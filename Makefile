@@ -29,8 +29,14 @@ REDIS_ADDR ?= redis://:$(REDIS_PASSWORD)@localhost:$(REDIS_PORT)/0
 endif
 REDIS_ADDR ?=
 
+# Security tools are installed on demand into the Go bin directory, so a fresh
+# checkout can run the full gate without a separate setup step.
+GOBIN  := $(shell go env GOPATH)/bin
+GOVULN := $(GOBIN)/govulncheck
+GOSEC  := $(GOBIN)/gosec
+
 .DEFAULT_GOAL := help
-.PHONY: help require-env build test test-race cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-down dev-logs compose-up compose-down check
+.PHONY: help require-env build test test-race cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-down dev-logs compose-up compose-down check fmt-check tidy-check vuln sec test-all
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -61,6 +67,29 @@ tidy: ## Sync go.mod and go.sum
 	cd $(BACKEND) && go mod tidy
 
 check: fmt vet test ## Format, vet and test — run before pushing
+
+## --- Quality gate -----------------------------------------------------------
+
+fmt-check: ## Fail if the sources are not gofmt-clean (does not modify them)
+	@cd $(BACKEND) && out=$$(gofmt -l -s .); \
+		test -z "$$out" || { echo "not gofmt-clean:"; echo "$$out"; exit 1; }
+
+tidy-check: ## Fail if go.mod/go.sum are not tidy (does not modify them)
+	cd $(BACKEND) && go mod tidy -diff
+
+vuln: ## Scan dependencies and the toolchain for known vulnerabilities
+	@test -x $(GOVULN) || go install golang.org/x/vuln/cmd/govulncheck@latest
+	cd $(BACKEND) && $(GOVULN) ./...
+
+sec: ## Static security analysis
+	@test -x $(GOSEC) || go install github.com/securego/gosec/v2/cmd/gosec@latest
+	cd $(BACKEND) && $(GOSEC) -exclude-generated -quiet ./...
+
+# The full gate, mirroring the CI workflow so a green run here means a green run
+# there. Unlike `check` it changes nothing on disk: every step verifies rather
+# than reformats, so it is safe to run on a dirty tree.
+test-all: fmt-check tidy-check vet test-race build vuln sec ## Run everything CI runs
+	@echo "test-all: all checks passed."
 
 # require-env fails with an explanation instead of letting the command reach the
 # database with empty credentials and report an authentication failure.
