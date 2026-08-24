@@ -1,0 +1,38 @@
+# Development overlay: infrastructure only.
+#
+# Run it with the base file to get PostgreSQL and Redis on the host, then run
+# the API from your editor against them:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d pg-core redis
+#
+# Ports are bound to loopback so the databases are never exposed to the local
+# network.
+
+name: db-contest
+
+services:
+  pg-core:
+    ports:
+      - "127.0.0.1:${CORE_DB_PORT:-5432}:5432"
+    # Verbose statement logging is a development aid; it is far too noisy and
+    # too revealing for a real contest.
+    command:
+      - postgres
+      - -c
+      - log_statement=all
+      - -c
+      - log_min_duration_statement=0
+
+  redis:
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+
+  # The API and the migration job are run from the host during development.
+  migrate:
+    profiles: [full]
+
+  api:
+    profiles: [full]
+    environment:
+      ENV: development
+      LOG_LEVEL: debug

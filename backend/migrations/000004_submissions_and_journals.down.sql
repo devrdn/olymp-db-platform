@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS audit_log;
+DROP TABLE IF EXISTS query_log;
+DROP TABLE IF EXISTS submissions;

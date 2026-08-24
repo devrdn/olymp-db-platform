@@ -1,0 +1,114 @@
+# Core stack for the DB Contest platform.
+#
+# Only the API's public port is published to the host. The core database, the
+# cache and the API's internal listener (metrics, health) stay on the private
+# network, reachable by name from other services but not from outside.
+#
+# The game cluster is added in a later step; nothing here talks to it yet.
+
+name: db-contest
+
+services:
+  pg-core:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${CORE_DB_USER:?set CORE_DB_USER in .env}
+      POSTGRES_PASSWORD: ${CORE_DB_PASSWORD:?set CORE_DB_PASSWORD in .env}
+      POSTGRES_DB: ${CORE_DB_NAME:-dbcontest_core}
+      # Scram is the default in PG16; stated explicitly so a base image change
+      # cannot silently weaken it.
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    volumes:
+      - pg-core-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [internal]
+
+  # Optional. Start it with the "shared" profile:
+  #   docker compose --profile shared up -d
+  # Without it the API uses its in-process cache, which is correct for a single
+  # replica and wrong for several — see backend/README.md.
+  redis:
+    image: redis:7-alpine
+    profiles: [shared]
+    restart: unless-stopped
+    # Sessions and rate-limit windows must survive a restart of the cache, so
+    # appendonly is on.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $${REDIS_PASSWORD} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    networks: [internal]
+
+  # One-shot job: applies pending migrations, then exits. The API waits for it
+  # to finish successfully, so no replica ever serves an unmigrated schema.
+  migrate:
+    build:
+      context: ../backend
+      args:
+        VERSION: ${VERSION:-dev}
+    restart: "no"
+    entrypoint: ["/usr/local/bin/migrate", "up"]
+    environment:
+      CORE_DB_DSN: postgres://${CORE_DB_USER}:${CORE_DB_PASSWORD}@pg-core:5432/${CORE_DB_NAME:-dbcontest_core}?sslmode=disable
+    depends_on:
+      pg-core:
+        condition: service_healthy
+    networks: [internal]
+
+  api:
+    build:
+      context: ../backend
+      args:
+        VERSION: ${VERSION:-dev}
+    restart: unless-stopped
+    environment:
+      ENV: ${ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      HTTP_ADDR: ":8080"
+      INTERNAL_ADDR: ":9090"
+      CORE_DB_DSN: postgres://${CORE_DB_USER}:${CORE_DB_PASSWORD}@pg-core:5432/${CORE_DB_NAME:-dbcontest_core}?sslmode=disable
+      # Empty selects the in-process cache. Set it (and start the "shared"
+      # profile) as soon as more than one replica runs.
+      REDIS_ADDR: ${REDIS_ADDR-}
+      METRICS_BACKEND: ${METRICS_BACKEND:-prometheus}
+    ports:
+      # Bound to loopback: the reverse proxy terminates TLS in front of it.
+      - "127.0.0.1:${API_PORT:-8080}:8080"
+    depends_on:
+      pg-core:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # Distroless carries no shell or curl, so the binary probes itself.
+      test: ["CMD", "/usr/local/bin/api", "-healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks: [internal]
+
+volumes:
+  pg-core-data:
+  redis-data:
+
+networks:
+  internal:
+    driver: bridge

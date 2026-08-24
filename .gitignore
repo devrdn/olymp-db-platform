@@ -1,0 +1,15 @@
+# Secrets — never commit real credentials
+.env
+*.env
+!.env.example
+!deploy/.env.example
+
+# Go build output
+backend/bin/
+coverage.out
+*.test
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
