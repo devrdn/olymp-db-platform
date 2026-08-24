@@ -15,14 +15,16 @@ COPY . .
 ARG VERSION=dev
 # CGO is off so the result runs on a distroless base with no libc.
 ENV CGO_ENABLED=0
-RUN go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/api      ./cmd/api && \
-    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/migrate  ./cmd/migrate
+RUN go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/api       ./cmd/api && \
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/migrate   ./cmd/migrate && \
+    go build -trimpath -ldflags="-s -w"                            -o /out/bootstrap ./cmd/bootstrap
 
 # Runtime stage: no shell, no package manager, non-root by default.
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 
-COPY --from=build /out/api     /usr/local/bin/api
-COPY --from=build /out/migrate /usr/local/bin/migrate
+COPY --from=build /out/api       /usr/local/bin/api
+COPY --from=build /out/migrate   /usr/local/bin/migrate
+COPY --from=build /out/bootstrap /usr/local/bin/bootstrap
 
 USER nonroot:nonroot
 EXPOSE 8080 9090

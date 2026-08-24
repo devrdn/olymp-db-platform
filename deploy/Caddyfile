@@ -1,0 +1,35 @@
+# Reverse proxy and TLS terminator — the only service exposed to the network.
+#
+# SITE_ADDRESS decides how TLS is obtained. Left as "localhost" Caddy issues a
+# local certificate itself, so a development stack is HTTPS without any setup;
+# set it to the real hostname and Caddy obtains a public certificate from Let's
+# Encrypt automatically.
+#
+# This matters beyond encryption: the session cookie is marked Secure outside
+# development, and a browser silently discards a Secure cookie delivered over
+# plain HTTP. Without TLS in front, signing in would appear to succeed and then
+# fail on the next request.
+
+{$SITE_ADDRESS:localhost} {
+	encode zstd gzip
+
+	# Tell the application which scheme the browser actually used. The API
+	# compares this against the Origin header on every write; it is trustworthy
+	# only because this proxy is the sole ingress and overwrites whatever the
+	# client sent.
+	reverse_proxy /api/* api:8080 {
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	# The participant and administrator interface is served here once the
+	# frontend exists. Until then the root answers plainly rather than 404, so
+	# a health check against the site root succeeds.
+	handle {
+		respond "DB Contest — API only; the web interface is not deployed yet." 200
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}
