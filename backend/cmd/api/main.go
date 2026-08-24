@@ -11,6 +11,8 @@ import (
 	"syscall"
 
 	"github.com/devrdn/db-contest/backend/internal/api"
+	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/health"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
@@ -18,6 +20,9 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
 	"github.com/devrdn/db-contest/backend/internal/platform/server"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/db-contest/backend/internal/postgres"
+	"github.com/devrdn/db-contest/backend/internal/rbac"
+	"github.com/devrdn/db-contest/backend/internal/users"
 )
 
 // version is stamped at build time with -ldflags.
@@ -106,6 +111,33 @@ func run() error {
 		go runner.Run(stop)
 	}
 
+	// Authentication and account management. The repositories are the only
+	// components that know SQL; everything above them works against the
+	// interfaces the domain packages declare.
+	userRepo := postgres.NewUsers(pool)
+	auditRecorder := audit.New(postgres.NewAuditSink(pool))
+	sessions := auth.NewSessionStore(cacheBackend, cfg.SessionTTL)
+
+	authService := auth.NewService(auth.ServiceConfig{
+		Users:    userRepo,
+		Sessions: sessions,
+		Audit:    auditRecorder,
+		Limiter:  auth.NewLimiter(cacheBackend),
+		Logger:   log,
+	})
+	// Whether the deployment is served over TLS is configuration, not
+	// something to guess per request from a proxy header.
+	cookies := auth.NewCookieWriter(cfg.CookieSecure)
+
+	authMiddleware := auth.NewMiddleware(auth.MiddlewareConfig{
+		Sessions:   sessions,
+		Users:      userRepo,
+		Authorizer: rbac.New(postgres.NewContestRoles(pool)),
+		Cookies:    cookies,
+		Logger:     log,
+	})
+	userService := users.NewService(userRepo, auditRecorder)
+
 	deps := api.Deps{
 		Logger:    log,
 		Metrics:   recorder,
@@ -114,6 +146,10 @@ func run() error {
 		Checkers: []health.Checker{
 			storage.NewChecker("core-db", pool),
 			storage.NewChecker("cache", cacheBackend),
+		},
+		Modules: []api.Module{
+			api.NewAuthHandler(authService, userService, authMiddleware, cookies, log),
+			api.NewUsersHandler(userService, authMiddleware, log),
 		},
 	}
 
