@@ -98,7 +98,11 @@ dev-up: ## Start PostgreSQL and Redis for local development
 	$(COMPOSE_DEV) up -d pg-core redis
 
 dev-down: ## Stop the development infrastructure
-	$(COMPOSE_DEV) down
+	# dev-up starts redis by naming it, which activates its "shared" profile for
+	# that command only. A plain `down` does not re-activate the profile, so it
+	# would leave redis running and then refuse to remove the network it is still
+	# attached to. Activating the profiles here tears down everything dev can start.
+	$(COMPOSE_DEV) --profile shared --profile full down
 
 dev-logs: ## Follow the development infrastructure logs
 	$(COMPOSE_DEV) logs -f
