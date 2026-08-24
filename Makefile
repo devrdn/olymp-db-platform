@@ -3,25 +3,44 @@
 # Run `make help` for the list.
 
 BACKEND     := backend
+ENV_FILE    := deploy/.env
 COMPOSE     := docker compose -f deploy/docker-compose.yml
 COMPOSE_DEV := $(COMPOSE) -f deploy/docker-compose.dev.yml
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
-# Local DSNs used by `make run` and `make migrate-up` against the dev overlay.
-CORE_DB_DSN ?= postgres://dbcontest:dbcontest@localhost:5432/dbcontest_core?sslmode=disable
-REDIS_ADDR  ?= localhost:6379
+# The host-side targets talk to the same containers as Compose does, so they
+# read the same credentials. Hard-coding them here would mean two sources of
+# truth that silently disagree the moment somebody changes a password.
+-include $(ENV_FILE)
+
+CORE_DB_USER     ?= dbcontest
+CORE_DB_NAME     ?= dbcontest_core
+CORE_DB_PORT     ?= 5432
+REDIS_PORT       ?= 6379
+ADMIN_LOGIN      ?= admin
+ADMIN_NAME       ?= System Administrator
+
+CORE_DB_DSN ?= postgres://$(CORE_DB_USER):$(CORE_DB_PASSWORD)@localhost:$(CORE_DB_PORT)/$(CORE_DB_NAME)?sslmode=disable
+
+# Redis is optional: with no address the service uses its in-process cache.
+# Set REDIS_ADDR in deploy/.env to use the container instead.
+ifdef REDIS_PASSWORD
+REDIS_ADDR ?= redis://:$(REDIS_PASSWORD)@localhost:$(REDIS_PORT)/0
+endif
+REDIS_ADDR ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help build test test-race cover lint vet fmt tidy run migrate-up migrate-down migrate-version dev-up dev-down dev-logs compose-up compose-down check
+.PHONY: help require-env build test test-race cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-down dev-logs compose-up compose-down check
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 ## --- Go ---------------------------------------------------------------------
 
-build: ## Compile both binaries into backend/bin
+build: ## Compile the binaries into backend/bin
 	cd $(BACKEND) && go build -trimpath -ldflags="-X main.version=$(VERSION)" -o bin/api ./cmd/api
 	cd $(BACKEND) && go build -trimpath -ldflags="-X main.version=$(VERSION)" -o bin/migrate ./cmd/migrate
+	cd $(BACKEND) && go build -trimpath -o bin/bootstrap ./cmd/bootstrap
 
 test: ## Run the unit tests
 	cd $(BACKEND) && go test ./...
@@ -43,20 +62,35 @@ tidy: ## Sync go.mod and go.sum
 
 check: fmt vet test ## Format, vet and test — run before pushing
 
-run: ## Run the API against the dev infrastructure
+# require-env fails with an explanation instead of letting the command reach the
+# database with empty credentials and report an authentication failure.
+.PHONY: require-env
+require-env:
+	@test -f $(ENV_FILE) || { \
+		echo "$(ENV_FILE) is missing. Create it first:"; \
+		echo "  cp deploy/.env.example $(ENV_FILE)"; \
+		echo "then fill in the passwords."; \
+		exit 1; }
+	@test -n "$(CORE_DB_PASSWORD)" || { \
+		echo "CORE_DB_PASSWORD is not set in $(ENV_FILE)."; exit 1; }
+
+run: require-env ## Run the API against the dev infrastructure
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" REDIS_ADDR="$(REDIS_ADDR)" \
 		ENV=development LOG_LEVEL=debug go run ./cmd/api
 
 ## --- Migrations -------------------------------------------------------------
 
-migrate-up: ## Apply pending migrations
+migrate-up: require-env ## Apply pending migrations
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go run ./cmd/migrate up
 
-migrate-down: ## Roll back the most recent migration
+migrate-down: require-env ## Roll back the most recent migration
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go run ./cmd/migrate down
 
-migrate-version: ## Print the current schema version
+migrate-version: require-env ## Print the current schema version
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go run ./cmd/migrate version
+
+bootstrap: require-env ## Create the first administrator (idempotent; prints the password)
+	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go run ./cmd/bootstrap -login $(ADMIN_LOGIN) -name "$(ADMIN_NAME)"
 
 ## --- Containers -------------------------------------------------------------
 
@@ -69,8 +103,14 @@ dev-down: ## Stop the development infrastructure
 dev-logs: ## Follow the development infrastructure logs
 	$(COMPOSE_DEV) logs -f
 
-compose-up: ## Build and start the full stack
+compose-up: ## Build and start the stack (Caddy, API, database)
 	VERSION=$(VERSION) $(COMPOSE) up -d --build
 
+compose-bootstrap: require-env ## Create the first administrator inside the stack
+	$(COMPOSE) --profile bootstrap run --rm bootstrap
+
+compose-observability: ## Add Prometheus, Loki and Grafana to a running stack
+	$(COMPOSE) --profile observability up -d
+
 compose-down: ## Stop the full stack
-	$(COMPOSE) down
+	$(COMPOSE) --profile bootstrap --profile observability --profile shared down

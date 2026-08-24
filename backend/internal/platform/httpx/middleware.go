@@ -4,6 +4,7 @@ package httpx
 
 import (
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -101,4 +102,18 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 // keeping streaming responses (SSE) usable behind this middleware.
 func (r *statusRecorder) Unwrap() http.ResponseWriter {
 	return r.ResponseWriter
+}
+
+// ClientIP returns the address the request came from.
+//
+// It reads RemoteAddr only. A forwarded header is client-supplied unless a
+// trusted proxy overwrote it, and treating one as authentic here would let a
+// caller spoof the address that rate limiting and the audit trail record.
+// Proxy-aware resolution belongs in one configured place, not in each handler.
+func ClientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return ""
+	}
+	return host
 }

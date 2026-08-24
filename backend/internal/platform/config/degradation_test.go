@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRedisAddressIsOptional(t *testing.T) {
@@ -74,5 +75,79 @@ func TestUnknownMetricsBackendIsRejectedAtStartup(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "statsd") {
 		t.Errorf("error %q does not name the offending value", err)
+	}
+}
+
+func TestSessionLifetimeDefaultsToAWorkingDay(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.SessionTTL != 12*time.Hour {
+		t.Errorf("SessionTTL = %v, want 12h", cfg.SessionTTL)
+	}
+}
+
+func TestSessionLifetimeIsConfigurable(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("SESSION_TTL", "4h")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.SessionTTL != 4*time.Hour {
+		t.Errorf("SessionTTL = %v, want 4h", cfg.SessionTTL)
+	}
+}
+
+func TestCookieIsSecureOutsideDevelopment(t *testing.T) {
+	// The dangerous default is the insecure one, so production must not have
+	// to remember a flag to get it right.
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("ENV", "production")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if !cfg.CookieSecure {
+		t.Error("CookieSecure = false in production; the session cookie would travel unprotected")
+	}
+}
+
+func TestCookieIsNotSecureInDevelopment(t *testing.T) {
+	// A local stack has no certificate, and a browser silently drops a Secure
+	// cookie over plain HTTP — nobody could sign in.
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("ENV", "development")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.CookieSecure {
+		t.Error("CookieSecure = true in development; local sign-in would be impossible")
+	}
+}
+
+func TestCookieSecurityCanBeOverridden(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("ENV", "development")
+	t.Setenv("COOKIE_SECURE", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if !cfg.CookieSecure {
+		t.Error("the explicit override was ignored")
 	}
 }

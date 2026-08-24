@@ -33,7 +33,24 @@ type Deps struct {
 	// degraded install is visible to operators.
 	CacheMode        string
 	ReadinessTimeout time.Duration
+	// Modules contribute the routes of a feature area under /api/v1. The
+	// router knows nothing about what they serve, so a feature is added by
+	// wiring one in main rather than by editing this package.
+	Modules []Module
 }
+
+// Module registers the routes of one feature area.
+type Module interface {
+	Mount(r chi.Router)
+}
+
+// chiRouter is the router type a module receives.
+type chiRouter = chi.Router
+
+// moduleFunc adapts a function to Module.
+type moduleFunc func(r chi.Router)
+
+func (f moduleFunc) Mount(r chi.Router) { f(r) }
 
 func (d Deps) readinessTimeout() time.Duration {
 	if d.ReadinessTimeout > 0 {
@@ -72,7 +89,14 @@ func NewRouter(deps Deps) *chi.Mux {
 	})
 
 	r.Route("/api/v1", func(r chi.Router) {
+		// Cookie-borne sessions mean every write needs the cross-origin guard.
+		r.Use(httpx.CheckOrigin)
+
 		r.Get("/version", versionHandler(deps.Version))
+
+		for _, module := range deps.Modules {
+			module.Mount(r)
+		}
 	})
 
 	return r

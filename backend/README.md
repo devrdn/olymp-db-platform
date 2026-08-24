@@ -11,16 +11,23 @@ schema. Business endpoints arrive in the following steps.
 backend/
 ├── cmd/
 │   ├── api/          Core API server
-│   └── migrate/      schema migration tool (embedded migrations)
+│   ├── migrate/      schema migration tool (embedded migrations)
+│   └── bootstrap/    creates the first administrator account
 ├── internal/
-│   ├── api/          router assembly (public and internal)
+│   ├── api/          router assembly and HTTP handlers
+│   ├── audit/        append-only trail of who did what
+│   ├── auth/         passwords, sessions, login, middleware
 │   ├── health/       liveness, readiness, self-probe
+│   ├── postgres/     repository implementations (all SQL lives here)
+│   ├── rbac/         two-level authorisation model
+│   ├── users/        accounts, roles, password rules
 │   └── platform/
 │       ├── cache/    Cache interface: Redis or in-process fallback
 │       ├── config/   environment configuration
-│       ├── httpx/    middleware and JSON responses
+│       ├── httpx/    middleware, CSRF guard, JSON responses
 │       ├── logging/  slog setup and request correlation
 │       ├── metrics/  Recorder interface: prometheus, log or none
+│       ├── password/ argon2id hashing
 │       ├── server/   HTTP listener with graceful shutdown
 │       └── storage/  PostgreSQL pool, querier seam, unit of work
 └── migrations/       core schema, applied by cmd/migrate
@@ -58,20 +65,123 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `ENV` | no | `development` | environment name |
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn`, `error` |
 | `SHUTDOWN_TIMEOUT` | no | `15s` | drain period on SIGTERM |
+| `SESSION_TTL` | no | `12h` | idle lifetime of a session; slides on activity |
+| `COOKIE_SECURE` | no | true outside `development` | mark the session cookie Secure |
 
 ## Running locally
 
-Start the infrastructure, apply migrations, run the service:
+Compose and the Makefile both read `deploy/.env`, and the host-side targets
+take the database password from it, so create it first:
 
 ```bash
-make dev-up && make migrate-up && make run
+cp deploy/.env.example deploy/.env
 ```
 
-Then:
+Fill in the passwords, then start the infrastructure, apply migrations and run
+the service:
+
+```bash
+make dev-up && make migrate-up && make bootstrap && make run
+```
+
+`make bootstrap` prints the first administrator's one-time password. Then:
 
 ```bash
 curl -s localhost:8080/api/v1/version && curl -s localhost:9090/readyz
 ```
+
+Note that `make run` sets `ENV=development`, which turns off the Secure flag on
+the session cookie. That is required locally: a browser discards a Secure cookie
+delivered over plain HTTP, so signing in would appear to work and then fail on
+the next request. The full stack puts Caddy in front and serves HTTPS, where the
+flag belongs on.
+
+
+## Authentication and access
+
+### Getting in the first time
+
+A freshly migrated installation has no accounts, so there is a command for it —
+not an HTTP endpoint, because an unauthenticated route that mints
+administrators stays a liability long after it is needed once. It is idempotent
+and prints the password to stdout, apart from the logs:
+
+```bash
+CORE_DB_DSN=... go run ./cmd/bootstrap -login root -name "Root Administrator"
+```
+
+The account is flagged so the first sign-in ends in choosing a real password.
+
+### Endpoints
+
+| Method | Path | Who |
+|---|---|---|
+| POST | `/api/v1/auth/login` | anyone |
+| GET | `/api/v1/auth/me` | signed in |
+| POST | `/api/v1/auth/logout` | signed in |
+| POST | `/api/v1/auth/password` | signed in (own password) |
+| GET, POST | `/api/v1/users` | `users.manage` |
+| GET, PATCH | `/api/v1/users/{id}` | `users.manage` |
+| POST | `/api/v1/users/{id}/block`, `/unblock` | `users.manage` |
+| POST | `/api/v1/users/{id}/password-reset` | `users.manage` |
+| PUT | `/api/v1/users/{id}/roles` | `users.manage` |
+
+### Two levels of authorisation
+
+Global roles grant installation-wide abilities: creating contests, managing
+accounts. Contest roles (`contest_managers`) grant power over **one** contest.
+They are not interchangeable — somebody running the March olympiad gains no say
+over the April one, and never gains account management.
+
+```go
+mw.RequirePermission(rbac.PermissionUsersManage)   // installation-wide
+mw.RequireContestPermission(rbac.PermissionContestEdit) // scoped to {contestID}
+```
+
+`contest.admin_all` lifts the scope and is held only by `admin`. It is a
+permission rather than a hard-coded "is admin" check, so the same reach can be
+given to a new role from data.
+
+Owner and manager differ in one thing: only an owner appoints managers. That is
+the one power a manager must not be able to grant themselves more of.
+
+### What the design protects against
+
+**Account enumeration.** An unknown login and a wrong password return the same
+message *and take the same time* — a missing account is still verified against a
+dummy digest, because returning in microseconds instead of tens of milliseconds
+is a timing oracle. A blocked account learns it is blocked only after the
+password checked out: the owner deserves to know, a guesser does not.
+
+**Brute force.** Fixed windows of 10 attempts per login and 30 per address, both
+over 15 minutes. Fixed rather than sliding: a sliding window extended by every
+attempt never resets under sustained load, which turns an attack on one account
+into a denial of service against its owner. A cache failure refuses the attempt
+— an unmaintained counter means no protection.
+
+**Stolen session store.** The cookie holds a 256-bit opaque token; the cache
+holds only its SHA-256. A dump yields digests, which cannot authenticate.
+
+**Sessions outliving their welcome.** `users.session_generation` advances on
+block, password change, password reset and role change; a session records the
+generation it was issued at, so all of them die at once. The account is also
+re-read on every request, so blocking takes effect on the next request rather
+than whenever the session lapses. That costs one indexed query, which is the
+right trade at this scale.
+
+**XSS and CSRF.** The token lives in an `HttpOnly` cookie, so page script cannot
+read it. `SameSite=Lax` plus an `Origin` check on every mutating request covers
+CSRF. A request with *no* `Origin` passes: browsers always send it on
+cross-origin writes, while curl and health probes send nothing.
+
+**Leaking the digest.** API responses are built from dedicated DTOs, never by
+serialising `users.User` — that would publish `PasswordHash` the first time
+somebody adds a field without thinking. Tests assert it on every endpoint.
+
+**A trail that lies.** Audit entries are written in the same transaction as the
+action, so a rolled-back change leaves no record claiming it happened. Payloads
+are redacted at any depth: `password`, `token`, `secret` and friends never reach
+a table kept for a year.
 
 ## Optional dependencies
 

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"time"
 )
 
@@ -36,6 +37,15 @@ type Config struct {
 	RedisAddr string
 	// MetricsBackend is prometheus, log or none.
 	MetricsBackend string
+	// CookieSecure marks the session cookie Secure. It defaults to true
+	// outside development: a browser drops a Secure cookie over plain HTTP, so
+	// a local stack without a certificate needs it off, and every other
+	// deployment needs it on.
+	CookieSecure bool
+	// SessionTTL is how long a session survives without activity. It slides on
+	// every authenticated request, so it bounds idle time rather than the
+	// length of a working session.
+	SessionTTL time.Duration
 }
 
 // Load reads configuration from the environment, applying defaults for
@@ -57,6 +67,12 @@ func Load() (Config, error) {
 	cfg.MetricsBackend = envOrDefault("METRICS_BACKEND", "prometheus")
 
 	if cfg.ShutdownTimeout, err = durationEnv("SHUTDOWN_TIMEOUT", 15*time.Second); err != nil {
+		return Config{}, err
+	}
+	if cfg.SessionTTL, err = durationEnv("SESSION_TTL", 12*time.Hour); err != nil {
+		return Config{}, err
+	}
+	if cfg.CookieSecure, err = boolEnv("COOKIE_SECURE", cfg.Env != "development"); err != nil {
 		return Config{}, err
 	}
 
@@ -91,6 +107,18 @@ func requiredEnv(key string) (string, error) {
 		return "", fmt.Errorf("%s: required environment variable is not set", key)
 	}
 	return v, nil
+}
+
+func boolEnv(key string, fallback bool) (bool, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", key, err)
+	}
+	return value, nil
 }
 
 func durationEnv(key string, fallback time.Duration) (time.Duration, error) {
