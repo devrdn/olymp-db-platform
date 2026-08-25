@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "e1a7c9a0-6b3a-4f7a-9d2e-db-contest-core-api",
     "name": "DB Contest — Core API",
-    "description": "Auth + account management endpoints for the DB Contest Core API (step 1 & 2 of the architecture plan). Sessions are stored server-side and carried in an HttpOnly cookie set by /auth/login — Postman's cookie jar handles it automatically once you run Login inside this collection.\n\nFolders:\n- Auth — login, current session, logout, own password change\n- Users (admin) — account management, requires `users.manage`\n- Operational — health/readiness/metrics on the internal listener (not exposed publicly in production)\n\nRun order for a fresh environment: Auth ▸ Login (bootstrap account) → any Users request → Auth ▸ Logout.",
+    "description": "Auth + account management endpoints for the DB Contest Core API (step 1 & 2 of the architecture plan). Sessions are stored server-side and carried in an HttpOnly cookie set by /auth/login — Postman's cookie jar handles it automatically once you run Login inside this collection.\n\nFolders:\n- Auth — login, current session, logout, own password change\n- Users (admin) — account management, requires `users.manage`\n- Operational — health/readiness/metrics. Reachable only against `go run ./cmd/api` on the host (`make run`), NOT against `make compose-up`: there, the internal listener lives only on the compose network and is not published to the host, by design — the same as production. See that folder's description for how to reach it inside the container.\n\nRun order for a fresh environment: Auth ▸ Login (bootstrap account) → any Users request → Auth ▸ Logout.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -10,7 +10,7 @@
   },
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:8080/api/v1", "type": "string", "description": "Public listener. In production this is reached through Caddy; only this path is ever exposed." },
-    { "key": "internalUrl", "value": "http://localhost:9090", "type": "string", "description": "Internal listener (metrics, health) — never published outside the compose network." },
+    { "key": "internalUrl", "value": "http://localhost:9090", "type": "string", "description": "Internal listener (metrics, health). Only reachable when the API runs directly on the host (`make run`). With `make compose-up` this port lives on the compose network only and is not published — hitting it from Postman then means either an old orphaned `go run` process on the host (kill it) or nothing at all (connection refused), never the containerized api. See the Operational folder for how to reach it inside the container." },
     { "key": "adminLogin", "value": "admin", "type": "string" },
     { "key": "adminPassword", "value": "", "type": "string", "description": "Set this to the one-time password printed by `make bootstrap`." },
     { "key": "userId", "value": "", "type": "string", "description": "Populated automatically by Users ▸ Create." },
@@ -307,7 +307,7 @@
     },
     {
       "name": "Operational",
-      "description": "Served on the internal listener ({{internalUrl}}), which is never published through the reverse proxy — reachable only inside the compose network or on localhost during development. No authentication: these exist for the container runtime and Prometheus.",
+      "description": "Served on the internal listener ({{internalUrl}}), which is never published through the reverse proxy — by design, so metrics and readiness details are never reachable from the network. No authentication: these exist for the container runtime and Prometheus.\n\nHow to actually reach it, depending on how the service is running:\n- `make run` (bare `go run ./cmd/api` on the host) — {{internalUrl}} works directly, exactly as configured below.\n- `make compose-up` — the port is intentionally not published to the host. Use `docker exec db-contest-api-1 /usr/local/bin/api -healthcheck` for a pass/fail liveness check, or `docker compose --profile observability up -d` and view Grafana/Prometheus, which reach the container over the compose network.\n- `make dev-up` (dev overlay, API still run via `make run` on the host) — same as the first case.\n\nIf a request in this folder returns core-db failed while `make compose-up` is what's running, you are very likely hitting a leftover `go run ./cmd/api` process still bound to port 9090 on the host from an earlier session — check with `lsof -nP -iTCP:9090 -sTCP:LISTEN` and kill it.",
       "item": [
         {
           "name": "Liveness",
