@@ -45,8 +45,17 @@ export default async function LoginPage(props: PageProps<"/login">) {
             The rule runs the full height of the band rather than the height of
             the text beside it. A division that stops where the content stops
             reads as a gap; one that runs edge to edge is structure, which is
-            what this system draws with instead of panels. */}
-        <div className="grid flex-1 content-center gap-12 xl:grid-cols-[minmax(0,1fr)_1px_24rem] xl:content-stretch xl:gap-x-20">
+            what this system draws with instead of panels.
+
+            One horizontal module, and every vertical in the composition sits on
+            it: the band's own padding, the heading's distance to the rule and
+            the rule's distance to the form are the same figure. With a wider
+            column gap the form stood 80px from the rule and 40px from the
+            hatched field, so the panel read as shoved against the right edge —
+            an asymmetry invisible in a mock-up and obvious on a wide screen.
+            Matching the band's padding also lines the form up with the app bar,
+            which is measured from that same edge. */}
+        <div className="grid flex-1 content-center gap-12 xl:grid-cols-[minmax(0,1fr)_1px_24rem] xl:content-stretch xl:gap-x-10">
           <div className="flex flex-col justify-center gap-8 xl:py-24">
             <h1 className="max-w-head text-display text-balance text-ink">{t.title}</h1>
             <p className="max-w-lede text-lede text-ink-2">{t.lede}</p>
