@@ -1,10 +1,10 @@
-import Link from "next/link";
-
-import { buttonVariants } from "@/components/ui/button";
-import type { ContestSummary } from "@/lib/api/contests";
-import { formatMoment } from "@/lib/format/datetime";
+import { Tag } from "@/components/ui/tag";
+import { StateView } from "@/components/product/state-view";
+import type { ContestStatus, ContestSummary } from "@/lib/api/contests";
+import { formatDay, formatMoment, formatTime, isSameDay } from "@/lib/format/datetime";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { cn } from "@/lib/utils";
 
 /**
  * The contest listing, as a register rather than a wall of cards.
@@ -14,12 +14,83 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
  * tabular, so the semantics come for free and a screen reader announces which
  * column a cell belongs to.
  *
+ * On a narrow screen it stays a table. Restacking into one card per contest is
+ * the usual answer and it is the wrong one here: it dissolves the columns, and
+ * comparing down a column is the entire reason this is a register and not the
+ * wall of cards the direction was chosen to get away from.
+ *
+ * What gives instead is the column count. Enrollment and format fold under the
+ * title, where they read as a caption on the contest rather than as columns
+ * too thin to compare; state and the window stay, because those are what a
+ * reader scans a register for. Nothing is ever shown twice: the folded line
+ * only exists at the width where its columns are gone. Past that the box —
+ * and only this box — scrolls sideways.
+ *
  * Every string arrives in `dict`. The component holds no copy of its own, so a
  * fourth language needs a dictionary file and nothing here.
  */
 
-const HEAD_CELL =
-  "px-3 py-2 font-mono text-[0.625rem] font-medium tracking-[0.11em] text-ink-3 uppercase";
+/** One tone per state, and the accent spent only on what is happening now. */
+const STATUS_TONE: Record<ContestStatus, "live" | "good" | "mute"> = {
+  draft: "mute",
+  published: "good",
+  running: "live",
+  finished: "mute",
+  archived: "mute",
+};
+
+/* Padding comes from the density tokens, so the same register is comfortable
+   in the constructor and compact in the query log without a second component
+   or a prop threaded through four layers (spec section 5). */
+const HEAD =
+  "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
+const CELL = "border-b border-line px-(--row-px) py-(--row-py) align-baseline";
+
+/**
+ * The contest window, in two lines that never repeat themselves.
+ *
+ * A contest that starts and ends on one day — which is most of them — used to
+ * print its date twice, and the second line ran past the column and broke
+ * between the hour and the meridiem. One date and a time range says the same
+ * thing in half the width and reads down the column, which is what a register
+ * column is for.
+ */
+function Window({
+  contest,
+  locale,
+  unscheduled,
+  until,
+}: {
+  contest: ContestSummary;
+  locale: Locale;
+  unscheduled: string;
+  until: string;
+}) {
+  if (!contest.startsAt) return <span className="text-ink-3">{unscheduled}</span>;
+
+  if (!contest.endsAt) return <>{formatMoment(contest.startsAt, { locale })}</>;
+
+  if (isSameDay(contest.startsAt, contest.endsAt, { locale })) {
+    return (
+      <>
+        {formatDay(contest.startsAt, { locale })}
+        <span className="block text-ink-3">
+          {formatTime(contest.startsAt, { locale })}\u2009–\u2009
+          {formatTime(contest.endsAt, { locale })}
+        </span>
+      </>
+    );
+  }
+
+  return (
+    <>
+      {formatMoment(contest.startsAt, { locale })}
+      <span className="block text-ink-3">
+        {until} {formatMoment(contest.endsAt, { locale })}
+      </span>
+    </>
+  );
+}
 
 type RegisterProps = {
   contests: ContestSummary[];
@@ -29,31 +100,6 @@ type RegisterProps = {
   filtered?: boolean;
   resetHref?: string;
 };
-
-/**
- * "Nothing here" and "nothing matched" are different states and get different
- * screens (spec section 7). The first has no filter to clear, so offering the
- * control would be a lie; the second is useless without it.
- */
-function EmptyRegister({
-  dict,
-  filtered,
-  resetHref,
-}: Pick<RegisterProps, "dict" | "filtered" | "resetHref">) {
-  const copy = filtered ? dict.contests.emptyFiltered : dict.contests.empty;
-
-  return (
-    <div className="flex flex-col items-start gap-2 border-t border-line px-1 py-12">
-      <p className="font-medium">{copy.title}</p>
-      <p className="max-w-[48ch] text-sm text-ink-2">{copy.body}</p>
-      {filtered && resetHref ? (
-        <Link href={resetHref} className={`${buttonVariants({ variant: "outline" })} mt-2`}>
-          {dict.contests.emptyFiltered.reset}
-        </Link>
-      ) : null}
-    </div>
-  );
-}
 
 export function ContestRegister({
   contests,
@@ -66,62 +112,98 @@ export function ContestRegister({
   const t = dict.contests;
 
   return (
-    <section aria-labelledby="register-heading">
-      <div className="flex items-baseline justify-between gap-4 px-1 pb-3">
-        <h2 id="register-heading" className="text-lg font-medium tracking-tight">
+    <section aria-labelledby="register-heading" className="flex flex-col">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2 pb-6">
+        <h1 id="register-heading" className="text-h2 text-ink">
           {t.heading}
-        </h2>
-        <span className="font-mono text-xs text-ink-3 tabular-nums">
+        </h1>
+        <span className="font-mono text-data text-ink-3">
           {total} {t.countLabel}
         </span>
       </div>
 
       {contests.length === 0 ? (
-        <EmptyRegister dict={dict} filtered={filtered} resetHref={resetHref} />
+        <div className="border-t border-line">
+          <StateView
+            state={
+              /* "Nothing here" and "nothing matched" are different states and
+                 get different screens (spec section 7). The first has no filter
+                 to clear, so offering the control would be a lie; the second is
+                 a dead end without it. The type refuses to mix them up. */
+              filtered && resetHref
+                ? {
+                    kind: "empty-filtered",
+                    title: t.emptyFiltered.title,
+                    body: t.emptyFiltered.body,
+                    reset: { label: t.emptyFiltered.reset, href: resetHref },
+                  }
+                : { kind: "empty", title: t.empty.title, body: t.empty.body }
+            }
+          />
+        </div>
       ) : (
-        /* Wide content scrolls inside its own container, so the page body never
-           scrolls sideways on a narrow screen. */
-        <div className="overflow-x-auto border-t border-line">
-          <table className="w-full min-w-[46rem] border-collapse text-left">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-lg border-collapse text-left narrow:min-w-3xl">
             <thead>
-              <tr className="border-b border-line-2">
-                <th scope="col" className={`${HEAD_CELL} w-10 text-right`}>
+              <tr>
+                <th scope="col" className={cn(HEAD, "w-10 pr-0 text-right")}>
                   {t.columns.index}
                 </th>
-                <th scope="col" className={HEAD_CELL}>
+                <th scope="col" className={HEAD}>
                   {t.columns.contest}
                 </th>
-                <th scope="col" className={HEAD_CELL}>
+                <th scope="col" className={cn(HEAD, "w-36")}>
                   {t.columns.state}
                 </th>
-                <th scope="col" className={HEAD_CELL}>
+                <th scope="col" className={cn(HEAD, "w-32 max-narrow:hidden")}>
                   {t.columns.enrollment}
                 </th>
-                <th scope="col" className={HEAD_CELL}>
+                <th scope="col" className={cn(HEAD, "w-40 max-narrow:hidden")}>
+                  {t.columns.mode}
+                </th>
+                <th scope="col" className={cn(HEAD, "w-52")}>
                   {t.columns.starts}
                 </th>
               </tr>
             </thead>
             <tbody>
               {contests.map((contest, index) => (
-                <tr key={contest.id} className="border-b border-line align-baseline">
-                  <td className="px-3 py-3 text-right font-mono text-[0.6875rem] text-ink-3 tabular-nums">
+                <tr
+                  key={contest.id}
+                  className="transition-colors duration-(--t-input) ease-standard hover:bg-panel"
+                >
+                  {/* The register line number: a position in an ordered list,
+                      which is what the number on a card in a drawer is. */}
+                  <td className={cn(CELL, "pr-0 text-right font-mono text-data text-ink-3")}>
                     {String(index + 1).padStart(2, "0")}
                   </td>
-                  <td className="px-3 py-3">
-                    <span className="block font-medium tracking-tight">{contest.title}</span>
+                  <td className={CELL}>
+                    <span className="block text-row text-ink">{contest.title}</span>
                     {contest.description ? (
-                      <span className="mt-1 block max-w-[52ch] text-sm text-ink-2">
+                      <span className="mt-1.5 block max-w-body text-small text-ink-2">
                         {contest.description}
                       </span>
                     ) : null}
+                    <span className="mt-2 hidden font-mono text-data text-ink-3 max-narrow:block">
+                      {t.enrollment[contest.enrollment]} · {t.mode[contest.questionMode]}
+                    </span>
                   </td>
-                  <td className="px-3 py-3 text-sm">{t.status[contest.status]}</td>
-                  <td className="px-3 py-3 text-sm">{t.enrollment[contest.enrollment]}</td>
-                  <td className="px-3 py-3 font-mono text-[0.6875rem] text-ink-2 tabular-nums">
-                    {contest.startsAt
-                      ? formatMoment(contest.startsAt, { locale })
-                      : t.unscheduled}
+                  <td className={CELL}>
+                    <Tag tone={STATUS_TONE[contest.status]}>{t.status[contest.status]}</Tag>
+                  </td>
+                  <td className={cn(CELL, "text-small whitespace-nowrap text-ink-2 max-narrow:hidden")}>
+                    {t.enrollment[contest.enrollment]}
+                  </td>
+                  <td className={cn(CELL, "font-mono text-data whitespace-nowrap text-ink-3 max-narrow:hidden")}>
+                    {t.mode[contest.questionMode]}
+                  </td>
+                  <td className={cn(CELL, "font-mono text-data whitespace-nowrap text-ink-2")}>
+                    <Window
+                      contest={contest}
+                      locale={locale}
+                      unscheduled={t.unscheduled}
+                      until={t.until}
+                    />
                   </td>
                 </tr>
               ))}

@@ -1,5 +1,7 @@
-import { LanguageSwitcher } from "@/components/layout/language-switcher";
+import { Band } from "@/components/layout/band";
+import { PublicShell } from "@/components/layout/public-shell";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
+import { activeTheme } from "@/lib/theme/server";
 
 import { SignInForm } from "./sign-in-form";
 
@@ -12,37 +14,55 @@ export async function generateMetadata() {
  * Sign-in, for participants and staff alike: the API has no separate admin
  * endpoint, and where an account lands afterwards is decided by the
  * permissions it turns out to hold.
+ *
+ * The composition is the direction's own, not the split screen the pattern
+ * usually gets. One word at the display step — 92px at weight 400 — against a
+ * form whose submit is a 14px pill: that scale contrast is what carries the
+ * page, and it is the thing colour is normally asked to do instead (spec
+ * section 5). The two columns are separated by a hairline rather than by a
+ * change of background, because this system draws with rules, not with panels.
  */
-export default async function LoginPage() {
-  const [dict, locale] = await Promise.all([activeDictionary(), activeLocale()]);
+export default async function LoginPage(props: PageProps<"/login">) {
+  const [params, dict, locale, theme] = await Promise.all([
+    props.searchParams,
+    activeDictionary(),
+    activeLocale(),
+    activeTheme(),
+  ]);
+  const next = typeof params.next === "string" ? params.next : undefined;
   const t = dict.auth.signIn;
 
   return (
-    <main className="grid min-h-[100dvh] lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
-      <div className="flex items-center justify-center px-6 py-16 sm:px-10">
-        <div className="flex w-full max-w-sm flex-col gap-8">
-          <div className="flex items-center justify-between gap-4">
-            <span className="bg-cta px-2.5 py-1 font-mono text-[0.6875rem] font-bold tracking-[0.14em] text-cta-fg">
-              DB CONTEST
-            </span>
-            <LanguageSwitcher current={locale} />
+    <PublicShell locale={locale} theme={theme} dict={dict}>
+      <Band fill className="py-0">
+        {/* Two columns only from 1280px up, not from the layout breakpoint.
+            Between the two the split still technically fits, and it reads
+            badly: the heading column and the form column come out the same
+            width, the lede breaks after three words, and the page looks like
+            two narrow strips rather than a composition. Below that the form
+            goes under the heading, where it has the whole column.
+
+            The rule runs the full height of the band rather than the height of
+            the text beside it. A division that stops where the content stops
+            reads as a gap; one that runs edge to edge is structure, which is
+            what this system draws with instead of panels. */}
+        <div className="grid flex-1 content-center gap-12 xl:grid-cols-[minmax(0,1fr)_1px_24rem] xl:content-stretch xl:gap-x-20">
+          <div className="flex flex-col justify-center gap-8 xl:py-24">
+            <h1 className="max-w-head text-display text-balance text-ink">{t.title}</h1>
+            <p className="max-w-lede text-lede text-ink-2">{t.lede}</p>
+            {/* Set in the interface face, not in Literata: the narrative
+                register belongs to the crime story and to nothing else
+                (spec section 4). */}
+            <p className="max-w-body text-body text-ink-3">{t.aside}</p>
           </div>
 
-          <div className="flex flex-col gap-2">
-            <h1 className="text-3xl font-normal tracking-[-0.03em]">{t.title}</h1>
-            <p className="text-sm text-ink-2">{t.lede}</p>
-          </div>
+          <div aria-hidden className="hidden bg-line xl:block" />
 
-          <SignInForm dict={dict} />
+          <div className="flex flex-col justify-center xl:py-24">
+            <SignInForm dict={dict} next={next} />
+          </div>
         </div>
-      </div>
-
-      {/* The narrative register lives here and nowhere else in the product. */}
-      <aside className="hidden flex-col justify-center gap-4 border-l border-line-2 bg-sunk px-10 py-16 lg:flex">
-        <p className="font-serif text-lg leading-relaxed text-ink-2 max-w-[38ch]">
-          {t.aside}
-        </p>
-      </aside>
-    </main>
+      </Band>
+    </PublicShell>
   );
 }

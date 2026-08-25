@@ -1,6 +1,15 @@
 import type { Dictionary } from "./en";
 
 const ro = {
+  chrome: {
+    product: "DB Contest",
+    language: "Limbă",
+    theme: {
+      system: "Urmați tema sistemului",
+      light: "Treceți la tema deschisă",
+      dark: "Treceți la tema întunecată",
+    },
+  },
   auth: {
     signIn: {
       title: "Autentificare",
@@ -30,6 +39,7 @@ const ro = {
       state: "Stare",
       enrollment: "Înscriere",
       starts: "Început",
+      mode: "Format",
     },
     status: {
       draft: "ciornă",
@@ -42,6 +52,11 @@ const ro = {
       open: "deschisă",
       invite_only: "pe bază de invitație",
     },
+    mode: {
+      single: "o singură întrebare",
+      multi: "set de întrebări",
+    },
+    until: "până la",
     unscheduled: "neprogramat",
     empty: {
       title: "Încă nu există olimpiade",
