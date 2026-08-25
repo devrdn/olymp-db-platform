@@ -1,8 +1,12 @@
 import { contestListSchema } from "@/lib/api/contests";
 import { serverRequest } from "@/lib/api/server";
+import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { ContestRegister } from "@/components/product/contest-register";
 
-export const metadata = { title: "Олимпиады" };
+export async function generateMetadata() {
+  const dict = await activeDictionary();
+  return { title: dict.contests.heading };
+}
 
 /**
  * The constructor's index.
@@ -11,17 +15,24 @@ export const metadata = { title: "Олимпиады" };
  * token reaches the browser and the first paint carries the rows. Filters live
  * in the URL, which makes them shareable and the reset a plain link.
  */
-export default async function ContestsPage(props: PageProps<"/contests">) {
-  const params = await props.searchParams;
+export default async function ContestsPage(props: PageProps<"/[locale]/contests">) {
+  const [params, locale, dict] = await Promise.all([
+    props.searchParams,
+    activeLocale(),
+    activeDictionary(),
+  ]);
+
   const query = typeof params.q === "string" ? params.q : "";
   const status = typeof params.status === "string" ? params.status : "";
 
   const search = new URLSearchParams();
   if (query) search.set("q", query);
   if (status) search.set("status", status);
-  const suffix = search.size > 0 ? `?${search}` : "";
+  // The server negotiates the contest's own text; ask it in the same language
+  // the interface is rendering, so a page never mixes two.
+  search.set("lang", locale);
 
-  const payload = await serverRequest(`/contests${suffix}`);
+  const payload = await serverRequest(`/contests?${search}`);
   const { items, total } = contestListSchema.parse(payload);
 
   return (
@@ -29,8 +40,10 @@ export default async function ContestsPage(props: PageProps<"/contests">) {
       <ContestRegister
         contests={items}
         total={total}
+        dict={dict}
+        locale={locale}
         filtered={Boolean(query || status)}
-        resetHref="/contests"
+        resetHref={`/${locale}/contests`}
       />
     </main>
   );
