@@ -17,6 +17,28 @@ jobs:
   build:
     name: build and test
     runs-on: ubuntu-latest
+
+    # The repository tests run their SQL against a real PostgreSQL. Without a
+    # database they skip, which is right for a developer with none to hand and
+    # wrong for CI: a query is the one thing a fake cannot verify.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: dbcontest
+          POSTGRES_PASSWORD: dbcontest
+          POSTGRES_DB: dbcontest_core
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dbcontest"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      CORE_DB_DSN: postgres://dbcontest:dbcontest@localhost:5432/dbcontest_core?sslmode=disable
+
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +62,9 @@ jobs:
           git diff --exit-code go.mod go.sum
 
       - run: go vet ./...
+
+      - name: Apply the migrations
+        run: go run ./cmd/migrate up
 
       - name: Test with the race detector
         run: go test -race -coverprofile=coverage.out ./...

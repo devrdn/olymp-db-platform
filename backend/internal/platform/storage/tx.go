@@ -49,6 +49,18 @@ func QuerierFrom(ctx context.Context, fallback Querier) Querier {
 	return fallback
 }
 
+// InTx reports whether ctx carries an open transaction.
+//
+// Repositories use it to refuse work that is only correct inside one. Deferring
+// a constraint is the case that motivated it: SET CONSTRAINTS outside a
+// transaction block is silently ignored, so a reordering that relies on it
+// would appear to work and then fail depending on the order rows happened to
+// be visited.
+func InTx(ctx context.Context) bool {
+	_, ok := ctx.Value(txKey{}).(Querier)
+	return ok
+}
+
 // PgxUnitOfWork implements UnitOfWork on a pgx pool.
 type PgxUnitOfWork struct {
 	pool *pgxpool.Pool

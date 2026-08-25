@@ -20,6 +20,7 @@ backend/
 │   ├── auth/            who is this: passwords, sessions, login, middleware
 │   ├── rbac/            may they do this: the two-level permission model
 │   ├── users/           accounts, roles, password rules
+│   ├── contests/        contests, content, staff, participants, publish gate
 │   ├── audit/           append-only trail of who did what
 │   ├── health/          liveness, readiness, self-probe
 │   ├── postgres/        every repository implementation — all SQL lives here
@@ -49,6 +50,9 @@ Architecture without its folder ceremony.
 | what happens on sign-in | `internal/auth/service.go` |
 | who may do what | `internal/rbac/rbac.go` |
 | the SQL behind an account | `internal/postgres/users.go` |
+| when a contest may still be edited | `internal/contests/contests.go` |
+| what stops a contest being published | `internal/contests/publish.go` |
+| who may sign themselves up | `internal/contests/enrollment.go` |
 | which routes exist | `internal/api/router.go` and the `*_handler.go` beside it |
 | how the service is wired | `internal/app/app.go` |
 | a setting and its default | `internal/platform/config/config.go` |
@@ -70,6 +74,13 @@ concern, not in a test file. Helpers another package
 needs live in a `<pkg>test` package (`users/userstest`,
 `platform/password/passwordtest`), which is also where the in-memory
 repositories live — business rules are tested against those, not against mocks.
+
+The repository tests in `internal/postgres` run their SQL against a **real**
+PostgreSQL, each inside a transaction that is rolled back, so they leave nothing
+behind. Without `CORE_DB_DSN` they skip rather than fail, which keeps `make
+test` runnable with no database to hand; `make test-db` is what actually
+exercises the SQL, and CI sets the variable. A query is the one thing a fake
+cannot verify.
 
 ## Two listeners
 
@@ -180,6 +191,78 @@ secret, not a credential to live on.
 | POST | `/api/v1/users/{id}/block`, `/unblock` | `users.manage` |
 | POST | `/api/v1/users/{id}/password-reset` | `users.manage` |
 | PUT | `/api/v1/users/{id}/roles` | `users.manage` |
+| GET | `/api/v1/contests` | signed in (scoped by who you are) |
+| POST | `/api/v1/contests` | `contest.create` |
+| GET | `/api/v1/contests/{id}` | `contest.view` on that contest |
+| PATCH, DELETE | `/api/v1/contests/{id}` | `contest.edit` |
+| GET | `/api/v1/contests/{id}/publish-check` | `contest.view` |
+| POST | `/api/v1/contests/{id}/status` | `contest.publish` |
+| PUT | `/api/v1/contests/{id}/languages`, `/translations` | `contest.edit` |
+| GET, PUT | `/api/v1/contests/{id}/sql-policy` | `contest.view` / `contest.edit` |
+| GET, PUT | `/api/v1/contests/{id}/story` | `contest.view` / `contest.edit` |
+| GET, POST | `/api/v1/contests/{id}/questions` | `contest.view` / `contest.edit` |
+| PUT | `/api/v1/contests/{id}/questions/order` | `contest.edit` |
+| GET, PATCH, DELETE | `/api/v1/contests/{id}/questions/{qid}` | `contest.view` / `contest.edit` |
+| PUT | `/api/v1/contests/{id}/questions/{qid}/texts`, `/answers` | `contest.edit` |
+| GET | `/api/v1/contests/{id}/managers` | `contest.view` |
+| PUT, DELETE | `/api/v1/contests/{id}/managers/{userId}` | `contest.manage` (owner) |
+| GET, POST | `/api/v1/contests/{id}/participants` | `participant.manage` |
+| DELETE | `/api/v1/contests/{id}/participants/{userId}` | `participant.manage` |
+| POST | `/api/v1/contests/{id}/participants/{userId}/disqualify` | `participant.manage` |
+| POST | `/api/v1/contests/{id}/enroll` | signed in (the contest decides) |
+
+The Postman collection in `postman/` covers all of them with the request bodies
+and the response codes each one answers with.
+
+### Running a contest
+
+The constructor is a pipeline, and each step refuses what the next one could not
+survive:
+
+1. **Create** — the author becomes the contest's `owner`, and a read-only SQL
+   policy is stored in the same transaction. A contest with nobody who may
+   appoint staff, or with undefined SQL access, is never observable.
+2. **Languages and translations** — the set of languages is what the contest
+   offers; exactly one is the default. Language codes are checked against the
+   `languages` table, so adding a fourth language to the installation is an
+   `INSERT` there, with no migration and no deploy.
+3. **Story, questions, answers** — authored per language. `is_visible` defaults
+   to true: hiding a question is the deliberate choice, and a hidden question
+   still scores.
+4. **Publish check** — reports *everything* missing at once, as machine codes
+   the interface translates. An organizer fixing a contest one refusal at a time
+   would need a round trip per missing translation.
+5. **Status** — draft → published → running → finished → archived. The only step
+   back is published → draft, because publishing is how an organizer finds out
+   the gate passes.
+
+What may still change depends on where the contest is, and the two lines are
+deliberately different. **Content** freezes at the start: changing a question
+while people answer it changes their task. **Settings** stay open while running,
+because extending the window after a power cut and correcting a network range
+that turned out wrong are exactly what a running contest needs — what cannot
+move is the shape (question mode, timing model, session length).
+
+### Enrollment and network restrictions
+
+`enrollment` decides only **who creates the registration**: `open` lets a
+student sign themselves up, `invite_only` means staff add them. Past that point
+both paths are identical.
+
+A roster import takes logins as well as identifiers, because what an organizer
+has is a spreadsheet of student numbers. It reports partial success honestly:
+one mistyped login does not reject the other three hundred rows, and every row
+it could not use comes back with a reason.
+
+`allowed_cidrs` limits participation to given networks — an on-site olympiad run
+from one lecture hall. It is checked against the address resolved through
+`TRUSTED_PROXIES`, never a header read at the endpoint, and an address that
+cannot be resolved is refused rather than admitted: failing open would turn
+every proxy misconfiguration into an open door. It applies to participants only.
+Staff are exempt, so an administrator who mistypes a range cannot lock
+themselves out of the contest they are configuring. Every refusal is written to
+`audit_log` — the entry that proves the rule works is the same signal that
+somebody tried from an outside device.
 
 ### Two levels of authorisation
 

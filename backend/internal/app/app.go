@@ -17,6 +17,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/api"
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/health"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
@@ -120,6 +121,23 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	})
 	userService := users.NewService(userRepo, auditRecorder, storage.NewUnitOfWork(pool))
 
+	// The contest module: everything an organizer authors and runs. It is
+	// assembled from the same repositories pattern — the domain declares what
+	// it needs, internal/postgres implements it — so nothing below this line
+	// knows any SQL.
+	contestService := contests.NewService(contests.ServiceConfig{
+		Contests:      postgres.NewContests(pool),
+		Stories:       postgres.NewStories(pool),
+		Questions:     postgres.NewQuestions(pool),
+		Managers:      postgres.NewContestManagers(pool),
+		Registrations: postgres.NewRegistrations(pool),
+		Policies:      postgres.NewSQLPolicies(pool),
+		Languages:     postgres.NewLanguages(pool),
+		Users:         userRepo,
+		Audit:         auditRecorder,
+		UnitOfWork:    storage.NewUnitOfWork(pool),
+	})
+
 	deps := api.Deps{
 		Logger:    log,
 		Metrics:   recorder,
@@ -133,6 +151,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Modules: []api.Module{
 			api.NewAuthHandler(authService, userService, authMiddleware, cookies, log),
 			api.NewUsersHandler(userService, authMiddleware, log),
+			api.NewContestsHandler(contestService, authMiddleware, log, cfg.DefaultLocale),
 		},
 	}
 
