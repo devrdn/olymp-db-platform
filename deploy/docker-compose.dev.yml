@@ -49,3 +49,27 @@ services:
   # The proxy exists to terminate TLS; running the API directly does not need it.
   caddy:
     profiles: [full]
+
+  # A browser UI for the core database — dev only, and deliberately no more
+  # than that: Adminer is a single ~50 MiB image with no server-side account
+  # of its own and nothing to persist, unlike pgAdmin's own volume and
+  # first-run master password. It authenticates as whatever Postgres role you
+  # log in with, so access is exactly Postgres's own — nothing extra to lock
+  # down, and nothing extra to configure to make it "safe for dev".
+  adminer:
+    image: adminer:4
+    profiles: [dbui]
+    restart: unless-stopped
+    environment:
+      # Pre-fills the connection form with the compose service name, so the
+      # only fields left to type on the login screen are the credentials
+      # already sitting in deploy/.env.
+      ADMINER_DEFAULT_SERVER: pg-core
+    ports:
+      - "127.0.0.1:${ADMINER_PORT:-8081}:8080"
+    depends_on:
+      - pg-core
+    # Without this it lands on Compose's separate default network instead of
+    # the one pg-core is actually on, and "pg-core" would not resolve at all —
+    # caught by trying to actually connect, not by reading the config.
+    networks: [internal]

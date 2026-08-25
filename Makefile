@@ -43,7 +43,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env build test test-race cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-observability dev-down dev-logs compose-up compose-down check fmt-check tidy-check vuln sec test-all
+.PHONY: help require-env build test test-race cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-observability dev-db-ui dev-down dev-logs compose-up compose-down check fmt-check tidy-check vuln sec test-all
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -151,12 +151,18 @@ dev-up: ## Start PostgreSQL and Redis for local development
 dev-observability: ## Add Prometheus, Loki, Promtail and Grafana to the dev stack
 	$(COMPOSE_DEV) --profile observability up -d prometheus loki promtail grafana
 
+# A browser UI for the core database (Adminer) — dev only. Its login screen
+# already knows the server (pg-core); type in CORE_DB_USER / CORE_DB_PASSWORD
+# / CORE_DB_NAME from deploy/.env to connect.
+dev-db-ui: ## Add a database browser (Adminer) to the dev stack
+	$(COMPOSE_DEV) --profile dbui up -d adminer
+
 dev-down: ## Stop the development infrastructure
 	# dev-up starts redis by naming it, which activates its "shared" profile for
 	# that command only. A plain `down` does not re-activate the profile, so it
 	# would leave redis running and then refuse to remove the network it is still
 	# attached to. Activating the profiles here tears down everything dev can start.
-	$(COMPOSE_DEV) --profile shared --profile observability --profile full down
+	$(COMPOSE_DEV) --profile shared --profile observability --profile dbui --profile full down
 
 dev-logs: ## Follow the development infrastructure logs
 	$(COMPOSE_DEV) logs -f

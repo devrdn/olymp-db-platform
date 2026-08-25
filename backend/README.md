@@ -134,16 +134,16 @@ delivered over plain HTTP, so signing in would appear to work and then fail on
 the next request. The full stack puts Caddy in front and serves HTTPS, where the
 flag belongs on.
 
-Want dashboards and logs while developing this way? `make` happily runs several
-targets in one invocation, so bring up the dev infrastructure and observability
-together:
+Want dashboards, logs, or a database browser while developing this way? `make`
+happily runs several targets in one invocation, so combine whatever you need:
 
 ```bash
-make dev-up dev-observability
+make dev-up dev-observability dev-db-ui
 ```
 
-See [Observability](#observability) below for what that gets you and, just as
-important, what it does not.
+See [Observability](#observability) below for what the first gets you and,
+just as important, what it does not; the database browser is covered right
+after it.
 
 
 ## Authentication and access
@@ -346,6 +346,26 @@ need to give Promtail a file-based scrape target and have `make run` tee its
 output there; nothing in this repository does that today, and it has not been
 worth the plumbing so far.
 
+## Database browser (dev only)
+
+```bash
+make dev-db-ui   # http://localhost:${ADMINER_PORT:-8081}
+```
+
+[Adminer](https://www.adminer.org/), not pgAdmin: a single ~50 MiB image with
+no account of its own and nothing to persist, against pgAdmin's own volume and
+first-run master password — for a dev convenience that gets started and
+stopped constantly, that overhead bought nothing here. It authenticates as
+whatever Postgres role you log in with, so access is exactly Postgres's own,
+nothing extra to lock down. The login form already knows the server
+(`pg-core`); type in `CORE_DB_USER` / `CORE_DB_PASSWORD` / `CORE_DB_NAME` from
+`deploy/.env` and you're at the schema.
+
+Bound to loopback, like Grafana. Not something this repo runs in production —
+if a production database browser turns out to be worth it, it needs its own
+answer for access control and audit that "loopback-only" sidesteps in dev, and
+that's a separate decision.
+
 ## Swapping the database
 
 The game cluster is PostgreSQL and stays that way: per-participant `CREATE
@@ -415,6 +435,14 @@ currently up, so it cannot stop them, and then can't remove a network they are
 still attached to. Both `dev-down` and `compose-down` pass every profile this
 project defines for exactly this reason — if you add a new profile to
 `docker-compose.yml`, add it there too.
+
+**A new service you add can't reach `pg-core` or `redis` by name.** Every
+service in `docker-compose.yml` declares `networks: [internal]` explicitly —
+without that line on a new service, Compose attaches it to a separate,
+implicitly-created default network instead, and service-name DNS
+(`pg-core`, `redis`, `api`) simply does not resolve across that boundary.
+`docker compose config` won't catch this — it looks correct right up until
+something actually tries to connect.
 
 **A `go run` process outlives the `kill` you sent it.** `go run` compiles to a
 temp binary and execs it as a *child* process; the PID your shell's `$!` gives
