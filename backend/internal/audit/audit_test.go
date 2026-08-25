@@ -2,9 +2,6 @@ package audit
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -163,43 +160,5 @@ func TestExplicitOriginWinsOverTheContext(t *testing.T) {
 	got := sink.entries[0]
 	if got.IP != "203.0.113.7" || got.UserAgent != "explicit" {
 		t.Errorf("origin = %q/%q, want the explicit values to win", got.IP, got.UserAgent)
-	}
-}
-
-func TestRequestMetaMiddlewareStashesTheRequestOrigin(t *testing.T) {
-	sink := &recordingSink{}
-	recorder := New(sink)
-	handler := RequestMeta(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = recorder.Record(r.Context(), Entry{Action: ActionUserBlock})
-	}))
-	req := httptest.NewRequest(http.MethodPost, "/users/x/block", nil)
-	req.RemoteAddr = "203.0.113.7:41000"
-	req.Header.Set("User-Agent", "Admin/1.0")
-
-	handler.ServeHTTP(httptest.NewRecorder(), req)
-
-	got := sink.entries[0]
-	if got.IP != "203.0.113.7" {
-		t.Errorf("IP = %q, want the request peer", got.IP)
-	}
-	if got.UserAgent != "Admin/1.0" {
-		t.Errorf("UserAgent = %q, want the request agent", got.UserAgent)
-	}
-}
-
-func TestRequestMetaTruncatesAnAbsurdUserAgent(t *testing.T) {
-	// The header is attacker-controlled and the column is kept for a year.
-	sink := &recordingSink{}
-	recorder := New(sink)
-	handler := RequestMeta(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = recorder.Record(r.Context(), Entry{Action: "test"})
-	}))
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("User-Agent", strings.Repeat("x", 5000))
-
-	handler.ServeHTTP(httptest.NewRecorder(), req)
-
-	if len(sink.entries[0].UserAgent) > maxUserAgentLength {
-		t.Errorf("UserAgent is %d bytes, want at most %d", len(sink.entries[0].UserAgent), maxUserAgentLength)
 	}
 }

@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/health"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
@@ -85,7 +84,7 @@ func NewRouter(deps Deps) *chi.Mux {
 	// address, so every consumer sees the same answer.
 	r.Use(deps.ClientIPs.Middleware)
 	// Every audit write below inherits the request origin from the context.
-	r.Use(audit.RequestMeta)
+	r.Use(requestMeta)
 	r.Use(httpx.Recoverer(deps.Logger))
 	r.Use(metrics.Middleware(deps.recorder()))
 	r.Use(httpx.AccessLog(deps.Logger))

@@ -47,7 +47,7 @@ func IdentityFrom(ctx context.Context) (rbac.Identity, bool) {
 // MiddlewareConfig collects what the middleware needs.
 type MiddlewareConfig struct {
 	Sessions   *SessionStore
-	Users      users.Repository
+	Users      UserStore
 	Authorizer *rbac.Authorizer
 	Cookies    CookieWriter
 	Logger     *slog.Logger
@@ -56,7 +56,7 @@ type MiddlewareConfig struct {
 // Middleware turns a session cookie into an identity and enforces permissions.
 type Middleware struct {
 	sessions *SessionStore
-	users    users.Repository
+	users    UserStore
 	authz    *rbac.Authorizer
 	cookies  CookieWriter
 	log      *slog.Logger
