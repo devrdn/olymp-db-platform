@@ -150,6 +150,11 @@ func TestRedisAddressIsOptional(t *testing.T) {
 func TestCoreDatabaseRemainsRequired(t *testing.T) {
 	// The core database has no fallback: without it there are no users,
 	// contests or answers, so starting would be pointless.
+	//
+	// The variable is cleared rather than assumed absent: CI exports it for
+	// the whole job, and a test that reads the ambient environment passes or
+	// fails by accident of where it runs.
+	t.Setenv("CORE_DB_DSN", "")
 	t.Setenv("REDIS_ADDR", "localhost:6379")
 
 	_, err := Load()
