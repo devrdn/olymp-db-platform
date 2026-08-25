@@ -1,0 +1,376 @@
+{
+  "info": {
+    "_postman_id": "e1a7c9a0-6b3a-4f7a-9d2e-db-contest-core-api",
+    "name": "DB Contest — Core API",
+    "description": "Auth + account management endpoints for the DB Contest Core API (step 1 & 2 of the architecture plan). Sessions are stored server-side and carried in an HttpOnly cookie set by /auth/login — Postman's cookie jar handles it automatically once you run Login inside this collection.\n\nFolders:\n- Auth — login, current session, logout, own password change\n- Users (admin) — account management, requires `users.manage`\n- Operational — health/readiness/metrics on the internal listener (not exposed publicly in production)\n\nRun order for a fresh environment: Auth ▸ Login (bootstrap account) → any Users request → Auth ▸ Logout.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080/api/v1", "type": "string", "description": "Public listener. In production this is reached through Caddy; only this path is ever exposed." },
+    { "key": "internalUrl", "value": "http://localhost:9090", "type": "string", "description": "Internal listener (metrics, health) — never published outside the compose network." },
+    { "key": "adminLogin", "value": "admin", "type": "string" },
+    { "key": "adminPassword", "value": "", "type": "string", "description": "Set this to the one-time password printed by `make bootstrap`." },
+    { "key": "userId", "value": "", "type": "string", "description": "Populated automatically by Users ▸ Create." },
+    { "key": "oneTimePassword", "value": "", "type": "string", "description": "Populated automatically by Users ▸ Create / Reset password." }
+  ],
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Every request gets this: a structured error body always carries",
+          "// error.request_id, useful when correlating with server logs.",
+          "if (pm.response.code >= 400) {",
+          "    pm.test('error body is structured', function () {",
+          "        const body = pm.response.json();",
+          "        pm.expect(body).to.have.property('error');",
+          "        pm.expect(body.error).to.have.property('code');",
+          "        pm.expect(body.error).to.have.property('message');",
+          "    });",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "description": "Unauthenticated: Login. Authenticated (session cookie required): Me, Logout, Change password.",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"login\": \"{{adminLogin}}\",\n  \"password\": \"{{adminPassword}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "Authenticates and starts a server-side session. The session token is never returned in the body — it is set as an HttpOnly cookie, which Postman stores and replays automatically on every later request in this collection.\n\nUnknown login and wrong password are indistinguishable (both 401 invalid_credentials) and cost the same time, by design — see docs/ARCHITECTURE.md §7.2.\n\nResponses:\n- 200 — `{ user, must_change_password }`. If `must_change_password` is true, every endpoint except /auth/password, /auth/logout and /auth/me will answer 403 `password_change_required` until you call Change password.\n- 401 `invalid_credentials`\n- 403 `account_blocked`\n- 429 `too_many_attempts` — 10/15min per account, 30/15min per address"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    pm.test('response has user and must_change_password', function () {",
+                  "        pm.expect(body).to.have.property('user');",
+                  "        pm.expect(body).to.have.property('must_change_password');",
+                  "    });",
+                  "    if (body.user && body.user.id) {",
+                  "        pm.collectionVariables.set('userId', body.user.id);",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Change password",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"old_password\": \"{{adminPassword}}\",\n  \"new_password\": \"a much longer new password\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/password",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "password"]
+            },
+            "description": "Replaces the caller's own password. Requires the current password (proof of possession — stops a borrowed unlocked browser from being a permanent takeover). Policy: at least 12 characters, must differ from the current password.\n\nThis is the one endpoint reachable while `must_change_password` is still true — it's how a one-time password gets replaced on first sign-in.\n\nEvery other session on the account is retired as part of this call, and so is this one: the response clears the session cookie, so log in again with the new password afterwards.\n\nResponses:\n- 204 — no body\n- 400 `wrong_password` / `weak_password` / `same_password`\n- 401 `unauthenticated`"
+          },
+          "response": []
+        },
+        {
+          "name": "Current session (me)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "me"]
+            },
+            "description": "Describes the signed-in account and the exact permission codes its roles grant — useful for building UI that hides what the account may not do.\n\nResponses:\n- 200 — `{ id, login, permissions: string[] }`\n- 401 `unauthenticated`"
+          },
+          "response": []
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "logout"]
+            },
+            "description": "Ends the session server-side (not just the cookie) and clears the cookie. Calling it with no session, or twice, is not an error — logging out with a stale cookie is a normal thing for a browser to do.\n\nResponses:\n- 204 — no body"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Users (admin)",
+      "description": "Account management. Every route here requires the `users.manage` permission — an installation-wide grant, not scoped to any contest. Run Auth ▸ Login first.",
+      "item": [
+        {
+          "name": "List users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users?q=&status=&limit=50&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["users"],
+              "query": [
+                { "key": "q", "value": "", "description": "Matches login, full name or email (case-insensitive substring)." },
+                { "key": "status", "value": "", "description": "active | blocked" },
+                { "key": "limit", "value": "50", "description": "Page size, capped server-side at 200." },
+                { "key": "offset", "value": "0" }
+              ]
+            },
+            "description": "Paged account listing.\n\nResponses:\n- 200 — `{ items: UserResponse[], total: number }` — `total` counts every match, not just the returned page\n- 401 `unauthenticated`\n- 403 `forbidden`"
+          },
+          "response": []
+        },
+        {
+          "name": "Create user",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"login\": \"ivanov\",\n  \"full_name\": \"Ivan Ivanov\",\n  \"email\": \"ivanov@university.edu\",\n  \"roles\": [\"student\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": ["{{baseUrl}}"],
+              "path": ["users"]
+            },
+            "description": "Creates an account with a server-generated one-time password. The account is flagged so the first sign-in must replace it — see Auth ▸ Change password.\n\n`roles` are global role codes (`student`, `organizer`, `admin`); omit for a student with no elevated role.\n\nResponses:\n- 201 — `{ user, one_time_password }` — the password is shown exactly once and is never retrievable again; a lost one is reset via Users ▸ Reset password\n- 400 — malformed body\n- 409 `login_taken` / `email_taken`"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    pm.collectionVariables.set('userId', body.user.id);",
+                  "    pm.collectionVariables.set('oneTimePassword', body.one_time_password);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get user by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["users", "{{userId}}"]
+            },
+            "description": "Responses:\n- 200 — `UserResponse`\n- 400 `invalid_user_id`\n- 404 `not_found`"
+          },
+          "response": []
+        },
+        {
+          "name": "Update profile",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"Ivan A. Ivanov\",\n  \"email\": \"ivanov@university.edu\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["users", "{{userId}}"]
+            },
+            "description": "Changes the descriptive fields only — not status, roles or password.\n\nResponses:\n- 204 — no body\n- 400 — empty full name / `invalid_user_id`\n- 404 `not_found`"
+          },
+          "response": []
+        },
+        {
+          "name": "Block user",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}/block",
+              "host": ["{{baseUrl}}"],
+              "path": ["users", "{{userId}}", "block"]
+            },
+            "description": "Denies access and retires every session the account currently holds — blocking takes effect immediately, not at the next login or whenever an open tab's session happens to expire.\n\nAn administrator cannot block their own account (guards against locking yourself out).\n\nResponses:\n- 204 — no body\n- 400 `cannot_act_on_self`\n- 404 `not_found`"
+          },
+          "response": []
+        },
+        {
+          "name": "Unblock user",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}/unblock",
+              "host": ["{{baseUrl}}"],
+              "path": ["users", "{{userId}}", "unblock"]
+            },
+            "description": "Restores access. Sessions retired by the block stay retired — the account signs in again.\n\nResponses:\n- 204 — no body\n- 404 `not_found`"
+          },
+          "response": []
+        },
+        {
+          "name": "Reset password",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}/password-reset",
+              "host": ["{{baseUrl}}"],
+              "path": ["users", "{{userId}}", "password-reset"]
+            },
+            "description": "Issues a fresh one-time password for an account the user can no longer reach, and retires their sessions. Same flag as account creation: the next sign-in must replace it.\n\nResponses:\n- 200 — `{ one_time_password }`\n- 404 `not_found`"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.collectionVariables.set('oneTimePassword', pm.response.json().one_time_password);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Replace roles",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"roles\": [\"organizer\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}/roles",
+              "host": ["{{baseUrl}}"],
+              "path": ["users", "{{userId}}", "roles"]
+            },
+            "description": "Sets the account's global roles to exactly this set (not a merge). Retires the account's sessions, so a demotion bites on the next request rather than at the next login.\n\nResponses:\n- 204 — no body\n- 400 — unknown role code / `invalid_user_id`\n- 404 `not_found`"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Operational",
+      "description": "Served on the internal listener ({{internalUrl}}), which is never published through the reverse proxy — reachable only inside the compose network or on localhost during development. No authentication: these exist for the container runtime and Prometheus.",
+      "item": [
+        {
+          "name": "Liveness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{internalUrl}}/healthz",
+              "host": ["{{internalUrl}}"],
+              "path": ["healthz"]
+            },
+            "description": "Reports only that the process is running — it never checks dependencies, so a database outage does not trigger a restart loop.\n\nResponse: 200 — `{ status: \"ok\" }`"
+          },
+          "response": []
+        },
+        {
+          "name": "Readiness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{internalUrl}}/readyz",
+              "host": ["{{internalUrl}}"],
+              "path": ["readyz"]
+            },
+            "description": "Probes PostgreSQL and the cache concurrently under a shared timeout and reports whether this instance can serve traffic. Failure details are logged, never returned in the body — this endpoint is reachable from the network and driver errors carry hosts and credentials.\n\nResponses:\n- 200 — `{ status: \"ok\", checks: { \"core-db\": \"ok\", cache: \"ok\" }, cache: \"memory\"|\"redis\" }`\n- 503 — `status: \"unavailable\"`, same shape, with the failing check(s) marked `failed`"
+          },
+          "response": []
+        },
+        {
+          "name": "Metrics (Prometheus)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{internalUrl}}/metrics",
+              "host": ["{{internalUrl}}"],
+              "path": ["metrics"]
+            },
+            "description": "Prometheus scrape endpoint. Only present when METRICS_BACKEND=prometheus (the default) — with the `log` or `none` backend this route does not exist and answers 404, on purpose: serving an empty page would tell a scraper the service is instrumented when its numbers live elsewhere.\n\nResponse: 200 — text/plain Prometheus exposition format."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Service info",
+      "item": [
+        {
+          "name": "Version",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/version",
+              "host": ["{{baseUrl}}"],
+              "path": ["version"]
+            },
+            "description": "Public, unauthenticated. Reports the build version stamped at compile time.\n\nResponse: 200 — `{ version: string }`"
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
