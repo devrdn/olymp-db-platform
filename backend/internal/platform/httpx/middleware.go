@@ -63,54 +63,31 @@ func AccessLog(log *slog.Logger) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			started := time.Now()
-			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+			rec := NewStatusRecorder(w)
 
 			next.ServeHTTP(rec, r)
 
 			log.InfoContext(r.Context(), "http request",
 				"method", r.Method,
 				"path", r.URL.Path,
-				"status", rec.status,
-				"bytes", rec.written,
+				"status", rec.Status(),
+				"bytes", rec.BytesWritten(),
 				"duration_ms", time.Since(started).Milliseconds(),
 			)
 		})
 	}
 }
 
-// statusRecorder captures the status code and response size for logging and
-// metrics. It assumes 200 until the handler says otherwise, matching the
-// behaviour of net/http when a handler writes a body without a status.
-type statusRecorder struct {
-	http.ResponseWriter
-	status  int
-	written int
-}
-
-func (r *statusRecorder) WriteHeader(status int) {
-	r.status = status
-	r.ResponseWriter.WriteHeader(status)
-}
-
-func (r *statusRecorder) Write(b []byte) (int, error) {
-	n, err := r.ResponseWriter.Write(b)
-	r.written += n
-	return n, err
-}
-
-// Unwrap exposes the wrapped writer to helpers such as http.ResponseController,
-// keeping streaming responses (SSE) usable behind this middleware.
-func (r *statusRecorder) Unwrap() http.ResponseWriter {
-	return r.ResponseWriter
-}
-
 // ClientIP returns the address the request came from.
 //
-// It reads RemoteAddr only. A forwarded header is client-supplied unless a
-// trusted proxy overwrote it, and treating one as authentic here would let a
-// caller spoof the address that rate limiting and the audit trail record.
-// Proxy-aware resolution belongs in one configured place, not in each handler.
+// When the IPResolver middleware ran, this is the proxy-aware resolution it
+// stored; otherwise it falls back to the TCP peer. The fallback never reads
+// forwarded headers — a header is client-supplied unless a trusted proxy
+// vouched for it, and that judgement lives in IPResolver, in one place.
 func ClientIP(r *http.Request) string {
+	if ip, ok := r.Context().Value(clientIPKey{}).(string); ok && ip != "" {
+		return ip
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return ""

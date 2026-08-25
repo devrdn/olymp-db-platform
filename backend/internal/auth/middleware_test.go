@@ -304,3 +304,52 @@ func TestActiveSessionIsExtendedOnUse(t *testing.T) {
 		t.Errorf("the session expired although it was used: %v", err)
 	}
 }
+
+func TestOneTimePasswordAccountIsBlockedFromTheAPI(t *testing.T) {
+	// must_change_password was advisory: a client ignoring the UI kept the
+	// administrator-issued password as a working credential indefinitely.
+	f := newMiddlewareFixture(t, staticRoles{})
+	setMustChange(t, f)
+	rec := httptest.NewRecorder()
+
+	f.mw.Authenticate(http.HandlerFunc(okHandler)).ServeHTTP(rec, authed(f.token))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 while the password change is pending", rec.Code)
+	}
+	var body struct {
+		Error struct{ Code string } `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if body.Error.Code != "password_change_required" {
+		t.Errorf("error.code = %q, want password_change_required so the client can route to the form", body.Error.Code)
+	}
+}
+
+func TestOneTimePasswordAccountMayStillChangeItsPassword(t *testing.T) {
+	// The enforcement must not wall off the only way out.
+	f := newMiddlewareFixture(t, staticRoles{})
+	setMustChange(t, f)
+
+	for _, path := range []string{"/api/v1/auth/password", "/api/v1/auth/logout", "/api/v1/auth/me"} {
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: f.token})
+		rec := httptest.NewRecorder()
+
+		f.mw.Authenticate(http.HandlerFunc(okHandler)).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s = %d, want 200 while the password change is pending", path, rec.Code)
+		}
+	}
+}
+
+// setMustChange flags the fixture account as still on its one-time password.
+func setMustChange(t *testing.T, f *mwFixture) {
+	t.Helper()
+	if err := f.repo.SetPassword(context.Background(), f.user.ID, "$argon2id$stub", true); err != nil {
+		t.Fatalf("SetPassword returned error: %v", err)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
@@ -21,6 +22,17 @@ const SessionCookieName = "dbcontest_session"
 
 // contestIDParam is the URL parameter the contest-scoped middleware reads.
 const contestIDParam = "contestID"
+
+// passwordChangeExemptSuffixes are the endpoints an account still on its
+// one-time password may reach: the way out (changing the password), the way
+// back (logout) and the self-description the client needs to route to the
+// form. Matched by suffix so the mount prefix (/api/v1 in production, bare in
+// tests) does not matter.
+var passwordChangeExemptSuffixes = []string{
+	"/auth/password",
+	"/auth/logout",
+	"/auth/me",
+}
 
 // identityKey is unexported so only this package can place an identity in a
 // context — a handler cannot fabricate one.
@@ -102,10 +114,13 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 			return
 		}
 
-		permissions, err := m.users.PermissionsFor(ctx, user.ID)
-		if err != nil {
-			m.log.ErrorContext(ctx, "could not load permissions", "user_id", user.ID, "error", err)
-			httpx.Error(w, r, http.StatusInternalServerError, "internal_error", "Internal server error")
+		// An administrator-issued password is a handover secret, not a
+		// credential to live on: until the user replaces it, the API is
+		// closed except for the endpoints that let them do exactly that.
+		// Enforcing it here, not in the UI, is what makes the flag real.
+		if user.MustChangePassword && !passwordChangeExempt(r.URL.Path) {
+			httpx.Error(w, r, http.StatusForbidden, "password_change_required",
+				"Change your password before continuing")
 			return
 		}
 
@@ -118,7 +133,7 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 		identity := rbac.Identity{
 			UserID:      user.ID,
 			Login:       user.Login,
-			Permissions: toSet(permissions),
+			Permissions: toSet(user.Permissions),
 		}
 
 		ctx = context.WithValue(ctx, identityKey{}, identity)
@@ -189,6 +204,15 @@ func (m *Middleware) discard(ctx context.Context, token string) {
 func (m *Middleware) unauthenticated(w http.ResponseWriter, r *http.Request) {
 	m.cookies.Clear(w)
 	httpx.Error(w, r, http.StatusUnauthorized, "unauthenticated", "Sign in to continue")
+}
+
+func passwordChangeExempt(path string) bool {
+	for _, suffix := range passwordChangeExemptSuffixes {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func toSet(values []string) map[string]struct{} {

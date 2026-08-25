@@ -11,9 +11,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 
+	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/google/uuid"
 )
 
@@ -88,38 +88,49 @@ func (r *Recorder) Record(ctx context.Context, e Entry) error {
 
 	e.Payload = redact(e.Payload)
 
+	// An explicit origin (the login flow resolves its own) wins; everything
+	// else inherits the request's.
+	if meta, ok := ctx.Value(metaKey{}).(requestMeta); ok {
+		if e.IP == "" {
+			e.IP = meta.ip
+		}
+		if e.UserAgent == "" {
+			e.UserAgent = meta.userAgent
+		}
+	}
+
 	if err := r.sink.Append(ctx, e); err != nil {
 		return fmt.Errorf("append audit entry: %w", err)
 	}
 	return nil
 }
 
-// FromRequest fills in the caller's address and agent.
-func FromRequest(r *http.Request, e Entry) Entry {
-	e.IP = clientIP(r)
+// metaKey carries the request origin through the context.
+type metaKey struct{}
 
-	agent := r.UserAgent()
-	if len(agent) > maxUserAgentLength {
-		agent = agent[:maxUserAgentLength]
-	}
-	e.UserAgent = agent
-
-	return e
+type requestMeta struct {
+	ip        string
+	userAgent string
 }
 
-// clientIP extracts the peer address. It reads RemoteAddr only: a forwarded
-// header is client-supplied, and the proxy-aware resolution belongs in one
-// place rather than being re-derived per call site.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		// Store nothing rather than junk: the column is typed `inet`.
-		return ""
+// WithRequestMeta returns a context carrying the request origin. Record fills
+// entries from it when the caller did not set an origin explicitly, so every
+// audit write in a request names where the action came from without each call
+// site remembering to.
+func WithRequestMeta(ctx context.Context, ip, userAgent string) context.Context {
+	if len(userAgent) > maxUserAgentLength {
+		userAgent = userAgent[:maxUserAgentLength]
 	}
-	if net.ParseIP(host) == nil {
-		return ""
-	}
-	return host
+	return context.WithValue(ctx, metaKey{}, requestMeta{ip: ip, userAgent: userAgent})
+}
+
+// RequestMeta is the HTTP middleware form of WithRequestMeta. It runs after
+// the client-IP resolver, so the recorded address is the proxy-aware one.
+func RequestMeta(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := WithRequestMeta(r.Context(), httpx.ClientIP(r), r.UserAgent())
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // redact returns a copy of the payload with sensitive values removed, at any

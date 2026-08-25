@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/health"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
@@ -29,6 +30,10 @@ type Deps struct {
 	Metrics  metrics.Recorder
 	Version  string
 	Checkers []health.Checker
+	// ClientIPs resolves the real client address behind the reverse proxy.
+	// The zero value trusts nobody, which is the safe default: forwarded
+	// headers are then ignored and the TCP peer is the client.
+	ClientIPs httpx.IPResolver
 	// CacheMode names the active cache backend, reported by readiness so a
 	// degraded install is visible to operators.
 	CacheMode        string
@@ -76,6 +81,11 @@ func NewRouter(deps Deps) *chi.Mux {
 	// body can carry it, recovery next so a panic in any handler below still
 	// produces a logged 500, then observability, then response hardening.
 	r.Use(httpx.RequestID)
+	// Client IP is resolved once, before anything that records or limits by
+	// address, so every consumer sees the same answer.
+	r.Use(deps.ClientIPs.Middleware)
+	// Every audit write below inherits the request origin from the context.
+	r.Use(audit.RequestMeta)
 	r.Use(httpx.Recoverer(deps.Logger))
 	r.Use(metrics.Middleware(deps.recorder()))
 	r.Use(httpx.AccessLog(deps.Logger))

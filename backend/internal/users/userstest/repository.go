@@ -75,7 +75,7 @@ func (r *Repository) ByLogin(_ context.Context, login string) (users.User, error
 	}
 	for _, u := range r.byID {
 		if strings.EqualFold(u.Login, login) {
-			return u, nil
+			return r.withPermissions(u), nil
 		}
 	}
 	return users.User{}, users.ErrNotFound
@@ -92,7 +92,7 @@ func (r *Repository) ByID(_ context.Context, id uuid.UUID) (users.User, error) {
 	if !ok {
 		return users.User{}, users.ErrNotFound
 	}
-	return u, nil
+	return r.withPermissions(u), nil
 }
 
 func (r *Repository) Create(_ context.Context, u users.User) (users.User, error) {
@@ -198,30 +198,21 @@ func (r *Repository) ReplaceRoles(_ context.Context, id uuid.UUID, roleCodes []s
 	})
 }
 
-func (r *Repository) PermissionsFor(_ context.Context, id uuid.UUID) ([]string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r.Err != nil {
-		return nil, r.Err
-	}
-	u, ok := r.byID[id]
-	if !ok {
-		return nil, users.ErrNotFound
-	}
-
+// withPermissions mirrors the production repository: permissions arrive with
+// the account. Callers hold the lock.
+func (r *Repository) withPermissions(u users.User) users.User {
 	seen := map[string]struct{}{}
-	var out []string
+	u.Permissions = nil
 	for _, role := range u.Roles {
 		for _, permission := range r.permissions[role] {
 			if _, dup := seen[permission]; dup {
 				continue
 			}
 			seen[permission] = struct{}{}
-			out = append(out, permission)
+			u.Permissions = append(u.Permissions, permission)
 		}
 	}
-	return out, nil
+	return u
 }
 
 func (r *Repository) mutate(id uuid.UUID, fn func(*users.User)) error {
@@ -242,4 +233,20 @@ func (r *Repository) mutate(id uuid.UUID, fn func(*users.User)) error {
 
 func containsFold(haystack, needle string) bool {
 	return strings.Contains(strings.ToLower(haystack), strings.ToLower(needle))
+}
+
+// SpyUnitOfWork is a pass-through storage.UnitOfWork that counts invocations,
+// so tests can assert an operation ran under exactly one unit of work.
+type SpyUnitOfWork struct {
+	Calls int
+	// Err, when set, is returned instead of running the function.
+	Err error
+}
+
+func (s *SpyUnitOfWork) Do(ctx context.Context, fn func(context.Context) error) error {
+	s.Calls++
+	if s.Err != nil {
+		return s.Err
+	}
+	return fn(ctx)
 }
