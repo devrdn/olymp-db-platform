@@ -254,3 +254,31 @@ func TestDeletingAContestTakesItsTranslationsWithIt(t *testing.T) {
 		}
 	})
 }
+
+func TestTheDefaultLanguageCanBeMovedToAnotherLanguage(t *testing.T) {
+	// A partial unique index allows one default per contest, and it is checked
+	// row by row. Switching the default has to survive the moment when the old
+	// one has not been cleared yet.
+	withTx(t, func(ctx context.Context) {
+		repo := NewContests(testPool)
+		author := makeUser(t, ctx, "author-default-switch")
+		id := makeContest(t, ctx, author.ID)
+		if err := repo.ReplaceLanguages(ctx, id, []contests.ContestLanguage{
+			{Code: "en", IsDefault: true}, {Code: "ro"},
+		}); err != nil {
+			t.Fatalf("ReplaceLanguages() = %v", err)
+		}
+
+		err := repo.ReplaceLanguages(ctx, id, []contests.ContestLanguage{
+			{Code: "ro", IsDefault: true}, {Code: "en"},
+		})
+		if err != nil {
+			t.Fatalf("moving the default language failed: %v", err)
+		}
+
+		loaded, _ := repo.ByID(ctx, id)
+		if got := loaded.DefaultLanguage(); got != "ro" {
+			t.Errorf("default language = %q, want ro", got)
+		}
+	})
+}

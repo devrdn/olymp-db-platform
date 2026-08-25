@@ -71,7 +71,7 @@ func (s *Service) GrantManager(ctx context.Context, actorID, contestID, userID u
 		return fmt.Errorf("%w: %q", ErrInvalidRole, role)
 	}
 
-	c, err := s.staffableContest(ctx, contestID)
+	c, err := s.mutableContest(ctx, contestID)
 	if err != nil {
 		return err
 	}
@@ -108,7 +108,7 @@ func (s *Service) GrantManager(ctx context.Context, actorID, contestID, userID u
 
 // RevokeManager removes somebody from a contest's staff.
 func (s *Service) RevokeManager(ctx context.Context, actorID, contestID, userID uuid.UUID) error {
-	if _, err := s.staffableContest(ctx, contestID); err != nil {
+	if _, err := s.mutableContest(ctx, contestID); err != nil {
 		return err
 	}
 	existing, err := s.managers.Get(ctx, contestID, userID)
@@ -130,12 +130,14 @@ func (s *Service) RevokeManager(ctx context.Context, actorID, contestID, userID 
 	})
 }
 
-// staffableContest loads a contest whose staff may still change.
+// mutableContest loads a contest that still accepts changes of any kind.
 //
 // Wider than editing content: appointing somebody to help with the reports
-// after the finish is ordinary. An archived contest is a closed record, and
-// nothing about it changes any more.
-func (s *Service) staffableContest(ctx context.Context, contestID uuid.UUID) (Contest, error) {
+// after the finish, or excluding a participant whose result is disputed, are
+// both ordinary. An archived contest is a closed record, and nothing about it
+// changes any more — which has to be true whichever door the change comes
+// through.
+func (s *Service) mutableContest(ctx context.Context, contestID uuid.UUID) (Contest, error) {
 	c, err := s.contests.ByID(ctx, contestID)
 	if err != nil {
 		return Contest{}, err

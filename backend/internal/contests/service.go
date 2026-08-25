@@ -220,6 +220,13 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 		updated.Settings = *cmd.Settings
 	}
 
+	// The session length belongs to individual timing. Without this the switch
+	// back is unreachable: a client has no way to send "no duration", and a
+	// fixed contest that still carries one does not validate.
+	if updated.Timing == TimingFixed {
+		updated.DurationMin = nil
+	}
+
 	if err := updated.Validate(); err != nil {
 		return Contest{}, err
 	}
@@ -361,7 +368,12 @@ func (s *Service) Transition(ctx context.Context, actorID, contestID uuid.UUID, 
 	if err := c.CanTransitionTo(status); err != nil {
 		return err
 	}
-	if status == StatusPublished {
+	// Both doors, not only the first. Content stays editable while published
+	// — an organizer publishes to see the contest as participants will, and
+	// may still fix a typo — so "publish, then remove the story, then start"
+	// is a sequence the rules allow. The invariant has to hold at the moment
+	// participants are actually let in.
+	if status == StatusPublished || status == StatusRunning {
 		if err := s.checkPublishable(ctx, c); err != nil {
 			return err
 		}

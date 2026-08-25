@@ -181,20 +181,28 @@ func (r *Questions) Delete(ctx context.Context, questionID uuid.UUID) error {
 
 	// One statement: the delete and the renumbering of everything after it are
 	// the same change, and a reader between the two would see a hole.
-	tag, err := r.querier(ctx).Exec(ctx, `
+	//
+	// The row count of the UPDATE says nothing about whether the question
+	// existed — it is zero whenever the deleted question was the last one — so
+	// the DELETE reports for itself through the returning CTE.
+	var deleted int
+	err := r.querier(ctx).QueryRow(ctx, `
 		WITH removed AS (
 			DELETE FROM questions WHERE id = $1 RETURNING contest_id, ord
+		), renumbered AS (
+			UPDATE questions q
+			SET ord = q.ord - 1
+			FROM removed
+			WHERE q.contest_id = removed.contest_id AND q.ord > removed.ord
+			RETURNING q.id
 		)
-		UPDATE questions q
-		SET ord = q.ord - 1
-		FROM removed
-		WHERE q.contest_id = removed.contest_id AND q.ord > removed.ord`, questionID)
+		SELECT count(*) FROM removed`, questionID).Scan(&deleted)
 	if err != nil {
 		return fmt.Errorf("delete question: %w", err)
 	}
-	// The UPDATE touches no rows when the deleted question was the last one,
-	// so its count says nothing about whether the question existed.
-	_ = tag
+	if deleted == 0 {
+		return contests.ErrQuestionNotFound
+	}
 	return nil
 }
 

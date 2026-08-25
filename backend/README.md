@@ -234,7 +234,9 @@ survive:
    would need a round trip per missing translation.
 5. **Status** — draft → published → running → finished → archived. The only step
    back is published → draft, because publishing is how an organizer finds out
-   the gate passes.
+   the gate passes. The gate runs at **both** doors: content stays editable
+   while published, so "publish, remove the story, start" is a sequence the
+   rules allow, and the invariant has to hold when participants are let in.
 
 What may still change depends on where the contest is, and the two lines are
 deliberately different. **Content** freezes at the start: changing a question

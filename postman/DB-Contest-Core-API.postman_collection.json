@@ -716,7 +716,7 @@
                 "status"
               ]
             },
-            "description": "Moves the contest along its lifecycle: draft → published → running → finished → archived. The only step back is published → draft, and it exists because publishing is how an organizer finds out the gate passes.\n\nPublishing runs the gate. Requires `contest.publish`.\n\nResponses: 200 `ContestResponse` · 409 `invalid_transition` · 422 `not_publishable` with the same `problems[]` as publish-check",
+            "description": "Moves the contest along its lifecycle: draft → published → running → finished → archived. The only step back is published → draft, and it exists because publishing is how an organizer finds out the gate passes.\n\nThe gate runs on **both** the move to `published` and the move to `running`: content stays editable while published, so it has to hold again at the moment participants are let in. Requires `contest.publish`.\n\nResponses: 200 `ContestResponse` · 409 `invalid_transition` · 422 `not_publishable` with the same `problems[]` as publish-check",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"status\": \"published\"\n}",

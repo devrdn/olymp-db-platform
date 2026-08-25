@@ -242,15 +242,18 @@ func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsComman
 
 // addOne registers one resolved account, recording why it was skipped when it
 // was.
+//
+// Whether the person is already taking part is decided by the write, not by a
+// lookup first: the guarantee is a unique index, and two organizers importing
+// overlapping rosters at the same moment would both pass a lookup. Treating
+// that verdict as an ordinary skip is what keeps one such row from failing the
+// other three hundred.
 func (s *Service) addOne(ctx context.Context, cmd AddParticipantsCommand, c Contest, user users.User, result *AddParticipantsResult) error {
-	if _, err := s.registrations.ByUser(ctx, c.ID, user.ID); err == nil {
-		result.skip(user.Login, SkipAlreadyEnrolled)
-		return nil
-	} else if !errors.Is(err, ErrParticipantNotFound) {
-		return err
-	}
-
 	if _, err := s.registrations.Add(ctx, c.ID, user.ID); err != nil {
+		if errors.Is(err, ErrAlreadyEnrolled) {
+			result.skip(user.Login, SkipAlreadyEnrolled)
+			return nil
+		}
 		return err
 	}
 	result.Added++
@@ -287,12 +290,8 @@ func (s *Service) Enroll(ctx context.Context, cmd EnrollCommand) (Participant, e
 		return Participant{}, ErrAddressNotAllowed
 	}
 
-	if _, err := s.registrations.ByUser(ctx, c.ID, cmd.UserID); err == nil {
-		return Participant{}, ErrAlreadyEnrolled
-	} else if !errors.Is(err, ErrParticipantNotFound) {
-		return Participant{}, err
-	}
-
+	// Signing up twice is likewise decided by the write: a double-clicked
+	// button sends two requests, and a lookup would let both through.
 	var enrolled Participant
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
 		var err error
@@ -321,12 +320,8 @@ func (s *Service) recordDenied(ctx context.Context, cmd EnrollCommand) error {
 // Somebody who has already started is refused: their queries and answers are
 // part of the record, and excluding them is disqualification.
 func (s *Service) RemoveParticipant(ctx context.Context, actorID, contestID, userID uuid.UUID) error {
-	c, err := s.contests.ByID(ctx, contestID)
-	if err != nil {
+	if _, err := s.mutableContest(ctx, contestID); err != nil {
 		return err
-	}
-	if c.Status == StatusArchived {
-		return fmt.Errorf("%w: it is archived", ErrNotEditable)
 	}
 	p, err := s.registrations.ByUser(ctx, contestID, userID)
 	if err != nil {
@@ -348,7 +343,7 @@ func (s *Service) RemoveParticipant(ctx context.Context, actorID, contestID, use
 
 // DisqualifyParticipant excludes somebody while keeping everything they did.
 func (s *Service) DisqualifyParticipant(ctx context.Context, actorID, contestID, userID uuid.UUID) error {
-	if _, err := s.contests.ByID(ctx, contestID); err != nil {
+	if _, err := s.mutableContest(ctx, contestID); err != nil {
 		return err
 	}
 	p, err := s.registrations.ByUser(ctx, contestID, userID)

@@ -293,3 +293,53 @@ func TestUnknownContestIsReportedAsNotFound(t *testing.T) {
 		t.Errorf("ByID() = %v, want ErrNotFound", err)
 	}
 }
+
+func TestAContestCanBeSwitchedBackToAFixedWindow(t *testing.T) {
+	// The session length belongs to individual timing. Switching to a fixed
+	// window has to take it away, or the change is unreachable: the client has
+	// no way to send "no duration", and the contest refuses to validate with a
+	// duration it is not allowed to carry.
+	f := conteststest.NewFixture()
+	minutes := 90
+	c := f.Contests.Put(contests.Contest{
+		Status:       contests.StatusDraft,
+		Enrollment:   contests.EnrollmentInviteOnly,
+		QuestionMode: contests.QuestionModeMulti,
+		Timing:       contests.TimingIndividual,
+		DurationMin:  &minutes,
+	})
+
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID:   uuid.New(),
+		ContestID: c.ID,
+		Timing:    contests.TimingFixed,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+
+	if updated.DurationMin != nil {
+		t.Errorf("duration = %v, want it cleared with the timing model", *updated.DurationMin)
+	}
+}
+
+func TestStartingRefusesAContestWhoseContentWasTakenApartAfterPublishing(t *testing.T) {
+	// Content stays editable while published, deliberately — an organizer
+	// publishes to see the contest as participants will, and may still fix a
+	// typo. That leaves a window: publish, remove the story, start. The gate
+	// has to hold at the moment participants are actually let in.
+	f := conteststest.NewFixture()
+	c := f.SeedPublishableContest()
+	if err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusPublished); err != nil {
+		t.Fatalf("Transition(published) = %v", err)
+	}
+	if err := f.Stories.Delete(context.Background(), c.ID); err != nil {
+		t.Fatalf("Delete() = %v", err)
+	}
+
+	err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusRunning)
+
+	if !errors.Is(err, contests.ErrNotPublishable) {
+		t.Errorf("Transition(running) = %v, want ErrNotPublishable", err)
+	}
+}

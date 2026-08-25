@@ -358,6 +358,11 @@ type Registrations struct {
 	byID map[uuid.UUID]contests.Participant
 	// Accounts resolves the login and name carried on every participant.
 	Accounts AccountLookup
+	// MissLookups makes ByUser report "not found" even when the row is there,
+	// which is what a caller sees when a concurrent writer registered the same
+	// person between the lookup and the write. It exists so that path can be
+	// exercised without two goroutines.
+	MissLookups bool
 }
 
 var _ contests.RegistrationRepository = (*Registrations)(nil)
@@ -405,6 +410,9 @@ func (r *Registrations) List(_ context.Context, contestID uuid.UUID, f contests.
 }
 
 func (r *Registrations) ByUser(_ context.Context, contestID, userID uuid.UUID) (contests.Participant, error) {
+	if r.MissLookups {
+		return contests.Participant{}, contests.ErrParticipantNotFound
+	}
 	for _, p := range r.byID {
 		if p.ContestID == contestID && p.UserID == userID {
 			return p, nil
@@ -414,8 +422,13 @@ func (r *Registrations) ByUser(_ context.Context, contestID, userID uuid.UUID) (
 }
 
 func (r *Registrations) Add(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, error) {
-	if _, err := r.ByUser(ctx, contestID, userID); err == nil {
-		return contests.Participant{}, contests.ErrAlreadyEnrolled
+	// Checked against the stored rows rather than through ByUser: the real
+	// guarantee is a unique index, and it does not stop holding because a
+	// lookup missed.
+	for _, existing := range r.byID {
+		if existing.ContestID == contestID && existing.UserID == userID {
+			return contests.Participant{}, contests.ErrAlreadyEnrolled
+		}
 	}
 	p := contests.Participant{
 		ContestID: contestID,
