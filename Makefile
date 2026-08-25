@@ -23,11 +23,18 @@ ADMIN_NAME       ?= System Administrator
 CORE_DB_DSN ?= postgres://$(CORE_DB_USER):$(CORE_DB_PASSWORD)@localhost:$(CORE_DB_PORT)/$(CORE_DB_NAME)?sslmode=disable
 
 # Redis is optional: with no address the service uses its in-process cache.
-# Set REDIS_ADDR in deploy/.env to use the container instead.
-ifdef REDIS_PASSWORD
-REDIS_ADDR ?= redis://:$(REDIS_PASSWORD)@localhost:$(REDIS_PORT)/0
-endif
-REDIS_ADDR ?=
+#
+# deploy/.env also sets REDIS_ADDR — for the containerized api service, which
+# reaches Redis by the compose-internal hostname `redis`. A process on the
+# host cannot resolve that name, so that value must never reach `make run`.
+# `?=` will not shadow it: once -include reads the line, Make considers the
+# variable "defined" even when its value is empty, and `?=` only fires on a
+# variable that is entirely undefined. This assignment is therefore
+# unconditional, computed straight from REDIS_PASSWORD instead. A value given
+# on the command line (`make REDIS_ADDR=... run`) still wins — Make always
+# prefers a command-line assignment over one written in a makefile, no matter
+# where in the file it appears.
+REDIS_ADDR := $(if $(REDIS_PASSWORD),redis://:$(REDIS_PASSWORD)@localhost:$(REDIS_PORT)/0,)
 
 # Security tools are installed on demand into the Go bin directory, so a fresh
 # checkout can run the full gate without a separate setup step.
@@ -36,7 +43,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env build test test-race cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-down dev-logs compose-up compose-down check fmt-check tidy-check vuln sec test-all
+.PHONY: help require-env build test test-race cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-observability dev-down dev-logs compose-up compose-down check fmt-check tidy-check vuln sec test-all
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -126,12 +133,30 @@ bootstrap: require-env ## Create the first administrator (idempotent; prints the
 dev-up: ## Start PostgreSQL and Redis for local development
 	$(COMPOSE_DEV) up -d pg-core redis
 
+# Prometheus, Loki, Promtail and Grafana, without pulling in the containerized
+# api/caddy/pg-core (same reasoning as compose-observability below). Combine
+# it with dev-up in one command the way `make` already supports running
+# several targets: `make dev-up dev-observability`.
+#
+# Metrics: Prometheus is already configured with a second scrape job
+# (core-api-dev, see deploy/observability/prometheus.yml) pointed at
+# host.docker.internal:9090, which is how `make run`'s API — bound to all
+# interfaces on the host — becomes visible without any extra flag.
+#
+# Logs: this does NOT give you `make run`'s logs in Grafana. Promtail
+# discovers what to scrape through the Docker socket, so it can only see
+# containers; a bare `go run` process on the host has no container to find.
+# Watch its own terminal (or your own `tee` to a file) for dev logs — the
+# Loki/Grafana log view only ever shows the containerized api.
+dev-observability: ## Add Prometheus, Loki, Promtail and Grafana to the dev stack
+	$(COMPOSE_DEV) --profile observability up -d prometheus loki promtail grafana
+
 dev-down: ## Stop the development infrastructure
 	# dev-up starts redis by naming it, which activates its "shared" profile for
 	# that command only. A plain `down` does not re-activate the profile, so it
 	# would leave redis running and then refuse to remove the network it is still
 	# attached to. Activating the profiles here tears down everything dev can start.
-	$(COMPOSE_DEV) --profile shared --profile full down
+	$(COMPOSE_DEV) --profile shared --profile observability --profile full down
 
 dev-logs: ## Follow the development infrastructure logs
 	$(COMPOSE_DEV) logs -f
@@ -142,8 +167,14 @@ compose-up: ## Build and start the stack (Caddy, API, database)
 compose-bootstrap: require-env ## Create the first administrator inside the stack
 	$(COMPOSE) --profile bootstrap run --rm bootstrap
 
-compose-observability: ## Add Prometheus, Loki and Grafana to a running stack
-	$(COMPOSE) --profile observability up -d
+compose-observability: ## Add Prometheus, Loki, Promtail and Grafana without touching the rest
+	# Services with no `profiles:` key (api, caddy, pg-core, migrate) are
+	# Compose's "default" set and start on ANY `up`, profile flag or not —
+	# `--profile` only lifts the gate on profiled services, it never narrows
+	# the run. Naming the services explicitly is what actually limits `up`
+	# to them; --profile is still required or these four would be skipped
+	# as "not in an active profile".
+	$(COMPOSE) --profile observability up -d prometheus loki promtail grafana
 
 compose-down: ## Stop the full stack
 	$(COMPOSE) --profile bootstrap --profile observability --profile shared down

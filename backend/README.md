@@ -134,6 +134,17 @@ delivered over plain HTTP, so signing in would appear to work and then fail on
 the next request. The full stack puts Caddy in front and serves HTTPS, where the
 flag belongs on.
 
+Want dashboards and logs while developing this way? `make` happily runs several
+targets in one invocation, so bring up the dev infrastructure and observability
+together:
+
+```bash
+make dev-up dev-observability
+```
+
+See [Observability](#observability) below for what that gets you and, just as
+important, what it does not.
+
 
 ## Authentication and access
 
@@ -247,10 +258,42 @@ A configured but unreachable Redis is an error, not a reason to fall back: the
 operator named that server, and silently using a different store would hide a
 broken deployment.
 
-```bash
-REDIS_ADDR=            # in-process cache, single instance
-REDIS_ADDR=redis:6379  # shared cache, required before scaling out
-```
+To turn Redis on, set `REDIS_PASSWORD` in `deploy/.env` and start the `shared`
+profile (`make dev-up`, or `docker compose --profile shared up -d redis`) —
+**leave `REDIS_ADDR` itself empty.** That single password then produces two
+different, both correct, addresses on its own:
+
+- `docker-compose.yml` builds the containerized api's address as
+  `redis://:${REDIS_PASSWORD}@redis:6379/0` — `redis` is the compose service
+  name, resolvable only on the compose network.
+- The Makefile builds `make run`'s address as
+  `redis://:$(REDIS_PASSWORD)@localhost:$(REDIS_PORT)/0` — a bare process on
+  the host cannot resolve `redis` at all, so it needs the loopback form
+  instead.
+
+Writing a finished `REDIS_ADDR` into `deploy/.env` yourself breaks one side or
+the other, for two separate reasons worth knowing about:
+
+1. **`.env` files are not shell-interpolated.** `REDIS_ADDR=redis://:${REDIS_PASSWORD}@redis:6379/0`
+   in `.env` does *not* expand `${REDIS_PASSWORD}` — Compose only expands
+   variables inside the compose YAML itself, never recursively inside another
+   `.env` value — so the password ships as the literal four characters
+   `${REDIS_PASSWORD}`.
+2. **A value in `.env`, even empty, reaches `make run` and wins.** The Makefile
+   includes `deploy/.env` directly, so `REDIS_ADDR=` there is *not* the same as
+   "unset" from Make's point of view — a `?=` default only fires on a variable
+   that was never assigned at all, and an included empty assignment still
+   counts as an assignment. A `redis://...@redis:6379/0` value meant for the
+   container would silently become `make run`'s address too, and a bare host
+   process cannot resolve `redis`. (This is exactly the shape of bug this
+   project tries to design out elsewhere — one fact with two different correct
+   readings, sourced from a single, ambiguous place. Here the fix was to stop
+   sourcing the host address from `.env` at all: the Makefile now always
+   derives it fresh from `REDIS_PASSWORD`.)
+
+Only set `REDIS_ADDR` explicitly if you want the **containerized** api to reach
+a Redis that is not this stack's own `redis` service; it has no effect on
+`make run` regardless.
 
 **Metrics.** Prometheus scrapes the service, so its absence cannot break
 anything — but it is not a required dependency either. `METRICS_BACKEND`
@@ -266,6 +309,42 @@ The instrumentation is identical for every backend, so switching one cannot
 change *what* is measured — only where it goes. `/metrics` is registered only
 when the backend actually has a scrape endpoint: serving an empty page would
 tell a scraper the service is instrumented while its numbers live elsewhere.
+
+## Observability
+
+Prometheus, Loki, Promtail and Grafana are optional and off by default — a
+small install stays small. Bring them up:
+
+```bash
+make compose-observability   # alongside the containerized stack (make compose-up)
+make dev-observability       # alongside the dev infrastructure (make dev-up)
+```
+
+Both are pure additions: they only start the four observability services by
+name, never the rest of the stack, and `make dev-down` / `make compose-down`
+tear them down along with everything else. Grafana is at
+`http://localhost:${GRAFANA_PORT:-3001}` (bound to loopback), login `admin` /
+your `GRAFANA_PASSWORD`; Prometheus and Loki are provisioned as its
+datasources automatically, nothing to click through.
+
+**Metrics work in both modes without touching anything.** Prometheus is
+configured with two scrape jobs pointed at the same `service: core-api` label:
+`api:9090` for the containerized service, and `host.docker.internal:9090` for
+`make run`'s process on the host — Docker Desktop resolves that hostname to
+the host machine from any container, regardless of which network it is on.
+Whichever one you are actually running answers `up`; the other one just shows
+as a down target, which is the correct way to say "not running that way right
+now" rather than a toggle to remember. See
+[`deploy/observability/prometheus.yml`](../deploy/observability/prometheus.yml).
+
+**Logs only work for the containerized stack.** Promtail discovers what to
+tail through the Docker socket (`docker_sd_configs`), so it can only ever see
+containers. A bare `go run ./cmd/api` process from `make run` has no
+container to discover — its logs go to your terminal (or wherever you redirect
+them) and nowhere else. If you want `make run`'s logs in Grafana too, you would
+need to give Promtail a file-based scrape target and have `make run` tee its
+output there; nothing in this repository does that today, and it has not been
+worth the plumbing so far.
 
 ## Swapping the database
 
@@ -308,6 +387,41 @@ Records are JSON on stdout, ready for Promtail. Every request gets a
 `request_id`: reused from `X-Request-Id` when it is a valid UUID, generated
 otherwise — arbitrary client text must never reach the logs. The logger reads
 the identifier from the request context, so handlers do not pass it explicitly.
+
+## Troubleshooting
+
+**`bind: address already in use` on port 80/443 (`make compose-up`).** Caddy
+wants those ports and something else on the host already has them — commonly
+macOS's built-in Apache (`sudo apachectl stop`, and
+`sudo launchctl disable system/org.apache.httpd` if you want it to stay off
+across reboots). Find the actual culprit with `lsof -nP -iTCP:80 -sTCP:LISTEN`
+before assuming it is Apache.
+
+**A profile flag adds services, it does not select them.** `docker compose
+--profile observability up -d` (no service names) does *not* start only the
+observability stack — it starts observability **in addition to** every service
+that has no `profiles:` key at all (`api`, `caddy`, `pg-core`, `migrate`),
+because those are Compose's unconditional "default set" and start on any `up`
+regardless of which profiles are active. The only way to actually limit `up`
+to a specific set is to name the services explicitly, which is what
+`compose-observability` and `dev-observability` both do
+(`up -d prometheus loki promtail grafana`) — `--profile` is still required
+too, or Compose skips them as "not in an active profile".
+
+**`make dev-down` (or `compose-down`) leaves containers running / refuses to
+remove the network.** Same root cause as above, in reverse: `down` without the
+right `--profile` flags does not know about profiled services that are
+currently up, so it cannot stop them, and then can't remove a network they are
+still attached to. Both `dev-down` and `compose-down` pass every profile this
+project defines for exactly this reason — if you add a new profile to
+`docker-compose.yml`, add it there too.
+
+**A `go run` process outlives the `kill` you sent it.** `go run` compiles to a
+temp binary and execs it as a *child* process; the PID your shell's `$!` gives
+you is the `go` wrapper, not the binary actually holding the port. Killing the
+wrapper can leave the real process listening behind it. If a port that should
+be free still answers, find the actual owner —
+`lsof -nP -iTCP:<port> -sTCP:LISTEN` — and kill that PID instead.
 
 ## Development
 

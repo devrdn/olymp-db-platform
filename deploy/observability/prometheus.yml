@@ -9,9 +9,25 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
+  # The containerized api (docker-compose.yml, `make compose-up`), reached by
+  # its service name on the compose network.
   - job_name: core-api
     static_configs:
       - targets: ["api:9090"]
+        labels:
+          service: core-api
+
+  # The same binary run directly on the host during development (`make run`,
+  # alongside `make dev-up`). Docker Desktop's `host.docker.internal` reaches
+  # the host from any container regardless of which network it is on, so this
+  # needs no extra wiring beyond the API listening on all interfaces, which it
+  # already does. Only one of these two jobs is ever actually up at a time —
+  # the other just shows as a down target, which is the correct, harmless way
+  # to represent "not running that way right now" rather than a config you
+  # have to toggle by hand.
+  - job_name: core-api-dev
+    static_configs:
+      - targets: ["host.docker.internal:9090"]
         labels:
           service: core-api
 
