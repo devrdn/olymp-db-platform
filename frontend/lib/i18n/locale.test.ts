@@ -1,23 +1,23 @@
 import { describe, expect, test } from "vitest";
 
-import { matchLocale } from "./locale";
+import { LOCALES } from "./config";
+import { readLocale } from "./locale";
 
-describe("matchLocale", () => {
-  test("answers in the fallback when no preference is available", () => {
-    expect(matchLocale(["de", "fr"], ["en", "ro", "ru"], "en")).toBe("en");
-  });
-});
-
-describe("matchLocale, regions", () => {
-  test("accepts the base language when a region was asked for", () => {
-    expect(matchLocale(["ro-MD"], ["en", "ro"], "en")).toBe("ro");
+describe("readLocale", () => {
+  test("answers with what the visitor chose", () => {
+    expect(readLocale("ro")).toBe("ro");
   });
 
-  test("accepts a regional variant when the base language was asked for", () => {
-    expect(matchLocale(["ro"], ["en", "ro-MD"], "en")).toBe("ro-MD");
+  test("answers English when nothing has been chosen", () => {
+    expect(readLocale(undefined)).toBe("en");
   });
 
-  test("prefers an exact match over the order of the list", () => {
-    expect(matchLocale(["ru"], ["en", "ro", "ru"], "en")).toBe("ru");
+  test("answers English rather than trusting a value we do not speak", () => {
+    expect(readLocale("de")).toBe("en");
+    expect(readLocale("../../etc/passwd")).toBe("en");
+  });
+
+  test("speaks exactly the languages the app declares", () => {
+    for (const locale of LOCALES) expect(readLocale(locale)).toBe(locale);
   });
 });
