@@ -1,439 +1,593 @@
-# Дизайн-система DB Contest — спецификация
+# DB Contest design system — specification
 
-Статус: принята 2026-08-25. Основание для шага «каркас фронтенда» и предпосылка
-к пункту 3 плана имплементации (`docs/ARCHITECTURE.md`, раздел 14).
+Status: accepted 2026-08-25, revised 2026-08-26 after the first run on real
+screens. Basis for the "frontend skeleton" step and a precondition for item 3 of
+the implementation plan (`docs/ARCHITECTURE.md`, section 14).
 
-Направление выбрано из трёх проработанных вариантов. Принят третий — «Чистовик»:
-палитра из варианта «Картотека», метод компоновки и типографики снят с
-документации Tailwind CSS путём чтения вычисленных стилей живой страницы.
+The direction was chosen from three worked-out options. The third was accepted —
+*Chistovik* ("fair copy"): the palette comes from the *Kartoteka* ("card index")
+option, and the method of layout and typography was taken from the Tailwind CSS
+documentation by reading the computed styles of the live page rather than from
+memory.
 
-## 1. Рамки этого шага
+## 1. Scope of this step
 
-**Входит:** слой токенов, типографическая шкала, режимы плотности, таксономия
-состояний, инвентарь компонентов, структура каталога `frontend/`, витрина
-`/design`, вертикальный срез на экранах входа и списка олимпиад.
+**In:** the token layer, the type scale, density modes, the state taxonomy, the
+component inventory, the `frontend/` directory structure, the `/design`
+showcase, and a vertical slice on the sign-in and contest-listing screens.
 
-**Не входит:** CRUD контента и конструктор олимпиады — это пункт 3 архитектуры,
-он начинается после того, как система готова, и собирается из её частей.
+**Out:** content CRUD and the contest constructor — that is item 3 of the
+architecture, and it begins once the system is ready and is assembled from its
+parts.
 
-**Предпосылка выполнена:** ветка слита с `main`, каркас `frontend/` и разделы
-6.1/6.2 архитектуры находятся в дереве.
+**Precondition met:** the branch is merged with `main`, and the `frontend/`
+skeleton and architecture sections 6.1/6.2 are in the tree.
 
-## 2. Принципы
+## 2. Principles
 
-Пять правил, из которых выводится остальное. Каждое дальше на что-то влияет.
+Five rules, from which the rest follows. Each one decides something later.
 
-1. **Данные важнее хрома.** Максимум пикселей отдан таблице результатов,
-   редактору и дереву схемы. Интерфейс вокруг — линейки и типографика.
-2. **Иерархию несут масштаб и вес, а не жирность.** Крупные ступени идут весом
-   400 с сильным отрицательным трекингом. Начертания 700 в системе нет.
-3. **Движение не стоит между действием и результатом.** Продукт работает под
-   таймером; анимация, добавляющая 300 мс ожидания, крадёт время участника.
-4. **Состояние всегда объяснено.** Ни одного пустого экрана без причины и
-   следующего шага, ни одной ошибки без того, что делать дальше.
-5. **Один акцент, три семантики.** Расширение палитры — изменение системы, а не
-   решение на месте.
+1. **Data outranks chrome.** The maximum number of pixels goes to the result
+   table, the editor and the schema tree. The interface around them is rules and
+   typography.
+2. **Hierarchy is carried by scale and weight, not by boldness.** The large
+   steps run at weight 400 with strong negative tracking. There is no 700 in the
+   system.
+3. **Motion never stands between an action and its result.** The product runs
+   under a timer; an animation that adds 300 ms of waiting spends the
+   participant's time.
+4. **A state is always explained.** No empty screen without a reason and a next
+   step, no error without what to do about it.
+5. **One accent, three semantics.** Widening the palette is a change to the
+   system, not a decision taken on the spot.
 
-## 3. Слой токенов
+## 3. The token layer
 
-Три уровня, каждый ссылается только на предыдущий: примитив → семантика →
-компонент. Живёт в `frontend/styles/tokens.css` внутри `@theme` Tailwind v4 —
-один источник порождает и CSS-переменные, и утилиты.
+Three levels, each referring only to the one below it: primitive → semantic →
+component. It lives in `frontend/styles/tokens.css` and is exposed through
+Tailwind v4's `@theme` in `app/globals.css` — one source produces both the CSS
+variables and the utilities.
 
-**Правило, делающее систему проверяемой:** тёмная тема переопределяет **только**
-семантический уровень. Примитивы и компонентные токены не дублируются. Если ради
-тёмной темы приходится трогать компонентный токен — семантика описана неверно, и
-чинить надо её.
+**The rule that makes the system checkable:** the dark theme redefines the
+semantic level **only**. Primitives and component tokens are not duplicated. If a
+component token ever has to be touched for the sake of the dark theme, the
+semantics are described wrongly, and the semantics are what gets fixed.
 
-### 3.1 Семантические токены
+### 3.1 Semantic tokens
 
-| Токен | Светлая | Тёмная | Назначение |
+| Token | Light | Dark | Purpose |
 |---|---|---|---|
-| `--color-bg` | `#ffffff` | `#0a0b0f` | полотно страницы |
-| `--color-panel` | `#fafafa` | `#101218` | приподнятая подложка, демо-панель |
-| `--color-sunk` | `#f6f6f6` | `#0d0f14` | утопленная область (редактор) |
-| `--color-ink` | `#0d1117` | `#ffffff` | основной текст |
-| `--color-ink-2` | `#4c535e` | `#a6adb8` | вторичный текст |
-| `--color-ink-3` | `#66696d` | `#898c8c` | приглушённый текст, подписи |
-| `--color-line` | `rgb(13 17 23 / 0.07)` | `rgb(255 255 255 / 0.10)` | линейка-разделитель |
-| `--color-line-2` | `rgb(13 17 23 / 0.13)` | `rgb(255 255 255 / 0.17)` | усиленная линейка |
-| `--color-edge` | `#838587` | `#6c6f70` | **граница интерактивного контрола** |
-| `--color-pattern` | `rgb(13 17 23 / 0.05)` | `rgb(255 255 255 / 0.10)` | штриховка полей, точечная сетка |
-| `--color-ann` | `rgb(13 17 23 / 0.24)` | `rgb(255 255 255 / 0.26)` | декоративная подпись-аннотация |
-| `--color-cta-bg` | `#0d1117` | `#262b36` | фон главного действия |
-| `--color-cta-fg` | `#ffffff` | `#ffffff` | текст главного действия |
-| `--color-accent` | `#0e5048` | `#5ed0bc` | акцент — только «живое» |
-| `--color-accent-wash` | `#e4efec` | `rgb(94 208 188 / 0.12)` | подложка акцента |
-| `--color-good` | `#2c6338` | `#6fbf80` | принято, успех |
-| `--color-warn` | `#8a5510` | `#d59a3e` | предупреждение |
-| `--color-bad` | `#a32a21` | `#e0796d` | отказ, ошибка |
+| `--color-bg` | `#ffffff` | `#0a0b0f` | the page ground |
+| `--color-panel` | `#fafafa` | `#101218` | raised surface, demo panel |
+| `--color-sunk` | `#f6f6f6` | `#0d0f14` | sunken area (editor) |
+| `--color-ink` | `#0d1117` | `#ffffff` | primary text |
+| `--color-ink-2` | `#4c535e` | `#a6adb8` | secondary text |
+| `--color-ink-3` | `#66696d` | `#898c8c` | muted text, captions |
+| `--color-line` | `rgb(13 17 23 / 0.07)` | `rgb(255 255 255 / 0.10)` | separating rule |
+| `--color-line-2` | `rgb(13 17 23 / 0.13)` | `rgb(255 255 255 / 0.17)` | stronger rule |
+| `--color-edge` | `#838587` | `#6c6f70` | **boundary of an interactive control** |
+| `--color-pattern` | `rgb(13 17 23 / 0.05)` | `rgb(255 255 255 / 0.10)` | hatched fields, dotted grid |
+| `--color-ann` | `rgb(13 17 23 / 0.24)` | `rgb(255 255 255 / 0.26)` | decorative annotation caption |
+| `--color-cta-bg` | `#0d1117` | `#262b36` | ground of the primary action |
+| `--color-cta-fg` | `#ffffff` | `#ffffff` | text of the primary action |
+| `--color-accent` | `#0e5048` | `#5ed0bc` | the accent — only for what is live |
+| `--color-accent-wash` | `#e4efec` | `rgb(94 208 188 / 0.12)` | tinted surface under the accent |
+| `--color-good` | `#2c6338` | `#6fbf80` | accepted, success |
+| `--color-warn` | `#8a5510` | `#d59a3e` | warning |
+| `--color-bad` | `#a32a21` | `#e0796d` | rejection, error |
 
-Подсветка SQL — отдельная подпалитра, выводимая из основной: ключевое слово несёт
-акцент, функция `#1f4e79`/`#7fb2e5`, строка `#8a5510`/`#d5a75e`, число
-`#8f3a14`/`#e0956b`, комментарий `--color-ink-3`.
+SQL highlighting is a sub-palette derived from the main one: a keyword carries
+the accent, a function `#1f4e79`/`#7fb2e5`, a string `#8a5510`/`#d5a75e`, a
+number `#8f3a14`/`#e0956b`, a comment `--color-ink-3`.
 
-### 3.2 Три решения по цвету, которые надо не потерять
+### 3.2 Three colour decisions worth not losing
 
-**Светлая тема стоит на чистом белом, а не на тонированной бумаге.** Метод
-держится на линейке в 5 % — на кремовом или сером фоне она тонет.
+**The light theme stands on pure white, not on tinted paper.** The whole method
+rests on a rule at 5 % — on a cream or grey ground that rule drowns.
 
-**Прозрачности между темами не зеркалятся, а удваиваются.** 5 % чёрного на белом
-против 10 % белого на чёрном. Тёмный фон съедает контраст сильнее светлого;
-честная инверсия даёт линейку, которой не видно.
+**Alpha values are doubled between themes, not mirrored.** 5 % black on white
+against 10 % white on black. A dark ground swallows contrast harder than a light
+one; an honest inversion produces a rule nobody can see.
 
-**Граница контрола — отдельный токен от декоративной линейки.** У них разные
-пороги WCAG: линейке порог не предъявляется вовсе, контуру интерактивного
-контрола нужны 3:1 (SC 1.4.11). Один токен на две работы провалил бы строгий
-порог — это уже случалось в двух черновиках подряд.
+**A control's boundary is a separate token from a decorative rule.** They answer
+to different WCAG thresholds: a rule has none at all, while the outline of an
+interactive control needs 3:1 (SC 1.4.11). One token doing both jobs would fail
+the stricter threshold — which had already happened in two drafts running.
 
-### 3.3 Запрет на произвольные цвета
+### 3.3 No arbitrary colours
 
-`bg-[#…]`, `text-[#…]`, `border-[#…]` запрещены и ловятся правилом ESLint. Без
-него система расползается примерно за месяц. Единственный источник — `tokens.css`;
-`tailwind.config` цветов не содержит.
+`bg-[#…]`, `text-[#…]`, `border-[#…]` are forbidden and are caught by an ESLint
+rule. Without it the system spreads out in about a month. The single source is
+`tokens.css`; there is no `tailwind.config` holding colours.
 
-## 4. Типографика
+### 3.4 Switching the theme
 
-`Onest` — интерфейс. `JetBrains Mono` — SQL, все числа, служебные подписи.
-`Literata` — только текст истории преступления и больше нигде.
+The theme lives in a cookie (`dbcontest_theme`: `system` / `light` / `dark`) and
+is read by the server before anything renders; `<html>` carries `data-theme` in
+the first byte of markup. `system` writes no attribute at all — that absence is
+exactly what lets the `prefers-color-scheme` block in `tokens.css` apply.
 
-Покрытие проверено эмпирически замером ширины глифа против подстановки: у всех
-трёх гарнитур есть собственные `Ș ș Ț ț Ă ă` (запятая снизу, как требует
-румынская орфография, а не седиль) и полная кириллица. Объявленный у Google
-подсет `latin-ext` одинаков для всех шрифтов и сам по себе ничего не гарантирует.
+This replaces the blocking inline script that every second dark-mode
+implementation ships, whose only job is to repaint a page that has already been
+shown wrong. There is nothing to flash here: every route is dynamic anyway
+because each one reads the session, so reading one more cookie costs nothing.
 
-| Ступень | Кегль / интерлиньяж | Вес | Трекинг | Мера |
+The dark values are declared **once** (`--dark-*`) and referenced from two
+places: under the media query and under the explicit choice. Repeating twenty
+values across two blocks is precisely the mechanism by which they diverge — one
+copy gets corrected and the other keeps the old value until somebody notices in
+the wrong theme.
+
+## 4. Typography
+
+`Onest` — the interface. `JetBrains Mono` — SQL, every number, utility captions.
+`Literata` — the text of the crime story and nowhere else.
+
+Coverage was checked empirically, by measuring glyph width against substitution:
+all three faces have their own `Ș ș Ț ț Ă ă` (comma below, as Romanian
+orthography requires, not cedilla) and full Cyrillic. The `latin-ext` subset
+Google declares is identical for every font and guarantees nothing by itself.
+
+| Step | Size / leading | Weight | Tracking | Measure |
 |---|---|---|---|---|
-| `display` | `clamp(40px, 8.2vw, 92px)` / `0.98` | 400 | `-0.05em` | 20ch |
-| `h2` | `clamp(28px, 4vw, 44px)` / `1.02` | 400 | `-0.042em` | 20ch |
-| `h3` | `19px` / `1.3` | 500 | `-0.02em` | — |
-| `lede` | `18px` / `1.55` | 500 | — | 60ch |
-| `body` | `15.5px` / `1.65` | 400 | — | 66ch |
-| `small` | `13px` / `1.5` | 400 | — | — |
-| `label` (mono) | `11.5px` / `1.5` | 400 | — | — |
-| `data` (mono) | `11.5–13px` | 400/500 | — | `tabular-nums` |
-| `narrative` (Literata) | `17px` / `1.7` | 400 | — | 58ch |
+| `display` | `clamp(44px, 8vw, 104px)` / `0.98` | 400 | `-0.05em` | 20ch |
+| `h2` | `clamp(32px, 3.6vw, 52px)` / `1.02` | 400 | `-0.042em` | 20ch |
+| `h3` | `21px` / `1.3` | 500 | `-0.02em` | — |
+| `lede` | `20px` / `1.55` | 500 | — | 60ch |
+| `body` | `17px` / `1.65` | 400 | — | 66ch |
+| `small` | `14px` / `1.5` | 400 | — | — |
+| `row` | `17.5px` / `1.35` | 500 | `-0.022em` | — |
+| `control` | `15px` / `1.4` | 500 | — | — |
+| `control-sm` | `13.5px` / `1.4` | 500 | — | — |
+| `label` (mono) | `12.5px` / `1.5` | 500 | `0.1em`, uppercase | — |
+| `data` (mono) | `13px` / `1.85` | 400 | — | `tabular-nums` |
+| `narrative` (Literata) | `18px` / `1.7` | 400 | — | 58ch |
 
-**Правило моноширинного:** если значение можно сравнить с соседним взглядом по
-вертикали, оно набрано `JetBrains Mono` с табличными цифрами. Пропорциональные
-цифры в колонке — столбец, который нельзя прочитать сканированием.
+**The scale was revised upward after the first run on real screens.** The first
+set of values was taken from the Tailwind CSS documentation and inherited its
+sizes — but that is a page made of prose, and this is a register, a query log and
+a result table, read close up and for a long time. At 1600 px, captions at
+11.5 px and body at 15.5 px read as fine print. Roughly 9 % across the whole
+scale keeps the relationships between the steps and gives back a normal size.
 
-**Почему вес 400 на крупных ступенях.** Масштаб даёт иерархию, лёгкое начертание
-возвращает спокойствие. На кириллице это работает сильнее, чем на латинице: у неё
-выше плотность вертикальных штрихов, и жирный крупный гротеск превращается в
-частокол.
+**The steps `row`, `control` and `control-sm` were added to the original nine.**
+Their absence was a hole, not an economy: the title of a register row and the
+text of a button exist on every screen, and the specification did not have them —
+the button's size was written in section 5 as a property of one pill. So every
+button and every row arrived with a size written on the spot. A step in the scale
+is what makes writing one unnecessary.
 
-## 5. Компоновка
+**Each step carries size, leading, tracking and weight as one value.** In code
+that is Tailwind v4's `@theme` (`--text-display`, `--text-display--line-height`,
+and so on), so `text-display` cannot be taken without its tracking. Tailwind's
+stock scale is **erased** (`--text-*: initial`): `text-xl` does not exist, and a
+size can only be picked from the system. A tenth step is an edit to
+`app/globals.css`, not a decision taken alone inside a component.
 
-**Штрихованные поля.** Полосы слева и справа от колонки контента заштрихованы
-под 315° в один пиксель с шагом 10 (`--color-pattern`) и ограничены линейкой.
-Это удерживает колонку без единой рамки. Реализация — `repeating-linear-gradient`
-на крайних колонках грид-полосы, ширина колонки контента 1136 px.
+**The trap that cost one run.** `text-*` is two different utilities under one
+prefix: a size and a colour. `tailwind-merge` tells them apart by looking the
+name up in Tailwind's stock size list, so a step this project invented
+(`text-label`) is classified as a colour, collides with the `text-ink-3` beside
+it and is silently dropped. The caption renders in the right family and the wrong
+size — a defect that survives review. The cure is extending `cn()` in
+`lib/utils.ts`, where the scale is declared explicitly; there is a test for it.
 
-**Скругление живёт только на внешней рамке.** Окно демонстрации — 10–12 px;
-внутри окна вложенных плашек нет, панели разделены линейкой.
+**The monospace rule:** if a value can be compared to its neighbour by looking
+down the column, it is set in `JetBrains Mono` with tabular figures. Proportional
+figures in a column produce a column that cannot be read by scanning.
 
-**Главное действие — пилюля.** Радиус 999 px, 14 px / вес 600, фон
-`--color-cta-bg`. Крошечная кнопка рядом с крупным заголовком: контраст масштабов
-делает работу, которую обычно пытаются сделать цветом.
+**Why weight 400 on the large steps.** Scale gives the hierarchy; a light weight
+gives the calm back. On Cyrillic this works harder than on Latin: it has a higher
+density of vertical strokes, and a heavy large grotesque turns into a palisade.
 
-**Плотность — два режима.** `comfortable` (профиль, конструктор, нарратив) и
-`compact` (таблица результатов, журнал запросов, мониторинг, лидерборд).
-Переключаются атрибутом на контейнере, переопределяющим компонентные токены
-(высота строки, внутренние отступы, кегль). Один и тот же `DataTable` работает в
-обоих.
+## 5. Layout
 
-**Мобильный сброс.** Ниже 760 px штрихованные поля скрываются, колонка занимает
-всю ширину, все асимметричные сетки схлопываются в одну колонку.
+**Hatched fields.** The strips to the left and right of the content column are
+hatched at 315° in one pixel on a 10 px step (`--color-pattern`) and bounded by a
+rule. This holds the column without a single frame. The implementation is a
+`repeating-linear-gradient` on the outer tracks of the band's grid.
 
-## 6. Движение
+**The content column is up to 1760 px, the fields are
+`clamp(24px, 4.5vw, 140px)`.** The former fixed 1136 px came from the Tailwind
+CSS documentation, where a column holds prose. Here it holds a register, a query
+log and a result table, and on a 1920 px monitor a fixed column violated
+principle 1 of section 2 ("the maximum number of pixels goes to the data")
+outright: a third of the screen went to hatching. The fields are defined not by a
+minimum but by a dependence on the window's width — at 16 px they read not as a
+margin but as a rendering artefact.
 
-Три длительности: 120 мс — реакция на ввод, 180 мс — смена состояния, 260 мс —
-появление слоёв. Всё, что стоит между действием и результатом, укладывается в
-150 мс. Кривая одна: `cubic-bezier(0.16, 1, 0.3, 1)`. Пружина
-(`stiffness 100, damping 20`) — только на перестроении списков в админке.
+The text measure does not grow with it: `body` is still 66ch, `lede` 60ch,
+`narrative` 58ch. Tables get the width, paragraphs do not.
 
-Перпетуальная анимация разрешена там, где несёт информацию: индикатор «олимпиада
-идёт», shimmer скелетона, тик таймера. На экране, где участник решает задачу,
-ничего не движется само по себе.
+**Rounding lives on the outer frame only.** A demonstration window is 10–12 px;
+inside the window there are no nested plates, and panels are separated by a rule.
+A text field is **square**: it is neither the outer frame nor a small control,
+and the register this direction is has cells with corners. Tailwind's stock
+radius ladder is erased from the theme (`--radius-*: initial`), leaving two named
+radii (`window`, `frame`) plus `rounded-none` and `rounded-full`. The
+`rounded-md` somebody reaches for when a panel "looks bare" simply does not
+exist.
 
-`prefers-reduced-motion` уважается на уровне токенов: длительности схлопываются,
-`transform`-переходы заменяются на `opacity` ≤ 120 мс.
+**The primary action is a pill.** Radius 999 px, 15 px at weight 600, ground
+`--color-cta-bg`. A tiny button beside a large heading: the contrast of scales
+does the work that colour is usually asked to do.
 
-## 7. Таксономия состояний
+**Density — two modes.** `comfortable` (profile, constructor, narrative) and
+`compact` (result table, query log, monitoring, leaderboard). They are switched
+by a `data-density` attribute on a container, which overrides the component
+tokens: `--control-h` (38 px against 32), `--control-px`, `--row-py`, `--row-px`,
+`--stack-gap`. The same `DataTable` works in both, with no second component and
+no prop threaded through four layers.
 
-Девять состояний, единый контракт для каждого контейнера данных. Компонент, не
-умеющий их принимать, в систему не принимается. Продукт — соревнование под
-таймером с чужой базой на том конце, поэтому «пусто», «сломалось» и «нельзя»
-здесь не крайние случаи, а рядовые экраны.
+**The mobile reset.** Below 760 px the hatched fields are hidden, the column
+takes the full width, and every asymmetric grid collapses to a single column.
+What collapses is the **band's template** — to one track, not to three of zero
+width: a hidden grid item leaves the flow entirely, and with three tracks the
+content slides into the first one and renders at 104 px inside a 375 px screen.
 
-| Состояние | Что показываем | Ключевое отличие |
+**On a narrow screen the register loses columns, not rows.** Restacking a table
+into cards is the usual answer and the wrong one here: it dissolves the columns,
+and comparing down a column is the only reason this is a register and not a wall
+of cards. So enrollment and format fold into a caption under the title, while
+state and the window stay — those are what a reader comes to a register for.
+Nothing is ever shown twice: the caption exists only at the width where its
+columns are gone.
+
+**The sign-in screen splits at 1280 px, not at the mobile reset.** Between 760
+and 1280 two columns technically fit and read badly: the heading column and the
+form column come out the same width, the lede breaks after the third word, and
+the page looks like two narrow strips instead of a composition. Below 1280 the
+form goes under the heading, where it has the whole column.
+
+## 6. Motion
+
+Three durations: 120 ms for a reaction to input, 180 ms for a change of state,
+260 ms for a layer arriving. Anything standing between an action and its result
+fits inside 150 ms. There is one curve: `cubic-bezier(0.16, 1, 0.3, 1)`. A spring
+(`stiffness 100, damping 20`) is used only when lists reorder in the admin area.
+
+Perpetual animation is allowed where it carries information: the "contest is
+running" indicator, the skeleton shimmer, the timer tick. On a screen where a
+participant is solving a problem, nothing moves by itself.
+
+`prefers-reduced-motion` is honoured at the token level: the durations collapse,
+and `transform` transitions are replaced by `opacity` at ≤ 120 ms.
+
+## 7. The state taxonomy
+
+Nine states, one contract for every data container. A component that cannot
+accept them is not accepted into the system. The product is a contest under a
+timer with somebody else's database at the far end, so "empty", "broken" and "not
+allowed" are not edge cases here but ordinary screens.
+
+| State | What is shown | The distinction that matters |
 |---|---|---|
-| `idle` | данные | обычное состояние |
-| `loading` | скелетон по форме будущего контента | не спиннер; круговой индикатор — только внутри кнопки |
-| `empty` | «пусто, и это нормально» + путь появления данных | кнопки сброса фильтра быть не может |
-| `empty-filtered` | «ничего не нашлось» + сброс фильтра | отличается от `empty` принципиально; их путают чаще всего |
-| `error-recoverable` | причина + «повторить» | сеть и 5xx; единственное состояние с повтором |
-| `error-terminal` | причина + выход | 403/404; повтора нет намеренно |
-| `degraded` | баннер **над** показанным контентом | усечение до 1000 строк, устаревший кеш |
-| `blocked` | причина + момент снятия | не началась, закончилась, IP вне диапазона, лимит, дисквалификация |
-| `provisioning` | прогресс + оценка времени | наше собственное; игровая БД ещё создаётся |
+| `idle` | the data | the ordinary state |
+| `loading` | a skeleton shaped like the content to come | not a spinner; a circular indicator only inside a button |
+| `empty` | "nothing here, and that is normal" + how data appears | there cannot be a clear-filter control |
+| `empty-filtered` | "nothing matched" + clear the filter | differs from `empty` in principle; these two get confused most often |
+| `error-recoverable` | cause + "try again" | network and 5xx; the only state with a retry |
+| `error-terminal` | cause + a way out | 403/404; no retry, on purpose |
+| `degraded` | a banner **above** the content that is shown | truncation at 1000 rows, a stale cache |
+| `blocked` | cause + when it lifts | not started, finished, IP out of range, rate limit, disqualification |
+| `provisioning` | progress + an estimate | our own; the game database is still being built |
 
-Тексты всех девяти — переводимые строки из словаря фронтенда, а не то, что
-прислал сервер (раздел 8).
+The text of all nine is translatable strings from the frontend dictionary, not
+whatever the server sent (section 8).
 
-`blocked` применяется и к действиям администратора: кнопка публикации олимпиады
-блокируется с названной причиной и списком недостающего, а не просто сереет.
+`blocked` also applies to an administrator's actions: the publish button is
+blocked with the reason named and the missing work listed, rather than simply
+going grey.
 
-## 8. Мультиязычность
+**The type is the contract.** `StateView` declares these as a discriminated
+union, so `empty` cannot be given a clear-filter control and `empty-filtered`
+cannot be rendered without one; `error-recoverable` requires a retry and
+`error-terminal` refuses one. The confusion that used to be caught in review now
+does not compile.
 
-Следует разделу 6.2 архитектуры. Языки — `en`, `ro`, `ru`; список приходит из
-справочника, четвёртый добавляется данными без правки интерфейса.
+**Two of the nine are deliberately absent from `StateView`.** `loading` is drawn
+from `Skeleton` by each container, because its appearance is a property of the
+content it stands in for. `degraded` and `provisioning` arrive with the game
+loop — a truncated result set and a game database still being built are steps 4
+and 5 of the implementation order, and a state nothing renders is a state that
+rots.
 
-**Текст делится на три слоя с разными владельцами:**
+## 8. Multilingual text
 
-| Слой | Кто переводит | Источник | Пример |
+Follows architecture section 6.2. The languages are `en`, `ro`, `ru`; the list
+comes from a reference table, and a fourth is added as data without touching the
+interface.
+
+**Text splits into three layers with different owners:**
+
+| Layer | Who translates | Source | Example |
 |---|---|---|---|
-| интерфейс | фронтенд | словарь в репозитории | «Выполнить», «Осталось» |
-| авторский контент | организатор | `*_translations` через API | название, история, вопросы, подписи вариантов |
-| игровые данные | **никто** | игровая БД, английская всегда | `guests.full_name = 'Margot Feilhaber'` |
+| interface | the frontend | a dictionary in the repository | "Run", "Remaining" |
+| authored content | the organiser | `*_translations` through the API | title, story, questions, choice labels |
+| game data | **nobody** | the game database, always English | `guests.full_name = 'Margot Feilhaber'` |
 
-**Сообщения об ошибках относятся к первому слою.** API возвращает машинный код
-(`error.code`), человеческий текст собирает фронтенд по словарю
-`lib/i18n/errors.ts`. Сервер не должен знать язык пользователя, чтобы сообщить об
-ошибке.
+**Error messages belong to the first layer.** The API returns a machine code
+(`error.code`); the human text is assembled by the frontend from
+`lib/i18n/errors.ts`. The server does not need to know the user's language in
+order to report a failure.
 
-**Внутри таблицы результатов не локализуется ничего** — ни имена, ни метки
-времени, ни числа. Строка показывается ровно так, как её вернул PostgreSQL, иначе
-участник не сможет сопоставить увиденное с тем, что написал в запросе.
-Локализация живёт в интерфейсе вокруг таблицы, но не внутри неё.
+**Nothing inside the result table is localised** — not names, not timestamps, not
+numbers. A row is shown exactly as PostgreSQL returned it; otherwise a
+participant cannot match what they see to what they wrote. Localisation lives in
+the interface around the table, never inside it.
 
-**Длина строки — переменная.** Румынский длиннее английского примерно на четверть.
-Ни один контейнер не получает ширину, подогнанную под конкретную строку. У
-переключателя языка ширина фиксирована — коды всегда двухбуквенные.
+**String length is a variable.** Romanian is about a quarter longer than English.
+No container is given a width fitted to a particular string. The language
+switcher is the one exception — the codes are always two letters.
 
-**Атрибут `lang`** проставляется из разрешённого языка, а не прибит в разметке.
+**The `lang` attribute** is set from the resolved language rather than nailed
+into the markup.
 
-## 9. Формат вопросов
+## 9. Question format
 
-Следует разделу 6.1 архитектуры.
+Follows architecture section 6.1.
 
-**Режим `multi`** — правая панель консоли есть список вопросов со своими баллами
-и попытками.
+**Mode `multi`** — the console's right panel is a list of questions with their own
+scores and attempts.
 
-**Режим `single`** — другой экран, а не список из одного элемента: панель
-перестаёт быть списком, вся олимпиада несёт один вопрос.
+**Mode `single`** — a different screen, not a list of one: the panel stops being a
+list, and the whole contest carries one question.
 
-**Скрытый вопрос** (`questions.is_visible = false`) — участник видит историю и
-поле ответа, но не текст вопроса. Это формат, а не пустое место, и интерфейс
-обязан сказать об этом явно, иначе прочитается как баг.
+**A hidden question** (`questions.is_visible = false`) — the participant sees the
+story and the answer field but not the question's text. That is a format, not a
+blank, and the interface has to say so explicitly or it reads as a bug.
 
-**Вопрос с вариантами** — подписи переводятся, идентификаторы (`choice_ids`) нет.
-Отправляется идентификатор. Идентификатор показан в интерфейсе рядом с подписью:
-он делает языконезависимость проверки видимой и составителю, и участнику.
+**A multiple-choice question** — labels are translated, identifiers (`choice_ids`)
+are not. The identifier is what gets submitted, and it is shown in the interface
+next to the label: that makes the language-independence of checking visible to
+the author and to the participant alike.
 
-**Гейт публикации — экран.** Матрица «язык × название / история / вопросы» с
-недостающими переводами, плюс проверка «ровно один вопрос при `single`». Кнопка
-публикации заблокирована с названной причиной.
+**The publish gate is a screen.** A matrix of language × title / story / questions
+with the missing translations, plus the "exactly one question when `single`"
+check. The publish button is blocked with the reason named.
 
-## 10. Изображения
+## 10. Images
 
-Решение: фотография допускается там, где делает работу, и запрещена там, где
-только заполняет место.
+The decision: a photograph is allowed where it does work, and forbidden where it
+only fills space.
 
-**Работу она делает ровно в одном месте — над историей преступления.** Снимок
-задаёт сцену прежде, чем участник полезет в базу, и это единственная поверхность
-продукта, где атмосфера — часть задачи, а не украшение.
+**It does work in exactly one place — above the crime story.** The picture sets
+the scene before the participant goes into the database, and that is the one
+surface of the product where atmosphere is part of the task rather than
+decoration.
 
-**В списке олимпиад изображений нет.** Там уже есть номер, название, статус и
-метрики; восемь превью превратили бы опись обратно в стену карточек, ради ухода
-от которой и выбиралось направление.
+**There are no images in the contest listing.** It already has a number, a title,
+a state and metrics; eight thumbnails would turn the register back into the wall
+of cards this direction was chosen to get away from.
 
-### 10.1 Правила для фотографии
+### 10.1 Rules for photographs
 
-| Правило | Значение |
+| Rule | Value |
 |---|---|
-| Лицензия | CC0 (предпочтительно), общественное достояние, CC BY при заполненной атрибуции. `NC` и `ND` не принимаются |
-| Хранение | файл скачивается и лежит у нас; горячая ссылка на чужой хост запрещена |
-| Пропорция | `16 / 9`, кадрирование по центру (`object-fit: cover`) |
-| Обработка | обесцвечивание, контраст `1.06`, яркость `0.99` — задана системой, не автором |
-| Атрибуция | поле олимпиады, выводится строкой под снимком; без него изображение не публикуется — часть гейта публикации |
-| Загрузка | `loading="lazy"`, `decoding="async"`, явные `width`/`height` против сдвига вёрстки |
+| Licence | CC0 (preferred), public domain, CC BY with the attribution line filled in. `NC` and `ND` are not accepted |
+| Storage | the file is downloaded and kept by us; hot-linking to somebody else's host is forbidden |
+| Aspect | `16 / 9`, centre crop (`object-fit: cover`) |
+| Processing | desaturation, contrast `1.06`, brightness `0.99` — set by the system, not by the author |
+| Attribution | a field on the contest, rendered as a line under the picture; without it the image is not published — part of the publish gate |
+| Loading | `loading="lazy"`, `decoding="async"`, explicit `width`/`height` against layout shift |
 
-**Почему 16:9, а не кинематографичные 21:9.** Свободные архивные материалы почти
-не бывают шире 3:2: это сканы отпечатков и негативов. Пропорция 21:9 заставила бы
-либо срезать сюжет, либо искать материал, которого в свободных фондах нет. Правило
-подстраивается под то, что реально доступно, а не наоборот.
+**Why 16:9 rather than cinematic 21:9.** Freely licensed archival material is
+almost never wider than 3:2: these are scans of prints and negatives. A 21:9 rule
+would force either cutting the subject or hunting for material that does not
+exist in free collections. The rule adapts to what is actually available, not the
+other way round.
 
-**Почему предпочтителен CC0, а не общественное достояние.** CC0 — отказ от прав,
-действующий во всём мире. У произведения, ставшего общественным достоянием по
-праву одной страны (например, работы правительства США), статус в других
-юрисдикциях не гарантирован; Wikimedia печатает эту оговорку прямо под такими
-файлами. Демонстрационный снимок в `preview.html` — как раз такой случай, и это
-зафиксировано в `CREDITS.md`.
+**Why CC0 is preferred over public domain.** CC0 is a waiver of rights effective
+worldwide. A work that entered the public domain under one country's law (a work
+of the United States government, say) has no guaranteed status in other
+jurisdictions; Wikimedia prints that caveat directly under such files. The
+demonstration picture in `preview.html` is exactly that case, and it is recorded
+in `CREDITS.md`.
 
-### 10.2 Заголовок над снимком
+### 10.2 The title over the picture
 
-Текст лежит не на фотографии, а на затемнении, сходящем к фону страницы:
-`--color-scrim-a` (97 % фона) → `--color-scrim-b` (72 %) → прозрачность на 76 %
-высоты. Токены свои в каждой теме, поэтому в светлой затемнение белое, в тёмной
-почти чёрное, и контраст заголовка не зависит от того, что оказалось в нижней
-трети чужого снимка.
+The text does not sit on the photograph but on a scrim that resolves to the page
+ground: `--color-scrim-a` (97 % of the ground) → `--color-scrim-b` (72 %) →
+transparent at 76 % of the height. The tokens differ per theme, so the scrim is
+white in the light theme and almost black in the dark one, and the title's
+contrast does not depend on what happens to be in the bottom third of somebody
+else's picture.
 
-Это не косметика: организатор выбирает сюжет, а система обязана гарантировать
-читаемость независимо от его выбора.
+This is not cosmetics: the organiser picks the subject, and the system is obliged
+to guarantee legibility whatever they pick.
 
-### 10.3 Когда снимка нет
+### 10.3 When there is no picture
 
-Шапка становится штрихованной плашкой той же пропорции с той же типографикой —
-ни одного сдвига в вёрстке. Олимпиада без изображения выглядит намеренно, а не
-недоделанно.
+The header becomes a hatched plate of the same aspect with the same typography —
+not one shift in the layout. A contest without an image looks deliberate rather
+than unfinished.
 
-### 10.4 Аватары
+### 10.4 Avatars
 
-Загрузка фотографий участников не добавляется. Инициалы, выведенные из
-идентификатора, решают ту же задачу и не создают персональных данных, которые
-пришлось бы хранить, модерировать и удалять по запросу.
+Uploading participants' photographs is not added. Initials derived from the
+identifier solve the same problem and create no personal data that would have to
+be stored, moderated and deleted on request.
 
-## 11. Инвентарь компонентов
+## 11. Component inventory
 
-Три круга. Компонентный слой — `shadcn/ui`, скопированный в репозиторий и
-полностью перерисованный под токены: `Radix Primitives` под капотом закрывают
-доступность, копирование снимает риск чужого мажорного релиза посреди олимпиады.
-Дефолтный вид `shadcn` использовать нельзя — радиусы, палитра, плотность
-переопределяются целиком.
+Three circles. The component layer is `shadcn/ui`, copied into the repository and
+redrawn completely against the tokens: `Base UI` underneath covers accessibility,
+and copying removes the risk of somebody else's major release landing in the
+middle of a contest. The default `shadcn` look may not be used — radii, palette
+and density are overridden wholesale.
 
-**Круг 1, примитивы (~26):** Button (5 вариантов × 3 размера), IconButton, Input,
-Textarea, Select, Combobox, Checkbox, Radio, Switch, FormField (метка + контрол +
-подсказка + ошибка одним блоком), Badge, Tag, Avatar, Tooltip, Dialog, Sheet,
+**Circle 1, primitives (~26):** Button (4 variants × 4 sizes), IconButton, Input,
+Textarea, Select, Combobox, Checkbox, Radio, Switch, Field (label + control +
+hint + error as one block), Badge, Tag, Avatar, Tooltip, Dialog, Sheet,
 DropdownMenu, Toast, Tabs, Separator, Skeleton, Spinner, Kbd, Link, Progress,
 Pagination.
 
-**Круг 2, продуктовые (~15):** DataTable (виртуализация, липкая шапка, типы
-колонок, явный `NULL`), ResultGrid (специализация под результат запроса, CSV,
-баннер усечения), CodeEditor (CodeMirror 6, наша тема, подсветка позиции ошибки
-из PostgreSQL), SchemaTree, ERDiagram, Timer, ContestRow, QuestionCard,
-ChoiceList, AnswerField, LeaderboardRow, StateView (реализация раздела 7),
-FilterBar, ExportMenu, LanguageSwitcher, PublishGate, AuditRow.
+**Circle 2, product components (~15):** DataTable (virtualisation, sticky head,
+column types, explicit `NULL`), ResultGrid (a specialisation for query results,
+CSV, the truncation banner), CodeEditor (CodeMirror 6, our theme, highlighting
+the error position PostgreSQL returns), SchemaTree, ERDiagram, Timer,
+ContestRegister, QuestionCard, ChoiceList, AnswerField, LeaderboardRow, StateView
+(the implementation of section 7), FilterBar, ExportMenu, LanguageSwitcher,
+PublishGate, AuditRow.
 
-**Круг 3, лейауты (4):** PublicShell, StudentShell, ConsoleShell (три панели с
-изменяемыми и сохраняемыми размерами), AdminShell.
+**Circle 3, layouts:** PublicShell, AdminShell, StudentShell, ConsoleShell (three
+panes with resizable, remembered sizes). Plus `Band` and `AppBar`, which every
+shell is built from.
 
-## 12. Структура каталога
+**Built so far:** Button, Input, Label, Field, Tag, Skeleton, StateView, Band,
+AppBar, Mark, PublicShell, AdminShell, ContestRegister, LanguageSwitcher,
+ThemeToggle.
+
+## 12. Directory structure
 
 ```
 frontend/
 ├── app/
-│   ├── (public)/          # посадочная, вход — SSR
-│   ├── (student)/         # профиль, олимпиады, консоль
-│   ├── (admin)/           # конструктор, пользователи, журнал
-│   ├── design/            # витрина; в проде за флагом
-│   └── layout.tsx
+│   ├── login/             # sign-in — SSR
+│   ├── contests/          # the constructor's index, with its own layout,
+│   │                      # loading state and error boundary
+│   ├── globals.css        # the theme: tokens become utilities here
+│   └── layout.tsx         # lang and data-theme, both resolved per request
 ├── components/
-│   ├── ui/                # круг 1
-│   ├── product/           # круг 2
-│   └── layout/            # круг 3
+│   ├── ui/                # circle 1
+│   ├── product/           # circle 2
+│   └── layout/            # circle 3, plus Band, AppBar and the switchers
 ├── lib/
-│   ├── api/               # типизированный клиент Core API, разбор ошибок
-│   ├── query/             # ключи и инвалидация TanStack Query
-│   ├── auth/              # чтение сессии на сервере, guard'ы
-│   ├── i18n/              # словари, Match(), errors.ts
-│   └── format/            # даты, длительности, числа по локали
+│   ├── api/               # typed Core API client, error parsing
+│   ├── auth/              # reading the session on the server, guards
+│   ├── i18n/              # dictionaries, locale resolution, errors.ts
+│   ├── theme/             # the theme cookie and its attribute
+│   └── format/            # dates, durations, numbers by locale
+├── scripts/
+│   └── contrast.mjs       # the palette checked against WCAG, in CI
 └── styles/
-    ├── tokens.css         # единственный источник токенов
-    └── globals.css
+    └── tokens.css         # the single source of tokens
 ```
 
-**Витрина `/design` — не Storybook.** Отдельный инструмент означает отдельную
-сборку и неизбежный дрейф между витриной и продуктом. Витрина живёт на том же
-Next.js и собрана из того же кода; показывает все применимые состояния из
-раздела 7, переключатели темы, плотности и языка.
+A test file mirrors its source: `foo.tsx` is tested by `foo.test.tsx`.
 
-## 13. Что чинится в существующем каркасе
+**The `/design` showcase is not Storybook.** A separate tool means a separate
+build and inevitable drift between the showcase and the product. The showcase
+lives on the same Next.js and is assembled from the same code; it shows every
+applicable state from section 7 and the theme, density and language switches.
 
-Каркас создан `create-next-app` (коммит `bdbcc31`). Совпало: Next.js 16.3.2 App
-Router, Tailwind v4 на `@tailwindcss/postcss`, TypeScript, структура без `src/`.
-Три дефекта заготовки правятся до всего остального:
+**The showcase is deferred.** It was built and then removed: to show the register
+it needs contests, and invented data does not belong in the repository. It
+returns when the constructor (architecture step 3) can give it real ones. Until
+then the system is held not by a showcase but by the checks in CI: the ESLint
+rule against arbitrary colours, sizes and weight 700; the contrast script over
+the tokens; and the `cn()` tests on the scale.
 
-1. **`subsets: ["latin"]`** у подключённых шрифтов молча выбрасывает кириллицу и
-   `latin-ext` — при трёх языках румынский и русский рендерились бы подстановкой.
-2. **`body { font-family: Arial, Helvetica, sans-serif }`** в `globals.css` стоит
-   после `@theme` и гасит шрифтовые переменные.
-3. **`lang="en"`** прибит в `app/layout.tsx` при трёх языках.
+## 13. What was fixed in the existing skeleton
 
-Плюс `metadata` остаётся заготовочным («Create Next App»).
+The skeleton was created by `create-next-app` (commit `bdbcc31`). What matched:
+Next.js 16.3.2 App Router, Tailwind v4 on `@tailwindcss/postcss`, TypeScript, a
+structure without `src/`. Three defects of the starter were fixed before anything
+else, and all three are now done:
 
-**`frontend/AGENTS.md` требует** перед написанием кода читать руководство в
-`node_modules/next/dist/docs/`: версия несёт ломающие изменения относительно
-привычного Next.js. Это обязательное требование, а не рекомендация.
+1. **`subsets: ["latin"]`** on the loaded fonts silently drops Cyrillic and
+   `latin-ext` — with three languages, Romanian and Russian would have rendered
+   from a fallback face.
+2. **`body { font-family: Arial, Helvetica, sans-serif }`** in `globals.css` sat
+   after `@theme` and killed the font variables.
+3. **`lang="en"`** was nailed into `app/layout.tsx` with three languages in play.
 
-## 14. Доступность и проверки
+Plus the starter `metadata` ("Create Next App").
 
-Контраст ≥ 4.5:1 для текста и ≥ 3:1 для границ контролов в обеих темах —
-**проверяется скриптом по токенам в CI**, а не на глаз. Скрипт написан и прогнан
-по принятым значениям при подготовке этой спецификации; в репозиторий он
-переносится на шаге 2 раздела 16. На черновых значениях он поймал три провала,
-невидимых визуально: приглушённый текст 2,4:1 вместо 4,5:1 и граница поля ввода
-1,49:1 вместо 3:1.
+**`frontend/AGENTS.md` requires** reading the guide in
+`node_modules/next/dist/docs/` before writing code: this version carries breaking
+changes relative to the Next.js one remembers. That is a requirement, not a
+suggestion.
 
-Исключение зафиксировано явно: декоративная подпись-аннотация
-(`--color-ann`, ~1,6:1) порог не проходит и не имеет права быть единственным
-носителем информации. Там, где подпись несёт данные (шкала кеглей, значения
-токенов), она набирается `--color-ink-3` (5,5:1).
+## 14. Accessibility and checks
 
-Фокус виден всегда: кольцо 2 px акцентом со смещением 2 px; `outline: none` без
-замены запрещён. Консоль полностью клавиатурная: `Cmd/Ctrl+Enter` выполняет,
-`Esc` прерывает, `Cmd/Ctrl+K` открывает поиск по схеме. Таблица результатов —
-настоящая `<table>` со `scope`, а не сетка из `div`.
+Contrast ≥ 4.5:1 for text and ≥ 3:1 for control boundaries in both themes —
+**checked by a script over the tokens in CI** (`frontend/scripts/contrast.mjs`),
+not by eye. On draft values it caught three failures that were invisible: muted
+text at 2.4:1 instead of 4.5:1 and an input border at 1.49:1 instead of 3:1.
 
-## 15. Границы
+One exception is recorded explicitly: the decorative annotation caption
+(`--color-ann`, ~1.7:1) does not pass the threshold and has no right to be the
+only carrier of information. Where a caption carries data (the size scale, token
+values) it is set in `--color-ink-3` (5.5:1).
 
-Ни одного эмодзи. Ни одной стоковой фотографии: изображения только свободные и
-только по правилам раздела 10 — на странице дела и на публичной посадочной, но не
-в списках, не в карточках метрик и не в пустых состояниях.
-Никаких свечений и градиентного текста. Никакого фиолетового. Ни одного
-`h-screen` — только `min-h-[100dvh]`. Ни одного `bg-[#hex]`. Ни одного маркетингового ряда из трёх
-одинаковых карточек-фич (сетка из девяти демонстраций состояний в разделе 7 —
-другое: она показывает перечень, а не рекламирует три преимущества). Ни одной ширины, подогнанной под строку. Начертания 700
-в системе нет.
+Focus is always visible: a 2 px ring in the accent at 2 px offset, declared once
+globally so a control added tomorrow arrives with it rather than without;
+`outline: none` without a replacement is forbidden. The console is fully
+keyboard-driven: `Cmd/Ctrl+Enter` runs, `Esc` aborts, `Cmd/Ctrl+K` opens schema
+search. The result table is a real `<table>` with `scope`, not a grid of `div`s.
 
-## 16. Порядок работ
+**A form-level failure is announced, not just displayed.** The sign-in error is
+written once, because the API answers `invalid_credentials` without saying which
+field was wrong — deliberately, so the form cannot be used to enumerate logins —
+and both fields carry `aria-invalid` and point at that one message. Showing it on
+screen and saying nothing to a screen reader is the same bug as not showing it at
+all.
 
-1. Починить каркас (раздел 12), подключить шрифты с подсетами `latin`,
-   `latin-ext`, `cyrillic`.
-2. Слой токенов в `styles/tokens.css`, правило ESLint на произвольные цвета,
-   скрипт контраста в CI.
-3. Примитивы поверх Radix, перерисованные под токены; витрина `/design`.
-4. Вертикальный срез: `/login` и `/contests` на живом бэкенде — форма с серверной
-   ошибкой, сессия через единый origin, четыре состояния, оба шелла, обе темы,
-   оба режима плотности, три языка.
+**The surfaces the page never drew still belong to it.** Selection, the caret,
+the scrollbar, the focus ring, underline offset and the figures in tabular data
+all ship with browser defaults that belong to no design system. They are themed
+from the palette in `globals.css`. This is the cheapest signal that an interface
+was built rather than assembled, and the one most reliably skipped.
 
-После этого — пункт 3 архитектуры (CRUD контента и конструктор), который к тому
-моменту собирается из готовых частей.
+## 15. Boundaries
 
-## 17. Побочная правка архитектуры
+No emoji. No stock photography: images are free-licensed only and only under the
+rules of section 10 — on the case page and the public landing, but not in
+listings, not in metric cards and not in empty states. No glows and no gradient
+text. No purple. No `h-screen` — only `min-h-[100dvh]`. No `bg-[#hex]`. No
+marketing row of three identical feature cards (the grid of nine state
+demonstrations in section 7 is a different thing: it shows an inventory, it does
+not advertise three advantages). No width fitted to a string. There is no weight
+700 in the system.
 
-`docs/ARCHITECTURE.md` не описывает фронтенд-архитектуру: раздел 2.1 перечисляет
-экраны, раздел 13 отводит фронту одну строку. Отдельным изменением добавляется
-раздел с границами Server/Client Components, путём сессии (единый origin через
-Caddy — иначе `Secure`+`SameSite` cookie не доедет), стратегией инвалидации кеша
-TanStack Query, приёмом SSE для таймера и мониторинга и ссылкой на таксономию
-состояний.
+## 16. Order of work
 
-## 18. Макеты
+1. ~~Fix the skeleton (section 13); load the fonts with the `latin`, `latin-ext`
+   and `cyrillic` subsets.~~ **Done.**
+2. ~~The token layer in `styles/tokens.css`, the ESLint rule against arbitrary
+   colours, the contrast script in CI.~~ **Done**, plus the type scale, the
+   motion tokens, the density modes and the named radii; Tailwind's stock scales
+   (`--text-*`, `--radius-*`, `--tracking-*`) are erased.
+3. ~~Primitives over the headless layer, redrawn against the tokens; the
+   `/design` showcase.~~ **Done** except the showcase, which is deferred
+   (section 12).
+4. ~~The vertical slice: `/login` and `/contests` against the live backend — the
+   form with a server error, the session over a single origin, four states, both
+   shells, both themes, both density modes, three languages.~~ **Done.**
 
-Макет принятого направления лежит рядом: [`preview.html`](preview.html). Он
-открывается в браузере как есть, следует теме операционной системы и
-воспроизводим из этой спецификации — она источник истины, он иллюстрация.
+Next is item 3 of the architecture: content CRUD and the constructor, which by
+now is assembled from ready parts.
 
-Та же страница опубликована как приватный артефакт:
+## 17. Side edit to the architecture
+
+`docs/ARCHITECTURE.md` does not describe the frontend architecture: section 2.1
+lists the screens and section 13 gives the frontend one line. A separate change
+adds a section covering the Server/Client Component boundary, the session path (a
+single origin through Caddy — otherwise a `Secure`+`SameSite` cookie never
+arrives), the TanStack Query invalidation strategy, the SSE approach for the
+timer and monitoring, and a reference to the state taxonomy.
+
+## 18. Mockups
+
+The mockup of the accepted direction sits next to this file:
+[`preview.html`](preview.html). It opens in a browser as it is, follows the
+operating system's theme, and is reproducible from this specification — the
+specification is the source of truth, the mockup is an illustration.
+
+It predates the revision of 2026-08-26: the column width and the type scale in it
+are the original values. The reasoning it illustrates still holds; the numbers in
+this document are the ones that ship.
+
+The same page is published as a private artifact:
 <https://claude.ai/code/artifact/08d4a86a-de62-4018-973a-c3e9aa23042d>
 
-Отклонённые сохранены, чтобы решение можно было пересмотреть, зная альтернативы:
+The rejected options are kept so the decision can be revisited knowing the
+alternatives:
 
-- «Картотека» — реестр, нулевое скругление, инверсия чернил вместо цветных
-  кнопок: <https://claude.ai/code/artifact/a2fcf640-b277-44f7-9728-d5faf845a000>
-- Первый вариант — тёплая нейтраль, плашки, полный разбор всех разделов:
+- *Kartoteka* — a register, zero rounding, inverted ink instead of coloured
+  buttons: <https://claude.ai/code/artifact/a2fcf640-b277-44f7-9728-d5faf845a000>
+- The first option — warm neutrals, plates, a full treatment of every section:
   <https://claude.ai/code/artifact/b656b2bc-0d87-40ec-80aa-1b37f14ddd06>
 
-Артефакты приватны и доступны только владельцу аккаунта.
+The artifacts are private and reachable only by the account that owns them.
