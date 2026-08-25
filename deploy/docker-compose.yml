@@ -112,7 +112,7 @@ services:
       CORE_DB_DSN: postgres://${CORE_DB_USER}:${CORE_DB_PASSWORD}@pg-core:5432/${CORE_DB_NAME:-dbcontest_core}?sslmode=disable
       # Empty selects the in-process cache. Set it (and start the "shared"
       # profile) as soon as more than one replica runs.
-      REDIS_ADDR: ${REDIS_ADDR-}
+      REDIS_ADDR: ${REDIS_ADDR:-redis://:${REDIS_PASSWORD}@redis:6379/0}
       METRICS_BACKEND: ${METRICS_BACKEND:-prometheus}
       SESSION_TTL: ${SESSION_TTL:-12h}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
