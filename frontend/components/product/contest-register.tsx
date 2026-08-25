@@ -1,7 +1,10 @@
 import Link from "next/link";
 
-import type { ContestStatus, ContestSummary } from "@/lib/api/contests";
+import { buttonVariants } from "@/components/ui/button";
+import type { ContestSummary } from "@/lib/api/contests";
 import { formatMoment } from "@/lib/format/datetime";
+import type { Locale } from "@/lib/i18n/config";
+import type { Dictionary } from "@/lib/i18n/dictionary";
 
 /**
  * The contest listing, as a register rather than a wall of cards.
@@ -10,39 +13,42 @@ import { formatMoment } from "@/lib/format/datetime";
  * column, which a grid of tiles cannot. It is a real `<table>`: the data is
  * tabular, so the semantics come for free and a screen reader announces which
  * column a cell belongs to.
+ *
+ * Every string arrives in `dict`. The component holds no copy of its own, so a
+ * fourth language needs a dictionary file and nothing here.
  */
-
-const STATUS_LABELS: Record<ContestStatus, string> = {
-  draft: "черновик",
-  published: "опубликована",
-  running: "идёт",
-  finished: "завершена",
-  archived: "в архиве",
-};
 
 const HEAD_CELL =
   "px-3 py-2 font-mono text-[0.625rem] font-medium tracking-[0.11em] text-ink-3 uppercase";
+
+type RegisterProps = {
+  contests: ContestSummary[];
+  total: number;
+  dict: Dictionary;
+  locale: Locale;
+  filtered?: boolean;
+  resetHref?: string;
+};
 
 /**
  * "Nothing here" and "nothing matched" are different states and get different
  * screens (spec section 7). The first has no filter to clear, so offering the
  * control would be a lie; the second is useless without it.
  */
-function EmptyRegister({ filtered, resetHref }: { filtered?: boolean; resetHref?: string }) {
+function EmptyRegister({
+  dict,
+  filtered,
+  resetHref,
+}: Pick<RegisterProps, "dict" | "filtered" | "resetHref">) {
+  const copy = filtered ? dict.contests.emptyFiltered : dict.contests.empty;
+
   return (
     <div className="flex flex-col items-start gap-2 border-t border-line px-1 py-12">
-      <p className="font-medium">{filtered ? "Ничего не нашлось" : "Олимпиад пока нет"}</p>
-      <p className="max-w-[48ch] text-sm text-ink-2">
-        {filtered
-          ? "Ни одна олимпиада не подходит под выбранные условия."
-          : "Создайте первую — она появится здесь и станет доступна участникам после публикации."}
-      </p>
+      <p className="font-medium">{copy.title}</p>
+      <p className="max-w-[48ch] text-sm text-ink-2">{copy.body}</p>
       {filtered && resetHref ? (
-        <Link
-          href={resetHref}
-          className="mt-2 rounded-full border border-edge px-4 py-1.5 text-sm font-medium transition-colors duration-150 hover:border-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-        >
-          Сбросить фильтры
+        <Link href={resetHref} className={`${buttonVariants({ variant: "outline" })} mt-2`}>
+          {dict.contests.emptyFiltered.reset}
         </Link>
       ) : null}
     </div>
@@ -52,25 +58,26 @@ function EmptyRegister({ filtered, resetHref }: { filtered?: boolean; resetHref?
 export function ContestRegister({
   contests,
   total,
+  dict,
+  locale,
   filtered,
   resetHref,
-}: {
-  contests: ContestSummary[];
-  total: number;
-  filtered?: boolean;
-  resetHref?: string;
-}) {
+}: RegisterProps) {
+  const t = dict.contests;
+
   return (
     <section aria-labelledby="register-heading">
       <div className="flex items-baseline justify-between gap-4 px-1 pb-3">
         <h2 id="register-heading" className="text-lg font-medium tracking-tight">
-          Олимпиады
+          {t.heading}
         </h2>
-        <span className="font-mono text-xs text-ink-3 tabular-nums">{total} в реестре</span>
+        <span className="font-mono text-xs text-ink-3 tabular-nums">
+          {total} {t.countLabel}
+        </span>
       </div>
 
       {contests.length === 0 ? (
-        <EmptyRegister filtered={filtered} resetHref={resetHref} />
+        <EmptyRegister dict={dict} filtered={filtered} resetHref={resetHref} />
       ) : (
         /* Wide content scrolls inside its own container, so the page body never
            scrolls sideways on a narrow screen. */
@@ -79,19 +86,19 @@ export function ContestRegister({
             <thead>
               <tr className="border-b border-line-2">
                 <th scope="col" className={`${HEAD_CELL} w-10 text-right`}>
-                  №
+                  {t.columns.index}
                 </th>
                 <th scope="col" className={HEAD_CELL}>
-                  Олимпиада
+                  {t.columns.contest}
                 </th>
                 <th scope="col" className={HEAD_CELL}>
-                  Состояние
+                  {t.columns.state}
                 </th>
                 <th scope="col" className={HEAD_CELL}>
-                  Запись
+                  {t.columns.enrollment}
                 </th>
                 <th scope="col" className={HEAD_CELL}>
-                  Начало
+                  {t.columns.starts}
                 </th>
               </tr>
             </thead>
@@ -109,12 +116,12 @@ export function ContestRegister({
                       </span>
                     ) : null}
                   </td>
-                  <td className="px-3 py-3 text-sm">{STATUS_LABELS[contest.status]}</td>
-                  <td className="px-3 py-3 text-sm">
-                    {contest.enrollment === "open" ? "открытая" : "по приглашению"}
-                  </td>
+                  <td className="px-3 py-3 text-sm">{t.status[contest.status]}</td>
+                  <td className="px-3 py-3 text-sm">{t.enrollment[contest.enrollment]}</td>
                   <td className="px-3 py-3 font-mono text-[0.6875rem] text-ink-2 tabular-nums">
-                    {contest.startsAt ? formatMoment(contest.startsAt) : "не назначено"}
+                    {contest.startsAt
+                      ? formatMoment(contest.startsAt, { locale })
+                      : t.unscheduled}
                   </td>
                 </tr>
               ))}

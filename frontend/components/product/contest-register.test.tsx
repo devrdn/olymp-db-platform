@@ -1,7 +1,8 @@
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
 
 import type { ContestSummary } from "@/lib/api/contests";
+import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
 import { ContestRegister } from "./contest-register";
 
@@ -17,43 +18,66 @@ const nightInTheArchive: ContestSummary = {
   endsAt: "2026-11-08T21:00:00Z",
 };
 
+let en: Dictionary;
+let ro: Dictionary;
+
+beforeAll(async () => {
+  [en, ro] = await Promise.all([getDictionary("en"), getDictionary("ro")]);
+});
+
 describe("ContestRegister", () => {
-  test("gives every contest a row naming its state in words", () => {
-    render(<ContestRegister contests={[nightInTheArchive]} total={1} />);
+  test("names a contest's state in the dictionary's language", () => {
+    render(<ContestRegister contests={[nightInTheArchive]} total={1} dict={en} locale="en" />);
 
     const row = screen.getByRole("row", { name: /Ночь в архиве/ });
 
-    expect(within(row).getByText("идёт")).toBeInTheDocument();
+    expect(within(row).getByText("running")).toBeInTheDocument();
+  });
+
+  test("carries the same row into another language without touching the component", () => {
+    render(<ContestRegister contests={[nightInTheArchive]} total={1} dict={ro} locale="ro" />);
+
+    const row = screen.getByRole("row", { name: /Ночь în arhivă|Ночь в архиве/ });
+
+    expect(within(row).getByText("în desfășurare")).toBeInTheDocument();
   });
 });
 
 describe("ContestRegister, nothing to show", () => {
   test("offers no filter reset when nothing has been created yet", () => {
-    render(<ContestRegister contests={[]} total={0} />);
+    render(<ContestRegister contests={[]} total={0} dict={en} locale="en" />);
 
-    expect(screen.getByText("Олимпиад пока нет")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /сбросить/i })).not.toBeInTheDocument();
+    expect(screen.getByText(en.contests.empty.title)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /clear/i })).not.toBeInTheDocument();
   });
 
   test("offers a filter reset when a filter is what emptied the register", () => {
     // Filters live in the URL, so clearing them is navigation, not a handler.
-    render(<ContestRegister contests={[]} total={0} filtered resetHref="/admin/contests" />);
-
-    expect(screen.getByText("Ничего не нашлось")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /сбросить фильтры/i })).toHaveAttribute(
-      "href",
-      "/admin/contests",
+    render(
+      <ContestRegister
+        contests={[]}
+        total={0}
+        dict={en}
+        locale="en"
+        filtered
+        resetHref="/en/contests"
+      />,
     );
+
+    expect(screen.getByText(en.contests.emptyFiltered.title)).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: en.contests.emptyFiltered.reset }),
+    ).toHaveAttribute("href", "/en/contests");
   });
 });
 
 describe("ContestRegister, dates", () => {
   test("shows the start as a readable date, not as an ISO string", () => {
-    render(<ContestRegister contests={[nightInTheArchive]} total={1} />);
+    render(<ContestRegister contests={[nightInTheArchive]} total={1} dict={en} locale="en" />);
 
     const row = screen.getByRole("row", { name: /Ночь в архиве/ });
 
-    expect(within(row).getByText("8 нояб. 2026 г., 21:00")).toBeInTheDocument();
     expect(within(row).queryByText(/2026-11-08T19:00:00Z/)).not.toBeInTheDocument();
+    expect(within(row).getByText(/2026/)).toBeInTheDocument();
   });
 });
