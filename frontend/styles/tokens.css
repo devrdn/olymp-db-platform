@@ -1,0 +1,110 @@
+/**
+ * The single source of design tokens (spec section 3).
+ *
+ * Three levels, each referring only to the one below it. The dark theme
+ * redefines the semantic level only: if a component token ever needs a dark
+ * variant, the semantics are wrong and the semantics get fixed, not the theme.
+ *
+ * Arbitrary colours in components are a lint error. Everything comes from here.
+ */
+
+:root {
+  --bg: #ffffff;
+  --panel: #fafafa;
+  --sunk: #f6f6f6;
+
+  --ink: #0d1117;
+  --ink-2: #4c535e;
+  --ink-3: #66696d;
+
+  --line: rgb(13 17 23 / 0.07);
+  --line-2: rgb(13 17 23 / 0.13);
+  /* The outline that identifies an interactive control. Separate from --line
+     because WCAG 1.4.11 holds it to 3:1 and a decorative rule to nothing. */
+  --edge: #838587;
+  --pattern: rgb(13 17 23 / 0.05);
+  --ann: rgb(13 17 23 / 0.24);
+
+  --cta-bg: #0d1117;
+  --cta-fg: #ffffff;
+
+  --accent: #0e5048;
+  --accent-wash: #e4efec;
+  --good: #2c6338;
+  --good-wash: #e6f0e8;
+  --warn: #8a5510;
+  --warn-wash: #f4ece0;
+  --bad: #a32a21;
+  --bad-wash: #f7e6e4;
+
+  --scrim-a: rgb(255 255 255 / 0.97);
+  --scrim-b: rgb(255 255 255 / 0.72);
+}
+
+/* System preference, unless an explicit light choice overrides it. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0a0b0f;
+    --panel: #101218;
+    --sunk: #0d0f14;
+
+    --ink: #ffffff;
+    --ink-2: #a6adb8;
+    --ink-3: #898c8c;
+
+    /* Doubled, not mirrored: a dark ground swallows contrast, so 5% black on
+       white has to become 10% white on black to read as the same hairline. */
+    --line: rgb(255 255 255 / 0.10);
+    --line-2: rgb(255 255 255 / 0.17);
+    --edge: #6c6f70;
+    --pattern: rgb(255 255 255 / 0.10);
+    --ann: rgb(255 255 255 / 0.26);
+
+    --cta-bg: #262b36;
+    --cta-fg: #ffffff;
+
+    --accent: #5ed0bc;
+    --accent-wash: rgb(94 208 188 / 0.12);
+    --good: #6fbf80;
+    --good-wash: rgb(111 191 128 / 0.12);
+    --warn: #d59a3e;
+    --warn-wash: rgb(213 154 62 / 0.12);
+    --bad: #e0796d;
+    --bad-wash: rgb(224 121 109 / 0.12);
+
+    --scrim-a: rgb(10 11 15 / 0.97);
+    --scrim-b: rgb(10 11 15 / 0.72);
+  }
+}
+
+/* An explicit choice wins in both directions. */
+:root[data-theme="dark"] {
+  --bg: #0a0b0f;
+  --panel: #101218;
+  --sunk: #0d0f14;
+
+  --ink: #ffffff;
+  --ink-2: #a6adb8;
+  --ink-3: #898c8c;
+
+  --line: rgb(255 255 255 / 0.10);
+  --line-2: rgb(255 255 255 / 0.17);
+  --edge: #6c6f70;
+  --pattern: rgb(255 255 255 / 0.10);
+  --ann: rgb(255 255 255 / 0.26);
+
+  --cta-bg: #262b36;
+  --cta-fg: #ffffff;
+
+  --accent: #5ed0bc;
+  --accent-wash: rgb(94 208 188 / 0.12);
+  --good: #6fbf80;
+  --good-wash: rgb(111 191 128 / 0.12);
+  --warn: #d59a3e;
+  --warn-wash: rgb(213 154 62 / 0.12);
+  --bad: #e0796d;
+  --bad-wash: rgb(224 121 109 / 0.12);
+
+  --scrim-a: rgb(10 11 15 / 0.97);
+  --scrim-b: rgb(10 11 15 / 0.72);
+}
