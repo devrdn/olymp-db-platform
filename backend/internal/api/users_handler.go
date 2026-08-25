@@ -265,7 +265,7 @@ func (h *UsersHandler) replaceRoles(w http.ResponseWriter, r *http.Request) {
 func (h *UsersHandler) accountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, userIDParam))
 	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_user_id", "users.User identifier is not valid")
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_user_id", "User identifier is not valid")
 		return uuid.Nil, false
 	}
 	return id, true
@@ -276,7 +276,7 @@ func (h *UsersHandler) accountID(w http.ResponseWriter, r *http.Request) (uuid.U
 func (h *UsersHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, users.ErrNotFound):
-		httpx.Error(w, r, http.StatusNotFound, "not_found", "users.User not found")
+		httpx.Error(w, r, http.StatusNotFound, "not_found", "User not found")
 	case errors.Is(err, users.ErrLoginTaken):
 		httpx.Error(w, r, http.StatusConflict, "login_taken", "This login is already in use")
 	case errors.Is(err, users.ErrEmailTaken):
