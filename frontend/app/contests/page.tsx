@@ -2,6 +2,7 @@ import { contestListSchema } from "@/lib/api/contests";
 import { serverRequest } from "@/lib/api/server";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { ContestRegister } from "@/components/product/contest-register";
+import { LanguageSwitcher } from "@/components/layout/language-switcher";
 
 export async function generateMetadata() {
   const dict = await activeDictionary();
@@ -15,7 +16,7 @@ export async function generateMetadata() {
  * token reaches the browser and the first paint carries the rows. Filters live
  * in the URL, which makes them shareable and the reset a plain link.
  */
-export default async function ContestsPage(props: PageProps<"/[locale]/contests">) {
+export default async function ContestsPage(props: PageProps<"/contests">) {
   const [params, locale, dict] = await Promise.all([
     props.searchParams,
     activeLocale(),
@@ -37,13 +38,16 @@ export default async function ContestsPage(props: PageProps<"/[locale]/contests"
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
+      <div className="flex justify-end pb-4">
+        <LanguageSwitcher current={locale} />
+      </div>
       <ContestRegister
         contests={items}
         total={total}
         dict={dict}
         locale={locale}
         filtered={Boolean(query || status)}
-        resetHref={`/${locale}/contests`}
+        resetHref="/contests"
       />
     </main>
   );

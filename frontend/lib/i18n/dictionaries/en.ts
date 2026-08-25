@@ -5,6 +5,26 @@
  * never touching a component.
  */
 const en = {
+  auth: {
+    signIn: {
+      title: "Sign in",
+      lede: "Your login and password come from the department.",
+      login: "Login",
+      password: "Password",
+      submit: "Sign in",
+      submitting: "Signing in",
+      aside: "A crime, a database and a deadline. Write SQL, read the evidence, name who did it.",
+    },
+    changePassword: {
+      title: "Change your password",
+      lede: "This account still uses a one-time password. Pick your own to continue.",
+      current: "One-time password",
+      next: "New password",
+      confirm: "Repeat the new password",
+      submit: "Save and continue",
+      mismatch: "The two passwords do not match.",
+    },
+  },
   contests: {
     heading: "Contests",
     countLabel: "in the register",

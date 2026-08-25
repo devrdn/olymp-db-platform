@@ -1,18 +1,19 @@
-import { locale as rootLocale } from "next/root-params";
+import { cookies } from "next/headers";
 
-import { DEFAULT_LOCALE, LOCALES, type Locale } from "./config";
+import { LOCALE_COOKIE, type Locale } from "./config";
 import { getDictionary, type Dictionary } from "./dictionary";
+import { readLocale } from "./locale";
 
 /**
  * The active language, for Server Components.
  *
- * The locale segment sits above the root layout, which makes it a Next root
- * parameter: any Server Component can read it without the value being threaded
- * through props. The value still comes off the URL, so it is never guessed.
+ * Read on the server before anything renders, which is why the choice lives in
+ * a cookie: localStorage would arrive after the page had already been built,
+ * and after the API had been asked for content in the wrong language.
  */
 export async function activeLocale(): Promise<Locale> {
-  const segment = await rootLocale();
-  return LOCALES.includes(segment as Locale) ? (segment as Locale) : DEFAULT_LOCALE;
+  const jar = await cookies();
+  return readLocale(jar.get(LOCALE_COOKIE)?.value);
 }
 
 export async function activeDictionary(): Promise<Dictionary> {
