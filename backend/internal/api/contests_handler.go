@@ -1,0 +1,803 @@
+package api
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/netip"
+	"time"
+
+	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
+	"github.com/devrdn/db-contest/backend/internal/platform/i18n"
+	"github.com/devrdn/db-contest/backend/internal/rbac"
+	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+)
+
+// URL parameters. contestIDParam matches what the authorisation middleware
+// reads to scope a permission, so the two cannot drift apart.
+const (
+	contestIDParam  = "contestID"
+	questionIDParam = "questionID"
+	memberIDParam   = "userID"
+)
+
+// timeLayout is the one timestamp format the API speaks.
+const timeLayout = "2006-01-02T15:04:05Z"
+
+// ContestsHandler serves the contest constructor: the contest itself, its
+// content, its staff and its participants.
+//
+// Authorisation is two-level throughout (§7): creating a contest is an
+// installation-wide permission, everything about one contest is scoped to it,
+// so an organizer never reaches somebody else's olympiad.
+type ContestsHandler struct {
+	service *contests.Service
+	mw      *auth.Middleware
+	log     *slog.Logger
+	// defaultLocale answers when a request expresses no usable preference and
+	// the contest narrows nothing down.
+	defaultLocale string
+}
+
+// NewContestsHandler assembles the contest endpoints.
+func NewContestsHandler(service *contests.Service, mw *auth.Middleware, log *slog.Logger, defaultLocale string) *ContestsHandler {
+	if defaultLocale == "" {
+		defaultLocale = "en"
+	}
+	return &ContestsHandler{service: service, mw: mw, log: log, defaultLocale: defaultLocale}
+}
+
+// Mount registers the routes under /contests.
+func (h *ContestsHandler) Mount(r chi.Router) {
+	r.Route("/contests", func(r chi.Router) {
+		r.Use(h.mw.Authenticate)
+
+		// Listing is scoped inside the handler rather than by a permission:
+		// what a student sees and what staff see are different result sets,
+		// not different rights over the same one.
+		r.Get("/", h.list)
+		r.With(h.mw.RequirePermission(rbac.PermissionContestCreate)).Post("/", h.create)
+
+		r.Route("/{"+contestIDParam+"}", func(r chi.Router) {
+			// Self-signup is the one participant action here, and it is open
+			// to any authenticated account: the contest's own rules decide.
+			r.Post("/enroll", h.enroll)
+
+			r.Group(func(r chi.Router) {
+				r.Use(h.mw.RequireContestPermission(rbac.PermissionContestView))
+				r.Get("/", h.byID)
+				r.Get("/publish-check", h.publishCheck)
+				r.Get("/sql-policy", h.policy)
+				r.Get("/story", h.story)
+				r.Get("/questions", h.listQuestions)
+				r.Get("/questions/{"+questionIDParam+"}", h.question)
+				r.Get("/managers", h.listManagers)
+			})
+
+			r.Group(func(r chi.Router) {
+				r.Use(h.mw.RequireContestPermission(rbac.PermissionContestEdit))
+				r.Patch("/", h.update)
+				r.Delete("/", h.delete)
+				r.Put("/languages", h.setLanguages)
+				r.Put("/translations", h.setTranslations)
+				r.Put("/sql-policy", h.setPolicy)
+				r.Put("/story", h.setStory)
+				r.Post("/questions", h.addQuestion)
+				r.Put("/questions/order", h.reorderQuestions)
+				r.Patch("/questions/{"+questionIDParam+"}", h.updateQuestion)
+				r.Delete("/questions/{"+questionIDParam+"}", h.deleteQuestion)
+				r.Put("/questions/{"+questionIDParam+"}/texts", h.setQuestionTexts)
+				r.Put("/questions/{"+questionIDParam+"}/answers", h.setAnswers)
+			})
+
+			// Appointing staff is the owner's alone.
+			r.With(h.mw.RequireContestPermission(rbac.PermissionContestPublish)).
+				Post("/status", h.setStatus)
+
+			r.Group(func(r chi.Router) {
+				r.Use(h.mw.RequireContestPermission(rbac.PermissionContestManage))
+				r.Put("/managers/{"+memberIDParam+"}", h.grantManager)
+				r.Delete("/managers/{"+memberIDParam+"}", h.revokeManager)
+			})
+
+			r.Group(func(r chi.Router) {
+				r.Use(h.mw.RequireContestPermission(rbac.PermissionParticipantManage))
+				r.Get("/participants", h.listParticipants)
+				r.Post("/participants", h.addParticipants)
+				r.Delete("/participants/{"+memberIDParam+"}", h.removeParticipant)
+				r.Post("/participants/{"+memberIDParam+"}/disqualify", h.disqualifyParticipant)
+			})
+		})
+	})
+}
+
+// ContestResponse is a contest as its staff see it.
+//
+// A dedicated type rather than the domain object, for the same reason accounts
+// have one: direct serialisation publishes whatever field is added next.
+type ContestResponse struct {
+	ID           string                         `json:"id"`
+	Status       string                         `json:"status"`
+	Enrollment   string                         `json:"enrollment"`
+	QuestionMode string                         `json:"question_mode"`
+	Timing       string                         `json:"timing"`
+	DurationMin  *int                           `json:"duration_min,omitempty"`
+	StartsAt     string                         `json:"starts_at,omitempty"`
+	EndsAt       string                         `json:"ends_at,omitempty"`
+	AllowedCIDRs []string                       `json:"allowed_cidrs"`
+	Settings     SettingsResponse               `json:"settings"`
+	Languages    []LanguageResponse             `json:"languages"`
+	Translations map[string]TranslationResponse `json:"translations"`
+	CreatedAt    string                         `json:"created_at"`
+	UpdatedAt    string                         `json:"updated_at"`
+}
+
+// SettingsResponse mirrors contests.Settings on the wire.
+type SettingsResponse struct {
+	EnrollmentDeadline   string `json:"enrollment_deadline,omitempty"`
+	QueryRateLimitPerMin int    `json:"query_rate_limit_per_min"`
+	GracePeriodMin       int    `json:"grace_period_min"`
+}
+
+// LanguageResponse is one language a contest is offered in.
+type LanguageResponse struct {
+	Code      string `json:"code"`
+	IsDefault bool   `json:"is_default"`
+}
+
+// TranslationResponse is the authored text in one language.
+type TranslationResponse struct {
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+}
+
+// ContestSummary is a contest in a listing: one negotiated title rather than
+// every translation, plus the language it was actually served in.
+type ContestSummary struct {
+	ID           string `json:"id"`
+	Status       string `json:"status"`
+	Enrollment   string `json:"enrollment"`
+	QuestionMode string `json:"question_mode"`
+	Lang         string `json:"lang"`
+	Title        string `json:"title"`
+	Description  string `json:"description,omitempty"`
+	StartsAt     string `json:"starts_at,omitempty"`
+	EndsAt       string `json:"ends_at,omitempty"`
+}
+
+func toContestResponse(c contests.Contest) ContestResponse {
+	out := ContestResponse{
+		ID:           c.ID.String(),
+		Status:       c.Status,
+		Enrollment:   c.Enrollment,
+		QuestionMode: c.QuestionMode,
+		Timing:       c.Timing,
+		DurationMin:  c.DurationMin,
+		StartsAt:     formatTime(c.StartsAt),
+		EndsAt:       formatTime(c.EndsAt),
+		AllowedCIDRs: make([]string, 0, len(c.AllowedCIDRs)),
+		Settings: SettingsResponse{
+			EnrollmentDeadline:   formatTime(c.Settings.EnrollmentDeadline),
+			QueryRateLimitPerMin: c.Settings.QueryRateLimitPerMin,
+			GracePeriodMin:       c.Settings.GracePeriodMin,
+		},
+		Languages:    make([]LanguageResponse, 0, len(c.Languages)),
+		Translations: make(map[string]TranslationResponse, len(c.Translations)),
+		CreatedAt:    c.CreatedAt.UTC().Format(timeLayout),
+		UpdatedAt:    c.UpdatedAt.UTC().Format(timeLayout),
+	}
+	for _, prefix := range c.AllowedCIDRs {
+		out.AllowedCIDRs = append(out.AllowedCIDRs, prefix.String())
+	}
+	for _, l := range c.Languages {
+		out.Languages = append(out.Languages, LanguageResponse{Code: l.Code, IsDefault: l.IsDefault})
+	}
+	for lang, t := range c.Translations {
+		out.Translations[lang] = TranslationResponse{Title: t.Title, Description: t.Description}
+	}
+	return out
+}
+
+func (h *ContestsHandler) toSummary(r *http.Request, c contests.Contest) ContestSummary {
+	lang := h.negotiate(r, c)
+	translation := c.Translations[lang]
+	return ContestSummary{
+		ID:           c.ID.String(),
+		Status:       c.Status,
+		Enrollment:   c.Enrollment,
+		QuestionMode: c.QuestionMode,
+		Lang:         lang,
+		Title:        translation.Title,
+		Description:  translation.Description,
+		StartsAt:     formatTime(c.StartsAt),
+		EndsAt:       formatTime(c.EndsAt),
+	}
+}
+
+// negotiate picks the language to answer in.
+//
+// Everything language-dependent goes through platform/i18n.Match, so "which
+// language did they get, and why" has one answer (§6.2). The order is the
+// explicit request, then the browser's preferences, then the account's, then
+// the contest's default, then the installation's.
+func (h *ContestsHandler) negotiate(r *http.Request, c contests.Contest) string {
+	var preferred []string
+	if explicit := r.URL.Query().Get("lang"); explicit != "" {
+		preferred = append(preferred, explicit)
+	}
+	preferred = append(preferred, i18n.ParseAcceptLanguage(r.Header.Get("Accept-Language"))...)
+
+	fallback := c.DefaultLanguage()
+	if fallback == "" {
+		fallback = h.defaultLocale
+	}
+
+	available := c.LanguageCodes()
+	if len(available) == 0 {
+		// A contest that has not chosen its languages yet still has authored
+		// text; answering from what exists beats answering with nothing.
+		available = translationCodes(c)
+	}
+	return i18n.Match(preferred, available, fallback)
+}
+
+func translationCodes(c contests.Contest) []string {
+	codes := make([]string, 0, len(c.Translations))
+	for lang := range c.Translations {
+		codes = append(codes, lang)
+	}
+	return codes
+}
+
+type contestListResponse struct {
+	Items []ContestSummary `json:"items"`
+	Total int              `json:"total"`
+}
+
+// list returns the contests the caller may see.
+//
+// Two different result sets, not two different rights: staff see the contests
+// they run, everybody sees the ones they take part in and the open ones. An
+// installation administrator sees all of them.
+func (h *ContestsHandler) list(w http.ResponseWriter, r *http.Request) {
+	identity, _ := auth.IdentityFrom(r.Context())
+
+	filter := contests.Filter{
+		Query:  r.URL.Query().Get("q"),
+		Status: r.URL.Query().Get("status"),
+		Limit:  intParam(r, "limit"),
+		Offset: intParam(r, "offset"),
+	}
+	switch {
+	case r.URL.Query().Get("scope") == "participant":
+		filter.VisibleTo = identity.UserID
+	case identity.Has(rbac.PermissionContestAdminAll):
+		// Everything, unscoped.
+	case identity.Has(rbac.PermissionContestCreate):
+		filter.ManagedBy = identity.UserID
+	default:
+		filter.VisibleTo = identity.UserID
+	}
+
+	found, total, err := h.service.List(r.Context(), filter)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+
+	items := make([]ContestSummary, 0, len(found))
+	for _, c := range found {
+		items = append(items, h.toSummary(r, c))
+	}
+	httpx.JSON(w, r, http.StatusOK, contestListResponse{Items: items, Total: total})
+}
+
+type contestRequest struct {
+	Enrollment   string                         `json:"enrollment"`
+	QuestionMode string                         `json:"question_mode"`
+	Timing       string                         `json:"timing"`
+	DurationMin  *int                           `json:"duration_min"`
+	StartsAt     *string                        `json:"starts_at"`
+	EndsAt       *string                        `json:"ends_at"`
+	AllowedCIDRs []string                       `json:"allowed_cidrs"`
+	Settings     *SettingsResponse              `json:"settings"`
+	Languages    []LanguageResponse             `json:"languages"`
+	Translations map[string]TranslationResponse `json:"translations"`
+}
+
+func (h *ContestsHandler) create(w http.ResponseWriter, r *http.Request) {
+	var req contestRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	starts, ends, err := req.window()
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	cidrs, err := parseCIDRs(req.AllowedCIDRs)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_cidr", err.Error())
+		return
+	}
+	settings, err := req.settings()
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	identity, _ := auth.IdentityFrom(r.Context())
+	created, err := h.service.Create(r.Context(), contests.CreateCommand{
+		ActorID:      identity.UserID,
+		Enrollment:   req.Enrollment,
+		QuestionMode: req.QuestionMode,
+		Timing:       req.Timing,
+		DurationMin:  req.DurationMin,
+		StartsAt:     starts,
+		EndsAt:       ends,
+		AllowedCIDRs: cidrs,
+		Settings:     settings,
+		Languages:    toDomainLanguages(req.Languages),
+		Translations: toDomainTranslations(req.Translations),
+	})
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusCreated, toContestResponse(created))
+}
+
+func (h *ContestsHandler) byID(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+
+	c, err := h.service.ByID(r.Context(), id)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	// Every translation, not the negotiated one: staff are authoring them, and
+	// showing only one would make the others invisible in the editor.
+	httpx.JSON(w, r, http.StatusOK, toContestResponse(c))
+}
+
+func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+
+	var req contestRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	starts, ends, err := req.window()
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	cidrs, err := parseCIDRs(req.AllowedCIDRs)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_cidr", err.Error())
+		return
+	}
+
+	cmd := contests.UpdateCommand{
+		ContestID:    id,
+		Enrollment:   req.Enrollment,
+		QuestionMode: req.QuestionMode,
+		Timing:       req.Timing,
+		DurationMin:  req.DurationMin,
+		StartsAt:     starts,
+		EndsAt:       ends,
+		AllowedCIDRs: cidrs,
+	}
+	if req.Settings != nil {
+		settings, err := req.settings()
+		if err != nil {
+			httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		cmd.Settings = &settings
+	}
+	identity, _ := auth.IdentityFrom(r.Context())
+	cmd.ActorID = identity.UserID
+
+	updated, err := h.service.Update(r.Context(), cmd)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, toContestResponse(updated))
+}
+
+func (h *ContestsHandler) delete(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+
+	identity, _ := auth.IdentityFrom(r.Context())
+	if err := h.service.Delete(r.Context(), identity.UserID, id); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.NoContent(w, r)
+}
+
+type statusRequest struct {
+	Status string `json:"status"`
+}
+
+// setStatus is mounted separately from editing: publishing and starting are
+// the contest.publish permission, not contest.edit.
+func (h *ContestsHandler) setStatus(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+
+	var req statusRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	identity, _ := auth.IdentityFrom(r.Context())
+	if err := h.service.Transition(r.Context(), identity.UserID, id, req.Status); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+
+	c, err := h.service.ByID(r.Context(), id)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, toContestResponse(c))
+}
+
+// publishCheckResponse reports the remaining work.
+type publishCheckResponse struct {
+	Ready    bool             `json:"ready"`
+	Problems []problemPayload `json:"problems"`
+}
+
+type problemPayload struct {
+	Code       string `json:"code"`
+	Lang       string `json:"lang,omitempty"`
+	QuestionID string `json:"question_id,omitempty"`
+	Detail     string `json:"detail,omitempty"`
+}
+
+func (h *ContestsHandler) publishCheck(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+
+	err := h.service.CheckPublish(r.Context(), id)
+	switch {
+	case err == nil:
+		httpx.JSON(w, r, http.StatusOK, publishCheckResponse{Ready: true, Problems: []problemPayload{}})
+	case errors.Is(err, contests.ErrNotPublishable):
+		// 200, not an error: being asked what is left is not a failure.
+		httpx.JSON(w, r, http.StatusOK, publishCheckResponse{
+			Ready: false, Problems: problemsOf(err),
+		})
+	default:
+		h.fail(w, r, err)
+	}
+}
+
+func problemsOf(err error) []problemPayload {
+	var notReady *contests.NotPublishableError
+	if !errors.As(err, &notReady) {
+		return nil
+	}
+	out := make([]problemPayload, 0, len(notReady.Problems))
+	for _, p := range notReady.Problems {
+		payload := problemPayload{Code: p.Code, Lang: p.Lang, Detail: p.Detail}
+		if p.QuestionID != uuid.Nil {
+			payload.QuestionID = p.QuestionID.String()
+		}
+		out = append(out, payload)
+	}
+	return out
+}
+
+type languagesRequest struct {
+	Languages []LanguageResponse `json:"languages"`
+}
+
+func (h *ContestsHandler) setLanguages(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+
+	var req languagesRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	identity, _ := auth.IdentityFrom(r.Context())
+	if err := h.service.SetLanguages(r.Context(), identity.UserID, id, toDomainLanguages(req.Languages)); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.NoContent(w, r)
+}
+
+type translationsRequest struct {
+	Translations map[string]TranslationResponse `json:"translations"`
+}
+
+func (h *ContestsHandler) setTranslations(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+
+	var req translationsRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	identity, _ := auth.IdentityFrom(r.Context())
+	if err := h.service.SetTranslations(r.Context(), identity.UserID, id, toDomainTranslations(req.Translations)); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.NoContent(w, r)
+}
+
+// PolicyResponse is a contest's SQL access policy.
+type PolicyResponse struct {
+	Mode            string   `json:"mode"`
+	WritableTables  []string `json:"writable_tables"`
+	AllowCreateView bool     `json:"allow_create_view"`
+	AllowOwnTables  bool     `json:"allow_own_tables"`
+	AllowTempTables bool     `json:"allow_temp_tables"`
+	AllowCatalog    bool     `json:"allow_catalog"`
+	DiskQuotaRatio  int      `json:"disk_quota_ratio"`
+	UpdatedAt       string   `json:"updated_at,omitempty"`
+}
+
+func (h *ContestsHandler) policy(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+
+	p, err := h.service.Policy(r.Context(), id)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, toPolicyResponse(p))
+}
+
+func (h *ContestsHandler) setPolicy(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+
+	var req PolicyResponse
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	identity, _ := auth.IdentityFrom(r.Context())
+	err := h.service.SetPolicy(r.Context(), identity.UserID, id, contests.SQLPolicy{
+		Mode:            req.Mode,
+		WritableTables:  req.WritableTables,
+		AllowCreateView: req.AllowCreateView,
+		AllowOwnTables:  req.AllowOwnTables,
+		AllowTempTables: req.AllowTempTables,
+		AllowCatalog:    req.AllowCatalog,
+		DiskQuotaRatio:  req.DiskQuotaRatio,
+	})
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.NoContent(w, r)
+}
+
+func toPolicyResponse(p contests.SQLPolicy) PolicyResponse {
+	out := PolicyResponse{
+		Mode:            p.Mode,
+		WritableTables:  p.WritableTables,
+		AllowCreateView: p.AllowCreateView,
+		AllowOwnTables:  p.AllowOwnTables,
+		AllowTempTables: p.AllowTempTables,
+		AllowCatalog:    p.AllowCatalog,
+		DiskQuotaRatio:  p.DiskQuotaRatio,
+	}
+	if out.WritableTables == nil {
+		out.WritableTables = []string{}
+	}
+	if !p.UpdatedAt.IsZero() {
+		out.UpdatedAt = p.UpdatedAt.UTC().Format(timeLayout)
+	}
+	return out
+}
+
+// contestID reads and validates the contest in the URL.
+func (h *ContestsHandler) contestID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(chi.URLParam(r, contestIDParam))
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_contest_id", "Contest identifier is not valid")
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// memberID reads the account named in the URL of a staff or participant route.
+func (h *ContestsHandler) memberID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(chi.URLParam(r, memberIDParam))
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_user_id", "User identifier is not valid")
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// fail maps a domain error onto a response.
+//
+// The mapping is the API's contract: 404 for things that are not there, 400
+// for a request that could never be right, 409 for one that is right but not
+// now, 422 for a publication that is simply not ready yet.
+func (h *ContestsHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, contests.ErrNotFound):
+		httpx.Error(w, r, http.StatusNotFound, "not_found", "Contest not found")
+	case errors.Is(err, contests.ErrQuestionNotFound):
+		httpx.Error(w, r, http.StatusNotFound, "question_not_found", "Question not found")
+	case errors.Is(err, contests.ErrStoryNotFound):
+		httpx.Error(w, r, http.StatusNotFound, "story_not_found", "This contest has no story yet")
+	case errors.Is(err, contests.ErrParticipantNotFound):
+		httpx.Error(w, r, http.StatusNotFound, "participant_not_found", "Participant not found")
+	case errors.Is(err, contests.ErrManagerNotFound):
+		httpx.Error(w, r, http.StatusNotFound, "manager_not_found", "This user does not staff the contest")
+	case errors.Is(err, users.ErrNotFound):
+		httpx.Error(w, r, http.StatusNotFound, "user_not_found", "User not found")
+
+	case errors.Is(err, contests.ErrNotPublishable):
+		httpx.JSON(w, r, http.StatusUnprocessableEntity, map[string]any{
+			"error": map[string]any{
+				"code":    "not_publishable",
+				"message": "The contest is not ready to publish",
+			},
+			"problems": problemsOf(err),
+		})
+
+	case errors.Is(err, contests.ErrInvalidTransition):
+		httpx.Error(w, r, http.StatusConflict, "invalid_transition", err.Error())
+	case errors.Is(err, contests.ErrNotEditable):
+		httpx.Error(w, r, http.StatusConflict, "not_editable", err.Error())
+	case errors.Is(err, contests.ErrOwnerImmutable):
+		httpx.Error(w, r, http.StatusConflict, "owner_immutable", err.Error())
+	case errors.Is(err, contests.ErrAlreadyEnrolled):
+		httpx.Error(w, r, http.StatusConflict, "already_enrolled", err.Error())
+	case errors.Is(err, contests.ErrEnrollmentClosed):
+		httpx.Error(w, r, http.StatusConflict, "enrollment_closed", err.Error())
+	case errors.Is(err, contests.ErrParticipantStarted):
+		httpx.Error(w, r, http.StatusConflict, "participant_started", err.Error())
+
+	case errors.Is(err, contests.ErrAddressNotAllowed):
+		// Deliberately explicit: "you are on the wrong network" is something
+		// the participant can act on, unlike a bare 403.
+		httpx.Error(w, r, http.StatusForbidden, "address_not_allowed",
+			"This contest is only available from the university network")
+
+	case errors.Is(err, contests.ErrInvalidContest),
+		errors.Is(err, contests.ErrInvalidQuestion),
+		errors.Is(err, contests.ErrInvalidAnswer),
+		errors.Is(err, contests.ErrInvalidPolicy),
+		errors.Is(err, contests.ErrInvalidRole),
+		errors.Is(err, contests.ErrUnknownLanguage):
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+
+	default:
+		h.log.ErrorContext(r.Context(), "contest operation failed", "error", err)
+		httpx.Error(w, r, http.StatusInternalServerError, "internal_error", "Internal server error")
+	}
+}
+
+// window parses the schedule out of a request.
+func (req contestRequest) window() (*time.Time, *time.Time, error) {
+	starts, err := parseTime(req.StartsAt)
+	if err != nil {
+		return nil, nil, fmt.Errorf("starts_at: %w", err)
+	}
+	ends, err := parseTime(req.EndsAt)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ends_at: %w", err)
+	}
+	return starts, ends, nil
+}
+
+func (req contestRequest) settings() (contests.Settings, error) {
+	if req.Settings == nil {
+		return contests.Settings{}, nil
+	}
+	deadline, err := parseTime(&req.Settings.EnrollmentDeadline)
+	if err != nil {
+		return contests.Settings{}, fmt.Errorf("enrollment_deadline: %w", err)
+	}
+	return contests.Settings{
+		EnrollmentDeadline:   deadline,
+		QueryRateLimitPerMin: req.Settings.QueryRateLimitPerMin,
+		GracePeriodMin:       req.Settings.GracePeriodMin,
+	}, nil
+}
+
+func parseTime(value *string) (*time.Time, error) {
+	if value == nil || *value == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, *value)
+	if err != nil {
+		return nil, errors.New("must be an RFC 3339 timestamp")
+	}
+	utc := parsed.UTC()
+	return &utc, nil
+}
+
+func formatTime(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(timeLayout)
+}
+
+// parseCIDRs turns the request's networks into prefixes.
+//
+// A nil list means "leave the restriction alone" and an empty one means "clear
+// it", which is why the empty slice is returned non-nil.
+func parseCIDRs(values []string) ([]netip.Prefix, error) {
+	if values == nil {
+		return nil, nil
+	}
+	prefixes := make([]netip.Prefix, 0, len(values))
+	for _, value := range values {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not a valid network in CIDR notation", value)
+		}
+		prefixes = append(prefixes, prefix)
+	}
+	return prefixes, nil
+}
+
+func toDomainLanguages(in []LanguageResponse) []contests.ContestLanguage {
+	out := make([]contests.ContestLanguage, 0, len(in))
+	for _, l := range in {
+		out = append(out, contests.ContestLanguage{Code: l.Code, IsDefault: l.IsDefault})
+	}
+	return out
+}
+
+func toDomainTranslations(in map[string]TranslationResponse) []contests.Translation {
+	out := make([]contests.Translation, 0, len(in))
+	for lang, t := range in {
+		out = append(out, contests.Translation{Lang: lang, Title: t.Title, Description: t.Description})
+	}
+	return out
+}

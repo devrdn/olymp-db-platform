@@ -79,3 +79,20 @@ func TestQuerierFromContextFallsBackToTheGivenQuerier(t *testing.T) {
 		t.Error("QuerierFrom did not fall back to the supplied querier")
 	}
 }
+
+func TestInTxIsFalseWithoutATransaction(t *testing.T) {
+	if InTx(context.Background()) {
+		t.Error("InTx() = true on a bare context, want false")
+	}
+}
+
+func TestInTxIsTrueInsideAUnitOfWork(t *testing.T) {
+	// Some statements are only correct inside a transaction — deferring a
+	// constraint outside one is silently ignored — so a repository has to be
+	// able to refuse rather than half-work.
+	ctx := withQuerier(context.Background(), &fakeQuerier{name: "tx"})
+
+	if !InTx(ctx) {
+		t.Error("InTx() = false inside a transaction, want true")
+	}
+}
