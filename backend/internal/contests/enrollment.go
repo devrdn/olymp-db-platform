@@ -1,0 +1,375 @@
+package contests
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/netip"
+	"strings"
+	"time"
+
+	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/google/uuid"
+)
+
+// Registration statuses.
+const (
+	// RegistrationRegistered means signed up but not yet started.
+	RegistrationRegistered = "registered"
+	// RegistrationActive means the participant's session is running.
+	RegistrationActive = "active"
+	// RegistrationFinished means they are done, by choice or by the clock.
+	RegistrationFinished = "finished"
+	// RegistrationDisqualified means excluded while the record is kept.
+	RegistrationDisqualified = "disqualified"
+)
+
+// Errors about taking part.
+var (
+	ErrAlreadyEnrolled     = errors.New("already taking part in this contest")
+	ErrEnrollmentClosed    = errors.New("this contest is not accepting signups")
+	ErrAddressNotAllowed   = errors.New("this contest is not available from your network")
+	ErrParticipantNotFound = errors.New("participant not found")
+	// ErrParticipantStarted reports an attempt to delete somebody who has
+	// already worked on the contest. Their queries and answers are part of the
+	// record; excluding them is disqualification, not deletion.
+	ErrParticipantStarted = errors.New("this participant has already started; disqualify instead of removing")
+)
+
+// EnrollmentOpenAt reports whether a student may still sign themselves up.
+//
+// Three things have to hold: the contest invites self-signup, it is in a state
+// that accepts registrations, and the deadline (if any) has not passed.
+func (c Contest) EnrollmentOpenAt(now time.Time) error {
+	if c.Enrollment != EnrollmentOpen {
+		return ErrEnrollmentClosed
+	}
+
+	switch c.Status {
+	case StatusPublished:
+	case StatusRunning:
+		// A late joiner in a shared window would get less time than everybody
+		// else. Individual timing measures from each participant's own start,
+		// so joining late costs the joiner nothing and takes nothing from
+		// anybody else.
+		if c.Timing != TimingIndividual {
+			return ErrEnrollmentClosed
+		}
+	default:
+		return ErrEnrollmentClosed
+	}
+
+	if c.Settings.EnrollmentDeadline != nil && now.After(*c.Settings.EnrollmentDeadline) {
+		return ErrEnrollmentClosed
+	}
+	return nil
+}
+
+// Participant is one person's involvement in one contest.
+type Participant struct {
+	// ID is the registration identifier: what submissions, game instances and
+	// the query journal all hang off.
+	ID        uuid.UUID
+	ContestID uuid.UUID
+	UserID    uuid.UUID
+	Login     string
+	FullName  string
+	Status    string
+	// StartedAt is when the participant opened the contest. With individual
+	// timing it is what their deadline is computed from.
+	StartedAt  *time.Time
+	FinishedAt *time.Time
+	TotalScore int
+	CreatedAt  time.Time
+}
+
+// HasStarted reports whether the participant has begun working.
+//
+// Both the timestamp and the status are consulted because either can arrive
+// first: the status moves when a session opens, the timestamp when the clock
+// starts.
+func (p Participant) HasStarted() bool {
+	return p.StartedAt != nil ||
+		p.Status == RegistrationActive ||
+		p.Status == RegistrationFinished
+}
+
+// ParticipantFilter selects a page of participants.
+type ParticipantFilter struct {
+	// Query matches a substring of the login or full name.
+	Query  string
+	Status string
+	Limit  int
+	Offset int
+}
+
+// Normalize clamps the page size. The ceiling is higher than for contests: a
+// staff list of a 400-person olympiad is a legitimate single page.
+func (f ParticipantFilter) Normalize() ParticipantFilter {
+	const (
+		defaultLimit = 50
+		maxLimit     = 500
+	)
+	if f.Limit <= 0 {
+		f.Limit = defaultLimit
+	}
+	if f.Limit > maxLimit {
+		f.Limit = maxLimit
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+	return f
+}
+
+// RegistrationRepository stores who takes part.
+type RegistrationRepository interface {
+	// List returns a page of the contest's participants and the total count.
+	List(ctx context.Context, contestID uuid.UUID, f ParticipantFilter) ([]Participant, int, error)
+	// ByUser returns one participation, or ErrParticipantNotFound.
+	ByUser(ctx context.Context, contestID, userID uuid.UUID) (Participant, error)
+	// Add registers a user for a contest.
+	Add(ctx context.Context, contestID, userID uuid.UUID) (Participant, error)
+	// Remove deletes a registration outright.
+	Remove(ctx context.Context, contestID, userID uuid.UUID) error
+	// SetStatus changes a registration's status.
+	SetStatus(ctx context.Context, registrationID uuid.UUID, status string) error
+}
+
+// Why an entry of an import produced no registration.
+const (
+	SkipUnknownAccount  = "unknown_account"
+	SkipAlreadyEnrolled = "already_enrolled"
+)
+
+// AddParticipantsCommand adds people to a contest on behalf of its staff.
+//
+// Logins as well as identifiers because the practical input is a roster pasted
+// out of a spreadsheet, where what an organizer has is student numbers.
+type AddParticipantsCommand struct {
+	ActorID   uuid.UUID
+	ContestID uuid.UUID
+	UserIDs   []uuid.UUID
+	Logins    []string
+}
+
+// AddParticipantsResult reports what an import did.
+//
+// Partial success is the honest outcome: one mistyped login must not reject
+// the other three hundred rows, and the person importing has to see which
+// ones did not go in and why.
+type AddParticipantsResult struct {
+	Added   int
+	Skipped []SkippedParticipant
+}
+
+// SkippedParticipant is one entry that produced no registration.
+type SkippedParticipant struct {
+	// Ref is the login or identifier exactly as it was given, so the row can
+	// be found again in the spreadsheet it came from.
+	Ref    string
+	Reason string
+}
+
+// EnrollCommand is a student signing themselves up.
+type EnrollCommand struct {
+	UserID    uuid.UUID
+	ContestID uuid.UUID
+	// Address is the resolved client address, checked against the contest's
+	// network restriction.
+	Address netip.Addr
+}
+
+// Participants returns a page of the contest's participants.
+func (s *Service) Participants(ctx context.Context, contestID uuid.UUID, f ParticipantFilter) ([]Participant, int, error) {
+	return s.registrations.List(ctx, contestID, f.Normalize())
+}
+
+// AddParticipants registers people on behalf of the contest's staff.
+//
+// The network restriction is not applied here: it governs where a participant
+// may work from, not where the organizer sits while preparing the roster.
+func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsCommand) (AddParticipantsResult, error) {
+	c, err := s.contests.ByID(ctx, cmd.ContestID)
+	if err != nil {
+		return AddParticipantsResult{}, err
+	}
+	if !s.acceptsRegistrations(c) {
+		return AddParticipantsResult{}, fmt.Errorf("%w: it is %s", ErrNotEditable, c.Status)
+	}
+
+	var result AddParticipantsResult
+	err = s.uow.Do(ctx, func(ctx context.Context) error {
+		for _, id := range cmd.UserIDs {
+			user, err := s.users.ByID(ctx, id)
+			if err != nil {
+				if errors.Is(err, users.ErrNotFound) {
+					result.skip(id.String(), SkipUnknownAccount)
+					continue
+				}
+				return err
+			}
+			if err := s.addOne(ctx, cmd, c, user, &result); err != nil {
+				return err
+			}
+		}
+
+		for _, login := range cmd.Logins {
+			login = strings.TrimSpace(login)
+			if login == "" {
+				continue
+			}
+			user, err := s.users.ByLogin(ctx, login)
+			if err != nil {
+				if errors.Is(err, users.ErrNotFound) {
+					result.skip(login, SkipUnknownAccount)
+					continue
+				}
+				return err
+			}
+			if err := s.addOne(ctx, cmd, c, user, &result); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return AddParticipantsResult{}, err
+	}
+	return result, nil
+}
+
+// addOne registers one resolved account, recording why it was skipped when it
+// was.
+func (s *Service) addOne(ctx context.Context, cmd AddParticipantsCommand, c Contest, user users.User, result *AddParticipantsResult) error {
+	if _, err := s.registrations.ByUser(ctx, c.ID, user.ID); err == nil {
+		result.skip(user.Login, SkipAlreadyEnrolled)
+		return nil
+	} else if !errors.Is(err, ErrParticipantNotFound) {
+		return err
+	}
+
+	if _, err := s.registrations.Add(ctx, c.ID, user.ID); err != nil {
+		return err
+	}
+	result.Added++
+
+	return s.record(ctx, cmd.ActorID, audit.ActionParticipantAdd, c.ID, map[string]any{
+		"user_id": user.ID.String(),
+		"login":   user.Login,
+	})
+}
+
+func (r *AddParticipantsResult) skip(ref, reason string) {
+	r.Skipped = append(r.Skipped, SkippedParticipant{Ref: ref, Reason: reason})
+}
+
+// Enroll signs a student up for a contest that invites self-signup.
+func (s *Service) Enroll(ctx context.Context, cmd EnrollCommand) (Participant, error) {
+	c, err := s.contests.ByID(ctx, cmd.ContestID)
+	if err != nil {
+		return Participant{}, err
+	}
+	if err := c.EnrollmentOpenAt(s.now()); err != nil {
+		return Participant{}, err
+	}
+
+	// Checked after the contest is known to accept signups, so the trail
+	// carries real attempts rather than noise about closed contests.
+	if !c.AllowsAddress(cmd.Address) {
+		// Recorded outside a unit of work: this is a refusal, there is nothing
+		// to be atomic with, and the attempt is exactly what an administrator
+		// wants to see afterwards.
+		if err := s.recordDenied(ctx, cmd); err != nil {
+			return Participant{}, err
+		}
+		return Participant{}, ErrAddressNotAllowed
+	}
+
+	if _, err := s.registrations.ByUser(ctx, c.ID, cmd.UserID); err == nil {
+		return Participant{}, ErrAlreadyEnrolled
+	} else if !errors.Is(err, ErrParticipantNotFound) {
+		return Participant{}, err
+	}
+
+	var enrolled Participant
+	err = s.uow.Do(ctx, func(ctx context.Context) error {
+		var err error
+		if enrolled, err = s.registrations.Add(ctx, c.ID, cmd.UserID); err != nil {
+			return err
+		}
+		return s.record(ctx, cmd.UserID, audit.ActionParticipantEnroll, c.ID, nil)
+	})
+	if err != nil {
+		return Participant{}, err
+	}
+	return enrolled, nil
+}
+
+// recordDenied notes a participant turned away by the network restriction.
+func (s *Service) recordDenied(ctx context.Context, cmd EnrollCommand) error {
+	payload := map[string]any{"reason": "address_not_allowed"}
+	if cmd.Address.IsValid() {
+		payload["address"] = cmd.Address.String()
+	}
+	return s.record(ctx, cmd.UserID, audit.ActionContestAccessDenied, cmd.ContestID, payload)
+}
+
+// RemoveParticipant deletes a registration that never turned into work.
+//
+// Somebody who has already started is refused: their queries and answers are
+// part of the record, and excluding them is disqualification.
+func (s *Service) RemoveParticipant(ctx context.Context, actorID, contestID, userID uuid.UUID) error {
+	c, err := s.contests.ByID(ctx, contestID)
+	if err != nil {
+		return err
+	}
+	if c.Status == StatusArchived {
+		return fmt.Errorf("%w: it is archived", ErrNotEditable)
+	}
+	p, err := s.registrations.ByUser(ctx, contestID, userID)
+	if err != nil {
+		return err
+	}
+	if p.HasStarted() {
+		return ErrParticipantStarted
+	}
+
+	return s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.registrations.Remove(ctx, contestID, userID); err != nil {
+			return err
+		}
+		return s.record(ctx, actorID, audit.ActionParticipantRemove, contestID, map[string]any{
+			"user_id": userID.String(),
+		})
+	})
+}
+
+// DisqualifyParticipant excludes somebody while keeping everything they did.
+func (s *Service) DisqualifyParticipant(ctx context.Context, actorID, contestID, userID uuid.UUID) error {
+	if _, err := s.contests.ByID(ctx, contestID); err != nil {
+		return err
+	}
+	p, err := s.registrations.ByUser(ctx, contestID, userID)
+	if err != nil {
+		return err
+	}
+
+	return s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.registrations.SetStatus(ctx, p.ID, RegistrationDisqualified); err != nil {
+			return err
+		}
+		return s.record(ctx, actorID, audit.ActionParticipantDisqualify, contestID, map[string]any{
+			"user_id": userID.String(),
+		})
+	})
+}
+
+// acceptsRegistrations reports whether staff may still add people.
+//
+// Up to and including a running contest: adding a latecomer who was left off
+// the roster is a normal thing to have to do at the start of an olympiad.
+func (s *Service) acceptsRegistrations(c Contest) bool {
+	return c.Status == StatusDraft || c.Status == StatusPublished || c.Status == StatusRunning
+}

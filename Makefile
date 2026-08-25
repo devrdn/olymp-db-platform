@@ -43,7 +43,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env build test test-race cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-observability dev-db-ui dev-down dev-logs compose-up compose-down check fmt-check tidy-check vuln sec test-all
+.PHONY: help require-env build test test-race test-db cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-observability dev-db-ui dev-down dev-logs compose-up compose-down check fmt-check tidy-check vuln sec test-all
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -60,6 +60,14 @@ test: ## Run the unit tests
 
 test-race: ## Run the tests with the race detector
 	cd $(BACKEND) && go test -race ./...
+
+# The repository tests run their SQL against a real PostgreSQL, each inside a
+# transaction that is rolled back, so they leave nothing behind. Without
+# CORE_DB_DSN they skip instead of failing: a developer with no database to
+# hand can still run `make test`. This target is what makes sure the SQL is
+# actually exercised — `make dev-up` first.
+test-db: require-env ## Run the repository tests against the development database
+	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go test -count=1 ./internal/postgres/...
 
 cover: ## Run the tests and open the coverage report
 	cd $(BACKEND) && go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1

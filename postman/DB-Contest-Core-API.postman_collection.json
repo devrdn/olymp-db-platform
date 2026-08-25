@@ -9,12 +9,53 @@
     "type": "noauth"
   },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:8080/api/v1", "type": "string", "description": "Public listener. In production this is reached through Caddy; only this path is ever exposed." },
-    { "key": "internalUrl", "value": "http://localhost:9090", "type": "string", "description": "Internal listener (metrics, health). Only reachable when the API runs directly on the host (`make run`). With `make compose-up` this port lives on the compose network only and is not published — hitting it from Postman then means either an old orphaned `go run` process on the host (kill it) or nothing at all (connection refused), never the containerized api. See the Operational folder for how to reach it inside the container." },
-    { "key": "adminLogin", "value": "admin", "type": "string" },
-    { "key": "adminPassword", "value": "", "type": "string", "description": "Set this to the one-time password printed by `make bootstrap`." },
-    { "key": "userId", "value": "", "type": "string", "description": "Populated automatically by Users ▸ Create." },
-    { "key": "oneTimePassword", "value": "", "type": "string", "description": "Populated automatically by Users ▸ Create / Reset password." }
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080/api/v1",
+      "type": "string",
+      "description": "Public listener. In production this is reached through Caddy; only this path is ever exposed."
+    },
+    {
+      "key": "internalUrl",
+      "value": "http://localhost:9090",
+      "type": "string",
+      "description": "Internal listener (metrics, health). Only reachable when the API runs directly on the host (`make run`). With `make compose-up` this port lives on the compose network only and is not published — hitting it from Postman then means either an old orphaned `go run` process on the host (kill it) or nothing at all (connection refused), never the containerized api. See the Operational folder for how to reach it inside the container."
+    },
+    {
+      "key": "adminLogin",
+      "value": "admin",
+      "type": "string"
+    },
+    {
+      "key": "adminPassword",
+      "value": "",
+      "type": "string",
+      "description": "Set this to the one-time password printed by `make bootstrap`."
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "type": "string",
+      "description": "Populated automatically by Users ▸ Create."
+    },
+    {
+      "key": "oneTimePassword",
+      "value": "",
+      "type": "string",
+      "description": "Populated automatically by Users ▸ Create / Reset password."
+    },
+    {
+      "key": "contestId",
+      "value": "",
+      "type": "string",
+      "description": "Populated automatically by Contests ▸ Create contest."
+    },
+    {
+      "key": "questionId",
+      "value": "",
+      "type": "string",
+      "description": "Populated automatically by Contest content ▸ Add question."
+    }
   ],
   "event": [
     {
@@ -46,7 +87,10 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -54,8 +98,13 @@
             },
             "url": {
               "raw": "{{baseUrl}}/auth/login",
-              "host": ["{{baseUrl}}"],
-              "path": ["auth", "login"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
             },
             "description": "Authenticates and starts a server-side session. The session token is never returned in the body — it is set as an HttpOnly cookie, which Postman stores and replays automatically on every later request in this collection.\n\nUnknown login and wrong password are indistinguishable (both 401 invalid_credentials) and cost the same time, by design — see docs/ARCHITECTURE.md §7.2.\n\nResponses:\n- 200 — `{ user, must_change_password }`. If `must_change_password` is true, every endpoint except /auth/password, /auth/logout and /auth/me will answer 403 `password_change_required` until you call Change password.\n- 401 `invalid_credentials`\n- 403 `account_blocked`\n- 429 `too_many_attempts` — 10/15min per account, 30/15min per address"
           },
@@ -90,7 +139,10 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -98,8 +150,13 @@
             },
             "url": {
               "raw": "{{baseUrl}}/auth/password",
-              "host": ["{{baseUrl}}"],
-              "path": ["auth", "password"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "password"
+              ]
             },
             "description": "Replaces the caller's own password. Requires the current password (proof of possession — stops a borrowed unlocked browser from being a permanent takeover). Policy: at least 12 characters, must differ from the current password.\n\nThis is the one endpoint reachable while `must_change_password` is still true — it's how a one-time password gets replaced on first sign-in.\n\nEvery other session on the account is retired as part of this call, and so is this one: the response clears the session cookie, so log in again with the new password afterwards.\n\nResponses:\n- 204 — no body\n- 400 `wrong_password` / `weak_password` / `same_password`\n- 401 `unauthenticated`"
           },
@@ -112,8 +169,13 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/auth/me",
-              "host": ["{{baseUrl}}"],
-              "path": ["auth", "me"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
             },
             "description": "Describes the signed-in account and the exact permission codes its roles grant — useful for building UI that hides what the account may not do.\n\nResponses:\n- 200 — `{ id, login, permissions: string[] }`\n- 401 `unauthenticated`"
           },
@@ -126,8 +188,13 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/auth/logout",
-              "host": ["{{baseUrl}}"],
-              "path": ["auth", "logout"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
             },
             "description": "Ends the session server-side (not just the cookie) and clears the cookie. Calling it with no session, or twice, is not an error — logging out with a stale cookie is a normal thing for a browser to do.\n\nResponses:\n- 204 — no body"
           },
@@ -146,13 +213,32 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/users?q=&status=&limit=50&offset=0",
-              "host": ["{{baseUrl}}"],
-              "path": ["users"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ],
               "query": [
-                { "key": "q", "value": "", "description": "Matches login, full name or email (case-insensitive substring)." },
-                { "key": "status", "value": "", "description": "active | blocked" },
-                { "key": "limit", "value": "50", "description": "Page size, capped server-side at 200." },
-                { "key": "offset", "value": "0" }
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "Matches login, full name or email (case-insensitive substring)."
+                },
+                {
+                  "key": "status",
+                  "value": "",
+                  "description": "active | blocked"
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Page size, capped server-side at 200."
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
               ]
             },
             "description": "Paged account listing.\n\nResponses:\n- 200 — `{ items: UserResponse[], total: number }` — `total` counts every match, not just the returned page\n- 401 `unauthenticated`\n- 403 `forbidden`"
@@ -164,7 +250,10 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -172,8 +261,12 @@
             },
             "url": {
               "raw": "{{baseUrl}}/users",
-              "host": ["{{baseUrl}}"],
-              "path": ["users"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
             },
             "description": "Creates an account with a server-generated one-time password. The account is flagged so the first sign-in must replace it — see Auth ▸ Change password.\n\n`roles` are global role codes (`student`, `organizer`, `admin`); omit for a student with no elevated role.\n\nResponses:\n- 201 — `{ user, one_time_password }` — the password is shown exactly once and is never retrievable again; a lost one is reset via Users ▸ Reset password\n- 400 — malformed body\n- 409 `login_taken` / `email_taken`"
           },
@@ -201,8 +294,13 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/users/{{userId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["users", "{{userId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{userId}}"
+              ]
             },
             "description": "Responses:\n- 200 — `UserResponse`\n- 400 `invalid_user_id`\n- 404 `not_found`"
           },
@@ -213,7 +311,10 @@
           "request": {
             "method": "PATCH",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -221,8 +322,13 @@
             },
             "url": {
               "raw": "{{baseUrl}}/users/{{userId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["users", "{{userId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{userId}}"
+              ]
             },
             "description": "Changes the descriptive fields only — not status, roles or password.\n\nResponses:\n- 204 — no body\n- 400 — empty full name / `invalid_user_id`\n- 404 `not_found`"
           },
@@ -235,8 +341,14 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/users/{{userId}}/block",
-              "host": ["{{baseUrl}}"],
-              "path": ["users", "{{userId}}", "block"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{userId}}",
+                "block"
+              ]
             },
             "description": "Denies access and retires every session the account currently holds — blocking takes effect immediately, not at the next login or whenever an open tab's session happens to expire.\n\nAn administrator cannot block their own account (guards against locking yourself out).\n\nResponses:\n- 204 — no body\n- 400 `cannot_act_on_self`\n- 404 `not_found`"
           },
@@ -249,8 +361,14 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/users/{{userId}}/unblock",
-              "host": ["{{baseUrl}}"],
-              "path": ["users", "{{userId}}", "unblock"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{userId}}",
+                "unblock"
+              ]
             },
             "description": "Restores access. Sessions retired by the block stay retired — the account signs in again.\n\nResponses:\n- 204 — no body\n- 404 `not_found`"
           },
@@ -263,8 +381,14 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/users/{{userId}}/password-reset",
-              "host": ["{{baseUrl}}"],
-              "path": ["users", "{{userId}}", "password-reset"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{userId}}",
+                "password-reset"
+              ]
             },
             "description": "Issues a fresh one-time password for an account the user can no longer reach, and retires their sessions. Same flag as account creation: the next sign-in must replace it.\n\nResponses:\n- 200 — `{ one_time_password }`\n- 404 `not_found`"
           },
@@ -288,7 +412,10 @@
           "request": {
             "method": "PUT",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
@@ -296,10 +423,894 @@
             },
             "url": {
               "raw": "{{baseUrl}}/users/{{userId}}/roles",
-              "host": ["{{baseUrl}}"],
-              "path": ["users", "{{userId}}", "roles"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{userId}}",
+                "roles"
+              ]
             },
             "description": "Sets the account's global roles to exactly this set (not a merge). Retires the account's sessions, so a demotion bites on the next request rather than at the next login.\n\nResponses:\n- 204 — no body\n- 400 — unknown role code / `invalid_user_id`\n- 404 `not_found`"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Contests",
+      "description": "The contest constructor. Authorisation is two-level: creating a contest is the installation-wide `contest.create` permission, everything about one contest is scoped to it through `contest_managers`, so an organizer never reaches somebody else's olympiad. A system administrator holds `contest.admin_all` and skips the scope.\n\nOrder of work: create → languages → translations → story → questions → answers → publish-check → status.",
+      "item": [
+        {
+          "name": "List contests",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests?q=&status=&scope=&lang=&limit=50&offset=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "Substring of any translated title."
+                },
+                {
+                  "key": "status",
+                  "value": "",
+                  "description": "draft | published | running | finished | archived"
+                },
+                {
+                  "key": "scope",
+                  "value": "",
+                  "description": "participant — what a student would see."
+                },
+                {
+                  "key": "lang",
+                  "value": "",
+                  "description": "Preferred language, e.g. ro. Overrides Accept-Language."
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Page size, capped server-side at 200."
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "Which contests the caller sees depends on who they are, not on a flag they pass:\n- system administrator (`contest.admin_all`) — all of them\n- organizer (`contest.create`) — the ones they own or manage\n- anybody else — the ones they take part in, plus open ones taking signups\n\n`scope=participant` asks for the student view explicitly, which is how staff preview what a participant sees.\n\nEach item carries one **negotiated** title and the `lang` it was served in (`?lang=`, then `Accept-Language`, then the contest default, then `DEFAULT_LOCALE`).\n\nResponses: 200 `{ items: ContestSummary[], total }` · 401 `unauthenticated`"
+          },
+          "response": []
+        },
+        {
+          "name": "Create contest",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests"
+              ]
+            },
+            "description": "Creates a draft and makes the caller its **owner** — somebody has to be able to appoint managers from the first moment. A read-only SQL policy is stored at the same time, in the same transaction: a contest with undefined SQL access must not be observable.\n\nEverything but the author is optional; an organizer starts from an empty draft.\n\nResponses: 201 `ContestResponse` · 400 `invalid_request` / `invalid_cidr` · 403 `forbidden`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enrollment\": \"invite_only\",\n  \"question_mode\": \"multi\",\n  \"timing\": \"fixed\",\n  \"starts_at\": \"2026-09-01T10:00:00Z\",\n  \"ends_at\": \"2026-09-01T13:00:00Z\",\n  \"allowed_cidrs\": [\n    \"10.20.0.0/16\"\n  ],\n  \"settings\": {\n    \"query_rate_limit_per_min\": 30,\n    \"grace_period_min\": 15\n  },\n  \"languages\": [\n    {\n      \"code\": \"en\",\n      \"is_default\": true\n    },\n    {\n      \"code\": \"ro\"\n    }\n  ],\n  \"translations\": {\n    \"en\": {\n      \"title\": \"The Library Murder\",\n      \"description\": \"A locked-room case.\"\n    },\n    \"ro\": {\n      \"title\": \"Crima din bibliotecă\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set('contestId', pm.response.json().id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get contest",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}"
+              ]
+            },
+            "description": "The staff view: **every** translation, not the negotiated one — they are authoring them, and showing only one would make the others invisible in the editor.\n\nResponses: 200 `ContestResponse` · 403 `forbidden` (not staff on this contest) · 404 `not_found`"
+          },
+          "response": []
+        },
+        {
+          "name": "Update contest",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}"
+              ]
+            },
+            "description": "A field left out is left alone. `allowed_cidrs: []` clears the restriction; omitting it keeps it.\n\nEditable up to and including `running`: extending the window after a power cut, or fixing a network range that turned out wrong, is exactly what a running contest needs. What cannot move mid-flight is the **shape** — question mode, timing model, session length — since participants are already answering under it.\n\nResponses: 200 `ContestResponse` · 400 · 409 `not_editable` · 404",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"allowed_cidrs\": [\n    \"10.20.0.0/16\",\n    \"192.168.1.42/32\"\n  ],\n  \"ends_at\": \"2026-09-01T14:00:00Z\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete contest (draft only)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}"
+              ]
+            },
+            "description": "Only a draft. Once it was published people could see it, and what they saw is a record — getting rid of one of those is archiving.\n\nResponses: 204 · 409 `not_editable` · 404"
+          },
+          "response": []
+        },
+        {
+          "name": "Set languages",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/languages",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "languages"
+              ]
+            },
+            "description": "Replaces the set of languages the contest is offered in. Exactly one must be the default: 'what do we serve when the requested language is missing' must never be ambiguous.\n\nCodes are checked against the `languages` table — adding a fourth language to the installation is an INSERT there, with no migration and no deploy.\n\nRefused once the contest is running: a language added then would be empty for whoever picked it.\n\nResponses: 204 · 400 `invalid_request` (unknown language, no default) · 409 `not_editable`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"languages\": [\n    {\n      \"code\": \"en\",\n      \"is_default\": true\n    },\n    {\n      \"code\": \"ro\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Set translations",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/translations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "translations"
+              ]
+            },
+            "description": "Replaces the contest's titles and descriptions. The whole set at once, because the publish gate reasons about the set.\n\nResponses: 204 · 400 · 409 `not_editable`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"translations\": {\n    \"en\": {\n      \"title\": \"The Library Murder\",\n      \"description\": \"A locked-room case.\"\n    },\n    \"ro\": {\n      \"title\": \"Crima din bibliotecă\",\n      \"description\": \"Un caz în cameră închisă.\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Publish check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/publish-check",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "publish-check"
+              ]
+            },
+            "description": "What still stands between the contest and its participants — **all** of it, so an organizer does not need one round trip per missing translation. Always 200: being asked what is left is not a failure.\n\nProblem codes: `no_languages`, `missing_contest_translation`, `no_story`, `missing_story_translation`, `no_questions`, `single_mode_needs_one_question`, `missing_question_translation`, `missing_choice_label`, `no_reference_answer`, `no_schedule`. Each may name the `lang` and the `question_id` at fault.\n\nResponses: 200 `{ ready, problems[] }`"
+          },
+          "response": []
+        },
+        {
+          "name": "Change status",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "status"
+              ]
+            },
+            "description": "Moves the contest along its lifecycle: draft → published → running → finished → archived. The only step back is published → draft, and it exists because publishing is how an organizer finds out the gate passes.\n\nPublishing runs the gate. Requires `contest.publish`.\n\nResponses: 200 `ContestResponse` · 409 `invalid_transition` · 422 `not_publishable` with the same `problems[]` as publish-check",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"published\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get SQL policy",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/sql-policy",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "sql-policy"
+              ]
+            },
+            "description": "How much SQL power the contest hands its participants. A contest nobody configured reports the read-only default rather than an error — the absence of a policy must never read as 'no restrictions'.\n\nResponses: 200 `PolicyResponse`"
+          },
+          "response": []
+        },
+        {
+          "name": "Set SQL policy",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/sql-policy",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "sql-policy"
+              ]
+            },
+            "description": "Both the AST validator and the database grants are derived from this one row, so they cannot drift apart.\n\n`writable_tables` must be plain lowercase identifiers, optionally schema-qualified: they become GRANT statements when the game template is built, where they cannot be passed as parameters.\n\nA read-only contest carrying write permissions is refused outright — that is a contradiction, not a policy.\n\nFrozen once the contest is running: participants would otherwise have different powers depending on when they connected.\n\nResponses: 204 · 400 `invalid_request` · 409 `not_editable`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mode\": \"read_write\",\n  \"writable_tables\": [\n    \"notes\"\n  ],\n  \"allow_create_view\": true,\n  \"allow_own_tables\": true,\n  \"allow_temp_tables\": false,\n  \"allow_catalog\": true,\n  \"disk_quota_ratio\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Contest content",
+      "description": "The story, the questions and the reference answers. Staff-only: these payloads carry the reference answers, and the participant-facing view is a separate projection rather than this one with a field filtered out.\n\nAll of it is frozen once the contest is running — changing a question then would change the task under people already answering it.",
+      "item": [
+        {
+          "name": "Get story",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/story",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "story"
+              ]
+            },
+            "description": "Responses: 200 `{ id, translations, updated_at }` · 404 `story_not_found`"
+          },
+          "response": []
+        },
+        {
+          "name": "Set story",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/story",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "story"
+              ]
+            },
+            "description": "Creates the story on first save — a contest has none until one is written.\n\nThe game database is English; this is the narrative around it, and it is what a participant actually reads.\n\nResponses: 200 · 400 `invalid_request` (unknown language) · 409 `not_editable`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"translations\": {\n    \"en\": \"A body in the stacks.\",\n    \"ro\": \"Un cadavru între rafturi.\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List questions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/questions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "questions"
+              ]
+            },
+            "description": "In display order, with the authored text and the reference answers.\n\nResponses: 200 `{ items: QuestionResponse[] }`"
+          },
+          "response": []
+        },
+        {
+          "name": "Add question",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/questions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "questions"
+              ]
+            },
+            "description": "Appended at the end. `is_visible` defaults to **true**: hiding is the deliberate choice, and a hidden question still scores — working out what is being asked is then part of the puzzle.\n\n`kind`: `text` | `choice` | `final`. A choice question needs at least two `choice_ids`; the submitted answer is one of those identifiers, never a label, so grading does not depend on the language the participant read.\n\nResponses: 201 `QuestionResponse` · 400 · 409 `not_editable`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"final\",\n  \"points\": 10,\n  \"is_visible\": true,\n  \"texts\": {\n    \"en\": {\n      \"body_md\": \"Who did it?\"\n    },\n    \"ro\": {\n      \"body_md\": \"Cine a făcut-o?\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set('questionId', pm.response.json().id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get question",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/questions/{{questionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "questions",
+                "{{questionId}}"
+              ]
+            },
+            "description": "A question that belongs to another contest reports 404, not 403: permission was granted for **this** contest, and the existence of another one's question is not the caller's business.\n\nResponses: 200 · 404 `question_not_found`"
+          },
+          "response": []
+        },
+        {
+          "name": "Update question",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/questions/{{questionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "questions",
+                "{{questionId}}"
+              ]
+            },
+            "description": "Replaces the question's own fields. Text and answers have their own endpoints.\n\nChanging the options out from under existing reference answers is refused: it would leave answers nobody can submit.\n\nResponses: 200 · 400 · 404 · 409",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"final\",\n  \"points\": 15,\n  \"is_visible\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete question",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/questions/{{questionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "questions",
+                "{{questionId}}"
+              ]
+            },
+            "description": "Closes the gap in the ordering, so positions stay 1..n.\n\nResponses: 204 · 404 · 409"
+          },
+          "response": []
+        },
+        {
+          "name": "Reorder questions",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/questions/order",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "questions",
+                "order"
+              ]
+            },
+            "description": "Must name **every** question of the contest, exactly once: a partial list would leave positions duplicated or missing, and the participant's view is built from exactly that order.\n\nResponses: 204 · 400 `invalid_request` (partial list) / `invalid_question_id` · 409",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"order\": [\n    \"{{questionId}}\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Set question text",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/questions/{{questionId}}/texts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "questions",
+                "{{questionId}}",
+                "texts"
+              ]
+            },
+            "description": "Replaces the authored text. `choices` maps each choice identifier to its label in that language.\n\nResponses: 204 · 400 · 404 · 409",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"texts\": {\n    \"en\": {\n      \"body_md\": \"Who did it?\",\n      \"choices\": {\n        \"a\": \"The butler\",\n        \"b\": \"The gardener\"\n      }\n    },\n    \"ro\": {\n      \"body_md\": \"Cine a făcut-o?\",\n      \"choices\": {\n        \"a\": \"Majordomul\",\n        \"b\": \"Grădinarul\"\n      }\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Set reference answers",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/questions/{{questionId}}/answers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "questions",
+                "{{questionId}}",
+                "answers"
+              ]
+            },
+            "description": "Replaces the accepted answers. Several per question is normal: the game database is English, so a translated story that transliterates a name simply adds another accepted spelling — refusing it would score language rather than detection.\n\n`match_kind`: `exact` | `exact_ci` | `regex`. A regular expression is compiled here, at authoring time: a pattern that fails to compile during a running contest would break grading for everybody who reached that question.\n\nNever returned to a participant, and never written to the audit trail.\n\nResponses: 204 · 400 `invalid_request` (bad pattern, or a choice value that is not one of the options) · 404 · 409",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"answers\": [\n    {\n      \"match_kind\": \"exact_ci\",\n      \"value\": \"the butler\"\n    },\n    {\n      \"match_kind\": \"exact_ci\",\n      \"value\": \"majordomul\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Contest staff and participants",
+      "description": "Two different permissions on purpose: running a contest (`contest.edit`) does not include appointing who else may run it (`contest.manage`, the owner's alone), and managing the roster (`participant.manage`) includes neither.\n\nEvery appointment and every roster change is written to `audit_log` with who did it and from where.",
+      "item": [
+        {
+          "name": "List staff",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/managers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "managers"
+              ]
+            },
+            "description": "Owner first, whatever their login sorts like.\n\nResponses: 200 `{ items: ManagerResponse[] }`"
+          },
+          "response": []
+        },
+        {
+          "name": "Appoint manager",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/managers/{{userId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "managers",
+                "{{userId}}"
+              ]
+            },
+            "description": "Owner-only (`contest.manage`). Ownership is **not** handed over here: two owners make 'who may appoint staff' ambiguous, and a transfer should not happen quietly through the staff list.\n\nResponses: 204 · 400 `invalid_request` (unknown role) · 404 `user_not_found` · 409 `owner_immutable`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"manager\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Remove manager",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/managers/{{userId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "managers",
+                "{{userId}}"
+              ]
+            },
+            "description": "The owner cannot be removed: a contest with no owner has nobody who may appoint anybody.\n\nResponses: 204 · 404 `manager_not_found` · 409 `owner_immutable`"
+          },
+          "response": []
+        },
+        {
+          "name": "List participants",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/participants?q=&status=&limit=50&offset=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "participants"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "Substring of the login or full name."
+                },
+                {
+                  "key": "status",
+                  "value": "",
+                  "description": "registered | active | finished | disqualified"
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Page size, capped server-side at 500."
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "Responses: 200 `{ items: ParticipantResponse[], total }`"
+          },
+          "response": []
+        },
+        {
+          "name": "Add participants (roster import)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/participants",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "participants"
+              ]
+            },
+            "description": "Logins as well as identifiers, because the practical input is a roster pasted out of a spreadsheet.\n\nPartial success is the honest outcome: one mistyped login must not reject the other three hundred rows. `skipped[]` names each row it could not use and why — `unknown_account` or `already_enrolled`.\n\nThe contest's network restriction does **not** apply here: it governs where a participant may work from, not where the organizer sits while preparing the roster.\n\nResponses: 200 `{ added, skipped[] }` · 400 · 409 `not_editable` (finished/archived)",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"logins\": [\n    \"s.popescu\",\n    \"i.ivanov\"\n  ],\n  \"user_ids\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Remove participant",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/participants/{{userId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "participants",
+                "{{userId}}"
+              ]
+            },
+            "description": "Only somebody who never started. Once they have worked on the contest their queries and answers are part of the record, and excluding them is disqualification.\n\nResponses: 204 · 404 `participant_not_found` · 409 `participant_started`"
+          },
+          "response": []
+        },
+        {
+          "name": "Disqualify participant",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/participants/{{userId}}/disqualify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "participants",
+                "{{userId}}",
+                "disqualify"
+              ]
+            },
+            "description": "Excludes them while keeping everything they did.\n\nResponses: 204 · 404"
+          },
+          "response": []
+        },
+        {
+          "name": "Enroll (self-signup)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/enroll",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "enroll"
+              ]
+            },
+            "description": "A student signing themselves up. Needs no staff permission: whether it is allowed is the contest's own decision.\n\nRefused unless the contest is `open`, published, and past neither its start nor its enrollment deadline. A running contest still accepts signups when the timing is `individual` — each participant's clock starts on their own start, so a latecomer takes nothing from anybody.\n\nThe network restriction is checked here, against the address resolved through `TRUSTED_PROXIES` — never a header read from the request. Every refusal is written to `audit_log`: the entry that proves the rule works is the same signal that somebody tried from an outside device.\n\nResponses: 201 `ParticipantResponse` · 403 `address_not_allowed` · 409 `enrollment_closed` / `already_enrolled` · 404"
           },
           "response": []
         }
@@ -316,8 +1327,12 @@
             "header": [],
             "url": {
               "raw": "{{internalUrl}}/healthz",
-              "host": ["{{internalUrl}}"],
-              "path": ["healthz"]
+              "host": [
+                "{{internalUrl}}"
+              ],
+              "path": [
+                "healthz"
+              ]
             },
             "description": "Reports only that the process is running — it never checks dependencies, so a database outage does not trigger a restart loop.\n\nResponse: 200 — `{ status: \"ok\" }`"
           },
@@ -330,8 +1345,12 @@
             "header": [],
             "url": {
               "raw": "{{internalUrl}}/readyz",
-              "host": ["{{internalUrl}}"],
-              "path": ["readyz"]
+              "host": [
+                "{{internalUrl}}"
+              ],
+              "path": [
+                "readyz"
+              ]
             },
             "description": "Probes PostgreSQL and the cache concurrently under a shared timeout and reports whether this instance can serve traffic. Failure details are logged, never returned in the body — this endpoint is reachable from the network and driver errors carry hosts and credentials.\n\nResponses:\n- 200 — `{ status: \"ok\", checks: { \"core-db\": \"ok\", cache: \"ok\" }, cache: \"memory\"|\"redis\" }`\n- 503 — `status: \"unavailable\"`, same shape, with the failing check(s) marked `failed`"
           },
@@ -344,8 +1363,12 @@
             "header": [],
             "url": {
               "raw": "{{internalUrl}}/metrics",
-              "host": ["{{internalUrl}}"],
-              "path": ["metrics"]
+              "host": [
+                "{{internalUrl}}"
+              ],
+              "path": [
+                "metrics"
+              ]
             },
             "description": "Prometheus scrape endpoint. Only present when METRICS_BACKEND=prometheus (the default) — with the `log` or `none` backend this route does not exist and answers 404, on purpose: serving an empty page would tell a scraper the service is instrumented when its numbers live elsewhere.\n\nResponse: 200 — text/plain Prometheus exposition format."
           },
@@ -363,8 +1386,12 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/version",
-              "host": ["{{baseUrl}}"],
-              "path": ["version"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "version"
+              ]
             },
             "description": "Public, unauthenticated. Reports the build version stamped at compile time.\n\nResponse: 200 — `{ version: string }`"
           },

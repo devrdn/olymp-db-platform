@@ -28,6 +28,31 @@ const (
 	ActionUserRolesChange   = "user.roles_change"
 	ActionUserPasswordReset = "user.password_reset"
 	ActionPasswordChange    = "user.password_change"
+
+	ActionContestCreate       = "contest.create"
+	ActionContestUpdate       = "contest.update"
+	ActionContestDelete       = "contest.delete"
+	ActionContestStatusChange = "contest.status_change"
+	ActionContestLanguages    = "contest.languages_change"
+	ActionContestTranslations = "contest.translations_change"
+	ActionContestPolicyChange = "contest.policy_change"
+	ActionContestStoryChange  = "contest.story_change"
+	ActionQuestionCreate      = "contest.question_create"
+	ActionQuestionUpdate      = "contest.question_update"
+	ActionQuestionDelete      = "contest.question_delete"
+	ActionQuestionReorder     = "contest.question_reorder"
+	ActionAnswersChange       = "contest.answers_change"
+	ActionManagerGrant        = "contest.manager_grant"
+	ActionManagerRevoke       = "contest.manager_revoke"
+
+	ActionParticipantAdd        = "participant.add"
+	ActionParticipantRemove     = "participant.remove"
+	ActionParticipantDisqualify = "participant.disqualify"
+	ActionParticipantEnroll     = "participant.enroll"
+	// ActionContestAccessDenied records a participant turned away by a
+	// contest's network restriction: the same entry that proves the rule works
+	// is the signal that somebody tried from an outside device (§7.1).
+	ActionContestAccessDenied = "contest.access_denied"
 )
 
 // MaxUserAgentLength bounds a header the client controls. The column is kept
