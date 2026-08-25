@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>html,body{margin:0;padding:0}</style>
+</head>
+<body>
+<title>Чистовик</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Literata:ital,opsz,wght@0,7..72,400;1,7..72,400&display=swap">
+
+<style>
+:root {
+  --bg: #ffffff;
+  --panel: #fafafa;
+  --sunk: #f6f6f6;
+  --ink: #0d1117;
+  --ink-2: #4c535e;
+  --ink-3: #66696d;
+  --line: rgba(13, 17, 23, 0.07);
+  --line-2: rgba(13, 17, 23, 0.13);
+  --edge: #838587;
+  --pattern: rgba(13, 17, 23, 0.05);
+  --ann: rgba(13, 17, 23, 0.24);
+  --cta-bg: #0d1117;
+  --cta-fg: #ffffff;
+  --accent: #0e5048;
+  --accent-wash: #e4efec;
+  --good: #2c6338;
+  --good-wash: #e6f0e8;
+  --warn: #8a5510;
+  --warn-wash: #f4ece0;
+  --bad: #a32a21;
+  --bad-wash: #f7e6e4;
+  --k-key: #0e5048;
+  --k-fn: #1f4e79;
+  --k-str: #8a5510;
+  --k-num: #8f3a14;
+  --k-com: #66696d;
+  --color-scrim-a: rgb(255 255 255 / 0.97);
+  --color-scrim-b: rgb(255 255 255 / 0.72);
+  --sans: 'Onest', ui-sans-serif, system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --serif: 'Literata', Georgia, serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0a0b0f;
+    --panel: #101218;
+    --sunk: #0d0f14;
+    --ink: #ffffff;
+    --ink-2: #a6adb8;
+    --ink-3: #898c8c;
+    --line: rgba(255, 255, 255, 0.10);
+    --line-2: rgba(255, 255, 255, 0.17);
+    --edge: #6c6f70;
+    --pattern: rgba(255, 255, 255, 0.10);
+    --ann: rgba(255, 255, 255, 0.26);
+    --cta-bg: #262b36;
+    --cta-fg: #ffffff;
+    --accent: #5ed0bc;
+    --accent-wash: rgba(94, 208, 188, 0.12);
+    --good: #6fbf80;
+    --good-wash: rgba(111, 191, 128, 0.12);
+    --warn: #d59a3e;
+    --warn-wash: rgba(213, 154, 62, 0.12);
+    --bad: #e0796d;
+    --bad-wash: rgba(224, 121, 109, 0.12);
+    --k-key: #5ed0bc;
+    --k-fn: #7fb2e5;
+    --k-str: #d5a75e;
+    --k-num: #e0956b;
+    --k-com: #898c8c;
+    --color-scrim-a: rgb(10 11 15 / 0.97);
+    --color-scrim-b: rgb(10 11 15 / 0.72);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0a0b0f; --panel: #101218; --sunk: #0d0f14;
+  --ink: #ffffff; --ink-2: #a6adb8; --ink-3: #898c8c;
+  --line: rgba(255,255,255,0.10); --line-2: rgba(255,255,255,0.17);
+  --edge: #6c6f70; --pattern: rgba(255,255,255,0.10); --ann: rgba(255,255,255,0.26);
+  --cta-bg: #262b36; --cta-fg: #ffffff;
+  --accent: #5ed0bc; --accent-wash: rgba(94,208,188,0.12);
+  --good: #6fbf80; --good-wash: rgba(111,191,128,0.12);
+  --warn: #d59a3e; --warn-wash: rgba(213,154,62,0.12);
+  --bad: #e0796d; --bad-wash: rgba(224,121,109,0.12);
+  --k-key: #5ed0bc; --k-fn: #7fb2e5; --k-str: #d5a75e; --k-num: #e0956b; --k-com: #898c8c; --color-scrim-a: rgb(10 11 15 / 0.97); --color-scrim-b: rgb(10 11 15 / 0.72);
+}
+.tl.tl.tl {
+  --bg: #ffffff; --panel: #fafafa; --sunk: #f6f6f6;
+  --ink: #0d1117; --ink-2: #4c535e; --ink-3: #66696d;
+  --line: rgba(13,17,23,0.07); --line-2: rgba(13,17,23,0.13);
+  --edge: #838587; --pattern: rgba(13,17,23,0.05); --ann: rgba(13,17,23,0.24);
+  --cta-bg: #0d1117; --cta-fg: #ffffff;
+  --accent: #0e5048; --accent-wash: #e4efec;
+  --good: #2c6338; --good-wash: #e6f0e8;
+  --warn: #8a5510; --warn-wash: #f4ece0;
+  --bad: #a32a21; --bad-wash: #f7e6e4;
+  --k-key: #0e5048; --k-fn: #1f4e79; --k-str: #8a5510; --k-num: #8f3a14; --k-com: #66696d; --color-scrim-a: rgb(255 255 255 / 0.97); --color-scrim-b: rgb(255 255 255 / 0.72);
+}
+.td.td.td {
+  --bg: #0a0b0f; --panel: #101218; --sunk: #0d0f14;
+  --ink: #ffffff; --ink-2: #a6adb8; --ink-3: #898c8c;
+  --line: rgba(255,255,255,0.10); --line-2: rgba(255,255,255,0.17);
+  --edge: #6c6f70; --pattern: rgba(255,255,255,0.10); --ann: rgba(255,255,255,0.26);
+  --cta-bg: #262b36; --cta-fg: #ffffff;
+  --accent: #5ed0bc; --accent-wash: rgba(94,208,188,0.12);
+  --good: #6fbf80; --good-wash: rgba(111,191,128,0.12);
+  --warn: #d59a3e; --warn-wash: rgba(213,154,62,0.12);
+  --bad: #e0796d; --bad-wash: rgba(224,121,109,0.12);
+  --k-key: #5ed0bc; --k-fn: #7fb2e5; --k-str: #d5a75e; --k-num: #e0956b; --k-com: #898c8c; --color-scrim-a: rgb(10 11 15 / 0.97); --color-scrim-b: rgb(10 11 15 / 0.72);
+}
+</style>
+
+<style>
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 16px; line-height: 1.6; margin: 0; -webkit-font-smoothing: antialiased; }
+
+/* Hatched gutters bracket every band, exactly as the reference does. */
+.band { display: grid; grid-template-columns: minmax(16px, 1fr) minmax(0, 1136px) minmax(16px, 1fr); border-top: 1px solid var(--line); }
+.band:last-of-type { border-bottom: 1px solid var(--line); }
+.gut { background-image: repeating-linear-gradient(315deg, var(--pattern) 0, var(--pattern) 1px, transparent 0, transparent 50%); background-size: 10px 10px; border-inline: 1px solid var(--line); }
+.mid { padding: 56px 40px 64px; min-width: 0; }
+@media (max-width: 760px) { .mid { padding: 36px 18px 44px; } .band { grid-template-columns: 0 minmax(0,1fr) 0; } .gut { display: none; } }
+
+/* The annotation label: our token names where the reference puts utility classes. */
+.ann { display: block; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; color: var(--ann); letter-spacing: 0; margin-bottom: 9px; }
+.ann::selection { background: var(--accent-wash); }
+.ann.read { color: var(--ink-3); }
+
+h1.dsp { font-size: clamp(40px, 8.2vw, 92px); font-weight: 400; letter-spacing: -0.05em; line-height: 0.98; margin: 0; text-wrap: balance; color: var(--ink); }
+h2.sec { font-size: clamp(28px, 4vw, 44px); font-weight: 400; letter-spacing: -0.042em; line-height: 1.02; margin: 0; text-wrap: balance; max-width: 20ch; }
+h3.sub { font-size: 19px; font-weight: 500; letter-spacing: -0.02em; margin: 0; }
+.lede { font-size: 18px; font-weight: 500; line-height: 1.55; color: var(--ink-2); max-width: 60ch; margin: 0; }
+.body { font-size: 15.5px; font-weight: 400; line-height: 1.65; color: var(--ink-2); max-width: 66ch; margin: 0; }
+.body + .body { margin-top: 13px; }
+.body b, .lede b { color: var(--ink); font-weight: 500; }
+.mn { font-family: var(--mono); font-size: 0.87em; color: var(--ink); background: var(--sunk); padding: 1px 5px; border-radius: 4px; }
+.stack { display: flex; flex-direction: column; gap: 22px; }
+.stack-s { display: flex; flex-direction: column; gap: 13px; }
+
+.cta { background: var(--cta-bg); color: var(--cta-fg); border: 0; border-radius: 999px; font-family: var(--sans); font-size: 14px; font-weight: 600; padding: 9px 18px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; line-height: 1.4; }
+.cta:hover { opacity: 0.88; }
+.cta2 { background: transparent; color: var(--ink); border: 1px solid var(--edge); border-radius: 999px; font-family: var(--sans); font-size: 14px; font-weight: 500; padding: 8px 17px; cursor: pointer; }
+.cta2:hover { border-color: var(--ink); }
+.cta:focus-visible, .cta2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Demo surface: dotted grid on a faint panel, rounded — the reference's example frame. */
+.demo { border-radius: 12px; background-color: var(--panel); background-image: radial-gradient(var(--pattern) 1px, transparent 0); background-size: 8px 8px; padding: 18px; border: 1px solid var(--line); }
+.win { border-radius: 10px; overflow: hidden; border: 1px solid var(--line-2); background: var(--bg); }
+.win-bar { display: flex; align-items: center; gap: 7px; padding: 9px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.win-bar i { width: 9px; height: 9px; border-radius: 50%; background: var(--line-2); display: block; }
+.win-bar span { font-family: var(--mono); font-size: 11px; color: var(--ink-3); margin-left: 6px; }
+.scrollx { overflow-x: auto; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { font-family: var(--mono); font-size: 11px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--ink-2); }
+.tag { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; padding: 2.5px 8px; border-radius: 999px; display: inline-flex; align-items: center; gap: 5px; line-height: 1.45; }
+.g-live { background: var(--accent-wash); color: var(--accent); }
+.g-live i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: bp 2.4s ease-in-out infinite; }
+@keyframes bp { 0%,100%{opacity:1} 50%{opacity:.3} }
+.g-good { background: var(--good-wash); color: var(--good); }
+.g-warn { background: var(--warn-wash); color: var(--warn); }
+.g-bad { background: var(--bad-wash); color: var(--bad); }
+.g-mute { background: var(--sunk); color: var(--ink-3); }
+.g-ink { background: var(--cta-bg); color: var(--cta-fg); }
+
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px,100%), 1fr)); gap: 28px; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px,100%), 1fr)); gap: 20px; }
+.rule { height: 1px; background: var(--line); }
+@media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important } }
+</style>
+
+<style>
+.app { min-width: 920px; background: var(--bg); color: var(--ink); }
+.app-n { min-width: 640px; }
+.topbar { display: flex; align-items: center; gap: 14px; padding: 0 14px; height: 48px; border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; letter-spacing: -0.015em; }
+.brand em { font-style: normal; width: 20px; height: 20px; border-radius: 6px; background: var(--cta-bg); color: var(--cta-fg); display: grid; place-items: center; font-family: var(--mono); font-size: 10px; font-weight: 600; }
+.vr { width: 1px; height: 18px; background: var(--line); }
+.spacer { flex: 1; }
+.tt { font-size: 13.5px; font-weight: 500; }
+.clock { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 16px; font-weight: 500; letter-spacing: -0.02em; }
+.clock u { display: block; text-decoration: none; font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); font-weight: 500; line-height: 1.2; }
+.lgs { display: inline-flex; border: 1px solid var(--line-2); border-radius: 999px; overflow: hidden; font-family: var(--mono); font-size: 10.5px; }
+.lgs span { padding: 3px 8px; color: var(--ink-3); text-transform: uppercase; }
+.lgs span.on { background: var(--cta-bg); color: var(--cta-fg); }
+.ava { width: 25px; height: 25px; border-radius: 999px; background: var(--accent-wash); color: var(--accent); display: grid; place-items: center; font-family: var(--mono); font-size: 10px; font-weight: 600; }
+
+.cons { display: grid; grid-template-columns: 212px minmax(0,1fr) 252px; min-height: 430px; }
+.pane { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
+.pane:last-child { border-right: 0; border-left: 1px solid var(--line); }
+.pane-h { display: flex; justify-content: space-between; gap: 8px; padding: 8px 13px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); }
+.pane-b { padding: 10px 0; flex: 1; }
+.srch { margin: 0 13px 9px; display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11px; color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 999px; padding: 4px 11px; }
+.tree { font-family: var(--mono); font-size: 11.5px; line-height: 1.95; }
+.tree .t { display: flex; gap: 7px; padding: 0 13px; color: var(--ink); }
+.tree .t.on { color: var(--accent); font-weight: 500; background: var(--accent-wash); }
+.tree .t .fk { margin-left: auto; font-size: 9px; letter-spacing: .06em; color: var(--ink-3); }
+.tree .c { display: flex; gap: 7px; padding: 0 13px 0 27px; color: var(--ink-2); }
+.tree .c i { margin-left: auto; font-style: normal; font-size: 9.5px; color: var(--ink-3); }
+.bar2 { display: flex; align-items: center; gap: 7px; padding: 8px 13px; border-bottom: 1px solid var(--line); }
+.sm { font-family: var(--sans); font-size: 12.5px; font-weight: 500; border: 0; background: transparent; color: var(--ink-2); padding: 5px 8px; border-radius: 999px; cursor: pointer; }
+.sm:hover { background: var(--sunk); color: var(--ink); }
+.sm.pri { background: var(--cta-bg); color: var(--cta-fg); padding: 6px 13px; }
+.sm .k { font-family: var(--mono); font-size: 10px; opacity: .6; margin-left: 5px; }
+.ed { display: flex; font-family: var(--mono); font-size: 12.5px; line-height: 1.85; background: var(--sunk); }
+.gut2 { padding: 12px 0 12px 13px; min-width: 34px; text-align: right; color: var(--ink-3); font-size: 11px; user-select: none; }
+.code { padding: 12px 13px; white-space: pre; overflow-x: auto; flex: 1; }
+.kk{color:var(--k-key);font-weight:500} .kf{color:var(--k-fn)} .ks{color:var(--k-str)} .kn{color:var(--k-num)} .kc{color:var(--k-com);font-style:italic} .ko{color:var(--ink-2)}
+.mtr { display: flex; gap: 18px; padding: 6px 13px; border-block: 1px solid var(--line); font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.mtr b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+table.dt { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11.5px; }
+table.dt th { text-align: left; font-weight: 500; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); padding: 5px 13px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.dt th u { display: block; text-decoration: none; font-size: 9px; opacity: .8; font-weight: 400; letter-spacing: .05em; }
+table.dt td { padding: 4px 13px; border-bottom: 1px solid var(--line); white-space: nowrap; font-variant-numeric: tabular-nums; }
+table.dt td.i { color: var(--ink-3); font-size: 10px; width: 30px; text-align: right; padding-right: 0; }
+table.dt .nl { color: var(--ink-3); font-style: italic; }
+table.dt tr:last-child td { border-bottom: 0; }
+.qq { border-bottom: 1px solid var(--line); padding: 9px 13px; display: flex; flex-direction: column; gap: 5px; }
+.qq .r { display: flex; align-items: center; gap: 7px; }
+.qq .r .n { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.qq .r .p { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.qq .x { font-size: 12.5px; line-height: 1.4; }
+.qq.on { background: var(--accent-wash); }
+.qq.off .x { color: var(--ink-3); }
+
+.rows { border-top: 1px solid var(--line); }
+.rw { display: grid; grid-template-columns: 30px minmax(0,2.3fr) minmax(0,1fr) 128px 118px; gap: 18px; align-items: baseline; padding: 14px 14px; border-bottom: 1px solid var(--line); }
+.rw:hover { background: var(--panel); }
+.rw .n { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.rw .h { font-size: 16px; font-weight: 500; letter-spacing: -0.022em; }
+.rw .d { font-size: 12.5px; color: var(--ink-2); line-height: 1.45; margin-top: 3px; }
+.rw .m { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); line-height: 1.85; }
+.rw .m b { color: var(--ink-2); font-weight: 500; }
+.rw .a { text-align: right; }
+@media (max-width: 760px) { .rw { grid-template-columns: minmax(0,1fr); gap: 7px; } .rw .a { text-align: left; } }
+
+.st { display: flex; flex-direction: column; gap: 10px; }
+.st .k { font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; color: var(--accent); }
+.st .t { font-size: 14px; font-weight: 500; }
+.st .d { font-size: 13px; color: var(--ink-2); line-height: 1.5; }
+.st .demo { min-height: 72px; display: flex; flex-direction: column; justify-content: center; gap: 7px; padding: 13px; }
+.skl { height: 8px; border-radius: 3px; background: var(--line-2); position: relative; overflow: hidden; }
+.skl::after { content:""; position:absolute; inset:0; background: linear-gradient(90deg, transparent, var(--bg), transparent); animation: sh 1.7s ease-in-out infinite; }
+@keyframes sh { 0%{transform:translateX(-100%)} 100%{transform:translateX(100%)} }
+</style>
+
+<style>
+.plate { position: relative; aspect-ratio: 16 / 9; overflow: hidden; background: var(--sunk); }
+.plate img { width: 100%; height: 100%; object-fit: cover; display: block; filter: grayscale(1) contrast(1.06) brightness(0.99); }
+/* The scrim resolves to the page ground in whichever theme is active, so the
+   title never lands on an unpredictable region of somebody else's photograph. */
+.plate .scrim { position: absolute; inset: 0; background: linear-gradient(to top, var(--color-scrim-a) 0%, var(--color-scrim-b) 40%, transparent 76%); }
+.plate .lay, .noplate { position: absolute; left: 0; right: 0; bottom: 0; padding: 22px 26px; display: flex; flex-direction: column; gap: 7px; }
+.plate .ttl, .noplate .ttl { font-size: clamp(24px, 3.2vw, 36px); font-weight: 400; letter-spacing: -0.042em; line-height: 1.03; color: var(--ink); }
+.plate .eb, .noplate .eb { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); }
+.noplate { position: static; aspect-ratio: 16 / 9; justify-content: flex-end; background-color: var(--sunk); background-image: repeating-linear-gradient(315deg, var(--pattern) 0, var(--pattern) 1px, transparent 0, transparent 50%); background-size: 10px 10px; }
+.credit { font-family: var(--mono); font-size: 10.5px; line-height: 1.65; color: var(--ink-3); padding: 9px 14px; border-top: 1px solid var(--line); }
+.credit b { color: var(--ink-2); font-weight: 500; }
+</style>
+
+<section class="band" style="border-top: 0">
+  <div class="gut"></div>
+  <div class="mid" style="padding-top: 72px; padding-bottom: 76px">
+    <div class="stack">
+      <div>
+        <span class="ann">--font-sans · 92/0.98 · weight 400 · tracking -0.05em</span>
+        <h1 class="dsp">Студенты пишут SQL. Интерфейс не мешает.</h1>
+      </div>
+      <div>
+        <span class="ann">--text-lede · 18/1.55 · weight 500 · --color-ink-2</span>
+        <p class="lede">Дизайн-система платформы университетских SQL-олимпиад формата «Детектив». Третье направление: палитра из предыдущего, метод — из документации Tailwind.</p>
+      </div>
+      <div class="chips" style="margin-top: 4px">
+        <button class="cta">Смотреть консоль</button>
+        <button class="cta2">Что именно взято</button>
+      </div>
+    </div>
+  </div>
+  <div class="gut"></div>
+</section>
+
+<section class="band">
+  <div class="gut"></div>
+  <div class="mid">
+    <div class="grid2" style="gap: 44px">
+      <div class="stack-s">
+        <span class="ann">// метод</span>
+        <h2 class="sec">Шесть приёмов, снятых с живой страницы</h2>
+        <p class="body">Не по памяти и не по скриншоту: я открыл сайт и вычитал вычисленные стили. Три из шести оказались неочевидными: по скриншоту их не увидеть.</p>
+      </div>
+      <div class="stack-s">
+        <div class="rule"></div>
+        <div style="display:flex; gap:16px; padding: 4px 0"><span class="ann" style="margin:0; min-width:22px">01</span><p class="body" style="margin:0"><b>Заголовок 92 px набран весом 400, а не 700.</b> Именно поэтому огромный кегль не кричит: масштаб даёт иерархию, а лёгкое начертание возвращает спокойствие. Прибавьте жирность — и та же строка станет баннером.</p></div>
+        <div class="rule"></div>
+        <div style="display:flex; gap:16px; padding: 4px 0"><span class="ann" style="margin:0; min-width:22px">02</span><p class="body" style="margin:0"><b>Трекинг −0,05em и интерлиньяж 0,98.</b> Строки почти касаются друг друга, слова стянуты. На кириллице это работает даже заметнее, чем на латинице: у неё выше плотность вертикальных штрихов.</p></div>
+        <div class="rule"></div>
+        <div style="display:flex; gap:16px; padding: 4px 0"><span class="ann" style="margin:0; min-width:22px">03</span><p class="body" style="margin:0"><b>Линейки на 5 % чёрного в светлой теме и 10 % белого в тёмной.</b> Прозрачность удваивается, а не зеркалится: тёмный фон съедает контраст, и честная инверсия даёт линейку, которой не видно.</p></div>
+        <div class="rule"></div>
+        <div style="display:flex; gap:16px; padding: 4px 0"><span class="ann" style="margin:0; min-width:22px">04</span><p class="body" style="margin:0"><b>Штриховка полей под 315°.</b> Поля не пустые — они заштрихованы в один пиксель с шагом 10. Это удерживает колонку контента без единой рамки и даёт странице материал.</p></div>
+        <div class="rule"></div>
+        <div style="display:flex; gap:16px; padding: 4px 0"><span class="ann" style="margin:0; min-width:22px">05</span><p class="body" style="margin:0"><b>Крошечная кнопка рядом с огромным заголовком.</b> Пилюля 14 px против заголовка 92 px — контраст масштабов делает работу, которую обычно пытаются сделать цветом.</p></div>
+        <div class="rule"></div>
+        <div style="display:flex; gap:16px; padding: 4px 0"><span class="ann" style="margin:0; min-width:22px">06</span><p class="body" style="margin:0"><b>Подписи-аннотации.</b> На сайте Tailwind над каждым элементом висит его же набор классов — страница документирует сама себя. У нас продукт другой, поэтому подпись называет <b>наши токены</b>. Приём тот же, содержание честное.</p></div>
+      </div>
+    </div>
+  </div>
+  <div class="gut"></div>
+</section>
+
+<section class="band">
+  <div class="gut"></div>
+  <div class="mid">
+    <div class="stack">
+      <div class="stack-s">
+        <span class="ann">// цвет · палитра сохранена, фон стал белым</span>
+        <h2 class="sec">Один акцент, три семантики, белый фон</h2>
+        <p class="body">Чернила ушли в синеву, акцент остался тем же зелёным. Поменялась подложка: не бумага, а чистый белый — на нём линейка в 5 % работает, а на тонированной бумаге она бы утонула.</p>
+      </div>
+      <div class="demo">
+        <div class="grid3" style="gap: 1px">
+          <div style="background: var(--bg); padding: 14px"><span class="ann read" style="margin-bottom:7px">--color-bg</span><div style="height:34px; background: var(--bg); border: 1px solid var(--line-2); border-radius: 6px"></div><div style="font-family:var(--mono); font-size:11px; color:var(--ink-3); margin-top:7px">#ffffff · #0a0b0f</div></div>
+          <div style="background: var(--bg); padding: 14px"><span class="ann read" style="margin-bottom:7px">--color-ink</span><div style="height:34px; background: var(--ink); border-radius: 6px"></div><div style="font-family:var(--mono); font-size:11px; color:var(--ink-3); margin-top:7px">#0d1117 · #ffffff</div></div>
+          <div style="background: var(--bg); padding: 14px"><span class="ann read" style="margin-bottom:7px">--color-accent</span><div style="height:34px; background: var(--accent); border-radius: 6px"></div><div style="font-family:var(--mono); font-size:11px; color:var(--ink-3); margin-top:7px">#0e5048 · #5ed0bc</div></div>
+          <div style="background: var(--bg); padding: 14px"><span class="ann read" style="margin-bottom:7px">--color-good</span><div style="height:34px; background: var(--good); border-radius: 6px"></div><div style="font-family:var(--mono); font-size:11px; color:var(--ink-3); margin-top:7px">#2c6338 · #6fbf80</div></div>
+          <div style="background: var(--bg); padding: 14px"><span class="ann read" style="margin-bottom:7px">--color-warn</span><div style="height:34px; background: var(--warn); border-radius: 6px"></div><div style="font-family:var(--mono); font-size:11px; color:var(--ink-3); margin-top:7px">#8a5510 · #d59a3e</div></div>
+          <div style="background: var(--bg); padding: 14px"><span class="ann read" style="margin-bottom:7px">--color-bad</span><div style="height:34px; background: var(--bad); border-radius: 6px"></div><div style="font-family:var(--mono); font-size:11px; color:var(--ink-3); margin-top:7px">#a32a21 · #e0796d</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="gut"></div>
+</section>
+
+<section class="band">
+  <div class="gut"></div>
+  <div class="mid">
+    <div class="stack">
+      <div class="stack-s">
+        <span class="ann">// типографика · вес несёт иерархию вместо жирности</span>
+        <h2 class="sec">Крупно и легко, мелко и плотно</h2>
+        <p class="body">Шкала перестроена под находку номер один. Крупные ступени идут весом 300–400 с трекингом до −0,05em, мелкие — весом 500. Жирного начертания в системе нет вовсе: 600 остаётся только пилюле-кнопке.</p>
+      </div>
+      <div class="demo" style="padding: 0; background-image: none">
+        <div style="padding: 26px 24px; border-bottom: 1px solid var(--line)"><span class="ann read">display · 92/0.98 · 400 · -0.05em</span><div style="font-size: clamp(34px,6vw,72px); font-weight: 400; letter-spacing: -0.05em; line-height: 0.98">Ночь в архиве</div></div>
+        <div style="padding: 22px 24px; border-bottom: 1px solid var(--line)"><span class="ann read">h2 · 44/1.02 · 400 · -0.042em</span><div style="font-size: 40px; font-weight: 400; letter-spacing: -0.042em; line-height: 1.02">Восемнадцать гостей, одна опись</div></div>
+        <div style="padding: 20px 24px; border-bottom: 1px solid var(--line)"><span class="ann read">h3 · 19/1.3 · 500 · -0.02em</span><div style="font-size: 19px; font-weight: 500; letter-spacing: -0.02em">Политика SQL-доступа олимпиады</div></div>
+        <div style="padding: 20px 24px; border-bottom: 1px solid var(--line)"><span class="ann read">body · 15.5/1.65 · 400 · --color-ink-2 · 66ch</span><div style="font-size: 15.5px; color: var(--ink-2); max-width: 66ch; line-height: 1.65">Каждый участник работает со своей копией игровой базы и не может повлиять на других. Запросы проходят валидацию по AST и выполняются с жёсткими лимитами.</div></div>
+        <div style="padding: 20px 24px; border-bottom: 1px solid var(--line)"><span class="ann read">mono · 13/1.6 · tabular-nums</span><div style="font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums">41:07 · 4 строки · 38 мс · 47,2 % · keycard_events.guest_id</div></div>
+        <div style="padding: 20px 24px"><span class="ann read">narrative · Literata 17/1.7 · только текст дела</span><div style="font-family: var(--serif); font-size: 17px; line-height: 1.7; color: var(--ink-2); max-width: 58ch">Опись пропала между полуночью и рассветом, и в журнале охраны есть ровно одна лишняя подпись.</div></div>
+      </div>
+      <p class="body"><b>Кириллица выигрывает от этого больше латиницы.</b> У неё плотнее вертикальные штрихи, поэтому жирное начертание на крупном кегле быстро превращается в частокол. Вес 400 с сильным отрицательным трекингом — то, что кириллическому гротеску идёт, а не то, что он терпит.</p>
+    </div>
+  </div>
+  <div class="gut"></div>
+</section>
+
+<section class="band">
+  <div class="gut"></div>
+  <div class="mid">
+    <div class="stack">
+      <div class="stack-s">
+        <span class="ann">// главный экран · плотность compact</span>
+        <h2 class="sec">SQL-консоль</h2>
+        <p class="body">Обзор схемы слева, редактор и результат в центре, вопросы справа. Внутри окна — ни одной вложенной плашки: панели разделены линейкой в 5 %, скругление живёт только на внешней рамке, как на образцах кода в документации, с которой снят метод.</p>
+      </div>
+      <div class="win">
+        <div class="win-bar"><i></i><i></i><i></i><span>console · Ночь в архиве</span></div>
+        <div class="scrollx"><div class="app">
+          <div class="topbar">
+            <div class="brand"><em>DB</em>Contest</div>
+            <div class="vr"></div>
+            <div class="tt">Ночь в архиве</div>
+            <span class="tag g-live"><i></i>идёт</span>
+            <div class="spacer"></div>
+            <span class="lgs"><span>en</span><span>ro</span><span class="on">ru</span></span>
+            <div class="vr"></div>
+            <div class="clock"><u>осталось</u>41:07</div>
+            <div class="vr"></div>
+            <div class="ava">ИС</div>
+          </div>
+          <div class="cons">
+            <div class="pane">
+              <div class="pane-h"><span>схема · английская</span><span>7</span></div>
+              <div class="pane-b">
+                <div class="srch"><span>поиск по схеме</span><span>⌘K</span></div>
+                <div class="tree">
+                  <div class="t"><span>▾</span>guests</div>
+                  <div class="c">id<i>uuid</i></div>
+                  <div class="c">full_name<i>text</i></div>
+                  <div class="c">room_id<i>fk rooms</i></div>
+                  <div class="c">checked_out<i>timestamptz</i></div>
+                  <div class="t on"><span>▾</span>keycard_events<span class="fk">fk 2</span></div>
+                  <div class="c">guest_id<i>fk guests</i></div>
+                  <div class="c">door<i>text</i></div>
+                  <div class="c">at<i>timestamptz</i></div>
+                  <div class="t"><span>▸</span>rooms</div>
+                  <div class="t"><span>▸</span>staff</div>
+                  <div class="t"><span>▸</span>shifts</div>
+                  <div class="t"><span>▸</span>inventory</div>
+                  <div class="t"><span>▸</span>incidents</div>
+                </div>
+              </div>
+            </div>
+            <div class="pane">
+              <div class="bar2">
+                <button class="sm pri">Выполнить<span class="k">⌘↵</span></button>
+                <button class="sm">Формат</button>
+                <div class="spacer"></div>
+                <button class="sm">История · 23</button>
+                <button class="sm">CSV</button>
+              </div>
+              <div class="ed">
+                <div class="gut2">1<br>2<br>3<br>4<br>5<br>6<br>7</div>
+                <div class="code"><span class="kc">-- кто заходил в архив B-2 после полуночи</span>
+<span class="kk">select</span> <span class="ko">g.full_name, k.at, k.door</span>
+<span class="kk">from</span> <span class="ko">keycard_events k</span>
+  <span class="kk">join</span> <span class="ko">guests g</span> <span class="kk">on</span> <span class="ko">g.id = k.guest_id</span>
+<span class="kk">where</span> <span class="ko">k.door =</span> <span class="ks">'archive_b2'</span>
+  <span class="kk">and</span> <span class="ko">k.at &gt;=</span> <span class="ks">'2024-11-09 00:00'</span>
+<span class="kk">order by</span> <span class="ko">k.at;</span></div>
+              </div>
+              <div class="mtr"><span>строк <b>4</b></span><span>время <b>38 мс</b></span><span>предел <b>1000</b></span><div class="spacer"></div><span>лимит <b>3/20</b></span></div>
+              <table class="dt">
+                <thead><tr><th></th><th>full_name<u>text</u></th><th>at<u>timestamptz</u></th><th>door<u>text</u></th></tr></thead>
+                <tbody>
+                  <tr><td class="i">1</td><td>Margot Feilhaber</td><td>2024-11-09 00:14:22</td><td>archive_b2</td></tr>
+                  <tr><td class="i">2</td><td>Desmond Achebe</td><td>2024-11-09 00:41:08</td><td>archive_b2</td></tr>
+                  <tr><td class="i">3</td><td>Margot Feilhaber</td><td>2024-11-09 01:02:57</td><td>archive_b2</td></tr>
+                  <tr><td class="i">4</td><td>Priya Raghunathan</td><td>2024-11-09 01:47:31</td><td class="nl">null</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="pane">
+              <div class="pane-h"><span>вопросы</span><span>30 / 100</span></div>
+              <div>
+                <div class="qq"><div class="r"><span class="n">01</span><span class="tag g-good">принято</span><span class="p">10 б</span></div><div class="x">Сколько гостей заселилось на третий этаж до полуночи?</div></div>
+                <div class="qq"><div class="r"><span class="n">02</span><span class="tag g-good">принято</span><span class="p">20 б</span></div><div class="x">Какая дверь открывалась чаще всего между 23:00 и 02:00?</div></div>
+                <div class="qq on"><div class="r"><span class="n">03</span><span class="tag g-ink">текущий</span><span class="p">20 б</span></div><div class="x">Кто входил в архив B-2 дважды за одну ночь?</div></div>
+                <div class="qq"><div class="r"><span class="n">04</span><span class="tag g-mute">не отвечен</span><span class="p">20 б</span></div><div class="x">Кто из ночной смены не отметился на выходе?</div></div>
+                <div class="qq off"><div class="r"><span class="n">05</span><span class="tag g-mute">после 04</span><span class="p">30 б</span></div><div class="x">Имя того, кто вынес опись.</div></div>
+              </div>
+            </div>
+          </div>
+        </div></div>
+      </div>
+      <p class="body"><b>Игровая база английская целиком</b> — схема, подозреваемые, улики. Переводятся только название, история и вопросы. Поэтому в таблице результатов латиница, а в панели вопросов кириллица, и это не разнобой, а разные слои текста.</p>
+    </div>
+  </div>
+  <div class="gut"></div>
+</section>
+
+<section class="band">
+  <div class="gut"></div>
+  <div class="mid">
+    <div class="stack">
+      <div class="stack-s">
+        <span class="ann">// студенческий раздел · плотность comfortable</span>
+        <h2 class="sec">Список олимпиад</h2>
+        <p class="body">Строки, а не стена карточек: одинаковые сведения выстроены по колонкам, сравнивать можно глазом по вертикали. Действие есть только у той олимпиады, где оно осмысленно, и оно чёрное — единственное тёмное пятно на белом.</p>
+      </div>
+      <div class="win">
+        <div class="scrollx"><div class="app app-n">
+          <div class="rows" style="border-top: 0">
+            <div class="rw">
+              <div class="n">01</div>
+              <div><div class="h">Ночь в архиве</div><div class="d">Опись пропала между полуночью и рассветом. Восемнадцать гостей, три этажа, один лишний след в журнале охраны.</div></div>
+              <div class="m">5 вопросов<br>100 баллов<br><b>read only</b></div>
+              <div class="m"><span class="tag g-live"><i></i>идёт</span><br><b>41:07</b> до конца</div>
+              <div class="a"><button class="cta" style="font-size:13px; padding:7px 15px">Продолжить</button></div>
+            </div>
+            <div class="rw">
+              <div class="n">02</div>
+              <div><div class="h">Пропавший рейс 114</div><div class="d">Самолёт сел, а один пассажир так и не прошёл паспортный контроль.</div></div>
+              <div class="m">7 вопросов<br>140 баллов<br><b>read write</b></div>
+              <div class="m"><span class="tag g-mute">12 сентября</span><br>запись до 11-го</div>
+              <div class="a"><button class="cta2" style="font-size:13px; padding:6px 14px">Участвовать</button></div>
+            </div>
+            <div class="rw">
+              <div class="n">03</div>
+              <div><div class="h">Инвентаризация кафедры</div><div class="d">Тренировочный тур для второго курса. Участников добавляет менеджер списком.</div></div>
+              <div class="m">4 вопроса<br>60 баллов<br><b>read only</b></div>
+              <div class="m"><span class="tag g-warn">по приглашению</span><br>вы в списке</div>
+              <div class="a"><button class="cta2" style="font-size:13px; padding:6px 14px">Открыть</button></div>
+            </div>
+            <div class="rw">
+              <div class="n">04</div>
+              <div><div class="h">Долгий вторник</div><div class="d">Весенний тур. Разбор и эталонные решения открыты.</div></div>
+              <div class="m">6 вопросов<br>80 из 120<br><b>7 место / 62</b></div>
+              <div class="m"><span class="tag g-mute">завершена</span><br>14 апреля</div>
+              <div class="a"><button class="sm">Разбор</button></div>
+            </div>
+          </div>
+        </div></div>
+      </div>
+    </div>
+  </div>
+  <div class="gut"></div>
+</section>
+
+<section class="band">
+  <div class="gut"></div>
+  <div class="mid">
+    <div class="stack">
+      <div class="stack-s">
+        <span class="ann">// изображения · одно место, одна лицензия, одна обработка</span>
+        <h2 class="sec">Фотография есть, но только на странице дела</h2>
+        <p class="body">Решение принято так: изображение допускается там, где оно делает работу, и запрещено там, где оно только заполняет место. Работу оно делает ровно в одном месте — над историей преступления, потому что задаёт сцену прежде, чем участник полезет в базу. В списке олимпиад работы для него нет: там уже есть номер, название, статус и метрики, а восемь превью превратили бы опись обратно в стену карточек.</p>
+      </div>
+      <div class="win">
+        <div class="plate">
+          <img src="assets/archive-card-index.jpg" alt="Работница архива перебирает карточки в настольном картотечном ящике; на ящике ярлык «Personal file, S to W»" loading="lazy" decoding="async" width="1132" height="637">
+          <div class="scrim"></div>
+          <div class="lay">
+            <span class="eb">дело № 114 · ноябрь · 62 участника</span>
+            <div class="ttl">Ночь в архиве</div>
+          </div>
+        </div>
+        <div style="padding: 22px 26px 24px; display: flex; flex-direction: column; gap: 14px">
+          <p style="font-family: var(--serif); font-size: 17px; line-height: 1.7; color: var(--ink-2); max-width: 58ch; margin: 0">Опись пропала между полуночью и рассветом. Восемнадцать гостей, три этажа, один журнал охраны — и ровно одна лишняя подпись в нём.</p>
+          <div><button class="cta">Открыть консоль</button></div>
+        </div>
+        <div class="credit"><b>Источник:</b> Photograph of Storage Boxes, Used in National Archives Stack Area · U.S. National Archives and Records Administration · общественное достояние · Wikimedia Commons · кадрирован до отпечатка</div>
+      </div>
+      <div class="grid2" style="gap: 22px">
+        <div class="stack-s">
+          <h3 class="sub">Правила для фотографии</h3>
+          <p class="body" style="font-size: 14.5px"><b>Лицензия.</b> Только CC0 или общественное достояние; CC BY допустима при заполненной атрибуции. Предпочтение CC0: это отказ от прав, действующий во всём мире, тогда как у произведений правительства США есть оговорка о юрисдикции — та самая, которую печатает Wikimedia под этим снимком.</p>
+          <p class="body" style="font-size: 14.5px"><b>Хранение.</b> Файл скачивается и лежит у нас. Горячая ссылка на чужой хост — это и утечка адресов участников третьей стороне, и отказ страницы в тот день, когда хост переедет.</p>
+          <p class="body" style="font-size: 14.5px"><b>Обработка задана системой, а не автором.</b> Пропорция 16:9, кадрирование по центру, обесцвечивание, лёгкий подъём контраста. Организатор выбирает сюжет, но не может испортить экран цветом.</p>
+        </div>
+        <div class="stack-s">
+          <h3 class="sub">Заголовок всегда читается</h3>
+          <p class="body" style="font-size: 14.5px">Текст лежит не на фотографии, а на затемнении, которое сходит к фону страницы — <span class="mn">--color-scrim-a</span> и <span class="mn">--color-scrim-b</span>. Токен свой в каждой теме, поэтому в светлой затемнение белое, в тёмной почти чёрное, и контраст заголовка не зависит от того, что оказалось в нижней трети чужого снимка.</p>
+          <p class="body" style="font-size: 14.5px"><b>Атрибуция — поле олимпиады, а не подпись в описании.</b> Хранится рядом со снимком и выводится строкой под ним. Без заполненного поля изображение не публикуется — это часть гейта публикации.</p>
+          <p class="body" style="font-size: 14.5px"><b>Аватары остаются генерируемыми.</b> Загрузка фотографий участников не добавляется: это персональные данные, а инициалы решают ту же задачу.</p>
+        </div>
+      </div>
+      <div class="stack-s">
+        <span class="ann read">fallback · олимпиада без снимка</span>
+        <div class="win">
+          <div class="noplate">
+            <span class="eb">дело № 087 · апрель · 41 участник</span>
+            <div class="ttl">Инвентаризация кафедры</div>
+          </div>
+        </div>
+        <p class="body">Снимок необязателен. Без него шапка становится штрихованной плашкой того же размера — та же пропорция, та же типографика, ни одного сдвига в вёрстке. Олимпиада без картинки выглядит намеренно, а не недоделанно.</p>
+      </div>
+    </div>
+  </div>
+  <div class="gut"></div>
+</section>
+
+<section class="band">
+  <div class="gut"></div>
+  <div class="mid">
+    <div class="stack">
+      <div class="stack-s">
+        <span class="ann">// состояния · контракт для каждого контейнера данных</span>
+        <h2 class="sec">Девять состояний</h2>
+        <p class="body">Продукт — соревнование под таймером с чужой базой на том конце, поэтому «пусто», «сломалось» и «нельзя» здесь не крайние случаи, а рядовые экраны. Компонент, не умеющий их принимать, в систему не принимается.</p>
+      </div>
+      <div class="grid3">
+        <div class="st"><div class="k">loading</div><div class="t">Скелетон по форме контента</div><div class="demo"><div class="skl" style="width:60%"></div><div class="skl" style="width:92%"></div><div class="skl" style="width:74%"></div></div><div class="d">Не спиннер. Круговой индикатор живёт только внутри кнопки.</div></div>
+        <div class="st"><div class="k">empty</div><div class="t">Пусто, и это нормально</div><div class="demo" style="align-items:flex-start"><div style="font-size:13px;font-weight:500">Олимпиад пока нет</div><div style="font-size:12px;color:var(--ink-2);line-height:1.45">Как только кафедра опубликует первую, она появится здесь.</div></div><div class="d">Всегда показан путь, которым данные появятся.</div></div>
+        <div class="st"><div class="k">empty-filtered</div><div class="t">Пусто из-за фильтра</div><div class="demo" style="align-items:flex-start"><div style="font-size:13px;font-weight:500">Ничего не нашлось</div><button class="cta2" style="font-size:12px;padding:4px 12px">Сбросить фильтры</button></div><div class="d">Отличается от <span class="mn">empty</span> принципиально: там кнопки сброса быть не может.</div></div>
+        <div class="st"><div class="k">error-recoverable</div><div class="t">Можно повторить</div><div class="demo" style="align-items:flex-start"><span class="tag g-bad">таймаут</span><div style="font-size:12px;color:var(--ink-2)">Сервер не ответил за 10 секунд.</div><button class="cta2" style="font-size:12px;padding:4px 12px">Повторить</button></div><div class="d">Сеть и 5xx. Единственное состояние, где «повторить» уместно.</div></div>
+        <div class="st"><div class="k">error-terminal</div><div class="t">Повторять нечего</div><div class="demo" style="align-items:flex-start"><div style="font-size:13px;font-weight:500">Нет доступа к олимпиаде</div><div style="font-size:12px;color:var(--ink-2);line-height:1.45">Запись по приглашению. Обратитесь к менеджеру.</div></div><div class="d">403 и 404. Кнопки «повторить» нет намеренно.</div></div>
+        <div class="st"><div class="k">degraded</div><div class="t">Данные есть, но неполные</div><div class="demo" style="align-items:flex-start"><span class="tag g-warn">усечено</span><div style="font-size:12px;color:var(--ink-2);line-height:1.45">Показаны первые 1000 строк. Уточните запрос.</div><div style="font-family:var(--mono);font-size:11px;color:var(--ink-3)">1000 строк · 412 мс</div></div><div class="d">Контент показан под баннером, а не заменён им.</div></div>
+        <div class="st"><div class="k">blocked</div><div class="t">Запрещено состоянием домена</div><div class="demo" style="align-items:flex-start"><span class="tag g-warn">лимит</span><div style="font-size:12px;color:var(--ink-2);line-height:1.45">Следующий запрос — через 00:47.</div></div><div class="d">Не началась, закончилась, IP вне диапазона, лимит исчерпан. Всегда причина и момент снятия.</div></div>
+        <div class="st"><div class="k">provisioning</div><div class="t">База ещё создаётся</div><div class="demo" style="align-items:stretch"><div style="font-size:13px;font-weight:500">Готовим вашу копию базы</div><div style="height:4px;border-radius:999px;background:var(--line-2);overflow:hidden"><div style="width:68%;height:100%;background:var(--accent)"></div></div><div style="font-family:var(--mono);font-size:11px;color:var(--ink-3)">обычно 6–8 секунд</div></div><div class="d">Наше собственное состояние. Прогресс и оценка вместо спиннера.</div></div>
+        <div class="st"><div class="k">idle</div><div class="t">Данные показаны</div><div class="demo" style="align-items:flex-start"><span class="tag g-good">ответ принят</span><div style="font-family:var(--mono);font-size:11px;color:var(--ink-3)">30 / 100 · вопрос 3 из 5</div></div><div class="d">Обычное состояние, ради которого существуют остальные восемь.</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="gut"></div>
+</section>
+
+<section class="band">
+  <div class="gut"></div>
+  <div class="mid">
+    <div class="stack">
+      <div class="stack-s">
+        <span class="ann">// две темы · и почему они не зеркальны</span>
+        <h2 class="sec">Светлая белая и тёмная</h2>
+        <p class="body">Светлая тема стоит на чистом <span class="mn">#ffffff</span>, а не на тонированной бумаге — иначе линейка в 5 % тонет. Тёмная стоит на <span class="mn">#0a0b0f</span>: почти чёрный с синим уклоном, в тон чернилам, а не нейтральный уголь.</p>
+        <p class="body"><b>Главное — они не зеркальны.</b> Прозрачность линеек и штриховки в тёмной теме удвоена: 5 % чёрного на белом и 10 % белого на чёрном. Честная инверсия дала бы линейку, которой не видно, потому что тёмный фон съедает контраст сильнее светлого. Это снято с реальных вычисленных значений, а не выведено из принципа.</p>
+      </div>
+      <div class="grid2" style="gap: 18px">
+        <div class="tl">
+          <div class="win">
+            <div class="win-bar"><i></i><i></i><i></i><span>светлая · #ffffff</span></div>
+            <div class="app app-n" style="min-width:0">
+              <div class="ed"><div class="gut2">1<br>2<br>3</div><div class="code"><span class="kk">select</span> <span class="kf">count</span><span class="ko">(*), door</span>
+<span class="kk">from</span> <span class="ko">keycard_events</span>
+<span class="kk">group by</span> <span class="ko">door</span> <span class="kk">having</span> <span class="kf">count</span><span class="ko">(*) &gt;</span> <span class="kn">4</span><span class="ko">;</span></div></div>
+              <div class="mtr"><span>строк <b>3</b></span><span>время <b>12 мс</b></span></div>
+              <table class="dt"><thead><tr><th></th><th>count<u>bigint</u></th><th>door<u>text</u></th></tr></thead><tbody>
+                <tr><td class="i">1</td><td>11</td><td>archive_b2</td></tr>
+                <tr><td class="i">2</td><td>7</td><td>service_lift</td></tr>
+                <tr><td class="i">3</td><td>5</td><td>roof_access</td></tr>
+              </tbody></table>
+            </div>
+          </div>
+        </div>
+        <div class="td">
+          <div class="win">
+            <div class="win-bar"><i></i><i></i><i></i><span>тёмная · #0a0b0f</span></div>
+            <div class="app app-n" style="min-width:0">
+              <div class="ed"><div class="gut2">1<br>2<br>3</div><div class="code"><span class="kk">select</span> <span class="kf">count</span><span class="ko">(*), door</span>
+<span class="kk">from</span> <span class="ko">keycard_events</span>
+<span class="kk">group by</span> <span class="ko">door</span> <span class="kk">having</span> <span class="kf">count</span><span class="ko">(*) &gt;</span> <span class="kn">4</span><span class="ko">;</span></div></div>
+              <div class="mtr"><span>строк <b>3</b></span><span>время <b>12 мс</b></span></div>
+              <table class="dt"><thead><tr><th></th><th>count<u>bigint</u></th><th>door<u>text</u></th></tr></thead><tbody>
+                <tr><td class="i">1</td><td>11</td><td>archive_b2</td></tr>
+                <tr><td class="i">2</td><td>7</td><td>service_lift</td></tr>
+                <tr><td class="i">3</td><td>5</td><td>roof_access</td></tr>
+              </tbody></table>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="demo">
+        <span class="ann">линейка на тёмном: честная инверсия против удвоенной</span>
+        <div class="grid2" style="gap: 16px; margin-top: 4px">
+          <div class="td" style="background: var(--bg); padding: 16px; border-radius: 8px">
+            <div style="font-family:var(--mono);font-size:11px;color:var(--ink-3);margin-bottom:9px">rgba(255,255,255,0.05) — зеркально</div>
+            <div style="border-top:1px solid rgba(255,255,255,0.05);padding-top:9px;font-size:13px;color:var(--ink)">Строка над линейкой</div>
+            <div style="border-top:1px solid rgba(255,255,255,0.05);padding-top:9px;margin-top:9px;font-size:13px;color:var(--ink)">Строка под линейкой</div>
+          </div>
+          <div class="td" style="background: var(--bg); padding: 16px; border-radius: 8px">
+            <div style="font-family:var(--mono);font-size:11px;color:var(--ink-3);margin-bottom:9px">rgba(255,255,255,0.10) — как надо</div>
+            <div style="border-top:1px solid rgba(255,255,255,0.10);padding-top:9px;font-size:13px;color:var(--ink)">Строка над линейкой</div>
+            <div style="border-top:1px solid rgba(255,255,255,0.10);padding-top:9px;margin-top:9px;font-size:13px;color:var(--ink)">Строка под линейкой</div>
+          </div>
+        </div>
+      </div>
+      <p class="body">Блоки в этом разделе зафиксированы принудительно и не следуют вашей системной настройке: в верхней паре слева светлая тема, справа тёмная, в нижней обе тёмные. Иначе сравнение было бы невидимым для половины читателей. Всё остальное на странице следует теме: переключите её, и страница пересоберётся.</p>
+    </div>
+  </div>
+  <div class="gut"></div>
+</section>
+
+</body>
+</html>
