@@ -341,3 +341,50 @@ func TestDisqualifyingKeepsTheRecord(t *testing.T) {
 		t.Errorf("status = %q, want disqualified", p.Status)
 	}
 }
+
+func TestNothingAboutParticipantsChangesInAnArchivedContest(t *testing.T) {
+	// Removal already refuses it. Disqualification changing a status inside a
+	// closed record would be the same mistake through the other door.
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusArchived)
+	student := f.AddUser("s.popescu")
+	f.Registrations.Put(contests.Participant{
+		ContestID: c.ID, UserID: student.ID, Status: contests.RegistrationActive,
+	})
+
+	err := f.Service.DisqualifyParticipant(context.Background(), uuid.New(), c.ID, student.ID)
+
+	if !errors.Is(err, contests.ErrNotEditable) {
+		t.Errorf("DisqualifyParticipant() on an archived contest = %v, want ErrNotEditable", err)
+	}
+}
+
+func TestImportSurvivesSomebodyElseRegisteringTheSamePersonFirst(t *testing.T) {
+	// Two organizers importing overlapping rosters at the same moment: the
+	// lookup says the student is not there, the write finds out otherwise. The
+	// unique index is the real guarantee, so the import has to treat its
+	// verdict as an ordinary skip rather than failing the whole roster.
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+	student := f.AddUser("s.popescu")
+	f.Registrations.Put(contests.Participant{
+		ContestID: c.ID, UserID: student.ID, Status: contests.RegistrationRegistered,
+	})
+	f.Registrations.MissLookups = true
+
+	result, err := f.Service.AddParticipants(context.Background(), contests.AddParticipantsCommand{
+		ActorID:   uuid.New(),
+		ContestID: c.ID,
+		Logins:    []string{"s.popescu"},
+	})
+	if err != nil {
+		t.Fatalf("AddParticipants() = %v, want the roster to survive", err)
+	}
+
+	if result.Added != 0 {
+		t.Errorf("added = %d, want 0", result.Added)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0].Reason != contests.SkipAlreadyEnrolled {
+		t.Errorf("skipped = %+v, want the student reported as already enrolled", result.Skipped)
+	}
+}

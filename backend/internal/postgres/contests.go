@@ -283,6 +283,17 @@ func (r *Contests) ReplaceLanguages(ctx context.Context, id uuid.UUID, langs []c
 		return nil
 	}
 
+	// Clear the old default before writing the new one. Only one language per
+	// contest may carry the flag, and that is a plain unique index — checked
+	// row by row, and not deferrable. Without this step, moving the default
+	// from en to ro collides with the en row that has not been rewritten yet,
+	// and the move is simply impossible to express.
+	if _, err := r.querier(ctx).Exec(ctx,
+		`UPDATE contest_languages SET is_default = false WHERE contest_id = $1 AND is_default`,
+		id); err != nil {
+		return fmt.Errorf("replace contest languages: %w", err)
+	}
+
 	_, err := r.querier(ctx).Exec(ctx, `
 		INSERT INTO contest_languages (contest_id, lang, is_default)
 		SELECT $1, code, is_default

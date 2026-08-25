@@ -172,3 +172,15 @@ func TestReorderOutsideATransactionIsRefused(t *testing.T) {
 		t.Errorf("Reorder() = %v, want the missing transaction reported, not a lookup failure", err)
 	}
 }
+
+func TestDeletingAQuestionThatIsNotThereIsReported(t *testing.T) {
+	// Silently succeeding would let a stale editor tab report that it removed
+	// something it did not.
+	withTx(t, func(ctx context.Context) {
+		err := NewQuestions(testPool).Delete(ctx, uuid.New())
+
+		if !errors.Is(err, contests.ErrQuestionNotFound) {
+			t.Errorf("Delete() of an unknown question = %v, want ErrQuestionNotFound", err)
+		}
+	})
+}
