@@ -1,7 +1,11 @@
 import type { Metadata } from "next";
 import { JetBrains_Mono, Literata, Onest } from "next/font/google";
+import { locale as rootLocale } from "next/root-params";
+import { notFound } from "next/navigation";
 
-import "./globals.css";
+import { LOCALES, type Locale } from "@/lib/i18n/config";
+
+import "../globals.css";
 
 // Three languages, so three subsets. The scaffold shipped `["latin"]`, which
 // silently drops Cyrillic and the Romanian comma-below letters and renders
@@ -28,19 +32,26 @@ const literata = Literata({
 });
 
 export const metadata: Metadata = {
-  title: {
-    default: "DB Contest",
-    template: "%s · DB Contest",
-  },
-  description: "Платформа университетских SQL-олимпиад формата «Детектив».",
+  title: { default: "DB Contest", template: "%s · DB Contest" },
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{ children: React.ReactNode }>) {
+/** Every supported language is a real route, so each one can be crawled. */
+export function generateStaticParams() {
+  return LOCALES.map((locale) => ({ locale }));
+}
+
+/**
+ * The root layout lives under the locale segment, which is what makes `locale`
+ * a root parameter readable anywhere on the server. The `lang` attribute is
+ * therefore the language actually being rendered, not a constant.
+ */
+export default async function LocaleLayout({ children }: { children: React.ReactNode }) {
+  const segment = await rootLocale();
+  if (!LOCALES.includes(segment as Locale)) notFound();
+
   return (
     <html
-      lang="ru"
+      lang={segment}
       className={`${onest.variable} ${jetbrainsMono.variable} ${literata.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col font-sans">{children}</body>

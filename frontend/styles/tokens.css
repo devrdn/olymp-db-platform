@@ -28,7 +28,10 @@
   --cta-bg: #0d1117;
   --cta-fg: #ffffff;
 
-  --accent: #0e5048;
+  /* The accent is spent on what is live, and on nothing else. `-ink` is the
+     stroke and text colour, `-wash` the tinted surface it sits on. The pair is
+     named this way because shadcn/ui claims the bare `--accent` for a surface. */
+  --accent-ink: #0e5048;
   --accent-wash: #e4efec;
   --good: #2c6338;
   --good-wash: #e6f0e8;
@@ -63,7 +66,7 @@
     --cta-bg: #262b36;
     --cta-fg: #ffffff;
 
-    --accent: #5ed0bc;
+    --accent-ink: #5ed0bc;
     --accent-wash: rgb(94 208 188 / 0.12);
     --good: #6fbf80;
     --good-wash: rgb(111 191 128 / 0.12);
@@ -96,7 +99,7 @@
   --cta-bg: #262b36;
   --cta-fg: #ffffff;
 
-  --accent: #5ed0bc;
+  --accent-ink: #5ed0bc;
   --accent-wash: rgb(94 208 188 / 0.12);
   --good: #6fbf80;
   --good-wash: rgb(111 191 128 / 0.12);
