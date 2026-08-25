@@ -36,7 +36,7 @@ export function SignInForm({ dict, next }: { dict: Dictionary; next?: string }) 
     : null;
 
   return (
-    <form action={formAction} className="flex w-full max-w-96 flex-col gap-6" noValidate>
+    <form action={formAction} className="flex w-full max-w-96 flex-col gap-7" noValidate>
       {/* Where the visitor was going before the guard sent them here. It rides
           in the form rather than in the action's closure so the page still
           works with JavaScript switched off, and the action validates it —
@@ -52,7 +52,20 @@ export function SignInForm({ dict, next }: { dict: Dictionary; next?: string }) 
         <Input name="login" autoComplete="username" required />
       </Field>
 
-      <div className="flex flex-col gap-2">
+      {/* The failure hangs off the password field rather than occupying a row.
+
+          It used to hold a blank line whether or not there was a message, to
+          keep the submit from moving under the cursor. That cost 28px no other
+          step in the form pays — the two fields sat 28px apart and the button
+          56px below the second — and the password read as having come loose.
+
+          Taking the line out of the flow instead was worse and measurably so: a
+          two-line failure, which Russian reaches at 67 characters in a 384px
+          column, printed straight through the button. So the message is in the
+          flow and appears only when there is one. At rest the rhythm is even;
+          when a sign-in is rejected the form grows by exactly the message and
+          nothing is ever overlapped. */}
+      <div className="flex flex-col gap-1.5">
         <Field
           id="password"
           label={t.password}
@@ -62,14 +75,11 @@ export function SignInForm({ dict, next }: { dict: Dictionary; next?: string }) 
           <Input name="password" type="password" autoComplete="current-password" required />
         </Field>
 
-        {/* One line of space is held whether or not there is a message, so the
-            common single-line failure never shifts the submit out from under
-            the cursor. It sits against the fields rather than floating between
-            them and the button, where the reserved space read as a gap
-            somebody forgot to close. */}
-        <p id={FAILURE_ID} role="alert" className="min-h-5 text-small text-bad">
-          {failure}
-        </p>
+        {failure ? (
+          <p id={FAILURE_ID} role="alert" className="text-small text-bad">
+            {failure}
+          </p>
+        ) : null}
       </div>
 
       <Button type="submit" disabled={pending} className="self-start">
