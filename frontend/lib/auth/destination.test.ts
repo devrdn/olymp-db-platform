@@ -22,3 +22,53 @@ describe("destinationAfterLogin", () => {
     expect(destinationAfterLogin({ mustChangePassword: false, permissions: [] })).toBe("/my");
   });
 });
+
+/**
+ * `guardRedirect` carries the requested path along as `?next=` so signing in
+ * resumes the journey instead of dropping the visitor on a listing. Reading it
+ * back is the other half of that, and it is the half that is worth testing:
+ * an unchecked `next` is a login-page open redirect, which is the classic way
+ * a phishing link borrows a real domain.
+ */
+describe("destinationAfterLogin, resuming an interrupted journey", () => {
+  const staff = { mustChangePassword: false, permissions: ["contest.create"] };
+
+  test("returns to the page the visitor was asking for", () => {
+    expect(destinationAfterLogin(staff, "/contests/3f1a/questions")).toBe(
+      "/contests/3f1a/questions",
+    );
+  });
+
+  test("keeps the query the visitor had", () => {
+    expect(destinationAfterLogin(staff, "/contests?status=draft")).toBe("/contests?status=draft");
+  });
+
+  test.each([
+    ["an absolute URL", "https://evil.example/steal"],
+    ["a protocol-relative URL", "//evil.example/steal"],
+    ["a backslash the browser normalises to a slash", "/\\evil.example/steal"],
+    ["a scheme with no slashes", "javascript:alert(1)"],
+    ["a path that is not a path", "contests"],
+    ["an empty value", ""],
+  ])("refuses %s and falls back to the default", (_case, next) => {
+    expect(destinationAfterLogin(staff, next)).toBe("/contests");
+  });
+
+  test("refuses to send the visitor back to the sign-in page", () => {
+    expect(destinationAfterLogin(staff, "/login")).toBe("/contests");
+    expect(destinationAfterLogin(staff, "/login?next=%2Fcontests")).toBe("/contests");
+  });
+
+  test("refuses the root, which has no page yet", () => {
+    expect(destinationAfterLogin(staff, "/")).toBe("/contests");
+  });
+
+  test("ignores it entirely while a one-time password is still in force", () => {
+    // Every other request answers password_change_required, so any other
+    // destination would bounce straight back here.
+    expect(
+      destinationAfterLogin({ mustChangePassword: true, permissions: ["contest.create"] },
+        "/contests"),
+    ).toBe("/password");
+  });
+});

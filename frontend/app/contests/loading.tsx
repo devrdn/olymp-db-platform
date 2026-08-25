@@ -1,31 +1,41 @@
+import { Band } from "@/components/layout/band";
+import { Skeleton } from "@/components/ui/skeleton";
+import { activeDictionary } from "@/lib/i18n/server";
+
 /**
- * The loading state is a skeleton shaped like the register, not a spinner:
- * a spinner says "wait", a skeleton says "here is what is coming" (spec §7).
- * Its rows match the real row height, so nothing jumps when data arrives.
+ * The loading state is a skeleton shaped like the register, not a spinner: a
+ * spinner says "wait", a skeleton says "here is what is coming" (spec
+ * section 7). Its rows carry the real row height and the real column offsets,
+ * so nothing moves when the data lands.
  */
-export default function Loading() {
+export default async function Loading() {
+  const dict = await activeDictionary();
+
   return (
-    <main className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
-      <div className="flex items-baseline justify-between gap-4 px-1 pb-3">
-        <div className="h-6 w-32 rounded bg-line-2" />
-        <div className="h-3 w-20 rounded bg-line" />
+    <Band fill className="py-12">
+      <div className="flex items-baseline justify-between gap-6 pb-6">
+        <Skeleton className="h-8 w-44 rounded-none" />
+        <Skeleton className="h-3 w-24" />
       </div>
-      <div className="border-t border-line" aria-hidden>
-        {[0, 1, 2, 3].map((row) => (
-          <div key={row} className="flex items-center gap-4 border-b border-line px-3 py-4">
-            <div className="h-3 w-5 rounded bg-line" />
-            <div className="flex-1 space-y-2">
-              <div className="h-3.5 w-52 rounded bg-line-2" />
-              <div className="h-3 w-80 max-w-full rounded bg-line" />
+
+      <div aria-hidden className="border-t border-line-2">
+        {[0, 1, 2, 3, 4].map((row) => (
+          <div key={row} className="flex items-start gap-3.5 border-b border-line px-3.5 py-3.5">
+            <Skeleton className="mt-1 h-2.5 w-5 shrink-0" />
+            <div className="flex flex-1 flex-col gap-2">
+              <Skeleton className="h-3.5 w-56 max-w-full" />
+              <Skeleton className="h-3 w-96 max-w-full" />
             </div>
-            <div className="hidden h-3 w-20 rounded bg-line sm:block" />
-            <div className="hidden h-3 w-24 rounded bg-line md:block" />
+            <Skeleton className="mt-0.5 hidden h-4 w-20 shrink-0 narrow:block" />
+            <Skeleton className="mt-1 hidden h-2.5 w-24 shrink-0 narrow:block" />
+            <Skeleton className="mt-1 hidden h-2.5 w-28 shrink-0 narrow:block" />
           </div>
         ))}
       </div>
-      <span className="sr-only" role="status">
-        Загружается список олимпиад
+
+      <span role="status" className="sr-only">
+        {dict.contests.loading}
       </span>
-    </main>
+    </Band>
   );
 }

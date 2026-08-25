@@ -8,6 +8,10 @@
  * Arbitrary colours in components are a lint error. Everything comes from here.
  */
 
+/* ==========================================================================
+   Colour — semantic level
+   ========================================================================== */
+
 :root {
   --bg: #ffffff;
   --panel: #fafafa;
@@ -42,72 +46,183 @@
 
   --scrim-a: rgb(255 255 255 / 0.97);
   --scrim-b: rgb(255 255 255 / 0.72);
+
+  /* Selection is a surface the page did not draw but still owns. Left alone it
+     ships the browser's blue, which belongs to no design system on earth. */
+  --select-bg: var(--accent-wash);
+  --select-fg: var(--accent-ink);
+
+  /* Tells the browser which way to render the surfaces it owns: form controls
+     it draws itself, and the scrollbar when the custom one is not honoured. */
+  color-scheme: light;
 }
 
-/* System preference, unless an explicit light choice overrides it. */
+/* The dark values, written once and applied from two places: the system
+   preference below and the explicit choice after it. */
+:root {
+  --dark-bg: #0a0b0f;
+  --dark-panel: #101218;
+  --dark-sunk: #0d0f14;
+  --dark-ink: #ffffff;
+  --dark-ink-2: #a6adb8;
+  --dark-ink-3: #898c8c;
+  /* Doubled, not mirrored: a dark ground swallows contrast, so 5% black on
+     white has to become 10% white on black to read as the same hairline. */
+  --dark-line: rgb(255 255 255 / 0.10);
+  --dark-line-2: rgb(255 255 255 / 0.17);
+  --dark-edge: #6c6f70;
+  --dark-pattern: rgb(255 255 255 / 0.10);
+  --dark-ann: rgb(255 255 255 / 0.26);
+  --dark-cta-bg: #262b36;
+  --dark-accent-ink: #5ed0bc;
+  --dark-accent-wash: rgb(94 208 188 / 0.12);
+  --dark-good: #6fbf80;
+  --dark-good-wash: rgb(111 191 128 / 0.12);
+  --dark-warn: #d59a3e;
+  --dark-warn-wash: rgb(213 154 62 / 0.12);
+  --dark-bad: #e0796d;
+  --dark-bad-wash: rgb(224 121 109 / 0.12);
+  --dark-scrim-a: rgb(10 11 15 / 0.97);
+  --dark-scrim-b: rgb(10 11 15 / 0.72);
+}
+
+/**
+ * One dark block, referenced twice.
+ *
+ * Repeating the twenty values under both the media query and the explicit
+ * selector is how they drift: a value gets corrected in one copy and the other
+ * keeps the old one until somebody notices in the wrong theme. The custom
+ * property indirection above costs nothing at runtime and removes the copy.
+ */
+:root[data-theme="dark"] {
+  --bg: var(--dark-bg);
+  --panel: var(--dark-panel);
+  --sunk: var(--dark-sunk);
+  --ink: var(--dark-ink);
+  --ink-2: var(--dark-ink-2);
+  --ink-3: var(--dark-ink-3);
+  --line: var(--dark-line);
+  --line-2: var(--dark-line-2);
+  --edge: var(--dark-edge);
+  --pattern: var(--dark-pattern);
+  --ann: var(--dark-ann);
+  --cta-bg: var(--dark-cta-bg);
+  --accent-ink: var(--dark-accent-ink);
+  --accent-wash: var(--dark-accent-wash);
+  --good: var(--dark-good);
+  --good-wash: var(--dark-good-wash);
+  --warn: var(--dark-warn);
+  --warn-wash: var(--dark-warn-wash);
+  --bad: var(--dark-bad);
+  --bad-wash: var(--dark-bad-wash);
+  --scrim-a: var(--dark-scrim-a);
+  --scrim-b: var(--dark-scrim-b);
+  color-scheme: dark;
+}
+
+/* System preference, unless an explicit choice overrides it in either
+   direction. `data-theme` is stamped on <html> from a cookie the server reads,
+   so the correct theme is in the first byte of HTML and there is no flash. */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0a0b0f;
-    --panel: #101218;
-    --sunk: #0d0f14;
-
-    --ink: #ffffff;
-    --ink-2: #a6adb8;
-    --ink-3: #898c8c;
-
-    /* Doubled, not mirrored: a dark ground swallows contrast, so 5% black on
-       white has to become 10% white on black to read as the same hairline. */
-    --line: rgb(255 255 255 / 0.10);
-    --line-2: rgb(255 255 255 / 0.17);
-    --edge: #6c6f70;
-    --pattern: rgb(255 255 255 / 0.10);
-    --ann: rgb(255 255 255 / 0.26);
-
-    --cta-bg: #262b36;
-    --cta-fg: #ffffff;
-
-    --accent-ink: #5ed0bc;
-    --accent-wash: rgb(94 208 188 / 0.12);
-    --good: #6fbf80;
-    --good-wash: rgb(111 191 128 / 0.12);
-    --warn: #d59a3e;
-    --warn-wash: rgb(213 154 62 / 0.12);
-    --bad: #e0796d;
-    --bad-wash: rgb(224 121 109 / 0.12);
-
-    --scrim-a: rgb(10 11 15 / 0.97);
-    --scrim-b: rgb(10 11 15 / 0.72);
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+    --bg: var(--dark-bg);
+    --panel: var(--dark-panel);
+    --sunk: var(--dark-sunk);
+    --ink: var(--dark-ink);
+    --ink-2: var(--dark-ink-2);
+    --ink-3: var(--dark-ink-3);
+    --line: var(--dark-line);
+    --line-2: var(--dark-line-2);
+    --edge: var(--dark-edge);
+    --pattern: var(--dark-pattern);
+    --ann: var(--dark-ann);
+    --cta-bg: var(--dark-cta-bg);
+    --accent-ink: var(--dark-accent-ink);
+    --accent-wash: var(--dark-accent-wash);
+    --good: var(--dark-good);
+    --good-wash: var(--dark-good-wash);
+    --warn: var(--dark-warn);
+    --warn-wash: var(--dark-warn-wash);
+    --bad: var(--dark-bad);
+    --bad-wash: var(--dark-bad-wash);
+    --scrim-a: var(--dark-scrim-a);
+    --scrim-b: var(--dark-scrim-b);
+    color-scheme: dark;
   }
 }
 
-/* An explicit choice wins in both directions. */
-:root[data-theme="dark"] {
-  --bg: #0a0b0f;
-  --panel: #101218;
-  --sunk: #0d0f14;
+/* ==========================================================================
+   Geometry
+   ========================================================================== */
 
-  --ink: #ffffff;
-  --ink-2: #a6adb8;
-  --ink-3: #898c8c;
+/**
+ * Rounding lives on the outer frame and on small controls, nowhere between
+ * (spec section 5). Two named radii, and the ladder they replace is deleted
+ * from the theme in globals.css: naming a radius after the thing it belongs to
+ * is what stops a `rounded-md` from appearing on the next panel that "looks
+ * bare". Everything else is `rounded-none` or `rounded-full`, both of which
+ * are decisions rather than degrees.
+ */
+:root {
+  --r-window: 10px;
+  --r-frame: 12px;
 
-  --line: rgb(255 255 255 / 0.10);
-  --line-2: rgb(255 255 255 / 0.17);
-  --edge: #6c6f70;
-  --pattern: rgb(255 255 255 / 0.10);
-  --ann: rgb(255 255 255 / 0.26);
+  /* The hatched fields that bracket the content column. They scale with the
+     viewport instead of collapsing to a token strip: the field is the
+     direction's most recognisable surface, and at 16px on a wide display it
+     reads as a rendering artefact rather than as a margin. The column width
+     itself is `--container-column`, so that `max-w-column` exists. */
+  --gutter-min: clamp(1.5rem, 4.5vw, 8.75rem);
+  --hatch-step: 10px;
+}
 
-  --cta-bg: #262b36;
-  --cta-fg: #ffffff;
+/* ==========================================================================
+   Density (spec section 5)
+   ========================================================================== */
 
-  --accent-ink: #5ed0bc;
-  --accent-wash: rgb(94 208 188 / 0.12);
-  --good: #6fbf80;
-  --good-wash: rgb(111 191 128 / 0.12);
-  --warn: #d59a3e;
-  --warn-wash: rgb(213 154 62 / 0.12);
-  --bad: #e0796d;
-  --bad-wash: rgb(224 121 109 / 0.12);
+/**
+ * Two modes, switched by an attribute on any container. Only component-level
+ * tokens move: the same DataTable is comfortable in a profile and compact in a
+ * results grid without a second component or a prop threaded through four
+ * layers.
+ */
+:root,
+[data-density="comfortable"] {
+  --control-h: 2.375rem; /* 38px */
+  --control-px: 1rem;
+  --row-py: 1rem;
+  --row-px: 1rem;
+  --stack-gap: 1.5rem;
+}
 
-  --scrim-a: rgb(10 11 15 / 0.97);
-  --scrim-b: rgb(10 11 15 / 0.72);
+[data-density="compact"] {
+  --control-h: 2rem; /* 32px */
+  --control-px: 0.75rem;
+  --row-py: 0.375rem;
+  --row-px: 0.875rem;
+  --stack-gap: 0.75rem;
+}
+
+/* ==========================================================================
+   Motion (spec section 6)
+   ========================================================================== */
+
+/**
+ * Three durations and one curve. Nothing standing between an action and its
+ * result exceeds --t-state: the product runs under a timer, and an animation
+ * that adds 300ms of waiting spends the participant's time, not ours.
+ */
+:root {
+  --t-input: 120ms; /* reaction to a keystroke or a hover */
+  --t-state: 180ms; /* a state changing in place */
+  --t-layer: 260ms; /* a layer arriving: dialog, sheet, toast */
+  --curve: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-input: 1ms;
+    --t-state: 1ms;
+    --t-layer: 1ms;
+  }
 }
