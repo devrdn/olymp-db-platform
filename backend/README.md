@@ -15,6 +15,7 @@ backend/
 │   └── bootstrap/    creates the first administrator account
 ├── internal/
 │   ├── api/          router assembly and HTTP handlers
+│   ├── app/          composition root: builds and runs the service
 │   ├── audit/        append-only trail of who did what
 │   ├── auth/         passwords, sessions, login, middleware
 │   ├── health/       liveness, readiness, self-probe
@@ -66,6 +67,7 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn`, `error` |
 | `SHUTDOWN_TIMEOUT` | no | `15s` | drain period on SIGTERM |
 | `SESSION_TTL` | no | `12h` | idle lifetime of a session; slides on activity |
+| `TRUSTED_PROXIES` | no | — | CIDRs whose `X-Forwarded-For` is believed for client IPs |
 | `COOKIE_SECURE` | no | true outside `development` | mark the session cookie Secure |
 
 ## Running locally
@@ -110,7 +112,11 @@ and prints the password to stdout, apart from the logs:
 CORE_DB_DSN=... go run ./cmd/bootstrap -login root -name "Root Administrator"
 ```
 
-The account is flagged so the first sign-in ends in choosing a real password.
+The account is flagged so the first sign-in ends in choosing a real password —
+and the flag is enforced: until the password is changed, every endpoint except
+`/auth/password`, `/auth/logout` and `/auth/me` answers 403
+`password_change_required`. An administrator-issued password is a handover
+secret, not a credential to live on.
 
 ### Endpoints
 
@@ -154,7 +160,10 @@ is a timing oracle. A blocked account learns it is blocked only after the
 password checked out: the owner deserves to know, a guesser does not.
 
 **Brute force.** Fixed windows of 10 attempts per login and 30 per address, both
-over 15 minutes. Fixed rather than sliding: a sliding window extended by every
+over 15 minutes. Addresses are resolved proxy-aware: `TRUSTED_PROXIES` names the
+ingress, whose `X-Forwarded-For` is then believed (rightmost untrusted hop wins);
+without it, behind a proxy, every client would share the proxy's address and the
+per-address window would throttle the whole installation at once. Fixed rather than sliding: a sliding window extended by every
 attempt never resets under sustained load, which turns an attack on one account
 into a denial of service against its owner. A cache failure refuses the attempt
 — an unmaintained counter means no protection.
@@ -178,8 +187,11 @@ cross-origin writes, while curl and health probes send nothing.
 serialising `users.User` — that would publish `PasswordHash` the first time
 somebody adds a field without thinking. Tests assert it on every endpoint.
 
-**A trail that lies.** Audit entries are written in the same transaction as the
-action, so a rolled-back change leaves no record claiming it happened. Payloads
+**A trail that lies.** Every multi-write account operation runs inside a unit of
+work injected into the service, so the action and its audit entry land together
+or not at all — a user cannot exist without their roles or without the entry
+naming who created them. Request origin (IP, user agent) travels in the context
+and is stamped onto every entry automatically. Payloads
 are redacted at any depth: `password`, `token`, `secret` and friends never reach
 a table kept for a year.
 

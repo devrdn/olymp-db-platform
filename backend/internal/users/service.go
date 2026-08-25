@@ -10,6 +10,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/google/uuid"
 )
 
@@ -32,11 +33,13 @@ var ErrCannotActOnSelf = errors.New("this operation cannot be performed on your 
 type Service struct {
 	repo  Repository
 	audit *audit.Recorder
+	uow   storage.UnitOfWork
 }
 
-// NewService assembles the account service.
-func NewService(repo Repository, recorder *audit.Recorder) *Service {
-	return &Service{repo: repo, audit: recorder}
+// NewService assembles the account service. Every multi-write operation runs
+// inside uow, so an action and its audit entry land together or not at all.
+func NewService(repo Repository, recorder *audit.Recorder, uow storage.UnitOfWork) *Service {
+	return &Service{repo: repo, audit: recorder, uow: uow}
 }
 
 // CreateCommand describes a new account.
@@ -87,29 +90,36 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (CreateResult, 
 		return CreateResult{}, fmt.Errorf("hash password: %w", err)
 	}
 
-	created, err := s.repo.Create(ctx, User{
-		Login:              login,
-		Email:              strings.TrimSpace(cmd.Email),
-		FullName:           strings.TrimSpace(cmd.FullName),
-		Status:             StatusActive,
-		PasswordHash:       hash,
-		MustChangePassword: true,
+	// One transaction: a user without their roles, or without the entry that
+	// says who created them, must not be able to exist.
+	var created User
+	err = s.uow.Do(ctx, func(ctx context.Context) error {
+		var err error
+		created, err = s.repo.Create(ctx, User{
+			Login:              login,
+			Email:              strings.TrimSpace(cmd.Email),
+			FullName:           strings.TrimSpace(cmd.FullName),
+			Status:             StatusActive,
+			PasswordHash:       hash,
+			MustChangePassword: true,
+		})
+		if err != nil {
+			return err
+		}
+
+		if len(cmd.Roles) > 0 {
+			if err := s.repo.ReplaceRoles(ctx, created.ID, cmd.Roles); err != nil {
+				return err
+			}
+			created.Roles = cmd.Roles
+		}
+
+		return s.record(ctx, cmd.ActorID, audit.ActionUserCreate, created.ID, map[string]any{
+			"login": created.Login,
+			"roles": cmd.Roles,
+		})
 	})
 	if err != nil {
-		return CreateResult{}, err
-	}
-
-	if len(cmd.Roles) > 0 {
-		if err := s.repo.ReplaceRoles(ctx, created.ID, cmd.Roles); err != nil {
-			return CreateResult{}, err
-		}
-		created.Roles = cmd.Roles
-	}
-
-	if err := s.record(ctx, cmd.ActorID, audit.ActionUserCreate, created.ID, map[string]any{
-		"login": created.Login,
-		"roles": cmd.Roles,
-	}); err != nil {
 		return CreateResult{}, err
 	}
 
@@ -135,16 +145,17 @@ func (s *Service) Block(ctx context.Context, actorID, userID uuid.UUID) error {
 		return err
 	}
 
-	if err := s.repo.SetStatus(ctx, userID, StatusBlocked); err != nil {
-		return err
-	}
-	// Without this the account keeps working in every tab that is already
-	// open, which is precisely the situation blocking exists to stop.
-	if _, err := s.repo.BumpSessionGeneration(ctx, userID); err != nil {
-		return err
-	}
-
-	return s.record(ctx, actorID, audit.ActionUserBlock, userID, nil)
+	return s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.repo.SetStatus(ctx, userID, StatusBlocked); err != nil {
+			return err
+		}
+		// Without this the account keeps working in every tab that is already
+		// open, which is precisely the situation blocking exists to stop.
+		if _, err := s.repo.BumpSessionGeneration(ctx, userID); err != nil {
+			return err
+		}
+		return s.record(ctx, actorID, audit.ActionUserBlock, userID, nil)
+	})
 }
 
 // Unblock restores access. Existing sessions stay retired: the account has to
@@ -153,10 +164,12 @@ func (s *Service) Unblock(ctx context.Context, actorID, userID uuid.UUID) error 
 	if _, err := s.repo.ByID(ctx, userID); err != nil {
 		return err
 	}
-	if err := s.repo.SetStatus(ctx, userID, StatusActive); err != nil {
-		return err
-	}
-	return s.record(ctx, actorID, audit.ActionUserUnblock, userID, nil)
+	return s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.repo.SetStatus(ctx, userID, StatusActive); err != nil {
+			return err
+		}
+		return s.record(ctx, actorID, audit.ActionUserUnblock, userID, nil)
+	})
 }
 
 // ChangePasswordCommand is a user changing their own password.
@@ -190,16 +203,17 @@ func (s *Service) ChangePassword(ctx context.Context, cmd ChangePasswordCommand)
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}
-	if err := s.repo.SetPassword(ctx, user.ID, hash, false); err != nil {
-		return err
-	}
-	// Changing a password is what someone does when they suspect the account
-	// is in use elsewhere; those sessions have to end.
-	if _, err := s.repo.BumpSessionGeneration(ctx, user.ID); err != nil {
-		return err
-	}
-
-	return s.record(ctx, user.ID, audit.ActionPasswordChange, user.ID, nil)
+	return s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.repo.SetPassword(ctx, user.ID, hash, false); err != nil {
+			return err
+		}
+		// Changing a password is what someone does when they suspect the
+		// account is in use elsewhere; those sessions have to end.
+		if _, err := s.repo.BumpSessionGeneration(ctx, user.ID); err != nil {
+			return err
+		}
+		return s.record(ctx, user.ID, audit.ActionPasswordChange, user.ID, nil)
+	})
 }
 
 // ResetPassword issues a fresh one-time password for an account the user can
@@ -218,14 +232,16 @@ func (s *Service) ResetPassword(ctx context.Context, actorID, userID uuid.UUID) 
 		return "", fmt.Errorf("hash password: %w", err)
 	}
 
-	if err := s.repo.SetPassword(ctx, userID, hash, true); err != nil {
-		return "", err
-	}
-	if _, err := s.repo.BumpSessionGeneration(ctx, userID); err != nil {
-		return "", err
-	}
-
-	if err := s.record(ctx, actorID, audit.ActionUserPasswordReset, userID, nil); err != nil {
+	err = s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.repo.SetPassword(ctx, userID, hash, true); err != nil {
+			return err
+		}
+		if _, err := s.repo.BumpSessionGeneration(ctx, userID); err != nil {
+			return err
+		}
+		return s.record(ctx, actorID, audit.ActionUserPasswordReset, userID, nil)
+	})
+	if err != nil {
 		return "", err
 	}
 	return oneTime, nil
@@ -239,10 +255,12 @@ func (s *Service) UpdateProfile(ctx context.Context, actorID, userID uuid.UUID, 
 	if strings.TrimSpace(fullName) == "" {
 		return errors.New("full name must not be empty")
 	}
-	if err := s.repo.UpdateProfile(ctx, userID, strings.TrimSpace(fullName), strings.TrimSpace(email)); err != nil {
-		return err
-	}
-	return s.record(ctx, actorID, audit.ActionUserUpdate, userID, map[string]any{"full_name": fullName})
+	return s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.repo.UpdateProfile(ctx, userID, strings.TrimSpace(fullName), strings.TrimSpace(email)); err != nil {
+			return err
+		}
+		return s.record(ctx, actorID, audit.ActionUserUpdate, userID, map[string]any{"full_name": fullName})
+	})
 }
 
 // ReplaceRoles sets an account's global roles.
@@ -252,18 +270,19 @@ func (s *Service) ReplaceRoles(ctx context.Context, actorID, userID uuid.UUID, r
 		return err
 	}
 
-	if err := s.repo.ReplaceRoles(ctx, userID, roleCodes); err != nil {
-		return err
-	}
-	// New limits have to bite immediately: a demotion that waited for the next
-	// login would leave someone exercising rights they no longer hold.
-	if _, err := s.repo.BumpSessionGeneration(ctx, userID); err != nil {
-		return err
-	}
-
-	return s.record(ctx, actorID, audit.ActionUserRolesChange, userID, map[string]any{
-		"from": user.Roles,
-		"to":   roleCodes,
+	return s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.repo.ReplaceRoles(ctx, userID, roleCodes); err != nil {
+			return err
+		}
+		// New limits have to bite immediately: a demotion that waited for the
+		// next login would leave someone exercising rights they no longer hold.
+		if _, err := s.repo.BumpSessionGeneration(ctx, userID); err != nil {
+			return err
+		}
+		return s.record(ctx, actorID, audit.ActionUserRolesChange, userID, map[string]any{
+			"from": user.Roles,
+			"to":   roleCodes,
+		})
 	})
 }
 

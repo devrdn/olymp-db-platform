@@ -14,9 +14,15 @@ import (
 )
 
 // collectingSink keeps audit entries for assertions.
-type collectingSink struct{ entries []audit.Entry }
+type collectingSink struct {
+	entries []audit.Entry
+	err     error
+}
 
 func (s *collectingSink) Append(_ context.Context, e audit.Entry) error {
+	if s.err != nil {
+		return s.err
+	}
 	s.entries = append(s.entries, e)
 	return nil
 }
@@ -33,6 +39,7 @@ type fixture struct {
 	service *users.Service
 	repo    *userstest.Repository
 	sink    *collectingSink
+	uow     *userstest.SpyUnitOfWork
 	actor   uuid.UUID
 }
 
@@ -40,10 +47,12 @@ func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	repo := userstest.New()
 	sink := &collectingSink{}
+	uow := &userstest.SpyUnitOfWork{}
 	return &fixture{
-		service: users.NewService(repo, audit.New(sink)),
+		service: users.NewService(repo, audit.New(sink), uow),
 		repo:    repo,
 		sink:    sink,
+		uow:     uow,
 		actor:   uuid.New(),
 	}
 }
@@ -481,5 +490,56 @@ func TestBootstrapIsAudited(t *testing.T) {
 	}
 	if f.sink.entries[0].ActorID != nil {
 		t.Error("the bootstrap entry names an actor; there was none")
+	}
+}
+
+func TestEveryMultiWriteOperationRunsInsideTheUnitOfWork(t *testing.T) {
+	// The transactional seam existed but nothing used it: Block was three
+	// independent statements, and an audit failure after SetStatus left a
+	// blocked account with no trail. Each operation must run under one Do.
+	f := newFixture(t)
+	user := f.addUser(t, "petrov", "some password")
+	ctx := context.Background()
+
+	operations := map[string]func() error{
+		"Create": func() error {
+			_, err := f.service.Create(ctx, users.CreateCommand{ActorID: f.actor, Login: "new", FullName: "New User"})
+			return err
+		},
+		"Block":   func() error { return f.service.Block(ctx, f.actor, user.ID) },
+		"Unblock": func() error { return f.service.Unblock(ctx, f.actor, user.ID) },
+		"ChangePassword": func() error {
+			return f.service.ChangePassword(ctx, users.ChangePasswordCommand{
+				UserID: user.ID, OldPassword: "some password", NewPassword: "a brand new password",
+			})
+		},
+		"ResetPassword": func() error { _, err := f.service.ResetPassword(ctx, f.actor, user.ID); return err },
+		"ReplaceRoles":  func() error { return f.service.ReplaceRoles(ctx, f.actor, user.ID, []string{"student"}) },
+		"UpdateProfile": func() error { return f.service.UpdateProfile(ctx, f.actor, user.ID, "New Name", "") },
+	}
+
+	for name, op := range operations {
+		before := f.uow.Calls
+		if err := op(); err != nil {
+			t.Errorf("%s returned error: %v", name, err)
+			continue
+		}
+		if f.uow.Calls != before+1 {
+			t.Errorf("%s ran with %d unit-of-work calls, want exactly 1", name, f.uow.Calls-before)
+		}
+	}
+}
+
+func TestAFailedAuditWriteAbortsTheOperation(t *testing.T) {
+	// Inside a transaction this becomes a rollback: the action must not
+	// survive without its trail.
+	f := newFixture(t)
+	user := f.addUser(t, "petrov", "some password")
+	f.sink.err = context.DeadlineExceeded
+
+	err := f.service.Block(context.Background(), f.actor, user.ID)
+
+	if err == nil {
+		t.Error("Block succeeded although the audit write failed")
 	}
 }

@@ -51,7 +51,7 @@ func newAPIFixture(t *testing.T, permissions ...string) *apiFixture {
 		Sessions: sessions, Users: repo,
 		Authorizer: rbac.New(noRoles{}), Cookies: auth.NewCookieWriter(false), Logger: log,
 	})
-	service := users.NewService(repo, audit.New(&apiSink{}))
+	service := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{})
 
 	router := chi.NewRouter()
 	api.NewUsersHandler(service, mw, log).Mount(router)

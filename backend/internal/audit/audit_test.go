@@ -122,44 +122,6 @@ func TestRecordRedactsNestedSensitiveFields(t *testing.T) {
 	}
 }
 
-func TestFromRequestCapturesTheClientAddressAndAgent(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
-	req.RemoteAddr = "10.1.2.3:54321"
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-
-	entry := FromRequest(req, Entry{Action: ActionAuthLogin})
-
-	if entry.IP != "10.1.2.3" {
-		t.Errorf("IP = %q, want 10.1.2.3", entry.IP)
-	}
-	if entry.UserAgent != "Mozilla/5.0" {
-		t.Errorf("UserAgent = %q, want the request's agent", entry.UserAgent)
-	}
-}
-
-func TestFromRequestTruncatesAnAbsurdUserAgent(t *testing.T) {
-	// The header is attacker-controlled and the column is kept for a year.
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("User-Agent", strings.Repeat("x", 5000))
-
-	entry := FromRequest(req, Entry{Action: "test"})
-
-	if len(entry.UserAgent) > maxUserAgentLength {
-		t.Errorf("UserAgent is %d bytes, want at most %d", len(entry.UserAgent), maxUserAgentLength)
-	}
-}
-
-func TestFromRequestLeavesTheAddressEmptyWhenUnparseable(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.RemoteAddr = "not-an-address"
-
-	entry := FromRequest(req, Entry{Action: "test"})
-
-	if entry.IP != "" {
-		t.Errorf("IP = %q, want it left empty rather than storing junk", entry.IP)
-	}
-}
-
 func TestRecordPropagatesAStorageFailure(t *testing.T) {
 	// The caller decides what a failed audit write means; for anything
 	// security-relevant it must fail the whole action.
@@ -169,5 +131,75 @@ func TestRecordPropagatesAStorageFailure(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("Record() hid a storage failure")
+	}
+}
+
+func TestRecordFillsOriginFromTheRequestContext(t *testing.T) {
+	// Handlers pass ctx everywhere already; carrying the origin in it means
+	// every audit write — including future ones — names where the action came
+	// from without each call site remembering to.
+	sink := &recordingSink{}
+	ctx := WithRequestMeta(context.Background(), "203.0.113.7", "Mozilla/5.0")
+
+	_ = New(sink).Record(ctx, Entry{Action: ActionUserBlock})
+
+	got := sink.entries[0]
+	if got.IP != "203.0.113.7" {
+		t.Errorf("IP = %q, want the context origin", got.IP)
+	}
+	if got.UserAgent != "Mozilla/5.0" {
+		t.Errorf("UserAgent = %q, want the context agent", got.UserAgent)
+	}
+}
+
+func TestExplicitOriginWinsOverTheContext(t *testing.T) {
+	// The login flow resolves its own origin before the session exists; an
+	// explicit value must not be overwritten by ambient data.
+	sink := &recordingSink{}
+	ctx := WithRequestMeta(context.Background(), "10.0.0.1", "ctx-agent")
+
+	_ = New(sink).Record(ctx, Entry{Action: ActionAuthLogin, IP: "203.0.113.7", UserAgent: "explicit"})
+
+	got := sink.entries[0]
+	if got.IP != "203.0.113.7" || got.UserAgent != "explicit" {
+		t.Errorf("origin = %q/%q, want the explicit values to win", got.IP, got.UserAgent)
+	}
+}
+
+func TestRequestMetaMiddlewareStashesTheRequestOrigin(t *testing.T) {
+	sink := &recordingSink{}
+	recorder := New(sink)
+	handler := RequestMeta(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = recorder.Record(r.Context(), Entry{Action: ActionUserBlock})
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/users/x/block", nil)
+	req.RemoteAddr = "203.0.113.7:41000"
+	req.Header.Set("User-Agent", "Admin/1.0")
+
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	got := sink.entries[0]
+	if got.IP != "203.0.113.7" {
+		t.Errorf("IP = %q, want the request peer", got.IP)
+	}
+	if got.UserAgent != "Admin/1.0" {
+		t.Errorf("UserAgent = %q, want the request agent", got.UserAgent)
+	}
+}
+
+func TestRequestMetaTruncatesAnAbsurdUserAgent(t *testing.T) {
+	// The header is attacker-controlled and the column is kept for a year.
+	sink := &recordingSink{}
+	recorder := New(sink)
+	handler := RequestMeta(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = recorder.Record(r.Context(), Entry{Action: "test"})
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("User-Agent", strings.Repeat("x", 5000))
+
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	if len(sink.entries[0].UserAgent) > maxUserAgentLength {
+		t.Errorf("UserAgent is %d bytes, want at most %d", len(sink.entries[0].UserAgent), maxUserAgentLength)
 	}
 }

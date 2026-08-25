@@ -78,8 +78,17 @@ services:
   bootstrap:
     build:
       context: ../backend
+      args:
+        VERSION: ${VERSION:-dev}
     profiles: [bootstrap]
     restart: "no"
+    # The job prints the administrator's one-time password. With the default
+    # driver that line becomes a container log — persisted by Docker and, with
+    # the observability profile on, shipped to Loki for 30 days. Driver "none"
+    # keeps it off disk entirely; an attached `compose run` still shows it,
+    # because the terminal stream does not go through the logging driver.
+    logging:
+      driver: none
     entrypoint: ["/usr/local/bin/bootstrap"]
     command: ["-login", "${ADMIN_LOGIN:-admin}", "-name", "${ADMIN_NAME:-System Administrator}"]
     environment:
@@ -107,6 +116,10 @@ services:
       METRICS_BACKEND: ${METRICS_BACKEND:-prometheus}
       SESSION_TTL: ${SESSION_TTL:-12h}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      # The compose network: Caddy's X-Forwarded-For is believed, a direct
+      # client's is not. Without this, every request appears to come from the
+      # proxy and the per-IP login throttle becomes one global counter.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.28.0.0/16}
     # No host port: Caddy is the only way in. The development overlay exposes
     # the API directly for debugging.
     depends_on:
@@ -216,3 +229,9 @@ volumes:
 networks:
   internal:
     driver: bridge
+    # Pinned so TRUSTED_PROXIES can name it deterministically: the API must
+    # know which peers are "our proxy" to resolve real client addresses from
+    # X-Forwarded-For instead of seeing Caddy for every request.
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

@@ -54,16 +54,15 @@ func run() error {
 	defer pool.Close()
 
 	log := logging.New("info", os.Stderr)
-	service := users.NewService(postgres.NewUsers(pool), audit.New(postgres.NewAuditSink(pool)))
+	// The service runs every multi-write operation — account plus audit entry —
+	// inside its own unit of work.
+	service := users.NewService(
+		postgres.NewUsers(pool),
+		audit.New(postgres.NewAuditSink(pool)),
+		storage.NewUnitOfWork(pool),
+	)
 
-	// The account and its audit entry land together or not at all.
-	uow := storage.NewUnitOfWork(pool)
-	var result users.BootstrapResult
-	err = uow.Do(ctx, func(ctx context.Context) error {
-		var err error
-		result, err = service.BootstrapAdmin(ctx, *login, *fullName)
-		return err
-	})
+	result, err := service.BootstrapAdmin(ctx, *login, *fullName)
 	if err != nil {
 		return err
 	}
@@ -73,8 +72,10 @@ func run() error {
 		return nil
 	}
 
-	// The password goes to stdout, separate from the logs, so it can be piped
-	// somewhere sensible and does not end up in the log pipeline.
+	// The password goes to stdout so an attached run shows it and a script can
+	// capture it. Inside a container, stdout is the container log — which is
+	// why the compose job runs with `logging: driver: none`: the password must
+	// not be persisted by Docker or shipped to Loki.
 	log.Info("administrator created", "login", result.User.Login)
 	fmt.Println(result.OneTimePassword)
 	log.Warn("this password is shown once and must be changed at first sign-in")

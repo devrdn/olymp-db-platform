@@ -57,7 +57,7 @@ func newHandlerFixture(t *testing.T) *handlerFixture {
 	})
 
 	router := chi.NewRouter()
-	api.NewAuthHandler(service, users.NewService(repo, audit.New(&apiSink{})), mw, auth.NewCookieWriter(false), log).Mount(router)
+	api.NewAuthHandler(service, users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}), mw, auth.NewCookieWriter(false), log).Mount(router)
 
 	return &handlerFixture{router: router, repo: repo, user: user}
 }

@@ -8,11 +8,18 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
+
+// DefaultInternalAddr is where metrics and health probes listen when
+// INTERNAL_ADDR is not set. Exported so the container self-check derives its
+// probe URL from the same constant and cannot drift from it.
+const DefaultInternalAddr = ":9090"
 
 // validLogLevels mirrors the levels understood by the logging package.
 var validLogLevels = []string{"debug", "info", "warn", "error"}
@@ -42,6 +49,11 @@ type Config struct {
 	// a local stack without a certificate needs it off, and every other
 	// deployment needs it on.
 	CookieSecure bool
+	// TrustedProxies lists the CIDRs (or bare addresses) whose forwarded
+	// headers are believed when resolving the client IP. Empty means the TCP
+	// peer is always the client — correct without a reverse proxy, and the
+	// safe default behind an unknown one.
+	TrustedProxies []string
 	// SessionTTL is how long a session survives without activity. It slides on
 	// every authenticated request, so it bounds idle time rather than the
 	// length of a working session.
@@ -55,7 +67,7 @@ func Load() (Config, error) {
 	cfg := Config{
 		Env:          envOrDefault("ENV", "development"),
 		HTTPAddr:     envOrDefault("HTTP_ADDR", ":8080"),
-		InternalAddr: envOrDefault("INTERNAL_ADDR", ":9090"),
+		InternalAddr: envOrDefault("INTERNAL_ADDR", DefaultInternalAddr),
 		LogLevel:     envOrDefault("LOG_LEVEL", "info"),
 	}
 
@@ -76,6 +88,21 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	// Validation happens here so a typo fails the boot; the list is split
+	// eagerly and re-validated by the resolver that consumes it.
+	if raw := os.Getenv("TRUSTED_PROXIES"); raw != "" {
+		for _, entry := range strings.Split(raw, ",") {
+			entry = strings.TrimSpace(entry)
+			if entry == "" {
+				continue
+			}
+			if err := validateProxyEntry(entry); err != nil {
+				return Config{}, fmt.Errorf("TRUSTED_PROXIES: %w", err)
+			}
+			cfg.TrustedProxies = append(cfg.TrustedProxies, entry)
+		}
+	}
+
 	if !slices.Contains(validMetricsBackends, cfg.MetricsBackend) {
 		return Config{}, fmt.Errorf("METRICS_BACKEND: unknown backend %q, want one of %v",
 			cfg.MetricsBackend, validMetricsBackends)
@@ -92,6 +119,17 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// validateProxyEntry accepts a CIDR prefix or a bare address.
+func validateProxyEntry(entry string) error {
+	if _, err := netip.ParsePrefix(entry); err == nil {
+		return nil
+	}
+	if _, err := netip.ParseAddr(entry); err == nil {
+		return nil
+	}
+	return fmt.Errorf("%q is neither a CIDR nor an address", entry)
 }
 
 func envOrDefault(key, fallback string) string {
