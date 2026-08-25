@@ -3,7 +3,9 @@ package storage
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,13 +32,39 @@ const (
 //
 // Errors deliberately omit the DSN: it carries the database password and
 // startup errors end up in the logs.
+// dsnSetsPoolMaxConns reports whether the connection string chooses the pool
+// size itself.
+//
+// It has to be asked, because pgxpool never leaves MaxConns unset: parsing
+// fills it with max(4, NumCPU). A "was it left at zero" check therefore never
+// fires, which silently handed the pool size to whatever machine happened to
+// run the process.
+func dsnSetsPoolMaxConns(dsn string) bool {
+	const key = "pool_max_conns"
+
+	if u, err := url.Parse(dsn); err == nil && u.Scheme != "" {
+		return u.Query().Has(key)
+	}
+
+	// Keyword/value form: "host=localhost pool_max_conns=25 dbname=core".
+	for _, field := range strings.Fields(dsn) {
+		if name, _, found := strings.Cut(field, "="); found && name == key {
+			return true
+		}
+	}
+	return false
+}
+
 func PoolConfig(dsn string) (*pgxpool.Config, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse core database DSN: invalid connection string")
 	}
 
-	if cfg.MaxConns == 0 {
+	// Not "if it is zero": pgxpool has already put max(4, NumCPU) there. The
+	// question is whether the deployment asked for a size, and only if it did
+	// not does the service default apply.
+	if !dsnSetsPoolMaxConns(dsn) {
 		cfg.MaxConns = defaultMaxConns
 	}
 	if cfg.MinConns == 0 {
