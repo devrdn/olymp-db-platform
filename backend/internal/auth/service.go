@@ -39,7 +39,7 @@ var (
 
 // ServiceConfig collects the service's collaborators.
 type ServiceConfig struct {
-	Users    users.Repository
+	Users    UserStore
 	Sessions *SessionStore
 	Audit    *audit.Recorder
 	Limiter  *Limiter
@@ -48,7 +48,7 @@ type ServiceConfig struct {
 
 // Service runs the login and logout flows.
 type Service struct {
-	users    users.Repository
+	users    UserStore
 	sessions *SessionStore
 	audit    *audit.Recorder
 	limiter  *Limiter

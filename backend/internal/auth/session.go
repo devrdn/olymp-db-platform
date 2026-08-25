@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
+	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 )
 
@@ -40,6 +41,20 @@ const (
 // ErrSessionNotFound reports a token that is unknown, expired or withdrawn.
 // All three are the same thing to a caller: not authenticated.
 var ErrSessionNotFound = errors.New("session not found")
+
+// UserStore is the slice of the account repository that authentication needs:
+// finding an account, and the two writes a successful sign-in performs.
+//
+// Declaring it here rather than importing users.Repository wholesale keeps the
+// coupling to what is actually used — authentication has no business seeing
+// Create, List or ReplaceRoles, and a test double only has to provide four
+// methods. The production repository satisfies it without knowing it exists.
+type UserStore interface {
+	ByID(ctx context.Context, id uuid.UUID) (users.User, error)
+	ByLogin(ctx context.Context, login string) (users.User, error)
+	SetPassword(ctx context.Context, id uuid.UUID, hash string, mustChange bool) error
+	RecordLogin(ctx context.Context, id uuid.UUID, at time.Time) error
+}
 
 // Principal is the identity a session is issued for.
 type Principal struct {

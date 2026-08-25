@@ -11,9 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 
-	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/google/uuid"
 )
 
@@ -32,9 +30,9 @@ const (
 	ActionPasswordChange    = "user.password_change"
 )
 
-// maxUserAgentLength bounds a header the client controls. The column is kept
+// MaxUserAgentLength bounds a header the client controls. The column is kept
 // for a year, so an unbounded value is storage someone else gets to spend.
-const maxUserAgentLength = 512
+const MaxUserAgentLength = 512
 
 // sensitiveKeys never reach the trail, whatever a caller passes in.
 var sensitiveKeys = map[string]struct{}{
@@ -118,19 +116,10 @@ type requestMeta struct {
 // audit write in a request names where the action came from without each call
 // site remembering to.
 func WithRequestMeta(ctx context.Context, ip, userAgent string) context.Context {
-	if len(userAgent) > maxUserAgentLength {
-		userAgent = userAgent[:maxUserAgentLength]
+	if len(userAgent) > MaxUserAgentLength {
+		userAgent = userAgent[:MaxUserAgentLength]
 	}
 	return context.WithValue(ctx, metaKey{}, requestMeta{ip: ip, userAgent: userAgent})
-}
-
-// RequestMeta is the HTTP middleware form of WithRequestMeta. It runs after
-// the client-IP resolver, so the recorded address is the proxy-aware one.
-func RequestMeta(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := WithRequestMeta(r.Context(), httpx.ClientIP(r), r.UserAgent())
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
 }
 
 // redact returns a copy of the payload with sensitive values removed, at any
