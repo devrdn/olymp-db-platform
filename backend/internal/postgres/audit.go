@@ -11,6 +11,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// AuditSink implements audit.Sink.
+var _ audit.Sink = (*AuditSink)(nil)
+
 // AuditSink appends to the audit trail.
 type AuditSink struct {
 	pool *pgxpool.Pool

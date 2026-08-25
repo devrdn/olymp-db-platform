@@ -55,6 +55,10 @@ func decodeMessage(err error) string {
 		return fmt.Sprintf("field %q has the wrong type", typeErr.Field)
 	case errors.Is(err, io.EOF):
 		return "body is empty"
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		// A truncated document reaches us as an unexpected EOF rather than a
+		// SyntaxError; saying so beats a generic "could not be read".
+		return "malformed JSON: the body ends mid-value"
 	default:
 		return "body could not be read"
 	}

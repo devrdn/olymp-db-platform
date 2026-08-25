@@ -1,38 +1,74 @@
 # Core API
 
-Backend service of the DB Contest platform. This is step 1 of the plan in
-[docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md): the foundation — project
-layout, configuration, logging, metrics, health probes and the core database
-schema. Business endpoints arrive in the following steps.
+Backend service of the DB Contest platform. Steps 1 and 2 of the plan in
+[docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) are implemented: the foundation
+(layout, configuration, logging, metrics, health probes, core schema) and
+authentication with role-based access control. Contests, the game databases and
+the query runner arrive in the following steps.
 
 ## Layout
 
 ```
 backend/
-├── cmd/
-│   ├── api/          Core API server
-│   ├── migrate/      schema migration tool (embedded migrations)
-│   └── bootstrap/    creates the first administrator account
+├── cmd/                 entry points, thin: flags, signals, exit codes
+│   ├── api/             Core API server
+│   ├── migrate/         schema migrations (embedded)
+│   └── bootstrap/       creates the first administrator
 ├── internal/
-│   ├── api/          router assembly and HTTP handlers
-│   ├── app/          composition root: builds and runs the service
-│   ├── audit/        append-only trail of who did what
-│   ├── auth/         passwords, sessions, login, middleware
-│   ├── health/       liveness, readiness, self-probe
-│   ├── postgres/     repository implementations (all SQL lives here)
-│   ├── rbac/         two-level authorisation model
-│   ├── users/        accounts, roles, password rules
-│   └── platform/
-│       ├── cache/    Cache interface: Redis or in-process fallback
-│       ├── config/   environment configuration
-│       ├── httpx/    middleware, CSRF guard, JSON responses
-│       ├── logging/  slog setup and request correlation
-│       ├── metrics/  Recorder interface: prometheus, log or none
-│       ├── password/ argon2id hashing
-│       ├── server/   HTTP listener with graceful shutdown
-│       └── storage/  PostgreSQL pool, querier seam, unit of work
-└── migrations/       core schema, applied by cmd/migrate
+│   ├── app/             composition root: builds the graph, runs it, tears it down
+│   ├── api/             HTTP surface: router assembly and handlers
+│   ├── auth/            who is this: passwords, sessions, login, middleware
+│   ├── rbac/            may they do this: the two-level permission model
+│   ├── users/           accounts, roles, password rules
+│   ├── audit/           append-only trail of who did what
+│   ├── health/          liveness, readiness, self-probe
+│   ├── postgres/        every repository implementation — all SQL lives here
+│   └── platform/        infrastructure, imports no domain package
+│       ├── cache/       Cache interface: Redis or in-process fallback
+│       ├── config/      environment configuration
+│       ├── httpx/       middleware, CSRF guard, client IP, JSON responses
+│       ├── logging/     slog setup and request correlation
+│       ├── metrics/     Recorder interface: prometheus, log or none
+│       ├── password/    argon2id hashing
+│       ├── server/      HTTP listener with graceful shutdown
+│       └── storage/     PostgreSQL pool, querier seam, unit of work
+└── migrations/          core schema, applied by cmd/migrate
 ```
+
+### Finding your way
+
+The layout is by layer, and dependencies point one way: `platform` knows nothing
+about domains, domains know nothing about the database, and only `internal/app`
+knows about everything. A domain package declares the storage interface it
+needs; `internal/postgres` implements it. That is the dependency rule from Clean
+Architecture without its folder ceremony.
+
+| Looking for | Open |
+|---|---|
+| what happens on sign-in | `internal/auth/service.go` |
+| who may do what | `internal/rbac/rbac.go` |
+| the SQL behind an account | `internal/postgres/users.go` |
+| which routes exist | `internal/api/router.go` and the `*_handler.go` beside it |
+| how the service is wired | `internal/app/app.go` |
+| a setting and its default | `internal/platform/config/config.go` |
+
+Files are named for what is in them, not for a technical role: there is no
+`model.go`/`service.go`/`repository.go` split, because in Go the package is the
+unit of encapsulation and such a split costs navigation while hiding nothing.
+`go doc ./internal/<pkg>` states what each package answers.
+
+### Tests
+
+A test file mirrors its source file — `session.go` is tested by
+`session_test.go` — so there is never a question of where a test lives or where
+a new one goes. Two exceptions, both named so you can spot them:
+`integration_test.go` assembles the whole service over real listeners, and
+`support_test.go` holds helpers shared within a package. Compile-time interface
+assertions (`var _ users.Repository = (*Users)(nil)`) sit next to the type they
+concern, not in a test file. Helpers another package
+needs live in a `<pkg>test` package (`users/userstest`,
+`platform/password/passwordtest`), which is also where the in-memory
+repositories live — business rules are tested against those, not against mocks.
 
 ## Two listeners
 

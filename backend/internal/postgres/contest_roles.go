@@ -12,6 +12,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// ContestRoles implements rbac.ContestRoleLoader.
+var _ rbac.ContestRoleLoader = (*ContestRoles)(nil)
+
 // ContestRoles resolves a user's standing in one contest.
 type ContestRoles struct {
 	pool *pgxpool.Pool

@@ -41,6 +41,10 @@ const userColumns = `
 		ORDER BY p.code
 	), '{}')`
 
+// Users implements users.Repository; the assertion fails the build here
+// rather than at wiring time if the interface and this type drift apart.
+var _ users.Repository = (*Users)(nil)
+
 // Users stores accounts in PostgreSQL.
 type Users struct {
 	pool *pgxpool.Pool

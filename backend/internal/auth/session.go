@@ -1,3 +1,11 @@
+// Package auth answers "who is this?": password-backed sign-in, server-side
+// sessions, the cookie that carries them, brute-force throttling, and the
+// middleware that turns a session into an identity for the rest of the API.
+//
+// It deliberately does not answer "may they do this?" — that is package rbac —
+// nor does it own accounts, which belong to package users. Password hashing is
+// a primitive in platform/password, kept separate so authentication and account
+// management do not have to depend on each other.
 package auth
 
 import (
