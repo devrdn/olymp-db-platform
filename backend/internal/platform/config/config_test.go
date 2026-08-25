@@ -317,3 +317,46 @@ func TestTrustedProxiesRejectGarbageAtStartup(t *testing.T) {
 		t.Error("Load() accepted an unparseable TRUSTED_PROXIES entry")
 	}
 }
+
+func TestDefaultLocaleFallsBackToEnglish(t *testing.T) {
+	// The last resort when a request expresses no preference and no contest
+	// context has narrowed it down. English because the game database is
+	// English, so it is the one language every installation certainly has.
+	setRequired(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.DefaultLocale != "en" {
+		t.Errorf("DefaultLocale = %q, want en", cfg.DefaultLocale)
+	}
+}
+
+func TestDefaultLocaleIsConfigurable(t *testing.T) {
+	// An installation that runs entirely in Romanian should not have to see
+	// English first; the code is data, so no rebuild is involved.
+	setRequired(t)
+	t.Setenv("DEFAULT_LOCALE", "ro")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.DefaultLocale != "ro" {
+		t.Errorf("DefaultLocale = %q, want ro", cfg.DefaultLocale)
+	}
+}
+
+func TestDefaultLocaleRejectsSomethingThatIsNotALanguageTag(t *testing.T) {
+	// Catching a typo at boot beats every participant silently getting the
+	// wrong fallback.
+	setRequired(t)
+	t.Setenv("DEFAULT_LOCALE", "not a tag!")
+
+	if _, err := Load(); err == nil {
+		t.Error("Load() accepted a malformed DEFAULT_LOCALE")
+	}
+}
