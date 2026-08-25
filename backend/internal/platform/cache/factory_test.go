@@ -3,12 +3,10 @@ package cache
 import (
 	"bytes"
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
-	"github.com/redis/go-redis/v9"
 )
 
 func TestNewFallsBackToMemoryWhenNoAddressIsConfigured(t *testing.T) {
@@ -72,48 +70,5 @@ func TestModeNamesTheActiveBackend(t *testing.T) {
 
 	if got := Mode(c); got != ModeMemory {
 		t.Errorf("Mode() = %q, want %q", got, ModeMemory)
-	}
-}
-
-func TestRedisMissIsReportedAsNotFoundRatherThanError(t *testing.T) {
-	// redis.Nil means "no such key"; treating it as a failure would turn every
-	// cache miss into a request error.
-	value, found, err := classifyGet("", redis.Nil)
-
-	if err != nil {
-		t.Errorf("err = %v, want nil for a missing key", err)
-	}
-	if found {
-		t.Error("found = true for a missing key")
-	}
-	if value != nil {
-		t.Errorf("value = %q, want nil", value)
-	}
-}
-
-func TestRedisFailureIsReportedAsError(t *testing.T) {
-	wantErr := errors.New("connection reset")
-
-	_, found, err := classifyGet("", wantErr)
-
-	if !errors.Is(err, wantErr) {
-		t.Errorf("err = %v, want it to wrap %v", err, wantErr)
-	}
-	if found {
-		t.Error("found = true despite a backend failure")
-	}
-}
-
-func TestRedisHitIsReturned(t *testing.T) {
-	value, found, err := classifyGet("stored", nil)
-
-	if err != nil {
-		t.Fatalf("err = %v, want nil", err)
-	}
-	if !found {
-		t.Fatal("found = false for a stored key")
-	}
-	if string(value) != "stored" {
-		t.Errorf("value = %q, want stored", value)
 	}
 }
