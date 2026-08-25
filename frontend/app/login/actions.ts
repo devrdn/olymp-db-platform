@@ -21,6 +21,11 @@ export async function signInAction(
   const password = String(form.get("password") ?? "");
   if (login === "" || password === "") return { code: "invalid_request" };
 
+  // Where the guard was taking them before it stopped here. It arrives from
+  // the browser, so `destinationAfterLogin` is the one that decides whether it
+  // is a path on this origin at all.
+  const next = form.get("next");
+
   const jar = await cookies();
 
   const outcome = await signIn(
@@ -47,9 +52,12 @@ export async function signInAction(
 
   // redirect() signals by throwing, so it stays outside any try/catch.
   redirect(
-    destinationAfterLogin({
-      mustChangePassword: outcome.mustChangePassword,
-      permissions: identity?.permissions ?? [],
-    }),
+    destinationAfterLogin(
+      {
+        mustChangePassword: outcome.mustChangePassword,
+        permissions: identity?.permissions ?? [],
+      },
+      typeof next === "string" ? next : undefined,
+    ),
   );
 }

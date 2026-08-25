@@ -23,10 +23,42 @@ const STAFF_PERMISSIONS = [
   "audit.view",
 ];
 
-export function destinationAfterLogin(identity: Identity): string {
+/** Where a visitor is sent to obtain a session, and never sent back to. */
+const SIGN_IN = "/login";
+
+/**
+ * The `?next=` the guard captured, if it is safe to obey.
+ *
+ * An unchecked `next` turns the sign-in page into an open redirect, which is
+ * how a phishing link borrows a real domain: the address bar shows this
+ * university, the destination does not. Only a path on this origin is
+ * accepted, and the two forms browsers read as protocol-relative — `//host`
+ * and `/\host`, since a backslash is normalised to a slash — are rejected
+ * along with everything that is not a path at all.
+ *
+ * `/` and `/login` are refused for a duller reason: the first has no page yet,
+ * and the second is where the visitor has just come from.
+ */
+function resumable(next: string | undefined): string | null {
+  if (!next || next[0] !== "/") return null;
+  if (next[1] === "/" || next[1] === "\\") return null;
+  // A newline or a NUL in a Location header is a response-splitting attempt.
+  if (/[\u0000-\u001f\u007f]/.test(next)) return null;
+
+  const path = next.split(/[?#]/, 1)[0];
+  if (path === "/") return null;
+  if (path === SIGN_IN || path.startsWith(`${SIGN_IN}/`)) return null;
+
+  return next;
+}
+
+export function destinationAfterLogin(identity: Identity, next?: string): string {
   // A one-time password blocks every other request with password_change_required,
   // so any other destination would bounce straight back.
   if (identity.mustChangePassword) return "/password";
+
+  const resumed = resumable(next);
+  if (resumed) return resumed;
 
   const isStaff = identity.permissions.some((held) => STAFF_PERMISSIONS.includes(held));
   return isStaff ? "/contests" : "/my";

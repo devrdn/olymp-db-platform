@@ -1,20 +1,38 @@
-import * as React from "react"
-import { Input as InputPrimitive } from "@base-ui/react/input"
+import * as React from "react";
+import { Input as InputPrimitive } from "@base-ui/react/input";
 
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/utils";
 
+/**
+ * A square field.
+ *
+ * The registry ships `rounded-lg`, and spec section 5 puts rounding on the
+ * outer frame and on small controls only — a field is neither. Square is also
+ * what the direction is: this is a register, and a register's cells have
+ * corners.
+ *
+ * The border is `--edge` rather than `--line-2`, because a field is an
+ * interactive control and WCAG 1.4.11 holds its boundary to 3:1 while asking
+ * nothing of a decorative rule. Focus darkens that border to ink; the ring
+ * itself is global (spec section 14), so it is not repeated here.
+ */
 function Input({ className, type, ...props }: React.ComponentProps<"input">) {
   return (
     <InputPrimitive
       type={type}
       data-slot="input"
       className={cn(
-        "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none file:inline-flex file:h-6 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:bg-input/50 disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 md:text-sm dark:bg-input/30 dark:disabled:bg-input/80 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40",
-        className
+        "h-(--control-h) w-full min-w-0 rounded-none border border-edge bg-transparent px-3",
+        "text-control text-ink placeholder:text-ink-3",
+        "transition-colors duration-(--t-input) ease-standard",
+        "hover:border-ink-2 focus-visible:border-ink",
+        "disabled:cursor-not-allowed disabled:bg-sunk disabled:text-ink-3",
+        "aria-invalid:border-bad",
+        className,
       )}
       {...props}
     />
-  )
+  );
 }
 
-export { Input }
+export { Input };

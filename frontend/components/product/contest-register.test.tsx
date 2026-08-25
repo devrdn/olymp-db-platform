@@ -72,12 +72,52 @@ describe("ContestRegister, nothing to show", () => {
 });
 
 describe("ContestRegister, dates", () => {
-  test("shows the start as a readable date, not as an ISO string", () => {
+  test("shows the contest window as readable dates, not as ISO strings", () => {
     render(<ContestRegister contests={[nightInTheArchive]} total={1} dict={en} locale="en" />);
 
     const row = screen.getByRole("row", { name: /Ночь в архиве/ });
 
-    expect(within(row).queryByText(/2026-11-08T19:00:00Z/)).not.toBeInTheDocument();
+    expect(row.textContent).not.toContain("2026-11-08T19:00:00Z");
     expect(within(row).getByText(/2026/)).toBeInTheDocument();
+  });
+
+  test("prints a one-day window as a date and a time range, not the date twice", () => {
+    render(<ContestRegister contests={[nightInTheArchive]} total={1} dict={en} locale="en" />);
+
+    const row = screen.getByRole("row", { name: /Ночь в архиве/ });
+
+    // 19:00–21:00 UTC is one evening in Chisinau, so the date is said once.
+    expect(within(row).getAllByText(/2026/)).toHaveLength(1);
+    expect(within(row).getByText(/\d{2}:\d{2}.+\d{2}:\d{2}/)).toBeInTheDocument();
+  });
+
+  test("repeats the full moment when the window crosses midnight", () => {
+    render(
+      <ContestRegister
+        contests={[{ ...nightInTheArchive, endsAt: "2026-11-09T03:00:00Z" }]}
+        total={1}
+        dict={en}
+        locale="en"
+      />,
+    );
+
+    const row = screen.getByRole("row", { name: /Ночь в архиве/ });
+
+    expect(within(row).getAllByText(/2026/)).toHaveLength(2);
+  });
+
+  test("says so when a contest has no date rather than leaving the cell blank", () => {
+    render(
+      <ContestRegister
+        contests={[{ ...nightInTheArchive, startsAt: undefined, endsAt: undefined }]}
+        total={1}
+        dict={en}
+        locale="en"
+      />,
+    );
+
+    const row = screen.getByRole("row", { name: /Ночь в архиве/ });
+
+    expect(within(row).getByText(en.contests.unscheduled)).toBeInTheDocument();
   });
 });

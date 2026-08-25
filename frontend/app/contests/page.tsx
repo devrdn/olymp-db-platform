@@ -1,8 +1,11 @@
+import { redirect } from "next/navigation";
+
+import { Band } from "@/components/layout/band";
+import { ContestRegister } from "@/components/product/contest-register";
 import { contestListSchema } from "@/lib/api/contests";
 import { serverRequest } from "@/lib/api/server";
+import { expiredSessionRedirect } from "@/lib/auth/guard";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
-import { ContestRegister } from "@/components/product/contest-register";
-import { LanguageSwitcher } from "@/components/layout/language-switcher";
 
 export async function generateMetadata() {
   const dict = await activeDictionary();
@@ -33,14 +36,24 @@ export default async function ContestsPage(props: PageProps<"/contests">) {
   // the interface is rendering, so a page never mixes two.
   search.set("lang", locale);
 
-  const payload = await serverRequest(`/contests?${search}`);
+  // The proxy could only see that a session cookie exists; whether it is still
+  // worth anything is this answer. A dead one goes back to the form rather than
+  // to the recoverable-error screen, whose retry could never fix it.
+  const payload = await serverRequest(`/contests?${search}`).catch((error: unknown) => {
+    const resume = new URLSearchParams();
+    if (query) resume.set("q", query);
+    if (status) resume.set("status", status);
+    const here = resume.size > 0 ? `/contests?${resume}` : "/contests";
+
+    const target = expiredSessionRedirect(error, here);
+    if (target) redirect(target);
+    throw error;
+  });
+
   const { items, total } = contestListSchema.parse(payload);
 
   return (
-    <main className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
-      <div className="flex justify-end pb-4">
-        <LanguageSwitcher current={locale} />
-      </div>
+    <Band fill className="py-12">
       <ContestRegister
         contests={items}
         total={total}
@@ -49,6 +62,6 @@ export default async function ContestsPage(props: PageProps<"/contests">) {
         filtered={Boolean(query || status)}
         resetHref="/contests"
       />
-    </main>
+    </Band>
   );
 }

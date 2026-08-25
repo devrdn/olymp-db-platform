@@ -7,10 +7,18 @@ import { chooseLocale } from "./locale-actions";
  * is not part of the address, so there is nothing to navigate.
  *
  * A form, so it needs no JavaScript. Each language is a submit button.
+ *
+ * The width is fixed by the codes themselves — two letters, in every language
+ * there will ever be — which is the one place in this interface where a
+ * container may be sized to its content (spec section 8).
  */
-export function LanguageSwitcher({ current }: { current: Locale }) {
+export function LanguageSwitcher({ current, label }: { current: Locale; label: string }) {
   return (
-    <form action={chooseLocale} className="flex items-center gap-px" aria-label="Language">
+    <form
+      action={chooseLocale}
+      aria-label={label}
+      className="inline-flex overflow-hidden rounded-full border border-line-2"
+    >
       {LOCALES.map((locale) => {
         const active = locale === current;
         return (
@@ -23,8 +31,8 @@ export function LanguageSwitcher({ current }: { current: Locale }) {
             aria-current={active ? "true" : undefined}
             title={LOCALE_NAMES[locale]}
             className={[
-              "px-2 py-1 font-mono text-[0.625rem] tracking-[0.08em] uppercase transition-colors duration-150",
-              "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+              "px-2 py-1 font-mono text-label uppercase",
+              "transition-colors duration-(--t-input) ease-standard",
               active ? "bg-cta text-cta-fg" : "text-ink-3 hover:text-ink",
             ].join(" ")}
           >

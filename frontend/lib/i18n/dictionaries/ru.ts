@@ -1,6 +1,15 @@
 import type { Dictionary } from "./en";
 
 const ru = {
+  chrome: {
+    product: "DB Contest",
+    language: "Язык",
+    theme: {
+      system: "Следовать теме системы",
+      light: "Переключить на светлую тему",
+      dark: "Переключить на тёмную тему",
+    },
+  },
   auth: {
     signIn: {
       title: "Вход",
@@ -30,6 +39,7 @@ const ru = {
       state: "Состояние",
       enrollment: "Запись",
       starts: "Начало",
+      mode: "Формат",
     },
     status: {
       draft: "черновик",
@@ -42,6 +52,11 @@ const ru = {
       open: "открытая",
       invite_only: "по приглашению",
     },
+    mode: {
+      single: "один вопрос",
+      multi: "набор вопросов",
+    },
+    until: "до",
     unscheduled: "не назначено",
     empty: {
       title: "Олимпиад пока нет",

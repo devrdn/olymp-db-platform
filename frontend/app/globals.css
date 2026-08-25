@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import "tw-animate-css";
 @import "../styles/tokens.css";
 
 /**
@@ -38,12 +37,12 @@
   /* A control's own outline, held to 3:1 by WCAG 1.4.11 (spec section 3.2). */
   --input: var(--edge);
   --ring: var(--accent-ink);
-
-  --radius: 0.5rem;
 }
 
-/* Semantic tokens become Tailwind utilities. `inline` keeps them referring to
-   the variables, so switching theme is a variable swap, not a rebuild. */
+/**
+ * Semantic tokens become Tailwind utilities. `inline` keeps them referring to
+ * the variables, so switching theme is a variable swap, not a rebuild.
+ */
 @theme inline {
   --color-bg: var(--bg);
   --color-panel: var(--panel);
@@ -90,22 +89,214 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
-  --radius-sm: calc(var(--radius) * 0.5);
-  --radius-md: calc(var(--radius) * 0.75);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.5);
-
   --font-sans: var(--font-onest);
   --font-mono: var(--font-jetbrains-mono);
   --font-serif: var(--font-literata);
+
+  --ease-standard: var(--curve);
 }
 
 /**
- * Tailwind v4 stopped setting `cursor: pointer` on buttons, leaving the
- * browser default. Restored once here rather than as a class on each control,
- * so the next button added does not arrive without it.
+ * The typographic scale (spec section 4), as utilities rather than as a table
+ * in a document.
+ *
+ * Each step carries its leading, its tracking and its weight, because that is
+ * what a step is: `text-display` is 92px at 0.98 in weight 400 at -0.05em, and
+ * there is no way to take the size without the rest. Spelling those out at
+ * every call site is how nine steps became `text-3xl tracking-[-0.03em]` in
+ * one file and `text-lg tracking-tight` in the next.
+ *
+ * The default ladder is cleared. `text-xl` no longer exists, so reaching for a
+ * size means picking a step from the system, and adding a tenth step is an
+ * edit here rather than a decision taken alone in a component.
  */
+@theme {
+  --text-*: initial;
+  --radius-*: initial;
+  --tracking-*: initial;
+
+  --text-display: clamp(2.75rem, 8vw, 6.5rem);
+  --text-display--line-height: 0.98;
+  --text-display--letter-spacing: -0.05em;
+  --text-display--font-weight: 400;
+
+  --text-h2: clamp(2rem, 3.6vw, 3.25rem);
+  --text-h2--line-height: 1.02;
+  --text-h2--letter-spacing: -0.042em;
+  --text-h2--font-weight: 400;
+
+  --text-h3: 1.3125rem;
+  --text-h3--line-height: 1.3;
+  --text-h3--letter-spacing: -0.02em;
+  --text-h3--font-weight: 500;
+
+  --text-lede: 1.25rem;
+  --text-lede--line-height: 1.55;
+  --text-lede--font-weight: 500;
+
+  --text-body: 1.0625rem;
+  --text-body--line-height: 1.65;
+  --text-body--font-weight: 400;
+
+  --text-small: 0.875rem;
+  --text-small--line-height: 1.5;
+  --text-small--font-weight: 400;
+
+  /* Controls. Section 4's table stops at `small` and pins the primary action's
+     14px/600 in section 5 instead, which is how every button since arrived
+     with a hand-written size. Two steps close that gap. */
+  --text-control: 0.9375rem;
+  --text-control--line-height: 1.4;
+  --text-control--font-weight: 500;
+
+  --text-control-sm: 0.84375rem;
+  --text-control-sm--line-height: 1.4;
+  --text-control-sm--font-weight: 500;
+
+  /* The register's own voice: a row title, a field value, a pane heading. */
+  --text-row: 1.09375rem;
+  --text-row--line-height: 1.35;
+  --text-row--letter-spacing: -0.022em;
+  --text-row--font-weight: 500;
+
+  /* Mono. `label` is the uppercase micro-caption on a column or a pane;
+     `data` is a value meant to be compared down a column. */
+  --text-label: 0.78125rem;
+  --text-label--line-height: 1.5;
+  --text-label--letter-spacing: 0.1em;
+  --text-label--font-weight: 500;
+
+  --text-data: 0.8125rem;
+  --text-data--line-height: 1.85;
+  --text-data--font-weight: 400;
+
+  /* Literata, and only over the crime story. */
+  --text-narrative: 1.125rem;
+  --text-narrative--line-height: 1.7;
+  --text-narrative--font-weight: 400;
+
+  --radius-window: var(--r-window);
+  --radius-frame: var(--r-frame);
+
+  /* Measures, as widths rather than as a rule nobody remembers: `max-w-body`
+     is 66 characters because that is what section 4 says a body measure is. */
+  /* The one breakpoint the direction actually has: below it the hatched
+     fields go, the column takes the full width, and every asymmetric grid
+     collapses to a single track (spec section 5). */
+  --breakpoint-narrow: 47.5rem;
+
+  --container-column: 110rem;
+  --container-head: 20ch;
+  --container-lede: 60ch;
+  --container-body: 66ch;
+  --container-narrative: 58ch;
+
+  /**
+   * The two perpetual motions the spec allows, and the reason each is allowed:
+   * both report a fact that is true right now and would otherwise need a word.
+   * Nothing else on a screen where somebody is solving a problem moves by
+   * itself (spec section 6).
+   */
+  --animate-live: live 2.4s ease-in-out infinite;
+  --animate-shimmer: shimmer 1.7s ease-in-out infinite;
+
+  @keyframes live {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.3;
+    }
+  }
+
+  @keyframes shimmer {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(100%);
+    }
+  }
+}
+
 @layer base {
+  body {
+    background: var(--bg);
+    color: var(--ink);
+  }
+
+  /**
+   * The surfaces the page never drew but still owns.
+   *
+   * Selection, the caret, the scrollbar and the focus ring all ship with
+   * browser defaults that belong to no design system: a blue highlight, a
+   * black bar, a platform-blue outline. Left alone they are the loudest
+   * remaining evidence that an interface was assembled rather than built, and
+   * they cost four rules to fix.
+   */
+  ::selection {
+    background: var(--select-bg);
+    color: var(--select-fg);
+  }
+
+  :root {
+    scrollbar-color: var(--line-2) transparent;
+    scrollbar-width: thin;
+    accent-color: var(--accent-ink);
+  }
+
+  ::-webkit-scrollbar {
+    width: 11px;
+    height: 11px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--line-2);
+    border: 3px solid var(--bg);
+    border-radius: 999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--edge);
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /**
+   * Focus is visible everywhere, in one place (spec section 14). A ring of
+   * 2px in the accent at 2px offset, on anything focusable, so a control
+   * added tomorrow arrives with it rather than without.
+   */
+  :focus-visible {
+    outline: 2px solid var(--accent-ink);
+    outline-offset: 2px;
+  }
+
+  input,
+  textarea,
+  select {
+    caret-color: var(--accent-ink);
+  }
+
+  /* An underline that runs through the descenders is the browser's, not ours. */
+  a,
+  .underline {
+    text-underline-offset: 0.18em;
+    text-decoration-thickness: from-font;
+  }
+
+  /**
+   * Tailwind v4 stopped setting `cursor: pointer` on buttons, leaving the
+   * browser default. Restored once here rather than as a class on each
+   * control, so the next button added does not arrive without it.
+   */
   button:not(:disabled),
   [role="button"]:not(:disabled),
   label[for],
@@ -117,15 +308,45 @@
   [role="button"][aria-disabled="true"] {
     cursor: not-allowed;
   }
+
+  /* A number that can be compared down a column is set in the mono face with
+     tabular figures, always (spec section 4). */
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+  }
 }
 
-body {
-  background: var(--bg);
-  color: var(--ink);
+@layer utilities {
+  /**
+   * The hatched field (spec section 5).
+   *
+   * One-pixel strokes at 315 degrees on a 10px step. This is what holds the
+   * content column without drawing a frame around it, and it is the direction's
+   * single most recognisable surface: the ruled margin of a register sheet.
+   */
+  .hatched {
+    background-image: repeating-linear-gradient(
+      315deg,
+      var(--pattern) 0,
+      var(--pattern) 1px,
+      transparent 0,
+      transparent 50%
+    );
+    background-size: var(--hatch-step) var(--hatch-step);
+  }
+
+  /* The dotted ground of a demonstration surface. Same family, different grain:
+     a field of points rather than of strokes. */
+  .dotted {
+    background-image: radial-gradient(var(--pattern) 1px, transparent 0);
+    background-size: 8px 8px;
+  }
 }
 
-/* Motion is capped by the spec: nothing sits between an action and its result
-   for longer than 150ms, and a stated preference removes it entirely. */
+/**
+ * A stated preference removes motion rather than shortening it. The duration
+ * tokens collapse in tokens.css; this catches anything that hard-codes one.
+ */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -5,6 +5,15 @@
  * never touching a component.
  */
 const en = {
+  chrome: {
+    product: "DB Contest",
+    language: "Language",
+    theme: {
+      system: "Follow the system theme",
+      light: "Switch to the light theme",
+      dark: "Switch to the dark theme",
+    },
+  },
   auth: {
     signIn: {
       title: "Sign in",
@@ -34,6 +43,7 @@ const en = {
       state: "State",
       enrollment: "Enrollment",
       starts: "Starts",
+      mode: "Format",
     },
     status: {
       draft: "draft",
@@ -46,6 +56,11 @@ const en = {
       open: "open",
       invite_only: "by invitation",
     },
+    mode: {
+      single: "single question",
+      multi: "question set",
+    },
+    until: "to",
     unscheduled: "not scheduled",
     empty: {
       title: "No contests yet",
