@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -54,6 +55,10 @@ type Config struct {
 	// peer is always the client — correct without a reverse proxy, and the
 	// safe default behind an unknown one.
 	TrustedProxies []string
+	// DefaultLocale is the language of last resort, used when a request
+	// expresses no usable preference and no contest narrows it down. It is a
+	// BCP-47 tag matching a row in the `languages` table.
+	DefaultLocale string
 	// SessionTTL is how long a session survives without activity. It slides on
 	// every authenticated request, so it bounds idle time rather than the
 	// length of a working session.
@@ -88,6 +93,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	cfg.DefaultLocale = envOrDefault("DEFAULT_LOCALE", "en")
+	if !languageTag.MatchString(cfg.DefaultLocale) {
+		return Config{}, fmt.Errorf("DEFAULT_LOCALE: %q is not a language tag", cfg.DefaultLocale)
+	}
+
 	// Validation happens here so a typo fails the boot; the list is split
 	// eagerly and re-validated by the resolver that consumes it.
 	if raw := os.Getenv("TRUSTED_PROXIES"); raw != "" {
@@ -120,6 +130,11 @@ func Load() (Config, error) {
 
 	return cfg, nil
 }
+
+// languageTag matches a BCP-47 tag loosely enough for the codes this platform
+// uses ("en", "ro", "ru-KZ") and strictly enough to catch a typo before it
+// becomes every participant's fallback.
+var languageTag = regexp.MustCompile(`^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$`)
 
 // validateProxyEntry accepts a CIDR prefix or a bare address.
 func validateProxyEntry(entry string) error {

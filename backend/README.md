@@ -27,6 +27,7 @@ backend/
 │       ├── cache/       Cache interface: Redis or in-process fallback
 │       ├── config/      environment configuration
 │       ├── httpx/       middleware, CSRF guard, client IP, JSON responses
+│       ├── i18n/        language negotiation (Accept-Language, fallbacks)
 │       ├── logging/     slog setup and request correlation
 │       ├── metrics/     Recorder interface: prometheus, log or none
 │       ├── password/    argon2id hashing
@@ -104,6 +105,7 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `SHUTDOWN_TIMEOUT` | no | `15s` | drain period on SIGTERM |
 | `SESSION_TTL` | no | `12h` | idle lifetime of a session; slides on activity |
 | `TRUSTED_PROXIES` | no | — | CIDRs whose `X-Forwarded-For` is believed for client IPs |
+| `DEFAULT_LOCALE` | no | `en` | language of last resort; must exist in the `languages` table |
 | `COOKIE_SECURE` | no | true outside `development` | mark the session cookie Secure |
 
 ## Running locally
