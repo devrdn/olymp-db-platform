@@ -1,6 +1,26 @@
 import type { Dictionary } from "./en";
 
 const ro = {
+  auth: {
+    signIn: {
+      title: "Autentificare",
+      lede: "Utilizatorul și parola vă sunt date de catedră.",
+      login: "Utilizator",
+      password: "Parolă",
+      submit: "Intrați",
+      submitting: "Se autentifică",
+      aside: "O crimă, o bază de date și un termen. Scrieți SQL, citiți probele, spuneți cine a făcut-o.",
+    },
+    changePassword: {
+      title: "Schimbați parola",
+      lede: "Contul folosește încă o parolă temporară. Alegeți una proprie pentru a continua.",
+      current: "Parola temporară",
+      next: "Parolă nouă",
+      confirm: "Repetați parola nouă",
+      submit: "Salvați și continuați",
+      mismatch: "Cele două parole nu coincid.",
+    },
+  },
   contests: {
     heading: "Olimpiade",
     countLabel: "în registru",

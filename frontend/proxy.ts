@@ -1,26 +1,28 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { localeRedirect } from "@/lib/i18n/routing";
+import { guardRedirect } from "@/lib/auth/guard";
+import { SESSION_COOKIE } from "@/lib/auth/session";
 
 /**
  * Named `proxy` rather than `middleware`: Next 16 renamed the convention to
  * make the network boundary explicit, and the runtime is Node with no edge
  * option.
  *
- * Its only job is language. A request without a locale prefix is negotiated
- * from the browser's own preferences and redirected once, so every page below
- * can assume the segment is there.
+ * One job: keep a signed-out visitor off a screen that would only fail at the
+ * API. Language is not decided here, because it is not in the URL.
  */
 export function proxy(request: NextRequest) {
-  const target = localeRedirect(
+  const target = guardRedirect(
     request.nextUrl.pathname,
-    request.headers.get("accept-language"),
+    request.cookies.has(SESSION_COOKIE),
   );
 
   if (!target) return NextResponse.next();
 
   const url = request.nextUrl.clone();
-  url.pathname = target;
+  const [pathname, search = ""] = target.split("?");
+  url.pathname = pathname;
+  url.search = search;
   return NextResponse.redirect(url);
 }
 
