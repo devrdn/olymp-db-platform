@@ -151,3 +151,42 @@ func TestCookieSecurityCanBeOverridden(t *testing.T) {
 		t.Error("the explicit override was ignored")
 	}
 }
+
+func TestTrustedProxiesDefaultToNone(t *testing.T) {
+	// Trusting nobody is the safe default: forwarded headers stay ignored.
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if len(cfg.TrustedProxies) != 0 {
+		t.Errorf("TrustedProxies = %v, want empty", cfg.TrustedProxies)
+	}
+}
+
+func TestTrustedProxiesParseCommaSeparatedList(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("TRUSTED_PROXIES", "172.28.0.0/16, 10.0.0.1")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if len(cfg.TrustedProxies) != 2 || cfg.TrustedProxies[0] != "172.28.0.0/16" || cfg.TrustedProxies[1] != "10.0.0.1" {
+		t.Errorf("TrustedProxies = %v, want the two entries", cfg.TrustedProxies)
+	}
+}
+
+func TestTrustedProxiesRejectGarbageAtStartup(t *testing.T) {
+	// A typo must fail the boot, not silently produce a resolver that trusts
+	// nobody and reintroduces the shared-throttle bug behind the proxy.
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("TRUSTED_PROXIES", "not-a-cidr")
+
+	if _, err := Load(); err == nil {
+		t.Error("Load() accepted an unparseable TRUSTED_PROXIES entry")
+	}
+}

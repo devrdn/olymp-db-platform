@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -20,11 +21,11 @@ func Middleware(rec Recorder) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			started := time.Now()
-			sr := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+			sr := httpx.NewStatusRecorder(w)
 
 			next.ServeHTTP(sr, r)
 
-			rec.ObserveRequest(r.Method, routePattern(r), sr.status, time.Since(started))
+			rec.ObserveRequest(r.Method, routePattern(r), sr.Status(), time.Since(started))
 		})
 	}
 }
@@ -38,20 +39,4 @@ func routePattern(r *http.Request) string {
 		}
 	}
 	return unknownRoute
-}
-
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (r *statusRecorder) WriteHeader(status int) {
-	r.status = status
-	r.ResponseWriter.WriteHeader(status)
-}
-
-// Unwrap exposes the wrapped writer to http.ResponseController, keeping
-// streaming responses (SSE) usable behind this middleware.
-func (r *statusRecorder) Unwrap() http.ResponseWriter {
-	return r.ResponseWriter
 }

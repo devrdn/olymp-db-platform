@@ -24,6 +24,7 @@ const (
 var (
 	ErrNotFound      = errors.New("user not found")
 	ErrLoginTaken    = errors.New("login already in use")
+	ErrEmailTaken    = errors.New("email already in use")
 	ErrWeakPassword  = errors.New("password does not meet the policy")
 	ErrSamePassword  = errors.New("new password must differ from the current one")
 	ErrWrongPassword = errors.New("current password is incorrect")
@@ -49,6 +50,9 @@ type User struct {
 	UpdatedAt          time.Time
 	// Roles are the codes of the global roles the account holds.
 	Roles []string
+	// Permissions are the codes those roles grant, loaded with the account so
+	// the authentication path costs one query, not two.
+	Permissions []string
 }
 
 // IsActive reports whether the account may authenticate.
@@ -77,8 +81,6 @@ type Repository interface {
 	RecordLogin(ctx context.Context, id uuid.UUID, at time.Time) error
 	// ReplaceRoles sets the account's global roles to exactly these codes.
 	ReplaceRoles(ctx context.Context, id uuid.UUID, roleCodes []string) error
-	// PermissionsFor returns the permission codes the account's roles grant.
-	PermissionsFor(ctx context.Context, id uuid.UUID) ([]string, error)
 }
 
 // Filter selects a page of accounts.

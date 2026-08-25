@@ -279,6 +279,8 @@ func (h *UsersHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusNotFound, "not_found", "users.User not found")
 	case errors.Is(err, users.ErrLoginTaken):
 		httpx.Error(w, r, http.StatusConflict, "login_taken", "This login is already in use")
+	case errors.Is(err, users.ErrEmailTaken):
+		httpx.Error(w, r, http.StatusConflict, "email_taken", "This email is already in use")
 	case errors.Is(err, users.ErrCannotActOnSelf):
 		httpx.Error(w, r, http.StatusBadRequest, "cannot_act_on_self",
 			"This operation cannot be performed on your own account")

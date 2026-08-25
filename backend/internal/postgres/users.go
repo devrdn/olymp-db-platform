@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
@@ -31,6 +32,13 @@ const userColumns = `
 		JOIN roles r ON r.id = ur.role_id
 		WHERE ur.user_id = u.id
 		ORDER BY r.code
+	), '{}'),
+	COALESCE(ARRAY(
+		SELECT DISTINCT p.code FROM user_roles ur
+		JOIN role_permissions rp ON rp.role_id = ur.role_id
+		JOIN permissions p ON p.id = rp.permission_id
+		WHERE ur.user_id = u.id
+		ORDER BY p.code
 	), '{}')`
 
 // Users stores accounts in PostgreSQL.
@@ -54,7 +62,7 @@ func scanUser(row pgx.Row) (users.User, error) {
 	err := row.Scan(
 		&u.ID, &u.Login, &u.Email, &u.PasswordHash, &u.FullName, &u.Status,
 		&u.SessionGeneration, &u.MustChangePassword, &u.PasswordChangedAt,
-		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Roles,
+		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Roles, &u.Permissions,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return users.User{}, users.ErrNotFound
@@ -101,19 +109,26 @@ func (r *Users) Create(ctx context.Context, u users.User) (users.User, error) {
 		// The pre-check in the service is a courtesy; this is the guarantee,
 		// and it is what catches two administrators creating the same login at
 		// the same moment.
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
-			return users.User{}, users.ErrLoginTaken
-		}
-		return users.User{}, err
+		return users.User{}, mapUserConstraint(err)
 	}
 	return created, nil
+}
+
+// escapeLike makes a search string literal inside a LIKE pattern. Without it
+// '%' in the query matches every row and a trailing backslash is a syntax
+// error Postgres surfaces as a 500.
+func escapeLike(s string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(s)
 }
 
 // List returns a page of accounts together with the total number of matches.
 func (r *Users) List(ctx context.Context, f users.Filter) ([]users.User, int, error) {
 	f = f.Normalize()
 	q := r.querier(ctx)
+	// The pattern is parameterized (no injection possible); escaping is about
+	// meaning, not safety: the admin's text must match literally.
+	needle := escapeLike(f.Query)
 
 	// The filter is passed as parameters, never interpolated: the search box is
 	// user input reaching a query.
@@ -124,13 +139,13 @@ func (r *Users) List(ctx context.Context, f users.Filter) ([]users.User, int, er
 		  AND ($2 = '' OR u.status = $2)`
 
 	var total int
-	if err := q.QueryRow(ctx, `SELECT count(*) FROM users u`+where, f.Query, f.Status).Scan(&total); err != nil {
+	if err := q.QueryRow(ctx, `SELECT count(*) FROM users u`+where, needle, f.Status).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count users: %w", err)
 	}
 
 	rows, err := q.Query(ctx,
 		`SELECT `+userColumns+` FROM users u`+where+` ORDER BY u.login LIMIT $3 OFFSET $4`,
-		f.Query, f.Status, f.Limit, f.Offset)
+		needle, f.Status, f.Limit, f.Offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list users: %w", err)
 	}
@@ -227,36 +242,30 @@ func (r *Users) ReplaceRoles(ctx context.Context, id uuid.UUID, roleCodes []stri
 	return nil
 }
 
-// PermissionsFor returns the permission codes the account's roles grant.
-func (r *Users) PermissionsFor(ctx context.Context, id uuid.UUID) ([]string, error) {
-	rows, err := r.querier(ctx).Query(ctx, `
-		SELECT DISTINCT p.code
-		FROM user_roles ur
-		JOIN role_permissions rp ON rp.role_id = ur.role_id
-		JOIN permissions p ON p.id = rp.permission_id
-		WHERE ur.user_id = $1
-		ORDER BY p.code`, id)
-	if err != nil {
-		return nil, fmt.Errorf("load permissions: %w", err)
+// mapUserConstraint translates a unique violation into the sentinel the
+// violated constraint means. Which index fired matters: reporting a duplicate
+// email as "login already in use" sends the administrator fixing the wrong
+// field. Anything unrecognised passes through untouched.
+func mapUserConstraint(err error) error {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != uniqueViolation {
+		return err
 	}
-	defer rows.Close()
-
-	var codes []string
-	for rows.Next() {
-		var code string
-		if err := rows.Scan(&code); err != nil {
-			return nil, fmt.Errorf("scan permission: %w", err)
-		}
-		codes = append(codes, code)
+	switch pgErr.ConstraintName {
+	case "users_login_key", "users_login_lower_key":
+		return users.ErrLoginTaken
+	case "users_email_key":
+		return users.ErrEmailTaken
+	default:
+		return err
 	}
-	return codes, rows.Err()
 }
 
 // exec runs a statement that must affect exactly one account.
 func (r *Users) exec(ctx context.Context, sql string, args ...any) error {
 	tag, err := r.querier(ctx).Exec(ctx, sql, args...)
 	if err != nil {
-		return fmt.Errorf("update user: %w", err)
+		return fmt.Errorf("update user: %w", mapUserConstraint(err))
 	}
 	if tag.RowsAffected() == 0 {
 		return users.ErrNotFound
