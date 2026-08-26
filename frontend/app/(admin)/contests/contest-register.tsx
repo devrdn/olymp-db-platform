@@ -1,7 +1,7 @@
 import { Tag } from "@/components/ui/tag";
+import { ContestWindow } from "@/components/product/contest-window";
 import { StateView } from "@/components/product/state-view";
 import type { ContestStatus, ContestSummary } from "@/lib/api/contests";
-import { formatDay, formatMoment, formatTime, isSameDay } from "@/lib/format/datetime";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
@@ -45,52 +45,6 @@ const STATUS_TONE: Record<ContestStatus, "live" | "good" | "mute"> = {
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
 const CELL = "border-b border-line px-(--row-px) py-(--row-py) align-baseline";
-
-/**
- * The contest window, in two lines that never repeat themselves.
- *
- * A contest that starts and ends on one day — which is most of them — used to
- * print its date twice, and the second line ran past the column and broke
- * between the hour and the meridiem. One date and a time range says the same
- * thing in half the width and reads down the column, which is what a register
- * column is for.
- */
-function Window({
-  contest,
-  locale,
-  unscheduled,
-  until,
-}: {
-  contest: ContestSummary;
-  locale: Locale;
-  unscheduled: string;
-  until: string;
-}) {
-  if (!contest.startsAt) return <span className="text-ink-3">{unscheduled}</span>;
-
-  if (!contest.endsAt) return <>{formatMoment(contest.startsAt, { locale })}</>;
-
-  if (isSameDay(contest.startsAt, contest.endsAt, { locale })) {
-    return (
-      <>
-        {formatDay(contest.startsAt, { locale })}
-        <span className="block text-ink-3">
-          {formatTime(contest.startsAt, { locale })}\u2009–\u2009
-          {formatTime(contest.endsAt, { locale })}
-        </span>
-      </>
-    );
-  }
-
-  return (
-    <>
-      {formatMoment(contest.startsAt, { locale })}
-      <span className="block text-ink-3">
-        {until} {formatMoment(contest.endsAt, { locale })}
-      </span>
-    </>
-  );
-}
 
 type RegisterProps = {
   contests: ContestSummary[];
@@ -198,8 +152,9 @@ export function ContestRegister({
                     {t.mode[contest.questionMode]}
                   </td>
                   <td className={cn(CELL, "font-mono text-data whitespace-nowrap text-ink-2")}>
-                    <Window
-                      contest={contest}
+                    <ContestWindow
+                      startsAt={contest.startsAt}
+                      endsAt={contest.endsAt}
                       locale={locale}
                       unscheduled={t.unscheduled}
                       until={t.until}

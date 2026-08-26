@@ -8,8 +8,8 @@ import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 vi.mock("./locale-actions", () => ({ chooseLocale: vi.fn() }));
 vi.mock("./theme-actions", () => ({ chooseTheme: vi.fn() }));
 
-import { AdminShell } from "./admin-shell";
 import { FocusShell } from "./focus-shell";
+import { ProductShell } from "./product-shell";
 
 let en: Dictionary;
 
@@ -23,17 +23,38 @@ beforeAll(async () => {
  * link there is a 404 with the product's name on it.
  */
 describe("the product mark", () => {
-  test("is a link to the constructor for a signed-in visitor", () => {
+  test("leads to the home of whichever audience the shell was built for", () => {
     render(
-      <AdminShell locale="en" theme="system" dict={en} section={en.contests.heading}>
+      <ProductShell locale="en" theme="system" dict={en} home="/contests" section={en.contests.heading}>
         <p>rows</p>
-      </AdminShell>,
+      </ProductShell>,
     );
 
     expect(screen.getByRole("link", { name: en.chrome.product })).toHaveAttribute(
       "href",
       "/contests",
     );
+  });
+
+  /**
+   * The whole reason there is one shell and not two. A participant sent to the
+   * author's register would meet it scoped to contests they manage, which is
+   * empty — an accurate answer to a question they never asked.
+   */
+  test("leads somewhere else for a participant", () => {
+    render(
+      <ProductShell
+        locale="en"
+        theme="system"
+        dict={en}
+        home="/my"
+        section={en.participant.heading}
+      >
+        <p>rows</p>
+      </ProductShell>,
+    );
+
+    expect(screen.getByRole("link", { name: en.chrome.product })).toHaveAttribute("href", "/my");
   });
 
   test("is not a link on the sign-in screen, where there is nowhere to go yet", () => {
@@ -51,9 +72,9 @@ describe("the product mark", () => {
 describe("the app bar", () => {
   test("names the section a signed-in visitor is in", () => {
     render(
-      <AdminShell locale="en" theme="system" dict={en} section={en.contests.heading}>
+      <ProductShell locale="en" theme="system" dict={en} home="/contests" section={en.contests.heading}>
         <p>rows</p>
-      </AdminShell>,
+      </ProductShell>,
     );
 
     expect(screen.getByRole("banner")).toHaveTextContent(en.contests.heading);

@@ -1,4 +1,4 @@
-import { AdminShell } from "@/components/layout/admin-shell";
+import { ProductShell } from "@/components/layout/product-shell";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -10,17 +10,10 @@ import { activeTheme } from "@/lib/theme/server";
  * story editor, the question list, the participant import — drops in beside
  * `contests` and arrives already framed.
  *
- * It is a layout rather than something each page wraps itself in because
- * `loading.tsx` and `error.tsx` render inside it: the bar stays put while rows
- * load and stays put when they fail. A shell that only exists on the happy
- * path is a shell that flashes.
-
+ * The shell itself is shared with the participant's group. What differs is
+ * where the mark leads, which is a prop.
  */
-export default async function AdminLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const [dict, locale, theme] = await Promise.all([
     activeDictionary(),
     activeLocale(),
@@ -28,13 +21,14 @@ export default async function AdminLayout({
   ]);
 
   return (
-    <AdminShell
+    <ProductShell
       locale={locale}
       theme={theme}
       dict={dict}
+      home="/contests"
       section={dict.contests.heading}
     >
       {children}
-    </AdminShell>
+    </ProductShell>
   );
 }
