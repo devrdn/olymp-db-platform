@@ -79,6 +79,20 @@ const en = {
       reference: "Reference",
     },
   },
+  /** The two screens any route can end on, so they live outside every section. */
+  screens: {
+    notFound: {
+      title: "There is nothing at this address",
+      body: "The page may have been moved, or the link may be wrong.",
+      home: "Go to contests",
+    },
+    failure: {
+      title: "Something went wrong",
+      body: "The page could not be shown. Trying again often settles it.",
+      retry: "Try again",
+      reference: "Reference",
+    },
+  },
   errors: {
     fallback: "Something went wrong. Try again.",
     invalid_credentials: "Wrong login or password.",
@@ -112,6 +126,7 @@ const en = {
     invalid_contest_id: "Wrong contest identifier.",
     invalid_question_id: "Wrong question identifier.",
     invalid_user_id: "Wrong user identifier.",
+    cross_origin: "The request did not come from this site. Reload the page and try again.",
     method_not_allowed: "That action is unavailable for this resource.",
     internal_error: "The server could not process the request.",
     unreachable: "The server is unreachable. Check your connection.",

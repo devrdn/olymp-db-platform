@@ -39,6 +39,9 @@ jobs:
       - name: Contrast of the palette in both themes
         run: npm run contrast
 
+      - name: Every API error code has a message
+        run: npm run error-codes
+
       - name: Types
         run: npm run typecheck
 

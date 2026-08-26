@@ -10,18 +10,17 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "contrast": "node scripts/contrast.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "error-codes": "node scripts/error-codes.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
-    "@tanstack/react-query": "^5.102.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.34.0",
     "next": "16.3.2",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "shadcn": "^4.19.0",
     "tailwind-merge": "^3.6.0",
     "zod": "^4.4.3"
   },
@@ -38,6 +37,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.3.2",
     "jsdom": "^29.1.1",
+    "shadcn": "^4.19.0",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.1.11"

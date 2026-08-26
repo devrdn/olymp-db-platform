@@ -1,34 +1,19 @@
-import { cookies } from "next/headers";
-
+import { apiOrigin } from "./config";
 import { request, type RequestOptions } from "./client";
+import { sessionHeader } from "@/lib/auth/session";
 
 /**
- * Server-side access to the Core API.
+ * Server-side access to the Core API: the transport, plus the two things only
+ * the server knows — where the API is, and who is asking.
  *
- * The session is an httpOnly cookie the browser will not hand to JavaScript,
- * and a Server Component's fetch carries no cookies of its own. So the cookie
- * is read here and forwarded explicitly. In the browser the same request needs
- * nothing, because it is same-origin through the reverse proxy.
+ * Neither is spelled out here. The address comes from `./config`, which refuses
+ * to guess in production, and the session from `lib/auth`, which owns the
+ * cookie's name. A second copy of either in this file is how the two drift.
  */
-
-const SESSION_COOKIE = "dbcontest_session";
-
-/** Where the API lives from the server's point of view (never the browser's). */
-function apiOrigin(): string {
-  return process.env.API_ORIGIN ?? "http://localhost:8080";
-}
-
 export async function serverRequest(path: string, options: RequestOptions = {}) {
-  // Next 16: cookies() is async and synchronous access has been removed.
-  const jar = await cookies();
-  const session = jar.get(SESSION_COOKIE)?.value;
-
   return request(path, {
     ...options,
     origin: apiOrigin(),
-    headers: {
-      ...options.headers,
-      ...(session ? { cookie: `${SESSION_COOKIE}=${session}` } : {}),
-    },
+    headers: { ...options.headers, ...(await sessionHeader()) },
   });
 }
