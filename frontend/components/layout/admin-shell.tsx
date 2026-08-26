@@ -5,7 +5,7 @@ import type { Theme } from "@/lib/theme/config";
 import { AppBar } from "./app-bar";
 
 /**
- * The frame the constructor wears (spec section 11, circle 3).
+ * The frame the constructor wears.
  *
  * `section` names where the visitor is, in the bar, next to the mark. It is a
  * plain string rather than a nav because the constructor has one screen so

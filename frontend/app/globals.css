@@ -34,7 +34,7 @@
   --destructive-foreground: var(--bg);
 
   --border: var(--line-2);
-  /* A control's own outline, held to 3:1 by WCAG 1.4.11 (spec section 3.2). */
+  /* A control's own outline, held to 3:1 by WCAG 1.4.11. */
   --input: var(--edge);
   --ring: var(--accent-ink);
 }
@@ -97,7 +97,7 @@
 }
 
 /**
- * The typographic scale (spec section 4), as utilities rather than as a table
+ * The typographic scale, as utilities rather than as a table
  * in a document.
  *
  * Each step carries its leading, its tracking and its weight, because that is
@@ -182,7 +182,7 @@
      is 66 characters because that is what section 4 says a body measure is. */
   /* The one breakpoint the direction actually has: below it the hatched
      fields go, the column takes the full width, and every asymmetric grid
-     collapses to a single track (spec section 5). */
+     collapses to a single track. */
   --breakpoint-narrow: 47.5rem;
 
   --container-column: 110rem;
@@ -195,7 +195,7 @@
    * The two perpetual motions the spec allows, and the reason each is allowed:
    * both report a fact that is true right now and would otherwise need a word.
    * Nothing else on a screen where somebody is solving a problem moves by
-   * itself (spec section 6).
+   * itself.
    */
   --animate-live: live 2.4s ease-in-out infinite;
   --animate-shimmer: shimmer 1.7s ease-in-out infinite;
@@ -270,7 +270,7 @@
   }
 
   /**
-   * Focus is visible everywhere, in one place (spec section 14). A ring of
+   * Focus is visible everywhere, in one place. A ring of
    * 2px in the accent at 2px offset, on anything focusable, so a control
    * added tomorrow arrives with it rather than without.
    */
@@ -310,7 +310,7 @@
   }
 
   /* A number that can be compared down a column is set in the mono face with
-     tabular figures, always (spec section 4). */
+     tabular figures, always. */
   .font-mono {
     font-variant-numeric: tabular-nums;
   }
@@ -318,7 +318,7 @@
 
 @layer utilities {
   /**
-   * The hatched field (spec section 5).
+   * The hatched field.
    *
    * One-pixel strokes at 315 degrees on a 10px step. This is what holds the
    * content column without drawing a frame around it, and it is the direction's

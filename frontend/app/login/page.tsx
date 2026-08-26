@@ -61,7 +61,7 @@ export default async function LoginPage(props: PageProps<"/login">) {
             <p className="max-w-lede text-lede text-ink-2">{t.lede}</p>
             {/* Set in the interface face, not in Literata: the narrative
                 register belongs to the crime story and to nothing else
-                (spec section 4). */}
+               . */}
             <p className="max-w-body text-body text-ink-3">{t.aside}</p>
           </div>
 

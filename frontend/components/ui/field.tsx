@@ -4,7 +4,7 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
 /**
- * Label, control and message as one block (spec section 11).
+ * Label, control and message as one block.
  *
  * The wiring is the reason this exists rather than three elements written by
  * hand: the control gets the label's `for`, the message's `aria-describedby`

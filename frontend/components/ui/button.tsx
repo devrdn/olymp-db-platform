@@ -10,10 +10,10 @@ import { cn } from "@/lib/utils";
  * of them is a rule from the spec rather than a preference:
  *
  * - The focus treatment is a 2px accent ring at 2px offset, applied globally in
- *   globals.css (spec section 14). The registry's `ring-3 ring-ring/50` is a
+ *   globals.css. The registry's `ring-3 ring-ring/50` is a
  *   glow, and section 15 has no glows in it.
  * - Sizes come from `--control-h`, so the same button is 34px in a profile and
- *   28px in a results grid without a second variant (spec section 5).
+ *   28px in a results grid without a second variant.
  * - There is no `dark:` utility anywhere. The theme is a variable swap on
  *   `data-theme`, so a colour that is written once is already correct in both
  *   themes; a `dark:` class here would be a second, silently diverging source.

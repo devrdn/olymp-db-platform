@@ -58,7 +58,7 @@ const PAIRS = [
 ];
 
 /**
- * The one documented exception (spec section 14): the annotation caption sits
+ * The one documented exception: the annotation caption sits
  * near 1.6:1 by design and may never be the only thing carrying a fact. It is
  * listed so that nobody "fixes" it, and so that its value cannot drift into
  * looking like real text.

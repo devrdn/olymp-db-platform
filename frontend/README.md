@@ -37,6 +37,14 @@ CI runs all of them on every pull request (`.github/workflows/frontend.yml`).
 |---|---|---|
 | `API_ORIGIN` | in production | where the Next **server** dials the Core API, e.g. `http://api:8080` |
 
+Copy `.env.example` to `.env.local` for a local override; Next reads it
+automatically and it is git-ignored. In the deployed stack the value comes from
+`deploy/.env`, which `docker-compose.yml` passes through.
+
+There are no `NEXT_PUBLIC_` variables, and adding one should be a decision
+rather than a reflex: those are inlined into the browser bundle at build time,
+so they are both public and frozen into the image.
+
 `API_ORIGIN` is the private address of the API on the internal network, not the
 public one. The browser never uses it: a page request is same-origin through
 Caddy, which is what makes the `SameSite=Lax` session cookie sufficient. In
@@ -52,12 +60,12 @@ app/                 routes; a folder is a URL
   error.tsx            the last boundary before the framework's own
   not-found.tsx        404
   global-error.tsx     the failure that took the layout with it
-  login/               sign-in: page, form (client), Server Action
-  contests/            the constructor index: page, layout, loading, error
+  login/               page, sign-in-form, actions.ts
+  contests/            page, layout, loading, error, contest-register
 
 components/
-  ui/                  primitives with no product knowledge: Button, Input, Field, Tag, Skeleton
-  product/             components that know the domain: ContestRegister, StateView
+  ui/                  primitives with no domain knowledge: Button, Input, Field, Tag, Skeleton
+  product/             domain components more than one route uses: StateView
   layout/              the frame: Band, AppBar, shells, the language and theme switchers
 
 lib/
@@ -73,8 +81,18 @@ styles/tokens.css      the single source of every colour, size, duration and rad
 proxy.ts               route protection (Next 16 calls this middleware "proxy")
 ```
 
-**A test sits next to its source.** `foo.tsx` is tested by `foo.test.tsx`. There
-is no `__tests__` directory to keep in step with the tree.
+**A route owns what only it uses.** Its page, the components that page renders
+and the Server Actions it submits to live in the route folder. `login/` has an
+`actions.ts` because signing in is a mutation; `contests/` has none yet because
+listing is a read. When a second route reaches for a component, that is the
+moment it moves to `components/product/` — one route, keep it; two, move it.
+
+**A test sits next to its source.** `foo.tsx` is tested by `foo.test.tsx`. A
+mirrored `__tests__` tree has to be kept in step by hand, and renaming a file
+becomes a two-file operation whose second half is easy to forget; both Vitest
+and the Next testing guide colocate by default. End-to-end tests are the
+exception and will get their own top-level directory when they arrive, because
+they belong to a journey rather than to a file.
 
 ## Which direction things point
 
@@ -95,9 +113,11 @@ authenticated request needs both.
 carries the cookie. Give it `loading.tsx` if the wait is visible, and an
 `error.tsx` only if the section's failure differs from the root one.
 
-**A component.** Does it mention the domain? `product/`. Is it chrome the whole
-app wears? `layout/`. Otherwise `ui/`. Primitives take their sizing from
-`--control-h` and their colour from tokens, never from a literal.
+**A component.** Rendered by one route? Put it in that route's folder. Reached
+by a second? Move it to `components/product/`. Chrome the whole app wears?
+`components/layout/`. No domain knowledge at all? `components/ui/`. Primitives
+take their sizing from `--control-h` and their colour from tokens, never from a
+literal.
 
 **A string.** `lib/i18n/dictionaries/en.ts` first: its shape is the type the
 other locales must satisfy, so adding a key there makes the build fail until

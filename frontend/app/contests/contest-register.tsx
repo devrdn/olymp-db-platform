@@ -41,7 +41,7 @@ const STATUS_TONE: Record<ContestStatus, "live" | "good" | "mute"> = {
 
 /* Padding comes from the density tokens, so the same register is comfortable
    in the constructor and compact in the query log without a second component
-   or a prop threaded through four layers (spec section 5). */
+   or a prop threaded through four layers. */
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
 const CELL = "border-b border-line px-(--row-px) py-(--row-py) align-baseline";
@@ -127,7 +127,7 @@ export function ContestRegister({
           <StateView
             state={
               /* "Nothing here" and "nothing matched" are different states and
-                 get different screens (spec section 7). The first has no filter
+                 get different screens. The first has no filter
                  to clear, so offering the control would be a lie; the second is
                  a dead end without it. The type refuses to mix them up. */
               filtered && resetHref

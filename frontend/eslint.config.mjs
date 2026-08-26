@@ -35,7 +35,7 @@ const BANNED = [
     // scale, and a heavy large grotesque on Cyrillic reads as a palisade.
     pattern: "\\bfont-(?:bold|extrabold|black)\\b",
     message:
-      "There is no weight 700 in this system (spec section 15). Hierarchy comes from scale; font-semibold is the ceiling and belongs to the primary action.",
+      "There is no weight 700 in this system. Hierarchy comes from scale; font-semibold is the ceiling and belongs to the primary action.",
   },
 ];
 
