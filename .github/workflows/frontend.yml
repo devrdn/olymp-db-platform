@@ -29,15 +29,22 @@ jobs:
 
       - run: npm ci
 
-      # The design system's three guarantees, checked before anything is built.
-      # Each catches a class of defect that is invisible in review: a colour
-      # written by hand, a type step invented on the spot, and a contrast
-      # failure that looks fine to somebody who already knows what it says.
+      # The design system's guarantees, checked before anything is built. Each
+      # catches a class of defect that is invisible in review: a colour written
+      # by hand, a type step invented on the spot, a contrast failure that
+      # looks fine to somebody who already knows what it says, and an API code
+      # nobody wrote a message for.
       - name: Lint
         run: npm run lint
 
       - name: Contrast of the palette in both themes
         run: npm run contrast
+
+      # This one was claimed by the comment above long before anything checked
+      # it, and `text-h1` shipped on two headings in the meantime: the erased
+      # stock scale means an unknown step emits no CSS and says nothing.
+      - name: Every text-* class names a real step
+        run: npm run type-scale
 
       - name: Every API error code has a message
         run: npm run error-codes
