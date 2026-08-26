@@ -3,6 +3,7 @@
 # Run `make help` for the list.
 
 BACKEND     := backend
+FRONTEND    := frontend
 ENV_FILE    := deploy/.env
 COMPOSE     := docker compose -f deploy/docker-compose.yml
 COMPOSE_DEV := $(COMPOSE) -f deploy/docker-compose.dev.yml
@@ -19,6 +20,7 @@ CORE_DB_PORT     ?= 5432
 REDIS_PORT       ?= 6379
 ADMIN_LOGIN      ?= admin
 ADMIN_NAME       ?= System Administrator
+API_PORT         ?= 8080
 
 CORE_DB_DSN ?= postgres://$(CORE_DB_USER):$(CORE_DB_PASSWORD)@localhost:$(CORE_DB_PORT)/$(CORE_DB_NAME)?sslmode=disable
 
@@ -36,6 +38,11 @@ CORE_DB_DSN ?= postgres://$(CORE_DB_USER):$(CORE_DB_PASSWORD)@localhost:$(CORE_D
 # where in the file it appears.
 REDIS_ADDR := $(if $(REDIS_PASSWORD),redis://:$(REDIS_PASSWORD)@localhost:$(REDIS_PORT)/0,)
 
+# Where the interface reaches the API when both run on the host. Inside compose
+# the address is the service name; from a process on the host it is loopback,
+# which is the same translation CORE_DB_DSN above makes for the database.
+FRONT_API_ORIGIN := http://localhost:$(API_PORT)
+
 # Security tools are installed on demand into the Go bin directory, so a fresh
 # checkout can run the full gate without a separate setup step.
 GOBIN  := $(shell go env GOPATH)/bin
@@ -43,7 +50,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env build test test-race test-db cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-observability dev-db-ui dev-down dev-logs compose-up compose-down check fmt-check tidy-check vuln sec test-all
+.PHONY: help require-env build test test-race test-db cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-observability dev-db-ui dev-down dev-logs compose-up compose-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -135,6 +142,40 @@ migrate-version: require-env ## Print the current schema version
 
 bootstrap: require-env ## Create the first administrator (idempotent; prints the password)
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go run ./cmd/bootstrap -login $(ADMIN_LOGIN) -name "$(ADMIN_NAME)"
+
+
+## --- Interface --------------------------------------------------------------
+#
+# The frontend runs on the host during development, like the API does, and takes
+# its one setting from the same deploy/.env: API_ORIGIN is derived here rather
+# than duplicated in a second env file, so there is one place to change a port.
+#
+# Switching between development and production locally is a choice of target:
+# `front` runs the development server, `front-build` + `front-start` run the
+# production one — which is the only way to see the production behaviour that
+# differs, the content policy among it.
+
+front: front-install ## Run the interface against the dev API
+	cd $(FRONTEND) && API_ORIGIN="$(FRONT_API_ORIGIN)" npm run dev
+
+front-install: ## Install the interface's dependencies if they are missing
+	@test -d $(FRONTEND)/node_modules || (cd $(FRONTEND) && npm ci)
+
+front-build: front-install ## Build the interface for production
+	cd $(FRONTEND) && npm run build
+
+front-start: front-build ## Serve the production build against the dev API
+	cd $(FRONTEND) && API_ORIGIN="$(FRONT_API_ORIGIN)" npm run start
+
+front-test: front-install ## Run the interface's tests
+	cd $(FRONTEND) && npm test
+
+front-lint: front-install ## Lint the interface
+	cd $(FRONTEND) && npm run lint
+
+front-check: front-install ## Everything CI runs for the interface
+	cd $(FRONTEND) && npm run lint && npm run contrast && npm run error-codes \
+		&& npm run typecheck && npm test && npm run build
 
 ## --- Containers -------------------------------------------------------------
 

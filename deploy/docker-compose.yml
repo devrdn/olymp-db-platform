@@ -149,7 +149,7 @@ services:
       context: ../frontend
     restart: unless-stopped
     environment:
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-production}
       API_ORIGIN: ${API_ORIGIN:-http://api:8080}
     # No host port: Caddy is the only way in, exactly as for the API.
     depends_on:
