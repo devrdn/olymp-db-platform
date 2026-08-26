@@ -447,8 +447,10 @@ frontend/
 │   ├── error.tsx            the last boundary before the framework's own
 │   ├── not-found.tsx        404
 │   ├── global-error.tsx     the failure that took the layout with it
-│   ├── login/               page, its form, its Server Action
-│   └── contests/            page, layout, loading, error, its register
+│   ├── (public)/            no session: the group's layout is the shell
+│   │   └── login/             page, its form, its Server Action
+│   └── (admin)/             behind one: the group's layout is the shell
+│       └── contests/          page, loading, error, its register
 ├── components/
 │   ├── ui/                  primitives with no domain knowledge
 │   ├── product/             domain components more than one route uses
@@ -464,10 +466,21 @@ frontend/
 └── styles/tokens.css        the single source of every token
 ```
 
+**A parenthesised folder is a group, not a segment.** `(public)` and `(admin)`
+appear in no URL; the addresses are `/login` and `/contests`. What a group
+carries is the layout, so the shell is put on once for a set of screens rather
+than by each page for itself — which is how sign-in and the constructor came to
+wear theirs in two different places. A new administrative screen is a folder
+inside `(admin)` and arrives already framed.
+
 **A route owns what only it uses.** Its page, the components that page renders
 and the Server Actions it submits to live in the route folder. A component a
 second route reaches for is promoted to `components/product/`, and the move is
 the moment it stops being one route's business.
+
+Next documents three ways to organise an application — everything outside `app`,
+everything in shared folders at its root, or split by feature and route — and
+asks only that one be chosen and followed. This is the third.
 
 The alternative — every component in `components/` regardless — reads tidier in
 a listing and worse in practice: it separates a form from the action it posts

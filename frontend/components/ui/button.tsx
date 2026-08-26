@@ -29,8 +29,8 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        /* The one dark mass on a white page. Its weight is the 600 of spec
-           section 5, the only place in the system above 500. */
+        /* The one dark mass on a white page, and the only place in the system
+           whose weight goes above 500. */
         primary: "bg-cta font-semibold text-cta-fg hover:opacity-88",
         /* Outlined in the control edge, which is the token WCAG 1.4.11 holds
            to 3:1 — not the decorative hairline. */

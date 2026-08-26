@@ -13,8 +13,8 @@ export async function generateMetadata() {
  * The address that leads nowhere.
  *
  * A Server Component, so it is translated like every other screen rather than
- * falling back to the framework's English default. It is `error-terminal` from
- * section 7 and not `error-recoverable`: a wrong address does not become right
+ * falling back to the framework's English default. It is a terminal error and
+ * not a recoverable one: a wrong address does not become right
  * on a second attempt, so it offers a way out instead of a retry.
  */
 export default async function NotFound() {

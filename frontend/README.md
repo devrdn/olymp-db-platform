@@ -10,14 +10,22 @@ about the code: where things are, and where a new thing goes.
 
 ## Running it
 
+From the repository root, which is where the environment lives:
+
 ```bash
-npm install
-npm run dev
+make dev-up     # PostgreSQL and Redis
+make run        # the API, on the host
+make front      # this, on the host
 ```
 
-The interface needs the Core API. Bring the stack up from `deploy/` first, or
-run the Go service on `:8080`, which is where a development build looks by
-default.
+`make front` derives `API_ORIGIN` from `deploy/.env`, the same file the API and
+the containers read, so a port changes in one place. `make front-check` runs
+everything CI runs, and `make front-build` + `make front-start` serve the
+production build locally — which is the only way to see the behaviour that
+differs there, the content policy among it.
+
+Running `npm run dev` directly also works; copy `.env.example` to `.env.local`
+first so the API address is set.
 
 | Script | What it does |
 |---|---|
@@ -37,9 +45,11 @@ CI runs all of them on every pull request (`.github/workflows/frontend.yml`).
 |---|---|---|
 | `API_ORIGIN` | in production | where the Next **server** dials the Core API, e.g. `http://api:8080` |
 
-Copy `.env.example` to `.env.local` for a local override; Next reads it
-automatically and it is git-ignored. In the deployed stack the value comes from
-`deploy/.env`, which `docker-compose.yml` passes through.
+There is one environment file for the whole project, `deploy/.env`. The API
+reads `ENV` from it, the interface reads `NODE_ENV`, and both read `API_ORIGIN`
+— the containers directly, and the Makefile by translating the container address
+to a host one when either process runs outside Docker. `frontend/.env.local` is
+for running `npm` directly without the Makefile; it is git-ignored.
 
 There are no `NEXT_PUBLIC_` variables, and adding one should be a decision
 rather than a reflex: those are inlined into the browser bundle at build time,
@@ -60,8 +70,10 @@ app/                 routes; a folder is a URL
   error.tsx            the last boundary before the framework's own
   not-found.tsx        404
   global-error.tsx     the failure that took the layout with it
-  login/               page, sign-in-form, actions.ts
-  contests/            page, layout, loading, error, contest-register
+  (public)/            screens without a session; the group holds their shell
+    login/               page, sign-in-form, actions.ts
+  (admin)/             screens behind one; the group holds their shell
+    contests/            page, loading, error, contest-register
 
 components/
   ui/                  primitives with no domain knowledge: Button, Input, Field, Tag, Skeleton
@@ -80,6 +92,11 @@ scripts/               the checks CI runs
 styles/tokens.css      the single source of every colour, size, duration and radius
 proxy.ts               route protection (Next 16 calls this middleware "proxy")
 ```
+
+**A parenthesised folder is a group, not a segment.** `(public)` and `(admin)`
+do not appear in any URL: `/login` and `/contests` are the addresses. What they
+carry is the layout — the shell each set of screens wears — so a new
+administrative screen is a folder inside `(admin)` and arrives already framed.
 
 **A route owns what only it uses.** Its page, the components that page renders
 and the Server Actions it submits to live in the route folder. `login/` has an
@@ -108,7 +125,8 @@ authenticated request needs both.
 
 ## Where does a new thing go?
 
-**A page.** A folder under `app/`. If it needs a session, it needs nothing extra:
+**A page.** A folder inside `(admin)` if it needs a session, inside `(public)`
+if it does not. The group gives it the shell. Beyond that it needs nothing:
 `proxy.ts` already redirects a visitor without one, and `serverRequest` already
 carries the cookie. Give it `loading.tsx` if the wait is visible, and an
 `error.tsx` only if the section's failure differs from the root one.

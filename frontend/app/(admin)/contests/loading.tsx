@@ -4,8 +4,8 @@ import { activeDictionary } from "@/lib/i18n/server";
 
 /**
  * The loading state is a skeleton shaped like the register, not a spinner: a
- * spinner says "wait", a skeleton says "here is what is coming" (spec
- * section 7). Its rows carry the real row height and the real column offsets,
+ * spinner says "wait", a skeleton says "here is what is coming". Its rows
+ * carry the real row height and the real column offsets,
  * so nothing moves when the data lands.
  */
 export default async function Loading() {

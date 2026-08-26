@@ -5,6 +5,9 @@
 #
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d pg-core redis
 #
+# The Makefile wraps this as `make dev-up`; `make run` and `make front` then run
+# the API and the interface from the host against it.
+#
 # Ports are bound to loopback so the databases are never exposed to the local
 # network.
 
@@ -45,6 +48,13 @@ services:
     ports:
       # Reachable without going through the proxy, for debugging.
       - "127.0.0.1:${API_PORT:-8080}:8080"
+
+  # The interface runs on the host during development (`make front`), so its
+  # container joins the API in the profile that is off by default.
+  web:
+    profiles: [full]
+    environment:
+      NODE_ENV: development
 
   # The proxy exists to terminate TLS; running the API directly does not need it.
   caddy:

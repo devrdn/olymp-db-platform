@@ -5,8 +5,8 @@ import type { Theme } from "@/lib/theme/config";
 import { AppBar } from "./app-bar";
 
 /**
- * What a visitor without a session sees: the bar, and the screen (spec
- * section 11, circle 3). No navigation, because there is nowhere to go until
+ * What a visitor without a session sees: the bar, and the screen. No
+ * navigation, because there is nowhere to go until
  * they have signed in, and an empty nav is worse than none.
  */
 export function PublicShell({
