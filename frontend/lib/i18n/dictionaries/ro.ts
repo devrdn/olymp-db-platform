@@ -75,6 +75,20 @@ const ro = {
       reference: "Cod de referință",
     },
   },
+  /** The two screens any route can end on, so they live outside every section. */
+  screens: {
+    notFound: {
+      title: "La această adresă nu se află nimic",
+      body: "Pagina poate fi mutată sau legătura poate fi greșită.",
+      home: "Mergeți la olimpiade",
+    },
+    failure: {
+      title: "Ceva nu a mers bine",
+      body: "Pagina nu a putut fi afișată. De obicei o nouă încercare rezolvă.",
+      retry: "Încercați din nou",
+      reference: "Cod de referință",
+    },
+  },
   errors: {
     fallback: "Ceva nu a mers bine. Încercați din nou.",
     invalid_credentials: "Utilizator sau parolă greșită.",
@@ -108,6 +122,7 @@ const ro = {
     invalid_contest_id: "Identificator de olimpiadă greșit.",
     invalid_question_id: "Identificator de întrebare greșit.",
     invalid_user_id: "Identificator de utilizator greșit.",
+    cross_origin: "Cererea nu a venit de pe acest site. Reîncărcați pagina și încercați din nou.",
     method_not_allowed: "Acțiunea nu este disponibilă pentru această resursă.",
     internal_error: "Serverul nu a putut procesa cererea.",
     unreachable: "Serverul nu este accesibil. Verificați conexiunea.",

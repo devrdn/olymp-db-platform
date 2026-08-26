@@ -136,6 +136,34 @@ services:
       start_period: 20s
     networks: [internal]
 
+  # The participant and administrator interface.
+  #
+  # It reaches the API over the internal network rather than through Caddy: the
+  # browser and the server talk to two different addresses on purpose. A page
+  # request from the browser is same-origin through the proxy, which is what
+  # makes the SameSite=Lax session cookie sufficient; the server rendering that
+  # page dials the API directly, which is why API_ORIGIN is a service name and
+  # not a public one.
+  web:
+    build:
+      context: ../frontend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_ORIGIN: http://api:8080
+    # No host port: Caddy is the only way in, exactly as for the API.
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks: [internal]
+
   # The only service reachable from outside. It terminates TLS, which the
   # session cookie depends on: a Secure cookie sent over plain HTTP is
   # discarded by the browser, and sign-in would fail on the request after it.
@@ -153,6 +181,7 @@ services:
       - caddy-config:/config
     depends_on:
       - api
+      - web
     networks: [internal]
 
   # --- Observability -------------------------------------------------------

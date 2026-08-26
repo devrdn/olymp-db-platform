@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { JetBrains_Mono, Literata, Onest } from "next/font/google";
 
-import { activeLocale } from "@/lib/i18n/server";
+import { DictionaryProvider } from "@/lib/i18n/client";
+import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { themeAttribute } from "@/lib/theme/config";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -52,7 +53,11 @@ export const metadata: Metadata = {
  * session, so nothing is lost by resolving both per request.
  */
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const [locale, theme] = await Promise.all([activeLocale(), activeTheme()]);
+  const [locale, dict, theme] = await Promise.all([
+    activeLocale(),
+    activeDictionary(),
+    activeTheme(),
+  ]);
 
   return (
     <html
@@ -60,7 +65,14 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       data-theme={themeAttribute(theme)}
       className={`${onest.variable} ${jetbrainsMono.variable} ${literata.variable} antialiased`}
     >
-      <body className="font-sans text-body">{children}</body>
+      <body className="font-sans text-body">
+        {/* At the root rather than per section: `error.tsx` and `not-found.tsx`
+            are client boundaries that can never await a dictionary, and any
+            route can end on one. */}
+        <DictionaryProvider dict={dict} locale={locale}>
+          {children}
+        </DictionaryProvider>
+      </body>
     </html>
   );
 }

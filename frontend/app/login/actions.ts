@@ -5,7 +5,8 @@ import { redirect } from "next/navigation";
 
 import { destinationAfterLogin } from "@/lib/auth/destination";
 import { signIn } from "@/lib/auth/sign-in";
-import { apiOrigin, fetchIdentity } from "@/lib/auth/session";
+import { apiOrigin } from "@/lib/api/config";
+import { fetchIdentity } from "@/lib/auth/session";
 export type SignInState = { code?: string };
 
 /**
