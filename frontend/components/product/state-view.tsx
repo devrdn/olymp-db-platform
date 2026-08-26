@@ -5,7 +5,7 @@ import { Tag } from "@/components/ui/tag";
 import { cn } from "@/lib/utils";
 
 /**
- * The states of spec section 7 that the constructor actually reaches.
+ * The states of the specification that the constructor actually reaches.
  *
  * The type is the contract. `empty` has no reset control, because there is no
  * filter to clear and offering one would be a lie; `empty-filtered` cannot be

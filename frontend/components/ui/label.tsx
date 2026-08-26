@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * The field label is the tab on a card-index divider: mono, uppercase, small
- * and wide-tracked (the `label` step of spec section 4).
+ * and wide-tracked.
  *
  * That is the same treatment column headings and pane headings get, which is
  * the point — one voice names things throughout the product, and it is never

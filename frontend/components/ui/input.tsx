@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 /**
  * A square field.
  *
- * The registry ships `rounded-lg`, and spec section 5 puts rounding on the
+ * The registry ships `rounded-lg`, and the specification puts rounding on the
  * outer frame and on small controls only — a field is neither. Square is also
  * what the direction is: this is a register, and a register's cells have
  * corners.
@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
  * The border is `--edge` rather than `--line-2`, because a field is an
  * interactive control and WCAG 1.4.11 holds its boundary to 3:1 while asking
  * nothing of a decorative rule. Focus darkens that border to ink; the ring
- * itself is global (spec section 14), so it is not repeated here.
+ * itself is global, so it is not repeated here.
  */
 function Input({ className, type, ...props }: React.ComponentProps<"input">) {
   return (

@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
  * says it in the real layout, so nothing jumps when the data lands. That is
  * why there is no `<StateView kind="loading">`: the loading state is the only
  * one of the nine whose appearance is a property of the content, so each
- * container draws its own out of these (spec section 7).
+ * container draws its own out of these.
  *
  * The shimmer is one of the two perpetual animations the system allows: it
  * reports that the wait is still live rather than hung.

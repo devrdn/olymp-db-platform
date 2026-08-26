@@ -1,5 +1,5 @@
 /**
- * The single source of design tokens (spec section 3).
+ * The single source of design tokens.
  *
  * Three levels, each referring only to the one below it. The dark theme
  * redefines the semantic level only: if a component token ever needs a dark
@@ -157,7 +157,7 @@
 
 /**
  * Rounding lives on the outer frame and on small controls, nowhere between
- * (spec section 5). Two named radii, and the ladder they replace is deleted
+ *. Two named radii, and the ladder they replace is deleted
  * from the theme in globals.css: naming a radius after the thing it belongs to
  * is what stops a `rounded-md` from appearing on the next panel that "looks
  * bare". Everything else is `rounded-none` or `rounded-full`, both of which
@@ -177,7 +177,7 @@
 }
 
 /* ==========================================================================
-   Density (spec section 5)
+   Density
    ========================================================================== */
 
 /**
@@ -204,7 +204,7 @@
 }
 
 /* ==========================================================================
-   Motion (spec section 6)
+   Motion
    ========================================================================== */
 
 /**

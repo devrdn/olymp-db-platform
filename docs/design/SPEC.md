@@ -442,29 +442,54 @@ ThemeToggle.
 
 ```
 frontend/
-├── app/
-│   ├── login/             # sign-in — SSR
-│   ├── contests/          # the constructor's index, with its own layout,
-│   │                      # loading state and error boundary
-│   ├── globals.css        # the theme: tokens become utilities here
-│   └── layout.tsx         # lang and data-theme, both resolved per request
+├── app/                   routes; a folder is a URL
+│   ├── layout.tsx           <html>, fonts, lang, data-theme, dictionary
+│   ├── error.tsx            the last boundary before the framework's own
+│   ├── not-found.tsx        404
+│   ├── global-error.tsx     the failure that took the layout with it
+│   ├── login/               page, its form, its Server Action
+│   └── contests/            page, layout, loading, error, its register
 ├── components/
-│   ├── ui/                # circle 1
-│   ├── product/           # circle 2
-│   └── layout/            # circle 3, plus Band, AppBar and the switchers
+│   ├── ui/                  primitives with no domain knowledge
+│   ├── product/             domain components more than one route uses
+│   └── layout/              the app frame: Band, AppBar, shells, switchers
 ├── lib/
-│   ├── api/               # typed Core API client, error parsing
-│   ├── auth/              # reading the session on the server, guards
-│   ├── i18n/              # dictionaries, locale resolution, errors.ts
-│   ├── theme/             # the theme cookie and its attribute
-│   └── format/            # dates, durations, numbers by locale
-├── scripts/
-│   └── contrast.mjs       # the palette checked against WCAG, in CI
-└── styles/
-    └── tokens.css         # the single source of tokens
+│   ├── api/                 transport, wire schemas, the API's address
+│   ├── auth/                session, guards, sign-in, where an account lands
+│   ├── i18n/                dictionaries, locale resolution, error messages
+│   ├── theme/               the theme cookie and its attribute
+│   ├── format/              dates and numbers by locale
+│   └── utils.ts             cn(), which also teaches tailwind-merge the scale
+├── scripts/                 the checks CI runs
+└── styles/tokens.css        the single source of every token
 ```
 
-A test file mirrors its source: `foo.tsx` is tested by `foo.test.tsx`.
+**A route owns what only it uses.** Its page, the components that page renders
+and the Server Actions it submits to live in the route folder. A component a
+second route reaches for is promoted to `components/product/`, and the move is
+the moment it stops being one route's business.
+
+The alternative — every component in `components/` regardless — reads tidier in
+a listing and worse in practice: it separates a form from the action it posts
+to, and it forces a component that will only ever serve one screen to be named
+as though it serves the product. The rule as written is also the one Next
+documents, and it needs no judgement at the moment of writing a file: one route,
+keep it; two, move it.
+
+`components/ui` never mentions the domain. A primitive that knows what a contest
+is belongs one directory over.
+
+**Imports point one way:** `app` → `components` → `lib`. Nothing in `lib`
+imports a component. Within `lib`, `api` is the lowest layer; `api/server.ts` is
+the single deliberate crossing, because an authenticated request needs both the
+transport and the session.
+
+**A test sits beside its source.** `foo.tsx` is tested by `foo.test.tsx`. A
+mirrored `__tests__` tree has to be kept in step by hand, and renaming a file
+becomes a two-file operation whose second half is easy to forget. Vitest and the
+Next testing guide both colocate by default. End-to-end tests are the exception
+and get their own directory when they arrive: they belong to a journey rather
+than to a file.
 
 **The `/design` showcase is not Storybook.** A separate tool means a separate
 build and inevitable drift between the showcase and the product. The showcase
@@ -476,7 +501,8 @@ it needs contests, and invented data does not belong in the repository. It
 returns when the constructor (architecture step 3) can give it real ones. Until
 then the system is held not by a showcase but by the checks in CI: the ESLint
 rule against arbitrary colours, sizes and weight 700; the contrast script over
-the tokens; and the `cn()` tests on the scale.
+the tokens; the check that every error code the API returns has a message; and
+the `cn()` tests on the scale.
 
 ## 13. What was fixed in the existing skeleton
 
