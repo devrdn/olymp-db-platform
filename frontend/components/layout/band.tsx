@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 
 /**
- * The hatched band (spec section 5).
+ * The hatched band.
  *
  * A page is a stack of bands. Each one is three grid tracks: a hatched field,
  * the 1136px content column, another hatched field — and it is those fields,
@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
  * instead of cards.
  *
  * Below the one breakpoint the direction has, the fields are removed and the
- * column takes the full width (spec section 5, mobile reset). The template
+ * column takes the full width (the mobile reset). The template
  * drops to a single track rather than keeping three at zero width: a hidden
  * grid item leaves the flow entirely, so with three tracks the content would
  * slide into the first one and render 104px wide inside a 375px screen.

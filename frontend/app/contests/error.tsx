@@ -7,7 +7,7 @@ import { StateView } from "@/components/product/state-view";
 import { useDictionary } from "@/lib/i18n/client";
 
 /**
- * The recoverable-error state (spec section 7): a cause and a way forward.
+ * The recoverable-error state: a cause and a way forward.
  *
  * Next strips a Server Component error down to a digest before it reaches the
  * browser, so the API's machine code is not available here and this screen does

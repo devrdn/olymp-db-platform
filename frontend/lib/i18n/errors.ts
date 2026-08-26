@@ -8,7 +8,7 @@ import type { Dictionary } from "./dictionary";
  *
  * The server sends an English `message` alongside the code, but it is a
  * developer aid: not translated, not reviewed as product copy, and it may name
- * internals. It never reaches the interface (spec section 8).
+ * internals. It never reaches the interface.
  *
  * A code the dictionary does not know means the API grew one this build has
  * not learned yet. A plain sentence beats untranslated English, so the fallback

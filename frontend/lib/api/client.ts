@@ -37,8 +37,8 @@ export const CLIENT_ERROR_CODES = {
  * A failure the API described in its own terms.
  *
  * `code` is the contract. `message` is a developer-facing aid the server sends
- * in English and the interface never renders: per spec §8 error text belongs to
- * the frontend dictionary, keyed by code.
+ * in English and the interface never renders: error text belongs to the
+ * frontend dictionary, keyed by code.
  */
 export class ApiError extends Error {
   readonly code: string;

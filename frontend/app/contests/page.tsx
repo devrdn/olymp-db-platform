@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 
 import { Band } from "@/components/layout/band";
-import { ContestRegister } from "@/components/product/contest-register";
+import { ContestRegister } from "./contest-register";
 import { contestListSchema } from "@/lib/api/contests";
 import { serverRequest } from "@/lib/api/server";
 import { expiredSessionRedirect } from "@/lib/auth/guard";

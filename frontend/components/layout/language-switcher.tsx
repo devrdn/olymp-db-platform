@@ -10,7 +10,7 @@ import { chooseLocale } from "./locale-actions";
  *
  * The width is fixed by the codes themselves — two letters, in every language
  * there will ever be — which is the one place in this interface where a
- * container may be sized to its content (spec section 8).
+ * container may be sized to its content.
  */
 export function LanguageSwitcher({ current, label }: { current: Locale; label: string }) {
   return (

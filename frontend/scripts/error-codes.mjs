@@ -2,7 +2,7 @@
 /**
  * The error dictionary, checked against the vocabulary the API actually speaks.
  *
- * Section 8 of the specification promises that every machine code the server
+ * The specification promises that every machine code the server
  * returns has a translated message, and that the English the server sends
  * alongside it never reaches a person. Nothing enforced the first half: a code
  * added on the Go side simply fell through to the generic sentence, and the
