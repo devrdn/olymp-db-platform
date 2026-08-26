@@ -78,6 +78,29 @@ const ru = {
     },
   },
   /** The two screens any route can end on, so they live outside every section. */
+  participant: {
+    heading: "Мои олимпиады",
+    countLabel: "доступно",
+    columns: {
+      action: "Участие",
+    },
+    join: "Записаться",
+    joining: "Записываем",
+    joined: "Вы записаны.",
+    byInvitation: "По приглашению",
+    noAction: "Пока ничего не требуется",
+    empty: {
+      title: "Пока не в чем участвовать",
+      body: "Олимпиады появятся здесь после публикации. На открытую можно записаться прямо с этого экрана.",
+    },
+    loading: "Загружаем ваши олимпиады",
+    failed: {
+      title: "Не удалось загрузить ваши олимпиады",
+      body: "Сервер не ответил. Проверьте соединение и попробуйте ещё раз.",
+      retry: "Попробовать снова",
+      reference: "Идентификатор",
+    },
+  },
   screens: {
     notFound: {
       title: "По этому адресу ничего нет",

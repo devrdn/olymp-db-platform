@@ -1,0 +1,110 @@
+import { render, screen, within } from "@testing-library/react";
+import { beforeAll, describe, expect, test, vi } from "vitest";
+
+import type { ContestSummary } from "@/lib/api/contests";
+import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+
+// The join control submits to a Server Action; importing it for real pulls in
+// `next/headers`. What the register decides — whether to offer the control at
+// all — is what is under test.
+vi.mock("./actions", () => ({ enrollAction: vi.fn() }));
+
+import { ParticipantRegister } from "./participant-register";
+
+let en: Dictionary;
+
+beforeAll(async () => {
+  en = await getDictionary("en");
+});
+
+const contest = (over: Partial<ContestSummary> = {}): ContestSummary => ({
+  id: "6f1b7d2e-3a4c-4f8b-9c1d-2e5a7b8c9d01",
+  status: "published",
+  enrollment: "open",
+  questionMode: "multi",
+  lang: "en",
+  title: "The Greenhouse",
+  // Spelled out rather than omitted: the schema's transform produces the key
+  // whether or not the API sent one, so a factory that leaves it out is not
+  // building the shape the component actually receives.
+  description: undefined,
+  startsAt: "2026-05-14T07:00:00Z",
+  endsAt: "2026-05-14T10:00:00Z",
+  ...over,
+});
+
+const render_ = (contests: ContestSummary[]) =>
+  render(
+    <ParticipantRegister contests={contests} total={contests.length} dict={en} locale="en" />,
+  );
+
+describe("the way in", () => {
+  test("is offered on an open contest that has been published", () => {
+    render_([contest()]);
+
+    expect(screen.getByRole("button", { name: en.participant.join })).toBeInTheDocument();
+  });
+
+  /**
+   * The API decides who may join; the register decides only what is worth
+   * offering. A button on a contest nobody can self-join is a control that
+   * exists to be refused, and the state column already says why.
+   */
+  test("is withheld from a contest that is by invitation", () => {
+    render_([contest({ enrollment: "invite_only" })]);
+
+    expect(screen.queryByRole("button", { name: en.participant.join })).not.toBeInTheDocument();
+    expect(screen.getByText(en.participant.byInvitation)).toBeInTheDocument();
+  });
+
+  test("is withheld from a contest that has finished", () => {
+    render_([contest({ status: "finished" })]);
+
+    expect(screen.queryByRole("button", { name: en.participant.join })).not.toBeInTheDocument();
+  });
+
+  /**
+   * A contest already under way is the game loop's to open, and that is step 5.
+   * Offering "join" here would promise a door this build does not have.
+   */
+  test("is withheld from a contest already under way", () => {
+    render_([contest({ status: "running" })]);
+
+    expect(screen.queryByRole("button", { name: en.participant.join })).not.toBeInTheDocument();
+  });
+});
+
+describe("the register itself", () => {
+  test("is a table, so a column can be compared down its length", () => {
+    render_([contest(), contest({ id: "aa1b7d2e-3a4c-4f8b-9c1d-2e5a7b8c9d02", title: "The Pier" })]);
+
+    expect(screen.getAllByRole("row")).toHaveLength(3); // one head, two contests
+  });
+
+  test("says nothing is waiting rather than showing an empty table", () => {
+    render_([]);
+
+    expect(screen.getByText(en.participant.empty.title)).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  /**
+   * The screen has no filters, so there is no control to clear. Offering a
+   * reset here would be offering a way out of a state nothing led into.
+   */
+  test("offers no filter reset it could not honour", () => {
+    render_([]);
+
+    expect(
+      screen.queryByRole("link", { name: en.contests.emptyFiltered.reset }),
+    ).not.toBeInTheDocument();
+  });
+
+  test("names the contest and the state it is in", () => {
+    render_([contest({ status: "running" })]);
+
+    const row = screen.getAllByRole("row")[1];
+    expect(within(row).getByText("The Greenhouse")).toBeInTheDocument();
+    expect(within(row).getByText(en.contests.status.running)).toBeInTheDocument();
+  });
+});
