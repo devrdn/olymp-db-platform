@@ -3,11 +3,13 @@ import Link from "next/link";
 import { Band } from "@/components/layout/band";
 import { ContestWindow } from "@/components/product/contest-window";
 import { Tag } from "@/components/ui/tag";
-import { titleIn, type ContestStatus } from "@/lib/api/contests";
+import { questionListSchema, untranslated } from "@/lib/api/content";
+import { publishCheckSchema, titleIn, type ContestStatus } from "@/lib/api/contests";
+import { PUBLISH_PROBLEMS } from "@/lib/api/publish-gate";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
-import { ContestTabs, type Tab } from "./contest-tabs";
-import { loadContest } from "./contest";
+import { ContestNav, type NavGroup } from "./contest-nav";
+import { loadContest, loadContestResource } from "./contest";
 
 /** One tone per state, and the accent spent only on what is happening now. */
 const STATUS_TONE: Record<ContestStatus, "live" | "good" | "mute"> = {
@@ -27,18 +29,23 @@ export async function generateMetadata(props: LayoutProps<"/contests/[contestId]
 
 /**
  * The frame every screen of one contest wears: which contest, what state it is
- * in, and the way between its sections.
+ * in, what it still owes, and the way between its sections.
  *
  * The contest is loaded here rather than in each page. A layout and its page
- * render in the same pass and `fetch` is deduplicated across them, so the
- * heading and the section below it are guaranteed to be describing the same
- * revision of the same contest — which two independent requests do not
- * guarantee, and the symptom of that is a title that disagrees with the state
- * badge beside it.
+ * render in the same pass with `fetch` deduplicated across them, so the
+ * heading and the section below it are guaranteed to describe the same
+ * revision — which two independent requests do not guarantee, and the symptom
+ * of that is a title disagreeing with the badge beside it.
  *
- * The header is a band and the section below it is another. That keeps the
- * hatched margins running unbroken down the page, and it means a section can
- * fill its own band without inheriting padding meant for the title.
+ * The gate is loaded here too, and that is what the navigation column is for.
+ * Publishing is blocked by work that lives in particular sections, and a gate
+ * report on the overview makes an author read a list, translate each line into
+ * a section, and navigate there. Marking the section itself skips all three
+ * steps: the work is named where the work is done.
+ *
+ * Two bands. The header is one and the workspace is another, so the hatched
+ * margins run unbroken down the page and a section can fill its own band
+ * without inheriting padding meant for a title.
  */
 export default async function ContestLayout(props: LayoutProps<"/contests/[contestId]">) {
   const [{ contestId }, locale, dict] = await Promise.all([
@@ -51,19 +58,11 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
   const t = dict.workspace;
   const base = `/contests/${contest.id}`;
 
-  const tabs: Tab[] = [
-    { href: base, label: t.tabs.overview, exact: true },
-    { href: `${base}/story`, label: t.tabs.story },
-    { href: `${base}/questions`, label: t.tabs.questions },
-    { href: `${base}/people`, label: t.tabs.people },
-    { href: `${base}/settings`, label: t.tabs.settings },
-  ];
+  const groups = await navigation(contestId, base, contest.languages.map((l) => l.code), dict);
 
   return (
     <>
-      {/* No bottom padding: the tab row reaches the band's own rule and the
-          current section's mark sits on it. */}
-      <Band className="gap-6 pt-9 pb-0">
+      <Band className="gap-6 pt-9 pb-7">
         <Link
           href="/contests"
           className="w-fit font-mono text-data text-ink-3 transition-colors duration-(--t-input) ease-standard hover:text-ink"
@@ -71,38 +70,132 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
           {t.backToRegister}
         </Link>
 
-        <div className="flex flex-wrap items-start justify-between gap-x-8 gap-y-4">
-          <div className="flex min-w-0 flex-col gap-3">
-            <h1 className="max-w-head text-h2 text-balance text-ink">
-              {/* A draft has no title until somebody writes one, and a blank
-                  heading tells the author nothing about what they have open. */}
-              {titleIn(contest, locale) || (
-                <span className="text-ink-3">{t.untitled}</span>
-              )}
-            </h1>
-            <div className="flex flex-wrap items-center gap-3">
-              <Tag tone={STATUS_TONE[contest.status]}>{dict.contests.status[contest.status]}</Tag>
-              <span className="font-mono text-data text-ink-3">
-                {dict.contests.mode[contest.questionMode]}
-              </span>
-              <span aria-hidden className="h-3 w-px bg-line-2" />
-              <span className="font-mono text-data text-ink-2">
-                <ContestWindow
-                  startsAt={contest.startsAt}
-                  endsAt={contest.endsAt}
-                  locale={locale}
-                  unscheduled={dict.contests.unscheduled}
-                  until={dict.contests.until}
-                />
-              </span>
-            </div>
+        <div className="flex min-w-0 flex-col gap-3">
+          <h1 className="max-w-head text-h2 text-balance text-ink">
+            {/* A draft has no title until somebody writes one, and a blank
+                heading tells the author nothing about what they have open. */}
+            {titleIn(contest, locale) || <span className="text-ink-3">{t.untitled}</span>}
+          </h1>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <Tag tone={STATUS_TONE[contest.status]}>{dict.contests.status[contest.status]}</Tag>
+            <span className="font-mono text-data text-ink-3">
+              {dict.contests.mode[contest.questionMode]}
+            </span>
+            <span aria-hidden className="h-3 w-px bg-line-2" />
+            <span className="font-mono text-data text-ink-2">
+              <ContestWindow
+                startsAt={contest.startsAt}
+                endsAt={contest.endsAt}
+                locale={locale}
+                unscheduled={dict.contests.unscheduled}
+                until={dict.contests.until}
+              />
+            </span>
           </div>
         </div>
-
-        <ContestTabs tabs={tabs} />
       </Band>
 
-      {props.children}
+      {/* The rule between the column and the work is a grid track, not a
+          border on either side of it: a 1px track cannot be rounded off by a
+          margin collapse and runs the full height of whichever side is taller. */}
+      <Band fill className="grid content-start gap-x-9 gap-y-8 py-9 narrow:grid-cols-[13rem_1px_minmax(0,1fr)] narrow:content-stretch">
+        <ContestNav groups={groups} />
+        <div aria-hidden className="hidden bg-line narrow:block" />
+        <div className="flex min-w-0 flex-col">{props.children}</div>
+      </Band>
     </>
   );
+}
+
+/**
+ * The sections, with what each one still owes.
+ *
+ * The notes come from the publish gate, which answers 200 even when publishing
+ * is impossible and returns every problem at once. Read here, its flat list
+ * becomes a mark against the section that owns the work.
+ *
+ * A gate that cannot be reached is not an error worth a screen: the sections
+ * are still there and still work. The navigation simply says nothing, which is
+ * honest — it does not know.
+ */
+async function navigation(
+  contestId: string,
+  base: string,
+  languages: string[],
+  dict: Awaited<ReturnType<typeof activeDictionary>>,
+): Promise<NavGroup[]> {
+  const t = dict.workspace;
+
+  const check = await loadContestResource(contestId, "/publish-check", (payload) =>
+    publishCheckSchema.parse(payload),
+  ).catch(() => null);
+
+  const problems = check?.problems ?? [];
+  const has = (code: string) => problems.some((p) => p.code === code);
+
+  const storyNote = has(PUBLISH_PROBLEMS.noStory)
+    ? t.notes.none
+    : countLanguages(problems, PUBLISH_PROBLEMS.missingStoryTranslation, languages);
+
+  const questionNote = has(PUBLISH_PROBLEMS.noQuestions)
+    ? t.notes.none
+    : await questionNoteFor(contestId, languages);
+
+  return [
+    { items: [{ href: base, label: t.tabs.overview, exact: true }] },
+    {
+      label: t.groups.content,
+      items: [
+        { href: `${base}/story`, label: t.tabs.story, note: storyNote },
+        { href: `${base}/questions`, label: t.tabs.questions, note: questionNote },
+      ],
+    },
+    {
+      label: t.groups.setup,
+      items: [
+        { href: `${base}/people`, label: t.tabs.people },
+        { href: `${base}/settings`, label: t.tabs.settings },
+      ],
+    },
+  ];
+}
+
+/** How many declared languages a per-language problem names. */
+function countLanguages(
+  problems: { code: string; lang?: string }[],
+  code: string,
+  languages: string[],
+): string | undefined {
+  const named = new Set(
+    problems.filter((p) => p.code === code && p.lang).map((p) => p.lang as string),
+  );
+  const missing = languages.filter((lang) => named.has(lang)).length;
+
+  return missing > 0 ? `${missing}` : undefined;
+}
+
+/**
+ * What the question list owes, counted from the questions themselves.
+ *
+ * The gate reports a missing translation per question and language, which
+ * would make the note a number an author cannot act on — "6" across three
+ * questions and two languages is not six pieces of work. Counting questions
+ * that are incomplete gives a figure that matches what the list shows.
+ */
+async function questionNoteFor(
+  contestId: string,
+  languages: string[],
+): Promise<string | undefined> {
+  const list = await loadContestResource(contestId, "/questions", (payload) =>
+    questionListSchema.parse(payload),
+  ).catch(() => null);
+
+  if (!list) return undefined;
+
+  const incomplete = list.items.filter(
+    (question) => untranslated(question, languages).length > 0,
+  ).length;
+
+  return incomplete > 0 ? `${incomplete}` : undefined;
 }

@@ -4,19 +4,25 @@ import { describe, expect, test, vi } from "vitest";
 const usePathname = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({ usePathname }));
 
-import { ContestTabs } from "./contest-tabs";
+import { ContestNav, type NavGroup } from "./contest-nav";
 
 const ID = "3f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6";
-const tabs = [
-  { href: `/contests/${ID}`, label: "Overview", exact: true as const },
-  { href: `/contests/${ID}/story`, label: "Story" },
-  { href: `/contests/${ID}/questions`, label: "Questions" },
+
+const groups: NavGroup[] = [
+  { items: [{ href: `/contests/${ID}`, label: "Overview", exact: true }] },
+  {
+    label: "Content",
+    items: [
+      { href: `/contests/${ID}/story`, label: "Story" },
+      { href: `/contests/${ID}/questions`, label: "Questions" },
+    ],
+  },
 ];
 
-describe("ContestTabs", () => {
+describe("ContestNav", () => {
   test("marks the section being read", () => {
     usePathname.mockReturnValue(`/contests/${ID}/story`);
-    render(<ContestTabs tabs={tabs} />);
+    render(<ContestNav groups={groups} />);
 
     expect(screen.getByRole("link", { name: "Story" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Overview" })).not.toHaveAttribute("aria-current");
@@ -29,7 +35,7 @@ describe("ContestTabs", () => {
    */
   test("does not mark the overview while a section under it is open", () => {
     usePathname.mockReturnValue(`/contests/${ID}/questions`);
-    render(<ContestTabs tabs={tabs} />);
+    render(<ContestNav groups={groups} />);
 
     expect(screen.getByRole("link", { name: "Overview" })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("link", { name: "Questions" })).toHaveAttribute("aria-current", "page");
@@ -37,19 +43,19 @@ describe("ContestTabs", () => {
 
   test("marks the overview on its own address", () => {
     usePathname.mockReturnValue(`/contests/${ID}`);
-    render(<ContestTabs tabs={tabs} />);
+    render(<ContestNav groups={groups} />);
 
     expect(screen.getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
   });
 
   /**
-   * A question's own screen lives under the question list. Its tab stays
+   * A question's own screen lives under the question list. Its section stays
    * marked while it is open, or the author loses their place in the workspace
    * the moment they open anything.
    */
   test("keeps a section marked while a screen under it is open", () => {
     usePathname.mockReturnValue(`/contests/${ID}/questions/9f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6`);
-    render(<ContestTabs tabs={tabs} />);
+    render(<ContestNav groups={groups} />);
 
     expect(screen.getByRole("link", { name: "Questions" })).toHaveAttribute("aria-current", "page");
   });
@@ -60,8 +66,37 @@ describe("ContestTabs", () => {
    */
   test("does not mark a section on an address that merely shares its prefix", () => {
     usePathname.mockReturnValue(`/contests/${ID}/questions-archive`);
-    render(<ContestTabs tabs={tabs} />);
+    render(<ContestNav groups={groups} />);
 
     expect(screen.getByRole("link", { name: "Questions" })).not.toHaveAttribute("aria-current");
+  });
+});
+
+/**
+ * The reason the navigation is a column rather than a row of tabs. Work that
+ * blocks publication belongs beside the section that owns it, not four screens
+ * away in a report the author has to translate into a destination.
+ */
+describe("ContestNav, what a section still owes", () => {
+  test("names the outstanding work beside the section", () => {
+    usePathname.mockReturnValue(`/contests/${ID}`);
+    render(
+      <ContestNav
+        groups={[
+          {
+            items: [{ href: `/contests/${ID}/questions`, label: "Questions", note: "3" }],
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: /Questions/ })).toHaveTextContent("3");
+  });
+
+  test("says nothing about a section that owes nothing", () => {
+    usePathname.mockReturnValue(`/contests/${ID}`);
+    render(<ContestNav groups={groups} />);
+
+    expect(screen.getByRole("link", { name: "Story" })).toHaveTextContent(/^Story$/);
   });
 });
