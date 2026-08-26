@@ -81,6 +81,30 @@ const en = {
       reference: "Reference",
     },
   },
+  /** The participant's own screens. Staff words live under `contests`. */
+  participant: {
+    heading: "My contests",
+    countLabel: "available",
+    columns: {
+      action: "Taking part",
+    },
+    join: "Join",
+    joining: "Joining",
+    joined: "You are enrolled.",
+    byInvitation: "By invitation",
+    noAction: "Nothing to do yet",
+    empty: {
+      title: "Nothing to take part in yet",
+      body: "Contests appear here once they are published. An open one can be joined from this screen.",
+    },
+    loading: "Loading your contests",
+    failed: {
+      title: "Could not load your contests",
+      body: "The server did not answer. Check the connection and try again.",
+      retry: "Try again",
+      reference: "Reference",
+    },
+  },
   /** The two screens any route can end on, so they live outside every section. */
   screens: {
     notFound: {

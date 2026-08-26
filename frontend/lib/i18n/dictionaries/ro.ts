@@ -78,6 +78,29 @@ const ro = {
     },
   },
   /** The two screens any route can end on, so they live outside every section. */
+  participant: {
+    heading: "Olimpiadele mele",
+    countLabel: "disponibile",
+    columns: {
+      action: "Participare",
+    },
+    join: "Înscrieți-vă",
+    joining: "Se înscrie",
+    joined: "Sunteți înscris.",
+    byInvitation: "Pe bază de invitație",
+    noAction: "Nimic de făcut deocamdată",
+    empty: {
+      title: "Nu aveți încă la ce participa",
+      body: "Olimpiadele apar aici după publicare. La una deschisă vă puteți înscrie de pe acest ecran.",
+    },
+    loading: "Se încarcă olimpiadele dumneavoastră",
+    failed: {
+      title: "Olimpiadele nu au putut fi încărcate",
+      body: "Serverul nu a răspuns. Verificați conexiunea și încercați din nou.",
+      retry: "Încercați din nou",
+      reference: "Referință",
+    },
+  },
   screens: {
     notFound: {
       title: "La această adresă nu se află nimic",
