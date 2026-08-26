@@ -1,6 +1,9 @@
+import Link from "next/link";
+
 import { Tag } from "@/components/ui/tag";
 import { ContestWindow } from "@/components/product/contest-window";
 import { StateView } from "@/components/product/state-view";
+import { buttonVariants } from "@/components/ui/button";
 import type { ContestStatus, ContestSummary } from "@/lib/api/contests";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -71,9 +74,17 @@ export function ContestRegister({
         <h1 id="register-heading" className="text-h2 text-ink">
           {t.heading}
         </h1>
-        <span className="font-mono text-data text-ink-3">
-          {total} {t.countLabel}
-        </span>
+        <div className="flex items-center gap-5">
+          <span className="font-mono text-data text-ink-3">
+            {total} {t.countLabel}
+          </span>
+          {/* The register's one action. A link rather than a button: it
+              navigates, and a button that navigates loses the middle click,
+              the new tab and the address the browser would otherwise show. */}
+          <Link href="/contests/new" className={buttonVariants({ size: "sm" })}>
+            {dict.workspace.create.action}
+          </Link>
+        </div>
       </div>
 
       {contests.length === 0 ? (
@@ -132,7 +143,15 @@ export function ContestRegister({
                     {String(index + 1).padStart(2, "0")}
                   </td>
                   <td className={CELL}>
-                    <span className="block text-row text-ink">{contest.title}</span>
+                    {/* The title is the way in. The whole row is not: a row
+                        that navigates cannot hold a second control, and this
+                        one will hold state changes before long. */}
+                    <Link
+                      href={`/contests/${contest.id}`}
+                      className="block w-fit text-row text-ink underline decoration-edge underline-offset-4 transition-colors duration-(--t-input) ease-standard hover:decoration-ink"
+                    >
+                      {contest.title || t.untitled}
+                    </Link>
                     {contest.description ? (
                       <span className="mt-1.5 block max-w-body text-small text-ink-2">
                         {contest.description}

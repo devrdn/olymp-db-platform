@@ -174,8 +174,8 @@ front-lint: front-install ## Lint the interface
 	cd $(FRONTEND) && npm run lint
 
 front-check: front-install ## Everything CI runs for the interface
-	cd $(FRONTEND) && npm run lint && npm run contrast && npm run error-codes \
-		&& npm run typecheck && npm test && npm run build
+	cd $(FRONTEND) && npm run lint && npm run contrast && npm run type-scale \
+		&& npm run error-codes && npm run typecheck && npm test && npm run build
 
 ## --- Containers -------------------------------------------------------------
 

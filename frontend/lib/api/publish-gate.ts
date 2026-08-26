@@ -30,11 +30,25 @@ export type PublishProblem = {
 
 export type PublishCheck = { ready: boolean; problems: PublishProblem[] };
 
+/**
+ * A cell in the language matrix.
+ *
+ * Three states, not two. "There is no story in Romanian" and "there is no
+ * story at all" are different facts, and collapsing the second into "done"
+ * — which is what happens when only per-language problems are consulted —
+ * prints a tick beside a language whose story does not exist. The author is
+ * then told, in the same panel, that the story is missing and that every
+ * language has one.
+ */
+export type CellState = "ok" | "missing" | "not-started";
+
 export type LanguageRow = {
   lang: string;
-  title: "ok" | "missing";
-  story: "ok" | "missing";
+  title: CellState;
+  story: CellState;
   questionsMissing: number;
+  /** No questions exist yet, so "none untranslated" is not an achievement. */
+  questionsNotStarted: boolean;
 };
 
 /** A problem that belongs to the contest, not to one of its languages. */
@@ -43,27 +57,34 @@ export type GlobalProblem = { code: string; detail?: string };
 export type PublishGate = { global: GlobalProblem[]; byLanguage: LanguageRow[] };
 
 export function summarisePublishCheck(check: PublishCheck, languages: string[]): PublishGate {
-  const byLanguage = languages.map((lang) => {
-    const named = check.problems.filter((p) => p.lang === lang);
-    return {
-      lang,
-      title: named.some((p) => p.code === PUBLISH_PROBLEMS.missingContestTranslation)
-        ? ("missing" as const)
-        : ("ok" as const),
-      story: named.some((p) => p.code === PUBLISH_PROBLEMS.missingStoryTranslation)
-        ? ("missing" as const)
-        : ("ok" as const),
-      questionsMissing: named.filter(
-        (p) => p.code === PUBLISH_PROBLEMS.missingQuestionTranslation,
-      ).length,
-    };
-  });
-
   // A problem without a language is about the contest itself: no schedule, no
   // questions, the wrong number of them for the mode. It has no cell to sit in.
   const global = check.problems
     .filter((p) => !p.lang)
     .map((p) => ({ code: p.code, detail: p.detail }));
+
+  // What does not exist yet cannot be translated. The gate reports "no story"
+  // once, without a language, and says nothing further about any language's
+  // story — so a matrix built only from per-language problems concludes that
+  // every language's story is in order.
+  const noStory = global.some((p) => p.code === PUBLISH_PROBLEMS.noStory);
+  const noQuestions = global.some((p) => p.code === PUBLISH_PROBLEMS.noQuestions);
+
+  const byLanguage = languages.map((lang) => {
+    const named = check.problems.filter((p) => p.lang === lang);
+    const missing = (code: string): CellState =>
+      named.some((p) => p.code === code) ? "missing" : "ok";
+
+    return {
+      lang,
+      title: missing(PUBLISH_PROBLEMS.missingContestTranslation),
+      story: noStory ? ("not-started" as const) : missing(PUBLISH_PROBLEMS.missingStoryTranslation),
+      questionsMissing: named.filter(
+        (p) => p.code === PUBLISH_PROBLEMS.missingQuestionTranslation,
+      ).length,
+      questionsNotStarted: noQuestions,
+    };
+  });
 
   return { global, byLanguage };
 }
