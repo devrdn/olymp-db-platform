@@ -9,7 +9,7 @@ vi.mock("./locale-actions", () => ({ chooseLocale: vi.fn() }));
 vi.mock("./theme-actions", () => ({ chooseTheme: vi.fn() }));
 
 import { AdminShell } from "./admin-shell";
-import { PublicShell } from "./public-shell";
+import { FocusShell } from "./focus-shell";
 
 let en: Dictionary;
 
@@ -38,9 +38,9 @@ describe("the product mark", () => {
 
   test("is not a link on the sign-in screen, where there is nowhere to go yet", () => {
     render(
-      <PublicShell locale="en" theme="system" dict={en}>
+      <FocusShell locale="en" theme="system" dict={en}>
         <p>form</p>
-      </PublicShell>,
+      </FocusShell>,
     );
 
     expect(screen.getByText(en.chrome.product)).toBeInTheDocument();
@@ -61,9 +61,9 @@ describe("the app bar", () => {
 
   test("offers the language the visitor is not already reading", () => {
     render(
-      <PublicShell locale="en" theme="system" dict={en}>
+      <FocusShell locale="en" theme="system" dict={en}>
         <p>form</p>
-      </PublicShell>,
+      </FocusShell>,
     );
 
     expect(screen.getByRole("button", { name: "ro" })).toBeInTheDocument();
@@ -72,9 +72,9 @@ describe("the app bar", () => {
 
   test("says where the theme control leads, not where it is", () => {
     render(
-      <PublicShell locale="en" theme="system" dict={en}>
+      <FocusShell locale="en" theme="system" dict={en}>
         <p>form</p>
-      </PublicShell>,
+      </FocusShell>,
     );
 
     // Standing on `system`, the press moves to `light`.

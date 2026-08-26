@@ -26,6 +26,17 @@ export default async function LoginPage(props: PageProps<"/login">) {
     activeDictionary(),
   ]);
   const next = typeof params.next === "string" ? params.next : undefined;
+
+  /**
+   * The password screen has no way to reach this page except through the
+   * address: the change retires every session, so the browser arrives with
+   * nothing carried over. A flag rather than a message — the address can
+   * choose *which* sentence from the dictionary appears and never supply one,
+   * which is the difference between a notice and an open door for anyone who
+   * can get a link clicked.
+   */
+  const passwordChanged = params.changed === "1";
+
   const t = dict.auth.signIn;
 
   return (
@@ -63,7 +74,18 @@ export default async function LoginPage(props: PageProps<"/login">) {
 
         <div aria-hidden className="hidden bg-line xl:block" />
 
-        <div className="flex flex-col justify-center xl:py-24">
+        <div className="flex flex-col justify-center gap-6 xl:py-24">
+          {/* `status` rather than `alert`: this is the calm end of a task the
+              visitor just completed, and an assertive live region would
+              interrupt whatever a screen reader was saying to announce good
+              news. It sits above the form because it explains why the form is
+              being asked for again. */}
+          {passwordChanged ? (
+            <p role="status" className="max-w-96 border-l-2 border-good pl-3 text-small text-ink-2">
+              {t.passwordChanged}
+            </p>
+          ) : null}
+
           <SignInForm dict={dict} next={next} />
         </div>
       </div>

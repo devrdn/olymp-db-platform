@@ -4,7 +4,7 @@ import { Band } from "@/components/layout/band";
 import { ContestRegister } from "./contest-register";
 import { contestListSchema } from "@/lib/api/contests";
 import { serverRequest } from "@/lib/api/server";
-import { expiredSessionRedirect } from "@/lib/auth/guard";
+import { authRecoveryRedirect } from "@/lib/auth/guard";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 export async function generateMetadata() {
@@ -45,7 +45,7 @@ export default async function ContestsPage(props: PageProps<"/contests">) {
     if (status) resume.set("status", status);
     const here = resume.size > 0 ? `/contests?${resume}` : "/contests";
 
-    const target = expiredSessionRedirect(error, here);
+    const target = authRecoveryRedirect(error, here);
     if (target) redirect(target);
     throw error;
   });

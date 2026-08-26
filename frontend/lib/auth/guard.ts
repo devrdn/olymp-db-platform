@@ -16,6 +16,9 @@ const PUBLIC_PATHS = ["/login"];
 /** Where a visitor goes to obtain one. */
 const SIGN_IN = "/login";
 
+/** The one screen an account still on its one-time password may use. */
+const PASSWORD_CHANGE = "/password";
+
 export function guardRedirect(pathname: string, hasSession: boolean): string | null {
   if (hasSession) return null;
   if (PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`))) {
@@ -28,20 +31,33 @@ export function guardRedirect(pathname: string, hasSession: boolean): string | n
 }
 
 /**
- * The other half of the guard, for the session it cannot see.
+ * The other half of the guard, for what it cannot see.
  *
- * `guardRedirect` knows only that a cookie exists. Whether it is still worth
- * anything is the API's answer, and it arrives after the page has already been
- * asked to render — as `unauthenticated`. Left alone that lands on the
- * recoverable-error screen, which offers a retry; nothing about signing in
- * happens by asking the same question again, so the retry is a button that
- * cannot work. Send them to the form instead, carrying where they were going.
+ * `guardRedirect` knows only that a cookie exists. What that cookie is still
+ * worth is the API's answer, and it arrives after the page has already been
+ * asked to render. Left alone, both verdicts below land on the
+ * recoverable-error screen, which offers a retry — and neither signing in nor
+ * replacing a password happens by asking the same question again, so the retry
+ * is a button that cannot work.
+ *
+ * Two codes, two destinations:
+ *
+ * - `unauthenticated` — the session is gone. Back to the form, carrying where
+ *   they were going, so signing in resumes the journey.
+ * - `password_change_required` — the session is fine and the account is still
+ *   on the password an administrator handed it. The API closes every other
+ *   endpoint until it is replaced, so the interface has exactly one screen to
+ *   offer. Nothing is carried: the change retires every session, and the
+ *   journey restarts at sign-in regardless.
  *
  * `forbidden` is deliberately not included. That account is signed in and
  * simply not allowed, and the sign-in form would bounce it straight back.
  */
-export function expiredSessionRedirect(error: unknown, pathname: string): string | null {
-  if (!(error instanceof ApiError) || error.code !== "unauthenticated") return null;
+export function authRecoveryRedirect(error: unknown, pathname: string): string | null {
+  if (!(error instanceof ApiError)) return null;
 
-  return `${SIGN_IN}?next=${encodeURIComponent(pathname)}`;
+  if (error.code === "password_change_required") return PASSWORD_CHANGE;
+  if (error.code === "unauthenticated") return `${SIGN_IN}?next=${encodeURIComponent(pathname)}`;
+
+  return null;
 }
