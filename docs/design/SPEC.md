@@ -233,6 +233,24 @@ state and the window stay — those are what a reader comes to a register for.
 Nothing is ever shown twice: the caption exists only at the width where its
 columns are gone.
 
+**A workspace with many sections gets a navigation column, not a row of tabs.**
+The contest workspace has five sections today, and the architecture names two
+more admin screens for the same contest — the query log (section 9.1) and the
+reports (section 10). A horizontal row was already scrolling sideways at 375 px
+with five, and a row has nowhere to put what a section still owes. The column
+does: "Questions — 3" beside the link is a piece of work with an address, where
+the same fact in a publish-gate report is a line the author has to translate
+into a destination first.
+
+It is **not** a panel, and that is the part worth not losing. There is no fill,
+no border box and no shadow: the column is held by a single hairline in a 1 px
+grid track — the same device the sign-in screen is built from, and the same one
+this section means by "panels are separated by a rule". A `13rem` column, a 1 px
+track, and the rest to the work. Below the mobile reset the grid collapses like
+every other asymmetric one here: the column becomes a single scrolling row with
+the same links in the same order, and the group labels are dropped rather than
+stacked, because at that width they cost a line each and name two items.
+
 **The sign-in screen splits at 1280 px, not at the mobile reset.** Between 760
 and 1280 two columns technically fit and read badly: the heading column and the
 form column come out the same width, the lede breaks after the third word, and

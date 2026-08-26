@@ -1,4 +1,3 @@
-import { Band } from "@/components/layout/band";
 import {
   contentEditable,
   defaultLanguage,
@@ -41,7 +40,7 @@ export default async function ContestOverviewPage(props: PageProps<"/contests/[c
   const t = dict.workspace;
 
   return (
-    <Band fill className="gap-12 py-12">
+    <div className="flex flex-col gap-12">
       <section aria-labelledby="gate-heading" className="flex flex-col gap-6">
         <h2 id="gate-heading" className="text-h3 text-ink">
           {t.gate.heading}
@@ -109,7 +108,7 @@ export default async function ContestOverviewPage(props: PageProps<"/contests/[c
           <Fact term={t.facts.updated} value={formatMoment(contest.updatedAt, { locale })} mono />
         </dl>
       </section>
-    </Band>
+    </div>
   );
 }
 
