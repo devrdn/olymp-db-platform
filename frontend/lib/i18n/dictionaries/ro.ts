@@ -19,6 +19,7 @@ const ro = {
       submit: "Intrați",
       submitting: "Se autentifică",
       aside: "O crimă, o bază de date și un termen. Scrieți SQL, citiți probele, spuneți cine a făcut-o.",
+      passwordChanged: "Parola a fost schimbată. Autentificați-vă cu cea nouă.",
     },
     changePassword: {
       title: "Schimbați parola",
@@ -27,7 +28,8 @@ const ro = {
       next: "Parolă nouă",
       confirm: "Repetați parola nouă",
       submit: "Salvați și continuați",
-      mismatch: "Cele două parole nu coincid.",
+      submitting: "Se salvează",
+      note: "Schimbarea deconectează contul de peste tot. Vă veți autentifica din nou cu parola nouă.",
     },
   },
   contests: {
@@ -99,6 +101,7 @@ const ro = {
     wrong_password: "Parola curentă este greșită.",
     invalid_password: "Parola nu îndeplinește cerințele.",
     weak_password: "Parola este prea simplă. Faceți-o mai lungă și mai variată.",
+    password_mismatch: "Cele două parole noi nu coincid.",
     same_password: "Parola nouă coincide cu cea veche.",
     login_taken: "Acest utilizator există deja.",
     email_taken: "Această adresă de e-mail este deja folosită.",

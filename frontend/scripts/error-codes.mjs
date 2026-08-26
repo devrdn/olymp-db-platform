@@ -20,7 +20,7 @@ const BACKEND = "../backend/internal";
 const DICTIONARY = "lib/i18n/dictionaries/en.ts";
 
 /** Codes this layer invents for failures that never reached the API. */
-const CLIENT_ONLY = new Set(["fallback", "unreachable"]);
+const CLIENT_ONLY = new Set(["fallback", "unreachable", "password_mismatch"]);
 
 function goFiles(dir) {
   const out = [];

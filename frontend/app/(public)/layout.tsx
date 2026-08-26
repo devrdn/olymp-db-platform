@@ -1,4 +1,4 @@
-import { PublicShell } from "@/components/layout/public-shell";
+import { FocusShell } from "@/components/layout/focus-shell";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -18,8 +18,8 @@ export default async function PublicLayout({ children }: { children: React.React
   ]);
 
   return (
-    <PublicShell locale={locale} theme={theme} dict={dict}>
+    <FocusShell locale={locale} theme={theme} dict={dict}>
       {children}
-    </PublicShell>
+    </FocusShell>
   );
 }

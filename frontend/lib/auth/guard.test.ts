@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import { ApiError } from "@/lib/api/client";
 
-import { expiredSessionRedirect, guardRedirect } from "./guard";
+import { authRecoveryRedirect, guardRedirect } from "./guard";
 
 describe("guardRedirect", () => {
   test("sends a signed-out visitor to sign-in, remembering where they were going", () => {
@@ -16,36 +16,57 @@ describe("guardRedirect", () => {
   test("lets a signed-in visitor through", () => {
     expect(guardRedirect("/contests", true)).toBeNull();
   });
+
+  test("keeps the password screen behind a session", () => {
+    // It is reached by an account that is signed in and stuck; without a
+    // session there is nothing to change.
+    expect(guardRedirect("/password", false)).toBe("/login?next=%2Fpassword");
+  });
 });
 
 /**
  * The guard can only see whether a cookie exists; the cookie is httpOnly and
- * only the API can say whether it is still valid. So a stale session reaches
- * the page and comes back as `unauthenticated` — and the recoverable-error
- * screen then offers a retry that can never succeed, because nothing about
- * signing in happens by asking again.
+ * only the API can say what it is still worth. So the real verdict arrives
+ * after the page has been asked to render, as a failure code — and the
+ * recoverable-error screen then offers a retry that can never succeed, because
+ * neither signing in nor replacing a password happens by asking again.
  */
-describe("expiredSessionRedirect", () => {
+describe("authRecoveryRedirect", () => {
   test("sends a dead session back to sign in, carrying where it was going", () => {
-    expect(expiredSessionRedirect(new ApiError("unauthenticated", 401, "..."), "/contests")).toBe(
+    expect(authRecoveryRedirect(new ApiError("unauthenticated", 401, "..."), "/contests")).toBe(
       "/login?next=%2Fcontests",
     );
   });
 
-  test("leaves a failure that a retry could fix alone", () => {
+  test("sends an account still on its one-time password to the one screen it may use", () => {
+    // The API closes everything except the way out. The interface has to agree,
+    // or the account meets an error screen on every route instead of the form
+    // that unblocks it.
     expect(
-      expiredSessionRedirect(new ApiError("internal_error", 500, "..."), "/contests"),
-    ).toBeNull();
-    expect(expiredSessionRedirect(new ApiError("unreachable", 502, "..."), "/contests")).toBeNull();
+      authRecoveryRedirect(new ApiError("password_change_required", 403, "..."), "/contests"),
+    ).toBe("/password");
+  });
+
+  test("does not carry a destination into the password screen", () => {
+    // Nothing resumes here: changing a password retires every session, so the
+    // journey restarts at sign-in whatever they were doing.
+    expect(
+      authRecoveryRedirect(new ApiError("password_change_required", 403, "..."), "/contests"),
+    ).not.toContain("next=");
+  });
+
+  test("leaves a failure that a retry could fix alone", () => {
+    expect(authRecoveryRedirect(new ApiError("internal_error", 500, "..."), "/contests")).toBeNull();
+    expect(authRecoveryRedirect(new ApiError("unreachable", 502, "..."), "/contests")).toBeNull();
   });
 
   test("leaves a refusal that signing in again would not lift", () => {
     // The account is signed in and simply not allowed: sending it to the form
     // would loop it straight back here.
-    expect(expiredSessionRedirect(new ApiError("forbidden", 403, "..."), "/contests")).toBeNull();
+    expect(authRecoveryRedirect(new ApiError("forbidden", 403, "..."), "/contests")).toBeNull();
   });
 
   test("ignores anything that is not an API failure", () => {
-    expect(expiredSessionRedirect(new Error("boom"), "/contests")).toBeNull();
+    expect(authRecoveryRedirect(new Error("boom"), "/contests")).toBeNull();
   });
 });
