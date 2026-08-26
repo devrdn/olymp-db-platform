@@ -21,11 +21,12 @@
 		header_up X-Forwarded-Proto {scheme}
 	}
 
-	# The participant and administrator interface is served here once the
-	# frontend exists. Until then the root answers plainly rather than 404, so
-	# a health check against the site root succeeds.
+	# Everything else is the interface. Serving it from this same name is not a
+	# convenience: the session cookie is SameSite=Lax and the API compares the
+	# Origin header against its own Host on every write, so a frontend on a
+	# second hostname would be rejected by its own backend.
 	handle {
-		respond "DB Contest — API only; the web interface is not deployed yet." 200
+		reverse_proxy web:3000
 	}
 
 	log {

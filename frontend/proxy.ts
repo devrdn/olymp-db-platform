@@ -26,7 +26,15 @@ export function proxy(request: NextRequest) {
   return NextResponse.redirect(url);
 }
 
+/**
+ * Every route except the framework's own assets.
+ *
+ * The exclusions are named rather than inferred from the path. Skipping
+ * anything containing a dot is the usual shorthand and it is a hole with a
+ * timer on it: the day a route legitimately carries one — a file name, a
+ * version, an identifier that is not a UUID — the guard stops running on it
+ * and nothing says so.
+ */
 export const config = {
-  // Everything except Next's own assets and files with an extension.
-  matcher: ["/((?!_next|.*\\..*).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon\\.ico|robots\\.txt|sitemap\\.xml).*)"],
 };
