@@ -23,6 +23,7 @@ const en = {
       submit: "Sign in",
       submitting: "Signing in",
       aside: "A crime, a database and a deadline. Write SQL, read the evidence, name who did it.",
+      passwordChanged: "Your password has been changed. Sign in with the new one.",
     },
     changePassword: {
       title: "Change your password",
@@ -31,7 +32,8 @@ const en = {
       next: "New password",
       confirm: "Repeat the new password",
       submit: "Save and continue",
-      mismatch: "The two passwords do not match.",
+      submitting: "Saving",
+      note: "Changing it signs this account out everywhere. You will sign in again with the new password.",
     },
   },
   contests: {
@@ -103,6 +105,7 @@ const en = {
     wrong_password: "The current password is wrong.",
     invalid_password: "That password does not meet the requirements.",
     weak_password: "That password is too simple. Make it longer and more varied.",
+    password_mismatch: "The two new passwords do not match.",
     same_password: "The new password matches the old one.",
     login_taken: "That login is already taken.",
     email_taken: "That email is already in use.",

@@ -1,5 +1,5 @@
 import { Band } from "@/components/layout/band";
-import { PublicShell } from "@/components/layout/public-shell";
+import { FocusShell } from "@/components/layout/focus-shell";
 import { StateView } from "@/components/product/state-view";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
@@ -26,7 +26,7 @@ export default async function NotFound() {
   const t = dict.screens.notFound;
 
   return (
-    <PublicShell locale={locale} theme={theme} dict={dict}>
+    <FocusShell locale={locale} theme={theme} dict={dict}>
       <Band fill>
         <StateView
           state={{
@@ -37,6 +37,6 @@ export default async function NotFound() {
           }}
         />
       </Band>
-    </PublicShell>
+    </FocusShell>
   );
 }
