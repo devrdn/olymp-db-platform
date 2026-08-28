@@ -459,6 +459,7 @@ const ro = {
     address_not_allowed: "Accesul este permis doar din rețeaua universității.",
     invalid_transition: "Din starea curentă această trecere nu este posibilă.",
     not_editable: "O olimpiadă în această stare nu poate fi modificată.",
+    not_publishable: "Olimpiada încă nu este gata de publicare.",
     enrollment_closed: "Înscrierea la această olimpiadă este închisă.",
     already_enrolled: "Sunteți deja înscris la această olimpiadă.",
     participant_started: "Participantul a început deja și poate fi doar descalificat.",
