@@ -63,10 +63,10 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env require-version build test test-race test-db api-contract backup restore restore-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-observability dev-db-ui dev-down dev-logs compose-up compose-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
+.PHONY: help require-env require-version build test test-race test-db api-contract backup restore restore-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
 
 help: ## Show this help
-	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 ## --- Go ---------------------------------------------------------------------
 
@@ -269,7 +269,7 @@ dev-up: ## Start PostgreSQL and Redis for local development
 	$(COMPOSE_DEV) up -d pg-core redis
 
 # Prometheus, Loki, Promtail and Grafana, without pulling in the containerized
-# api/caddy/pg-core (same reasoning as compose-observability below). Combine
+# api/caddy/pg-core (same reasoning as stack-observability below). Combine
 # it with dev-up in one command the way `make` already supports running
 # several targets: `make dev-up dev-observability`.
 #
@@ -301,9 +301,6 @@ dev-down: ## Stop the development infrastructure
 
 dev-logs: ## Follow the development infrastructure logs
 	$(COMPOSE_DEV) logs -f
-
-compose-up: ## Build the stack from this working tree and start it
-	VERSION=$(VERSION) $(COMPOSE_BUILD) up -d --build
 
 images: ## Build the release images from this working tree
 	VERSION=$(VERSION) $(COMPOSE_BUILD) build api web
@@ -349,10 +346,27 @@ deployed: ## Print the versions currently running
 	@$(COMPOSE) ps --format '{{.Service}}\t{{.Image}}' 2>/dev/null || \
 		echo "nothing is running from this compose project"
 
-compose-bootstrap: require-env ## Create the first administrator inside the stack
+## --- The whole stack --------------------------------------------------------
+#
+# Three families, and the difference between them is worth keeping straight:
+#
+#   dev-*     the infrastructure only, with the API and the interface run from
+#             your editor against it. The everyday loop.
+#   stack-*   everything, in containers. `stack-up` BUILDS from this working
+#             tree — uncommitted changes included — and tags the images with
+#             the commit, or <commit>-dirty. Nothing is pulled.
+#   deploy*   a named release, pulled from the registry. Nothing is built.
+#
+# `stack-up` is not "production": it is production's shape, from your code.
+# A server runs `make deploy VERSION=...`, which cannot build anything at all.
+
+stack-up: ## Build the whole stack from this working tree and start it
+	VERSION=$(VERSION) $(COMPOSE_BUILD) up -d --build
+
+stack-bootstrap: require-env ## Create the first administrator inside the stack
 	$(COMPOSE) --profile bootstrap run --rm bootstrap
 
-compose-observability: ## Add Prometheus, Loki, Promtail and Grafana without touching the rest
+stack-observability: ## Add Prometheus, Loki, Promtail and Grafana without touching the rest
 	# Services with no `profiles:` key (api, caddy, pg-core, migrate) are
 	# Compose's "default" set and start on ANY `up`, profile flag or not —
 	# `--profile` only lifts the gate on profiled services, it never narrows
@@ -361,5 +375,5 @@ compose-observability: ## Add Prometheus, Loki, Promtail and Grafana without tou
 	# as "not in an active profile".
 	$(COMPOSE) --profile observability up -d prometheus loki promtail grafana
 
-compose-down: ## Stop the full stack
+stack-down: ## Stop the full stack
 	$(COMPOSE) --profile bootstrap --profile observability --profile shared down

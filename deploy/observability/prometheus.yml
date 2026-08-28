@@ -9,7 +9,7 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
-  # The containerized api (docker-compose.yml, `make compose-up`), reached by
+  # The containerized api (docker-compose.yml, `make stack-up`), reached by
   # its service name on the compose network.
   - job_name: core-api
     static_configs:
