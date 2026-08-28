@@ -465,6 +465,7 @@ const en = {
     address_not_allowed: "Access is allowed only from the university network.",
     invalid_transition: "That transition is not possible from the current state.",
     not_editable: "A contest in this state cannot be changed.",
+    not_publishable: "The contest is not ready to publish yet.",
     enrollment_closed: "Enrollment for this contest is closed.",
     already_enrolled: "You are already enrolled in this contest.",
     participant_started: "This participant has already started and can only be disqualified.",
