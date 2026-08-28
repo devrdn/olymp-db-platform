@@ -31,12 +31,12 @@ func CheckOrigin(next http.Handler) http.Handler {
 
 		parsed, err := url.Parse(origin)
 		if err != nil || parsed.Host == "" {
-			Error(w, r, http.StatusForbidden, "cross_origin", "Request origin is not recognised")
+			Error(w, r, http.StatusForbidden, CodeCrossOrigin, "Request origin is not recognised")
 			return
 		}
 
 		if parsed.Host != r.Host || parsed.Scheme != requestScheme(r) {
-			Error(w, r, http.StatusForbidden, "cross_origin", "Request origin is not recognised")
+			Error(w, r, http.StatusForbidden, CodeCrossOrigin, "Request origin is not recognised")
 			return
 		}
 

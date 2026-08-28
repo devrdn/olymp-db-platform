@@ -313,23 +313,23 @@ type contestRequest struct {
 func (h *ContestsHandler) create(w http.ResponseWriter, r *http.Request) {
 	var req contestRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
 	starts, ends, err := req.window()
 	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 	cidrs, err := parseCIDRs(req.AllowedCIDRs)
 	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_cidr", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidCIDR, err.Error())
 		return
 	}
 	settings, err := req.settings()
 	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
@@ -378,17 +378,17 @@ func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {
 
 	var req contestRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 	starts, ends, err := req.window()
 	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 	cidrs, err := parseCIDRs(req.AllowedCIDRs)
 	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_cidr", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidCIDR, err.Error())
 		return
 	}
 
@@ -405,7 +405,7 @@ func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {
 	if req.Settings != nil {
 		settings, err := req.settings()
 		if err != nil {
-			httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+			httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 			return
 		}
 		cmd.Settings = &settings
@@ -449,7 +449,7 @@ func (h *ContestsHandler) setStatus(w http.ResponseWriter, r *http.Request) {
 
 	var req statusRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
@@ -528,7 +528,7 @@ func (h *ContestsHandler) setLanguages(w http.ResponseWriter, r *http.Request) {
 
 	var req languagesRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
@@ -552,7 +552,7 @@ func (h *ContestsHandler) setTranslations(w http.ResponseWriter, r *http.Request
 
 	var req translationsRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
@@ -598,7 +598,7 @@ func (h *ContestsHandler) setPolicy(w http.ResponseWriter, r *http.Request) {
 
 	var req PolicyResponse
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
@@ -642,7 +642,7 @@ func toPolicyResponse(p contests.SQLPolicy) PolicyResponse {
 func (h *ContestsHandler) contestID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, contestIDParam))
 	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_contest_id", "Contest identifier is not valid")
+		httpx.Error(w, r, http.StatusBadRequest, auth.CodeInvalidContestID, "Contest identifier is not valid")
 		return uuid.Nil, false
 	}
 	return id, true
@@ -652,7 +652,7 @@ func (h *ContestsHandler) contestID(w http.ResponseWriter, r *http.Request) (uui
 func (h *ContestsHandler) memberID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, memberIDParam))
 	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_user_id", "User identifier is not valid")
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidUserID, "User identifier is not valid")
 		return uuid.Nil, false
 	}
 	return id, true
@@ -666,44 +666,44 @@ func (h *ContestsHandler) memberID(w http.ResponseWriter, r *http.Request) (uuid
 func (h *ContestsHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, contests.ErrNotFound):
-		httpx.Error(w, r, http.StatusNotFound, "not_found", "Contest not found")
+		httpx.Error(w, r, http.StatusNotFound, codeNotFound, "Contest not found")
 	case errors.Is(err, contests.ErrQuestionNotFound):
-		httpx.Error(w, r, http.StatusNotFound, "question_not_found", "Question not found")
+		httpx.Error(w, r, http.StatusNotFound, codeQuestionNotFound, "Question not found")
 	case errors.Is(err, contests.ErrStoryNotFound):
-		httpx.Error(w, r, http.StatusNotFound, "story_not_found", "This contest has no story yet")
+		httpx.Error(w, r, http.StatusNotFound, codeStoryNotFound, "This contest has no story yet")
 	case errors.Is(err, contests.ErrParticipantNotFound):
-		httpx.Error(w, r, http.StatusNotFound, "participant_not_found", "Participant not found")
+		httpx.Error(w, r, http.StatusNotFound, codeParticipantNotFound, "Participant not found")
 	case errors.Is(err, contests.ErrManagerNotFound):
-		httpx.Error(w, r, http.StatusNotFound, "manager_not_found", "This user does not staff the contest")
+		httpx.Error(w, r, http.StatusNotFound, codeManagerNotFound, "This user does not staff the contest")
 	case errors.Is(err, users.ErrNotFound):
-		httpx.Error(w, r, http.StatusNotFound, "user_not_found", "User not found")
+		httpx.Error(w, r, http.StatusNotFound, codeUserNotFound, "User not found")
 
 	case errors.Is(err, contests.ErrNotPublishable):
-		httpx.JSON(w, r, http.StatusUnprocessableEntity, map[string]any{
-			"error": map[string]any{
-				"code":    "not_publishable",
-				"message": "The contest is not ready to publish",
-			},
-			"problems": problemsOf(err),
-		})
+		// The gate answers with a code and the whole list of what is missing.
+		// It goes through the same helper as every other error rather than
+		// building its own envelope: writing one by hand is how this code
+		// once reached clients undeclared, with no message in any language.
+		httpx.ErrorWithDetails(w, r, http.StatusUnprocessableEntity,
+			codeNotPublishable, "The contest is not ready to publish",
+			map[string]any{"problems": problemsOf(err)})
 
 	case errors.Is(err, contests.ErrInvalidTransition):
-		httpx.Error(w, r, http.StatusConflict, "invalid_transition", err.Error())
+		httpx.Error(w, r, http.StatusConflict, codeInvalidTransition, err.Error())
 	case errors.Is(err, contests.ErrNotEditable):
-		httpx.Error(w, r, http.StatusConflict, "not_editable", err.Error())
+		httpx.Error(w, r, http.StatusConflict, codeNotEditable, err.Error())
 	case errors.Is(err, contests.ErrOwnerImmutable):
-		httpx.Error(w, r, http.StatusConflict, "owner_immutable", err.Error())
+		httpx.Error(w, r, http.StatusConflict, codeOwnerImmutable, err.Error())
 	case errors.Is(err, contests.ErrAlreadyEnrolled):
-		httpx.Error(w, r, http.StatusConflict, "already_enrolled", err.Error())
+		httpx.Error(w, r, http.StatusConflict, codeAlreadyEnrolled, err.Error())
 	case errors.Is(err, contests.ErrEnrollmentClosed):
-		httpx.Error(w, r, http.StatusConflict, "enrollment_closed", err.Error())
+		httpx.Error(w, r, http.StatusConflict, codeEnrollmentClosed, err.Error())
 	case errors.Is(err, contests.ErrParticipantStarted):
-		httpx.Error(w, r, http.StatusConflict, "participant_started", err.Error())
+		httpx.Error(w, r, http.StatusConflict, codeParticipantStarted, err.Error())
 
 	case errors.Is(err, contests.ErrAddressNotAllowed):
 		// Deliberately explicit: "you are on the wrong network" is something
 		// the participant can act on, unlike a bare 403.
-		httpx.Error(w, r, http.StatusForbidden, "address_not_allowed",
+		httpx.Error(w, r, http.StatusForbidden, codeAddressNotAllowed,
 			"This contest is only available from the university network")
 
 	case errors.Is(err, contests.ErrInvalidContest),
@@ -712,11 +712,11 @@ func (h *ContestsHandler) fail(w http.ResponseWriter, r *http.Request, err error
 		errors.Is(err, contests.ErrInvalidPolicy),
 		errors.Is(err, contests.ErrInvalidRole),
 		errors.Is(err, contests.ErrUnknownLanguage):
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 
 	default:
 		h.log.ErrorContext(r.Context(), "contest operation failed", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, "internal_error", "Internal server error")
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 	}
 }
 

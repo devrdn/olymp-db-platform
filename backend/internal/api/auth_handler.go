@@ -66,7 +66,7 @@ type loginResponse struct {
 func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
@@ -79,19 +79,19 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 	case errors.Is(err, auth.ErrInvalidCredentials):
-		httpx.Error(w, r, http.StatusUnauthorized, "invalid_credentials", "Incorrect login or password")
+		httpx.Error(w, r, http.StatusUnauthorized, codeInvalidCredentials, "Incorrect login or password")
 		return
 	case errors.Is(err, auth.ErrAccountBlocked):
-		httpx.Error(w, r, http.StatusForbidden, "account_blocked",
+		httpx.Error(w, r, http.StatusForbidden, codeAccountBlocked,
 			"This account is blocked. Contact the organizers.")
 		return
 	case errors.Is(err, auth.ErrTooManyAttempts):
-		httpx.Error(w, r, http.StatusTooManyRequests, "too_many_attempts",
+		httpx.Error(w, r, http.StatusTooManyRequests, codeTooManyAttempts,
 			"Too many attempts. Try again in a few minutes.")
 		return
 	default:
 		h.log.ErrorContext(r.Context(), "login failed", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, "internal_error", "Internal server error")
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 		return
 	}
 
@@ -113,7 +113,7 @@ type meResponse struct {
 func (h *AuthHandler) me(w http.ResponseWriter, r *http.Request) {
 	identity, ok := auth.IdentityFrom(r.Context())
 	if !ok {
-		httpx.Error(w, r, http.StatusUnauthorized, "unauthenticated", "Sign in to continue")
+		httpx.Error(w, r, http.StatusUnauthorized, auth.CodeUnauthenticated, "Sign in to continue")
 		return
 	}
 
@@ -137,7 +137,7 @@ func (h *AuthHandler) logout(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		if err := h.service.Logout(r.Context(), cookie.Value); err != nil {
 			h.log.ErrorContext(r.Context(), "logout failed", "error", err)
-			httpx.Error(w, r, http.StatusInternalServerError, "internal_error", "Internal server error")
+			httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 			return
 		}
 	}
@@ -155,13 +155,13 @@ type changePasswordRequest struct {
 func (h *AuthHandler) changePassword(w http.ResponseWriter, r *http.Request) {
 	identity, ok := auth.IdentityFrom(r.Context())
 	if !ok {
-		httpx.Error(w, r, http.StatusUnauthorized, "unauthenticated", "Sign in to continue")
+		httpx.Error(w, r, http.StatusUnauthorized, auth.CodeUnauthenticated, "Sign in to continue")
 		return
 	}
 
 	var req changePasswordRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
@@ -173,17 +173,17 @@ func (h *AuthHandler) changePassword(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 	case errors.Is(err, users.ErrWrongPassword):
-		httpx.Error(w, r, http.StatusBadRequest, "wrong_password", "Current password is incorrect")
+		httpx.Error(w, r, http.StatusBadRequest, codeWrongPassword, "Current password is incorrect")
 		return
 	case errors.Is(err, users.ErrWeakPassword):
-		httpx.Error(w, r, http.StatusBadRequest, "weak_password", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeWeakPassword, err.Error())
 		return
 	case errors.Is(err, users.ErrSamePassword):
-		httpx.Error(w, r, http.StatusBadRequest, "same_password", "Choose a password different from the current one")
+		httpx.Error(w, r, http.StatusBadRequest, codeSamePassword, "Choose a password different from the current one")
 		return
 	default:
 		h.log.ErrorContext(r.Context(), "password change failed", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, "internal_error", "Internal server error")
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 		return
 	}
 

@@ -34,14 +34,46 @@ func JSON(w http.ResponseWriter, r *http.Request, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// Error writes a structured error response. The message is user-facing: it
-// must explain the problem without exposing internals.
-func Error(w http.ResponseWriter, r *http.Request, status int, code, message string) {
+// Error writes a structured error response.
+//
+// The code is what a client acts on and the interface translates; the message
+// beside it explains the problem to whoever is reading a log or writing that
+// client, and must not expose internals. Only a declared Code can be passed,
+// so nothing reaches a client that is missing from the published catalog.
+func Error(w http.ResponseWriter, r *http.Request, status int, code Code, message string) {
 	JSON(w, r, status, errorBody{Error: errorDetail{
-		Code:      code,
+		Code:      code.String(),
 		Message:   message,
 		RequestID: logging.RequestIDFrom(r.Context()),
 	}})
+}
+
+// ErrorWithDetails writes the same error object with extra fields beside it.
+//
+// The publish gate needs it: alongside the code it returns the list of what is
+// still missing. This exists so that answering with more than the error object
+// does not mean writing the envelope by hand — which is how a code once
+// reached clients without being declared at all, invisible to the check that
+// existed to prevent exactly that.
+//
+// A "error" key in details is ignored: overwriting the object every client
+// parses would make the code vanish from a response that still looked well
+// formed.
+func ErrorWithDetails(w http.ResponseWriter, r *http.Request, status int, code Code, message string, details map[string]any) {
+	body := map[string]any{
+		"error": errorDetail{
+			Code:      code.String(),
+			Message:   message,
+			RequestID: logging.RequestIDFrom(r.Context()),
+		},
+	}
+	for key, value := range details {
+		if key == "error" {
+			continue
+		}
+		body[key] = value
+	}
+	JSON(w, r, status, body)
 }
 
 // NoContent replies with 204 and an empty body.
