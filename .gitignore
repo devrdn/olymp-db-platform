@@ -13,3 +13,6 @@ coverage.out
 .DS_Store
 .idea/
 .vscode/
+
+# Database dumps are data, never source: they hold real participant answers.
+deploy/backups/

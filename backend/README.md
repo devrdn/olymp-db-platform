@@ -488,6 +488,31 @@ make migrate-down      # roll back one step
 Each migration ships an `up` and a `down` file; a test in `migrations/` fails
 the build if a pair is incomplete or a version number is reused.
 
+## Backups
+
+On-premise means nobody else is backing this machine up, and what is in the
+core database — the participants' answers and the results of an olympiad —
+cannot be reconstructed by reinstalling anything.
+
+```bash
+make backup                                   # deploy/backups/<db>-<timestamp>.dump
+make restore-check FILE=deploy/backups/....dump
+make restore       FILE=deploy/backups/....dump CONFIRM=yes
+```
+
+`backup` dumps from inside the container, so no PostgreSQL client is needed on
+the host, and refuses to keep an empty file. Copy the result off the machine:
+a backup that only exists on the host it came from is not a backup.
+
+`restore-check` loads the dump into a throwaway database and drops it again. It
+touches nothing real, and it is the whole difference between having backups and
+believing you do — run it after every schema change.
+
+`restore` replaces the live database and says so twice before doing it: it needs
+`CONFIRM=yes`. When the API is running it is stopped for the duration, because
+pg_restore cannot drop objects a live service holds open, and started again
+afterwards whether the restore worked or not.
+
 ## Logging
 
 Records are JSON on stdout, ready for Promtail. Every request gets a

@@ -8,6 +8,7 @@ ENV_FILE    := deploy/.env
 COMPOSE     := docker compose -f deploy/docker-compose.yml
 COMPOSE_DEV := $(COMPOSE) -f deploy/docker-compose.dev.yml
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+BACKUP_DIR  ?= deploy/backups
 
 # The host-side targets talk to the same containers as Compose does, so they
 # read the same credentials. Hard-coding them here would mean two sources of
@@ -50,7 +51,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env build test test-race test-db api-contract cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-observability dev-db-ui dev-down dev-logs compose-up compose-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
+.PHONY: help require-env build test test-race test-db api-contract backup restore restore-check cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-observability dev-db-ui dev-down dev-logs compose-up compose-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -184,6 +185,73 @@ front-check: front-install ## Everything CI runs for the interface
 		&& npm run error-codes && npm run typecheck && npm test && npm run build
 
 ## --- Containers -------------------------------------------------------------
+
+## --- Backups ----------------------------------------------------------------
+#
+# On-premise means nobody else is backing this machine up. What is in the core
+# database — the participants' answers and the results of an olympiad — cannot
+# be reconstructed by reinstalling anything, so this is the one piece of
+# operations that is not optional.
+#
+# The dump runs inside the container, so no PostgreSQL client is needed on the
+# host, and it goes through the same credentials as everything else in this
+# file.
+
+backup: require-env ## Dump the core database into deploy/backups/
+	@mkdir -p $(BACKUP_DIR)
+	@file=$(BACKUP_DIR)/$(CORE_DB_NAME)-$$(date +%Y%m%d-%H%M%S).dump; \
+		$(COMPOSE) exec -T pg-core \
+			pg_dump --format=custom --no-owner --username=$(CORE_DB_USER) $(CORE_DB_NAME) > $$file || \
+			{ echo "backup failed; removing the partial file"; rm -f $$file; exit 1; }; \
+		test -s $$file || { echo "the dump is empty — refusing to keep it"; rm -f $$file; exit 1; }; \
+		echo "wrote $$file ($$(du -h $$file | cut -f1))"; \
+		echo "Copy it off this machine. A backup that only exists on the host it came from is not a backup."
+
+# Proves the dump is loadable without touching anything real: it is restored
+# into a throwaway database that is dropped again immediately. Run it after
+# every change to the schema — the difference between having backups and
+# believing you do is exactly this command.
+restore-check: require-env ## Verify a dump can be loaded (FILE=path)
+	@test -n "$(FILE)" || { echo "usage: make restore-check FILE=$(BACKUP_DIR)/....dump"; exit 1; }
+	@test -f "$(FILE)" || { echo "no such file: $(FILE)"; exit 1; }
+	@scratch=restore_check_$$$$; \
+		$(COMPOSE) exec -T pg-core createdb --username=$(CORE_DB_USER) $$scratch; \
+		if $(COMPOSE) exec -T pg-core \
+			pg_restore --username=$(CORE_DB_USER) --dbname=$$scratch --no-owner --exit-on-error < "$(FILE)"; then \
+			tables=$$($(COMPOSE) exec -T pg-core psql --username=$(CORE_DB_USER) --dbname=$$scratch -tAc \
+				"SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"); \
+			echo "$(FILE) restores cleanly: $$tables tables"; result=0; \
+		else \
+			echo "$(FILE) DOES NOT restore — this backup cannot be relied on"; result=1; \
+		fi; \
+		$(COMPOSE) exec -T pg-core dropdb --username=$(CORE_DB_USER) $$scratch; \
+		exit $$result
+
+# Replaces the live database. Everything currently in it is gone.
+#
+# The API is stopped for the duration when it is running: pg_restore cannot
+# drop objects a live service holds open, and a half-restored database serving
+# requests is worse than a stopped one. It is started again afterwards whether
+# the restore worked or not — and if that fails, it says so, because a silent
+# "restored" over a service that never came back is the worst of both.
+restore: require-env ## Replace the core database from a dump (FILE=path CONFIRM=yes)
+	@test -n "$(FILE)" || { echo "usage: make restore FILE=$(BACKUP_DIR)/....dump CONFIRM=yes"; exit 1; }
+	@test -f "$(FILE)" || { echo "no such file: $(FILE)"; exit 1; }
+	@test "$(CONFIRM)" = "yes" || { \
+		echo "This REPLACES the contents of $(CORE_DB_NAME) with $(FILE)."; \
+		echo "Everything currently in it — participants, answers, results — is lost."; \
+		echo "Re-run with CONFIRM=yes when that is what you mean."; exit 1; }
+	@serving=$$($(COMPOSE) ps --status=running --services 2>/dev/null | grep -cx api || true); \
+		if [ "$$serving" = "1" ]; then echo "stopping api for the restore"; $(COMPOSE) stop api; fi; \
+		$(COMPOSE) exec -T pg-core \
+			pg_restore --username=$(CORE_DB_USER) --dbname=$(CORE_DB_NAME) \
+				--clean --if-exists --no-owner --exit-on-error < "$(FILE)"; \
+		result=$$?; \
+		if [ "$$serving" = "1" ]; then \
+			$(COMPOSE) start api || echo "the api did NOT come back up — start it by hand"; fi; \
+		if [ $$result -eq 0 ]; then echo "restored $(CORE_DB_NAME) from $(FILE)"; \
+		else echo "restore FAILED — the database is in an unknown state, do not run an olympiad on it"; fi; \
+		exit $$result
 
 dev-up: ## Start PostgreSQL and Redis for local development
 	$(COMPOSE_DEV) up -d pg-core redis
