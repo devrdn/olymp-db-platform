@@ -488,6 +488,42 @@ make migrate-down      # roll back one step
 Each migration ships an `up` and a `down` file; a test in `migrations/` fails
 the build if a pair is incomplete or a version number is reused.
 
+## Releases and deployment
+
+Development does not go near the registry. `make dev-up` starts PostgreSQL and
+Redis in containers, and the API and the interface run from your editor against
+them — no images are involved at all. `make compose-up` builds the whole stack
+from the working tree when you want to see it as it will be served.
+
+A server, on the other hand, never compiles anything:
+
+```bash
+make deploy      VERSION=v1.4.0   # everything
+make deploy-api  VERSION=v1.4.0   # only the API and its migration job
+make deploy-web  VERSION=v1.4.0   # only the interface
+make deployed                     # what is running right now
+```
+
+Three properties are worth naming, because each of them is the point:
+
+**What CI proved is what runs.** The base compose file names images and has no
+build definitions, so `docker compose up` on a missing tag fails loudly instead
+of quietly compiling something new. Building on the machine that serves an
+olympiad would also put the toolchain, the sources and a compile's worth of CPU
+on it, in the hour that has the least of both to spare.
+
+**Rolling back is the same command with the previous version.** Seconds, and no
+network beyond the registry. `VERSION` has no default that would deploy: naming
+it is what makes a deploy a decision.
+
+**One component at a time.** The API and the interface are separate images with
+separate tags, so releasing one leaves the other — and every session it is
+serving — untouched.
+
+Deployment is pull-based and run by a person on the host. Nothing reaches into
+the network from outside, no production key lives in a cloud CI system, and a
+merge never restarts a service in the middle of a running contest.
+
 ## Backups
 
 On-premise means nobody else is backing this machine up, and what is in the

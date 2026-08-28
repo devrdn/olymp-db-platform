@@ -1,0 +1,38 @@
+# Build overlay: adds back the build definitions the base file leaves out.
+#
+# The base file only names images, so a server pulls exactly what CI proved and
+# never compiles anything. This overlay is for the two places that do build:
+# a developer running the whole stack from their working tree, and CI producing
+# the images to push.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml build
+#
+# The Makefile wraps it as `make images` (build) and `make compose-up` (build
+# and run locally). Each service keeps the `image:` name from the base file, so
+# what is built is tagged exactly as what a deploy would pull — a local build
+# and a released one cannot end up under different names.
+#
+# Note that `docker compose up` on the base file alone will refuse when an
+# image is missing rather than quietly building one. That is the point: on a
+# server, "the tag does not exist" has to be an error, not a rebuild.
+
+name: db-contest
+
+services:
+  api:
+    build: &backend
+      context: ../backend
+      args:
+        VERSION: ${VERSION:-dev}
+
+  # The same image as the API, with a different entrypoint — building it three
+  # times would be three chances for them to differ.
+  migrate:
+    build: *backend
+
+  bootstrap:
+    build: *backend
+
+  web:
+    build:
+      context: ../frontend

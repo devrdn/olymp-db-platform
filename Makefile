@@ -5,8 +5,20 @@
 BACKEND     := backend
 FRONTEND    := frontend
 ENV_FILE    := deploy/.env
-COMPOSE     := docker compose -f deploy/docker-compose.yml
-COMPOSE_DEV := $(COMPOSE) -f deploy/docker-compose.dev.yml
+COMPOSE       := docker compose -f deploy/docker-compose.yml
+COMPOSE_DEV   := $(COMPOSE) -f deploy/docker-compose.dev.yml
+COMPOSE_BUILD := $(COMPOSE) -f deploy/docker-compose.build.yml
+
+# Where released images live. The base compose file only names images, so a
+# server pulls what CI proved instead of compiling on the machine that serves
+# the olympiad.
+REGISTRY         ?= ghcr.io/devrdn
+IMAGE_BACKEND    := $(REGISTRY)/db-contest-backend
+IMAGE_FRONTEND   := $(REGISTRY)/db-contest-frontend
+# What a local build is tagged with, and what `make deploy` refuses to accept
+# as a deployable version. deploy/.env deliberately does not set it: an
+# assignment there would be read by the -include below and would beat anything
+# passed in the environment.
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 BACKUP_DIR  ?= deploy/backups
 
@@ -51,7 +63,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env build test test-race test-db api-contract backup restore restore-check cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-observability dev-db-ui dev-down dev-logs compose-up compose-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
+.PHONY: help require-env require-version build test test-race test-db api-contract backup restore restore-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-observability dev-db-ui dev-down dev-logs compose-up compose-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -290,8 +302,52 @@ dev-down: ## Stop the development infrastructure
 dev-logs: ## Follow the development infrastructure logs
 	$(COMPOSE_DEV) logs -f
 
-compose-up: ## Build and start the stack (Caddy, API, database)
-	VERSION=$(VERSION) $(COMPOSE) up -d --build
+compose-up: ## Build the stack from this working tree and start it
+	VERSION=$(VERSION) $(COMPOSE_BUILD) up -d --build
+
+images: ## Build the release images from this working tree
+	VERSION=$(VERSION) $(COMPOSE_BUILD) build api web
+	@echo "built $(IMAGE_BACKEND):$(VERSION) and $(IMAGE_FRONTEND):$(VERSION)"
+
+# CI pushes these; this target exists for the day the registry is unreachable
+# from CI and somebody has to do it by hand.
+images-push: images ## Push the release images to the registry
+	docker push $(IMAGE_BACKEND):$(VERSION)
+	docker push $(IMAGE_FRONTEND):$(VERSION)
+
+## --- Deployment -------------------------------------------------------------
+#
+# Pull-based and deliberate: the server fetches a named version, nothing
+# reaches in from outside. That is what keeps a production SSH key out of a
+# cloud CI system and keeps a merge from restarting a service in the middle of
+# a running olympiad.
+#
+# VERSION is required rather than defaulted. `make deploy` picking up whatever
+# the working tree describes as is exactly how the wrong thing gets deployed.
+
+require-version:
+	@test -n "$(filter-out dev,$(VERSION))" || { 		echo "name the version to deploy, for example:"; 		echo "  make deploy VERSION=v1.4.0"; 		echo "Rolling back is the same command with the previous version."; 		exit 1; }
+
+deploy: require-env require-version ## Deploy a version of everything (VERSION=vX.Y.Z)
+	VERSION=$(VERSION) $(COMPOSE) pull
+	VERSION=$(VERSION) $(COMPOSE) up -d
+	@echo "deployed $(VERSION)"
+
+# One service at a time, which is how a frontend release leaves the API — and
+# every session it is serving — untouched.
+deploy-api: require-env require-version ## Deploy only the API (VERSION=vX.Y.Z)
+	VERSION=$(VERSION) $(COMPOSE) pull api migrate
+	VERSION=$(VERSION) $(COMPOSE) up -d api
+	@echo "deployed api $(VERSION)"
+
+deploy-web: require-env require-version ## Deploy only the interface (VERSION=vX.Y.Z)
+	VERSION=$(VERSION) $(COMPOSE) pull web
+	VERSION=$(VERSION) $(COMPOSE) up -d web
+	@echo "deployed web $(VERSION)"
+
+deployed: ## Print the versions currently running
+	@$(COMPOSE) ps --format '{{.Service}}\t{{.Image}}' 2>/dev/null || \
+		echo "nothing is running from this compose project"
 
 compose-bootstrap: require-env ## Create the first administrator inside the stack
 	$(COMPOSE) --profile bootstrap run --rm bootstrap
