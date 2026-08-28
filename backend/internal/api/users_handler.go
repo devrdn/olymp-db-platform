@@ -102,7 +102,7 @@ type createResponse struct {
 func (h *UsersHandler) create(w http.ResponseWriter, r *http.Request) {
 	var req createRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
@@ -178,7 +178,7 @@ func (h *UsersHandler) updateProfile(w http.ResponseWriter, r *http.Request) {
 
 	var req updateProfileRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
@@ -249,7 +249,7 @@ func (h *UsersHandler) replaceRoles(w http.ResponseWriter, r *http.Request) {
 
 	var req rolesRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
@@ -265,7 +265,7 @@ func (h *UsersHandler) replaceRoles(w http.ResponseWriter, r *http.Request) {
 func (h *UsersHandler) accountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, userIDParam))
 	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_user_id", "User identifier is not valid")
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidUserID, "User identifier is not valid")
 		return uuid.Nil, false
 	}
 	return id, true
@@ -276,19 +276,19 @@ func (h *UsersHandler) accountID(w http.ResponseWriter, r *http.Request) (uuid.U
 func (h *UsersHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, users.ErrNotFound):
-		httpx.Error(w, r, http.StatusNotFound, "not_found", "User not found")
+		httpx.Error(w, r, http.StatusNotFound, codeNotFound, "User not found")
 	case errors.Is(err, users.ErrLoginTaken):
-		httpx.Error(w, r, http.StatusConflict, "login_taken", "This login is already in use")
+		httpx.Error(w, r, http.StatusConflict, codeLoginTaken, "This login is already in use")
 	case errors.Is(err, users.ErrEmailTaken):
-		httpx.Error(w, r, http.StatusConflict, "email_taken", "This email is already in use")
+		httpx.Error(w, r, http.StatusConflict, codeEmailTaken, "This email is already in use")
 	case errors.Is(err, users.ErrCannotActOnSelf):
-		httpx.Error(w, r, http.StatusBadRequest, "cannot_act_on_self",
+		httpx.Error(w, r, http.StatusBadRequest, codeCannotActOnSelf,
 			"This operation cannot be performed on your own account")
 	case errors.Is(err, users.ErrWeakPassword), errors.Is(err, users.ErrSamePassword):
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_password", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidPassword, err.Error())
 	default:
 		h.log.ErrorContext(r.Context(), "account operation failed", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, "internal_error", "Internal server error")
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 	}
 }
 

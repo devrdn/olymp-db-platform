@@ -64,7 +64,7 @@ func (h *ContestsHandler) setStory(w http.ResponseWriter, r *http.Request) {
 
 	var req storyRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
@@ -203,7 +203,7 @@ func (h *ContestsHandler) addQuestion(w http.ResponseWriter, r *http.Request) {
 
 	var req questionRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
@@ -224,7 +224,7 @@ func (h *ContestsHandler) updateQuestion(w http.ResponseWriter, r *http.Request)
 
 	var req questionRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
@@ -265,7 +265,7 @@ func (h *ContestsHandler) reorderQuestions(w http.ResponseWriter, r *http.Reques
 
 	var req reorderRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
@@ -273,7 +273,7 @@ func (h *ContestsHandler) reorderQuestions(w http.ResponseWriter, r *http.Reques
 	for _, raw := range req.Order {
 		parsed, err := uuid.Parse(raw)
 		if err != nil {
-			httpx.Error(w, r, http.StatusBadRequest, "invalid_question_id",
+			httpx.Error(w, r, http.StatusBadRequest, codeInvalidQuestionID,
 				"The order contains an identifier that is not valid")
 			return
 		}
@@ -300,7 +300,7 @@ func (h *ContestsHandler) setQuestionTexts(w http.ResponseWriter, r *http.Reques
 
 	var req questionTextsRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
@@ -325,7 +325,7 @@ func (h *ContestsHandler) setAnswers(w http.ResponseWriter, r *http.Request) {
 
 	var req answersRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
@@ -350,7 +350,7 @@ func (h *ContestsHandler) questionRoute(w http.ResponseWriter, r *http.Request) 
 	}
 	questionID, err := uuid.Parse(chi.URLParam(r, questionIDParam))
 	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_question_id", "Question identifier is not valid")
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidQuestionID, "Question identifier is not valid")
 		return uuid.Nil, uuid.Nil, false
 	}
 	return contestID, questionID, true

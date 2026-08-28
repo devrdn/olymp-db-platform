@@ -72,7 +72,7 @@ func (h *ContestsHandler) grantManager(w http.ResponseWriter, r *http.Request) {
 
 	var req grantRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 	// Manager is the only role this endpoint exists to hand out, so an
@@ -195,7 +195,7 @@ func (h *ContestsHandler) addParticipants(w http.ResponseWriter, r *http.Request
 
 	var req addParticipantsRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 
@@ -203,7 +203,7 @@ func (h *ContestsHandler) addParticipants(w http.ResponseWriter, r *http.Request
 	for _, raw := range req.UserIDs {
 		parsed, err := uuid.Parse(raw)
 		if err != nil {
-			httpx.Error(w, r, http.StatusBadRequest, "invalid_user_id",
+			httpx.Error(w, r, http.StatusBadRequest, codeInvalidUserID,
 				"The roster contains an identifier that is not valid")
 			return
 		}

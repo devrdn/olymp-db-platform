@@ -119,7 +119,7 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 		// closed except for the endpoints that let them do exactly that.
 		// Enforcing it here, not in the UI, is what makes the flag real.
 		if user.MustChangePassword && !passwordChangeExempt(r.URL.Path) {
-			httpx.Error(w, r, http.StatusForbidden, "password_change_required",
+			httpx.Error(w, r, http.StatusForbidden, CodePasswordChangeRequired,
 				"Change your password before continuing")
 			return
 		}
@@ -171,19 +171,19 @@ func (m *Middleware) require(permission string, scope func(*http.Request) (uuid.
 
 			contestID, err := scope(r)
 			if err != nil {
-				httpx.Error(w, r, http.StatusBadRequest, "invalid_contest_id", "Contest identifier is not valid")
+				httpx.Error(w, r, http.StatusBadRequest, CodeInvalidContestID, "Contest identifier is not valid")
 				return
 			}
 
 			switch err := m.authz.Authorize(r.Context(), identity, permission, contestID); {
 			case err == nil:
 			case errors.Is(err, rbac.ErrForbidden):
-				httpx.Error(w, r, http.StatusForbidden, "forbidden", "You do not have access to this resource")
+				httpx.Error(w, r, http.StatusForbidden, CodeForbidden, "You do not have access to this resource")
 				return
 			default:
 				m.log.ErrorContext(r.Context(), "authorisation check failed",
 					"permission", permission, "error", err)
-				httpx.Error(w, r, http.StatusInternalServerError, "internal_error", "Internal server error")
+				httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 				return
 			}
 
@@ -203,7 +203,7 @@ func (m *Middleware) discard(ctx context.Context, token string) {
 // dead session stops sending it.
 func (m *Middleware) unauthenticated(w http.ResponseWriter, r *http.Request) {
 	m.cookies.Clear(w)
-	httpx.Error(w, r, http.StatusUnauthorized, "unauthenticated", "Sign in to continue")
+	httpx.Error(w, r, http.StatusUnauthorized, CodeUnauthenticated, "Sign in to continue")
 }
 
 func passwordChangeExempt(path string) bool {

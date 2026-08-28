@@ -1,65 +1,50 @@
 #!/usr/bin/env node
 /**
- * The error dictionary, checked against the vocabulary the API actually speaks.
+ * The error dictionary, checked against the vocabulary the API publishes.
  *
- * The specification promises that every machine code the server
- * returns has a translated message, and that the English the server sends
- * alongside it never reaches a person. Nothing enforced the first half: a code
- * added on the Go side simply fell through to the generic sentence, and the
- * only symptom was a user reading "Something went wrong" where a real reason
- * existed. That is exactly the kind of drift review does not catch, because
- * neither side looks wrong on its own.
+ * The specification promises that every machine code the server returns has a
+ * translated message, and that the English the server sends alongside it never
+ * reaches a person. Nothing enforced the first half: a code added on the server
+ * fell through to the generic sentence, and the only symptom was a user reading
+ * "Something went wrong" where a real reason existed. That is exactly the kind
+ * of drift review does not catch, because neither side looks wrong on its own.
  *
- * Run from the frontend directory with the repository checked out.
+ * This used to read the server's own source and recover the codes with a
+ * regular expression. It was both a dependency on another language's layout and
+ * unsound: a code written anywhere but the expected call shape was invisible,
+ * and `not_publishable` shipped with no message in any language while this
+ * check reported success.
+ *
+ * It now reads the contract the server generates (docs/api/error-codes.json),
+ * which is exact by construction — a code that is not declared cannot be sent.
+ * Nothing here knows that the server is written in Go, so if the two ever live
+ * in separate repositories, only CONTRACT changes: from a path to wherever the
+ * published file is fetched from.
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const BACKEND = "../backend/internal";
+const CONTRACT = "../docs/api/error-codes.json";
 const DICTIONARIES = "lib/i18n/dictionaries";
 
 /** Codes this layer invents for failures that never reached the API. */
 const CLIENT_ONLY = new Set(["fallback", "unreachable", "password_mismatch"]);
 
-function goFiles(dir) {
-  const out = [];
-  for (const entry of readdirSync(dir)) {
-    const path = join(dir, entry);
-    if (statSync(path).isDirectory()) out.push(...goFiles(path));
-    else if (entry.endsWith(".go") && !entry.endsWith("_test.go")) out.push(path);
-  }
-  return out;
-}
-
-/**
- * Every code the service can put on the wire.
- *
- * Matched on the call rather than on a constant list, because the codes are
- * written inline at the call site — including inside `platform/httpx` itself,
- * where the helper is called without its package name.
- *
- * Two shapes, because there are two ways a code reaches the wire. Most go
- * through the httpx.Error helper. A handler that has to send more than the
- * error object — the publish gate returns the list of what is missing
- * alongside it — writes the envelope itself, and that form was invisible here:
- * `not_publishable` shipped with no message and this check reported success,
- * which is precisely the drift it exists to catch.
- */
 function serverCodes() {
-  const found = new Set();
-  const shapes = [
-    /\bError\(\s*w,\s*r,[^,]+,\s*"([a-z_]+)"/g,
-    /"code":\s*"([a-z_]+)"/g,
-  ];
-
-  for (const file of goFiles(BACKEND)) {
-    const source = readFileSync(file, "utf8");
-    for (const shape of shapes) {
-      for (const match of source.matchAll(shape)) found.add(match[1]);
-    }
+  let contract;
+  try {
+    contract = JSON.parse(readFileSync(CONTRACT, "utf8"));
+  } catch (cause) {
+    throw new Error(
+      `Cannot read ${CONTRACT}. Regenerate it with \`make api-contract\`.`,
+      { cause },
+    );
   }
-  return found;
+  if (!Array.isArray(contract.codes) || contract.codes.length === 0) {
+    throw new Error(`${CONTRACT} lists no codes; regenerate it with \`make api-contract\`.`);
+  }
+  return new Set(contract.codes.map((entry) => entry.code));
 }
 
 function dictionaryCodes(file) {
@@ -97,4 +82,4 @@ if (failures) {
   process.exit(1);
 }
 
-console.log(`Every one of the ${server.size} codes the API returns has a message in all ${locales.length} locales.`);
+console.log(`Every one of the ${server.size} codes the API publishes has a message in all ${locales.length} locales.`);

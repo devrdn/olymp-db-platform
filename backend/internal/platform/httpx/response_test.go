@@ -32,7 +32,7 @@ func TestErrorWritesStructuredErrorBody(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 
-	Error(rec, req, http.StatusNotFound, "not_found", "Contest not found")
+	Error(rec, req, http.StatusNotFound, NewCode("not_found", "Declared by a test."), "Contest not found")
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
@@ -57,7 +57,7 @@ func TestErrorWritesStructuredErrorBody(t *testing.T) {
 func TestErrorIncludesRequestIDWhenPresent(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		Error(w, r, http.StatusForbidden, "forbidden", "Access denied")
+		Error(w, r, http.StatusForbidden, NewCode("forbidden", "Declared by a test."), "Access denied")
 	}))
 
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -86,5 +86,81 @@ func TestNoContentWritesEmptyBody(t *testing.T) {
 	}
 	if rec.Body.Len() != 0 {
 		t.Errorf("body = %q, want empty", rec.Body.String())
+	}
+}
+
+func TestErrorAnswersWithTheDeclaredCode(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	Error(rec, req, http.StatusNotFound, NewCode("gone_test", "Declared by a test."), "Nothing here")
+
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	if body.Error.Code != "gone_test" {
+		t.Errorf("code = %q, want gone_test", body.Error.Code)
+	}
+	if body.Error.Message != "Nothing here" {
+		t.Errorf("message = %q, want the one that was passed", body.Error.Message)
+	}
+}
+
+func TestErrorWithDetailsKeepsTheErrorObjectAndAddsBesideIt(t *testing.T) {
+	// The publish gate answers with a code and the list of what is missing.
+	// Writing that envelope by hand is how a code once reached clients without
+	// ever being declared; this is the one way to send more than the error
+	// object.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	ErrorWithDetails(rec, req, http.StatusUnprocessableEntity,
+		NewCode("not_ready_test", "Declared by a test."), "Not ready",
+		map[string]any{"problems": []string{"no_story"}})
+
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+		Problems []string `json:"problems"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	if body.Error.Code != "not_ready_test" {
+		t.Errorf("code = %q, want not_ready_test", body.Error.Code)
+	}
+	if len(body.Problems) != 1 || body.Problems[0] != "no_story" {
+		t.Errorf("problems = %v, want the detail carried beside the error", body.Problems)
+	}
+}
+
+func TestDetailsCannotOverwriteTheErrorObject(t *testing.T) {
+	// A caller passing "error" would replace the very thing every client
+	// parses, and the code would vanish from a response that still looked
+	// well formed.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	ErrorWithDetails(rec, req, http.StatusConflict,
+		NewCode("kept_test", "Declared by a test."), "Kept",
+		map[string]any{"error": "hijacked"})
+
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	if body.Error.Code != "kept_test" {
+		t.Errorf("code = %q, want the declared code to survive", body.Error.Code)
 	}
 }

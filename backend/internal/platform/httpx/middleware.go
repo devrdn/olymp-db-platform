@@ -48,7 +48,7 @@ func Recoverer(log *slog.Logger) Middleware {
 						"method", r.Method,
 						"path", r.URL.Path,
 					)
-					Error(w, r, http.StatusInternalServerError, "internal_error", "Internal server error")
+					Error(w, r, http.StatusInternalServerError, CodeInternalError, "Internal server error")
 				}
 			}()
 

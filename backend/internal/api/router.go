@@ -91,10 +91,10 @@ func NewRouter(deps Deps) *chi.Mux {
 	r.Use(httpx.SecureHeaders)
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		httpx.Error(w, r, http.StatusNotFound, "not_found", "Resource not found")
+		httpx.Error(w, r, http.StatusNotFound, codeNotFound, "Resource not found")
 	})
 	r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
-		httpx.Error(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed for this resource")
+		httpx.Error(w, r, http.StatusMethodNotAllowed, codeMethodNotAllowed, "Method not allowed for this resource")
 	})
 
 	r.Route("/api/v1", func(r chi.Router) {

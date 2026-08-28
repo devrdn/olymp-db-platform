@@ -50,7 +50,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env build test test-race test-db cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-observability dev-db-ui dev-down dev-logs compose-up compose-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
+.PHONY: help require-env build test test-race test-db api-contract cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap compose-bootstrap compose-observability dev-up dev-observability dev-db-ui dev-down dev-logs compose-up compose-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -87,6 +87,12 @@ fmt: ## Format the Go sources
 
 tidy: ## Sync go.mod and go.sum
 	cd $(BACKEND) && go mod tidy
+
+# The API's error vocabulary, published as data for the interface to check its
+# messages against. A test fails when the committed file is out of date, so
+# this is never something anybody has to remember on their own.
+api-contract: ## Regenerate docs/api/error-codes.json from the declared codes
+	cd $(BACKEND) && go run ./cmd/apicontract
 
 check: fmt vet test ## Format, vet and test — run before pushing
 
