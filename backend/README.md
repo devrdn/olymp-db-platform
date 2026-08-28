@@ -403,12 +403,12 @@ Prometheus, Loki, Promtail and Grafana are optional and off by default — a
 small install stays small. Bring them up:
 
 ```bash
-make compose-observability   # alongside the containerized stack (make compose-up)
+make stack-observability   # alongside the containerized stack (make stack-up)
 make dev-observability       # alongside the dev infrastructure (make dev-up)
 ```
 
 Both are pure additions: they only start the four observability services by
-name, never the rest of the stack, and `make dev-down` / `make compose-down`
+name, never the rest of the stack, and `make dev-down` / `make stack-down`
 tear them down along with everything else. Grafana is at
 `http://localhost:${GRAFANA_PORT:-3001}` (bound to loopback), login `admin` /
 your `GRAFANA_PASSWORD`; Prometheus and Loki are provisioned as its
@@ -492,7 +492,7 @@ the build if a pair is incomplete or a version number is reused.
 
 Development does not go near the registry. `make dev-up` starts PostgreSQL and
 Redis in containers, and the API and the interface run from your editor against
-them — no images are involved at all. `make compose-up` builds the whole stack
+them — no images are involved at all. `make stack-up` builds the whole stack
 from the working tree when you want to see it as it will be served.
 
 A server, on the other hand, never compiles anything:
@@ -558,7 +558,7 @@ the identifier from the request context, so handlers do not pass it explicitly.
 
 ## Troubleshooting
 
-**`bind: address already in use` on port 80/443 (`make compose-up`).** Caddy
+**`bind: address already in use` on port 80/443 (`make stack-up`).** Caddy
 wants those ports and something else on the host already has them — commonly
 macOS's built-in Apache (`sudo apachectl stop`, and
 `sudo launchctl disable system/org.apache.httpd` if you want it to stay off
@@ -572,15 +572,15 @@ that has no `profiles:` key at all (`api`, `caddy`, `pg-core`, `migrate`),
 because those are Compose's unconditional "default set" and start on any `up`
 regardless of which profiles are active. The only way to actually limit `up`
 to a specific set is to name the services explicitly, which is what
-`compose-observability` and `dev-observability` both do
+`stack-observability` and `dev-observability` both do
 (`up -d prometheus loki promtail grafana`) — `--profile` is still required
 too, or Compose skips them as "not in an active profile".
 
-**`make dev-down` (or `compose-down`) leaves containers running / refuses to
+**`make dev-down` (or `stack-down`) leaves containers running / refuses to
 remove the network.** Same root cause as above, in reverse: `down` without the
 right `--profile` flags does not know about profiled services that are
 currently up, so it cannot stop them, and then can't remove a network they are
-still attached to. Both `dev-down` and `compose-down` pass every profile this
+still attached to. Both `dev-down` and `stack-down` pass every profile this
 project defines for exactly this reason — if you add a new profile to
 `docker-compose.yml`, add it there too.
 
