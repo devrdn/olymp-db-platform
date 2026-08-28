@@ -1,9 +1,24 @@
 name: frontend
 
+# Only what this component owns, plus the API's published contract: the error
+# dictionary is checked against docs/api/error-codes.json, so a change there is
+# a change to what this interface must be able to say. That file is the entire
+# dependency — nothing here reads the server's source.
+#
+# See the note in backend.yml before making these required checks.
 on:
   push:
     branches: [main]
+    tags: ["v*"]
+    paths:
+      - "frontend/**"
+      - "docs/api/error-codes.json"
+      - ".github/workflows/frontend.yml"
   pull_request:
+    paths:
+      - "frontend/**"
+      - "docs/api/error-codes.json"
+      - ".github/workflows/frontend.yml"
 
 # Least privilege: the workflow only reads the repository.
 permissions:
@@ -55,3 +70,40 @@ jobs:
       - run: npm test
 
       - run: npm run build
+
+  publish:
+    name: build and publish the image
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/db-contest-frontend
+          tags: |
+            type=sha,format=long,prefix=sha-
+            type=ref,event=branch
+            type=semver,pattern={{raw}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

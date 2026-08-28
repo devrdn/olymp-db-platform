@@ -8,6 +8,15 @@
 
 name: db-contest
 
+# The application images are pulled, not built here. Building on the machine
+# that serves an olympiad would put the toolchain, the sources and a compile's
+# worth of CPU on it, and — worse — what ran would be a different build from
+# the one CI proved. docker-compose.build.yml adds the build definitions back
+# for local work and for CI, which is the only place that builds them.
+#
+# One backend image carries all three binaries; api, migrate and bootstrap are
+# the same image with different entrypoints.
+
 services:
   pg-core:
     image: postgres:16-alpine
@@ -59,10 +68,7 @@ services:
   # One-shot job: applies pending migrations, then exits. The API waits for it
   # to finish successfully, so no replica ever serves an unmigrated schema.
   migrate:
-    build:
-      context: ../backend
-      args:
-        VERSION: ${VERSION:-dev}
+    image: ${REGISTRY:-ghcr.io/devrdn}/db-contest-backend:${VERSION:-dev}
     restart: "no"
     entrypoint: ["/usr/local/bin/migrate", "up"]
     environment:
@@ -76,10 +82,7 @@ services:
   # its one-time password to the job log. Run it once after the first deploy:
   #   docker compose --profile bootstrap run --rm bootstrap
   bootstrap:
-    build:
-      context: ../backend
-      args:
-        VERSION: ${VERSION:-dev}
+    image: ${REGISTRY:-ghcr.io/devrdn}/db-contest-backend:${VERSION:-dev}
     profiles: [bootstrap]
     restart: "no"
     # The job prints the administrator's one-time password. With the default
@@ -99,10 +102,7 @@ services:
     networks: [internal]
 
   api:
-    build:
-      context: ../backend
-      args:
-        VERSION: ${VERSION:-dev}
+    image: ${REGISTRY:-ghcr.io/devrdn}/db-contest-backend:${VERSION:-dev}
     restart: unless-stopped
     environment:
       ENV: ${ENV:-production}
@@ -145,8 +145,7 @@ services:
   # page dials the API directly, which is why API_ORIGIN is a service name and
   # not a public one.
   web:
-    build:
-      context: ../frontend
+    image: ${REGISTRY:-ghcr.io/devrdn}/db-contest-frontend:${VERSION:-dev}
     restart: unless-stopped
     environment:
       NODE_ENV: ${NODE_ENV:-production}
