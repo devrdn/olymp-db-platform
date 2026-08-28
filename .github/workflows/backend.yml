@@ -53,6 +53,15 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+    # A literal, not a secret, and deliberately so. It has to match the
+    # password three lines above, in this same file; hiding one half of a pair
+    # in GitHub Secrets would conceal nothing and would suggest something here
+    # is protected. The database it names is created by this job on the runner,
+    # holds only fixtures the tests roll back, is reachable from nowhere else,
+    # and is destroyed with the virtual machine minutes later.
+    #
+    # The credentials that do matter — deploy/.env — are on the installation's
+    # own host and never come near this file.
     env:
       CORE_DB_DSN: postgres://dbcontest:dbcontest@localhost:5432/dbcontest_core?sslmode=disable
 
