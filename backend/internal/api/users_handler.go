@@ -38,6 +38,7 @@ func (h *UsersHandler) Mount(r chi.Router) {
 
 		r.Get("/", h.list)
 		r.Post("/", h.create)
+		r.Post("/import", h.importRoster)
 
 		r.Route("/{"+userIDParam+"}", func(r chi.Router) {
 			r.Get("/", h.byID)
@@ -123,6 +124,78 @@ func (h *UsersHandler) create(w http.ResponseWriter, r *http.Request) {
 		User:            toUserResponse(created.User),
 		OneTimePassword: created.OneTimePassword,
 	})
+}
+
+// importRequest is a whole group at once.
+//
+// Accounts are created by an administrator rather than by self-registration
+// (§7), and a group arrives as a list from the department. One request per
+// student is thirty round trips and thirty chances to lose one.
+type importRequest struct {
+	Rows []importRow `json:"rows"`
+	// Roles every created account receives, typically the single student role.
+	Roles []string `json:"roles"`
+}
+
+type importRow struct {
+	Login    string `json:"login"`
+	FullName string `json:"full_name"`
+	Email    string `json:"email"`
+}
+
+// importResponse reports the outcome row by row.
+//
+// Partial success, honestly: one duplicate must not reject the other
+// twenty-nine, and whoever pasted the list has to see which line to fix. The
+// one-time passwords appear here and nowhere else — they are not stored in
+// clear and cannot be fetched later.
+type accountImportResponse struct {
+	Created []createResponse `json:"created"`
+	Skipped []skippedAccount `json:"skipped"`
+}
+
+type skippedAccount struct {
+	Login  string `json:"login"`
+	Reason string `json:"reason"`
+}
+
+func (h *UsersHandler) importRoster(w http.ResponseWriter, r *http.Request) {
+	var req importRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+		return
+	}
+
+	rows := make([]users.ImportRow, 0, len(req.Rows))
+	for _, row := range req.Rows {
+		rows = append(rows, users.ImportRow{
+			Login: row.Login, FullName: row.FullName, Email: row.Email,
+		})
+	}
+
+	identity, _ := auth.IdentityFrom(r.Context())
+	result, err := h.service.Import(r.Context(), users.ImportCommand{
+		ActorID: identity.UserID,
+		Rows:    rows,
+		Roles:   req.Roles,
+	})
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+
+	created := make([]createResponse, 0, len(result.Created))
+	for _, one := range result.Created {
+		created = append(created, createResponse{
+			User:            toUserResponse(one.User),
+			OneTimePassword: one.OneTimePassword,
+		})
+	}
+	skipped := make([]skippedAccount, 0, len(result.Skipped))
+	for _, one := range result.Skipped {
+		skipped = append(skipped, skippedAccount{Login: one.Login, Reason: one.Reason})
+	}
+	httpx.JSON(w, r, http.StatusOK, accountImportResponse{Created: created, Skipped: skipped})
 }
 
 type listResponse struct {
@@ -284,6 +357,8 @@ func (h *UsersHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, users.ErrCannotActOnSelf):
 		httpx.Error(w, r, http.StatusBadRequest, codeCannotActOnSelf,
 			"This operation cannot be performed on your own account")
+	case errors.Is(err, users.ErrRosterTooLarge):
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 	case errors.Is(err, users.ErrWeakPassword), errors.Is(err, users.ErrSamePassword):
 		httpx.Error(w, r, http.StatusBadRequest, codeInvalidPassword, err.Error())
 	default:

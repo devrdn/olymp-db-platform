@@ -3,6 +3,8 @@ package users_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -541,5 +543,114 @@ func TestAFailedAuditWriteAbortsTheOperation(t *testing.T) {
 
 	if err == nil {
 		t.Error("Block succeeded although the audit write failed")
+	}
+}
+
+func TestImportCreatesAnAccountForEveryRow(t *testing.T) {
+	// A group arrives as a list from the department, and creating thirty
+	// accounts one request at a time is thirty chances to lose one.
+	f := newFixture(t)
+	svc, repo := f.service, f.repo
+
+	result, err := svc.Import(context.Background(), users.ImportCommand{
+		ActorID: f.actor,
+		Rows: []users.ImportRow{
+			{Login: "s.popescu", FullName: "Sergiu Popescu"},
+			{Login: "i.ivanov", FullName: "Ivan Ivanov", Email: "i@example.edu"},
+		},
+		Roles: []string{"student"},
+	})
+	if err != nil {
+		t.Fatalf("Import() = %v", err)
+	}
+
+	if len(result.Created) != 2 {
+		t.Fatalf("created %d accounts, want 2", len(result.Created))
+	}
+	for _, created := range result.Created {
+		if created.OneTimePassword == "" {
+			t.Errorf("%s got no password to hand over", created.User.Login)
+		}
+		if !created.User.MustChangePassword {
+			t.Errorf("%s may keep the password an administrator saw", created.User.Login)
+		}
+	}
+	if _, err := repo.ByLogin(context.Background(), "s.popescu"); err != nil {
+		t.Errorf("the account was not stored: %v", err)
+	}
+}
+
+func TestImportReportsTheRowsItCouldNotUse(t *testing.T) {
+	// One duplicate must not reject the other twenty-nine, and whoever pasted
+	// the list has to see which line to fix.
+	f := newFixture(t)
+	svc := f.service
+	if _, err := svc.Create(context.Background(), users.CreateCommand{
+		Login: "s.popescu", FullName: "Sergiu Popescu",
+	}); err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
+
+	result, err := svc.Import(context.Background(), users.ImportCommand{
+		ActorID: f.actor,
+		Rows: []users.ImportRow{
+			{Login: "s.popescu", FullName: "Sergiu Popescu"},
+			{Login: "i.ivanov", FullName: "Ivan Ivanov"},
+			{Login: "  ", FullName: "Nobody"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Import() = %v", err)
+	}
+
+	if len(result.Created) != 1 {
+		t.Errorf("created %d accounts, want 1", len(result.Created))
+	}
+	reasons := map[string]string{}
+	for _, skipped := range result.Skipped {
+		reasons[skipped.Login] = skipped.Reason
+	}
+	if reasons["s.popescu"] != users.SkipLoginTaken {
+		t.Errorf("the duplicate was skipped as %q, want %q", reasons["s.popescu"], users.SkipLoginTaken)
+	}
+	if len(result.Skipped) != 2 {
+		t.Errorf("skipped %+v, want the duplicate and the empty row", result.Skipped)
+	}
+}
+
+func TestImportRefusesARosterLargerThanAGroup(t *testing.T) {
+	// Every row costs an argon2id hash, which is deliberately expensive. An
+	// unbounded list is a way to spend the server's CPU with one request.
+	f := newFixture(t)
+	svc := f.service
+
+	rows := make([]users.ImportRow, 501)
+	for i := range rows {
+		rows[i] = users.ImportRow{Login: fmt.Sprintf("s%d", i), FullName: "Student"}
+	}
+
+	_, err := svc.Import(context.Background(), users.ImportCommand{ActorID: f.actor, Rows: rows})
+
+	if !errors.Is(err, users.ErrRosterTooLarge) {
+		t.Errorf("Import() = %v, want ErrRosterTooLarge", err)
+	}
+}
+
+func TestImportRecordsEachAccountItCreated(t *testing.T) {
+	// Thirty accounts appearing at once with no trail is exactly the kind of
+	// thing the trail exists for.
+	f := newFixture(t)
+	svc := f.service
+
+	if _, err := svc.Import(context.Background(), users.ImportCommand{
+		ActorID: f.actor,
+		Rows:    []users.ImportRow{{Login: "s.popescu", FullName: "Sergiu Popescu"}},
+	}); err != nil {
+		t.Fatalf("Import() = %v", err)
+	}
+
+	if !slices.Contains(f.sink.actions(), audit.ActionUserCreate) {
+		t.Errorf("actions = %v, want a %s for the imported account",
+			f.sink.actions(), audit.ActionUserCreate)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -167,4 +168,75 @@ func redact(payload map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
+}
+
+// Record is one entry of the trail as it is read back.
+//
+// Wider than Entry, which is what a caller writes: reading answers "who, what,
+// when, from where", and the actor is a login rather than an identifier
+// because a page of UUIDs answers nothing. A system event has no actor at all,
+// and says so by leaving both empty.
+type Record struct {
+	ID      int64
+	ActorID *uuid.UUID
+	// ActorLogin is empty for a system event, and for an account that has since
+	// been deleted — the trail outlives the people in it, which is the point.
+	ActorLogin string
+	Action     string
+	Entity     string
+	EntityID   string
+	Payload    map[string]any
+	IP         string
+	UserAgent  string
+	CreatedAt  time.Time
+}
+
+// Filter selects a page of the trail.
+//
+// Every field narrows; an empty one does not. The two that matter in practice
+// are Actor ("what did this person do") and Entity with EntityID ("what
+// happened to this contest"), which is why the table carries an index for each.
+type Filter struct {
+	Actor    uuid.UUID
+	Action   string
+	Entity   string
+	EntityID string
+	// From and To bound created_at, inclusive of From and exclusive of To.
+	From  *time.Time
+	To    *time.Time
+	Limit int
+	// Offset pages backwards through history, newest first.
+	Offset int
+}
+
+// Normalize clamps the page size.
+//
+// The trail is the largest table in the core database and is kept for a year;
+// an unbounded request would ask the server to hold a year of it in memory.
+func (f Filter) Normalize() Filter {
+	const (
+		defaultLimit = 50
+		maxLimit     = 200
+	)
+	if f.Limit <= 0 {
+		f.Limit = defaultLimit
+	}
+	if f.Limit > maxLimit {
+		f.Limit = maxLimit
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+	return f
+}
+
+// Reader reads the trail back.
+//
+// Separate from Sink because the two have nothing in common but a table: one
+// is written inside every action's transaction and must never fail silently,
+// the other is a paged query behind a permission.
+type Reader interface {
+	// List returns a page of the trail, newest first, and the total number of
+	// entries matching the filter.
+	List(ctx context.Context, f Filter) ([]Record, int, error)
 }

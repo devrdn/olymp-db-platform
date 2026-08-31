@@ -372,3 +372,99 @@ func (s *Service) BootstrapAdmin(ctx context.Context, login, fullName string) (B
 		Created:         true,
 	}, nil
 }
+
+// Why a row of an import produced no account.
+const (
+	SkipLoginTaken = "login_taken"
+	SkipEmailTaken = "email_taken"
+	SkipInvalidRow = "invalid_row"
+)
+
+// maxImportRows bounds a roster.
+//
+// Every row costs an argon2id hash, which is deliberately expensive: 64 MiB
+// and three passes. An unbounded list would be a way to spend the server's
+// memory and CPU with one request, on an endpoint an organizer legitimately
+// holds. A university group is thirty people and a whole year is a few
+// hundred, so this is far above any honest use.
+const maxImportRows = 500
+
+// ErrRosterTooLarge reports an import above that bound.
+var ErrRosterTooLarge = errors.New("too many rows in one import")
+
+// ImportRow is one line of a roster.
+type ImportRow struct {
+	Login    string
+	FullName string
+	Email    string
+}
+
+// ImportCommand creates accounts for a whole group.
+//
+// Accounts are created by an administrator rather than by self-registration
+// (see §7), and a group arrives as a list from the department — so creating
+// them one request at a time is thirty round trips and thirty chances to lose
+// one.
+type ImportCommand struct {
+	ActorID uuid.UUID
+	Rows    []ImportRow
+	// Roles every created account receives. Typically the single student role.
+	Roles []string
+}
+
+// ImportResult reports what an import did, row by row.
+//
+// Partial success is the honest outcome, exactly as it is for a contest
+// roster: one duplicate must not reject the other twenty-nine, and whoever
+// pasted the list has to see which line to fix.
+type ImportResult struct {
+	Created []CreateResult
+	Skipped []SkippedRow
+}
+
+// SkippedRow is one line that produced no account.
+type SkippedRow struct {
+	// Login is the value exactly as it was given, so the line can be found
+	// again in the list it came from.
+	Login  string
+	Reason string
+}
+
+// Import creates an account for every row it can use.
+//
+// Each account is created in its own unit of work, through the same path as a
+// single creation: one bad row rolls back its own row and nothing else. The
+// alternative — one transaction for the whole roster — would make the
+// twenty-ninth duplicate discard the twenty-eight accounts before it, and the
+// one-time passwords already shown for them.
+func (s *Service) Import(ctx context.Context, cmd ImportCommand) (ImportResult, error) {
+	if len(cmd.Rows) > maxImportRows {
+		return ImportResult{}, fmt.Errorf("%w: %d rows, at most %d",
+			ErrRosterTooLarge, len(cmd.Rows), maxImportRows)
+	}
+
+	var result ImportResult
+	for _, row := range cmd.Rows {
+		created, err := s.Create(ctx, CreateCommand{
+			ActorID:  cmd.ActorID,
+			Login:    row.Login,
+			Email:    row.Email,
+			FullName: row.FullName,
+			Roles:    cmd.Roles,
+		})
+		switch {
+		case err == nil:
+			result.Created = append(result.Created, created)
+		case errors.Is(err, ErrLoginTaken):
+			result.Skipped = append(result.Skipped, SkippedRow{Login: row.Login, Reason: SkipLoginTaken})
+		case errors.Is(err, ErrEmailTaken):
+			result.Skipped = append(result.Skipped, SkippedRow{Login: row.Login, Reason: SkipEmailTaken})
+		default:
+			// A row that could never be an account — no login, no name. The
+			// message is not carried: it is the same for every such row and
+			// the line number is what the importer needs.
+			result.Skipped = append(result.Skipped, SkippedRow{Login: row.Login, Reason: SkipInvalidRow})
+		}
+	}
+	return result, nil
+}
