@@ -50,4 +50,30 @@ describe("signIn", () => {
     expect(outcome).toEqual({ ok: false, code: "invalid_credentials" });
     expect(cookieWasSet).toBe(false);
   });
+
+  test("carries the caller's forwarded address to the API", async () => {
+    // Sign-in reaches the API from this server, so without the chain the API
+    // throttles and audits the web container instead of the person. The
+    // headers are the action's to decide — this layer just must not lose them.
+    let sent: Headers | undefined;
+
+    await signIn(
+      { login: "strelcova.i", password: "correct horse" },
+      {
+        fetchImpl: async (_input, init) => {
+          sent = new Headers(init?.headers);
+          return new Response(JSON.stringify({ error: { code: "invalid_credentials" } }), {
+            status: 401,
+            headers: { "content-type": "application/json" },
+          });
+        },
+        setCookie: () => {},
+        headers: { "x-forwarded-for": "203.0.113.7", "user-agent": "Mozilla/5.0" },
+      },
+    );
+
+    expect(sent?.get("x-forwarded-for")).toBe("203.0.113.7");
+    expect(sent?.get("user-agent")).toBe("Mozilla/5.0");
+    expect(sent?.get("content-type")).toBe("application/json");
+  });
 });

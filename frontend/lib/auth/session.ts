@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 
+import { callerHeaders } from "@/lib/api/caller";
 import { API_PREFIX } from "@/lib/api/client";
 import { apiOrigin } from "@/lib/api/config";
 
@@ -41,7 +42,7 @@ export async function fetchIdentity(): Promise<CurrentIdentity | null> {
   if (!header.cookie) return null;
 
   const response = await fetch(`${apiOrigin()}${API_PREFIX}/auth/me`, {
-    headers: header,
+    headers: { ...(await callerHeaders()), ...header },
     cache: "no-store",
   }).catch(() => null);
 
