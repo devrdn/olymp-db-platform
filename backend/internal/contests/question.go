@@ -327,14 +327,7 @@ func (s *Service) UpdateQuestion(ctx context.Context, cmd QuestionCommand) (Ques
 
 	// Which question, and what was done to it. The identifier alone answered
 	// only the first half, which is not the half anybody asks about.
-	changes := audit.NewChanges()
-	changes.Set("kind", current.Kind, updated.Kind)
-	changes.Set("points", current.Points, updated.Points)
-	changes.Set("max_attempts", current.MaxAttempts, updated.MaxAttempts)
-	changes.Set("is_visible", current.IsVisible, updated.IsVisible)
-	changes.Set("choice_ids", current.ChoiceIDs, updated.ChoiceIDs)
-
-	payload := changes.Payload()
+	payload := audit.Between(current.auditFields(), updated.auditFields()).Payload()
 	payload["question_id"] = updated.ID.String()
 
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
@@ -475,4 +468,18 @@ func textLanguages(texts map[string]QuestionText) []string {
 	}
 	slices.Sort(codes)
 	return codes
+}
+
+// auditFields is the part of a question that may be written to the audit
+// trail. The wording and the reference answers are not in it: the first is
+// authored text, and the second must never become something the trail can be
+// read for (§9.2).
+func (q Question) auditFields() map[string]any {
+	return map[string]any{
+		"kind":         q.Kind,
+		"points":       q.Points,
+		"max_attempts": q.MaxAttempts,
+		"is_visible":   q.IsVisible,
+		"choice_ids":   q.ChoiceIDs,
+	}
 }

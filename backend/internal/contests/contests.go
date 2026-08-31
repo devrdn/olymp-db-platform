@@ -345,3 +345,25 @@ type Repository interface {
 	// ReplaceTranslations sets the contest's titles to exactly these.
 	ReplaceTranslations(ctx context.Context, id uuid.UUID, translations []Translation) error
 }
+
+// auditFields is the part of a contest that may be written to the audit trail.
+//
+// One list, next to the type, rather than repeated wherever a change is
+// recorded: it reads as a decision about what the trail may hold, and a field
+// added to the contest is either added here deliberately or not recorded at
+// all. Authored text is absent on purpose — the trail records that titles
+// changed and in which languages, never the titles (§9.2).
+func (c Contest) auditFields() map[string]any {
+	return map[string]any{
+		"enrollment":               c.Enrollment,
+		"question_mode":            c.QuestionMode,
+		"timing":                   c.Timing,
+		"duration_min":             c.DurationMin,
+		"starts_at":                c.StartsAt,
+		"ends_at":                  c.EndsAt,
+		"allowed_cidrs":            cidrStrings(c.AllowedCIDRs),
+		"enrollment_deadline":      c.Settings.EnrollmentDeadline,
+		"query_rate_limit_per_min": c.Settings.QueryRateLimitPerMin,
+		"grace_period_min":         c.Settings.GracePeriodMin,
+	}
+}

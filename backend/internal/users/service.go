@@ -261,9 +261,7 @@ func (s *Service) UpdateProfile(ctx context.Context, actorID, userID uuid.UUID, 
 
 	// What moved and what it was. The new name alone said neither what it
 	// replaced nor whether the email had changed at all.
-	changes := audit.NewChanges()
-	changes.Set("full_name", current.FullName, fullName)
-	changes.Set("email", current.Email, email)
+	changes := audit.Between(current.auditFields(), User{FullName: fullName, Email: email}.auditFields())
 
 	return s.uow.Do(ctx, func(ctx context.Context) error {
 		if err := s.repo.UpdateProfile(ctx, userID, fullName, email); err != nil {
