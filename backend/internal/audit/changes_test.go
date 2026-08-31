@@ -166,3 +166,52 @@ func TestTheNumberOfFieldsIsBounded(t *testing.T) {
 		t.Errorf("recorded %d fields, want at most %d", len(got), maxChangedFields)
 	}
 }
+
+func TestBetweenRecordsOnlyWhatDiffers(t *testing.T) {
+	// The call site should say "these two shapes" once, not repeat the list of
+	// fields it is comparing — the list belongs next to the type it describes.
+	changes := Between(
+		map[string]any{"enrollment": "invite_only", "timing": "fixed", "points": 5},
+		map[string]any{"enrollment": "open", "timing": "fixed", "points": 5},
+	)
+
+	got := changes.Payload()["changes"].(map[string]any)
+
+	if len(got) != 1 {
+		t.Fatalf("changes = %v, want only the enrollment", got)
+	}
+	if got["enrollment"].(map[string]any)["to"] != "open" {
+		t.Errorf("enrollment = %v, want it recorded", got["enrollment"])
+	}
+}
+
+func TestBetweenTwoIdenticalShapesRecordsNothing(t *testing.T) {
+	changes := Between(
+		map[string]any{"timing": "fixed"},
+		map[string]any{"timing": "fixed"},
+	)
+
+	if !changes.Empty() {
+		t.Errorf("Payload() = %v, want nothing recorded", changes.Payload())
+	}
+}
+
+func TestBetweenTreatsAFieldOnOneSideOnlyAsAChange(t *testing.T) {
+	// The two shapes come from one function, so this should not happen — and
+	// when it does, silently ignoring the field would hide the very edit
+	// somebody is looking for.
+	changes := Between(
+		map[string]any{"points": 5},
+		map[string]any{"points": 5, "max_attempts": 3},
+	)
+
+	got := changes.Payload()["changes"].(map[string]any)
+
+	attempts, ok := got["max_attempts"].(map[string]any)
+	if !ok {
+		t.Fatalf("changes = %v, want the field that appeared", got)
+	}
+	if attempts["from"] != nil || attempts["to"] != 3 {
+		t.Errorf("max_attempts = %v, want nil → 3", attempts)
+	}
+}

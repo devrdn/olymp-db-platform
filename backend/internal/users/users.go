@@ -109,3 +109,17 @@ func (f Filter) Normalize() Filter {
 	}
 	return f
 }
+
+// auditFields is the part of an account that may be written to the audit
+// trail.
+//
+// Declared beside the type rather than at each place a change is recorded, so
+// a column added to User is either listed here deliberately or not recorded at
+// all. The digest, the session generation and the password timestamps are
+// absent on purpose: the trail is read by administrators and kept for a year.
+func (u User) auditFields() map[string]any {
+	return map[string]any{
+		"full_name": u.FullName,
+		"email":     u.Email,
+	}
+}

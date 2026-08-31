@@ -61,6 +61,31 @@ func (c *Changes) Set(field string, before, after any) {
 	c.fields[field] = map[string]any{"from": bounded(from), "to": bounded(to)}
 }
 
+// Between records what differs between two shapes of the same thing.
+//
+// The call site says "these two", once, instead of repeating the list of
+// fields it compares — that list belongs beside the type it describes, where
+// it reads as a decision about what may be recorded rather than as
+// boilerplate. It is still a hand-written map, so the boundary holds: a field
+// that is not named cannot be recorded, and nothing walks a value with
+// reflection (see docs/ARCHITECTURE.md §9.2).
+func Between(before, after map[string]any) *Changes {
+	changes := NewChanges()
+
+	// The union, not just one side. Both maps normally come from one function
+	// and carry the same keys; when they do not, ignoring the odd field would
+	// hide the very edit somebody is looking for.
+	for field, value := range after {
+		changes.Set(field, before[field], value)
+	}
+	for field, value := range before {
+		if _, present := after[field]; !present {
+			changes.Set(field, value, nil)
+		}
+	}
+	return changes
+}
+
 // Empty reports whether anything moved.
 func (c *Changes) Empty() bool { return len(c.fields) == 0 }
 

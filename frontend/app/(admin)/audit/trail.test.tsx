@@ -99,7 +99,32 @@ describe("AuditTrailRegister", () => {
 });
 
 describe("AuditTrailRegister, what an action changed", () => {
-  test("shows the fields that moved and what they were", () => {
+  test("names the fields that moved, on one line", () => {
+    // A register is read by scanning down a column; a row that grows to a
+    // paragraph per edit destroys that. The names are what a reader is
+    // scanning for — "was the schedule touched?" — and they fit on the line.
+    render(
+      <AuditTrailRegister
+        entries={[
+          entry({
+            action: "contest.update",
+            payload: {
+              changes: {
+                ends_at: { from: "2026-11-08T19:30:00Z", to: "2026-11-08T22:30:00Z" },
+                allowed_cidrs: { from: [], to: ["10.20.0.0/16"] },
+              },
+            },
+          }),
+        ]}
+        {...props}
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByText("allowed_cidrs, ends_at")).toBeInTheDocument();
+  });
+
+  test("keeps the values one hover away rather than on the line", () => {
     render(
       <AuditTrailRegister
         entries={[
@@ -117,8 +142,10 @@ describe("AuditTrailRegister, what an action changed", () => {
       />,
     );
 
-    expect(screen.getByText(/ends_at/)).toBeInTheDocument();
-    expect(screen.getByText(/2026-11-08T19:30:00Z → 2026-11-08T22:30:00Z/)).toBeInTheDocument();
+    expect(screen.getByText("ends_at")).toHaveAttribute(
+      "title",
+      "ends_at: 2026-11-08T19:30:00Z → 2026-11-08T22:30:00Z",
+    );
   });
 
   test("says a save moved nothing rather than showing an empty row", () => {
@@ -203,5 +230,46 @@ describe("AuditTrailRegister, what the action was about", () => {
 
     expect(screen.getByText("c-gone")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "c-gone" })).not.toBeInTheDocument();
+  });
+});
+
+describe("AuditTrailRegister, an edit that touched many fields", () => {
+  test("names the first few and counts the rest", () => {
+    // A settings save can move ten fields. Listing all of them turns one row
+    // into a paragraph and undoes the register — and past the first few the
+    // names stop being scannable anyway.
+    const changes = Object.fromEntries(
+      ["a_one", "b_two", "c_three", "d_four", "e_five"].map((field) => [
+        field,
+        { from: "x", to: "y" },
+      ]),
+    );
+
+    render(
+      <AuditTrailRegister
+        entries={[entry({ action: "contest.update", payload: { changes } })]}
+        {...props}
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByText("a_one, b_two, c_three +2")).toBeInTheDocument();
+  });
+
+  test("still carries every field and its values in the title", () => {
+    const changes = Object.fromEntries(
+      ["a_one", "b_two", "c_three", "d_four"].map((field) => [field, { from: "x", to: "y" }]),
+    );
+
+    render(
+      <AuditTrailRegister
+        entries={[entry({ action: "contest.update", payload: { changes } })]}
+        {...props}
+        dict={dict}
+      />,
+    );
+
+    const title = screen.getByText(/a_one/).getAttribute("title") ?? "";
+    expect(title).toContain("d_four: x → y");
   });
 });

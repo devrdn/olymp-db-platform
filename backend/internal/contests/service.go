@@ -234,19 +234,8 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 		return Contest{}, err
 	}
 
-	// Named field by field rather than diffed off the struct: what may be
-	// recorded is a decision, not a consequence of a type's shape (§9.2).
-	changes := audit.NewChanges()
-	changes.Set("enrollment", current.Enrollment, updated.Enrollment)
-	changes.Set("question_mode", current.QuestionMode, updated.QuestionMode)
-	changes.Set("timing", current.Timing, updated.Timing)
-	changes.Set("duration_min", current.DurationMin, updated.DurationMin)
-	changes.Set("starts_at", current.StartsAt, updated.StartsAt)
-	changes.Set("ends_at", current.EndsAt, updated.EndsAt)
-	changes.Set("allowed_cidrs", cidrStrings(current.AllowedCIDRs), cidrStrings(updated.AllowedCIDRs))
-	changes.Set("enrollment_deadline", current.Settings.EnrollmentDeadline, updated.Settings.EnrollmentDeadline)
-	changes.Set("query_rate_limit_per_min", current.Settings.QueryRateLimitPerMin, updated.Settings.QueryRateLimitPerMin)
-	changes.Set("grace_period_min", current.Settings.GracePeriodMin, updated.Settings.GracePeriodMin)
+	// What may be recorded is declared once, on the type (Contest.auditFields).
+	changes := audit.Between(current.auditFields(), updated.auditFields())
 
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
 		if err := s.contests.Update(ctx, updated); err != nil {
@@ -466,14 +455,7 @@ func (s *Service) SetPolicy(ctx context.Context, actorID, contestID uuid.UUID, p
 
 	// How much power a participant gets, and what it was before: the whole
 	// question after an incident.
-	changes := audit.NewChanges()
-	changes.Set("mode", current.Mode, p.Mode)
-	changes.Set("writable_tables", current.WritableTables, p.WritableTables)
-	changes.Set("allow_create_view", current.AllowCreateView, p.AllowCreateView)
-	changes.Set("allow_own_tables", current.AllowOwnTables, p.AllowOwnTables)
-	changes.Set("allow_temp_tables", current.AllowTempTables, p.AllowTempTables)
-	changes.Set("allow_catalog", current.AllowCatalog, p.AllowCatalog)
-	changes.Set("disk_quota_ratio", current.DiskQuotaRatio, p.DiskQuotaRatio)
+	changes := audit.Between(current.auditFields(), p.auditFields())
 
 	return s.uow.Do(ctx, func(ctx context.Context) error {
 		if err := s.policies.Save(ctx, p); err != nil {

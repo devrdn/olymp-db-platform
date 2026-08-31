@@ -122,3 +122,17 @@ type PolicyStore interface {
 	// Save stores the policy.
 	Save(ctx context.Context, p SQLPolicy) error
 }
+
+// auditFields is the part of a policy that may be written to the audit trail —
+// which is all of it, since a policy is nothing but configuration.
+func (p SQLPolicy) auditFields() map[string]any {
+	return map[string]any{
+		"mode":              p.Mode,
+		"writable_tables":   p.WritableTables,
+		"allow_create_view": p.AllowCreateView,
+		"allow_own_tables":  p.AllowOwnTables,
+		"allow_temp_tables": p.AllowTempTables,
+		"allow_catalog":     p.AllowCatalog,
+		"disk_quota_ratio":  p.DiskQuotaRatio,
+	}
+}

@@ -25,6 +25,9 @@ const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
 const CELL = "border-b border-line px-(--row-px) py-(--row-py) align-baseline";
 
+/** How many changed fields a row names before it starts counting them. */
+const NAMED_FIELDS = 3;
+
 export function AuditTrailRegister({
   entries,
   total,
@@ -87,7 +90,7 @@ export function AuditTrailRegister({
               <th scope="col" className={HEAD}>
                 {t.columns.what}
               </th>
-              <th scope="col" className={cn(HEAD, "w-36")}>
+              <th scope="col" className={cn(HEAD, "w-56")}>
                 {t.columns.about}
               </th>
               <th scope="col" className={cn(HEAD, "w-32")}>
@@ -161,10 +164,13 @@ export function AuditTrailRegister({
 }
 
 /**
- * The fields an entry moved, beneath the action that moved them.
+ * Which fields an entry moved, beside the action that moved them.
  *
- * A second line rather than a sixth column: a change set is a list, and a
- * column wide enough for one would squeeze the four that a reader scans.
+ * Names only, on one line. A register is read by scanning down a column, and
+ * a row that grows to a paragraph per edit destroys that — which is what a
+ * line per field did. The names answer the question a reader is actually
+ * scanning for ("was the schedule touched?"); the values are one hover away,
+ * where they cost nothing until asked for.
  *
  * "Nothing changed" is shown, not hidden. The server records it deliberately,
  * because a save that moved nothing is otherwise indistinguishable from an
@@ -180,28 +186,39 @@ function ChangeSummary({
   const { changes, unchanged } = summariseChanges(payload);
 
   if (unchanged) {
-    return <p className="pt-1 text-small text-ink-3 italic">{label}</p>;
+    return <span className="ml-2 text-small text-ink-3 italic">{label}</span>;
   }
   if (changes.length === 0) return null;
 
+  // A settings save can move ten fields. Listing all of them turns the row
+  // into a paragraph and undoes the register, and past the first few the names
+  // stop being scannable anyway — so the rest become a count, and the title
+  // keeps every one of them with its values.
+  const shown = changes.slice(0, NAMED_FIELDS).map((change) => change.field).join(", ");
+  const rest = changes.length - NAMED_FIELDS;
+
   return (
-    <ul className="flex flex-col gap-0.5 pt-1">
-      {changes.map((change) => (
-        <li key={change.field} className="font-mono text-data text-ink-2">
-          <span className="text-ink-3">{change.field}</span> {change.from} → {change.to}
-        </li>
-      ))}
-    </ul>
+    <span
+      className="ml-2 font-mono text-data text-ink-3"
+      title={changes.map((change) => `${change.field}: ${change.from} → ${change.to}`).join("\n")}
+    >
+      {rest > 0 ? `${shown} +${rest}` : shown}
+    </span>
   );
 }
 
 /**
- * What the action was about — by name where there is one.
+ * What the action was about, on one line.
  *
- * The type alone ("Contest") answers half the question and leaves out the
- * half that matters. A contest that still exists is a link, because the next
- * thing a reader wants is to look at it; one that is gone keeps its
- * identifier, which is all that honestly remains of it.
+ * The name only. The kind was there too and doubled the height of every row
+ * in the register — for a word the action beside it had already said:
+ * "Changed a contest · Contest". It survives as the title, which is where it
+ * earns its keep, on an action this interface has no wording for yet.
+ *
+ * A contest that still exists is a link, because the next thing a reader
+ * wants is to open it. One that is gone keeps its identifier and no name: the
+ * trail outlives what it describes, and inventing a name for something
+ * deleted would be inventing a record.
  */
 function Subject({ entry, dict }: { entry: AuditEntry; dict: Dictionary }) {
   if (!entry.entity) return null;
@@ -209,31 +226,30 @@ function Subject({ entry, dict }: { entry: AuditEntry; dict: Dictionary }) {
   const kind = (dict.audit.entities as Record<string, string>)[entry.entity] ?? entry.entity;
 
   if (!entry.entity_label) {
-    return (
-      <span className="flex flex-col gap-0.5">
-        <span>{kind}</span>
-        {entry.entity_id ? (
-          /* No name means the thing is gone. The identifier is not decoration
-             here: it is the only handle left on what the entry describes. */
-          <span className="font-mono text-data text-ink-3">{entry.entity_id}</span>
-        ) : null}
+    return entry.entity_id ? (
+      <span className="font-mono text-data text-ink-3" title={kind}>
+        {entry.entity_id}
       </span>
+    ) : (
+      <span>{kind}</span>
     );
   }
 
-  const name =
-    entry.entity === "contest" && entry.entity_id ? (
-      <Link href={`/contests/${entry.entity_id}`} className="text-ink underline-offset-2 hover:underline">
+  if (entry.entity === "contest" && entry.entity_id) {
+    return (
+      <Link
+        href={`/contests/${entry.entity_id}`}
+        title={kind}
+        className="text-ink underline-offset-2 hover:underline"
+      >
         {entry.entity_label}
       </Link>
-    ) : (
-      <span className="font-mono text-data text-ink">{entry.entity_label}</span>
     );
+  }
 
   return (
-    <span className="flex flex-col gap-0.5">
-      <span>{kind}</span>
-      {name}
+    <span className="font-mono text-data text-ink" title={kind}>
+      {entry.entity_label}
     </span>
   );
 }
