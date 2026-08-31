@@ -124,9 +124,7 @@ export function AuditTrailRegister({
                   <ChangeSummary payload={entry.payload} label={t.unchanged} />
                 </td>
                 <td className={cn(CELL, "text-small text-ink-2")}>
-                  {entry.entity
-                    ? ((t.entities as Record<string, string>)[entry.entity] ?? entry.entity)
-                    : null}
+                  <Subject entry={entry} dict={dict} />
                 </td>
                 <td className={cn(CELL, "font-mono text-data text-ink-3")}>{entry.ip}</td>
               </tr>
@@ -194,5 +192,48 @@ function ChangeSummary({
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * What the action was about — by name where there is one.
+ *
+ * The type alone ("Contest") answers half the question and leaves out the
+ * half that matters. A contest that still exists is a link, because the next
+ * thing a reader wants is to look at it; one that is gone keeps its
+ * identifier, which is all that honestly remains of it.
+ */
+function Subject({ entry, dict }: { entry: AuditEntry; dict: Dictionary }) {
+  if (!entry.entity) return null;
+
+  const kind = (dict.audit.entities as Record<string, string>)[entry.entity] ?? entry.entity;
+
+  if (!entry.entity_label) {
+    return (
+      <span className="flex flex-col gap-0.5">
+        <span>{kind}</span>
+        {entry.entity_id ? (
+          /* No name means the thing is gone. The identifier is not decoration
+             here: it is the only handle left on what the entry describes. */
+          <span className="font-mono text-data text-ink-3">{entry.entity_id}</span>
+        ) : null}
+      </span>
+    );
+  }
+
+  const name =
+    entry.entity === "contest" && entry.entity_id ? (
+      <Link href={`/contests/${entry.entity_id}`} className="text-ink underline-offset-2 hover:underline">
+        {entry.entity_label}
+      </Link>
+    ) : (
+      <span className="font-mono text-data text-ink">{entry.entity_label}</span>
+    );
+
+  return (
+    <span className="flex flex-col gap-0.5">
+      <span>{kind}</span>
+      {name}
+    </span>
   );
 }

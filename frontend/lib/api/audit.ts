@@ -20,6 +20,12 @@ export const auditEntrySchema = z.object({
   action: z.string(),
   entity: z.string().optional(),
   entity_id: z.string().optional(),
+  /**
+   * The name of the thing acted upon, while it still exists. Absent once it
+   * does not — the trail outlives what it describes, and the identifier is
+   * what remains.
+   */
+  entity_label: z.string().optional(),
   payload: z.record(z.string(), z.unknown()).optional(),
   ip: z.string().optional(),
   user_agent: z.string().optional(),

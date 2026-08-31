@@ -49,14 +49,17 @@ type AuditEntryResponse struct {
 	ActorID string `json:"actor_id,omitempty"`
 	// ActorLogin is empty for a system event, and for an account deleted since:
 	// the trail outlives the people in it.
-	ActorLogin string         `json:"actor_login,omitempty"`
-	Action     string         `json:"action"`
-	Entity     string         `json:"entity,omitempty"`
-	EntityID   string         `json:"entity_id,omitempty"`
-	Payload    map[string]any `json:"payload,omitempty"`
-	IP         string         `json:"ip,omitempty"`
-	UserAgent  string         `json:"user_agent,omitempty"`
-	CreatedAt  string         `json:"created_at"`
+	ActorLogin string `json:"actor_login,omitempty"`
+	Action     string `json:"action"`
+	Entity     string `json:"entity,omitempty"`
+	EntityID   string `json:"entity_id,omitempty"`
+	// EntityLabel names the thing acted upon while it still exists. Absent
+	// once it is gone; the identifier stays either way.
+	EntityLabel string         `json:"entity_label,omitempty"`
+	Payload     map[string]any `json:"payload,omitempty"`
+	IP          string         `json:"ip,omitempty"`
+	UserAgent   string         `json:"user_agent,omitempty"`
+	CreatedAt   string         `json:"created_at"`
 }
 
 type auditListResponse struct {
@@ -81,15 +84,16 @@ func (h *AuditHandler) list(w http.ResponseWriter, r *http.Request) {
 	items := make([]AuditEntryResponse, 0, len(found))
 	for _, record := range found {
 		entry := AuditEntryResponse{
-			ID:         record.ID,
-			ActorLogin: record.ActorLogin,
-			Action:     record.Action,
-			Entity:     record.Entity,
-			EntityID:   record.EntityID,
-			Payload:    record.Payload,
-			IP:         record.IP,
-			UserAgent:  record.UserAgent,
-			CreatedAt:  record.CreatedAt.UTC().Format(timeLayout),
+			ID:          record.ID,
+			ActorLogin:  record.ActorLogin,
+			Action:      record.Action,
+			Entity:      record.Entity,
+			EntityID:    record.EntityID,
+			EntityLabel: record.EntityLabel,
+			Payload:     record.Payload,
+			IP:          record.IP,
+			UserAgent:   record.UserAgent,
+			CreatedAt:   record.CreatedAt.UTC().Format(timeLayout),
 		}
 		if record.ActorID != nil {
 			entry.ActorID = record.ActorID.String()

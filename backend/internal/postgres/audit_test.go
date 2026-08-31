@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/google/uuid"
 )
 
@@ -148,6 +149,125 @@ func TestTheTotalCountsEveryMatchNotJustThePage(t *testing.T) {
 
 		if len(found) != 1 || total != 2 {
 			t.Errorf("page of %d with total %d, want 1 of 2", len(found), total)
+		}
+	})
+}
+
+func TestTheTrailNamesWhatWasActedUpon(t *testing.T) {
+	// "Changed the reference answers · Contest" answers half a question. Which
+	// contest is the half that matters, and a bare identifier is no more
+	// readable here than it was for the actor.
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "auditor-subject")
+		contestID := makeContest(t, ctx, author.ID)
+		if err := NewContests(testPool).ReplaceTranslations(ctx, contestID, []contests.Translation{
+			{Lang: "en", Title: "Night in the archive"},
+		}); err != nil {
+			t.Fatalf("ReplaceTranslations() = %v", err)
+		}
+		if err := NewContests(testPool).ReplaceLanguages(ctx, contestID, []contests.ContestLanguage{
+			{Code: "en", IsDefault: true},
+		}); err != nil {
+			t.Fatalf("ReplaceLanguages() = %v", err)
+		}
+		if err := NewAuditSink(testPool).Append(ctx, audit.Entry{
+			ActorID: &author.ID, Action: "contest.answers_change",
+			Entity: "contest", EntityID: contestID.String(),
+		}); err != nil {
+			t.Fatalf("Append() = %v", err)
+		}
+
+		found, _, err := NewAuditTrail(testPool).List(ctx,
+			audit.Filter{Entity: "contest", EntityID: contestID.String(), Limit: 5}.Normalize())
+		if err != nil {
+			t.Fatalf("List() = %v", err)
+		}
+
+		if len(found) != 1 {
+			t.Fatalf("listed %d entries, want 1", len(found))
+		}
+		if found[0].EntityLabel != "Night in the archive" {
+			t.Errorf("entity label = %q, want the contest's title", found[0].EntityLabel)
+		}
+	})
+}
+
+func TestTheTrailNamesAnAccountItWasAboutToo(t *testing.T) {
+	// "root blocked an Account" is not the sentence anybody needs.
+	withTx(t, func(ctx context.Context) {
+		actor := makeUser(t, ctx, "auditor-blocker")
+		subject := makeUser(t, ctx, "s.popescu-blocked")
+		if err := NewAuditSink(testPool).Append(ctx, audit.Entry{
+			ActorID: &actor.ID, Action: "user.block",
+			Entity: "user", EntityID: subject.ID.String(),
+		}); err != nil {
+			t.Fatalf("Append() = %v", err)
+		}
+
+		found, _, err := NewAuditTrail(testPool).List(ctx,
+			audit.Filter{Entity: "user", EntityID: subject.ID.String(), Limit: 5}.Normalize())
+		if err != nil {
+			t.Fatalf("List() = %v", err)
+		}
+
+		if len(found) != 1 || found[0].EntityLabel != "s.popescu-blocked" {
+			t.Errorf("entity label = %q, want the subject's login", found[0].EntityLabel)
+		}
+	})
+}
+
+func TestSomethingSinceDeletedKeepsItsEntryWithoutAName(t *testing.T) {
+	// The trail outlives what it describes — that is the point of keeping one.
+	// The identifier is still there for whoever needs it; the name is simply
+	// gone, and pretending otherwise would be inventing a record.
+	withTx(t, func(ctx context.Context) {
+		actor := makeUser(t, ctx, "auditor-gone")
+		gone := uuid.New()
+		if err := NewAuditSink(testPool).Append(ctx, audit.Entry{
+			ActorID: &actor.ID, Action: "contest.delete",
+			Entity: "contest", EntityID: gone.String(),
+		}); err != nil {
+			t.Fatalf("Append() = %v", err)
+		}
+
+		found, _, err := NewAuditTrail(testPool).List(ctx,
+			audit.Filter{Entity: "contest", EntityID: gone.String(), Limit: 5}.Normalize())
+		if err != nil {
+			t.Fatalf("List() = %v", err)
+		}
+
+		if len(found) != 1 {
+			t.Fatalf("listed %d entries, want the entry to survive the deletion", len(found))
+		}
+		if found[0].EntityLabel != "" {
+			t.Errorf("entity label = %q, want none for something that is gone", found[0].EntityLabel)
+		}
+		if found[0].EntityID != gone.String() {
+			t.Errorf("entity id = %q, want it kept", found[0].EntityID)
+		}
+	})
+}
+
+func TestAnEntityIdThatIsNotAnIdentifierDoesNotBreakTheQuery(t *testing.T) {
+	// entity_id is text, and nothing constrains it to a UUID. A cast in the
+	// join would turn one odd row into a failure for the whole page.
+	withTx(t, func(ctx context.Context) {
+		actor := makeUser(t, ctx, "auditor-odd")
+		if err := NewAuditSink(testPool).Append(ctx, audit.Entry{
+			ActorID: &actor.ID, Action: "contest.update",
+			Entity: "contest", EntityID: "not-a-uuid",
+		}); err != nil {
+			t.Fatalf("Append() = %v", err)
+		}
+
+		found, _, err := NewAuditTrail(testPool).List(ctx,
+			audit.Filter{EntityID: "not-a-uuid", Limit: 5}.Normalize())
+		if err != nil {
+			t.Fatalf("List() = %v", err)
+		}
+
+		if len(found) != 1 || found[0].EntityLabel != "" {
+			t.Errorf("found %+v, want the entry with no label", found)
 		}
 	})
 }

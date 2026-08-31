@@ -184,11 +184,17 @@ type Record struct {
 	ActorLogin string
 	Action     string
 	Entity     string
-	EntityID   string
-	Payload    map[string]any
-	IP         string
-	UserAgent  string
-	CreatedAt  time.Time
+	// EntityID identifies the thing acted upon, and outlives it.
+	EntityID string
+	// EntityLabel names that thing — a contest's title, an account's login —
+	// when it still exists. Empty when it does not: the trail outlives what it
+	// describes, and inventing a name for something that is gone would be
+	// inventing a record. The identifier is always there for whoever needs it.
+	EntityLabel string
+	Payload     map[string]any
+	IP          string
+	UserAgent   string
+	CreatedAt   time.Time
 }
 
 // Filter selects a page of the trail.

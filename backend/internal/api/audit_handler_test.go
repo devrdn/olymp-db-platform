@@ -167,3 +167,27 @@ func TestAMalformedTimeIsABadRequest(t *testing.T) {
 		t.Errorf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
 	}
 }
+
+func TestTheTrailAnswersWithWhatWasActedUpon(t *testing.T) {
+	// The identifier alone made the panel say "Contest" and nothing more.
+	trail := &stubTrail{
+		total: 1,
+		records: []audit.Record{{
+			ID: 1, Action: "contest.answers_change", Entity: "contest",
+			EntityID: "c-1", EntityLabel: "Night in the archive",
+			CreatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
+		}},
+	}
+	router, cookie := newAuditFixture(t, trail, rbac.PermissionAuditView)
+
+	rec := getAudit(t, router, cookie, "/audit")
+
+	items, _ := decode(t, rec)["items"].([]any)
+	entry, _ := items[0].(map[string]any)
+	if entry["entity_label"] != "Night in the archive" {
+		t.Errorf("entity_label = %v, want the contest's name", entry["entity_label"])
+	}
+	if entry["entity_id"] != "c-1" {
+		t.Errorf("entity_id = %v, want it kept beside the name", entry["entity_id"])
+	}
+}
