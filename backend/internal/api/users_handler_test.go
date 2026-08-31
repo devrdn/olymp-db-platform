@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -246,4 +247,98 @@ func TestRolesEndpointReplacesTheSet(t *testing.T) {
 	if len(stored.Roles) != 1 || stored.Roles[0] != "organizer" {
 		t.Errorf("Roles = %v, want [organizer]", stored.Roles)
 	}
+}
+
+func TestImportEndpointReturnsAPasswordForEveryAccountItCreated(t *testing.T) {
+	// The passwords are shown once, here. An import that created accounts and
+	// did not return them would leave thirty people unable to sign in and no
+	// way to find out what their password was.
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+
+	rec := f.do(http.MethodPost, "/users/import", `{
+		"roles": ["student"],
+		"rows": [
+			{"login": "s.popescu", "full_name": "Sergiu Popescu"},
+			{"login": "i.ivanov", "full_name": "Ivan Ivanov", "email": "i@example.edu"}
+		]
+	}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Created []struct {
+			User            UserRef `json:"user"`
+			OneTimePassword string  `json:"one_time_password"`
+		} `json:"created"`
+		Skipped []struct {
+			Login  string `json:"login"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	if len(body.Created) != 2 {
+		t.Fatalf("created %d accounts, want 2", len(body.Created))
+	}
+	for _, created := range body.Created {
+		if created.OneTimePassword == "" {
+			t.Errorf("%s came back without a password to hand over", created.User.Login)
+		}
+	}
+}
+
+func TestImportEndpointReportsTheRowsItSkipped(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	f.repo.Add(users.User{Login: "s.popescu", FullName: "Sergiu Popescu", Status: users.StatusActive})
+
+	rec := f.do(http.MethodPost, "/users/import",
+		`{"rows": [{"login": "s.popescu", "full_name": "Sergiu Popescu"}]}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Skipped []struct {
+			Login  string `json:"login"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not JSON: %v", err)
+	}
+	if len(body.Skipped) != 1 || body.Skipped[0].Reason != users.SkipLoginTaken {
+		t.Errorf("skipped = %+v, want the duplicate named", body.Skipped)
+	}
+}
+
+func TestImportEndpointRefusesAnOversizedRoster(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+
+	rows := make([]string, 501)
+	for i := range rows {
+		rows[i] = fmt.Sprintf(`{"login":"s%d","full_name":"Student"}`, i)
+	}
+
+	rec := f.do(http.MethodPost, "/users/import", `{"rows": [`+strings.Join(rows, ",")+`]}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestImportEndpointNeedsThePermission(t *testing.T) {
+	f := newAPIFixture(t)
+
+	rec := f.do(http.MethodPost, "/users/import", `{"rows": []}`)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+// UserRef is the slice of the account response these tests read.
+type UserRef struct {
+	Login string `json:"login"`
 }

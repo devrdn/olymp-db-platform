@@ -191,6 +191,8 @@ secret, not a credential to live on.
 | POST | `/api/v1/users/{id}/block`, `/unblock` | `users.manage` |
 | POST | `/api/v1/users/{id}/password-reset` | `users.manage` |
 | PUT | `/api/v1/users/{id}/roles` | `users.manage` |
+| POST | `/api/v1/users/import` | `users.manage` |
+| GET | `/api/v1/audit` | `audit.view` |
 | GET | `/api/v1/contests` | signed in (scoped by who you are) |
 | POST | `/api/v1/contests` | `contest.create` |
 | GET | `/api/v1/contests/{id}` | `contest.view` on that contest |
@@ -265,6 +267,27 @@ Staff are exempt, so an administrator who mistypes a range cannot lock
 themselves out of the contest they are configuring. Every refusal is written to
 `audit_log` — the entry that proves the rule works is the same signal that
 somebody tried from an outside device.
+
+### The audit trail
+
+Who did what, from where and when — kept for a year, and the record the
+specification asks for. Entries are written in the same transaction as the
+action they describe, so an action and its entry land together or neither
+does.
+
+`GET /api/v1/audit` reads it back, newest first, filtered by actor, action,
+entity or a time window — each of which narrows an index the table already
+carries. There is no route that writes: the trail is append-only, and entries
+never arrive over HTTP.
+
+It sits behind `audit.view` and nothing else, because it names who blocked whom
+and from which address. The actor comes back as a login rather than an
+identifier — a page of UUIDs answers nothing — and is empty for a system event
+or an account deleted since. The trail outlives the people in it, which is the
+point of keeping one.
+
+Passwords, hashes and tokens never reach a payload: they are stripped at any
+depth before the entry is written.
 
 ### Two levels of authorisation
 

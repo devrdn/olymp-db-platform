@@ -162,3 +162,23 @@ func TestExplicitOriginWinsOverTheContext(t *testing.T) {
 		t.Errorf("origin = %q/%q, want the explicit values to win", got.IP, got.UserAgent)
 	}
 }
+
+func TestFilterClampsThePageSize(t *testing.T) {
+	// The trail is the largest table in the core database and it is kept for a
+	// year. A client asking for all of it would be asking the server to hold
+	// all of it in memory.
+	got := Filter{Limit: 100000, Offset: -5}.Normalize()
+
+	if got.Limit > 200 {
+		t.Errorf("Normalize().Limit = %d, want it clamped", got.Limit)
+	}
+	if got.Offset != 0 {
+		t.Errorf("Normalize().Offset = %d, want 0", got.Offset)
+	}
+}
+
+func TestFilterFillsInAPageSize(t *testing.T) {
+	if got := (Filter{}).Normalize(); got.Limit <= 0 {
+		t.Errorf("Normalize().Limit = %d, want a positive default", got.Limit)
+	}
+}

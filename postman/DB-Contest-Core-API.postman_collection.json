@@ -435,6 +435,39 @@
             "description": "Sets the account's global roles to exactly this set (not a merge). Retires the account's sessions, so a demotion bites on the next request rather than at the next login.\n\nResponses:\n- 204 — no body\n- 400 — unknown role code / `invalid_user_id`\n- 404 `not_found`"
           },
           "response": []
+        },
+        {
+          "name": "Import a group",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users/import",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "import"
+              ]
+            },
+            "description": "Creates an account per row, each with its own one-time password.\n\nAccounts are created by an administrator rather than by self-registration (architecture §7), and a group arrives as a list from the department — one request per student would be thirty round trips and thirty chances to lose one.\n\nPartial success is the honest outcome: a duplicate does not reject the rest, and every row that produced no account comes back in `skipped` with a reason (`login_taken`, `email_taken`, `invalid_row`) and the login exactly as it was given, so the line can be found again in the list it came from.\n\n**The passwords appear here and nowhere else.** They are not stored in clear and cannot be fetched later; a lost one is reset.\n\nAt most 500 rows: every row costs an argon2id hash (64 MiB, three passes), so an unbounded list would be a way to spend the server's memory with one request.\n\nResponses: 200 `{ created[], skipped[] }` · 400 `invalid_request` (too many rows) · 403 `forbidden`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"roles\": [\n    \"student\"\n  ],\n  \"rows\": [\n    {\n      \"login\": \"s.popescu\",\n      \"full_name\": \"Sergiu Popescu\"\n    },\n    {\n      \"login\": \"i.ivanov\",\n      \"full_name\": \"Ivan Ivanov\",\n      \"email\": \"i.ivanov@example.edu\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
         }
       ]
     },
@@ -1311,6 +1344,71 @@
               ]
             },
             "description": "A student signing themselves up. Needs no staff permission: whether it is allowed is the contest's own decision.\n\nRefused unless the contest is `open`, published, and past neither its start nor its enrollment deadline. A running contest still accepts signups when the timing is `individual` — each participant's clock starts on their own start, so a latecomer takes nothing from anybody.\n\nThe network restriction is checked here, against the address resolved through `TRUSTED_PROXIES` — never a header read from the request. Every refusal is written to `audit_log`: the entry that proves the rule works is the same signal that somebody tried from an outside device.\n\nResponses: 201 `ParticipantResponse` · 403 `address_not_allowed` · 409 `enrollment_closed` / `already_enrolled` · 404"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Audit trail",
+      "description": "Who did what, from where and when — the record required by the specification (§13) and kept for a year.\n\nWritten in the same transaction as the action it describes, so an action and its entry land together or neither does. Append-only: there is no route here that writes, and entries never arrive over HTTP.\n\nBehind `audit.view` and nothing else. The trail names who blocked whom and from which address, so reading it is a privilege rather than a side effect of being signed in.",
+      "item": [
+        {
+          "name": "Read the trail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/audit?actor=&action=&entity=&entity_id=&from=&to=&limit=50&offset=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "audit"
+              ],
+              "query": [
+                {
+                  "key": "actor",
+                  "value": "",
+                  "description": "UUID of the account that acted."
+                },
+                {
+                  "key": "action",
+                  "value": "",
+                  "description": "Exact action code, e.g. user.block, contest.status_change."
+                },
+                {
+                  "key": "entity",
+                  "value": "",
+                  "description": "user | contest"
+                },
+                {
+                  "key": "entity_id",
+                  "value": "",
+                  "description": "The thing acted upon; use with entity."
+                },
+                {
+                  "key": "from",
+                  "value": "",
+                  "description": "RFC 3339, inclusive."
+                },
+                {
+                  "key": "to",
+                  "value": "",
+                  "description": "RFC 3339, exclusive."
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Page size, capped server-side at 200."
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "Newest first, paged. Every filter narrows an index the table already carries.\n\nThe actor comes back as a login rather than an identifier, because a page of UUIDs answers nothing. It is empty for a system event, and for an account deleted since — the trail outlives the people in it, which is the point of keeping one.\n\nA malformed `actor` or timestamp is refused rather than ignored: answering a question about one person with the whole trail is the opposite of what was asked.\n\nPasswords, hashes and tokens never reach the payload — they are stripped at any depth before the entry is written.\n\nResponses: 200 `{ items: AuditEntry[], total }` · 400 `invalid_request` · 403 `forbidden`"
           },
           "response": []
         }
