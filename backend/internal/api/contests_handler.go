@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
@@ -168,6 +169,12 @@ type ContestSummary struct {
 	Description  string `json:"description,omitempty"`
 	StartsAt     string `json:"starts_at,omitempty"`
 	EndsAt       string `json:"ends_at,omitempty"`
+	// Enrolled says whether the caller is registered for this contest, and
+	// only ever about the caller: it is filled from the authenticated
+	// identity, never from anything the request carries. Without it a
+	// catalogue cannot tell "join" from "you are already in", and offering the
+	// button anyway turns an ordinary state into an error message.
+	Enrolled bool `json:"enrolled"`
 }
 
 func toContestResponse(c contests.Contest) ContestResponse {
@@ -267,6 +274,15 @@ type contestListResponse struct {
 func (h *ContestsHandler) list(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.IdentityFrom(r.Context())
 
+	enrolled, err := boolParam(r, "enrolled")
+	if err != nil {
+		// Refused rather than dropped: ignoring it would answer a different
+		// question from the one asked, and the screen would quietly show the
+		// wrong list.
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+		return
+	}
+
 	filter := contests.Filter{
 		Query:  r.URL.Query().Get("q"),
 		Status: r.URL.Query().Get("status"),
@@ -284,7 +300,37 @@ func (h *ContestsHandler) list(w http.ResponseWriter, r *http.Request) {
 		filter.VisibleTo = identity.UserID
 	}
 
+	// The narrowing into "mine" and "the rest of what is open to me" — the
+	// participant's two screens. It only ever narrows what the scope above
+	// already allows, so it cannot become a way to see more.
+	//
+	// Outside a participant scope there is no "me" for it to be about: an
+	// organizer's register answers "what do I run". Applied there it would
+	// compare against a null identity and quietly return nothing, which is the
+	// same sin as ignoring a value that could not be parsed.
+	if enrolled != nil {
+		if filter.VisibleTo == uuid.Nil {
+			httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest,
+				"enrolled applies to a participant listing only; add scope=participant")
+			return
+		}
+		filter.Enrolled = enrolled
+	}
+
 	found, total, err := h.service.List(r.Context(), filter)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+
+	// Which of this page the caller is on. One query for the page, and about
+	// the caller alone: the identity comes from the session the middleware
+	// authenticated, so no parameter can point it at anybody else.
+	ids := make([]uuid.UUID, 0, len(found))
+	for _, c := range found {
+		ids = append(ids, c.ID)
+	}
+	on, err := h.service.EnrolledIn(r.Context(), identity.UserID, ids)
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -292,9 +338,27 @@ func (h *ContestsHandler) list(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]ContestSummary, 0, len(found))
 	for _, c := range found {
-		items = append(items, h.toSummary(r, c))
+		summary := h.toSummary(r, c)
+		summary.Enrolled = on[c.ID]
+		items = append(items, summary)
 	}
 	httpx.JSON(w, r, http.StatusOK, contestListResponse{Items: items, Total: total})
+}
+
+// boolParam reads an optional true/false query parameter.
+//
+// Absent is nil, which is a third answer and not the same as false: "every
+// contest I may see" and "the ones I am not on" are different questions.
+func boolParam(r *http.Request, name string) (*bool, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be true or false, got %q", name, raw)
+	}
+	return &value, nil
 }
 
 type contestRequest struct {

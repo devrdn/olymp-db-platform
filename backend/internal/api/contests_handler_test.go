@@ -25,11 +25,12 @@ import (
 // contestFixture mounts the contest endpoints behind a session for an account
 // holding the given installation-wide permissions.
 type contestFixture struct {
-	router  http.Handler
-	service *contests.Service
-	stores  *conteststest.Fixture
-	actor   users.User
-	cookie  *http.Cookie
+	router   http.Handler
+	service  *contests.Service
+	stores   *conteststest.Fixture
+	sessions *auth.SessionStore
+	actor    users.User
+	cookie   *http.Cookie
 }
 
 func newContestFixture(t *testing.T, permissions ...string) *contestFixture {
@@ -61,11 +62,12 @@ func newContestFixture(t *testing.T, permissions ...string) *contestFixture {
 	api.NewContestsHandler(stores.Service, mw, log, "en").Mount(router)
 
 	return &contestFixture{
-		router:  router,
-		service: stores.Service,
-		stores:  stores,
-		actor:   actor,
-		cookie:  &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		router:   router,
+		service:  stores.Service,
+		stores:   stores,
+		sessions: sessions,
+		actor:    actor,
+		cookie:   &http.Cookie{Name: auth.SessionCookieName, Value: token},
 	}
 }
 
@@ -367,6 +369,140 @@ func TestAMalformedNetworkIsRejected(t *testing.T) {
 	c := f.ownedContest(t, contests.StatusDraft)
 
 	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(), `{"allowed_cidrs": ["10.20.0.0/64"]}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// asParticipant returns a session cookie for a fresh account holding no
+// installation-wide permission, which is what a student is.
+func (f *contestFixture) asParticipant(t *testing.T, login string) (users.User, *http.Cookie) {
+	t.Helper()
+
+	user := f.stores.Users.Add(users.User{
+		Login: login, FullName: login, Status: users.StatusActive,
+	})
+	token, err := f.sessions.Create(t.Context(), auth.Principal{UserID: user.ID, Login: user.Login})
+	if err != nil {
+		t.Fatalf("session Create() returned error: %v", err)
+	}
+	return user, &http.Cookie{Name: auth.SessionCookieName, Value: token}
+}
+
+// asked sends a GET as whoever the cookie belongs to.
+func (f *contestFixture) asked(t *testing.T, path string, cookie *http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	return rec
+}
+
+// listed reads the items of a contest listing, keyed by identifier.
+func listed(t *testing.T, rec *httptest.ResponseRecorder) map[string]map[string]any {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	body := decode(t, rec)
+	items, _ := body["items"].([]any)
+
+	out := map[string]map[string]any{}
+	for _, item := range items {
+		row, _ := item.(map[string]any)
+		id, _ := row["id"].(string)
+		out[id] = row
+	}
+	return out
+}
+
+func TestTheListingSaysWhetherTheCallerIsOnEachContest(t *testing.T) {
+	// The catalogue has to tell "join" from "you are already in". Without it,
+	// the workaround it replaces — offer the button everywhere and let the API
+	// answer already_enrolled — turns an ordinary state into an error message
+	// as soon as the two lists become separate screens.
+	f := newContestFixture(t)
+	student, cookie := f.asParticipant(t, "s.popescu")
+	mine := f.stores.SeedContest(contests.StatusPublished)
+	other := f.stores.SeedContest(contests.StatusPublished)
+	if _, err := f.stores.Registrations.Add(t.Context(), mine.ID, student.ID); err != nil {
+		t.Fatalf("Add() returned error: %v", err)
+	}
+
+	rows := listed(t, f.asked(t, "/contests?scope=participant", cookie))
+
+	if rows[mine.ID.String()]["enrolled"] != true {
+		t.Error("the contest the student is on is not marked as theirs")
+	}
+	if rows[other.ID.String()]["enrolled"] != false {
+		t.Error("a contest the student never joined is marked as theirs")
+	}
+}
+
+func TestTheEnrolmentFlagIsAlwaysAboutTheCaller(t *testing.T) {
+	// It must come from the authenticated identity and from nothing a request
+	// can carry. A parameter that steered it would make the listing a way to
+	// ask who takes part in what.
+	f := newContestFixture(t)
+	_, cookie := f.asParticipant(t, "s.popescu")
+	other, _ := f.asParticipant(t, "i.ivanov")
+	shared := f.stores.SeedContest(contests.StatusPublished)
+	if _, err := f.stores.Registrations.Add(t.Context(), shared.ID, other.ID); err != nil {
+		t.Fatalf("Add() returned error: %v", err)
+	}
+
+	for _, query := range []string{
+		"/contests?scope=participant&user_id=" + other.ID.String(),
+		"/contests?scope=participant&enrolled=true&user_id=" + other.ID.String(),
+		"/contests?scope=participant&visible_to=" + other.ID.String(),
+	} {
+		for id, row := range listed(t, f.asked(t, query, cookie)) {
+			if row["enrolled"] == true {
+				t.Errorf("%s reported somebody else's registration as the caller's (%s)", query, id)
+			}
+		}
+	}
+}
+
+func TestAnUnreadableEnrolledParameterIsRefusedRatherThanIgnored(t *testing.T) {
+	// Dropping it silently would answer a different question from the one
+	// asked, and the screen would quietly show the wrong list.
+	f := newContestFixture(t)
+	_, cookie := f.asParticipant(t, "s.popescu")
+
+	rec := f.asked(t, "/contests?scope=participant&enrolled=perhaps", cookie)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestStaffListingsCarryNoEnrolmentFlagWorthReading(t *testing.T) {
+	// An organizer's register answers "what do I run", and marking those rows
+	// with the organizer's own participation would be a fact about a different
+	// question. It is reported honestly as false rather than invented.
+	f := newContestFixture(t, rbac.PermissionContestCreate)
+	owned := f.ownedContest(t, contests.StatusPublished)
+
+	rows := listed(t, f.asked(t, "/contests", f.cookie))
+
+	if rows[owned.ID.String()]["enrolled"] != false {
+		t.Error("a contest the organizer runs but does not sit is marked as theirs")
+	}
+}
+
+func TestTheEnrolmentNarrowingIsRefusedWhereItMeansNothing(t *testing.T) {
+	// Outside the participant scope there is no "me" for it to be about: an
+	// organizer's register answers "what do I run". Applied there the SQL
+	// compares against a null identity and quietly returns an empty list —
+	// which is the same sin as ignoring an unparseable value, answering a
+	// different question from the one asked.
+	f := newContestFixture(t, rbac.PermissionContestCreate)
+	f.ownedContest(t, contests.StatusPublished)
+
+	rec := f.asked(t, "/contests?enrolled=true", f.cookie)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())

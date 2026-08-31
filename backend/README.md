@@ -193,7 +193,7 @@ secret, not a credential to live on.
 | PUT | `/api/v1/users/{id}/roles` | `users.manage` |
 | POST | `/api/v1/users/import` | `users.manage` |
 | GET | `/api/v1/audit` | `audit.view` |
-| GET | `/api/v1/contests` | signed in (scoped by who you are) |
+| GET | `/api/v1/contests` | signed in (scoped by who you are; `scope=participant` and `enrolled=true|false` cut a participant's own two lists) |
 | POST | `/api/v1/contests` | `contest.create` |
 | GET | `/api/v1/contests/{id}` | `contest.view` on that contest |
 | PATCH, DELETE | `/api/v1/contests/{id}` | `contest.edit` |

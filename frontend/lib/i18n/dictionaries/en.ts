@@ -423,20 +423,37 @@ const en = {
   },
   /** The participant's own screens. Staff words live under `contests`. */
   participant: {
-    heading: "My contests",
-    countLabel: "available",
+    mine: {
+      heading: "My contests",
+      countLabel: "you are in",
+      empty: {
+        title: "You are not taking part in anything yet",
+        body: "Contests you are enrolled in appear here. Some can be joined from the open list; the rest arrive by invitation from the organizers.",
+        action: "See what is open",
+      },
+    },
+    open: {
+      heading: "Open contests",
+      countLabel: "available to you",
+      empty: {
+        title: "Nothing is open for signup",
+        body: "Contests open for self-signup appear here while they accept participants. An invitation-only contest arrives from its organizers instead.",
+      },
+      loading: "Loading open contests",
+      failed: {
+        title: "Could not load the open contests",
+        body: "The server did not answer. Check the connection and try again.",
+      },
+    },
     columns: {
       action: "Taking part",
     },
     join: "Join",
     joining: "Joining",
     joined: "You are enrolled.",
+    enrolled: "You are in",
     byInvitation: "By invitation",
     noAction: "Nothing to do yet",
-    empty: {
-      title: "Nothing to take part in yet",
-      body: "Contests appear here once they are published. An open one can be joined from this screen.",
-    },
     loading: "Loading your contests",
     failed: {
       title: "Could not load your contests",

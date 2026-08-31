@@ -10,7 +10,7 @@ import { ParticipantRegister } from "./participant-register";
 
 export async function generateMetadata() {
   const dict = await activeDictionary();
-  return { title: dict.participant.heading };
+  return { title: dict.participant.mine.heading };
 }
 
 /**
@@ -25,11 +25,17 @@ export async function generateMetadata() {
  * account that holds both roles, which the teaching assistant running a
  * contest and sitting another one does, would otherwise get the contests they
  * manage on the screen that promises the ones they take part in.
+ *
+ * This screen is the enrolled half of that; `/open` is the other.
  */
 export default async function MyContestsPage() {
   const [locale, dict] = await Promise.all([activeLocale(), activeDictionary()]);
 
-  const search = new URLSearchParams({ scope: "participant", lang: locale });
+  // `enrolled=true` is what makes this screen its own. The scope alone still
+  // returns the open contests too, which is the catalogue's answer, not this
+  // one: the question here is asked under a timer on the day of a contest, and
+  // diluting it with things to browse is what the split was for.
+  const search = new URLSearchParams({ scope: "participant", enrolled: "true", lang: locale });
 
   // The proxy could only see that a session cookie exists; what it is worth is
   // this answer. A dead session goes back to the form and an account still on
@@ -45,7 +51,21 @@ export default async function MyContestsPage() {
 
   return (
     <Band fill className="py-12">
-      <ParticipantRegister contests={items} total={total} dict={dict} locale={locale} />
+      <ParticipantRegister
+        contests={items}
+        total={total}
+        dict={dict}
+        locale={locale}
+        heading={dict.participant.mine.heading}
+        countLabel={dict.participant.mine.countLabel}
+        empty={{
+          title: dict.participant.mine.empty.title,
+          body: dict.participant.mine.empty.body,
+          // Principle 4: the state names its next step. Without it a new
+          // student meets an accurate screen with nothing to do on it.
+          action: { label: dict.participant.mine.empty.action, href: "/open" },
+        }}
+      />
     </Band>
   );
 }

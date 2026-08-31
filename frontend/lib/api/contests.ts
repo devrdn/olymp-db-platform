@@ -56,6 +56,16 @@ export const contestSummarySchema = z
     description: z.string().optional(),
     starts_at: z.string().optional(),
     ends_at: z.string().optional(),
+    /**
+     * Whether the caller is registered for this contest. Always about the
+     * caller: the API fills it from the session it authenticated, never from
+     * anything the request carries.
+     *
+     * Defaulted rather than required, so a listing from an older server reads
+     * as "not enrolled" instead of failing the whole page — the flag decides
+     * which of two labels a row shows, and no screen depends on it to be safe.
+     */
+    enrolled: z.boolean().default(false),
   })
   .transform((raw) => ({
     id: raw.id,
@@ -68,6 +78,7 @@ export const contestSummarySchema = z
     description: raw.description,
     startsAt: raw.starts_at,
     endsAt: raw.ends_at,
+    enrolled: raw.enrolled,
   }));
 
 export type ContestSummary = z.infer<typeof contestSummarySchema>;

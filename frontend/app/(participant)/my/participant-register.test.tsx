@@ -30,12 +30,27 @@ const contest = (over: Partial<ContestSummary> = {}): ContestSummary => ({
   description: undefined,
   startsAt: "2026-05-14T07:00:00Z",
   endsAt: "2026-05-14T10:00:00Z",
+  enrolled: false,
   ...over,
 });
 
 const render_ = (contests: ContestSummary[]) =>
   render(
-    <ParticipantRegister contests={contests} total={contests.length} dict={en} locale="en" />,
+    <ParticipantRegister
+      contests={contests}
+      total={contests.length}
+      dict={en}
+      locale="en"
+      heading={en.participant.mine.heading}
+      countLabel={en.participant.mine.countLabel}
+      // Shaped as a page shapes it: the dictionary holds the label, the
+      // destination is the application's and not the translator's.
+      empty={{
+        title: en.participant.mine.empty.title,
+        body: en.participant.mine.empty.body,
+        action: { label: en.participant.mine.empty.action, href: "/open" },
+      }}
+    />,
   );
 
 describe("the way in", () => {
@@ -84,13 +99,15 @@ describe("the register itself", () => {
   test("says nothing is waiting rather than showing an empty table", () => {
     render_([]);
 
-    expect(screen.getByText(en.participant.empty.title)).toBeInTheDocument();
+    expect(screen.getByText(en.participant.mine.empty.title)).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 
   /**
    * The screen has no filters, so there is no control to clear. Offering a
-   * reset here would be offering a way out of a state nothing led into.
+   * reset here would be offering a way out of a state nothing led into — the
+   * link that is offered goes to the open list, which is a next step and not
+   * an undo.
    */
   test("offers no filter reset it could not honour", () => {
     render_([]);
@@ -98,6 +115,9 @@ describe("the register itself", () => {
     expect(
       screen.queryByRole("link", { name: en.contests.emptyFiltered.reset }),
     ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: en.participant.mine.empty.action }),
+    ).toHaveAttribute("href", "/open");
   });
 
   test("names the contest and the state it is in", () => {
@@ -106,5 +126,38 @@ describe("the register itself", () => {
     const row = screen.getAllByRole("row")[1];
     expect(within(row).getByText("The Greenhouse")).toBeInTheDocument();
     expect(within(row).getByText(en.contests.status.running)).toBeInTheDocument();
+  });
+});
+
+describe("a contest the visitor is already on", () => {
+  test("says so instead of offering to join it again", () => {
+    // The catalogue lists open contests including the ones already joined —
+    // hiding those would answer "what is there" incompletely, and somebody who
+    // cannot find a familiar name concludes their registration was lost. So
+    // the row has to distinguish them. Offering the button and letting the API
+    // answer `already_enrolled` was tolerable while both kinds shared one
+    // screen; on a catalogue it turns an ordinary state into an error message.
+    render_([contest({ enrolled: true })]);
+
+    expect(screen.getByText(en.participant.enrolled)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: en.participant.join }),
+    ).not.toBeInTheDocument();
+  });
+
+  test("still says so when the contest is no longer taking signups", () => {
+    // A running or finished contest cannot be joined by anyone. For somebody
+    // who is on it, "nothing to do yet" would read as though they were not.
+    render_([contest({ enrolled: true, status: "finished", enrollment: "invite_only" })]);
+
+    expect(screen.getByText(en.participant.enrolled)).toBeInTheDocument();
+    expect(screen.queryByText(en.participant.byInvitation)).not.toBeInTheDocument();
+  });
+
+  test("offers the way in to somebody who is not on it", () => {
+    render_([contest({ enrolled: false })]);
+
+    expect(screen.getByRole("button", { name: en.participant.join })).toBeInTheDocument();
+    expect(screen.queryByText(en.participant.enrolled)).not.toBeInTheDocument();
   });
 });

@@ -6,7 +6,11 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 /**
- * Where an administrator can go, in the bar.
+ * Where the signed-in visitor can go, in the bar.
+ *
+ * Not the administrator's: a participant has two destinations too — the
+ * contests they are in and the ones open to them — and nothing in here was
+ * ever about the constructor.
  *
  * Only what the account may actually open: a link that answers 403 teaches
  * somebody that a screen exists and that they are not welcome on it, which is
@@ -23,7 +27,7 @@ import { cn } from "@/lib/utils";
  * at — and the design system's first rule is that the interface around the
  * data is rules and typography (SPEC section 2).
  */
-export function AdminNav({ items }: { items: { href: string; label: string }[] }) {
+export function SectionNav({ items }: { items: { href: string; label: string }[] }) {
   const pathname = usePathname();
 
   return (

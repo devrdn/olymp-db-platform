@@ -9,8 +9,13 @@ import { cn } from "@/lib/utils";
 import { EnrollButton } from "./enroll-button";
 
 /**
- * The participant's own list: contests they take part in, and the open ones
- * they may still join. The API returns both in one scoped result set.
+ * A participant's register, used by both of their screens.
+ *
+ * One component, not two, because the rows are identical: the same columns,
+ * the same window, the same rule for what a row offers. What differs is which
+ * contests are in it and what the screen is called, so those arrive as props.
+ * Two components differing by a heading is how one of them gets a fix and the
+ * other does not.
  *
  * A register, like the author's, and for the same reason the direction gives:
  * rows compare down a column and tiles do not. It is not the author's register
@@ -40,17 +45,17 @@ const CELL = "border-b border-line px-(--row-px) py-(--row-py) align-baseline";
 /**
  * Whether joining is worth offering on this row.
  *
- * The listing cannot say whether this account is already enrolled — the
- * summary carries no such field, and the scoped result mixes "yours" with
- * "open to you". So the button is offered wherever joining is *possible* and
- * the API decides: a second attempt comes back `already_enrolled`, which the
- * button reports as the accepted answer it is.
+ * Somebody already registered is never offered it. The listing used to be
+ * unable to say — the summary carried no such field — so the button appeared
+ * wherever joining was possible and the API answered `already_enrolled`,
+ * which was tolerable while "mine" and "open to me" shared one screen. On a
+ * catalogue that lists both, it turns an ordinary state into an error message.
  *
  * `draft` and `archived` never appear in a participant's scope. `finished`
  * cannot be joined, and `running` is the game loop's to open, which is step 5.
  */
 function canOfferToJoin(contest: ContestSummary): boolean {
-  return contest.enrollment === "open" && contest.status === "published";
+  return !contest.enrolled && contest.enrollment === "open" && contest.status === "published";
 }
 
 export function ParticipantRegister({
@@ -58,31 +63,42 @@ export function ParticipantRegister({
   total,
   dict,
   locale,
+  heading,
+  countLabel,
+  empty,
 }: {
   contests: ContestSummary[];
   total: number;
   dict: Dictionary;
   locale: Locale;
+  heading: string;
+  countLabel: string;
+  /**
+   * What to say when there is nothing, and where to go about it. The two
+   * screens have different answers: an empty "mine" sends the reader to the
+   * open list, and an empty open list has nowhere useful to send anybody.
+   */
+  empty: { title: string; body: string; action?: { label: string; href: string } };
 }) {
   const t = dict.participant;
   const shared = dict.contests;
 
   return (
-    <section aria-labelledby="my-heading" className="flex flex-col">
+    <section aria-labelledby="participant-heading" className="flex flex-col">
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2 pb-6">
-        <h1 id="my-heading" className="text-h2 text-ink">
-          {t.heading}
+        <h1 id="participant-heading" className="text-h2 text-ink">
+          {heading}
         </h1>
         <span className="font-mono text-data text-ink-3">
-          {total} {t.countLabel}
+          {total} {countLabel}
         </span>
       </div>
 
       {contests.length === 0 ? (
         <div className="border-t border-line">
-          {/* `empty`, never `empty-filtered`: this screen has no filters, so
+          {/* `empty`, never `empty-filtered`: neither screen has filters, so
               there is no control to offer and offering one would be a lie. */}
-          <StateView state={{ kind: "empty", title: t.empty.title, body: t.empty.body }} />
+          <StateView state={{ kind: "empty", ...empty }} />
         </div>
       ) : (
         <div className="overflow-x-auto">
@@ -141,6 +157,11 @@ export function ParticipantRegister({
                   <td className={CELL}>
                     {canOfferToJoin(contest) ? (
                       <EnrollButton contestId={contest.id} dict={dict} />
+                    ) : contest.enrolled ? (
+                      /* First, because it outranks every other reason there is
+                         nothing to press. "By invitation" on a contest one is
+                         already invited to reads as though one were not. */
+                      <span className="text-small text-ink-2">{t.enrolled}</span>
                     ) : (
                       /* Nothing to do, and the state column already says why.
                          A disabled button repeating it would be a control that

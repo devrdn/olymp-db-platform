@@ -1,4 +1,4 @@
-import { AdminNav } from "@/components/layout/admin-nav";
+import { SectionNav } from "@/components/layout/section-nav";
 import { ProductShell } from "@/components/layout/product-shell";
 import { fetchIdentity } from "@/lib/auth/session";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
@@ -39,7 +39,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       theme={theme}
       dict={dict}
       home="/contests"
-      nav={<AdminNav items={destinations} />}
+      nav={<SectionNav items={destinations} />}
       account={identity ? { fullName: identity.fullName, login: identity.login } : undefined}
     >
       {children}

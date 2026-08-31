@@ -323,3 +323,160 @@ func TestSetStatusStillReportsAContestThatIsGone(t *testing.T) {
 		}
 	})
 }
+
+// setContest puts a seeded contest into a state the visibility rule reacts to.
+func setContest(t *testing.T, ctx context.Context, id uuid.UUID, status, enrollment string) {
+	t.Helper()
+	_, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+		`UPDATE contests SET status = $2, enrollment = $3 WHERE id = $1`, id, status, enrollment)
+	if err != nil {
+		t.Fatalf("set contest state: %v", err)
+	}
+}
+
+func TestAParticipantSeesTheirOwnContestsAndWhatIsOpen(t *testing.T) {
+	// The rule the two participant screens are cut from, and the one that
+	// decides what a student may see at all.
+	withTx(t, func(ctx context.Context) {
+		repo := NewContests(testPool)
+		author := makeUser(t, ctx, "author-vis")
+		student := makeUser(t, ctx, "student-vis")
+
+		mine := makeContest(t, ctx, author.ID)
+		open := makeContest(t, ctx, author.ID)
+		shut := makeContest(t, ctx, author.ID)
+		draft := makeContest(t, ctx, author.ID)
+
+		setContest(t, ctx, mine, contests.StatusPublished, contests.EnrollmentInviteOnly)
+		setContest(t, ctx, open, contests.StatusPublished, contests.EnrollmentOpen)
+		setContest(t, ctx, shut, contests.StatusPublished, contests.EnrollmentInviteOnly)
+		setContest(t, ctx, draft, contests.StatusDraft, contests.EnrollmentOpen)
+
+		if _, err := NewRegistrations(testPool).Add(ctx, mine, student.ID); err != nil {
+			t.Fatalf("Add() = %v", err)
+		}
+
+		found, _, err := repo.List(ctx, contests.Filter{VisibleTo: student.ID}.Normalize())
+		if err != nil {
+			t.Fatalf("List() = %v", err)
+		}
+
+		seen := idSet(found)
+		if !seen[mine] {
+			t.Error("the contest the student is registered for is missing")
+		}
+		if !seen[open] {
+			t.Error("a contest open for signup is missing")
+		}
+		// An invitation-only contest they are not on is not their business,
+		// and a draft is nobody's but its authors'.
+		if seen[shut] {
+			t.Error("an invitation-only contest the student is not on was listed")
+		}
+		if seen[draft] {
+			t.Error("a draft was listed to a participant")
+		}
+	})
+}
+
+func TestAParticipantCanAskForOnlyTheContestsTheyAreOn(t *testing.T) {
+	// What /my asks. The two lists answer different questions, and the one
+	// asked under a timer on the day must not be diluted by the one browsed
+	// once a term.
+	withTx(t, func(ctx context.Context) {
+		repo := NewContests(testPool)
+		author := makeUser(t, ctx, "author-mine")
+		student := makeUser(t, ctx, "student-mine")
+
+		mine := makeContest(t, ctx, author.ID)
+		open := makeContest(t, ctx, author.ID)
+		setContest(t, ctx, mine, contests.StatusPublished, contests.EnrollmentInviteOnly)
+		setContest(t, ctx, open, contests.StatusPublished, contests.EnrollmentOpen)
+		if _, err := NewRegistrations(testPool).Add(ctx, mine, student.ID); err != nil {
+			t.Fatalf("Add() = %v", err)
+		}
+
+		enrolled := true
+		found, total, err := repo.List(ctx,
+			contests.Filter{VisibleTo: student.ID, Enrolled: &enrolled}.Normalize())
+		if err != nil {
+			t.Fatalf("List() = %v", err)
+		}
+
+		if total != 1 || !idSet(found)[mine] {
+			t.Errorf("List() returned %d contests, want only the one they are on", total)
+		}
+	})
+}
+
+func TestNarrowingByEnrolmentCannotWidenWhatIsVisible(t *testing.T) {
+	// The flag narrows the visible set and must never reach outside it.
+	// Asking for "not enrolled" must not turn into a listing of every
+	// invitation-only contest in the installation.
+	withTx(t, func(ctx context.Context) {
+		repo := NewContests(testPool)
+		author := makeUser(t, ctx, "author-narrow")
+		student := makeUser(t, ctx, "student-narrow")
+
+		shut := makeContest(t, ctx, author.ID)
+		open := makeContest(t, ctx, author.ID)
+		setContest(t, ctx, shut, contests.StatusPublished, contests.EnrollmentInviteOnly)
+		setContest(t, ctx, open, contests.StatusPublished, contests.EnrollmentOpen)
+
+		notEnrolled := false
+		found, _, err := repo.List(ctx,
+			contests.Filter{VisibleTo: student.ID, Enrolled: &notEnrolled}.Normalize())
+		if err != nil {
+			t.Fatalf("List() = %v", err)
+		}
+
+		seen := idSet(found)
+		if seen[shut] {
+			t.Error("an invitation-only contest leaked through the not-enrolled filter")
+		}
+		if !seen[open] {
+			t.Error("the open contest the student could join is missing")
+		}
+	})
+}
+
+func TestEnrolledInReportsOnlyTheCallersOwnRegistrations(t *testing.T) {
+	// The flag the catalogue marks its rows with. Reporting somebody else's
+	// registration would disclose who takes part in what.
+	withTx(t, func(ctx context.Context) {
+		repo := NewRegistrations(testPool)
+		author := makeUser(t, ctx, "author-on")
+		student := makeUser(t, ctx, "student-on")
+		other := makeUser(t, ctx, "other-on")
+
+		mine := makeContest(t, ctx, author.ID)
+		theirs := makeContest(t, ctx, author.ID)
+		if _, err := repo.Add(ctx, mine, student.ID); err != nil {
+			t.Fatalf("Add() = %v", err)
+		}
+		if _, err := repo.Add(ctx, theirs, other.ID); err != nil {
+			t.Fatalf("Add() = %v", err)
+		}
+
+		on, err := repo.EnrolledIn(ctx, student.ID, []uuid.UUID{mine, theirs})
+		if err != nil {
+			t.Fatalf("EnrolledIn() = %v", err)
+		}
+
+		if !on[mine] {
+			t.Error("the student's own registration is not reported")
+		}
+		if on[theirs] {
+			t.Error("another account's registration was reported as this student's")
+		}
+	})
+}
+
+// idSet indexes a listing by identifier, for readable assertions.
+func idSet(found []contests.Contest) map[uuid.UUID]bool {
+	seen := make(map[uuid.UUID]bool, len(found))
+	for _, c := range found {
+		seen[c.ID] = true
+	}
+	return seen
+}
