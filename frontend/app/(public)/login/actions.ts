@@ -3,6 +3,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { callerHeaders } from "@/lib/api/caller";
 import { destinationAfterLogin } from "@/lib/auth/destination";
 import { signIn } from "@/lib/auth/sign-in";
 import { apiOrigin } from "@/lib/api/config";
@@ -34,6 +35,10 @@ export async function signInAction(
     {
       fetchImpl: fetch,
       origin: apiOrigin(),
+      // The browser's own address, handed on: sign-in leaves from this
+      // server, and without the chain the API's per-address throttle counts
+      // every student in the building as one machine.
+      headers: await callerHeaders(),
       setCookie: (cookie) =>
         jar.set(cookie.name, cookie.value, {
           path: cookie.path ?? "/",

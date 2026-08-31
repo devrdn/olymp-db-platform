@@ -112,17 +112,20 @@ func New(loader ContestRoleLoader) *Authorizer {
 // could not be made — a caller must treat the latter as a failure, never as
 // permission.
 func (a *Authorizer) Authorize(ctx context.Context, id Identity, permission string, contestID uuid.UUID) error {
-	// Installation-wide administrators skip the scope check entirely; there is
-	// no contest they are not staff on.
-	if id.Has(PermissionContestAdminAll) {
-		return nil
-	}
-
 	if contestID == uuid.Nil {
 		if id.Has(permission) {
 			return nil
 		}
 		return fmt.Errorf("%w: %s", ErrForbidden, permission)
+	}
+
+	// Installation-wide administrators skip the contest-role lookup; there is
+	// no contest they are not staff on. The shortcut sits after the
+	// installation-wide branch on purpose: admin_all lifts the contest scope
+	// and nothing else, so it must not double as users.manage or audit.view
+	// for a role that was only ever given reach over contests.
+	if id.Has(PermissionContestAdminAll) {
+		return nil
 	}
 
 	role, err := a.roles.ContestRole(ctx, id.UserID, contestID)

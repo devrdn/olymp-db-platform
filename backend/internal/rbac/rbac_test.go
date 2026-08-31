@@ -106,6 +106,23 @@ func TestSystemAdministratorPassesEveryContestScopedCheck(t *testing.T) {
 	}
 }
 
+func TestContestAdminAllLiftsOnlyTheContestScope(t *testing.T) {
+	// The permission's own comment says what it does: "acts on every contest
+	// without being listed as a manager". It says nothing about accounts or
+	// the audit trail, and the package doc is explicit that contest power
+	// "must never gain the ability to manage accounts". A shortcut that fires
+	// before the scope is even looked at would hand an auditor role, granted
+	// admin_all from data alone, every installation-wide right there is —
+	// including resetting any account's password.
+	auth := New(&fakeRoles{})
+
+	err := auth.Authorize(context.Background(), identity(PermissionContestAdminAll), PermissionUsersManage, uuid.Nil)
+
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("Authorize() = %v, want admin_all to be worthless outside a contest scope", err)
+	}
+}
+
 func TestOnlyTheOwnerMayAppointManagers(t *testing.T) {
 	owner := New(&fakeRoles{roles: map[uuid.UUID]ContestRole{contestA: RoleOwner}})
 	manager := New(&fakeRoles{roles: map[uuid.UUID]ContestRole{contestA: RoleManager}})

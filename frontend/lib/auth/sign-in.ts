@@ -20,6 +20,12 @@ export type SignInDeps = {
   fetchImpl: typeof fetch;
   setCookie: (cookie: ParsedCookie) => void;
   origin?: string;
+  /**
+   * Forwarded verbatim, so the API sees who is really signing in. This call
+   * leaves from the server, and without the browser's forwarded address the
+   * API throttles and audits the web container instead of the person.
+   */
+  headers?: Record<string, string>;
 };
 
 export type SignInOutcome =
@@ -30,11 +36,11 @@ export async function signIn(
   credentials: Credentials,
   deps: SignInDeps,
 ): Promise<SignInOutcome> {
-  const { fetchImpl, setCookie, origin = "" } = deps;
+  const { fetchImpl, setCookie, origin = "", headers = {} } = deps;
 
   const response = await fetchImpl(`${origin}${API_PREFIX}/auth/login`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { ...headers, "content-type": "application/json" },
     body: JSON.stringify(credentials),
   });
 

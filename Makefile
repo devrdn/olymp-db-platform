@@ -144,8 +144,14 @@ require-env:
 	@test -n "$(CORE_DB_PASSWORD)" || { \
 		echo "CORE_DB_PASSWORD is not set in $(ENV_FILE)."; exit 1; }
 
+# Loopback is trusted so the interface running on the host (`make front`) may
+# hand a forwarded address on, the way the web container does behind Caddy in
+# production. In plain dev there is no proxy and no chain, so requests still
+# log as ::1 — the line exists so the dev API treats a forwarded header the
+# same way production does the moment something does send one.
 run: require-env ## Run the API against the dev infrastructure
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" REDIS_ADDR="$(REDIS_ADDR)" \
+		TRUSTED_PROXIES="127.0.0.1,::1" \
 		ENV=development LOG_LEVEL=debug go run ./cmd/api
 
 ## --- Migrations -------------------------------------------------------------
