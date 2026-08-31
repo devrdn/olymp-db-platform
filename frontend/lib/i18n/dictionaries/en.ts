@@ -449,6 +449,7 @@ const en = {
     newerPage: "Newer",
     counted: "{n} recorded",
     system: "system",
+    unchanged: "Saved without changes",
     unknownAction: "The action is recorded under a code this interface has no wording for yet.",
     filters: {
       action: "Action",

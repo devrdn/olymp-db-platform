@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { StateView } from "@/components/product/state-view";
 import { buttonVariants } from "@/components/ui/button";
-import { AUDIT_PAGE, type AuditEntry } from "@/lib/api/audit";
+import { AUDIT_PAGE, summariseChanges, type AuditEntry } from "@/lib/api/audit";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
@@ -117,6 +117,11 @@ export function AuditTrailRegister({
                       {entry.action}
                     </span>
                   )}
+                  {/* What moved, under what it was called. In the monospace
+                      register, where the interface's own prose ends and the
+                      record's raw data begins — these are field names as the
+                      API spells them, not sentences. */}
+                  <ChangeSummary payload={entry.payload} label={t.unchanged} />
                 </td>
                 <td className={cn(CELL, "text-small text-ink-2")}>
                   {entry.entity
@@ -154,5 +159,40 @@ export function AuditTrailRegister({
         </nav>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The fields an entry moved, beneath the action that moved them.
+ *
+ * A second line rather than a sixth column: a change set is a list, and a
+ * column wide enough for one would squeeze the four that a reader scans.
+ *
+ * "Nothing changed" is shown, not hidden. The server records it deliberately,
+ * because a save that moved nothing is otherwise indistinguishable from an
+ * edit the reader simply cannot see.
+ */
+function ChangeSummary({
+  payload,
+  label,
+}: {
+  payload: AuditEntry["payload"];
+  label: string;
+}) {
+  const { changes, unchanged } = summariseChanges(payload);
+
+  if (unchanged) {
+    return <p className="pt-1 text-small text-ink-3 italic">{label}</p>;
+  }
+  if (changes.length === 0) return null;
+
+  return (
+    <ul className="flex flex-col gap-0.5 pt-1">
+      {changes.map((change) => (
+        <li key={change.field} className="font-mono text-data text-ink-2">
+          <span className="text-ink-3">{change.field}</span> {change.from} → {change.to}
+        </li>
+      ))}
+    </ul>
   );
 }

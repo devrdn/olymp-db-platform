@@ -234,14 +234,25 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 		return Contest{}, err
 	}
 
+	// Named field by field rather than diffed off the struct: what may be
+	// recorded is a decision, not a consequence of a type's shape (§9.2).
+	changes := audit.NewChanges()
+	changes.Set("enrollment", current.Enrollment, updated.Enrollment)
+	changes.Set("question_mode", current.QuestionMode, updated.QuestionMode)
+	changes.Set("timing", current.Timing, updated.Timing)
+	changes.Set("duration_min", current.DurationMin, updated.DurationMin)
+	changes.Set("starts_at", current.StartsAt, updated.StartsAt)
+	changes.Set("ends_at", current.EndsAt, updated.EndsAt)
+	changes.Set("allowed_cidrs", cidrStrings(current.AllowedCIDRs), cidrStrings(updated.AllowedCIDRs))
+	changes.Set("enrollment_deadline", current.Settings.EnrollmentDeadline, updated.Settings.EnrollmentDeadline)
+	changes.Set("query_rate_limit_per_min", current.Settings.QueryRateLimitPerMin, updated.Settings.QueryRateLimitPerMin)
+	changes.Set("grace_period_min", current.Settings.GracePeriodMin, updated.Settings.GracePeriodMin)
+
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
 		if err := s.contests.Update(ctx, updated); err != nil {
 			return err
 		}
-		return s.record(ctx, cmd.ActorID, audit.ActionContestUpdate, updated.ID, map[string]any{
-			"enrollment": updated.Enrollment,
-			"timing":     updated.Timing,
-		})
+		return s.record(ctx, cmd.ActorID, audit.ActionContestUpdate, updated.ID, changes.Payload())
 	})
 	if err != nil {
 		return Contest{}, err
@@ -301,13 +312,10 @@ func (s *Service) SetLanguages(ctx context.Context, actorID, contestID uuid.UUID
 		if err := s.contests.ReplaceLanguages(ctx, contestID, langs); err != nil {
 			return err
 		}
-		codes := make([]string, 0, len(langs))
-		for _, l := range langs {
-			codes = append(codes, l.Code)
-		}
-		return s.record(ctx, actorID, audit.ActionContestLanguages, contestID, map[string]any{
-			"languages": codes,
-		})
+		changes := audit.NewChanges()
+		changes.Set("languages", languageCodes(c.Languages), languageCodes(langs))
+		changes.Set("default_language", c.DefaultLanguage(), defaultLanguageOf(langs))
+		return s.record(ctx, actorID, audit.ActionContestLanguages, contestID, changes.Payload())
 	})
 }
 
@@ -324,11 +332,23 @@ func (s *Service) SetTranslations(ctx context.Context, actorID, contestID uuid.U
 		return err
 	}
 
+	// The languages, never the titles. Which languages were authored is the
+	// part somebody asks about later; the text itself is content, and keeping
+	// its previous copies here would make the trail a version history it
+	// cannot serve as (§9.2).
+	written := make([]string, 0, len(translations))
+	for _, t := range translations {
+		written = append(written, t.Lang)
+	}
+	slices.Sort(written)
+
 	return s.uow.Do(ctx, func(ctx context.Context) error {
 		if err := s.contests.ReplaceTranslations(ctx, contestID, translations); err != nil {
 			return err
 		}
-		return s.record(ctx, actorID, audit.ActionContestTranslations, contestID, nil)
+		return s.record(ctx, actorID, audit.ActionContestTranslations, contestID, map[string]any{
+			"languages": written,
+		})
 	})
 }
 
@@ -383,10 +403,11 @@ func (s *Service) Transition(ctx context.Context, actorID, contestID uuid.UUID, 
 		if err := s.contests.SetStatus(ctx, contestID, status); err != nil {
 			return err
 		}
-		return s.record(ctx, actorID, audit.ActionContestStatusChange, contestID, map[string]any{
-			"from": c.Status,
-			"to":   status,
-		})
+		// One shape for every change, so the panel can render it without
+		// knowing which action it is looking at.
+		changes := audit.NewChanges()
+		changes.Set("status", c.Status, status)
+		return s.record(ctx, actorID, audit.ActionContestStatusChange, contestID, changes.Payload())
 	})
 }
 
@@ -430,6 +451,11 @@ func (s *Service) SetPolicy(ctx context.Context, actorID, contestID uuid.UUID, p
 		return fmt.Errorf("%w: the SQL policy cannot change once the contest is %s", ErrNotEditable, c.Status)
 	}
 
+	current, err := s.policies.ByContest(ctx, contestID)
+	if err != nil {
+		return err
+	}
+
 	p.ContestID = contestID
 	if err := p.Validate(); err != nil {
 		return err
@@ -438,14 +464,22 @@ func (s *Service) SetPolicy(ctx context.Context, actorID, contestID uuid.UUID, p
 	p.UpdatedBy = &actor
 	p.UpdatedAt = s.now()
 
+	// How much power a participant gets, and what it was before: the whole
+	// question after an incident.
+	changes := audit.NewChanges()
+	changes.Set("mode", current.Mode, p.Mode)
+	changes.Set("writable_tables", current.WritableTables, p.WritableTables)
+	changes.Set("allow_create_view", current.AllowCreateView, p.AllowCreateView)
+	changes.Set("allow_own_tables", current.AllowOwnTables, p.AllowOwnTables)
+	changes.Set("allow_temp_tables", current.AllowTempTables, p.AllowTempTables)
+	changes.Set("allow_catalog", current.AllowCatalog, p.AllowCatalog)
+	changes.Set("disk_quota_ratio", current.DiskQuotaRatio, p.DiskQuotaRatio)
+
 	return s.uow.Do(ctx, func(ctx context.Context) error {
 		if err := s.policies.Save(ctx, p); err != nil {
 			return err
 		}
-		return s.record(ctx, actorID, audit.ActionContestPolicyChange, contestID, map[string]any{
-			"mode":            p.Mode,
-			"writable_tables": p.WritableTables,
-		})
+		return s.record(ctx, actorID, audit.ActionContestPolicyChange, contestID, changes.Payload())
 	})
 }
 
@@ -549,4 +583,31 @@ func langCodes(byLang map[string]string) []string {
 	}
 	slices.Sort(codes)
 	return codes
+}
+
+// cidrStrings renders a network list for the trail, where a printed prefix is
+// what somebody reading it a year later can act on.
+func cidrStrings(prefixes []netip.Prefix) []string {
+	out := make([]string, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		out = append(out, prefix.String())
+	}
+	return out
+}
+
+func languageCodes(langs []ContestLanguage) []string {
+	codes := make([]string, 0, len(langs))
+	for _, l := range langs {
+		codes = append(codes, l.Code)
+	}
+	return codes
+}
+
+func defaultLanguageOf(langs []ContestLanguage) string {
+	for _, l := range langs {
+		if l.IsDefault {
+			return l.Code
+		}
+	}
+	return ""
 }

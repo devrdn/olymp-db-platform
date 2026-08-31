@@ -385,7 +385,10 @@ func TestReplaceRolesRecordsBothTheOldAndNewSet(t *testing.T) {
 	if entry.Action != audit.ActionUserRolesChange {
 		t.Fatalf("action = %q, want %q", entry.Action, audit.ActionUserRolesChange)
 	}
-	if entry.Payload["from"] == nil || entry.Payload["to"] == nil {
+	// Under the one shape every change now takes, so the panel can render a
+	// change without knowing which action produced it.
+	roles, ok := entry.Payload["changes"].(map[string]any)["roles"].(map[string]any)
+	if !ok || roles["from"] == nil || roles["to"] == nil {
 		t.Errorf("payload = %v, want both the previous and the new roles", entry.Payload)
 	}
 }
@@ -503,24 +506,32 @@ func TestEveryMultiWriteOperationRunsInsideTheUnitOfWork(t *testing.T) {
 	user := f.addUser(t, "petrov", "some password")
 	ctx := context.Background()
 
-	operations := map[string]func() error{
-		"Create": func() error {
+	// A slice, not a map: these are not independent. ChangePassword proves
+	// knowledge of the current password, and ResetPassword replaces it — so
+	// map iteration, whose order Go randomises per run, made this test fail
+	// on the runs where the reset happened to go first.
+	operations := []struct {
+		name string
+		run  func() error
+	}{
+		{"Create", func() error {
 			_, err := f.service.Create(ctx, users.CreateCommand{ActorID: f.actor, Login: "new", FullName: "New User"})
 			return err
-		},
-		"Block":   func() error { return f.service.Block(ctx, f.actor, user.ID) },
-		"Unblock": func() error { return f.service.Unblock(ctx, f.actor, user.ID) },
-		"ChangePassword": func() error {
+		}},
+		{"Block", func() error { return f.service.Block(ctx, f.actor, user.ID) }},
+		{"Unblock", func() error { return f.service.Unblock(ctx, f.actor, user.ID) }},
+		{"UpdateProfile", func() error { return f.service.UpdateProfile(ctx, f.actor, user.ID, "New Name", "") }},
+		{"ReplaceRoles", func() error { return f.service.ReplaceRoles(ctx, f.actor, user.ID, []string{"student"}) }},
+		{"ChangePassword", func() error {
 			return f.service.ChangePassword(ctx, users.ChangePasswordCommand{
 				UserID: user.ID, OldPassword: "some password", NewPassword: "a brand new password",
 			})
-		},
-		"ResetPassword": func() error { _, err := f.service.ResetPassword(ctx, f.actor, user.ID); return err },
-		"ReplaceRoles":  func() error { return f.service.ReplaceRoles(ctx, f.actor, user.ID, []string{"student"}) },
-		"UpdateProfile": func() error { return f.service.UpdateProfile(ctx, f.actor, user.ID, "New Name", "") },
+		}},
+		{"ResetPassword", func() error { _, err := f.service.ResetPassword(ctx, f.actor, user.ID); return err }},
 	}
 
-	for name, op := range operations {
+	for _, operation := range operations {
+		name, op := operation.name, operation.run
 		before := f.uow.Calls
 		if err := op(); err != nil {
 			t.Errorf("%s returned error: %v", name, err)
@@ -653,4 +664,62 @@ func TestImportRecordsEachAccountItCreated(t *testing.T) {
 		t.Errorf("actions = %v, want a %s for the imported account",
 			f.sink.actions(), audit.ActionUserCreate)
 	}
+}
+
+func TestUpdatingAProfileRecordsWhatMoved(t *testing.T) {
+	// It recorded the new name and nothing else — not what it replaced, and
+	// not that the email had changed at all.
+	f := newFixture(t)
+	user := f.addUser(t, "s.popescu", "correct horse battery staple")
+
+	if err := f.service.UpdateProfile(context.Background(), f.actor, user.ID,
+		"Sergiu Popescu", "s.popescu@example.edu"); err != nil {
+		t.Fatalf("UpdateProfile() = %v", err)
+	}
+
+	changes := lastChanges(t, f, audit.ActionUserUpdate)
+
+	name, ok := changes["full_name"].(map[string]any)
+	if !ok || name["from"] != "Test User" || name["to"] != "Sergiu Popescu" {
+		t.Errorf("full_name = %v, want the previous name recorded", changes["full_name"])
+	}
+	if _, present := changes["email"]; !present {
+		t.Errorf("changes = %v, want the email recorded", changes)
+	}
+}
+
+func TestChangingRolesRecordsThemTheSameWayAsEverythingElse(t *testing.T) {
+	// It already carried from/to under its own keys. One shape for every
+	// change is what lets the panel render them without knowing the action.
+	f := newFixture(t)
+	user := f.addUser(t, "s.popescu", "correct horse battery staple")
+
+	if err := f.service.ReplaceRoles(context.Background(), f.actor, user.ID,
+		[]string{"organizer"}); err != nil {
+		t.Fatalf("ReplaceRoles() = %v", err)
+	}
+
+	changes := lastChanges(t, f, audit.ActionUserRolesChange)
+
+	if _, ok := changes["roles"].(map[string]any); !ok {
+		t.Errorf("changes = %v, want the roles under one shape", changes)
+	}
+}
+
+// lastChanges returns the change set of the newest entry with that action.
+func lastChanges(t *testing.T, f *fixture, action string) map[string]any {
+	t.Helper()
+
+	for i := len(f.sink.entries) - 1; i >= 0; i-- {
+		if f.sink.entries[i].Action != action {
+			continue
+		}
+		changes, ok := f.sink.entries[i].Payload["changes"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s payload = %v, want a changes map", action, f.sink.entries[i].Payload)
+		}
+		return changes
+	}
+	t.Fatalf("no %s entry among %v", action, f.sink.actions())
+	return nil
 }

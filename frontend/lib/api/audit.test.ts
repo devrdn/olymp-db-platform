@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { auditSearch, dayBounds } from "./audit";
+import { auditSearch, dayBounds, summariseChanges } from "./audit";
 
 describe("auditSearch", () => {
   test("leaves out what was not asked for", () => {
@@ -44,5 +44,45 @@ describe("dayBounds", () => {
 
   test("crosses a month boundary without inventing a day", () => {
     expect(dayBounds("", "2026-03-31")).toEqual({ to: "2026-04-01T00:00:00Z" });
+  });
+});
+
+describe("summariseChanges", () => {
+  test("lists the fields that moved, with what they were", () => {
+    const { changes } = summariseChanges({
+      changes: {
+        ends_at: { from: "2026-11-08T19:30:00Z", to: "2026-11-08T22:30:00Z" },
+        enrollment: { from: "invite_only", to: "open" },
+      },
+    });
+
+    expect(changes.map((c) => c.field)).toEqual(["ends_at", "enrollment"]);
+    expect(changes[1]).toEqual({ field: "enrollment", from: "invite_only", to: "open" });
+  });
+
+  test("says when a save moved nothing", () => {
+    // Otherwise it is indistinguishable from an edit the reader cannot see.
+    expect(summariseChanges({ changed: false })).toEqual({ changes: [], unchanged: true });
+  });
+
+  test("renders an emptied list as an absence rather than as nothing at all", () => {
+    const { changes } = summariseChanges({
+      changes: { allowed_cidrs: { from: ["10.20.0.0/16"], to: [] } },
+    });
+
+    expect(changes[0]).toEqual({ field: "allowed_cidrs", from: "10.20.0.0/16", to: "—" });
+  });
+
+  test("says a value was too large rather than pretending it was empty", () => {
+    const { changes } = summariseChanges({
+      changes: { allowed_cidrs: { from: [], to: { omitted_bytes: 6000 } } },
+    });
+
+    expect(changes[0].to).toBe("6000 B");
+  });
+
+  test("has nothing to say about an entry that records no change set", () => {
+    expect(summariseChanges({ login: "root" })).toEqual({ changes: [], unchanged: false });
+    expect(summariseChanges(undefined)).toEqual({ changes: [], unchanged: false });
   });
 });

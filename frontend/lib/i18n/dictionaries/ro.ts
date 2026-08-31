@@ -443,6 +443,7 @@ const ro = {
     newerPage: "Mai noi",
     counted: "{n} înregistrate",
     system: "sistem",
+    unchanged: "Salvat fără modificări",
     unknownAction: "Acțiunea este înregistrată sub un cod pentru care interfața nu are încă o formulare.",
     filters: {
       action: "Acțiune",

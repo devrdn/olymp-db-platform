@@ -3,6 +3,8 @@ package contests_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -342,4 +344,175 @@ func TestStartingRefusesAContestWhoseContentWasTakenApartAfterPublishing(t *test
 	if !errors.Is(err, contests.ErrNotPublishable) {
 		t.Errorf("Transition(running) = %v, want ErrNotPublishable", err)
 	}
+}
+
+// changesIn returns the recorded change set of the last entry with that action.
+func changesIn(t *testing.T, f *conteststest.Fixture, action string) map[string]any {
+	t.Helper()
+
+	for i := len(f.Audit.Entries) - 1; i >= 0; i-- {
+		if f.Audit.Entries[i].Action != action {
+			continue
+		}
+		changes, ok := f.Audit.Entries[i].Payload["changes"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s payload = %v, want a changes map", action, f.Audit.Entries[i].Payload)
+		}
+		return changes
+	}
+	t.Fatalf("no %s entry among %v", action, f.Audit.Actions())
+	return nil
+}
+
+func TestAnEditRecordsWhatMovedAndWhatItWas(t *testing.T) {
+	// "Who moved the deadline, and what was it before" is the question asked
+	// months later. Recording the new state alone cannot answer the second
+	// half, and recording every field cannot answer the first.
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	later := f.Now.Add(9 * time.Hour)
+
+	if _, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID:    uuid.New(),
+		ContestID:  c.ID,
+		EndsAt:     &later,
+		Enrollment: contests.EnrollmentOpen,
+	}); err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+
+	changes := changesIn(t, f, audit.ActionContestUpdate)
+
+	enrollment, ok := changes["enrollment"].(map[string]any)
+	if !ok {
+		t.Fatalf("changes = %v, want the enrollment recorded", changes)
+	}
+	if enrollment["from"] != contests.EnrollmentInviteOnly || enrollment["to"] != contests.EnrollmentOpen {
+		t.Errorf("enrollment = %v, want invite_only → open", enrollment)
+	}
+	if _, present := changes["ends_at"]; !present {
+		t.Errorf("changes = %v, want the moved deadline recorded", changes)
+	}
+}
+
+func TestAnEditDoesNotRecordFieldsTheFormMerelyResent(t *testing.T) {
+	// The settings form sends everything it holds. If all of it were recorded,
+	// every save would read as a rewrite of the contest and bury the one line
+	// that actually moved.
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+
+	if _, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID:    uuid.New(),
+		ContestID:  c.ID,
+		Enrollment: contests.EnrollmentInviteOnly,
+		Timing:     contests.TimingFixed,
+		StartsAt:   c.StartsAt,
+		EndsAt:     c.EndsAt,
+	}); err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+
+	for i := len(f.Audit.Entries) - 1; i >= 0; i-- {
+		if f.Audit.Entries[i].Action != audit.ActionContestUpdate {
+			continue
+		}
+		if f.Audit.Entries[i].Payload["changed"] != false {
+			t.Errorf("payload = %v, want it to say nothing changed", f.Audit.Entries[i].Payload)
+		}
+		return
+	}
+	t.Fatalf("no %s entry at all", audit.ActionContestUpdate)
+}
+
+func TestChangingTheSQLPolicyRecordsWhatWasLoosened(t *testing.T) {
+	// The one setting that decides how much power a participant gets. What it
+	// was before is the whole question after an incident.
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+
+	policy := contests.DefaultSQLPolicy(c.ID)
+	policy.Mode = contests.ModeReadWrite
+	policy.WritableTables = []string{"notes"}
+	policy.AllowCreateView = true
+	if err := f.Service.SetPolicy(context.Background(), uuid.New(), c.ID, policy); err != nil {
+		t.Fatalf("SetPolicy() = %v", err)
+	}
+
+	changes := changesIn(t, f, audit.ActionContestPolicyChange)
+
+	mode, ok := changes["mode"].(map[string]any)
+	if !ok || mode["from"] != contests.ModeReadOnly || mode["to"] != contests.ModeReadWrite {
+		t.Errorf("mode = %v, want read_only → read_write", changes["mode"])
+	}
+	if _, present := changes["allow_create_view"]; !present {
+		t.Errorf("changes = %v, want the loosened flag recorded", changes)
+	}
+}
+
+func TestChangingTheLanguagesRecordsTheSetItReplaced(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+
+	if err := f.Service.SetLanguages(context.Background(), uuid.New(), c.ID,
+		[]contests.ContestLanguage{{Code: "en", IsDefault: true}, {Code: "ro"}}); err != nil {
+		t.Fatalf("SetLanguages() = %v", err)
+	}
+
+	changes := changesIn(t, f, audit.ActionContestLanguages)
+
+	languages, ok := changes["languages"].(map[string]any)
+	if !ok {
+		t.Fatalf("changes = %v, want the languages recorded", changes)
+	}
+	if _, ok := languages["from"].([]string); !ok {
+		t.Errorf("from = %v, want the previous set", languages["from"])
+	}
+}
+
+func TestAStatusChangeRecordsItTheSameWayAsEverythingElse(t *testing.T) {
+	// It already carried from/to under its own keys. One shape for every
+	// change is what lets the panel render them without knowing the action.
+	f := conteststest.NewFixture()
+	c := f.SeedPublishableContest()
+
+	if err := f.Service.Transition(context.Background(), uuid.New(), c.ID,
+		contests.StatusPublished); err != nil {
+		t.Fatalf("Transition() = %v", err)
+	}
+
+	changes := changesIn(t, f, audit.ActionContestStatusChange)
+
+	status, ok := changes["status"].(map[string]any)
+	if !ok || status["from"] != contests.StatusDraft || status["to"] != contests.StatusPublished {
+		t.Errorf("status = %v, want draft → published", changes["status"])
+	}
+}
+
+func TestChangingTheTitlesRecordsTheLanguagesButNotTheText(t *testing.T) {
+	// It recorded nothing at all — an entry that says only that somebody
+	// touched the titles. The languages are the part worth keeping; the titles
+	// themselves are authored text, and the trail is not a version history.
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+
+	if err := f.Service.SetTranslations(context.Background(), uuid.New(), c.ID,
+		[]contests.Translation{{Lang: "en", Title: "The Library Murder"}}); err != nil {
+		t.Fatalf("SetTranslations() = %v", err)
+	}
+
+	for i := len(f.Audit.Entries) - 1; i >= 0; i-- {
+		entry := f.Audit.Entries[i]
+		if entry.Action != audit.ActionContestTranslations {
+			continue
+		}
+		if fmt.Sprint(entry.Payload) == "map[]" || entry.Payload == nil {
+			t.Fatalf("payload = %v, want the languages named", entry.Payload)
+		}
+		if strings.Contains(fmt.Sprint(entry.Payload), "Library Murder") {
+			t.Fatalf("payload = %v, want no authored text in the trail", entry.Payload)
+		}
+		return
+	}
+	t.Fatalf("no %s entry", audit.ActionContestTranslations)
 }

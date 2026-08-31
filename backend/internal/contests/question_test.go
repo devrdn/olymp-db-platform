@@ -3,8 +3,11 @@ package contests_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
 	"github.com/google/uuid"
@@ -318,4 +321,77 @@ func questionCmd(contestID uuid.UUID) contests.QuestionCommand {
 		Kind:      contests.KindText,
 		Points:    5,
 	}
+}
+
+func TestChangingAQuestionRecordsWhichFieldMoved(t *testing.T) {
+	// It recorded only which question was touched, which answers nothing: the
+	// point of asking is what was done to it.
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	created, err := f.Service.AddQuestion(context.Background(), questionCmd(c.ID))
+	if err != nil {
+		t.Fatalf("AddQuestion() = %v", err)
+	}
+
+	hidden := false
+	if _, err := f.Service.UpdateQuestion(context.Background(), contests.QuestionCommand{
+		ActorID:    uuid.New(),
+		ContestID:  c.ID,
+		QuestionID: created.ID,
+		Kind:       contests.KindText,
+		Points:     20,
+		IsVisible:  &hidden,
+	}); err != nil {
+		t.Fatalf("UpdateQuestion() = %v", err)
+	}
+
+	var payload map[string]any
+	for i := len(f.Audit.Entries) - 1; i >= 0; i-- {
+		if f.Audit.Entries[i].Action == audit.ActionQuestionUpdate {
+			payload = f.Audit.Entries[i].Payload
+			break
+		}
+	}
+	changes, ok := payload["changes"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload = %v, want a changes map", payload)
+	}
+	points, ok := changes["points"].(map[string]any)
+	if !ok || points["from"] != 5 || points["to"] != 20 {
+		t.Errorf("points = %v, want 5 → 20", changes["points"])
+	}
+	if _, present := changes["is_visible"]; !present {
+		t.Errorf("changes = %v, want the hidden flag recorded", changes)
+	}
+	if payload["question_id"] != created.ID.String() {
+		t.Errorf("payload = %v, want it to still name the question", payload)
+	}
+}
+
+func TestSettingTheAnswersStillRecordsOnlyHowMany(t *testing.T) {
+	// The one place a change set must not reach. The trail is read by
+	// organizers, and it must not become somewhere to look the answers up.
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	created, _ := f.Service.AddQuestion(context.Background(), questionCmd(c.ID))
+
+	if err := f.Service.SetAnswers(context.Background(), uuid.New(), c.ID, created.ID,
+		[]contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the butler"}}); err != nil {
+		t.Fatalf("SetAnswers() = %v", err)
+	}
+
+	for _, entry := range f.Audit.Entries {
+		if entry.Action != audit.ActionAnswersChange {
+			continue
+		}
+		encoded := fmt.Sprint(entry.Payload)
+		if strings.Contains(encoded, "butler") {
+			t.Fatalf("payload = %v, want no answer value in it", entry.Payload)
+		}
+		if entry.Payload["count"] != 1 {
+			t.Errorf("payload = %v, want the count", entry.Payload)
+		}
+		return
+	}
+	t.Fatalf("no %s entry", audit.ActionAnswersChange)
 }

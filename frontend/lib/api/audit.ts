@@ -84,3 +84,52 @@ export function dayBounds(from: string, to: string): { from?: string; to?: strin
   }
   return bounds;
 }
+
+/** One field an action moved, ready to render. */
+export type FieldChange = { field: string; from: string; to: string };
+
+/**
+ * What an entry says it changed.
+ *
+ * The server records only fields that actually moved, and says so explicitly
+ * when none did — "saved, nothing moved" is a fact worth showing, because
+ * otherwise it is indistinguishable from a real edit that the reader simply
+ * cannot see (architecture §9.2).
+ *
+ * Values are rendered rather than typed: the trail carries strings, numbers,
+ * lists and the occasional note that a value was too large to keep, and this
+ * is a column in a register, not a form.
+ */
+export function summariseChanges(
+  payload: Record<string, unknown> | undefined,
+): { changes: FieldChange[]; unchanged: boolean } {
+  if (payload?.changed === false) return { changes: [], unchanged: true };
+
+  const raw = payload?.changes;
+  if (!raw || typeof raw !== "object") return { changes: [], unchanged: false };
+
+  const changes = Object.entries(raw as Record<string, unknown>)
+    .map(([field, value]) => {
+      const pair = (value ?? {}) as { from?: unknown; to?: unknown };
+      return { field, from: renderValue(pair.from), to: renderValue(pair.to) };
+    })
+    // A stable order, because the server sends a map and a register that
+    // reshuffles its own rows between reloads is unreadable.
+    .sort((a, b) => a.field.localeCompare(b.field));
+
+  return { changes, unchanged: false };
+}
+
+/** The shortest honest rendering of a recorded value. */
+function renderValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (Array.isArray(value)) return value.length === 0 ? "—" : value.join(", ");
+  if (typeof value === "object") {
+    const omitted = (value as { omitted_bytes?: unknown }).omitted_bytes;
+    // The server replaces a value too large to keep with a note of its size.
+    // Saying so is the point; pretending it was empty would be a lie.
+    if (typeof omitted === "number") return `${omitted} B`;
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
