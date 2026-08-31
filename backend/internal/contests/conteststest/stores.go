@@ -517,6 +517,15 @@ func (r *Languages) Active(context.Context) ([]contests.Language, error) {
 // left a trail.
 type Sink struct {
 	Entries []audit.Entry
+	// Loose holds the entries appended with no transaction open.
+	//
+	// Almost every action must record inside one: an entry written after the
+	// change commits can be lost while the change survives, and one written
+	// before it can outlive a rollback. Either way the trail stops being
+	// evidence. Refusals are the exception — there is nothing to be atomic
+	// with — so this is a list rather than a flag, and a test names which
+	// entries it expects to find in it.
+	Loose []audit.Entry
 }
 
 var _ audit.Sink = (*Sink)(nil)
@@ -524,8 +533,11 @@ var _ audit.Sink = (*Sink)(nil)
 // NewSink returns an empty audit sink.
 func NewSink() *Sink { return &Sink{} }
 
-func (s *Sink) Append(_ context.Context, e audit.Entry) error {
+func (s *Sink) Append(ctx context.Context, e audit.Entry) error {
 	s.Entries = append(s.Entries, e)
+	if !inTx(ctx) {
+		s.Loose = append(s.Loose, e)
+	}
 	return nil
 }
 
