@@ -29,6 +29,7 @@ export function ProductShell({
   dict,
   home,
   section,
+  nav,
   children,
 }: {
   locale: Locale;
@@ -36,12 +37,18 @@ export function ProductShell({
   dict: Dictionary;
   home: string;
   section?: string;
+  /**
+   * Navigation for a shell that has more than one destination. It replaces the
+   * plain section label rather than joining it: a name beside a set of links,
+   * one of which is marked as current, says the same thing twice.
+   */
+  nav?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="flex min-h-[100dvh] flex-col">
       <AppBar locale={locale} theme={theme} dict={dict} home={home}>
-        {section ? <span className="truncate text-control text-ink-2">{section}</span> : null}
+        {nav ?? (section ? <span className="truncate text-control text-ink-2">{section}</span> : null)}
       </AppBar>
       <main className="flex flex-1 flex-col">{children}</main>
     </div>
