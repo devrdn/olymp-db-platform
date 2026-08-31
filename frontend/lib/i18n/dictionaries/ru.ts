@@ -80,6 +80,18 @@ const ru = {
     },
   },
   /** The two screens any route can end on, so they live outside every section. */
+  profile: {
+    heading: "Ваш аккаунт",
+    lede: "Под кем вы вошли и что этот аккаунт может делать.",
+    login: "Логин",
+    email: "Почта",
+    noEmail: "не указана",
+    roles: "Роли",
+    noRoles: "нет",
+    changePassword: "Сменить пароль",
+    signOut: "Выйти",
+    signOutNote: "Завершает сессию только на этом устройстве.",
+  },
   workspace: {
     backToRegister: "← Все олимпиады",
     untitled: "Олимпиада без названия",

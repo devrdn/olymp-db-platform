@@ -6,8 +6,8 @@ vi.mock("next/navigation", () => ({ usePathname: () => "/contests/c-1/story" }))
 import { AdminNav } from "./admin-nav";
 
 const items = [
-  { href: "/contests", label: "Contests", icon: "contests" as const },
-  { href: "/audit", label: "Audit", icon: "audit" as const },
+  { href: "/contests", label: "Contests" },
+  { href: "/audit", label: "Audit" },
 ];
 
 describe("AdminNav", () => {
@@ -18,13 +18,13 @@ describe("AdminNav", () => {
     expect(screen.getByRole("link", { name: "Audit" })).not.toHaveAttribute("aria-current");
   });
 
-  test("draws an icon that the accessible name does not repeat", () => {
-    // The icon is decoration beside a word, not a second label: announced, it
-    // would make every destination read twice to a screen reader.
+  test("carries no glyph beside the words", () => {
+    // SPEC section 2, rule 1: the interface around the data is rules and
+    // typography. Two destinations are told apart by reading them, so an icon
+    // here is a mark to look past rather than a shape to aim at.
     const { container } = render(<AdminNav items={items} />);
 
-    const icons = container.querySelectorAll("svg[aria-hidden='true']");
-    expect(icons).toHaveLength(2);
+    expect(container.querySelectorAll("svg")).toHaveLength(0);
     expect(screen.getByRole("link", { name: "Contests" })).toHaveAccessibleName("Contests");
   });
 });

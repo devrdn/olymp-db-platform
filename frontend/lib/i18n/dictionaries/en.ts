@@ -84,6 +84,18 @@ const en = {
     },
   },
   /** The contest workspace: everything an author does to one contest. */
+  profile: {
+    heading: "Your account",
+    lede: "Who you are signed in as, and what this account may do.",
+    login: "Login",
+    email: "Email",
+    noEmail: "not set",
+    roles: "Roles",
+    noRoles: "none",
+    changePassword: "Change password",
+    signOut: "Sign out",
+    signOutNote: "Ends this session on this device only.",
+  },
   workspace: {
     backToRegister: "← All contests",
     untitled: "Untitled contest",

@@ -376,10 +376,14 @@ func TestTheWayOutWorksWhereverTheAPIIsMounted(t *testing.T) {
 	// Production mounts under /api/v1 and the tests mount bare. Both have to
 	// reach the same three endpoints, which is what the suffix match bought
 	// and what the exact match must not lose.
+	//
+	// /api/v2 is in the list on purpose. Pinning the literal current prefix
+	// would mean that renaming the mount silently shuts the only way out of a
+	// one-time password — a change nobody would connect to this file.
 	f := newMiddlewareFixture(t, staticRoles{})
 	setMustChange(t, f)
 
-	for _, path := range []string{"/auth/password", "/api/v1/auth/password"} {
+	for _, path := range []string{"/auth/password", "/api/v1/auth/password", "/api/v2/auth/password"} {
 		req := httptest.NewRequest(http.MethodPost, path, nil)
 		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: f.token})
 		rec := httptest.NewRecorder()

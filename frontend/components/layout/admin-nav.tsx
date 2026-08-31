@@ -1,26 +1,9 @@
 "use client";
 
-import { ClipboardList, ScrollText } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { cn } from "@/lib/utils";
-
-/**
- * The icons a destination may carry, named by what they lead to rather than
- * by what they look like.
- *
- * A closed set, not a component passed in: the layout that builds these items
- * is a Server Component, and a React element crossing that boundary would
- * have to be serialisable. A key is, and it keeps the drawing here where the
- * sizes and stroke weights already agree with the rest of the bar.
- */
-const ICONS = {
-  contests: ClipboardList,
-  audit: ScrollText,
-} as const;
-
-export type NavIcon = keyof typeof ICONS;
 
 /**
  * Where an administrator can go, in the bar.
@@ -35,17 +18,12 @@ export type NavIcon = keyof typeof ICONS;
  * and only the browser knows which one that is. Everything it renders was
  * decided on the server.
  *
- * The icon sits beside the word rather than replacing it. Two destinations
- * need no glyph to be told apart, and a bar of unlabelled pictograms is a
- * quiz; what the icon buys is a shape to aim at, which is what the eye
- * actually returns to. It is `aria-hidden` for the same reason — announced, it
- * would make every destination read twice.
+ * Words, with no glyph beside them. Two destinations are told apart by reading
+ * them, so an icon here adds a mark to look past rather than a shape to aim
+ * at — and the design system's first rule is that the interface around the
+ * data is rules and typography (SPEC section 2).
  */
-export function AdminNav({
-  items,
-}: {
-  items: { href: string; label: string; icon?: NavIcon }[];
-}) {
+export function AdminNav({ items }: { items: { href: string; label: string }[] }) {
   const pathname = usePathname();
 
   return (
@@ -55,7 +33,6 @@ export function AdminNav({
         // still contests, and a mark that disappears one level in would leave
         // the reader with no idea where they are.
         const current = pathname === item.href || pathname.startsWith(`${item.href}/`);
-        const Icon = item.icon ? ICONS[item.icon] : null;
 
         return (
           <Link
@@ -63,12 +40,11 @@ export function AdminNav({
             href={item.href}
             aria-current={current ? "page" : undefined}
             className={cn(
-              "flex items-center gap-1.5 rounded-full px-2 py-1 text-control transition-colors duration-(--t-input) ease-standard",
+              "truncate px-2 py-1 text-control transition-colors duration-(--t-input) ease-standard",
               current ? "text-ink" : "text-ink-3 hover:text-ink-2",
             )}
           >
-            {Icon ? <Icon className="size-4 shrink-0" strokeWidth={1.75} aria-hidden /> : null}
-            <span className="truncate">{item.label}</span>
+            {item.label}
           </Link>
         );
       })}

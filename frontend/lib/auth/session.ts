@@ -12,7 +12,23 @@ import { apiOrigin } from "@/lib/api/config";
  */
 export const SESSION_COOKIE = "dbcontest_session";
 
-export type CurrentIdentity = { id: string; login: string; permissions: string[] };
+/**
+ * Who the caller is, as `/auth/me` reports it.
+ *
+ * Permissions are what route protection branches on — the same thing the
+ * server's middleware decides on, so a role added as data needs no change
+ * here. The name and roles are what a profile shows: a person is greeted by
+ * name, and told what they are, which a permission list spells out but does
+ * not name.
+ */
+export type CurrentIdentity = {
+  id: string;
+  login: string;
+  fullName: string;
+  email?: string;
+  roles: string[];
+  permissions: string[];
+};
 
 /**
  * The session, shaped as a header for a server-to-server call.
@@ -48,5 +64,24 @@ export async function fetchIdentity(): Promise<CurrentIdentity | null> {
 
   if (!response?.ok) return null;
 
-  return (await response.json()) as CurrentIdentity;
+  const body = (await response.json()) as {
+    id: string;
+    login: string;
+    full_name?: string;
+    email?: string;
+    roles?: string[];
+    permissions?: string[];
+  };
+
+  return {
+    id: body.id,
+    login: body.login,
+    // The API leaves the name out when it could not read the account behind
+    // the session — it does not fail the request over a display field. The
+    // login is always there, and is what the interface falls back to.
+    fullName: body.full_name ?? "",
+    email: body.email,
+    roles: body.roles ?? [],
+    permissions: body.permissions ?? [],
+  };
 }

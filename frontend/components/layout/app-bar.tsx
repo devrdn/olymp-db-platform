@@ -4,6 +4,7 @@ import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import type { Theme } from "@/lib/theme/config";
 
+import { AccountLink, type Account } from "./account-link";
 import { LanguageSwitcher } from "./language-switcher";
 import { Mark } from "./mark";
 import { SignOutButton } from "./sign-out-button";
@@ -23,6 +24,7 @@ export function AppBar({
   theme,
   dict,
   home,
+  account,
   signedIn,
   children,
 }: {
@@ -39,8 +41,14 @@ export function AppBar({
    */
   home?: string;
   /**
-   * Whether there is a session to end. A control that ends nothing invites a
-   * press to find out what it does, so the sign-in screen does not carry one.
+   * Who is signed in. Present, the bar carries the door to their profile,
+   * which is where signing out lives; absent, it carries neither.
+   */
+  account?: Account;
+  /**
+   * A session with no profile to open. The forced password change is the only
+   * such screen: the API refuses that account every endpoint but three, so it
+   * needs the way out spelled directly in the bar.
    */
   signedIn?: boolean;
   /** Screen-specific chrome: a contest title, a timer, a breadcrumb. */
@@ -80,7 +88,8 @@ export function AppBar({
         <div className="flex shrink-0 items-center gap-1.5">
           <ThemeToggle current={theme} labels={dict.chrome.theme} />
           <LanguageSwitcher current={locale} label={dict.chrome.language} />
-          {signedIn ? <SignOutButton label={dict.chrome.signOut} /> : null}
+          {account ? <AccountLink account={account} /> : null}
+          {!account && signedIn ? <SignOutButton label={dict.chrome.signOut} /> : null}
         </div>
       </div>
       <div />

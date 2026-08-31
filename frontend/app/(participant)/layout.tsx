@@ -1,4 +1,5 @@
 import { ProductShell } from "@/components/layout/product-shell";
+import { fetchIdentity } from "@/lib/auth/session";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -15,10 +16,11 @@ import { activeTheme } from "@/lib/theme/server";
  * belong here, already framed.
  */
 export default async function ParticipantLayout({ children }: { children: React.ReactNode }) {
-  const [dict, locale, theme] = await Promise.all([
+  const [dict, locale, theme, identity] = await Promise.all([
     activeDictionary(),
     activeLocale(),
     activeTheme(),
+    fetchIdentity(),
   ]);
 
   return (
@@ -28,6 +30,7 @@ export default async function ParticipantLayout({ children }: { children: React.
       dict={dict}
       home="/my"
       section={dict.participant.heading}
+      account={identity ? { fullName: identity.fullName, login: identity.login } : undefined}
     >
       {children}
     </ProductShell>
