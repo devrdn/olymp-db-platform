@@ -16,6 +16,9 @@ const nightInTheArchive: ContestSummary = {
   description: "Опись пропала между полуночью и рассветом.",
   startsAt: "2026-11-08T19:00:00Z",
   endsAt: "2026-11-08T21:00:00Z",
+  // The author's register ignores it — an organizer's own participation is a
+  // fact about a different question — but the shape it receives carries it.
+  enrolled: false,
 };
 
 let en: Dictionary;

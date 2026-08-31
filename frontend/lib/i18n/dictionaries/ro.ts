@@ -418,20 +418,37 @@ const ro = {
     },
   },
   participant: {
-    heading: "Olimpiadele mele",
-    countLabel: "disponibile",
+    mine: {
+      heading: "Olimpiadele mele",
+      countLabel: "cu participarea dumneavoastră",
+      empty: {
+        title: "Nu participați încă la nimic",
+        body: "Aici apar olimpiadele la care sunteți înscris. La unele vă puteți înscrie singur din lista celor deschise, la restul vă invită organizatorii.",
+        action: "Vedeți ce este deschis",
+      },
+    },
+    open: {
+      heading: "Olimpiade deschise",
+      countLabel: "disponibile pentru dumneavoastră",
+      empty: {
+        title: "Nu este nimic deschis pentru înscriere",
+        body: "Aici apar olimpiadele cu înscriere liberă, cât timp primesc participanți. La una pe bază de invitație vă adaugă organizatorii.",
+      },
+      loading: "Se încarcă olimpiadele deschise",
+      failed: {
+        title: "Nu s-au putut încărca olimpiadele deschise",
+        body: "Serverul nu a răspuns. Verificați conexiunea și încercați din nou.",
+      },
+    },
     columns: {
       action: "Participare",
     },
     join: "Înscrieți-vă",
     joining: "Se înscrie",
     joined: "Sunteți înscris.",
+    enrolled: "Sunteți înscris",
     byInvitation: "Pe bază de invitație",
     noAction: "Nimic de făcut deocamdată",
-    empty: {
-      title: "Nu aveți încă la ce participa",
-      body: "Olimpiadele apar aici după publicare. La una deschisă vă puteți înscrie de pe acest ecran.",
-    },
     loading: "Se încarcă olimpiadele dumneavoastră",
     failed: {
       title: "Olimpiadele nu au putut fi încărcate",

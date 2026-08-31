@@ -93,6 +93,43 @@ func (r *Registrations) ByUser(ctx context.Context, contestID, userID uuid.UUID)
 		WHERE r.contest_id = $1 AND r.user_id = $2`, contestID, userID))
 }
 
+// EnrolledIn reports which of these contests the user is registered for.
+//
+// One query for a whole page: a catalogue of twenty rows must not become
+// twenty lookups, and `= ANY($2)` keeps the identifiers as parameters rather
+// than building a list into the statement.
+//
+// The user is a parameter the HTTP layer fills from the authenticated
+// identity, never from the request, so this cannot be asked about anybody
+// else. Absent contests simply have no key: a caller reads the map with `[id]`
+// and gets false, which is the right answer for "not registered".
+func (r *Registrations) EnrolledIn(ctx context.Context, userID uuid.UUID, contestIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+	on := make(map[uuid.UUID]bool, len(contestIDs))
+	if userID == uuid.Nil || len(contestIDs) == 0 {
+		return on, nil
+	}
+
+	rows, err := r.querier(ctx).Query(ctx,
+		`SELECT contest_id FROM registrations WHERE user_id = $1 AND contest_id = ANY($2)`,
+		userID, contestIDs)
+	if err != nil {
+		return nil, fmt.Errorf("read the caller's registrations: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan registration: %w", err)
+		}
+		on[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read the caller's registrations: %w", err)
+	}
+	return on, nil
+}
+
 // Add registers a user for a contest.
 func (r *Registrations) Add(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, error) {
 	p, err := scanParticipant(r.querier(ctx).QueryRow(ctx, `

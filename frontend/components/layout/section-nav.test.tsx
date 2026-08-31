@@ -3,16 +3,16 @@ import { describe, expect, test, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/contests/c-1/story" }));
 
-import { AdminNav } from "./admin-nav";
+import { SectionNav } from "./section-nav";
 
 const items = [
   { href: "/contests", label: "Contests" },
   { href: "/audit", label: "Audit" },
 ];
 
-describe("AdminNav", () => {
+describe("SectionNav", () => {
   test("keeps the section marked while the visitor is deeper inside it", () => {
-    render(<AdminNav items={items} />);
+    render(<SectionNav items={items} />);
 
     expect(screen.getByRole("link", { name: "Contests" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Audit" })).not.toHaveAttribute("aria-current");
@@ -22,7 +22,7 @@ describe("AdminNav", () => {
     // SPEC section 2, rule 1: the interface around the data is rules and
     // typography. Two destinations are told apart by reading them, so an icon
     // here is a mark to look past rather than a shape to aim at.
-    const { container } = render(<AdminNav items={items} />);
+    const { container } = render(<SectionNav items={items} />);
 
     expect(container.querySelectorAll("svg")).toHaveLength(0);
     expect(screen.getByRole("link", { name: "Contests" })).toHaveAccessibleName("Contests");

@@ -135,6 +135,15 @@ type RegistrationRepository interface {
 	Remove(ctx context.Context, contestID, userID uuid.UUID) error
 	// SetStatus changes a registration's status.
 	SetStatus(ctx context.Context, registrationID uuid.UUID, status string) error
+	// EnrolledIn reports which of these contests the user is registered for.
+	//
+	// One question, one query: a catalogue of twenty rows must not become
+	// twenty lookups. It lives on the registrations repository rather than
+	// becoming a field on Contest, because "am I on this" is a fact about a
+	// viewer and a contest together, not a property of the contest — put on
+	// the domain type it would have to be filled, or left wrong, everywhere a
+	// contest is loaded.
+	EnrolledIn(ctx context.Context, userID uuid.UUID, contestIDs []uuid.UUID) (map[uuid.UUID]bool, error)
 }
 
 // Why an entry of an import produced no registration.
@@ -179,6 +188,18 @@ type EnrollCommand struct {
 	// Address is the resolved client address, checked against the contest's
 	// network restriction.
 	Address netip.Addr
+}
+
+// EnrolledIn reports which of these contests the user is registered for.
+//
+// The user is always the caller: the HTTP layer passes the identity it
+// authenticated, never a value from the request, so this cannot answer "who
+// else takes part in what".
+func (s *Service) EnrolledIn(ctx context.Context, userID uuid.UUID, contestIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+	if userID == uuid.Nil || len(contestIDs) == 0 {
+		return map[uuid.UUID]bool{}, nil
+	}
+	return s.registrations.EnrolledIn(ctx, userID, contestIDs)
 }
 
 // Participants returns a page of the contest's participants.

@@ -49,7 +49,7 @@ describe("the product mark", () => {
         theme="system"
         dict={en}
         home="/my"
-        section={en.participant.heading}
+        section={en.participant.mine.heading}
       >
         <p>rows</p>
       </ProductShell>,

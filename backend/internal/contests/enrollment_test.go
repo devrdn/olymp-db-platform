@@ -388,3 +388,37 @@ func TestImportSurvivesSomebodyElseRegisteringTheSamePersonFirst(t *testing.T) {
 		t.Errorf("skipped = %+v, want the student reported as already enrolled", result.Skipped)
 	}
 }
+
+func TestTheRosterCanSayWhichOfTheseTheStudentIsOn(t *testing.T) {
+	// Without this the catalogue cannot tell "join" from "you are already in",
+	// and the workaround it replaces — offer the button everywhere and let the
+	// API answer already_enrolled — turns an ordinary state into an error
+	// message the moment the two lists are separate screens.
+	ctx := context.Background()
+	f := conteststest.NewFixture()
+	student := f.AddUser("s.popescu")
+	other := f.AddUser("i.ivanov")
+
+	mine := f.SeedContest(contests.StatusPublished)
+	theirs := f.SeedContest(contests.StatusPublished)
+	if _, err := f.Registrations.Add(ctx, mine.ID, student.ID); err != nil {
+		t.Fatalf("Add() = %v", err)
+	}
+	if _, err := f.Registrations.Add(ctx, theirs.ID, other.ID); err != nil {
+		t.Fatalf("Add() = %v", err)
+	}
+
+	on, err := f.Service.EnrolledIn(ctx, student.ID, []uuid.UUID{mine.ID, theirs.ID})
+	if err != nil {
+		t.Fatalf("EnrolledIn() = %v", err)
+	}
+
+	if !on[mine.ID] {
+		t.Error("the contest the student is registered for is not reported")
+	}
+	// Somebody else's registration is not this student's business, and a flag
+	// that leaked it would be a disclosure of who takes part in what.
+	if on[theirs.ID] {
+		t.Error("another account's registration was reported as this student's")
+	}
+}

@@ -303,8 +303,16 @@ type Filter struct {
 	// VisibleTo limits the result to what a participant may see: contests they
 	// are registered for, plus open ones still accepting signups.
 	VisibleTo uuid.UUID
-	Limit     int
-	Offset    int
+	// Enrolled narrows that set to one half or the other: true for the
+	// contests the person is on, false for the rest of what is offered to
+	// them. Nil leaves the whole visible set, which is what a catalogue wants.
+	//
+	// It narrows and never widens — the visibility rule above still decides
+	// what may be seen at all, so this cannot become a way to ask about
+	// somebody else's registrations.
+	Enrolled *bool
+	Limit    int
+	Offset   int
 }
 
 // Normalize clamps the page size so a client cannot ask for the whole table.

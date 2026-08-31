@@ -1,4 +1,5 @@
 import { ProductShell } from "@/components/layout/product-shell";
+import { SectionNav } from "@/components/layout/section-nav";
 import { fetchIdentity } from "@/lib/auth/session";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
@@ -14,6 +15,11 @@ import { activeTheme } from "@/lib/theme/server";
  * is the thing that differs, and it is the audience that decides where the
  * mark leads. When the case screen and the SQL console arrive in step 5 they
  * belong here, already framed.
+ *
+ * Two destinations, so a section label gives way to navigation. They answer
+ * different questions — "when does mine start", asked under a timer on the
+ * day, and "what can I join", browsed once a term — which is why they are two
+ * screens and not one list.
  */
 export default async function ParticipantLayout({ children }: { children: React.ReactNode }) {
   const [dict, locale, theme, identity] = await Promise.all([
@@ -29,7 +35,14 @@ export default async function ParticipantLayout({ children }: { children: React.
       theme={theme}
       dict={dict}
       home="/my"
-      section={dict.participant.heading}
+      nav={
+        <SectionNav
+          items={[
+            { href: "/my", label: dict.participant.mine.heading },
+            { href: "/open", label: dict.participant.open.heading },
+          ]}
+        />
+      }
       account={identity ? { fullName: identity.fullName, login: identity.login } : undefined}
     >
       {children}

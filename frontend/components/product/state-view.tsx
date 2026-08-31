@@ -28,7 +28,17 @@ import { cn } from "@/lib/utils";
  * rots.
  */
 export type ViewState =
-  | { kind: "empty"; title: string; body: string }
+  | {
+      kind: "empty";
+      title: string;
+      body: string;
+      /**
+       * Where to go instead. Optional, because not every emptiness has a next
+       * step — but where one exists, principle 4 says to name it: an accurate
+       * screen that leaves the reader with nothing to do is only half a state.
+       */
+      action?: { label: string; href: string };
+    }
   | {
       kind: "empty-filtered";
       title: string;
@@ -74,6 +84,12 @@ export function StateView({ state, className }: { state: ViewState; className?: 
       {state.kind === "empty-filtered" ? (
         <Link href={state.reset.href} className={EXIT}>
           {state.reset.label}
+        </Link>
+      ) : null}
+
+      {state.kind === "empty" && state.action ? (
+        <Link href={state.action.href} className={EXIT}>
+          {state.action.label}
         </Link>
       ) : null}
 

@@ -90,3 +90,35 @@ describe("StateView, blocked", () => {
     expect(screen.getByText("draft")).toBeInTheDocument();
   });
 });
+
+describe("an empty state with somewhere to go", () => {
+  test("names the next step rather than only the absence", () => {
+    // SPEC principle 4: a state is always explained, and no empty screen
+    // without a reason and a next step. A student with no contests yet is
+    // looking at an accurate but useless page unless it says where to find
+    // one — which, since the two lists were split, is a different screen.
+    render(
+      <StateView
+        state={{
+          kind: "empty",
+          title: "Nothing yet",
+          body: "You are not taking part in anything.",
+          action: { label: "Browse open contests", href: "/open" },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "Browse open contests" })).toHaveAttribute(
+      "href",
+      "/open",
+    );
+  });
+
+  test("offers nothing when there is nowhere useful to send anybody", () => {
+    // The catalogue's own empty state. "Browse open contests" on the screen
+    // that is the open contests would be a link back to itself.
+    render(<StateView state={{ kind: "empty", title: "Nothing yet", body: "None are open." }} />);
+
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+});

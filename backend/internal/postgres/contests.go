@@ -170,9 +170,17 @@ func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Cont
 		           AND EXISTS (SELECT 1 FROM registrations reg
 		                       WHERE reg.contest_id = c.id AND reg.user_id = $4))
 		          OR (c.enrollment = 'open' AND c.status IN ('published', 'running'))))
+		  -- Narrows the visible set above into its two halves: what the person
+		  -- is on, and the rest of what is offered to them. It is a second
+		  -- AND rather than part of the clause above, which is what stops it
+		  -- widening anything: whatever this says, the visibility rule has
+		  -- already decided the row may be seen.
+		  AND ($7::boolean IS NULL OR $7 = EXISTS (
+		          SELECT 1 FROM registrations reg
+		          WHERE reg.contest_id = c.id AND reg.user_id = $4))
 		ORDER BY c.starts_at DESC NULLS LAST, c.created_at DESC
 		LIMIT $5 OFFSET $6`,
-		f.Query, f.Status, nilUUID(f.ManagedBy), nilUUID(f.VisibleTo), f.Limit, f.Offset)
+		f.Query, f.Status, nilUUID(f.ManagedBy), nilUUID(f.VisibleTo), f.Limit, f.Offset, f.Enrolled)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list contests: %w", err)
 	}

@@ -471,6 +471,29 @@ func (r *Registrations) Remove(ctx context.Context, contestID, userID uuid.UUID)
 	return nil
 }
 
+// EnrolledIn reports which of the named contests the user is registered for.
+//
+// Only the ones asked about: the map is a lookup for a page of rows, not a
+// dump of everything the person is on, and a caller that read it as one would
+// be reading somebody else's list into their own screen.
+func (r *Registrations) EnrolledIn(_ context.Context, userID uuid.UUID, contestIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+	wanted := make(map[uuid.UUID]struct{}, len(contestIDs))
+	for _, id := range contestIDs {
+		wanted[id] = struct{}{}
+	}
+
+	on := map[uuid.UUID]bool{}
+	for _, p := range r.byID {
+		if p.UserID != userID {
+			continue
+		}
+		if _, asked := wanted[p.ContestID]; asked {
+			on[p.ContestID] = true
+		}
+	}
+	return on, nil
+}
+
 func (r *Registrations) SetStatus(_ context.Context, registrationID uuid.UUID, status string) error {
 	p, ok := r.byID[registrationID]
 	if !ok {
