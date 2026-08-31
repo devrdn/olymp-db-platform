@@ -20,16 +20,26 @@ export function FocusShell({
   locale,
   theme,
   dict,
+  signedIn,
   children,
 }: {
   locale: Locale;
   theme: Theme;
   dict: Dictionary;
+  /**
+   * The forced password change is the one screen here that belongs to a
+   * signed-in account, and the one that most needs a way out: the API closes
+   * every other endpoint until the password is replaced, so without it the
+   * only escape from somebody else's handover password is clearing a cookie
+   * by hand. `/auth/logout` is exempt from that gate on the server for exactly
+   * this reason.
+   */
+  signedIn?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div className="flex min-h-[100dvh] flex-col">
-      <AppBar locale={locale} theme={theme} dict={dict} />
+      <AppBar locale={locale} theme={theme} dict={dict} signedIn={signedIn} />
       <main className="flex flex-1 flex-col">{children}</main>
     </div>
   );

@@ -3,6 +3,7 @@ import type { Dictionary } from "./en";
 const ro = {
   chrome: {
     product: "DB Contest",
+    signOut: "Deconectare",
     language: "Limbă",
     theme: {
       system: "Urmați tema sistemului",
@@ -82,6 +83,7 @@ const ro = {
   workspace: {
     backToRegister: "← Toate olimpiadele",
     untitled: "Olimpiadă fără titlu",
+    breadcrumb: "Firimituri",
     tabs: {
       overview: "Prezentare",
       story: "Poveste",
@@ -530,6 +532,7 @@ const ro = {
     owner_immutable: "Proprietarul olimpiadei nu poate fi retras.",
     address_not_allowed: "Accesul este permis doar din rețeaua universității.",
     invalid_transition: "Din starea curentă această trecere nu este posibilă.",
+    status_changed: "Altcineva a mutat olimpiada cât timp decideați. Reîncărcați pagina — nimic din ce ați făcut nu a fost salvat.",
     not_editable: "O olimpiadă în această stare nu poate fi modificată.",
     not_publishable: "Olimpiada încă nu este gata de publicare.",
     enrollment_closed: "Înscrierea la această olimpiadă este închisă.",
