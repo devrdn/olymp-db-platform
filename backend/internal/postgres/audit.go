@@ -102,11 +102,33 @@ func (r *AuditTrail) List(ctx context.Context, f audit.Filter) ([]audit.Record, 
 	rows, err := storage.QuerierFrom(ctx, r.pool).Query(ctx, `
 		SELECT a.id, a.actor_id, COALESCE(u.login, ''), a.action,
 		       COALESCE(a.entity, ''), COALESCE(a.entity_id, ''),
+		       -- What was acted upon, by name. "Changed the reference answers ·
+		       -- Contest" answers half a question; which contest is the half
+		       -- that matters, and an identifier is no more readable here than
+		       -- it was for the actor. Empty when the thing is gone, which is
+		       -- not a gap to fill: the trail outlives what it describes.
+		       COALESCE(subject.login, contest_title.title, ''),
 		       COALESCE(a.payload, '{}'::jsonb), COALESCE(host(a.ip), ''),
 		       COALESCE(a.user_agent, ''), a.created_at,
 		       COUNT(*) OVER() AS total
 		FROM audit_log a
 		LEFT JOIN users u ON u.id = a.actor_id
+		-- Compared as text in both directions: entity_id is a text column and
+		-- nothing constrains it to a UUID, so casting it would turn one odd
+		-- row into a failure for the whole page.
+		LEFT JOIN users subject
+		       ON a.entity = 'user' AND subject.id::text = a.entity_id
+		LEFT JOIN LATERAL (
+		    -- The contest's own default language, not the reader's: one
+		    -- deterministic name per contest, and no locale to thread through
+		    -- a query that has nothing else to do with language.
+		    SELECT ct.title
+		    FROM contest_translations ct
+		    JOIN contest_languages cl
+		      ON cl.contest_id = ct.contest_id AND cl.lang = ct.lang AND cl.is_default
+		    WHERE a.entity = 'contest' AND ct.contest_id::text = a.entity_id
+		    LIMIT 1
+		) AS contest_title ON true
 		WHERE ($1::uuid IS NULL OR a.actor_id = $1)
 		  AND ($2 = '' OR a.action = $2)
 		  AND ($3 = '' OR a.entity = $3)
@@ -134,8 +156,8 @@ func (r *AuditTrail) List(ctx context.Context, f audit.Filter) ([]audit.Record, 
 			payload []byte
 		)
 		if err := rows.Scan(&record.ID, &record.ActorID, &record.ActorLogin, &record.Action,
-			&record.Entity, &record.EntityID, &payload, &record.IP, &record.UserAgent,
-			&record.CreatedAt, &total); err != nil {
+			&record.Entity, &record.EntityID, &record.EntityLabel, &payload, &record.IP,
+			&record.UserAgent, &record.CreatedAt, &total); err != nil {
 			return nil, 0, fmt.Errorf("scan audit entry: %w", err)
 		}
 		if err := json.Unmarshal(payload, &record.Payload); err != nil {

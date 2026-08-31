@@ -148,3 +148,60 @@ describe("AuditTrailRegister, what an action changed", () => {
     expect(screen.getByText("Signed in")).toBeInTheDocument();
   });
 });
+
+describe("AuditTrailRegister, what the action was about", () => {
+  test("names the contest and links to it", () => {
+    // "Changed the reference answers · Contest" answers half a question. The
+    // half that matters is which contest, and the next thing a reader wants
+    // is to open it.
+    render(
+      <AuditTrailRegister
+        entries={[
+          entry({
+            action: "contest.answers_change",
+            entity: "contest",
+            entity_id: "c-1",
+            entity_label: "Night in the archive",
+          }),
+        ]}
+        {...props}
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "Night in the archive" })).toHaveAttribute(
+      "href",
+      "/contests/c-1",
+    );
+  });
+
+  test("names the account an action was about, which is not the actor", () => {
+    render(
+      <AuditTrailRegister
+        entries={[entry({ action: "user.block", entity_label: "s.popescu" })]}
+        {...props}
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByText("root")).toBeInTheDocument();
+    expect(screen.getByText("s.popescu")).toBeInTheDocument();
+  });
+
+  test("keeps the identifier of something that no longer exists", () => {
+    // The trail outlives what it describes. Without a name the identifier is
+    // the only handle left, so it is shown rather than dropped.
+    render(
+      <AuditTrailRegister
+        entries={[
+          entry({ action: "contest.delete", entity: "contest", entity_id: "c-gone", entity_label: undefined }),
+        ]}
+        {...props}
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByText("c-gone")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "c-gone" })).not.toBeInTheDocument();
+  });
+});
