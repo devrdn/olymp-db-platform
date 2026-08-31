@@ -52,12 +52,30 @@ export function guardRedirect(pathname: string, hasSession: boolean): string | n
  *
  * `forbidden` is deliberately not included. That account is signed in and
  * simply not allowed, and the sign-in form would bounce it straight back.
+ *
+ * Every redirect from here is recorded. Being returned to the sign-in form
+ * with a session that looked fine was reported twice and reproduced neither
+ * time, and this was the reason: the moment the interface knew which request
+ * had been refused, and why, was the one moment it said nothing. The line
+ * carries the API's own request id, so it names the matching entry in the
+ * server's log rather than merely agreeing that something went wrong.
  */
 export function authRecoveryRedirect(error: unknown, pathname: string): string | null {
   if (!(error instanceof ApiError)) return null;
 
-  if (error.code === "password_change_required") return PASSWORD_CHANGE;
-  if (error.code === "unauthenticated") return `${SIGN_IN}?next=${encodeURIComponent(pathname)}`;
+  const target =
+    error.code === "password_change_required"
+      ? PASSWORD_CHANGE
+      : error.code === "unauthenticated"
+        ? `${SIGN_IN}?next=${encodeURIComponent(pathname)}`
+        : null;
 
-  return null;
+  if (target) {
+    console.warn(
+      `auth redirect: ${pathname} -> ${target} because the API answered ` +
+        `${error.code} (${error.status}), request ${error.requestId ?? "unknown"}`,
+    );
+  }
+
+  return target;
 }
