@@ -28,6 +28,7 @@ type Fixture struct {
 	Languages     *Languages
 	Users         *userstest.Repository
 	Audit         *Sink
+	UnitOfWork    *UnitOfWork
 	Now           time.Time
 }
 
@@ -43,6 +44,7 @@ func NewFixture() *Fixture {
 		Languages:     NewLanguages(),
 		Users:         userstest.New(),
 		Audit:         NewSink(),
+		UnitOfWork:    &UnitOfWork{},
 		Now:           FixtureNow,
 	}
 	// Participants carry the login the real repository joins in.
@@ -63,20 +65,40 @@ func NewFixture() *Fixture {
 		Languages:     f.Languages,
 		Users:         f.Users,
 		Audit:         audit.New(f.Audit),
-		UnitOfWork:    unitOfWork{},
+		UnitOfWork:    f.UnitOfWork,
 		Now:           func() time.Time { return f.Now },
 	})
 	return f
 }
 
-// unitOfWork runs the function directly.
+// UnitOfWork runs the function directly, and marks the context while it does.
 //
 // It cannot roll back in-memory maps, and no test claims it does: what the
 // fixture exercises is the rules, while the atomicity of the writes is a
-// property of the real transaction runner and is tested there.
-type unitOfWork struct{}
+// property of the real transaction runner and is tested there. What it can
+// answer is which writes happened with a transaction open — the fact the
+// trail's guarantee rests on, and the reason for the mark.
+type UnitOfWork struct {
+	// Calls counts the transactions opened, so a test can assert an operation
+	// took exactly one rather than a transaction per statement.
+	Calls int
+}
 
-func (unitOfWork) Do(ctx context.Context, fn func(context.Context) error) error { return fn(ctx) }
+func (u *UnitOfWork) Do(ctx context.Context, fn func(context.Context) error) error {
+	u.Calls++
+	return fn(context.WithValue(ctx, txKey{}, true))
+}
+
+// txKey marks a context running inside the fixture's unit of work. The real
+// runner marks its context the same way, with the transaction itself, which is
+// how a repository knows to write through it (storage.QuerierFrom).
+type txKey struct{}
+
+// inTx reports whether ctx is running inside the fixture's unit of work.
+func inTx(ctx context.Context) bool {
+	open, _ := ctx.Value(txKey{}).(bool)
+	return open
+}
 
 // AddUser stores an account the contest service can resolve.
 func (f *Fixture) AddUser(login string) users.User {
