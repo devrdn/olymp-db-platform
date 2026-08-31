@@ -59,8 +59,13 @@ export function PublishGateReport({
                 {/* The server's detail is a developer's aid in English. It is
                     shown in the monospace register, where the interface's own
                     prose ends and raw data begins, so it never reads as a
-                    translated sentence. */}
-                {problem.detail ? (
+                    translated sentence. A count belongs to that register too:
+                    it is a numeral, it needs no translation, and it says the
+                    sentence is true of that many questions — which repeating
+                    the sentence never did. */}
+                {problem.count > 1 ? (
+                  <span className="ml-2 font-mono text-data text-ink-3">×{problem.count}</span>
+                ) : problem.detail ? (
                   <span className="ml-2 font-mono text-data text-ink-3">{problem.detail}</span>
                 ) : null}
               </span>
