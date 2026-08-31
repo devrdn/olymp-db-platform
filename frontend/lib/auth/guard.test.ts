@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/client";
 
@@ -68,5 +68,40 @@ describe("authRecoveryRedirect", () => {
 
   test("ignores anything that is not an API failure", () => {
     expect(authRecoveryRedirect(new Error("boom"), "/contests")).toBeNull();
+  });
+});
+
+describe("authRecoveryRedirect, leaving a trace", () => {
+  /**
+   * The bug this exists for was reported twice and reproduced neither time:
+   * a session that bounces to the sign-in form, with nothing on either side
+   * saying which request was refused or why. The redirect is the moment the
+   * interface knows, and it was the one moment that said nothing.
+   */
+  test("records which code sent the visitor back, and where from", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    authRecoveryRedirect(new ApiError("unauthenticated", 401, "Sign in", "req-42"), "/contests");
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = warn.mock.calls[0].join(" ");
+    expect(line).toContain("unauthenticated");
+    expect(line).toContain("/contests");
+    // The request id is what ties this line to the API's own log for the very
+    // same request, which is the whole point of writing one.
+    expect(line).toContain("req-42");
+
+    warn.mockRestore();
+  });
+
+  test("says nothing when it is not the one redirecting", () => {
+    // `forbidden` is somebody signed in and simply not allowed. Logging it
+    // here would put a line in the log for every ordinary permission check.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    authRecoveryRedirect(new ApiError("forbidden", 403, "No", "req-7"), "/contests");
+
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
