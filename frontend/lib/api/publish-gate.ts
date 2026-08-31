@@ -51,17 +51,39 @@ export type LanguageRow = {
   questionsNotStarted: boolean;
 };
 
-/** A problem that belongs to the contest, not to one of its languages. */
-export type GlobalProblem = { code: string; detail?: string };
+/**
+ * A problem that belongs to the contest, not to one of its languages.
+ *
+ * `count` because several of these arrive under one code: the gate reports a
+ * missing reference answer once per question. Listed as they come, two
+ * questions produce two identical sentences — neither naming which question,
+ * so the repetition tells an author nothing — and two list children under one
+ * key, which React will not guarantee the rendering of.
+ */
+export type GlobalProblem = { code: string; count: number; detail?: string };
 
 export type PublishGate = { global: GlobalProblem[]; byLanguage: LanguageRow[] };
 
 export function summarisePublishCheck(check: PublishCheck, languages: string[]): PublishGate {
   // A problem without a language is about the contest itself: no schedule, no
   // questions, the wrong number of them for the mode. It has no cell to sit in.
-  const global = check.problems
-    .filter((p) => !p.lang)
-    .map((p) => ({ code: p.code, detail: p.detail }));
+  //
+  // Grouped by code, in the order the codes first appear. The detail survives
+  // only on a code that occurs once: where several arrive, each one describes a
+  // different question, and showing one of them beside a count would say
+  // something true of a single question as though it were true of all of them.
+  const global: GlobalProblem[] = [];
+  for (const problem of check.problems) {
+    if (problem.lang) continue;
+
+    const seen = global.find((entry) => entry.code === problem.code);
+    if (!seen) {
+      global.push({ code: problem.code, count: 1, ...(problem.detail ? { detail: problem.detail } : {}) });
+      continue;
+    }
+    seen.count += 1;
+    delete seen.detail;
+  }
 
   // What does not exist yet cannot be translated. The gate reports "no story"
   // once, without a language, and says nothing further about any language's
@@ -79,8 +101,16 @@ export function summarisePublishCheck(check: PublishCheck, languages: string[]):
       lang,
       title: missing(PUBLISH_PROBLEMS.missingContestTranslation),
       story: noStory ? ("not-started" as const) : missing(PUBLISH_PROBLEMS.missingStoryTranslation),
+      // A question with no text and a question whose choice has no label are
+      // both a question that is not finished in this language. Counting only
+      // the first left the second reported nowhere at all: it names a language,
+      // so it is not a contest-wide problem, and nothing in the matrix looked
+      // for it — the panel called every language complete while the gate went
+      // on refusing to publish.
       questionsMissing: named.filter(
-        (p) => p.code === PUBLISH_PROBLEMS.missingQuestionTranslation,
+        (p) =>
+          p.code === PUBLISH_PROBLEMS.missingQuestionTranslation ||
+          p.code === PUBLISH_PROBLEMS.missingChoiceLabel,
       ).length,
       questionsNotStarted: noQuestions,
     };
