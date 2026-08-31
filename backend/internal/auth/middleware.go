@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
@@ -39,9 +40,14 @@ var passwordChangeExemptPaths = map[string]struct{}{
 	"/auth/me":       {},
 }
 
-// apiMountPrefix is where the public router mounts. Tests mount bare, so it is
-// stripped when present rather than required.
-const apiMountPrefix = "/api/v1"
+// apiMount matches the versioned prefix the public router mounts under, so it
+// can be stripped before comparing.
+//
+// A pattern rather than the literal "/api/v1": the version is the one part of
+// that path designed to change, and pinning it here would mean that moving the
+// mount to v2 silently shuts the only way out of a one-time password — a
+// consequence nobody would connect to this file.
+var apiMount = regexp.MustCompile(`^/api/v[0-9]+`)
 
 // identityKey is unexported so only this package can place an identity in a
 // context — a handler cannot fabricate one.
@@ -218,7 +224,7 @@ func (m *Middleware) unauthenticated(w http.ResponseWriter, r *http.Request) {
 func passwordChangeExempt(path string) bool {
 	// Trailing slashes are stripped so /auth/logout/ is the same door, not a
 	// different one that happens to be shut.
-	path = strings.TrimSuffix(strings.TrimPrefix(path, apiMountPrefix), "/")
+	path = strings.TrimSuffix(apiMount.ReplaceAllString(path, ""), "/")
 
 	_, exempt := passwordChangeExemptPaths[path]
 	return exempt

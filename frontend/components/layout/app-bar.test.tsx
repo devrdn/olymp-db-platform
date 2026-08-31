@@ -92,29 +92,71 @@ describe("the app bar", () => {
     expect(screen.getByRole("button", { name: "en" })).toHaveAttribute("aria-current", "true");
   });
 
-  test("offers the way out to a visitor who has a session", () => {
-    // Until now there was none: the only way to sign out was to clear the
-    // cookie by hand. A session that cannot be ended on purpose is one that
-    // stays open on a shared machine in a computer lab.
+  test("names the account and leads to its profile", () => {
+    // The way into one's own account, and the answer to "who am I signed in
+    // as" — which on a shared lab machine is a question people actually ask
+    // before they type anything.
     render(
-      <ProductShell locale="en" theme="system" dict={en} home="/contests" section={en.contests.heading}>
+      <ProductShell
+        locale="en"
+        theme="system"
+        dict={en}
+        home="/contests"
+        section={en.contests.heading}
+        account={{ fullName: "Ivan Ivanov", login: "ivanov" }}
+      >
         <p>rows</p>
       </ProductShell>,
     );
 
-    expect(screen.getByRole("button", { name: en.chrome.signOut })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Ivan Ivanov" })).toHaveAttribute("href", "/profile");
   });
 
-  test("offers nothing to end on the sign-in screen", () => {
-    // There is no session yet, and a control that ends nothing is a control
-    // that invites a press to find out.
+  test("puts initials in the circle, and does not read them out", () => {
+    // SPEC 10.4: initials, never a photograph. The letters are decoration —
+    // the link already carries the name, and "I I" beside it would be noise.
+    const { container } = render(
+      <ProductShell
+        locale="en"
+        theme="system"
+        dict={en}
+        home="/contests"
+        account={{ fullName: "Ivan Ivanov", login: "ivanov" }}
+      >
+        <p>rows</p>
+      </ProductShell>,
+    );
+
+    expect(container.querySelector("header [aria-hidden='true']")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Ivan Ivanov" })).toHaveAccessibleName("Ivan Ivanov");
+  });
+
+  test("offers no account door on the sign-in screen", () => {
+    // There is no account yet, and a door to nobody's profile is one that
+    // invites a press to find out.
     render(
       <FocusShell locale="en" theme="system" dict={en}>
         <p>form</p>
       </FocusShell>,
     );
 
+    expect(screen.queryByRole("link", { name: /profile/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: en.chrome.signOut })).not.toBeInTheDocument();
+  });
+
+  test("keeps the way out on a screen that cannot reach the profile", () => {
+    // The forced password change. That account is signed in and the API
+    // refuses every endpoint but three, so /profile would answer 403 — and
+    // without a control here the only escape from somebody else's handover
+    // password is clearing a cookie by hand.
+    render(
+      <FocusShell locale="en" theme="system" dict={en} signedIn>
+        <p>form</p>
+      </FocusShell>,
+    );
+
+    expect(screen.getByRole("button", { name: en.chrome.signOut })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /profile/i })).not.toBeInTheDocument();
   });
 
   test("says where the theme control leads, not where it is", () => {

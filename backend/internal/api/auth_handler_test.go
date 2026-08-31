@@ -57,7 +57,7 @@ func newHandlerFixture(t *testing.T) *handlerFixture {
 	})
 
 	router := chi.NewRouter()
-	api.NewAuthHandler(service, users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}), mw, auth.NewCookieWriter(false), log).Mount(router)
+	api.NewAuthHandler(service, users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}), repo, mw, auth.NewCookieWriter(false), log).Mount(router)
 
 	return &handlerFixture{router: router, repo: repo, user: user}
 }
@@ -216,6 +216,36 @@ func TestCurrentUserEndpointDescribesTheSignedInAccount(t *testing.T) {
 	}
 	if body.Login != "ivanov" {
 		t.Errorf("login = %q, want ivanov", body.Login)
+	}
+}
+
+func TestCurrentUserEndpointNamesTheAccountAsAPersonWouldReadIt(t *testing.T) {
+	// /auth/me was built for routing: a login and a permission list is all a
+	// guard needs. A profile screen has to greet somebody, and the identity the
+	// middleware assembles carries no name — deriving initials from a login is
+	// how "i.ivanov" becomes "II" instead of "Ivan Ivanov" becoming "IV".
+	f := newHandlerFixture(t)
+	cookie := f.login(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	var body struct {
+		FullName string   `json:"full_name"`
+		Roles    []string `json:"roles"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if body.FullName != "Ivan Ivanov" {
+		t.Errorf("full_name = %q, want Ivan Ivanov", body.FullName)
+	}
+	// The roles too: a profile says what somebody is, which permissions spell
+	// out but do not name.
+	if len(body.Roles) != 1 || body.Roles[0] != "student" {
+		t.Errorf("roles = %v, want [student]", body.Roles)
 	}
 }
 

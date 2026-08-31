@@ -11,21 +11,27 @@ import { signOutAction } from "./session-actions";
  * POST it also inherits Next's Origin check, so another site cannot sign our
  * visitors out.
  *
- * Icon-only, like its two neighbours in the bar, with the label carried by
- * `aria-label` and `title`. It sits last of the three because it is the one
- * with a consequence, and because a control that ends the session should not
- * be the one the thumb reaches first.
+ * Two shapes for two places. On the profile screen it is a labelled control
+ * among other account actions, which is where it belongs. In the bar it is
+ * icon-only, and appears on exactly one screen: the forced password change,
+ * whose account cannot open a profile at all because the API refuses it every
+ * endpoint but three.
  */
-export function SignOutButton({ label }: { label: string }) {
+export function SignOutButton({ label, withLabel }: { label: string; withLabel?: boolean }) {
   return (
     <form action={signOutAction} className="flex">
       <button
         type="submit"
-        title={label}
-        aria-label={label}
-        className="grid size-7 place-items-center rounded-full text-ink-3 transition-colors duration-(--t-input) ease-standard hover:bg-sunk hover:text-ink"
+        title={withLabel ? undefined : label}
+        aria-label={withLabel ? undefined : label}
+        className={
+          withLabel
+            ? "flex items-center gap-2 rounded-full text-control text-ink-2 transition-colors duration-(--t-input) ease-standard hover:text-bad"
+            : "grid size-7 place-items-center rounded-full text-ink-3 transition-colors duration-(--t-input) ease-standard hover:bg-sunk hover:text-ink"
+        }
       >
-        <LogOut className="size-4" strokeWidth={1.75} aria-hidden />
+        <LogOut className="size-4 shrink-0" strokeWidth={1.75} aria-hidden />
+        {withLabel ? label : null}
       </button>
     </form>
   );

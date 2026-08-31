@@ -52,6 +52,20 @@ function resumable(next: string | undefined): string | null {
   return next;
 }
 
+/**
+ * Where an account belongs when nothing more specific is known.
+ *
+ * Separate from the function below because two callers need it: the one that
+ * decides where signing in lands, and any screen shared by both audiences —
+ * the profile — which has to point its own mark somewhere. A participant sent
+ * to the register would meet it scoped to contests they manage, which is
+ * empty: an accurate answer to a question they never asked.
+ */
+export function homeFor(permissions: string[]): string {
+  const isStaff = permissions.some((held) => STAFF_PERMISSIONS.includes(held));
+  return isStaff ? "/contests" : "/my";
+}
+
 export function destinationAfterLogin(identity: Identity, next?: string): string {
   // A one-time password blocks every other request with password_change_required,
   // so any other destination would bounce straight back.
@@ -60,6 +74,5 @@ export function destinationAfterLogin(identity: Identity, next?: string): string
   const resumed = resumable(next);
   if (resumed) return resumed;
 
-  const isStaff = identity.permissions.some((held) => STAFF_PERMISSIONS.includes(held));
-  return isStaff ? "/contests" : "/my";
+  return homeFor(identity.permissions);
 }

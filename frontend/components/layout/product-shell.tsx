@@ -2,6 +2,7 @@ import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import type { Theme } from "@/lib/theme/config";
 
+import type { Account } from "./account-link";
 import { AppBar } from "./app-bar";
 
 /**
@@ -30,6 +31,7 @@ export function ProductShell({
   home,
   section,
   nav,
+  account,
   children,
 }: {
   locale: Locale;
@@ -43,11 +45,17 @@ export function ProductShell({
    * one of which is marked as current, says the same thing twice.
    */
   nav?: React.ReactNode;
+  /**
+   * Who is signed in, for the door to their profile. Absent while the layout
+   * could not reach `/auth/me` — the bar then simply says less rather than
+   * inventing a name.
+   */
+  account?: Account;
   children: React.ReactNode;
 }) {
   return (
     <div className="flex min-h-[100dvh] flex-col">
-      <AppBar locale={locale} theme={theme} dict={dict} home={home} signedIn>
+      <AppBar locale={locale} theme={theme} dict={dict} home={home} account={account}>
         {nav ?? (section ? <span className="truncate text-control text-ink-2">{section}</span> : null)}
       </AppBar>
       <main className="flex flex-1 flex-col">{children}</main>

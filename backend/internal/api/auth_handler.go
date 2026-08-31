@@ -11,6 +11,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 // PasswordChanger is the slice of account management the auth endpoints need.
@@ -20,18 +21,37 @@ type PasswordChanger interface {
 	ChangePassword(ctx context.Context, cmd users.ChangePasswordCommand) error
 }
 
+// AccountReader is the one method the profile endpoint needs: the descriptive
+// fields an identity does not carry.
+//
+// The identity is assembled for authorisation, and holds what a guard decides
+// on — an id, a login, a permission set. A person's name and roles are not
+// that, and widening the identity to carry them would put display data on the
+// value every middleware in the chain passes around.
+type AccountReader interface {
+	ByID(ctx context.Context, id uuid.UUID) (users.User, error)
+}
+
 // AuthHandler serves the authentication endpoints.
 type AuthHandler struct {
 	service   *auth.Service
 	passwords PasswordChanger
+	accounts  AccountReader
 	mw        *auth.Middleware
 	cookies   auth.CookieWriter
 	log       *slog.Logger
 }
 
 // NewAuthHandler assembles the authentication endpoints.
-func NewAuthHandler(service *auth.Service, passwords PasswordChanger, mw *auth.Middleware, cookies auth.CookieWriter, log *slog.Logger) *AuthHandler {
-	return &AuthHandler{service: service, passwords: passwords, mw: mw, cookies: cookies, log: log}
+func NewAuthHandler(service *auth.Service, passwords PasswordChanger, accounts AccountReader, mw *auth.Middleware, cookies auth.CookieWriter, log *slog.Logger) *AuthHandler {
+	return &AuthHandler{
+		service:   service,
+		passwords: passwords,
+		accounts:  accounts,
+		mw:        mw,
+		cookies:   cookies,
+		log:       log,
+	}
 }
 
 // Mount registers the routes under /auth.
@@ -103,13 +123,19 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 }
 
 type meResponse struct {
-	ID          string   `json:"id"`
-	Login       string   `json:"login"`
+	ID    string `json:"id"`
+	Login string `json:"login"`
+	// FullName and Roles are what a profile screen shows. Permissions answer
+	// "may I offer this button"; a name and a role answer "who am I looking
+	// at", and initials taken from a login would read "II" for Ivan Ivanov.
+	FullName    string   `json:"full_name"`
+	Email       string   `json:"email,omitempty"`
+	Roles       []string `json:"roles"`
 	Permissions []string `json:"permissions"`
 }
 
-// me describes the signed-in account and what it may do, so the interface can
-// hide what it must not offer.
+// me describes the signed-in account: what it may do, so the interface can hide
+// what it must not offer, and who it is, so a profile can say so.
 func (h *AuthHandler) me(w http.ResponseWriter, r *http.Request) {
 	identity, ok := auth.IdentityFrom(r.Context())
 	if !ok {
@@ -124,11 +150,26 @@ func (h *AuthHandler) me(w http.ResponseWriter, r *http.Request) {
 	// Sorted so the response is stable between requests and easy to diff.
 	slices.Sort(permissions)
 
-	httpx.JSON(w, r, http.StatusOK, meResponse{
+	body := meResponse{
 		ID:          identity.UserID.String(),
 		Login:       identity.Login,
 		Permissions: permissions,
-	})
+	}
+
+	// One indexed lookup, on the endpoint whose whole job is describing the
+	// account. A failure here does not fail the request: routing depends on
+	// the permissions above, and losing a display name must not lock somebody
+	// out of an interface they are entitled to.
+	if account, err := h.accounts.ByID(r.Context(), identity.UserID); err != nil {
+		h.log.WarnContext(r.Context(), "could not read the account behind the session",
+			"user_id", identity.UserID, "error", err)
+	} else {
+		body.FullName = account.FullName
+		body.Email = account.Email
+		body.Roles = account.Roles
+	}
+
+	httpx.JSON(w, r, http.StatusOK, body)
 }
 
 // logout ends the session and clears the cookie.

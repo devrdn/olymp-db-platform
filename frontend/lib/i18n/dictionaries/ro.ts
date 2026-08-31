@@ -80,6 +80,18 @@ const ro = {
     },
   },
   /** The two screens any route can end on, so they live outside every section. */
+  profile: {
+    heading: "Contul dumneavoastră",
+    lede: "Cu cine sunteți autentificat și ce poate face acest cont.",
+    login: "Utilizator",
+    email: "E-mail",
+    noEmail: "nespecificat",
+    roles: "Roluri",
+    noRoles: "niciunul",
+    changePassword: "Schimbați parola",
+    signOut: "Deconectare",
+    signOutNote: "Încheie sesiunea doar pe acest dispozitiv.",
+  },
   workspace: {
     backToRegister: "← Toate olimpiadele",
     untitled: "Olimpiadă fără titlu",

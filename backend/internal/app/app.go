@@ -150,7 +150,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			storage.NewChecker("cache", cacheBackend),
 		},
 		Modules: []api.Module{
-			api.NewAuthHandler(authService, userService, authMiddleware, cookies, log),
+			api.NewAuthHandler(authService, userService, userRepo, authMiddleware, cookies, log),
 			api.NewUsersHandler(userService, authMiddleware, log),
 			api.NewContestsHandler(contestService, authMiddleware, log, cfg.DefaultLocale),
 			// The trail is written by every module above; this is the only way
