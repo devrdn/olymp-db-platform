@@ -97,3 +97,54 @@ describe("AuditTrailRegister", () => {
     expect(screen.queryByRole("link", { name: dict.audit.olderPage })).not.toBeInTheDocument();
   });
 });
+
+describe("AuditTrailRegister, what an action changed", () => {
+  test("shows the fields that moved and what they were", () => {
+    render(
+      <AuditTrailRegister
+        entries={[
+          entry({
+            action: "contest.update",
+            payload: {
+              changes: {
+                ends_at: { from: "2026-11-08T19:30:00Z", to: "2026-11-08T22:30:00Z" },
+              },
+            },
+          }),
+        ]}
+        {...props}
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByText(/ends_at/)).toBeInTheDocument();
+    expect(screen.getByText(/2026-11-08T19:30:00Z → 2026-11-08T22:30:00Z/)).toBeInTheDocument();
+  });
+
+  test("says a save moved nothing rather than showing an empty row", () => {
+    // The server records this on purpose; hiding it would make the entry
+    // indistinguishable from an edit the reader cannot see.
+    render(
+      <AuditTrailRegister
+        entries={[entry({ action: "contest.update", payload: { changed: false } })]}
+        {...props}
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByText(dict.audit.unchanged)).toBeInTheDocument();
+  });
+
+  test("adds nothing to an action that records no change set", () => {
+    render(
+      <AuditTrailRegister
+        entries={[entry({ action: "auth.login", payload: { login: "root" } })]}
+        {...props}
+        dict={dict}
+      />,
+    );
+
+    expect(screen.queryByText(dict.audit.unchanged)).not.toBeInTheDocument();
+    expect(screen.getByText("Signed in")).toBeInTheDocument();
+  });
+});

@@ -325,13 +325,23 @@ func (s *Service) UpdateQuestion(ctx context.Context, cmd QuestionCommand) (Ques
 		return Question{}, err
 	}
 
+	// Which question, and what was done to it. The identifier alone answered
+	// only the first half, which is not the half anybody asks about.
+	changes := audit.NewChanges()
+	changes.Set("kind", current.Kind, updated.Kind)
+	changes.Set("points", current.Points, updated.Points)
+	changes.Set("max_attempts", current.MaxAttempts, updated.MaxAttempts)
+	changes.Set("is_visible", current.IsVisible, updated.IsVisible)
+	changes.Set("choice_ids", current.ChoiceIDs, updated.ChoiceIDs)
+
+	payload := changes.Payload()
+	payload["question_id"] = updated.ID.String()
+
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
 		if err := s.questions.Update(ctx, updated); err != nil {
 			return err
 		}
-		return s.record(ctx, cmd.ActorID, audit.ActionQuestionUpdate, cmd.ContestID, map[string]any{
-			"question_id": updated.ID.String(),
-		})
+		return s.record(ctx, cmd.ActorID, audit.ActionQuestionUpdate, cmd.ContestID, payload)
 	})
 	if err != nil {
 		return Question{}, err

@@ -249,17 +249,27 @@ func (s *Service) ResetPassword(ctx context.Context, actorID, userID uuid.UUID) 
 
 // UpdateProfile changes the descriptive fields of an account.
 func (s *Service) UpdateProfile(ctx context.Context, actorID, userID uuid.UUID, fullName, email string) error {
-	if _, err := s.repo.ByID(ctx, userID); err != nil {
+	current, err := s.repo.ByID(ctx, userID)
+	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(fullName) == "" {
 		return errors.New("full name must not be empty")
 	}
+
+	fullName, email = strings.TrimSpace(fullName), strings.TrimSpace(email)
+
+	// What moved and what it was. The new name alone said neither what it
+	// replaced nor whether the email had changed at all.
+	changes := audit.NewChanges()
+	changes.Set("full_name", current.FullName, fullName)
+	changes.Set("email", current.Email, email)
+
 	return s.uow.Do(ctx, func(ctx context.Context) error {
-		if err := s.repo.UpdateProfile(ctx, userID, strings.TrimSpace(fullName), strings.TrimSpace(email)); err != nil {
+		if err := s.repo.UpdateProfile(ctx, userID, fullName, email); err != nil {
 			return err
 		}
-		return s.record(ctx, actorID, audit.ActionUserUpdate, userID, map[string]any{"full_name": fullName})
+		return s.record(ctx, actorID, audit.ActionUserUpdate, userID, changes.Payload())
 	})
 }
 
@@ -279,10 +289,11 @@ func (s *Service) ReplaceRoles(ctx context.Context, actorID, userID uuid.UUID, r
 		if _, err := s.repo.BumpSessionGeneration(ctx, userID); err != nil {
 			return err
 		}
-		return s.record(ctx, actorID, audit.ActionUserRolesChange, userID, map[string]any{
-			"from": user.Roles,
-			"to":   roleCodes,
-		})
+		// One shape for every change, so the panel can render it without
+		// knowing which action it is looking at.
+		changes := audit.NewChanges()
+		changes.Set("roles", user.Roles, roleCodes)
+		return s.record(ctx, actorID, audit.ActionUserRolesChange, userID, changes.Payload())
 	})
 }
 
