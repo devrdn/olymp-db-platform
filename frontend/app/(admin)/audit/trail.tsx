@@ -164,17 +164,21 @@ export function AuditTrailRegister({
 }
 
 /**
- * Which fields an entry moved, beside the action that moved them.
+ * Which fields an entry moved, and what they moved to, behind a disclosure.
  *
- * Names only, on one line. A register is read by scanning down a column, and
- * a row that grows to a paragraph per edit destroys that — which is what a
- * line per field did. The names answer the question a reader is actually
- * scanning for ("was the schedule touched?"); the values are one hover away,
- * where they cost nothing until asked for.
+ * Closed, the row names the first few fields and counts the rest: a register
+ * is read by scanning down a column, and a line per field turned each row into
+ * a paragraph. Open, it holds every field with both values.
  *
- * "Nothing changed" is shown, not hidden. The server records it deliberately,
- * because a save that moved nothing is otherwise indistinguishable from an
- * edit the reader simply cannot see.
+ * A native <details>, so this page still ships no client JavaScript for
+ * reading the trail: it is keyboard-operable and announced as a disclosure
+ * without a line of ours. The values were in a title attribute before, which
+ * is a tooltip — invisible on a touch screen, impossible to copy, and found by
+ * accident if at all.
+ *
+ * "Nothing changed" gets no disclosure: there is nothing under it. The server
+ * records it deliberately, because a save that moved nothing is otherwise
+ * indistinguishable from an edit the reader simply cannot see.
  */
 function ChangeSummary({
   payload,
@@ -190,20 +194,31 @@ function ChangeSummary({
   }
   if (changes.length === 0) return null;
 
-  // A settings save can move ten fields. Listing all of them turns the row
-  // into a paragraph and undoes the register, and past the first few the names
-  // stop being scannable anyway — so the rest become a count, and the title
-  // keeps every one of them with its values.
-  const shown = changes.slice(0, NAMED_FIELDS).map((change) => change.field).join(", ");
+  const named = changes.slice(0, NAMED_FIELDS).map((change) => change.field).join(", ");
   const rest = changes.length - NAMED_FIELDS;
 
   return (
-    <span
-      className="ml-2 font-mono text-data text-ink-3"
-      title={changes.map((change) => `${change.field}: ${change.from} → ${change.to}`).join("\n")}
-    >
-      {rest > 0 ? `${shown} +${rest}` : shown}
-    </span>
+    <details className="mt-1 group">
+      <summary className="cursor-pointer font-mono text-data text-ink-3 marker:text-ink-3 hover:text-ink-2">
+        {rest > 0 ? `${named} +${rest}` : named}
+      </summary>
+
+      {/* A description list, because that is what this is: a field, and what
+          became of it. The arrow carries the direction, so neither side needs
+          a word for it in any language. */}
+      <dl className="mt-1.5 flex flex-col gap-1">
+        {changes.map((change) => (
+          <div key={change.field} className="flex flex-wrap items-baseline gap-x-2">
+            <dt className="font-mono text-data text-ink-3">{change.field}</dt>
+            <dd className="flex flex-wrap items-baseline gap-x-1.5 font-mono text-data text-ink-2">
+              <span className="text-ink-3 line-through decoration-ink-3/50">{change.from}</span>
+              <span aria-hidden>→</span>
+              <span className="text-ink">{change.to}</span>
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </details>
   );
 }
 

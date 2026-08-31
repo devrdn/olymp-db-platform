@@ -99,59 +99,54 @@ describe("AuditTrailRegister", () => {
 });
 
 describe("AuditTrailRegister, what an action changed", () => {
-  test("names the fields that moved, on one line", () => {
+  const edited = (changes: Record<string, { from: unknown; to: unknown }>) =>
+    entry({ action: "contest.update", payload: { changes } });
+
+  const schedule = {
+    ends_at: { from: "2026-11-08T19:30:00Z", to: "2026-11-08T22:30:00Z" },
+    allowed_cidrs: { from: [], to: ["10.20.0.0/16"] },
+  };
+
+  test("names the fields that moved, on the closed row", () => {
     // A register is read by scanning down a column; a row that grows to a
     // paragraph per edit destroys that. The names are what a reader is
     // scanning for — "was the schedule touched?" — and they fit on the line.
-    render(
-      <AuditTrailRegister
-        entries={[
-          entry({
-            action: "contest.update",
-            payload: {
-              changes: {
-                ends_at: { from: "2026-11-08T19:30:00Z", to: "2026-11-08T22:30:00Z" },
-                allowed_cidrs: { from: [], to: ["10.20.0.0/16"] },
-              },
-            },
-          }),
-        ]}
-        {...props}
-        dict={dict}
-      />,
+    const { container } = render(
+      <AuditTrailRegister entries={[edited(schedule)]} {...props} dict={dict} />,
     );
 
-    expect(screen.getByText("allowed_cidrs, ends_at")).toBeInTheDocument();
+    expect(container.querySelector("summary")).toHaveTextContent("allowed_cidrs, ends_at");
   });
 
-  test("keeps the values one hover away rather than on the line", () => {
-    render(
-      <AuditTrailRegister
-        entries={[
-          entry({
-            action: "contest.update",
-            payload: {
-              changes: {
-                ends_at: { from: "2026-11-08T19:30:00Z", to: "2026-11-08T22:30:00Z" },
-              },
-            },
-          }),
-        ]}
-        {...props}
-        dict={dict}
-      />,
+  test("stays closed until somebody opens it", () => {
+    // A row that arrives already unfolded is the paragraph-per-edit problem
+    // again, wearing a triangle.
+    const { container } = render(
+      <AuditTrailRegister entries={[edited(schedule)]} {...props} dict={dict} />,
     );
 
-    expect(screen.getByText("ends_at")).toHaveAttribute(
-      "title",
-      "ends_at: 2026-11-08T19:30:00Z → 2026-11-08T22:30:00Z",
-    );
+    expect(container.querySelector("details")).not.toHaveAttribute("open");
   });
 
-  test("says a save moved nothing rather than showing an empty row", () => {
-    // The server records this on purpose; hiding it would make the entry
-    // indistinguishable from an edit the reader cannot see.
-    render(
+  test("holds both values of every field, in the row itself", () => {
+    // They lived in a title attribute before, which is a tooltip: invisible on
+    // a touch screen, impossible to copy, and found by accident if at all.
+    const { container } = render(
+      <AuditTrailRegister entries={[edited(schedule)]} {...props} dict={dict} />,
+    );
+
+    const values = container.querySelector("dl");
+    expect(values).toHaveTextContent("2026-11-08T19:30:00Z");
+    expect(values).toHaveTextContent("2026-11-08T22:30:00Z");
+    // An emptied list reads as an absence, not as nothing at all.
+    expect(values).toHaveTextContent("10.20.0.0/16");
+  });
+
+  test("says a save moved nothing, and offers nothing to open", () => {
+    // The server records it deliberately; hiding it would make the entry
+    // indistinguishable from an edit the reader cannot see. There is simply
+    // nothing underneath it.
+    const { container } = render(
       <AuditTrailRegister
         entries={[entry({ action: "contest.update", payload: { changed: false } })]}
         {...props}
@@ -160,10 +155,11 @@ describe("AuditTrailRegister, what an action changed", () => {
     );
 
     expect(screen.getByText(dict.audit.unchanged)).toBeInTheDocument();
+    expect(container.querySelector("details")).toBeNull();
   });
 
   test("adds nothing to an action that records no change set", () => {
-    render(
+    const { container } = render(
       <AuditTrailRegister
         entries={[entry({ action: "auth.login", payload: { login: "root" } })]}
         {...props}
@@ -171,7 +167,7 @@ describe("AuditTrailRegister, what an action changed", () => {
       />,
     );
 
-    expect(screen.queryByText(dict.audit.unchanged)).not.toBeInTheDocument();
+    expect(container.querySelector("details")).toBeNull();
     expect(screen.getByText("Signed in")).toBeInTheDocument();
   });
 });
@@ -256,7 +252,7 @@ describe("AuditTrailRegister, an edit that touched many fields", () => {
     expect(screen.getByText("a_one, b_two, c_three +2")).toBeInTheDocument();
   });
 
-  test("still carries every field and its values in the title", () => {
+  test("holds every field once it is opened", () => {
     const changes = Object.fromEntries(
       ["a_one", "b_two", "c_three", "d_four"].map((field) => [field, { from: "x", to: "y" }]),
     );
@@ -269,7 +265,8 @@ describe("AuditTrailRegister, an edit that touched many fields", () => {
       />,
     );
 
-    const title = screen.getByText(/a_one/).getAttribute("title") ?? "";
-    expect(title).toContain("d_four: x → y");
+    // Closed, the row names the first few; opened, it holds every one.
+    expect(screen.getByText("a_one, b_two, c_three +1")).toBeInTheDocument();
+    expect(screen.getByText("d_four")).toBeInTheDocument();
   });
 });
