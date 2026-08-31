@@ -22,7 +22,7 @@ export default async function AccountLayout({ children }: { children: React.Reac
   ]);
 
   return (
-    <FocusShell locale={locale} theme={theme} dict={dict}>
+    <FocusShell locale={locale} theme={theme} dict={dict} signedIn>
       {children}
     </FocusShell>
   );

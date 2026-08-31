@@ -47,7 +47,7 @@ export function ProductShell({
 }) {
   return (
     <div className="flex min-h-[100dvh] flex-col">
-      <AppBar locale={locale} theme={theme} dict={dict} home={home}>
+      <AppBar locale={locale} theme={theme} dict={dict} home={home} signedIn>
         {nav ?? (section ? <span className="truncate text-control text-ink-2">{section}</span> : null)}
       </AppBar>
       <main className="flex flex-1 flex-col">{children}</main>

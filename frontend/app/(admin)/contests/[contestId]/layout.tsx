@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 import { Band } from "@/components/layout/band";
 import { ContestWindow } from "@/components/product/contest-window";
 import { Tag } from "@/components/ui/tag";
@@ -8,6 +6,7 @@ import { publishCheckSchema, titleIn, type ContestStatus } from "@/lib/api/conte
 import { PUBLISH_PROBLEMS } from "@/lib/api/publish-gate";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
+import { ContestCrumbs } from "./contest-crumbs";
 import { ContestNav, type NavGroup } from "./contest-nav";
 import { loadContest, loadContestResource } from "./contest";
 
@@ -63,12 +62,21 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
   return (
     <>
       <Band className="gap-6 pt-9 pb-7">
-        <Link
-          href="/contests"
-          className="w-fit font-mono text-data text-ink-3 transition-colors duration-(--t-input) ease-standard hover:text-ink"
-        >
-          {t.backToRegister}
-        </Link>
+        {/* The trail replaces what was a lone "back to the register" link. It
+            leads to the same place and answers the question that link did not:
+            not only where one step out goes, but where the visitor is. */}
+        <ContestCrumbs
+          label={t.breadcrumb}
+          register={{ href: "/contests", label: dict.contests.heading }}
+          contestHref={base}
+          title={titleIn(contest, locale) || t.untitled}
+          sections={{
+            story: t.tabs.story,
+            questions: t.tabs.questions,
+            people: t.tabs.people,
+            settings: t.tabs.settings,
+          }}
+        />
 
         <div className="flex min-w-0 flex-col gap-3">
           <h1 className="max-w-head text-h2 text-balance text-ink">

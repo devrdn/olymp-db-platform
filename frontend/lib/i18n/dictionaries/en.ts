@@ -7,6 +7,7 @@
 const en = {
   chrome: {
     product: "DB Contest",
+    signOut: "Sign out",
     language: "Language",
     theme: {
       system: "Follow the system theme",
@@ -86,6 +87,7 @@ const en = {
   workspace: {
     backToRegister: "← All contests",
     untitled: "Untitled contest",
+    breadcrumb: "Breadcrumb",
     tabs: {
       overview: "Overview",
       story: "Story",
@@ -536,6 +538,7 @@ const en = {
     owner_immutable: "A contest owner cannot be removed.",
     address_not_allowed: "Access is allowed only from the university network.",
     invalid_transition: "That transition is not possible from the current state.",
+    status_changed: "Somebody else moved this contest while you were deciding. Reload to see where it is now — nothing you did was saved.",
     not_editable: "A contest in this state cannot be changed.",
     not_publishable: "The contest is not ready to publish yet.",
     enrollment_closed: "Enrollment for this contest is closed.",

@@ -29,8 +29,10 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   // door it cannot open.
   const may = (permission: string) => identity?.permissions.includes(permission) ?? false;
   const destinations = [
-    { href: "/contests", label: dict.contests.heading },
-    ...(may("audit.view") ? [{ href: "/audit", label: dict.audit.heading }] : []),
+    { href: "/contests", label: dict.contests.heading, icon: "contests" as const },
+    ...(may("audit.view")
+      ? [{ href: "/audit", label: dict.audit.heading, icon: "audit" as const }]
+      : []),
   ];
 
   return (

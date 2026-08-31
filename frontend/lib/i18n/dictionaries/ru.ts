@@ -3,6 +3,7 @@ import type { Dictionary } from "./en";
 const ru = {
   chrome: {
     product: "DB Contest",
+    signOut: "Выйти",
     language: "Язык",
     theme: {
       system: "Следовать теме системы",
@@ -82,6 +83,7 @@ const ru = {
   workspace: {
     backToRegister: "← Все олимпиады",
     untitled: "Олимпиада без названия",
+    breadcrumb: "Хлебные крошки",
     tabs: {
       overview: "Обзор",
       story: "История",
@@ -530,6 +532,7 @@ const ru = {
     owner_immutable: "Владельца олимпиады снять нельзя.",
     address_not_allowed: "Доступ разрешён только из сети университета.",
     invalid_transition: "Из текущего состояния такой переход невозможен.",
+    status_changed: "Пока вы принимали решение, олимпиаду перевёл кто-то другой. Обновите страницу — ничего из ваших действий не сохранено.",
     not_editable: "Олимпиаду в этом состоянии нельзя менять.",
     not_publishable: "Олимпиада ещё не готова к публикации.",
     enrollment_closed: "Запись на эту олимпиаду закрыта.",

@@ -6,6 +6,7 @@ import type { Theme } from "@/lib/theme/config";
 
 import { LanguageSwitcher } from "./language-switcher";
 import { Mark } from "./mark";
+import { SignOutButton } from "./sign-out-button";
 import { ThemeToggle } from "./theme-toggle";
 
 /**
@@ -22,6 +23,7 @@ export function AppBar({
   theme,
   dict,
   home,
+  signedIn,
   children,
 }: {
   locale: Locale;
@@ -36,6 +38,11 @@ export function AppBar({
    * visitor without a session has nowhere to be sent but back here.
    */
   home?: string;
+  /**
+   * Whether there is a session to end. A control that ends nothing invites a
+   * press to find out what it does, so the sign-in screen does not carry one.
+   */
+  signedIn?: boolean;
   /** Screen-specific chrome: a contest title, a timer, a breadcrumb. */
   children?: React.ReactNode;
 }) {
@@ -73,6 +80,7 @@ export function AppBar({
         <div className="flex shrink-0 items-center gap-1.5">
           <ThemeToggle current={theme} labels={dict.chrome.theme} />
           <LanguageSwitcher current={locale} label={dict.chrome.language} />
+          {signedIn ? <SignOutButton label={dict.chrome.signOut} /> : null}
         </div>
       </div>
       <div />
