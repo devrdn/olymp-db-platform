@@ -27,6 +27,8 @@ type Contests struct {
 	byID map[uuid.UUID]contests.Contest
 	// order preserves insertion order, so listings are deterministic.
 	order []uuid.UUID
+	// racesTo stages one concurrent status change; see SetStatusRaces.
+	racesTo string
 }
 
 var _ contests.Repository = (*Contests)(nil)
@@ -105,15 +107,34 @@ func (r *Contests) Update(_ context.Context, c contests.Contest) error {
 	return nil
 }
 
-func (r *Contests) SetStatus(_ context.Context, id uuid.UUID, status string) error {
+func (r *Contests) SetStatus(_ context.Context, id uuid.UUID, from, to string) error {
+	// The race, staged. Set by SetStatusRaces, it stands for a concurrent
+	// request that committed between the caller's read and this write.
+	if r.racesTo != "" {
+		c, ok := r.byID[id]
+		if ok {
+			c.Status = r.racesTo
+			r.byID[id] = c
+		}
+		r.racesTo = ""
+	}
+
 	c, ok := r.byID[id]
 	if !ok {
 		return contests.ErrNotFound
 	}
-	c.Status = status
+	if c.Status != from {
+		return contests.ErrStatusChanged
+	}
+	c.Status = to
 	r.byID[id] = c
 	return nil
 }
+
+// SetStatusRaces makes the next SetStatus find the contest already moved to
+// status, as a concurrent writer would have left it. One shot: the point is to
+// stage the collision, not to keep the store lying.
+func (r *Contests) SetStatusRaces(status string) { r.racesTo = status }
 
 func (r *Contests) Delete(_ context.Context, id uuid.UUID) error {
 	if _, ok := r.byID[id]; !ok {

@@ -63,6 +63,11 @@ type Config struct {
 	// every authenticated request, so it bounds idle time rather than the
 	// length of a working session.
 	SessionTTL time.Duration
+	// MaxLoginAttemptsPerAddress caps sign-in attempts from one address in a
+	// quarter of an hour. It counts successes too, so it bounds people and not
+	// only guesses: a hall of students behind one NAT address is one address
+	// here. Raise it where the whole cohort shares an address.
+	MaxLoginAttemptsPerAddress int
 }
 
 // Load reads configuration from the environment, applying defaults for
@@ -90,6 +95,14 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.CookieSecure, err = boolEnv("COOKIE_SECURE", cfg.Env != "development"); err != nil {
+		return Config{}, err
+	}
+
+	// Zero means "not stated", and the authentication service supplies its own
+	// default. The number is a rule about brute force, so it belongs to that
+	// package rather than here — and this one must not import it: platform
+	// packages do not depend on a domain (CLAUDE.md, Go layout rule 7).
+	if cfg.MaxLoginAttemptsPerAddress, err = intEnv("MAX_LOGIN_ATTEMPTS_PER_ADDRESS", 0); err != nil {
 		return Config{}, err
 	}
 
@@ -160,6 +173,23 @@ func requiredEnv(key string) (string, error) {
 		return "", fmt.Errorf("%s: required environment variable is not set", key)
 	}
 	return v, nil
+}
+
+// intEnv reads a whole number, refusing a negative one: every setting that
+// uses it counts something.
+func intEnv(key string, fallback int) (int, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %q is not a whole number", key, raw)
+	}
+	if value < 0 {
+		return 0, fmt.Errorf("%s: %d is negative", key, value)
+	}
+	return value, nil
 }
 
 func boolEnv(key string, fallback bool) (bool, error) {

@@ -389,7 +389,9 @@ func (s *Service) Transition(ctx context.Context, actorID, contestID uuid.UUID, 
 	}
 
 	return s.uow.Do(ctx, func(ctx context.Context) error {
-		if err := s.contests.SetStatus(ctx, contestID, status); err != nil {
+		// c.Status is what the transition rules and the publish gate above
+		// were checked against; the write refuses if it is no longer true.
+		if err := s.contests.SetStatus(ctx, contestID, c.Status, status); err != nil {
 			return err
 		}
 		// One shape for every change, so the panel can render it without

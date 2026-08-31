@@ -144,7 +144,25 @@ func (r *Questions) ByID(ctx context.Context, questionID uuid.UUID) (contests.Qu
 // back: two organizers adding a question at the same moment would otherwise
 // both read the same number, and one of the inserts would fail.
 func (r *Questions) Create(ctx context.Context, q contests.Question) (contests.Question, error) {
-	return scanQuestion(r.querier(ctx).QueryRow(ctx, `
+	querier := r.querier(ctx)
+
+	// Two authors adding a question to the same contest at the same moment
+	// both read the same MAX(ord) and both write that position, which the
+	// unique constraint on (contest_id, ord) rejects — the loser sees a 500
+	// where they should simply have got the next number. Locking the contest
+	// row serialises the allocation.
+	//
+	// A separate statement, not a CTE, and the reason is subtle enough to be
+	// worth stating: under READ COMMITTED every statement takes its own
+	// snapshot, so the INSERT below is the first thing that can see rows the
+	// other transaction committed while we waited. Folded into one statement
+	// the MAX would be read from the snapshot taken before the lock was held,
+	// and the lock would buy nothing.
+	if err := lockContest(ctx, querier, q.ContestID); err != nil {
+		return contests.Question{}, err
+	}
+
+	return scanQuestion(querier.QueryRow(ctx, `
 		WITH inserted AS (
 			INSERT INTO questions (contest_id, ord, kind, points, max_attempts, is_visible, choice_ids)
 			VALUES ($1,
@@ -154,6 +172,23 @@ func (r *Questions) Create(ctx context.Context, q contests.Question) (contests.Q
 		)
 		SELECT `+questionColumns+` FROM inserted q`,
 		q.ContestID, q.Kind, q.Points, q.MaxAttempts, q.IsVisible, stringList(q.ChoiceIDs)))
+}
+
+// lockContest serialises everything that allocates a position within one
+// contest, by taking the contest row itself.
+//
+// The lock lives until the surrounding transaction ends, so outside one it
+// would be released before the INSERT it is meant to protect and the guard
+// would be decoration. Refusing is the honest answer: the caller runs inside a
+// unit of work, and a silent no-op here is a race that only appears under load.
+func lockContest(ctx context.Context, q storage.Querier, contestID uuid.UUID) error {
+	if !storage.InTx(ctx) {
+		return errors.New("adding a question must run inside a transaction")
+	}
+	if _, err := q.Exec(ctx, `SELECT id FROM contests WHERE id = $1 FOR UPDATE`, contestID); err != nil {
+		return fmt.Errorf("lock contest for a new question: %w", err)
+	}
+	return nil
 }
 
 // Update saves a question's own fields. Position, text and answers each have

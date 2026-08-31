@@ -61,8 +61,13 @@ const (
 var (
 	ErrNotFound          = errors.New("contest not found")
 	ErrInvalidTransition = errors.New("contest cannot move to that status")
-	ErrInvalidContest    = errors.New("contest is not valid")
-	ErrUnknownLanguage   = errors.New("language is not available")
+	// ErrStatusChanged reports a move decided against a status that has since
+	// moved. Distinct from ErrInvalidTransition, which is about a step that is
+	// never legal: this one says the caller was right a moment ago and should
+	// look again, which is a different thing to tell a client.
+	ErrStatusChanged   = errors.New("contest status changed while the request was being decided")
+	ErrInvalidContest  = errors.New("contest is not valid")
+	ErrUnknownLanguage = errors.New("language is not available")
 )
 
 // Contest is one olympiad.
@@ -336,8 +341,16 @@ type Repository interface {
 	List(ctx context.Context, f Filter) ([]Contest, int, error)
 	// Update saves the contest's own fields; status is not among them.
 	Update(ctx context.Context, c Contest) error
-	// SetStatus moves the contest along its lifecycle.
-	SetStatus(ctx context.Context, id uuid.UUID, status string) error
+	// SetStatus moves the contest along its lifecycle, but only from the
+	// status the caller decided against.
+	//
+	// The expectation is a parameter rather than a convention because the
+	// decision and the write are two statements: the gate that permits a move
+	// runs against a contest read moments earlier, and between the two a
+	// concurrent request may have moved it. Reporting ErrStatusChanged makes
+	// the second writer look again instead of overwriting a state it never
+	// examined.
+	SetStatus(ctx context.Context, id uuid.UUID, from, to string) error
 	// Delete removes a contest and everything hanging off it.
 	Delete(ctx context.Context, id uuid.UUID) error
 	// ReplaceLanguages sets the contest's languages to exactly these.

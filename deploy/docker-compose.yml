@@ -119,7 +119,18 @@ services:
       # The compose network: Caddy's X-Forwarded-For is believed, a direct
       # client's is not. Without this, every request appears to come from the
       # proxy and the per-IP login throttle becomes one global counter.
-      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.28.0.0/16}
+      # The two containers that actually front a browser, and only those.
+      # A forwarded address decides the audit trail, the per-address login
+      # throttle and a contest's network restriction, so trusting the whole
+      # compose subnet would let any container on it — promtail, which mounts
+      # the Docker socket, among them — assert whatever address it liked.
+      # Addresses rather than names because the resolver reads CIDRs at
+      # startup, which is why the two are pinned below.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.28.0.10/32,172.28.0.11/32}
+      # Counts successful sign-ins too, so it bounds people rather than only
+      # guesses. Raise it where a whole cohort shares one NAT address; the
+      # per-account limit of ten is what stops guessing.
+      MAX_LOGIN_ATTEMPTS_PER_ADDRESS: ${MAX_LOGIN_ATTEMPTS_PER_ADDRESS:-300}
     # No host port: Caddy is the only way in. The development overlay exposes
     # the API directly for debugging.
     depends_on:
@@ -161,7 +172,10 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
-    networks: [internal]
+    # Pinned so TRUSTED_PROXIES can name this container and not its neighbours.
+    networks:
+      internal:
+        ipv4_address: 172.28.0.11
 
   # The only service reachable from outside. It terminates TLS, which the
   # session cookie depends on: a Secure cookie sent over plain HTTP is
@@ -181,7 +195,11 @@ services:
     depends_on:
       - api
       - web
-    networks: [internal]
+    # Pinned for the same reason as web: it is the outermost hop whose
+    # X-Forwarded-For the API believes.
+    networks:
+      internal:
+        ipv4_address: 172.28.0.10
 
   # --- Observability -------------------------------------------------------
   # Optional, and off by default so a small install stays small:
@@ -263,3 +281,6 @@ networks:
     ipam:
       config:
         - subnet: 172.28.0.0/16
+          # Leaves .1–.15 free for the fixed assignments above; everything
+          # else is handed out from here and is not trusted to forward.
+          ip_range: 172.28.16.0/20

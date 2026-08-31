@@ -689,6 +689,11 @@ func (h *ContestsHandler) fail(w http.ResponseWriter, r *http.Request, err error
 
 	case errors.Is(err, contests.ErrInvalidTransition):
 		httpx.Error(w, r, http.StatusConflict, codeInvalidTransition, err.Error())
+	case errors.Is(err, contests.ErrStatusChanged):
+		// Its own code, not invalid_transition: the caller asked for something
+		// that was legal when they asked, so the interface tells them to look
+		// again rather than that they were wrong.
+		httpx.Error(w, r, http.StatusConflict, codeStatusChanged, err.Error())
 	case errors.Is(err, contests.ErrNotEditable):
 		httpx.Error(w, r, http.StatusConflict, codeNotEditable, err.Error())
 	case errors.Is(err, contests.ErrOwnerImmutable):

@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"testing"
@@ -137,5 +138,83 @@ func TestMemoryCloseIsSafe(t *testing.T) {
 
 	if err := c.Close(); err != nil {
 		t.Errorf("Close() = %v, want nil", err)
+	}
+}
+
+func TestFloodingTheCacheCannotSilentlyResetALoginThrottle(t *testing.T) {
+	// The counter behind the brute-force limit lives here. Under plain LRU an
+	// attacker could push a victim's counter out of the store simply by
+	// attempting logins against many other names, and guessing would resume
+	// from zero — with nothing in any log to say it had happened.
+	//
+	// Refusing is the right failure: Limiter.Allow reads a cache error as
+	// "the protection is not in place" and denies, so a full store becomes a
+	// visible refusal instead of an invisible bypass.
+	c := NewMemory(4)
+	ctx := context.Background()
+
+	if _, err := c.Incr(ctx, "rl:login:victim", time.Minute); err != nil {
+		t.Fatalf("Incr() = %v", err)
+	}
+
+	var lastErr error
+	for i := range 20 {
+		if _, err := c.Incr(ctx, fmt.Sprintf("rl:login:flood-%d", i), time.Minute); err != nil {
+			lastErr = err
+		}
+	}
+
+	if lastErr == nil {
+		t.Fatal("the store absorbed every counter; something was evicted silently")
+	}
+
+	// The victim's counter is still there, still counting.
+	n, err := c.Incr(ctx, "rl:login:victim", time.Minute)
+	if err != nil {
+		t.Fatalf("Incr() on the victim = %v", err)
+	}
+	if n != 2 {
+		t.Errorf("victim counter = %d, want 2: it was evicted and started over", n)
+	}
+}
+
+func TestAFullStoreReclaimsWhatHasExpiredBeforeRefusing(t *testing.T) {
+	// A window that has passed is not occupying the store on merit. Reclaiming
+	// it first is what keeps the refusal above rare rather than routine.
+	c := NewMemory(2)
+	ctx := context.Background()
+
+	if _, err := c.Incr(ctx, "rl:old", time.Millisecond); err != nil {
+		t.Fatalf("Incr() = %v", err)
+	}
+	if _, err := c.Incr(ctx, "rl:also-old", time.Millisecond); err != nil {
+		t.Fatalf("Incr() = %v", err)
+	}
+	time.Sleep(5 * time.Millisecond)
+
+	if _, err := c.Incr(ctx, "rl:fresh", time.Minute); err != nil {
+		t.Errorf("Incr() = %v, want the expired windows to make room", err)
+	}
+}
+
+func TestSessionsStillMakeRoomForEachOther(t *testing.T) {
+	// Set keeps least-recently-used eviction. A session store that refused new
+	// sessions once full would lock the installation out, and a lost session
+	// is a re-login rather than a security control that quietly stopped
+	// working.
+	c := NewMemory(2)
+	ctx := context.Background()
+
+	for _, key := range []string{"sess:a", "sess:b", "sess:c"} {
+		if err := c.Set(ctx, key, []byte("x"), time.Minute); err != nil {
+			t.Fatalf("Set(%s) = %v", key, err)
+		}
+	}
+
+	if _, found, _ := c.Get(ctx, "sess:c"); !found {
+		t.Error("the newest session was not stored")
+	}
+	if c.Len() > 2 {
+		t.Errorf("Len() = %d, want the capacity to hold", c.Len())
 	}
 }

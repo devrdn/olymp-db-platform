@@ -346,6 +346,52 @@ func TestOneTimePasswordAccountMayStillChangeItsPassword(t *testing.T) {
 	}
 }
 
+func TestTheWayOutIsNamedExactly(t *testing.T) {
+	// The exemption was a suffix match, so any route whose path happened to
+	// end in one of the three was exempt too. Nothing does today; the point is
+	// that adding /contests/{id}/auth/me tomorrow would silently reopen the
+	// API to an account still carrying somebody else's handover password, and
+	// nothing in that change would look like a security decision.
+	f := newMiddlewareFixture(t, staticRoles{})
+	setMustChange(t, f)
+
+	for _, path := range []string{
+		"/api/v1/contests/c-1/auth/me",
+		"/api/v1/auth/password/reset",
+		"/hack/auth/logout",
+	} {
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: f.token})
+		rec := httptest.NewRecorder()
+
+		f.mw.Authenticate(http.HandlerFunc(okHandler)).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s = %d, want 403: only the three named endpoints are a way out", path, rec.Code)
+		}
+	}
+}
+
+func TestTheWayOutWorksWhereverTheAPIIsMounted(t *testing.T) {
+	// Production mounts under /api/v1 and the tests mount bare. Both have to
+	// reach the same three endpoints, which is what the suffix match bought
+	// and what the exact match must not lose.
+	f := newMiddlewareFixture(t, staticRoles{})
+	setMustChange(t, f)
+
+	for _, path := range []string{"/auth/password", "/api/v1/auth/password"} {
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: f.token})
+		rec := httptest.NewRecorder()
+
+		f.mw.Authenticate(http.HandlerFunc(okHandler)).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s = %d, want 200", path, rec.Code)
+		}
+	}
+}
+
 // setMustChange flags the fixture account as still on its one-time password.
 func setMustChange(t *testing.T, f *mwFixture) {
 	t.Helper()

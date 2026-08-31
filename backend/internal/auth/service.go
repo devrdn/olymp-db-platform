@@ -15,8 +15,20 @@ import (
 // per-address window stops a sweep across many logins from one machine.
 const (
 	maxLoginAttemptsPerAccount = 10
-	maxLoginAttemptsPerAddress = 30
 	loginAttemptWindow         = 15 * time.Minute
+
+	// DefaultMaxLoginAttemptsPerAddress is the per-address ceiling when the
+	// deployment does not state one.
+	//
+	// It counts successful sign-ins too, and must: resetting it on success
+	// would let an attacker launder their own counter by signing in to an
+	// account they already hold. That makes it a ceiling on people, not only
+	// on guesses — a lecture hall behind one NAT address is one address here,
+	// and thirty was low enough to refuse honest students at the start of an
+	// olympiad. The per-account limit of ten is what actually stops guessing;
+	// this one exists to stop a sweep across many logins, and a few hundred
+	// is still far below what a sweep needs.
+	DefaultMaxLoginAttemptsPerAddress = 300
 )
 
 // dummyHash is verified against when the login does not exist, so a missing
@@ -44,25 +56,35 @@ type ServiceConfig struct {
 	Audit    *audit.Recorder
 	Limiter  *Limiter
 	Logger   *slog.Logger
+	// MaxAttemptsPerAddress caps sign-in attempts from one address in a
+	// window. Zero takes DefaultMaxLoginAttemptsPerAddress; a site whose
+	// participants share one NAT address raises it.
+	MaxAttemptsPerAddress int
 }
 
 // Service runs the login and logout flows.
 type Service struct {
-	users    UserStore
-	sessions *SessionStore
-	audit    *audit.Recorder
-	limiter  *Limiter
-	log      *slog.Logger
+	users         UserStore
+	sessions      *SessionStore
+	audit         *audit.Recorder
+	limiter       *Limiter
+	log           *slog.Logger
+	maxPerAddress int
 }
 
 // NewService assembles the authentication service.
 func NewService(cfg ServiceConfig) *Service {
+	perAddress := cfg.MaxAttemptsPerAddress
+	if perAddress <= 0 {
+		perAddress = DefaultMaxLoginAttemptsPerAddress
+	}
 	return &Service{
-		users:    cfg.Users,
-		sessions: cfg.Sessions,
-		audit:    cfg.Audit,
-		limiter:  cfg.Limiter,
-		log:      cfg.Logger,
+		users:         cfg.Users,
+		sessions:      cfg.Sessions,
+		audit:         cfg.Audit,
+		limiter:       cfg.Limiter,
+		log:           cfg.Logger,
+		maxPerAddress: perAddress,
 	}
 }
 
@@ -206,7 +228,7 @@ func (s *Service) checkThrottle(ctx context.Context, cmd LoginCommand) error {
 	}
 
 	if cmd.IP != "" {
-		allowed, err = s.limiter.Allow(ctx, "ip:"+cmd.IP, maxLoginAttemptsPerAddress, loginAttemptWindow)
+		allowed, err = s.limiter.Allow(ctx, "ip:"+cmd.IP, s.maxPerAddress, loginAttemptWindow)
 		if err != nil {
 			return err
 		}
