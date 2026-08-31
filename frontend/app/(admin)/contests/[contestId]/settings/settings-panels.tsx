@@ -181,8 +181,21 @@ export function ContestPanel({
   );
   const [timing, setTiming] = useState<string>(contest.timing);
 
+  // The form is keyed by the server's own version of what it renders.
+  //
+  // The fields are uncontrolled: a defaultValue is read once, when the input
+  // mounts, and ignored after that. A save revalidates the page and this panel
+  // re-renders with the saved contest — so without a fresh mount the field
+  // keeps whatever was in it and quietly disagrees with the server. Base UI
+  // notices the same thing from the other side and warns that a default
+  // changed after it was initialised.
+  //
+  // The key sits on the form element rather than on the panel, so the
+  // useActionState above survives and the "saved" confirmation is still there
+  // to read. And it moves only when the server's copy does: a re-render that
+  // is not a save leaves what somebody is typing alone.
   return (
-    <form action={formAction} className="contents">
+    <form key={contest.updatedAt} action={formAction} className="contents">
       <Panel title={t.schedule.heading} hint={t.schedule.hint}>
         <input type="hidden" name="contestId" value={contest.id} />
 
@@ -436,8 +449,10 @@ export function TranslationPanel({
 
   const declared = contest.languages.map((l) => l.code);
 
+  // Keyed like the schedule above, and for the same reason: these fields are
+  // uncontrolled, so the saved copy only reaches them through a fresh mount.
   return (
-    <form action={formAction} className="contents">
+    <form key={contest.updatedAt} action={formAction} className="contents">
       <Panel title={t.titles.heading} hint={t.titles.hint}>
         <input type="hidden" name="contestId" value={contest.id} />
 
@@ -505,8 +520,11 @@ export function PolicyPanel({
     { name: "allowCatalog", on: policy.allowCatalog, label: t.policy.catalog },
   ];
 
+  // Keyed like the schedule above, and for the same reason: these fields are
+  // uncontrolled, so the saved copy only reaches them through a fresh mount.
+  // The policy carries its own stamp, since it is saved on its own endpoint.
   return (
-    <form action={formAction} className="contents">
+    <form key={policy.updatedAt} action={formAction} className="contents">
       <Panel
         title={t.policy.heading}
         hint={t.policy.hint}
