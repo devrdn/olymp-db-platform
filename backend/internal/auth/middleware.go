@@ -23,16 +23,25 @@ const SessionCookieName = "dbcontest_session"
 // contestIDParam is the URL parameter the contest-scoped middleware reads.
 const contestIDParam = "contestID"
 
-// passwordChangeExemptSuffixes are the endpoints an account still on its
-// one-time password may reach: the way out (changing the password), the way
-// back (logout) and the self-description the client needs to route to the
-// form. Matched by suffix so the mount prefix (/api/v1 in production, bare in
-// tests) does not matter.
-var passwordChangeExemptSuffixes = []string{
-	"/auth/password",
-	"/auth/logout",
-	"/auth/me",
+// passwordChangeExempt lists the endpoints an account still on its one-time
+// password may reach: the way out (changing the password), the way back
+// (logout) and the self-description the client needs to route to the form.
+//
+// Exact paths, and the mount prefix is stripped before comparing rather than
+// matched by suffix. A suffix match reads the same for these three and is not
+// the same rule: it exempts anything whose path happens to end in one of them,
+// so a later /contests/{id}/auth/me would reopen the whole API to an account
+// carrying somebody else's handover password — and nothing about adding that
+// route would look like a security decision.
+var passwordChangeExemptPaths = map[string]struct{}{
+	"/auth/password": {},
+	"/auth/logout":   {},
+	"/auth/me":       {},
 }
+
+// apiMountPrefix is where the public router mounts. Tests mount bare, so it is
+// stripped when present rather than required.
+const apiMountPrefix = "/api/v1"
 
 // identityKey is unexported so only this package can place an identity in a
 // context — a handler cannot fabricate one.
@@ -207,12 +216,12 @@ func (m *Middleware) unauthenticated(w http.ResponseWriter, r *http.Request) {
 }
 
 func passwordChangeExempt(path string) bool {
-	for _, suffix := range passwordChangeExemptSuffixes {
-		if strings.HasSuffix(path, suffix) {
-			return true
-		}
-	}
-	return false
+	// Trailing slashes are stripped so /auth/logout/ is the same door, not a
+	// different one that happens to be shut.
+	path = strings.TrimSuffix(strings.TrimPrefix(path, apiMountPrefix), "/")
+
+	_, exempt := passwordChangeExemptPaths[path]
+	return exempt
 }
 
 func toSet(values []string) map[string]struct{} {

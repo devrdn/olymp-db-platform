@@ -208,7 +208,7 @@ func TestUpdateLeavesTheStatusAlone(t *testing.T) {
 		repo := NewContests(testPool)
 		author := makeUser(t, ctx, "author-status")
 		id := makeContest(t, ctx, author.ID)
-		if err := repo.SetStatus(ctx, id, contests.StatusPublished); err != nil {
+		if err := repo.SetStatus(ctx, id, contests.StatusDraft, contests.StatusPublished); err != nil {
 			t.Fatalf("SetStatus() = %v", err)
 		}
 
@@ -279,6 +279,47 @@ func TestTheDefaultLanguageCanBeMovedToAnotherLanguage(t *testing.T) {
 		loaded, _ := repo.ByID(ctx, id)
 		if got := loaded.DefaultLanguage(); got != "ro" {
 			t.Errorf("default language = %q, want ro", got)
+		}
+	})
+}
+
+func TestSetStatusRefusesAStatusThatMovedUnderneathIt(t *testing.T) {
+	// The guard that makes the check-then-write atomic. Transition decides
+	// against a status it read moments earlier; if a concurrent request has
+	// since moved the contest, the second write must not land on a state
+	// nobody examined — the publish gate ran against the old one.
+	withTx(t, func(ctx context.Context) {
+		repo := NewContests(testPool)
+		author := makeUser(t, ctx, "author-cas")
+		id := makeContest(t, ctx, author.ID)
+
+		if err := repo.SetStatus(ctx, id, contests.StatusDraft, contests.StatusPublished); err != nil {
+			t.Fatalf("SetStatus() = %v", err)
+		}
+
+		// A second caller still holding "draft", as a concurrent request would.
+		err := repo.SetStatus(ctx, id, contests.StatusDraft, contests.StatusRunning)
+
+		if !errors.Is(err, contests.ErrStatusChanged) {
+			t.Errorf("SetStatus() = %v, want ErrStatusChanged", err)
+		}
+		if after, _ := repo.ByID(ctx, id); after.Status != contests.StatusPublished {
+			t.Errorf("status = %q, want the first writer's value to stand", after.Status)
+		}
+	})
+}
+
+func TestSetStatusStillReportsAContestThatIsGone(t *testing.T) {
+	// "Nothing matched" has two causes and they are different answers: the
+	// row moved, or there is no row. Collapsing them would report a deleted
+	// contest as a conflict somebody could retry.
+	withTx(t, func(ctx context.Context) {
+		repo := NewContests(testPool)
+
+		err := repo.SetStatus(ctx, uuid.New(), contests.StatusDraft, contests.StatusPublished)
+
+		if !errors.Is(err, contests.ErrNotFound) {
+			t.Errorf("SetStatus() = %v, want ErrNotFound", err)
 		}
 	})
 }

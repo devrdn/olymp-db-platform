@@ -3,10 +3,22 @@ package cache
 import (
 	"container/list"
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"time"
 )
+
+// ErrFull reports a store that has no room for a new counter.
+//
+// Only counters see it. A value (a session) makes room by evicting the least
+// recently used one, because losing a session costs a re-login. A counter is
+// the brute-force limit itself: evicting one would let an attacker reset a
+// victim's window simply by attempting logins against many other names, and
+// nothing would record that it had happened. Limiter.Allow reads an error as
+// "the protection is not in place" and refuses, which turns a silent bypass
+// into a visible refusal.
+var ErrFull = errors.New("cache is full")
 
 // defaultCapacity bounds the in-process store. Keys are derived from user
 // input (session ids, rate-limit subjects), so an unbounded map would be a way
@@ -114,8 +126,37 @@ func (m *Memory) Incr(_ context.Context, key string, ttl time.Duration) (int64, 
 		m.removeElement(el)
 	}
 
+	// A new window needs a slot of its own, and it may not take one from a
+	// counter that is still running. Windows that have already passed are not
+	// holding their place on merit, so they are reclaimed first.
+	if len(m.entries) >= m.capacity {
+		m.reclaimExpired()
+		if len(m.entries) >= m.capacity {
+			return 0, ErrFull
+		}
+	}
+
 	m.set(key, []byte("1"), ttl)
 	return 1, nil
+}
+
+// reclaimExpired drops entries whose time has passed, oldest first. Callers
+// hold the lock.
+//
+// It walks from the back, where the least recently used sit, and stops at the
+// first live one: the list is ordered by use rather than by expiry, so a full
+// scan would cost the whole store on every full write, and the entries most
+// likely to have lapsed are the ones nobody has touched.
+func (m *Memory) reclaimExpired() {
+	now := time.Now()
+
+	for el := m.order.Back(); el != nil; {
+		previous := el.Prev()
+		if now.After(el.Value.(*entry).expiresAt) {
+			m.removeElement(el)
+		}
+		el = previous
+	}
 }
 
 // Ping always succeeds: the store is this process.

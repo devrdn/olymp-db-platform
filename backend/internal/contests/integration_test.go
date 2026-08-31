@@ -2,6 +2,7 @@ package contests_test
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"testing"
 
@@ -210,5 +211,58 @@ func TestARefusalIsRecordedWithoutATransaction(t *testing.T) {
 	}
 	if len(f.Audit.Loose) != 1 || f.Audit.Loose[0].Action != audit.ActionContestAccessDenied {
 		t.Errorf("entries recorded outside a transaction = %v, want one refusal", f.Audit.Loose)
+	}
+}
+
+// TestTwoTransitionsRaceAndOnlyOneWins pins the check-then-write that the
+// status change used to be.
+//
+// Transition reads the contest, decides the move is legal, runs the publish
+// gate, and only then writes — and the write said "set the status to running"
+// rather than "set it to running if it is still published". Two organisers
+// pressing Start at the same moment both passed the check against the same
+// old status, and the second wrote over the first. The dangerous version is
+// not the duplicate: it is the sequence where the gate passes against a state
+// that no longer exists by the time the write lands, which is how a contest
+// with no story starts.
+func TestTwoTransitionsRaceAndOnlyOneWins(t *testing.T) {
+	ctx := context.Background()
+	f := conteststest.NewFixture()
+	actor := uuid.New()
+	c := f.SeedPublishableContest()
+
+	if err := f.Service.Transition(ctx, actor, c.ID, contests.StatusPublished); err != nil {
+		t.Fatalf("Transition() to published = %v", err)
+	}
+
+	// The second caller decided while the contest was still published, which
+	// is what a concurrent request holds: a snapshot taken before the first
+	// one committed.
+	f.Contests.SetStatusRaces(contests.StatusRunning)
+
+	err := f.Service.Transition(ctx, actor, c.ID, contests.StatusRunning)
+
+	if !errors.Is(err, contests.ErrStatusChanged) {
+		t.Errorf("Transition() = %v, want it to refuse a status that moved underneath it", err)
+	}
+}
+
+// TestATransitionThatWasNotRacedStillLands is the other half: the guard must
+// refuse the race without refusing the ordinary case.
+func TestATransitionThatWasNotRacedStillLands(t *testing.T) {
+	ctx := context.Background()
+	f := conteststest.NewFixture()
+	c := f.SeedPublishableContest()
+
+	if err := f.Service.Transition(ctx, uuid.New(), c.ID, contests.StatusPublished); err != nil {
+		t.Fatalf("Transition() = %v", err)
+	}
+
+	stored, err := f.Contests.ByID(ctx, c.ID)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	if stored.Status != contests.StatusPublished {
+		t.Errorf("status = %q, want published", stored.Status)
 	}
 }

@@ -118,6 +118,10 @@
       "meaning": "The new password is the one already in use."
     },
     {
+      "code": "status_changed",
+      "meaning": "Somebody else moved the contest while this request was being decided. Reload and look again; nothing was changed."
+    },
+    {
       "code": "story_not_found",
       "meaning": "The contest has no story yet."
     },

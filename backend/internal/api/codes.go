@@ -64,6 +64,8 @@ var (
 
 	codeInvalidTransition = httpx.NewCode("invalid_transition",
 		"The contest cannot move to that status from the one it is in.")
+	codeStatusChanged = httpx.NewCode("status_changed",
+		"Somebody else moved the contest while this request was being decided. Reload and look again; nothing was changed.")
 	codeNotEditable = httpx.NewCode("not_editable",
 		"The contest's status no longer allows this change. The message says which status.")
 	codeNotPublishable = httpx.NewCode("not_publishable",

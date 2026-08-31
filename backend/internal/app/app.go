@@ -106,11 +106,12 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	cookies := auth.NewCookieWriter(cfg.CookieSecure)
 
 	authService := auth.NewService(auth.ServiceConfig{
-		Users:    userRepo,
-		Sessions: sessions,
-		Audit:    auditRecorder,
-		Limiter:  auth.NewLimiter(cacheBackend),
-		Logger:   log,
+		Users:                 userRepo,
+		Sessions:              sessions,
+		Audit:                 auditRecorder,
+		Limiter:               auth.NewLimiter(cacheBackend),
+		Logger:                log,
+		MaxAttemptsPerAddress: cfg.MaxLoginAttemptsPerAddress,
 	})
 	authMiddleware := auth.NewMiddleware(auth.MiddlewareConfig{
 		Sessions:   sessions,

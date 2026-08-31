@@ -236,17 +236,31 @@ func (r *Contests) Update(ctx context.Context, c contests.Contest) error {
 	return nil
 }
 
-// SetStatus moves the contest along its lifecycle.
-func (r *Contests) SetStatus(ctx context.Context, id uuid.UUID, status string) error {
+// SetStatus moves the contest along its lifecycle, only from the status the
+// caller decided against.
+//
+// The comparison is in the WHERE clause rather than in a preceding SELECT,
+// which is what makes it atomic: PostgreSQL locks the row for the UPDATE and
+// re-evaluates the condition against the committed value, so of two concurrent
+// callers holding the same stale status exactly one matches a row.
+func (r *Contests) SetStatus(ctx context.Context, id uuid.UUID, from, to string) error {
 	tag, err := r.querier(ctx).Exec(ctx,
-		`UPDATE contests SET status = $2, updated_at = now() WHERE id = $1`, id, status)
+		`UPDATE contests SET status = $3, updated_at = now() WHERE id = $1 AND status = $2`,
+		id, from, to)
 	if err != nil {
 		return fmt.Errorf("set contest status: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return contests.ErrNotFound
+	if tag.RowsAffected() == 1 {
+		return nil
 	}
-	return nil
+
+	// Nothing matched: either the contest is gone or its status moved. The two
+	// are different answers, and a second read is the only way to tell them
+	// apart. It costs one indexed lookup on a path that has already failed.
+	if _, err := r.ByID(ctx, id); err != nil {
+		return err
+	}
+	return contests.ErrStatusChanged
 }
 
 // Delete removes a contest. Everything hanging off it goes with it through the

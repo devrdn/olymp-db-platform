@@ -11,11 +11,23 @@ import (
 	"time"
 )
 
-// Timeouts protecting the listener from slow or idle peers. ReadHeaderTimeout
-// bounds the header phase; WriteTimeout stays generous because streaming
-// endpoints (SSE) keep a response open for the length of a contest.
+// Timeouts protecting the listener from slow or idle peers.
+//
+// ReadHeaderTimeout bounds the header phase and readTimeout bounds the body
+// after it: without the second, a client that has sent complete headers may
+// then feed the 1 MiB body one byte at a time and hold a goroutine and a
+// connection for as long as it likes. Thirty seconds is far beyond any
+// legitimate JSON body — the largest thing the API accepts is a roster import
+// — and far below "indefinitely".
+//
+// WriteTimeout is deliberately absent, not forgotten. It is measured from the
+// end of the request headers rather than from the start of the response, so
+// any value at all would cut off the streaming endpoints (SSE) that keep a
+// response open for the length of a contest. Slow readers are bounded by
+// IdleTimeout and by the reverse proxy in front.
 const (
 	readHeaderTimeout = 10 * time.Second
+	readTimeout       = 30 * time.Second
 	idleTimeout       = 2 * time.Minute
 )
 
@@ -40,6 +52,7 @@ func New(name, addr string, handler http.Handler, log *slog.Logger) *Server {
 			Addr:              addr,
 			Handler:           handler,
 			ReadHeaderTimeout: readHeaderTimeout,
+			ReadTimeout:       readTimeout,
 			IdleTimeout:       idleTimeout,
 			ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 		},
