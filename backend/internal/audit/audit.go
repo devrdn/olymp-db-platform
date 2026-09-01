@@ -54,6 +54,11 @@ const (
 	// contest's network restriction: the same entry that proves the rule works
 	// is the signal that somebody tried from an outside device (§7.1).
 	ActionContestAccessDenied = "contest.access_denied"
+
+	// ActionSettingsChange records a change to what the installation calls
+	// itself and how it looks. It is entity "settings" with no identifier:
+	// there is one of it.
+	ActionSettingsChange = "settings.change"
 )
 
 // MaxUserAgentLength bounds a header the client controls. The column is kept

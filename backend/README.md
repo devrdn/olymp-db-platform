@@ -186,6 +186,8 @@ secret, not a credential to live on.
 | GET | `/api/v1/auth/me` | signed in |
 | POST | `/api/v1/auth/logout` | signed in |
 | POST | `/api/v1/auth/password` | signed in (own password) |
+| GET | `/api/v1/settings` | anyone — the sign-in screen carries the installation's name |
+| GET | `/api/v1/settings/all`, PUT `/api/v1/settings` | `settings.manage` |
 | GET | `/api/v1/roles` | `users.manage` |
 | GET, POST | `/api/v1/users` | `users.manage` |
 | GET, PATCH | `/api/v1/users/{id}` | `users.manage` |
