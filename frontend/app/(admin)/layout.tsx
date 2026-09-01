@@ -20,7 +20,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     activeDictionary(),
     activeLocale(),
     activeTheme(),
-    fetchIdentity(),
+    // Tolerated here, and only here: this layout decorates and never
+    // redirects, so a server that cannot be asked costs the audit link and the account door and nothing
+    // else. The screens that decide where somebody may go let the failure
+    // through, because there "unknown" must not be answered as "signed out".
+    fetchIdentity().catch(() => null),
   ]);
 
   // Offered from the permissions the API reports, which is the same thing its

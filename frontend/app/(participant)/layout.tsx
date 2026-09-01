@@ -26,7 +26,11 @@ export default async function ParticipantLayout({ children }: { children: React.
     activeDictionary(),
     activeLocale(),
     activeTheme(),
-    fetchIdentity(),
+    // Tolerated here, and only here: this layout decorates and never
+    // redirects, so a server that cannot be asked costs the account door and nothing
+    // else. The screens that decide where somebody may go let the failure
+    // through, because there "unknown" must not be answered as "signed out".
+    fetchIdentity().catch(() => null),
   ]);
 
   return (

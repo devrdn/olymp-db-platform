@@ -91,6 +91,10 @@ const ro = {
     changePassword: "Schimbați parola",
     signOut: "Deconectare",
     signOutNote: "Încheie sesiunea doar pe acest dispozitiv.",
+    failed: {
+      title: "Nu s-a putut încărca contul",
+      body: "Serverul nu a răspuns. Sesiunea dumneavoastră este în regulă — nu ați fost deconectat.",
+    },
   },
   workspace: {
     backToRegister: "← Toate olimpiadele",

@@ -54,7 +54,10 @@ export async function signInAction(
 
   if (!outcome.ok) return { code: outcome.code };
 
-  const identity = await fetchIdentity();
+  // The session exists either way — it was just issued. If the API cannot be
+  // asked what it may do, the safe landing is the participant's own screen,
+  // which every account can open.
+  const identity = await fetchIdentity().catch(() => null);
 
   // redirect() signals by throwing, so it stays outside any try/catch.
   redirect(
