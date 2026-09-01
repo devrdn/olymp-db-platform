@@ -6,6 +6,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
+import { pasteAsMarkdown } from "./paste-as-markdown";
+
 import "@milkdown/crepe/theme/common/style.css";
 import "./markdown-editor.css";
 
@@ -89,7 +91,26 @@ export function MarkdownEditor({
         [Crepe.Feature.Latex]: false,
         [Crepe.Feature.AI]: false,
       },
+      featureConfigs: {
+        [Crepe.Feature.BlockEdit]: {
+          blockHandle: {
+            // Pinned to the left, with no middleware. Crepe's default flips
+            // the handle to the right of the block when it decides there is
+            // not enough room on the left — and a control that changes sides
+            // is one somebody has to look for. It also lands past the text,
+            // which is where the stray horizontal scroll bar came from.
+            getPlacement: () => "left",
+            middleware: [],
+            // Closer than the default 16, so the pair of controls reaches
+            // 74px rather than 82 and fits the gutter with room to spare.
+            getOffset: () => 8,
+          },
+        },
+      },
     });
+
+    // The document is Markdown; a paste should be too.
+    crepe.editor.use(pasteAsMarkdown);
 
     crepe.on((api) => api.markdownUpdated((_ctx, value) => setMarkdown(value)));
 

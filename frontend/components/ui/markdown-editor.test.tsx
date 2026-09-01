@@ -7,7 +7,15 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 // that expands it, what that does to the page, and the field the form submits.
 vi.mock("@milkdown/crepe", () => ({
   Crepe: class {
-    static Feature = { ImageBlock: "image-block", Latex: "latex", AI: "ai" };
+    static Feature = {
+      ImageBlock: "image-block",
+      Latex: "latex",
+      AI: "ai",
+      BlockEdit: "block-edit",
+    };
+    // The Milkdown editor underneath, which the component adds its paste
+    // handler to before creating anything.
+    editor = { use: () => this.editor };
     on() {
       return this;
     }
