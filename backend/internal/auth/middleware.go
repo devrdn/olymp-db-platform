@@ -140,8 +140,9 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 		}
 
 		// Extend the session on activity, so working through a contest does not
-		// end in being logged out mid-answer.
-		if err := m.sessions.Refresh(ctx, cookie.Value); err != nil {
+		// end in being logged out mid-answer. From the record just read, and
+		// only when it is due: the store decides whether a write is needed.
+		if err := m.sessions.Touch(ctx, cookie.Value, session); err != nil {
 			m.log.WarnContext(ctx, "could not extend the session", "error", err)
 		}
 

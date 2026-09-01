@@ -72,7 +72,17 @@ type Session struct {
 	Login      string    `json:"login"`
 	Generation int64     `json:"generation"`
 	IssuedAt   time.Time `json:"issued_at"`
+	// RefreshedAt is when the lifetime was last rewritten. Touch reads it to
+	// decide whether the store needs another write at all; a record from
+	// before the field existed leaves it zero and is treated as due.
+	RefreshedAt time.Time `json:"refreshed_at,omitzero"`
 }
+
+// maxRefreshInterval caps how long an active session goes without its
+// lifetime being rewritten. The sliding window is the product's promise; how
+// often it slides is an implementation cost, and once a minute is
+// indistinguishable from every request to anybody working through a contest.
+const maxRefreshInterval = time.Minute
 
 // SessionStore keeps sessions in the shared cache.
 //
@@ -99,21 +109,30 @@ func (s *SessionStore) Create(ctx context.Context, p Principal) (string, error) 
 	}
 	token := base64.RawURLEncoding.EncodeToString(raw)
 
-	record, err := json.Marshal(Session{
-		UserID:     p.UserID,
-		Login:      p.Login,
-		Generation: p.Generation,
-		IssuedAt:   time.Now().UTC(),
-	})
-	if err != nil {
-		return "", fmt.Errorf("encode session: %w", err)
-	}
-
-	if err := s.cache.Set(ctx, sessionKey(token), record, s.ttl); err != nil {
-		return "", fmt.Errorf("store session: %w", err)
+	now := time.Now().UTC()
+	if err := s.put(ctx, token, Session{
+		UserID:      p.UserID,
+		Login:       p.Login,
+		Generation:  p.Generation,
+		IssuedAt:    now,
+		RefreshedAt: now,
+	}); err != nil {
+		return "", err
 	}
 
 	return token, nil
+}
+
+// put writes a session under its token for a full lifetime.
+func (s *SessionStore) put(ctx context.Context, token string, session Session) error {
+	record, err := json.Marshal(session)
+	if err != nil {
+		return fmt.Errorf("encode session: %w", err)
+	}
+	if err := s.cache.Set(ctx, sessionKey(token), record, s.ttl); err != nil {
+		return fmt.Errorf("store session: %w", err)
+	}
+	return nil
 }
 
 // Get resolves a token to its session.
@@ -140,22 +159,53 @@ func (s *SessionStore) Get(ctx context.Context, token string) (Session, error) {
 	return session, nil
 }
 
-// Refresh extends an active session by a full lifetime.
+// Refresh extends an active session by a full lifetime, unconditionally.
 func (s *SessionStore) Refresh(ctx context.Context, token string) error {
 	session, err := s.Get(ctx, token)
 	if err != nil {
 		return err
 	}
+	session.RefreshedAt = time.Now().UTC()
+	return s.put(ctx, token, session)
+}
 
-	record, err := json.Marshal(session)
-	if err != nil {
-		return fmt.Errorf("encode session: %w", err)
+// Touch extends a session the caller has already loaded, but only when the
+// last extension is old enough to matter.
+//
+// The middleware authenticates every request and used to rewrite the session
+// on each one: a read to authenticate, a second read inside Refresh, then a
+// write — three round trips to the cache per request, two of them to move an
+// expiry by a few seconds. Working from the record already in hand and
+// skipping writes inside the refresh interval leaves one read per request for
+// the common case. The cost is that the idle timeout is honoured to within
+// one interval rather than exactly, which nobody can observe.
+func (s *SessionStore) Touch(ctx context.Context, token string, session Session) error {
+	now := time.Now().UTC()
+
+	last := session.RefreshedAt
+	if last.IsZero() {
+		// Written before the field existed, or by a Create that predates it:
+		// the issue time is the last moment the lifetime is known to have
+		// been set.
+		last = session.IssuedAt
+	}
+	if now.Sub(last) < s.refreshInterval() {
+		return nil
 	}
 
-	if err := s.cache.Set(ctx, sessionKey(token), record, s.ttl); err != nil {
-		return fmt.Errorf("refresh session: %w", err)
+	session.RefreshedAt = now
+	return s.put(ctx, token, session)
+}
+
+// refreshInterval is how long a session may go between lifetime rewrites: a
+// tenth of the lifetime, and never more than a minute, so a short-lived
+// session still slides often enough to stay alive under steady use.
+func (s *SessionStore) refreshInterval() time.Duration {
+	interval := s.ttl / 10
+	if interval > maxRefreshInterval {
+		interval = maxRefreshInterval
 	}
-	return nil
+	return interval
 }
 
 // Delete ends one session. An unknown token is not an error: logging out twice

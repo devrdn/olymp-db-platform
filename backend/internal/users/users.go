@@ -20,14 +20,33 @@ const (
 	StatusBlocked = "blocked"
 )
 
+// Bounds on what an account's descriptive fields may hold.
+//
+// The columns are unbounded text, and the request body is bounded at a
+// megabyte, so without these a login could be a megabyte long — indexed,
+// compared case-insensitively on every sign-in, and printed in every audit
+// line about the account. The numbers are generous for what they name: a
+// student card number or a username, a person's name, and the longest address
+// the mail RFCs allow.
+const (
+	MaxLoginLength    = 100
+	MaxFullNameLength = 200
+	MaxEmailLength    = 254
+)
+
 // Errors the service reports to its callers.
 var (
-	ErrNotFound      = errors.New("user not found")
-	ErrLoginTaken    = errors.New("login already in use")
-	ErrEmailTaken    = errors.New("email already in use")
-	ErrWeakPassword  = errors.New("password does not meet the policy")
-	ErrSamePassword  = errors.New("new password must differ from the current one")
-	ErrWrongPassword = errors.New("current password is incorrect")
+	ErrNotFound = errors.New("user not found")
+	// ErrInvalidAccount reports descriptive fields the account cannot be
+	// created or updated with: an empty login or name, a field over its bound,
+	// an email that is not one. Callers answer it as a bad request; an
+	// undeclared error here used to reach the client as a 500.
+	ErrInvalidAccount = errors.New("account details are not valid")
+	ErrLoginTaken     = errors.New("login already in use")
+	ErrEmailTaken     = errors.New("email already in use")
+	ErrWeakPassword   = errors.New("password does not meet the policy")
+	ErrSamePassword   = errors.New("new password must differ from the current one")
+	ErrWrongPassword  = errors.New("current password is incorrect")
 	// ErrLastAdministrator refuses the change that would leave the
 	// installation with nobody able to manage accounts.
 	//

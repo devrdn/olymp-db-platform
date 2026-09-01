@@ -414,3 +414,15 @@ func TestTheStatusesTheRegisterActuallyOffersAreAccepted(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateEndpointAnswersABadRequestForUnusableDetails(t *testing.T) {
+	// An empty login is the client's mistake and is told so; it used to come
+	// back as a 500 because the error had no name the handler could map.
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+
+	rec := f.do(http.MethodPost, "/users", `{"login":"","full_name":"Nobody"}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+}

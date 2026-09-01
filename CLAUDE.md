@@ -46,3 +46,51 @@ These exist so anyone opening the project can find things without asking.
    storage, cache, metrics) and must not import a domain package. Domain
    packages sit at the top of `internal/`. `internal/app` is the composition
    root and is the only place allowed to know about all of them.
+## Security and performance rules
+
+Distilled from a review of the whole service. Each one names a class of
+mistake that was actually found, not a hypothetical.
+
+1. **Every error a service hands to the HTTP layer is a declared sentinel** (or
+   wraps one with `%w`). A bare `errors.New` inside a service is a 500 waiting
+   to happen: the handler's `fail` switch cannot name it, so the client is
+   told "internal error" for its own typo. When adding a refusal, add the
+   sentinel, the mapping in `fail`, and a handler test asserting the 4xx.
+2. **Every field and every list that reaches storage has an explicit bound in
+   the domain.** Columns are unbounded `text`, and the 1 MiB body limit bounds
+   the request, not a field: without a check a login can be a megabyte long
+   and a roster can hold thirty thousand identifiers inside one transaction.
+   Lengths go on strings, a maximum count on any slice a request carries.
+3. **Free text that lands in a `LIKE`/`ILIKE` pattern goes through
+   `escapeLike`** (`internal/postgres/like.go`). A parameter stops injection,
+   not a change of meaning: an unescaped `%` matches every row and a trailing
+   backslash is a 500. If a query builds a pattern, it calls the helper.
+4. **Anything that verifies a password is throttled, not only `/login`.**
+   Changing a password verifies the current one, and a borrowed session must
+   not be a place to guess it. Use `auth.Limiter`; count every attempt; reset
+   on success.
+5. **Check the bounded rate-limit key before the unbounded one.** Every limiter
+   subject becomes a cache key. The address is one key per machine; the login
+   is one key per string the caller invents. Spending the address budget first
+   caps how many counters a refused caller can create — on the in-process
+   cache a full store refuses every counter, which is a denial of service on
+   sign-in for everybody.
+6. **A middleware write per request needs a reason.** Authentication is one
+   read; extending a session is a write, and moving an expiry by a few seconds
+   is not worth one. Skip the write when nothing observable changes (see
+   `SessionStore.Touch`) — and apply the same test to any hot path that
+   touches the cache or the database.
+7. **A filter the API offers is backed by an index, in the same change.** Adding
+   a query parameter to a `List` endpoint is adding a `WHERE` clause on the
+   largest tables; the migration that serves it lands with the code, or the
+   comment claiming "the table carries an index for each" is a lie.
+8. **Partial-success imports classify errors explicitly.** Only a row-level
+   sentinel (taken login, invalid row) becomes a "skipped" entry. Anything
+   else — the database, the audit trail — aborts and surfaces, or an outage
+   is reported as three hundred rows the importer has to "fix".
+9. **Trust boundaries are named once.** A forwarded address is believed only
+   from `TRUSTED_PROXIES`, and only `httpx.IPResolver` reads
+   `X-Forwarded-For`; everything else asks `httpx.ClientIP`. The one other
+   forwarded header the service reads, `X-Forwarded-Proto` in `httpx.isTLS`,
+   comes from any peer, so nothing may fail open because of it: a spoofed
+   value must only ever make a request stricter, never looser.

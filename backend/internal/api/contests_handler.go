@@ -784,7 +784,8 @@ func (h *ContestsHandler) fail(w http.ResponseWriter, r *http.Request, err error
 		errors.Is(err, contests.ErrInvalidAnswer),
 		errors.Is(err, contests.ErrInvalidPolicy),
 		errors.Is(err, contests.ErrInvalidRole),
-		errors.Is(err, contests.ErrUnknownLanguage):
+		errors.Is(err, contests.ErrUnknownLanguage),
+		errors.Is(err, contests.ErrRosterTooLarge):
 		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 
 	default:

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/mail"
 	"slices"
 	"strings"
 
@@ -65,12 +66,9 @@ type CreateResult struct {
 // The administrator never chooses a password that outlives the handover: the
 // account is flagged so the first login ends in the user setting their own.
 func (s *Service) Create(ctx context.Context, cmd CreateCommand) (CreateResult, error) {
-	login := strings.TrimSpace(cmd.Login)
-	if login == "" {
-		return CreateResult{}, errors.New("login must not be empty")
-	}
-	if strings.TrimSpace(cmd.FullName) == "" {
-		return CreateResult{}, errors.New("full name must not be empty")
+	login, fullName, email := strings.TrimSpace(cmd.Login), strings.TrimSpace(cmd.FullName), strings.TrimSpace(cmd.Email)
+	if err := validateAccount(login, fullName, email); err != nil {
+		return CreateResult{}, err
 	}
 
 	// Check before writing so the caller gets a clear error rather than a
@@ -98,8 +96,8 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (CreateResult, 
 		var err error
 		created, err = s.repo.Create(ctx, User{
 			Login:              login,
-			Email:              strings.TrimSpace(cmd.Email),
-			FullName:           strings.TrimSpace(cmd.FullName),
+			Email:              email,
+			FullName:           fullName,
 			Status:             StatusActive,
 			PasswordHash:       hash,
 			MustChangePassword: true,
@@ -263,11 +261,11 @@ func (s *Service) UpdateProfile(ctx context.Context, actorID, userID uuid.UUID, 
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(fullName) == "" {
-		return errors.New("full name must not be empty")
-	}
 
 	fullName, email = strings.TrimSpace(fullName), strings.TrimSpace(email)
+	if err := validateAccount(current.Login, fullName, email); err != nil {
+		return err
+	}
 
 	// What moved and what it was. The new name alone said neither what it
 	// replaced nor whether the email had changed at all.
@@ -330,6 +328,38 @@ func (s *Service) record(ctx context.Context, actorID uuid.UUID, action string, 
 		EntityID: subject.String(),
 		Payload:  payload,
 	})
+}
+
+// validateAccount checks the descriptive fields an account is created or
+// updated with. The values are expected already trimmed.
+//
+// The email is parsed rather than pattern-matched, and has to come back as
+// exactly the bare address that went in: net/mail also accepts a display name
+// with brackets around the address, which is a valid header and not a valid
+// thing to store in a column other code will send mail to.
+func validateAccount(login, fullName, email string) error {
+	switch {
+	case login == "":
+		return fmt.Errorf("%w: login must not be empty", ErrInvalidAccount)
+	case len(login) > MaxLoginLength:
+		return fmt.Errorf("%w: login must be at most %d characters", ErrInvalidAccount, MaxLoginLength)
+	case fullName == "":
+		return fmt.Errorf("%w: full name must not be empty", ErrInvalidAccount)
+	case len(fullName) > MaxFullNameLength:
+		return fmt.Errorf("%w: full name must be at most %d characters", ErrInvalidAccount, MaxFullNameLength)
+	}
+
+	if email == "" {
+		return nil
+	}
+	if len(email) > MaxEmailLength {
+		return fmt.Errorf("%w: email must be at most %d characters", ErrInvalidAccount, MaxEmailLength)
+	}
+	parsed, err := mail.ParseAddress(email)
+	if err != nil || parsed.Address != email {
+		return fmt.Errorf("%w: %q is not an email address", ErrInvalidAccount, email)
+	}
+	return nil
 }
 
 // validatePassword applies the policy.
@@ -512,11 +542,18 @@ func (s *Service) Import(ctx context.Context, cmd ImportCommand) (ImportResult, 
 			result.Skipped = append(result.Skipped, SkippedRow{Login: row.Login, Reason: SkipLoginTaken})
 		case errors.Is(err, ErrEmailTaken):
 			result.Skipped = append(result.Skipped, SkippedRow{Login: row.Login, Reason: SkipEmailTaken})
-		default:
-			// A row that could never be an account — no login, no name. The
-			// message is not carried: it is the same for every such row and
-			// the line number is what the importer needs.
+		case errors.Is(err, ErrInvalidAccount):
+			// A row that could never be an account — no login, no name, an
+			// address that is not one. The message is not carried: the line
+			// number is what the importer needs.
 			result.Skipped = append(result.Skipped, SkippedRow{Login: row.Login, Reason: SkipInvalidRow})
+		default:
+			// Anything else is the database or the trail failing, not the
+			// row. Reporting it as "invalid row" would tell the importer to
+			// fix a line that was fine, and hide an outage behind a list of
+			// them; the accounts already created stay created and are
+			// reported by the error, not swallowed.
+			return result, fmt.Errorf("import row %q: %w", row.Login, err)
 		}
 	}
 	return result, nil

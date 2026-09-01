@@ -350,3 +350,19 @@ func TestPasswordChangeEndsTheOtherSessions(t *testing.T) {
 		t.Errorf("the other session survived the password change: status = %d", after.Code)
 	}
 }
+
+func TestPasswordChangeReportsThrottlingWith429(t *testing.T) {
+	// A borrowed session must not be a place to guess the current password;
+	// the endpoint is throttled like the sign-in it resembles.
+	f := newHandlerFixture(t)
+	cookie := f.login(t)
+
+	var rec *httptest.ResponseRecorder
+	for range maxLoginAttempts + 1 {
+		rec = f.post("/auth/password", `{"old_password":"nope","new_password":"a brand new password"}`, cookie)
+	}
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("status = %d, want 429 after repeated wrong current passwords", rec.Code)
+	}
+}

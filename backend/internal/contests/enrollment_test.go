@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"strconv"
 	"testing"
 	"time"
 
@@ -420,5 +421,27 @@ func TestTheRosterCanSayWhichOfTheseTheStudentIsOn(t *testing.T) {
 	// that leaked it would be a disclosure of who takes part in what.
 	if on[theirs.ID] {
 		t.Error("another account's registration was reported as this student's")
+	}
+}
+
+func TestRosterImportRefusesMoreEntriesThanTheBound(t *testing.T) {
+	// Every entry is a lookup, an insert and an audit line inside one
+	// transaction; the request body alone would allow tens of thousands.
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+
+	logins := make([]string, 1001)
+	for i := range logins {
+		logins[i] = "s" + strconv.Itoa(i)
+	}
+
+	_, err := f.Service.AddParticipants(context.Background(), contests.AddParticipantsCommand{
+		ActorID:   uuid.New(),
+		ContestID: c.ID,
+		Logins:    logins,
+	})
+
+	if !errors.Is(err, contests.ErrRosterTooLarge) {
+		t.Errorf("AddParticipants() = %v, want ErrRosterTooLarge", err)
 	}
 }

@@ -198,3 +198,69 @@ func TestSessionRecordsWhenItWasIssued(t *testing.T) {
 		t.Errorf("IssuedAt = %v, want a time at or after %v", got.IssuedAt, before)
 	}
 }
+
+func TestTouchLeavesARecentlyRefreshedSessionAlone(t *testing.T) {
+	// Authenticating is one read; it must not become a write as well on every
+	// request when the last write was moments ago.
+	c := cache.NewMemory(100)
+	t.Cleanup(func() { _ = c.Close() })
+	store := NewSessionStore(c, time.Hour)
+	ctx := context.Background()
+	token, _ := store.Create(ctx, testPrincipal())
+	before, _ := store.Get(ctx, token)
+
+	if err := store.Touch(ctx, token, before); err != nil {
+		t.Fatalf("Touch() returned error: %v", err)
+	}
+
+	after, _ := store.Get(ctx, token)
+	if !after.RefreshedAt.Equal(before.RefreshedAt) {
+		t.Errorf("RefreshedAt moved from %v to %v; a session refreshed moments ago was rewritten", before.RefreshedAt, after.RefreshedAt)
+	}
+}
+
+func TestTouchExtendsASessionThatIsDue(t *testing.T) {
+	// The sliding window is still the promise: once the interval has passed,
+	// activity buys a full lifetime again.
+	c := cache.NewMemory(100)
+	t.Cleanup(func() { _ = c.Close() })
+	store := NewSessionStore(c, 80*time.Millisecond) // the interval is 8ms
+	ctx := context.Background()
+	token, _ := store.Create(ctx, testPrincipal())
+
+	time.Sleep(50 * time.Millisecond)
+	session, err := store.Get(ctx, token)
+	if err != nil {
+		t.Fatalf("Get() returned error: %v", err)
+	}
+	if err := store.Touch(ctx, token, session); err != nil {
+		t.Fatalf("Touch() returned error: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	if _, err := store.Get(ctx, token); err != nil {
+		t.Errorf("session expired although it was touched: %v", err)
+	}
+}
+
+func TestTouchTreatsARecordWithoutARefreshTimeAsDue(t *testing.T) {
+	// Sessions written before the field existed carry no RefreshedAt. They
+	// are extended on their next request rather than left to lapse.
+	c := cache.NewMemory(100)
+	t.Cleanup(func() { _ = c.Close() })
+	store := NewSessionStore(c, time.Hour)
+	ctx := context.Background()
+	token, _ := store.Create(ctx, testPrincipal())
+	legacy, _ := store.Get(ctx, token)
+	legacy.RefreshedAt = time.Time{}
+	legacy.IssuedAt = time.Now().Add(-2 * time.Hour)
+
+	if err := store.Touch(ctx, token, legacy); err != nil {
+		t.Fatalf("Touch() returned error: %v", err)
+	}
+
+	after, _ := store.Get(ctx, token)
+	if after.RefreshedAt.IsZero() {
+		t.Error("a legacy record was not stamped with a refresh time")
+	}
+}
