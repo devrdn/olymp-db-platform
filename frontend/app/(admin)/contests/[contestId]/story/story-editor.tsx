@@ -73,6 +73,7 @@ export function StoryEditor({
                 name={`body.${lang}`}
                 defaultValue={translations[lang] ?? ""}
                 placeholder={t.placeholder}
+                labels={{ expand: t.expand, collapse: t.collapse }}
               />
             ) : (
               // A frozen contest gets the story as a reader sees it, rendered

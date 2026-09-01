@@ -167,6 +167,8 @@ const en = {
       lede: "What a participant reads before they open the database. Every declared language needs one.",
       fallback: "default",
       placeholder: "The greenhouse was locked from the inside…",
+      expand: "Open full screen",
+      collapse: "Close full screen",
       preview: "Preview",
       previewEmpty: "Nothing to show yet.",
       save: "Save the story",
