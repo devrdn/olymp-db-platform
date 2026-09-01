@@ -10,6 +10,7 @@ require (
 	github.com/prometheus/client_golang v1.24.1
 	github.com/redis/go-redis/v9 v9.22.0
 	golang.org/x/crypto v0.55.0
+	golang.org/x/image v0.45.0
 )
 
 require (

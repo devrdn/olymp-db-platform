@@ -21,7 +21,7 @@ func newFixture() *fixture {
 	s := &sink{}
 
 	return &fixture{
-		service: settings.NewService(r, audit.New(s), unitOfWork{}),
+		service: settings.NewService(r, &images{byKind: map[string]settings.Image{}}, audit.New(s), unitOfWork{}),
 		repo:    r,
 		sink:    s,
 	}
@@ -67,3 +67,32 @@ func (s *sink) Append(_ context.Context, e audit.Entry) error {
 type unitOfWork struct{}
 
 func (unitOfWork) Do(ctx context.Context, fn func(context.Context) error) error { return fn(ctx) }
+
+// images is the picture store, in memory.
+type images struct{ byKind map[string]settings.Image }
+
+func (i *images) ByKind(_ context.Context, kind string) (settings.Image, error) {
+	img, ok := i.byKind[kind]
+	if !ok {
+		return settings.Image{}, settings.ErrImageNotFound
+	}
+	return img, nil
+}
+
+func (i *images) Save(_ context.Context, _ uuid.UUID, img settings.Image) error {
+	i.byKind[img.Kind] = img
+	return nil
+}
+
+func (i *images) Delete(_ context.Context, kind string) error {
+	delete(i.byKind, kind)
+	return nil
+}
+
+func (i *images) Present(context.Context) (map[string]string, error) {
+	out := map[string]string{}
+	for kind, img := range i.byKind {
+		out[kind] = img.SHA256
+	}
+	return out, nil
+}

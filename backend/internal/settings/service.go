@@ -3,6 +3,7 @@ package settings
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
@@ -11,14 +12,75 @@ import (
 
 // Service holds the rules of the installation's own settings.
 type Service struct {
-	repo  Repository
-	audit *audit.Recorder
-	uow   storage.UnitOfWork
+	repo   Repository
+	images ImageRepository
+	audit  *audit.Recorder
+	uow    storage.UnitOfWork
 }
 
 // NewService assembles the settings service.
-func NewService(repo Repository, recorder *audit.Recorder, uow storage.UnitOfWork) *Service {
-	return &Service{repo: repo, audit: recorder, uow: uow}
+func NewService(repo Repository, images ImageRepository, recorder *audit.Recorder, uow storage.UnitOfWork) *Service {
+	return &Service{repo: repo, images: images, audit: recorder, uow: uow}
+}
+
+// SaveImage stores a picture in one of the installation's slots.
+//
+// What arrives is bytes and a slot, and nothing else is believed: the declared
+// content type and the filename are written by whoever is uploading, so the
+// answer comes from sniffing and then decoding the bytes themselves. See
+// `inspect`, which is where the rules are.
+func (s *Service) SaveImage(ctx context.Context, actorID uuid.UUID, kind string, data []byte) (Image, error) {
+	img, err := inspect(kind, data)
+	if err != nil {
+		return Image{}, err
+	}
+
+	err = s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.images.Save(ctx, actorID, img); err != nil {
+			return fmt.Errorf("save image: %w", err)
+		}
+		return s.record(ctx, actorID, map[string]any{
+			"image":  kind,
+			"sha256": img.SHA256,
+			"size":   fmt.Sprintf("%dx%d", img.Width, img.Height),
+		})
+	})
+	if err != nil {
+		return Image{}, err
+	}
+	return img, nil
+}
+
+// RemoveImage empties a slot, so the installation falls back to the product's
+// own mark rather than keeping a picture nobody wants.
+func (s *Service) RemoveImage(ctx context.Context, actorID uuid.UUID, kind string) error {
+	if !slices.Contains(ImageKinds, kind) {
+		return fmt.Errorf("%w: %q", ErrUnknownImageKind, kind)
+	}
+
+	return s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.images.Delete(ctx, kind); err != nil {
+			return fmt.Errorf("remove image: %w", err)
+		}
+		return s.record(ctx, actorID, map[string]any{"image": kind, "removed": true})
+	})
+}
+
+// Images reports which slots hold a picture, and the hash its URL carries.
+func (s *Service) Images(ctx context.Context) (map[string]string, error) {
+	present, err := s.images.Present(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read images: %w", err)
+	}
+	return present, nil
+}
+
+// Image returns one stored picture, for serving it.
+func (s *Service) Image(ctx context.Context, kind string) (Image, error) {
+	if !slices.Contains(ImageKinds, kind) {
+		return Image{}, fmt.Errorf("%w: %q", ErrUnknownImageKind, kind)
+	}
+	return s.images.ByKind(ctx, kind)
 }
 
 // All returns every setting the product knows about, with the fallback where
