@@ -39,7 +39,7 @@ var (
 	codeAccountBlocked = httpx.NewCode("account_blocked",
 		"The account exists and the password was right, but it is blocked. Only ever sent after a correct password: the owner may know, a guesser may not.")
 	codeTooManyAttempts = httpx.NewCode("too_many_attempts",
-		"Too many sign-in attempts for this login or from this address. Try again later.")
+		"Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account. Try again later.")
 	codeWrongPassword = httpx.NewCode("wrong_password",
 		"The current password given while changing it is not correct.")
 	codeWeakPassword = httpx.NewCode("weak_password",

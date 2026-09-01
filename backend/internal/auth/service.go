@@ -9,6 +9,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/google/uuid"
 )
 
 // Brute-force limits. The per-account window stops guessing at one login; the
@@ -16,6 +17,13 @@ import (
 const (
 	maxLoginAttemptsPerAccount = 10
 	loginAttemptWindow         = 15 * time.Minute
+
+	// maxPasswordChangeAttempts caps how often a signed-in account may offer a
+	// current password while changing it. The endpoint verifies a password
+	// exactly as the login does, so without a ceiling somebody holding a
+	// borrowed session could guess the current password at leisure and turn a
+	// stolen browser tab into a permanent takeover.
+	maxPasswordChangeAttempts = 10
 
 	// DefaultMaxLoginAttemptsPerAddress is the per-address ceiling when the
 	// deployment does not state one.
@@ -217,18 +225,19 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 
 // checkThrottle applies both windows. It runs before anything else, so a
 // throttled attempt costs no hashing work either.
+//
+// The address is checked first, and the order is a defence rather than a
+// style. Every subject the limiter sees becomes a key in the cache, and the
+// account key is derived from whatever login the caller typed — an unbounded
+// space. Checked the other way round, a single machine that had already spent
+// its address budget could keep minting one new counter per invented login,
+// and on the in-process cache that is a way to fill the store until every
+// counter, and with it every sign-in, is refused. Spending the bounded key
+// (one per address) before the unbounded one caps what a refused caller can
+// create at its own address budget.
 func (s *Service) checkThrottle(ctx context.Context, cmd LoginCommand) error {
-	allowed, err := s.limiter.Allow(ctx, accountSubject(cmd.Login), maxLoginAttemptsPerAccount, loginAttemptWindow)
-	if err != nil {
-		return err
-	}
-	if !allowed {
-		s.recordFailure(ctx, cmd, "throttled_account")
-		return ErrTooManyAttempts
-	}
-
 	if cmd.IP != "" {
-		allowed, err = s.limiter.Allow(ctx, "ip:"+cmd.IP, s.maxPerAddress, loginAttemptWindow)
+		allowed, err := s.limiter.Allow(ctx, "ip:"+cmd.IP, s.maxPerAddress, loginAttemptWindow)
 		if err != nil {
 			return err
 		}
@@ -238,7 +247,43 @@ func (s *Service) checkThrottle(ctx context.Context, cmd LoginCommand) error {
 		}
 	}
 
+	allowed, err := s.limiter.Allow(ctx, accountSubject(cmd.Login), maxLoginAttemptsPerAccount, loginAttemptWindow)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		s.recordFailure(ctx, cmd, "throttled_account")
+		return ErrTooManyAttempts
+	}
+
 	return nil
+}
+
+// AllowPasswordChange counts one attempt by the account to change its own
+// password and reports ErrTooManyAttempts once the window is spent.
+//
+// It is keyed on the account rather than the address: the caller is already
+// signed in, so the address is theirs either way, and what the ceiling guards
+// against is a second person holding the same session. Every attempt counts,
+// exactly as at sign-in; ClearPasswordChangeThrottle is what a success calls.
+func (s *Service) AllowPasswordChange(ctx context.Context, userID uuid.UUID) error {
+	allowed, err := s.limiter.Allow(ctx, passwordChangeSubject(userID), maxPasswordChangeAttempts, loginAttemptWindow)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return ErrTooManyAttempts
+	}
+	return nil
+}
+
+// ClearPasswordChangeThrottle forgets the account's attempts after a
+// successful change, so somebody who mistyped their current password twice and
+// then got it right does not carry the count into the next window.
+func (s *Service) ClearPasswordChangeThrottle(ctx context.Context, userID uuid.UUID) {
+	if err := s.limiter.Reset(ctx, passwordChangeSubject(userID)); err != nil {
+		s.log.WarnContext(ctx, "could not reset the password-change throttle", "error", err)
+	}
 }
 
 // upgradeHash replaces a digest made with weaker parameters. A failure here
@@ -276,6 +321,8 @@ func (s *Service) record(ctx context.Context, entry audit.Entry) {
 }
 
 func accountSubject(login string) string { return "login:" + normalizeLogin(login) }
+
+func passwordChangeSubject(userID uuid.UUID) string { return "pwchange:" + userID.String() }
 
 func mustHash(plaintext string) string {
 	hash, err := password.Hash(plaintext)

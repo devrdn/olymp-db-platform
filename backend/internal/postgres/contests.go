@@ -180,7 +180,9 @@ func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Cont
 		          WHERE reg.contest_id = c.id AND reg.user_id = $4))
 		ORDER BY c.starts_at DESC NULLS LAST, c.created_at DESC
 		LIMIT $5 OFFSET $6`,
-		f.Query, f.Status, nilUUID(f.ManagedBy), nilUUID(f.VisibleTo), f.Limit, f.Offset, f.Enrolled)
+		// The search text is typed by a person and lands in an ILIKE pattern,
+		// so its metacharacters are neutralised (see like.go).
+		escapeLike(f.Query), f.Status, nilUUID(f.ManagedBy), nilUUID(f.VisibleTo), f.Limit, f.Offset, f.Enrolled)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list contests: %w", err)
 	}

@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
@@ -118,20 +117,12 @@ func (r *Users) Create(ctx context.Context, u users.User) (users.User, error) {
 	return created, nil
 }
 
-// escapeLike makes a search string literal inside a LIKE pattern. Without it
-// '%' in the query matches every row and a trailing backslash is a syntax
-// error Postgres surfaces as a 500.
-func escapeLike(s string) string {
-	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-	return replacer.Replace(s)
-}
-
 // List returns a page of accounts together with the total number of matches.
 func (r *Users) List(ctx context.Context, f users.Filter) ([]users.User, int, error) {
 	f = f.Normalize()
 	q := r.querier(ctx)
 	// The pattern is parameterized (no injection possible); escaping is about
-	// meaning, not safety: the admin's text must match literally.
+	// meaning, not safety: the admin's text must match literally (see like.go).
 	needle := escapeLike(f.Query)
 
 	// The filter is passed as parameters, never interpolated: the search box is

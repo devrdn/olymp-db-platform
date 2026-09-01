@@ -425,7 +425,7 @@ func (h *UsersHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, users.ErrCannotActOnSelf):
 		httpx.Error(w, r, http.StatusBadRequest, codeCannotActOnSelf,
 			"This operation cannot be performed on your own account")
-	case errors.Is(err, users.ErrRosterTooLarge):
+	case errors.Is(err, users.ErrRosterTooLarge), errors.Is(err, users.ErrInvalidAccount):
 		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 	case errors.Is(err, users.ErrWeakPassword), errors.Is(err, users.ErrSamePassword):
 		httpx.Error(w, r, http.StatusBadRequest, codeInvalidPassword, err.Error())

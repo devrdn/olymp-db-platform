@@ -206,6 +206,21 @@ func (h *AuthHandler) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Throttled like a sign-in, because it verifies a password like one. The
+	// session proves possession of a browser, not knowledge of the password,
+	// and this is the endpoint where that difference is tested.
+	switch err := h.service.AllowPasswordChange(r.Context(), identity.UserID); {
+	case err == nil:
+	case errors.Is(err, auth.ErrTooManyAttempts):
+		httpx.Error(w, r, http.StatusTooManyRequests, codeTooManyAttempts,
+			"Too many attempts. Try again in a few minutes.")
+		return
+	default:
+		h.log.ErrorContext(r.Context(), "password change throttle failed", "error", err)
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+		return
+	}
+
 	err := h.passwords.ChangePassword(r.Context(), users.ChangePasswordCommand{
 		UserID:      identity.UserID,
 		OldPassword: req.OldPassword,
@@ -213,6 +228,7 @@ func (h *AuthHandler) changePassword(w http.ResponseWriter, r *http.Request) {
 	})
 	switch {
 	case err == nil:
+		h.service.ClearPasswordChangeThrottle(r.Context(), identity.UserID)
 	case errors.Is(err, users.ErrWrongPassword):
 		httpx.Error(w, r, http.StatusBadRequest, codeWrongPassword, "Current password is incorrect")
 		return

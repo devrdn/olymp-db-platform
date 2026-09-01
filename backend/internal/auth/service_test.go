@@ -357,3 +357,56 @@ func TestLogoutOfAnUnknownSessionIsNotAnError(t *testing.T) {
 		t.Errorf("Logout() with a stale token = %v, want nil", err)
 	}
 }
+
+func TestAddressThrottleIsSpentBeforeAccountCountersAreCreated(t *testing.T) {
+	// Every login somebody types becomes a counter key, so a caller whose
+	// address is already refused must not be able to keep minting new ones by
+	// inventing logins: on the in-process cache that is how the store fills
+	// until every counter — and every sign-in — is refused.
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+
+	service := NewService(ServiceConfig{
+		Users:                 userstest.New(),
+		Sessions:              NewSessionStore(c, time.Hour),
+		Audit:                 audit.New(&collectingSink{}),
+		Limiter:               NewLimiter(c),
+		Logger:                logging.New("error", io.Discard),
+		MaxAttemptsPerAddress: 2,
+	})
+	ctx := context.Background()
+
+	for i := range 10 {
+		_, _ = service.Login(ctx, LoginCommand{
+			Login: "invented-" + string(rune('a'+i)), Password: "whatever", IP: "10.0.0.9",
+		})
+	}
+
+	// One address counter, plus an account counter for each of the two attempts
+	// the address was allowed. The eight refused attempts left nothing behind.
+	if got := c.Len(); got != 3 {
+		t.Errorf("the cache holds %d counters, want 3: refused attempts created account keys", got)
+	}
+}
+
+func TestPasswordChangeIsThrottledPerAccount(t *testing.T) {
+	// The endpoint verifies a password exactly as sign-in does, so a borrowed
+	// session must not be a place to guess the current one at leisure.
+	f := newFixture(t)
+	ctx := context.Background()
+
+	for range maxPasswordChangeAttempts {
+		if err := f.service.AllowPasswordChange(ctx, f.user.ID); err != nil {
+			t.Fatalf("AllowPasswordChange() refused within the limit: %v", err)
+		}
+	}
+	if err := f.service.AllowPasswordChange(ctx, f.user.ID); !errors.Is(err, ErrTooManyAttempts) {
+		t.Errorf("err = %v, want ErrTooManyAttempts once the window is spent", err)
+	}
+
+	// A success forgets the attempts, as it does at sign-in.
+	f.service.ClearPasswordChangeThrottle(ctx, f.user.ID)
+	if err := f.service.AllowPasswordChange(ctx, f.user.ID); err != nil {
+		t.Errorf("AllowPasswordChange() after a reset = %v, want nil", err)
+	}
+}

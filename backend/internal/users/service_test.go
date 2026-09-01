@@ -783,3 +783,38 @@ func TestTheLastAdministratorCannotBeBlocked(t *testing.T) {
 		t.Errorf("Block() = %v, want it to refuse the last administrator", err)
 	}
 }
+
+func TestCreateRefusesAccountDetailsItCannotStore(t *testing.T) {
+	// Each of these used to surface as an undeclared error, which the HTTP
+	// layer could only answer with a 500; now they are one sentinel the
+	// handler maps to a bad request.
+	f := newFixture(t)
+	cases := map[string]users.CreateCommand{
+		"empty login":    {FullName: "Somebody"},
+		"empty name":     {Login: "somebody"},
+		"overlong login": {Login: strings.Repeat("a", users.MaxLoginLength+1), FullName: "Somebody"},
+		"overlong name":  {Login: "somebody", FullName: strings.Repeat("n", users.MaxFullNameLength+1)},
+		"not an email":   {Login: "somebody", FullName: "Somebody", Email: "not-an-address"},
+		"email with a display name": {
+			Login: "somebody", FullName: "Somebody", Email: "Somebody <s@example.edu>",
+		},
+	}
+
+	for name, cmd := range cases {
+		cmd.ActorID = f.actor
+		if _, err := f.service.Create(context.Background(), cmd); !errors.Is(err, users.ErrInvalidAccount) {
+			t.Errorf("%s: Create() = %v, want ErrInvalidAccount", name, err)
+		}
+	}
+}
+
+func TestUpdateProfileRefusesAMalformedEmail(t *testing.T) {
+	f := newFixture(t)
+	user := f.addUser(t, "petrov", "correct horse battery staple")
+
+	err := f.service.UpdateProfile(context.Background(), f.actor, user.ID, "Pyotr Petrov", "nope@")
+
+	if !errors.Is(err, users.ErrInvalidAccount) {
+		t.Errorf("UpdateProfile() = %v, want ErrInvalidAccount", err)
+	}
+}

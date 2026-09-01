@@ -131,7 +131,7 @@
     },
     {
       "code": "too_many_attempts",
-      "meaning": "Too many sign-in attempts for this login or from this address. Try again later."
+      "meaning": "Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account. Try again later."
     },
     {
       "code": "unauthenticated",

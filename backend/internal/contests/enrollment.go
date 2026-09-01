@@ -152,6 +152,20 @@ const (
 	SkipAlreadyEnrolled = "already_enrolled"
 )
 
+// maxRosterEntries bounds one import of participants.
+//
+// Every entry is an account lookup, an insert and an audit line, all inside
+// one transaction that holds its locks until the last row. The request body
+// alone would allow tens of thousands of identifiers, which is a way for
+// somebody who legitimately holds participant.manage to pin a database
+// connection for as long as the statement timeout allows. A whole faculty
+// year is a few hundred people, so the bound is far above honest use and far
+// below what turns an import into a lever.
+const maxRosterEntries = 1000
+
+// ErrRosterTooLarge reports an import above that bound.
+var ErrRosterTooLarge = errors.New("too many entries in one roster")
+
 // AddParticipantsCommand adds people to a contest on behalf of its staff.
 //
 // Logins as well as identifiers because the practical input is a roster pasted
@@ -212,6 +226,11 @@ func (s *Service) Participants(ctx context.Context, contestID uuid.UUID, f Parti
 // The network restriction is not applied here: it governs where a participant
 // may work from, not where the organizer sits while preparing the roster.
 func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsCommand) (AddParticipantsResult, error) {
+	if entries := len(cmd.UserIDs) + len(cmd.Logins); entries > maxRosterEntries {
+		return AddParticipantsResult{}, fmt.Errorf("%w: %d entries, at most %d",
+			ErrRosterTooLarge, entries, maxRosterEntries)
+	}
+
 	c, err := s.contests.ByID(ctx, cmd.ContestID)
 	if err != nil {
 		return AddParticipantsResult{}, err

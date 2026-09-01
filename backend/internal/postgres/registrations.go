@@ -60,7 +60,8 @@ func (r *Registrations) List(ctx context.Context, contestID uuid.UUID, f contest
 		  AND ($3 = '' OR u.login ILIKE '%' || $3 || '%' OR u.full_name ILIKE '%' || $3 || '%')
 		ORDER BY u.login
 		LIMIT $4 OFFSET $5`,
-		contestID, f.Status, f.Query, f.Limit, f.Offset)
+		// Typed by a person and used as an ILIKE pattern, so escaped (see like.go).
+		contestID, f.Status, escapeLike(f.Query), f.Limit, f.Offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list participants: %w", err)
 	}
