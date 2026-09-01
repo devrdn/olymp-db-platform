@@ -217,6 +217,29 @@ func (r *Users) RecordLogin(ctx context.Context, id uuid.UUID, at time.Time) err
 	return r.exec(ctx, `UPDATE users SET last_login_at = $2 WHERE id = $1`, id, at)
 }
 
+// Roles lists the installation's global roles, ordered by code so the
+// interface renders them the same way twice.
+func (r *Users) Roles(ctx context.Context) ([]users.Role, error) {
+	rows, err := r.querier(ctx).Query(ctx, `SELECT code, name FROM roles ORDER BY code`)
+	if err != nil {
+		return nil, fmt.Errorf("list roles: %w", err)
+	}
+	defer rows.Close()
+
+	catalogue := []users.Role{}
+	for rows.Next() {
+		var role users.Role
+		if err := rows.Scan(&role.Code, &role.Name); err != nil {
+			return nil, fmt.Errorf("scan role: %w", err)
+		}
+		catalogue = append(catalogue, role)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list roles: %w", err)
+	}
+	return catalogue, nil
+}
+
 // ReplaceRoles sets the account's global roles to exactly these codes.
 //
 // Delete-then-insert rather than a diff: the set is tiny, and both statements

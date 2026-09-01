@@ -83,6 +83,17 @@ type Repository interface {
 	ReplaceRoles(ctx context.Context, id uuid.UUID, roleCodes []string) error
 }
 
+// Role is one of the installation's global roles, as a person reads it.
+//
+// The code is what the authorisation model works in; the name is what an
+// administrator picks from a list. Both come from the `roles` table rather
+// than from a constant, because adding a role is meant to be data — a
+// hard-coded list in any client quietly takes that back.
+type Role struct {
+	Code string
+	Name string
+}
+
 // Filter selects a page of accounts.
 type Filter struct {
 	// Query matches a substring of the login, full name or email.

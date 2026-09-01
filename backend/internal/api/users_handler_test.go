@@ -55,7 +55,7 @@ func newAPIFixture(t *testing.T, permissions ...string) *apiFixture {
 	service := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{})
 
 	router := chi.NewRouter()
-	api.NewUsersHandler(service, mw, log).Mount(router)
+	api.NewUsersHandler(service, repo, mw, log).Mount(router)
 
 	return &apiFixture{
 		router: router,
@@ -341,4 +341,49 @@ func TestImportEndpointNeedsThePermission(t *testing.T) {
 // UserRef is the slice of the account response these tests read.
 type UserRef struct {
 	Login string `json:"login"`
+}
+
+func TestRolesEndpointPublishesTheRoleCatalogue(t *testing.T) {
+	// The interface has to offer roles when creating an account, and the codes
+	// are rows in a table rather than an enum — the whole point of the
+	// permission model is that a new role is data (section 11). Hard-coding
+	// "student, organizer, admin" in the frontend would quietly undo that: the
+	// day somebody adds a role, one of the two lists is wrong and neither says
+	// so.
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+
+	rec := f.do(http.MethodGet, "/roles", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Items []struct {
+			Code string `json:"code"`
+			Name string `json:"name"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if len(body.Items) == 0 {
+		t.Fatal("the catalogue is empty; the interface has nothing to offer")
+	}
+	for _, item := range body.Items {
+		if item.Code == "" || item.Name == "" {
+			t.Errorf("role %+v is missing a code or a name", item)
+		}
+	}
+}
+
+func TestRolesEndpointIsClosedToAnAccountThatCannotManageAccounts(t *testing.T) {
+	// Which roles exist is a description of how this installation is
+	// organised. It goes with the screen that uses it and with nothing else.
+	f := newAPIFixture(t)
+
+	rec := f.do(http.MethodGet, "/roles", "")
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -17,22 +18,40 @@ import (
 // userIDParam names the account in the URL.
 const userIDParam = "userID"
 
+// RoleCatalog lists the roles an account may hold.
+//
+// Declared here, by the consumer, and one method wide: this screen offers a
+// list to pick from and has no business with anything else about roles.
+type RoleCatalog interface {
+	Roles(ctx context.Context) ([]users.Role, error)
+}
+
 // UsersHandler serves the account management endpoints. Every route requires the
 // installation-wide users.manage permission: these operations are not scoped
 // to a contest, and running one must never grant power over accounts.
 type UsersHandler struct {
 	service *users.Service
+	roles   RoleCatalog
 	mw      *auth.Middleware
 	log     *slog.Logger
 }
 
 // NewUsersHandler assembles the account endpoints.
-func NewUsersHandler(service *users.Service, mw *auth.Middleware, log *slog.Logger) *UsersHandler {
-	return &UsersHandler{service: service, mw: mw, log: log}
+func NewUsersHandler(service *users.Service, roles RoleCatalog, mw *auth.Middleware, log *slog.Logger) *UsersHandler {
+	return &UsersHandler{service: service, roles: roles, mw: mw, log: log}
 }
 
-// Mount registers the routes under /users.
+// Mount registers the routes under /users, and the role catalogue beside them.
 func (h *UsersHandler) Mount(r chi.Router) {
+	// A sibling of /users rather than /users/roles: it describes the
+	// installation, not an account. Behind the same permission, because which
+	// roles exist is a description of how this university is organised and it
+	// goes with the screen that uses it.
+	r.Route("/roles", func(r chi.Router) {
+		r.Use(h.mw.Authenticate, h.mw.RequirePermission(rbac.PermissionUsersManage))
+		r.Get("/", h.listRoles)
+	})
+
 	r.Route("/users", func(r chi.Router) {
 		r.Use(h.mw.Authenticate, h.mw.RequirePermission(rbac.PermissionUsersManage))
 
@@ -49,6 +68,37 @@ func (h *UsersHandler) Mount(r chi.Router) {
 			r.Put("/roles", h.replaceRoles)
 		})
 	})
+}
+
+// RoleResponse is one role as a person picks it from a list.
+type RoleResponse struct {
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
+type roleListResponse struct {
+	Items []RoleResponse `json:"items"`
+}
+
+// listRoles publishes the roles an account may hold.
+//
+// It exists so the interface never hard-codes "student, organizer, admin".
+// Roles are rows precisely so a new one is data; a list repeated in the client
+// takes that back, and the day somebody adds a role one of the two copies is
+// wrong without saying so.
+func (h *UsersHandler) listRoles(w http.ResponseWriter, r *http.Request) {
+	catalogue, err := h.roles.Roles(r.Context())
+	if err != nil {
+		h.log.ErrorContext(r.Context(), "could not read the role catalogue", "error", err)
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+		return
+	}
+
+	items := make([]RoleResponse, 0, len(catalogue))
+	for _, role := range catalogue {
+		items = append(items, RoleResponse{Code: role.Code, Name: role.Name})
+	}
+	httpx.JSON(w, r, http.StatusOK, roleListResponse{Items: items})
 }
 
 // UserResponse is the account as the API describes it.

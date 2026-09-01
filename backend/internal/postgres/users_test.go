@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -67,4 +68,26 @@ func TestEscapeLikeNeutralisesPatternMetacharacters(t *testing.T) {
 			t.Errorf("escapeLike(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+func TestRoleCatalogueCarriesWhatTheMigrationSeeded(t *testing.T) {
+	// The interface offers these, so an empty or misnamed catalogue is a
+	// screen with nothing to pick. They ship as a migration rather than as
+	// optional seed data, which is what makes asserting on them fair.
+	withTx(t, func(ctx context.Context) {
+		catalogue, err := NewUsers(testPool).Roles(ctx)
+		if err != nil {
+			t.Fatalf("Roles() = %v", err)
+		}
+
+		byCode := map[string]string{}
+		for _, role := range catalogue {
+			byCode[role.Code] = role.Name
+		}
+		for _, code := range []string{"student", "organizer", "admin"} {
+			if byCode[code] == "" {
+				t.Errorf("role %q is missing or unnamed; catalogue = %+v", code, catalogue)
+			}
+		}
+	})
 }

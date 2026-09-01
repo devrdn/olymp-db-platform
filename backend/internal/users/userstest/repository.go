@@ -6,6 +6,7 @@ package userstest
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -189,6 +190,24 @@ func (r *Repository) BumpSessionGeneration(_ context.Context, id uuid.UUID) (int
 
 func (r *Repository) RecordLogin(_ context.Context, id uuid.UUID, at time.Time) error {
 	return r.mutate(id, func(u *users.User) { u.LastLoginAt = &at })
+}
+
+// Roles lists the roles GrantRole has defined, ordered like the real one.
+func (r *Repository) Roles(_ context.Context) ([]users.Role, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	codes := make([]string, 0, len(r.permissions))
+	for code := range r.permissions {
+		codes = append(codes, code)
+	}
+	slices.Sort(codes)
+
+	catalogue := make([]users.Role, 0, len(codes))
+	for _, code := range codes {
+		catalogue = append(catalogue, users.Role{Code: code, Name: code})
+	}
+	return catalogue, nil
 }
 
 func (r *Repository) ReplaceRoles(_ context.Context, id uuid.UUID, roleCodes []string) error {
