@@ -174,7 +174,14 @@ export function MarkdownEditor({
           // Filling the screen means filling it: the box takes the height it
           // has been given and the text scrolls inside, rather than the page
           // scrolling under a surface meant to be the whole of it.
-          full ? "min-h-0 flex-1 overflow-y-auto px-4 py-3.5" : "min-h-40",
+          //
+          // The left gutter is not decoration. Scrolling makes this a scroll
+          // container, and `overflow-y: auto` computes `overflow-x: auto` with
+          // it — so what sits outside the box is clipped rather than merely
+          // overflowing. The handle for dragging a block sits to the left of
+          // the paragraph it belongs to, about 48px out; with no room for it
+          // inside the box it is clipped away and the control vanishes.
+          full ? "min-h-0 flex-1 overflow-y-auto py-3.5 pr-4 pl-14" : "min-h-40",
         )}
       />
       <input type="hidden" name={name} value={markdown} />
