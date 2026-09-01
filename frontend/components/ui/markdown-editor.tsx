@@ -162,7 +162,18 @@ export function MarkdownEditor({
   return (
     <div
       className={cn(
-        "flex flex-col",
+        // `isolate` on every editor, expanded or not, and it is what makes the
+        // expanded one actually cover the others.
+        //
+        // Crepe's own stylesheet raises parts of itself a long way: a code
+        // block's chrome sits at z-index 999, a table's controls at 100 and
+        // 50. `.milkdown` has no z-index of its own, so none of that is
+        // contained — it all competes in the page's root stacking context and
+        // paints straight through an overlay at 40. Chasing the number would
+        // mean chasing a dependency's internals; isolating each editor gives
+        // its z-indexes a ceiling of their own instead, and the wrappers then
+        // compete on their own terms.
+        "isolate flex flex-col",
         // Fixed rather than re-rendered somewhere else: the node the editor is
         // bound to keeps its place in the tree and only moves on screen.
         full && "fixed inset-0 z-40 bg-bg p-4 narrow:p-8",
