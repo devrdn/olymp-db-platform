@@ -10,23 +10,24 @@ import { MATCH_KINDS, QUESTION_KINDS, type Question } from "@/lib/api/content";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
-import {
-  saveAnswersAction,
-  saveQuestionAction,
-  saveTextsAction,
-  type QuestionState,
-} from "./actions";
+import { saveQuestionAction, type QuestionState } from "./actions";
 
 /**
- * One question, in three forms that save separately.
+ * One question, in one form with one save.
  *
- * Separately because they are three endpoints with three different meanings,
- * and because an author fixing a typo in the Romanian body should not have to
- * re-submit the reference answers to do it. A single "save everything" button
- * would also make a failure in one part discard the other two.
+ * It was three forms saving separately, on the reasoning that they were three
+ * endpoints. That had the argument backwards: the endpoints were three because
+ * nothing had put them together, and an author never edits a third of a
+ * question — they edit the question.
  *
- * The order is the order the work happens in: what the question *is*, then
- * what it says, then what counts as right.
+ * Three saves also made two things impossible. A failure in the second left
+ * the first already committed, under a button that had said "saved". And a
+ * change of kind could not be expressed at all: turning a typed question into
+ * a choice question needs the kind, the options and the answers to move
+ * together, and sent separately each half was refused on account of the other.
+ *
+ * The order is still the order the work happens in: what the question *is*,
+ * then what it says, then what counts as right.
  */
 export function QuestionEditor({
   contestId,
@@ -47,10 +48,22 @@ export function QuestionEditor({
   const [choiceIds, setChoiceIds] = useState<string[]>(question.choiceIds);
   const [kind, setKind] = useState(question.kind);
 
+  const [state, formAction, pending] = useActionState<QuestionState, FormData>(
+    saveQuestionAction,
+    {},
+  );
+
   return (
-    <div className="flex flex-col gap-12">
-      <ShapeForm
-        contestId={contestId}
+    // One form and one save. The question is one thing an author edits, and it
+    // used to be saved in three requests — three chances for the second to
+    // fail after the first had landed. It is also the only shape in which a
+    // change of kind and its answers can be expressed at all: sent separately,
+    // each half was refused on account of the other.
+    <form action={formAction} className="flex flex-col gap-12">
+      <input type="hidden" name="contestId" value={contestId} />
+      <input type="hidden" name="questionId" value={question.id} />
+
+      <ShapeSection
         question={question}
         editable={editable}
         dict={dict}
@@ -60,8 +73,7 @@ export function QuestionEditor({
         onChoiceIds={setChoiceIds}
       />
 
-      <TextsForm
-        contestId={contestId}
+      <TextsSection
         question={question}
         languages={languages}
         choiceIds={kind === "choice" ? choiceIds : []}
@@ -69,15 +81,20 @@ export function QuestionEditor({
         dict={dict}
       />
 
-      <AnswersForm
-        contestId={contestId}
+      <AnswersSection
         question={question}
         kind={kind}
         choiceIds={choiceIds}
         editable={editable}
         dict={dict}
       />
-    </div>
+
+      {/* One save row for the whole question, at the end of everything it
+          saves — not three, each claiming a third of the same object. */}
+      <div className="border-t border-line pt-5">
+        <SaveRow state={state} pending={pending} editable={editable} dict={dict} />
+      </div>
+    </form>
   );
 }
 
@@ -140,8 +157,7 @@ function SaveRow({
   );
 }
 
-function ShapeForm({
-  contestId,
+function ShapeSection({
   question,
   editable,
   dict,
@@ -150,7 +166,6 @@ function ShapeForm({
   choiceIds,
   onChoiceIds,
 }: {
-  contestId: string;
   question: Question;
   editable: boolean;
   dict: Dictionary;
@@ -160,17 +175,9 @@ function ShapeForm({
   onChoiceIds: (value: string[]) => void;
 }) {
   const t = dict.workspace.question;
-  const [state, formAction, pending] = useActionState<QuestionState, FormData>(
-    saveQuestionAction,
-    {},
-  );
-
   return (
-    <form action={formAction} className="contents">
+    <>
       <Section title={t.shape.heading} hint={t.shape.hint}>
-        <input type="hidden" name="contestId" value={contestId} />
-        <input type="hidden" name="questionId" value={question.id} />
-
         <fieldset className="flex flex-col gap-2.5">
           <legend className="pb-2 font-mono text-label text-ink-3 uppercase">{t.shape.kind}</legend>
           {QUESTION_KINDS.map((value) => (
@@ -253,21 +260,18 @@ function ShapeForm({
         </label>
         <p className="-mt-3 max-w-body text-small text-ink-3">{t.shape.visibleHint}</p>
 
-        <SaveRow state={state} pending={pending} editable={editable} dict={dict} />
       </Section>
-    </form>
+    </>
   );
 }
 
-function TextsForm({
-  contestId,
+function TextsSection({
   question,
   languages,
   choiceIds,
   editable,
   dict,
 }: {
-  contestId: string;
   question: Question;
   languages: string[];
   choiceIds: string[];
@@ -275,14 +279,9 @@ function TextsForm({
   dict: Dictionary;
 }) {
   const t = dict.workspace.question;
-  const [state, formAction, pending] = useActionState<QuestionState, FormData>(saveTextsAction, {});
-
   return (
-    <form action={formAction} className="contents">
+    <>
       <Section title={t.texts.heading} hint={t.texts.hint}>
-        <input type="hidden" name="contestId" value={contestId} />
-        <input type="hidden" name="questionId" value={question.id} />
-
         {languages.length === 0 ? (
           <p className="max-w-body text-body text-ink-3">{dict.workspace.story.noLanguages}</p>
         ) : (
@@ -324,21 +323,18 @@ function TextsForm({
           </div>
         )}
 
-        <SaveRow state={state} pending={pending} editable={editable} dict={dict} />
       </Section>
-    </form>
+    </>
   );
 }
 
-function AnswersForm({
-  contestId,
+function AnswersSection({
   question,
   kind,
   choiceIds,
   editable,
   dict,
 }: {
-  contestId: string;
   question: Question;
   kind: string;
   choiceIds: string[];
@@ -346,21 +342,13 @@ function AnswersForm({
   dict: Dictionary;
 }) {
   const t = dict.workspace.question;
-  const [state, formAction, pending] = useActionState<QuestionState, FormData>(
-    saveAnswersAction,
-    {},
-  );
-
   // One spare row, so adding an answer needs no button and no client state.
   const rows = [...question.answers, { id: undefined, matchKind: "exact" as const, value: "" }];
   const [extra, setExtra] = useState(0);
 
   return (
-    <form action={formAction} className="contents">
+    <>
       <Section title={t.answers.heading} hint={t.answers.hint}>
-        <input type="hidden" name="contestId" value={contestId} />
-        <input type="hidden" name="questionId" value={question.id} />
-
         <div className="flex flex-col gap-3">
           {[...rows, ...Array.from({ length: extra }, () => null)].map((answer, index) => (
             <div key={index} className="flex flex-wrap items-center gap-3">
@@ -438,8 +426,7 @@ function AnswersForm({
             because a control that is absent has to be explained. */}
         <p className="max-w-body text-small text-ink-3">{t.answers.removeHint}</p>
 
-        <SaveRow state={state} pending={pending} editable={editable} dict={dict} />
       </Section>
-    </form>
+    </>
   );
 }

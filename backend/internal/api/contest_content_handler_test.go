@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/google/uuid"
 )
 
@@ -193,4 +194,64 @@ func (f *contestFixture) addQuestion(t *testing.T, contestID uuid.UUID) string {
 
 func questionPath(contestID uuid.UUID, questionID string) string {
 	return "/contests/" + contestID.String() + "/questions/" + questionID
+}
+
+func TestSavingAQuestionWholeAnswersWithIt(t *testing.T) {
+	f := newContestFixture(t, rbac.PermissionContestCreate)
+	c := f.ownedContest(t, contests.StatusDraft)
+	q := f.stores.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 1, Kind: contests.KindText, Points: 5, IsVisible: true,
+		Answers: []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the butler"}},
+	})
+
+	rec := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/questions/"+q.ID.String(), `{
+		"kind": "text",
+		"points": 8,
+		"texts": {"en": {"body_md": "Who did it?"}},
+		"answers": [{"match_kind": "exact_ci", "value": "the gardener"}]
+	}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	body := decode(t, rec)
+	if body["points"] != float64(8) {
+		t.Errorf("points = %v, want 8", body["points"])
+	}
+}
+
+func TestSavingAQuestionRefusesAnAnswerTheOptionsDoNotHave(t *testing.T) {
+	// The one check the three narrower endpoints could not make between them:
+	// the answers are compared against the question as it will be.
+	f := newContestFixture(t, rbac.PermissionContestCreate)
+	c := f.ownedContest(t, contests.StatusDraft)
+	q := f.stores.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 1, Kind: contests.KindText, Points: 5, IsVisible: true,
+	})
+
+	rec := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/questions/"+q.ID.String(), `{
+		"kind": "choice",
+		"points": 5,
+		"choice_ids": ["a", "b"],
+		"answers": [{"match_kind": "exact", "value": "z"}]
+	}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSavingAQuestionNeedsThePermissionToEdit(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.stores.SeedContest(contests.StatusDraft)
+	q := f.stores.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 1, Kind: contests.KindText, Points: 5, IsVisible: true,
+	})
+
+	rec := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/questions/"+q.ID.String(),
+		`{"kind": "text", "points": 5}`)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
 }

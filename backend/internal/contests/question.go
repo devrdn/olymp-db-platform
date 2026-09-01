@@ -342,6 +342,135 @@ func (s *Service) UpdateQuestion(ctx context.Context, cmd QuestionCommand) (Ques
 	return updated, nil
 }
 
+// SaveQuestionCommand is a question as its author edits it: its own fields,
+// its wording in every language and its reference answers, together.
+type SaveQuestionCommand struct {
+	ActorID     uuid.UUID
+	ContestID   uuid.UUID
+	QuestionID  uuid.UUID
+	Kind        string
+	Points      int
+	MaxAttempts *int
+	IsVisible   *bool
+	ChoiceIDs   []string
+	Texts       map[string]QuestionText
+	Answers     []Answer
+}
+
+// SaveQuestion replaces a question whole, in one transaction.
+//
+// The three narrower operations remain, and each is still useful on its own —
+// fixing a reference answer without reopening the wording, for instance. What
+// they could not do is the change that touches more than one of them at once,
+// and that was not merely awkward:
+//
+// Converting a text question into a choice question was impossible. Updating
+// the question checked the *existing* answers against the *new* kind and
+// refused; saving the answers checked the *new* answers against the *old* kind
+// and refused. Whichever way round an author went, one half of the change
+// rejected the other. Here both halves are known at once, so the answers are
+// checked against the question as it will be.
+//
+// Everything is validated before anything is written, and the writes share one
+// transaction — so a save either lands whole or leaves the question exactly as
+// it was. Three requests from a browser could not promise that: the second was
+// free to fail after the first had committed, leaving a half-saved question
+// under a button that had already said "saved".
+func (s *Service) SaveQuestion(ctx context.Context, cmd SaveQuestionCommand) (Question, error) {
+	if _, err := s.editableContest(ctx, cmd.ContestID); err != nil {
+		return Question{}, err
+	}
+	current, err := s.questionOf(ctx, cmd.ContestID, cmd.QuestionID)
+	if err != nil {
+		return Question{}, err
+	}
+
+	updated := current
+	updated.Kind = orDefault(cmd.Kind, current.Kind)
+	updated.Points = cmd.Points
+	updated.MaxAttempts = cmd.MaxAttempts
+	updated.ChoiceIDs = cmd.ChoiceIDs
+	if cmd.IsVisible != nil {
+		updated.IsVisible = *cmd.IsVisible
+	}
+
+	if err := updated.Validate(); err != nil {
+		return Question{}, err
+	}
+	// Against the question as it will be, which is the whole point.
+	if err := validateAnswersFor(updated, cmd.Answers); err != nil {
+		return Question{}, err
+	}
+	if err := s.checkLanguageCodes(ctx, textLanguages(cmd.Texts)); err != nil {
+		return Question{}, err
+	}
+
+	payload := audit.Between(current.auditFields(), updated.auditFields()).Payload()
+	payload["question_id"] = updated.ID.String()
+	if len(cmd.Texts) > 0 {
+		payload["languages"] = textLanguages(cmd.Texts)
+	}
+
+	// Whether the reference answers actually moved. Compared before the write,
+	// because afterwards there is nothing left to compare against.
+	answersMoved := !sameAnswers(current.Answers, cmd.Answers)
+
+	err = s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.questions.Update(ctx, updated); err != nil {
+			return err
+		}
+		if cmd.Texts != nil {
+			if err := s.questions.ReplaceTexts(ctx, updated.ID, cmd.Texts); err != nil {
+				return err
+			}
+			updated.Texts = cmd.Texts
+		}
+		if answersMoved {
+			if err := s.questions.ReplaceAnswers(ctx, updated.ID, cmd.Answers); err != nil {
+				return err
+			}
+			updated.Answers = cmd.Answers
+		}
+
+		if err := s.record(ctx, cmd.ActorID, audit.ActionQuestionUpdate, cmd.ContestID, payload); err != nil {
+			return err
+		}
+		if !answersMoved {
+			return nil
+		}
+		// Its own line, in the same transaction. "Who changed the reference
+		// answers after publication" is a question the trail is built to
+		// answer with an indexed filter (section 9), and folding this into the
+		// entry above would take that away. The values never appear — only how
+		// many there are (section 9.2).
+		return s.record(ctx, cmd.ActorID, audit.ActionAnswersChange, cmd.ContestID, map[string]any{
+			"question_id": updated.ID.String(),
+			"count":       len(cmd.Answers),
+		})
+	})
+	if err != nil {
+		return Question{}, err
+	}
+	return updated, nil
+}
+
+// sameAnswers reports whether two sets of reference answers are the same, in
+// the same order.
+//
+// Order counts because it is what an author sees, and reordering is a change
+// worth a line in the trail even though it scores identically.
+func sameAnswers(before, after []Answer) bool {
+	if len(before) != len(after) {
+		return false
+	}
+	for i := range before {
+		if before[i].MatchKind != after[i].MatchKind || before[i].Value != after[i].Value {
+			return false
+		}
+	}
+	return true
+}
+
 // DeleteQuestion removes a question from a contest.
 func (s *Service) DeleteQuestion(ctx context.Context, actorID, contestID, questionID uuid.UUID) error {
 	if _, err := s.editableContest(ctx, contestID); err != nil {
