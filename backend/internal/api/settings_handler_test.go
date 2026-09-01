@@ -1,8 +1,11 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -49,6 +52,35 @@ func (r *settingsRepo) Save(_ context.Context, _ uuid.UUID, values settings.Valu
 	return nil
 }
 
+// settingsImages is the picture store, in memory.
+type settingsImages struct{ byKind map[string]settings.Image }
+
+func (i *settingsImages) ByKind(_ context.Context, kind string) (settings.Image, error) {
+	img, ok := i.byKind[kind]
+	if !ok {
+		return settings.Image{}, settings.ErrImageNotFound
+	}
+	return img, nil
+}
+
+func (i *settingsImages) Save(_ context.Context, _ uuid.UUID, img settings.Image) error {
+	i.byKind[img.Kind] = img
+	return nil
+}
+
+func (i *settingsImages) Delete(_ context.Context, kind string) error {
+	delete(i.byKind, kind)
+	return nil
+}
+
+func (i *settingsImages) Present(context.Context) (map[string]string, error) {
+	out := map[string]string{}
+	for kind, img := range i.byKind {
+		out[kind] = img.SHA256
+	}
+	return out, nil
+}
+
 type settingsUnitOfWork struct{}
 
 func (settingsUnitOfWork) Do(ctx context.Context, fn func(context.Context) error) error {
@@ -80,7 +112,8 @@ func newSettingsFixture(t *testing.T, permissions ...string) *settingsFixture {
 	})
 
 	store := &settingsRepo{values: settings.Values{}}
-	service := settings.NewService(store, audit.New(&apiSink{}), settingsUnitOfWork{})
+	service := settings.NewService(store, &settingsImages{byKind: map[string]settings.Image{}},
+		audit.New(&apiSink{}), settingsUnitOfWork{})
 
 	router := chi.NewRouter()
 	api.NewSettingsHandler(service, mw, log).Mount(router)
@@ -201,5 +234,88 @@ func TestASettingNothingReadsIsRefusedByTheAPI(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// pngBytes is a real one-pixel PNG, so the endpoint exercises the decoder.
+func pngBytes(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func (f *settingsFixture) upload(t *testing.T, kind string, data []byte, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPut, "/settings/images/"+kind, bytes.NewReader(data))
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestUploadingAPictureNeedsThePermission(t *testing.T) {
+	f := newSettingsFixture(t)
+
+	rec := f.upload(t, settings.ImageLogo, pngBytes(t), f.cookie)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAPictureIsServedWithoutASessionAndCannotBeOpenedAsADocument(t *testing.T) {
+	// The sign-in screen wears the logo and is seen before anybody signs in,
+	// so the read is open. What stops an uploaded file becoming a page on this
+	// origin is the disposition and the refusal to sniff — belt and braces
+	// behind a format that cannot carry script in the first place.
+	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+	if rec := f.upload(t, settings.ImageLogo, pngBytes(t), f.cookie); rec.Code != http.StatusOK {
+		t.Fatalf("upload = %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	rec := f.do(http.MethodGet, "/settings/images/logo", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with no session", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "image/png" {
+		t.Errorf("content type = %q, want the one read out of the bytes", got)
+	}
+	if got := rec.Header().Get("Content-Disposition"); got != "attachment" {
+		t.Errorf("disposition = %q, want attachment so it cannot be opened as a document", got)
+	}
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("nosniff = %q, want the browser not to guess the type again", got)
+	}
+	if rec.Header().Get("ETag") == "" {
+		t.Error("no ETag: the URL carries the hash, so caching should be unconditional")
+	}
+}
+
+func TestSomethingThatIsNotAPictureIsRefusedByTheAPI(t *testing.T) {
+	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+
+	rec := f.upload(t, settings.ImageLogo,
+		[]byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`), f.cookie)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAnEmptySlotIsNotFoundRatherThanEmpty(t *testing.T) {
+	// A blank 200 would have a page render an empty picture and never say why.
+	f := newSettingsFixture(t)
+
+	rec := f.do(http.MethodGet, "/settings/images/logo", "")
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
 	}
 }

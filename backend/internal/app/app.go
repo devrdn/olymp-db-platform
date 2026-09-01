@@ -154,7 +154,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			api.NewAuthHandler(authService, userService, userRepo, authMiddleware, cookies, log),
 			api.NewUsersHandler(userService, userRepo, authMiddleware, log),
 			api.NewSettingsHandler(
-				settings.NewService(postgres.NewSettings(pool), auditRecorder, storage.NewUnitOfWork(pool)),
+				settings.NewService(postgres.NewSettings(pool), postgres.NewSettingsImages(pool), auditRecorder, storage.NewUnitOfWork(pool)),
 				authMiddleware, log),
 			api.NewContestsHandler(contestService, authMiddleware, log, cfg.DefaultLocale),
 			// The trail is written by every module above; this is the only way

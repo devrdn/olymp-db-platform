@@ -188,6 +188,8 @@ secret, not a credential to live on.
 | POST | `/api/v1/auth/password` | signed in (own password) |
 | GET | `/api/v1/settings` | anyone — the sign-in screen carries the installation's name |
 | GET | `/api/v1/settings/all`, PUT `/api/v1/settings` | `settings.manage` |
+| GET | `/api/v1/settings/images/{kind}` | anyone — the sign-in screen wears them |
+| PUT, DELETE | `/api/v1/settings/images/{kind}` | `settings.manage`. `kind` is logo, icon or favicon |
 | GET | `/api/v1/roles` | `users.manage` |
 | GET, POST | `/api/v1/users` | `users.manage` |
 | GET, PATCH | `/api/v1/users/{id}` | `users.manage` |

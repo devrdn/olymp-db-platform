@@ -3,11 +3,13 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/settings"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -104,4 +106,91 @@ func asText(encoded [][]byte) []string {
 		out = append(out, string(raw))
 	}
 	return out
+}
+
+// SettingsImages stores the pictures an installation puts on itself.
+type SettingsImages struct{ pool *pgxpool.Pool }
+
+var _ settings.ImageRepository = (*SettingsImages)(nil)
+
+// NewSettingsImages returns a repository over pool.
+func NewSettingsImages(pool *pgxpool.Pool) *SettingsImages { return &SettingsImages{pool: pool} }
+
+func (r *SettingsImages) querier(ctx context.Context) storage.Querier {
+	return storage.QuerierFrom(ctx, r.pool)
+}
+
+// ByKind returns the picture in that slot.
+func (r *SettingsImages) ByKind(ctx context.Context, kind string) (settings.Image, error) {
+	var img settings.Image
+	err := r.querier(ctx).QueryRow(ctx, `
+		SELECT id, kind, content_type, bytes, sha256, width, height, uploaded_at
+		FROM settings_files WHERE kind = $1`, kind).
+		Scan(&img.ID, &img.Kind, &img.ContentType, &img.Bytes, &img.SHA256,
+			&img.Width, &img.Height, &img.UploadedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return settings.Image{}, settings.ErrImageNotFound
+	}
+	if err != nil {
+		return settings.Image{}, fmt.Errorf("read image %q: %w", kind, err)
+	}
+	return img, nil
+}
+
+// Save replaces whatever is in the slot.
+//
+// One row per purpose, enforced by the unique key on `kind`: replacing the
+// logo replaces the row, so there is no gallery of abandoned uploads that
+// nothing reads and somebody eventually has to clear out.
+func (r *SettingsImages) Save(ctx context.Context, actorID uuid.UUID, img settings.Image) error {
+	_, err := r.querier(ctx).Exec(ctx, `
+		INSERT INTO settings_files (kind, content_type, bytes, sha256, width, height, uploaded_by, uploaded_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+		ON CONFLICT (kind) DO UPDATE
+		SET content_type = EXCLUDED.content_type,
+		    bytes = EXCLUDED.bytes,
+		    sha256 = EXCLUDED.sha256,
+		    width = EXCLUDED.width,
+		    height = EXCLUDED.height,
+		    uploaded_by = EXCLUDED.uploaded_by,
+		    uploaded_at = EXCLUDED.uploaded_at`,
+		img.Kind, img.ContentType, img.Bytes, img.SHA256, img.Width, img.Height, nilUUID(actorID))
+	if err != nil {
+		return fmt.Errorf("save image %q: %w", img.Kind, err)
+	}
+	return nil
+}
+
+// Delete empties the slot. An empty one is not an error: removing a picture
+// that is already gone is what a second click does.
+func (r *SettingsImages) Delete(ctx context.Context, kind string) error {
+	if _, err := r.querier(ctx).Exec(ctx, `DELETE FROM settings_files WHERE kind = $1`, kind); err != nil {
+		return fmt.Errorf("remove image %q: %w", kind, err)
+	}
+	return nil
+}
+
+// Present lists the slots that hold something, with the hash the URL carries.
+//
+// Deliberately without the bytes: a page that only needs to know whether there
+// is a logo should not pull the logo across to find out.
+func (r *SettingsImages) Present(ctx context.Context) (map[string]string, error) {
+	rows, err := r.querier(ctx).Query(ctx, `SELECT kind, sha256 FROM settings_files`)
+	if err != nil {
+		return nil, fmt.Errorf("list images: %w", err)
+	}
+	defer rows.Close()
+
+	present := map[string]string{}
+	for rows.Next() {
+		var kind, sum string
+		if err := rows.Scan(&kind, &sum); err != nil {
+			return nil, fmt.Errorf("scan image: %w", err)
+		}
+		present[kind] = sum
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list images: %w", err)
+	}
+	return present, nil
 }
