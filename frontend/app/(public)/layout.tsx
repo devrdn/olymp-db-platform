@@ -1,5 +1,6 @@
 import { FocusShell } from "@/components/layout/focus-shell";
 import { branding } from "@/lib/api/branding";
+import { imageHref } from "@/lib/api/settings";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -21,7 +22,8 @@ export default async function PublicLayout({ children }: { children: React.React
 
   return (
     <FocusShell
-      name={brand.name} locale={locale} theme={theme} dict={dict}>
+      name={brand.name}
+      logo={brand.images.logo ? imageHref("logo", brand.images.logo) : undefined} locale={locale} theme={theme} dict={dict}>
       {children}
     </FocusShell>
   );

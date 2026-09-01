@@ -6,6 +6,7 @@ import { settingsSchema } from "@/lib/api/settings";
 import { authRecoveryRedirect } from "@/lib/auth/guard";
 import { activeDictionary } from "@/lib/i18n/server";
 
+import { ImageSlots } from "./image-slots";
 import { SettingsForm } from "./settings-form";
 
 export async function generateMetadata() {
@@ -40,6 +41,8 @@ export default async function SettingsPage() {
       </div>
 
       <SettingsForm settings={settings} dict={dict} />
+
+      <ImageSlots images={settings.images} dict={dict} />
     </Band>
   );
 }

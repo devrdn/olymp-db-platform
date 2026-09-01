@@ -2,6 +2,7 @@ import { ProductShell } from "@/components/layout/product-shell";
 import { SectionNav } from "@/components/layout/section-nav";
 import { fetchIdentity } from "@/lib/auth/session";
 import { branding } from "@/lib/api/branding";
+import { imageHref } from "@/lib/api/settings";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -38,6 +39,7 @@ export default async function ParticipantLayout({ children }: { children: React.
   return (
     <ProductShell
       name={brand.name}
+      logo={brand.images.logo ? imageHref("logo", brand.images.logo) : undefined}
       locale={locale}
       theme={theme}
       dict={dict}

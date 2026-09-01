@@ -10,6 +10,13 @@ export type RequestOptions = {
   method?: string;
   /** Serialised as JSON. Omit for GET and for endpoints that take no body. */
   body?: unknown;
+  /**
+   * Sent as-is, for an endpoint that takes bytes rather than a document. The
+   * API reads the bytes to decide what they are, so no content type is
+   * declared: one sent from here would be this side's guess about a file it
+   * never opened.
+   */
+  rawBody?: ArrayBuffer;
   /** Absolute prefix; the server wrapper supplies one, the browser needs none. */
   origin?: string;
   /** Forwarded verbatim; the server wrapper uses this to pass the session on. */
@@ -59,12 +66,14 @@ type ErrorEnvelope = {
 };
 
 export async function request(path: string, options: RequestOptions = {}): Promise<unknown> {
-  const { method, body, origin = "", headers = {}, fetchImpl = fetch } = options;
+  const { method, body, rawBody, origin = "", headers = {}, fetchImpl = fetch } = options;
 
   const init: RequestInit = { method, headers };
   if (body !== undefined) {
     init.headers = { ...headers, "content-type": "application/json" };
     init.body = JSON.stringify(body);
+  } else if (rawBody !== undefined) {
+    init.body = rawBody;
   }
 
   const response = await fetchImpl(`${origin}${API_PREFIX}${path}`, init);

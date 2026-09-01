@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { JetBrains_Mono, Literata, Onest } from "next/font/google";
 
+import { branding } from "@/lib/api/branding";
+import { imageHref } from "@/lib/api/settings";
 import { DictionaryProvider } from "@/lib/i18n/client";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { themeAttribute } from "@/lib/theme/config";
@@ -38,11 +40,35 @@ const literata = Literata({
   display: "swap",
 });
 
-export const metadata: Metadata = {
-  title: { default: "DB Contest", template: "%s · DB Contest" },
-  description:
-    "SQL detective contests for universities: a crime story, an isolated game database and a timer.",
-};
+/**
+ * The title and the tab icon come from the installation.
+ *
+ * `generateMetadata` rather than a constant, because both are rows in a table
+ * now: a university that renamed itself would otherwise be renamed everywhere
+ * on screen and still called "DB Contest" in the browser's tab, its history
+ * and every bookmark somebody made.
+ *
+ * Both fall back to the product's own. A settings row that cannot be read is
+ * not a reason to serve a page with no title.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  const brand = await branding();
+  const name = brand.name.trim() || "DB Contest";
+
+  const icons: Metadata["icons"] = {};
+  if (brand.images.favicon) icons.icon = imageHref("favicon", brand.images.favicon);
+  // The large square one: a home screen, a bookmark tile. Falls back to the
+  // favicon rather than to nothing, since a small icon scaled up beats none.
+  const large = brand.images.icon ?? brand.images.favicon;
+  if (large) icons.apple = imageHref(brand.images.icon ? "icon" : "favicon", large);
+
+  return {
+    title: { default: name, template: `%s · ${name}` },
+    description:
+      "SQL detective contests for universities: a crime story, an isolated game database and a timer.",
+    ...(icons.icon || icons.apple ? { icons } : {}),
+  };
+}
 
 /**
  * `lang` is the language actually being rendered, read from the one place that

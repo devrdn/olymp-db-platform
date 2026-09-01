@@ -25,6 +25,7 @@ export function AppBar({
   dict,
   home,
   name,
+  logo,
   account,
   signedIn,
   children,
@@ -43,6 +44,8 @@ export function AppBar({
   home?: string;
   /** What this installation calls itself, from its own settings. */
   name?: string;
+  /** Where its own mark lives, when it has uploaded one. */
+  logo?: string;
   /**
    * Who is signed in. Present, the bar carries the door to their profile,
    * which is where signing out lives; absent, it carries neither.
@@ -59,9 +62,18 @@ export function AppBar({
 }) {
   const mark = (
     <>
-      <span aria-hidden className="grid size-5 shrink-0 place-items-center bg-cta text-cta-fg">
-        <Mark className="size-3" />
-      </span>
+      {/* The installation's own mark when it has uploaded one, the product's
+          otherwise. Not `next/image`: the address already carries a content
+          hash and is cached forever by the API, so there is nothing an
+          optimiser could add but a second copy and a second origin. */}
+      {logo ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={logo} alt="" aria-hidden className="h-5 w-auto max-w-32 shrink-0 object-contain" />
+      ) : (
+        <span aria-hidden className="grid size-5 shrink-0 place-items-center bg-cta text-cta-fg">
+          <Mark className="size-3" />
+        </span>
+      )}
       {/* What the installation calls itself, with the product's own name as
           the fallback. A university that has not renamed anything still gets a
           heading rather than a blank. */}
