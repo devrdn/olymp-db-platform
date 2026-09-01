@@ -1,7 +1,10 @@
 "use client";
 
 import { Crepe } from "@milkdown/crepe";
-import { useEffect, useRef, useState } from "react";
+import { Maximize2, Minimize2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import { cn } from "@/lib/utils";
 
 import "@milkdown/crepe/theme/common/style.css";
 import "./markdown-editor.css";
@@ -33,6 +36,14 @@ import "./markdown-editor.css";
  * One consequence worth knowing: the story screen now needs JavaScript. The
  * rest of the constructor does not, and the plain forms elsewhere were kept
  * for that reason — but there is no editor of this kind without it.
+ *
+ * It can be filled to the screen. Writing a story is the one thing in the
+ * constructor that is a long sitting rather than a form to fill, and the
+ * column it shares with the other languages is right for comparing them and
+ * wrong for writing one. Expanding moves nothing: the same node stays in the
+ * same place in the tree and only its position changes, because the editor is
+ * a ProseMirror instance bound to that node and a second copy would lose the
+ * undo history and whatever was typed into the one being discarded.
  */
 export function MarkdownEditor({
   name,
@@ -40,6 +51,7 @@ export function MarkdownEditor({
   placeholder,
   readOnly,
   className,
+  labels,
 }: {
   /** The form field the Markdown is submitted under. */
   name: string;
@@ -47,6 +59,8 @@ export function MarkdownEditor({
   placeholder?: string;
   readOnly?: boolean;
   className?: string;
+  /** What the one toggle says, in each of its two states. */
+  labels: { expand: string; collapse: string };
 }) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<Crepe | null>(null);
@@ -99,12 +113,69 @@ export function MarkdownEditor({
     editor.current?.setReadonly(Boolean(readOnly));
   }, [readOnly]);
 
+  const [full, setFull] = useState(false);
+
+  // The page behind must not scroll under a surface that covers it, or closing
+  // leaves the author somewhere they never went. Cleared on unmount too:
+  // navigating away from an expanded editor must not leave a page that cannot
+  // scroll and no control left to fix it.
+  useEffect(() => {
+    if (!full) return;
+
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFull(false);
+    };
+    document.addEventListener("keydown", onKey);
+
+    return () => {
+      document.body.style.overflow = previous;
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [full]);
+
+  const toggle = useCallback(() => setFull((open) => !open), []);
+
   return (
-    <div className={className}>
+    <div
+      className={cn(
+        "flex flex-col",
+        // Fixed rather than re-rendered somewhere else: the node the editor is
+        // bound to keeps its place in the tree and only moves on screen.
+        full && "fixed inset-0 z-40 bg-bg p-4 narrow:p-8",
+        className,
+      )}
+    >
+      <div className="flex justify-end pb-1.5">
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={full}
+          title={full ? labels.collapse : labels.expand}
+          aria-label={full ? labels.collapse : labels.expand}
+          className="grid size-7 place-items-center rounded-full text-ink-3 transition-colors duration-(--t-input) ease-standard hover:bg-sunk hover:text-ink"
+        >
+          {full ? (
+            <Minimize2 className="size-4" strokeWidth={1.75} aria-hidden />
+          ) : (
+            <Maximize2 className="size-4" strokeWidth={1.75} aria-hidden />
+          )}
+        </button>
+      </div>
+
       <div
         ref={host}
+        data-editor-host
         data-placeholder={placeholder}
-        className="min-h-40 border border-edge bg-bg px-3 py-2.5"
+        className={cn(
+          "border border-edge bg-bg px-3 py-2.5",
+          // Filling the screen means filling it: the box takes the height it
+          // has been given and the text scrolls inside, rather than the page
+          // scrolling under a surface meant to be the whole of it.
+          full ? "min-h-0 flex-1 overflow-y-auto px-4 py-3.5" : "min-h-40",
+        )}
       />
       <input type="hidden" name={name} value={markdown} />
     </div>
