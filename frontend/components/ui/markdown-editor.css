@@ -1,0 +1,69 @@
+/*
+ * The editor, in this system's colours.
+ *
+ * Crepe's own themes are not imported at all — only its structural stylesheet.
+ * Everything it draws comes from the variables below, mapped onto our tokens,
+ * so the editor follows the light and dark themes for free and there is no
+ * second palette to keep in step. The design system's rule that a colour comes
+ * from a token and never from a literal (SPEC 3.3) applies to a dependency's
+ * chrome as much as to ours.
+ *
+ * The prose inside it is deliberately the same face and size as the rendered
+ * story, so an author is writing in what a reader will read.
+ */
+.milkdown {
+  --crepe-font-default: var(--font-serif), Georgia, serif;
+  --crepe-font-title: var(--font-sans), system-ui, sans-serif;
+  --crepe-font-code: var(--font-mono), ui-monospace, monospace;
+  --crepe-base-font-size: 1.125rem;
+
+  --crepe-color-background: var(--color-bg);
+  --crepe-color-on-background: var(--color-ink);
+  --crepe-color-surface: var(--color-bg);
+  --crepe-color-surface-low: var(--color-panel);
+  --crepe-color-on-surface: var(--color-ink);
+  --crepe-color-on-surface-variant: var(--color-ink-2);
+  --crepe-color-outline: var(--color-line-2);
+
+  --crepe-color-primary: var(--color-accent);
+  --crepe-color-secondary: var(--color-sunk);
+  --crepe-color-on-secondary: var(--color-ink);
+  --crepe-color-inverse: var(--color-cta);
+  --crepe-color-on-inverse: var(--color-cta-fg);
+
+  --crepe-color-inline-code: var(--color-bad);
+  --crepe-color-inline-area: var(--color-sunk);
+  --crepe-color-error: var(--color-bad);
+  --crepe-color-hover: var(--color-sunk);
+  --crepe-color-selected: var(--color-accent-wash);
+
+  /* The direction has no elevation: structure comes from ruled margins, not
+     from things floating above the page. Two shadows are required by the
+     stylesheet, so they are given the hairline instead. */
+  --crepe-shadow-1: 0 0 0 1px var(--color-line);
+  --crepe-shadow-2: 0 0 0 1px var(--color-line-2);
+}
+
+/* The editable surface carries its own padding from the wrapper, and the
+   library's default page-like margins would put the text half a screen from
+   the label it belongs to. */
+.milkdown .ProseMirror {
+  padding: 0;
+  outline: none;
+}
+
+/* Headings in the interface face, body in the narrative one — the same split
+   the rendered story uses, so the two cannot look like different documents. */
+.milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--crepe-font-title);
+}
+
+/* Shown only while the document is empty; the attribute is set by the
+   component so the wording stays in the dictionary. */
+.milkdown .ProseMirror p.is-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--color-ink-3);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
