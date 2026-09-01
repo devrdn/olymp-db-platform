@@ -58,6 +58,30 @@
   font-family: var(--crepe-font-title);
 }
 
+/*
+ * The block handle follows the pointer, so it must not animate its way there.
+ *
+ * Crepe transitions `all`, which includes the `left` and `top` it is
+ * repositioned with — the handle then slides towards each block over 200ms and
+ * reads as lag. Only the fade is worth animating: appearing and disappearing
+ * is a state change, moving is tracking.
+ */
+.milkdown .milkdown-block-handle {
+  transition: opacity 0.15s var(--ease-standard, ease-out);
+}
+
+/*
+ * An opaque editing surface.
+ *
+ * The drag ghost is a snapshot of the block being dragged, and a block with no
+ * background of its own composites whatever is painted behind it — on a wide
+ * screen that is the contest header and the column beside it, which is how
+ * unrelated words end up travelling with the paragraph.
+ */
+.milkdown .ProseMirror {
+  background: var(--crepe-color-background);
+}
+
 /* Shown only while the document is empty; the attribute is set by the
    component so the wording stays in the dictionary. */
 .milkdown .ProseMirror p.is-empty:first-child::before {
