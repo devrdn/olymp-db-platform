@@ -313,6 +313,58 @@ func (h *ContestsHandler) setQuestionTexts(w http.ResponseWriter, r *http.Reques
 	httpx.NoContent(w, r)
 }
 
+// saveQuestionRequest is the whole question: its own fields, its wording and
+// its reference answers.
+type saveQuestionRequest struct {
+	questionRequest
+	Answers []AnswerResponse `json:"answers"`
+}
+
+// saveQuestion replaces a question whole.
+//
+// One request rather than three, so a save either lands entirely or leaves the
+// question as it was — and so a change spanning more than one part is
+// expressible at all. Converting a text question to a choice question could
+// not be done through the narrower endpoints: each saw half the change and
+// refused on account of the other half.
+func (h *ContestsHandler) saveQuestion(w http.ResponseWriter, r *http.Request) {
+	contestID, questionID, ok := h.questionRoute(w, r)
+	if !ok {
+		return
+	}
+	identity, _ := auth.IdentityFrom(r.Context())
+
+	var req saveQuestionRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+		return
+	}
+
+	answers := make([]contests.Answer, 0, len(req.Answers))
+	for _, a := range req.Answers {
+		answers = append(answers, contests.Answer{MatchKind: a.MatchKind, Value: a.Value})
+	}
+
+	saved, err := h.service.SaveQuestion(r.Context(), contests.SaveQuestionCommand{
+		ActorID:     identity.UserID,
+		ContestID:   contestID,
+		QuestionID:  questionID,
+		Kind:        req.Kind,
+		Points:      req.Points,
+		MaxAttempts: req.MaxAttempts,
+		IsVisible:   req.IsVisible,
+		ChoiceIDs:   req.ChoiceIDs,
+		Texts:       toDomainTexts(req.Texts),
+		Answers:     answers,
+	})
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+
+	httpx.JSON(w, r, http.StatusOK, toQuestionResponse(saved))
+}
+
 type answersRequest struct {
 	Answers []AnswerResponse `json:"answers"`
 }

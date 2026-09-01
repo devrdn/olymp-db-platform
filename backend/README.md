@@ -205,7 +205,7 @@ secret, not a credential to live on.
 | GET, PUT | `/api/v1/contests/{id}/story` | `contest.view` / `contest.edit` |
 | GET, POST | `/api/v1/contests/{id}/questions` | `contest.view` / `contest.edit` |
 | PUT | `/api/v1/contests/{id}/questions/order` | `contest.edit` |
-| GET, PATCH, DELETE | `/api/v1/contests/{id}/questions/{qid}` | `contest.view` / `contest.edit` |
+| GET, PUT, PATCH, DELETE | `/api/v1/contests/{id}/questions/{qid}` | `contest.view` / `contest.edit`. PUT replaces the whole question — fields, wording and answers — in one transaction; PATCH edits its own fields only |
 | PUT | `/api/v1/contests/{id}/questions/{qid}/texts`, `/answers` | `contest.edit` |
 | GET | `/api/v1/contests/{id}/managers` | `contest.view` |
 | PUT, DELETE | `/api/v1/contests/{id}/managers/{userId}` | `contest.manage` (owner) |

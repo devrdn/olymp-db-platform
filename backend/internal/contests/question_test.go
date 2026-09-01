@@ -395,3 +395,167 @@ func TestSettingTheAnswersStillRecordsOnlyHowMany(t *testing.T) {
 	}
 	t.Fatalf("no %s entry", audit.ActionAnswersChange)
 }
+
+func TestSavingAQuestionWholeWritesEveryPart(t *testing.T) {
+	// The author edits one thing. Three requests with three buttons made that
+	// three chances for the second to fail after the first had landed, leaving
+	// a question half saved and a button that had already said "done".
+	ctx := context.Background()
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	q := f.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 1, Kind: contests.KindText, Points: 5, IsVisible: true,
+		Texts:   map[string]contests.QuestionText{"en": {BodyMD: "Old wording"}},
+		Answers: []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the butler"}},
+	})
+
+	saved, err := f.Service.SaveQuestion(ctx, contests.SaveQuestionCommand{
+		ActorID:    uuid.New(),
+		ContestID:  c.ID,
+		QuestionID: q.ID,
+		Kind:       contests.KindText,
+		Points:     9,
+		Texts:      map[string]contests.QuestionText{"en": {BodyMD: "New wording"}},
+		Answers:    []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the gardener"}},
+	})
+	if err != nil {
+		t.Fatalf("SaveQuestion() = %v", err)
+	}
+
+	if saved.Points != 9 {
+		t.Errorf("points = %d, want 9", saved.Points)
+	}
+	stored, err := f.Service.Question(ctx, c.ID, q.ID)
+	if err != nil {
+		t.Fatalf("Question() = %v", err)
+	}
+	if stored.Texts["en"].BodyMD != "New wording" {
+		t.Errorf("text = %q, want the new wording", stored.Texts["en"].BodyMD)
+	}
+	if len(stored.Answers) != 1 || stored.Answers[0].Value != "the gardener" {
+		t.Errorf("answers = %+v, want the one that was saved", stored.Answers)
+	}
+}
+
+func TestAQuestionMayChangeItsKindAndItsAnswersTogether(t *testing.T) {
+	// This was not merely awkward before — it was impossible. Updating the
+	// question checked the *existing* answers against the *new* kind and
+	// refused; saving the answers checked the *new* answers against the *old*
+	// kind and refused. Whichever way round an author tried, one half of the
+	// change rejected the other, and a text question could never become a
+	// choice question.
+	ctx := context.Background()
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	q := f.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 1, Kind: contests.KindText, Points: 5, IsVisible: true,
+		Answers: []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the butler"}},
+	})
+
+	saved, err := f.Service.SaveQuestion(ctx, contests.SaveQuestionCommand{
+		ActorID:    uuid.New(),
+		ContestID:  c.ID,
+		QuestionID: q.ID,
+		Kind:       contests.KindChoice,
+		Points:     5,
+		ChoiceIDs:  []string{"a", "b"},
+		Texts: map[string]contests.QuestionText{
+			"en": {BodyMD: "Who?", Choices: map[string]string{"a": "The butler", "b": "The gardener"}},
+		},
+		Answers: []contests.Answer{{MatchKind: contests.MatchExact, Value: "b"}},
+	})
+	if err != nil {
+		t.Fatalf("SaveQuestion() = %v", err)
+	}
+
+	if saved.Kind != contests.KindChoice {
+		t.Errorf("kind = %q, want choice", saved.Kind)
+	}
+}
+
+func TestARefusedSaveLeavesTheQuestionExactlyAsItWas(t *testing.T) {
+	// Everything is checked before anything is written. An answer naming an
+	// option the question does not have must not land after the new points
+	// already have.
+	ctx := context.Background()
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	q := f.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 1, Kind: contests.KindChoice, Points: 5, IsVisible: true,
+		ChoiceIDs: []string{"a", "b"},
+		Answers:   []contests.Answer{{MatchKind: contests.MatchExact, Value: "a"}},
+	})
+
+	_, err := f.Service.SaveQuestion(ctx, contests.SaveQuestionCommand{
+		ActorID:    uuid.New(),
+		ContestID:  c.ID,
+		QuestionID: q.ID,
+		Kind:       contests.KindChoice,
+		Points:     99,
+		ChoiceIDs:  []string{"a", "b"},
+		Answers:    []contests.Answer{{MatchKind: contests.MatchExact, Value: "z"}},
+	})
+
+	if !errors.Is(err, contests.ErrInvalidAnswer) {
+		t.Fatalf("SaveQuestion() = %v, want it refused for an answer with no such option", err)
+	}
+	stored, _ := f.Service.Question(ctx, c.ID, q.ID)
+	if stored.Points != 5 {
+		t.Errorf("points = %d, want 5: a refused save must change nothing", stored.Points)
+	}
+}
+
+func TestSavingAQuestionStillNamesTheAnswerChangeOnItsOwn(t *testing.T) {
+	// One action by the author, but "who changed the reference answers after
+	// publication" is a question the trail is built to answer with an indexed
+	// filter (section 9). Folding it into the question's own entry would take
+	// that away, so the answer change keeps its own line — in the same
+	// transaction, so the two cannot disagree.
+	ctx := context.Background()
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	q := f.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 1, Kind: contests.KindText, Points: 5, IsVisible: true,
+		Answers: []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the butler"}},
+	})
+
+	if _, err := f.Service.SaveQuestion(ctx, contests.SaveQuestionCommand{
+		ActorID: uuid.New(), ContestID: c.ID, QuestionID: q.ID,
+		Kind: contests.KindText, Points: 5,
+		Answers: []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the gardener"}},
+	}); err != nil {
+		t.Fatalf("SaveQuestion() = %v", err)
+	}
+
+	if !f.Audit.Recorded(audit.ActionAnswersChange) {
+		t.Errorf("actions = %v, want the answer change named on its own", f.Audit.Actions())
+	}
+	if !f.Audit.Recorded(audit.ActionQuestionUpdate) {
+		t.Errorf("actions = %v, want the question's own change recorded too", f.Audit.Actions())
+	}
+}
+
+func TestSavingAQuestionWithoutTouchingTheAnswersSaysNothingAboutThem(t *testing.T) {
+	// The other half. An entry claiming the reference answers changed, on a
+	// save that only fixed a typo in the wording, would send somebody
+	// investigating a change that never happened.
+	ctx := context.Background()
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	answers := []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the butler"}}
+	q := f.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 1, Kind: contests.KindText, Points: 5, IsVisible: true,
+		Answers: answers,
+	})
+
+	if _, err := f.Service.SaveQuestion(ctx, contests.SaveQuestionCommand{
+		ActorID: uuid.New(), ContestID: c.ID, QuestionID: q.ID,
+		Kind: contests.KindText, Points: 6, Answers: answers,
+	}); err != nil {
+		t.Fatalf("SaveQuestion() = %v", err)
+	}
+
+	if f.Audit.Recorded(audit.ActionAnswersChange) {
+		t.Errorf("actions = %v, want no answer change recorded", f.Audit.Actions())
+	}
+}
