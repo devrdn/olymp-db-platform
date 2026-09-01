@@ -207,16 +207,20 @@ export function MarkdownEditor({
           // scrolling under a surface meant to be the whole of it.
           full
             ? "min-h-0 flex-1 overflow-x-clip overflow-y-auto py-3.5 pl-24"
-            : // Closed, it stops at a screenful and scrolls inside. A story of
-              // any length otherwise pushes everything below it a thousand
-              // pixels down, and the way to write at length is the control
-              // above rather than a box that grows without end.
+            : // Closed, every language is the same rectangle, and the text
+              // scrolls inside it. A height that follows the content leaves
+              // the row of languages a staircase — one box short, the next
+              // twice as tall, a scroll bar on whichever happens to be
+              // longest — and it is the same story in three languages, so
+              // they should look like three of the same thing. It also stops
+              // a long story pushing everything below it a thousand pixels
+              // down; writing at length is what the expand control is for.
               //
               // From the one breakpoint up, and not on a phone: there a box
               // that scrolls inside a page that scrolls is a trap for the
-              // thumb, and the 96px of gutter clipping costs would take a
-              // quarter of the screen away from the words.
-              "min-h-40 narrow:max-h-[32rem] narrow:overflow-x-clip narrow:overflow-y-auto narrow:pl-24",
+              // thumb, and the 96px of gutter that clipping costs would take
+              // a quarter of the screen away from the words.
+              "min-h-40 narrow:h-[32rem] narrow:overflow-x-clip narrow:overflow-y-auto narrow:pl-24",
         )}
       />
       <input type="hidden" name={name} value={markdown} />
