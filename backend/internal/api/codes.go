@@ -55,6 +55,8 @@ var (
 		"Another account already uses this login.")
 	codeEmailTaken = httpx.NewCode("email_taken",
 		"Another account already uses this email address.")
+	codeLastAdministrator = httpx.NewCode("last_administrator",
+		"The change would leave the installation with no account able to manage accounts, so it is refused.")
 	codeCannotActOnSelf = httpx.NewCode("cannot_act_on_self",
 		"The operation would lock the caller out of their own account, so it is refused on oneself.")
 	codeUserNotFound = httpx.NewCode("user_not_found",

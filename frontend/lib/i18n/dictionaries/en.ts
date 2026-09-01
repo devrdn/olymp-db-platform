@@ -624,6 +624,7 @@ const en = {
     login_taken: "That login is already taken.",
     email_taken: "That email is already in use.",
     forbidden: "You do not have the rights for this action.",
+    last_administrator: "This would leave the installation with nobody able to manage accounts. Give another account the administrator role first.",
     cannot_act_on_self: "This action cannot be applied to yourself.",
     owner_immutable: "A contest owner cannot be removed.",
     address_not_allowed: "Access is allowed only from the university network.",

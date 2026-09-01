@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
@@ -254,9 +256,20 @@ type listResponse struct {
 }
 
 func (h *UsersHandler) list(w http.ResponseWriter, r *http.Request) {
+	// An unreadable status filters by a value nothing has, so the register
+	// comes back empty — "no account matches", a true answer to a question
+	// nobody asked. Refused instead, the same way the contest listing refuses
+	// an unreadable `enrolled`.
+	status := r.URL.Query().Get("status")
+	if status != "" && !slices.Contains(users.Statuses, status) {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest,
+			fmt.Sprintf("status must be one of %v, got %q", users.Statuses, status))
+		return
+	}
+
 	filter := users.Filter{
 		Query:  r.URL.Query().Get("q"),
-		Status: r.URL.Query().Get("status"),
+		Status: status,
 		Limit:  intParam(r, "limit"),
 		Offset: intParam(r, "offset"),
 	}
@@ -404,6 +417,11 @@ func (h *UsersHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusConflict, codeLoginTaken, "This login is already in use")
 	case errors.Is(err, users.ErrEmailTaken):
 		httpx.Error(w, r, http.StatusConflict, codeEmailTaken, "This email is already in use")
+	case errors.Is(err, users.ErrLastAdministrator):
+		// 409, not 403: whoever asked is entitled to do this, and it is the
+		// state of the installation that refuses. Telling them they lack
+		// permission would send them looking for a right they already hold.
+		httpx.Error(w, r, http.StatusConflict, codeLastAdministrator, err.Error())
 	case errors.Is(err, users.ErrCannotActOnSelf):
 		httpx.Error(w, r, http.StatusBadRequest, codeCannotActOnSelf,
 			"This operation cannot be performed on your own account")

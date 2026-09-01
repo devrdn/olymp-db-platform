@@ -55,30 +55,51 @@ export function AccountFilters({
   const [searching, startSearch] = useTransition();
   const filtered = Boolean(query || status);
 
-  // The select is not debounced. A pause makes sense for a value somebody
-  // builds letter by letter; a choice from a list is complete the moment it is
-  // made, and waiting on it is latency with no purpose.
-  const go = useCallback(
-    (href: string) => startSearch(() => router.replace(href, { scroll: false })),
+  const box = useRef<HTMLInputElement>(null);
+  const picker = useRef<HTMLSelectElement>(null);
+
+  // React never updates an uncontrolled input when `defaultValue` changes, so
+  // without this the back button and the reset link move the list while the
+  // controls keep showing the previous filter — results for one search under a
+  // box claiming another.
+  //
+  // Focus is what tells the two cases apart. A navigation that lands while
+  // somebody is typing must not touch the box: they are two letters further on
+  // than the address is, and writing it back would swallow those letters. Back
+  // and the reset link both blur it first, which is exactly when following the
+  // address is right.
+  useEffect(() => {
+    const typing = box.current !== null && document.activeElement === box.current;
+
+    if (box.current && !typing && box.current.value !== query) box.current.value = query;
+    if (picker.current && picker.current.value !== status) picker.current.value = status;
+  }, [query, status]);
+
+  const navigate = useCallback(
+    (next: { query: string; status: string }) =>
+      // `resetPage`: searching from page three of the previous result would
+      // otherwise leave somebody on page three of a result with four rows.
+      startSearch(() =>
+        router.replace(accountsHref({ ...next, resetPage: true }), { scroll: false }),
+      ),
     [router],
   );
 
-  // Rebuilt when the status changes, so a search already waiting carries the
-  // filter that is on screen rather than the one that was.
+  // The select is not debounced. A pause suits a value built letter by letter;
+  // a choice from a list is complete the moment it is made, and waiting on it
+  // is latency for nothing.
+  //
+  // `navigate` is stable, so this is built once per status rather than per
+  // render — a debounce rebuilt on every render would restart its pause with
+  // each re-render instead of with each keystroke.
   const search = useMemo(
-    () =>
-      debounce(
-        (next: string) => go(accountsHref({ query: next, status, resetPage: true })),
-        SEARCH_PAUSE_MS,
-      ),
-    [go, status],
+    () => debounce((next: string) => navigate({ query: next, status }), SEARCH_PAUSE_MS),
+    [navigate, status],
   );
 
   // A timer that fires after the screen is gone navigates somebody somewhere
   // they did not ask to go — including undoing a link they just followed.
   useEffect(() => search.cancel, [search]);
-
-  const box = useRef<HTMLInputElement>(null);
 
   return (
     <form
@@ -90,7 +111,7 @@ export function AccountFilters({
       onSubmit={(event) => {
         event.preventDefault();
         search.cancel();
-        go(accountsHref({ query: box.current?.value ?? "", status, resetPage: true }));
+        navigate({ query: box.current?.value ?? "", status });
       }}
     >
       <div className="flex min-w-56 flex-1 flex-col gap-1.5">
@@ -114,14 +135,9 @@ export function AccountFilters({
           id="account-status"
           name="status"
           defaultValue={status}
+          ref={picker}
           onChange={(event) =>
-            go(
-              accountsHref({
-                query: box.current?.value ?? query,
-                status: event.target.value,
-                resetPage: true,
-              }),
-            )
+            navigate({ query: box.current?.value ?? query, status: event.target.value })
           }
           className={CONTROL}
         >

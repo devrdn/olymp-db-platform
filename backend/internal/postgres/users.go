@@ -217,6 +217,25 @@ func (r *Users) RecordLogin(ctx context.Context, id uuid.UUID, at time.Time) err
 	return r.exec(ctx, `UPDATE users SET last_login_at = $2 WHERE id = $1`, id, at)
 }
 
+// CountActiveWithRole returns how many accounts hold the role and can sign in.
+//
+// The status is part of the question, not a refinement of it: a blocked
+// administrator cannot administer, and counting them would let the last usable
+// one be removed on the strength of an account nobody can use.
+func (r *Users) CountActiveWithRole(ctx context.Context, roleCode string) (int, error) {
+	var count int
+	err := r.querier(ctx).QueryRow(ctx, `
+		SELECT count(*)
+		FROM user_roles ur
+		JOIN roles r ON r.id = ur.role_id
+		JOIN users u ON u.id = ur.user_id
+		WHERE r.code = $1 AND u.status = $2`, roleCode, users.StatusActive).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count accounts holding %q: %w", roleCode, err)
+	}
+	return count, nil
+}
+
 // Roles lists the installation's global roles, ordered by code so the
 // interface renders them the same way twice.
 func (r *Users) Roles(ctx context.Context) ([]users.Role, error) {

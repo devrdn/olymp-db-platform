@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -88,6 +89,44 @@ func TestRoleCatalogueCarriesWhatTheMigrationSeeded(t *testing.T) {
 			if byCode[code] == "" {
 				t.Errorf("role %q is missing or unnamed; catalogue = %+v", code, catalogue)
 			}
+		}
+	})
+}
+
+func TestCountingAdministratorsIgnoresTheOnesWhoCannotSignIn(t *testing.T) {
+	// The count decides whether the installation may lose an administrator.
+	// A blocked one cannot administer, so counting them would let the last
+	// usable account be demoted on the strength of one nobody can use.
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+
+		before, err := repo.CountActiveWithRole(ctx, "admin")
+		if err != nil {
+			t.Fatalf("CountActiveWithRole() = %v", err)
+		}
+
+		active := makeUser(t, ctx, "admin-active")
+		blocked := makeUser(t, ctx, "admin-blocked")
+
+		for _, id := range []uuid.UUID{active.ID, blocked.ID} {
+			if err := repo.ReplaceRoles(ctx, id, []string{"admin"}); err != nil {
+				t.Fatalf("ReplaceRoles() = %v", err)
+			}
+		}
+		if err := repo.SetStatus(ctx, blocked.ID, users.StatusBlocked); err != nil {
+			t.Fatalf("SetStatus() = %v", err)
+		}
+
+		count, err := repo.CountActiveWithRole(ctx, "admin")
+		if err != nil {
+			t.Fatalf("CountActiveWithRole() after = %v", err)
+		}
+		// A delta, not an absolute: a real installation already has the
+		// administrator bootstrap created, and a test that assumed an empty
+		// table would pass on a laptop and fail on anything real.
+		if count != before+1 {
+			t.Errorf("CountActiveWithRole() = %d, want %d: the blocked one must not count",
+				count, before+1)
 		}
 	})
 }

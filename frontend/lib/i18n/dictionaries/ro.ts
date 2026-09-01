@@ -618,6 +618,7 @@ const ro = {
     login_taken: "Acest utilizator există deja.",
     email_taken: "Această adresă de e-mail este deja folosită.",
     forbidden: "Nu aveți drepturi pentru această acțiune.",
+    last_administrator: "Astfel nu ar mai rămâne nimeni care să poată administra conturile. Acordați mai întâi rolul de administrator altui cont.",
     cannot_act_on_self: "Această acțiune nu se poate aplica asupra propriului cont.",
     owner_immutable: "Proprietarul olimpiadei nu poate fi retras.",
     address_not_allowed: "Accesul este permis doar din rețeaua universității.",
