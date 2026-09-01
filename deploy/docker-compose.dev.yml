@@ -55,6 +55,9 @@ services:
     profiles: [full]
     environment:
       NODE_ENV: development
+      # No Caddy in this overlay, so no TLS: a Secure cookie would be
+      # discarded by the browser and sign-in would fail on the next request.
+      COOKIE_SECURE: "false"
 
   # The proxy exists to terminate TLS; running the API directly does not need it.
   caddy:

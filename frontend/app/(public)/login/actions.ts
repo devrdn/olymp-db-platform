@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { callerHeaders } from "@/lib/api/caller";
+import { cookieSecure } from "@/lib/auth/cookie-policy";
 import { destinationAfterLogin } from "@/lib/auth/destination";
 import { signIn } from "@/lib/auth/sign-in";
 import { apiOrigin } from "@/lib/api/config";
@@ -45,9 +46,11 @@ export async function signInAction(
           maxAge: cookie.maxAge,
           httpOnly: true,
           sameSite: "lax",
-          // Set from this app's own configuration: a browser on plain HTTP
-          // discards a Secure cookie, and a local stack has no certificate.
-          secure: process.env.NODE_ENV === "production",
+          // From the deployment, not from NODE_ENV. A production build served
+          // over plain http — `make front-start`, a box behind no proxy — used
+          // to mark this Secure, and the browser then discarded it: signing in
+          // appeared to work and the next click went back to the form.
+          secure: cookieSecure(),
         }),
     },
   );
