@@ -1,10 +1,10 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState } from "react";
 
 import { StoryText } from "@/components/product/story-text";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { MarkdownEditor } from "@/components/ui/markdown-editor";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import { saveStoryAction, type StoryState } from "./actions";
@@ -20,15 +20,14 @@ import { saveStoryAction, type StoryState } from "./actions";
  * The whole set is submitted together, because the endpoint replaces it as a
  * set and the publish gate reasons about it as one.
  *
- * Under each box is what it will look like, live. Not a contenteditable
- * editor: a real one has to turn Markdown into a document and back again, and
- * the way back is where it quietly eats a table. The source stays the source,
- * so pasting prepared Markdown in and writing it here are the same thing, and
- * nothing is lost in either direction.
+ * Formatting is shown where it is typed rather than in a pane underneath: a
+ * heading is large, bold is bold, a table is a table. What is stored is still
+ * Markdown, so prepared Markdown can be pasted in and what comes back out is
+ * Markdown somebody could edit by hand.
  *
- * The preview uses the same renderer the participant's screen will use, so an
- * author is proofreading what a reader gets rather than an approximation of
- * it.
+ * What a reader finally sees is rendered by `StoryText`, not by this editor —
+ * that separation is what keeps the security boundary on the reading side
+ * where it belongs (see `components/ui/markdown-editor.tsx`).
  */
 export function StoryEditor({
   contestId,
@@ -51,14 +50,6 @@ export function StoryEditor({
   const t = dict.workspace.story;
   const [state, formAction, pending] = useActionState<StoryState, FormData>(saveStoryAction, {});
 
-  // Controlled, so the rendering below each box follows the typing. Nothing
-  // navigates while an author writes, so there is no re-render from the server
-  // to fight over the caret — the reason the account search stayed
-  // uncontrolled does not apply here.
-  const [drafts, setDrafts] = useState<Record<string, string>>(() =>
-    Object.fromEntries(languages.map((lang) => [lang, translations[lang] ?? ""])),
-  );
-
   const failure = state.code
     ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
     : null;
@@ -70,33 +61,30 @@ export function StoryEditor({
       <div className="grid gap-8 narrow:grid-cols-2">
         {languages.map((lang) => (
           <div key={lang} className="flex flex-col gap-2.5">
-            <label htmlFor={`body-${lang}`} className="flex items-baseline gap-2">
+            <p className="flex items-baseline gap-2">
               <span className="font-mono text-label text-ink uppercase">{lang}</span>
               {lang === defaultLanguage ? (
                 <span className="font-mono text-label text-ink-3 lowercase">{t.fallback}</span>
               ) : null}
-            </label>
+            </p>
 
-            <Textarea
-              id={`body-${lang}`}
-              name={`body.${lang}`}
-              value={drafts[lang] ?? ""}
-              onChange={(event) => setDrafts({ ...drafts, [lang]: event.target.value })}
-              disabled={!editable}
-              placeholder={t.placeholder}
-            />
-
-            {/* Rendered below the source rather than beside it: the languages
-                are already the columns, and comparing a paragraph with its
-                translation is the comparison this screen exists for. */}
-            <div className="flex flex-col gap-2 border-t border-line pt-3">
-              <span className="font-mono text-label text-ink-3 uppercase">{t.preview}</span>
-              {(drafts[lang] ?? "").trim() === "" ? (
-                <p className="text-small text-ink-3">{t.previewEmpty}</p>
-              ) : (
-                <StoryText markdown={drafts[lang] ?? ""} className="max-w-narrative" />
-              )}
-            </div>
+            {editable ? (
+              <MarkdownEditor
+                name={`body.${lang}`}
+                defaultValue={translations[lang] ?? ""}
+                placeholder={t.placeholder}
+              />
+            ) : (
+              // A frozen contest gets the story as a reader sees it, rendered
+              // by the same component the participant's screen uses. A
+              // read-only editor would be chrome around text nobody may
+              // change, and it would show the author something subtly other
+              // than what is being read right now.
+              <StoryText
+                markdown={translations[lang] ?? ""}
+                className="max-w-narrative border border-line p-4"
+              />
+            )}
           </div>
         ))}
       </div>
