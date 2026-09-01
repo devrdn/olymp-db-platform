@@ -1,4 +1,5 @@
 import { FocusShell } from "@/components/layout/focus-shell";
+import { branding } from "@/lib/api/branding";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -15,14 +16,16 @@ import { activeTheme } from "@/lib/theme/server";
  * require a session, and the guard has to be able to tell the two apart.
  */
 export default async function AccountLayout({ children }: { children: React.ReactNode }) {
-  const [dict, locale, theme] = await Promise.all([
+  const [brand, dict, locale, theme] = await Promise.all([
+    branding(),
     activeDictionary(),
     activeLocale(),
     activeTheme(),
   ]);
 
   return (
-    <FocusShell locale={locale} theme={theme} dict={dict} signedIn>
+    <FocusShell
+      name={brand.name} locale={locale} theme={theme} dict={dict} signedIn>
       {children}
     </FocusShell>
   );

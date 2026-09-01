@@ -1,6 +1,7 @@
 import { Band } from "@/components/layout/band";
 import { FocusShell } from "@/components/layout/focus-shell";
 import { StateView } from "@/components/product/state-view";
+import { branding } from "@/lib/api/branding";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -18,7 +19,8 @@ export async function generateMetadata() {
  * on a second attempt, so it offers a way out instead of a retry.
  */
 export default async function NotFound() {
-  const [dict, locale, theme] = await Promise.all([
+  const [brand, dict, locale, theme] = await Promise.all([
+    branding(),
     activeDictionary(),
     activeLocale(),
     activeTheme(),
@@ -26,7 +28,8 @@ export default async function NotFound() {
   const t = dict.screens.notFound;
 
   return (
-    <FocusShell locale={locale} theme={theme} dict={dict}>
+    <FocusShell
+      name={brand.name} locale={locale} theme={theme} dict={dict}>
       <Band fill>
         <StateView
           state={{

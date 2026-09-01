@@ -32,6 +32,7 @@ export function ProductShell({
   section,
   nav,
   account,
+  name,
   children,
 }: {
   locale: Locale;
@@ -51,11 +52,13 @@ export function ProductShell({
    * inventing a name.
    */
   account?: Account;
+  /** What this installation calls itself. */
+  name?: string;
   children: React.ReactNode;
 }) {
   return (
     <div className="flex min-h-[100dvh] flex-col">
-      <AppBar locale={locale} theme={theme} dict={dict} home={home} account={account}>
+      <AppBar locale={locale} theme={theme} dict={dict} home={home} account={account} name={name}>
         {nav ?? (section ? <span className="truncate text-control text-ink-2">{section}</span> : null)}
       </AppBar>
       <main className="flex flex-1 flex-col">{children}</main>

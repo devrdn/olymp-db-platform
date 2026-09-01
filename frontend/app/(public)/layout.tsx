@@ -1,4 +1,5 @@
 import { FocusShell } from "@/components/layout/focus-shell";
+import { branding } from "@/lib/api/branding";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -11,14 +12,16 @@ import { activeTheme } from "@/lib/theme/server";
  * putting their shells on in two different places.
  */
 export default async function PublicLayout({ children }: { children: React.ReactNode }) {
-  const [dict, locale, theme] = await Promise.all([
+  const [brand, dict, locale, theme] = await Promise.all([
+    branding(),
     activeDictionary(),
     activeLocale(),
     activeTheme(),
   ]);
 
   return (
-    <FocusShell locale={locale} theme={theme} dict={dict}>
+    <FocusShell
+      name={brand.name} locale={locale} theme={theme} dict={dict}>
       {children}
     </FocusShell>
   );

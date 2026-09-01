@@ -24,6 +24,7 @@ export function AppBar({
   theme,
   dict,
   home,
+  name,
   account,
   signedIn,
   children,
@@ -40,6 +41,8 @@ export function AppBar({
    * visitor without a session has nowhere to be sent but back here.
    */
   home?: string;
+  /** What this installation calls itself, from its own settings. */
+  name?: string;
   /**
    * Who is signed in. Present, the bar carries the door to their profile,
    * which is where signing out lives; absent, it carries neither.
@@ -59,7 +62,10 @@ export function AppBar({
       <span aria-hidden className="grid size-5 shrink-0 place-items-center bg-cta text-cta-fg">
         <Mark className="size-3" />
       </span>
-      {dict.chrome.product}
+      {/* What the installation calls itself, with the product's own name as
+          the fallback. A university that has not renamed anything still gets a
+          heading rather than a blank. */}
+      {name?.trim() || dict.chrome.product}
     </>
   );
   const markClass = "flex shrink-0 items-center gap-2 text-control font-semibold text-ink";

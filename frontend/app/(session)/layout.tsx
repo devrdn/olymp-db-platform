@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { ProductShell } from "@/components/layout/product-shell";
 import { homeFor } from "@/lib/auth/destination";
 import { fetchIdentity } from "@/lib/auth/session";
+import { branding } from "@/lib/api/branding";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -19,7 +20,8 @@ import { activeTheme } from "@/lib/theme/server";
  * would be offering a door that answers 403.
  */
 export default async function SessionLayout({ children }: { children: React.ReactNode }) {
-  const [dict, locale, theme, identity] = await Promise.all([
+  const [brand, dict, locale, theme, identity] = await Promise.all([
+    branding(),
     activeDictionary(),
     activeLocale(),
     activeTheme(),
@@ -32,6 +34,7 @@ export default async function SessionLayout({ children }: { children: React.Reac
 
   return (
     <ProductShell
+      name={brand.name}
       locale={locale}
       theme={theme}
       dict={dict}
