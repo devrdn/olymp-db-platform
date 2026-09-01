@@ -28,6 +28,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
+	"github.com/devrdn/db-contest/backend/internal/settings"
 	"github.com/devrdn/db-contest/backend/internal/users"
 )
 
@@ -152,6 +153,9 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Modules: []api.Module{
 			api.NewAuthHandler(authService, userService, userRepo, authMiddleware, cookies, log),
 			api.NewUsersHandler(userService, userRepo, authMiddleware, log),
+			api.NewSettingsHandler(
+				settings.NewService(postgres.NewSettings(pool), auditRecorder, storage.NewUnitOfWork(pool)),
+				authMiddleware, log),
 			api.NewContestsHandler(contestService, authMiddleware, log, cfg.DefaultLocale),
 			// The trail is written by every module above; this is the only way
 			// to read it back, and it is behind its own permission.

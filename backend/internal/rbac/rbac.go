@@ -29,6 +29,7 @@ const (
 	PermissionReportsView       = "reports.view"
 	PermissionUsersManage       = "users.manage"
 	PermissionAuditView         = "audit.view"
+	PermissionSettingsManage    = "settings.manage"
 
 	// PermissionContestAdminAll lifts the contest scope: its holder acts on
 	// every contest without being listed as a manager. It is a permission
