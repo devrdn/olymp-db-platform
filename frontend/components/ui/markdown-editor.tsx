@@ -172,23 +172,25 @@ export function MarkdownEditor({
         className={cn(
           // The handle is two 32px controls — add a block, and drag it —
           // separated by 2px and offset 16px from the paragraph, so it reaches
-          // 82px to the left of where the text starts.
-          //
-          // 56px of gutter in the ordinary layout, which leaves 26px hanging
-          // outside the box. Nothing clips there, and 26px fits inside the
-          // 32px gap between two languages, so it neither disappears nor
-          // lands on the editor next door.
+          // 82px to the left of where the text starts. Every gutter below is
+          // that number: 56px where the box may overflow visibly, 96px
+          // wherever it clips.
           "border border-edge bg-bg py-2.5 pr-3 pl-14",
           // Filling the screen means filling it: the box takes the height it
           // has been given and the text scrolls inside, rather than the page
           // scrolling under a surface meant to be the whole of it.
-          //
-          // And that is why the gutter grows here. Scrolling makes this a
-          // clipping box — `overflow-y: auto` computes `overflow-x: auto` with
-          // it — so the 26px that harmlessly hang outside above are cut off
-          // instead, taking the add-block control with them. 96px clears the
-          // whole 82px reach with room to spare.
-          full ? "min-h-0 flex-1 overflow-y-auto py-3.5 pl-24" : "min-h-40",
+          full
+            ? "min-h-0 flex-1 overflow-y-auto py-3.5 pl-24"
+            : // Closed, it stops at a screenful and scrolls inside. A story of
+              // any length otherwise pushes everything below it a thousand
+              // pixels down, and the way to write at length is the control
+              // above rather than a box that grows without end.
+              //
+              // From the one breakpoint up, and not on a phone: there a box
+              // that scrolls inside a page that scrolls is a trap for the
+              // thumb, and the 96px of gutter clipping costs would take a
+              // quarter of the screen away from the words.
+              "min-h-40 narrow:max-h-[32rem] narrow:overflow-y-auto narrow:pl-24",
         )}
       />
       <input type="hidden" name={name} value={markdown} />
