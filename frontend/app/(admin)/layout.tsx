@@ -34,6 +34,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const may = (permission: string) => identity?.permissions.includes(permission) ?? false;
   const destinations = [
     { href: "/contests", label: dict.contests.heading },
+    ...(may("users.manage") ? [{ href: "/users", label: dict.accounts.heading }] : []),
     ...(may("audit.view") ? [{ href: "/audit", label: dict.audit.heading }] : []),
   ];
 
