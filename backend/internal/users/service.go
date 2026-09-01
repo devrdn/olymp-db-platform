@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
@@ -141,8 +142,17 @@ func (s *Service) Block(ctx context.Context, actorID, userID uuid.UUID) error {
 	if actorID == userID {
 		return ErrCannotActOnSelf
 	}
-	if _, err := s.repo.ByID(ctx, userID); err != nil {
+	user, err := s.repo.ByID(ctx, userID)
+	if err != nil {
 		return err
+	}
+
+	// The same lockout by the other door. Blocking yourself is already
+	// refused, but two administrators can block each other down to none.
+	if holdsAdmin(user.Roles) {
+		if err := s.refuseIfLastAdmin(ctx, user); err != nil {
+			return err
+		}
 	}
 
 	return s.uow.Do(ctx, func(ctx context.Context) error {
@@ -278,6 +288,14 @@ func (s *Service) ReplaceRoles(ctx context.Context, actorID, userID uuid.UUID, r
 		return err
 	}
 
+	// Taking the administrator role away from the only one left leaves nobody
+	// able to put it back.
+	if holdsAdmin(user.Roles) && !slices.Contains(roleCodes, RoleAdmin) {
+		if err := s.refuseIfLastAdmin(ctx, user); err != nil {
+			return err
+		}
+	}
+
 	return s.uow.Do(ctx, func(ctx context.Context) error {
 		if err := s.repo.ReplaceRoles(ctx, userID, roleCodes); err != nil {
 			return err
@@ -332,6 +350,32 @@ func generatePassword() (string, error) {
 		return "", fmt.Errorf("generate password: %w", err)
 	}
 	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func holdsAdmin(roles []string) bool { return slices.Contains(roles, RoleAdmin) }
+
+// refuseIfLastAdmin blocks a change that would leave nobody able to administer.
+//
+// Counted rather than remembered: the number changes under this process, and a
+// cached answer would be wrong exactly when two administrators are being
+// removed at once. The count and the write are not in one transaction, so two
+// simultaneous demotions could still both pass — the window is milliseconds
+// and the failure is recoverable by the other administrator, which is a fair
+// trade against serialising every role change in the installation.
+func (s *Service) refuseIfLastAdmin(ctx context.Context, user User) error {
+	// A blocked administrator cannot administer, so they do not count. Nor
+	// does this one, whose administrator role is what is being taken away.
+	remaining, err := s.repo.CountActiveWithRole(ctx, RoleAdmin)
+	if err != nil {
+		return fmt.Errorf("count administrators: %w", err)
+	}
+	if user.IsActive() {
+		remaining--
+	}
+	if remaining <= 0 {
+		return ErrLastAdministrator
+	}
+	return nil
 }
 
 // RoleAdmin is the global role that holds every permission.

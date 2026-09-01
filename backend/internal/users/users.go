@@ -28,7 +28,19 @@ var (
 	ErrWeakPassword  = errors.New("password does not meet the policy")
 	ErrSamePassword  = errors.New("new password must differ from the current one")
 	ErrWrongPassword = errors.New("current password is incorrect")
+	// ErrLastAdministrator refuses the change that would leave the
+	// installation with nobody able to manage accounts.
+	//
+	// It is a lockout, not a permission problem: `bootstrap` returns early for
+	// a login that already exists and never looks at what roles it still
+	// holds, so recovery is hand-written SQL against production.
+	ErrLastAdministrator = errors.New("this would leave the installation without an administrator")
 )
+
+// Statuses is every state an account can be in, for validating a filter
+// against something other than a comment. It mirrors the CHECK constraint on
+// the column, which remains the real guarantee.
+var Statuses = []string{StatusActive, StatusBlocked}
 
 // User is an account.
 type User struct {
@@ -81,6 +93,13 @@ type Repository interface {
 	RecordLogin(ctx context.Context, id uuid.UUID, at time.Time) error
 	// ReplaceRoles sets the account's global roles to exactly these codes.
 	ReplaceRoles(ctx context.Context, id uuid.UUID, roleCodes []string) error
+	// CountActiveWithRole returns how many accounts hold the role and can
+	// still sign in.
+	//
+	// "Active" is half the question: a blocked administrator is an
+	// administrator who cannot administer, so counting them would let the last
+	// usable one be demoted on the strength of an account nobody can use.
+	CountActiveWithRole(ctx context.Context, roleCode string) (int, error)
 }
 
 // Role is one of the installation's global roles, as a person reads it.

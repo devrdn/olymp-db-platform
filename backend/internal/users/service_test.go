@@ -723,3 +723,63 @@ func lastChanges(t *testing.T, f *fixture, action string) map[string]any {
 	t.Fatalf("no %s entry among %v", action, f.sink.actions())
 	return nil
 }
+
+func TestTheLastAdministratorCannotBeDemoted(t *testing.T) {
+	// The lockout this guards. An administrator opens their own account,
+	// unchecks "admin" and saves; now nobody in the installation holds
+	// users.manage, so nobody can put it back. `bootstrap` does not help — it
+	// returns early for a login that exists and never looks at what roles the
+	// account still has — so recovery is hand-written SQL against production.
+	//
+	// The screen made this two clicks away. It was always reachable through
+	// the API, which is why the rule belongs here and not in the interface.
+	f := newFixture(t)
+	ctx := context.Background()
+	admin := f.addUser(t, "root", "some password")
+	if err := f.repo.ReplaceRoles(ctx, admin.ID, []string{users.RoleAdmin}); err != nil {
+		t.Fatalf("ReplaceRoles() = %v", err)
+	}
+
+	err := f.service.ReplaceRoles(ctx, admin.ID, admin.ID, []string{"student"})
+
+	if !errors.Is(err, users.ErrLastAdministrator) {
+		t.Errorf("ReplaceRoles() = %v, want it to refuse the last administrator", err)
+	}
+}
+
+func TestAnAdministratorMayBeDemotedWhileAnotherRemains(t *testing.T) {
+	// The guard must protect the installation without freezing its staff: two
+	// administrators is the ordinary state, and removing one of them is an
+	// ordinary act.
+	f := newFixture(t)
+	ctx := context.Background()
+	first := f.addUser(t, "root", "some password")
+	second := f.addUser(t, "dean", "another password")
+	for _, id := range []uuid.UUID{first.ID, second.ID} {
+		if err := f.repo.ReplaceRoles(ctx, id, []string{users.RoleAdmin}); err != nil {
+			t.Fatalf("ReplaceRoles() = %v", err)
+		}
+	}
+
+	if err := f.service.ReplaceRoles(ctx, first.ID, second.ID, []string{"student"}); err != nil {
+		t.Errorf("ReplaceRoles() = %v, want the demotion to be allowed", err)
+	}
+}
+
+func TestTheLastAdministratorCannotBeBlocked(t *testing.T) {
+	// The same lockout by the other door. Self-blocking is already refused,
+	// but two administrators can block each other down to none.
+	f := newFixture(t)
+	ctx := context.Background()
+	admin := f.addUser(t, "root", "some password")
+	other := f.addUser(t, "dean", "another password")
+	if err := f.repo.ReplaceRoles(ctx, admin.ID, []string{users.RoleAdmin}); err != nil {
+		t.Fatalf("ReplaceRoles() = %v", err)
+	}
+
+	err := f.service.Block(ctx, other.ID, admin.ID)
+
+	if !errors.Is(err, users.ErrLastAdministrator) {
+		t.Errorf("Block() = %v, want it to refuse the last administrator", err)
+	}
+}

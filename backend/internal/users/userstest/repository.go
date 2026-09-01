@@ -192,6 +192,20 @@ func (r *Repository) RecordLogin(_ context.Context, id uuid.UUID, at time.Time) 
 	return r.mutate(id, func(u *users.User) { u.LastLoginAt = &at })
 }
 
+// CountActiveWithRole counts the accounts holding the role that can sign in.
+func (r *Repository) CountActiveWithRole(_ context.Context, roleCode string) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	count := 0
+	for _, u := range r.byID {
+		if u.Status == users.StatusActive && slices.Contains(u.Roles, roleCode) {
+			count++
+		}
+	}
+	return count, nil
+}
+
 // Roles lists the roles GrantRole has defined, ordered like the real one.
 func (r *Repository) Roles(_ context.Context) ([]users.Role, error) {
 	r.mu.Lock()

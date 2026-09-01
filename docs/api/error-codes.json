@@ -70,6 +70,10 @@
       "meaning": "A user identifier in the path or body is not a valid UUID."
     },
     {
+      "code": "last_administrator",
+      "meaning": "The change would leave the installation with no account able to manage accounts, so it is refused."
+    },
+    {
       "code": "login_taken",
       "meaning": "Another account already uses this login."
     },

@@ -387,3 +387,30 @@ func TestRolesEndpointIsClosedToAnAccountThatCannotManageAccounts(t *testing.T) 
 		t.Errorf("status = %d, want 403", rec.Code)
 	}
 }
+
+func TestAnUnknownAccountStatusIsRefusedRatherThanIgnored(t *testing.T) {
+	// The listing filters by an exact status, so an unreadable one matches
+	// nothing and the screen shows an empty register — "no account matches",
+	// which is a true answer to a question nobody asked. The contest listing
+	// already refuses an unreadable `enrolled` for exactly this reason, and
+	// two endpoints answering the same mistake differently is worse than
+	// either choice.
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+
+	rec := f.do(http.MethodGet, "/users?status=banished", "")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTheStatusesTheRegisterActuallyOffersAreAccepted(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+
+	for _, status := range []string{"", "active", "blocked"} {
+		rec := f.do(http.MethodGet, "/users?status="+status, "")
+		if rec.Code != http.StatusOK {
+			t.Errorf("status=%q = %d, want 200", status, rec.Code)
+		}
+	}
+}

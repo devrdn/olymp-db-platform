@@ -24,14 +24,18 @@ export function offeredActions(
   account: { id: string; status: AccountStatus },
   viewerId: string,
 ): Offered {
+  // An empty viewer is "we could not find out who is looking". Nothing equals
+  // an empty string, so treating it as "not you" would make every account
+  // look blockable — including the reader's own. Unknown fails closed.
+  const known = viewerId !== "";
   const isSelf = account.id === viewerId;
 
   return {
     // Blocking your own account locks the installation out of itself, which
     // is why the service refuses it. Offering it and reporting the refusal
     // afterwards would mean finding out by pressing.
-    block: !isSelf && account.status === "active",
-    unblock: !isSelf && account.status === "blocked",
+    block: known && !isSelf && account.status === "active",
+    unblock: known && !isSelf && account.status === "blocked",
     // Recoverable, and on your own account too: whoever asks is handed the
     // new password, so there is nothing to withhold.
     resetPassword: true,

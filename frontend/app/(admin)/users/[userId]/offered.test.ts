@@ -41,3 +41,23 @@ describe("offeredActions", () => {
     expect(offeredActions(self, viewer)).toMatchObject({ roles: true, profile: true });
   });
 });
+
+describe("offeredActions, when the viewer is not known", () => {
+  test("offers no block at all rather than offering it on everyone", () => {
+    // `viewerId` is empty when the page could not learn who is looking. With
+    // an empty string nothing equals it, so every account — including the
+    // reader's own — would look blockable. The server refuses a self-block
+    // either way; what this avoids is a screen that invites the press.
+    expect(offeredActions({ id: "u-1", status: "active" }, "")).toMatchObject({
+      block: false,
+      unblock: false,
+    });
+  });
+
+  test("still offers what cannot lock anybody out", () => {
+    expect(offeredActions({ id: "u-1", status: "active" }, "")).toMatchObject({
+      resetPassword: true,
+      roles: true,
+    });
+  });
+});
