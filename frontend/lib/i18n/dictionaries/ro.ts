@@ -163,6 +163,8 @@ const ro = {
       lede: "Ce citește participantul înainte de a deschide baza de date. Fiecare limbă declarată are nevoie de una.",
       fallback: "implicită",
       placeholder: "Sera era încuiată pe dinăuntru…",
+      preview: "Previzualizare",
+      previewEmpty: "Nu este încă nimic de arătat.",
       save: "Salvați povestea",
       saving: "Se salvează",
       saved: "Salvat.",

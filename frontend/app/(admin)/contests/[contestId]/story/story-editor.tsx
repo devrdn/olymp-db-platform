@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 
+import { StoryText } from "@/components/product/story-text";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -18,6 +19,16 @@ import { saveStoryAction, type StoryState } from "./actions";
  *
  * The whole set is submitted together, because the endpoint replaces it as a
  * set and the publish gate reasons about it as one.
+ *
+ * Under each box is what it will look like, live. Not a contenteditable
+ * editor: a real one has to turn Markdown into a document and back again, and
+ * the way back is where it quietly eats a table. The source stays the source,
+ * so pasting prepared Markdown in and writing it here are the same thing, and
+ * nothing is lost in either direction.
+ *
+ * The preview uses the same renderer the participant's screen will use, so an
+ * author is proofreading what a reader gets rather than an approximation of
+ * it.
  */
 export function StoryEditor({
   contestId,
@@ -40,6 +51,14 @@ export function StoryEditor({
   const t = dict.workspace.story;
   const [state, formAction, pending] = useActionState<StoryState, FormData>(saveStoryAction, {});
 
+  // Controlled, so the rendering below each box follows the typing. Nothing
+  // navigates while an author writes, so there is no re-render from the server
+  // to fight over the caret — the reason the account search stayed
+  // uncontrolled does not apply here.
+  const [drafts, setDrafts] = useState<Record<string, string>>(() =>
+    Object.fromEntries(languages.map((lang) => [lang, translations[lang] ?? ""])),
+  );
+
   const failure = state.code
     ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
     : null;
@@ -61,10 +80,23 @@ export function StoryEditor({
             <Textarea
               id={`body-${lang}`}
               name={`body.${lang}`}
-              defaultValue={translations[lang] ?? ""}
+              value={drafts[lang] ?? ""}
+              onChange={(event) => setDrafts({ ...drafts, [lang]: event.target.value })}
               disabled={!editable}
               placeholder={t.placeholder}
             />
+
+            {/* Rendered below the source rather than beside it: the languages
+                are already the columns, and comparing a paragraph with its
+                translation is the comparison this screen exists for. */}
+            <div className="flex flex-col gap-2 border-t border-line pt-3">
+              <span className="font-mono text-label text-ink-3 uppercase">{t.preview}</span>
+              {(drafts[lang] ?? "").trim() === "" ? (
+                <p className="text-small text-ink-3">{t.previewEmpty}</p>
+              ) : (
+                <StoryText markdown={drafts[lang] ?? ""} className="max-w-narrative" />
+              )}
+            </div>
           </div>
         ))}
       </div>
