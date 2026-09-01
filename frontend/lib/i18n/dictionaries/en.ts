@@ -95,6 +95,10 @@ const en = {
     changePassword: "Change password",
     signOut: "Sign out",
     signOutNote: "Ends this session on this device only.",
+    failed: {
+      title: "Could not load your account",
+      body: "The server did not answer. Your session is still good — this is not a sign-out.",
+    },
   },
   workspace: {
     backToRegister: "← All contests",

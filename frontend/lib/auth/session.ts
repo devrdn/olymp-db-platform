@@ -46,12 +46,33 @@ export async function sessionHeader(): Promise<Record<string, string>> {
 }
 
 /**
+ * Raised when the API could not be asked who the caller is.
+ *
+ * Distinct from a null identity, and the distinction is the whole point: null
+ * means the server answered "nobody", this means it did not answer. Only the
+ * first is a reason to send somebody to the sign-in form.
+ */
+export class IdentityUnavailableError extends Error {
+  constructor(readonly status: number) {
+    super(`/auth/me could not be reached (status ${status || "none"})`);
+    this.name = "IdentityUnavailableError";
+  }
+}
+
+/**
  * Who the caller is, according to the API.
  *
  * `/auth/me` reports permissions rather than roles, so the interface branches
  * on the same thing the server's middleware does and a role added as data
  * needs no change here. Returns null when there is no usable session, which is
  * what route protection reads.
+ *
+ * It throws rather than returning null when the question could not be put at
+ * all. Treating those the same is how a restarted API, a dropped connection or
+ * a 500 becomes a forced sign-out: the visitor's session was fine, and they
+ * are told to sign in again — which is the bug that kept being reported as
+ * "it throws me to login on every click" and never reproduced, because
+ * reproducing it needs the API to blink at the moment somebody navigates.
  */
 export async function fetchIdentity(): Promise<CurrentIdentity | null> {
   const header = await sessionHeader();
@@ -62,7 +83,24 @@ export async function fetchIdentity(): Promise<CurrentIdentity | null> {
     cache: "no-store",
   }).catch(() => null);
 
-  if (!response?.ok) return null;
+  return identityFrom(response);
+}
+
+/**
+ * Reads one `/auth/me` response, separated from the fetch so the decision it
+ * makes is testable without a framework or a live API.
+ *
+ * `null` for the response itself means the request never completed.
+ */
+export async function identityFrom(
+  response: Response | null,
+): Promise<CurrentIdentity | null> {
+  // The one answer that means "no session": the server was asked and said so.
+  if (response?.status === 401) return null;
+
+  if (!response?.ok) {
+    throw new IdentityUnavailableError(response?.status ?? 0);
+  }
 
   const body = (await response.json()) as {
     id: string;
