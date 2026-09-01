@@ -22,6 +22,7 @@ export function FocusShell({
   dict,
   signedIn,
   name,
+  logo,
   children,
 }: {
   locale: Locale;
@@ -38,11 +39,13 @@ export function FocusShell({
   signedIn?: boolean;
   /** What this installation calls itself. */
   name?: string;
+  /** Where its own mark lives, when it has uploaded one. */
+  logo?: string;
   children: React.ReactNode;
 }) {
   return (
     <div className="flex min-h-[100dvh] flex-col">
-      <AppBar locale={locale} theme={theme} dict={dict} signedIn={signedIn} name={name} />
+      <AppBar locale={locale} theme={theme} dict={dict} signedIn={signedIn} name={name} logo={logo} />
       <main className="flex flex-1 flex-col">{children}</main>
     </div>
   );

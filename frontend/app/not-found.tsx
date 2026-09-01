@@ -2,6 +2,7 @@ import { Band } from "@/components/layout/band";
 import { FocusShell } from "@/components/layout/focus-shell";
 import { StateView } from "@/components/product/state-view";
 import { branding } from "@/lib/api/branding";
+import { imageHref } from "@/lib/api/settings";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -29,7 +30,8 @@ export default async function NotFound() {
 
   return (
     <FocusShell
-      name={brand.name} locale={locale} theme={theme} dict={dict}>
+      name={brand.name}
+      logo={brand.images.logo ? imageHref("logo", brand.images.logo) : undefined} locale={locale} theme={theme} dict={dict}>
       <Band fill>
         <StateView
           state={{
