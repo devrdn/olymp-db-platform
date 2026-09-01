@@ -430,6 +430,24 @@ const en = {
     },
   },
   /** The participant's own screens. Staff words live under `contests`. */
+  settings: {
+    heading: "Installation",
+    lede: "What this copy of the product calls itself. Changed here rather than in a deploy — everything on this screen is a decision about your organisation, not about how the server runs.",
+    name: "Name",
+    nameHint: "Shown in the bar and on the sign-in screen.",
+    contact: "Contact email",
+    contactHint: "Where a participant writes when something goes wrong. Left empty, nothing is offered.",
+    save: "Save",
+    saving: "Saving",
+    saved: "Saved",
+    loading: "Loading the settings",
+    failed: {
+      title: "Could not load the settings",
+      body: "The server did not answer. Check the connection and try again.",
+      retry: "Try again",
+      reference: "Reference",
+    },
+  },
   accounts: {
     heading: "Accounts",
     countLabel: "in the register",

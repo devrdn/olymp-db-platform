@@ -1,6 +1,7 @@
 import { ProductShell } from "@/components/layout/product-shell";
 import { SectionNav } from "@/components/layout/section-nav";
 import { fetchIdentity } from "@/lib/auth/session";
+import { branding } from "@/lib/api/branding";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -22,7 +23,8 @@ import { activeTheme } from "@/lib/theme/server";
  * screens and not one list.
  */
 export default async function ParticipantLayout({ children }: { children: React.ReactNode }) {
-  const [dict, locale, theme, identity] = await Promise.all([
+  const [brand, dict, locale, theme, identity] = await Promise.all([
+    branding(),
     activeDictionary(),
     activeLocale(),
     activeTheme(),
@@ -35,6 +37,7 @@ export default async function ParticipantLayout({ children }: { children: React.
 
   return (
     <ProductShell
+      name={brand.name}
       locale={locale}
       theme={theme}
       dict={dict}
