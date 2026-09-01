@@ -83,23 +83,6 @@
 }
 
 /*
- * No stray horizontal scroll bar.
- *
- * `overflow-y: auto` computes `overflow-x: auto` with it, so anything reaching
- * past the right edge — a floating control resting where it was last
- * positioned, with only its opacity turned off — gives the box a scroll bar
- * along the bottom that scrolls to nothing. `clip` refuses the overflow
- * without offering to scroll it, and unlike `visible` it does not force the
- * other axis back to `auto`.
- *
- * The handle is safe from it: the gutter puts it inside the box, which is
- * what that padding is for.
- */
-.milkdown {
-  overflow-x: clip;
-}
-
-/*
  * A table is the one thing that legitimately outgrows the measure, so it gets
  * to scroll on its own rather than being cut off by the rule above.
  */

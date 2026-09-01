@@ -192,16 +192,21 @@ export function MarkdownEditor({
         data-placeholder={placeholder}
         className={cn(
           // The handle is two 32px controls — add a block, and drag it —
-          // separated by 2px and offset 16px from the paragraph, so it reaches
-          // 82px to the left of where the text starts. Every gutter below is
-          // that number: 56px where the box may overflow visibly, 96px
-          // wherever it clips.
+          // separated by 2px and 8px clear of the paragraph, so it reaches
+          // 74px to the left of where the text starts. It is positioned
+          // against `.milkdown`, which begins at this box's content edge, so
+          // the gutter is what decides whether it lands inside: 56px where the
+          // box may overflow visibly, 96px wherever the box clips.
+          //
+          // Clipping belongs on this element and never on `.milkdown` —
+          // putting it there clips the handle itself, since the handle sits at
+          // a negative offset from exactly that box.
           "border border-edge bg-bg py-2.5 pr-3 pl-14",
           // Filling the screen means filling it: the box takes the height it
           // has been given and the text scrolls inside, rather than the page
           // scrolling under a surface meant to be the whole of it.
           full
-            ? "min-h-0 flex-1 overflow-y-auto py-3.5 pl-24"
+            ? "min-h-0 flex-1 overflow-x-clip overflow-y-auto py-3.5 pl-24"
             : // Closed, it stops at a screenful and scrolls inside. A story of
               // any length otherwise pushes everything below it a thousand
               // pixels down, and the way to write at length is the control
@@ -211,7 +216,7 @@ export function MarkdownEditor({
               // that scrolls inside a page that scrolls is a trap for the
               // thumb, and the 96px of gutter clipping costs would take a
               // quarter of the screen away from the words.
-              "min-h-40 narrow:max-h-[32rem] narrow:overflow-y-auto narrow:pl-24",
+              "min-h-40 narrow:max-h-[32rem] narrow:overflow-x-clip narrow:overflow-y-auto narrow:pl-24",
         )}
       />
       <input type="hidden" name={name} value={markdown} />
