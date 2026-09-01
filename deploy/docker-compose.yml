@@ -161,6 +161,11 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       API_ORIGIN: ${API_ORIGIN:-http://api:8080}
+      # The same value the API gets, and it has to be: the API issues the
+      # session cookie and the interface writes it on to the browser, so two
+      # different answers here mean a cookie the browser throws away. Caddy
+      # terminates TLS in front, hence true.
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
     # No host port: Caddy is the only way in, exactly as for the API.
     depends_on:
       api:

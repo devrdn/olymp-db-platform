@@ -189,8 +189,13 @@ front-install: ## Install the interface's dependencies if they are missing
 front-build: front-install ## Build the interface for production
 	cd $(FRONTEND) && npm run build
 
+# COOKIE_SECURE=false is not optional here, and it is the whole reason this
+# line has a comment. `next start` sets NODE_ENV=production, but this serves
+# over plain http on localhost with no proxy and no certificate — and a browser
+# silently discards a Secure cookie delivered over http. Without this, signing
+# in appears to succeed and the very next click goes back to the form.
 front-start: front-build ## Serve the production build against the dev API
-	cd $(FRONTEND) && API_ORIGIN="$(FRONT_API_ORIGIN)" npm run start
+	cd $(FRONTEND) && API_ORIGIN="$(FRONT_API_ORIGIN)" COOKIE_SECURE=false npm run start
 
 front-test: front-install ## Run the interface's tests
 	cd $(FRONTEND) && npm test
