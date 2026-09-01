@@ -457,6 +457,7 @@ const ru = {
     search: "Логин, имя или почта",
     filter: "Показать",
     anyStatus: "Любое состояние",
+    searching: "Ищем",
     apply: "Искать",
     empty: {
       title: "Ничего не найдено",

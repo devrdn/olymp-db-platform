@@ -457,6 +457,7 @@ const ro = {
     search: "Utilizator, nume sau e-mail",
     filter: "Afișează",
     anyStatus: "Orice stare",
+    searching: "Se caută",
     apply: "Caută",
     empty: {
       title: "Nu s-a găsit nimic",

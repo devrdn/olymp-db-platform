@@ -462,6 +462,7 @@ const en = {
     search: "Login, name or email",
     filter: "Show",
     anyStatus: "Any state",
+    searching: "Searching",
     apply: "Search",
     empty: {
       title: "No account matches",

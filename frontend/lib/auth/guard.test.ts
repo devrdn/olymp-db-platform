@@ -105,3 +105,19 @@ describe("authRecoveryRedirect, leaving a trace", () => {
     warn.mockRestore();
   });
 });
+
+describe("guardRedirect, resuming the exact view", () => {
+  test("carries the query string, not just the path", () => {
+    // The promise this function makes is that signing in resumes the journey.
+    // A filtered register, a page of results, a search somebody typed — all of
+    // that lives in the query string, and dropping it lands them on a bare
+    // list wondering what happened to their search.
+    expect(guardRedirect("/users?q=popescu&status=blocked", false)).toBe(
+      "/login?next=%2Fusers%3Fq%3Dpopescu%26status%3Dblocked",
+    );
+  });
+
+  test("leaves a plain path exactly as it was", () => {
+    expect(guardRedirect("/contests", false)).toBe("/login?next=%2Fcontests");
+  });
+});
