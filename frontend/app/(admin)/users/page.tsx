@@ -8,6 +8,7 @@ import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 import { AccountRegister, ACCOUNTS_PAGE } from "./account-register";
 import { AccountFilters } from "./filters";
+import { accountsHref } from "./search-href";
 
 export async function generateMetadata() {
   const dict = await activeDictionary();
@@ -48,14 +49,6 @@ export default async function UsersPage(props: PageProps<"/users">) {
   if (offset > 0) search.set("offset", String(offset));
   search.set("limit", String(ACCOUNTS_PAGE));
 
-  const here = () => {
-    const shown = new URLSearchParams();
-    for (const [key, value] of Object.entries({ q: query, status })) {
-      if (value) shown.set(key, value);
-    }
-    return shown.size > 0 ? `/users?${shown}` : "/users";
-  };
-
   // The proxy could only see that a session cookie exists; whether it is still
   // worth anything is this answer. A dead session goes back to the form, which
   // the error boundary could not offer.
@@ -66,7 +59,7 @@ export default async function UsersPage(props: PageProps<"/users">) {
     serverRequest(`/users?${search}`),
     serverRequest("/roles"),
   ]).catch((error: unknown) => {
-    const target = authRecoveryRedirect(error, here());
+    const target = authRecoveryRedirect(error, accountsHref({ query, status, offset }));
     if (target) redirect(target);
     throw error;
   });
@@ -74,14 +67,7 @@ export default async function UsersPage(props: PageProps<"/users">) {
   const { items, total } = accountListSchema.parse(accountsPayload);
   const { items: roles } = roleListSchema.parse(rolesPayload);
 
-  const pageHref = (next: number) => {
-    const shown = new URLSearchParams();
-    for (const [key, value] of Object.entries({ q: query, status })) {
-      if (value) shown.set(key, value);
-    }
-    if (next > 0) shown.set("offset", String(next));
-    return shown.size > 0 ? `/users?${shown}` : "/users";
-  };
+  const pageHref = (next: number) => accountsHref({ query, status, offset: next });
 
   return (
     <Band fill className="flex flex-col gap-8 py-12">

@@ -12,8 +12,11 @@ import { SESSION_COOKIE } from "@/lib/auth/session";
  * API. Language is not decided here, because it is not in the URL.
  */
 export function proxy(request: NextRequest) {
+  // Path *and* query. A filtered register, a page of results, a search
+  // somebody typed all live in the query string, and carrying only the path
+  // lands them afterwards on a bare list wondering where their search went.
   const target = guardRedirect(
-    request.nextUrl.pathname,
+    request.nextUrl.pathname + request.nextUrl.search,
     request.cookies.has(SESSION_COOKIE),
   );
 
