@@ -61,3 +61,20 @@ type Statement struct {
 	// fill a disk and the check costs a round trip.
 	Writes bool
 }
+
+// Codes lists every refusal this package can produce.
+//
+// Enumerable so that the layer above can be checked against it rather than
+// trusted to keep up: the HTTP layer turns each of these into a sentence in
+// three languages, and a code added here without one there would reach a
+// participant as whatever the interface says when it does not recognise an
+// answer. A list that can be walked is the difference between that being a
+// test failure and a discovery during a contest.
+func Codes() []Code {
+	return []Code{
+		CodeInvalidPolicy, CodeModeNotSupported, CodeParseError,
+		CodeNotOneStatement, CodeStatementNotSupported, CodeConstructNotSupported,
+		CodeFunctionNotSupported, CodeCatalogNotReadable, CodeCatalogNotAllowed,
+		CodeTooDeep, CodeTooLong, CodeTableNotWritable, CodeNotPermitted,
+	}
+}

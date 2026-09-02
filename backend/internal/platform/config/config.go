@@ -77,6 +77,10 @@ type Config struct {
 	// PoolDepth is how many spare copies each live contest keeps ready, so
 	// that a participant arriving does not wait for CREATE DATABASE.
 	PoolDepth int
+	// QueryRunnerAddr is where the Query Runner service answers. Empty turns
+	// the SQL console off, which is what a deployment without a game cluster
+	// wants — and what one has before the runner is deployed.
+	QueryRunnerAddr string
 	// ProvisionWorkers is how many copies are made at once. Section 4.2 says
 	// two to four: enough to fill a pool in reasonable time, few enough that
 	// filling it is never what the cluster is busy doing.
@@ -142,6 +146,7 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("GAME_PROVISION_WORKERS must be at least 1, got %d", cfg.ProvisionWorkers)
 	}
 	cfg.CopyStrategy = os.Getenv("GAME_COPY_STRATEGY")
+	cfg.QueryRunnerAddr = os.Getenv("QUERY_RUNNER_ADDR")
 
 	cfg.DefaultLocale = envOrDefault("DEFAULT_LOCALE", "en")
 	if !languageTag.MatchString(cfg.DefaultLocale) {

@@ -675,6 +675,48 @@ const ro = {
       "Imaginea este prea grea sau prea mare. Până la 512 KB și cel mult 4096 de pixeli pe latură.",
     image_not_accepted:
       "Acest fișier nu este o imagine pe care instalarea o păstrează. PNG, JPEG, GIF sau WebP — formatul este citit din fișier, nu din numele lui. Un .ico nu este necesar: orice browser actual acceptă un PNG drept pictogramă de filă.",
+    not_a_participant:
+      "Nu participați la această olimpiadă.",
+    contest_not_running:
+      "Olimpiada nu se desfășoară, deci nu acceptă interogări.",
+    no_game_yet:
+      "Baza de date a acestei olimpiade nu este încă pregătită. Nu este greșeala dumneavoastră — încercați peste puțin timp.",
+    query_parse_error:
+      "PostgreSQL nu a putut citi interogarea. Cuvintele lui sunt mai jos.",
+    query_not_one_statement:
+      "Trimiteți câte o instrucțiune pe rând.",
+    query_statement_not_supported:
+      "Această olimpiadă nu permite acest tip de instrucțiune.",
+    query_construct_not_supported:
+      "Această construcție nu este acceptată aici. Tot ce nu este recunoscut se refuză, nu se ghicește.",
+    query_function_not_supported:
+      "Această funcție nu este disponibilă în această olimpiadă.",
+    query_catalog_not_readable:
+      "Acest catalog de sistem descrie instalarea și ceilalți participanți și nu poate fi citit niciodată.",
+    query_catalog_not_allowed:
+      "Această olimpiadă a dezactivat citirea cataloagelor de sistem.",
+    query_too_deep:
+      "Interogarea este imbricată prea adânc.",
+    query_too_long:
+      "Interogarea este prea lungă.",
+    query_table_not_writable:
+      "Această olimpiadă nu a deschis acest tabel pentru scriere.",
+    query_not_permitted:
+      "Regulile acestei olimpiade nu permit acest lucru.",
+    query_timed_out:
+      "Interogarea a rulat prea mult și a fost oprită.",
+    query_cancelled:
+      "Interogarea a fost anulată înainte de a se termina.",
+    query_busy:
+      "Sistemul este ocupat. Încercați din nou în câteva secunde.",
+    query_already_running:
+      "Una dintre interogările dumneavoastră încă rulează. Așteptați-o.",
+    query_too_often:
+      "Trimiteți interogări prea des. Așteptați puțin.",
+    query_disk_full:
+      "Baza dumneavoastră a atins limita de dimensiune, nu se mai poate scrie nimic.",
+    query_result_too_large:
+      "Răspunsul este prea mare pentru a fi returnat. Restrângeți-l cu WHERE sau cu mai puține coloane.",
     invalid_request: "Verificați câmpurile completate.",
     invalid_cidr: "Format greșit pentru intervalul IP. Exemplu: 10.24.0.0/16",
     invalid_contest_id: "Identificator de olimpiadă greșit.",

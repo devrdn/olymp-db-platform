@@ -18,6 +18,10 @@
       "meaning": "The operation would lock the caller out of their own account, so it is refused on oneself."
     },
     {
+      "code": "contest_not_running",
+      "meaning": "The contest has not started, or has finished. Queries are taken only while it runs."
+    },
+    {
       "code": "cross_origin",
       "meaning": "The request carried an Origin the server does not serve. Sent for a write that a browser made from another site."
     },
@@ -94,6 +98,14 @@
       "meaning": "The path exists but not for this HTTP method."
     },
     {
+      "code": "no_game_yet",
+      "meaning": "The contest's game database has not been built. Nobody's mistake and nothing to do with the query."
+    },
+    {
+      "code": "not_a_participant",
+      "meaning": "The caller is not taking part in this contest. The same answer whether they never registered or were disqualified: telling those apart would say whether an account is on a roster."
+    },
+    {
       "code": "not_editable",
       "meaning": "The contest's status no longer allows this change. The message says which status."
     },
@@ -120,6 +132,78 @@
     {
       "code": "password_change_required",
       "meaning": "The account is still on a one-time password and must set its own before anything else."
+    },
+    {
+      "code": "query_already_running",
+      "meaning": "This participant already has a query in flight. One at a time, so that ten open tabs cannot hold ten execution slots."
+    },
+    {
+      "code": "query_busy",
+      "meaning": "The instance is running as many queries as it will at once. Answered immediately rather than queued indefinitely."
+    },
+    {
+      "code": "query_cancelled",
+      "meaning": "The caller stopped waiting before the query finished. Not a timeout: only one of the two is about load."
+    },
+    {
+      "code": "query_catalog_not_allowed",
+      "meaning": "The query reads the structural catalogues, which this contest has turned off."
+    },
+    {
+      "code": "query_catalog_not_readable",
+      "meaning": "The query reads a system catalogue describing the installation or other participants. Refused in every contest."
+    },
+    {
+      "code": "query_construct_not_supported",
+      "meaning": "The query uses a construct the validator does not know. Anything unrecognised is refused rather than guessed at."
+    },
+    {
+      "code": "query_disk_full",
+      "meaning": "The write was refused because the participant's database is at its size limit."
+    },
+    {
+      "code": "query_function_not_supported",
+      "meaning": "The query calls a function that is not on the allow-list. The details name it, which is what an operator needs to decide whether it belongs there."
+    },
+    {
+      "code": "query_not_one_statement",
+      "meaning": "The console takes exactly one statement. Several would let a check on the first be walked past by the second."
+    },
+    {
+      "code": "query_not_permitted",
+      "meaning": "The query does something this contest's policy does not permit — creating a view, a table, or a temporary one."
+    },
+    {
+      "code": "query_parse_error",
+      "meaning": "PostgreSQL could not parse the query. The message carries the parser's own words, which are the most useful thing anybody can say here."
+    },
+    {
+      "code": "query_result_too_large",
+      "meaning": "The answer was larger than the console will carry, and reading it was stopped rather than finished."
+    },
+    {
+      "code": "query_statement_not_supported",
+      "meaning": "That kind of statement is not one this contest allows."
+    },
+    {
+      "code": "query_table_not_writable",
+      "meaning": "The query writes to a table this contest did not open for writing. The details name it."
+    },
+    {
+      "code": "query_timed_out",
+      "meaning": "The query ran longer than it is allowed to and was cancelled."
+    },
+    {
+      "code": "query_too_deep",
+      "meaning": "The query nests deeper than the validator will walk."
+    },
+    {
+      "code": "query_too_long",
+      "meaning": "The query is longer than the console accepts."
+    },
+    {
+      "code": "query_too_often",
+      "meaning": "This participant is asking faster than the contest allows."
     },
     {
       "code": "question_not_found",

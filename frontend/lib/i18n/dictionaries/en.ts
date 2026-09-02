@@ -681,6 +681,48 @@ const en = {
       "That picture is too heavy or too large. Up to 512 KB, and no more than 4096 pixels on a side.",
     image_not_accepted:
       "That file is not a picture this installation stores. PNG, JPEG, GIF or WebP — the format is read from the file itself, not from its name. An .ico is not needed: every current browser takes a PNG as a tab icon.",
+    not_a_participant:
+      "You are not taking part in this contest.",
+    contest_not_running:
+      "The contest is not running, so it takes no queries.",
+    no_game_yet:
+      "This contest's database has not been prepared yet. Nothing you did — try again shortly.",
+    query_parse_error:
+      "PostgreSQL could not read that query. Its own words are below.",
+    query_not_one_statement:
+      "Send one statement at a time.",
+    query_statement_not_supported:
+      "This contest does not allow that kind of statement.",
+    query_construct_not_supported:
+      "That construct is not supported here. Anything unrecognised is refused rather than guessed at.",
+    query_function_not_supported:
+      "That function is not available in this contest.",
+    query_catalog_not_readable:
+      "That system catalogue describes the installation and other participants, and is never readable.",
+    query_catalog_not_allowed:
+      "This contest has turned off reading the system catalogues.",
+    query_too_deep:
+      "That query nests too deeply.",
+    query_too_long:
+      "That query is too long.",
+    query_table_not_writable:
+      "This contest did not open that table for writing.",
+    query_not_permitted:
+      "This contest's rules do not permit that.",
+    query_timed_out:
+      "The query ran too long and was stopped.",
+    query_cancelled:
+      "The query was cancelled before it finished.",
+    query_busy:
+      "The system is busy. Try again in a moment.",
+    query_already_running:
+      "One of your queries is still running. Wait for it to finish.",
+    query_too_often:
+      "You are sending queries too quickly. Wait a moment.",
+    query_disk_full:
+      "Your database is at its size limit, so nothing more can be written to it.",
+    query_result_too_large:
+      "The answer is too large to return. Narrow it with a WHERE or fewer columns.",
     invalid_request: "Check the fields you filled in.",
     invalid_cidr: "Wrong IP range format. Example: 10.24.0.0/16",
     invalid_contest_id: "Wrong contest identifier.",
