@@ -1,0 +1,164 @@
+// Package sqlpolicy says what a participant's SQL is allowed to do, and
+// decides whether a given query stays inside that.
+//
+// It answers two questions the architecture deliberately keeps together
+// (section 4.1): what an olympiad permits, and whether this statement is
+// within it. They live in one package because the defence is layered — the
+// same description drives both the check performed here and the GRANTs the
+// database template is built with, and two layers meant to agree must not be
+// able to drift apart.
+//
+// What it deliberately does not do: talk to a database, execute anything, or
+// decide how much load a query may impose. Execution, timeouts and admission
+// control belong to the Query Runner; rendering GRANTs belongs to the
+// provisioner. This package is pure, which is what lets its security tests be
+// exhaustive.
+package sqlpolicy
+
+import (
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+)
+
+// ErrInvalidPolicy marks a policy that does not describe a coherent olympiad.
+var ErrInvalidPolicy = errors.New("invalid sql policy")
+
+// Mode is the coarse setting an organizer picks; everything else refines it.
+type Mode string
+
+const (
+	// ModeReadOnly is the default and covers the basic contest: the story is
+	// read out of the database, nothing is written back.
+	ModeReadOnly Mode = "read_only"
+	// ModeReadWrite is for an olympiad that asks a participant to record
+	// something — notes, marks on evidence, a view built along the way.
+	ModeReadWrite Mode = "read_write"
+)
+
+// maxIdentifier is PostgreSQL's own limit on an unquoted name (NAMEDATALEN-1).
+const maxIdentifier = 63
+
+// Policy is one olympiad's answer to "what may a participant's SQL do".
+//
+// The zero value is deliberately invalid rather than read-only. A struct
+// nobody filled in should fail loudly at the boundary, not silently pick the
+// safe-looking option: the same value is about to be turned into GRANTs, and
+// "whatever the caller forgot to say" is not a permission set anyone reviewed.
+type Policy struct {
+	Mode Mode
+	// WritableTables are the game tables INSERT/UPDATE/DELETE may touch.
+	// Anything outside the list is refused here and ungranted in the template.
+	WritableTables []string
+	// AllowCreateView lets a participant build their own VIEW, in schema
+	// `work` — never over the game schema, which they have no CREATE on.
+	AllowCreateView bool
+	// AllowOwnTables lets them keep their own tables for notes and workings.
+	AllowOwnTables bool
+	// AllowTempTables lets them use temporary tables within one query.
+	AllowTempTables bool
+	// AllowCatalog covers the *structural* catalogs — pg_class, pg_attribute,
+	// information_schema — which are on by default because reading the shape
+	// of a table is part of the exercise. The sensitive catalogs are not
+	// governed by this flag and are never readable.
+	AllowCatalog bool
+}
+
+// ReadOnly returns the default policy: read the game database, change nothing.
+//
+// A constructor rather than a zero value, because the safe default is not the
+// zero of every field — structural catalogs are readable, and `false` there
+// would be a stricter contest than anybody asked for.
+func ReadOnly() Policy {
+	return Policy{Mode: ModeReadOnly, AllowCatalog: true}
+}
+
+// ReadWrite returns a policy that permits writing to exactly these tables.
+func ReadWrite(tables ...string) Policy {
+	p := ReadOnly()
+	p.Mode = ModeReadWrite
+	p.WritableTables = tables
+	return p
+}
+
+// Validate reports whether the policy describes one coherent set of rules.
+//
+// Two kinds of incoherence are caught. The first is a permission the mode does
+// not support: every option below needs the writer role and a GRANT, so
+// granting one under `read_only` produces a policy that means one thing to the
+// checker and another to the template builder. The second is a table name that
+// is not a plain identifier — those names are interpolated into GRANT
+// statements when the template is built, because SQL has no parameter binding
+// for an identifier, and refusing them once here is what keeps every place
+// that renders them safe.
+func (p Policy) Validate() error {
+	switch p.Mode {
+	case ModeReadOnly:
+		for _, granted := range []struct {
+			what string
+			on   bool
+		}{
+			{"writable tables", len(p.WritableTables) > 0},
+			{"creating views", p.AllowCreateView},
+			{"own tables", p.AllowOwnTables},
+			{"temporary tables", p.AllowTempTables},
+		} {
+			if granted.on {
+				return fmt.Errorf("%w: %s needs mode %q", ErrInvalidPolicy, granted.what, ModeReadWrite)
+			}
+		}
+	case ModeReadWrite:
+	default:
+		return fmt.Errorf("%w: unknown mode %q", ErrInvalidPolicy, p.Mode)
+	}
+
+	seen := make(map[string]struct{}, len(p.WritableTables))
+	for _, table := range p.WritableTables {
+		if !plainIdentifier(table) {
+			return fmt.Errorf("%w: %q is not a plain table name", ErrInvalidPolicy, table)
+		}
+		folded := strings.ToLower(table)
+		if _, already := seen[folded]; already {
+			return fmt.Errorf("%w: table %q is listed twice", ErrInvalidPolicy, table)
+		}
+		seen[folded] = struct{}{}
+	}
+	return nil
+}
+
+// MayWriteTo reports whether the policy names this table.
+//
+// Folded, because PostgreSQL lowercases an unquoted identifier and the parse
+// tree hands over the folded form: a policy naming `Suspects2` and a query
+// writing `suspects2` are talking about the same table.
+func (p Policy) MayWriteTo(table string) bool {
+	if p.Mode != ModeReadWrite {
+		return false
+	}
+	folded := strings.ToLower(table)
+	return slices.ContainsFunc(p.WritableTables, func(named string) bool {
+		return strings.ToLower(named) == folded
+	})
+}
+
+// plainIdentifier reports whether name is one unquoted PostgreSQL identifier.
+//
+// An allow-list of characters, like everything else here: letters, digits and
+// underscore, not starting with a digit. Anything needing quotes — a space, a
+// dot, a semicolon, a quote of its own — is refused rather than escaped,
+// because an escaping bug is silent and a refusal is not.
+func plainIdentifier(name string) bool {
+	if name == "" || len(name) > maxIdentifier {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '_':
+		case r >= '0' && r <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
