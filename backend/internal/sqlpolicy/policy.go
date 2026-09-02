@@ -115,7 +115,7 @@ func (p Policy) Validate() error {
 
 	seen := make(map[string]struct{}, len(p.WritableTables))
 	for _, table := range p.WritableTables {
-		if !PlainIdentifier(table) {
+		if !PlainTableName(table) {
 			return fmt.Errorf("%w: %q is not a plain table name", ErrInvalidPolicy, table)
 		}
 		folded := strings.ToLower(table)
@@ -140,6 +140,21 @@ func (p Policy) MayWriteTo(table string) bool {
 	return slices.ContainsFunc(p.WritableTables, func(named string) bool {
 		return strings.ToLower(named) == folded
 	})
+}
+
+// PlainTableName reports whether name is a table a GRANT can safely name:
+// one identifier, or a schema and an identifier.
+//
+// Qualification is allowed because a contest's game schema need not be
+// `public` — the rest of the platform already stores names like
+// `public.evidence` — and refused beyond one dot, because two would be a
+// database reference and this cluster has no business with those.
+func PlainTableName(name string) bool {
+	schema, table, qualified := strings.Cut(name, ".")
+	if !qualified {
+		return PlainIdentifier(name)
+	}
+	return PlainIdentifier(schema) && PlainIdentifier(table)
 }
 
 // PlainIdentifier reports whether name is one unquoted PostgreSQL identifier.

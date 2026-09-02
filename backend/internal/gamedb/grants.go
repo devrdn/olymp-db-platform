@@ -3,6 +3,7 @@ package gamedb
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 )
@@ -47,7 +48,7 @@ func grantPolicy(ctx context.Context, conn Conn, policy sqlpolicy.Policy) error 
 			// is no way to bind an identifier, so the check has to happen
 			// before the string is built.
 			statements = append(statements,
-				`GRANT INSERT, UPDATE, DELETE ON public.`+QuoteIdentifier(table)+` TO `+RoleWriter)
+				`GRANT INSERT, UPDATE, DELETE ON `+qualify(table)+` TO `+RoleWriter)
 		}
 		if len(policy.WritableTables) > 0 {
 			// A table with a serial column cannot be inserted into without
@@ -87,4 +88,19 @@ func settleTemporaryTables(ctx context.Context, conn Conn, instance string, poli
 		}
 	}
 	return nil
+}
+
+// qualify spells a table the way a GRANT needs it.
+//
+// A name may carry its schema, because a contest's game schema need not be
+// `public`. Quoting the whole thing would produce `"public.evidence"` — one
+// identifier with a dot in it, which is a different table and almost certainly
+// not one that exists. The policy has already refused anything with more parts
+// than these, which is what makes splitting on the dot safe.
+func qualify(table string) string {
+	schema, name, ok := strings.Cut(table, ".")
+	if !ok {
+		return "public." + QuoteIdentifier(table)
+	}
+	return QuoteIdentifier(schema) + "." + QuoteIdentifier(name)
 }

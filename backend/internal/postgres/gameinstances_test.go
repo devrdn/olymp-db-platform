@@ -231,10 +231,14 @@ func TestLiveListsOnlyContestsWorthProvisioningFor(t *testing.T) {
 	} {
 		var id uuid.UUID
 		if err := testPool.QueryRow(ctx,
-			`INSERT INTO contests (created_by, status, sql_mode, writable_tables)
-			 VALUES ($1, $2, 'read_write', ARRAY['evidence']::plain_identifier[]) RETURNING id`,
+			`INSERT INTO contests (created_by, status) VALUES ($1, $2) RETURNING id`,
 			author.ID, s.contest).Scan(&id); err != nil {
 			t.Fatalf("create contest: %v", err)
+		}
+		if _, err := testPool.Exec(ctx,
+			`INSERT INTO contest_sql_policies (contest_id, mode, writable_tables)
+			 VALUES ($1, 'read_write', ARRAY['evidence']::plain_table_name[])`, id); err != nil {
+			t.Fatalf("create policy: %v", err)
 		}
 		if _, err := testPool.Exec(ctx,
 			`INSERT INTO game_templates (contest_id, template_db, init_script, status, version)
