@@ -90,6 +90,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The GitHub Actions cache backend is an exporter, and only the
+      # docker-container driver can export. Without this step the runner's
+      # default `docker` driver refuses the build outright — before compiling
+      # anything, which is why the job used to fail in seconds with an error
+      # about cache backends rather than about the code.
+      - uses: docker/setup-buildx-action@v3
+
       - id: meta
         uses: docker/metadata-action@v5
         with:
