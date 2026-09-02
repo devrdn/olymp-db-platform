@@ -18,7 +18,6 @@ package sqlpolicy
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 )
 
@@ -129,17 +128,28 @@ func (p Policy) Validate() error {
 
 // MayWriteTo reports whether the policy names this table.
 //
-// Folded, because PostgreSQL lowercases an unquoted identifier and the parse
-// tree hands over the folded form: a policy naming `Suspects2` and a query
-// writing `suspects2` are talking about the same table.
-func (p Policy) MayWriteTo(table string) bool {
+// Either side may carry a schema, and an absent one means `public` on both:
+// a contest naming `evidence` and a participant writing `public.evidence` mean
+// the same table, and so do the other way round. Folded, because PostgreSQL
+// lowercases an unquoted identifier and the parse tree hands over the folded
+// form.
+func (p Policy) MayWriteTo(schema, table string) bool {
 	if p.Mode != ModeReadWrite {
 		return false
 	}
-	folded := strings.ToLower(table)
-	return slices.ContainsFunc(p.WritableTables, func(named string) bool {
-		return strings.ToLower(named) == folded
-	})
+	if schema == "" {
+		schema = "public"
+	}
+	for _, named := range p.WritableTables {
+		namedSchema, namedTable, qualified := strings.Cut(named, ".")
+		if !qualified {
+			namedSchema, namedTable = "public", named
+		}
+		if strings.EqualFold(namedSchema, schema) && strings.EqualFold(namedTable, table) {
+			return true
+		}
+	}
+	return false
 }
 
 // PlainTableName reports whether name is a table a GRANT can safely name:
