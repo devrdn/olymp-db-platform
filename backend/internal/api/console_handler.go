@@ -166,6 +166,7 @@ func (h *ConsoleHandler) fail(w http.ResponseWriter, r *http.Request, err error)
 		{queryproxy.ErrFinished, http.StatusConflict, codeContestFinished},
 		{queryproxy.ErrAddressNotAllowed, http.StatusForbidden, codeAddressNotAllowed},
 		{queryproxy.ErrNoGameYet, http.StatusConflict, codeNoGameYet},
+		{queryproxy.ErrDatabaseDeclined, http.StatusBadRequest, codeQueryDeclined},
 		{queryrunner.ErrTimeout, http.StatusGatewayTimeout, codeQueryTimedOut},
 		{queryrunner.ErrCanceled, http.StatusRequestTimeout, codeQueryCancelled},
 		{queryrunner.ErrBusy, http.StatusServiceUnavailable, codeQueryBusy},

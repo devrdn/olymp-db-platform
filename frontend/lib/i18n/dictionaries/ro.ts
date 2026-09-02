@@ -719,6 +719,8 @@ const ro = {
       "Răspunsul este prea mare pentru a fi returnat. Restrângeți-l cu WHERE sau cu mai puține coloane.",
     contest_finished:
       "Ați terminat această olimpiadă. Consola este închisă pentru dumneavoastră.",
+    query_declined:
+      "Baza de date a refuzat interogarea. Această olimpiadă își ascunde schema, așa că motivul nu este afișat — descoperirea tabelelor face parte din sarcină.",
     invalid_request: "Verificați câmpurile completate.",
     invalid_cidr: "Format greșit pentru intervalul IP. Exemplu: 10.24.0.0/16",
     invalid_contest_id: "Identificator de olimpiadă greșit.",
