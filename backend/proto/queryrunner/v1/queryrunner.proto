@@ -1,0 +1,116 @@
+edition = "2023";
+
+// The contract between the Core API and the Query Runner.
+//
+// The Query Runner is the one component that is a separate service (section
+// 2.3), and this file is the whole of what the two say to each other. Two
+// reasons for the split, and the second is the one worth remembering:
+//
+//   - The runner links PostgreSQL's own parser through cgo, to check a query
+//     before running it. That is C code reading text an adversary chooses, and
+//     a crash in it takes down the process rather than raising an error a
+//     recover can catch. In one process with the Core API, a crafted query
+//     would be a repeatable way to end sign-in, the timer and the submission
+//     of answers — the very things section 4 insists must survive everything.
+//   - Only this service holds the game cluster's credentials. In one process,
+//     a fault anywhere in the API would be within reach of every participant's
+//     database.
+//
+// Scaling is *not* among the reasons. On one on-premise machine serving a few
+// hundred participants, nobody is going to replicate this.
+package dbcontest.queryrunner.v1;
+
+option go_package = "github.com/devrdn/db-contest/backend/internal/rpc/queryrunnerv1";
+
+service QueryRunner {
+  // Run checks one participant's query against the contest's policy and, if it
+  // passes, executes it in that participant's own database.
+  rpc Run(RunRequest) returns (RunResponse);
+}
+
+// Policy is the contest's answer to "what may a participant's SQL do".
+//
+// Sent with every request rather than held by the runner, because it belongs
+// to the contest and the runner is stateless. It mirrors sqlpolicy.Policy;
+// the fields are named the same so that a mismatch reads as one.
+message Policy {
+  // "read_only" or "read_write". Deliberately not an enum: the value is a
+  // domain constant, and an enum here would be a second place to add one.
+  string mode = 1;
+  repeated string writable_tables = 2;
+  bool allow_create_view = 3;
+  bool allow_own_tables = 4;
+  bool allow_temp_tables = 5;
+  bool allow_catalog = 6;
+}
+
+message RunRequest {
+  // The registration asking, which is what "one query at a time" counts: the
+  // same person in two contests is two participants.
+  string registration = 1;
+  // The participant's own game database. It comes from game_instances on the
+  // Core API's side and never from the client — section 5, point 1.
+  string database = 2;
+  string sql = 3;
+  Policy policy = 4;
+}
+
+message RunResponse {
+  // Exactly one. A refusal, a timeout and a full instance are ordinary
+  // outcomes of asking, not faults of the transport, so they travel in the
+  // response rather than as a gRPC error status. A gRPC error from this call
+  // means the runner could not be reached or could not answer at all.
+  oneof outcome {
+    Result result = 1;
+    Failure failure = 2;
+  }
+}
+
+message Result {
+  repeated string columns = 1;
+  repeated Row rows = 2;
+  // The answer is longer than what is here — by rows, by bytes, or both. A
+  // flag rather than a silent cut: a participant reading nine hundred rows of
+  // a nine thousand row answer and not being told has a wrong answer, not a
+  // short one.
+  bool truncated = 3;
+}
+
+message Row {
+  repeated Cell cells = 1;
+}
+
+// Cell is one value, rendered.
+//
+// Text rather than a typed union, because the only consumer is a console that
+// displays it. `is_null` is separate so that NULL and the empty string stay
+// different, which in SQL they very much are.
+message Cell {
+  bool is_null = 1;
+  string text = 2;
+}
+
+message Failure {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    // The validator would not allow it. `code` and `subject` carry which rule
+    // and which construct, so the Core API can say it in the participant's
+    // own language rather than forwarding an English sentence.
+    KIND_REFUSED = 1;
+    // Admission control declined: the instance is full, or this participant
+    // already has a query in flight.
+    KIND_BUSY = 2;
+    KIND_ALREADY_RUNNING = 3;
+    // The runner's own deadline fired and the query was cancelled.
+    KIND_TIMEOUT = 4;
+    // The database refused it — a missing table, a type error, a privilege.
+    KIND_DATABASE_ERROR = 5;
+  }
+
+  Kind kind = 1;
+  string code = 2;
+  string subject = 3;
+  // For the journal and the technical log. Not for the participant: what they
+  // are shown is chosen from `kind` and `code`.
+  string message = 4;
+}

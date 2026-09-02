@@ -33,6 +33,15 @@ services:
   bootstrap:
     build: *backend
 
+  # A different image, because it is a different build: the Query Runner needs
+  # cgo and a libc, and the target selects the stage that provides both.
+  queryrunner:
+    build:
+      context: ../backend
+      target: queryrunner
+      args:
+        VERSION: ${VERSION:-dev}
+
   web:
     build:
       context: ../frontend

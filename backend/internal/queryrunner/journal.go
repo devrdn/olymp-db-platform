@@ -46,7 +46,18 @@ type Journal interface {
 	Complete(ctx context.Context, id int64, outcome Outcome) error
 }
 
-// Journalled is a Runner that writes the query log around each execution.
+// Executor is the part of a runner the journal wraps.
+//
+// An interface with one method, and it is the seam the architecture turns on:
+// the Query Runner is a separate service (section 2.3), so what the Core API
+// journals is a call over the network, not a local execution. Both satisfy
+// this, which is why moving the runner out of the process changes a line in
+// the composition root and nothing here.
+type Executor interface {
+	Run(ctx context.Context, req Request) (*Result, error)
+}
+
+// Journalled is an Executor that writes the query log around each execution.
 //
 // Two phases, and the order is the point (section 5, point 7). The row is
 // written *before* the query is sent, so that a process that dies mid-query
@@ -55,16 +66,20 @@ type Journal interface {
 // are swept to `error` by a background job — which only works because they
 // were written first.
 //
-// It wraps the Runner rather than living inside it, so that the runner stays
-// the thing that answers and this stays the thing that records.
+// It wraps the executor rather than living inside it, so that the runner stays
+// the thing that answers and this stays the thing that records — and so that
+// it can wrap the service client just as readily as a local runner. Section 2
+// puts the query log on the Core API's side of that boundary, which is only
+// possible if this does not know which side it is on.
 type Journalled struct {
-	runner  *Runner
+	runner  Executor
 	journal Journal
 	log     *slog.Logger
 }
 
-// NewJournalled wraps a runner.
-func NewJournalled(runner *Runner, journal Journal, log *slog.Logger) *Journalled {
+// NewJournalled wraps an executor — a local Runner, or a client of the Query
+// Runner service.
+func NewJournalled(runner Executor, journal Journal, log *slog.Logger) *Journalled {
 	return &Journalled{runner: runner, journal: journal, log: log}
 }
 
