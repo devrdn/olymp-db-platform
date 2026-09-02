@@ -32,7 +32,16 @@ var _ queryrunner.Executor = (*Client)(nil)
 // two are ever split across hosts, that reasoning stops holding and this is
 // the line that has to change.
 func Dial(address string) (*Client, error) {
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		// gRPC's own default receive limit is 4 MiB, which is smaller than the
+		// result budget the runner enforces. Left alone, a large but valid
+		// answer arrives as ResourceExhausted.
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(MaxPayloadBytes),
+			grpc.MaxCallSendMsgSize(MaxPayloadBytes),
+		),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to the query runner: %w", err)
 	}

@@ -150,6 +150,12 @@ func statusOf(err error) Status {
 		return StatusRejected
 	case errors.Is(err, ErrTimeout), errors.Is(err, context.DeadlineExceeded):
 		return StatusTimeout
+	case errors.Is(err, ErrCanceled), errors.Is(err, context.Canceled):
+		// Not a timeout: the query did not run out of time, the caller stopped
+		// waiting, and what happened to the query itself is unknown. `error`
+		// with the reason recorded is the honest answer, and it keeps the
+		// timeout count meaning what a reader assumes it means.
+		return StatusError
 	default:
 		return StatusError
 	}

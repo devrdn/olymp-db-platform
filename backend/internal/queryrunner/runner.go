@@ -34,8 +34,17 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ErrTimeout is a query that ran longer than it was allowed to.
-var ErrTimeout = errors.New("the query took too long")
+// ErrTimeout is a query that ran longer than it was allowed to. ErrCanceled is
+// a caller that stopped waiting for one.
+//
+// Separate, because they are separate events and only one of them is about
+// load. A participant who navigates away cancels the request, and counting
+// that as a timeout inflates the number capacity decisions are made from — the
+// two look alike only because both arrive as a cancelled context.
+var (
+	ErrTimeout  = errors.New("the query took too long")
+	ErrCanceled = errors.New("the caller stopped waiting")
+)
 
 // Limits bound one execution and the instance as a whole.
 type Limits struct {
@@ -158,13 +167,16 @@ func (r *Runner) execute(ctx context.Context, req Request, statement sqlpolicy.S
 		text = limited(req.SQL, r.limits.MaxRows)
 	}
 
-	result, err := collect(ctx, conn, text, r.limits)
+	// EXPLAIN is not wrapped and so arrives without the extra LIMIT; collect
+	// stops at MaxRows either way, which is all a plan needs.
+	return collectOr(ctx, conn, text, r.limits)
+}
+
+// collectOr reads the result and names what interrupted it, if anything.
+func collectOr(ctx context.Context, conn *pgx.Conn, text string, limits Limits) (*Result, error) {
+	result, err := collect(ctx, conn, text, limits)
 	if err != nil {
 		return nil, timeoutOr(ctx, err)
-	}
-	if statement.Explain && len(result.Rows) > r.limits.MaxRows {
-		result.Rows = result.Rows[:r.limits.MaxRows]
-		result.Truncated = true
 	}
 	return result, nil
 }
@@ -176,16 +188,21 @@ func accessMode(p sqlpolicy.Policy) pgx.TxAccessMode {
 	return pgx.ReadOnly
 }
 
-// timeoutOr reports a deadline as a timeout rather than as whatever the driver
-// happened to notice first.
+// timeoutOr names what ended the query, rather than reporting whatever the
+// driver happened to notice first.
 //
-// A cancelled query surfaces differently depending on where it was when the
-// deadline fired — a context error, a closed connection, a server-side
-// cancellation. They are one outcome as far as the participant and the journal
-// are concerned, and collapsing them here is what keeps that true.
+// An interrupted query surfaces differently depending on where it was at the
+// time — a context error, a closed connection, a server-side cancellation —
+// and collapsing those is the point. What must not be collapsed is the
+// difference between the deadline firing and the caller leaving: the first is
+// about load and the second is not.
 func timeoutOr(ctx context.Context, err error) error {
-	if ctx.Err() != nil {
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return fmt.Errorf("%w: %w", ErrTimeout, err)
+	case errors.Is(ctx.Err(), context.Canceled):
+		return fmt.Errorf("%w: %w", ErrCanceled, err)
+	default:
+		return err
 	}
-	return err
 }

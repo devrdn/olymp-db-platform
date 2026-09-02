@@ -2,6 +2,7 @@ package gamedb_test
 
 import (
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
@@ -103,6 +104,42 @@ func TestTheRolesExistAndCannotBecomeMore(t *testing.T) {
 	} {
 		if granted {
 			t.Errorf("the reader role holds %s", name)
+		}
+	}
+}
+
+// Idempotent has to mean concurrent too.
+//
+// Two replicas of the job, a retry after a timeout, or simply `docker compose
+// up` next to somebody's manual run: two of these overlap and PostgreSQL
+// answers `tuple concurrently updated` — SQLSTATE XX000, an internal error
+// indistinguishable from a real fault. It was found by Go running two test
+// binaries against the same cluster at once, which is exactly the shape of the
+// production case.
+func TestPreparingTheClusterSurvivesConcurrentRuns(t *testing.T) {
+	requireCluster(t)
+	pool := admin(t)
+
+	const runs = 8
+	failures := make(chan error, runs)
+
+	var wg sync.WaitGroup
+	for range runs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			failures <- gamedb.PrepareCluster(t.Context(), pool, gamedb.Roles{
+				ReaderPassword: gamedbtest.ReaderPassword,
+				WriterPassword: gamedbtest.WriterPassword,
+			})
+		}()
+	}
+	wg.Wait()
+	close(failures)
+
+	for err := range failures {
+		if err != nil {
+			t.Fatalf("a concurrent run failed: %v", err)
 		}
 	}
 }

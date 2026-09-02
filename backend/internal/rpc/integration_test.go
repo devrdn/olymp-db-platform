@@ -49,7 +49,7 @@ func serving(t *testing.T, limits queryrunner.Limits, checker *sqlpolicy.Checker
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_ = Serve(ctx, lis, NewServer(queryrunner.New(cluster, checker, limits), quiet), quiet)
+		_ = Serve(ctx, lis, NewServer(queryrunner.New(cluster, checker, limits), limits, quiet), 5*time.Second, quiet)
 	}()
 
 	client, err := Dial(lis.Addr().String())
@@ -203,5 +203,49 @@ func TestAListenAddressBecomesOneThatCanBeDialled(t *testing.T) {
 	}
 	if got := ProbeAddress(""); got != "127.0.0.1:9100" {
 		t.Fatalf("an empty address became %q", got)
+	}
+}
+
+// A result the runner considers acceptable must be one the transport can
+// carry. It was not: gRPC's default receive limit is 4 MiB and the runner's
+// own budget is 5 MiB, so an answer between the two came back as
+// ResourceExhausted — which the client reported as the service being unable to
+// answer and the journal recorded as an error. A big answer looked like an
+// outage.
+func TestAnAnswerInsideTheBudgetArrivesWhole(t *testing.T) {
+	client, database := serving(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+
+	// Five million bytes: comfortably past gRPC's default, comfortably inside
+	// the five mebibyte budget. Precisely the range that used to fail.
+	result, err := client.Run(t.Context(),
+		ask(database, `SELECT repeat('x', 5000) FROM generate_series(1, 1000)`))
+	if err != nil {
+		t.Fatalf("an answer inside the budget failed to arrive: %v", err)
+	}
+	if result.Truncated {
+		t.Fatal("an answer inside the budget was cut")
+	}
+	if len(result.Rows) != 1000 {
+		t.Fatalf("rows = %d, want 1000", len(result.Rows))
+	}
+}
+
+// Past the budget it is cut, not refused — and cut by what is actually sent.
+// The runner's own count is over the Go values it read, and a value counted as
+// eight bytes can render as twenty characters, so that count is a floor rather
+// than a bound. This is the layer that knows the real size.
+func TestAnAnswerBeyondTheBudgetIsCutRatherThanRefused(t *testing.T) {
+	client, database := serving(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+
+	result, err := client.Run(t.Context(),
+		ask(database, `SELECT repeat('x', 6000) FROM generate_series(1, 1000)`))
+	if err != nil {
+		t.Fatalf("an oversized answer failed instead of being cut: %v", err)
+	}
+	if !result.Truncated {
+		t.Fatal("an answer over the byte budget arrived saying it was complete")
+	}
+	if len(result.Rows) == 0 || len(result.Rows) >= 1000 {
+		t.Fatalf("rows = %d; the budget cut nothing useful", len(result.Rows))
 	}
 }

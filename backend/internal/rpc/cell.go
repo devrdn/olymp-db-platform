@@ -56,3 +56,19 @@ func render(value any) (text string, null bool) {
 		return fmt.Sprint(typed), false
 	}
 }
+
+// weigh is what a rendered row costs on the wire.
+//
+// The text itself plus a little for the framing protobuf puts around each
+// field. Exact enough to be a bound rather than a guess, which the runner's
+// own estimate over Go values cannot be: it never sees the rendering.
+func weigh(row *pb.Row) int {
+	// Per cell, for the field tags and length prefixes around the two fields.
+	const framing = 8
+
+	total := 0
+	for _, cell := range row.GetCells() {
+		total += framing + len(cell.GetText())
+	}
+	return total
+}

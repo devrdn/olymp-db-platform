@@ -71,17 +71,25 @@ func run() error {
 		return err
 	}
 
-	runner := queryrunner.New(
-		cluster,
-		sqlpolicy.NewChecker(cfg.ExtraFunctions...),
-		queryrunner.Limits{
-			Deadline:   cfg.Deadline,
-			MaxRows:    cfg.MaxRows,
-			MaxBytes:   cfg.MaxBytes,
-			Concurrent: cfg.Concurrent,
-			QueueDepth: cfg.QueueDepth,
-		},
-	)
+	limits := queryrunner.Limits{
+		Deadline:   cfg.Deadline,
+		MaxRows:    cfg.MaxRows,
+		MaxBytes:   cfg.MaxBytes,
+		Concurrent: cfg.Concurrent,
+		QueueDepth: cfg.QueueDepth,
+	}
+
+	// A result budget larger than what the transport will carry produces the
+	// worst kind of failure: a valid answer arriving as a transport error,
+	// which reads as the service being down. Refusing at startup is the only
+	// place the two numbers can be compared before a participant meets them.
+	if limits.MaxBytes >= rpc.MaxPayloadBytes {
+		return fmt.Errorf(
+			"QUERY_MAX_BYTES is %d, which does not leave room inside the %d byte message limit",
+			limits.MaxBytes, rpc.MaxPayloadBytes)
+	}
+
+	runner := queryrunner.New(cluster, sqlpolicy.NewChecker(cfg.ExtraFunctions...), limits)
 
 	// Shut down on SIGINT/SIGTERM: the container runtime sends SIGTERM and
 	// waits before killing the process.
@@ -93,5 +101,5 @@ func run() error {
 		return fmt.Errorf("listen on %s: %w", cfg.ListenAddr, err)
 	}
 
-	return rpc.Serve(ctx, lis, rpc.NewServer(runner, log), log)
+	return rpc.Serve(ctx, lis, rpc.NewServer(runner, limits, log), cfg.ShutdownTimeout, log)
 }

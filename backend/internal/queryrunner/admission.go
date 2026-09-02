@@ -3,6 +3,7 @@ package queryrunner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 )
 
@@ -103,6 +104,12 @@ func (g *gate) enter(ctx context.Context, participant string) (func(), error) {
 		g.mu.Lock()
 		delete(g.running, participant)
 		g.mu.Unlock()
-		return nil, ctx.Err()
+		// Named rather than passed through raw: a bare context error reaches
+		// the transport as an unrecognised failure and is reported as a fault
+		// of the database, which a queue nobody waited out is not.
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("%w: waiting for a free slot", ErrTimeout)
+		}
+		return nil, fmt.Errorf("%w: while waiting for a free slot", ErrCanceled)
 	}
 }
