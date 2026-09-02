@@ -138,135 +138,59 @@ jobs:
   # Publishing is what makes a deploy possible without a compiler on the server:
   # the image CI proved is the image that runs. Only on main and on tags — a
   # pull request is not something anybody should be able to deploy.
-  publish:
-    name: build the image, publish on a tag
-    # Nothing is published that failed either gate, including the scan.
-    needs: [build, security]
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+  # Building on a merge and publishing from a tag are the same work with
+  # different permissions, so they are the same reusable workflow called twice.
+  # A merge proves the image can be built — the only check the Dockerfile and
+  # the shape of the dependency graph ever get — while the registry keeps
+  # deliberate releases rather than one image per merge.
+  #
+  # The matrix is the list of images, which is data. Repeating it under both
+  # callers is cheaper than the alternative: permissions cannot be made
+  # conditional, so one job cannot be both.
 
+  build-images:
+    name: build the images
+    needs: [build, security]
+    if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - target: runtime
+            image: db-contest-backend
+            expect: usr/local/bin/api
+          - target: queryrunner
+            image: db-contest-queryrunner
+            expect: usr/local/bin/queryrunner
+    uses: ./.github/workflows/image.yml
+    with:
+      context: backend
+      target: ${{ matrix.target }}
+      image: ${{ matrix.image }}
+      expect: ${{ matrix.expect }}
+      publish: false
+
+  publish-images:
+    name: publish the images
+    needs: [build, security]
+    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: read
       packages: write
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # The GitHub Actions cache backend is an exporter, and only the
-      # docker-container driver can export. Without this step the runner's
-      # default `docker` driver refuses the build outright — before compiling
-      # anything, which is why the job used to fail in seconds with an error
-      # about cache backends rather than about the code.
-      - uses: docker/setup-buildx-action@v3
-
-      # Two tags on every image: the commit it was built from, which is
-      # unambiguous and never reused, and a moving one for convenience. A
-      # deploy names a version explicitly; nothing deploys "latest".
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/db-contest-backend
-          tags: |
-            type=sha,format=long,prefix=sha-
-            type=ref,event=branch
-            type=semver,pattern={{raw}}
-
-      - uses: docker/build-push-action@v6
-        with:
-          context: backend
-          # Named explicitly. A build with no target produces the *last* stage
-          # in the Dockerfile, so adding the Query Runner's stages at the end
-          # silently turned this into a Query Runner image published under the
-          # backend's name — with no /usr/local/bin/api in it.
-          target: runtime
-          # Loaded into the local daemon rather than pushed: what is built on a
-          # merge is a check that it *can* be built, and the registry should
-          # hold deliberate releases rather than one image per merge. The push
-          # happens below, and only from a tag.
-          load: true
-          push: false
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('sha-{0}', github.sha) }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # The Query Runner is a second image because it is a different build:
-      # cgo and a libc, which the other binaries neither need nor should carry.
-      # Published from here so that a deploy can pull what compose names.
-      - id: meta-runner
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/db-contest-queryrunner
-          tags: |
-            type=sha,format=long,prefix=sha-
-            type=ref,event=branch
-            type=semver,pattern={{raw}}
-
-      - uses: docker/build-push-action@v6
-        with:
-          context: backend
-          target: queryrunner
-          # Loaded into the local daemon rather than pushed: what is built on a
-          # merge is a check that it *can* be built, and the registry should
-          # hold deliberate releases rather than one image per merge. The push
-          # happens below, and only from a tag.
-          load: true
-          push: false
-          tags: ${{ steps.meta-runner.outputs.tags }}
-          labels: ${{ steps.meta-runner.outputs.labels }}
-          build-args: |
-            VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('sha-{0}', github.sha) }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # What each image actually contains, asserted rather than assumed. This
-      # is the check that would have caught the wrong stage being published,
-      # and it costs a second.
-      - name: the images carry the binaries they are named for
-        run: |
-          set -eu
-          api=$(echo '${{ steps.meta.outputs.tags }}' | head -1)
-          runner=$(echo '${{ steps.meta-runner.outputs.tags }}' | head -1)
-          docker create --name check-api "$api" >/dev/null
-          docker export check-api | tar -t | grep -q '^usr/local/bin/api$' \
-            || { echo "the backend image has no /usr/local/bin/api"; exit 1; }
-          docker rm check-api >/dev/null
-          docker create --name check-runner "$runner" >/dev/null
-          docker export check-runner | tar -t | grep -q '^usr/local/bin/queryrunner$' \
-            || { echo "the query runner image has no /usr/local/bin/queryrunner"; exit 1; }
-          docker rm check-runner >/dev/null
-
-      # Only from a tag. A merge proves the image can be built; a tag says
-      # somebody meant to ship it. The deployment model already names a version
-      # explicitly and never deploys "latest", so a registry holding one image
-      # per merge is a haystack rather than a history.
-      - name: publish
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          set -eu
-          echo "$TAGS" | while read -r tag; do
-            [ -n "$tag" ] || continue
-            docker push "$tag"
-          done
-        env:
-          TAGS: ${{ steps.meta.outputs.tags }}
-
-      - name: publish the query runner
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          set -eu
-          echo "$TAGS" | while read -r tag; do
-            [ -n "$tag" ] || continue
-            docker push "$tag"
-          done
-        env:
-          TAGS: ${{ steps.meta-runner.outputs.tags }}
-
+    strategy:
+      matrix:
+        include:
+          - target: runtime
+            image: db-contest-backend
+            expect: usr/local/bin/api
+          - target: queryrunner
+            image: db-contest-queryrunner
+            expect: usr/local/bin/queryrunner
+    uses: ./.github/workflows/image.yml
+    with:
+      context: backend
+      target: ${{ matrix.target }}
+      image: ${{ matrix.image }}
+      expect: ${{ matrix.expect }}
+      publish: true
