@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
@@ -79,6 +80,9 @@ func (h *ConsoleHandler) run(w http.ResponseWriter, r *http.Request) {
 		ContestID: contestID,
 		UserID:    identity.UserID,
 		SQL:       req.SQL,
+		// Resolved by the one place allowed to read a forwarded header, so
+		// that a contest held on one network stays on it.
+		Address: clientAddress(r),
 		// The same identifier the technical log carries, so a participant
 		// saying "it failed at two o'clock" can be answered.
 		RequestID: requestUUID(r.Context()),
@@ -98,6 +102,20 @@ func (h *ConsoleHandler) run(w http.ResponseWriter, r *http.Request) {
 		answer.Rows = [][]any{}
 	}
 	httpx.JSON(w, r, http.StatusOK, answer)
+}
+
+// clientAddress is where the request came from.
+//
+// An unparseable address is not a reason to answer a query: it is a reason to
+// refuse one, because a contest restricted to a network cannot be honoured
+// without knowing which one this is. The zero value fails every restriction,
+// which is the direction to fail in.
+func clientAddress(r *http.Request) netip.Addr {
+	addr, err := netip.ParseAddr(httpx.ClientIP(r))
+	if err != nil {
+		return netip.Addr{}
+	}
+	return addr
 }
 
 // requestUUID is the request's own identifier, as the journal's column needs
@@ -145,6 +163,8 @@ func (h *ConsoleHandler) fail(w http.ResponseWriter, r *http.Request, err error)
 	}{
 		{queryproxy.ErrNotAParticipant, http.StatusForbidden, codeNotAParticipant},
 		{queryproxy.ErrContestNotRunning, http.StatusConflict, codeContestNotRunning},
+		{queryproxy.ErrFinished, http.StatusConflict, codeContestFinished},
+		{queryproxy.ErrAddressNotAllowed, http.StatusForbidden, codeAddressNotAllowed},
 		{queryproxy.ErrNoGameYet, http.StatusConflict, codeNoGameYet},
 		{queryrunner.ErrTimeout, http.StatusGatewayTimeout, codeQueryTimedOut},
 		{queryrunner.ErrCanceled, http.StatusRequestTimeout, codeQueryCancelled},

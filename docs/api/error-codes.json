@@ -18,6 +18,10 @@
       "meaning": "The operation would lock the caller out of their own account, so it is refused on oneself."
     },
     {
+      "code": "contest_finished",
+      "meaning": "The participant has already finished. Their answers are in, and the console closes with them."
+    },
+    {
       "code": "contest_not_running",
       "meaning": "The contest has not started, or has finished. Queries are taken only while it runs."
     },

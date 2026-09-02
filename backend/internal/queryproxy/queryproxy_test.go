@@ -3,6 +3,7 @@ package queryproxy_test
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
@@ -226,5 +227,56 @@ func TestARefusalPassesThroughUntouched(t *testing.T) {
 	}
 	if refusal.Subject != "pg_sleep" {
 		t.Fatalf("refusal = %+v", refusal)
+	}
+}
+
+// A restriction applied once is a restriction somebody walks out of the room
+// with. The contest names the network it is held on, and every query is
+// checked against it — not only the enrolment that happened in the lab.
+func TestTheContestsNetworkIsCheckedOnEveryQuery(t *testing.T) {
+	inRoom := netip.MustParsePrefix("10.20.0.0/16")
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning, AllowedCIDRs: []netip.Prefix{inRoom},
+	}
+	service := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	)
+
+	fromRoom := command()
+	fromRoom.Address = netip.MustParseAddr("10.20.3.4")
+	if _, err := service.Run(t.Context(), fromRoom); err != nil {
+		t.Fatalf("a query from the contest's own network was refused: %v", err)
+	}
+
+	fromHome := command()
+	fromHome.Address = netip.MustParseAddr("203.0.113.7")
+	if _, err := service.Run(t.Context(), fromHome); !errors.Is(err, queryproxy.ErrAddressNotAllowed) {
+		t.Fatalf("error = %v, want ErrAddressNotAllowed", err)
+	}
+
+	// An address that could not be resolved fails the restriction too: a
+	// contest held on one network cannot be honoured without knowing which
+	// one this is.
+	unknown := command()
+	if _, err := service.Run(t.Context(), unknown); !errors.Is(err, queryproxy.ErrAddressNotAllowed) {
+		t.Fatalf("error = %v, want ErrAddressNotAllowed", err)
+	}
+}
+
+// Finishing closes the console. Their answers are in, and letting them carry
+// on querying is letting them keep working after the bell.
+func TestAParticipantWhoHasFinishedIsDone(t *testing.T) {
+	service := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationFinished}},
+		contestStore{contest: contests.Contest{Status: contests.StatusRunning}},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	)
+
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrFinished) {
+		t.Fatalf("error = %v, want ErrFinished", err)
 	}
 }

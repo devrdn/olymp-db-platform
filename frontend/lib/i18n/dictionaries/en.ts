@@ -723,6 +723,8 @@ const en = {
       "Your database is at its size limit, so nothing more can be written to it.",
     query_result_too_large:
       "The answer is too large to return. Narrow it with a WHERE or fewer columns.",
+    contest_finished:
+      "You have finished this contest. The console is closed for you.",
     invalid_request: "Check the fields you filled in.",
     invalid_cidr: "Wrong IP range format. Example: 10.24.0.0/16",
     invalid_contest_id: "Wrong contest identifier.",
