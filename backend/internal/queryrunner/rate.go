@@ -27,9 +27,15 @@ type window struct {
 	// now is injected so the tests can move time rather than spend it.
 	now func() time.Time
 
-	mu   sync.Mutex
-	seen map[string][]time.Time
+	mu    sync.Mutex
+	seen  map[string][]time.Time
+	since int
 }
+
+// pruneEvery is how many admissions pass between sweeps of the map. Often
+// enough that it cannot grow unboundedly, rarely enough that the sweep is not
+// what the rate limiter spends its time on.
+const pruneEvery = 256
 
 func newWindow(limit int, over time.Duration, now func() time.Time) *window {
 	if now == nil {
@@ -53,6 +59,10 @@ func (w *window) admit(participant string) error {
 	defer w.mu.Unlock()
 
 	now := w.now()
+	if w.since++; w.since >= pruneEvery {
+		w.since = 0
+		w.prune(now)
+	}
 	cutoff := now.Add(-w.over)
 
 	// Pruned on the way past, which is what keeps the map from growing with
@@ -73,13 +83,16 @@ func (w *window) admit(participant string) error {
 	return nil
 }
 
-// forget drops a participant with nothing in the window, so that a contest
-// that has finished does not stay in memory until the process restarts.
-func (w *window) forget(participant string) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	if len(w.seen[participant]) == 0 {
-		delete(w.seen, participant)
+// prune drops participants with nothing left in the window.
+//
+// Called on the way past rather than on a timer: without it the map keeps a
+// key for everybody who ever asked anything, which over a term of olympiads is
+// a slow leak in a process meant to run for months.
+func (w *window) prune(now time.Time) {
+	cutoff := now.Add(-w.over)
+	for participant, at := range w.seen {
+		if len(at) == 0 || at[len(at)-1].Before(cutoff) {
+			delete(w.seen, participant)
+		}
 	}
 }

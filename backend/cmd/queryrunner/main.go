@@ -28,7 +28,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/rpc"
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
 )
 
 // version is stamped at build time with -ldflags.
@@ -90,7 +90,7 @@ func run() error {
 			limits.MaxBytes, rpc.MaxPayloadBytes)
 	}
 
-	runner := queryrunner.New(cluster, sqlpolicy.NewChecker(cfg.ExtraFunctions...), limits)
+	runner := queryrunner.New(cluster, checker.NewChecker(cfg.ExtraFunctions...), limits)
 
 	// Shut down on SIGINT/SIGTERM: the container runtime sends SIGTERM and
 	// waits before killing the process.

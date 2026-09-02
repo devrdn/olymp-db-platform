@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
 	"github.com/google/uuid"
 )
 
@@ -15,7 +15,7 @@ import (
 // needs, by allowing the one function the standard list leaves out.
 func slowRunner(t *testing.T, limits queryrunner.Limits) (*queryrunner.Runner, string) {
 	t.Helper()
-	return setupWith(t, limits, sqlpolicy.NewChecker("pg_sleep"))
+	return setupWith(t, limits, checker.NewChecker("pg_sleep"))
 }
 
 // One query at a time per participant. Not a fairness rule but a resource one:

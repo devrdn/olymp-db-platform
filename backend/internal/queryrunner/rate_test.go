@@ -2,6 +2,7 @@ package queryrunner
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -80,5 +81,30 @@ func TestNoLimitMeansNoLimit(t *testing.T) {
 		if err := w.admit("p"); err != nil {
 			t.Fatalf("an unlimited window refused: %v", err)
 		}
+	}
+}
+
+// The map must not keep a key for everybody who ever asked anything: a process
+// meant to run for months across a term of olympiads would leak one per
+// participant.
+func TestTheWindowForgetsParticipantsItNoLongerCounts(t *testing.T) {
+	c := &clock{at: time.Unix(1_700_000_000, 0)}
+	w := newWindow(10, time.Minute, c.now)
+
+	for i := range 300 {
+		_ = w.admit("participant-" + strconv.Itoa(i))
+	}
+	// Everybody's single query is now well outside the window.
+	c.tick(2 * time.Minute)
+	for range pruneEvery {
+		_ = w.admit("someone-else")
+	}
+
+	w.mu.Lock()
+	remaining := len(w.seen)
+	w.mu.Unlock()
+
+	if remaining > 10 {
+		t.Fatalf("%d participants still counted after their queries aged out", remaining)
 	}
 }

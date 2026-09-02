@@ -8,6 +8,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
 	"github.com/google/uuid"
 )
 
@@ -18,10 +19,10 @@ import (
 
 func setup(t *testing.T) (*queryrunner.Runner, string) {
 	t.Helper()
-	return setupWith(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+	return setupWith(t, queryrunner.DefaultLimits(), checker.NewChecker())
 }
 
-func setupWith(t *testing.T, limits queryrunner.Limits, checker *sqlpolicy.Checker) (*queryrunner.Runner, string) {
+func setupWith(t *testing.T, limits queryrunner.Limits, checker *checker.Checker) (*queryrunner.Runner, string) {
 	t.Helper()
 
 	database := gamedbtest.Scratch(t)

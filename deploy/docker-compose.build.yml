@@ -22,6 +22,9 @@ services:
   api:
     build: &backend
       context: ../backend
+      # Named explicitly: a build with no target produces the last stage in the
+      # Dockerfile, which since the Query Runner arrived is not this one.
+      target: runtime
       args:
         VERSION: ${VERSION:-dev}
 

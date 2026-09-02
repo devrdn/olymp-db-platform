@@ -13,7 +13,10 @@ RUN go mod download
 COPY . .
 
 ARG VERSION=dev
-# CGO is off so the result runs on a distroless base with no libc.
+# CGO is off so the result runs on a distroless base with no libc. That is a
+# constraint on the dependency graph, not only on this line: one import of the
+# SQL checker anywhere beneath cmd/api pulls PostgreSQL's parser in and this
+# stage stops building. `make static-check` is what says so before CI does.
 ENV CGO_ENABLED=0
 RUN go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/api       ./cmd/api && \
     go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/migrate   ./cmd/migrate && \

@@ -1,14 +1,9 @@
-package sqlpolicy
+package checker
 
 import (
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	pg "github.com/pganalyze/pg_query_go/v6"
 )
-
-// workSchema is where a participant's own objects live. The template grants
-// CREATE on it and on nothing else, so this and internal/gamedb are naming the
-// same schema — the validator refuses what the privileges would refuse anyway,
-// with a sentence instead of "permission denied".
-const workSchema = "work"
 
 // The statements a contest may permit beyond reading, and what each one has to
 // satisfy.
@@ -26,7 +21,7 @@ const workSchema = "work"
 // "permission denied".
 
 // writeAllowed decides one write statement.
-func (c *Checker) writeAllowed(root *pg.Node, p Policy) error {
+func (c *Checker) writeAllowed(root *pg.Node, p sqlpolicy.Policy) error {
 	switch stmt := root.Node.(type) {
 	case *pg.Node_InsertStmt:
 		return targetAllowed(p, stmt.InsertStmt.GetRelation(), "INSERT")
@@ -37,7 +32,7 @@ func (c *Checker) writeAllowed(root *pg.Node, p Policy) error {
 
 	case *pg.Node_ViewStmt:
 		if !p.AllowCreateView {
-			return &Refusal{Code: CodeNotPermitted, Subject: "CREATE VIEW"}
+			return &sqlpolicy.Refusal{Code: sqlpolicy.CodeNotPermitted, Subject: "CREATE VIEW"}
 		}
 		return ownObject(stmt.ViewStmt.GetView(), "CREATE VIEW")
 
@@ -50,7 +45,7 @@ func (c *Checker) writeAllowed(root *pg.Node, p Policy) error {
 	case *pg.Node_DropStmt:
 		return dropAllowed(p, stmt.DropStmt)
 	}
-	return &Refusal{Code: CodeStatementNotSupported, Subject: kindOf(root)}
+	return &sqlpolicy.Refusal{Code: sqlpolicy.CodeStatementNotSupported, Subject: kindOf(root)}
 }
 
 // targetAllowed checks what a write is aimed at.
@@ -58,17 +53,17 @@ func (c *Checker) writeAllowed(root *pg.Node, p Policy) error {
 // Two ways to qualify: a game table the contest named, or something in the
 // participant's own schema. Anything else is refused by name, because "which
 // table" is the one thing the participant needs to be told.
-func targetAllowed(p Policy, rel *pg.RangeVar, what string) error {
+func targetAllowed(p sqlpolicy.Policy, rel *pg.RangeVar, what string) error {
 	if rel == nil {
-		return &Refusal{Code: CodeStatementNotSupported, Subject: what}
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeStatementNotSupported, Subject: what}
 	}
 	if p.MayWriteTo(rel.GetSchemaname(), rel.GetRelname()) {
 		return nil
 	}
-	if p.AllowOwnTables && rel.GetSchemaname() == workSchema {
+	if p.AllowOwnTables && rel.GetSchemaname() == sqlpolicy.WorkSchema {
 		return nil
 	}
-	return &Refusal{Code: CodeTableNotWritable, Subject: relationName(rel)}
+	return &sqlpolicy.Refusal{Code: sqlpolicy.CodeTableNotWritable, Subject: relationName(rel)}
 }
 
 // createdTableAllowed covers CREATE TABLE and CREATE TABLE AS.
@@ -76,27 +71,27 @@ func targetAllowed(p Policy, rel *pg.RangeVar, what string) error {
 // A temporary table is a separate permission from a permanent one: it lives
 // for the query and cannot be a way to keep something the contest did not mean
 // to allow.
-func createdTableAllowed(p Policy, rel *pg.RangeVar) error {
+func createdTableAllowed(p sqlpolicy.Policy, rel *pg.RangeVar) error {
 	if rel == nil {
-		return &Refusal{Code: CodeStatementNotSupported, Subject: "CREATE TABLE"}
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeStatementNotSupported, Subject: "CREATE TABLE"}
 	}
 
 	// `t` is the grammar's mark for a temporary relation.
 	if rel.GetRelpersistence() == "t" {
 		if !p.AllowTempTables {
-			return &Refusal{Code: CodeNotPermitted, Subject: "CREATE TEMPORARY TABLE"}
+			return &sqlpolicy.Refusal{Code: sqlpolicy.CodeNotPermitted, Subject: "CREATE TEMPORARY TABLE"}
 		}
 		return nil
 	}
 
 	if !p.AllowOwnTables {
-		return &Refusal{Code: CodeNotPermitted, Subject: "CREATE TABLE"}
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeNotPermitted, Subject: "CREATE TABLE"}
 	}
 	return ownObject(rel, "CREATE TABLE")
 }
 
 // dropAllowed covers removing what a participant made, and only that.
-func dropAllowed(p Policy, stmt *pg.DropStmt) error {
+func dropAllowed(p sqlpolicy.Policy, stmt *pg.DropStmt) error {
 	permitted := map[pg.ObjectType]bool{
 		pg.ObjectType_OBJECT_TABLE: p.AllowOwnTables,
 		pg.ObjectType_OBJECT_VIEW:  p.AllowCreateView,
@@ -104,10 +99,10 @@ func dropAllowed(p Policy, stmt *pg.DropStmt) error {
 
 	allowed, known := permitted[stmt.GetRemoveType()]
 	if !known {
-		return &Refusal{Code: CodeStatementNotSupported, Subject: stmt.GetRemoveType().String()}
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeStatementNotSupported, Subject: stmt.GetRemoveType().String()}
 	}
 	if !allowed {
-		return &Refusal{Code: CodeNotPermitted, Subject: "DROP"}
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeNotPermitted, Subject: "DROP"}
 	}
 
 	for _, object := range stmt.GetObjects() {
@@ -116,8 +111,8 @@ func dropAllowed(p Policy, stmt *pg.DropStmt) error {
 		// should have to guess at — so it is refused for the same reason an
 		// unqualified CREATE is.
 		parts := object.GetList().GetItems()
-		if len(parts) != 2 || parts[0].GetString_().GetSval() != workSchema {
-			return &Refusal{Code: CodeNotPermitted, Subject: "DROP outside " + workSchema}
+		if len(parts) != 2 || parts[0].GetString_().GetSval() != sqlpolicy.WorkSchema {
+			return &sqlpolicy.Refusal{Code: sqlpolicy.CodeNotPermitted, Subject: "DROP outside " + sqlpolicy.WorkSchema}
 		}
 	}
 	return nil
@@ -129,8 +124,8 @@ func dropAllowed(p Policy, stmt *pg.DropStmt) error {
 // search path, and a participant who meant `work.notes` and typed `notes`
 // should be told so rather than find out from a privilege error.
 func ownObject(rel *pg.RangeVar, what string) error {
-	if rel.GetSchemaname() != workSchema {
-		return &Refusal{Code: CodeNotPermitted, Subject: what + " outside " + workSchema}
+	if rel.GetSchemaname() != sqlpolicy.WorkSchema {
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeNotPermitted, Subject: what + " outside " + sqlpolicy.WorkSchema}
 	}
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
 )
 
 func TestItReturnsColumnsAndRows(t *testing.T) {
@@ -111,7 +112,7 @@ func TestAResultExactlyAtTheLimitIsNotCut(t *testing.T) {
 func TestAHugeResultIsCutByItsSize(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.MaxBytes = 64 << 10
-	runner, database := setupWith(t, limits, sqlpolicy.NewChecker())
+	runner, database := setupWith(t, limits, checker.NewChecker())
 
 	result, err := runner.Run(t.Context(),
 		request(database, `SELECT repeat('x', 4096) FROM generate_series(1, 100)`))
@@ -139,7 +140,7 @@ func TestTheRunnersOwnDeadlineIsWhatBoundsTime(t *testing.T) {
 	// pg_sleep is deliberately not on the standard allow-list. Extending the
 	// checker here is what lets this test reach the database at all, and it is
 	// the point: the deadline must hold for a query the validator did not stop.
-	runner, database := setupWith(t, limits, sqlpolicy.NewChecker("pg_sleep"))
+	runner, database := setupWith(t, limits, checker.NewChecker("pg_sleep"))
 
 	started := time.Now()
 	_, err := runner.Run(t.Context(), request(database, `SELECT pg_sleep(30)`))
@@ -162,7 +163,7 @@ func TestTheRunnersOwnDeadlineIsWhatBoundsTime(t *testing.T) {
 func TestATimedOutQueryStopsRunningOnTheServer(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.Deadline = 400 * time.Millisecond
-	runner, database := setupWith(t, limits, sqlpolicy.NewChecker("pg_sleep"))
+	runner, database := setupWith(t, limits, checker.NewChecker("pg_sleep"))
 
 	if _, err := runner.Run(t.Context(), request(database, `SELECT pg_sleep(30)`)); err == nil {
 		t.Fatal("a thirty-second query finished")
@@ -223,7 +224,7 @@ func TestAnUnknownDatabaseFailsWithoutPanicking(t *testing.T) {
 func TestACallerGoingAwayIsNotATimeout(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.Deadline = 30 * time.Second // far longer than this test will wait
-	runner, database := setupWith(t, limits, sqlpolicy.NewChecker("pg_sleep"))
+	runner, database := setupWith(t, limits, checker.NewChecker("pg_sleep"))
 
 	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
@@ -247,7 +248,7 @@ func TestACallerGoingAwayIsNotATimeout(t *testing.T) {
 func TestAParticipantMayNotAskFasterThanTheContestAllows(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.PerMinute = 3
-	runner, database := setupWith(t, limits, sqlpolicy.NewChecker())
+	runner, database := setupWith(t, limits, checker.NewChecker())
 
 	for i := range 3 {
 		if _, err := runner.Run(t.Context(), request(database, `SELECT 1`)); err != nil {
@@ -262,7 +263,7 @@ func TestAParticipantMayNotAskFasterThanTheContestAllows(t *testing.T) {
 // The quota is checked before a write and never before a read: a read cannot
 // fill a disk, and the check costs a round trip on every query.
 func TestAWriteIsRefusedWhenTheDatabaseIsAtItsLimit(t *testing.T) {
-	runner, database := setupWith(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+	runner, database := setupWith(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
 	writing := request(database, `INSERT INTO evidence (id, note) VALUES (99, 'planted')`)
 	writing.Policy = sqlpolicy.ReadWrite("evidence")
@@ -285,7 +286,7 @@ func TestAWriteIsRefusedWhenTheDatabaseIsAtItsLimit(t *testing.T) {
 
 // And a quota nobody set is no quota, which is what a read-only contest wants.
 func TestNoQuotaMeansNoCheck(t *testing.T) {
-	runner, database := setupWith(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+	runner, database := setupWith(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
 	writing := request(database, `INSERT INTO evidence (id, note) VALUES (98, 'x')`)
 	writing.Policy = sqlpolicy.ReadWrite("evidence")
@@ -422,7 +423,7 @@ func TestARunnerWithoutAWriterRefusesAReadWriteContest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("building the cluster connector: %v", err)
 	}
-	runner := queryrunner.New(cluster, sqlpolicy.NewChecker(), queryrunner.DefaultLimits())
+	runner := queryrunner.New(cluster, checker.NewChecker(), queryrunner.DefaultLimits())
 
 	reading := request(database, `SELECT id FROM evidence`)
 	reading.Policy = sqlpolicy.ReadWrite("evidence")
@@ -469,7 +470,7 @@ func TestAStatementFollowedByACommentStillRuns(t *testing.T) {
 func TestOneCellLargerThanTheBudgetIsRefusedWithoutBeingRead(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.MaxBytes = 64 << 10
-	runner, database := setupWith(t, limits, sqlpolicy.NewChecker())
+	runner, database := setupWith(t, limits, checker.NewChecker())
 
 	// Eight megabytes in one cell: past the budget and past its slack, and
 	// small enough that reading it whole would not itself fail the test —
@@ -503,7 +504,7 @@ func TestADatabaseNameThatIsNotPlainIsRefused(t *testing.T) {
 func TestARefusedQueryStillCountsAgainstTheRate(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.PerMinute = 2
-	runner, database := setupWith(t, limits, sqlpolicy.NewChecker())
+	runner, database := setupWith(t, limits, checker.NewChecker())
 
 	for range 2 {
 		if _, err := runner.Run(t.Context(), request(database, `COPY evidence TO STDOUT`)); errors.Is(err, queryrunner.ErrTooManyQueries) {
