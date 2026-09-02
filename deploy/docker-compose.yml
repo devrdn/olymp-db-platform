@@ -97,6 +97,72 @@ services:
       start_period: 30s
     networks: [internal]
 
+  # One-shot job: creates the game cluster's two participant roles, their
+  # session defaults and the revocations, then exits. Idempotent, and run on
+  # every deploy so a restriction added in a later release reaches a cluster
+  # that already exists — which an image init script, running only when the
+  # data directory is created, silently would not.
+  game-prepare:
+    image: ${REGISTRY:-ghcr.io/devrdn}/db-contest-queryrunner:${VERSION:-dev}
+    restart: "no"
+    entrypoint: ["/usr/local/bin/gamedb"]
+    environment:
+      GAME_DB_ADMIN_DSN: postgres://${GAME_DB_USER}:${GAME_DB_PASSWORD}@pg-game:5432/${GAME_DB_NAME:-dbcontest_game}?sslmode=disable
+      GAME_READER_PASSWORD: ${GAME_READER_PASSWORD:?set GAME_READER_PASSWORD in .env}
+      GAME_WRITER_PASSWORD: ${GAME_WRITER_PASSWORD:?set GAME_WRITER_PASSWORD in .env}
+    depends_on:
+      pg-game:
+        condition: service_healthy
+    networks: [internal]
+
+  # The Query Runner: the one component that is a separate service.
+  #
+  # Two things are true of it and of nothing else here. It links PostgreSQL's
+  # own parser through cgo to check a query before running it — C code reading
+  # text an adversary chooses, where a crash ends the process rather than
+  # raising an error — so inside the Core API a crafted query would be a
+  # repeatable way to end sign-in, the timer and the submission of answers. And
+  # it is the only process holding the game cluster's credentials: the API is
+  # deliberately given no route to a participant's database.
+  #
+  # No published port, and no core database: it is stateless, and what it knows
+  # about a request is what the request carries.
+  queryrunner:
+    image: ${REGISTRY:-ghcr.io/devrdn}/db-contest-queryrunner:${VERSION:-dev}
+    restart: unless-stopped
+    environment:
+      ENV: ${ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      QUERY_RUNNER_ADDR: ":9100"
+      # As the participant's role, never the provisioning one. The database in
+      # this URL is a placeholder: the runner replaces it per request with the
+      # participant's own, taken from game_instances by the Core API. Only the
+      # credentials here are ever used.
+      GAME_DB_DSN: postgres://game_reader:${GAME_READER_PASSWORD}@pg-game:5432/postgres?sslmode=disable
+      QUERY_DEADLINE: ${QUERY_DEADLINE:-5s}
+      QUERY_MAX_ROWS: ${QUERY_MAX_ROWS:-1000}
+      QUERY_MAX_BYTES: ${QUERY_MAX_BYTES:-5242880}
+      # Two to three times the cores of the game cluster (section 4.3).
+      QUERY_CONCURRENT: ${QUERY_CONCURRENT:-8}
+      QUERY_QUEUE_DEPTH: ${QUERY_QUEUE_DEPTH:-16}
+      # Functions an operator added to the allow-list after a pilot, without
+      # waiting for a release. Comma-separated.
+      QUERY_EXTRA_FUNCTIONS: ${QUERY_EXTRA_FUNCTIONS:-}
+    depends_on:
+      pg-game:
+        condition: service_healthy
+      game-prepare:
+        condition: service_completed_successfully
+    healthcheck:
+      # Distroless carries no shell and no gRPC probe, so the binary dials its
+      # own listener.
+      test: ["CMD", "/usr/local/bin/queryrunner", "-healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks: [internal]
+
   # Optional. Start it with the "shared" profile:
   #   docker compose --profile shared up -d
   # Without it the API uses its in-process cache, which is correct for a single

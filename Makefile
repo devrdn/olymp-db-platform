@@ -15,6 +15,10 @@ COMPOSE_BUILD := $(COMPOSE) -f deploy/docker-compose.build.yml
 REGISTRY         ?= ghcr.io/devrdn
 IMAGE_BACKEND    := $(REGISTRY)/db-contest-backend
 IMAGE_FRONTEND   := $(REGISTRY)/db-contest-frontend
+# A second backend image, not a second entrypoint on the first: the Query
+# Runner links PostgreSQL's parser through cgo and needs a libc at runtime, so
+# it cannot share the static base the other binaries run on.
+IMAGE_RUNNER     := $(REGISTRY)/db-contest-queryrunner
 # What a local build is tagged with, and what `make deploy` refuses to accept
 # as a deployable version. deploy/.env deliberately does not set it: an
 # assignment there would be read by the -include below and would beat anything
@@ -66,7 +70,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env require-version build test test-race test-db test-game api-contract backup restore restore-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
+.PHONY: help require-env require-version build test test-race test-db test-game api-contract proto backup restore restore-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -77,6 +81,8 @@ build: ## Compile the binaries into backend/bin
 	cd $(BACKEND) && go build -trimpath -ldflags="-X main.version=$(VERSION)" -o bin/api ./cmd/api
 	cd $(BACKEND) && go build -trimpath -ldflags="-X main.version=$(VERSION)" -o bin/migrate ./cmd/migrate
 	cd $(BACKEND) && go build -trimpath -o bin/bootstrap ./cmd/bootstrap
+	cd $(BACKEND) && go build -trimpath -ldflags="-X main.version=$(VERSION)" -o bin/queryrunner ./cmd/queryrunner
+	cd $(BACKEND) && go build -trimpath -o bin/gamedb ./cmd/gamedb
 
 test: ## Run the unit tests
 	cd $(BACKEND) && go test ./...
@@ -98,6 +104,15 @@ test-db: require-env ## Run the repository tests against the development databas
 # it starts pg-game along with the core database.
 test-game: require-env ## Run the game cluster tests against the development cluster
 	cd $(BACKEND) && GAME_DB_DSN="$(GAME_DB_DSN)" go test -count=1 ./internal/gamedb/... ./internal/queryrunner/...
+
+# The contract between the Core API and the Query Runner. Generated code is
+# committed, so a checkout builds without protoc; this regenerates it, and
+# `make check` fails if what is committed no longer matches the .proto.
+proto: ## Regenerate the Query Runner contract from proto/
+	cd $(BACKEND) && protoc --proto_path=proto \
+		--go_out=. --go_opt=module=github.com/devrdn/db-contest/backend \
+		--go-grpc_out=. --go-grpc_opt=module=github.com/devrdn/db-contest/backend \
+		proto/queryrunner/v1/queryrunner.proto
 
 cover: ## Run the tests and open the coverage report
 	cd $(BACKEND) && go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1
@@ -324,13 +339,14 @@ dev-logs: ## Follow the development infrastructure logs
 	$(COMPOSE_DEV) logs -f
 
 images: ## Build the release images from this working tree
-	VERSION=$(VERSION) $(COMPOSE_BUILD) build api web
-	@echo "built $(IMAGE_BACKEND):$(VERSION) and $(IMAGE_FRONTEND):$(VERSION)"
+	VERSION=$(VERSION) $(COMPOSE_BUILD) build api queryrunner web
+	@echo "built $(IMAGE_BACKEND):$(VERSION), $(IMAGE_RUNNER):$(VERSION) and $(IMAGE_FRONTEND):$(VERSION)"
 
 # CI pushes these; this target exists for the day the registry is unreachable
 # from CI and somebody has to do it by hand.
 images-push: images ## Push the release images to the registry
 	docker push $(IMAGE_BACKEND):$(VERSION)
+	docker push $(IMAGE_RUNNER):$(VERSION)
 	docker push $(IMAGE_FRONTEND):$(VERSION)
 
 ## --- Deployment -------------------------------------------------------------
