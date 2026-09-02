@@ -16,10 +16,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -60,8 +62,42 @@ func run() error {
 	if err := gamedb.PrepareCluster(ctx, pool, roles); err != nil {
 		return err
 	}
+	if err := hardenTheDefault(ctx, dsn); err != nil {
+		return err
+	}
 
-	fmt.Println("game cluster prepared: roles, session defaults and connect privileges are as declared")
+	fmt.Println("game cluster prepared: roles, session defaults, connect privileges " +
+		"and the catalogue revocations every new database inherits")
+	return nil
+}
+
+// hardenTheDefault applies the catalogue revocations to template1.
+//
+// Every database created without an explicit TEMPLATE comes from template1 and
+// copies its catalogue, ACLs included. Hardening it once means an instance
+// nobody remembered to harden is hardened anyway — which matters because the
+// alternative fails silently: an unhardened instance looks exactly like the
+// others, and only a participant would ever find out.
+//
+// The connection is closed before this returns, because CREATE DATABASE
+// refuses while anything is connected to its source. That is also why this is
+// a deploy-time job and not something the running system does.
+func hardenTheDefault(ctx context.Context, adminDSN string) error {
+	target, err := url.Parse(adminDSN)
+	if err != nil {
+		return fmt.Errorf("GAME_DB_ADMIN_DSN is not a URL: %w", err)
+	}
+	target.Path = "/template1"
+
+	conn, err := pgx.Connect(ctx, target.String())
+	if err != nil {
+		return fmt.Errorf("connect to template1: %w", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+
+	if err := gamedb.HardenDatabase(ctx, conn); err != nil {
+		return fmt.Errorf("harden template1: %w", err)
+	}
 	return nil
 }
 

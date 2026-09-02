@@ -227,3 +227,39 @@ func TestEverySensitiveCatalogTheValidatorNamesIsAlsoRevoked(t *testing.T) {
 		})
 	}
 }
+
+// Hardening reaches a participant by being inherited, and the surest way to
+// inherit it is to make the default carry it: every database created without
+// an explicit template comes from template1. Hardening that once means a
+// database nobody remembered to harden is hardened anyway — which matters
+// because the failure mode of the alternative is silent, an instance that
+// looks exactly like the others and is not.
+func TestADatabaseCreatedWithNoTemplateIsHardenedAnyway(t *testing.T) {
+	requireCluster(t)
+
+	// What the deploy job does, and idempotent, so running it here is running
+	// the real thing rather than a rehearsal of it.
+	template := connectAsOwner(t, "template1")
+	if err := gamedb.HardenDatabase(t.Context(), template); err != nil {
+		t.Fatalf("hardening template1: %v", err)
+	}
+	// CREATE DATABASE refuses while anything is connected to its source.
+	if err := template.Close(t.Context()); err != nil {
+		t.Fatalf("closing template1: %v", err)
+	}
+
+	name := "gamedb_default_" + strings.ReplaceAll(t.Name(), "/", "_")
+	if _, err := admin(t).Exec(t.Context(),
+		`DROP DATABASE IF EXISTS `+gamedb.QuoteIdentifier(name)+` WITH (FORCE)`); err != nil {
+		t.Fatalf("clearing a previous run: %v", err)
+	}
+	// No TEMPLATE clause at all: this is the shape a person types.
+	if _, err := admin(t).Exec(t.Context(), `CREATE DATABASE `+gamedb.QuoteIdentifier(name)); err != nil {
+		t.Fatalf("creating %s: %v", name, err)
+	}
+	t.Cleanup(func() { gamedbtest.Drop(name) })
+
+	reader := connectAs(t, roleReader, testReaderPassword, name)
+	refused(t, reader, `SELECT count(*) FROM pg_database`)
+	refused(t, reader, `SELECT count(*) FROM pg_stat_activity`)
+}

@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/devrdn/db-contest/backend/internal/api"
 	"github.com/devrdn/db-contest/backend/internal/audit"
@@ -38,6 +39,9 @@ type App struct {
 	log      *slog.Logger
 	public   *server.Server
 	internal *server.Server
+
+	// tasks are the periodic jobs, started with Run and stopped with it.
+	tasks []task
 
 	// closers releases resources in reverse assembly order on shutdown.
 	closers []func()
@@ -101,6 +105,12 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// Authentication and account management. The repositories are the only
 	// components that know SQL; everything above them works against the
 	// interfaces the domain packages declare.
+	// The second half of the two-phase query journal. A row is written before
+	// its query runs so that a process dying mid-query leaves evidence; this
+	// is what closes the evidence, and without it the guarantee is only
+	// half-built (section 5, point 7).
+	a.tasks = append(a.tasks, sweepQueryLog(log, postgres.NewQueryLog(pool).SweepAbandoned))
+
 	userRepo := postgres.NewUsers(pool)
 	auditRecorder := audit.New(postgres.NewAuditSink(pool))
 	sessions := auth.NewSessionStore(cacheBackend, cfg.SessionTTL)
@@ -185,8 +195,24 @@ func (a *App) Run(ctx context.Context) error {
 		return fmt.Errorf("start internal server: %w", err)
 	}
 
+	// Background jobs get their own cancellation so that shutdown stops them
+	// before the listeners drain: a job writing to the database while the pool
+	// is being closed is a confusing error in the log of an orderly shutdown.
+	jobs, stopJobs := context.WithCancel(ctx)
+	var running sync.WaitGroup
+	for _, t := range a.tasks {
+		running.Add(1)
+		go func() {
+			defer running.Done()
+			runPeriodically(jobs, a.log, t)
+		}()
+	}
+
 	<-ctx.Done()
 	a.log.Info("shutdown signal received")
+
+	stopJobs()
+	running.Wait()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), a.cfg.ShutdownTimeout)
 	defer cancel()
