@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	pb "github.com/devrdn/db-contest/backend/internal/rpc/queryrunnerv1"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
@@ -17,6 +18,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -165,6 +167,7 @@ func Serve(ctx context.Context, lis net.Listener, server *Server, shutdown time.
 	grpcServer := grpc.NewServer(
 		grpc.MaxRecvMsgSize(MaxPayloadBytes),
 		grpc.MaxSendMsgSize(MaxPayloadBytes),
+		grpc.UnaryInterceptor(correlate),
 	)
 	server.Register(grpcServer)
 
@@ -200,3 +203,32 @@ func Serve(ctx context.Context, lis net.Listener, server *Server, shutdown time.
 	}
 	return nil
 }
+
+// correlate carries the caller's request identifier into this process's
+// context, so that every line this service logs about a call joins the line
+// the Core API logged about the same one.
+//
+// A separate service whose logs cannot be joined to the requests that caused
+// them is a separate service nobody can debug. The identifier is the caller's
+// and is not trusted for anything: it decides nothing, it only labels.
+func correlate(
+	ctx context.Context,
+	req any,
+	_ *grpc.UnaryServerInfo,
+	handler grpc.UnaryHandler,
+) (any, error) {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if ids := md.Get(requestIDHeader); len(ids) > 0 && ids[0] != "" {
+			ctx = logging.WithRequestID(ctx, ids[0])
+		}
+	}
+	// A seam for the test that proves the identifier arrived: the service
+	// deliberately logs nothing per query, so there is no line to look for.
+	if carried != nil {
+		carried(ctx)
+	}
+	return handler(ctx, req)
+}
+
+// carried is set only by tests.
+var carried func(context.Context)

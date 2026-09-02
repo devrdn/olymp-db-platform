@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	pb "github.com/devrdn/db-contest/backend/internal/rpc/queryrunnerv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 // ErrUnreachable is the Query Runner failing to answer at all, as opposed to
@@ -18,6 +20,10 @@ import (
 // than as a gRPC status: without it, a service that is down and a query that
 // was refused reach the participant as the same sentence.
 var ErrUnreachable = errors.New("the query service could not answer")
+
+// requestIDHeader carries the correlation identifier across the two
+// processes. Lower case because gRPC metadata keys are.
+const requestIDHeader = "x-request-id"
 
 // Client calls the Query Runner service.
 //
@@ -66,6 +72,15 @@ func (c *Client) Close() error { return c.conn.Close() }
 // Failure in the response is the answer, and becomes the same Go error a local
 // runner would have produced.
 func (c *Client) Run(ctx context.Context, req queryrunner.Request) (*queryrunner.Result, error) {
+	// The request's own identifier travels as metadata rather than as a field
+	// of the contract, because it is not part of the question being asked —
+	// it is how the two processes' logs are joined afterwards. Without it
+	// anything the Query Runner writes about this call is an orphan line in a
+	// different file.
+	if id := logging.RequestIDFrom(ctx); id != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, requestIDHeader, id)
+	}
+
 	response, err := c.service.Run(ctx, &pb.RunRequest{
 		Registration:   ptr(req.Registration.String()),
 		Database:       ptr(req.Database),

@@ -14,7 +14,7 @@ import { serverRequest } from "@/lib/api/server";
 export type ConsoleState =
   | { kind: "idle" }
   | { kind: "answer"; result: QueryResult }
-  | { kind: "refused"; code: string; subject?: string };
+  | { kind: "refused"; code: string; subject?: string; requestId?: string };
 
 /**
  * Runs one query as the signed-in participant.
@@ -42,7 +42,15 @@ export async function runQueryAction(
     return { kind: "answer", result: queryResultSchema.parse(payload) };
   } catch (error: unknown) {
     if (error instanceof ApiError) {
-      return { kind: "refused", code: error.code, subject: error.subject };
+      // The identifier the API already puts in every error, carried so that
+      // the participant can quote it. "It failed around two o'clock" is not
+      // something anybody can grep for.
+      return {
+        kind: "refused",
+        code: error.code,
+        subject: error.subject,
+        requestId: error.requestId,
+      };
     }
     return { kind: "refused", code: "unreachable" };
   }

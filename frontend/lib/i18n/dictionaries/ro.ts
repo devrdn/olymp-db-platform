@@ -527,6 +527,7 @@ const ro = {
       truncated: "Se afișează primele {count} rânduri. Răspunsul este mai lung.",
       affected: "Rânduri modificate: {count}.",
       noRows: "Interogarea s-a executat și nu a găsit nimic.",
+      reference: "Dacă raportați acest lucru, menționați {id}.",
       null: "null",
     },
     mine: {
