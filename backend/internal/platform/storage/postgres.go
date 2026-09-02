@@ -56,6 +56,22 @@ func dsnSetsPoolMaxConns(dsn string) bool {
 }
 
 func PoolConfig(dsn string) (*pgxpool.Config, error) {
+	return poolConfig(dsn, coreStatementTimeout)
+}
+
+// MaintenancePoolConfig is PoolConfig with a statement timeout sized for
+// administrative work rather than for request queries.
+//
+// The core timeout of ten seconds is right for the API and wrong for a pool
+// whose statements are CREATE DATABASE … TEMPLATE and DROP DATABASE: copying
+// a large game template takes as long as the disk takes, and a ten-second cap
+// would fail provisioning exactly for the contests big enough to need it —
+// silently, at the first tick that tried.
+func MaintenancePoolConfig(dsn string, statementTimeout time.Duration) (*pgxpool.Config, error) {
+	return poolConfig(dsn, statementTimeout)
+}
+
+func poolConfig(dsn string, statementTimeout time.Duration) (*pgxpool.Config, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse core database DSN: invalid connection string")
@@ -84,7 +100,7 @@ func PoolConfig(dsn string) (*pgxpool.Config, error) {
 		cfg.ConnConfig.RuntimeParams = map[string]string{}
 	}
 	if _, ok := cfg.ConnConfig.RuntimeParams["statement_timeout"]; !ok {
-		ms := strconv.FormatInt(coreStatementTimeout.Milliseconds(), 10)
+		ms := strconv.FormatInt(statementTimeout.Milliseconds(), 10)
 		cfg.ConnConfig.RuntimeParams["statement_timeout"] = ms
 	}
 
@@ -98,7 +114,21 @@ func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, err
 	}
+	return openPool(ctx, cfg)
+}
 
+// NewMaintenancePool opens a pool for administrative statements — the game
+// cluster's provisioner — whose statement timeout is the one given rather
+// than the core API's.
+func NewMaintenancePool(ctx context.Context, dsn string, statementTimeout time.Duration) (*pgxpool.Pool, error) {
+	cfg, err := MaintenancePoolConfig(dsn, statementTimeout)
+	if err != nil {
+		return nil, err
+	}
+	return openPool(ctx, cfg)
+}
+
+func openPool(ctx context.Context, cfg *pgxpool.Config) (*pgxpool.Pool, error) {
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open core database pool: %w", err)

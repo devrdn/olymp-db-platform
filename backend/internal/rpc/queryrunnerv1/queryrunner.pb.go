@@ -67,6 +67,10 @@ const (
 	// The write was refused because the participant's database is at its size
 	// limit.
 	Failure_KIND_DISK_FULL Failure_Kind = 8
+	// The answer could not be read within the result budget at all — one row
+	// alone was larger than the whole allowance, so there is no prefix of it
+	// to show. Distinct from a truncated result, which is an answer.
+	Failure_KIND_RESULT_TOO_LARGE Failure_Kind = 9
 )
 
 // Enum value maps for Failure_Kind.
@@ -81,17 +85,19 @@ var (
 		6: "KIND_CANCELLED",
 		7: "KIND_RATE_LIMITED",
 		8: "KIND_DISK_FULL",
+		9: "KIND_RESULT_TOO_LARGE",
 	}
 	Failure_Kind_value = map[string]int32{
-		"KIND_UNSPECIFIED":     0,
-		"KIND_REFUSED":         1,
-		"KIND_BUSY":            2,
-		"KIND_ALREADY_RUNNING": 3,
-		"KIND_TIMEOUT":         4,
-		"KIND_DATABASE_ERROR":  5,
-		"KIND_CANCELLED":       6,
-		"KIND_RATE_LIMITED":    7,
-		"KIND_DISK_FULL":       8,
+		"KIND_UNSPECIFIED":      0,
+		"KIND_REFUSED":          1,
+		"KIND_BUSY":             2,
+		"KIND_ALREADY_RUNNING":  3,
+		"KIND_TIMEOUT":          4,
+		"KIND_DATABASE_ERROR":   5,
+		"KIND_CANCELLED":        6,
+		"KIND_RATE_LIMITED":     7,
+		"KIND_DISK_FULL":        8,
+		"KIND_RESULT_TOO_LARGE": 9,
 	}
 )
 
@@ -220,11 +226,16 @@ type RunRequest struct {
 	Registration *string `protobuf:"bytes,1,opt,name=registration" json:"registration,omitempty"`
 	// The participant's own game database. It comes from game_instances on the
 	// Core API's side and never from the client — section 5, point 1.
-	Database      *string `protobuf:"bytes,2,opt,name=database" json:"database,omitempty"`
-	Sql           *string `protobuf:"bytes,3,opt,name=sql" json:"sql,omitempty"`
-	Policy        *Policy `protobuf:"bytes,4,opt,name=policy" json:"policy,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Database *string `protobuf:"bytes,2,opt,name=database" json:"database,omitempty"`
+	Sql      *string `protobuf:"bytes,3,opt,name=sql" json:"sql,omitempty"`
+	Policy   *Policy `protobuf:"bytes,4,opt,name=policy" json:"policy,omitempty"`
+	// How large this participant's database may grow, in bytes. Computed on the
+	// Core API's side from the template's size and the policy's ratio, and
+	// checked by the runner before a write. Zero means no bound, which is what a
+	// read-only contest sends.
+	DiskQuotaBytes *int64 `protobuf:"varint,5,opt,name=disk_quota_bytes,json=diskQuotaBytes" json:"disk_quota_bytes,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RunRequest) Reset() {
@@ -283,6 +294,13 @@ func (x *RunRequest) GetPolicy() *Policy {
 		return x.Policy
 	}
 	return nil
+}
+
+func (x *RunRequest) GetDiskQuotaBytes() int64 {
+	if x != nil && x.DiskQuotaBytes != nil {
+		return *x.DiskQuotaBytes
+	}
+	return 0
 }
 
 type RunResponse struct {
@@ -380,7 +398,11 @@ type Result struct {
 	// flag rather than a silent cut: a participant reading nine hundred rows of
 	// a nine thousand row answer and not being told has a wrong answer, not a
 	// short one.
-	Truncated     *bool `protobuf:"varint,3,opt,name=truncated" json:"truncated,omitempty"`
+	Truncated *bool `protobuf:"varint,3,opt,name=truncated" json:"truncated,omitempty"`
+	// For a statement that changes the database: how many rows it changed. A
+	// read leaves it at zero, and so does a write that returned rows through
+	// RETURNING — those are the answer, and their count is the row count.
+	RowsAffected  *int64 `protobuf:"varint,4,opt,name=rows_affected,json=rowsAffected" json:"rows_affected,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -434,6 +456,13 @@ func (x *Result) GetTruncated() bool {
 		return *x.Truncated
 	}
 	return false
+}
+
+func (x *Result) GetRowsAffected() int64 {
+	if x != nil && x.RowsAffected != nil {
+		return *x.RowsAffected
+	}
+	return 0
 }
 
 type Row struct {
@@ -618,31 +647,33 @@ const file_queryrunner_v1_queryrunner_proto_rawDesc = "" +
 	"\x11allow_create_view\x18\x03 \x01(\bR\x0fallowCreateView\x12(\n" +
 	"\x10allow_own_tables\x18\x04 \x01(\bR\x0eallowOwnTables\x12*\n" +
 	"\x11allow_temp_tables\x18\x05 \x01(\bR\x0fallowTempTables\x12#\n" +
-	"\rallow_catalog\x18\x06 \x01(\bR\fallowCatalog\"\x98\x01\n" +
+	"\rallow_catalog\x18\x06 \x01(\bR\fallowCatalog\"\xc2\x01\n" +
 	"\n" +
 	"RunRequest\x12\"\n" +
 	"\fregistration\x18\x01 \x01(\tR\fregistration\x12\x1a\n" +
 	"\bdatabase\x18\x02 \x01(\tR\bdatabase\x12\x10\n" +
 	"\x03sql\x18\x03 \x01(\tR\x03sql\x128\n" +
-	"\x06policy\x18\x04 \x01(\v2 .dbcontest.queryrunner.v1.PolicyR\x06policy\"\x93\x01\n" +
+	"\x06policy\x18\x04 \x01(\v2 .dbcontest.queryrunner.v1.PolicyR\x06policy\x12(\n" +
+	"\x10disk_quota_bytes\x18\x05 \x01(\x03R\x0ediskQuotaBytes\"\x93\x01\n" +
 	"\vRunResponse\x12:\n" +
 	"\x06result\x18\x01 \x01(\v2 .dbcontest.queryrunner.v1.ResultH\x00R\x06result\x12=\n" +
 	"\afailure\x18\x02 \x01(\v2!.dbcontest.queryrunner.v1.FailureH\x00R\afailureB\t\n" +
-	"\aoutcome\"s\n" +
+	"\aoutcome\"\x98\x01\n" +
 	"\x06Result\x12\x18\n" +
 	"\acolumns\x18\x01 \x03(\tR\acolumns\x121\n" +
 	"\x04rows\x18\x02 \x03(\v2\x1d.dbcontest.queryrunner.v1.RowR\x04rows\x12\x1c\n" +
-	"\ttruncated\x18\x03 \x01(\bR\ttruncated\";\n" +
+	"\ttruncated\x18\x03 \x01(\bR\ttruncated\x12#\n" +
+	"\rrows_affected\x18\x04 \x01(\x03R\frowsAffected\";\n" +
 	"\x03Row\x124\n" +
 	"\x05cells\x18\x01 \x03(\v2\x1e.dbcontest.queryrunner.v1.CellR\x05cells\"3\n" +
 	"\x04Cell\x12\x17\n" +
 	"\ais_null\x18\x01 \x01(\bR\x06isNull\x12\x12\n" +
-	"\x04text\x18\x02 \x01(\tR\x04text\"\xd1\x02\n" +
+	"\x04text\x18\x02 \x01(\tR\x04text\"\xec\x02\n" +
 	"\aFailure\x12:\n" +
 	"\x04kind\x18\x01 \x01(\x0e2&.dbcontest.queryrunner.v1.Failure.KindR\x04kind\x12\x12\n" +
 	"\x04code\x18\x02 \x01(\tR\x04code\x12\x18\n" +
 	"\asubject\x18\x03 \x01(\tR\asubject\x12\x18\n" +
-	"\amessage\x18\x04 \x01(\tR\amessage\"\xc1\x01\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\"\xdc\x01\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fKIND_REFUSED\x10\x01\x12\r\n" +
@@ -652,7 +683,8 @@ const file_queryrunner_v1_queryrunner_proto_rawDesc = "" +
 	"\x13KIND_DATABASE_ERROR\x10\x05\x12\x12\n" +
 	"\x0eKIND_CANCELLED\x10\x06\x12\x15\n" +
 	"\x11KIND_RATE_LIMITED\x10\a\x12\x12\n" +
-	"\x0eKIND_DISK_FULL\x10\b2a\n" +
+	"\x0eKIND_DISK_FULL\x10\b\x12\x19\n" +
+	"\x15KIND_RESULT_TOO_LARGE\x10\t2a\n" +
 	"\vQueryRunner\x12R\n" +
 	"\x03Run\x12$.dbcontest.queryrunner.v1.RunRequest\x1a%.dbcontest.queryrunner.v1.RunResponseBAZ?github.com/devrdn/db-contest/backend/internal/rpc/queryrunnerv1b\beditionsp\xe8\a"
 

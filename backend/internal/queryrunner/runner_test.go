@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
@@ -289,8 +290,227 @@ func TestNoQuotaMeansNoCheck(t *testing.T) {
 	writing := request(database, `INSERT INTO evidence (id, note) VALUES (98, 'x')`)
 	writing.Policy = sqlpolicy.ReadWrite("evidence")
 
-	// It fails on privileges, not on size: the reader role has no INSERT.
+	// It fails on privileges, not on size: the writer was granted no INSERT on
+	// the game table in this arrangement.
 	if _, err := runner.Run(t.Context(), writing); errors.Is(err, queryrunner.ErrDiskFull) {
 		t.Fatal("a database with no quota was refused for its size")
+	}
+}
+
+// The point of a read-write contest: what a participant writes stays written.
+//
+// Both halves of this used to fail. A write was wrapped in the same subquery a
+// read is, which is a syntax error for an INSERT, and had it run, the
+// transaction was rolled back unconditionally. Neither was visible to a test
+// that connected as the reader, whose missing grant refused the write first.
+func TestAPermittedWriteIsKept(t *testing.T) {
+	runner, database := setup(t)
+	gamedbtest.Run(t, database, `GRANT INSERT, UPDATE, DELETE ON evidence TO `+gamedb.RoleWriter)
+
+	writing := request(database, `INSERT INTO evidence (id, note) VALUES (3, 'a glove'), (4, 'a coat')`)
+	writing.Policy = sqlpolicy.ReadWrite("evidence")
+
+	result, err := runner.Run(t.Context(), writing)
+	if err != nil {
+		t.Fatalf("a permitted write failed: %v", err)
+	}
+	if result.RowsAffected != 2 {
+		t.Fatalf("rows affected = %d, want 2", result.RowsAffected)
+	}
+
+	// Read back through the runner, on a fresh connection: what the
+	// transaction committed is what another query sees.
+	reading := request(database, `SELECT count(*) FROM evidence`)
+	reading.Policy = sqlpolicy.ReadWrite("evidence")
+	result, err = runner.Run(t.Context(), reading)
+	if err != nil {
+		t.Fatalf("reading back: %v", err)
+	}
+	if got := result.Rows[0][0]; got != int64(4) {
+		t.Fatalf("count after the write = %v, want 4", got)
+	}
+}
+
+// A write that answers with rows answers with rows: RETURNING is read through
+// the same limits a SELECT is, and its count is the row count.
+func TestAWriteWithReturningAnswersWithRows(t *testing.T) {
+	runner, database := setup(t)
+	gamedbtest.Run(t, database, `GRANT UPDATE ON evidence TO `+gamedb.RoleWriter)
+
+	writing := request(database, `UPDATE evidence SET note = upper(note) RETURNING id, note`)
+	writing.Policy = sqlpolicy.ReadWrite("evidence")
+
+	result, err := runner.Run(t.Context(), writing)
+	if err != nil {
+		t.Fatalf("a permitted UPDATE … RETURNING failed: %v", err)
+	}
+	if len(result.Rows) != 2 || result.RowsAffected != 0 {
+		t.Fatalf("rows = %d, affected = %d; want the rows to be the answer", len(result.Rows), result.RowsAffected)
+	}
+}
+
+// A participant's own table lives in `work`, and making one is a write that
+// has to be committed like any other.
+func TestOwnTablesAreKeptInWork(t *testing.T) {
+	runner, database := setup(t)
+	policy := sqlpolicy.ReadWrite()
+	policy.AllowOwnTables = true
+
+	creating := request(database, `CREATE TABLE work.notes (id int, body text)`)
+	creating.Policy = policy
+	if _, err := runner.Run(t.Context(), creating); err != nil {
+		t.Fatalf("creating an own table: %v", err)
+	}
+
+	inserting := request(database, `INSERT INTO work.notes VALUES (1, 'the butler')`)
+	inserting.Policy = policy
+	if _, err := runner.Run(t.Context(), inserting); err != nil {
+		t.Fatalf("writing to an own table: %v", err)
+	}
+
+	reading := request(database, `SELECT body FROM work.notes`)
+	reading.Policy = policy
+	result, err := runner.Run(t.Context(), reading)
+	if err != nil {
+		t.Fatalf("reading an own table: %v", err)
+	}
+	if len(result.Rows) != 1 || result.Rows[0][0] != "the butler" {
+		t.Fatalf("rows = %v, want the note that was written", result.Rows)
+	}
+}
+
+// Which role a query runs as is the policy's decision, and it has to be: the
+// writer's grants are what make a read-write contest's writes possible, and
+// the reader's lack of them is what keeps a read-only contest read-only by
+// privilege rather than by the transaction's access mode alone.
+//
+// Proven through a table only the writer may read: the same query is refused
+// by the database under one policy and answered under the other, and nothing
+// but the role behind the connection differs.
+func TestTheRoleFollowsThePolicy(t *testing.T) {
+	runner, database := setup(t)
+	// Created after the fixture's GRANT … ON ALL TABLES, so neither role can
+	// read it until this says so; only the writer is told.
+	gamedbtest.Run(t, database,
+		`CREATE TABLE writer_only (id int)`,
+		`GRANT SELECT ON writer_only TO `+gamedb.RoleWriter,
+	)
+
+	if _, err := runner.Run(t.Context(), request(database, `SELECT id FROM writer_only`)); err == nil {
+		t.Fatal("a read-only contest read a table only the writer may see: it ran as the writer")
+	}
+
+	asWriter := request(database, `SELECT id FROM writer_only`)
+	asWriter.Policy = sqlpolicy.ReadWrite("evidence")
+	if _, err := runner.Run(t.Context(), asWriter); err != nil {
+		t.Fatalf("a read-write contest could not read as the writer: %v", err)
+	}
+}
+
+// Without writer credentials a read-write contest is refused, not quietly run
+// as the reader, whose missing grants would turn every permitted write into
+// "permission denied" and read as a bug in the contest.
+func TestARunnerWithoutAWriterRefusesAReadWriteContest(t *testing.T) {
+	database := gamedbtest.Scratch(t)
+	gamedbtest.Run(t, database,
+		`CREATE TABLE evidence (id int PRIMARY KEY)`,
+		`GRANT USAGE ON SCHEMA public TO `+gamedb.RoleReader,
+		`GRANT SELECT ON ALL TABLES IN SCHEMA public TO `+gamedb.RoleReader,
+	)
+	cluster, err := queryrunner.NewCluster(
+		gamedbtest.DSN(t, gamedb.RoleReader, gamedbtest.ReaderPassword, database), "")
+	if err != nil {
+		t.Fatalf("building the cluster connector: %v", err)
+	}
+	runner := queryrunner.New(cluster, sqlpolicy.NewChecker(), queryrunner.DefaultLimits())
+
+	reading := request(database, `SELECT id FROM evidence`)
+	reading.Policy = sqlpolicy.ReadWrite("evidence")
+	if _, err := runner.Run(t.Context(), reading); !errors.Is(err, queryrunner.ErrNoWriter) {
+		t.Fatalf("error = %v, want ErrNoWriter", err)
+	}
+
+	// A read-only contest is unaffected: the reader is all it needs.
+	if _, err := runner.Run(t.Context(), request(database, `SELECT id FROM evidence`)); err != nil {
+		t.Fatalf("a read-only contest was refused: %v", err)
+	}
+}
+
+// One statement to the parser, a syntax error inside a FROM: the wrapper has
+// to cut where the parser said the statement ended, not where the string does.
+func TestAStatementFollowedByACommentStillRuns(t *testing.T) {
+	runner, database := setup(t)
+
+	for name, sql := range map[string]string{
+		"a semicolon then a comment": "SELECT 1 AS a; -- and a note",
+		"a semicolon then a newline": "SELECT 1 AS a;\n\n",
+		"a leading comment":          "-- what I was thinking\nSELECT 1 AS a",
+		"a leading block comment":    "/* thinking */ SELECT 1 AS a;",
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := runner.Run(t.Context(), request(database, sql))
+			if err != nil {
+				t.Fatalf("%q: %v", sql, err)
+			}
+			if len(result.Rows) != 1 {
+				t.Fatalf("%q: rows = %d, want 1", sql, len(result.Rows))
+			}
+		})
+	}
+}
+
+// The result budget bounds memory, not only what is passed on.
+//
+// The driver reads a whole row before handing any of it over, so a check on
+// the values it decoded comes after the allocation it exists to prevent: one
+// cell of hundreds of megabytes is hundreds of megabytes in this process. The
+// budget is therefore enforced where the bytes arrive. A single cell larger
+// than the whole allowance cannot be shown in part, so it is refused by name.
+func TestOneCellLargerThanTheBudgetIsRefusedWithoutBeingRead(t *testing.T) {
+	limits := queryrunner.DefaultLimits()
+	limits.MaxBytes = 64 << 10
+	runner, database := setupWith(t, limits, sqlpolicy.NewChecker())
+
+	// Eight megabytes in one cell: past the budget and past its slack, and
+	// small enough that reading it whole would not itself fail the test —
+	// what fails the test is reading it at all.
+	_, err := runner.Run(t.Context(), request(database, `SELECT repeat('x', 8 * 1024 * 1024)`))
+	if !errors.Is(err, queryrunner.ErrResultTooLarge) {
+		t.Fatalf("error = %v, want ErrResultTooLarge", err)
+	}
+
+	// The connection that refused to read is closed with the query; the next
+	// one starts with a fresh budget.
+	if _, err := runner.Run(t.Context(), request(database, `SELECT 1`)); err != nil {
+		t.Fatalf("the runner did not recover: %v", err)
+	}
+}
+
+// A database name is the caller's and is checked upstream; the runner still
+// refuses to build a connection string out of anything but a plain name.
+func TestADatabaseNameThatIsNotPlainIsRefused(t *testing.T) {
+	runner, _ := setup(t)
+
+	_, err := runner.Run(t.Context(), request("game?sslmode=require", `SELECT 1`))
+	if err == nil {
+		t.Fatal("a database name with a query string in it was accepted")
+	}
+}
+
+// The rate bounds how often the parser is exercised, so a refused query counts
+// too: otherwise refusals would be free, and the parser is C code reading text
+// an adversary chose.
+func TestARefusedQueryStillCountsAgainstTheRate(t *testing.T) {
+	limits := queryrunner.DefaultLimits()
+	limits.PerMinute = 2
+	runner, database := setupWith(t, limits, sqlpolicy.NewChecker())
+
+	for range 2 {
+		if _, err := runner.Run(t.Context(), request(database, `COPY evidence TO STDOUT`)); errors.Is(err, queryrunner.ErrTooManyQueries) {
+			t.Fatal("refused within the rate")
+		}
+	}
+	if _, err := runner.Run(t.Context(), request(database, `SELECT 1`)); !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("error = %v, want ErrTooManyQueries after two refused queries", err)
 	}
 }

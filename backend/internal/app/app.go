@@ -117,7 +117,11 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// to provision, and refusing to start would make the game circuit a
 	// requirement for running an olympiad's registration.
 	if cfg.GameProvisionerDSN != "" {
-		gamePool, err := storage.NewPool(ctx, cfg.GameProvisionerDSN)
+		// Its own statement timeout, not the core API's ten seconds: what this
+		// pool runs is CREATE DATABASE … TEMPLATE, which takes as long as
+		// copying the template takes, and the core timeout would fail
+		// provisioning exactly for the contests large enough to need it.
+		gamePool, err := storage.NewMaintenancePool(ctx, cfg.GameProvisionerDSN, provisionStatementTimeout)
 		if err != nil {
 			a.close()
 			return nil, fmt.Errorf("connect to the game cluster: %w", err)

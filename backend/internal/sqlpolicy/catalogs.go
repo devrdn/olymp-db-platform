@@ -22,17 +22,45 @@ import (
 // because the checker is the one that can have a bug.
 var (
 	sensitiveCatalogs = map[string]struct{}{
-		"pg_database":         {},
-		"pg_stat_activity":    {},
-		"pg_roles":            {},
-		"pg_user":             {},
-		"pg_shadow":           {},
-		"pg_authid":           {},
-		"pg_settings":         {},
-		"pg_stat_statements":  {},
-		"pg_file_settings":    {},
-		"pg_hba_file_rules":   {},
-		"pg_stat_replication": {},
+		// Who exists.
+		"pg_database":        {},
+		"pg_roles":           {},
+		"pg_user":            {},
+		"pg_shadow":          {},
+		"pg_authid":          {},
+		"pg_auth_members":    {},
+		"pg_db_role_setting": {},
+		// What everybody else is doing. pg_stat_activity is the obvious one,
+		// but the others below name other databases or other sessions just as
+		// plainly: pg_stat_database lists every database's name with its
+		// traffic, pg_locks lists every session's locks with its pid, and
+		// pg_prepared_xacts lists transactions by database. A participant
+		// refused pg_database who could read pg_stat_database would have the
+		// same list by another name.
+		"pg_stat_activity":              {},
+		"pg_stat_database":              {},
+		"pg_stat_database_conflicts":    {},
+		"pg_locks":                      {},
+		"pg_prepared_xacts":             {},
+		"pg_stat_ssl":                   {},
+		"pg_stat_gssapi":                {},
+		"pg_stat_progress_vacuum":       {},
+		"pg_stat_progress_analyze":      {},
+		"pg_stat_progress_cluster":      {},
+		"pg_stat_progress_create_index": {},
+		"pg_stat_progress_basebackup":   {},
+		"pg_stat_progress_copy":         {},
+		// How the installation is set up.
+		"pg_settings":          {},
+		"pg_stat_statements":   {},
+		"pg_file_settings":     {},
+		"pg_hba_file_rules":    {},
+		"pg_stat_replication":  {},
+		"pg_replication_slots": {},
+		"pg_stat_wal_receiver": {},
+		"pg_stat_subscription": {},
+		"pg_shdescription":     {},
+		"pg_shseclabel":        {},
 	}
 
 	// Schemas whose contents are catalog rather than game data.

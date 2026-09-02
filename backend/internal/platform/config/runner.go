@@ -26,9 +26,15 @@ type Runner struct {
 	// ListenAddr is where the Core API reaches this service. It is never
 	// published outside the private network.
 	ListenAddr string
-	// GameDBDSN connects as the participant role — game_reader — and is the
-	// only place in the system that holds it.
-	GameDBDSN       string
+	// GameDBDSN connects as the reading participant role — game_reader — and
+	// is the only place in the system that holds it.
+	GameDBDSN string
+	// GameDBWriterDSN connects as game_writer, for contests whose policy
+	// permits writing (section 4.1: which role is used is the policy's
+	// decision). Optional: without it a read-write contest is refused rather
+	// than quietly run as the reader, whose missing grants would turn every
+	// permitted write into "permission denied".
+	GameDBWriterDSN string
 	ShutdownTimeout time.Duration
 
 	// Deadline bounds one query, and is the bound that holds against SQL the
@@ -62,6 +68,7 @@ func LoadRunner() (Runner, error) {
 	if cfg.GameDBDSN, err = requiredEnv("GAME_DB_DSN"); err != nil {
 		return Runner{}, err
 	}
+	cfg.GameDBWriterDSN = os.Getenv("GAME_DB_WRITER_DSN")
 	if !slices.Contains(validLogLevels, cfg.LogLevel) {
 		return Runner{}, fmt.Errorf("LOG_LEVEL: unknown level %q, want one of %v", cfg.LogLevel, validLogLevels)
 	}

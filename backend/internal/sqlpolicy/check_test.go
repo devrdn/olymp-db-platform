@@ -232,3 +232,31 @@ func TestDecisionsWorthStating(t *testing.T) {
 		allow(t, `VALUES (1, 'a'), (2, 'b')`, sqlpolicy.ReadOnly())
 	})
 }
+
+// The statement's own text, as the parser delimited it. A caller that wraps
+// the query in a subquery needs the statement and not the string: what follows
+// a terminating semicolon is one statement to the parser and a syntax error
+// inside a FROM.
+func TestAnalyseReportsTheStatementsOwnText(t *testing.T) {
+	cases := map[string]string{
+		"SELECT 1":            "SELECT 1",
+		"SELECT 1;":           "SELECT 1",
+		"SELECT 1; -- a note": "SELECT 1",
+		// Leading whitespace and comments belong to the statement as the parser
+		// sees it, and are harmless inside a subquery; only what follows the
+		// terminating semicolon is cut.
+		"  \n SELECT 1  ":                    "  \n SELECT 1  ",
+		"-- a note\nSELECT 1":                "-- a note\nSELECT 1",
+		"/* thinking */ SELECT 1; \n\n":      "/* thinking */ SELECT 1",
+		"SELECT 1 -- trailing, no semicolon": "SELECT 1 -- trailing, no semicolon",
+	}
+	for in, want := range cases {
+		statement, err := sqlpolicy.NewChecker().Analyse(in, sqlpolicy.ReadOnly())
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if statement.Text != want {
+			t.Errorf("Analyse(%q).Text = %q, want %q", in, statement.Text, want)
+		}
+	}
+}

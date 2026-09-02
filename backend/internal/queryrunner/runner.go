@@ -47,7 +47,23 @@ var (
 	// ErrDiskFull is a write refused because the participant's database has
 	// grown past what the contest allows it.
 	ErrDiskFull = errors.New("the database is at its size limit")
+	// ErrResultTooLarge is an answer that could not be read within the result
+	// budget at all: one row on its own outweighed the whole allowance, so
+	// there is no prefix of it to show. A truncated result is an answer; this
+	// is the absence of one.
+	ErrResultTooLarge = errors.New("the result is too large to read")
+	// errBadDatabase is a database name that is not a plain identifier. The
+	// name is the caller's and is already checked upstream; this is the
+	// runner declining to build a connection string out of anything else.
+	errBadDatabase = errors.New("the database name is not a plain identifier")
 )
+
+// readSlack is what a connection may read beyond the result budget: the
+// handshake, the row description, the framing around every value, and the
+// difference between a value's size on the wire and its size in memory. A
+// mebibyte covers all of that for any legitimate answer, while keeping one
+// oversized cell from costing this process more than a few times the budget.
+const readSlack = 1 << 20
 
 // Limits bound one execution and the instance as a whole.
 type Limits struct {
@@ -124,21 +140,33 @@ func New(cluster *Cluster, checker *sqlpolicy.Checker, limits Limits) *Runner {
 
 // Run checks the query, admits it, and executes it.
 //
-// The order is the order of increasing cost. Checking is free and needs no
-// connection, so a refused query never occupies a slot or reaches the
-// database. Admission comes next, because a query that will not run should not
-// have a connection opened for it. The database is last.
+// The order is the order of increasing cost, and the rate comes first. It is
+// about who is asking rather than about what was asked, it costs a map lookup,
+// and it is the only bound on how often the parser is exercised: the parser is
+// C code reading text an adversary chose, and a participant who could put
+// sixty-four kilobytes through it as fast as the network allowed — refused or
+// not — would have a way to spend this process's CPU that no other limit sees.
+// A query refused by the checker therefore counts against the rate, which is
+// also what the journal records it as: a query that was asked.
+//
+// Checking needs no connection, so a refused query never occupies a slot or
+// reaches the database. Admission comes next, because a query that will not
+// run should not have a connection opened for it. The database is last.
 func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
-	statement, err := r.checker.Analyse(req.SQL, req.Policy)
-	if err != nil {
+	participant := req.Registration.String()
+	if err := r.rate.admit(participant); err != nil {
 		return nil, err
 	}
 
-	// The rate comes before the semaphore, as section 5 has it: it is about
-	// who is asking rather than about what is running, and answering it costs
-	// nothing.
-	participant := req.Registration.String()
-	if err := r.rate.admit(participant); err != nil {
+	// The name is the caller's, taken from game_instances and checked there;
+	// this is the runner refusing to build a connection string out of anything
+	// but a plain identifier, whichever caller it has.
+	if !sqlpolicy.PlainIdentifier(req.Database) {
+		return nil, errBadDatabase
+	}
+
+	statement, err := r.checker.Analyse(req.SQL, req.Policy)
+	if err != nil {
 		return nil, err
 	}
 
@@ -156,7 +184,12 @@ func (r *Runner) execute(ctx context.Context, req Request, statement sqlpolicy.S
 	ctx, cancel := context.WithTimeout(ctx, r.limits.Deadline)
 	defer cancel()
 
-	conn, err := r.cluster.connect(ctx, req.Database)
+	// As the writer only when the policy permits writing, so that a
+	// read-only contest is read-only by privilege and not only by the
+	// transaction's access mode below, which a query cannot change but a bug
+	// here could.
+	writes := req.Policy.Mode == sqlpolicy.ModeReadWrite
+	conn, meter, err := r.cluster.connect(ctx, req.Database, writes, int64(r.limits.MaxBytes)+readSlack)
 	if err != nil {
 		return nil, timeoutOr(ctx, err)
 	}
@@ -176,8 +209,9 @@ func (r *Runner) execute(ctx context.Context, req Request, statement sqlpolicy.S
 	if err != nil {
 		return nil, timeoutOr(ctx, err)
 	}
-	// Always rolled back: a read has nothing to commit, and a write that got
-	// this far under a read-only policy has nothing that should be kept.
+	// Rolled back unless a write below commits: a read has nothing to commit,
+	// and a write that failed half-way has nothing that should be kept.
+	// Rollback after a commit is a no-op, so this is safe unconditionally.
 	defer func() {
 		ending, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer stop()
@@ -190,21 +224,32 @@ func (r *Runner) execute(ctx context.Context, req Request, statement sqlpolicy.S
 		}
 	}
 
-	text := req.SQL
-	if !statement.Explain {
-		text = limited(req.SQL, r.limits.MaxRows)
+	// A read is wrapped so the server stops early. A write is not: an INSERT
+	// cannot sit inside a FROM any more than an EXPLAIN can, and what bounds
+	// its answer is that RETURNING is read through the same limits below.
+	text := statement.Text
+	if !statement.Explain && !statement.Writes {
+		text = limited(statement.Text, r.limits.MaxRows)
 	}
 
-	// EXPLAIN is not wrapped and so arrives without the extra LIMIT; collect
-	// stops at MaxRows either way, which is all a plan needs.
-	return collectOr(ctx, tx, text, r.limits)
-}
-
-// collectOr reads the result and names what interrupted it, if anything.
-func collectOr(ctx context.Context, tx pgx.Tx, text string, limits Limits) (*Result, error) {
-	result, err := collect(ctx, tx, text, limits)
+	result, err := collect(ctx, tx, text, r.limits, statement.Writes)
 	if err != nil {
+		if meter.exhausted() {
+			// The connection stopped reading, and the driver reports that as
+			// the connection failing. It did not: this process declined to
+			// hold more of the answer than one is allowed to cost.
+			return nil, ErrResultTooLarge
+		}
 		return nil, timeoutOr(ctx, err)
+	}
+
+	// The whole point of a permitted write is that it stays written. Only
+	// now, with the statement complete and its answer read within the limits,
+	// does the change become the participant's database.
+	if statement.Writes {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, timeoutOr(ctx, err)
+		}
 	}
 	return result, nil
 }

@@ -116,3 +116,25 @@ func TestPoolConfigKeepsAPoolSizeTheDSNChose(t *testing.T) {
 		t.Errorf("MaxConns = %d, want 25 from the DSN", cfg.MaxConns)
 	}
 }
+
+// The provisioning pool runs CREATE DATABASE … TEMPLATE, which takes as long
+// as copying the template takes; the core API's ten seconds would fail it for
+// exactly the contests large enough to need it.
+func TestMaintenancePoolConfigTakesItsOwnStatementTimeout(t *testing.T) {
+	cfg, err := MaintenancePoolConfig("postgres://u:p@localhost:5432/game", 10*time.Minute)
+	if err != nil {
+		t.Fatalf("MaintenancePoolConfig() returned error: %v", err)
+	}
+	if got := cfg.ConnConfig.RuntimeParams["statement_timeout"]; got != "600000" {
+		t.Errorf("statement_timeout = %q, want 600000 (ten minutes in milliseconds)", got)
+	}
+
+	// The core default is untouched by the variant.
+	core, err := PoolConfig("postgres://u:p@localhost:5432/core")
+	if err != nil {
+		t.Fatalf("PoolConfig() returned error: %v", err)
+	}
+	if got := core.ConnConfig.RuntimeParams["statement_timeout"]; got != "10000" {
+		t.Errorf("core statement_timeout = %q, want 10000", got)
+	}
+}

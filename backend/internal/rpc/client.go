@@ -58,10 +58,11 @@ func (c *Client) Close() error { return c.conn.Close() }
 // runner would have produced.
 func (c *Client) Run(ctx context.Context, req queryrunner.Request) (*queryrunner.Result, error) {
 	response, err := c.service.Run(ctx, &pb.RunRequest{
-		Registration: ptr(req.Registration.String()),
-		Database:     ptr(req.Database),
-		Sql:          ptr(req.SQL),
-		Policy:       policyProto(req.Policy),
+		Registration:   ptr(req.Registration.String()),
+		Database:       ptr(req.Database),
+		Sql:            ptr(req.SQL),
+		Policy:         policyProto(req.Policy),
+		DiskQuotaBytes: ptr(req.DiskQuotaBytes),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("the query service could not answer: %w", err)
@@ -72,10 +73,17 @@ func (c *Client) Run(ctx context.Context, req queryrunner.Request) (*queryrunner
 	}
 
 	answer := response.GetResult()
+	if answer == nil {
+		// Neither an answer nor a failure: a runner this build does not
+		// understand. Saying nothing was returned beats an empty result that
+		// looks like a query with no rows.
+		return nil, fmt.Errorf("the query service answered with neither a result nor a failure")
+	}
 	result := &queryrunner.Result{
-		Columns:   answer.GetColumns(),
-		Truncated: answer.GetTruncated(),
-		Rows:      make([][]any, 0, len(answer.GetRows())),
+		Columns:      answer.GetColumns(),
+		Truncated:    answer.GetTruncated(),
+		RowsAffected: answer.GetRowsAffected(),
+		Rows:         make([][]any, 0, len(answer.GetRows())),
 	}
 	for _, row := range answer.GetRows() {
 		// Rendered text, and nil where the column was NULL. The console shows

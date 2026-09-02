@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
@@ -116,6 +117,11 @@ func (j *Journalled) Run(ctx context.Context, req Request, requestID uuid.UUID) 
 	}
 	if result != nil {
 		outcome.Rows = len(result.Rows)
+		// A write that answered with a count rather than rows: the count is
+		// what the journal's row_count means for it.
+		if outcome.Rows == 0 && result.RowsAffected > 0 {
+			outcome.Rows = int(min(result.RowsAffected, int64(math.MaxInt32)))
+		}
 	}
 
 	// Detached from the request's context on purpose: a participant who

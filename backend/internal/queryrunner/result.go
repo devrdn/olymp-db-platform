@@ -17,6 +17,10 @@ type Result struct {
 	// nine hundred rows of a nine thousand row answer and not being told has
 	// been given a wrong answer, not a shortened one.
 	Truncated bool
+	// RowsAffected is how many rows a write changed, for a statement that
+	// answers with a count rather than with rows. Zero for a read, and zero
+	// for a write whose RETURNING clause produced rows — those are its answer.
+	RowsAffected int64
 }
 
 // resultAlias names the wrapper's subquery. Deliberately unlikely to collide
@@ -63,7 +67,7 @@ func trimStatement(sql string) string {
 // a pgx transaction is bound to the connection that began it — but only one of
 // them says so, and the day a connection comes from a pool the other would
 // send the query outside the read-only transaction without a word.
-func collect(ctx context.Context, tx pgx.Tx, statement string, limits Limits) (*Result, error) {
+func collect(ctx context.Context, tx pgx.Tx, statement string, limits Limits, write bool) (*Result, error) {
 	rows, err := tx.Query(ctx, statement)
 	if err != nil {
 		return nil, err
@@ -106,6 +110,14 @@ func collect(ctx context.Context, tx pgx.Tx, statement string, limits Limits) (*
 	if !stoppedEarly {
 		if err := rows.Err(); err != nil {
 			return nil, err
+		}
+		// The count a write answers with, read once the statement has run to
+		// its end — which a result cut short by the limits above has not.
+		// Only where there were no rows: a RETURNING clause makes the rows
+		// the answer, and reporting both would say the same thing twice.
+		if write && len(result.Columns) == 0 {
+			rows.Close()
+			result.RowsAffected = rows.CommandTag().RowsAffected()
 		}
 	}
 	return result, nil
