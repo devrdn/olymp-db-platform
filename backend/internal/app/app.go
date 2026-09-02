@@ -19,6 +19,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/health"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
@@ -28,6 +29,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/server"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
+	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/settings"
 	"github.com/devrdn/db-contest/backend/internal/users"
@@ -110,6 +112,26 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// is what closes the evidence, and without it the guarantee is only
 	// half-built (section 5, point 7).
 	a.tasks = append(a.tasks, sweepQueryLog(log, postgres.NewQueryLog(pool).SweepAbandoned))
+
+	// Provisioning is optional: a deployment with no game cluster has nothing
+	// to provision, and refusing to start would make the game circuit a
+	// requirement for running an olympiad's registration.
+	if cfg.GameProvisionerDSN != "" {
+		gamePool, err := storage.NewPool(ctx, cfg.GameProvisionerDSN)
+		if err != nil {
+			a.close()
+			return nil, fmt.Errorf("connect to the game cluster: %w", err)
+		}
+		a.closers = append(a.closers, gamePool.Close)
+
+		cluster, err := gamedb.NewProvisioner(gamePool, cfg.GameProvisionerDSN)
+		if err != nil {
+			a.close()
+			return nil, err
+		}
+		a.tasks = append(a.tasks, tendPools(log,
+			provisioning.New(postgres.NewGameInstances(pool), cluster), cfg.PoolDepth))
+	}
 
 	userRepo := postgres.NewUsers(pool)
 	auditRecorder := audit.New(postgres.NewAuditSink(pool))

@@ -63,6 +63,20 @@ type Config struct {
 	// every authenticated request, so it bounds idle time rather than the
 	// length of a working session.
 	SessionTTL time.Duration
+	// GameProvisionerDSN connects to the game cluster as the provisioning
+	// role, which creates and drops participants' databases. Optional: empty
+	// turns provisioning off, which is what a deployment without a game
+	// cluster wants.
+	//
+	// Deliberately not the participant's credentials. The Query Runner is the
+	// only process that ever connects as game_reader or game_writer, and this
+	// role cannot be one of them — section 11 asks for separate passwords for
+	// the core application, the provisioner and the participant roles, and
+	// this is where two of the three stay apart.
+	GameProvisionerDSN string
+	// PoolDepth is how many spare copies each live contest keeps ready, so
+	// that a participant arriving does not wait for CREATE DATABASE.
+	PoolDepth int
 	// MaxLoginAttemptsPerAddress caps sign-in attempts from one address in a
 	// quarter of an hour. It counts successes too, so it bounds people and not
 	// only guesses: a hall of students behind one NAT address is one address
@@ -104,6 +118,14 @@ func Load() (Config, error) {
 	// packages do not depend on a domain (CLAUDE.md, Go layout rule 7).
 	if cfg.MaxLoginAttemptsPerAddress, err = intEnv("MAX_LOGIN_ATTEMPTS_PER_ADDRESS", 0); err != nil {
 		return Config{}, err
+	}
+
+	cfg.GameProvisionerDSN = os.Getenv("GAME_PROVISIONER_DSN")
+	if cfg.PoolDepth, err = intEnv("GAME_POOL_DEPTH", 10); err != nil {
+		return Config{}, err
+	}
+	if cfg.PoolDepth < 0 {
+		return Config{}, fmt.Errorf("GAME_POOL_DEPTH cannot be negative, got %d", cfg.PoolDepth)
 	}
 
 	cfg.DefaultLocale = envOrDefault("DEFAULT_LOCALE", "en")
