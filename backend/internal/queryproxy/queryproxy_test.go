@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
@@ -278,5 +279,75 @@ func TestAParticipantWhoHasFinishedIsDone(t *testing.T) {
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrFinished) {
 		t.Fatalf("error = %v, want ErrFinished", err)
+	}
+}
+
+// A contest that closes the catalogues means the schema has to be discovered
+// some other way. PostgreSQL's own error names the relation that does not
+// exist — which turns guessing into enumeration and hands back the list the
+// closed catalogue was hiding. In that contest, and only in that one, the
+// database's words are kept back.
+func TestWhereTheSchemaIsHiddenTheDatabaseDoesNotSpellItOut(t *testing.T) {
+	closed := sqlpolicy.ReadOnly()
+	closed.AllowCatalog = false
+
+	build := func(policy sqlpolicy.Policy, failure error) *queryproxy.Service {
+		return queryproxy.New(
+			people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+			contestStore{contest: contests.Contest{Status: contests.StatusRunning}},
+			games{game: provisioning.Contest{Policy: policy}},
+			&databases{database: "x"},
+			&runner{err: failure},
+		)
+	}
+
+	probe := errors.New(`ERROR: relation "salaries" does not exist (SQLSTATE 42P01)`)
+
+	_, err := build(closed, probe).Run(t.Context(), command())
+	if !errors.Is(err, queryproxy.ErrDatabaseDeclined) {
+		t.Fatalf("error = %v, want ErrDatabaseDeclined", err)
+	}
+	if strings.Contains(err.Error(), "salaries") {
+		t.Fatalf("the name leaked anyway: %v", err)
+	}
+
+	// With the catalogues open the same message is the most useful sentence
+	// there is, and holding it back would only make the contest harder to
+	// learn from.
+	_, err = build(sqlpolicy.ReadOnly(), probe).Run(t.Context(), command())
+	if !strings.Contains(err.Error(), "salaries") {
+		t.Fatalf("the database's own words were withheld from an open contest: %v", err)
+	}
+}
+
+// What is held back is the database speaking for itself, and nothing else. A
+// refusal and the runner's own outcomes carry codes the interface turns into
+// sentences, and swallowing one would leave a participant with less than the
+// closed catalogue was protecting.
+func TestClosingTheCataloguesDoesNotSwallowOurOwnAnswers(t *testing.T) {
+	closed := sqlpolicy.ReadOnly()
+	closed.AllowCatalog = false
+
+	for name, failure := range map[string]error{
+		"a refusal":       &sqlpolicy.Refusal{Code: sqlpolicy.CodeFunctionNotSupported, Subject: "pg_sleep"},
+		"a timeout":       queryrunner.ErrTimeout,
+		"a full instance": queryrunner.ErrBusy,
+		"asking too fast": queryrunner.ErrTooManyQueries,
+		"a full disk":     queryrunner.ErrDiskFull,
+		"a huge answer":   queryrunner.ErrResultTooLarge,
+	} {
+		t.Run(name, func(t *testing.T) {
+			service := queryproxy.New(
+				people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+				contestStore{contest: contests.Contest{Status: contests.StatusRunning}},
+				games{game: provisioning.Contest{Policy: closed}},
+				&databases{database: "x"}, &runner{err: failure},
+			)
+
+			_, err := service.Run(t.Context(), command())
+			if errors.Is(err, queryproxy.ErrDatabaseDeclined) {
+				t.Fatalf("%v was swallowed as a database refusal", failure)
+			}
+		})
 	}
 }

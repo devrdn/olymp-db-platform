@@ -21,6 +21,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
 )
 
@@ -47,6 +48,16 @@ var (
 	// ErrNoGameYet is a contest whose game database was never built. Nobody's
 	// fault, and not a fact about the query.
 	ErrNoGameYet = errors.New("the contest has no game database yet")
+	// ErrDatabaseDeclined is the database refusing a query in a contest that
+	// hides its schema.
+	//
+	// PostgreSQL says exactly which relation does not exist, which is the most
+	// useful sentence there is — and, in a contest that closed the catalogues
+	// so that the schema has to be discovered some other way, it is an oracle:
+	// guess a name, read the answer, and the list the closed catalogue was
+	// hiding is reconstructed. So in that contest and only in that one, the
+	// database's own words are kept back.
+	ErrDatabaseDeclined = errors.New("the database refused the query")
 )
 
 // People answers who is asking.
@@ -155,14 +166,46 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		return nil, fmt.Errorf("work out the size limit: %w", err)
 	}
 
-	// Whatever comes back is returned as it is. A refusal carries a code the
-	// interface turns into a sentence in the participant's own language, and
-	// wrapping it here would leave that with nothing to read.
-	return s.runner.Run(ctx, queryrunner.Request{
+	result, err := s.runner.Run(ctx, queryrunner.Request{
 		Registration:   participant.ID,
 		Database:       database,
 		SQL:            cmd.SQL,
 		Policy:         game.Policy,
 		DiskQuotaBytes: quota,
 	}, cmd.RequestID)
+
+	// A refusal and the runner's own outcomes go back untouched: each carries
+	// a code the interface turns into a sentence in the participant's own
+	// language, and wrapping one would leave that with nothing to read. What
+	// is held back is the database speaking for itself, and only where the
+	// contest asked for the schema to be hidden.
+	if err != nil && !game.Policy.AllowCatalog && speaksForTheDatabase(err) {
+		return nil, ErrDatabaseDeclined
+	}
+	return result, err
+}
+
+// speaksForTheDatabase reports an error that carries PostgreSQL's own words
+// rather than one of ours.
+//
+// Written as "none of the answers we produce" rather than as a list of driver
+// errors: a new sentinel of ours is something this must keep passing through,
+// and a new shape of database error is something it must keep catching. Only
+// one of those two lists can be kept complete by hand, so the check is against
+// ours.
+func speaksForTheDatabase(err error) bool {
+	var refusal *sqlpolicy.Refusal
+	if errors.As(err, &refusal) {
+		return false
+	}
+	for _, ours := range []error{
+		queryrunner.ErrTimeout, queryrunner.ErrCanceled, queryrunner.ErrBusy,
+		queryrunner.ErrAlreadyRunning, queryrunner.ErrTooManyQueries,
+		queryrunner.ErrDiskFull, queryrunner.ErrResultTooLarge,
+	} {
+		if errors.Is(err, ours) {
+			return false
+		}
+	}
+	return true
 }

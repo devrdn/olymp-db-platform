@@ -162,6 +162,10 @@
       "meaning": "The query uses a construct the validator does not know. Anything unrecognised is refused rather than guessed at."
     },
     {
+      "code": "query_declined",
+      "meaning": "The database refused the query, in a contest that hides its schema. The reason is deliberately withheld: PostgreSQL names the relation that does not exist, which in such a contest is a way to enumerate the schema the closed catalogues were hiding."
+    },
+    {
       "code": "query_disk_full",
       "meaning": "The write was refused because the participant's database is at its size limit."
     },
