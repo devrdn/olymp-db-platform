@@ -44,6 +44,9 @@ import (
 var (
 	ErrTimeout  = errors.New("the query took too long")
 	ErrCanceled = errors.New("the caller stopped waiting")
+	// ErrDiskFull is a write refused because the participant's database has
+	// grown past what the contest allows it.
+	ErrDiskFull = errors.New("the database is at its size limit")
 )
 
 // Limits bound one execution and the instance as a whole.
@@ -60,6 +63,10 @@ type Limits struct {
 	// than queued indefinitely.
 	Concurrent int
 	QueueDepth int
+	// PerMinute bounds how often one participant may ask, which the semaphore
+	// cannot: a thousand cheap queries in a minute pass it one at a time.
+	// Zero means no limit.
+	PerMinute int
 }
 
 // DefaultLimits are the figures section 4.3 and section 5 name.
@@ -74,6 +81,7 @@ func DefaultLimits() Limits {
 		MaxBytes:   5 << 20,
 		Concurrent: 8,
 		QueueDepth: 16,
+		PerMinute:  30,
 	}
 }
 
@@ -88,6 +96,10 @@ type Request struct {
 	Database string
 	SQL      string
 	Policy   sqlpolicy.Policy
+	// DiskQuotaBytes is how large this participant's database may grow. Zero
+	// means unbounded, which is the right answer for a contest that permits no
+	// writing at all. Checked before a write and never before a read.
+	DiskQuotaBytes int64
 }
 
 // Runner executes participants' queries.
@@ -96,6 +108,7 @@ type Runner struct {
 	checker *sqlpolicy.Checker
 	limits  Limits
 	gate    *gate
+	rate    *window
 }
 
 // New assembles a runner.
@@ -105,6 +118,7 @@ func New(cluster *Cluster, checker *sqlpolicy.Checker, limits Limits) *Runner {
 		checker: checker,
 		limits:  limits,
 		gate:    newGate(limits.Concurrent, limits.QueueDepth),
+		rate:    newWindow(limits.PerMinute, time.Minute, nil),
 	}
 }
 
@@ -120,7 +134,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 		return nil, err
 	}
 
-	release, err := r.gate.enter(ctx, req.Registration.String())
+	// The rate comes before the semaphore, as section 5 has it: it is about
+	// who is asking rather than about what is running, and answering it costs
+	// nothing.
+	participant := req.Registration.String()
+	if err := r.rate.admit(participant); err != nil {
+		return nil, err
+	}
+
+	release, err := r.gate.enter(ctx, participant)
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +184,12 @@ func (r *Runner) execute(ctx context.Context, req Request, statement sqlpolicy.S
 		_ = tx.Rollback(ending)
 	}()
 
+	if statement.Writes && req.DiskQuotaBytes > 0 {
+		if err := withinQuota(ctx, tx, req.DiskQuotaBytes); err != nil {
+			return nil, err
+		}
+	}
+
 	text := req.SQL
 	if !statement.Explain {
 		text = limited(req.SQL, r.limits.MaxRows)
@@ -179,6 +207,25 @@ func collectOr(ctx context.Context, tx pgx.Tx, text string, limits Limits) (*Res
 		return nil, timeoutOr(ctx, err)
 	}
 	return result, nil
+}
+
+// withinQuota refuses a write to a database that has grown past its allowance.
+//
+// Checked synchronously, before the statement, because afterwards is too late:
+// a participant filling a shared disk takes the contest down with them. It
+// cannot be exact — one INSERT … SELECT can overshoot between the check and
+// the end of the statement — but the overshoot is bounded by what a statement
+// can write in the runner's deadline, which is the trade section 4.1 makes
+// explicitly.
+func withinQuota(ctx context.Context, tx pgx.Tx, allowed int64) error {
+	var used int64
+	if err := tx.QueryRow(ctx, `SELECT pg_database_size(current_database())`).Scan(&used); err != nil {
+		return fmt.Errorf("read the database size: %w", err)
+	}
+	if used >= allowed {
+		return fmt.Errorf("%w: %d bytes of %d", ErrDiskFull, used, allowed)
+	}
+	return nil
 }
 
 func accessMode(p sqlpolicy.Policy) pgx.TxAccessMode {

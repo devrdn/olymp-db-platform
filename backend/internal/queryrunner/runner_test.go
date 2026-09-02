@@ -239,3 +239,58 @@ func TestACallerGoingAwayIsNotATimeout(t *testing.T) {
 		t.Fatalf("error = %v, want ErrCanceled", err)
 	}
 }
+
+// The semaphore bounds what is running; this bounds how often one person asks.
+// A thousand cheap queries pass the semaphore one at a time, which is why the
+// two are separate layers rather than one.
+func TestAParticipantMayNotAskFasterThanTheContestAllows(t *testing.T) {
+	limits := queryrunner.DefaultLimits()
+	limits.PerMinute = 3
+	runner, database := setupWith(t, limits, sqlpolicy.NewChecker())
+
+	for i := range 3 {
+		if _, err := runner.Run(t.Context(), request(database, `SELECT 1`)); err != nil {
+			t.Fatalf("query %d was refused: %v", i+1, err)
+		}
+	}
+	if _, err := runner.Run(t.Context(), request(database, `SELECT 1`)); !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("error = %v, want ErrTooManyQueries", err)
+	}
+}
+
+// The quota is checked before a write and never before a read: a read cannot
+// fill a disk, and the check costs a round trip on every query.
+func TestAWriteIsRefusedWhenTheDatabaseIsAtItsLimit(t *testing.T) {
+	runner, database := setupWith(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+
+	writing := request(database, `INSERT INTO evidence (id, note) VALUES (99, 'planted')`)
+	writing.Policy = sqlpolicy.ReadWrite("evidence")
+	// One byte: any real database is past it.
+	writing.DiskQuotaBytes = 1
+
+	if _, err := runner.Run(t.Context(), writing); !errors.Is(err, queryrunner.ErrDiskFull) {
+		t.Fatalf("error = %v, want ErrDiskFull", err)
+	}
+
+	// Reading is unaffected, which is the half that matters during a contest:
+	// a participant who has filled their database can still look at it.
+	reading := request(database, `SELECT count(*) FROM evidence`)
+	reading.Policy = sqlpolicy.ReadWrite("evidence")
+	reading.DiskQuotaBytes = 1
+	if _, err := runner.Run(t.Context(), reading); err != nil {
+		t.Fatalf("reading was refused by the size limit: %v", err)
+	}
+}
+
+// And a quota nobody set is no quota, which is what a read-only contest wants.
+func TestNoQuotaMeansNoCheck(t *testing.T) {
+	runner, database := setupWith(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+
+	writing := request(database, `INSERT INTO evidence (id, note) VALUES (98, 'x')`)
+	writing.Policy = sqlpolicy.ReadWrite("evidence")
+
+	// It fails on privileges, not on size: the reader role has no INSERT.
+	if _, err := runner.Run(t.Context(), writing); errors.Is(err, queryrunner.ErrDiskFull) {
+		t.Fatal("a database with no quota was refused for its size")
+	}
+}

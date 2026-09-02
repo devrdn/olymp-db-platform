@@ -129,8 +129,13 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			a.close()
 			return nil, err
 		}
+		if cluster, err = cluster.WithCopyStrategy(gamedb.CopyStrategy(cfg.CopyStrategy)); err != nil {
+			a.close()
+			return nil, err
+		}
 		a.tasks = append(a.tasks, tendPools(log,
-			provisioning.New(postgres.NewGameInstances(pool), cluster), cfg.PoolDepth))
+			provisioning.New(postgres.NewGameInstances(pool), cluster).WithWorkers(cfg.ProvisionWorkers),
+			cfg.PoolDepth))
 	}
 
 	userRepo := postgres.NewUsers(pool)

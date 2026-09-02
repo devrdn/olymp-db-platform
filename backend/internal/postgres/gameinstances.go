@@ -197,7 +197,8 @@ func (r *GameInstances) Live(ctx context.Context) ([]provisioning.Contest, error
 		       coalesce(p.allow_create_view, false),
 		       coalesce(p.allow_own_tables, false),
 		       coalesce(p.allow_temp_tables, false),
-		       coalesce(p.allow_catalog, true)
+		       coalesce(p.allow_catalog, true),
+		       coalesce(p.disk_quota_ratio, 5)
 		FROM contests c
 		JOIN game_templates t ON t.contest_id = c.id
 		LEFT JOIN contest_sql_policies p ON p.contest_id = c.id
@@ -214,7 +215,7 @@ func (r *GameInstances) Live(ctx context.Context) ([]provisioning.Contest, error
 		var mode string
 		if err := rows.Scan(&c.ID, &c.Template, &c.Version,
 			&mode, &c.Policy.WritableTables, &c.Policy.AllowCreateView,
-			&c.Policy.AllowOwnTables, &c.Policy.AllowTempTables, &c.Policy.AllowCatalog); err != nil {
+			&c.Policy.AllowOwnTables, &c.Policy.AllowTempTables, &c.Policy.AllowCatalog, &c.Policy.DiskQuotaRatio); err != nil {
 			return nil, fmt.Errorf("scan a live contest: %w", err)
 		}
 		c.Policy.Mode = sqlpolicy.Mode(mode)

@@ -77,6 +77,7 @@ func run() error {
 		MaxBytes:   cfg.MaxBytes,
 		Concurrent: cfg.Concurrent,
 		QueueDepth: cfg.QueueDepth,
+		PerMinute:  cfg.PerMinute,
 	}
 
 	// A result budget larger than what the transport will carry produces the

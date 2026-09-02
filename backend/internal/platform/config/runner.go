@@ -42,6 +42,9 @@ type Runner struct {
 	// three times the cores.
 	Concurrent int
 	QueueDepth int
+	// PerMinute bounds how often one participant may ask. The semaphore
+	// cannot: a thousand cheap queries pass it one at a time.
+	PerMinute int
 	// ExtraFunctions are functions an operator has added to the allow-list
 	// after a pilot, without waiting for a release (section 5, point 3).
 	ExtraFunctions []string
@@ -79,6 +82,12 @@ func LoadRunner() (Runner, error) {
 	}
 	if cfg.QueueDepth, err = intEnv("QUERY_QUEUE_DEPTH", 16); err != nil {
 		return Runner{}, err
+	}
+	if cfg.PerMinute, err = intEnv("QUERY_PER_MINUTE", 30); err != nil {
+		return Runner{}, err
+	}
+	if cfg.PerMinute < 0 {
+		return Runner{}, fmt.Errorf("QUERY_PER_MINUTE cannot be negative, got %d", cfg.PerMinute)
 	}
 	// An allow-list an operator extends after a pilot without a release, which
 	// is what section 5 asks for. Split eagerly so a stray comma fails the

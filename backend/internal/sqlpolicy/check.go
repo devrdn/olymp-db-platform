@@ -99,6 +99,10 @@ type Statement struct {
 	// placed inside a subquery, so it is the one shape that must not be
 	// wrapped when a result is limited.
 	Explain bool
+	// Writes reports a statement that changes the database. The disk quota is
+	// checked before one of these and not before a read, because a read cannot
+	// fill a disk and the check costs a round trip.
+	Writes bool
 }
 
 // Check reports whether the query is allowed under the policy.
@@ -151,7 +155,7 @@ func (c *Checker) Analyse(sql string, p Policy) (Statement, error) {
 	if err != nil {
 		return Statement{}, err
 	}
-	return Statement{Explain: plan.explain}, nil
+	return Statement{Explain: plan.explain, Writes: plan.writes}, nil
 }
 
 // rootAllowed checks the outermost statement and returns the node to walk.
@@ -164,6 +168,7 @@ type rootPlan struct {
 	// from the allowed set so that it cannot appear anywhere but the root.
 	checkSelf bool
 	explain   bool
+	writes    bool
 }
 
 func (c *Checker) rootAllowed(root *pg.Node, p Policy) (rootPlan, error) {
@@ -190,7 +195,7 @@ func (c *Checker) rootAllowed(root *pg.Node, p Policy) (rootPlan, error) {
 		if err := c.writeAllowed(root, p); err != nil {
 			return rootPlan{}, err
 		}
-		return rootPlan{node: root}, nil
+		return rootPlan{node: root, writes: true}, nil
 	}
 }
 

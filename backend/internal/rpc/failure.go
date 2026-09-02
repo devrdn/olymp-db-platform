@@ -46,6 +46,10 @@ func failureFor(err error) *pb.Failure {
 		return &pb.Failure{Kind: pb.Failure_KIND_ALREADY_RUNNING.Enum(), Message: ptr(err.Error())}
 	case errors.Is(err, queryrunner.ErrBusy):
 		return &pb.Failure{Kind: pb.Failure_KIND_BUSY.Enum(), Message: ptr(err.Error())}
+	case errors.Is(err, queryrunner.ErrTooManyQueries):
+		return &pb.Failure{Kind: pb.Failure_KIND_RATE_LIMITED.Enum(), Message: ptr(err.Error())}
+	case errors.Is(err, queryrunner.ErrDiskFull):
+		return &pb.Failure{Kind: pb.Failure_KIND_DISK_FULL.Enum(), Message: ptr(err.Error())}
 	case errors.Is(err, queryrunner.ErrTimeout), errors.Is(err, context.DeadlineExceeded):
 		return &pb.Failure{Kind: pb.Failure_KIND_TIMEOUT.Enum(), Message: ptr(err.Error())}
 	case errors.Is(err, queryrunner.ErrCanceled), errors.Is(err, context.Canceled):
@@ -76,6 +80,10 @@ func errorFor(failure *pb.Failure) error {
 		return queryrunner.ErrAlreadyRunning
 	case pb.Failure_KIND_BUSY:
 		return queryrunner.ErrBusy
+	case pb.Failure_KIND_RATE_LIMITED:
+		return queryrunner.ErrTooManyQueries
+	case pb.Failure_KIND_DISK_FULL:
+		return queryrunner.ErrDiskFull
 	case pb.Failure_KIND_TIMEOUT:
 		return queryrunner.ErrTimeout
 	case pb.Failure_KIND_CANCELLED:

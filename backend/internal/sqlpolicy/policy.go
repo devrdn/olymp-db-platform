@@ -39,6 +39,11 @@ const (
 // maxIdentifier is PostgreSQL's own limit on an unquoted name (NAMEDATALEN-1).
 const maxIdentifier = 63
 
+// DefaultDiskQuotaRatio is how many times its template a participant's
+// database may grow to when nobody chose a number. Five is the figure section
+// 4.1 names.
+const DefaultDiskQuotaRatio = 5
+
 // Policy is one olympiad's answer to "what may a participant's SQL do".
 //
 // The zero value is deliberately invalid rather than read-only. A struct
@@ -62,6 +67,11 @@ type Policy struct {
 	// of a table is part of the exercise. The sensitive catalogs are not
 	// governed by this flag and are never readable.
 	AllowCatalog bool
+	// DiskQuotaRatio is how many times the template's size a participant's
+	// database may grow to. Only meaningful where writing is permitted, since
+	// nothing else can make one grow. Zero means the caller did not say, and
+	// the service supplies the default rather than treating it as unlimited.
+	DiskQuotaRatio int
 }
 
 // ReadOnly returns the default policy: read the game database, change nothing.
@@ -70,7 +80,7 @@ type Policy struct {
 // zero of every field — structural catalogs are readable, and `false` there
 // would be a stricter contest than anybody asked for.
 func ReadOnly() Policy {
-	return Policy{Mode: ModeReadOnly, AllowCatalog: true}
+	return Policy{Mode: ModeReadOnly, AllowCatalog: true, DiskQuotaRatio: DefaultDiskQuotaRatio}
 }
 
 // ReadWrite returns a policy that permits writing to exactly these tables.

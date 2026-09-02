@@ -55,6 +55,11 @@ type cluster struct {
 	made    []string
 	dropped []string
 	fail    error
+
+	// Creating is what makes the bounded worker pool observable: without a
+	// high-water mark, "at most three at once" is a claim nothing checks.
+	creating, peak int
+	slow           time.Duration
 }
 
 func (c *cluster) CreateInstance(_ context.Context, _, instance string, _ sqlpolicy.Policy) error {
@@ -64,8 +69,33 @@ func (c *cluster) CreateInstance(_ context.Context, _, instance string, _ sqlpol
 	if c.fail != nil {
 		return c.fail
 	}
+
+	c.creating++
+	if c.creating > c.peak {
+		c.peak = c.creating
+	}
+	slow := c.slow
+	c.mu.Unlock()
+
+	// Held open so that concurrent creations overlap; a copy that returned
+	// instantly would never show the pool being bounded.
+	time.Sleep(slow)
+
+	c.mu.Lock()
+	c.creating--
 	c.made = append(c.made, instance)
 	return nil
+}
+
+func (c *cluster) highWater() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.peak
+}
+
+func (c *cluster) DatabaseSize(context.Context, string) (int64, error) {
+	// A megabyte, so the quota arithmetic has something to multiply.
+	return 1 << 20, nil
 }
 
 func (c *cluster) Drop(_ context.Context, name string) error {

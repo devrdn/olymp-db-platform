@@ -28,6 +28,8 @@ func TestEveryFailureSurvivesTheWireAsItself(t *testing.T) {
 		// here would put back the difference the runner just took out.
 		"a caller that left":  {queryrunner.ErrCanceled, queryrunner.ErrCanceled},
 		"a cancelled context": {context.Canceled, queryrunner.ErrCanceled},
+		"asking too fast":     {queryrunner.ErrTooManyQueries, queryrunner.ErrTooManyQueries},
+		"a full disk":         {queryrunner.ErrDiskFull, queryrunner.ErrDiskFull},
 		"a database error":    {errors.New("relation \"nope\" does not exist"), nil},
 	} {
 		t.Run(name, func(t *testing.T) {

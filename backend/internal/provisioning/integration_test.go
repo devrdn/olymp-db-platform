@@ -3,6 +3,7 @@ package provisioning_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
@@ -217,5 +218,73 @@ func TestResettingSomethingThatWasNeverProvisioned(t *testing.T) {
 
 	if err := service.Reset(t.Context(), contest, people[0]); !errors.Is(err, provisioning.ErrNoInstance) {
 		t.Fatalf("error = %v, want ErrNoInstance", err)
+	}
+}
+
+// The quota is a multiple of the template, because the template is the only
+// thing that says how large a contest's data legitimately is: a game with a
+// hundred rows and one with a million should not share a number somebody typed
+// into a configuration file once.
+func TestTheQuotaFollowsTheTemplateAndHasAFloor(t *testing.T) {
+	service, _, contest, _ := serviceFor(t, 0)
+
+	contest.Policy.DiskQuotaRatio = 100 // the fake template is one megabyte
+	large, err := service.Quota(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("quota: %v", err)
+	}
+	if large != 100<<20 {
+		t.Fatalf("quota = %d, want a hundred times the template", large)
+	}
+
+	// A tiny template must not give a participant a quota they exhaust with
+	// one INSERT: the point is to bound a runaway, not to make work fail.
+	contest.Policy.DiskQuotaRatio = 1
+	small, err := service.Quota(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("quota: %v", err)
+	}
+	if small < 16<<20 {
+		t.Fatalf("quota = %d; the floor did not apply", small)
+	}
+}
+
+// `CREATE DATABASE … TEMPLATE` is the one operation that can spoil an olympiad
+// before a query runs, so the pool is filled a few at a time and never by
+// however many are missing. Without a high-water mark this is a claim nothing
+// checks.
+func TestThePoolIsFilledByABoundedNumberOfWorkers(t *testing.T) {
+	contest, _ := contestFor(t, 0)
+	fake := &cluster{slow: 40 * time.Millisecond}
+	service := provisioning.New(postgres.NewGameInstances(testPool), fake).WithWorkers(2)
+
+	made, err := service.TopUp(t.Context(), contest, 8)
+	if err != nil {
+		t.Fatalf("top-up: %v", err)
+	}
+	if made != 8 {
+		t.Fatalf("made %d copies, want 8", made)
+	}
+	if peak := fake.highWater(); peak > 2 {
+		t.Fatalf("%d copies were being made at once, want at most 2", peak)
+	}
+	if peak := fake.highWater(); peak < 2 {
+		t.Fatalf("high water was %d; the workers never overlapped, so this proves nothing", peak)
+	}
+}
+
+// A cluster that refuses must not leave the workers spinning through the rest
+// of the list, and what was made before the failure still counts.
+func TestAFailureStopsTheFillingRatherThanGrindingOn(t *testing.T) {
+	contest, _ := contestFor(t, 0)
+	fake := &cluster{fail: errors.New("the cluster is out of disk")}
+	service := provisioning.New(postgres.NewGameInstances(testPool), fake).WithWorkers(2)
+
+	made, err := service.TopUp(t.Context(), contest, 6)
+	if err == nil {
+		t.Fatal("a refusing cluster produced no error")
+	}
+	if made != 0 {
+		t.Fatalf("made %d copies against a cluster that refuses everything", made)
 	}
 }
