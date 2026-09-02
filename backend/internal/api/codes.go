@@ -34,6 +34,61 @@ var (
 	// no way to tell what to change.
 	codeImageTooLarge = httpx.NewCode("image_too_large",
 		"The picture is heavier than an installation image may be, or has more pixels on a side than one may have.")
+	// --- The SQL console -----------------------------------------------------
+	//
+	// One code per reason, because each is a different sentence to a
+	// participant mid-contest and most of them tell them what to change. A
+	// shared `invalid_request` here would be the same defect the picture
+	// upload had, in the place where it costs a competitor their time.
+	//
+	// Prefixed, because these live in a catalogue shared with the rest of the
+	// API: "too long" alone will mean something else the first time another
+	// endpoint needs it.
+	codeNotAParticipant = httpx.NewCode("not_a_participant",
+		"The caller is not taking part in this contest. The same answer whether they never registered or were disqualified: telling those apart would say whether an account is on a roster.")
+	codeContestNotRunning = httpx.NewCode("contest_not_running",
+		"The contest has not started, or has finished. Queries are taken only while it runs.")
+	codeNoGameYet = httpx.NewCode("no_game_yet",
+		"The contest's game database has not been built. Nobody's mistake and nothing to do with the query.")
+
+	codeQueryParseError = httpx.NewCode("query_parse_error",
+		"PostgreSQL could not parse the query. The message carries the parser's own words, which are the most useful thing anybody can say here.")
+	codeQueryNotOneStatement = httpx.NewCode("query_not_one_statement",
+		"The console takes exactly one statement. Several would let a check on the first be walked past by the second.")
+	codeQueryStatementNotSupported = httpx.NewCode("query_statement_not_supported",
+		"That kind of statement is not one this contest allows.")
+	codeQueryConstructNotSupported = httpx.NewCode("query_construct_not_supported",
+		"The query uses a construct the validator does not know. Anything unrecognised is refused rather than guessed at.")
+	codeQueryFunctionNotSupported = httpx.NewCode("query_function_not_supported",
+		"The query calls a function that is not on the allow-list. The details name it, which is what an operator needs to decide whether it belongs there.")
+	codeQueryCatalogNotReadable = httpx.NewCode("query_catalog_not_readable",
+		"The query reads a system catalogue describing the installation or other participants. Refused in every contest.")
+	codeQueryCatalogNotAllowed = httpx.NewCode("query_catalog_not_allowed",
+		"The query reads the structural catalogues, which this contest has turned off.")
+	codeQueryTooDeep = httpx.NewCode("query_too_deep",
+		"The query nests deeper than the validator will walk.")
+	codeQueryTooLong = httpx.NewCode("query_too_long",
+		"The query is longer than the console accepts.")
+	codeQueryTableNotWritable = httpx.NewCode("query_table_not_writable",
+		"The query writes to a table this contest did not open for writing. The details name it.")
+	codeQueryNotPermitted = httpx.NewCode("query_not_permitted",
+		"The query does something this contest's policy does not permit — creating a view, a table, or a temporary one.")
+
+	codeQueryTimedOut = httpx.NewCode("query_timed_out",
+		"The query ran longer than it is allowed to and was cancelled.")
+	codeQueryCancelled = httpx.NewCode("query_cancelled",
+		"The caller stopped waiting before the query finished. Not a timeout: only one of the two is about load.")
+	codeQueryBusy = httpx.NewCode("query_busy",
+		"The instance is running as many queries as it will at once. Answered immediately rather than queued indefinitely.")
+	codeQueryAlreadyRunning = httpx.NewCode("query_already_running",
+		"This participant already has a query in flight. One at a time, so that ten open tabs cannot hold ten execution slots.")
+	codeQueryTooOften = httpx.NewCode("query_too_often",
+		"This participant is asking faster than the contest allows.")
+	codeQueryDiskFull = httpx.NewCode("query_disk_full",
+		"The write was refused because the participant's database is at its size limit.")
+	codeQueryResultTooLarge = httpx.NewCode("query_result_too_large",
+		"The answer was larger than the console will carry, and reading it was stopped rather than finished.")
+
 	codeImageNotAccepted = httpx.NewCode("image_not_accepted",
 		"The file is not one of the picture formats this installation stores. The format is read from the bytes, not from the name.")
 

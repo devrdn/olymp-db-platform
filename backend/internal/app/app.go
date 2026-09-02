@@ -30,7 +30,10 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
+	"github.com/devrdn/db-contest/backend/internal/queryproxy"
+	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
+	"github.com/devrdn/db-contest/backend/internal/rpc"
 	"github.com/devrdn/db-contest/backend/internal/settings"
 	"github.com/devrdn/db-contest/backend/internal/users"
 )
@@ -113,6 +116,9 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// half-built (section 5, point 7).
 	a.tasks = append(a.tasks, sweepQueryLog(log, postgres.NewQueryLog(pool).SweepAbandoned))
 
+	// The SQL console, when there is a game cluster and a runner to reach.
+	var console *queryproxy.Service
+
 	// Provisioning is optional: a deployment with no game cluster has nothing
 	// to provision, and refusing to start would make the game circuit a
 	// requirement for running an olympiad's registration.
@@ -137,9 +143,30 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			a.close()
 			return nil, err
 		}
-		a.tasks = append(a.tasks, tendPools(log,
-			provisioning.New(postgres.NewGameInstances(pool), cluster).WithWorkers(cfg.ProvisionWorkers),
-			cfg.PoolDepth))
+		games := postgres.NewGameInstances(pool)
+		databases := provisioning.New(games, cluster).WithWorkers(cfg.ProvisionWorkers)
+		a.tasks = append(a.tasks, tendPools(log, databases, cfg.PoolDepth))
+
+		// The console needs a Query Runner to talk to. Without one the rest of
+		// provisioning still works — pools are kept stocked — and the endpoint
+		// simply is not mounted, which is the honest state of a deployment
+		// where the runner has not been rolled out yet.
+		if cfg.QueryRunnerAddr != "" {
+			client, err := rpc.Dial(cfg.QueryRunnerAddr)
+			if err != nil {
+				a.close()
+				return nil, err
+			}
+			a.closers = append(a.closers, func() { _ = client.Close() })
+
+			console = queryproxy.New(
+				postgres.NewRegistrations(pool),
+				postgres.NewContests(pool),
+				games,
+				databases,
+				queryrunner.NewJournalled(client, postgres.NewQueryLog(pool), log),
+			)
+		}
 	}
 
 	userRepo := postgres.NewUsers(pool)
@@ -181,6 +208,21 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		UnitOfWork:    storage.NewUnitOfWork(pool),
 	})
 
+	modules := []api.Module{
+		api.NewAuthHandler(authService, userService, userRepo, authMiddleware, cookies, log),
+		api.NewUsersHandler(userService, userRepo, authMiddleware, log),
+		api.NewSettingsHandler(
+			settings.NewService(postgres.NewSettings(pool), postgres.NewSettingsImages(pool), auditRecorder, storage.NewUnitOfWork(pool)),
+			authMiddleware, log),
+		api.NewContestsHandler(contestService, authMiddleware, log, cfg.DefaultLocale),
+		// The trail is written by every module above; this is the only way
+		// to read it back, and it is behind its own permission.
+		api.NewAuditHandler(postgres.NewAuditTrail(pool), authMiddleware, log),
+	}
+	if console != nil {
+		modules = append(modules, api.NewConsoleHandler(console, authMiddleware, log))
+	}
+
 	deps := api.Deps{
 		Logger:    log,
 		Metrics:   recorder,
@@ -191,17 +233,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			storage.NewChecker("core-db", pool),
 			storage.NewChecker("cache", cacheBackend),
 		},
-		Modules: []api.Module{
-			api.NewAuthHandler(authService, userService, userRepo, authMiddleware, cookies, log),
-			api.NewUsersHandler(userService, userRepo, authMiddleware, log),
-			api.NewSettingsHandler(
-				settings.NewService(postgres.NewSettings(pool), postgres.NewSettingsImages(pool), auditRecorder, storage.NewUnitOfWork(pool)),
-				authMiddleware, log),
-			api.NewContestsHandler(contestService, authMiddleware, log, cfg.DefaultLocale),
-			// The trail is written by every module above; this is the only way
-			// to read it back, and it is behind its own permission.
-			api.NewAuditHandler(postgres.NewAuditTrail(pool), authMiddleware, log),
-		},
+		Modules: modules,
 	}
 
 	a.public = server.New("public", cfg.HTTPAddr, api.NewRouter(deps), log)
