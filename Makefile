@@ -97,7 +97,7 @@ test-db: require-env ## Run the repository tests against the development databas
 # under test is a refusal by PostgreSQL, not by our code. `make dev-up` first —
 # it starts pg-game along with the core database.
 test-game: require-env ## Run the game cluster tests against the development cluster
-	cd $(BACKEND) && GAME_DB_DSN="$(GAME_DB_DSN)" go test -count=1 ./internal/gamedb/...
+	cd $(BACKEND) && GAME_DB_DSN="$(GAME_DB_DSN)" go test -count=1 ./internal/gamedb/... ./internal/queryrunner/...
 
 cover: ## Run the tests and open the coverage report
 	cd $(BACKEND) && go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1

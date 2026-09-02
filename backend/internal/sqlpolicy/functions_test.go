@@ -82,7 +82,15 @@ func TestAFunctionIsFoundWhereverItHides(t *testing.T) {
 		"as an aggregate's arg": `SELECT count(pg_sleep(1)) FROM t`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			refusal(t, sql, sqlpolicy.ReadOnly())
+			// The code is asserted, not just the refusal. Without it this
+			// suite passed while `FROM generate_series(…), pg_ls_dir('/')` was
+			// being refused for the FROM clause rather than for the function —
+			// a green test for a validator that could not run an ordinary
+			// query.
+			r := refusal(t, sql, sqlpolicy.ReadOnly())
+			if r.Code != sqlpolicy.CodeFunctionNotSupported {
+				t.Fatalf("code = %q, want %q", r.Code, sqlpolicy.CodeFunctionNotSupported)
+			}
 		})
 	}
 }
