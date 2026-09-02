@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -69,10 +70,10 @@ func DefaultLimits() Limits {
 
 // Request is one participant asking one question.
 type Request struct {
-	// Participant identifies who is asking, for the one-at-a-time rule. It is
-	// a registration rather than an account: the same person in two contests
-	// is two participants.
-	Participant string
+	// Registration identifies who is asking, for the one-at-a-time rule. A
+	// registration rather than an account: the same person in two contests is
+	// two participants, and the query log is keyed the same way.
+	Registration uuid.UUID
 	// Database is the participant's own game database, taken from
 	// game_instances by the caller. It never comes from the client.
 	Database string
@@ -110,7 +111,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 		return nil, err
 	}
 
-	release, err := r.gate.enter(ctx, req.Participant)
+	release, err := r.gate.enter(ctx, req.Registration.String())
 	if err != nil {
 		return nil, err
 	}

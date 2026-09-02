@@ -8,6 +8,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/google/uuid"
 )
 
 // These tests run against a real game cluster, as the participant's own role.
@@ -40,14 +41,16 @@ func setupWith(t *testing.T, limits queryrunner.Limits, checker *sqlpolicy.Check
 	return queryrunner.New(cluster, checker, limits), database
 }
 
-// request is one participant asking one question. The participant is fixed
-// because most tests are about the query rather than about who asked.
+// oneParticipant is fixed because most tests are about the query rather than
+// about who asked; the tests that are about who use `other`.
+var oneParticipant = uuid.MustParse("11111111-1111-1111-1111-111111111111")
+
 func request(database, sql string) queryrunner.Request {
 	return queryrunner.Request{
-		Participant: "participant-under-test",
-		Database:    database,
-		SQL:         sql,
-		Policy:      sqlpolicy.ReadOnly(),
+		Registration: oneParticipant,
+		Database:     database,
+		SQL:          sql,
+		Policy:       sqlpolicy.ReadOnly(),
 	}
 }
 
