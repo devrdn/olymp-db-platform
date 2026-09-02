@@ -109,6 +109,13 @@ message Failure {
     // the two is about load, and a report of "how often did queries run out of
     // time" is read as though it were.
     KIND_CANCELLED = 6;
+    // The participant is asking faster than the contest allows. Separate from
+    // BUSY: one is about this person's rate, the other about everyone's load,
+    // and the sentence a participant should read differs.
+    KIND_RATE_LIMITED = 7;
+    // The write was refused because the participant's database is at its size
+    // limit.
+    KIND_DISK_FULL = 8;
   }
 
   Kind kind = 1;

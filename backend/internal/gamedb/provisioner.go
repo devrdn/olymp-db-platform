@@ -212,3 +212,20 @@ func (p *Provisioner) connect(ctx context.Context, database string) (*pgx.Conn, 
 	}
 	return conn, nil
 }
+
+// DatabaseSize is how much disk one database occupies.
+//
+// The number the disk quota is a multiple of. Read live rather than recorded
+// at build time, because a template can be rebuilt and a recorded size is one
+// more thing that can be stale without saying so.
+func (p *Provisioner) DatabaseSize(ctx context.Context, name string) (int64, error) {
+	if !sqlpolicy.PlainIdentifier(name) {
+		return 0, fmt.Errorf("%w: %q", ErrBadName, name)
+	}
+
+	var size int64
+	if err := p.admin.QueryRow(ctx, `SELECT pg_database_size($1)`, name).Scan(&size); err != nil {
+		return 0, fmt.Errorf("read the size of %s: %w", name, err)
+	}
+	return size, nil
+}

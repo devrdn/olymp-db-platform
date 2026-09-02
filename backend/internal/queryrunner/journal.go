@@ -146,7 +146,11 @@ func statusOf(err error) Status {
 		return StatusOK
 	case errors.As(err, &refusal):
 		return StatusRejected
-	case errors.Is(err, ErrBusy), errors.Is(err, ErrAlreadyRunning):
+	case errors.Is(err, ErrBusy), errors.Is(err, ErrAlreadyRunning),
+		errors.Is(err, ErrTooManyQueries), errors.Is(err, ErrDiskFull):
+		// All four mean the same thing to a reader of the log: the system
+		// declined, and nothing reached the database. Which of them it was is
+		// in the recorded message.
 		return StatusRejected
 	case errors.Is(err, ErrTimeout), errors.Is(err, context.DeadlineExceeded):
 		return StatusTimeout

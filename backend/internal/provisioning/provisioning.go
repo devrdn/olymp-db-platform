@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
@@ -71,6 +72,7 @@ type Repository interface {
 type Cluster interface {
 	CreateInstance(ctx context.Context, template, instance string, policy sqlpolicy.Policy) error
 	Drop(ctx context.Context, name string) error
+	DatabaseSize(ctx context.Context, name string) (int64, error)
 }
 
 // Contest is what the service needs to know about one olympiad.
@@ -85,11 +87,26 @@ type Contest struct {
 type Service struct {
 	repo    Repository
 	cluster Cluster
+	workers int
 }
+
+// DefaultWorkers is how many copies are made at once. Section 4.2 says two to
+// four: enough that a pool fills in reasonable time, few enough that filling
+// it is never what the cluster is busy doing.
+const DefaultWorkers = 3
 
 // New assembles the service.
 func New(repo Repository, cluster Cluster) *Service {
-	return &Service{repo: repo, cluster: cluster}
+	return &Service{repo: repo, cluster: cluster, workers: DefaultWorkers}
+}
+
+// WithWorkers sets how many copies may be made at once.
+func (s *Service) WithWorkers(workers int) *Service {
+	if workers < 1 {
+		workers = 1
+	}
+	s.workers = workers
+	return s
 }
 
 // Ensure returns the database this registration works in, making one if there
@@ -150,24 +167,66 @@ func (s *Service) TopUp(ctx context.Context, contest Contest, depth int) (int, e
 	if err != nil {
 		return 0, err
 	}
-
-	made := 0
-	for range depth - have {
-		if err := ctx.Err(); err != nil {
-			return made, nil
-		}
-
-		database := spareName(contest.ID)
-		if err := s.cluster.CreateInstance(ctx, contest.Template, database, contest.Policy); err != nil {
-			return made, err
-		}
-		if err := s.repo.AddSpare(ctx, contest.ID, database, contest.Version); err != nil {
-			_ = s.cluster.Drop(context.WithoutCancel(ctx), database)
-			return made, err
-		}
-		made++
+	want := depth - have
+	if want <= 0 {
+		return 0, nil
 	}
-	return made, nil
+
+	// A bounded number of workers rather than a loop or a burst. `CREATE
+	// DATABASE … TEMPLATE` is the one operation that can spoil an olympiad
+	// before a query runs, so the pool is filled by two or three at a time and
+	// never by however many are missing.
+	work := make(chan struct{}, want)
+	for range want {
+		work <- struct{}{}
+	}
+	close(work)
+
+	var (
+		mu     sync.Mutex
+		made   int
+		failed error
+		party  sync.WaitGroup
+	)
+
+	for range min(s.workers, want) {
+		party.Add(1)
+		go func() {
+			defer party.Done()
+			for range work {
+				if ctx.Err() != nil {
+					return
+				}
+				if err := s.addSpare(ctx, contest); err != nil {
+					mu.Lock()
+					failed = errors.Join(failed, err)
+					mu.Unlock()
+					return
+				}
+				mu.Lock()
+				made++
+				mu.Unlock()
+			}
+		}()
+	}
+	party.Wait()
+
+	return made, failed
+}
+
+// addSpare makes one copy and records it.
+func (s *Service) addSpare(ctx context.Context, contest Contest) error {
+	database := spareName(contest.ID)
+	if err := s.cluster.CreateInstance(ctx, contest.Template, database, contest.Policy); err != nil {
+		return err
+	}
+	if err := s.repo.AddSpare(ctx, contest.ID, database, contest.Version); err != nil {
+		// The database exists and nothing points at it. Removed, so the
+		// cluster does not accumulate copies nobody can find.
+		_ = s.cluster.Drop(context.WithoutCancel(ctx), database)
+		return err
+	}
+	return nil
 }
 
 // Invalidate removes every database of this contest made from an older
@@ -240,6 +299,32 @@ func (s *Service) Tend(ctx context.Context, depth func(Contest) int) (made, drop
 		}
 	}
 	return made, dropped, errors.Join(failures...)
+}
+
+// Quota is how large one participant's database may grow.
+//
+// A multiple of the template rather than an absolute number, because the
+// template is the only thing that says how large a contest's data legitimately
+// is: a game with a hundred rows and one with a million should not share a
+// figure somebody typed into a configuration file once.
+func (s *Service) Quota(ctx context.Context, contest Contest) (int64, error) {
+	size, err := s.cluster.DatabaseSize(ctx, contest.Template)
+	if err != nil {
+		return 0, err
+	}
+
+	ratio := contest.Policy.DiskQuotaRatio
+	if ratio <= 0 {
+		ratio = sqlpolicy.DefaultDiskQuotaRatio
+	}
+	// A floor, because a template of a few kilobytes would otherwise give a
+	// participant a quota they exhaust with one INSERT — and the point is to
+	// bound a runaway, not to make ordinary work fail.
+	const smallest = 16 << 20
+	if quota := size * int64(ratio); quota > smallest {
+		return quota, nil
+	}
+	return smallest, nil
 }
 
 // Ready reports whether the contest may start: every database it has must have

@@ -77,6 +77,14 @@ type Config struct {
 	// PoolDepth is how many spare copies each live contest keeps ready, so
 	// that a participant arriving does not wait for CREATE DATABASE.
 	PoolDepth int
+	// ProvisionWorkers is how many copies are made at once. Section 4.2 says
+	// two to four: enough to fill a pool in reasonable time, few enough that
+	// filling it is never what the cluster is busy doing.
+	ProvisionWorkers int
+	// CopyStrategy is how PostgreSQL copies a template — empty leaves its own
+	// default. Which of the two wins depends on the size of the template, so
+	// it is a measurement rather than a constant.
+	CopyStrategy string
 	// MaxLoginAttemptsPerAddress caps sign-in attempts from one address in a
 	// quarter of an hour. It counts successes too, so it bounds people and not
 	// only guesses: a hall of students behind one NAT address is one address
@@ -127,6 +135,13 @@ func Load() (Config, error) {
 	if cfg.PoolDepth < 0 {
 		return Config{}, fmt.Errorf("GAME_POOL_DEPTH cannot be negative, got %d", cfg.PoolDepth)
 	}
+	if cfg.ProvisionWorkers, err = intEnv("GAME_PROVISION_WORKERS", 3); err != nil {
+		return Config{}, err
+	}
+	if cfg.ProvisionWorkers < 1 {
+		return Config{}, fmt.Errorf("GAME_PROVISION_WORKERS must be at least 1, got %d", cfg.ProvisionWorkers)
+	}
+	cfg.CopyStrategy = os.Getenv("GAME_COPY_STRATEGY")
 
 	cfg.DefaultLocale = envOrDefault("DEFAULT_LOCALE", "en")
 	if !languageTag.MatchString(cfg.DefaultLocale) {
