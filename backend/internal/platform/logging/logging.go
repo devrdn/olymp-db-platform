@@ -29,7 +29,14 @@ const (
 // New returns a JSON logger writing to w at the given level. Unknown levels
 // fall back to info; configuration validates the level before startup.
 func New(level string, w io.Writer) *slog.Logger {
-	handler := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: parseLevel(level)})
+	// AddSource, because a line that says an error happened and not where is
+	// a line somebody has to grep the source for. The cost is one call into
+	// the runtime per record, which at a few hundred requests a minute is not
+	// a cost worth the ambiguity.
+	handler := slog.NewJSONHandler(w, &slog.HandlerOptions{
+		Level:     parseLevel(level),
+		AddSource: true,
+	})
 	return slog.New(&contextHandler{root: handler})
 }
 
