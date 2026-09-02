@@ -19,15 +19,32 @@ const SIGN_IN = "/login";
 /** The one screen an account still on its one-time password may use. */
 const PASSWORD_CHANGE = "/password";
 
-export function guardRedirect(pathname: string, hasSession: boolean): string | null {
+/**
+ * Two arguments for the address, and the split is the point.
+ *
+ * `pathname` decides; `search` is only carried. They are separate parameters
+ * because the redirect this function issues has a query of its own, so the
+ * request that follows arrives at `/login?next=…` rather than at `/login`.
+ * Consulted with the query attached, the allow-list stops matching sign-in and
+ * the guard sends the sign-in page to itself, wrapping `next` one encoding
+ * deeper each round — a loop that locks out every signed-out visitor, not an
+ * unlucky few. Keeping the two apart makes that mistake unspellable rather
+ * than merely fixed.
+ */
+export function guardRedirect(
+  pathname: string,
+  search: string,
+  hasSession: boolean,
+): string | null {
   if (hasSession) return null;
   if (PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`))) {
     return null;
   }
 
-  // Where they were going is carried along, so signing in resumes the journey
-  // instead of dropping them on a landing page.
-  return `/login?next=${encodeURIComponent(pathname)}`;
+  // Where they were going is carried along — query included, because a
+  // filtered register or a search somebody typed lives there, and arriving
+  // afterwards on a bare list is losing it.
+  return `/login?next=${encodeURIComponent(pathname + search)}`;
 }
 
 /**
