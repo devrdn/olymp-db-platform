@@ -32,6 +32,9 @@ var (
 	ErrNoSpare = errors.New("no spare copy")
 	// ErrNoInstance means this registration has no database yet.
 	ErrNoInstance = errors.New("no instance")
+	// ErrNoGame means the contest's template was never built, or is still
+	// building. Nobody's mistake, and not a fact about anybody's query.
+	ErrNoGame = errors.New("no game database")
 )
 
 // Instance is the database a registration works in.
@@ -61,6 +64,9 @@ type Repository interface {
 	// Live lists the contests whose pool is worth keeping stocked: published
 	// or running, with a template that finished building.
 	Live(ctx context.Context) ([]Contest, error)
+	// Game returns one contest's game, or ErrNoGame. Named apart from Of
+	// above, which answers about a registration rather than a contest.
+	Game(ctx context.Context, contestID uuid.UUID) (Contest, error)
 }
 
 // Cluster is the part of the game cluster this service drives.

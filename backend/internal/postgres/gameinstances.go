@@ -180,6 +180,44 @@ func (r *GameInstances) AllCurrent(ctx context.Context, contest uuid.UUID, versi
 	return behind == 0, nil
 }
 
+// Game returns one contest's game: which template it plays on, at what version,
+// under which policy.
+//
+// The same shape Live returns, for the one contest a participant is asking
+// about. A template that is still building or has failed is no game yet, which
+// is a different answer from "no such contest" and reads differently to the
+// person waiting.
+func (r *GameInstances) Game(ctx context.Context, contestID uuid.UUID) (provisioning.Contest, error) {
+	var c provisioning.Contest
+	var mode string
+	err := r.querier(ctx).QueryRow(ctx, `
+		SELECT c.id, t.template_db, t.version,
+		       coalesce(p.mode, 'read_only'),
+		       coalesce(p.writable_tables, '{}')::text[],
+		       coalesce(p.allow_create_view, false),
+		       coalesce(p.allow_own_tables, false),
+		       coalesce(p.allow_temp_tables, false),
+		       coalesce(p.allow_catalog, true),
+		       coalesce(p.disk_quota_ratio, 5)
+		FROM contests c
+		JOIN game_templates t ON t.contest_id = c.id
+		LEFT JOIN contest_sql_policies p ON p.contest_id = c.id
+		WHERE c.id = $1 AND t.status = 'ready'`, contestID).
+		Scan(&c.ID, &c.Template, &c.Version,
+			&mode, &c.Policy.WritableTables, &c.Policy.AllowCreateView,
+			&c.Policy.AllowOwnTables, &c.Policy.AllowTempTables, &c.Policy.AllowCatalog,
+			&c.Policy.DiskQuotaRatio)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return provisioning.Contest{}, provisioning.ErrNoGame
+	}
+	if err != nil {
+		return provisioning.Contest{}, fmt.Errorf("read the contest's game: %w", err)
+	}
+	c.Policy.Mode = sqlpolicy.Mode(mode)
+	return c, nil
+}
+
 // Live lists the contests whose pool is worth keeping stocked.
 //
 // Published or running, and only with a template that finished building: a
