@@ -28,14 +28,47 @@ type TemplateSpec struct {
 	Policy sqlpolicy.Policy
 }
 
+// CopyStrategy is how PostgreSQL makes a copy of a template.
+//
+// A real choice with a measurable answer, which is why it is configuration and
+// not a constant: WAL_LOG puts the whole database through the write-ahead log
+// but takes no checkpoints, and FILE_COPY copies the files but forces two
+// checkpoints per database. Which wins depends on the size of the template and
+// on how many copies are made at once, so section 4.2 leaves it to a
+// measurement on the real thing.
+type CopyStrategy string
+
+const (
+	// StrategyWALLog is PostgreSQL's own default, and this one's.
+	StrategyWALLog   CopyStrategy = "WAL_LOG"
+	StrategyFileCopy CopyStrategy = "FILE_COPY"
+)
+
+// Valid reports whether the strategy is one PostgreSQL knows.
+func (s CopyStrategy) Valid() bool {
+	return s == "" || s == StrategyWALLog || s == StrategyFileCopy
+}
+
 // Provisioner builds contest templates and the per-participant copies of them.
 //
 // It owns two things a plain connection cannot do together: CREATE DATABASE,
 // which cannot run inside a transaction, and connecting to the database it has
 // just made in order to fill it.
 type Provisioner struct {
-	admin Cluster
-	base  *url.URL
+	admin    Cluster
+	base     *url.URL
+	strategy CopyStrategy
+}
+
+// WithCopyStrategy chooses how copies are made. An unknown one is refused
+// here rather than at the first CREATE DATABASE, which would be during a
+// contest.
+func (p *Provisioner) WithCopyStrategy(strategy CopyStrategy) (*Provisioner, error) {
+	if !strategy.Valid() {
+		return nil, fmt.Errorf("unknown copy strategy %q", strategy)
+	}
+	p.strategy = strategy
+	return p, nil
 }
 
 // NewProvisioner returns a provisioner over the cluster.
@@ -115,9 +148,14 @@ func (p *Provisioner) CreateInstance(ctx context.Context, template, instance str
 	}
 
 	create := `CREATE DATABASE ` + QuoteIdentifier(instance) + ` TEMPLATE ` + QuoteIdentifier(template)
+	if p.strategy != "" {
+		// The value is one of this package's own constants, checked when it
+		// was set; there is nothing here a caller could have written.
+		create += ` STRATEGY = ` + string(p.strategy)
+	}
 	_, err := p.admin.Exec(ctx, create)
 	if err == nil {
-		return settleTemporaryTables(ctx, p.admin, instance, policy)
+		return settleInstance(ctx, p.admin, instance, policy)
 	}
 
 	// `source database is being accessed by other users`. Nothing should be
@@ -136,7 +174,7 @@ func (p *Provisioner) CreateInstance(ctx context.Context, template, instance str
 	if _, err := p.admin.Exec(ctx, create); err != nil {
 		return fmt.Errorf("copy the template: %w", err)
 	}
-	return settleTemporaryTables(ctx, p.admin, instance, policy)
+	return settleInstance(ctx, p.admin, instance, policy)
 }
 
 // ResetInstance gives a participant their starting database back.

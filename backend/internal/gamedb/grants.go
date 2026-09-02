@@ -67,8 +67,17 @@ func grantPolicy(ctx context.Context, conn Conn, policy sqlpolicy.Policy) error 
 	return nil
 }
 
-// settleTemporaryTables decides, on one instance, whether temporary tables are
-// allowed.
+// instanceConnectionLimit is the last line under the Query Runner's semaphore.
+//
+// Two rather than one: a query is running while the connection that will
+// replace it is being opened, and a limit of one would turn an ordinary
+// handover into a refusal. Reaching even two means admission control has
+// already failed — a participant is allowed one query at a time, and the
+// runner closes each connection when it is done.
+const instanceConnectionLimit = 2
+
+// settleInstance applies the privileges that belong to a database rather than
+// to its contents.
 //
 // It is separate from grantPolicy and runs per instance because PostgreSQL
 // grants TEMPORARY on a database to PUBLIC by default, and a database-level
@@ -76,8 +85,16 @@ func grantPolicy(ctx context.Context, conn Conn, policy sqlpolicy.Policy) error 
 // row, and a copy starts with a fresh one. Applied only in the template, the
 // policy's `allow_temp_tables: false` would be a setting that quietly did
 // nothing.
-func settleTemporaryTables(ctx context.Context, conn Conn, instance string, policy sqlpolicy.Policy) error {
+func settleInstance(ctx context.Context, conn Conn, instance string, policy sqlpolicy.Policy) error {
 	name := QuoteIdentifier(instance)
+
+	// Nothing should ever open a third connection to one participant's
+	// database. This is not what enforces that — the runner's own semaphore
+	// is — but it is what holds if the runner is wrong.
+	if _, err := conn.Exec(ctx, fmt.Sprintf(
+		`ALTER DATABASE %s CONNECTION LIMIT %d`, name, instanceConnectionLimit)); err != nil {
+		return fmt.Errorf("limit connections to %s: %w", instance, err)
+	}
 
 	if _, err := conn.Exec(ctx, `REVOKE TEMPORARY ON DATABASE `+name+` FROM PUBLIC`); err != nil {
 		return fmt.Errorf("revoke temporary tables on %s: %w", instance, err)

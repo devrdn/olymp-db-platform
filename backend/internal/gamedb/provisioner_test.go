@@ -337,3 +337,66 @@ func TestTemporaryTablesFollowThePolicyOnEveryInstance(t *testing.T) {
 		}
 	})
 }
+
+// Nothing should ever open a third connection to one participant's database.
+// The runner's semaphore is what enforces that; this is what holds if the
+// runner is wrong, which is the only reason to have it.
+func TestAnInstanceRefusesMoreConnectionsThanAParticipantCanNeed(t *testing.T) {
+	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
+
+	instance := named(t, "inst")
+	if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
+		t.Fatalf("creating the instance: %v", err)
+	}
+
+	// Two is the allowance: a query running while its replacement is opened.
+	first := connectAs(t, roleReader, testReaderPassword, instance)
+	second := connectAs(t, roleReader, testReaderPassword, instance)
+	if err := first.Ping(t.Context()); err != nil {
+		t.Fatalf("the first connection is not usable: %v", err)
+	}
+	if err := second.Ping(t.Context()); err != nil {
+		t.Fatalf("the second connection is not usable: %v", err)
+	}
+
+	if err := tryConnectAs(t, roleReader, testReaderPassword, instance); err == nil {
+		t.Fatal("a third connection to one participant's database was allowed")
+	}
+}
+
+// Both strategies must actually produce a usable copy: the choice is a
+// measurement to be made on a real template, and a setting that only works one
+// way is not a choice.
+func TestEitherCopyStrategyProducesAUsableDatabase(t *testing.T) {
+	for _, strategy := range []gamedb.CopyStrategy{gamedb.StrategyWALLog, gamedb.StrategyFileCopy} {
+		t.Run(string(strategy), func(t *testing.T) {
+			p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
+			chosen, err := p.WithCopyStrategy(strategy)
+			if err != nil {
+				t.Fatalf("choosing %s: %v", strategy, err)
+			}
+
+			instance := named(t, "inst")
+			if err := chosen.CreateInstance(t.Context(), template, instance, policy); err != nil {
+				t.Fatalf("copying with %s: %v", strategy, err)
+			}
+
+			reader := connectAs(t, roleReader, testReaderPassword, instance)
+			var suspects int
+			if err := reader.QueryRow(t.Context(), `SELECT count(*) FROM suspects`).Scan(&suspects); err != nil {
+				t.Fatalf("the copy is not usable: %v", err)
+			}
+			if suspects != 2 {
+				t.Fatalf("suspects = %d, want 2", suspects)
+			}
+		})
+	}
+}
+
+// An unknown strategy is refused when it is set, not at the first copy — which
+// would be during a contest.
+func TestAnUnknownCopyStrategyIsRefusedUpFront(t *testing.T) {
+	if _, err := provisioner(t).WithCopyStrategy("MAGIC"); err == nil {
+		t.Fatal("an unknown copy strategy was accepted")
+	}
+}

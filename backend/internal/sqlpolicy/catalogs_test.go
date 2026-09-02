@@ -75,14 +75,12 @@ func TestASensitiveCatalogIsFoundWhereverItIsJoined(t *testing.T) {
 	}
 }
 
-// The mode exists in the policy and is deliberately not implemented yet
-// (section 14, step 4.2): the writing modes get their own iteration and their
-// own tests. What must not happen is that it quietly behaves like read_only,
-// because the template's GRANTs would then say something the checker does not.
-func TestTheWritingModeIsRefusedRatherThanApproximated(t *testing.T) {
-	r := refusal(t, `SELECT 1`, sqlpolicy.ReadWrite("evidence"))
-	if r.Code != sqlpolicy.CodeModeNotSupported {
-		t.Fatalf("code = %q, want %q", r.Code, sqlpolicy.CodeModeNotSupported)
+// Permitting writing must not quietly permit reading the installation: the
+// catalogue rules are not part of what a mode relaxes.
+func TestTheWritingModeDoesNotOpenTheCatalogues(t *testing.T) {
+	r := refusal(t, `SELECT datname FROM pg_database`, sqlpolicy.ReadWrite("evidence"))
+	if r.Code != sqlpolicy.CodeCatalogNotReadable {
+		t.Fatalf("code = %q, want %q", r.Code, sqlpolicy.CodeCatalogNotReadable)
 	}
 }
 

@@ -82,16 +82,24 @@ func TestReadWriteAcceptsOrdinaryTableNames(t *testing.T) {
 	if err := p.Validate(); err != nil {
 		t.Fatalf("ordinary table names were refused: %v", err)
 	}
-	if !p.MayWriteTo("evidence") {
+	if !p.MayWriteTo("", "evidence") {
 		t.Fatal("a table the policy names is not writable")
 	}
 	// Case-insensitively, because that is how PostgreSQL folds an unquoted
 	// identifier, and the AST hands the checker the folded form.
-	if !p.MayWriteTo("suspects2") {
+	if !p.MayWriteTo("", "suspects2") {
 		t.Fatal("identifier folding is not applied")
 	}
-	if p.MayWriteTo("users") {
+	if p.MayWriteTo("", "users") {
 		t.Fatal("a table the policy does not name is writable")
+	}
+	// An absent schema means `public` on both sides, so a contest naming
+	// `evidence` and a participant writing `public.evidence` mean one table.
+	if !p.MayWriteTo("public", "evidence") {
+		t.Fatal("a qualified spelling of the same table is not writable")
+	}
+	if p.MayWriteTo("other", "evidence") {
+		t.Fatal("the same name in another schema is writable")
 	}
 }
 

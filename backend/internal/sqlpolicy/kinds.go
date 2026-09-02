@@ -33,4 +33,13 @@ var allowedKinds = names(
 
 	// Leaves the grammar spells as their own nodes.
 	"integer", "float", "boolean", "string", "bit_string",
+
+	// What a table definition is made of, for the contests that let a
+	// participant keep their own. Reachable only under a write statement,
+	// whose own node is checked at the root and refused anywhere else — so
+	// these being here does not make `CREATE TABLE` possible in a contest
+	// that did not permit it. A default or a check expression is still an
+	// expression, walked like any other, so a forbidden function inside one
+	// is refused exactly as it would be in a WHERE.
+	"column_def", "constraint",
 )

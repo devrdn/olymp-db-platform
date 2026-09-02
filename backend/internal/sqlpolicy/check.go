@@ -28,6 +28,8 @@ const (
 	CodeCatalogNotAllowed     Code = "catalog_not_allowed"
 	CodeTooDeep               Code = "too_deep"
 	CodeTooLong               Code = "too_long"
+	CodeTableNotWritable      Code = "table_not_writable"
+	CodeNotPermitted          Code = "not_permitted"
 )
 
 // Refusal is why one query was not allowed to run.
@@ -117,15 +119,6 @@ func (c *Checker) Analyse(sql string, p Policy) (Statement, error) {
 	if err := p.Validate(); err != nil {
 		return Statement{}, &Refusal{Code: CodeInvalidPolicy, Subject: err.Error()}
 	}
-	if p.Mode == ModeReadWrite {
-		// Deliberately staged: the writing modes get their own iteration and
-		// their own security tests (section 14, step 4.2). Refusing loudly is
-		// the honest way to not support something yet — a checker that quietly
-		// treated read_write as read_only would disagree with the template's
-		// GRANTs, which is exactly the drift this package exists to prevent.
-		return Statement{}, &Refusal{Code: CodeModeNotSupported, Subject: string(p.Mode)}
-	}
-
 	if len(sql) > maxQueryBytes {
 		return Statement{}, &Refusal{Code: CodeTooLong, Subject: fmt.Sprintf("%d bytes", len(sql))}
 	}
@@ -143,39 +136,61 @@ func (c *Checker) Analyse(sql string, p Policy) (Statement, error) {
 		return Statement{}, &Refusal{Code: CodeNotOneStatement, Subject: "0 statements"}
 	}
 
-	target, explain, err := c.rootAllowed(root, p)
+	plan, err := c.rootAllowed(root, p)
 	if err != nil {
 		return Statement{}, err
 	}
-	if err := c.walkNode(target, p, 0); err != nil {
+	// A write statement's own node is not in the allowed set — that is what
+	// refuses one hidden inside a CTE — so its children are walked without
+	// checking the node itself, which the root check has already decided.
+	if plan.checkSelf {
+		err = c.walkNode(plan.node, p, 0)
+	} else {
+		err = c.walkMessage(plan.node.ProtoReflect(), p, 0)
+	}
+	if err != nil {
 		return Statement{}, err
 	}
-	return Statement{Explain: explain}, nil
+	return Statement{Explain: plan.explain}, nil
 }
 
 // rootAllowed checks the outermost statement and returns the node to walk.
 //
 // EXPLAIN returns its inner query rather than itself: its options are checked
 // here, once, so that DefElem never has to be a generally-allowed node type.
-func (c *Checker) rootAllowed(root *pg.Node, p Policy) (target *pg.Node, explain bool, err error) {
+type rootPlan struct {
+	node *pg.Node
+	// checkSelf is false for a write, whose own node is deliberately absent
+	// from the allowed set so that it cannot appear anywhere but the root.
+	checkSelf bool
+	explain   bool
+}
+
+func (c *Checker) rootAllowed(root *pg.Node, p Policy) (rootPlan, error) {
 	switch stmt := root.Node.(type) {
 	case *pg.Node_SelectStmt:
-		return root, false, nil
+		return rootPlan{node: root, checkSelf: true}, nil
 	case *pg.Node_ExplainStmt:
 		for _, option := range stmt.ExplainStmt.Options {
 			name := strings.ToLower(option.GetDefElem().GetDefname())
 			// ANALYZE is not a plan, it is a run — on a DML it *is* the DML.
 			// The rest (VERBOSE, COSTS, FORMAT) only change the printout.
 			if name == "analyze" {
-				return nil, false, &Refusal{Code: CodeStatementNotSupported, Subject: "EXPLAIN ANALYZE"}
+				return rootPlan{}, &Refusal{Code: CodeStatementNotSupported, Subject: "EXPLAIN ANALYZE"}
 			}
 		}
 		if stmt.ExplainStmt.Query == nil {
-			return nil, false, &Refusal{Code: CodeStatementNotSupported, Subject: "EXPLAIN"}
+			return rootPlan{}, &Refusal{Code: CodeStatementNotSupported, Subject: "EXPLAIN"}
 		}
-		return stmt.ExplainStmt.Query, true, nil
+		return rootPlan{node: stmt.ExplainStmt.Query, checkSelf: true, explain: true}, nil
 	default:
-		return nil, false, &Refusal{Code: CodeStatementNotSupported, Subject: kindOf(root)}
+		if p.Mode != ModeReadWrite {
+			return rootPlan{}, &Refusal{Code: CodeStatementNotSupported, Subject: kindOf(root)}
+		}
+		if err := c.writeAllowed(root, p); err != nil {
+			return rootPlan{}, err
+		}
+		return rootPlan{node: root}, nil
 	}
 }
 
