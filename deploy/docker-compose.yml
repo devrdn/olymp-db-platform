@@ -139,6 +139,10 @@ services:
       # participant's own, taken from game_instances by the Core API. Only the
       # credentials here are ever used.
       GAME_DB_DSN: postgres://game_reader:${GAME_READER_PASSWORD}@pg-game:5432/postgres?sslmode=disable
+      # The writer role, for contests whose policy permits writing (section
+      # 4.1). Which of the two a query runs as is the policy's decision; without
+      # this a read-write contest is refused rather than run as the reader.
+      GAME_DB_WRITER_DSN: postgres://game_writer:${GAME_WRITER_PASSWORD}@pg-game:5432/postgres?sslmode=disable
       QUERY_DEADLINE: ${QUERY_DEADLINE:-5s}
       QUERY_MAX_ROWS: ${QUERY_MAX_ROWS:-1000}
       QUERY_MAX_BYTES: ${QUERY_MAX_BYTES:-5242880}

@@ -39,6 +39,12 @@ func runPeriodically(ctx context.Context, log *slog.Logger, t task) {
 	}
 }
 
+// provisionStatementTimeout bounds one statement on the game cluster's
+// provisioning pool. Minutes rather than the core API's seconds, because
+// copying a template is disk work whose duration is the template's size; the
+// bound exists so a hung cluster is still noticed, not to shape normal work.
+const provisionStatementTimeout = 10 * time.Minute
+
 // abandonedAfter is how long a query log row may sit at `running` before it is
 // taken to belong to a process that died.
 //

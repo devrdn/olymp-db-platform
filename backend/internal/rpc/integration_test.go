@@ -29,12 +29,14 @@ func serving(t *testing.T, limits queryrunner.Limits, checker *sqlpolicy.Checker
 	gamedbtest.Run(t, database,
 		`CREATE TABLE evidence (id int PRIMARY KEY, note text)`,
 		`INSERT INTO evidence VALUES (1, 'a knife'), (2, NULL)`,
-		`GRANT USAGE ON SCHEMA public TO `+gamedb.RoleReader,
-		`GRANT SELECT ON ALL TABLES IN SCHEMA public TO `+gamedb.RoleReader,
+		`GRANT USAGE ON SCHEMA public TO `+gamedb.RoleReader+`, `+gamedb.RoleWriter,
+		`GRANT SELECT ON ALL TABLES IN SCHEMA public TO `+gamedb.RoleReader+`, `+gamedb.RoleWriter,
+		`GRANT INSERT ON evidence TO `+gamedb.RoleWriter,
 	)
 
 	cluster, err := queryrunner.NewCluster(
-		gamedbtest.DSN(t, gamedb.RoleReader, gamedbtest.ReaderPassword, database))
+		gamedbtest.DSN(t, gamedb.RoleReader, gamedbtest.ReaderPassword, database),
+		gamedbtest.DSN(t, gamedb.RoleWriter, gamedbtest.WriterPassword, database))
 	if err != nil {
 		t.Fatalf("building the cluster connector: %v", err)
 	}
@@ -247,5 +249,50 @@ func TestAnAnswerBeyondTheBudgetIsCutRatherThanRefused(t *testing.T) {
 	}
 	if len(result.Rows) == 0 || len(result.Rows) >= 1000 {
 		t.Fatalf("rows = %d; the budget cut nothing useful", len(result.Rows))
+	}
+}
+
+// The disk quota is decided on the Core API's side and checked on the runner's,
+// so it has to cross the wire. It did not: the request carried no such field,
+// and the check that section 4.1 puts first was dead in the one arrangement
+// the deployment actually uses.
+func TestTheDiskQuotaCrossesTheWire(t *testing.T) {
+	client, database := serving(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+
+	writing := ask(database, `INSERT INTO evidence (id, note) VALUES (9, 'planted')`)
+	writing.Policy = sqlpolicy.ReadWrite("evidence")
+	writing.DiskQuotaBytes = 1
+
+	if _, err := client.Run(t.Context(), writing); !errors.Is(err, queryrunner.ErrDiskFull) {
+		t.Fatalf("error = %v, want ErrDiskFull", err)
+	}
+}
+
+// What a write answers with is a count, and the count has to arrive.
+func TestRowsAffectedCrossTheWire(t *testing.T) {
+	client, database := serving(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+
+	writing := ask(database, `INSERT INTO evidence (id, note) VALUES (7, 'a hat'), (8, 'a cane')`)
+	writing.Policy = sqlpolicy.ReadWrite("evidence")
+
+	result, err := client.Run(t.Context(), writing)
+	if err != nil {
+		t.Fatalf("a permitted write failed across the wire: %v", err)
+	}
+	if result.RowsAffected != 2 {
+		t.Fatalf("rows affected = %d, want 2", result.RowsAffected)
+	}
+}
+
+// An answer too large to read at all is its own kind of failure on the wire,
+// so that the caller can say so rather than reporting the database as broken.
+func TestAnAnswerTooLargeToReadArrivesAsSuch(t *testing.T) {
+	limits := queryrunner.DefaultLimits()
+	limits.MaxBytes = 64 << 10
+	client, database := serving(t, limits, sqlpolicy.NewChecker())
+
+	_, err := client.Run(t.Context(), ask(database, `SELECT repeat('x', 8 * 1024 * 1024)`))
+	if !errors.Is(err, queryrunner.ErrResultTooLarge) {
+		t.Fatalf("error = %v, want ErrResultTooLarge", err)
 	}
 }

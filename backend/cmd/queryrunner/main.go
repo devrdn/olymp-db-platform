@@ -66,7 +66,7 @@ func run() error {
 
 	log := logging.New(cfg.LogLevel, os.Stdout).With("service", "queryrunner", "version", version)
 
-	cluster, err := queryrunner.NewCluster(cfg.GameDBDSN)
+	cluster, err := queryrunner.NewCluster(cfg.GameDBDSN, cfg.GameDBWriterDSN)
 	if err != nil {
 		return err
 	}

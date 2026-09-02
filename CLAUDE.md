@@ -94,3 +94,30 @@ mistake that was actually found, not a hypothetical.
    forwarded header the service reads, `X-Forwarded-Proto` in `httpx.isTLS`,
    comes from any peer, so nothing may fail open because of it: a spoofed
    value must only ever make a request stricter, never looser.
+10. **Prove a guarantee on the path the deployment uses.** A write path tested
+    only as the reader role never ran a write, and three defects hid behind
+    the privilege error it produced instead. Tests of a role-dependent
+    behaviour connect as that role; tests of a transport-dependent behaviour
+    cross that transport.
+11. **A value that drives a check crosses every boundary it has to.** The disk
+    quota was decided on one side of the gRPC contract and checked on the
+    other, and the contract carried no field for it, so the check was dead in
+    the only arrangement the deployment uses. When adding a check, trace its
+    input from where it is decided to where it is applied through every
+    proto, DTO and repository on the way.
+12. **Bound memory where the bytes arrive.** A limit applied to decoded values
+    comes after the allocation it exists to prevent: a driver reads a whole
+    row before handing any of it over. A result budget is enforced on the
+    socket (`queryrunner.readMeter`), and the same reasoning applies to any
+    reader of untrusted-sized input.
+13. **Rate-limit before the expensive step, and count refusals.** The SQL
+    parser is C code reading text an adversary chose. A refused query still
+    cost a parse, so it still counts against the participant's rate; a limit
+    that only counts successes is a limit on the wrong thing.
+14. **Cut SQL where the parser said the statement ends.** Wrapping a query is
+    string surgery; use the parser's own statement bounds
+    (`sqlpolicy.Statement.Text`) rather than trimming semicolons, or a valid
+    `SELECT 1; -- note` becomes a syntax error inside the wrapper.
+15. **A pool's statement timeout matches its workload.** The core API's ten
+    seconds is right for request queries and wrong for `CREATE DATABASE …
+    TEMPLATE`; a maintenance pool takes its own (`storage.NewMaintenancePool`).

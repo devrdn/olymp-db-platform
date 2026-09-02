@@ -53,6 +53,11 @@ message RunRequest {
   string database = 2;
   string sql = 3;
   Policy policy = 4;
+  // How large this participant's database may grow, in bytes. Computed on the
+  // Core API's side from the template's size and the policy's ratio, and
+  // checked by the runner before a write. Zero means no bound, which is what a
+  // read-only contest sends.
+  int64 disk_quota_bytes = 5;
 }
 
 message RunResponse {
@@ -74,6 +79,10 @@ message Result {
   // a nine thousand row answer and not being told has a wrong answer, not a
   // short one.
   bool truncated = 3;
+  // For a statement that changes the database: how many rows it changed. A
+  // read leaves it at zero, and so does a write that returned rows through
+  // RETURNING — those are the answer, and their count is the row count.
+  int64 rows_affected = 4;
 }
 
 message Row {
@@ -116,6 +125,10 @@ message Failure {
     // The write was refused because the participant's database is at its size
     // limit.
     KIND_DISK_FULL = 8;
+    // The answer could not be read within the result budget at all — one row
+    // alone was larger than the whole allowance, so there is no prefix of it
+    // to show. Distinct from a truncated result, which is an answer.
+    KIND_RESULT_TOO_LARGE = 9;
   }
 
   Kind kind = 1;

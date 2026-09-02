@@ -95,6 +95,12 @@ func Check(sql string, p Policy) error { return standard.Check(sql, p) }
 // Query Runner — would otherwise be reduced to matching a prefix, which a
 // leading comment defeats.
 type Statement struct {
+	// Text is the statement itself, as the parser delimited it: without the
+	// trailing semicolon, and without whatever followed it. A caller that
+	// wraps the query in a subquery needs exactly this — `SELECT 1; -- note`
+	// is one statement to the parser and a syntax error inside a FROM, and
+	// no amount of trimming the original string can tell where it ended.
+	Text string
 	// Explain reports an EXPLAIN. It matters because an EXPLAIN cannot be
 	// placed inside a subquery, so it is the one shape that must not be
 	// wrapped when a result is limited.
@@ -135,7 +141,8 @@ func (c *Checker) Analyse(sql string, p Policy) (Statement, error) {
 		return Statement{}, &Refusal{Code: CodeNotOneStatement, Subject: fmt.Sprintf("%d statements", len(tree.Stmts))}
 	}
 
-	root := tree.Stmts[0].Stmt
+	raw := tree.Stmts[0]
+	root := raw.Stmt
 	if root == nil || root.Node == nil {
 		return Statement{}, &Refusal{Code: CodeNotOneStatement, Subject: "0 statements"}
 	}
@@ -155,7 +162,32 @@ func (c *Checker) Analyse(sql string, p Policy) (Statement, error) {
 	if err != nil {
 		return Statement{}, err
 	}
-	return Statement{Explain: plan.explain, Writes: plan.writes}, nil
+	return Statement{
+		Text:    statementText(sql, raw),
+		Explain: plan.explain,
+		Writes:  plan.writes,
+	}, nil
+}
+
+// statementText cuts the one statement out of the text it was parsed from,
+// using the bounds the parser recorded rather than guessing at them.
+//
+// The parser marks where a statement starts — whitespace and comments before
+// its first token are counted as part of it, which is harmless inside a
+// subquery — and, when a semicolon ends it, how long it is. A length of zero
+// means "to the end of the input", which is how the last statement of a script
+// is marked when nothing terminates it. Bounds that do not fit the input —
+// which cannot happen with a tree parsed from this very string — fall back to
+// the whole text rather than to a panic.
+func statementText(sql string, raw *pg.RawStmt) string {
+	start, length := int(raw.GetStmtLocation()), int(raw.GetStmtLen())
+	if start < 0 || start > len(sql) {
+		return sql
+	}
+	if length <= 0 || start+length > len(sql) {
+		return sql[start:]
+	}
+	return sql[start : start+length]
 }
 
 // rootAllowed checks the outermost statement and returns the node to walk.

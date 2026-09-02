@@ -125,3 +125,28 @@ func TestTheCoreConfigurationNeverReadsTheParticipantsCredentials(t *testing.T) 
 		t.Fatal("the provisioner is configured as a participant")
 	}
 }
+
+// The writer's credentials are optional, and their absence has to be a value
+// the runner can act on: a read-write contest is then refused rather than run
+// as the reader.
+func TestRunnerReadsTheOptionalWriterDSN(t *testing.T) {
+	t.Setenv("GAME_DB_DSN", "postgres://game_reader:secret@pg-game:5432/postgres")
+	t.Setenv("GAME_DB_WRITER_DSN", "")
+
+	cfg, err := LoadRunner()
+	if err != nil {
+		t.Fatalf("LoadRunner() returned error: %v", err)
+	}
+	if cfg.GameDBWriterDSN != "" {
+		t.Errorf("GameDBWriterDSN = %q, want empty when unset", cfg.GameDBWriterDSN)
+	}
+
+	t.Setenv("GAME_DB_WRITER_DSN", "postgres://game_writer:secret@pg-game:5432/postgres")
+	cfg, err = LoadRunner()
+	if err != nil {
+		t.Fatalf("LoadRunner() returned error: %v", err)
+	}
+	if cfg.GameDBWriterDSN == "" {
+		t.Error("GameDBWriterDSN was not read from the environment")
+	}
+}

@@ -50,6 +50,8 @@ func failureFor(err error) *pb.Failure {
 		return &pb.Failure{Kind: pb.Failure_KIND_RATE_LIMITED.Enum(), Message: ptr(err.Error())}
 	case errors.Is(err, queryrunner.ErrDiskFull):
 		return &pb.Failure{Kind: pb.Failure_KIND_DISK_FULL.Enum(), Message: ptr(err.Error())}
+	case errors.Is(err, queryrunner.ErrResultTooLarge):
+		return &pb.Failure{Kind: pb.Failure_KIND_RESULT_TOO_LARGE.Enum(), Message: ptr(err.Error())}
 	case errors.Is(err, queryrunner.ErrTimeout), errors.Is(err, context.DeadlineExceeded):
 		return &pb.Failure{Kind: pb.Failure_KIND_TIMEOUT.Enum(), Message: ptr(err.Error())}
 	case errors.Is(err, queryrunner.ErrCanceled), errors.Is(err, context.Canceled):
@@ -84,6 +86,8 @@ func errorFor(failure *pb.Failure) error {
 		return queryrunner.ErrTooManyQueries
 	case pb.Failure_KIND_DISK_FULL:
 		return queryrunner.ErrDiskFull
+	case pb.Failure_KIND_RESULT_TOO_LARGE:
+		return queryrunner.ErrResultTooLarge
 	case pb.Failure_KIND_TIMEOUT:
 		return queryrunner.ErrTimeout
 	case pb.Failure_KIND_CANCELLED:

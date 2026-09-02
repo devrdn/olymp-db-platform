@@ -10,6 +10,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	pb "github.com/devrdn/db-contest/backend/internal/rpc/queryrunnerv1"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -109,15 +110,24 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 		// running anything, so it is an error status rather than a Failure.
 		return nil, status.Errorf(codes.InvalidArgument, "registration is not a uuid")
 	}
-	if req.GetDatabase() == "" {
-		return nil, status.Errorf(codes.InvalidArgument, "database is required")
+	// A database name is the caller's, taken from game_instances, and every
+	// name that table holds is one the platform generated. Checked anyway, at
+	// the door: it goes into a connection string, and the runner would refuse
+	// it too, but "invalid argument" here names the caller's mistake where a
+	// failure inside the response would name the database's.
+	if !sqlpolicy.PlainIdentifier(req.GetDatabase()) {
+		return nil, status.Errorf(codes.InvalidArgument, "database is not a plain identifier")
+	}
+	if req.GetDiskQuotaBytes() < 0 {
+		return nil, status.Errorf(codes.InvalidArgument, "disk_quota_bytes cannot be negative")
 	}
 
 	result, runErr := s.runner.Run(ctx, queryrunner.Request{
-		Registration: registration,
-		Database:     req.GetDatabase(),
-		SQL:          req.GetSql(),
-		Policy:       policyFrom(req.GetPolicy()),
+		Registration:   registration,
+		Database:       req.GetDatabase(),
+		SQL:            req.GetSql(),
+		Policy:         policyFrom(req.GetPolicy()),
+		DiskQuotaBytes: req.GetDiskQuotaBytes(),
 	})
 	if runErr != nil {
 		return &pb.RunResponse{
@@ -126,9 +136,10 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 	}
 
 	answer := &pb.Result{
-		Columns:   result.Columns,
-		Truncated: ptr(result.Truncated),
-		Rows:      make([]*pb.Row, 0, len(result.Rows)),
+		Columns:      result.Columns,
+		Truncated:    ptr(result.Truncated),
+		RowsAffected: ptr(result.RowsAffected),
+		Rows:         make([]*pb.Row, 0, len(result.Rows)),
 	}
 	var spent int
 	for _, values := range result.Rows {

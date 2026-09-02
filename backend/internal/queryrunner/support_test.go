@@ -28,17 +28,30 @@ func setupWith(t *testing.T, limits queryrunner.Limits, checker *sqlpolicy.Check
 	gamedbtest.Run(t, database,
 		`CREATE TABLE evidence (id int PRIMARY KEY, note text)`,
 		`INSERT INTO evidence VALUES (1, 'a knife'), (2, 'a letter')`,
-		`GRANT USAGE ON SCHEMA public TO `+gamedb.RoleReader,
-		`GRANT SELECT ON ALL TABLES IN SCHEMA public TO `+gamedb.RoleReader,
+		`GRANT USAGE ON SCHEMA public TO `+gamedb.RoleReader+`, `+gamedb.RoleWriter,
+		`GRANT SELECT ON ALL TABLES IN SCHEMA public TO `+gamedb.RoleReader+`, `+gamedb.RoleWriter,
+		// The writer may keep its own objects, as a read-write template grants
+		// (internal/gamedb), and nothing else: which game tables it may write
+		// is granted by the tests that are about writing.
+		`CREATE SCHEMA work`,
+		`GRANT USAGE, CREATE ON SCHEMA work TO `+gamedb.RoleWriter,
 	)
 
+	return queryrunner.New(clusterFor(t, database), checker, limits), database
+}
+
+// clusterFor connects as both participant roles, so a test may run either
+// kind of contest against the same database.
+func clusterFor(t *testing.T, database string) *queryrunner.Cluster {
+	t.Helper()
+
 	cluster, err := queryrunner.NewCluster(
-		gamedbtest.DSN(t, gamedb.RoleReader, gamedbtest.ReaderPassword, database))
+		gamedbtest.DSN(t, gamedb.RoleReader, gamedbtest.ReaderPassword, database),
+		gamedbtest.DSN(t, gamedb.RoleWriter, gamedbtest.WriterPassword, database))
 	if err != nil {
 		t.Fatalf("building the cluster connector: %v", err)
 	}
-
-	return queryrunner.New(cluster, checker, limits), database
+	return cluster
 }
 
 // oneParticipant is fixed because most tests are about the query rather than
