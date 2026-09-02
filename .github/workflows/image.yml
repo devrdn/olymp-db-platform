@@ -1,0 +1,125 @@
+# Building one image, and publishing it only when asked.
+#
+# A reusable workflow rather than a step somebody copies. Two things made that
+# the right shape:
+#
+#   - Permissions in GitHub Actions are declared per job and cannot be made
+#     conditional. Publishing needs `packages: write`; building to check that
+#     the image *can* be built needs nothing. Keeping them in one job would
+#     mean every merge running third-party build dependencies with a token that
+#     can write to the registry.
+#   - The alternative — the same forty lines in a build job and a publish job,
+#     twice over because the backend has two images — is two definitions that
+#     must stay identical. This repository has already been bitten by two
+#     lists that agreed on the day they were written.
+#
+# The caller decides which of the two it is, and grants the permission that
+# goes with it.
+
+name: image
+
+on:
+  workflow_call:
+    inputs:
+      context:
+        description: The build context, relative to the repository root.
+        required: true
+        type: string
+      target:
+        description: The Dockerfile stage to build. Named explicitly, because a
+          build with no target produces the last stage in the file.
+        required: true
+        type: string
+      image:
+        description: The image name under the owner, without the registry.
+        required: true
+        type: string
+      expect:
+        description: A path the built image must contain, asserted before it is
+          published. Empty to skip.
+        required: false
+        default: ""
+        type: string
+      publish:
+        description: Whether to push. False builds and throws the result away,
+          which is the point on a merge.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The GitHub Actions cache backend is an exporter, and only the
+      # docker-container driver can export. Without this the runner's default
+      # `docker` driver refuses the build outright, before compiling anything.
+      - uses: docker/setup-buildx-action@v3
+
+      - if: inputs.publish
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Two tags on every image: the commit it was built from, which is
+      # unambiguous and never reused, and a moving one for convenience. A
+      # deploy names a version explicitly; nothing deploys "latest".
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ inputs.image }}
+          tags: |
+            type=sha,format=long,prefix=sha-
+            type=ref,event=branch
+            type=semver,pattern={{raw}}
+
+      # Loaded into the local daemon rather than pushed, always. What is built
+      # on a merge is a check that it *can* be built; the push below happens
+      # only when the caller asked for one.
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          target: ${{ inputs.target }}
+          load: true
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('sha-{0}', github.sha) }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # What the image actually contains, asserted rather than assumed. This is
+      # the check that catches the wrong stage being built — which happened,
+      # and produced an image named for the API with no api binary in it.
+      - name: the image carries the binary it is named for
+        if: inputs.expect != ''
+        run: |
+          set -eu
+          image=$(echo "$TAGS" | head -1)
+          docker create --name check "$image" >/dev/null
+          docker export check | tar -t | grep -qx "$EXPECT" \
+            || { echo "$image has no $EXPECT"; exit 1; }
+          docker rm check >/dev/null
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          EXPECT: ${{ inputs.expect }}
+
+      - name: publish
+        if: inputs.publish
+        run: |
+          set -eu
+          echo "$TAGS" | while read -r tag; do
+            [ -n "$tag" ] || continue
+            docker push "$tag"
+          done
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}

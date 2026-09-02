@@ -77,66 +77,33 @@ jobs:
 
       - run: npm run build
 
-  publish:
-    name: build the image, publish on a tag
-    needs: build
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+  # Same shape as the backend's: a merge proves the image builds, a tag
+  # publishes it, and only the second holds a token that can write to the
+  # registry.
 
+  build-image:
+    name: build the image
+    needs: build
+    if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/image.yml
+    with:
+      context: frontend
+      target: runtime
+      image: db-contest-frontend
+      publish: false
+
+  publish-image:
+    name: publish the image
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: read
       packages: write
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # The GitHub Actions cache backend is an exporter, and only the
-      # docker-container driver can export. Without this step the runner's
-      # default `docker` driver refuses the build outright — before compiling
-      # anything, which is why the job used to fail in seconds with an error
-      # about cache backends rather than about the code.
-      - uses: docker/setup-buildx-action@v3
-
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/db-contest-frontend
-          tags: |
-            type=sha,format=long,prefix=sha-
-            type=ref,event=branch
-            type=semver,pattern={{raw}}
-
-      - uses: docker/build-push-action@v6
-        with:
-          context: frontend
-          # Loaded into the local daemon rather than pushed: what is built on a
-          # merge is a check that it *can* be built, and the registry should
-          # hold deliberate releases rather than one image per merge. The push
-          # happens below, and only from a tag.
-          load: true
-          push: false
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # Only from a tag. A merge proves the image can be built; a tag says
-      # somebody meant to ship it. The deployment model already names a version
-      # explicitly and never deploys "latest", so a registry holding one image
-      # per merge is a haystack rather than a history.
-      - name: publish
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          set -eu
-          echo "$TAGS" | while read -r tag; do
-            [ -n "$tag" ] || continue
-            docker push "$tag"
-          done
-        env:
-          TAGS: ${{ steps.meta.outputs.tags }}
+    uses: ./.github/workflows/image.yml
+    with:
+      context: frontend
+      target: runtime
+      image: db-contest-frontend
+      publish: true
