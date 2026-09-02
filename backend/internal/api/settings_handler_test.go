@@ -3,6 +3,7 @@ package api_test
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"image"
 	"image/png"
@@ -238,11 +239,17 @@ func TestASettingNothingReadsIsRefusedByTheAPI(t *testing.T) {
 }
 
 // pngBytes is a real one-pixel PNG, so the endpoint exercises the decoder.
-func pngBytes(t *testing.T) []byte {
+// pngBytes is a small real PNG, so the endpoint exercises the decoder rather
+// than a shape that happens to sniff right.
+func pngBytes(t *testing.T) []byte { return pngOf(t, 4, 4) }
+
+// pngOf builds one of a given size, for the tests about how large a picture
+// may be.
+func pngOf(t *testing.T, width, height int) []byte {
 	t.Helper()
-	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+
 	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, width, height))); err != nil {
 		t.Fatalf("encode png: %v", err)
 	}
 	return buf.Bytes()
@@ -307,6 +314,77 @@ func TestSomethingThatIsNotAPictureIsRefusedByTheAPI(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
 	}
+}
+
+// Each refusal needs its own code, because the interface answers with a
+// sentence chosen by the code and by nothing else. Under one shared
+// `invalid_request` a picture that was too heavy, one in a format the
+// installation does not store and one with too many pixels all read as the
+// same sentence — and the person uploading has no way to tell what to change.
+// That is what "a generic error" turned out to mean.
+func TestEachRefusalOfAPictureSaysWhichItWas(t *testing.T) {
+	f := newSettingsFixture(t, rbac.PermissionSettingsManage)
+
+	for name, given := range map[string]struct {
+		body []byte
+		want string
+	}{
+		"an icon file, which the format list does not include": {
+			// A real .ico: the header plus an embedded PNG. Named the way
+			// somebody uploading a favicon would name it, and refused — so
+			// the refusal has to say what to upload instead.
+			body: icoOf(t, 32, 32),
+			want: "image_not_accepted",
+		},
+		"a document rather than a picture": {
+			body: []byte("just some text"),
+			want: "image_not_accepted",
+		},
+		"a picture heavier than one may be": {
+			body: bytes.Repeat(pngOf(t, 8, 8), 40000),
+			want: "image_too_large",
+		},
+		"a picture with more pixels on a side than one may have": {
+			body: pngOf(t, 5000, 8),
+			want: "image_too_large",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := f.upload(t, settings.ImageLogo, given.body, f.cookie)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+			}
+			var answer struct {
+				Error struct {
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil {
+				t.Fatalf("reading the answer: %v (%s)", err, rec.Body.String())
+			}
+			if answer.Error.Code != given.want {
+				t.Fatalf("code = %q, want %q (%s)", answer.Error.Code, given.want, rec.Body.String())
+			}
+		})
+	}
+}
+
+// icoOf builds a real icon file: the header, one directory entry, and a PNG
+// inside it, which is how a modern favicon is made.
+func icoOf(t *testing.T, w, h int) []byte {
+	t.Helper()
+
+	picture := pngOf(t, w, h)
+	var out bytes.Buffer
+	_ = binary.Write(&out, binary.LittleEndian, [3]uint16{0, 1, 1})
+	_ = binary.Write(&out, binary.LittleEndian, struct {
+		Width, Height, Colours, Reserved uint8
+		Planes, Bits                     uint16
+		Size, Offset                     uint32
+	}{uint8(w), uint8(h), 0, 0, 1, 32, uint32(len(picture)), 22})
+	out.Write(picture)
+	return out.Bytes()
 }
 
 func TestAnEmptySlotIsNotFoundRatherThanEmpty(t *testing.T) {

@@ -152,7 +152,10 @@ func (h *SettingsHandler) uploadImage(w http.ResponseWriter, r *http.Request) {
 	body := http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	data, err := io.ReadAll(body)
 	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, "The upload is too large to read")
+		// The body outran the reader's limit. It is the same thing to the
+		// person uploading as a picture over the domain's own limit, and
+		// telling them apart would mean explaining our two ceilings.
+		httpx.Error(w, r, http.StatusBadRequest, codeImageTooLarge, "The upload is too large to read")
 		return
 	}
 
@@ -162,8 +165,11 @@ func (h *SettingsHandler) uploadImage(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, settings.ErrUnknownImageKind):
 		httpx.Error(w, r, http.StatusNotFound, codeNotFound, "No such image")
 		return
-	case errors.Is(err, settings.ErrNotAnImage), errors.Is(err, settings.ErrImageTooLarge):
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	case errors.Is(err, settings.ErrImageTooLarge):
+		httpx.Error(w, r, http.StatusBadRequest, codeImageTooLarge, err.Error())
+		return
+	case errors.Is(err, settings.ErrNotAnImage):
+		httpx.Error(w, r, http.StatusBadRequest, codeImageNotAccepted, err.Error())
 		return
 	default:
 		h.log.ErrorContext(r.Context(), "could not save an installation image", "error", err)

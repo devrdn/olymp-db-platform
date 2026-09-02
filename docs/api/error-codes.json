@@ -34,6 +34,14 @@
       "meaning": "The signed-in account may not perform this action here."
     },
     {
+      "code": "image_not_accepted",
+      "meaning": "The file is not one of the picture formats this installation stores. The format is read from the bytes, not from the name."
+    },
+    {
+      "code": "image_too_large",
+      "meaning": "The picture is heavier than an installation image may be, or has more pixels on a side than one may have."
+    },
+    {
       "code": "internal_error",
       "meaning": "The server failed in a way it could not attribute. The detail is in the log under this response's request id."
     },

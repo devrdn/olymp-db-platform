@@ -25,6 +25,18 @@ var (
 	codeInvalidCIDR = httpx.NewCode("invalid_cidr",
 		"A network was not written in CIDR notation, for example 10.20.0.0/16.")
 
+	// --- Installation pictures ----------------------------------------------
+	//
+	// Three codes rather than one, because the interface has to say which of
+	// them happened. Under a single `invalid_request` a picture that was too
+	// heavy, one in a format this installation does not store and one with too
+	// many pixels all read as the same sentence, and the person uploading has
+	// no way to tell what to change.
+	codeImageTooLarge = httpx.NewCode("image_too_large",
+		"The picture is heavier than an installation image may be, or has more pixels on a side than one may have.")
+	codeImageNotAccepted = httpx.NewCode("image_not_accepted",
+		"The file is not one of the picture formats this installation stores. The format is read from the bytes, not from the name.")
+
 	// --- Routing ------------------------------------------------------------
 
 	codeNotFound = httpx.NewCode("not_found",
