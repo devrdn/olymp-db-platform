@@ -1,4 +1,4 @@
-package sqlpolicy_test
+package checker_test
 
 import (
 	"errors"
@@ -6,19 +6,20 @@ import (
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
 )
 
-// refusal returns the refusal Check produced, failing if it allowed the query.
+// refusal returns the refusal checker.Check produced, failing if it allowed the query.
 func refusal(t *testing.T, sql string, p sqlpolicy.Policy) *sqlpolicy.Refusal {
 	t.Helper()
 
-	err := sqlpolicy.Check(sql, p)
+	err := checker.Check(sql, p)
 	if err == nil {
 		t.Fatalf("allowed: %s", sql)
 	}
 	var r *sqlpolicy.Refusal
 	if !errors.As(err, &r) {
-		t.Fatalf("error %v is not a Refusal", err)
+		t.Fatalf("error %v is not a sqlpolicy.Refusal", err)
 	}
 	return r
 }
@@ -27,7 +28,7 @@ func refusal(t *testing.T, sql string, p sqlpolicy.Policy) *sqlpolicy.Refusal {
 func allow(t *testing.T, sql string, p sqlpolicy.Policy) {
 	t.Helper()
 
-	if err := sqlpolicy.Check(sql, p); err != nil {
+	if err := checker.Check(sql, p); err != nil {
 		t.Fatalf("refused a legitimate query: %s\n  %v", sql, err)
 	}
 }
@@ -204,7 +205,7 @@ func TestTheCheckerProtectsItself(t *testing.T) {
 		// A stack overflow is not a refusal — it takes the API down with it,
 		// and it costs the sender one line of generated text.
 		sql := "SELECT 1" + strings.Repeat(" FROM (SELECT 1", 200) + strings.Repeat(") q", 200)
-		if err := sqlpolicy.Check(sql, sqlpolicy.ReadOnly()); err == nil {
+		if err := checker.Check(sql, sqlpolicy.ReadOnly()); err == nil {
 			t.Fatal("deep nesting was allowed")
 		}
 	})
@@ -251,7 +252,7 @@ func TestAnalyseReportsTheStatementsOwnText(t *testing.T) {
 		"SELECT 1 -- trailing, no semicolon": "SELECT 1 -- trailing, no semicolon",
 	}
 	for in, want := range cases {
-		statement, err := sqlpolicy.NewChecker().Analyse(in, sqlpolicy.ReadOnly())
+		statement, err := checker.NewChecker().Analyse(in, sqlpolicy.ReadOnly())
 		if err != nil {
 			t.Fatalf("%q: %v", in, err)
 		}

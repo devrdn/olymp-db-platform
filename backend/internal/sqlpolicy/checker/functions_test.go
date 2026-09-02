@@ -1,10 +1,11 @@
-package sqlpolicy_test
+package checker_test
 
 import (
 	"strings"
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
 )
 
 // The functions that turn a SELECT into something else. None of these is
@@ -41,7 +42,7 @@ func TestTheFunctionsThatAreNotOnTheList(t *testing.T) {
 		`SELECT query_to_xml('SELECT 1', true, false, '')`,
 	} {
 		t.Run(sql, func(t *testing.T) {
-			err := sqlpolicy.Check(sql, sqlpolicy.ReadOnly())
+			err := checker.Check(sql, sqlpolicy.ReadOnly())
 			if err == nil {
 				t.Fatalf("allowed: %s", sql)
 			}
@@ -138,14 +139,14 @@ func TestNameFoldingAndQualification(t *testing.T) {
 func TestAnOperatorCanExtendTheList(t *testing.T) {
 	const sql = `SELECT soundex(name) FROM suspects`
 
-	if err := sqlpolicy.Check(sql, sqlpolicy.ReadOnly()); err == nil {
+	if err := checker.Check(sql, sqlpolicy.ReadOnly()); err == nil {
 		t.Fatal("soundex is allowed by default; pick a function that is not")
 	}
-	if err := sqlpolicy.NewChecker("soundex").Check(sql, sqlpolicy.ReadOnly()); err != nil {
+	if err := checker.NewChecker("soundex").Check(sql, sqlpolicy.ReadOnly()); err != nil {
 		t.Fatalf("an extended checker still refused it: %v", err)
 	}
 	// Extending one checker must not quietly extend everyone's.
-	if err := sqlpolicy.Check(sql, sqlpolicy.ReadOnly()); err == nil {
+	if err := checker.Check(sql, sqlpolicy.ReadOnly()); err == nil {
 		t.Fatal("extending a checker changed the standard one")
 	}
 }

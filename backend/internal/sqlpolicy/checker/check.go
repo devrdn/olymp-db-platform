@@ -1,49 +1,14 @@
-package sqlpolicy
+package checker
 
 import (
 	"fmt"
 	"strings"
 
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+
 	pg "github.com/pganalyze/pg_query_go/v6"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
-
-// Code names why a query was refused.
-//
-// Stable, because it is the contract: the HTTP layer maps a code to a sentence
-// in each locale, and the journal panel groups refusals by it. The Subject
-// alongside carries the offending name — a function, a table, a construct — in
-// the parser's own vocabulary, which is what an operator needs in the log.
-type Code string
-
-const (
-	CodeInvalidPolicy         Code = "invalid_policy"
-	CodeModeNotSupported      Code = "mode_not_supported"
-	CodeParseError            Code = "parse_error"
-	CodeNotOneStatement       Code = "not_one_statement"
-	CodeStatementNotSupported Code = "statement_not_supported"
-	CodeConstructNotSupported Code = "construct_not_supported"
-	CodeFunctionNotSupported  Code = "function_not_supported"
-	CodeCatalogNotReadable    Code = "catalog_not_readable"
-	CodeCatalogNotAllowed     Code = "catalog_not_allowed"
-	CodeTooDeep               Code = "too_deep"
-	CodeTooLong               Code = "too_long"
-	CodeTableNotWritable      Code = "table_not_writable"
-	CodeNotPermitted          Code = "not_permitted"
-)
-
-// Refusal is why one query was not allowed to run.
-type Refusal struct {
-	Code    Code
-	Subject string
-}
-
-func (r *Refusal) Error() string {
-	if r.Subject == "" {
-		return string(r.Code)
-	}
-	return fmt.Sprintf("%s: %s", r.Code, r.Subject)
-}
 
 // maxDepth bounds how deeply nested a query may be.
 //
@@ -86,33 +51,10 @@ var standard = NewChecker()
 
 // Check reports whether the query is allowed under the policy, using the
 // standard function allow-list.
-func Check(sql string, p Policy) error { return standard.Check(sql, p) }
-
-// Statement is what the checker learned about a query it allowed.
-//
-// Small on purpose: it carries only what a caller cannot work out again
-// without parsing the query a second time, and the caller that needs it — the
-// Query Runner — would otherwise be reduced to matching a prefix, which a
-// leading comment defeats.
-type Statement struct {
-	// Text is the statement itself, as the parser delimited it: without the
-	// trailing semicolon, and without whatever followed it. A caller that
-	// wraps the query in a subquery needs exactly this — `SELECT 1; -- note`
-	// is one statement to the parser and a syntax error inside a FROM, and
-	// no amount of trimming the original string can tell where it ended.
-	Text string
-	// Explain reports an EXPLAIN. It matters because an EXPLAIN cannot be
-	// placed inside a subquery, so it is the one shape that must not be
-	// wrapped when a result is limited.
-	Explain bool
-	// Writes reports a statement that changes the database. The disk quota is
-	// checked before one of these and not before a read, because a read cannot
-	// fill a disk and the check costs a round trip.
-	Writes bool
-}
+func Check(sql string, p sqlpolicy.Policy) error { return standard.Check(sql, p) }
 
 // Check reports whether the query is allowed under the policy.
-func (c *Checker) Check(sql string, p Policy) error {
+func (c *Checker) Check(sql string, p sqlpolicy.Policy) error {
 	_, err := c.Analyse(sql, p)
 	return err
 }
@@ -125,31 +67,31 @@ func (c *Checker) Check(sql string, p Policy) error {
 // that reasons about a tree, and reasoning about a tree that represents only
 // the first half of what will run is how a checker gets walked past. Only then
 // the shape: the root statement, and then every node beneath it.
-func (c *Checker) Analyse(sql string, p Policy) (Statement, error) {
+func (c *Checker) Analyse(sql string, p sqlpolicy.Policy) (sqlpolicy.Statement, error) {
 	if err := p.Validate(); err != nil {
-		return Statement{}, &Refusal{Code: CodeInvalidPolicy, Subject: err.Error()}
+		return sqlpolicy.Statement{}, &sqlpolicy.Refusal{Code: sqlpolicy.CodeInvalidPolicy, Subject: err.Error()}
 	}
 	if len(sql) > maxQueryBytes {
-		return Statement{}, &Refusal{Code: CodeTooLong, Subject: fmt.Sprintf("%d bytes", len(sql))}
+		return sqlpolicy.Statement{}, &sqlpolicy.Refusal{Code: sqlpolicy.CodeTooLong, Subject: fmt.Sprintf("%d bytes", len(sql))}
 	}
 
 	tree, err := pg.Parse(sql)
 	if err != nil {
-		return Statement{}, &Refusal{Code: CodeParseError, Subject: err.Error()}
+		return sqlpolicy.Statement{}, &sqlpolicy.Refusal{Code: sqlpolicy.CodeParseError, Subject: err.Error()}
 	}
 	if len(tree.Stmts) != 1 {
-		return Statement{}, &Refusal{Code: CodeNotOneStatement, Subject: fmt.Sprintf("%d statements", len(tree.Stmts))}
+		return sqlpolicy.Statement{}, &sqlpolicy.Refusal{Code: sqlpolicy.CodeNotOneStatement, Subject: fmt.Sprintf("%d statements", len(tree.Stmts))}
 	}
 
 	raw := tree.Stmts[0]
 	root := raw.Stmt
 	if root == nil || root.Node == nil {
-		return Statement{}, &Refusal{Code: CodeNotOneStatement, Subject: "0 statements"}
+		return sqlpolicy.Statement{}, &sqlpolicy.Refusal{Code: sqlpolicy.CodeNotOneStatement, Subject: "0 statements"}
 	}
 
 	plan, err := c.rootAllowed(root, p)
 	if err != nil {
-		return Statement{}, err
+		return sqlpolicy.Statement{}, err
 	}
 	// A write statement's own node is not in the allowed set — that is what
 	// refuses one hidden inside a CTE — so its children are walked without
@@ -160,9 +102,9 @@ func (c *Checker) Analyse(sql string, p Policy) (Statement, error) {
 		err = c.walkMessage(plan.node.ProtoReflect(), p, 0)
 	}
 	if err != nil {
-		return Statement{}, err
+		return sqlpolicy.Statement{}, err
 	}
-	return Statement{
+	return sqlpolicy.Statement{
 		Text:    statementText(sql, raw),
 		Explain: plan.explain,
 		Writes:  plan.writes,
@@ -203,7 +145,7 @@ type rootPlan struct {
 	writes    bool
 }
 
-func (c *Checker) rootAllowed(root *pg.Node, p Policy) (rootPlan, error) {
+func (c *Checker) rootAllowed(root *pg.Node, p sqlpolicy.Policy) (rootPlan, error) {
 	switch stmt := root.Node.(type) {
 	case *pg.Node_SelectStmt:
 		return rootPlan{node: root, checkSelf: true}, nil
@@ -213,16 +155,16 @@ func (c *Checker) rootAllowed(root *pg.Node, p Policy) (rootPlan, error) {
 			// ANALYZE is not a plan, it is a run — on a DML it *is* the DML.
 			// The rest (VERBOSE, COSTS, FORMAT) only change the printout.
 			if name == "analyze" {
-				return rootPlan{}, &Refusal{Code: CodeStatementNotSupported, Subject: "EXPLAIN ANALYZE"}
+				return rootPlan{}, &sqlpolicy.Refusal{Code: sqlpolicy.CodeStatementNotSupported, Subject: "EXPLAIN ANALYZE"}
 			}
 		}
 		if stmt.ExplainStmt.Query == nil {
-			return rootPlan{}, &Refusal{Code: CodeStatementNotSupported, Subject: "EXPLAIN"}
+			return rootPlan{}, &sqlpolicy.Refusal{Code: sqlpolicy.CodeStatementNotSupported, Subject: "EXPLAIN"}
 		}
 		return rootPlan{node: stmt.ExplainStmt.Query, checkSelf: true, explain: true}, nil
 	default:
-		if p.Mode != ModeReadWrite {
-			return rootPlan{}, &Refusal{Code: CodeStatementNotSupported, Subject: kindOf(root)}
+		if p.Mode != sqlpolicy.ModeReadWrite {
+			return rootPlan{}, &sqlpolicy.Refusal{Code: sqlpolicy.CodeStatementNotSupported, Subject: kindOf(root)}
 		}
 		if err := c.writeAllowed(root, p); err != nil {
 			return rootPlan{}, err
@@ -232,9 +174,9 @@ func (c *Checker) rootAllowed(root *pg.Node, p Policy) (rootPlan, error) {
 }
 
 // walkNode visits this node and everything beneath it.
-func (c *Checker) walkNode(node *pg.Node, p Policy, depth int) error {
+func (c *Checker) walkNode(node *pg.Node, p sqlpolicy.Policy, depth int) error {
 	if depth > maxDepth {
-		return &Refusal{Code: CodeTooDeep, Subject: fmt.Sprintf("more than %d levels", maxDepth)}
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeTooDeep, Subject: fmt.Sprintf("more than %d levels", maxDepth)}
 	}
 	if err := c.visit(node, p); err != nil {
 		return err
@@ -251,7 +193,7 @@ func (c *Checker) walkNode(node *pg.Node, p Policy, depth int) error {
 // checks — silently, and only for the queries that reach it. Reflection cannot
 // forget a field, so an unknown construct is refused by the visit below rather
 // than skipped by the walk.
-func (c *Checker) walkMessage(m protoreflect.Message, p Policy, depth int) error {
+func (c *Checker) walkMessage(m protoreflect.Message, p sqlpolicy.Policy, depth int) error {
 	var failed error
 
 	m.Range(func(fd protoreflect.FieldDescriptor, value protoreflect.Value) bool {
@@ -278,19 +220,19 @@ func (c *Checker) walkMessage(m protoreflect.Message, p Policy, depth int) error
 }
 
 // enter visits a message, checking it first if it is a grammar node.
-func (c *Checker) enter(m protoreflect.Message, p Policy, depth int) error {
+func (c *Checker) enter(m protoreflect.Message, p sqlpolicy.Policy, depth int) error {
 	if node, ok := m.Interface().(*pg.Node); ok {
 		return c.walkNode(node, p, depth)
 	}
 	if depth > maxDepth {
-		return &Refusal{Code: CodeTooDeep, Subject: fmt.Sprintf("more than %d levels", maxDepth)}
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeTooDeep, Subject: fmt.Sprintf("more than %d levels", maxDepth)}
 	}
 	return c.walkMessage(m, p, depth)
 }
 
 // visit checks one node: that its type is one the checker knows, and then
 // whatever that particular type carries.
-func (c *Checker) visit(node *pg.Node, p Policy) error {
+func (c *Checker) visit(node *pg.Node, p sqlpolicy.Policy) error {
 	kind := kindOf(node)
 	if kind == "" {
 		// A node with nothing set is a placeholder the grammar leaves in a
@@ -302,7 +244,7 @@ func (c *Checker) visit(node *pg.Node, p Policy) error {
 		return nil
 	}
 	if _, known := allowedKinds[kind]; !known {
-		return &Refusal{Code: CodeConstructNotSupported, Subject: kind}
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeConstructNotSupported, Subject: kind}
 	}
 
 	switch n := node.Node.(type) {
@@ -326,13 +268,13 @@ func selectAllowed(stmt *pg.SelectStmt) error {
 	if stmt.IntoClause != nil {
 		// `SELECT … INTO notes FROM …` is CREATE TABLE AS wearing a SELECT's
 		// node type. A check that trusted the root would let it through.
-		return &Refusal{Code: CodeStatementNotSupported, Subject: "SELECT INTO"}
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeStatementNotSupported, Subject: "SELECT INTO"}
 	}
 	if len(stmt.LockingClause) > 0 {
 		// FOR UPDATE / FOR SHARE take row locks. A read-only transaction
 		// refuses them anyway; saying so here turns a database error nobody
 		// can read into a sentence about the query.
-		return &Refusal{Code: CodeStatementNotSupported, Subject: "SELECT FOR UPDATE"}
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeStatementNotSupported, Subject: "SELECT FOR UPDATE"}
 	}
 	return nil
 }
@@ -359,7 +301,7 @@ func sqlValueAllowed(fn *pg.SQLValueFunction) error {
 		pg.SQLValueFunctionOp_SVFOP_LOCALTIMESTAMP_N:
 		return nil
 	default:
-		return &Refusal{Code: CodeFunctionNotSupported, Subject: sqlValueName(fn.GetOp())}
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeFunctionNotSupported, Subject: sqlValueName(fn.GetOp())}
 	}
 }
 
@@ -379,25 +321,25 @@ func (c *Checker) functionAllowed(call *pg.FuncCall) error {
 
 	name, addressable := functionName(parts)
 	if !addressable {
-		return &Refusal{Code: CodeFunctionNotSupported, Subject: name}
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeFunctionNotSupported, Subject: name}
 	}
 	if _, allowed := c.functions[name]; !allowed {
-		return &Refusal{Code: CodeFunctionNotSupported, Subject: name}
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeFunctionNotSupported, Subject: name}
 	}
 	return nil
 }
 
 // relationAllowed checks a table reference against the catalog rules.
-func relationAllowed(rel *pg.RangeVar, p Policy) error {
-	sensitive, catalog := classifyRelation(rel.GetSchemaname(), rel.GetRelname())
+func relationAllowed(rel *pg.RangeVar, p sqlpolicy.Policy) error {
+	sensitive, catalog := sqlpolicy.ClassifyRelation(rel.GetSchemaname(), rel.GetRelname())
 
 	switch {
 	case sensitive:
 		// Never, whatever the policy says: these describe the installation and
 		// the other participants, not the game.
-		return &Refusal{Code: CodeCatalogNotReadable, Subject: rel.GetRelname()}
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeCatalogNotReadable, Subject: rel.GetRelname()}
 	case catalog && !p.AllowCatalog:
-		return &Refusal{Code: CodeCatalogNotAllowed, Subject: rel.GetRelname()}
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeCatalogNotAllowed, Subject: rel.GetRelname()}
 	}
 	return nil
 }

@@ -1,4 +1,4 @@
-package sqlpolicy
+package checker
 
 // The node types a query may be built from.
 //

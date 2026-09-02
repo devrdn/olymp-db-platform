@@ -13,6 +13,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
 	"github.com/google/uuid"
 )
 
@@ -22,7 +23,7 @@ import (
 // point of the split is that a caller cannot tell the difference, which is a
 // claim only an end-to-end test can make.
 
-func serving(t *testing.T, limits queryrunner.Limits, checker *sqlpolicy.Checker) (*Client, string) {
+func serving(t *testing.T, limits queryrunner.Limits, checker *checker.Checker) (*Client, string) {
 	t.Helper()
 
 	database := gamedbtest.Scratch(t)
@@ -77,7 +78,7 @@ func ask(database, sql string) queryrunner.Request {
 }
 
 func TestAQueryAndItsAnswerCrossTheWire(t *testing.T) {
-	client, database := serving(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
 	result, err := client.Run(t.Context(), ask(database, `SELECT id, note FROM evidence ORDER BY id`))
 	if err != nil {
@@ -103,7 +104,7 @@ func TestAQueryAndItsAnswerCrossTheWire(t *testing.T) {
 // The refusal has to arrive as a refusal, with its code, because that is what
 // the interface turns into a sentence in the participant's language.
 func TestARefusalArrivesAsARefusal(t *testing.T) {
-	client, database := serving(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
 	_, err := client.Run(t.Context(), ask(database, `SELECT pg_sleep(1)`))
 
@@ -117,7 +118,7 @@ func TestARefusalArrivesAsARefusal(t *testing.T) {
 }
 
 func TestTruncationSurvivesTheWire(t *testing.T) {
-	client, database := serving(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
 	result, err := client.Run(t.Context(), ask(database, `SELECT g FROM generate_series(1, 5000) g`))
 	if err != nil {
@@ -136,7 +137,7 @@ func TestTruncationSurvivesTheWire(t *testing.T) {
 func TestTheDeadlineStillBoundsTimeThroughTheWire(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.Deadline = 400 * time.Millisecond
-	client, database := serving(t, limits, sqlpolicy.NewChecker("pg_sleep"))
+	client, database := serving(t, limits, checker.NewChecker("pg_sleep"))
 
 	started := time.Now()
 	_, err := client.Run(t.Context(), ask(database, `SELECT pg_sleep(30)`))
@@ -155,7 +156,7 @@ func TestAFullInstanceSaysSoRatherThanWaiting(t *testing.T) {
 	limits.Concurrent = 1
 	limits.QueueDepth = 0
 	limits.Deadline = 3 * time.Second
-	client, database := serving(t, limits, sqlpolicy.NewChecker("pg_sleep"))
+	client, database := serving(t, limits, checker.NewChecker("pg_sleep"))
 
 	holding := make(chan struct{})
 	go func() {
@@ -174,7 +175,7 @@ func TestAFullInstanceSaysSoRatherThanWaiting(t *testing.T) {
 // client. If that stopped compiling the split would have cost the query log,
 // which is the one thing the Core API keeps on its own side of the wire.
 func TestTheJournalCanWrapTheClient(t *testing.T) {
-	client, _ := serving(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+	client, _ := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
 	var executor queryrunner.Executor = client
 	if executor == nil {
@@ -187,7 +188,7 @@ func TestTheJournalCanWrapTheClient(t *testing.T) {
 // stopped being registered, every deployment would report a runner that never
 // becomes healthy — and would do so only in production.
 func TestTheServiceReportsItselfHealthy(t *testing.T) {
-	client, _ := serving(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+	client, _ := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
 	if err := Probe(t.Context(), client.conn.Target()); err != nil {
 		t.Fatalf("the service is not reporting itself healthy: %v", err)
@@ -215,7 +216,7 @@ func TestAListenAddressBecomesOneThatCanBeDialled(t *testing.T) {
 // answer and the journal recorded as an error. A big answer looked like an
 // outage.
 func TestAnAnswerInsideTheBudgetArrivesWhole(t *testing.T) {
-	client, database := serving(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
 	// Five million bytes: comfortably past gRPC's default, comfortably inside
 	// the five mebibyte budget. Precisely the range that used to fail.
@@ -237,7 +238,7 @@ func TestAnAnswerInsideTheBudgetArrivesWhole(t *testing.T) {
 // eight bytes can render as twenty characters, so that count is a floor rather
 // than a bound. This is the layer that knows the real size.
 func TestAnAnswerBeyondTheBudgetIsCutRatherThanRefused(t *testing.T) {
-	client, database := serving(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
 	result, err := client.Run(t.Context(),
 		ask(database, `SELECT repeat('x', 6000) FROM generate_series(1, 1000)`))
@@ -257,7 +258,7 @@ func TestAnAnswerBeyondTheBudgetIsCutRatherThanRefused(t *testing.T) {
 // and the check that section 4.1 puts first was dead in the one arrangement
 // the deployment actually uses.
 func TestTheDiskQuotaCrossesTheWire(t *testing.T) {
-	client, database := serving(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
 	writing := ask(database, `INSERT INTO evidence (id, note) VALUES (9, 'planted')`)
 	writing.Policy = sqlpolicy.ReadWrite("evidence")
@@ -270,7 +271,7 @@ func TestTheDiskQuotaCrossesTheWire(t *testing.T) {
 
 // What a write answers with is a count, and the count has to arrive.
 func TestRowsAffectedCrossTheWire(t *testing.T) {
-	client, database := serving(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
 	writing := ask(database, `INSERT INTO evidence (id, note) VALUES (7, 'a hat'), (8, 'a cane')`)
 	writing.Policy = sqlpolicy.ReadWrite("evidence")
@@ -289,7 +290,7 @@ func TestRowsAffectedCrossTheWire(t *testing.T) {
 func TestAnAnswerTooLargeToReadArrivesAsSuch(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.MaxBytes = 64 << 10
-	client, database := serving(t, limits, sqlpolicy.NewChecker())
+	client, database := serving(t, limits, checker.NewChecker())
 
 	_, err := client.Run(t.Context(), ask(database, `SELECT repeat('x', 8 * 1024 * 1024)`))
 	if !errors.Is(err, queryrunner.ErrResultTooLarge) {

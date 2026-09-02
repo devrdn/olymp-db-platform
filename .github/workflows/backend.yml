@@ -89,6 +89,12 @@ jobs:
 
       - run: go vet ./...
 
+      # The API's binaries run on an image with no libc, so an accidental cgo
+      # dependency has to fail here rather than in the publish job — or, worse,
+      # produce an image that cannot start.
+      - name: the API builds without cgo
+        run: CGO_ENABLED=0 go build -o /dev/null ./cmd/api ./cmd/migrate ./cmd/bootstrap
+
       - name: Apply the migrations
         run: go run ./cmd/migrate up
 
@@ -161,6 +167,11 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: backend
+          # Named explicitly. A build with no target produces the *last* stage
+          # in the Dockerfile, so adding the Query Runner's stages at the end
+          # silently turned this into a Query Runner image published under the
+          # backend's name — with no /usr/local/bin/api in it.
+          target: runtime
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -168,3 +179,46 @@ jobs:
             VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('sha-{0}', github.sha) }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # The Query Runner is a second image because it is a different build:
+      # cgo and a libc, which the other binaries neither need nor should carry.
+      # Published from here so that a deploy can pull what compose names.
+      - id: meta-runner
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/db-contest-queryrunner
+          tags: |
+            type=sha,format=long,prefix=sha-
+            type=ref,event=branch
+            type=semver,pattern={{raw}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: backend
+          target: queryrunner
+          push: true
+          tags: ${{ steps.meta-runner.outputs.tags }}
+          labels: ${{ steps.meta-runner.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('sha-{0}', github.sha) }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # What each image actually contains, asserted rather than assumed. This
+      # is the check that would have caught the wrong stage being published,
+      # and it costs a second.
+      - name: the images carry the binaries they are named for
+        run: |
+          set -eu
+          api=$(echo '${{ steps.meta.outputs.tags }}' | head -1)
+          runner=$(echo '${{ steps.meta-runner.outputs.tags }}' | head -1)
+          docker run --rm --entrypoint /usr/local/bin/api "$api" -healthcheck 2>/dev/null || true
+          docker run --rm --entrypoint /bin/sh "$api" -c 'true' 2>/dev/null || true
+          docker create --name check-api "$api" >/dev/null
+          docker export check-api | tar -t | grep -q '^usr/local/bin/api$' \
+            || { echo "the backend image has no /usr/local/bin/api"; exit 1; }
+          docker rm check-api >/dev/null
+          docker create --name check-runner "$runner" >/dev/null
+          docker export check-runner | tar -t | grep -q '^usr/local/bin/queryrunner$' \
+            || { echo "the query runner image has no /usr/local/bin/queryrunner"; exit 1; }
+          docker rm check-runner >/dev/null

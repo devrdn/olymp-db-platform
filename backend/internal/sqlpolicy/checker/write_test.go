@@ -1,4 +1,4 @@
-package sqlpolicy_test
+package checker_test
 
 import (
 	"testing"

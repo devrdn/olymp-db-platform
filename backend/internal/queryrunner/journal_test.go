@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
-	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
 	"github.com/google/uuid"
 )
 
@@ -60,7 +60,7 @@ func (r *recorder) Complete(_ context.Context, id int64, outcome queryrunner.Out
 	return nil
 }
 
-func journalled(t *testing.T, limits queryrunner.Limits, checker *sqlpolicy.Checker) (*queryrunner.Journalled, *recorder, string) {
+func journalled(t *testing.T, limits queryrunner.Limits, checker *checker.Checker) (*queryrunner.Journalled, *recorder, string) {
 	t.Helper()
 
 	runner, database := setupWith(t, limits, checker)
@@ -69,7 +69,7 @@ func journalled(t *testing.T, limits queryrunner.Limits, checker *sqlpolicy.Chec
 }
 
 func TestTheRowIsWrittenBeforeTheQueryRuns(t *testing.T) {
-	runner, rec, database := journalled(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+	runner, rec, database := journalled(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
 	if _, err := runner.Run(t.Context(), request(database, `SELECT 1`), uuid.New()); err != nil {
 		t.Fatalf("running: %v", err)
@@ -103,7 +103,7 @@ func TestHowEachEndingIsRecorded(t *testing.T) {
 		"a query that ran too long":    {`SELECT pg_sleep(30)`, queryrunner.StatusTimeout},
 	} {
 		t.Run(name, func(t *testing.T) {
-			runner, rec, database := journalled(t, limits, sqlpolicy.NewChecker("pg_sleep"))
+			runner, rec, database := journalled(t, limits, checker.NewChecker("pg_sleep"))
 
 			_, _ = runner.Run(t.Context(), request(database, given.sql), uuid.New())
 
@@ -121,7 +121,7 @@ func TestHowEachEndingIsRecorded(t *testing.T) {
 // of "how many queries this participant needed" is built from, and an
 // execution missing from it is a quietly wrong answer later.
 func TestAQueryThatCannotBeRecordedDoesNotRun(t *testing.T) {
-	runner, rec, database := journalled(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+	runner, rec, database := journalled(t, queryrunner.DefaultLimits(), checker.NewChecker())
 	rec.beginErr = errors.New("the core database is unreachable")
 
 	if _, err := runner.Run(t.Context(), request(database, `SELECT 1`), uuid.New()); err == nil {
@@ -136,7 +136,7 @@ func TestAQueryThatCannotBeRecordedDoesNotRun(t *testing.T) {
 // run, and the participant is owed the answer. The row is left for the
 // sweeper, which is why it was written first.
 func TestAnAnswerSurvivesAJournalThatCannotBeClosed(t *testing.T) {
-	runner, rec, database := journalled(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+	runner, rec, database := journalled(t, queryrunner.DefaultLimits(), checker.NewChecker())
 	rec.finishErr = errors.New("the core database went away")
 
 	result, err := runner.Run(t.Context(), request(database, `SELECT 1`), uuid.New())
@@ -152,7 +152,7 @@ func TestAnAnswerSurvivesAJournalThatCannotBeClosed(t *testing.T) {
 // may well have finished; the row must not be left saying `running` because
 // nobody was still listening for the answer.
 func TestTheRowIsClosedEvenWhenTheCallerHasGoneAway(t *testing.T) {
-	runner, rec, database := journalled(t, queryrunner.DefaultLimits(), sqlpolicy.NewChecker())
+	runner, rec, database := journalled(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
 	ctx, cancel := context.WithCancel(t.Context())
 	_, _ = runner.Run(ctx, request(database, `SELECT 1`), uuid.New())
@@ -168,7 +168,7 @@ func TestTheRowIsClosedEvenWhenTheCallerHasGoneAway(t *testing.T) {
 func TestACancelledRequestIsNotJournalledAsATimeout(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	limits.Deadline = 30 * time.Second
-	runner, rec, database := journalled(t, limits, sqlpolicy.NewChecker("pg_sleep"))
+	runner, rec, database := journalled(t, limits, checker.NewChecker("pg_sleep"))
 
 	ctx, cancel := context.WithCancel(t.Context())
 	go func() {

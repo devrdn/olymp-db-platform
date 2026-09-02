@@ -71,13 +71,17 @@ var (
 	}
 )
 
-// classifyRelation decides what a table reference in the query is.
+// ClassifyRelation decides what a table reference in the query is.
+//
+// Exported because the checker next door consults it and the catalogue list it
+// reads lives here, with the REVOKEs that make the same decision in the
+// database.
 //
 // Both the schema and the bare name are considered: `pg_catalog.pg_database`
 // and an unqualified `pg_database` are the same table, because pg_catalog is
 // on the search path implicitly. Refusing only the qualified spelling would
 // be a check anyone gets past by deleting eleven characters.
-func classifyRelation(schema, name string) (sensitive, catalog bool) {
+func ClassifyRelation(schema, name string) (sensitive, catalog bool) {
 	schema, name = strings.ToLower(schema), strings.ToLower(name)
 
 	if _, yes := sensitiveCatalogs[name]; yes {

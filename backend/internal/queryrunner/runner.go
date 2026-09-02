@@ -118,17 +118,30 @@ type Request struct {
 	DiskQuotaBytes int64
 }
 
+// Validator decides whether a query is allowed, and says what it is.
+//
+// An interface rather than the checker itself, and the reason is a build
+// rather than a taste: the checker links PostgreSQL's parser through cgo, and
+// anything importing it inherits that. The Core API journals queries and holds
+// a client of this service, so it reaches this package — and would have had to
+// be compiled with cgo, on a base image carrying a libc, for a parser it never
+// runs. The concrete checker is wired in by the command that serves this
+// service and by nothing else.
+type Validator interface {
+	Analyse(sql string, p sqlpolicy.Policy) (sqlpolicy.Statement, error)
+}
+
 // Runner executes participants' queries.
 type Runner struct {
 	cluster *Cluster
-	checker *sqlpolicy.Checker
+	checker Validator
 	limits  Limits
 	gate    *gate
 	rate    *window
 }
 
 // New assembles a runner.
-func New(cluster *Cluster, checker *sqlpolicy.Checker, limits Limits) *Runner {
+func New(cluster *Cluster, checker Validator, limits Limits) *Runner {
 	return &Runner{
 		cluster: cluster,
 		checker: checker,

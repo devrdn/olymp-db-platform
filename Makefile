@@ -70,7 +70,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env require-version build test test-race test-db test-game api-contract proto proto-check backup restore restore-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
+.PHONY: help require-env require-version build test test-race test-db test-game api-contract proto proto-check static-check backup restore restore-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -145,7 +145,16 @@ tidy: ## Sync go.mod and go.sum
 api-contract: ## Regenerate docs/api/error-codes.json from the declared codes
 	cd $(BACKEND) && go run ./cmd/apicontract
 
-check: fmt vet test ## Format, vet and test — run before pushing
+# The Core API and the one-shot jobs must build without cgo, because they run
+# on a base image with no libc at all. It is an easy thing to lose: one import
+# of the SQL checker anywhere in their dependency graph pulls PostgreSQL's
+# parser in, and nothing else notices until the image build fails — or worse,
+# until an image is published that cannot start.
+static-check: ## Fail if the API's binaries have picked up a cgo dependency
+	@cd $(BACKEND) && CGO_ENABLED=0 go build -o /dev/null ./cmd/api ./cmd/migrate ./cmd/bootstrap \
+		&& echo "api, migrate and bootstrap build without cgo"
+
+check: fmt vet static-check test ## Format, vet and test — run before pushing
 
 ## --- Quality gate -----------------------------------------------------------
 

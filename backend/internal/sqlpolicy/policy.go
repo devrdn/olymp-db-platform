@@ -201,3 +201,9 @@ func PlainIdentifier(name string) bool {
 	}
 	return true
 }
+
+// WorkSchema is where a participant's own objects live. The template grants
+// CREATE on it and on nothing else, so this and internal/gamedb are naming the
+// same schema — the validator refuses what the privileges would refuse anyway,
+// with a sentence instead of "permission denied".
+const WorkSchema = "work"
