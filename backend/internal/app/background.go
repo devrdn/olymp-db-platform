@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"github.com/devrdn/db-contest/backend/internal/provisioning"
 )
 
 // A periodic job, and the small amount of machinery the service needs to run
@@ -66,6 +68,27 @@ func sweepQueryLog(log *slog.Logger, sweep func(context.Context, time.Duration) 
 				log.WarnContext(ctx, "closed query log rows left open by a crash", "rows", swept)
 			}
 			return nil
+		},
+	}
+}
+
+// tendPools keeps every live contest's pool stocked and free of stale copies.
+//
+// The background half of section 4.2, and the reason a participant arriving
+// mid-contest does not wait: CREATE DATABASE happens here, on a timer, while
+// nothing depends on it. Every ten minutes rather than every minute — a pool
+// drains at the speed people register, which is not a per-minute event, and
+// each tick may create databases.
+func tendPools(log *slog.Logger, service *provisioning.Service, depth int) task {
+	return task{
+		name:  "game-pool",
+		every: 10 * time.Minute,
+		run: func(ctx context.Context) error {
+			made, dropped, err := service.Tend(ctx, func(provisioning.Contest) int { return depth })
+			if made > 0 || dropped > 0 {
+				log.InfoContext(ctx, "tended the game pools", "created", made, "dropped", dropped)
+			}
+			return err
 		},
 	}
 }

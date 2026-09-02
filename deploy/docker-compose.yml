@@ -256,6 +256,11 @@ services:
       # guesses. Raise it where a whole cohort shares one NAT address; the
       # per-account limit of ten is what stops guessing.
       MAX_LOGIN_ATTEMPTS_PER_ADDRESS: ${MAX_LOGIN_ATTEMPTS_PER_ADDRESS:-300}
+      # The provisioning role, not a participant's: this creates and drops
+      # databases and never runs anybody's SQL. The Query Runner holds the
+      # participant credentials and this process does not.
+      GAME_PROVISIONER_DSN: postgres://${GAME_DB_USER}:${GAME_DB_PASSWORD}@pg-game:5432/${GAME_DB_NAME:-dbcontest_game}?sslmode=disable
+      GAME_POOL_DEPTH: ${GAME_POOL_DEPTH:-10}
     # No host port: Caddy is the only way in. The development overlay exposes
     # the API directly for debugging.
     depends_on:

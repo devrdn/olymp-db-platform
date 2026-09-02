@@ -98,10 +98,11 @@ func TestTheAllowListCanBeExtendedFromTheEnvironment(t *testing.T) {
 	}
 }
 
-// The Core API's configuration must not be able to name the game cluster: the
-// separation of credentials is one of the two reasons the runner is its own
-// service, and one struct with both fields would put them in the same process.
-func TestTheCoreConfigurationHasNoGameCluster(t *testing.T) {
+// The Core API may provision databases — the provisioner is one of its
+// modules — but it must never hold a *participant's* credentials. The Query
+// Runner is the only process that connects as game_reader or game_writer, and
+// that is one of the two reasons it is a separate service.
+func TestTheCoreConfigurationNeverReadsTheParticipantsCredentials(t *testing.T) {
 	setRequired(t)
 	t.Setenv("GAME_DB_DSN", "postgres://game_reader:secret@pg-game:5432/postgres")
 
@@ -109,7 +110,18 @@ func TestTheCoreConfigurationHasNoGameCluster(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if cfg.CoreDBDSN == "postgres://game_reader:secret@pg-game:5432/postgres" {
-		t.Fatal("the core configuration read the game cluster's DSN")
+	const participant = "postgres://game_reader:secret@pg-game:5432/postgres"
+	if cfg.CoreDBDSN == participant || cfg.GameProvisionerDSN == participant {
+		t.Fatal("the core configuration picked up the participant role's DSN")
+	}
+	// And its own provisioning credentials are a separate variable, so the two
+	// cannot be set to the same thing by a deployment that shortens a step.
+	t.Setenv("GAME_PROVISIONER_DSN", "postgres://provisioner:other@pg-game:5432/postgres")
+	again, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if again.GameProvisionerDSN == participant {
+		t.Fatal("the provisioner is configured as a participant")
 	}
 }

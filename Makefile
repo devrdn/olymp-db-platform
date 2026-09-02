@@ -96,7 +96,7 @@ test-race: ## Run the tests with the race detector
 # hand can still run `make test`. This target is what makes sure the SQL is
 # actually exercised — `make dev-up` first.
 test-db: require-env ## Run the repository tests against the development database
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go test -count=1 ./internal/postgres/...
+	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go test -count=1 ./internal/postgres/... ./internal/provisioning/...
 
 # The game cluster tests connect as the participant's own database role and
 # provoke what it must not be able to do. They cannot be faked: every guarantee
