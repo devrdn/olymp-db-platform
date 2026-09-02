@@ -190,6 +190,10 @@
       "meaning": "The answer was larger than the console will carry, and reading it was stopped rather than finished."
     },
     {
+      "code": "query_service_down",
+      "meaning": "The Query Runner could not be reached. Nothing to do with the query, and a retry is the right response rather than an edit."
+    },
+    {
       "code": "query_statement_not_supported",
       "meaning": "That kind of statement is not one this contest allows."
     },

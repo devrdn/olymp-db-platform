@@ -65,6 +65,21 @@ var (
 // oversized cell from costing this process more than a few times the budget.
 const readSlack = 1 << 20
 
+// Outcomes lists every ending this package reports for itself, as opposed to
+// passing on from the database.
+//
+// Enumerable because the layer above has to tell the two apart — a contest
+// that hides its schema withholds the database's words and must not withhold
+// ours — and a list kept by hand up there would fall behind a sentinel added
+// here. This is the list that can be complete; the shapes a driver can produce
+// are not.
+func Outcomes() []error {
+	return []error{
+		ErrTimeout, ErrCanceled, ErrBusy, ErrAlreadyRunning,
+		ErrTooManyQueries, ErrDiskFull, ErrResultTooLarge,
+	}
+}
+
 // Limits bound one execution and the instance as a whole.
 type Limits struct {
 	// Deadline bounds one query, and is the bound that holds against SQL the

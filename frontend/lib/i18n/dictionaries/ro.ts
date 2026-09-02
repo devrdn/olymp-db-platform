@@ -557,6 +557,7 @@ const ro = {
     join: "Înscrieți-vă",
     joining: "Se înscrie",
     joined: "Sunteți înscris.",
+    openConsole: "Deschideți",
     enrolled: "Sunteți înscris",
     byInvitation: "Pe bază de invitație",
     noAction: "Nimic de făcut deocamdată",
@@ -735,6 +736,8 @@ const ro = {
       "Ați terminat această olimpiadă. Consola este închisă pentru dumneavoastră.",
     query_declined:
       "Baza de date a refuzat interogarea. Această olimpiadă își ascunde schema, așa că motivul nu este afișat — descoperirea tabelelor face parte din sarcină.",
+    query_service_down:
+      "Serviciul de interogări nu răspunde acum. Nu are legătură cu interogarea dumneavoastră — încercați peste puțin timp.",
     invalid_request: "Verificați câmpurile completate.",
     invalid_cidr: "Format greșit pentru intervalul IP. Exemplu: 10.24.0.0/16",
     invalid_contest_id: "Identificator de olimpiadă greșit.",

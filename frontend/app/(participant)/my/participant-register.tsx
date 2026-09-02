@@ -1,4 +1,7 @@
+import Link from "next/link";
+
 import { ContestWindow } from "@/components/product/contest-window";
+import { buttonVariants } from "@/components/ui/button";
 import { StateView } from "@/components/product/state-view";
 import { Tag } from "@/components/ui/tag";
 import type { ContestStatus, ContestSummary } from "@/lib/api/contests";
@@ -56,6 +59,18 @@ const CELL = "border-b border-line px-(--row-px) py-(--row-py) align-baseline";
  */
 function canOfferToJoin(contest: ContestSummary): boolean {
   return !contest.enrolled && contest.enrollment === "open" && contest.status === "published";
+}
+
+/**
+ * Whether there is a contest to walk into.
+ *
+ * Enrolled and running, and nothing else: a published contest has not started,
+ * and a finished one has no console to open. Without this the console existed
+ * and nothing in the interface led to it, which is the same as it not
+ * existing.
+ */
+function canOpen(contest: ContestSummary): boolean {
+  return contest.enrolled && contest.status === "running";
 }
 
 export function ParticipantRegister({
@@ -157,6 +172,17 @@ export function ParticipantRegister({
                   <td className={CELL}>
                     {canOfferToJoin(contest) ? (
                       <EnrollButton contestId={contest.id} dict={dict} />
+                    ) : canOpen(contest) ? (
+                      /* The one row on this screen with something to do right
+                         now. It outranks "you are enrolled", which is a state
+                         rather than a step — and a contest that is running is
+                         the only thing a participant came here for. */
+                      <Link
+                        href={`/contests/${contest.id}/play`}
+                        className={cn(buttonVariants({ variant: "primary", size: "sm" }))}
+                      >
+                        {t.openConsole}
+                      </Link>
                     ) : contest.enrolled ? (
                       /* First, because it outranks every other reason there is
                          nothing to press. "By invitation" on a contest one is

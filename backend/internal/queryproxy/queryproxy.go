@@ -48,6 +48,12 @@ var (
 	// ErrNoGameYet is a contest whose game database was never built. Nobody's
 	// fault, and not a fact about the query.
 	ErrNoGameYet = errors.New("the contest has no game database yet")
+	// ErrUnavailable is this service failing, as opposed to the query being
+	// refused. Marked apart because the two need different answers: a refusal
+	// is about the query and belongs to the participant, while a database that
+	// cannot be reached is ours and must not arrive as "your request was bad"
+	// with a connection string attached.
+	ErrUnavailable = errors.New("the query could not be answered")
 	// ErrDatabaseDeclined is the database refusing a query in a contest that
 	// hides its schema.
 	//
@@ -131,7 +137,7 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 	case errors.Is(err, contests.ErrParticipantNotFound):
 		return nil, ErrNotAParticipant
 	case err != nil:
-		return nil, fmt.Errorf("look up the participant: %w", err)
+		return nil, fmt.Errorf("%w: look up the participant: %w", ErrUnavailable, err)
 	case participant.Status == contests.RegistrationDisqualified:
 		return nil, ErrNotAParticipant
 	case participant.Status == contests.RegistrationFinished:
@@ -140,7 +146,7 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 
 	contest, err := s.contests.ByID(ctx, cmd.ContestID)
 	if err != nil {
-		return nil, fmt.Errorf("look up the contest: %w", err)
+		return nil, fmt.Errorf("%w: look up the contest: %w", ErrUnavailable, err)
 	}
 	if contest.Status != contests.StatusRunning {
 		return nil, ErrContestNotRunning
@@ -154,16 +160,22 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 	case errors.Is(err, provisioning.ErrNoGame):
 		return nil, ErrNoGameYet
 	case err != nil:
-		return nil, fmt.Errorf("look up the contest's game: %w", err)
+		return nil, fmt.Errorf("%w: look up the contest's game: %w", ErrUnavailable, err)
 	}
 
 	database, err := s.databases.Ensure(ctx, game, participant.ID)
 	if err != nil {
-		return nil, fmt.Errorf("provide the participant's database: %w", err)
+		return nil, fmt.Errorf("%w: provide the participant's database: %w", ErrUnavailable, err)
 	}
-	quota, err := s.databases.Quota(ctx, game)
-	if err != nil {
-		return nil, fmt.Errorf("work out the size limit: %w", err)
+	// Only where writing is permitted. A read-only contest cannot grow its
+	// database, so the quota is a number nothing will compare against — and
+	// working it out means asking the game cluster how large the template is,
+	// on every query, for every participant.
+	var quota int64
+	if game.Policy.Mode == sqlpolicy.ModeReadWrite {
+		if quota, err = s.databases.Quota(ctx, game); err != nil {
+			return nil, fmt.Errorf("%w: work out the size limit: %w", ErrUnavailable, err)
+		}
 	}
 
 	result, err := s.runner.Run(ctx, queryrunner.Request{
@@ -198,11 +210,7 @@ func speaksForTheDatabase(err error) bool {
 	if errors.As(err, &refusal) {
 		return false
 	}
-	for _, ours := range []error{
-		queryrunner.ErrTimeout, queryrunner.ErrCanceled, queryrunner.ErrBusy,
-		queryrunner.ErrAlreadyRunning, queryrunner.ErrTooManyQueries,
-		queryrunner.ErrDiskFull, queryrunner.ErrResultTooLarge,
-	} {
+	for _, ours := range queryrunner.Outcomes() {
 		if errors.Is(err, ours) {
 			return false
 		}
