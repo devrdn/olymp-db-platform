@@ -10,6 +10,12 @@ name: backend
 # required check that never runs blocks the pull request forever. Make the
 # required check a small job that always runs and depends on these, rather
 # than these directly.
+# Images for the API and the Query Runner are built on every push to main and published only
+# from a tag. Building on a merge is the only check the Dockerfile and the
+# shape of the dependency graph get — the tests pass happily on code that
+# cannot be built into the image — while the registry holds deliberate
+# releases rather than one image per merge. Pull requests build nothing:
+# a draft or an accidental one should not cost an image build.
 on:
   push:
     branches: [main]
@@ -133,7 +139,7 @@ jobs:
   # the image CI proved is the image that runs. Only on main and on tags — a
   # pull request is not something anybody should be able to deploy.
   publish:
-    name: build and publish the image
+    name: build the image, publish on a tag
     # Nothing is published that failed either gate, including the scan.
     needs: [build, security]
     if: github.event_name == 'push'
@@ -179,7 +185,12 @@ jobs:
           # silently turned this into a Query Runner image published under the
           # backend's name — with no /usr/local/bin/api in it.
           target: runtime
-          push: true
+          # Loaded into the local daemon rather than pushed: what is built on a
+          # merge is a check that it *can* be built, and the registry should
+          # hold deliberate releases rather than one image per merge. The push
+          # happens below, and only from a tag.
+          load: true
+          push: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -203,7 +214,12 @@ jobs:
         with:
           context: backend
           target: queryrunner
-          push: true
+          # Loaded into the local daemon rather than pushed: what is built on a
+          # merge is a check that it *can* be built, and the registry should
+          # hold deliberate releases rather than one image per merge. The push
+          # happens below, and only from a tag.
+          load: true
+          push: false
           tags: ${{ steps.meta-runner.outputs.tags }}
           labels: ${{ steps.meta-runner.outputs.labels }}
           build-args: |
@@ -219,8 +235,6 @@ jobs:
           set -eu
           api=$(echo '${{ steps.meta.outputs.tags }}' | head -1)
           runner=$(echo '${{ steps.meta-runner.outputs.tags }}' | head -1)
-          docker run --rm --entrypoint /usr/local/bin/api "$api" -healthcheck 2>/dev/null || true
-          docker run --rm --entrypoint /bin/sh "$api" -c 'true' 2>/dev/null || true
           docker create --name check-api "$api" >/dev/null
           docker export check-api | tar -t | grep -q '^usr/local/bin/api$' \
             || { echo "the backend image has no /usr/local/bin/api"; exit 1; }
@@ -229,3 +243,30 @@ jobs:
           docker export check-runner | tar -t | grep -q '^usr/local/bin/queryrunner$' \
             || { echo "the query runner image has no /usr/local/bin/queryrunner"; exit 1; }
           docker rm check-runner >/dev/null
+
+      # Only from a tag. A merge proves the image can be built; a tag says
+      # somebody meant to ship it. The deployment model already names a version
+      # explicitly and never deploys "latest", so a registry holding one image
+      # per merge is a haystack rather than a history.
+      - name: publish
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -eu
+          echo "$TAGS" | while read -r tag; do
+            [ -n "$tag" ] || continue
+            docker push "$tag"
+          done
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+
+      - name: publish the query runner
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -eu
+          echo "$TAGS" | while read -r tag; do
+            [ -n "$tag" ] || continue
+            docker push "$tag"
+          done
+        env:
+          TAGS: ${{ steps.meta-runner.outputs.tags }}
+
