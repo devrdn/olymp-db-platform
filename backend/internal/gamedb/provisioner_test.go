@@ -1,0 +1,339 @@
+package gamedb_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/devrdn/db-contest/backend/internal/gamedb"
+	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/jackc/pgx/v5"
+)
+
+// The detective's own database: a small schema and some data, the way an
+// author would upload it.
+const detectiveScript = `
+CREATE TABLE suspects (id serial PRIMARY KEY, name text NOT NULL, city text);
+CREATE TABLE evidence (id serial PRIMARY KEY, note text);
+INSERT INTO suspects (name, city) VALUES ('Ionescu', 'Chisinau'), ('Popescu', 'Balti');
+INSERT INTO evidence (note) VALUES ('a knife'), ('a letter');
+CREATE VIEW recent AS SELECT * FROM evidence;
+`
+
+func provisioner(t *testing.T) *gamedb.Provisioner {
+	t.Helper()
+	requireCluster(t)
+
+	user, password := gamedbtest.AdminCredentials(t)
+	p, err := gamedb.NewProvisioner(admin(t), gamedbtest.DSN(t, user, password, "postgres"))
+	if err != nil {
+		t.Fatalf("building the provisioner: %v", err)
+	}
+	return p
+}
+
+// named returns a database name unique to this test, dropped afterwards.
+func named(t *testing.T, suffix string) string {
+	t.Helper()
+
+	// PostgreSQL stops at 63 characters, and a Go test name is easily longer.
+	// The suffix is appended *after* trimming, or two names in one test trim to
+	// the same thing — which is how a template and an instance once ended up
+	// as one database, the instance's creation dropping the template first.
+	base := strings.ToLower("gamedb_" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()))
+	if room := 55 - len(suffix); len(base) > room {
+		base = base[:room]
+	}
+	name := base + "_" + suffix
+	gamedbtest.Drop(name)
+	t.Cleanup(func() { gamedbtest.Drop(name) })
+	return name
+}
+
+func buildTemplate(t *testing.T, policy sqlpolicy.Policy) (*gamedb.Provisioner, string, sqlpolicy.Policy) {
+	t.Helper()
+
+	p := provisioner(t)
+	template := named(t, "tpl")
+	if err := p.BuildTemplate(t.Context(), gamedb.TemplateSpec{
+		Name: template, Script: detectiveScript, Policy: policy,
+	}); err != nil {
+		t.Fatalf("building the template: %v", err)
+	}
+	return p, template, policy
+}
+
+func TestATemplateHoldsTheAuthorsSchemaAndData(t *testing.T) {
+	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
+
+	instance := named(t, "inst")
+	if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
+		t.Fatalf("creating the instance: %v", err)
+	}
+
+	reader := connectAs(t, roleReader, testReaderPassword, instance)
+	var suspects int
+	if err := reader.QueryRow(t.Context(), `SELECT count(*) FROM suspects`).Scan(&suspects); err != nil {
+		t.Fatalf("a participant cannot read the game: %v", err)
+	}
+	if suspects != 2 {
+		t.Fatalf("suspects = %d, want 2", suspects)
+	}
+}
+
+// The whole reason a template exists: copying it is what a participant gets,
+// and the copy must be theirs alone.
+func TestTwoInstancesDoNotShareData(t *testing.T) {
+	p, template, policy := buildTemplate(t, sqlpolicy.ReadWrite("evidence"))
+
+	first, second := named(t, "one"), named(t, "two")
+	for _, name := range []string{first, second} {
+		if err := p.CreateInstance(t.Context(), template, name, policy); err != nil {
+			t.Fatalf("creating %s: %v", name, err)
+		}
+	}
+
+	writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword, first)
+	if _, err := writer.Exec(t.Context(), `INSERT INTO evidence (note) VALUES ('planted')`); err != nil {
+		t.Fatalf("the writer cannot write to a writable table: %v", err)
+	}
+
+	other := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword, second)
+	var rows int
+	if err := other.QueryRow(t.Context(), `SELECT count(*) FROM evidence`).Scan(&rows); err != nil {
+		t.Fatalf("reading the second instance: %v", err)
+	}
+	if rows != 2 {
+		t.Fatalf("the second instance sees %d rows; one participant's write reached another", rows)
+	}
+}
+
+// A read-only contest must produce a template whose privileges say so, whatever
+// the validator does. This is the layer that has to hold when the validator
+// does not.
+func TestAReadOnlyTemplateGrantsNothingThatWrites(t *testing.T) {
+	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
+
+	instance := named(t, "inst")
+	if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
+		t.Fatalf("creating the instance: %v", err)
+	}
+
+	reader := connectAs(t, roleReader, testReaderPassword, instance)
+	if _, err := reader.Exec(t.Context(), `SET default_transaction_read_only = off`); err != nil {
+		t.Fatalf("could not turn the default off: %v", err)
+	}
+
+	for _, statement := range []string{
+		`INSERT INTO evidence (note) VALUES ('planted')`,
+		`UPDATE suspects SET city = 'nowhere'`,
+		`DELETE FROM evidence`,
+		`CREATE TABLE work.mine (x int)`,
+		`CREATE VIEW work.mine AS SELECT 1`,
+	} {
+		t.Run(statement, func(t *testing.T) { refused(t, reader, statement) })
+	}
+}
+
+// Writing is granted table by table, so the tables the policy does not name
+// stay untouchable even in a contest that permits writing.
+func TestWritingReachesOnlyTheTablesThePolicyNames(t *testing.T) {
+	p, template, policy := buildTemplate(t, sqlpolicy.ReadWrite("evidence"))
+
+	instance := named(t, "inst")
+	if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
+		t.Fatalf("creating the instance: %v", err)
+	}
+
+	writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword, instance)
+
+	if _, err := writer.Exec(t.Context(), `INSERT INTO evidence (note) VALUES ('a note')`); err != nil {
+		t.Fatalf("the named table is not writable: %v", err)
+	}
+	// suspects is not on the list.
+	refused(t, writer, `INSERT INTO suspects (name) VALUES ('someone')`)
+	refused(t, writer, `UPDATE suspects SET city = 'nowhere'`)
+	refused(t, writer, `DROP TABLE evidence`)
+}
+
+// Their own objects go in `work`, and only there — the game's own schema stays
+// structurally untouchable.
+func TestOwnObjectsLiveInWorkAndNowhereElse(t *testing.T) {
+	policy := sqlpolicy.ReadWrite()
+	policy.AllowOwnTables = true
+	policy.AllowCreateView = true
+	p, template, policy := buildTemplate(t, policy)
+
+	instance := named(t, "inst")
+	if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
+		t.Fatalf("creating the instance: %v", err)
+	}
+
+	writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword, instance)
+
+	if _, err := writer.Exec(t.Context(), `CREATE TABLE work.notes (x int)`); err != nil {
+		t.Fatalf("their own schema is not writable: %v", err)
+	}
+	if _, err := writer.Exec(t.Context(), `CREATE VIEW work.clues AS SELECT * FROM evidence`); err != nil {
+		t.Fatalf("a view in their own schema was refused: %v", err)
+	}
+	refused(t, writer, `CREATE TABLE public.mine (x int)`)
+}
+
+// The hardening travels with the template, so an instance is not a place where
+// the catalogue rules quietly lapse.
+func TestAnInstanceInheritsTheCatalogueRules(t *testing.T) {
+	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
+
+	instance := named(t, "inst")
+	if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
+		t.Fatalf("creating the instance: %v", err)
+	}
+
+	reader := connectAs(t, roleReader, testReaderPassword, instance)
+	refused(t, reader, `SELECT count(*) FROM pg_database`)
+	refused(t, reader, `SELECT count(*) FROM pg_stat_activity`)
+}
+
+// Rebuilding replaces the template, and a template with a connection cannot be
+// copied — the discipline section 4.2 asks for. Both are the provisioner's job
+// to keep, not the caller's to remember.
+func TestATemplateCanBeRebuiltAndCopiedStraightAfter(t *testing.T) {
+	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
+
+	if err := p.BuildTemplate(t.Context(), gamedb.TemplateSpec{
+		Name:   template,
+		Script: `CREATE TABLE suspects (id int); INSERT INTO suspects VALUES (7);`,
+		Policy: sqlpolicy.ReadOnly(),
+	}); err != nil {
+		t.Fatalf("rebuilding: %v", err)
+	}
+
+	instance := named(t, "inst")
+	if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
+		t.Fatalf("copying straight after a rebuild: %v", err)
+	}
+
+	reader := connectAs(t, roleReader, testReaderPassword, instance)
+	var only int
+	if err := reader.QueryRow(t.Context(), `SELECT id FROM suspects`).Scan(&only); err != nil {
+		t.Fatalf("the rebuilt data is not there: %v", err)
+	}
+	if only != 7 {
+		t.Fatalf("id = %d; the instance came from the old template", only)
+	}
+}
+
+// Resetting is how a participant who has ruined their own data carries on. It
+// has to work while they are still connected, which is what FORCE is for.
+func TestResettingReplacesTheInstanceUnderALiveConnection(t *testing.T) {
+	p, template, policy := buildTemplate(t, sqlpolicy.ReadWrite("evidence"))
+
+	instance := named(t, "inst")
+	if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
+		t.Fatalf("creating the instance: %v", err)
+	}
+
+	writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword, instance)
+	if _, err := writer.Exec(t.Context(), `DELETE FROM evidence`); err != nil {
+		t.Fatalf("emptying the table: %v", err)
+	}
+
+	// Their connection is still open, on purpose.
+	if err := p.ResetInstance(t.Context(), template, instance, policy); err != nil {
+		t.Fatalf("resetting: %v", err)
+	}
+
+	fresh := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword, instance)
+	var rows int
+	if err := fresh.QueryRow(t.Context(), `SELECT count(*) FROM evidence`).Scan(&rows); err != nil {
+		t.Fatalf("reading the reset instance: %v", err)
+	}
+	if rows != 2 {
+		t.Fatalf("evidence = %d rows, want the template's 2", rows)
+	}
+}
+
+// A script that does not run must fail the build rather than leave a template
+// that is half a contest.
+func TestABrokenScriptLeavesNoTemplateBehind(t *testing.T) {
+	p := provisioner(t)
+	template := named(t, "tpl")
+
+	err := p.BuildTemplate(t.Context(), gamedb.TemplateSpec{
+		Name:   template,
+		Script: `CREATE TABLE fine (x int); CREATE TABLE oops (x nosuchtype);`,
+		Policy: sqlpolicy.ReadOnly(),
+	})
+	if err == nil {
+		t.Fatal("a broken script built a template")
+	}
+
+	var exists bool
+	if e := admin(t).QueryRow(t.Context(),
+		`SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)`, template).Scan(&exists); e != nil {
+		t.Fatalf("looking for the template: %v", e)
+	}
+	if exists {
+		t.Fatal("a failed build left a template behind for somebody to copy")
+	}
+}
+
+// The name is interpolated into DDL, where SQL has no parameter binding. The
+// policy already refuses a table name that is not a plain identifier; a
+// database name has to be refused the same way and for the same reason.
+func TestADatabaseNameThatIsNotAPlainIdentifierIsRefused(t *testing.T) {
+	p := provisioner(t)
+
+	for _, name := range []string{
+		`x" WITH (FORCE); DROP DATABASE dbcontest_game; --`,
+		"has space",
+		"",
+		strings.Repeat("x", 64),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := p.BuildTemplate(t.Context(), gamedb.TemplateSpec{
+				Name: name, Script: `SELECT 1`, Policy: sqlpolicy.ReadOnly(),
+			}); err == nil {
+				t.Fatalf("built a template called %q", name)
+			}
+		})
+	}
+}
+
+var _ = pgx.ErrNoRows
+
+// Temporary tables are the one permission that cannot travel with the
+// template. PostgreSQL grants TEMPORARY on a database to PUBLIC by default,
+// and a database-level privilege lives on the pg_database row, which a copy
+// does not inherit — so a policy that only reached the template would leave
+// `allow_temp_tables: false` quietly meaning nothing.
+func TestTemporaryTablesFollowThePolicyOnEveryInstance(t *testing.T) {
+	t.Run("refused when the policy does not allow them", func(t *testing.T) {
+		p, template, policy := buildTemplate(t, sqlpolicy.ReadWrite("evidence"))
+
+		instance := named(t, "inst")
+		if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
+			t.Fatalf("creating the instance: %v", err)
+		}
+
+		writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword, instance)
+		refused(t, writer, `CREATE TEMP TABLE scratch (x int)`)
+	})
+
+	t.Run("allowed when it does", func(t *testing.T) {
+		policy := sqlpolicy.ReadWrite("evidence")
+		policy.AllowTempTables = true
+		p, template, policy := buildTemplate(t, policy)
+
+		instance := named(t, "inst")
+		if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
+			t.Fatalf("creating the instance: %v", err)
+		}
+
+		writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword, instance)
+		if _, err := writer.Exec(t.Context(), `CREATE TEMP TABLE scratch (x int)`); err != nil {
+			t.Fatalf("temporary tables were refused although the policy allows them: %v", err)
+		}
+	})
+}

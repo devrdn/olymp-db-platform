@@ -115,7 +115,7 @@ func (p Policy) Validate() error {
 
 	seen := make(map[string]struct{}, len(p.WritableTables))
 	for _, table := range p.WritableTables {
-		if !plainIdentifier(table) {
+		if !PlainIdentifier(table) {
 			return fmt.Errorf("%w: %q is not a plain table name", ErrInvalidPolicy, table)
 		}
 		folded := strings.ToLower(table)
@@ -142,13 +142,17 @@ func (p Policy) MayWriteTo(table string) bool {
 	})
 }
 
-// plainIdentifier reports whether name is one unquoted PostgreSQL identifier.
+// PlainIdentifier reports whether name is one unquoted PostgreSQL identifier.
+//
+// Exported because the rule is needed wherever a name must be interpolated
+// into DDL, which SQL gives no way to bind: a table name here, a database name
+// in internal/gamedb. One rule rather than two that agree today.
 //
 // An allow-list of characters, like everything else here: letters, digits and
 // underscore, not starting with a digit. Anything needing quotes — a space, a
 // dot, a semicolon, a quote of its own — is refused rather than escaped,
 // because an escaping bug is silent and a refusal is not.
-func plainIdentifier(name string) bool {
+func PlainIdentifier(name string) bool {
 	if name == "" || len(name) > maxIdentifier {
 		return false
 	}
