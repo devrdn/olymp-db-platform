@@ -4,7 +4,9 @@
 # cache and the API's internal listener (metrics, health) stay on the private
 # network, reachable by name from other services but not from outside.
 #
-# The game cluster is added in a later step; nothing here talks to it yet.
+# The game cluster is a second PostgreSQL instance, deliberately separate from
+# the core one: participants' queries run there, and its total degradation must
+# not touch sign-in, answers or the timer.
 
 name: db-contest
 
@@ -30,6 +32,63 @@ services:
       POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
     volumes:
       - pg-core-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [internal]
+
+  # The game cluster: one database per participant, and nothing else.
+  #
+  # Separate from pg-core rather than a second database inside it, because the
+  # isolation being bought is resource isolation as much as visibility. A
+  # participant's runaway query should cost the game cluster's CPU and memory,
+  # not the ones the timer and the answer submissions depend on.
+  #
+  # No published port here: a participant reaches this cluster only through the
+  # interface, the API and the Query Runner, and section 4 is explicit that the
+  # game cluster's port is not published. The development overlay binds one to
+  # loopback so the role tests can connect as a participant's role and prove
+  # what it cannot do — a guarantee asserted in a comment is not a guarantee.
+  pg-game:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      # The provisioning role. It owns the templates and creates participant
+      # databases; the Query Runner never connects as this.
+      POSTGRES_USER: ${GAME_DB_USER:?set GAME_DB_USER in .env}
+      POSTGRES_PASSWORD: ${GAME_DB_PASSWORD:?set GAME_DB_PASSWORD in .env}
+      POSTGRES_DB: ${GAME_DB_NAME:-dbcontest_game}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    command:
+      - postgres
+      # Participant SQL is journalled by the application, in query_log, with
+      # the participant and the contest attached (section 5, point 7). Logging
+      # it here as well would duplicate every query into a file nobody reads
+      # and ship it to Loki, where it becomes a second copy of the answers.
+      - -c
+      - log_statement=none
+      # A connection that opens a transaction and stops is a lock held and a
+      # slot spent. The Query Runner closes its connections, so this only ever
+      # fires when something has already gone wrong.
+      - -c
+      - idle_in_transaction_session_timeout=30s
+      # Headroom over the Query Runner's semaphore, not a substitute for it:
+      # reaching this number means admission control has already failed.
+      - -c
+      - max_connections=200
+    volumes:
+      - pg-game-data:/var/lib/postgresql/data
+    # cgroup limits, so that "the game cluster degrades" stays a statement
+    # about this container rather than about the machine. Sized for the
+    # pilot; raise them together with the semaphore in section 4.3.
+    deploy:
+      resources:
+        limits:
+          cpus: "${GAME_DB_CPUS:-2.0}"
+          memory: ${GAME_DB_MEMORY:-2g}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -270,6 +329,7 @@ services:
 
 volumes:
   pg-core-data:
+  pg-game-data:
   redis-data:
   caddy-data:
   caddy-config:

@@ -36,6 +36,9 @@ ADMIN_NAME       ?= System Administrator
 API_PORT         ?= 8080
 
 CORE_DB_DSN ?= postgres://$(CORE_DB_USER):$(CORE_DB_PASSWORD)@localhost:$(CORE_DB_PORT)/$(CORE_DB_NAME)?sslmode=disable
+# The game cluster, as the provisioning role. Only the development overlay
+# publishes this port; the stack itself keeps the cluster off the host.
+GAME_DB_DSN ?= postgres://$(GAME_DB_USER):$(GAME_DB_PASSWORD)@localhost:$(GAME_DB_PORT)/$(GAME_DB_NAME)?sslmode=disable
 
 # Redis is optional: with no address the service uses its in-process cache.
 #
@@ -63,7 +66,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env require-version build test test-race test-db api-contract backup restore restore-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
+.PHONY: help require-env require-version build test test-race test-db test-game api-contract backup restore restore-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -88,6 +91,13 @@ test-race: ## Run the tests with the race detector
 # actually exercised — `make dev-up` first.
 test-db: require-env ## Run the repository tests against the development database
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go test -count=1 ./internal/postgres/...
+
+# The game cluster tests connect as the participant's own database role and
+# provoke what it must not be able to do. They cannot be faked: every guarantee
+# under test is a refusal by PostgreSQL, not by our code. `make dev-up` first —
+# it starts pg-game along with the core database.
+test-game: require-env ## Run the game cluster tests against the development cluster
+	cd $(BACKEND) && GAME_DB_DSN="$(GAME_DB_DSN)" go test -count=1 ./internal/gamedb/...
 
 cover: ## Run the tests and open the coverage report
 	cd $(BACKEND) && go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1
@@ -277,7 +287,7 @@ restore: require-env ## Replace the core database from a dump (FILE=path CONFIRM
 		exit $$result
 
 dev-up: ## Start PostgreSQL and Redis for local development
-	$(COMPOSE_DEV) up -d pg-core redis
+	$(COMPOSE_DEV) up -d pg-core pg-game redis
 
 # Prometheus, Loki, Promtail and Grafana, without pulling in the containerized
 # api/caddy/pg-core (same reasoning as stack-observability below). Combine

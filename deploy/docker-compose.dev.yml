@@ -26,6 +26,14 @@ services:
       - -c
       - log_min_duration_statement=0
 
+  # In production this cluster has no port at all. Here it gets one, on
+  # loopback, for two reasons: the role tests connect to it directly to prove
+  # what a participant's role cannot do, and an author wants to look at a game
+  # template by hand.
+  pg-game:
+    ports:
+      - "127.0.0.1:${GAME_DB_PORT:-5433}:5432"
+
   redis:
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
