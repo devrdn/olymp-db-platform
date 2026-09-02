@@ -169,12 +169,12 @@ func (r *Runner) execute(ctx context.Context, req Request, statement sqlpolicy.S
 
 	// EXPLAIN is not wrapped and so arrives without the extra LIMIT; collect
 	// stops at MaxRows either way, which is all a plan needs.
-	return collectOr(ctx, conn, text, r.limits)
+	return collectOr(ctx, tx, text, r.limits)
 }
 
 // collectOr reads the result and names what interrupted it, if anything.
-func collectOr(ctx context.Context, conn *pgx.Conn, text string, limits Limits) (*Result, error) {
-	result, err := collect(ctx, conn, text, limits)
+func collectOr(ctx context.Context, tx pgx.Tx, text string, limits Limits) (*Result, error) {
+	result, err := collect(ctx, tx, text, limits)
 	if err != nil {
 		return nil, timeoutOr(ctx, err)
 	}

@@ -58,8 +58,13 @@ func trimStatement(sql string) string {
 }
 
 // collect reads a result set, stopping at whichever limit comes first.
-func collect(ctx context.Context, conn *pgx.Conn, statement string, limits Limits) (*Result, error) {
-	rows, err := conn.Query(ctx, statement)
+//
+// It takes the transaction rather than the connection. Both work today, since
+// a pgx transaction is bound to the connection that began it — but only one of
+// them says so, and the day a connection comes from a pool the other would
+// send the query outside the read-only transaction without a word.
+func collect(ctx context.Context, tx pgx.Tx, statement string, limits Limits) (*Result, error) {
+	rows, err := tx.Query(ctx, statement)
 	if err != nil {
 		return nil, err
 	}
