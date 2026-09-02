@@ -515,6 +515,20 @@ const ro = {
     olderPage: "Mai vechi",
   },
   participant: {
+    console: {
+      heading: "Consolă SQL",
+      lede: "Copia dumneavoastră a bazei olimpiadei. Nimeni altcineva nu vede ce faceți aici.",
+      label: "Interogarea dumneavoastră",
+      placeholder: "SELECT * FROM suspects",
+      run: "Executați",
+      running: "Se execută…",
+      hint: "Câte o instrucțiune pe rând.",
+      rowCount: "Rânduri: {count}",
+      truncated: "Se afișează primele {count} rânduri. Răspunsul este mai lung.",
+      affected: "Rânduri modificate: {count}.",
+      noRows: "Interogarea s-a executat și nu a găsit nimic.",
+      null: "null",
+    },
     mine: {
       heading: "Olimpiadele mele",
       countLabel: "cu participarea dumneavoastră",
