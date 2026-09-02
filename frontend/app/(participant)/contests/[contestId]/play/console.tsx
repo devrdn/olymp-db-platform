@@ -81,6 +81,15 @@ function Refusal({ state, dict }: { state: Extract<ConsoleState, { kind: "refuse
     >
       {message}
       {state.subject ? <span className="ml-1 font-mono text-ink-2">{state.subject}</span> : null}
+      {/* Shown only where something went wrong on our side, because that is
+          the only case where anybody will be asked for it — and a reference
+          number printed under an ordinary refusal reads as though the refusal
+          were a fault. */}
+      {state.requestId && !passing ? (
+        <p className="mt-2 font-mono text-small text-ink-3">
+          {dict.participant.console.reference.replace("{id}", state.requestId)}
+        </p>
+      ) : null}
     </div>
   );
 }

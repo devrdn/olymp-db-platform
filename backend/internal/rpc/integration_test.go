@@ -11,6 +11,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
+	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
@@ -295,5 +296,31 @@ func TestAnAnswerTooLargeToReadArrivesAsSuch(t *testing.T) {
 	_, err := client.Run(t.Context(), ask(database, `SELECT repeat('x', 8 * 1024 * 1024)`))
 	if !errors.Is(err, queryrunner.ErrResultTooLarge) {
 		t.Fatalf("error = %v, want ErrResultTooLarge", err)
+	}
+}
+
+// A separate service whose logs cannot be joined to the requests that caused
+// them is a separate service nobody can debug. The identifier travels as
+// metadata, so every line the runner writes about a call carries the same
+// request_id as the line the Core API wrote about it.
+func TestTheRequestIdentifierCrossesIntoTheOtherProcess(t *testing.T) {
+	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
+
+	const id = "9d1f0c3a-known"
+	ctx := logging.WithRequestID(t.Context(), id)
+
+	// The server puts it into its own context, where the logger picks it up.
+	// Asserting on what the runner logs would mean logging per query, which it
+	// deliberately does not; asserting the context carried it is the same
+	// fact one step earlier.
+	var seen string
+	carried = func(ctx context.Context) { seen = logging.RequestIDFrom(ctx) }
+	t.Cleanup(func() { carried = nil })
+
+	if _, err := client.Run(ctx, ask(database, `SELECT 1`)); err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	if seen != id {
+		t.Fatalf("the runner saw request id %q, want %q", seen, id)
 	}
 }

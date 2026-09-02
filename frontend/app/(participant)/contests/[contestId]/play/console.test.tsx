@@ -113,3 +113,24 @@ describe("the SQL console", () => {
     expect(screen.getByRole("status")).toHaveTextContent(en.errors.fallback);
   });
 });
+
+describe("finding an error afterwards", () => {
+  // "It failed around two o'clock" is not something anybody can grep for.
+  test("a fault carries a reference the participant can quote", async () => {
+    answer.current = { kind: "refused", code: "query_service_down", requestId: "req-42" };
+    show();
+    await run();
+
+    expect(screen.getByRole("status")).toHaveTextContent("req-42");
+  });
+
+  // A reference number under an ordinary refusal reads as though the refusal
+  // were a fault, and invites a report about a query that was simply wrong.
+  test("but an ordinary refusal does not", async () => {
+    answer.current = { kind: "refused", code: "query_too_often", requestId: "req-42" };
+    show();
+    await run();
+
+    expect(screen.getByRole("status")).not.toHaveTextContent("req-42");
+  });
+})

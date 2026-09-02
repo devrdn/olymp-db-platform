@@ -532,6 +532,7 @@ const en = {
       truncated: "Showing the first {count} rows. The answer is longer than that.",
       affected: "{count} rows changed.",
       noRows: "The query ran and matched nothing.",
+      reference: "If you report this, quote {id}.",
       null: "null",
     },
     mine: {
