@@ -434,7 +434,7 @@ const ro = {
     contactHint: "Unde scrie un participant când ceva nu merge. Lăsat gol, nu se oferă nimic.",
     images: {
       heading: "Însemne",
-      hint: "PNG, JPEG, GIF sau WebP, până la 512 KiB. SVG nu este acceptat: este un document executabil, iar servit de la această adresă ar rula cu drepturile unui administrator.",
+      hint: "PNG, JPEG, GIF sau WebP, până la 512 KB și 4096 de pixeli pe latură. Formatul este citit din fișierul însuși, așa că redenumirea nu schimbă nimic. Un .ico nu este necesar — orice browser actual acceptă un PNG drept pictogramă de filă. SVG nu este acceptat: este un document executabil, iar servit de la această adresă ar rula cu drepturile unui administrator.",
       logo: "Logo",
       logoHint: "În bară și pe ecranul de autentificare. Se citește mai bine un însemn lat.",
       icon: "Pictograma aplicației",
@@ -671,6 +671,10 @@ const ro = {
     participant_not_found: "Participantul nu a fost găsit.",
     question_not_found: "Întrebarea nu a fost găsită.",
     story_not_found: "Povestea nu a fost încă scrisă.",
+    image_too_large:
+      "Imaginea este prea grea sau prea mare. Până la 512 KB și cel mult 4096 de pixeli pe latură.",
+    image_not_accepted:
+      "Acest fișier nu este o imagine pe care instalarea o păstrează. PNG, JPEG, GIF sau WebP — formatul este citit din fișier, nu din numele lui. Un .ico nu este necesar: orice browser actual acceptă un PNG drept pictogramă de filă.",
     invalid_request: "Verificați câmpurile completate.",
     invalid_cidr: "Format greșit pentru intervalul IP. Exemplu: 10.24.0.0/16",
     invalid_contest_id: "Identificator de olimpiadă greșit.",

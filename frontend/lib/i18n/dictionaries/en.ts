@@ -439,7 +439,7 @@ const en = {
     contactHint: "Where a participant writes when something goes wrong. Left empty, nothing is offered.",
     images: {
       heading: "Marks",
-      hint: "PNG, JPEG, GIF or WebP, up to 512 KiB. SVG is not accepted: it is an executable document, and one served from this address would run with an administrator's reach.",
+      hint: "PNG, JPEG, GIF or WebP, up to 512 KB and 4096 pixels on a side. The format is read from the file itself, so renaming one does not change it. An .ico is not needed — every current browser takes a PNG as a tab icon. SVG is not accepted: it is an executable document, and one served from this address would run with an administrator's reach.",
       logo: "Logo",
       logoHint: "In the bar and on the sign-in screen. A wide mark reads best.",
       icon: "App icon",
@@ -677,6 +677,10 @@ const en = {
     participant_not_found: "Participant not found.",
     question_not_found: "Question not found.",
     story_not_found: "The story has not been written yet.",
+    image_too_large:
+      "That picture is too heavy or too large. Up to 512 KB, and no more than 4096 pixels on a side.",
+    image_not_accepted:
+      "That file is not a picture this installation stores. PNG, JPEG, GIF or WebP — the format is read from the file itself, not from its name. An .ico is not needed: every current browser takes a PNG as a tab icon.",
     invalid_request: "Check the fields you filled in.",
     invalid_cidr: "Wrong IP range format. Example: 10.24.0.0/16",
     invalid_contest_id: "Wrong contest identifier.",
