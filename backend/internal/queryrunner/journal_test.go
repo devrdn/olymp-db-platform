@@ -162,3 +162,25 @@ func TestTheRowIsClosedEvenWhenTheCallerHasGoneAway(t *testing.T) {
 		t.Fatal("the row was left open")
 	}
 }
+
+// And the journal must not record it as a timeout either: that column is what
+// a report of "how often did queries run out of time" is built from.
+func TestACancelledRequestIsNotJournalledAsATimeout(t *testing.T) {
+	limits := queryrunner.DefaultLimits()
+	limits.Deadline = 30 * time.Second
+	runner, rec, database := journalled(t, limits, sqlpolicy.NewChecker("pg_sleep"))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+
+	_, _ = runner.Run(ctx, request(database, `SELECT pg_sleep(30)`), uuid.New())
+
+	if got := rec.outcomes[1].Status; got == queryrunner.StatusTimeout {
+		t.Fatal("a cancelled request was journalled as a timeout")
+	} else if got != queryrunner.StatusError {
+		t.Fatalf("status = %q, want %q", got, queryrunner.StatusError)
+	}
+}

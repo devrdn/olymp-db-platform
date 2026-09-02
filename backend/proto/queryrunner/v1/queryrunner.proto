@@ -105,6 +105,10 @@ message Failure {
     KIND_TIMEOUT = 4;
     // The database refused it — a missing table, a type error, a privilege.
     KIND_DATABASE_ERROR = 5;
+    // The caller stopped waiting. Separate from a timeout because only one of
+    // the two is about load, and a report of "how often did queries run out of
+    // time" is read as though it were.
+    KIND_CANCELLED = 6;
   }
 
   Kind kind = 1;

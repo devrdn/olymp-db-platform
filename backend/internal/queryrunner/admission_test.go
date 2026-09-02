@@ -80,8 +80,12 @@ func TestBeyondTheQueueTheAnswerIsImmediateRatherThanAWait(t *testing.T) {
 	if !errors.Is(err, queryrunner.ErrBusy) {
 		t.Fatalf("error = %v, want ErrBusy", err)
 	}
-	if waited > 200*time.Millisecond {
-		t.Fatalf("waited %s before saying it was busy", waited)
+	// The holder sleeps for a second, so anything well short of that proves
+	// the answer did not wait for the slot — which is the claim. The earlier
+	// bound of 200ms was measuring the machine rather than the code and failed
+	// under the race detector.
+	if waited > 700*time.Millisecond {
+		t.Fatalf("waited %s before saying it was busy, so it queued after all", waited)
 	}
 
 	wg.Wait()

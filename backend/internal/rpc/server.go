@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	pb "github.com/devrdn/db-contest/backend/internal/rpc/queryrunnerv1"
@@ -57,17 +58,38 @@ func ProbeAddress(listen string) string {
 	return listen
 }
 
+// MaxPayloadBytes is the largest message either side will carry.
+//
+// Set here rather than left at gRPC's own default, which is 4 MiB on the
+// receiving side and was smaller than the runner's own 5 MiB result budget: a
+// large but perfectly valid answer came back as ResourceExhausted, which the
+// client reported as the service being unable to answer and the journal
+// recorded as an error. A big answer looked like an outage.
+//
+// Generous, and deliberately not equal to the result budget: the budget bounds
+// the cells, while a message also carries column names and framing. The
+// command that wires the service refuses a configured budget that would not
+// fit inside this, so the two cannot be set into conflict again.
+const MaxPayloadBytes = 16 << 20
+
 // Server serves the Query Runner contract over gRPC.
 type Server struct {
 	pb.UnimplementedQueryRunnerServer
 
 	runner queryrunner.Executor
+	limits queryrunner.Limits
 	log    *slog.Logger
 }
 
 // NewServer adapts an executor to the service.
-func NewServer(runner queryrunner.Executor, log *slog.Logger) *Server {
-	return &Server{runner: runner, log: log}
+//
+// It takes the limits as well as the runner because the byte budget can only
+// be applied honestly here: the runner counts the Go values it read, and what
+// crosses the wire is those values rendered as text — a number counted as
+// eight bytes can render as twenty characters, so the estimate is a floor and
+// not a bound. This is the layer that knows the real size.
+func NewServer(runner queryrunner.Executor, limits queryrunner.Limits, log *slog.Logger) *Server {
+	return &Server{runner: runner, limits: limits, log: log}
 }
 
 // Register attaches the service to a gRPC server.
@@ -108,8 +130,17 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 		Truncated: ptr(result.Truncated),
 		Rows:      make([]*pb.Row, 0, len(result.Rows)),
 	}
+	var spent int
 	for _, values := range result.Rows {
-		answer.Rows = append(answer.Rows, cellsFor(values))
+		row := cellsFor(values)
+		// Measured after rendering, because rendering is where the size
+		// becomes real. Checked before appending, so the budget is a ceiling
+		// rather than a threshold the last row may cross.
+		if spent += weigh(row); spent > s.limits.MaxBytes {
+			answer.Truncated = ptr(true)
+			break
+		}
+		answer.Rows = append(answer.Rows, row)
 	}
 	return &pb.RunResponse{Outcome: &pb.RunResponse_Result{Result: answer}}, nil
 }
@@ -119,8 +150,11 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 // The standard gRPC health service is registered alongside it, because the
 // runtime image is distroless: it carries no shell and no probe, so the
 // container's health check is the binary dialling itself (see Probe).
-func Serve(ctx context.Context, lis net.Listener, server *Server, log *slog.Logger) error {
-	grpcServer := grpc.NewServer()
+func Serve(ctx context.Context, lis net.Listener, server *Server, shutdown time.Duration, log *slog.Logger) error {
+	grpcServer := grpc.NewServer(
+		grpc.MaxRecvMsgSize(MaxPayloadBytes),
+		grpc.MaxSendMsgSize(MaxPayloadBytes),
+	)
 	server.Register(grpcServer)
 
 	healthy := health.NewServer()
@@ -129,9 +163,24 @@ func Serve(ctx context.Context, lis net.Listener, server *Server, log *slog.Logg
 
 	go func() {
 		<-ctx.Done()
-		// Graceful: a query in flight is a participant waiting, and five
-		// seconds of shutdown is cheaper than an answer thrown away.
-		grpcServer.GracefulStop()
+
+		// Graceful first: a query in flight is a participant waiting, and a
+		// few seconds of shutdown is cheaper than an answer thrown away. But
+		// GracefulStop waits without limit, so a call that never returns would
+		// hold the deploy open indefinitely — which is what SHUTDOWN_TIMEOUT
+		// is for, and what it was not doing.
+		stopped := make(chan struct{})
+		go func() {
+			grpcServer.GracefulStop()
+			close(stopped)
+		}()
+
+		select {
+		case <-stopped:
+		case <-time.After(shutdown):
+			log.Warn("shutting down without waiting further", "after", shutdown)
+			grpcServer.Stop()
+		}
 	}()
 
 	log.Info("query runner listening", "address", lis.Addr().String())

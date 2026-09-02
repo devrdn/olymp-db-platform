@@ -48,6 +48,8 @@ func failureFor(err error) *pb.Failure {
 		return &pb.Failure{Kind: pb.Failure_KIND_BUSY.Enum(), Message: ptr(err.Error())}
 	case errors.Is(err, queryrunner.ErrTimeout), errors.Is(err, context.DeadlineExceeded):
 		return &pb.Failure{Kind: pb.Failure_KIND_TIMEOUT.Enum(), Message: ptr(err.Error())}
+	case errors.Is(err, queryrunner.ErrCanceled), errors.Is(err, context.Canceled):
+		return &pb.Failure{Kind: pb.Failure_KIND_CANCELLED.Enum(), Message: ptr(err.Error())}
 	default:
 		return &pb.Failure{Kind: pb.Failure_KIND_DATABASE_ERROR.Enum(), Message: ptr(err.Error())}
 	}
@@ -76,6 +78,8 @@ func errorFor(failure *pb.Failure) error {
 		return queryrunner.ErrBusy
 	case pb.Failure_KIND_TIMEOUT:
 		return queryrunner.ErrTimeout
+	case pb.Failure_KIND_CANCELLED:
+		return queryrunner.ErrCanceled
 	case pb.Failure_KIND_DATABASE_ERROR:
 		return errors.New(failure.GetMessage())
 	default:

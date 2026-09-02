@@ -19,12 +19,16 @@ func TestEveryFailureSurvivesTheWireAsItself(t *testing.T) {
 		err  error
 		want error
 	}{
-		"a refusal":        {&sqlpolicy.Refusal{Code: sqlpolicy.CodeFunctionNotSupported, Subject: "pg_sleep"}, nil},
-		"a full instance":  {queryrunner.ErrBusy, queryrunner.ErrBusy},
-		"one at a time":    {queryrunner.ErrAlreadyRunning, queryrunner.ErrAlreadyRunning},
-		"a timeout":        {queryrunner.ErrTimeout, queryrunner.ErrTimeout},
-		"a deadline":       {context.DeadlineExceeded, queryrunner.ErrTimeout},
-		"a database error": {errors.New("relation \"nope\" does not exist"), nil},
+		"a refusal":       {&sqlpolicy.Refusal{Code: sqlpolicy.CodeFunctionNotSupported, Subject: "pg_sleep"}, nil},
+		"a full instance": {queryrunner.ErrBusy, queryrunner.ErrBusy},
+		"one at a time":   {queryrunner.ErrAlreadyRunning, queryrunner.ErrAlreadyRunning},
+		"a timeout":       {queryrunner.ErrTimeout, queryrunner.ErrTimeout},
+		"a deadline":      {context.DeadlineExceeded, queryrunner.ErrTimeout},
+		// A caller that left is not a query that ran too long. Conflating them
+		// here would put back the difference the runner just took out.
+		"a caller that left":  {queryrunner.ErrCanceled, queryrunner.ErrCanceled},
+		"a cancelled context": {context.Canceled, queryrunner.ErrCanceled},
+		"a database error":    {errors.New("relation \"nope\" does not exist"), nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			back := errorFor(failureFor(given.err))
@@ -106,5 +110,19 @@ func TestThePolicyCrossesWholeInBothDirections(t *testing.T) {
 	}
 	if err := strict.Validate(); err != nil {
 		t.Fatalf("a policy that crossed the wire no longer validates: %v", err)
+	}
+}
+
+// A timeout and a cancellation must not collapse into each other on the way
+// across, in either direction.
+func TestATimeoutAndACancellationStayDistinct(t *testing.T) {
+	timeout := errorFor(failureFor(queryrunner.ErrTimeout))
+	cancelled := errorFor(failureFor(queryrunner.ErrCanceled))
+
+	if errors.Is(timeout, queryrunner.ErrCanceled) {
+		t.Fatal("a timeout arrived as a cancellation")
+	}
+	if errors.Is(cancelled, queryrunner.ErrTimeout) {
+		t.Fatal("a cancellation arrived as a timeout")
 	}
 }

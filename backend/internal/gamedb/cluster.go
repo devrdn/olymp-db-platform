@@ -67,6 +67,24 @@ type Conn interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+// Cluster is a connection that can also open a transaction, which preparing
+// the cluster needs and hardening one database does not.
+type Cluster interface {
+	Conn
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+// prepareLock is the advisory lock every run of PrepareCluster takes.
+//
+// An arbitrary but fixed number, and the only thing that matters about it is
+// that no other advisory lock in this system uses it. Role DDL in PostgreSQL
+// updates a shared catalogue row, and two sessions altering the same role at
+// once get `tuple concurrently updated` — SQLSTATE XX000, an internal error
+// that reads like a real fault. Two replicas of the job, a retry after a
+// timeout, or a deploy racing somebody's manual run are all ordinary; they
+// should queue, not collide.
+const prepareLock = 8_531_204_477_119_003_1
+
 // sessionDefaults are applied to both roles with ALTER ROLE … SET.
 //
 // Defaults, not limits — see the package comment. They are still worth setting:
@@ -87,7 +105,34 @@ var sessionDefaults = [][2]string{
 // running it after an upgrade is how a new restriction reaches a cluster that
 // already exists — which is why it is a program rather than an init script
 // that the image runs once and silently skips ever after.
-func PrepareCluster(ctx context.Context, conn Conn, roles Roles) error {
+func PrepareCluster(ctx context.Context, cluster Cluster, roles Roles) error {
+	// One transaction for the whole thing, holding an advisory lock: role DDL
+	// is transactional in PostgreSQL, so a run that fails half-way leaves the
+	// cluster as it was rather than half-declared. The lock is released by the
+	// commit, which is why it is the transaction-scoped variety — a session
+	// lock over a pool would be taken on one connection and released on
+	// another, or not at all.
+	tx, err := cluster.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin preparing the cluster: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(prepareLock)); err != nil {
+		return fmt.Errorf("wait for another run to finish: %w", err)
+	}
+
+	if err := prepare(ctx, tx, roles); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("finish preparing the cluster: %w", err)
+	}
+	return nil
+}
+
+// prepare does the work, inside the caller's transaction.
+func prepare(ctx context.Context, conn Conn, roles Roles) error {
 	for _, role := range []struct {
 		name     string
 		password string

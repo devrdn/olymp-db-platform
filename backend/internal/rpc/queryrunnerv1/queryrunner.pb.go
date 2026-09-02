@@ -56,6 +56,10 @@ const (
 	Failure_KIND_TIMEOUT Failure_Kind = 4
 	// The database refused it — a missing table, a type error, a privilege.
 	Failure_KIND_DATABASE_ERROR Failure_Kind = 5
+	// The caller stopped waiting. Separate from a timeout because only one of
+	// the two is about load, and a report of "how often did queries run out of
+	// time" is read as though it were.
+	Failure_KIND_CANCELLED Failure_Kind = 6
 )
 
 // Enum value maps for Failure_Kind.
@@ -67,6 +71,7 @@ var (
 		3: "KIND_ALREADY_RUNNING",
 		4: "KIND_TIMEOUT",
 		5: "KIND_DATABASE_ERROR",
+		6: "KIND_CANCELLED",
 	}
 	Failure_Kind_value = map[string]int32{
 		"KIND_UNSPECIFIED":     0,
@@ -75,6 +80,7 @@ var (
 		"KIND_ALREADY_RUNNING": 3,
 		"KIND_TIMEOUT":         4,
 		"KIND_DATABASE_ERROR":  5,
+		"KIND_CANCELLED":       6,
 	}
 )
 
@@ -620,19 +626,20 @@ const file_queryrunner_v1_queryrunner_proto_rawDesc = "" +
 	"\x05cells\x18\x01 \x03(\v2\x1e.dbcontest.queryrunner.v1.CellR\x05cells\"3\n" +
 	"\x04Cell\x12\x17\n" +
 	"\ais_null\x18\x01 \x01(\bR\x06isNull\x12\x12\n" +
-	"\x04text\x18\x02 \x01(\tR\x04text\"\x92\x02\n" +
+	"\x04text\x18\x02 \x01(\tR\x04text\"\xa6\x02\n" +
 	"\aFailure\x12:\n" +
 	"\x04kind\x18\x01 \x01(\x0e2&.dbcontest.queryrunner.v1.Failure.KindR\x04kind\x12\x12\n" +
 	"\x04code\x18\x02 \x01(\tR\x04code\x12\x18\n" +
 	"\asubject\x18\x03 \x01(\tR\asubject\x12\x18\n" +
-	"\amessage\x18\x04 \x01(\tR\amessage\"\x82\x01\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\"\x96\x01\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fKIND_REFUSED\x10\x01\x12\r\n" +
 	"\tKIND_BUSY\x10\x02\x12\x18\n" +
 	"\x14KIND_ALREADY_RUNNING\x10\x03\x12\x10\n" +
 	"\fKIND_TIMEOUT\x10\x04\x12\x17\n" +
-	"\x13KIND_DATABASE_ERROR\x10\x052a\n" +
+	"\x13KIND_DATABASE_ERROR\x10\x05\x12\x12\n" +
+	"\x0eKIND_CANCELLED\x10\x062a\n" +
 	"\vQueryRunner\x12R\n" +
 	"\x03Run\x12$.dbcontest.queryrunner.v1.RunRequest\x1a%.dbcontest.queryrunner.v1.RunResponseBAZ?github.com/devrdn/db-contest/backend/internal/rpc/queryrunnerv1b\beditionsp\xe8\a"
 

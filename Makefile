@@ -70,7 +70,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env require-version build test test-race test-db test-game api-contract proto backup restore restore-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
+.PHONY: help require-env require-version build test test-race test-db test-game api-contract proto proto-check backup restore restore-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -106,13 +106,26 @@ test-game: require-env ## Run the game cluster tests against the development clu
 	cd $(BACKEND) && GAME_DB_DSN="$(GAME_DB_DSN)" go test -count=1 ./internal/gamedb/... ./internal/queryrunner/...
 
 # The contract between the Core API and the Query Runner. Generated code is
-# committed, so a checkout builds without protoc; this regenerates it, and
-# `make check` fails if what is committed no longer matches the .proto.
+# committed, so a checkout builds without protoc and CI needs no toolchain for
+# it. `make proto` regenerates; `make proto-check` is what actually notices a
+# .proto edited without regenerating, and it is deliberately not part of
+# `make check`, which must keep working for a contributor with no protoc.
 proto: ## Regenerate the Query Runner contract from proto/
 	cd $(BACKEND) && protoc --proto_path=proto \
 		--go_out=. --go_opt=module=github.com/devrdn/db-contest/backend \
 		--go-grpc_out=. --go-grpc_opt=module=github.com/devrdn/db-contest/backend \
 		proto/queryrunner/v1/queryrunner.proto
+
+# Fails when the committed Go does not match the .proto — the drift that
+# otherwise shows up as a contract change nobody's code has.
+proto-check: ## Fail if the generated contract is out of date
+	@command -v protoc >/dev/null 2>&1 || { echo "protoc not installed; skipping the contract check"; exit 0; }
+	@$(MAKE) --no-print-directory proto
+	@git diff --quiet -- $(BACKEND)/internal/rpc/queryrunnerv1 || { \
+		echo "the generated contract is out of date; run 'make proto' and commit the result"; \
+		git --no-pager diff --stat -- $(BACKEND)/internal/rpc/queryrunnerv1; \
+		exit 1; }
+	@echo "the generated contract matches proto/"
 
 cover: ## Run the tests and open the coverage report
 	cd $(BACKEND) && go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1

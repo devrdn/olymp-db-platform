@@ -1,6 +1,7 @@
 package queryrunner_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -209,5 +210,32 @@ func TestAnUnknownDatabaseFailsWithoutPanicking(t *testing.T) {
 
 	if _, err := runner.Run(t.Context(), request("no_such_database", `SELECT 1`)); err == nil {
 		t.Fatal("a query against a missing database succeeded")
+	}
+}
+
+// A caller going away is not a query running too long, and recording it as one
+// inflates the very number capacity decisions are made from.
+//
+// The two are easy to conflate because both cancel the context: the check was
+// `ctx.Err() != nil`, which is true for either. What tells them apart is which
+// error the context carries.
+func TestACallerGoingAwayIsNotATimeout(t *testing.T) {
+	limits := queryrunner.DefaultLimits()
+	limits.Deadline = 30 * time.Second // far longer than this test will wait
+	runner, database := setupWith(t, limits, sqlpolicy.NewChecker("pg_sleep"))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := runner.Run(ctx, request(database, `SELECT pg_sleep(30)`))
+
+	if errors.Is(err, queryrunner.ErrTimeout) {
+		t.Fatalf("a cancelled request was reported as a timeout: %v", err)
+	}
+	if !errors.Is(err, queryrunner.ErrCanceled) {
+		t.Fatalf("error = %v, want ErrCanceled", err)
 	}
 }
