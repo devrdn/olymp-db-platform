@@ -77,18 +77,25 @@ func NewRouter(deps Deps) *chi.Mux {
 	r := chi.NewRouter()
 
 	// Order matters: request identity first so every later record and error
-	// body can carry it, recovery next so a panic in any handler below still
-	// produces a logged 500, then observability, then response hardening.
+	// body can carry it, then the client's address, then observability, then
+	// response hardening, and recovery innermost so that everything above
+	// observes the 500 it turns a panic into.
 	r.Use(httpx.RequestID)
 	// Client IP is resolved once, before anything that records or limits by
 	// address, so every consumer sees the same answer.
 	r.Use(deps.ClientIPs.Middleware)
 	// Every audit write below inherits the request origin from the context.
 	r.Use(requestMeta)
-	r.Use(httpx.Recoverer(deps.Logger))
-	r.Use(metrics.Middleware(deps.recorder()))
+	// Observability outside recovery, which is the other way round from the
+	// obvious order and is the point. A panic unwinds past anything that
+	// records *after* calling the next handler, so with the recoverer
+	// outermost a panicking request produced its own error line and nothing
+	// else: no access log entry, no metric, no 500 in the status counts —
+	// invisible to exactly the alert it should have fired.
 	r.Use(httpx.AccessLog(deps.Logger))
+	r.Use(metrics.Middleware(deps.recorder()))
 	r.Use(httpx.SecureHeaders)
+	r.Use(httpx.Recoverer(deps.Logger))
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusNotFound, codeNotFound, "Resource not found")

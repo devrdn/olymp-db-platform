@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 )
 
 func testDeps() Deps {
@@ -371,4 +373,47 @@ func TestPublicRouterWorksWithoutAnyOptionalDependency(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200 with every optional dependency absent", rec.Code)
 	}
+}
+
+// A panic unwinds past anything that records after calling the next handler.
+// With the recoverer outermost, a panicking request produced its own error
+// line and nothing else — no access log entry, no metric, no 500 in the status
+// counts. Invisible to exactly the alert it should have fired.
+func TestAPanickingRequestIsStillCountedAndLogged(t *testing.T) {
+	var logged bytes.Buffer
+	counted := &countingRecorder{}
+
+	deps := testDeps()
+	deps.Logger = logging.New("info", &logged)
+	deps.Metrics = counted
+	deps.Modules = []Module{moduleFunc(func(r chi.Router) {
+		r.Get("/boom", func(http.ResponseWriter, *http.Request) { panic("in a handler") })
+	})}
+
+	rec := do(t, NewRouter(deps), http.MethodGet, "/api/v1/boom")
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if !strings.Contains(logged.String(), `"msg":"http request"`) {
+		t.Fatal("the panicking request left no access log line")
+	}
+	if !strings.Contains(logged.String(), `"status":500`) {
+		t.Fatalf("the access line did not record the 500: %s", logged.String())
+	}
+	// And the stack, without which the line says a panic happened and not
+	// where.
+	if !strings.Contains(logged.String(), `"stack":`) {
+		t.Fatal("the panic was logged without a stack")
+	}
+	if counted.status != http.StatusInternalServerError {
+		t.Fatalf("metrics saw status %d; a panic must be counted as the 500 it becomes", counted.status)
+	}
+}
+
+// countingRecorder keeps the last observation, which is all this needs.
+type countingRecorder struct{ status int }
+
+func (c *countingRecorder) ObserveRequest(_, _ string, status int, _ time.Duration) {
+	c.status = status
 }

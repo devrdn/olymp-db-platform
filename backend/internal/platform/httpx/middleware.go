@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
@@ -43,10 +44,16 @@ func Recoverer(log *slog.Logger) Middleware {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if v := recover(); v != nil {
+					// With the stack. Without it the line says a panic
+					// happened and on which path, which during a contest is
+					// the difference between knowing and guessing — and a
+					// panic is not the kind of thing that reproduces politely
+					// afterwards.
 					log.ErrorContext(r.Context(), "recovered from panic",
 						"panic", v,
 						"method", r.Method,
 						"path", r.URL.Path,
+						"stack", string(debug.Stack()),
 					)
 					Error(w, r, http.StatusInternalServerError, CodeInternalError, "Internal server error")
 				}
@@ -65,15 +72,20 @@ func AccessLog(log *slog.Logger) Middleware {
 			started := time.Now()
 			rec := NewStatusRecorder(w)
 
-			next.ServeHTTP(rec, r)
+			// Deferred, so a panic that gets past the recoverer still leaves a
+			// line. A request that vanished from the log is the one nobody
+			// counts, and 500s are what an alert is set on.
+			defer func() {
+				log.InfoContext(r.Context(), "http request",
+					"method", r.Method,
+					"path", r.URL.Path,
+					"status", rec.Status(),
+					"bytes", rec.BytesWritten(),
+					"duration_ms", time.Since(started).Milliseconds(),
+				)
+			}()
 
-			log.InfoContext(r.Context(), "http request",
-				"method", r.Method,
-				"path", r.URL.Path,
-				"status", rec.Status(),
-				"bytes", rec.BytesWritten(),
-				"duration_ms", time.Since(started).Milliseconds(),
-			)
+			next.ServeHTTP(rec, r)
 		})
 	}
 }
