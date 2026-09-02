@@ -92,6 +92,21 @@ func makeUser(t *testing.T, ctx context.Context, login string) users.User {
 }
 
 // makeContest stores a draft contest owned by author.
+// makeRegistration enrols a user in a contest, which is what the query log is
+// keyed by: the same person in two contests is two participants.
+func makeRegistration(t *testing.T, ctx context.Context, contest, user uuid.UUID) uuid.UUID {
+	t.Helper()
+
+	var id uuid.UUID
+	err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+		`INSERT INTO registrations (contest_id, user_id) VALUES ($1, $2) RETURNING id`,
+		contest, user).Scan(&id)
+	if err != nil {
+		t.Fatalf("create registration: %v", err)
+	}
+	return id
+}
+
 func makeContest(t *testing.T, ctx context.Context, author uuid.UUID) uuid.UUID {
 	t.Helper()
 

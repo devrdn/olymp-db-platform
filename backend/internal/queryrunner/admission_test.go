@@ -8,6 +8,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/google/uuid"
 )
 
 // slowRunner is a runner that can be made to hold a slot for as long as a test
@@ -145,8 +146,10 @@ func TestASlotIsReturnedWhateverHappened(t *testing.T) {
 	}
 }
 
+// other is a different participant, named by a stable id so a failure names
+// which one.
 func other(participant, database, sql string) queryrunner.Request {
 	r := request(database, sql)
-	r.Participant = participant
+	r.Registration = uuid.NewSHA1(uuid.Nil, []byte(participant))
 	return r
 }
