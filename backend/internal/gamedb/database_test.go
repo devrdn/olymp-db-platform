@@ -1,11 +1,11 @@
-package gamedb
+package gamedb_test
 
 import (
-	"context"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/gamedb"
+	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/jackc/pgx/v5"
 )
@@ -19,8 +19,8 @@ func gameDatabase(t *testing.T) string {
 	asOwner(t, database,
 		`CREATE TABLE evidence (id int PRIMARY KEY, note text)`,
 		`INSERT INTO evidence VALUES (1, 'a knife'), (2, 'a letter')`,
-		`GRANT USAGE ON SCHEMA public TO `+RoleReader,
-		`GRANT SELECT ON ALL TABLES IN SCHEMA public TO `+RoleReader,
+		`GRANT USAGE ON SCHEMA public TO `+roleReader,
+		`GRANT SELECT ON ALL TABLES IN SCHEMA public TO `+roleReader,
 	)
 	return database
 }
@@ -30,7 +30,7 @@ func setupGame(t *testing.T) (*pgx.Conn, string) {
 	t.Helper()
 
 	database := gameDatabase(t)
-	return connectAs(t, RoleReader, testReaderPassword, database), database
+	return connectAs(t, roleReader, testReaderPassword, database), database
 }
 
 func TestTheReaderCanReadTheGame(t *testing.T) {
@@ -85,13 +85,13 @@ func TestNoWriteSurvivesEvenWithTheReadOnlyDefaultOff(t *testing.T) {
 func TestTheReaderCannotGrantItselfMore(t *testing.T) {
 	reader, _ := setupGame(t)
 
-	if _, err := reader.Exec(t.Context(), `GRANT ALL ON evidence TO `+RoleReader); err != nil {
+	if _, err := reader.Exec(t.Context(), `GRANT ALL ON evidence TO `+roleReader); err != nil {
 		t.Logf("the grant errored outright: %v", err)
 	}
 
 	var granted bool
 	if err := reader.QueryRow(t.Context(),
-		`SELECT has_table_privilege($1, 'evidence', 'INSERT')`, RoleReader).Scan(&granted); err != nil {
+		`SELECT has_table_privilege($1, 'evidence', 'INSERT')`, roleReader).Scan(&granted); err != nil {
 		t.Fatalf("asking about the privilege: %v", err)
 	}
 	if granted {
@@ -152,17 +152,16 @@ func TestTheHardeningIsInheritedByACopyOfTheTemplate(t *testing.T) {
 	template := gameDatabase(t)
 
 	copyName := template + "_copy"
-	if _, err := adminPool.Exec(t.Context(),
-		`CREATE DATABASE `+quoteIdentifier(copyName)+` TEMPLATE `+quoteIdentifier(template)); err != nil {
+	if _, err := admin(t).Exec(t.Context(),
+		`CREATE DATABASE `+gamedb.QuoteIdentifier(copyName)+` TEMPLATE `+gamedb.QuoteIdentifier(template)); err != nil {
 		t.Fatalf("copying the template: %v", err)
 	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		_, _ = adminPool.Exec(ctx, `DROP DATABASE IF EXISTS `+quoteIdentifier(copyName)+` WITH (FORCE)`)
-	})
+	// gamedbtest.Drop rather than a pool call: cleanup runs after the test's
+	// own context is cancelled, and anything taking t.Context() here fails for
+	// a reason that has nothing to do with the test.
+	t.Cleanup(func() { gamedbtest.Drop(copyName) })
 
-	reader := connectAs(t, RoleReader, testReaderPassword, copyName)
+	reader := connectAs(t, roleReader, testReaderPassword, copyName)
 
 	refused(t, reader, `SELECT count(*) FROM pg_database`)
 	var rows int
@@ -180,13 +179,13 @@ func TestTheParticipantRoleCannotReachTheMaintenanceDatabases(t *testing.T) {
 	requireCluster(t)
 
 	var maintenance string
-	if err := adminPool.QueryRow(t.Context(), `SELECT current_database()`).Scan(&maintenance); err != nil {
+	if err := admin(t).QueryRow(t.Context(), `SELECT current_database()`).Scan(&maintenance); err != nil {
 		t.Fatalf("asking which database the provisioner uses: %v", err)
 	}
 
 	for _, database := range []string{"postgres", "template1", maintenance} {
 		t.Run(database, func(t *testing.T) {
-			err := tryConnectAs(t, RoleReader, testReaderPassword, database)
+			err := tryConnectAs(t, roleReader, testReaderPassword, database)
 			if err == nil {
 				t.Fatalf("the reader connected to %s", database)
 			}
@@ -224,7 +223,7 @@ func TestEverySensitiveCatalogTheValidatorNamesIsAlsoRevoked(t *testing.T) {
 			if !present {
 				t.Skipf("pg_catalog.%s does not exist on this server", name)
 			}
-			refused(t, reader, `SELECT 1 FROM pg_catalog.`+quoteIdentifier(name)+` LIMIT 1`)
+			refused(t, reader, `SELECT 1 FROM pg_catalog.`+gamedb.QuoteIdentifier(name)+` LIMIT 1`)
 		})
 	}
 }

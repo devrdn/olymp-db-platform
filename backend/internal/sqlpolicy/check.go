@@ -86,7 +86,26 @@ var standard = NewChecker()
 // standard function allow-list.
 func Check(sql string, p Policy) error { return standard.Check(sql, p) }
 
+// Statement is what the checker learned about a query it allowed.
+//
+// Small on purpose: it carries only what a caller cannot work out again
+// without parsing the query a second time, and the caller that needs it — the
+// Query Runner — would otherwise be reduced to matching a prefix, which a
+// leading comment defeats.
+type Statement struct {
+	// Explain reports an EXPLAIN. It matters because an EXPLAIN cannot be
+	// placed inside a subquery, so it is the one shape that must not be
+	// wrapped when a result is limited.
+	Explain bool
+}
+
 // Check reports whether the query is allowed under the policy.
+func (c *Checker) Check(sql string, p Policy) error {
+	_, err := c.Analyse(sql, p)
+	return err
+}
+
+// Analyse checks the query and reports what it is.
 //
 // The order is deliberate. The policy is validated first, because an incoherent
 // policy cannot decide anything and failing closed is the only safe answer.
@@ -94,9 +113,9 @@ func Check(sql string, p Policy) error { return standard.Check(sql, p) }
 // that reasons about a tree, and reasoning about a tree that represents only
 // the first half of what will run is how a checker gets walked past. Only then
 // the shape: the root statement, and then every node beneath it.
-func (c *Checker) Check(sql string, p Policy) error {
+func (c *Checker) Analyse(sql string, p Policy) (Statement, error) {
 	if err := p.Validate(); err != nil {
-		return &Refusal{Code: CodeInvalidPolicy, Subject: err.Error()}
+		return Statement{}, &Refusal{Code: CodeInvalidPolicy, Subject: err.Error()}
 	}
 	if p.Mode == ModeReadWrite {
 		// Deliberately staged: the writing modes get their own iteration and
@@ -104,56 +123,59 @@ func (c *Checker) Check(sql string, p Policy) error {
 		// the honest way to not support something yet — a checker that quietly
 		// treated read_write as read_only would disagree with the template's
 		// GRANTs, which is exactly the drift this package exists to prevent.
-		return &Refusal{Code: CodeModeNotSupported, Subject: string(p.Mode)}
+		return Statement{}, &Refusal{Code: CodeModeNotSupported, Subject: string(p.Mode)}
 	}
 
 	if len(sql) > maxQueryBytes {
-		return &Refusal{Code: CodeTooLong, Subject: fmt.Sprintf("%d bytes", len(sql))}
+		return Statement{}, &Refusal{Code: CodeTooLong, Subject: fmt.Sprintf("%d bytes", len(sql))}
 	}
 
 	tree, err := pg.Parse(sql)
 	if err != nil {
-		return &Refusal{Code: CodeParseError, Subject: err.Error()}
+		return Statement{}, &Refusal{Code: CodeParseError, Subject: err.Error()}
 	}
 	if len(tree.Stmts) != 1 {
-		return &Refusal{Code: CodeNotOneStatement, Subject: fmt.Sprintf("%d statements", len(tree.Stmts))}
+		return Statement{}, &Refusal{Code: CodeNotOneStatement, Subject: fmt.Sprintf("%d statements", len(tree.Stmts))}
 	}
 
 	root := tree.Stmts[0].Stmt
 	if root == nil || root.Node == nil {
-		return &Refusal{Code: CodeNotOneStatement, Subject: "0 statements"}
+		return Statement{}, &Refusal{Code: CodeNotOneStatement, Subject: "0 statements"}
 	}
 
-	target, err := c.rootAllowed(root, p)
+	target, explain, err := c.rootAllowed(root, p)
 	if err != nil {
-		return err
+		return Statement{}, err
 	}
-	return c.walkNode(target, p, 0)
+	if err := c.walkNode(target, p, 0); err != nil {
+		return Statement{}, err
+	}
+	return Statement{Explain: explain}, nil
 }
 
 // rootAllowed checks the outermost statement and returns the node to walk.
 //
 // EXPLAIN returns its inner query rather than itself: its options are checked
 // here, once, so that DefElem never has to be a generally-allowed node type.
-func (c *Checker) rootAllowed(root *pg.Node, p Policy) (*pg.Node, error) {
+func (c *Checker) rootAllowed(root *pg.Node, p Policy) (target *pg.Node, explain bool, err error) {
 	switch stmt := root.Node.(type) {
 	case *pg.Node_SelectStmt:
-		return root, nil
+		return root, false, nil
 	case *pg.Node_ExplainStmt:
 		for _, option := range stmt.ExplainStmt.Options {
 			name := strings.ToLower(option.GetDefElem().GetDefname())
 			// ANALYZE is not a plan, it is a run — on a DML it *is* the DML.
 			// The rest (VERBOSE, COSTS, FORMAT) only change the printout.
 			if name == "analyze" {
-				return nil, &Refusal{Code: CodeStatementNotSupported, Subject: "EXPLAIN ANALYZE"}
+				return nil, false, &Refusal{Code: CodeStatementNotSupported, Subject: "EXPLAIN ANALYZE"}
 			}
 		}
 		if stmt.ExplainStmt.Query == nil {
-			return nil, &Refusal{Code: CodeStatementNotSupported, Subject: "EXPLAIN"}
+			return nil, false, &Refusal{Code: CodeStatementNotSupported, Subject: "EXPLAIN"}
 		}
-		return stmt.ExplainStmt.Query, nil
+		return stmt.ExplainStmt.Query, true, nil
 	default:
-		return nil, &Refusal{Code: CodeStatementNotSupported, Subject: kindOf(root)}
+		return nil, false, &Refusal{Code: CodeStatementNotSupported, Subject: kindOf(root)}
 	}
 }
 
@@ -218,6 +240,15 @@ func (c *Checker) enter(m protoreflect.Message, p Policy, depth int) error {
 // whatever that particular type carries.
 func (c *Checker) visit(node *pg.Node, p Policy) error {
 	kind := kindOf(node)
+	if kind == "" {
+		// A node with nothing set is a placeholder the grammar leaves in a
+		// fixed-shape list — `FROM generate_series(…)` carries one where the
+		// column definitions would go. It holds no SQL, so there is nothing to
+		// allow or refuse; anything actually present would have a kind. Left
+		// unhandled it refused every set-returning function in a FROM clause,
+		// with an empty name in the message.
+		return nil
+	}
 	if _, known := allowedKinds[kind]; !known {
 		return &Refusal{Code: CodeConstructNotSupported, Subject: kind}
 	}

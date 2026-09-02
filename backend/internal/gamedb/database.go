@@ -66,7 +66,7 @@ func hideSensitiveCatalogs(ctx context.Context, conn Conn) error {
 	return nil
 }
 
-// quoteIdentifier spells a name the way PostgreSQL does in its own dumps.
+// QuoteIdentifier spells a name the way PostgreSQL does in its own dumps.
 //
 // Needed where a name cannot be a bound parameter and cannot be built by the
 // server either — CREATE DATABASE and DROP DATABASE run outside a transaction
@@ -74,6 +74,6 @@ func hideSensitiveCatalogs(ctx context.Context, conn Conn) error {
 // this is given is one the platform generated, never a participant's, but it
 // is quoted regardless: the day that stops being true, this is what decides
 // whether it matters.
-func quoteIdentifier(name string) string {
+func QuoteIdentifier(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }

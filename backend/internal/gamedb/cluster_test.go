@@ -1,8 +1,11 @@
-package gamedb
+package gamedb_test
 
 import (
 	"strings"
 	"testing"
+
+	"github.com/devrdn/db-contest/backend/internal/gamedb"
+	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
 )
 
 // Running it twice must be as good as running it once: it is applied on every
@@ -10,9 +13,9 @@ import (
 func TestPreparingTheClusterIsIdempotent(t *testing.T) {
 	requireCluster(t)
 
-	if err := PrepareCluster(t.Context(), adminPool, Roles{
-		ReaderPassword: testReaderPassword,
-		WriterPassword: testWriterPassword,
+	if err := gamedb.PrepareCluster(t.Context(), admin(t), gamedb.Roles{
+		ReaderPassword: gamedbtest.ReaderPassword,
+		WriterPassword: gamedbtest.WriterPassword,
 	}); err != nil {
 		t.Fatalf("a second run failed: %v", err)
 	}
@@ -25,7 +28,7 @@ func TestPreparingTheClusterIsIdempotent(t *testing.T) {
 func TestTheReaderStartsWithTheIntendedSettings(t *testing.T) {
 	// A game database, not the maintenance one: the reader is deliberately
 	// barred from that, which the last test in database_test.go proves.
-	conn := connectAs(t, RoleReader, testReaderPassword, scratchDatabase(t))
+	conn := connectAs(t, roleReader, testReaderPassword, scratchDatabase(t))
 
 	for setting, want := range map[string]string{
 		"default_transaction_read_only":       "on",
@@ -59,7 +62,7 @@ func TestTheReaderStartsWithTheIntendedSettings(t *testing.T) {
 // It is written down as a test because the alternative is that somebody later
 // reads `ALTER ROLE ... SET statement_timeout` and believes it is a limit.
 func TestWhatTheRoleSettingsDoNotGuarantee(t *testing.T) {
-	conn := connectAs(t, RoleReader, testReaderPassword, scratchDatabase(t))
+	conn := connectAs(t, roleReader, testReaderPassword, scratchDatabase(t))
 
 	for _, statement := range []string{
 		"SET statement_timeout = 0",
@@ -84,9 +87,9 @@ func TestTheRolesExistAndCannotBecomeMore(t *testing.T) {
 	requireCluster(t)
 
 	var superuser, createdb, createrole, canLogin bool
-	err := adminPool.QueryRow(t.Context(),
+	err := admin(t).QueryRow(t.Context(),
 		`SELECT rolsuper, rolcreatedb, rolcreaterole, rolcanlogin
-		 FROM pg_roles WHERE rolname = $1`, RoleReader).
+		 FROM pg_roles WHERE rolname = $1`, roleReader).
 		Scan(&superuser, &createdb, &createrole, &canLogin)
 	if err != nil {
 		t.Fatalf("reading the reader role: %v", err)
