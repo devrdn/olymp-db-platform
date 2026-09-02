@@ -6,6 +6,12 @@ name: frontend
 # dependency — nothing here reads the server's source.
 #
 # See the note in backend.yml before making these required checks.
+# Images for the interface are built on every push to main and published only
+# from a tag. Building on a merge is the only check the Dockerfile and the
+# shape of the dependency graph get — the tests pass happily on code that
+# cannot be built into the image — while the registry holds deliberate
+# releases rather than one image per merge. Pull requests build nothing:
+# a draft or an accidental one should not cost an image build.
 on:
   push:
     branches: [main]
@@ -72,7 +78,7 @@ jobs:
       - run: npm run build
 
   publish:
-    name: build and publish the image
+    name: build the image, publish on a tag
     needs: build
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -109,8 +115,28 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: frontend
-          push: true
+          # Loaded into the local daemon rather than pushed: what is built on a
+          # merge is a check that it *can* be built, and the registry should
+          # hold deliberate releases rather than one image per merge. The push
+          # happens below, and only from a tag.
+          load: true
+          push: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Only from a tag. A merge proves the image can be built; a tag says
+      # somebody meant to ship it. The deployment model already names a version
+      # explicitly and never deploys "latest", so a registry holding one image
+      # per merge is a haystack rather than a history.
+      - name: publish
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -eu
+          echo "$TAGS" | while read -r tag; do
+            [ -n "$tag" ] || continue
+            docker push "$tag"
+          done
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}

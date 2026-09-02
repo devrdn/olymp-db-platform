@@ -364,8 +364,10 @@ images: ## Build the release images from this working tree
 	VERSION=$(VERSION) $(COMPOSE_BUILD) build api queryrunner web
 	@echo "built $(IMAGE_BACKEND):$(VERSION), $(IMAGE_RUNNER):$(VERSION) and $(IMAGE_FRONTEND):$(VERSION)"
 
-# CI pushes these; this target exists for the day the registry is unreachable
-# from CI and somebody has to do it by hand.
+# CI publishes these from a tag, and only from a tag: a merge proves the image
+# can be built, a tag says somebody meant to ship it. This target exists for
+# the day the registry is unreachable from CI and somebody has to do it by
+# hand.
 images-push: images ## Push the release images to the registry
 	docker push $(IMAGE_BACKEND):$(VERSION)
 	docker push $(IMAGE_RUNNER):$(VERSION)
