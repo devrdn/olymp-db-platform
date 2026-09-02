@@ -515,6 +515,20 @@ const ru = {
     olderPage: "Старее",
   },
   participant: {
+    console: {
+      heading: "SQL-консоль",
+      lede: "Ваша собственная копия базы олимпиады. Что вы здесь делаете, не видит никто.",
+      label: "Ваш запрос",
+      placeholder: "SELECT * FROM suspects",
+      run: "Выполнить",
+      running: "Выполняется…",
+      hint: "По одному запросу за раз.",
+      rowCount: "Строк: {count}",
+      truncated: "Показаны первые {count} строк. Ответ длиннее.",
+      affected: "Изменено строк: {count}.",
+      noRows: "Запрос выполнен и не нашёл ничего.",
+      null: "null",
+    },
     mine: {
       heading: "Мои олимпиады",
       countLabel: "с вашим участием",

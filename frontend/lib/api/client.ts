@@ -51,18 +51,31 @@ export class ApiError extends Error {
   readonly code: string;
   readonly status: number;
   readonly requestId?: string;
+  /**
+   * What the code is about, when the server names it: which function was not
+   * allowed, which table is not writable.
+   *
+   * Not a message — the message stays English and unrendered. This is the
+   * noun the dictionary's sentence is about, and it is carried because
+   * "a function is not available" without saying which is the same
+   * unactionable answer that uploading a picture used to give.
+   */
+  readonly subject?: string;
 
-  constructor(code: string, status: number, message: string, requestId?: string) {
+  constructor(code: string, status: number, message: string, requestId?: string, subject?: string) {
     super(message);
     this.name = "ApiError";
     this.code = code;
     this.status = status;
     this.requestId = requestId;
+    this.subject = subject;
   }
 }
 
 type ErrorEnvelope = {
   error: { code: string; message: string; request_id?: string };
+  /** Named beside the error rather than inside it; see ApiError.subject. */
+  subject?: string;
 };
 
 export async function request(path: string, options: RequestOptions = {}): Promise<unknown> {
@@ -101,7 +114,13 @@ async function toApiError(response: Response): Promise<ApiError> {
   try {
     const body = JSON.parse(raw) as ErrorEnvelope;
     if (body?.error?.code) {
-      return new ApiError(body.error.code, response.status, body.error.message, body.error.request_id);
+      return new ApiError(
+        body.error.code,
+        response.status,
+        body.error.message,
+        body.error.request_id,
+        typeof body.subject === "string" ? body.subject : undefined,
+      );
     }
   } catch {
     // Not the API talking. Fall through.

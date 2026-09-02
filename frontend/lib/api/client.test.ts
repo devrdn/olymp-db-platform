@@ -76,3 +76,28 @@ describe("request", () => {
     expect(seen?.init?.body).toBe('{"status":"published"}');
   });
 });
+
+describe("what an error is about", () => {
+  // "A function is not available" without saying which is the unactionable
+  // answer this exists to prevent.
+  test("carries the subject the server named beside the code", async () => {
+    const fetchImpl = respondWith(
+      { error: { code: "query_function_not_supported", message: "not allowed" }, subject: "pg_sleep" },
+      400,
+    );
+
+    await expect(request("/x", { fetchImpl })).rejects.toMatchObject({
+      code: "query_function_not_supported",
+      subject: "pg_sleep",
+    });
+  });
+
+  test("leaves the subject undefined when the server named none", async () => {
+    const fetchImpl = respondWith({ error: { code: "invalid_request", message: "no" } }, 400);
+
+    await expect(request("/x", { fetchImpl })).rejects.toMatchObject({
+      code: "invalid_request",
+      subject: undefined,
+    });
+  });
+});
