@@ -186,12 +186,21 @@ func (r *GameInstances) AllCurrent(ctx context.Context, contest uuid.UUID, versi
 // draft has nobody to provision for, and a template still building or failed
 // would have copies made of a database that is not a contest.
 func (r *GameInstances) Live(ctx context.Context) ([]provisioning.Contest, error) {
+	// The policy is joined from contest_sql_policies, which has held it since
+	// the schema's second migration. A contest that was never configured has
+	// no row there, and LEFT JOIN plus coalesce gives it the read-only
+	// default — the absence of a policy must never read as no restrictions.
 	rows, err := r.querier(ctx).Query(ctx, `
 		SELECT c.id, t.template_db, t.version,
-		       c.sql_mode, c.writable_tables::text[], c.allow_create_view,
-		       c.allow_own_tables, c.allow_temp_tables, c.allow_catalog
+		       coalesce(p.mode, 'read_only'),
+		       coalesce(p.writable_tables, '{}')::text[],
+		       coalesce(p.allow_create_view, false),
+		       coalesce(p.allow_own_tables, false),
+		       coalesce(p.allow_temp_tables, false),
+		       coalesce(p.allow_catalog, true)
 		FROM contests c
 		JOIN game_templates t ON t.contest_id = c.id
+		LEFT JOIN contest_sql_policies p ON p.contest_id = c.id
 		WHERE c.status IN ('published', 'running') AND t.status = 'ready'
 		ORDER BY c.id`)
 	if err != nil {
