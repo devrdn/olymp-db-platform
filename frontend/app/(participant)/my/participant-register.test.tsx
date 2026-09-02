@@ -161,3 +161,33 @@ describe("a contest the visitor is already on", () => {
     expect(screen.queryByText(en.participant.enrolled)).not.toBeInTheDocument();
   });
 });
+
+describe("the way into a running contest", () => {
+  // Without this the console existed and nothing led to it, which is the same
+  // as it not existing.
+  test("a contest that is running and enrolled offers a way in", () => {
+    render_([contest({ id: "c1", status: "running", enrolled: true })]);
+
+    expect(screen.getByRole("link", { name: en.participant.openConsole })).toHaveAttribute(
+      "href",
+      "/contests/c1/play",
+    );
+  });
+
+  // A contest that has not started has no console, and one that has finished
+  // has no console left. Offering the door either side of the contest is
+  // offering a refusal.
+  test.each(["published", "finished"] as const)("but %s does not", (status) => {
+    render_([contest({ id: "c1", status, enrolled: true })]);
+
+    expect(screen.queryByRole("link", { name: en.participant.openConsole })).not.toBeInTheDocument();
+  });
+
+  // Enrolment is the other half: a running contest somebody is not in is not
+  // a contest they may walk into.
+  test("nor does a running contest the viewer is not in", () => {
+    render_([contest({ id: "c1", status: "running", enrolled: false })]);
+
+    expect(screen.queryByRole("link", { name: en.participant.openConsole })).not.toBeInTheDocument();
+  });
+});

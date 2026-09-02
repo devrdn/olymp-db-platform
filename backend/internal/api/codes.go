@@ -53,6 +53,8 @@ var (
 	codeNoGameYet = httpx.NewCode("no_game_yet",
 		"The contest's game database has not been built. Nobody's mistake and nothing to do with the query.")
 
+	codeQueryServiceDown = httpx.NewCode("query_service_down",
+		"The Query Runner could not be reached. Nothing to do with the query, and a retry is the right response rather than an edit.")
 	codeQueryDeclined = httpx.NewCode("query_declined",
 		"The database refused the query, in a contest that hides its schema. The reason is deliberately withheld: PostgreSQL names the relation that does not exist, which in such a contest is a way to enumerate the schema the closed catalogues were hiding.")
 	codeQueryParseError = httpx.NewCode("query_parse_error",

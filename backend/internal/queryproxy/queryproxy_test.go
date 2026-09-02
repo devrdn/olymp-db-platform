@@ -52,8 +52,11 @@ type databases struct {
 	database string
 	quota    int64
 	err      error
-	// asked records what Ensure was called with.
-	asked *provisioning.Contest
+	// asked records what Ensure was called with, and quotaAsked whether the
+	// cluster was consulted about size at all.
+	asked      *provisioning.Contest
+	quotaAsked bool
+	lastQuota  int64
 }
 
 func (d *databases) Ensure(_ context.Context, c provisioning.Contest, _ uuid.UUID) (string, error) {
@@ -62,18 +65,23 @@ func (d *databases) Ensure(_ context.Context, c provisioning.Contest, _ uuid.UUI
 }
 
 func (d *databases) Quota(context.Context, provisioning.Contest) (int64, error) {
+	d.quotaAsked = true
 	return d.quota, nil
 }
 
 type runner struct {
-	got    queryrunner.Request
-	gotID  uuid.UUID
-	result *queryrunner.Result
-	err    error
+	quotaSink *int64
+	got       queryrunner.Request
+	gotID     uuid.UUID
+	result    *queryrunner.Result
+	err       error
 }
 
 func (r *runner) Run(_ context.Context, req queryrunner.Request, id uuid.UUID) (*queryrunner.Result, error) {
 	r.got, r.gotID = req, id
+	if r.quotaSink != nil {
+		*r.quotaSink = req.DiskQuotaBytes
+	}
 	return r.result, r.err
 }
 
@@ -134,17 +142,14 @@ func TestTheDatabaseComesFromTheRegistrationAndNeverFromTheRequest(t *testing.T)
 	}
 }
 
-func TestTheQuotaAndTheRequestIdentifierAreCarriedThrough(t *testing.T) {
-	service, db, run := fixture(t)
+func TestTheRequestIdentifierIsCarriedThrough(t *testing.T) {
+	service, _, run := fixture(t)
 	cmd := command()
 
 	if _, err := service.Run(t.Context(), cmd); err != nil {
 		t.Fatalf("running: %v", err)
 	}
 
-	if run.got.DiskQuotaBytes != db.quota {
-		t.Fatalf("quota = %d, want %d", run.got.DiskQuotaBytes, db.quota)
-	}
 	// The journal ties a row to the same request in the technical logs, which
 	// is what makes "the participant says it failed at 14:02" answerable.
 	if run.gotID != cmd.RequestID {
@@ -347,6 +352,103 @@ func TestClosingTheCataloguesDoesNotSwallowOurOwnAnswers(t *testing.T) {
 			_, err := service.Run(t.Context(), command())
 			if errors.Is(err, queryproxy.ErrDatabaseDeclined) {
 				t.Fatalf("%v was swallowed as a database refusal", failure)
+			}
+		})
+	}
+}
+
+// Our own failing is not the query being wrong.
+//
+// A database that cannot be reached, answered as "your request was bad", tells
+// the client to stop retrying and the participant to fix a query that was
+// fine — with our connection string attached to the explanation.
+func TestOurOwnFailuresAreMarkedApartFromTheQuerysOwn(t *testing.T) {
+	broken := errors.New("dial tcp 172.28.0.5:5432: connection refused")
+
+	for name, service := range map[string]*queryproxy.Service{
+		"the registration cannot be read": queryproxy.New(
+			people{err: broken}, contestStore{}, games{}, &databases{}, &runner{}),
+		"the contest cannot be read": queryproxy.New(
+			people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+			contestStore{err: broken}, games{}, &databases{}, &runner{}),
+		"the database cannot be provided": queryproxy.New(
+			people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+			contestStore{contest: contests.Contest{Status: contests.StatusRunning}},
+			games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+			&databases{err: broken}, &runner{}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := service.Run(t.Context(), command())
+			if !errors.Is(err, queryproxy.ErrUnavailable) {
+				t.Fatalf("error = %v, want ErrUnavailable", err)
+			}
+		})
+	}
+}
+
+// The quota is worked out by asking the game cluster how large the template
+// is. A read-only contest cannot grow its database, so that is a round trip to
+// another server on every query, for every participant, to produce a number
+// nothing will compare against.
+func TestAReadOnlyContestDoesNotAskTheClusterAboutSizeAtAll(t *testing.T) {
+	db := &databases{database: "x", quota: 1 << 20}
+	service := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+		contestStore{contest: contests.Contest{Status: contests.StatusRunning}},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		db, &runner{result: &queryrunner.Result{}},
+	)
+
+	if _, err := service.Run(t.Context(), command()); err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	if db.quotaAsked {
+		t.Fatal("a read-only contest asked the cluster for a size limit it cannot reach")
+	}
+
+	// And a contest that permits writing still gets one, because there the
+	// number is the only thing between a participant and the cluster's disk.
+	writing := &databases{database: "x", quota: 1 << 20}
+	service = queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+		contestStore{contest: contests.Contest{Status: contests.StatusRunning}},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadWrite("evidence")}},
+		writing, &runner{result: &queryrunner.Result{}, quotaSink: &writing.lastQuota},
+	)
+	if _, err := service.Run(t.Context(), command()); err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	if !writing.quotaAsked {
+		t.Fatal("a contest that permits writing got no size limit")
+	}
+	if got := writing.lastQuota; got != writing.quota {
+		t.Fatalf("quota reached the runner as %d, want %d", got, writing.quota)
+	}
+}
+
+// The classification next door asks "is this one of ours?", and the list it
+// asks against lives in the runner. A sentinel added there without being
+// listed would be swallowed as the database speaking — in exactly the contest
+// that withholds the database's words, where nobody would see it happen.
+func TestEveryOutcomeTheRunnerReportsIsRecognisedAsOurs(t *testing.T) {
+	closed := sqlpolicy.ReadOnly()
+	closed.AllowCatalog = false
+
+	for _, outcome := range queryrunner.Outcomes() {
+		t.Run(outcome.Error(), func(t *testing.T) {
+			service := queryproxy.New(
+				people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+				contestStore{contest: contests.Contest{Status: contests.StatusRunning}},
+				games{game: provisioning.Contest{Policy: closed}},
+				&databases{database: "x"}, &runner{err: outcome},
+			)
+
+			_, err := service.Run(t.Context(), command())
+			if errors.Is(err, queryproxy.ErrDatabaseDeclined) {
+				t.Fatalf("%v was swallowed as the database speaking", outcome)
+			}
+			if !errors.Is(err, outcome) {
+				t.Fatalf("error = %v, want it to still be %v", err, outcome)
 			}
 		})
 	}

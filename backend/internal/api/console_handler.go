@@ -12,6 +12,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
+	"github.com/devrdn/db-contest/backend/internal/rpc"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -181,11 +182,24 @@ func (h *ConsoleHandler) fail(w http.ResponseWriter, r *http.Request, err error)
 		}
 	}
 
-	// Whatever is left is the database refusing the query on its own terms —
-	// a missing table, a type error — or something genuinely broken. The
-	// participant is shown the database's words, which are the useful ones;
-	// the log keeps the rest.
-	h.log.ErrorContext(r.Context(), "a query could not be answered", "error", err)
+	// Ours failing is not the query being wrong. A database that cannot be
+	// reached answered as `400 invalid_request` tells the client to stop
+	// retrying and the participant to fix a query that was fine — with our
+	// connection string attached to the explanation.
+	switch {
+	case errors.Is(err, rpc.ErrUnreachable):
+		h.log.ErrorContext(r.Context(), "the query service could not be reached", "error", err)
+		httpx.Error(w, r, http.StatusServiceUnavailable, codeQueryServiceDown, "The query service is unavailable")
+		return
+	case errors.Is(err, queryproxy.ErrUnavailable):
+		h.log.ErrorContext(r.Context(), "a query could not be answered", "error", err)
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+		return
+	}
+
+	// What is left is the database refusing the query on its own terms — a
+	// missing table, a type error. The participant is shown its words, which
+	// are the useful ones.
 	httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 }
 

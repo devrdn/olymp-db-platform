@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
@@ -9,6 +10,14 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
+
+// ErrUnreachable is the Query Runner failing to answer at all, as opposed to
+// answering that the query was refused.
+//
+// The distinction is the whole reason a Failure travels in the response rather
+// than as a gRPC status: without it, a service that is down and a query that
+// was refused reach the participant as the same sentence.
+var ErrUnreachable = errors.New("the query service could not answer")
 
 // Client calls the Query Runner service.
 //
@@ -65,7 +74,7 @@ func (c *Client) Run(ctx context.Context, req queryrunner.Request) (*queryrunner
 		DiskQuotaBytes: ptr(req.DiskQuotaBytes),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("the query service could not answer: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 
 	if failure := response.GetFailure(); failure != nil {

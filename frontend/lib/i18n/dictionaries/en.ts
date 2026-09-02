@@ -562,6 +562,7 @@ const en = {
     join: "Join",
     joining: "Joining",
     joined: "You are enrolled.",
+    openConsole: "Open",
     enrolled: "You are in",
     byInvitation: "By invitation",
     noAction: "Nothing to do yet",
@@ -741,6 +742,8 @@ const en = {
       "You have finished this contest. The console is closed for you.",
     query_declined:
       "The database refused that query. This contest hides its schema, so the reason is not shown — discovering the tables is part of it.",
+    query_service_down:
+      "The query service is not answering right now. Nothing to do with your query — try again in a moment.",
     invalid_request: "Check the fields you filled in.",
     invalid_cidr: "Wrong IP range format. Example: 10.24.0.0/16",
     invalid_contest_id: "Wrong contest identifier.",
