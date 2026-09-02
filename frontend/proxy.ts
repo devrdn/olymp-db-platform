@@ -12,11 +12,13 @@ import { SESSION_COOKIE } from "@/lib/auth/session";
  * API. Language is not decided here, because it is not in the URL.
  */
 export function proxy(request: NextRequest) {
-  // Path *and* query. A filtered register, a page of results, a search
-  // somebody typed all live in the query string, and carrying only the path
-  // lands them afterwards on a bare list wondering where their search went.
+  // Path and query are passed separately: the path decides whether the screen
+  // is public, the query is only carried along so that a filtered register or
+  // a search somebody typed survives signing in. Joined into one string, the
+  // guard would stop recognising its own `/login?next=…` and loop.
   const target = guardRedirect(
-    request.nextUrl.pathname + request.nextUrl.search,
+    request.nextUrl.pathname,
+    request.nextUrl.search,
     request.cookies.has(SESSION_COOKIE),
   );
 
@@ -30,7 +32,14 @@ export function proxy(request: NextRequest) {
 }
 
 /**
- * Every route except the framework's own assets.
+ * Every route except the framework's own assets and the API's prefix.
+ *
+ * `/api/*` is not a route this application serves: the reverse proxy sends it
+ * to the API before Next is reached (deploy/Caddyfile). Claiming it here would
+ * mean answering a sign-in redirect on behalf of endpoints that are the API's
+ * to guard, including the ones that are deliberately public — the logo and the
+ * icons the sign-in screen itself wears, which are requested by a browser that
+ * has, by definition, not signed in yet.
  *
  * The exclusions are named rather than inferred from the path. Skipping
  * anything containing a dot is the usual shorthand and it is a hole with a
@@ -39,5 +48,5 @@ export function proxy(request: NextRequest) {
  * and nothing says so.
  */
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon\\.ico|robots\\.txt|sitemap\\.xml).*)"],
+  matcher: ["/((?!api/|_next/static|_next/image|favicon\\.ico|robots\\.txt|sitemap\\.xml).*)"],
 };

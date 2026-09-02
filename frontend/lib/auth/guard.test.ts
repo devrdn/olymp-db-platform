@@ -6,21 +6,44 @@ import { authRecoveryRedirect, guardRedirect } from "./guard";
 
 describe("guardRedirect", () => {
   test("sends a signed-out visitor to sign-in, remembering where they were going", () => {
-    expect(guardRedirect("/contests", false)).toBe("/login?next=%2Fcontests");
+    expect(guardRedirect("/contests", "", false)).toBe("/login?next=%2Fcontests");
   });
 
   test("leaves sign-in reachable without a session", () => {
-    expect(guardRedirect("/login", false)).toBeNull();
+    expect(guardRedirect("/login", "", false)).toBeNull();
   });
 
   test("lets a signed-in visitor through", () => {
-    expect(guardRedirect("/contests", true)).toBeNull();
+    expect(guardRedirect("/contests", "", true)).toBeNull();
   });
 
   test("keeps the password screen behind a session", () => {
     // It is reached by an account that is signed in and stuck; without a
     // session there is nothing to change.
-    expect(guardRedirect("/password", false)).toBe("/login?next=%2Fpassword");
+    expect(guardRedirect("/password", "", false)).toBe("/login?next=%2Fpassword");
+  });
+
+  /**
+   * The redirect this guard issues carries a query of its own, so the next
+   * request arrives at `/login?next=…` rather than at `/login`. If the
+   * allow-list is consulted with the query attached, sign-in stops matching
+   * it and the guard sends the sign-in page to itself, wrapping `next` one
+   * encoding deeper each time — a loop the browser ends with
+   * ERR_TOO_MANY_REDIRECTS, and which locks out every signed-out visitor
+   * rather than some unlucky path.
+   *
+   * Hence two arguments: the path decides, the query is only carried. They
+   * are separate parameters so that the decision cannot be handed a query
+   * string again by accident.
+   */
+  test("leaves sign-in reachable when it carries where to go next", () => {
+    expect(guardRedirect("/login", "?next=%2Fcontests", false)).toBeNull();
+  });
+
+  test("carries the query along, so a search survives signing in", () => {
+    expect(guardRedirect("/users", "?q=popescu", false)).toBe(
+      "/login?next=%2Fusers%3Fq%3Dpopescu",
+    );
   });
 });
 
@@ -107,17 +130,25 @@ describe("authRecoveryRedirect, leaving a trace", () => {
 });
 
 describe("guardRedirect, resuming the exact view", () => {
+  /**
+   * These two once called the guard with the path and query joined into one
+   * string, which is how the proxy called it, and they passed — while every
+   * signed-out visitor was caught in a redirect loop. The function was right
+   * about the string it was handed; the bug was in what it was handed, and a
+   * test that builds the argument itself cannot see that. Hence the separate
+   * parameters, which put the mistake beyond the type checker's tolerance.
+   */
   test("carries the query string, not just the path", () => {
     // The promise this function makes is that signing in resumes the journey.
     // A filtered register, a page of results, a search somebody typed — all of
     // that lives in the query string, and dropping it lands them on a bare
     // list wondering what happened to their search.
-    expect(guardRedirect("/users?q=popescu&status=blocked", false)).toBe(
+    expect(guardRedirect("/users", "?q=popescu&status=blocked", false)).toBe(
       "/login?next=%2Fusers%3Fq%3Dpopescu%26status%3Dblocked",
     );
   });
 
   test("leaves a plain path exactly as it was", () => {
-    expect(guardRedirect("/contests", false)).toBe("/login?next=%2Fcontests");
+    expect(guardRedirect("/contests", "", false)).toBe("/login?next=%2Fcontests");
   });
 });
