@@ -48,6 +48,8 @@ var (
 		"The caller is not taking part in this contest. The same answer whether they never registered or were disqualified: telling those apart would say whether an account is on a roster.")
 	codeContestNotRunning = httpx.NewCode("contest_not_running",
 		"The contest has not started, or has finished. Queries are taken only while it runs.")
+	codeContestFinished = httpx.NewCode("contest_finished",
+		"The participant has already finished. Their answers are in, and the console closes with them.")
 	codeNoGameYet = httpx.NewCode("no_game_yet",
 		"The contest's game database has not been built. Nobody's mistake and nothing to do with the query.")
 

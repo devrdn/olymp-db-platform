@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
@@ -35,6 +36,14 @@ var (
 	ErrNotAParticipant = errors.New("not a participant of this contest")
 	// ErrContestNotRunning is a contest that has not started or has finished.
 	ErrContestNotRunning = errors.New("the contest is not running")
+	// ErrFinished is a participant who has already finished. Their answers
+	// are in; the console closing with them is the point of finishing.
+	ErrFinished = errors.New("the participant has finished")
+	// ErrAddressNotAllowed is a query from outside the network the contest is
+	// held on. Checked on every query and not only at enrolment: a restriction
+	// that is applied once is a restriction somebody walks out of the room
+	// with.
+	ErrAddressNotAllowed = errors.New("the address is not allowed")
 	// ErrNoGameYet is a contest whose game database was never built. Nobody's
 	// fault, and not a fact about the query.
 	ErrNoGameYet = errors.New("the contest has no game database yet")
@@ -75,6 +84,10 @@ type Command struct {
 	ContestID uuid.UUID
 	UserID    uuid.UUID
 	SQL       string
+	// Address is where the query came from, resolved by the HTTP layer. The
+	// contest may be held on one network, and a participant who enrolled in
+	// the lab must not be able to carry on from home.
+	Address netip.Addr
 	// RequestID ties the journal row to the same request in the technical
 	// logs, which is what makes "it failed at 14:02" answerable.
 	RequestID uuid.UUID
@@ -110,6 +123,8 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		return nil, fmt.Errorf("look up the participant: %w", err)
 	case participant.Status == contests.RegistrationDisqualified:
 		return nil, ErrNotAParticipant
+	case participant.Status == contests.RegistrationFinished:
+		return nil, ErrFinished
 	}
 
 	contest, err := s.contests.ByID(ctx, cmd.ContestID)
@@ -118,6 +133,9 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 	}
 	if contest.Status != contests.StatusRunning {
 		return nil, ErrContestNotRunning
+	}
+	if !contest.AllowsAddress(cmd.Address) {
+		return nil, ErrAddressNotAllowed
 	}
 
 	game, err := s.games.Game(ctx, cmd.ContestID)

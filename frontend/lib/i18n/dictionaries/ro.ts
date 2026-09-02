@@ -717,6 +717,8 @@ const ro = {
       "Baza dumneavoastră a atins limita de dimensiune, nu se mai poate scrie nimic.",
     query_result_too_large:
       "Răspunsul este prea mare pentru a fi returnat. Restrângeți-l cu WHERE sau cu mai puține coloane.",
+    contest_finished:
+      "Ați terminat această olimpiadă. Consola este închisă pentru dumneavoastră.",
     invalid_request: "Verificați câmpurile completate.",
     invalid_cidr: "Format greșit pentru intervalul IP. Exemplu: 10.24.0.0/16",
     invalid_contest_id: "Identificator de olimpiadă greșit.",
