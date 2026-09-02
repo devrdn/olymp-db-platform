@@ -101,3 +101,31 @@
   height: 0;
   pointer-events: none;
 }
+
+/*
+ * The editable surface fills the box.
+ *
+ * Without this the box is as tall as it was told to be and `.ProseMirror` is
+ * as tall as its text, so everything below the last line is dead: clicking
+ * there lands on the wrapper, not on the thing that takes a caret. An author
+ * with a two-line story sees a large empty rectangle, clicks in the middle of
+ * it, and nothing happens — which reads exactly like an editor that does not
+ * work, and was reported as one.
+ *
+ * A flex column rather than `min-height: 100%`, because a percentage needs a
+ * definite height to resolve against and the closed editor only has a minimum.
+ */
+[data-editor-host] {
+  display: flex;
+  flex-direction: column;
+}
+
+[data-editor-host] > .milkdown {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+[data-editor-host] .ProseMirror {
+  flex: 1;
+}
