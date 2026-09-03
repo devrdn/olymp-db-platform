@@ -78,7 +78,7 @@ export default async function UsersPage(props: PageProps<"/users">) {
           server component renders, so navigating to another page of results
           starts the pick over rather than carrying it along. */}
       <SelectionProvider>
-        <SelectionBar dict={dict} />
+        <SelectionBar dict={dict} roles={roles} />
 
         <AccountRegister
           accounts={items}

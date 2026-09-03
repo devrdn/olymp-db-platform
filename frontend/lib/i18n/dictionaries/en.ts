@@ -501,6 +501,67 @@ const en = {
       pickPage: "Select the whole page",
       count: "{n} selected",
       clear: "Clear selection",
+      /**
+       * The actions a selection offers, and the outcome of running one.
+       *
+       * A skip reason is a closed vocabulary the server publishes
+       * (`SKIP_REASONS` in `lib/api/accounts-terms.ts`); a code this build does
+       * not name yet is shown as-is rather than dropped, which is why the
+       * lookup that reads `reason` below falls back to the raw string.
+       */
+      bulk: {
+        block: "Block",
+        unblock: "Unblock",
+        delete: "Delete",
+        roles: "Roles",
+        resetPassword: "Reset passwords",
+        tooMany: "That is more than one operation can take (at most {n}). Narrow the selection.",
+        cancel: "Cancel",
+        confirm: "Confirm",
+        submitting: "Working",
+        reasonLabel: "Reason",
+        blockDialog: {
+          title: "Block {n} accounts",
+          description: "A blocked account cannot sign in, and its open sessions end at once.",
+        },
+        unblockDialog: {
+          title: "Unblock {n} accounts",
+          description: "Accounts that are not blocked are left untouched.",
+        },
+        deleteDialog: {
+          title: "Delete {n} accounts",
+          description:
+            "The row stays for the record — results and the audit trail are untouched — and its login is freed at once.",
+        },
+        rolesDialog: {
+          title: "Change roles for {n} accounts",
+          description:
+            "Replaces the role set on every selected account with exactly what is checked here.",
+          submit: "Replace roles",
+        },
+        resetDialog: {
+          title: "Reset passwords for {n} accounts",
+          description:
+            "Issues a fresh one-time password for every selected account and ends its open sessions.",
+          submit: "Issue passwords",
+          issued: "New passwords",
+          handover: "Hand each one over to its owner. Shown once and cannot be retrieved again.",
+          copy: "Copy",
+          copied: "Copied",
+        },
+        changed: "{n} changed",
+        skipped: "{n} skipped",
+        done: "Done",
+        reason: {
+          not_found: "no longer exists",
+          self: "that is your own account",
+          last_administrator: "the last administrator",
+          already_in_status: "already in that state",
+          deleted: "deleted",
+          login_taken: "the login is now taken",
+          email_taken: "the email is now taken",
+        },
+      },
     },
     search: "Login, name or email",
     filter: "Show",
@@ -685,6 +746,8 @@ const en = {
     forbidden: "You do not have the rights for this action.",
     last_administrator: "This would leave the installation with nobody able to manage accounts. Give another account the administrator role first.",
     cannot_act_on_self: "This action cannot be applied to yourself.",
+    reason_required: "Enter a reason.",
+    too_many_accounts: "That is more accounts than one operation can take. Narrow the selection.",
     owner_immutable: "A contest owner cannot be removed.",
     address_not_allowed: "Access is allowed only from the university network.",
     invalid_transition: "That transition is not possible from the current state.",
