@@ -696,6 +696,8 @@ const ru = {
       "user.update": "Изменил учётную запись",
       "user.block": "Заблокировал учётную запись",
       "user.unblock": "Разблокировал учётную запись",
+      "user.delete": "Удалил учётную запись",
+      "user.restore": "Восстановил учётную запись",
       "user.roles_change": "Изменил роли учётной записи",
       "user.password_reset": "Сбросил пароль",
       "user.password_change": "Сменил свой пароль",
@@ -719,6 +721,7 @@ const ru = {
       "participant.disqualify": "Дисквалифицировал участника",
       "participant.enroll": "Записался на олимпиаду",
       "contest.access_denied": "Отклонён сетевым ограничением",
+      "settings.change": "Изменил настройки установки",
     },
   },
   screens: {
