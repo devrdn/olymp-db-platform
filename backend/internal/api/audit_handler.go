@@ -35,11 +35,17 @@ func NewAuditHandler(trail audit.Reader, mw *auth.Middleware, log *slog.Logger) 
 	return &AuditHandler{trail: trail, mw: mw, log: log}
 }
 
-// Mount registers the route under /audit.
+// Mount registers the route under /audit, and the action catalogue beside it.
 func (h *AuditHandler) Mount(r chi.Router) {
 	r.Route("/audit", func(r chi.Router) {
 		r.Use(h.mw.Authenticate, h.mw.RequirePermission(rbac.PermissionAuditView))
 		r.Get("/", h.list)
+		// A sibling of the trail rather than a value folded into it: it
+		// describes what this installation can record, not a page of what it
+		// has recorded, so the filter can offer the whole vocabulary before a
+		// single matching entry is on screen. Same permission as the trail
+		// itself — the roles catalogue beside /users is the same idea.
+		r.Get("/actions", h.listActions)
 	})
 }
 
@@ -65,6 +71,20 @@ type AuditEntryResponse struct {
 type auditListResponse struct {
 	Items []AuditEntryResponse `json:"items"`
 	Total int                  `json:"total"`
+}
+
+type auditActionsResponse struct {
+	Items []string `json:"items"`
+}
+
+// listActions publishes the vocabulary the trail can be filtered by.
+//
+// Read from audit.Actions() rather than built from the rows on the current
+// page: a filter offering only what is already on screen can never find a
+// deletion, say, until one happens to be in view — which is the defect this
+// endpoint exists to close.
+func (h *AuditHandler) listActions(w http.ResponseWriter, r *http.Request) {
+	httpx.JSON(w, r, http.StatusOK, auditActionsResponse{Items: audit.Actions()})
 }
 
 func (h *AuditHandler) list(w http.ResponseWriter, r *http.Request) {
@@ -127,6 +147,14 @@ func auditFilter(r *http.Request) (audit.Filter, error) {
 		filter.Actor = actor
 	}
 
+	// A code that names no action would otherwise return an empty page —
+	// indistinguishable from a real search that matched nothing — for what is
+	// usually a typo in the address bar. Refused instead, the same way an
+	// unparseable actor is.
+	if filter.Action != "" && !audit.IsAction(filter.Action) {
+		return audit.Filter{}, errInvalidAction
+	}
+
 	var err error
 	if filter.From, err = auditTime(query.Get("from")); err != nil {
 		return audit.Filter{}, err
@@ -149,9 +177,14 @@ func auditTime(value string) (*time.Time, error) {
 	return &utc, nil
 }
 
-// The two ways a query can be malformed, named so the message the client sees
-// is written once.
+// The ways a query can be malformed, named so the message the client sees is
+// written once.
 var (
-	errInvalidActor  = errors.New("actor must be a UUID")
+	errInvalidActor = errors.New("actor must be a UUID")
+	// errInvalidAction is a filter naming a code audit.IsAction does not
+	// recognise. The same sentinel a service would return, here because the
+	// check itself is a query-parameter validation the handler owns rather
+	// than a rule any service enforces.
+	errInvalidAction = errors.New("action is not one this installation records")
 	errInvalidWindow = errors.New("from and to must be RFC 3339 timestamps")
 )

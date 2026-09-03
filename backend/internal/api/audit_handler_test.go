@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -165,6 +166,77 @@ func TestAMalformedTimeIsABadRequest(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAnUnknownActionIsABadRequest(t *testing.T) {
+	// Without this, a typo in the address bar returns an empty page — the
+	// same answer as a real search that matched nothing — and the person
+	// filtering has no way to tell the two apart.
+	router, cookie := newAuditFixture(t, &stubTrail{}, rbac.PermissionAuditView)
+
+	rec := getAudit(t, router, cookie, "/audit?action=user.evaporate")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAKnownActionFiltersTheQuery(t *testing.T) {
+	trail := &stubTrail{}
+	router, cookie := newAuditFixture(t, trail, rbac.PermissionAuditView)
+
+	rec := getAudit(t, router, cookie, "/audit?action=user.delete")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if trail.asked.Action != "user.delete" {
+		t.Errorf("action = %q, want it to reach the query", trail.asked.Action)
+	}
+}
+
+func TestActionsEndpointPublishesTheWholeVocabulary(t *testing.T) {
+	// The interface has to offer every action the server can record, not only
+	// the ones on the current page — a filter that can only find what is
+	// already found is not a filter (this is the same idea as /roles beside
+	// /users).
+	router, cookie := newAuditFixture(t, &stubTrail{}, rbac.PermissionAuditView)
+
+	rec := getAudit(t, router, cookie, "/audit/actions")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Items []string `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if len(body.Items) != len(audit.Actions()) {
+		t.Fatalf("items = %d, want %d (the whole of audit.Actions())", len(body.Items), len(audit.Actions()))
+	}
+	found := false
+	for _, item := range body.Items {
+		if item == "user.delete" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the catalogue does not name user.delete")
+	}
+}
+
+func TestActionsEndpointIsClosedWithoutThePermission(t *testing.T) {
+	// Which actions exist is read alongside the trail itself, so it is
+	// refused to the same audience.
+	router, cookie := newAuditFixture(t, &stubTrail{})
+
+	rec := getAudit(t, router, cookie, "/audit/actions")
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 (%s)", rec.Code, rec.Body.String())
 	}
 }
 

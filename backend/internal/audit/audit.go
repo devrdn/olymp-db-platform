@@ -67,6 +67,60 @@ const (
 	ActionSettingsChange = "settings.change"
 )
 
+// actions lists every action code declared above.
+//
+// This is the list audit_test.go's TestEveryActionIsListed reads audit.go's
+// own source to check against: a constant added to the block above without
+// being added here is exactly the omission that left `user.delete` reaching
+// the trail with no wording in any language and no way for the filter to
+// offer it.
+var actions = []string{
+	ActionAuthLogin, ActionAuthLoginFailed, ActionAuthLogout,
+	ActionUserCreate, ActionUserUpdate, ActionUserBlock, ActionUserUnblock,
+	ActionUserDelete, ActionUserRestore, ActionUserRolesChange,
+	ActionUserPasswordReset, ActionPasswordChange,
+
+	ActionContestCreate, ActionContestUpdate, ActionContestDelete,
+	ActionContestStatusChange, ActionContestLanguages, ActionContestTranslations,
+	ActionContestPolicyChange, ActionContestStoryChange, ActionQuestionCreate,
+	ActionQuestionUpdate, ActionQuestionDelete, ActionQuestionReorder,
+	ActionAnswersChange, ActionManagerGrant, ActionManagerRevoke,
+
+	ActionParticipantAdd, ActionParticipantRemove, ActionParticipantDisqualify,
+	ActionParticipantEnroll, ActionContestAccessDenied,
+
+	ActionSettingsChange,
+}
+
+// actionSet backs IsAction. Built once from actions rather than kept as a
+// second hand-written list, so the two cannot say something different.
+var actionSet = func() map[string]struct{} {
+	set := make(map[string]struct{}, len(actions))
+	for _, a := range actions {
+		set[a] = struct{}{}
+	}
+	return set
+}()
+
+// Actions lists every action this installation can record.
+//
+// Enumerable so the layers above do not have to be trusted to keep up: the
+// HTTP layer serves this to the filter so it can offer the whole vocabulary
+// rather than whatever happens to be on the current page, and validates an
+// ?action= filter against it rather than silently returning an empty page for
+// a code that was never real. The interface translates each of these in
+// every language it speaks, checked by a test of its own.
+func Actions() []string {
+	return append([]string(nil), actions...)
+}
+
+// IsAction reports whether code names a real action, for validating a filter
+// before it reaches the query.
+func IsAction(code string) bool {
+	_, ok := actionSet[code]
+	return ok
+}
+
 // MaxUserAgentLength bounds a header the client controls. The column is kept
 // for a year, so an unbounded value is storage someone else gets to spend.
 const MaxUserAgentLength = 512

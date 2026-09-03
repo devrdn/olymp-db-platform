@@ -2,6 +2,8 @@ package audit
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -270,4 +272,89 @@ func TestRecordManyPropagatesAStorageFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("RecordMany() hid a storage failure")
 	}
+}
+
+// TestEveryActionIsListed reads audit.go's own source and checks every
+// `ActionXxx = "..."` constant it declares against Actions().
+//
+// A test that instead repeated the 30-odd strings by hand would prove
+// nothing: it would drift the same way Actions() itself could, and the two
+// hand-kept lists would agree right up until the day a reviewer approved a
+// change that touched only one of them. Reading the source is what makes a
+// constant declared and not enumerated a build failure instead of a support
+// ticket — which is exactly the gap that left `user.delete` and
+// `user.restore` reaching the trail with no wording and no way for the
+// filter to find them.
+func TestEveryActionIsListed(t *testing.T) {
+	source := readSource(t, "audit.go")
+
+	listed := make(map[string]bool, len(Actions()))
+	for _, action := range Actions() {
+		listed[action] = true
+	}
+
+	for _, line := range strings.Split(source, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "Action") {
+			continue
+		}
+		name, rest, ok := strings.Cut(trimmed, " = ")
+		if !ok {
+			continue
+		}
+		value := strings.Trim(strings.TrimSpace(rest), `"`)
+		if !listed[value] {
+			t.Errorf("%s (%q) is declared but not returned by Actions()", name, value)
+		}
+	}
+}
+
+// TestActionsHasNoStrayEntry is the other direction: everything Actions()
+// returns is backed by a real constant. Without it, a typo or a removed
+// constant left behind in the actions slice would validate an ?action=
+// filter for a code the trail can never actually carry.
+func TestActionsHasNoStrayEntry(t *testing.T) {
+	source := readSource(t, "audit.go")
+
+	declared := make(map[string]bool)
+	for _, line := range strings.Split(source, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "Action") {
+			continue
+		}
+		_, rest, ok := strings.Cut(trimmed, " = ")
+		if !ok {
+			continue
+		}
+		declared[strings.Trim(strings.TrimSpace(rest), `"`)] = true
+	}
+
+	for _, action := range Actions() {
+		if !declared[action] {
+			t.Errorf("Actions() returns %q, which no constant in audit.go declares", action)
+		}
+	}
+}
+
+func TestIsActionAcceptsEveryDeclaredActionAndNothingElse(t *testing.T) {
+	if IsAction("") {
+		t.Error(`IsAction("") = true, want false`)
+	}
+	if IsAction("user.evaporate") {
+		t.Error(`IsAction("user.evaporate") = true, want false`)
+	}
+	for _, action := range Actions() {
+		if !IsAction(action) {
+			t.Errorf("IsAction(%q) = false, want true", action)
+		}
+	}
+}
+
+func readSource(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatalf("reading %s: %v", name, err)
+	}
+	return string(data)
 }

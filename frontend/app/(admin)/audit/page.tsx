@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 
 import { Band } from "@/components/layout/band";
-import { auditPageSchema, auditSearch, dayBounds } from "@/lib/api/audit";
+import { auditActionsSchema, auditPageSchema, auditSearch, dayBounds } from "@/lib/api/audit";
 import { serverRequest } from "@/lib/api/server";
 import { authRecoveryRedirect } from "@/lib/auth/guard";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
@@ -22,9 +22,13 @@ export async function generateMetadata() {
  * in the address, which makes a view shareable — "here is every refusal from
  * that address on Tuesday" is a link.
  *
- * The action list offered by the filter is built from the page in hand rather
- * than from a fixed list, so it never offers a choice that would return
- * nothing, and a code added on the server appears here without a change.
+ * The action list offered by the filter is fetched beside the trail
+ * (`GET /audit/actions`) rather than built from the rows in hand — the
+ * accounts screen fetches its role catalogue beside `/users` for the same
+ * reason. A list built from the current page can only ever offer an action
+ * already on screen, which made a deletion unfilterable until one happened to
+ * appear by accident; the endpoint offers the whole vocabulary before a
+ * single matching entry exists.
  */
 export default async function AuditPage(props: PageProps<"/audit">) {
   const [params, locale, dict] = await Promise.all([
@@ -50,16 +54,28 @@ export default async function AuditPage(props: PageProps<"/audit">) {
     return shown.size > 0 ? `/audit?${shown}` : "/audit";
   };
 
-  // The proxy could only see that a session cookie exists; whether it is still
-  // worth anything is this answer.
-  const payload = await serverRequest(`/audit?${search}`).catch((error: unknown) => {
+  // The proxy could only see that a session cookie exists; whether it is
+  // still worth anything is this answer.
+  //
+  // Both requests together: they render one screen, and a page whose filter
+  // could only name the actions on it would be no better than the bug this
+  // replaces.
+  const onAuthFailure = (error: unknown) => {
     const target = authRecoveryRedirect(error, here());
     if (target) redirect(target);
     throw error;
-  });
+  };
+  const [payload, actionsPayload] = await Promise.all([
+    serverRequest(`/audit?${search}`).catch(onAuthFailure),
+    serverRequest(`/audit/actions`).catch(onAuthFailure),
+  ]);
 
   const { items, total } = auditPageSchema.parse(payload);
-  const actions = [...new Set(items.map((entry) => entry.action))].sort();
+  // Sorted for the dropdown; the server's own order is grouped by domain
+  // (auth, then accounts, then contests…), which reads well in source but not
+  // as a pick list.
+  const { items: actions } = auditActionsSchema.parse(actionsPayload);
+  actions.sort();
 
   const pageHref = (next: number) => {
     const shown = new URLSearchParams();
