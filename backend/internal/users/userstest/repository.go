@@ -74,6 +74,17 @@ func (r *Repository) ByLogin(_ context.Context, login string) (users.User, error
 	if r.Err != nil {
 		return users.User{}, r.Err
 	}
+	// The real repository resolves this through the partial unique index on
+	// lower(login), which guarantees at most one non-deleted row per login: a
+	// deleted account has released it. Map iteration order is undefined, so
+	// once a login has been deleted and recreated this must prefer the live
+	// row deliberately rather than by whichever row the range happens to visit
+	// first.
+	for _, u := range r.byID {
+		if u.Status != users.StatusDeleted && strings.EqualFold(u.Login, login) {
+			return r.withPermissions(u), nil
+		}
+	}
 	for _, u := range r.byID {
 		if strings.EqualFold(u.Login, login) {
 			return r.withPermissions(u), nil

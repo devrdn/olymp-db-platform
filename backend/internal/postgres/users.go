@@ -178,13 +178,24 @@ func (r *Users) UpdateProfile(ctx context.Context, id uuid.UUID, fullName, email
 }
 
 // SetStatus moves the named accounts to the status.
+//
+// A missing id is not reported as an error: it is silently skipped instead of
+// returning users.ErrNotFound the way the single-row exec helper does. This
+// method has no such helper to fall back on because the coming bulk path
+// resolves the accounts before writing and reports a missing one as a skip in
+// its own result, not as a failure of the write; the caller is the one
+// positioned to say which id was missing, this method only knows how many
+// rows an UPDATE touched.
 func (r *Users) SetStatus(ctx context.Context, ids []uuid.UUID, status string, change users.StatusChange) error {
 	_, err := r.querier(ctx).Exec(ctx, `
 		UPDATE users
 		SET status = $2, status_reason = $3, status_changed_at = $4,
 		    status_changed_by = $5, updated_at = now()
 		WHERE id = ANY($1)`,
-		ids, status, nullIfEmpty(change.Reason), change.At, change.By)
+		// A nil By means the system made the change, not a missing user — write
+		// NULL rather than uuid.Nil, or the foreign key on status_changed_by
+		// raises a raw constraint violation instead of the actor being absent.
+		ids, status, nullIfEmpty(change.Reason), change.At, nullIfEmptyUUID(change.By))
 	if err != nil {
 		return fmt.Errorf("set account status: %w", mapUserConstraint(err))
 	}
@@ -291,6 +302,16 @@ func (r *Users) ReplaceRoles(ctx context.Context, id uuid.UUID, roleCodes []stri
 			len(roleCodes)-int(tag.RowsAffected()), len(roleCodes))
 	}
 	return nil
+}
+
+// nullIfEmptyUUID stores NULL rather than the zero UUID, so a system-initiated
+// status change leaves status_changed_by absent instead of tripping its
+// foreign key to users.
+func nullIfEmptyUUID(id uuid.UUID) *uuid.UUID {
+	if id == uuid.Nil {
+		return nil
+	}
+	return &id
 }
 
 // mapUserConstraint translates a unique violation into the sentinel the
