@@ -68,6 +68,35 @@ func TestBulkBlockKeepsOneAdministrator(t *testing.T) {
 	if res.Skipped[0].Reason != users.SkipLastAdministrator {
 		t.Errorf("Skipped[0].Reason = %q, want %q", res.Skipped[0].Reason, users.SkipLastAdministrator)
 	}
+	// The property the two-phase design exists to protect: the budget is
+	// still spent from a single count of the whole selection, not one count
+	// per candidate, even now that fetching it is lazy.
+	if f.repo.CountActiveWithRoleCalls != 1 {
+		t.Errorf("CountActiveWithRoleCalls = %d, want 1", f.repo.CountActiveWithRoleCalls)
+	}
+}
+
+// TestBulkStatusNeverAsksForTheAdministratorBudgetWhenNothingCanSpendIt
+// guards the laziness itself: a selection that turns out to hold no active
+// administrator must never cost the count query at all, which is only true
+// if fetching it happens on first spend rather than up front.
+func TestBulkStatusNeverAsksForTheAdministratorBudgetWhenNothingCanSpendIt(t *testing.T) {
+	f := newBulkFixture(t)
+	target := f.createUser(t, "ivanov")
+	missing := uuid.New()
+
+	res, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+		[]uuid.UUID{target.ID, missing}, users.StatusBlocked, "sweep")
+	if err != nil {
+		t.Fatalf("BulkSetStatus() returned error: %v", err)
+	}
+
+	if len(res.Changed) != 1 || res.Changed[0] != target.ID {
+		t.Fatalf("Changed = %v, want [%v]", res.Changed, target.ID)
+	}
+	if f.repo.CountActiveWithRoleCalls != 0 {
+		t.Errorf("CountActiveWithRoleCalls = %d, want 0: neither account holds admin, so the budget should never be fetched", f.repo.CountActiveWithRoleCalls)
+	}
 }
 
 func TestBulkStatusSkipsRatherThanFails(t *testing.T) {
@@ -193,6 +222,85 @@ func TestBulkBlockReportsAnEmailCollisionAsEmailTaken(t *testing.T) {
 
 	if len(res.Skipped) != 1 || res.Skipped[0].Reason != users.SkipEmailTaken {
 		t.Fatalf("Skipped = %+v, want one entry with reason %q", res.Skipped, users.SkipEmailTaken)
+	}
+}
+
+// TestBulkBlockSkipsASecondDeletedAccountSharingAReclaimedLogin guards the
+// case TakenAmong cannot see: it only compares a deleted account against a
+// LIVE one, but the partial unique indexes (WHERE status <> 'deleted') let
+// many deleted rows share a login freely — exactly what "delete ivanov,
+// create ivanov, delete again" produces. The moment both leave "deleted" in
+// the same selection, the second one to apply collides with the first, and
+// that must skip the second account rather than trip the constraint and
+// abort the whole batch.
+func TestBulkBlockSkipsASecondDeletedAccountSharingAReclaimedLogin(t *testing.T) {
+	f := newBulkFixture(t)
+	first := f.createUser(t, "ivanov")
+	// A second account that only exists because "ivanov" was deleted and
+	// then recreated; the in-memory repository's Add, unlike Create, does not
+	// enforce login uniqueness, so this mirrors that history directly.
+	second := f.addUser(t, "ivanov", "some password")
+	other := f.createUser(t, "unrelated")
+
+	if _, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+		[]uuid.UUID{first.ID, second.ID}, users.StatusDeleted, "left"); err != nil {
+		t.Fatalf("BulkSetStatus() deleting = %v", err)
+	}
+
+	res, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+		[]uuid.UUID{first.ID, second.ID, other.ID}, users.StatusBlocked, "sweep")
+	if err != nil {
+		t.Fatalf("BulkSetStatus() returned error: %v", err)
+	}
+
+	changed := map[uuid.UUID]bool{}
+	for _, id := range res.Changed {
+		changed[id] = true
+	}
+	if !changed[first.ID] || !changed[other.ID] {
+		t.Fatalf("Changed = %v, want %v and %v: the first account named and the rest of the batch must still apply", res.Changed, first.ID, other.ID)
+	}
+	if changed[second.ID] {
+		t.Fatalf("Changed = %v, the second account sharing the login must not have applied", res.Changed)
+	}
+	reasons := map[uuid.UUID]string{}
+	for _, s := range res.Skipped {
+		reasons[s.ID] = s.Reason
+	}
+	if reasons[second.ID] != users.SkipLoginTaken {
+		t.Errorf("reason for the second reclaimed login = %q, want %q", reasons[second.ID], users.SkipLoginTaken)
+	}
+	if live, ok := f.repo.Get(second.ID); !ok || live.Status != users.StatusDeleted {
+		t.Errorf("the second account must stay deleted: %+v, ok=%v", live, ok)
+	}
+}
+
+// TestBulkBlockReportsLoginWhenBothLoginAndEmailCollide guards the
+// login-over-email precedence: when a deleted account's move would collide
+// on both fields at once, the login is reported because it is what an
+// administrator searches by. Every other test in this file sets exactly one
+// of the two flags, so this is the only one that would catch the switch
+// arms in BulkSetStatus's TakenAmong fold being swapped.
+func TestBulkBlockReportsLoginWhenBothLoginAndEmailCollide(t *testing.T) {
+	f := newBulkFixture(t)
+	gone := f.repo.Add(users.User{
+		Login: "collide", Email: "shared@example.com", FullName: "Gone", PasswordHash: "x",
+	})
+	if _, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+		[]uuid.UUID{gone.ID}, users.StatusDeleted, "left"); err != nil {
+		t.Fatalf("BulkSetStatus() deleting = %v", err)
+	}
+	// A live account holding both the same login and the same email at once.
+	f.repo.Add(users.User{Login: "collide", Email: "shared@example.com", FullName: "Live", PasswordHash: "x"})
+
+	res, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+		[]uuid.UUID{gone.ID}, users.StatusBlocked, "sweep")
+	if err != nil {
+		t.Fatalf("BulkSetStatus() returned error: %v", err)
+	}
+
+	if len(res.Skipped) != 1 || res.Skipped[0].Reason != users.SkipLoginTaken {
+		t.Fatalf("Skipped = %+v, want one entry with reason %q", res.Skipped, users.SkipLoginTaken)
 	}
 }
 
