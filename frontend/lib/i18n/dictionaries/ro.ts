@@ -479,6 +479,16 @@ const ro = {
       handover: "Predați-o proprietarului. Se afișează o singură dată și nu mai poate fi recuperată.",
       created: "Creat",
       back: "← Toate conturile",
+      delete: "Ștergeți",
+      deleteNote:
+        "Un cont șters nu se poate autentifica, sesiunile deschise se încheie imediat, iar login-ul și e-mailul sunt eliberate pentru reutilizare.",
+      restore: "Restaurați",
+      restoreNote:
+        "Readuce contul la starea activă. Poate eșua dacă un alt cont a preluat între timp login-ul sau e-mailul.",
+      reasonLabel: "Motiv",
+      statusTitle: "Notă de stare",
+      changedBy: "Modificat de {name}, {date}.",
+      unknownActor: "un administrator care nu mai este în listă",
     },
     columns: {
       index: "nr.",
@@ -557,7 +567,10 @@ const ro = {
     },
     search: "Utilizator, nume sau e-mail",
     filter: "Afișează",
-    anyStatus: "Orice stare",
+    // O stare goală nu înseamnă „toate conturile” — serverul o citește ca
+    // „toate, cu excepția celor șterse” (`users.Filter`), așa că eticheta
+    // trebuie să spună exact asta, nu „toate”, excluzând tăcut o categorie.
+    anyStatus: "Toate, cu excepția celor șterse",
     searching: "Se caută",
     apply: "Caută",
     empty: {

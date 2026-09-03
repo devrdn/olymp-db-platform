@@ -63,6 +63,32 @@ describe("accountSchema", () => {
 
     expect(account.status).toBe("deleted");
   });
+
+  test("carries what explains a status change, when there was one", () => {
+    const account = accountSchema.parse({
+      ...wire,
+      status: "blocked",
+      status_reason: "cheating in the October contest",
+      status_changed_at: "2026-03-02T09:00:00Z",
+      status_changed_by: "9a1f0c3e-2b44-4e77-8d0a-1c5b8e91a4d6",
+    });
+
+    expect(account.statusReason).toBe("cheating in the October contest");
+    expect(account.statusChangedAt).toBe("2026-03-02T09:00:00Z");
+    expect(account.statusChangedBy).toBe("9a1f0c3e-2b44-4e77-8d0a-1c5b8e91a4d6");
+  });
+
+  test("reads an empty reason rather than an absent one, for an account nobody has touched", () => {
+    // The three fields are omitted on the wire (see `UserResponse` in
+    // `backend/internal/api/users_handler.go`), and the account card gates its
+    // status panel on `statusReason` being non-empty — a string it can always
+    // compare, not an optional it must first check for presence.
+    const account = accountSchema.parse(wire);
+
+    expect(account.statusReason).toBe("");
+    expect(account.statusChangedAt).toBeUndefined();
+    expect(account.statusChangedBy).toBeUndefined();
+  });
 });
 
 describe("accountListSchema", () => {
