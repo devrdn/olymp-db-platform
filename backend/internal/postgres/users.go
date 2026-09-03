@@ -24,6 +24,7 @@ const uniqueViolation = "23505"
 // one place and the scan order cannot drift between queries.
 const userColumns = `
 	u.id, u.login, COALESCE(u.email, ''), u.password_hash, u.full_name, u.status,
+	COALESCE(u.status_reason, ''), u.status_changed_at, u.status_changed_by,
 	u.session_generation, u.must_change_password, u.password_changed_at,
 	u.last_login_at, u.created_at, u.updated_at,
 	COALESCE(ARRAY(
@@ -64,6 +65,7 @@ func scanUser(row pgx.Row) (users.User, error) {
 	var u users.User
 	err := row.Scan(
 		&u.ID, &u.Login, &u.Email, &u.PasswordHash, &u.FullName, &u.Status,
+		&u.StatusReason, &u.StatusChangedAt, &u.StatusChangedBy,
 		&u.SessionGeneration, &u.MustChangePassword, &u.PasswordChangedAt,
 		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Roles, &u.Permissions,
 	)
@@ -127,11 +129,14 @@ func (r *Users) List(ctx context.Context, f users.Filter) ([]users.User, int, er
 
 	// The filter is passed as parameters, never interpolated: the search box is
 	// user input reaching a query.
+	//
+	// An empty status means the register an administrator reads, which is not
+	// "every row": a deleted account appears only when asked for by name.
 	const where = `
 		WHERE ($1 = '' OR u.login ILIKE '%' || $1 || '%'
 		            OR u.full_name ILIKE '%' || $1 || '%'
 		            OR COALESCE(u.email, '') ILIKE '%' || $1 || '%')
-		  AND ($2 = '' OR u.status = $2)`
+		  AND (CASE WHEN $2 = '' THEN u.status <> 'deleted' ELSE u.status = $2 END)`
 
 	var total int
 	if err := q.QueryRow(ctx, `SELECT count(*) FROM users u`+where, needle, f.Status).Scan(&total); err != nil {
@@ -172,9 +177,18 @@ func (r *Users) UpdateProfile(ctx context.Context, id uuid.UUID, fullName, email
 		id, fullName, emailValue)
 }
 
-// SetStatus blocks or unblocks an account.
-func (r *Users) SetStatus(ctx context.Context, id uuid.UUID, status string) error {
-	return r.exec(ctx, `UPDATE users SET status = $2, updated_at = now() WHERE id = $1`, id, status)
+// SetStatus moves the named accounts to the status.
+func (r *Users) SetStatus(ctx context.Context, ids []uuid.UUID, status string, change users.StatusChange) error {
+	_, err := r.querier(ctx).Exec(ctx, `
+		UPDATE users
+		SET status = $2, status_reason = $3, status_changed_at = $4,
+		    status_changed_by = $5, updated_at = now()
+		WHERE id = ANY($1)`,
+		ids, status, nullIfEmpty(change.Reason), change.At, change.By)
+	if err != nil {
+		return fmt.Errorf("set account status: %w", mapUserConstraint(err))
+	}
+	return nil
 }
 
 // SetPassword stores a new digest.

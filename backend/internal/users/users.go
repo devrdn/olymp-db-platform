@@ -18,6 +18,11 @@ import (
 const (
 	StatusActive  = "active"
 	StatusBlocked = "blocked"
+	// StatusDeleted is an account an administrator has removed. The row stays
+	// so results and the audit trail keep their subject; the account cannot
+	// sign in, does not count as an administrator, and no longer holds its
+	// login.
+	StatusDeleted = "deleted"
 )
 
 // Bounds on what an account's descriptive fields may hold.
@@ -59,7 +64,7 @@ var (
 // Statuses is every state an account can be in, for validating a filter
 // against something other than a comment. It mirrors the CHECK constraint on
 // the column, which remains the real guarantee.
-var Statuses = []string{StatusActive, StatusBlocked}
+var Statuses = []string{StatusActive, StatusBlocked, StatusDeleted}
 
 // User is an account.
 type User struct {
@@ -68,6 +73,12 @@ type User struct {
 	Email    string
 	FullName string
 	Status   string
+	// StatusReason is why the account is in its current status, as the
+	// administrator who put it there wrote it. Empty for an account nobody has
+	// blocked or deleted.
+	StatusReason    string
+	StatusChangedAt *time.Time
+	StatusChangedBy *uuid.UUID
 	// PasswordHash is the argon2id digest. It never leaves the server and is
 	// stripped from anything the API returns.
 	PasswordHash string
@@ -89,6 +100,16 @@ type User struct {
 // IsActive reports whether the account may authenticate.
 func (u User) IsActive() bool { return u.Status == StatusActive }
 
+// StatusChange is the account of a status change: why, by whom, when.
+//
+// It travels with the new status rather than beside it so that storage cannot
+// record a status without recording what explains it.
+type StatusChange struct {
+	Reason string
+	By     uuid.UUID
+	At     time.Time
+}
+
 // Repository is the storage the service needs.
 type Repository interface {
 	// ByLogin resolves an account by its login, case-insensitively. It returns
@@ -101,8 +122,10 @@ type Repository interface {
 	List(ctx context.Context, f Filter) ([]User, int, error)
 	// UpdateProfile changes the mutable descriptive fields.
 	UpdateProfile(ctx context.Context, id uuid.UUID, fullName, email string) error
-	// SetStatus blocks or unblocks an account.
-	SetStatus(ctx context.Context, id uuid.UUID, status string) error
+	// SetStatus moves every named account to the status, recording what
+	// explains the move. One method rather than a single and a batch one: the
+	// single-account path passes a slice of one, so the two cannot drift.
+	SetStatus(ctx context.Context, ids []uuid.UUID, status string, change StatusChange) error
 	// SetPassword stores a new digest and clears the one-time-password flag.
 	SetPassword(ctx context.Context, id uuid.UUID, hash string, mustChange bool) error
 	// BumpSessionGeneration retires every session issued for the account and

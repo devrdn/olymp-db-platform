@@ -112,7 +112,7 @@ func TestAuthenticateRejectsABlockedAccountHoldingAValidSession(t *testing.T) {
 	// Blocking has to take effect on the next request, not when the session
 	// happens to expire.
 	f := newMiddlewareFixture(t, staticRoles{})
-	_ = f.repo.SetStatus(context.Background(), f.user.ID, users.StatusBlocked)
+	_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusBlocked, users.StatusChange{})
 	rec := httptest.NewRecorder()
 
 	f.mw.Authenticate(http.HandlerFunc(okHandler)).ServeHTTP(rec, authed(f.token))
@@ -124,7 +124,7 @@ func TestAuthenticateRejectsABlockedAccountHoldingAValidSession(t *testing.T) {
 
 func TestBlockedAccountLosesTheSessionEntirely(t *testing.T) {
 	f := newMiddlewareFixture(t, staticRoles{})
-	_ = f.repo.SetStatus(context.Background(), f.user.ID, users.StatusBlocked)
+	_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusBlocked, users.StatusChange{})
 
 	f.mw.Authenticate(http.HandlerFunc(okHandler)).ServeHTTP(httptest.NewRecorder(), authed(f.token))
 
