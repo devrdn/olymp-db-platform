@@ -496,6 +496,12 @@ const en = {
     handoverPending: "handover password",
     never: "never",
     noRoles: "none",
+    selection: {
+      pickAccount: "Select {name}",
+      pickPage: "Select the whole page",
+      count: "{n} selected",
+      clear: "Clear selection",
+    },
     search: "Login, name or email",
     filter: "Show",
     anyStatus: "Any state",

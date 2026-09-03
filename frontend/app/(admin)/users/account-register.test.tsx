@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { render, screen, within } from "@testing-library/react";
 import { beforeAll, describe, expect, test } from "vitest";
 
@@ -5,12 +6,20 @@ import type { Account, Role } from "@/lib/api/accounts";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
 import { AccountRegister } from "./account-register";
+import { SelectionProvider } from "./selection";
 
 let en: Dictionary;
 
 beforeAll(async () => {
   en = await getDictionary("en");
 });
+
+// The register now renders a RowCheckbox and a SelectAllCheckbox per row and
+// header, both of which read the selection store from context — so every
+// render needs a provider, exactly as page.tsx supplies one in the real app.
+function renderRegister(ui: ReactElement) {
+  return render(<SelectionProvider>{ui}</SelectionProvider>);
+}
 
 const account = (over: Partial<Account> = {}): Account => ({
   id: "9a1f0c3e-2b44-4e77-8d0a-1c5b8e91a4d6",
@@ -41,7 +50,7 @@ const props = {
 
 describe("AccountRegister", () => {
   test("names the account and the person behind it", () => {
-    render(<AccountRegister accounts={[account()]} {...props} dict={en} />);
+    renderRegister(<AccountRegister accounts={[account()]} {...props} dict={en} />);
 
     const row = screen.getAllByRole("row")[1];
     expect(within(row).getByText("Sergiu Popescu")).toBeInTheDocument();
@@ -51,7 +60,7 @@ describe("AccountRegister", () => {
   test("shows a role by the name a person reads, not by its code", () => {
     // The codes are what authorisation works in. An administrator picking who
     // may do what should not have to know that "admin" is spelled that way.
-    render(<AccountRegister accounts={[account({ roles: ["admin"] })]} {...props} dict={en} />);
+    renderRegister(<AccountRegister accounts={[account({ roles: ["admin"] })]} {...props} dict={en} />);
 
     expect(screen.getByText("System administrator")).toBeInTheDocument();
   });
@@ -59,7 +68,7 @@ describe("AccountRegister", () => {
   test("falls back to the code for a role the catalogue does not name", () => {
     // A role added to the table while this page was open. Showing nothing
     // would say the account holds no role, which is a different and wrong fact.
-    render(<AccountRegister accounts={[account({ roles: ["dean"] })]} {...props} dict={en} />);
+    renderRegister(<AccountRegister accounts={[account({ roles: ["dean"] })]} {...props} dict={en} />);
 
     expect(screen.getByText("dean")).toBeInTheDocument();
   });
@@ -67,7 +76,7 @@ describe("AccountRegister", () => {
   test("says an account holds no role rather than leaving the cell blank", () => {
     // An empty cell reads as missing data. No roles at all is a real state and
     // worth stating — such an account can sign in and do nothing.
-    render(<AccountRegister accounts={[account({ roles: [] })]} {...props} dict={en} />);
+    renderRegister(<AccountRegister accounts={[account({ roles: [] })]} {...props} dict={en} />);
 
     expect(screen.getByText(en.accounts.noRoles)).toBeInTheDocument();
   });
@@ -75,7 +84,7 @@ describe("AccountRegister", () => {
   test("marks an account still carrying the password it was handed", () => {
     // The administrator who reset it needs to see who has not yet picked their
     // own — that is the difference between "handed over" and "in use".
-    render(
+    renderRegister(
       <AccountRegister accounts={[account({ mustChangePassword: true })]} {...props} dict={en} />,
     );
 
@@ -83,13 +92,13 @@ describe("AccountRegister", () => {
   });
 
   test("says an account has never signed in instead of showing an empty cell", () => {
-    render(<AccountRegister accounts={[account({ lastLoginAt: undefined })]} {...props} dict={en} />);
+    renderRegister(<AccountRegister accounts={[account({ lastLoginAt: undefined })]} {...props} dict={en} />);
 
     expect(screen.getByText(en.accounts.never)).toBeInTheDocument();
   });
 
   test("offers the way out of a filter that matched nothing", () => {
-    render(<AccountRegister accounts={[]} {...props} filtered dict={en} />);
+    renderRegister(<AccountRegister accounts={[]} {...props} filtered dict={en} />);
 
     expect(screen.getByText(en.accounts.empty.title)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: en.accounts.empty.reset })).toHaveAttribute(
@@ -101,7 +110,7 @@ describe("AccountRegister", () => {
   test("does not offer a reset when nothing has been created at all", () => {
     // There is no filter to clear, and a control that cannot help suggests the
     // emptiness is the reader's doing.
-    render(<AccountRegister accounts={[]} {...props} dict={en} />);
+    renderRegister(<AccountRegister accounts={[]} {...props} dict={en} />);
 
     expect(screen.getByText(en.accounts.emptyAll.title)).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: en.accounts.empty.reset })).not.toBeInTheDocument();
@@ -112,13 +121,19 @@ describe("AccountRegister", () => {
       account({ id: `id-${i}`, login: `user${i}` }),
     );
 
-    const { rerender } = render(
+    const { rerender } = renderRegister(
       <AccountRegister accounts={many} {...props} total={120} dict={en} />,
     );
     expect(screen.getByRole("link", { name: en.accounts.olderPage })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: en.accounts.newerPage })).not.toBeInTheDocument();
 
-    rerender(<AccountRegister accounts={many} {...props} total={120} offset={100} dict={en} />);
+    // `rerender` swaps the whole mounted tree, so the provider has to be
+    // re-supplied here too — it is not carried over from the first render.
+    rerender(
+      <SelectionProvider>
+        <AccountRegister accounts={many} {...props} total={120} offset={100} dict={en} />
+      </SelectionProvider>,
+    );
     expect(screen.getByRole("link", { name: en.accounts.newerPage })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: en.accounts.olderPage })).not.toBeInTheDocument();
   });

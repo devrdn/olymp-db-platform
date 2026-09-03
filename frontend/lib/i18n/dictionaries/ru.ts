@@ -491,6 +491,12 @@ const ru = {
     handoverPending: "выданный пароль",
     never: "никогда",
     noRoles: "нет",
+    selection: {
+      pickAccount: "Выбрать {name}",
+      pickPage: "Выбрать всю страницу",
+      count: "Выбрано: {n}",
+      clear: "Снять выбор",
+    },
     search: "Логин, имя или почта",
     filter: "Показать",
     anyStatus: "Любое состояние",
