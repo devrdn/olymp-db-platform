@@ -9,6 +9,13 @@ import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
+// Client components, imported into this server one. Importing a client
+// component does not itself pull `"use client"` onto this file — that
+// boundary already lives inside selection.tsx — so the register stays
+// server-rendered while the boxes it renders per row are the only client
+// code on the page.
+import { RowCheckbox, SelectAllCheckbox } from "./selection";
+
 /**
  * The accounts of the installation, as a register.
  *
@@ -97,6 +104,12 @@ export function AccountRegister({
           <table className="w-full min-w-lg border-collapse text-left narrow:min-w-3xl">
             <thead>
               <tr>
+                <th scope="col" className={cn(HEAD, "w-8 pr-0")}>
+                  <SelectAllCheckbox
+                    ids={accounts.map((account) => account.id)}
+                    label={t.selection.pickPage}
+                  />
+                </th>
                 <th scope="col" className={cn(HEAD, "w-10 pr-0 text-right")}>
                   {t.columns.index}
                 </th>
@@ -120,6 +133,13 @@ export function AccountRegister({
                   key={account.id}
                   className="transition-colors duration-(--t-input) ease-standard hover:bg-panel"
                 >
+                  <td className={cn(CELL, "w-8 pr-0 align-middle")}>
+                    <RowCheckbox
+                      id={account.id}
+                      label={t.selection.pickAccount.replace("{name}", account.fullName)}
+                    />
+                  </td>
+
                   <td className={cn(CELL, "pr-0 text-right font-mono text-data text-ink-3")}>
                     {String(offset + index + 1).padStart(2, "0")}
                   </td>
