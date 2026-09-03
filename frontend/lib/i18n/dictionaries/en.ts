@@ -517,6 +517,10 @@ const en = {
         resetPassword: "Reset passwords",
         tooMany: "That is more than one operation can take (at most {n}). Narrow the selection.",
         cancel: "Cancel",
+        // The corner X on a bulk dialog: a plain "close", never "cancel" —
+        // once a result is on screen, "cancel" reads as undoing what already
+        // happened.
+        close: "Close",
         confirm: "Confirm",
         submitting: "Working",
         reasonLabel: "Reason",
@@ -538,6 +542,14 @@ const en = {
           description:
             "Replaces the role set on every selected account with exactly what is checked here.",
           submit: "Replace roles",
+          // Shown only when the submit button is pressed with nothing
+          // ticked — a legitimate way to strip every role, but never as an
+          // accident behind a button that looks like it is only asking.
+          confirmEmptyTitle: "Remove every role?",
+          confirmEmptyBody:
+            "No role is checked. Continuing will remove every role from all {n} selected accounts.",
+          confirmEmptySubmit: "Remove all roles",
+          back: "Go back",
         },
         resetDialog: {
           title: "Reset passwords for {n} accounts",
@@ -548,6 +560,7 @@ const en = {
           handover: "Hand each one over to its owner. Shown once and cannot be retrieved again.",
           copy: "Copy",
           copied: "Copied",
+          none: "No password was reset.",
         },
         changed: "{n} changed",
         skipped: "{n} skipped",

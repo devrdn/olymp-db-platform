@@ -1,6 +1,13 @@
 "use client";
 
-import { createContext, useActionState, useContext, useState, useSyncExternalStore } from "react";
+import {
+  createContext,
+  useActionState,
+  useContext,
+  useEffect,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -259,9 +266,15 @@ function ActionDialog({
   triggerVariant: "secondary" | "danger";
   disabled: boolean;
   closeLabel: string;
-  children: (close: () => void) => React.ReactNode;
+  // `reportDismissible` lets the form inside say whether Escape, an outside
+  // click and the corner X may currently close this dialog — the form is the
+  // one that knows whether a request is pending or a result is on screen, so
+  // it is the one that decides, through this callback, rather than this
+  // component guessing from the outside.
+  children: (close: () => void, reportDismissible: (value: boolean) => void) => React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const [dismissible, setDismissible] = useState(true);
 
   return (
     <>
@@ -270,7 +283,10 @@ function ActionDialog({
         variant={triggerVariant}
         size="sm"
         disabled={disabled}
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setDismissible(true);
+          setOpen(true);
+        }}
       >
         {triggerLabel}
       </Button>
@@ -278,8 +294,10 @@ function ActionDialog({
           — DialogPortal defaults to `keepMounted={false}` — so the form
           inside, and the useActionState it holds, starts fresh every time
           this reopens rather than showing the last run's result. */}
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent closeLabel={closeLabel}>{children(() => setOpen(false))}</DialogContent>
+      <Dialog open={open} onOpenChange={setOpen} dismissible={dismissible}>
+        <DialogContent closeLabel={closeLabel} dismissible={dismissible}>
+          {children(() => setOpen(false), setDismissible)}
+        </DialogContent>
       </Dialog>
     </>
   );
@@ -294,39 +312,63 @@ function ActionDialog({
 function StatusForm({
   ids,
   dict,
-  title,
+  titleTemplate,
   description,
   requireReason,
   danger,
   action,
   onClose,
+  reportDismissible,
 }: {
   ids: readonly string[];
   dict: Dictionary;
-  title: string;
+  titleTemplate: string;
   description: string;
   requireReason: boolean;
   danger: boolean;
   action: (previous: BulkState, form: FormData) => Promise<BulkState>;
   onClose: () => void;
+  reportDismissible: (value: boolean) => void;
 }) {
   const t = dict.accounts.selection.bulk;
+  const store = useSelectionStore();
+  // Frozen at mount rather than read live: this form remounts fresh every
+  // time the dialog opens (see `ActionDialog`), and a successful run clears
+  // the selection on close (below) — the title and the submitted ids must
+  // not drift out from under an outcome that is still on screen.
+  const [frozenIds] = useState(ids);
+  const title = titleTemplate.replace("{n}", String(frozenIds.length));
   const [state, formAction, pending] = useActionState<BulkState, FormData>(action, {});
   const [reasonMissing, setReasonMissing] = useState(false);
 
+  // While a request is in flight, or while its result is on screen, Escape,
+  // an outside click and the corner X must not be able to discard it — only
+  // the explicit "Done" below can. Before that, dismissal stays open.
+  useEffect(() => {
+    reportDismissible(!pending && !state.result);
+  }, [pending, state.result, reportDismissible]);
+
   if (state.result) {
+    const changedCount = state.result.changed.length;
+
     return (
       <>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
-        <ChangedSkipped
-          changedCount={state.result.changed.length}
-          skipped={state.result.skipped}
-          dict={dict}
-        />
+        <ChangedSkipped changedCount={changedCount} skipped={state.result.skipped} dict={dict} />
         <DialogFooter>
-          <Button type="button" onClick={onClose}>
+          <Button
+            type="button"
+            onClick={() => {
+              // Nothing changed is not cleared, so a mistaken pick can be
+              // corrected and retried without reselecting everything by
+              // hand; a run that changed at least one account is done with
+              // this selection.
+              if (changedCount > 0) store.replace([]);
+              onClose();
+            }}
+          >
             {t.done}
           </Button>
         </DialogFooter>
@@ -357,7 +399,7 @@ function StatusForm({
       className="flex flex-col gap-5"
       noValidate
     >
-      <HiddenIds ids={ids} />
+      <HiddenIds ids={frozenIds} />
 
       <DialogHeader>
         <DialogTitle>{title}</DialogTitle>
@@ -379,6 +421,14 @@ function StatusForm({
             required
             aria-invalid={reasonMissing || undefined}
             className="min-h-24 font-sans text-body"
+            onChange={(event) => {
+              // Clear the error the moment it is corrected, rather than
+              // leaving the red line and `aria-invalid` on screen until the
+              // next submit attempt re-evaluates it.
+              if (reasonMissing && event.currentTarget.value.trim() !== "") {
+                setReasonMissing(false);
+              }
+            }}
           />
         </div>
       ) : null}
@@ -405,38 +455,65 @@ function StatusForm({
   );
 }
 
-/** Replaces the role set on every selected account with what is checked here. */
+/**
+ * Replaces the role set on every selected account with what is checked here.
+ *
+ * Sending an empty set is legitimate — that is how every role is deliberately
+ * stripped from an account — but offering it as the dialog's silent default,
+ * behind a button that reads as a question, is not: an administrator who
+ * opens this to look, then confirms without ticking anything, would strip
+ * every role from the whole selection in one click. A submit with nothing
+ * checked is intercepted once and answered with a second, explicit step that
+ * names the consequence and the count; ticking at least one role still
+ * submits in a single step, exactly as before.
+ */
 function RolesForm({
   ids,
   roles,
   dict,
   onClose,
+  reportDismissible,
 }: {
   ids: readonly string[];
   roles: Role[];
   dict: Dictionary;
   onClose: () => void;
+  reportDismissible: (value: boolean) => void;
 }) {
   const t = dict.accounts.selection.bulk;
+  const store = useSelectionStore();
+  const [frozenIds] = useState(ids);
+  const title = t.rolesDialog.title.replace("{n}", String(frozenIds.length));
   const [state, formAction, pending] = useActionState<BulkState, FormData>(
     bulkReplaceRolesAction,
     {},
   );
-  const title = t.rolesDialog.title.replace("{n}", String(ids.length));
+  // Set once an empty submit has been intercepted, so the very next submit —
+  // the explicit "remove all roles" confirmation — is let through rather than
+  // intercepted again.
+  const [confirmingEmpty, setConfirmingEmpty] = useState(false);
+
+  useEffect(() => {
+    reportDismissible(!pending && !state.result);
+  }, [pending, state.result, reportDismissible]);
 
   if (state.result) {
+    const changedCount = state.result.changed.length;
+
     return (
       <>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
-        <ChangedSkipped
-          changedCount={state.result.changed.length}
-          skipped={state.result.skipped}
-          dict={dict}
-        />
+        <ChangedSkipped changedCount={changedCount} skipped={state.result.skipped} dict={dict} />
         <DialogFooter>
-          <Button type="button" onClick={onClose}>
+          <Button
+            type="button"
+            onClick={() => {
+              if (changedCount > 0) store.replace([]);
+              onClose();
+            }}
+          >
             {t.done}
           </Button>
         </DialogFooter>
@@ -448,9 +525,56 @@ function RolesForm({
     ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
     : null;
 
+  if (confirmingEmpty) {
+    return (
+      <form action={formAction} className="flex flex-col gap-5">
+        <HiddenIds ids={frozenIds} />
+        <DialogHeader>
+          <DialogTitle>{t.rolesDialog.confirmEmptyTitle}</DialogTitle>
+          <DialogDescription>
+            {t.rolesDialog.confirmEmptyBody.replace("{n}", String(frozenIds.length))}
+          </DialogDescription>
+        </DialogHeader>
+
+        {failure ? (
+          <p role="alert" className="text-small text-bad">
+            {failure}
+          </p>
+        ) : null}
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="quiet"
+            onClick={() => setConfirmingEmpty(false)}
+            disabled={pending}
+          >
+            {t.rolesDialog.back}
+          </Button>
+          <Button type="submit" variant="danger" disabled={pending}>
+            {pending ? t.submitting : t.rolesDialog.confirmEmptySubmit}
+          </Button>
+        </DialogFooter>
+      </form>
+    );
+  }
+
   return (
-    <form action={formAction} className="flex flex-col gap-5">
-      <HiddenIds ids={ids} />
+    <form
+      action={formAction}
+      onSubmit={(event) => {
+        const checked = new FormData(event.currentTarget).getAll("roles");
+        if (checked.length === 0) {
+          // Nothing ticked: this is the dialog's silent default, and
+          // confirming it as-is would strip every role from the whole
+          // selection. Ask once, in plain words, before letting it through.
+          event.preventDefault();
+          setConfirmingEmpty(true);
+        }
+      }}
+      className="flex flex-col gap-5"
+    >
+      <HiddenIds ids={frozenIds} />
 
       <DialogHeader>
         <DialogTitle>{title}</DialogTitle>
@@ -497,18 +621,29 @@ function ResetPasswordForm({
   ids,
   dict,
   onClose,
+  reportDismissible,
 }: {
   ids: readonly string[];
   dict: Dictionary;
   onClose: () => void;
+  reportDismissible: (value: boolean) => void;
 }) {
   const t = dict.accounts.selection.bulk;
+  const store = useSelectionStore();
+  const [frozenIds] = useState(ids);
   const [state, formAction, pending] = useActionState<BulkPasswordState, FormData>(
     bulkResetPasswordAction,
     {},
   );
 
+  useEffect(() => {
+    reportDismissible(!pending && !state.result);
+  }, [pending, state.result, reportDismissible]);
+
   if (state.result) {
+    const issuedCount = state.result.issued.length;
+    const skippedCount = state.result.skipped.length;
+
     return (
       <>
         <DialogHeader>
@@ -516,7 +651,7 @@ function ResetPasswordForm({
           <DialogDescription>{t.resetDialog.handover}</DialogDescription>
         </DialogHeader>
 
-        {state.result.issued.length > 0 ? (
+        {issuedCount > 0 ? (
           <ul className="flex max-h-64 flex-col gap-2 overflow-y-auto">
             {state.result.issued.map((row) => (
               <IssuedRow key={row.id} row={row} dict={dict} />
@@ -526,8 +661,18 @@ function ResetPasswordForm({
 
         <SkippedList skipped={state.result.skipped} dict={dict} />
 
+        {issuedCount === 0 && skippedCount === 0 ? (
+          <p className="text-small text-ink-2">{t.resetDialog.none}</p>
+        ) : null}
+
         <DialogFooter>
-          <Button type="button" onClick={onClose}>
+          <Button
+            type="button"
+            onClick={() => {
+              if (issuedCount > 0) store.replace([]);
+              onClose();
+            }}
+          >
             {t.done}
           </Button>
         </DialogFooter>
@@ -541,10 +686,10 @@ function ResetPasswordForm({
 
   return (
     <form action={formAction} className="flex flex-col gap-5">
-      <HiddenIds ids={ids} />
+      <HiddenIds ids={frozenIds} />
 
       <DialogHeader>
-        <DialogTitle>{t.resetDialog.title.replace("{n}", String(ids.length))}</DialogTitle>
+        <DialogTitle>{t.resetDialog.title.replace("{n}", String(frozenIds.length))}</DialogTitle>
         <DialogDescription>{t.resetDialog.description}</DialogDescription>
       </DialogHeader>
 
@@ -598,18 +743,19 @@ export function SelectionBar({ dict, roles }: { dict: Dictionary; roles: Role[] 
           triggerLabel={bulk.block}
           triggerVariant="danger"
           disabled={tooMany}
-          closeLabel={bulk.cancel}
+          closeLabel={bulk.close}
         >
-          {(close) => (
+          {(close, reportDismissible) => (
             <StatusForm
               ids={ids}
               dict={dict}
-              title={bulk.blockDialog.title.replace("{n}", String(ids.length))}
+              titleTemplate={bulk.blockDialog.title}
               description={bulk.blockDialog.description}
               requireReason
               danger
               action={bulkBlockAction}
               onClose={close}
+              reportDismissible={reportDismissible}
             />
           )}
         </ActionDialog>
@@ -618,18 +764,19 @@ export function SelectionBar({ dict, roles }: { dict: Dictionary; roles: Role[] 
           triggerLabel={bulk.unblock}
           triggerVariant="secondary"
           disabled={tooMany}
-          closeLabel={bulk.cancel}
+          closeLabel={bulk.close}
         >
-          {(close) => (
+          {(close, reportDismissible) => (
             <StatusForm
               ids={ids}
               dict={dict}
-              title={bulk.unblockDialog.title.replace("{n}", String(ids.length))}
+              titleTemplate={bulk.unblockDialog.title}
               description={bulk.unblockDialog.description}
               requireReason={false}
               danger={false}
               action={bulkUnblockAction}
               onClose={close}
+              reportDismissible={reportDismissible}
             />
           )}
         </ActionDialog>
@@ -638,18 +785,19 @@ export function SelectionBar({ dict, roles }: { dict: Dictionary; roles: Role[] 
           triggerLabel={bulk.delete}
           triggerVariant="danger"
           disabled={tooMany}
-          closeLabel={bulk.cancel}
+          closeLabel={bulk.close}
         >
-          {(close) => (
+          {(close, reportDismissible) => (
             <StatusForm
               ids={ids}
               dict={dict}
-              title={bulk.deleteDialog.title.replace("{n}", String(ids.length))}
+              titleTemplate={bulk.deleteDialog.title}
               description={bulk.deleteDialog.description}
               requireReason
               danger
               action={bulkDeleteAction}
               onClose={close}
+              reportDismissible={reportDismissible}
             />
           )}
         </ActionDialog>
@@ -658,18 +806,33 @@ export function SelectionBar({ dict, roles }: { dict: Dictionary; roles: Role[] 
           triggerLabel={bulk.roles}
           triggerVariant="secondary"
           disabled={tooMany}
-          closeLabel={bulk.cancel}
+          closeLabel={bulk.close}
         >
-          {(close) => <RolesForm ids={ids} roles={roles} dict={dict} onClose={close} />}
+          {(close, reportDismissible) => (
+            <RolesForm
+              ids={ids}
+              roles={roles}
+              dict={dict}
+              onClose={close}
+              reportDismissible={reportDismissible}
+            />
+          )}
         </ActionDialog>
 
         <ActionDialog
           triggerLabel={bulk.resetPassword}
           triggerVariant="secondary"
           disabled={tooMany}
-          closeLabel={bulk.cancel}
+          closeLabel={bulk.close}
         >
-          {(close) => <ResetPasswordForm ids={ids} dict={dict} onClose={close} />}
+          {(close, reportDismissible) => (
+            <ResetPasswordForm
+              ids={ids}
+              dict={dict}
+              onClose={close}
+              reportDismissible={reportDismissible}
+            />
+          )}
         </ActionDialog>
       </div>
 
