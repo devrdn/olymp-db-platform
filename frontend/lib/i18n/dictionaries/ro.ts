@@ -506,6 +506,10 @@ const ro = {
       pickAccount: "Selectați {name}",
       pickPage: "Selectați toată pagina",
       count: "{n} selectate",
+      offPage: "{n} nu sunt pe această pagină",
+      view: "Vedeți selecția",
+      viewTitle: "Conturi selectate",
+      unpick: "Eliminați {name} din selecție",
       clear: "Anulați selecția",
       bulk: {
         block: "Blocați",

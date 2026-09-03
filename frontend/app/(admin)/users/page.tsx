@@ -9,7 +9,7 @@ import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { AccountRegister, ACCOUNTS_PAGE } from "./account-register";
 import { AccountFilters } from "./filters";
 import { accountsHref } from "./search-href";
-import { SelectionBar, SelectionProvider } from "./selection";
+import { SelectionBar } from "./selection";
 
 export async function generateMetadata() {
   const dict = await activeDictionary();
@@ -74,23 +74,23 @@ export default async function UsersPage(props: PageProps<"/users">) {
     <Band fill className="flex flex-col gap-8 py-12">
       <AccountFilters query={query} status={status} dict={dict} />
 
-      {/* One store per page load: a fresh SelectionProvider each time this
-          server component renders, so navigating to another page of results
-          starts the pick over rather than carrying it along. */}
-      <SelectionProvider>
-        <SelectionBar dict={dict} roles={roles} />
+      {/* The selection itself lives one level up, in layout.tsx — it has to
+          survive this component re-rendering on every search, which a
+          provider mounted here could not. `pageIds` tells the bar which of
+          the whole selection are actually in `items` below, so it can say
+          when part of a pick spans other pages or an earlier search. */}
+      <SelectionBar dict={dict} roles={roles} pageIds={items.map((account) => account.id)} />
 
-        <AccountRegister
-          accounts={items}
-          total={total}
-          offset={offset}
-          pageHref={pageHref}
-          filtered={Boolean(query || status)}
-          roles={roles}
-          dict={dict}
-          locale={locale}
-        />
-      </SelectionProvider>
+      <AccountRegister
+        accounts={items}
+        total={total}
+        offset={offset}
+        pageHref={pageHref}
+        filtered={Boolean(query || status)}
+        roles={roles}
+        dict={dict}
+        locale={locale}
+      />
     </Band>
   );
 }
