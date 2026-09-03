@@ -3,6 +3,7 @@ package users_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
@@ -473,5 +474,311 @@ func TestBulkSetStatusRefusesEmptySelection(t *testing.T) {
 
 	if !errors.Is(err, users.ErrInvalidAccount) {
 		t.Errorf("err = %v, want ErrInvalidAccount", err)
+	}
+}
+
+// TestBulkRolesKeepsOneAdministrator guards the same defect the status
+// budget guards against, on the role surface: two administrators demoted
+// together must not both go through, each seeing the other still standing.
+func TestBulkRolesKeepsOneAdministrator(t *testing.T) {
+	f := newBulkFixture(t)
+	first := f.createAdmin(t, "admin-one")
+	second := f.createAdmin(t, "admin-two")
+
+	res, err := f.service.BulkReplaceRoles(context.Background(), f.admin.ID,
+		[]uuid.UUID{first.ID, second.ID}, []string{"student"})
+	if err != nil {
+		t.Fatalf("BulkReplaceRoles() returned error: %v", err)
+	}
+	if len(res.Changed) != 1 {
+		t.Fatalf("Changed = %v, want exactly one account", res.Changed)
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0].Reason != users.SkipLastAdministrator {
+		t.Fatalf("Skipped = %+v, want one entry with reason %q", res.Skipped, users.SkipLastAdministrator)
+	}
+}
+
+// TestBulkReplaceRolesCountsAdministratorsOnceForTheWholeSelection guards the
+// point of adminBudget's laziness and its cache: a selection of several
+// administrators being demoted at once must cost exactly one
+// CountActiveWithRole, not one per candidate — a per-account count would let
+// every one of them see the others still standing and all pass.
+func TestBulkReplaceRolesCountsAdministratorsOnceForTheWholeSelection(t *testing.T) {
+	f := newBulkFixture(t)
+	ids := make([]uuid.UUID, 0, 5)
+	for i := 0; i < 5; i++ {
+		admin := f.createAdmin(t, fmt.Sprintf("admin-%d", i))
+		ids = append(ids, admin.ID)
+	}
+
+	res, err := f.service.BulkReplaceRoles(context.Background(), f.admin.ID, ids, []string{"student"})
+	if err != nil {
+		t.Fatalf("BulkReplaceRoles() returned error: %v", err)
+	}
+	if len(res.Changed) != 4 {
+		t.Fatalf("Changed = %v, want 4 accounts demoted and one kept as the last administrator", res.Changed)
+	}
+	if f.repo.CountActiveWithRoleCalls != 1 {
+		t.Errorf("CountActiveWithRoleCalls = %d, want 1: the count must be taken once for the whole selection", f.repo.CountActiveWithRoleCalls)
+	}
+}
+
+// TestBulkReplaceRolesNeverSpendsTheBudgetWhenTheNewRolesKeepAdmin guards the
+// first half of the mirror with the single-account ReplaceRoles: the budget
+// is only at risk when the new role set drops the administrator role. The
+// sole administrator here is given a role set that still includes admin, so
+// nothing is actually being taken away, and the operation must succeed
+// without ever consulting how many administrators remain.
+func TestBulkReplaceRolesNeverSpendsTheBudgetWhenTheNewRolesKeepAdmin(t *testing.T) {
+	f := newBulkFixture(t)
+	sole := f.createAdmin(t, "sole-admin")
+
+	res, err := f.service.BulkReplaceRoles(context.Background(), f.admin.ID,
+		[]uuid.UUID{sole.ID}, []string{users.RoleAdmin, "instructor"})
+	if err != nil {
+		t.Fatalf("BulkReplaceRoles() returned error: %v", err)
+	}
+	if len(res.Changed) != 1 || res.Changed[0] != sole.ID {
+		t.Fatalf("Changed = %v, want [%v]: keeping the admin role must not be treated as a demotion", res.Changed, sole.ID)
+	}
+	if len(res.Skipped) != 0 {
+		t.Errorf("Skipped = %v, want none", res.Skipped)
+	}
+	if f.repo.CountActiveWithRoleCalls != 0 {
+		t.Errorf("CountActiveWithRoleCalls = %d, want 0: a role set that keeps admin never puts the budget at risk", f.repo.CountActiveWithRoleCalls)
+	}
+}
+
+// TestBulkReplaceRolesNeverSpendsTheBudgetForABlockedAdministrator guards the
+// second half of the mirror: only an account that can administer today —
+// meaning it is active — is one the budget protects. The first administrator
+// stays active and the second is blocked; demoting the second must go
+// through without a further count query, exactly as refuseIfLastAdmin does
+// not decrement for an inactive account. Block itself spends the budget once
+// (it is built on BulkSetStatus, which protects an active administrator being
+// blocked), so the calls are counted from right after that setup rather than
+// from zero.
+func TestBulkReplaceRolesNeverSpendsTheBudgetForABlockedAdministrator(t *testing.T) {
+	f := newBulkFixture(t)
+	f.createAdmin(t, "admin-one")
+	second := f.createAdmin(t, "admin-two")
+	if err := f.service.Block(context.Background(), f.admin.ID, second.ID, "on leave"); err != nil {
+		t.Fatalf("Block() returned error: %v", err)
+	}
+	before := f.repo.CountActiveWithRoleCalls
+
+	res, err := f.service.BulkReplaceRoles(context.Background(), f.admin.ID,
+		[]uuid.UUID{second.ID}, []string{"student"})
+	if err != nil {
+		t.Fatalf("BulkReplaceRoles() returned error: %v", err)
+	}
+	if len(res.Changed) != 1 || res.Changed[0] != second.ID {
+		t.Fatalf("Changed = %v, want [%v]: a blocked administrator cannot administer, so demoting it is free", res.Changed, second.ID)
+	}
+	if len(res.Skipped) != 0 {
+		t.Errorf("Skipped = %v, want none", res.Skipped)
+	}
+	if f.repo.CountActiveWithRoleCalls != before {
+		t.Errorf("CountActiveWithRoleCalls = %d, want %d: an inactive account never spends the budget", f.repo.CountActiveWithRoleCalls, before)
+	}
+}
+
+// TestBulkRolesSkipsDeletedAccounts guards SkipDeleted's reason for being:
+// giving roles to an account nobody can sign into is pointless, so a deleted
+// account must be skipped rather than touched.
+func TestBulkRolesSkipsDeletedAccounts(t *testing.T) {
+	f := newBulkFixture(t)
+	gone := f.createUser(t, "ivanov")
+	if err := f.service.Delete(context.Background(), f.admin.ID, gone.ID, "graduated"); err != nil {
+		t.Fatalf("Delete() returned error: %v", err)
+	}
+
+	res, err := f.service.BulkReplaceRoles(context.Background(), f.admin.ID,
+		[]uuid.UUID{gone.ID}, []string{"student"})
+	if err != nil {
+		t.Fatalf("BulkReplaceRoles() returned error: %v", err)
+	}
+	if len(res.Changed) != 0 {
+		t.Errorf("Changed = %v, want none", res.Changed)
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0].Reason != users.SkipDeleted {
+		t.Fatalf("Skipped = %+v, want one entry with reason %q", res.Skipped, users.SkipDeleted)
+	}
+}
+
+// TestBulkReplaceRolesAppliesInOneTransaction guards the point of the two
+// phases on the role surface, exactly as TestBulkStatusAppliesInOneTransaction
+// does for status: deciding costs no transaction, and applying costs exactly
+// one however many accounts survived.
+func TestBulkReplaceRolesAppliesInOneTransaction(t *testing.T) {
+	f := newBulkFixture(t)
+	ids := []uuid.UUID{
+		f.createUser(t, "a").ID,
+		f.createUser(t, "b").ID,
+		f.createUser(t, "c").ID,
+	}
+
+	if _, err := f.service.BulkReplaceRoles(context.Background(), f.admin.ID, ids, []string{"student"}); err != nil {
+		t.Fatalf("BulkReplaceRoles() returned error: %v", err)
+	}
+	if f.uow.Calls != 1 {
+		t.Errorf("uow.Calls = %d, want 1", f.uow.Calls)
+	}
+}
+
+// TestBulkReplaceRolesOpensNoTransactionWhenNothingSurvives mirrors
+// TestBulkStatusOpensNoTransactionWhenNothingSurvives on the role surface: a
+// selection that classify empties out entirely — here, an account skipped as
+// deleted — must never open the transaction at all. Deleting the account in
+// setup already opens one transaction of its own, so the count is compared
+// against its value right before the call under test rather than zero.
+func TestBulkReplaceRolesOpensNoTransactionWhenNothingSurvives(t *testing.T) {
+	f := newBulkFixture(t)
+	gone := f.createUser(t, "ivanov")
+	if err := f.service.Delete(context.Background(), f.admin.ID, gone.ID, "graduated"); err != nil {
+		t.Fatalf("Delete() returned error: %v", err)
+	}
+	before := f.uow.Calls
+
+	res, err := f.service.BulkReplaceRoles(context.Background(), f.admin.ID, []uuid.UUID{gone.ID}, []string{"student"})
+	if err != nil {
+		t.Fatalf("BulkReplaceRoles() returned error: %v", err)
+	}
+	if len(res.Changed) != 0 {
+		t.Errorf("Changed = %v, want none", res.Changed)
+	}
+	if f.uow.Calls != before {
+		t.Errorf("uow.Calls = %d, want %d: nothing survived classify, so no transaction should have opened", f.uow.Calls, before)
+	}
+}
+
+// TestBulkResetPasswordIssuesOnePerAccount guards the point of the whole
+// operation: every account gets its own password, never a group's shared
+// one, and the account is left exactly as a single ResetPassword leaves it —
+// due for a change and with its old sessions retired.
+func TestBulkResetPasswordIssuesOnePerAccount(t *testing.T) {
+	f := newBulkFixture(t)
+	first := f.createUser(t, "ivanov")
+	second := f.createUser(t, "petrov")
+
+	res, err := f.service.BulkResetPassword(context.Background(), f.admin.ID, []uuid.UUID{first.ID, second.ID})
+	if err != nil {
+		t.Fatalf("BulkResetPassword() returned error: %v", err)
+	}
+	if len(res.Issued) != 2 {
+		t.Fatalf("Issued = %v, want 2 accounts", res.Issued)
+	}
+	// Two accounts, two different passwords: one password for a group would be
+	// one password to share.
+	if res.Issued[0].OneTimePassword == res.Issued[1].OneTimePassword {
+		t.Errorf("both accounts got the same password: %q", res.Issued[0].OneTimePassword)
+	}
+
+	after, err := f.repo.ByID(context.Background(), first.ID)
+	if err != nil {
+		t.Fatalf("ByID() returned error: %v", err)
+	}
+	if !after.MustChangePassword {
+		t.Errorf("MustChangePassword = false, want true")
+	}
+	if after.SessionGeneration <= first.SessionGeneration {
+		t.Errorf("SessionGeneration = %d, want greater than %d", after.SessionGeneration, first.SessionGeneration)
+	}
+}
+
+// TestBulkResetPasswordSkipsDeletedAccounts mirrors
+// TestBulkRolesSkipsDeletedAccounts on the password surface: a one-time
+// password for an account nobody can sign into is pointless. It also guards
+// TestBulkStatusOpensNoTransactionWhenNothingSurvives's property on this
+// surface: a selection that classify empties out entirely — the only account
+// named here is skipped — must never open the transaction, even though
+// hashing has its own worker pool ahead of it. Deleting the account in setup
+// already opens one transaction of its own, so the count is compared against
+// its value right before the call under test rather than zero.
+func TestBulkResetPasswordSkipsDeletedAccounts(t *testing.T) {
+	f := newBulkFixture(t)
+	gone := f.createUser(t, "ivanov")
+	if err := f.service.Delete(context.Background(), f.admin.ID, gone.ID, "graduated"); err != nil {
+		t.Fatalf("Delete() returned error: %v", err)
+	}
+	before := f.uow.Calls
+
+	res, err := f.service.BulkResetPassword(context.Background(), f.admin.ID, []uuid.UUID{gone.ID})
+	if err != nil {
+		t.Fatalf("BulkResetPassword() returned error: %v", err)
+	}
+	if len(res.Issued) != 0 {
+		t.Errorf("Issued = %v, want none", res.Issued)
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0].Reason != users.SkipDeleted {
+		t.Fatalf("Skipped = %+v, want one entry with reason %q", res.Skipped, users.SkipDeleted)
+	}
+	if f.uow.Calls != before {
+		t.Errorf("uow.Calls = %d, want %d: nothing survived classify, so no transaction should have opened", f.uow.Calls, before)
+	}
+}
+
+// TestBulkResetPasswordAppliesInOneTransaction guards the point of the two
+// phases on the password surface: applying costs exactly one transaction
+// however many accounts survived, even though hashing itself runs in
+// parallel workers ahead of it.
+func TestBulkResetPasswordAppliesInOneTransaction(t *testing.T) {
+	f := newBulkFixture(t)
+	ids := []uuid.UUID{
+		f.createUser(t, "a").ID,
+		f.createUser(t, "b").ID,
+		f.createUser(t, "c").ID,
+	}
+
+	if _, err := f.service.BulkResetPassword(context.Background(), f.admin.ID, ids); err != nil {
+		t.Fatalf("BulkResetPassword() returned error: %v", err)
+	}
+	if f.uow.Calls != 1 {
+		t.Errorf("uow.Calls = %d, want 1", f.uow.Calls)
+	}
+}
+
+// TestBulkResetPasswordAbortsWhenTheParallelPhaseFailsRatherThanSkipping
+// guards CLAUDE.md rule 8: only a row-level reason from the closed skip
+// vocabulary may turn into a skipped entry. A failure in the parallel
+// hashing phase — the pool of workers each running generatePassword and
+// password.Hash ahead of the transaction — is the database or the machine
+// itself failing, not anything about a particular account, so it must abort
+// the whole operation and surface as an error, never be reported as accounts
+// somebody has to go and fix.
+//
+// The natural way to force that phase to fail is to break crypto/rand, but
+// on this Go toolchain (see https://go.dev/issue/66821) a broken
+// crypto/rand.Reader makes Read crash the process outright rather than
+// return an error, so it cannot be used as a test fixture. An already
+// canceled context takes the identical code path instead: each worker checks
+// groupCtx.Err() before it ever calls generatePassword or password.Hash, so
+// this exercises exactly the group.Go/group.Wait error plumbing a genuine
+// hashing failure would use, just entered a different way.
+func TestBulkResetPasswordAbortsWhenTheParallelPhaseFailsRatherThanSkipping(t *testing.T) {
+	f := newBulkFixture(t)
+	first := f.createUser(t, "ivanov")
+	second := f.createUser(t, "petrov")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	res, err := f.service.BulkResetPassword(ctx, f.admin.ID, []uuid.UUID{first.ID, second.ID})
+	if err == nil {
+		t.Fatalf("BulkResetPassword() = %+v, %v, want an error", res, err)
+	}
+	if len(res.Issued) != 0 || len(res.Skipped) != 0 {
+		t.Errorf("BulkResetPassword() returned %+v on failure, want a zero result", res)
+	}
+	if f.uow.Calls != 0 {
+		t.Errorf("uow.Calls = %d, want 0: a failure before the transaction must never open one", f.uow.Calls)
+	}
+
+	after, getErr := f.repo.ByID(context.Background(), first.ID)
+	if getErr != nil {
+		t.Fatalf("ByID() returned error: %v", getErr)
+	}
+	if after.MustChangePassword {
+		t.Errorf("the account was updated despite the phase failing")
 	}
 }
