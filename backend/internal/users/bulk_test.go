@@ -398,6 +398,69 @@ func TestBulkBlockSkipsASecondDeletedAccountWithEmptyEmailField(t *testing.T) {
 	}
 }
 
+// TestBulkBlockWithANewReasonUpdatesAnAlreadyBlockedAccount guards the same
+// rule as the single-account tests in service_test.go, on the bulk surface:
+// one machine decides both, so a selection naming an account already in the
+// target status must still accept it — and record the second decision — when
+// the reason differs. This is the intended fan-out of the fix: an
+// administrator who names an already-blocked account in a bulk block, giving
+// a reason for the whole selection, expects that reason to land on it too.
+func TestBulkBlockWithANewReasonUpdatesAnAlreadyBlockedAccount(t *testing.T) {
+	f := newBulkFixture(t)
+	target := f.createUser(t, "ivanov")
+	other := f.createUser(t, "petrov")
+	if _, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+		[]uuid.UUID{target.ID}, users.StatusBlocked, "suspected cheating"); err != nil {
+		t.Fatalf("BulkSetStatus() setup = %v", err)
+	}
+
+	res, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+		[]uuid.UUID{target.ID, other.ID}, users.StatusBlocked, "confirmed cheating in the October contest")
+	if err != nil {
+		t.Fatalf("BulkSetStatus() returned error: %v", err)
+	}
+
+	changed := map[uuid.UUID]bool{}
+	for _, id := range res.Changed {
+		changed[id] = true
+	}
+	if !changed[target.ID] || !changed[other.ID] {
+		t.Fatalf("Changed = %v, want both accounts: an already-blocked account with a new reason must be accepted", res.Changed)
+	}
+	if len(res.Skipped) != 0 {
+		t.Errorf("Skipped = %v, want none", res.Skipped)
+	}
+	after, ok := f.repo.Get(target.ID)
+	if !ok || after.StatusReason != "confirmed cheating in the October contest" {
+		t.Errorf("StatusReason = %q, want the corrected reason", after.StatusReason)
+	}
+}
+
+// TestBulkBlockSkipsAnAlreadyBlockedAccountWithTheIdenticalReason is the
+// no-op half on the bulk surface: nothing would change, so the account is
+// still reported as skipped rather than needlessly rewritten and re-audited.
+func TestBulkBlockSkipsAnAlreadyBlockedAccountWithTheIdenticalReason(t *testing.T) {
+	f := newBulkFixture(t)
+	target := f.createUser(t, "ivanov")
+	if _, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+		[]uuid.UUID{target.ID}, users.StatusBlocked, "suspected cheating"); err != nil {
+		t.Fatalf("BulkSetStatus() setup = %v", err)
+	}
+
+	res, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+		[]uuid.UUID{target.ID}, users.StatusBlocked, "suspected cheating")
+	if err != nil {
+		t.Fatalf("BulkSetStatus() returned error: %v", err)
+	}
+
+	if len(res.Changed) != 0 {
+		t.Errorf("Changed = %v, want none: the reason did not change", res.Changed)
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0].Reason != users.SkipAlreadyInStatus {
+		t.Fatalf("Skipped = %+v, want one entry with reason %q", res.Skipped, users.SkipAlreadyInStatus)
+	}
+}
+
 // TestBulkSetStatusRefusesEmptySelection guards the branch in boundSelection
 // that refuses a selection with no accounts. An empty slice should return an
 // error wrapped in ErrInvalidAccount rather than proceeding to apply zero

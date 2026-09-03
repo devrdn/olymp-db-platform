@@ -212,7 +212,14 @@ func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uu
 		switch {
 		case u.ID == actorID:
 			return SkipSelf
-		case u.Status == status:
+		// Already in the target status is only a no-op when the reason is
+		// unchanged too: the reason is part of what the operation sets, and an
+		// administrator giving a new one for an account already in that status
+		// (re-blocking with stronger evidence, say) is a decision that has to
+		// land, not a status transition that has to happen. A move to active
+		// always forces reason to "", so an already-active account compares
+		// empty to empty here and stays a no-op.
+		case u.Status == status && u.StatusReason == reason:
 			return SkipAlreadyInStatus
 		case taken[u.ID] != "":
 			return taken[u.ID]

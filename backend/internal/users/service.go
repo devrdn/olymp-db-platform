@@ -31,6 +31,13 @@ const (
 // out of the installation.
 var ErrCannotActOnSelf = errors.New("this operation cannot be performed on your own account")
 
+// errUnhandledSkipReason means setStatus's translation switch does not know a
+// skip reason BulkSetStatus returned. It is unexported: reaching it is
+// exclusively a programming error inside this package (the two have drifted
+// apart), never a refusal a caller can act on, so there is nothing for
+// another package to match against.
+var errUnhandledSkipReason = errors.New("users: unhandled skip reason for a single-account operation")
+
 // Service holds the account rules.
 type Service struct {
 	repo  Repository
@@ -172,10 +179,13 @@ func (s *Service) setStatus(ctx context.Context, actorID, userID uuid.UUID, stat
 		// including SkipDeleted (BulkSetStatus never emits it today — it
 		// belongs to the bulk role and password operations, which must skip a
 		// deleted account rather than touch it — but it is still a name in the
-		// shared vocabulary). Falling through to a silent success here would
-		// misreport a refusal this code has not been taught about yet, so an
-		// unrecognised reason is surfaced as an error instead of guessed at.
-		return fmt.Errorf("users: unhandled skip reason %q for a single-account operation", res.Skipped[0].Reason)
+		// shared vocabulary). Reaching here means the machine returned a skip
+		// reason this translation does not know, which is a programming error
+		// — this package and BulkSetStatus have drifted apart — and not
+		// anything the caller did, so it is a declared sentinel wrapped with
+		// the unknown reason rather than a bare error the HTTP layer cannot
+		// name.
+		return fmt.Errorf("%w: %q", errUnhandledSkipReason, res.Skipped[0].Reason)
 	}
 }
 
