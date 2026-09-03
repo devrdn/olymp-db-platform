@@ -241,8 +241,49 @@ func TestTakenAmongFindsRestoreConflicts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("TakenAmong() = %v", err)
 		}
-		if len(taken) != 1 || taken[0] != gone.ID {
-			t.Fatalf("TakenAmong() = %v, want [%v]", taken, gone.ID)
+		if len(taken) != 1 || taken[0].ID != gone.ID {
+			t.Fatalf("TakenAmong() = %+v, want [%v]", taken, gone.ID)
+		}
+		if !taken[0].Login {
+			t.Errorf("TakenAmong()[0].Login = false, want true: the login collided")
+		}
+		if taken[0].Email {
+			t.Errorf("TakenAmong()[0].Email = true, want false: only the login collided")
+		}
+	})
+}
+
+func TestTakenAmongReportsAnEmailCollisionSeparately(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		gone := makeUser(t, ctx, "taken-among-email-ivanov")
+		if _, err := repo.querier(ctx).Exec(ctx,
+			`UPDATE users SET email = $2 WHERE id = $1`, gone.ID, "ivanov@example.com"); err != nil {
+			t.Fatalf("set email: %v", err)
+		}
+		if err := repo.SetStatus(ctx, []uuid.UUID{gone.ID}, users.StatusDeleted,
+			users.StatusChange{Reason: "mistake", By: gone.ID, At: time.Now()}); err != nil {
+			t.Fatalf("SetStatus() = %v", err)
+		}
+		if _, err := repo.Create(ctx, users.User{
+			Login: "taken-among-email-petrov", Email: "ivanov@example.com",
+			FullName: "Petrov", PasswordHash: "x", Status: users.StatusActive,
+		}); err != nil {
+			t.Fatalf("Create() = %v", err)
+		}
+
+		taken, err := repo.TakenAmong(ctx, []uuid.UUID{gone.ID})
+		if err != nil {
+			t.Fatalf("TakenAmong() = %v", err)
+		}
+		if len(taken) != 1 || taken[0].ID != gone.ID {
+			t.Fatalf("TakenAmong() = %+v, want [%v]", taken, gone.ID)
+		}
+		if taken[0].Login {
+			t.Errorf("TakenAmong()[0].Login = true, want false: the logins differ")
+		}
+		if !taken[0].Email {
+			t.Errorf("TakenAmong()[0].Email = false, want true: the email collided")
 		}
 	})
 }

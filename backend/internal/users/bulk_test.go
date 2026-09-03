@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 )
@@ -125,6 +126,114 @@ func TestBulkStatusAppliesInOneTransaction(t *testing.T) {
 	}
 	if f.uow.Calls != 1 {
 		t.Errorf("uow.Calls = %d, want 1", f.uow.Calls)
+	}
+}
+
+// TestBulkBlockSkipsADeletedAccountWhoseLoginWasReclaimed guards the defect
+// where TakenAmong was consulted only when the destination was active. The
+// partial unique indexes are WHERE status <> 'deleted', so moving a deleted
+// account to blocked re-imposes uniqueness on its login exactly as restoring
+// it to active does: a deleted account whose login a live account has since
+// reclaimed must be skipped, not let through to trip the constraint and
+// abort accounts around it that would otherwise have gone through.
+func TestBulkBlockSkipsADeletedAccountWhoseLoginWasReclaimed(t *testing.T) {
+	f := newBulkFixture(t)
+	gone := f.createUser(t, "reclaimed")
+	if _, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+		[]uuid.UUID{gone.ID}, users.StatusDeleted, "left"); err != nil {
+		t.Fatalf("BulkSetStatus() deleting = %v", err)
+	}
+	// A live account has since taken the login the deleted one released.
+	f.repo.Add(users.User{Login: "reclaimed", FullName: "New Reclaimed", PasswordHash: "x"})
+	other := f.createUser(t, "unrelated")
+
+	res, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+		[]uuid.UUID{gone.ID, other.ID}, users.StatusBlocked, "sweep")
+	if err != nil {
+		t.Fatalf("BulkSetStatus() returned error: %v", err)
+	}
+
+	if len(res.Changed) != 1 || res.Changed[0] != other.ID {
+		t.Fatalf("Changed = %v, want [%v]: the rest of the selection must still apply", res.Changed, other.ID)
+	}
+	reasons := map[uuid.UUID]string{}
+	for _, s := range res.Skipped {
+		reasons[s.ID] = s.Reason
+	}
+	if reasons[gone.ID] != users.SkipLoginTaken {
+		t.Errorf("reason for the reclaimed login = %q, want %q", reasons[gone.ID], users.SkipLoginTaken)
+	}
+	if live, ok := f.repo.Get(other.ID); !ok || live.Status != users.StatusBlocked {
+		t.Errorf("the unrelated account was not blocked: %+v, ok=%v", live, ok)
+	}
+}
+
+// TestBulkBlockReportsAnEmailCollisionAsEmailTaken guards against TakenAmong
+// collapsing a login match and an email match into one undifferentiated
+// list: an account whose only conflict is its email must be reported with
+// SkipEmailTaken, not SkipLoginTaken, so the administrator looks at the
+// right field.
+func TestBulkBlockReportsAnEmailCollisionAsEmailTaken(t *testing.T) {
+	f := newBulkFixture(t)
+	gone := f.repo.Add(users.User{
+		Login: "gone-by-email", Email: "shared@example.com", FullName: "Gone", PasswordHash: "x",
+	})
+	if _, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+		[]uuid.UUID{gone.ID}, users.StatusDeleted, "left"); err != nil {
+		t.Fatalf("BulkSetStatus() deleting = %v", err)
+	}
+	// A live account holds a different login but the same email.
+	f.repo.Add(users.User{Login: "someone-else", Email: "shared@example.com", FullName: "Live", PasswordHash: "x"})
+
+	res, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+		[]uuid.UUID{gone.ID}, users.StatusBlocked, "sweep")
+	if err != nil {
+		t.Fatalf("BulkSetStatus() returned error: %v", err)
+	}
+
+	if len(res.Skipped) != 1 || res.Skipped[0].Reason != users.SkipEmailTaken {
+		t.Fatalf("Skipped = %+v, want one entry with reason %q", res.Skipped, users.SkipEmailTaken)
+	}
+}
+
+// TestBulkSetStatusRecordsTheRightAuditActionForEachMove exercises
+// statusAction end to end: coming back to active is two different events
+// depending on where the account came from, and only a test that inspects
+// the recorded action rather than just the returned status catches
+// statusAction naming the wrong one.
+func TestBulkSetStatusRecordsTheRightAuditActionForEachMove(t *testing.T) {
+	cases := []struct {
+		name string
+		from string
+		to   string
+		want string
+	}{
+		{"to blocked", users.StatusActive, users.StatusBlocked, audit.ActionUserBlock},
+		{"to deleted", users.StatusActive, users.StatusDeleted, audit.ActionUserDelete},
+		{"deleted back to active", users.StatusDeleted, users.StatusActive, audit.ActionUserRestore},
+		{"blocked back to active", users.StatusBlocked, users.StatusActive, audit.ActionUserUnblock},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newBulkFixture(t)
+			u := f.createUser(t, "mover")
+			if tc.from != users.StatusActive {
+				if _, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+					[]uuid.UUID{u.ID}, tc.from, "setup"); err != nil {
+					t.Fatalf("BulkSetStatus() setup = %v", err)
+				}
+			}
+
+			if _, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+				[]uuid.UUID{u.ID}, tc.to, "reason"); err != nil {
+				t.Fatalf("BulkSetStatus() = %v", err)
+			}
+
+			actions := f.sink.actions()
+			if len(actions) == 0 || actions[len(actions)-1] != tc.want {
+				t.Errorf("last recorded audit action = %v, want %q", actions, tc.want)
+			}
+		})
 	}
 }
 

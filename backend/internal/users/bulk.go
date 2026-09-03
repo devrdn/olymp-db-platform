@@ -1,19 +1,5 @@
 package users
 
-// Bulk operations apply one action to a selection of accounts.
-//
-// They run in two phases, and the split is not an optimisation but a
-// correctness requirement. Deciding who may change has to see the selection as
-// a whole: refuseIfLastAdmin asks storage how many administrators remain, so a
-// loop that called it per account would let a selection holding the last two
-// administrators through — each call sees the other one still standing.
-//
-// So the first phase resolves the selection with one read and decides
-// everything in memory, spending a single administrator budget as it goes; the
-// second applies the survivors in one transaction with one statement per kind
-// of write. A selection of five hundred costs a handful of queries rather than
-// a couple of thousand.
-
 import (
 	"context"
 	"errors"
@@ -38,7 +24,11 @@ const (
 	SkipSelf              = "self"
 	SkipLastAdministrator = "last_administrator"
 	SkipAlreadyInStatus   = "already_in_status"
-	SkipDeleted           = "deleted"
+	// SkipDeleted is unused by BulkSetStatus, which is expected to act on a
+	// deleted account (moving it to blocked or back to active). It belongs to
+	// the bulk operations that must not: bulk role changes and bulk password
+	// resets skip a deleted account rather than touch it.
+	SkipDeleted = "deleted"
 )
 
 // ErrTooManyAccounts refuses a selection above MaxBulkAccounts.
@@ -66,6 +56,19 @@ type selection struct {
 }
 
 // classify reads the selection once and asks decide about each account.
+//
+// This is the first of the two phases every bulk operation runs, and the
+// split is not an optimisation but a correctness requirement. Deciding who
+// may change has to see the selection as a whole: refuseIfLastAdmin asks
+// storage how many administrators remain, so a loop that called it per
+// account would let a selection holding the last two administrators through
+// — each call sees the other one still standing.
+//
+// So this phase resolves the selection with one read and decides everything
+// in memory, spending a single administrator budget as it goes (see
+// adminBudget); the caller then applies the survivors in one transaction
+// with one statement per kind of write. A selection of five hundred costs a
+// handful of queries rather than a couple of thousand.
 //
 // decide returns "" to accept an account or one of the skip reasons. It is
 // called in the order the caller gave the ids, so a budget it closes over is
@@ -150,17 +153,27 @@ func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uu
 		return BulkResult{}, err
 	}
 
-	// Restoring an account whose login a live one has taken collides with the
-	// partial unique index. Asked once, before the transaction, so one
-	// collision skips its own account instead of failing the whole operation.
-	taken := map[uuid.UUID]bool{}
-	if status == StatusActive {
+	// Moving a deleted account to any other status — active or blocked alike
+	// — releases the partial unique index's hold on its login and email
+	// (the index is WHERE status <> 'deleted'), so both destinations can
+	// collide with a live account that has since reclaimed one. Asked once,
+	// before the transaction, so one collision skips its own account instead
+	// of failing the whole operation.
+	taken := map[uuid.UUID]string{}
+	if status != StatusDeleted {
 		conflicting, err := s.repo.TakenAmong(ctx, ids)
 		if err != nil {
 			return BulkResult{}, err
 		}
-		for _, id := range conflicting {
-			taken[id] = true
+		for _, c := range conflicting {
+			// Both may collide; the login is what an administrator searches
+			// by, so it is the one reported.
+			switch {
+			case c.Login:
+				taken[c.ID] = SkipLoginTaken
+			case c.Email:
+				taken[c.ID] = SkipEmailTaken
+			}
 		}
 	}
 
@@ -170,8 +183,8 @@ func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uu
 			return SkipSelf
 		case u.Status == status:
 			return SkipAlreadyInStatus
-		case taken[u.ID]:
-			return SkipLoginTaken
+		case taken[u.ID] != "":
+			return taken[u.ID]
 		}
 		// Only an account that can administer today is one to protect, and
 		// only a status that cannot administer takes it away.

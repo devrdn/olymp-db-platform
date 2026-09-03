@@ -158,9 +158,12 @@ type Repository interface {
 	// ReplaceRolesMany sets the same roles on every named account.
 	ReplaceRolesMany(ctx context.Context, ids []uuid.UUID, roleCodes []string) error
 	// TakenAmong returns the deleted accounts whose login or email a live
-	// account now holds, so a restore that would collide is refused before the
-	// transaction rather than by it.
-	TakenAmong(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error)
+	// account now holds, so a move that would collide — a restore to active,
+	// or any other move that leaves "deleted" — is refused before the
+	// transaction rather than by it. Each result says which constraint the
+	// account would hit, so the caller can report the field that actually
+	// collided instead of guessing.
+	TakenAmong(ctx context.Context, ids []uuid.UUID) ([]TakenConflict, error)
 	// CountActiveWithRole returns how many accounts hold the role and can
 	// still sign in.
 	//
@@ -174,6 +177,15 @@ type Repository interface {
 type Credential struct {
 	UserID uuid.UUID
 	Hash   string
+}
+
+// TakenConflict is one deleted account TakenAmong found reclaimed by a live
+// one. Login and Email say which constraint it would trip if moved off
+// "deleted"; either or both may be true.
+type TakenConflict struct {
+	ID    uuid.UUID
+	Login bool
+	Email bool
 }
 
 // Role is one of the installation's global roles, as a person reads it.
