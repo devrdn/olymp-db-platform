@@ -751,6 +751,7 @@ const ro = {
     forbidden: "Nu aveți drepturi pentru această acțiune.",
     last_administrator: "Astfel nu ar mai rămâne nimeni care să poată administra conturile. Acordați mai întâi rolul de administrator altui cont.",
     cannot_act_on_self: "Această acțiune nu se poate aplica asupra propriului cont.",
+    account_deleted: "Acest cont este șters.",
     reason_required: "Indicați un motiv.",
     too_many_accounts: "Sunt mai multe conturi decât poate procesa o singură operațiune. Restrângeți selecția.",
     owner_immutable: "Proprietarul olimpiadei nu poate fi retras.",

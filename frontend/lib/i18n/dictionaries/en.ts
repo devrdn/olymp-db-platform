@@ -776,6 +776,7 @@ const en = {
     forbidden: "You do not have the rights for this action.",
     last_administrator: "This would leave the installation with nobody able to manage accounts. Give another account the administrator role first.",
     cannot_act_on_self: "This action cannot be applied to yourself.",
+    account_deleted: "This account is deleted.",
     reason_required: "Enter a reason.",
     too_many_accounts: "That is more accounts than one operation can take. Narrow the selection.",
     owner_immutable: "A contest owner cannot be removed.",

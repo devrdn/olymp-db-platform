@@ -60,6 +60,9 @@ export function offeredActions(
     // account holds no session to retire and no permission the roles matter
     // to.
     roles: !deleted,
-    profile: true,
+    // A deleted account has no screen to read the new name or email from,
+    // and the server refuses the edit outright (ErrAccountDeleted) — the
+    // same reasoning as resetPassword and roles above, now applied here too.
+    profile: !deleted,
   };
 }

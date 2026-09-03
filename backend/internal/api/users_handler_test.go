@@ -340,6 +340,39 @@ func TestMalformedAccountIDIsRejected(t *testing.T) {
 	}
 }
 
+// TestSingleAccountOperationsRefuseADeletedAccount closes the gap the bulk
+// endpoints already closed: bulk role changes and bulk password resets both
+// skip a deleted account (SkipDeleted), so the single-account endpoints for
+// the identical operations must answer the same way rather than silently
+// applying a change nobody can use.
+func TestSingleAccountOperationsRefuseADeletedAccount(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	target := f.repo.Add(users.User{Login: "gone", FullName: "Gone Petrov", Status: users.StatusDeleted})
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"profile", http.MethodPatch, "/users/" + target.ID.String(), `{"full_name":"New Name"}`},
+		{"password reset", http.MethodPost, "/users/" + target.ID.String() + "/password-reset", ""},
+		{"roles", http.MethodPut, "/users/" + target.ID.String() + "/roles", `{"roles":["student"]}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rec := f.do(c.method, c.path, c.body)
+
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want 409 (body: %s)", rec.Code, rec.Body.String())
+			}
+			if code := errorCode(t, rec); code != "account_deleted" {
+				t.Errorf("code = %q, want account_deleted", code)
+			}
+		})
+	}
+}
+
 func TestRolesEndpointReplacesTheSet(t *testing.T) {
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 	target := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr", Roles: []string{"student"}})

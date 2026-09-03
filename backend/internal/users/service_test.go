@@ -149,6 +149,33 @@ func TestCreateRejectsADuplicateLogin(t *testing.T) {
 	}
 }
 
+// TestCreateAllowsRecreatingADeletedLogin is the recovery workflow deletion
+// exists for: a deleted account's login must not go on blocking the
+// duplicate-login pre-check, or an account deleted by mistake could never be
+// created again under the same login. ByLogin still resolves to the deleted
+// account here (nothing live has reclaimed the login), so what is under test
+// is that Create's pre-check looks at its Status rather than treating any
+// match as taken.
+func TestCreateAllowsRecreatingADeletedLogin(t *testing.T) {
+	f := newFixture(t)
+	gone := f.addUser(t, "petrov", "old password")
+	if err := f.repo.SetStatus(context.Background(), []uuid.UUID{gone.ID}, users.StatusDeleted,
+		users.StatusChange{Reason: "created by mistake", By: f.actor}); err != nil {
+		t.Fatalf("SetStatus() = %v", err)
+	}
+
+	created, err := f.service.Create(context.Background(), users.CreateCommand{
+		ActorID: f.actor, Login: "petrov", FullName: "New Petrov",
+	})
+
+	if err != nil {
+		t.Fatalf("Create() after delete = %v, want the login to be free again", err)
+	}
+	if created.User.ID == gone.ID {
+		t.Error("Create() returned the deleted account instead of a new one")
+	}
+}
+
 func TestCreateRejectsAnEmptyLogin(t *testing.T) {
 	f := newFixture(t)
 
@@ -534,6 +561,37 @@ func TestOperationsOnAMissingAccountReportNotFound(t *testing.T) {
 	}
 }
 
+// TestOperationsOnADeletedAccountReportAccountDeleted closes the gap the bulk
+// path already closed: BulkReplaceRoles and BulkResetPassword both skip a
+// deleted account in a selection (SkipDeleted), but until now the
+// single-account UpdateProfile, ResetPassword and ReplaceRoles had no such
+// guard at all — an administrator could reset a deleted account's password
+// through this endpoint and be refused through the bulk one for the identical
+// operation.
+func TestOperationsOnADeletedAccountReportAccountDeleted(t *testing.T) {
+	f := newFixture(t)
+	deleted := f.repo.Add(users.User{
+		Login: "gone", FullName: "Gone Petrov", Status: users.StatusDeleted,
+	})
+	ctx := context.Background()
+
+	if err := f.service.UpdateProfile(ctx, f.actor, deleted.ID, "New Name", ""); !errors.Is(err, users.ErrAccountDeleted) {
+		t.Errorf("UpdateProfile() = %v, want ErrAccountDeleted", err)
+	}
+	if _, err := f.service.ResetPassword(ctx, f.actor, deleted.ID); !errors.Is(err, users.ErrAccountDeleted) {
+		t.Errorf("ResetPassword() = %v, want ErrAccountDeleted", err)
+	}
+	if err := f.service.ReplaceRoles(ctx, f.actor, deleted.ID, []string{"student"}); !errors.Is(err, users.ErrAccountDeleted) {
+		t.Errorf("ReplaceRoles() = %v, want ErrAccountDeleted", err)
+	}
+
+	// None of the refusals above may have changed anything.
+	stored, _ := f.repo.Get(deleted.ID)
+	if stored.FullName != "Gone Petrov" || len(stored.Roles) != 0 {
+		t.Errorf("stored = %+v, want the refused operations to leave the account untouched", stored)
+	}
+}
+
 func mustHash(t *testing.T, plaintext string) string {
 	t.Helper()
 	hash, err := password.Hash(plaintext)
@@ -593,6 +651,38 @@ func TestBootstrapIsIdempotent(t *testing.T) {
 	stored, _ := f.repo.Get(first.User.ID)
 	if ok, _ := password.Verify(stored.PasswordHash, first.OneTimePassword); !ok {
 		t.Error("the existing administrator's password was replaced")
+	}
+}
+
+// TestBootstrapCreatesAFreshAdminWhenTheOldOneWasDeleted is idempotency's
+// other half: a deleted administrator under that login is not the reachable
+// account BootstrapAdmin is idempotent about, so its login must not be
+// treated as already taken care of — the login is free, exactly as Create's
+// own duplicate check now treats it.
+func TestBootstrapCreatesAFreshAdminWhenTheOldOneWasDeleted(t *testing.T) {
+	f := newFixture(t)
+	first, err := f.service.BootstrapAdmin(context.Background(), "root", "Root Administrator")
+	if err != nil {
+		t.Fatalf("first BootstrapAdmin() returned error: %v", err)
+	}
+	if err := f.repo.SetStatus(context.Background(), []uuid.UUID{first.User.ID}, users.StatusDeleted,
+		users.StatusChange{Reason: "left the university", By: first.User.ID}); err != nil {
+		t.Fatalf("SetStatus() = %v", err)
+	}
+
+	second, err := f.service.BootstrapAdmin(context.Background(), "root", "Root Administrator")
+
+	if err != nil {
+		t.Fatalf("second BootstrapAdmin() returned error: %v", err)
+	}
+	if !second.Created {
+		t.Error("Created = false, want a fresh administrator: the old one under this login is deleted")
+	}
+	if second.User.ID == first.User.ID {
+		t.Error("BootstrapAdmin() returned the deleted account instead of creating a new one")
+	}
+	if second.OneTimePassword == "" {
+		t.Error("no password was issued for the new administrator")
 	}
 }
 

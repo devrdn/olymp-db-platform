@@ -73,6 +73,10 @@ describe("offeredActions, for a deleted account", () => {
     expect(offered.unblock).toBe(false);
     expect(offered.resetPassword).toBe(false);
     expect(offered.roles).toBe(false);
+    // The server refuses a profile edit on a deleted account the same way it
+    // refuses a password reset or a role change (ErrAccountDeleted); a
+    // control that exists only to be refused teaches nothing.
+    expect(offered.profile).toBe(false);
   });
 
   test("offers delete on an active or a blocked account, but not on a deleted one", () => {

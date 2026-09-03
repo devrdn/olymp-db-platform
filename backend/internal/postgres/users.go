@@ -88,11 +88,37 @@ func scanUser(row pgx.Row) (users.User, error) {
 	return u, nil
 }
 
-// ByLogin resolves an account case-insensitively, matching the unique index on
-// lower(login).
+// ByLogin resolves an account case-insensitively, preferring a live account
+// over a deleted one whenever both match.
+//
+// The partial unique index on lower(login) (WHERE status <> 'deleted') only
+// promises at most one *live* row per login — it says nothing about a
+// deleted one. Deletion exists precisely so a login can be reused, so once an
+// account has been deleted and recreated, two rows legitimately share
+// lower(login): the deleted original and the live account that now actually
+// means that login. A bare SELECT with no ORDER BY gives no guarantee which
+// one a single-row QueryRow gets, and before this ORDER BY existed that let
+// sign-in resolve to the deleted original (checking the password against the
+// wrong hash) and let Service.Create refuse to recreate the account at all
+// (finding the deleted row and reporting the login taken). `status = 'deleted'`
+// is false for a live row and true for a deleted one, and false sorts first,
+// so ORDER BY puts a live row ahead of a deleted one whenever one exists.
+//
+// When nothing live matches, this still returns a deleted row rather than
+// ErrNotFound — the login is not literally unclaimed, only free to be
+// reclaimed. auth.Service.Login relies on that: it is what lets a deleted
+// account's own owner be told the account is inaccessible rather than that
+// no such login exists (see TestDeletedAccountIsRejectedEvenWithTheRightPassword).
+// A caller for whom a deleted account must NOT count as "found" —
+// users.Service.Create's duplicate check, BootstrapAdmin's idempotency
+// check — has to inspect the returned Status itself; ByLogin only orders the
+// candidates, it does not decide who is allowed to treat which one as absent.
 func (r *Users) ByLogin(ctx context.Context, login string) (users.User, error) {
 	row := r.querier(ctx).QueryRow(ctx,
-		`SELECT `+userColumns+` FROM users u `+userJoin+` WHERE lower(u.login) = lower($1)`, login)
+		`SELECT `+userColumns+` FROM users u `+userJoin+`
+		 WHERE lower(u.login) = lower($1)
+		 ORDER BY (u.status = 'deleted')
+		 LIMIT 1`, login)
 	return scanUser(row)
 }
 
