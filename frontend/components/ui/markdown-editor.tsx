@@ -212,12 +212,18 @@ export function MarkdownEditor({
           // Clipping belongs on this element and never on `.milkdown` —
           // putting it there clips the handle itself, since the handle sits at
           // a negative offset from exactly that box.
+          //
+          // `hidden` rather than `clip`, and they are the same thing here: the
+          // spec computes `clip` to `hidden` whenever the other axis scrolls,
+          // which this one does. Spelling the used value means one less
+          // dependency on how new a browser is, in a component that already
+          // behaves differently in more of them than it should.
           "border border-edge bg-bg py-2.5 pr-3 pl-14",
           // Filling the screen means filling it: the box takes the height it
           // has been given and the text scrolls inside, rather than the page
           // scrolling under a surface meant to be the whole of it.
           full
-            ? "min-h-0 flex-1 overflow-x-clip overflow-y-auto py-3.5 pl-24"
+            ? "min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-3.5 pl-24"
             : // Closed, every language is the same rectangle, and the text
               // scrolls inside it. A height that follows the content leaves
               // the row of languages a staircase — one box short, the next
@@ -231,7 +237,7 @@ export function MarkdownEditor({
               // that scrolls inside a page that scrolls is a trap for the
               // thumb, and the 96px of gutter that clipping costs would take
               // a quarter of the screen away from the words.
-              "min-h-40 narrow:h-[32rem] narrow:overflow-x-clip narrow:overflow-y-auto narrow:pl-24",
+              "min-h-40 narrow:h-[32rem] narrow:overflow-x-hidden narrow:overflow-y-auto narrow:pl-24",
         )}
       />
       <input type="hidden" name={name} value={markdown} />
