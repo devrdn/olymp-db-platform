@@ -61,6 +61,11 @@ func (s *sink) Append(_ context.Context, e audit.Entry) error {
 	return nil
 }
 
+func (s *sink) AppendMany(_ context.Context, entries []audit.Entry) error {
+	s.entries = append(s.entries, entries...)
+	return nil
+}
+
 // unitOfWork runs the function directly. It cannot roll back a map, and no
 // test claims it does: what the fixture exercises is the rules, while the
 // atomicity of the writes belongs to the real transaction runner.

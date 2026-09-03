@@ -176,3 +176,213 @@ func TestDeletedAccountReleasesItsLogin(t *testing.T) {
 		}
 	})
 }
+
+func TestByIDsReturnsWhatExists(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		first := makeUser(t, ctx, "byids-ivanov")
+		second := makeUser(t, ctx, "byids-petrov")
+
+		// A missing id is not an error: telling the caller which of its ids
+		// exist is the whole job, and the bulk path turns the absent ones into
+		// skips.
+		found, err := repo.ByIDs(ctx, []uuid.UUID{first.ID, uuid.New(), second.ID})
+		if err != nil {
+			t.Fatalf("ByIDs() = %v", err)
+		}
+		if len(found) != 2 {
+			t.Fatalf("ByIDs() returned %d accounts, want 2", len(found))
+		}
+		byID := map[uuid.UUID]users.User{found[0].ID: found[0], found[1].ID: found[1]}
+		if _, ok := byID[first.ID]; !ok {
+			t.Errorf("ByIDs() is missing %v", first.ID)
+		}
+		if _, ok := byID[second.ID]; !ok {
+			t.Errorf("ByIDs() is missing %v", second.ID)
+		}
+	})
+}
+
+func TestByIDsCollapsesARepeatedID(t *testing.T) {
+	// ANY($1) is a membership test, not a join: a caller that (accidentally)
+	// repeats an id must not see the account twice.
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		u := makeUser(t, ctx, "byids-repeated")
+
+		found, err := repo.ByIDs(ctx, []uuid.UUID{u.ID, u.ID})
+		if err != nil {
+			t.Fatalf("ByIDs() = %v", err)
+		}
+		if len(found) != 1 {
+			t.Errorf("ByIDs() returned %d accounts for a repeated id, want 1", len(found))
+		}
+	})
+}
+
+func TestTakenAmongFindsRestoreConflicts(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		gone := makeUser(t, ctx, "taken-among-ivanov")
+		if err := repo.SetStatus(ctx, []uuid.UUID{gone.ID}, users.StatusDeleted,
+			users.StatusChange{Reason: "mistake", By: gone.ID, At: time.Now()}); err != nil {
+			t.Fatalf("SetStatus() = %v", err)
+		}
+		if _, err := repo.Create(ctx, users.User{
+			Login: "taken-among-ivanov", FullName: "Ivanov", PasswordHash: "x", Status: users.StatusActive,
+		}); err != nil {
+			t.Fatalf("Create() = %v", err)
+		}
+
+		// Restoring this one would collide with the live account that took the
+		// login. Finding that out before the transaction is what keeps the
+		// rest of a bulk restore working.
+		taken, err := repo.TakenAmong(ctx, []uuid.UUID{gone.ID})
+		if err != nil {
+			t.Fatalf("TakenAmong() = %v", err)
+		}
+		if len(taken) != 1 || taken[0] != gone.ID {
+			t.Fatalf("TakenAmong() = %v, want [%v]", taken, gone.ID)
+		}
+	})
+}
+
+func TestTakenAmongIgnoresADeletedAccountNobodyReclaimed(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		gone := makeUser(t, ctx, "taken-among-free")
+		if err := repo.SetStatus(ctx, []uuid.UUID{gone.ID}, users.StatusDeleted,
+			users.StatusChange{Reason: "mistake", By: gone.ID, At: time.Now()}); err != nil {
+			t.Fatalf("SetStatus() = %v", err)
+		}
+
+		// Nobody took the login back, so a restore would not collide.
+		taken, err := repo.TakenAmong(ctx, []uuid.UUID{gone.ID})
+		if err != nil {
+			t.Fatalf("TakenAmong() = %v", err)
+		}
+		if len(taken) != 0 {
+			t.Errorf("TakenAmong() = %v, want none", taken)
+		}
+	})
+}
+
+func TestBumpSessionGenerationManyRetiresEverySession(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		first := makeUser(t, ctx, "bump-many-first")
+		second := makeUser(t, ctx, "bump-many-second")
+
+		// A missing id must not fail the rest: the bulk path resolves accounts
+		// first and this only ever sees ones it already checked exist, but the
+		// method itself makes no such assumption.
+		if err := repo.BumpSessionGenerationMany(ctx, []uuid.UUID{first.ID, uuid.New(), second.ID}); err != nil {
+			t.Fatalf("BumpSessionGenerationMany() = %v", err)
+		}
+
+		for _, id := range []uuid.UUID{first.ID, second.ID} {
+			got, err := repo.ByID(ctx, id)
+			if err != nil {
+				t.Fatalf("ByID(%v) = %v", id, err)
+			}
+			if got.SessionGeneration != 1 {
+				t.Errorf("account %v session generation = %d, want 1", id, got.SessionGeneration)
+			}
+		}
+	})
+}
+
+func TestSetPasswordManyStoresADigestPerAccount(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		first := makeUser(t, ctx, "setpw-many-first")
+		second := makeUser(t, ctx, "setpw-many-second")
+
+		err := repo.SetPasswordMany(ctx, []users.Credential{
+			{UserID: first.ID, Hash: "hash-one"},
+			{UserID: second.ID, Hash: "hash-two"},
+		})
+		if err != nil {
+			t.Fatalf("SetPasswordMany() = %v", err)
+		}
+
+		gotFirst, err := repo.ByID(ctx, first.ID)
+		if err != nil {
+			t.Fatalf("ByID(first) = %v", err)
+		}
+		if gotFirst.PasswordHash != "hash-one" || !gotFirst.MustChangePassword {
+			t.Errorf("first account = %q/%v, want hash-one and must-change",
+				gotFirst.PasswordHash, gotFirst.MustChangePassword)
+		}
+
+		gotSecond, err := repo.ByID(ctx, second.ID)
+		if err != nil {
+			t.Fatalf("ByID(second) = %v", err)
+		}
+		if gotSecond.PasswordHash != "hash-two" {
+			t.Errorf("second account password = %q, want hash-two", gotSecond.PasswordHash)
+		}
+	})
+}
+
+func TestReplaceRolesManySetsTheSameRolesOnEveryAccount(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		first := makeUser(t, ctx, "roles-many-first")
+		second := makeUser(t, ctx, "roles-many-second")
+
+		if err := repo.ReplaceRolesMany(ctx, []uuid.UUID{first.ID, second.ID},
+			[]string{"organizer"}); err != nil {
+			t.Fatalf("ReplaceRolesMany() = %v", err)
+		}
+
+		for _, id := range []uuid.UUID{first.ID, second.ID} {
+			got, err := repo.ByID(ctx, id)
+			if err != nil {
+				t.Fatalf("ByID(%v) = %v", id, err)
+			}
+			if len(got.Roles) != 1 || got.Roles[0] != "organizer" {
+				t.Errorf("account %v roles = %v, want [organizer]", id, got.Roles)
+			}
+		}
+	})
+}
+
+func TestReplaceRolesManyReportsAnUnknownCode(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		u := makeUser(t, ctx, "roles-many-typo")
+
+		err := repo.ReplaceRolesMany(ctx, []uuid.UUID{u.ID}, []string{"organizer", "orgainzer"})
+		if err == nil {
+			t.Fatal("ReplaceRolesMany() with a typo'd code succeeded")
+		}
+		if got := err.Error(); got != "assign roles: 1 of 2 codes are not known roles" {
+			t.Errorf("err = %q, want it to name exactly one unknown code of two", got)
+		}
+	})
+}
+
+func TestReplaceRolesManyTreatsARepeatedCodeAsOne(t *testing.T) {
+	// Roles are a set an account holds. A caller-supplied duplicate is not a
+	// second, unknown role — the row-count check must not report it as one.
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		first := makeUser(t, ctx, "roles-many-dup-first")
+		second := makeUser(t, ctx, "roles-many-dup-second")
+
+		err := repo.ReplaceRolesMany(ctx, []uuid.UUID{first.ID, second.ID},
+			[]string{"organizer", "organizer"})
+		if err != nil {
+			t.Fatalf("ReplaceRolesMany() with a repeated known code = %v", err)
+		}
+
+		got, err := repo.ByID(ctx, first.ID)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
+		}
+		if len(got.Roles) != 1 || got.Roles[0] != "organizer" {
+			t.Errorf("roles = %v, want a single organizer role, not one per repeat", got.Roles)
+		}
+	})
+}

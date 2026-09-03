@@ -29,6 +29,14 @@ func (s *collectingSink) Append(_ context.Context, e audit.Entry) error {
 	return nil
 }
 
+func (s *collectingSink) AppendMany(_ context.Context, entries []audit.Entry) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.entries = append(s.entries, entries...)
+	return nil
+}
+
 func (s *collectingSink) actions() []string {
 	out := make([]string, 0, len(s.entries))
 	for _, e := range s.entries {

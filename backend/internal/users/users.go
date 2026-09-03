@@ -127,6 +127,10 @@ type Repository interface {
 	// ErrNotFound when there is no such account.
 	ByLogin(ctx context.Context, login string) (User, error)
 	ByID(ctx context.Context, id uuid.UUID) (User, error)
+	// ByIDs resolves the accounts that exist among the ids, in no particular
+	// order. An id with no account is absent from the result rather than an
+	// error: which of them exist is what the caller asked.
+	ByIDs(ctx context.Context, ids []uuid.UUID) ([]User, error)
 	// Create stores a new account and returns it with its generated id.
 	Create(ctx context.Context, u User) (User, error)
 	// List returns a page of accounts ordered by login.
@@ -139,13 +143,24 @@ type Repository interface {
 	SetStatus(ctx context.Context, ids []uuid.UUID, status string, change StatusChange) error
 	// SetPassword stores a new digest and clears the one-time-password flag.
 	SetPassword(ctx context.Context, id uuid.UUID, hash string, mustChange bool) error
+	// SetPasswordMany stores a digest per account and marks each one as
+	// carrying a one-time password.
+	SetPasswordMany(ctx context.Context, creds []Credential) error
 	// BumpSessionGeneration retires every session issued for the account and
 	// returns the new value.
 	BumpSessionGeneration(ctx context.Context, id uuid.UUID) (int64, error)
+	// BumpSessionGenerationMany retires every session of every named account.
+	BumpSessionGenerationMany(ctx context.Context, ids []uuid.UUID) error
 	// RecordLogin stamps the successful login time.
 	RecordLogin(ctx context.Context, id uuid.UUID, at time.Time) error
 	// ReplaceRoles sets the account's global roles to exactly these codes.
 	ReplaceRoles(ctx context.Context, id uuid.UUID, roleCodes []string) error
+	// ReplaceRolesMany sets the same roles on every named account.
+	ReplaceRolesMany(ctx context.Context, ids []uuid.UUID, roleCodes []string) error
+	// TakenAmong returns the deleted accounts whose login or email a live
+	// account now holds, so a restore that would collide is refused before the
+	// transaction rather than by it.
+	TakenAmong(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error)
 	// CountActiveWithRole returns how many accounts hold the role and can
 	// still sign in.
 	//
@@ -153,6 +168,12 @@ type Repository interface {
 	// administrator who cannot administer, so counting them would let the last
 	// usable one be demoted on the strength of an account nobody can use.
 	CountActiveWithRole(ctx context.Context, roleCode string) (int, error)
+}
+
+// Credential is one account's new password digest.
+type Credential struct {
+	UserID uuid.UUID
+	Hash   string
 }
 
 // Role is one of the installation's global roles, as a person reads it.
