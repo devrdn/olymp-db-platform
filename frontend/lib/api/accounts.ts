@@ -32,6 +32,11 @@ export const accountSchema = z
     must_change_password: z.boolean().default(false),
     last_login_at: z.string().optional(),
     created_at: z.string(),
+    // All three empty for an account nobody has ever blocked or deleted — see
+    // `UserResponse` in `backend/internal/api/users_handler.go`.
+    status_reason: z.string().optional(),
+    status_changed_at: z.string().optional(),
+    status_changed_by: z.string().optional(),
   })
   .transform((raw) => ({
     id: raw.id,
@@ -49,6 +54,11 @@ export const accountSchema = z
     mustChangePassword: raw.must_change_password,
     lastLoginAt: raw.last_login_at,
     createdAt: raw.created_at,
+    /** "" for an account nobody has blocked or deleted — never rendered as a frame. */
+    statusReason: raw.status_reason ?? "",
+    statusChangedAt: raw.status_changed_at,
+    /** The changing actor's id. The account card resolves it to a name by asking `/users/{id}` again. */
+    statusChangedBy: raw.status_changed_by,
   }));
 
 export type Account = z.infer<typeof accountSchema>;

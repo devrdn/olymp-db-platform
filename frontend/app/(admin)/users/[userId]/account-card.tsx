@@ -1,17 +1,20 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import type { Account, Role } from "@/lib/api/accounts";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import {
   blockAction,
+  deleteAction,
   replaceRolesAction,
   resetPasswordAction,
+  restoreAction,
   unblockAction,
   updateProfileAction,
   type AccountState,
@@ -76,17 +79,59 @@ function Outcome({ state, dict }: { state: AccountState; dict: Dictionary }) {
   return null;
 }
 
+/**
+ * A reason field that refuses to submit empty or whitespace-only, the same
+ * rule the bulk block and delete dialogs enforce (`selection.tsx`'s
+ * `StatusForm`). `noValidate` on the enclosing form keeps the browser's own
+ * unstyled, unlocalised validation bubble from ever firing — this check, and
+ * the message it shows, are what decide whether the request leaves.
+ */
+function ReasonField({
+  id,
+  label,
+  missing,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  missing: boolean;
+  onChange: (empty: boolean) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <label htmlFor={id} className="font-mono text-label text-ink-3 uppercase">
+        {label}
+      </label>
+      <Textarea
+        id={id}
+        name="reason"
+        required
+        aria-invalid={missing || undefined}
+        className="min-h-24 font-sans text-body"
+        onChange={(event) => onChange(event.currentTarget.value.trim() === "")}
+      />
+    </div>
+  );
+}
+
 export function AccountCard({
   account,
   roles,
   viewerId,
   dict,
+  /** Who last changed the account's status — null when nobody has, or when
+      the actor could not be resolved. */
+  statusChangedBy,
+  /** The status-change moment, already formatted for the active locale. */
+  statusChangedAtLabel,
 }: {
   account: Account;
   roles: Role[];
   /** Who is looking, so the screen does not offer them a self-block. */
   viewerId: string;
   dict: Dictionary;
+  statusChangedBy: { fullName: string; login: string } | null;
+  statusChangedAtLabel: string | null;
 }) {
   const t = dict.accounts.card;
   const offered = offeredActions(account, viewerId);
@@ -97,13 +142,44 @@ export function AccountCard({
     account.status === "active" ? blockAction : unblockAction,
     {},
   );
+  const [deleteState, runDelete, deleting] = useActionState<AccountState, FormData>(
+    deleteAction,
+    {},
+  );
+  const [restoreState, runRestore, restoring] = useActionState<AccountState, FormData>(
+    restoreAction,
+    {},
+  );
   const [reset, resetPassword, resetting] = useActionState<ResetState, FormData>(
     resetPasswordAction,
     {},
   );
 
+  const [blockReasonMissing, setBlockReasonMissing] = useState(false);
+  const [deleteReasonMissing, setDeleteReasonMissing] = useState(false);
+
+  const offersDanger =
+    offered.block || offered.unblock || offered.delete || offered.restore || offered.resetPassword;
+
   return (
     <div className="flex flex-col gap-8">
+      {/* Only when there is something to account for: an account nobody has
+          ever blocked or deleted carries an empty statusReason (see
+          `accountSchema` in `lib/api/accounts.ts`), and showing this panel
+          for it would be an empty frame around nothing. */}
+      {account.statusReason ? (
+        <Panel title={t.statusTitle}>
+          <div className="flex flex-col gap-2">
+            <p className="max-w-body text-body text-ink">{account.statusReason}</p>
+            <p className="text-small text-ink-3">
+              {t.changedBy
+                .replace("{name}", statusChangedBy?.fullName ?? t.unknownActor)
+                .replace("{date}", statusChangedAtLabel ?? "")}
+            </p>
+          </div>
+        </Panel>
+      ) : null}
+
       <Panel title={t.profile}>
         {/* Keyed on what the server last returned, so a saved value replaces
             what was typed rather than the field keeping a stale draft. */}
@@ -127,74 +203,168 @@ export function AccountCard({
         </form>
       </Panel>
 
-      <Panel title={t.roles} hint={t.rolesHint}>
-        <form key={account.roles.join(",")} action={saveRoles} className="flex flex-col gap-5">
-          <input type="hidden" name="userId" value={account.id} />
-
-          <div className="flex flex-col gap-2.5">
-            {roles.map((role) => (
-              <label key={role.code} className="flex items-center gap-2.5 text-control text-ink">
-                <input
-                  type="checkbox"
-                  name="roles"
-                  value={role.code}
-                  defaultChecked={account.roles.includes(role.code)}
-                  className="size-4 accent-cta"
-                />
-                {role.name}
-                <span className="font-mono text-data text-ink-3">{role.code}</span>
-              </label>
-            ))}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-4">
-            <Button type="submit" disabled={savingRoles}>
-              {savingRoles ? t.saving : t.save}
-            </Button>
-            <Outcome state={roleState} dict={dict} />
-          </div>
-        </form>
-      </Panel>
-
-      <Panel title={t.danger}>
-        <div className="flex flex-col gap-6">
-          {offered.block || offered.unblock ? (
-            <form action={changeAccess} className="flex flex-col gap-2.5">
-              <input type="hidden" name="userId" value={account.id} />
-              <p className="max-w-body text-small text-ink-2">{t.blockNote}</p>
-              <div className="flex flex-wrap items-center gap-4">
-                <Button type="submit" variant="danger" disabled={changingAccess}>
-                  {offered.block ? t.block : t.unblock}
-                </Button>
-                <Outcome state={access} dict={dict} />
-              </div>
-            </form>
-          ) : null}
-
-          <form action={resetPassword} className="flex flex-col gap-2.5">
+      {offered.roles ? (
+        <Panel title={t.roles} hint={t.rolesHint}>
+          <form key={account.roles.join(",")} action={saveRoles} className="flex flex-col gap-5">
             <input type="hidden" name="userId" value={account.id} />
-            <p className="max-w-body text-small text-ink-2">{t.resetNote}</p>
-            <div className="flex flex-wrap items-center gap-4">
-              <Button type="submit" variant="secondary" disabled={resetting}>
-                {resetting ? t.saving : t.resetPassword}
-              </Button>
-              <Outcome state={{ code: reset.code }} dict={dict} />
+
+            <div className="flex flex-col gap-2.5">
+              {roles.map((role) => (
+                <label key={role.code} className="flex items-center gap-2.5 text-control text-ink">
+                  <input
+                    type="checkbox"
+                    name="roles"
+                    value={role.code}
+                    defaultChecked={account.roles.includes(role.code)}
+                    className="size-4 accent-cta"
+                  />
+                  {role.name}
+                  <span className="font-mono text-data text-ink-3">{role.code}</span>
+                </label>
+              ))}
             </div>
 
-            {/* Shown until the administrator leaves the page, not flashed in a
-                toast: it arrives exactly once and cannot be retrieved again,
-                so a glance that misses it costs another reset. */}
-            {reset.oneTimePassword ? (
-              <div className="mt-2 flex max-w-body flex-col gap-2 border border-warn bg-warn-wash p-4">
-                <p className="text-small text-ink-2">{t.handover}</p>
-                <code className="font-mono text-row text-ink select-all">
-                  {reset.oneTimePassword}
-                </code>
-              </div>
-            ) : null}
+            <div className="flex flex-wrap items-center gap-4">
+              <Button type="submit" disabled={savingRoles}>
+                {savingRoles ? t.saving : t.save}
+              </Button>
+              <Outcome state={roleState} dict={dict} />
+            </div>
           </form>
-        </div>
-      </Panel>
+        </Panel>
+      ) : null}
+
+      {offersDanger ? (
+        <Panel title={t.danger}>
+          <div className="flex flex-col gap-6">
+            {offered.block || offered.unblock ? (
+              <form
+                action={changeAccess}
+                onSubmit={(event) => {
+                  // Unblocking needs no justification — only a block does.
+                  if (!offered.block) return;
+                  const reason = String(new FormData(event.currentTarget).get("reason") ?? "").trim();
+                  if (reason === "") {
+                    event.preventDefault();
+                    setBlockReasonMissing(true);
+                  } else {
+                    setBlockReasonMissing(false);
+                  }
+                }}
+                className="flex flex-col gap-2.5"
+                noValidate
+              >
+                <input type="hidden" name="userId" value={account.id} />
+                <p className="max-w-body text-small text-ink-2">{t.blockNote}</p>
+
+                {offered.block ? (
+                  <ReasonField
+                    id="block-reason"
+                    label={t.reasonLabel}
+                    missing={blockReasonMissing}
+                    onChange={(empty) => {
+                      if (blockReasonMissing && !empty) setBlockReasonMissing(false);
+                    }}
+                  />
+                ) : null}
+
+                <div className="flex flex-wrap items-center gap-4">
+                  <Button type="submit" variant="danger" disabled={changingAccess}>
+                    {offered.block ? t.block : t.unblock}
+                  </Button>
+                  {blockReasonMissing ? (
+                    <p role="alert" className="text-small text-bad">
+                      {dict.errors.reason_required}
+                    </p>
+                  ) : (
+                    <Outcome state={access} dict={dict} />
+                  )}
+                </div>
+              </form>
+            ) : null}
+
+            {offered.delete ? (
+              <form
+                action={runDelete}
+                onSubmit={(event) => {
+                  const reason = String(new FormData(event.currentTarget).get("reason") ?? "").trim();
+                  if (reason === "") {
+                    event.preventDefault();
+                    setDeleteReasonMissing(true);
+                  } else {
+                    setDeleteReasonMissing(false);
+                  }
+                }}
+                className="flex flex-col gap-2.5"
+                noValidate
+              >
+                <input type="hidden" name="userId" value={account.id} />
+                <p className="max-w-body text-small text-ink-2">{t.deleteNote}</p>
+
+                <ReasonField
+                  id="delete-reason"
+                  label={t.reasonLabel}
+                  missing={deleteReasonMissing}
+                  onChange={(empty) => {
+                    if (deleteReasonMissing && !empty) setDeleteReasonMissing(false);
+                  }}
+                />
+
+                <div className="flex flex-wrap items-center gap-4">
+                  <Button type="submit" variant="danger" disabled={deleting}>
+                    {deleting ? t.saving : t.delete}
+                  </Button>
+                  {deleteReasonMissing ? (
+                    <p role="alert" className="text-small text-bad">
+                      {dict.errors.reason_required}
+                    </p>
+                  ) : (
+                    <Outcome state={deleteState} dict={dict} />
+                  )}
+                </div>
+              </form>
+            ) : null}
+
+            {offered.restore ? (
+              <form action={runRestore} className="flex flex-col gap-2.5">
+                <input type="hidden" name="userId" value={account.id} />
+                <p className="max-w-body text-small text-ink-2">{t.restoreNote}</p>
+                <div className="flex flex-wrap items-center gap-4">
+                  <Button type="submit" variant="secondary" disabled={restoring}>
+                    {restoring ? t.saving : t.restore}
+                  </Button>
+                  <Outcome state={restoreState} dict={dict} />
+                </div>
+              </form>
+            ) : null}
+
+            {offered.resetPassword ? (
+              <form action={resetPassword} className="flex flex-col gap-2.5">
+                <input type="hidden" name="userId" value={account.id} />
+                <p className="max-w-body text-small text-ink-2">{t.resetNote}</p>
+                <div className="flex flex-wrap items-center gap-4">
+                  <Button type="submit" variant="secondary" disabled={resetting}>
+                    {resetting ? t.saving : t.resetPassword}
+                  </Button>
+                  <Outcome state={{ code: reset.code }} dict={dict} />
+                </div>
+
+                {/* Shown until the administrator leaves the page, not flashed in a
+                    toast: it arrives exactly once and cannot be retrieved again,
+                    so a glance that misses it costs another reset. */}
+                {reset.oneTimePassword ? (
+                  <div className="mt-2 flex max-w-body flex-col gap-2 border border-warn bg-warn-wash p-4">
+                    <p className="text-small text-ink-2">{t.handover}</p>
+                    <code className="font-mono text-row text-ink select-all">
+                      {reset.oneTimePassword}
+                    </code>
+                  </div>
+                ) : null}
+              </form>
+            ) : null}
+          </div>
+        </Panel>
+      ) : null}
     </div>
   );
 }

@@ -278,6 +278,48 @@ func TestRestoreEndpointRestoresTheAccount(t *testing.T) {
 	}
 }
 
+func TestByIDReportsWhoAndWhyForAStatusChangeAndNothingForAFreshAccount(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	target := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr"})
+	fresh := f.repo.Add(users.User{Login: "sidorov", FullName: "Sidor"})
+
+	if rec := f.do(http.MethodPost, "/users/"+target.ID.String()+"/block", `{"reason":"cheating in the October contest"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("block status = %d, want 204 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	rec := f.do(http.MethodGet, "/users/"+target.ID.String(), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		StatusReason    string `json:"status_reason"`
+		StatusChangedAt string `json:"status_changed_at"`
+		StatusChangedBy string `json:"status_changed_by"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if body.StatusReason != "cheating in the October contest" {
+		t.Errorf("status_reason = %q, want the reason the block was given", body.StatusReason)
+	}
+	if body.StatusChangedAt == "" {
+		t.Error("status_changed_at is empty, want the moment the block landed")
+	}
+	if body.StatusChangedBy != f.admin.ID.String() {
+		t.Errorf("status_changed_by = %q, want the blocking administrator %q", body.StatusChangedBy, f.admin.ID.String())
+	}
+
+	// An account nobody has ever blocked or deleted has nothing to account
+	// for — the response must not carry an empty history for it to render.
+	rec = f.do(http.MethodGet, "/users/"+fresh.ID.String(), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "status_reason") || strings.Contains(rec.Body.String(), "status_changed_at") {
+		t.Errorf("a fresh account's response names a status change that never happened: %s", rec.Body.String())
+	}
+}
+
 func TestUnknownAccountIsReportedAsNotFound(t *testing.T) {
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 

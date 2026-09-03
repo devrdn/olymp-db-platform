@@ -61,3 +61,38 @@ describe("offeredActions, when the viewer is not known", () => {
     });
   });
 });
+
+describe("offeredActions, for a deleted account", () => {
+  const deleted = { id: "u-2", status: "deleted" as const };
+
+  test("offers restore and nothing that assumes the account can still be reached", () => {
+    const offered = offeredActions(deleted, viewer);
+
+    expect(offered.restore).toBe(true);
+    expect(offered.block).toBe(false);
+    expect(offered.unblock).toBe(false);
+    expect(offered.resetPassword).toBe(false);
+    expect(offered.roles).toBe(false);
+  });
+
+  test("offers delete on an active or a blocked account, but not on a deleted one", () => {
+    expect(offeredActions(other, viewer).delete).toBe(true);
+    expect(offeredActions({ ...other, status: "blocked" }, viewer).delete).toBe(true);
+    expect(offeredActions(deleted, viewer).delete).toBe(false);
+  });
+
+  test("never offers to restore an account that is not deleted", () => {
+    expect(offeredActions(other, viewer).restore).toBe(false);
+    expect(offeredActions({ ...other, status: "blocked" }, viewer).restore).toBe(false);
+  });
+
+  test("never offers to delete your own account, the same rule as blocking", () => {
+    expect(offeredActions({ ...self, status: "active" }, viewer).delete).toBe(false);
+  });
+
+  test("offers no restore at all when the viewer is not known", () => {
+    // Same fail-closed reasoning as block: an empty viewerId must not read as
+    // "not you" on every account, including one that happens to be deleted.
+    expect(offeredActions(deleted, "").restore).toBe(false);
+  });
+});

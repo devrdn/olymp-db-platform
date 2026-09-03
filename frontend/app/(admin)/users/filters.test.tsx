@@ -72,3 +72,33 @@ describe("AccountFilters, when the query changes from outside", () => {
     expect(picker.value).toBe("blocked");
   });
 });
+
+/**
+ * The status filter is driven off `ACCOUNT_STATUSES`, which already carries
+ * "deleted" (task 8). What this task adds is honesty about what the empty
+ * option means: the backend reads it as "everyone except the deleted", not
+ * as "everyone" — see `users.Filter` and the comment on the option in
+ * `filters.tsx`.
+ */
+describe("AccountFilters, the status options", () => {
+  test("offers deleted as a status to filter by, without a second definition", () => {
+    render(<AccountFilters query="" status="" dict={en} />);
+    const picker = screen.getByLabelText(en.accounts.filter) as HTMLSelectElement;
+
+    const values = [...picker.options].map((option) => option.value);
+    expect(values).toContain("deleted");
+  });
+
+  test("labels the empty option as excluding deleted accounts, not as 'all' of them", () => {
+    render(<AccountFilters query="" status="" dict={en} />);
+    const picker = screen.getByLabelText(en.accounts.filter) as HTMLSelectElement;
+    const label = picker.options[0]?.textContent ?? "";
+
+    // A bare "All" or "Any state" would tell an administrator this shows
+    // every account when it deliberately does not; the label has to name
+    // what is left out.
+    expect(label.toLowerCase()).not.toBe("all");
+    expect(label.toLowerCase()).not.toBe("any state");
+    expect(label.toLowerCase()).toContain("deleted");
+  });
+});

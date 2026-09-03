@@ -131,6 +131,18 @@ type UserResponse struct {
 	MustChangePassword bool   `json:"must_change_password"`
 	LastLoginAt        string `json:"last_login_at,omitempty"`
 	CreatedAt          string `json:"created_at"`
+	// StatusReason, StatusChangedAt and StatusChangedBy explain the current
+	// status: why, when, and by whom. All three are empty for an account
+	// nobody has ever blocked or deleted — a fresh account has nothing to
+	// account for, and the account card reads their absence as exactly that
+	// rather than as an empty history to render.
+	StatusReason    string `json:"status_reason,omitempty"`
+	StatusChangedAt string `json:"status_changed_at,omitempty"`
+	// StatusChangedBy is the actor's id, not their name: this response is a
+	// pure mapping of one row and does not join against another to resolve
+	// one. The caller that needs a name (the account card) already holds the
+	// same GET /users/{id} it can point at that id.
+	StatusChangedBy string `json:"status_changed_by,omitempty"`
 }
 
 func toUserResponse(u users.User) UserResponse {
@@ -143,9 +155,16 @@ func toUserResponse(u users.User) UserResponse {
 		Roles:              u.Roles,
 		MustChangePassword: u.MustChangePassword,
 		CreatedAt:          u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		StatusReason:       u.StatusReason,
 	}
 	if u.LastLoginAt != nil {
 		out.LastLoginAt = u.LastLoginAt.UTC().Format("2006-01-02T15:04:05Z")
+	}
+	if u.StatusChangedAt != nil {
+		out.StatusChangedAt = u.StatusChangedAt.UTC().Format("2006-01-02T15:04:05Z")
+	}
+	if u.StatusChangedBy != nil {
+		out.StatusChangedBy = u.StatusChangedBy.String()
 	}
 	return out
 }

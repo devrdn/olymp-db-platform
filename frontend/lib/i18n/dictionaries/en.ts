@@ -484,6 +484,16 @@ const en = {
       handover: "Hand this over to its owner. It is shown once and cannot be retrieved again.",
       created: "Created",
       back: "← All accounts",
+      delete: "Delete",
+      deleteNote:
+        "A deleted account cannot sign in, its open sessions end at once, and its login and email are released for reuse.",
+      restore: "Restore",
+      restoreNote:
+        "Brings the account back to active. It fails if a live account has since taken its login or its email.",
+      reasonLabel: "Reason",
+      statusTitle: "Status note",
+      changedBy: "Changed by {name}, {date}.",
+      unknownActor: "an administrator no longer listed",
     },
     columns: {
       index: "no.",
@@ -578,7 +588,10 @@ const en = {
     },
     search: "Login, name or email",
     filter: "Show",
-    anyStatus: "Any state",
+    // Not "every account" — the backend reads an empty status as "every
+    // account except the deleted ones" (`users.Filter`), so the label says
+    // that rather than claiming "all" and quietly leaving a category out.
+    anyStatus: "All except deleted",
     searching: "Searching",
     apply: "Search",
     empty: {

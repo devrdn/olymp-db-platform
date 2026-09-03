@@ -141,6 +141,13 @@ export function AccountFilters({
           }
           className={CONTROL}
         >
+          {/* An empty status is not "every account" — the server reads it as
+              "every account except the deleted ones" (`users.Filter`), so
+              `t.anyStatus` has to say that rather than "all": a control
+              labelled "all" that quietly excludes a category is a lie an
+              administrator discovers at the worst moment. "deleted" needs no
+              entry of its own here — it is already the last of
+              `ACCOUNT_STATUSES`, so the loop below renders it. */}
           <option value="">{t.anyStatus}</option>
           {ACCOUNT_STATUSES.map((value) => (
             <option key={value} value={value}>
