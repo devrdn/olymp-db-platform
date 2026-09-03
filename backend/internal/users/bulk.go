@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
@@ -107,21 +108,40 @@ func (s *Service) classify(ctx context.Context, ids []uuid.UUID, decide func(Use
 
 // adminBudget is how many administrators may still be taken away.
 //
-// Counted once for the whole selection, which is the difference between this
-// and asking storage per account.
-type adminBudget struct{ remaining int }
-
-func (s *Service) adminBudget(ctx context.Context) (*adminBudget, error) {
-	remaining, err := s.repo.CountActiveWithRole(ctx, RoleAdmin)
-	if err != nil {
-		return nil, fmt.Errorf("count administrators: %w", err)
-	}
-	return &adminBudget{remaining: remaining}, nil
+// It asks storage for the count on its first spend rather than when
+// constructed, so a selection that never names an active administrator never
+// spends the query — deciding stays cheap for the common case of a selection
+// that turns out to be entirely not_found or already_in_status. Once asked,
+// though, the count is still taken exactly once for the whole selection: a
+// second spend reuses it rather than asking again, which is the defect a
+// per-account loop has and this design does not.
+type adminBudget struct {
+	ctx       context.Context
+	repo      Repository
+	fetched   bool
+	remaining int
+	err       error
 }
 
-// spend takes one administrator away, or refuses because it is the last.
+func (s *Service) newAdminBudget(ctx context.Context) *adminBudget {
+	return &adminBudget{ctx: ctx, repo: s.repo}
+}
+
+// spend takes one administrator away, or refuses because it is the last. A
+// failure fetching the count is remembered on the budget rather than
+// returned here — decide has no way to report an error — and BulkSetStatus
+// checks it once classify has finished.
 func (b *adminBudget) spend() bool {
-	if b.remaining <= 1 {
+	if !b.fetched {
+		b.fetched = true
+		remaining, err := b.repo.CountActiveWithRole(b.ctx, RoleAdmin)
+		if err != nil {
+			b.err = fmt.Errorf("count administrators: %w", err)
+			return false
+		}
+		b.remaining = remaining
+	}
+	if b.err != nil || b.remaining <= 1 {
 		return false
 	}
 	b.remaining--
@@ -148,10 +168,7 @@ func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uu
 		return BulkResult{}, err
 	}
 
-	budget, err := s.adminBudget(ctx)
-	if err != nil {
-		return BulkResult{}, err
-	}
+	budget := s.newAdminBudget(ctx)
 
 	// Moving a deleted account to any other status — active or blocked alike
 	// — releases the partial unique index's hold on its login and email
@@ -177,6 +194,20 @@ func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uu
 		}
 	}
 
+	// TakenAmong only ever compares a deleted account in the selection
+	// against a LIVE one — the partial index has nothing to say about two
+	// deleted rows sharing a login, since both are exempt from it today. But
+	// the moment two such rows leave "deleted" in the same batch, the second
+	// one to land collides with the first: "delete ivanov, create ivanov,
+	// delete again" produces exactly that pair. So the accepted set is
+	// folded against itself as it is built: a login or email already claimed
+	// by an earlier account in this same selection is taken exactly as if a
+	// live account held it. The ids are visited in the order the caller gave
+	// them, so the first one named wins and the outcome does not depend on
+	// map iteration order.
+	reclaimedLogins := map[string]bool{}
+	reclaimedEmails := map[string]bool{}
+
 	sel, err := s.classify(ctx, ids, func(u User) string {
 		switch {
 		case u.ID == actorID:
@@ -186,15 +217,39 @@ func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uu
 		case taken[u.ID] != "":
 			return taken[u.ID]
 		}
+		// Only an account actually leaving "deleted" reclaims anything; one
+		// already skipped above never gets here, so it never blocks another.
+		releasesIndex := status != StatusDeleted && u.Status == StatusDeleted
+		var loginKey string
+		if releasesIndex {
+			loginKey = strings.ToLower(u.Login)
+			switch {
+			case reclaimedLogins[loginKey]:
+				return SkipLoginTaken
+			case u.Email != "" && reclaimedEmails[u.Email]:
+				return SkipEmailTaken
+			}
+		}
 		// Only an account that can administer today is one to protect, and
 		// only a status that cannot administer takes it away.
 		if holdsAdmin(u.Roles) && u.IsActive() && !budget.spend() {
 			return SkipLastAdministrator
 		}
+		if releasesIndex {
+			reclaimedLogins[loginKey] = true
+			// An empty email is "no email", not a value every empty account
+			// shares — it must never collide with another empty one.
+			if u.Email != "" {
+				reclaimedEmails[u.Email] = true
+			}
+		}
 		return ""
 	})
 	if err != nil {
 		return BulkResult{}, err
+	}
+	if budget.err != nil {
+		return BulkResult{}, budget.err
 	}
 	if len(sel.accepted) == 0 {
 		return BulkResult{Skipped: sel.skipped}, nil
