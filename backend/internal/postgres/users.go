@@ -328,32 +328,39 @@ func (r *Users) CountActiveWithRole(ctx context.Context, roleCode string) (int, 
 }
 
 // TakenAmong returns the deleted accounts among ids whose login or email a
-// live account now holds.
+// live account now holds, saying which of the two each one hit.
 //
-// Checked before a bulk restore's transaction rather than by it: a restore
-// that would collide is refused up front, without aborting the accounts
-// around it that would have succeeded.
-func (r *Users) TakenAmong(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
+// Checked before a bulk move's transaction rather than by it: a move off
+// "deleted" that would collide is refused up front, without aborting the
+// accounts around it that would have succeeded.
+func (r *Users) TakenAmong(ctx context.Context, ids []uuid.UUID) ([]users.TakenConflict, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
-		SELECT d.id
-		FROM users d
-		WHERE d.id = ANY($1) AND d.status = 'deleted' AND EXISTS (
-			SELECT 1 FROM users a
-			WHERE a.status <> 'deleted'
-			  AND (lower(a.login) = lower(d.login)
-			       OR (a.email IS NOT NULL AND a.email = d.email)))`, ids)
+		SELECT id, login_taken, email_taken FROM (
+			SELECT d.id AS id,
+				EXISTS (
+					SELECT 1 FROM users a
+					WHERE a.status <> 'deleted' AND lower(a.login) = lower(d.login)
+				) AS login_taken,
+				EXISTS (
+					SELECT 1 FROM users a
+					WHERE a.status <> 'deleted' AND a.email IS NOT NULL AND a.email = d.email
+				) AS email_taken
+			FROM users d
+			WHERE d.id = ANY($1) AND d.status = 'deleted'
+		) conflicts
+		WHERE login_taken OR email_taken`, ids)
 	if err != nil {
 		return nil, fmt.Errorf("check restore conflicts: %w", err)
 	}
 	defer rows.Close()
 
-	var taken []uuid.UUID
+	var taken []users.TakenConflict
 	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
+		var c users.TakenConflict
+		if err := rows.Scan(&c.ID, &c.Login, &c.Email); err != nil {
 			return nil, fmt.Errorf("scan restore conflict: %w", err)
 		}
-		taken = append(taken, id)
+		taken = append(taken, c)
 	}
 	return taken, rows.Err()
 }
