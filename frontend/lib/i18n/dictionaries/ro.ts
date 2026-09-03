@@ -487,7 +487,7 @@ const ro = {
       roles: "Roluri",
       lastSeen: "Ultima autentificare",
     },
-    status: { active: "activ", blocked: "blocat" },
+    status: { active: "activ", blocked: "blocat", deleted: "șters" },
     handoverPending: "parolă predată",
     never: "niciodată",
     noRoles: "niciunul",

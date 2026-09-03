@@ -487,7 +487,7 @@ const ru = {
       roles: "Роли",
       lastSeen: "Последний вход",
     },
-    status: { active: "активен", blocked: "заблокирован" },
+    status: { active: "активен", blocked: "заблокирован", deleted: "удалён" },
     handoverPending: "выданный пароль",
     never: "никогда",
     noRoles: "нет",

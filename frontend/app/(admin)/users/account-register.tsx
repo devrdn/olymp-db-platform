@@ -27,9 +27,13 @@ import { cn } from "@/lib/utils";
 /** How many rows a page carries. Matches the API's own default. */
 export const ACCOUNTS_PAGE = 50;
 
-const STATUS_TONE: Record<AccountStatus, "good" | "bad"> = {
+const STATUS_TONE: Record<AccountStatus, "good" | "bad" | "mute"> = {
   active: "good",
   blocked: "bad",
+  // Softly deleted, not merely inactive: neither "good" nor a state somebody
+  // fixes by unblocking, so it gets the tone that reads as settled rather
+  // than urgent.
+  deleted: "mute",
 };
 
 const HEAD =
