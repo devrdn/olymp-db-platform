@@ -488,6 +488,7 @@ const ro = {
       reasonLabel: "Motiv",
       statusTitle: "Notă de stare",
       changedBy: "Modificat de {name}, {date}.",
+      changedByNoDate: "Modificat de {name}.",
       unknownActor: "un administrator care nu mai este în listă",
     },
     columns: {

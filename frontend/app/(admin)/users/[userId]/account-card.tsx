@@ -119,9 +119,6 @@ export function AccountCard({
   roles,
   viewerId,
   dict,
-  /** Who last changed the account's status — null when nobody has, or when
-      the actor could not be resolved. */
-  statusChangedBy,
   /** The status-change moment, already formatted for the active locale. */
   statusChangedAtLabel,
 }: {
@@ -130,7 +127,6 @@ export function AccountCard({
   /** Who is looking, so the screen does not offer them a self-block. */
   viewerId: string;
   dict: Dictionary;
-  statusChangedBy: { fullName: string; login: string } | null;
   statusChangedAtLabel: string | null;
 }) {
   const t = dict.accounts.card;
@@ -172,9 +168,15 @@ export function AccountCard({
           <div className="flex flex-col gap-2">
             <p className="max-w-body text-body text-ink">{account.statusReason}</p>
             <p className="text-small text-ink-3">
-              {t.changedBy
-                .replace("{name}", statusChangedBy?.fullName ?? t.unknownActor)
-                .replace("{date}", statusChangedAtLabel ?? "")}
+              {/* A row backfilled without a timestamp still names the actor —
+                  the sentence just drops its second half rather than leaving
+                  the punctuation stranded around an empty date ("Changed by
+                  X, ."). */}
+              {statusChangedAtLabel
+                ? t.changedBy
+                    .replace("{name}", account.statusChangedByLogin || t.unknownActor)
+                    .replace("{date}", statusChangedAtLabel)
+                : t.changedByNoDate.replace("{name}", account.statusChangedByLogin || t.unknownActor)}
             </p>
           </div>
         </Panel>

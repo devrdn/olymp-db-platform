@@ -488,6 +488,7 @@ const ru = {
       reasonLabel: "Причина",
       statusTitle: "Причина статуса",
       changedBy: "Изменил(а) {name}, {date}.",
+      changedByNoDate: "Изменил(а) {name}.",
       unknownActor: "администратор, которого больше нет в списке",
     },
     columns: {

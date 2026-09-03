@@ -20,6 +20,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/users/userstest"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 type handlerFixture struct {
@@ -129,6 +130,38 @@ func TestLoginResponseNeverCarriesThePasswordHash(t *testing.T) {
 
 	if strings.Contains(rec.Body.String(), "argon2id") || strings.Contains(rec.Body.String(), "password_hash") {
 		t.Errorf("the response leaks the stored digest: %s", rec.Body.String())
+	}
+}
+
+// TestLoginResponseDoesNotCarryStatusChangeMetadata pins the fix for the
+// leak toUserResponse's widening for the account card introduced: an
+// unblocked account is active again and its reason is empty, but its
+// StatusChangedAt/By/ByLogin still name the administrator and the moment of
+// the last change. login used to share toUserResponse verbatim with the
+// account-management screens, so that metadata — an administrator's UUID and
+// login among it — rode along into the response an ordinary account owner
+// gets merely by signing in.
+func TestLoginResponseDoesNotCarryStatusChangeMetadata(t *testing.T) {
+	f := newHandlerFixture(t)
+
+	withHistory := f.user
+	changedAt := time.Now().UTC()
+	changedBy := uuid.New()
+	withHistory.StatusChangedAt = &changedAt
+	withHistory.StatusChangedBy = &changedBy
+	withHistory.StatusChangedByLogin = "root"
+	f.repo.Add(withHistory)
+
+	rec := f.post("/auth/login", `{"login":"ivanov","password":"`+testPassword+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	for _, field := range []string{"status_changed_at", "status_changed_by", "status_changed_by_login"} {
+		if strings.Contains(rec.Body.String(), field) {
+			t.Errorf("the sign-in response names %q — administrator status-change metadata "+
+				"that is not the account owner's business: %s", field, rec.Body.String())
+		}
 	}
 }
 

@@ -493,6 +493,10 @@ const en = {
       reasonLabel: "Reason",
       statusTitle: "Status note",
       changedBy: "Changed by {name}, {date}.",
+      // A row backfilled without a timestamp: the sentence still names the
+      // actor, without the date and the stranded punctuation it would leave
+      // behind ("Changed by X, .").
+      changedByNoDate: "Changed by {name}.",
       unknownActor: "an administrator no longer listed",
     },
     columns: {

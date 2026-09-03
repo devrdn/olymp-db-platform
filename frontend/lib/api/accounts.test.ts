@@ -71,15 +71,20 @@ describe("accountSchema", () => {
       status_reason: "cheating in the October contest",
       status_changed_at: "2026-03-02T09:00:00Z",
       status_changed_by: "9a1f0c3e-2b44-4e77-8d0a-1c5b8e91a4d6",
+      status_changed_by_login: "a.admin",
     });
 
     expect(account.statusReason).toBe("cheating in the October contest");
     expect(account.statusChangedAt).toBe("2026-03-02T09:00:00Z");
     expect(account.statusChangedBy).toBe("9a1f0c3e-2b44-4e77-8d0a-1c5b8e91a4d6");
+    // Resolved by the server's own query — a LEFT JOIN in
+    // `internal/postgres/users.go` — so the card never has to ask a second
+    // time for the one login it needs.
+    expect(account.statusChangedByLogin).toBe("a.admin");
   });
 
   test("reads an empty reason rather than an absent one, for an account nobody has touched", () => {
-    // The three fields are omitted on the wire (see `UserResponse` in
+    // The four fields are omitted on the wire (see `UserResponse` in
     // `backend/internal/api/users_handler.go`), and the account card gates its
     // status panel on `statusReason` being non-empty — a string it can always
     // compare, not an optional it must first check for presence.
@@ -88,6 +93,7 @@ describe("accountSchema", () => {
     expect(account.statusReason).toBe("");
     expect(account.statusChangedAt).toBeUndefined();
     expect(account.statusChangedBy).toBeUndefined();
+    expect(account.statusChangedByLogin).toBe("");
   });
 });
 

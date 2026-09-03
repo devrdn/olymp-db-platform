@@ -51,21 +51,6 @@ async function loadAccount(userId: string) {
   return accountSchema.parse(payload);
 }
 
-/**
- * Resolves the account that last changed this one's status, to a name.
- *
- * A soft delete never removes the row, so the actor's own account is always
- * still there to look up — unlike the audit trail, which has to allow for an
- * actor gone for good. Failing soft rather than throwing: a lookup that stumbles
- * should cost the "who" line, not the whole page.
- */
-async function loadActor(userId: string) {
-  return serverRequest(`/users/${userId}`).then(
-    (payload) => accountSchema.parse(payload),
-    () => null,
-  );
-}
-
 export default async function AccountPage(props: PageProps<"/users/[userId]">) {
   const { userId } = await props.params;
   if (!isId(userId)) notFound();
@@ -81,11 +66,11 @@ export default async function AccountPage(props: PageProps<"/users/[userId]">) {
   const { items: roles } = roleListSchema.parse(rolesPayload);
   const t = dict.accounts;
 
-  // Both empty together and both set together: `status_changed_by` and
-  // `status_changed_at` are written by the same `StatusChange` on the server
-  // (`users.Service.setStatus`), so there is no case where one is present
-  // without the other.
-  const statusChangedByActor = account.statusChangedBy ? await loadActor(account.statusChangedBy) : null;
+  // The actor's login already rides along on `account` — resolved by the
+  // repository's own query (a LEFT JOIN, `internal/postgres/users.go`)
+  // rather than a second `GET /users/{id}` this page used to send for every
+  // blocked or deleted account. Only the date still needs work here: turning
+  // it into a locale-formatted string is presentation, not a fetch.
   const statusChangedAtLabel = account.statusChangedAt
     ? formatMoment(account.statusChangedAt, { locale })
     : null;
@@ -122,11 +107,6 @@ export default async function AccountPage(props: PageProps<"/users/[userId]">) {
         roles={roles}
         viewerId={identity?.id ?? ""}
         dict={dict}
-        statusChangedBy={
-          statusChangedByActor
-            ? { fullName: statusChangedByActor.fullName, login: statusChangedByActor.login }
-            : null
-        }
         statusChangedAtLabel={statusChangedAtLabel}
       />
     </Band>
