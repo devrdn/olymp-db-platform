@@ -1,5 +1,5 @@
 import { Profiler } from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -51,6 +51,7 @@ vi.mock("./bulk-actions", () => ({
 }));
 
 import {
+  CONFIRM_EMPTY_ARM_MS,
   RowCheckbox,
   SelectAllCheckbox,
   SelectionBar,
@@ -81,16 +82,21 @@ beforeEach(() => {
 async function renderBar({
   selected = [],
   roles = [],
+  pageIds,
 }: {
   selected?: string[];
   roles?: Role[];
+  /** Ids the bar treats as "on the current page". Defaults to `selected`
+   * itself — most tests here pick only rows that are, in fact, the one page
+   * being rendered, so nothing should read as off-page by default. */
+  pageIds?: string[];
 } = {}) {
   render(
     <SelectionProvider>
       {selected.map((id) => (
         <RowCheckbox key={id} id={id} label={id} />
       ))}
-      <SelectionBar dict={ru} roles={roles} />
+      <SelectionBar dict={ru} roles={roles} pageIds={pageIds ?? selected} />
     </SelectionProvider>,
   );
 
@@ -208,7 +214,7 @@ describe("SelectionBar", () => {
   test("stays out of the page while nothing is picked", () => {
     render(
       <SelectionProvider>
-        <SelectionBar dict={en} roles={[]} />
+        <SelectionBar dict={en} roles={[]} pageIds={[]} />
       </SelectionProvider>,
     );
 
@@ -220,7 +226,7 @@ describe("SelectionBar", () => {
       <SelectionProvider>
         <RowCheckbox id="a" label="a" />
         <RowCheckbox id="b" label="b" />
-        <SelectionBar dict={en} roles={[]} />
+        <SelectionBar dict={en} roles={[]} pageIds={["a", "b"]} />
       </SelectionProvider>,
     );
 
@@ -241,7 +247,7 @@ describe("SelectionBar", () => {
     render(
       <SelectionProvider>
         <SelectAllCheckbox ids={many} label="page" />
-        <SelectionBar dict={ru} roles={[]} />
+        <SelectionBar dict={ru} roles={[]} pageIds={many} />
       </SelectionProvider>,
     );
 
@@ -426,11 +432,16 @@ describe("bulk actions: an empty roles submit needs a second, explicit step", ()
     );
     expect(bulkReplaceRolesAction).not.toHaveBeenCalled();
 
-    await userEvent.click(
-      screen.getByRole("button", {
-        name: ru.accounts.selection.bulk.rolesDialog.confirmEmptySubmit,
-      }),
-    );
+    const confirmButton = screen.getByRole("button", {
+      name: ru.accounts.selection.bulk.rolesDialog.confirmEmptySubmit,
+    });
+    // Disabled for a moment when it first appears — see the fast-double-click
+    // guard covered on its own below — so this test waits it out rather than
+    // clicking straight away, the same as a real, unhurried confirmation would.
+    await waitFor(() => expect(confirmButton).toBeEnabled(), {
+      timeout: CONFIRM_EMPTY_ARM_MS + 1000,
+    });
+    await userEvent.click(confirmButton);
 
     expect(bulkReplaceRolesAction).toHaveBeenCalled();
     const form = bulkReplaceRolesAction.mock.calls[0]![1] as FormData;
@@ -577,7 +588,7 @@ describe("bulk outcome: the selection only clears after a run that changed somet
     render(
       <SelectionProvider>
         <RowCheckbox id="a" label="a" />
-        <SelectionBar dict={ru} roles={[]} />
+        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} />
       </SelectionProvider>,
     );
     await userEvent.click(screen.getByRole("checkbox", { name: "a" }));
@@ -598,7 +609,7 @@ describe("bulk outcome: the selection only clears after a run that changed somet
     render(
       <SelectionProvider>
         <RowCheckbox id="a" label="a" />
-        <SelectionBar dict={ru} roles={[]} />
+        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} />
       </SelectionProvider>,
     );
     await userEvent.click(screen.getByRole("checkbox", { name: "a" }));
@@ -625,6 +636,156 @@ describe("bulk password reset: an empty result says so", () => {
     );
 
     expect(await screen.findByText(ru.accounts.selection.bulk.resetDialog.none)).toBeVisible();
+  });
+});
+
+describe("SelectionBar: honest about a selection that spans more than the current page", () => {
+  test("says how many of the pick are not on the current page", async () => {
+    render(
+      <SelectionProvider>
+        <RowCheckbox id="a" label="a" display="ivanov" />
+        <RowCheckbox id="b" label="b" display="petrov" />
+        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} />
+      </SelectionProvider>,
+    );
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "a" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "b" }));
+
+    // Both are picked, but `pageIds` says only "a" is on this page — "b" is
+    // what an earlier search or another page contributed, and the bar must
+    // say so rather than only stating the total. The count and the off-page
+    // note share one paragraph as sibling text nodes (see `SelectionBar`),
+    // so both are checked against that one element rather than as two
+    // separate text queries, which the split would make ambiguous.
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent(ru.accounts.selection.count.replace("{n}", "2"));
+    expect(status).toHaveTextContent(ru.accounts.selection.offPage.replace("{n}", "1"));
+  });
+
+  test("says nothing extra when the whole pick is on this page", async () => {
+    await renderBar({ selected: ["a", "b"] });
+
+    expect(screen.queryByText(/не на этой странице/)).not.toBeInTheDocument();
+  });
+});
+
+describe("SelectionBar: seeing exactly who is selected", () => {
+  test("lists every selected account by name, including one not on this page, and drops one on its own", async () => {
+    render(
+      <SelectionProvider>
+        <RowCheckbox id="a" label="a" display="ivanov" />
+        <RowCheckbox id="b" label="b" display="petrov" />
+        <SelectionBar dict={ru} roles={[]} pageIds={["a"]} />
+      </SelectionProvider>,
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: "a" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "b" }));
+
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.view }));
+
+    expect(screen.getByText("ivanov")).toBeVisible();
+    expect(screen.getByText("petrov")).toBeVisible();
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: ru.accounts.selection.unpick.replace("{name}", "petrov"),
+      }),
+    );
+    expect(screen.queryByText("petrov")).not.toBeInTheDocument();
+
+    // The rows behind the (still open) dialog are inert to the accessibility
+    // tree while it is up, so close it before reading their state.
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.getByRole("checkbox", { name: "a" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "b" })).not.toBeChecked();
+  });
+});
+
+describe("SelectAllCheckbox: this page's box adds to a cross-page pick rather than replacing it", () => {
+  test("picking this page's rows leaves an already-picked, off-page account picked", async () => {
+    render(
+      <SelectionProvider>
+        <RowCheckbox id="off" label="off" />
+        <SelectAllCheckbox ids={["a", "b"]} label="page" />
+        <RowCheckbox id="a" label="a" />
+        <RowCheckbox id="b" label="b" />
+      </SelectionProvider>,
+    );
+
+    // Stands in for an account picked on an earlier search or another page.
+    await userEvent.click(screen.getByRole("checkbox", { name: "off" }));
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "page" }));
+
+    expect(screen.getByRole("checkbox", { name: "off" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "a" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "b" })).toBeChecked();
+  });
+
+  test("clearing this page's rows leaves an off-page account picked", async () => {
+    render(
+      <SelectionProvider>
+        <RowCheckbox id="off" label="off" />
+        <SelectAllCheckbox ids={["a", "b"]} label="page" />
+        <RowCheckbox id="a" label="a" />
+        <RowCheckbox id="b" label="b" />
+      </SelectionProvider>,
+    );
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "off" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "page" })); // picks the page
+    await userEvent.click(screen.getByRole("checkbox", { name: "page" })); // clears the page
+
+    expect(screen.getByRole("checkbox", { name: "off" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "a" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "b" })).not.toBeChecked();
+  });
+});
+
+describe("bulk actions: the empty-roles confirmation resists a fast double click", () => {
+  // The single-shot guard this replaces was proven unsafe by the very shape
+  // of the two screens: the confirmation renders shorter than the role
+  // picker it replaces (no checkbox list, just a warning), so the button a
+  // first, empty submit was intercepted from sits above where the
+  // confirmation's own "Remove all roles" button lands. A fast double-click
+  // aimed at the first button puts its second hit on the second button by
+  // pure layout accident, and nothing used to stand between that and an
+  // unconfirmed strip of every role.
+  test("a click on the confirm-empty button right after it appears does not submit", async () => {
+    const roles: Role[] = [{ code: "admin", name: "Administrator" }];
+    await renderBar({ selected: ["a"], roles });
+
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.roles }));
+    await userEvent.click(
+      screen.getByRole("button", { name: ru.accounts.selection.bulk.rolesDialog.submit }),
+    );
+
+    const confirmButton = await screen.findByRole("button", {
+      name: ru.accounts.selection.bulk.rolesDialog.confirmEmptySubmit,
+    });
+    // Disabled the instant the confirmation screen appears.
+    expect(confirmButton).toBeDisabled();
+
+    // Fired directly rather than through userEvent, which would itself
+    // refuse to click a disabled control: this is the click that must not
+    // reach the server action no matter how it arrives — a stray dblclick,
+    // a stuck key, anything.
+    fireEvent.click(confirmButton);
+    expect(bulkReplaceRolesAction).not.toHaveBeenCalled();
+
+    // Once the button has had a genuine moment to be a deliberate press, the
+    // very same interaction goes through.
+    await waitFor(() => expect(confirmButton).toBeEnabled(), {
+      timeout: CONFIRM_EMPTY_ARM_MS + 1000,
+    });
+    await userEvent.click(confirmButton);
+
+    expect(bulkReplaceRolesAction).toHaveBeenCalled();
+    const form = bulkReplaceRolesAction.mock.calls[0]![1] as FormData;
+    expect(form.getAll("roles")).toEqual([]);
+    expect(form.getAll("ids")).toEqual(["a"]);
   });
 });
 

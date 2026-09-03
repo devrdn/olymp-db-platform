@@ -9,6 +9,8 @@ import {
   useSyncExternalStore,
 } from "react";
 
+import { X } from "lucide-react";
+
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -35,6 +37,9 @@ import {
   type BulkState,
 } from "./bulk-actions";
 
+/** One picked account, as the selection panel below needs to name it. */
+export type SelectedAccount = { id: string; display: string };
+
 /**
  * Which accounts the administrator has picked.
  *
@@ -46,47 +51,90 @@ import {
  *
  * The page itself stays a server component. Only the boxes, the bar and the
  * dialogs below it are client code, which is the whole of what needs state.
+ *
+ * This now lives one level up, in `layout.tsx`, rather than inside the page —
+ * that is what lets a pick survive a search, which re-renders `page.tsx` but
+ * not the layout above it. That is also why an id is kept with a `display`
+ * label rather than bare: once a pick can outlive the page that showed it, an
+ * account a later search has pushed off screen still has to be nameable in
+ * the "who is selected" panel below, using the label captured when it was
+ * checked rather than something only the current page's rows can supply.
  */
 class SelectionStore {
-  private ids = new Set<string>();
+  private entries = new Map<string, string>();
   private listeners = new Set<() => void>();
-  // `selected()` used to hand back a snapshot every read is what
-  // useSyncExternalStore needs: it calls the getSnapshot function on every
-  // render to check for change, and a fresh array each time never compares
-  // equal to the last one, so React treats every render as a fresh update
-  // and can loop. Caching the array and only rebuilding it on an actual
-  // mutation keeps the reference stable between emits.
+  // Both `selected()` and `list()` hand back a cached snapshot rather than a
+  // fresh array on every read, which is what useSyncExternalStore needs: it
+  // calls the getSnapshot function on every render to check for change, and a
+  // fresh array each time never compares equal to the last one, so React
+  // treats every render as a fresh update and can loop. Rebuilding only on an
+  // actual mutation keeps the reference stable between emits.
   private cachedSelected: string[] | null = null;
+  private cachedList: SelectedAccount[] | null = null;
 
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
 
-  has = (id: string) => this.ids.has(id);
-  size = () => this.ids.size;
+  has = (id: string) => this.entries.has(id);
+  size = () => this.entries.size;
+
   selected = () => {
-    if (this.cachedSelected === null) this.cachedSelected = [...this.ids];
+    if (this.cachedSelected === null) this.cachedSelected = [...this.entries.keys()];
     return this.cachedSelected;
   };
 
-  toggle = (id: string) => {
-    if (!this.ids.delete(id)) this.ids.add(id);
+  /** Every picked account, by the label it was given when checked — what the
+   * "view selection" panel lists. */
+  list = () => {
+    if (this.cachedList === null) {
+      this.cachedList = [...this.entries.entries()].map(([id, display]) => ({ id, display }));
+    }
+    return this.cachedList;
+  };
+
+  toggle = (id: string, display: string) => {
+    if (!this.entries.delete(id)) this.entries.set(id, display);
     this.emit();
   };
 
-  replace = (ids: string[]) => {
-    this.ids = new Set(ids);
+  /**
+   * Adds every row given, leaving anything already picked — on another page,
+   * from an earlier search — exactly as it was. This is what "select this
+   * page" has to do now that a pick can span pages: overwriting the whole
+   * store here would silently drop everything not currently on screen, which
+   * is the header checkbox reaching further than what it shows.
+   */
+  selectMany = (rows: SelectedAccount[]) => {
+    for (const row of rows) this.entries.set(row.id, row.display);
+    this.emit();
+  };
+
+  /** Removes exactly these ids and no others — "deselect this page", and a
+   * single row's own remove button in the selection panel, both go through
+   * this rather than through `clear`. */
+  deselectMany = (ids: readonly string[]) => {
+    for (const id of ids) this.entries.delete(id);
+    this.emit();
+  };
+
+  /** Drops the whole selection — "Clear selection", and what a bulk run that
+   * actually changed something does on its way out. */
+  clear = () => {
+    this.entries.clear();
     this.emit();
   };
 
   private emit() {
     this.cachedSelected = null;
+    this.cachedList = null;
     for (const listener of this.listeners) listener();
   }
 }
 
 const EMPTY_SELECTION: readonly string[] = [];
+const EMPTY_LIST: readonly SelectedAccount[] = [];
 
 const SelectionContext = createContext<SelectionStore | null>(null);
 
@@ -120,22 +168,60 @@ export function useSelectedIds(): readonly string[] {
  * One row's box. Subscribes only to its own membership, so ticking it
  * re-renders this row and nothing else on the page.
  *
+ * `display` is what names this account in the "view selection" panel if it
+ * is still picked once a later search has taken it off screen — it defaults
+ * to `id`, which is enough for a checkbox nothing else reads by name (most
+ * tests), but the register itself always passes the account's own login.
+ *
  * `false` as the server snapshot: the server never knows about a selection,
  * so the first client render must agree with the server-rendered markup
  * (unchecked) or React reports a hydration mismatch.
  */
-export function RowCheckbox({ id, label }: { id: string; label: string }) {
+export function RowCheckbox({
+  id,
+  label,
+  display = id,
+}: {
+  id: string;
+  label: string;
+  display?: string;
+}) {
   const store = useSelectionStore();
   const checked = useSyncExternalStore(store.subscribe, () => store.has(id), () => false);
 
-  return <Checkbox checked={checked} onCheckedChange={() => store.toggle(id)} aria-label={label} />;
+  return (
+    <Checkbox
+      checked={checked}
+      onCheckedChange={() => store.toggle(id, display)}
+      aria-label={label}
+    />
+  );
 }
 
 /**
  * The header box: picks or clears every id on the visible page, and shows
  * the mixed state while only some of them are picked.
+ *
+ * Goes through `selectMany`/`deselectMany`, never `clear` or a full
+ * overwrite: a selection can now hold accounts from other pages, and this
+ * box speaks for the current page only — ticking it must add to whatever is
+ * already picked elsewhere, and unticking it must remove only what it added,
+ * not reach past what it shows. `pickedHere`/`allPicked`/`somePicked` are
+ * already scoped to `ids` (this page), which is what keeps the box truthful
+ * regardless of how much of the selection lives off it.
  */
-export function SelectAllCheckbox({ ids, label }: { ids: string[]; label: string }) {
+export function SelectAllCheckbox({
+  ids,
+  displays,
+  label,
+}: {
+  ids: string[];
+  /** id -> display label, used only when picking. Falls back to the id
+   * itself where omitted, which is enough for tests that never open the
+   * selection panel; the register always supplies real logins. */
+  displays?: Record<string, string>;
+  label: string;
+}) {
   const store = useSelectionStore();
   const pickedHere = useSyncExternalStore(
     store.subscribe,
@@ -149,7 +235,11 @@ export function SelectAllCheckbox({ ids, label }: { ids: string[]; label: string
     <Checkbox
       checked={allPicked}
       indeterminate={somePicked}
-      onCheckedChange={() => store.replace(allPicked ? [] : ids)}
+      onCheckedChange={() =>
+        allPicked
+          ? store.deselectMany(ids)
+          : store.selectMany(ids.map((id) => ({ id, display: displays?.[id] ?? id })))
+      }
       aria-label={label}
     />
   );
@@ -194,6 +284,74 @@ function SkippedList({ skipped, dict }: { skipped: readonly SkippedAccount[]; di
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * Names every currently selected account, with a way to drop any one of them.
+ *
+ * Follows `SkippedList`'s own shape on purpose — the same scrollable list,
+ * the same row layout, the same login-or-id naming — because it answers the
+ * same kind of question ("which accounts, exactly") that list already
+ * answers for a bulk outcome's skipped rows. Once a pick can span several
+ * searches, "how many are selected" stops being enough on its own: an
+ * account picked, then pushed off screen by a later search, is still fully
+ * part of what a destructive bulk action will touch, and this is where it
+ * stays visible without being hunted for.
+ */
+function SelectionList({ dict }: { dict: Dictionary }) {
+  const store = useSelectionStore();
+  const rows = useSyncExternalStore(store.subscribe, store.list, () => EMPTY_LIST);
+  const t = dict.accounts.selection;
+
+  if (rows.length === 0) return null;
+
+  return (
+    <ul className="flex max-h-64 flex-col gap-1 overflow-y-auto border-t border-line pt-3">
+      {rows.map((row) => (
+        <li
+          key={row.id}
+          className="flex items-center justify-between gap-3 font-mono text-data text-ink-2"
+        >
+          <span className="truncate">{row.display}</span>
+          <button
+            type="button"
+            onClick={() => store.deselectMany([row.id])}
+            className="shrink-0 text-ink-3 transition-colors duration-(--t-input) ease-standard hover:text-ink"
+          >
+            <X className="size-3.5" />
+            <span className="sr-only">{t.unpick.replace("{name}", row.display)}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * The trigger and dialog that let the administrator see who, exactly, is
+ * selected — not only how many. A plain read of the store, not a form: it
+ * holds no pending state of its own, so it stays dismissible throughout,
+ * unlike the bulk-action dialogs below.
+ */
+function SelectionListDialog({ dict }: { dict: Dictionary }) {
+  const [open, setOpen] = useState(false);
+  const t = dict.accounts.selection;
+
+  return (
+    <>
+      <Button type="button" variant="quiet" size="sm" onClick={() => setOpen(true)}>
+        {t.view}
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent closeLabel={t.bulk.close}>
+          <DialogHeader>
+            <DialogTitle>{t.viewTitle}</DialogTitle>
+          </DialogHeader>
+          <SelectionList dict={dict} />
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -365,7 +523,7 @@ function StatusForm({
               // corrected and retried without reselecting everything by
               // hand; a run that changed at least one account is done with
               // this selection.
-              if (changedCount > 0) store.replace([]);
+              if (changedCount > 0) store.clear();
               onClose();
             }}
           >
@@ -456,6 +614,19 @@ function StatusForm({
 }
 
 /**
+ * How long the confirmation screen's own submit button stays disabled once it
+ * appears. That screen renders shorter than the one before it — no role
+ * checkboxes, just a warning — so the button a first, empty submit was
+ * intercepted from sits higher on screen than the "Remove all roles" button
+ * that replaces it. A fast double-click aimed at the first button lands its
+ * second hit here by pure layout accident, and until this delay, nothing
+ * stopped that from going through: the screen looked like a fresh step but
+ * behaved like an unconfirmed one. A person confirming on purpose waits this
+ * long anyway; a stray click inside it does nothing.
+ */
+export const CONFIRM_EMPTY_ARM_MS = 400;
+
+/**
  * Replaces the role set on every selected account with what is checked here.
  *
  * Sending an empty set is legitimate — that is how every role is deliberately
@@ -466,6 +637,15 @@ function StatusForm({
  * checked is intercepted once and answered with a second, explicit step that
  * names the consequence and the count; ticking at least one role still
  * submits in a single step, exactly as before.
+ *
+ * That second step's own submit is guarded independently of the first: it
+ * disarms itself whenever the empty-roles screen is not the one showing, and
+ * only arms again after `CONFIRM_EMPTY_ARM_MS` of that screen actually being
+ * on-screen (`confirmArmed`), with the emptiness re-checked from the form's
+ * own data at the moment of submission rather than trusted from whichever
+ * click first raised this screen. Nothing about reaching this step is
+ * treated as consent to leave it — that is what makes the guard survive a
+ * second click rather than being spent by the first.
  */
 function RolesForm({
   ids,
@@ -488,14 +668,30 @@ function RolesForm({
     bulkReplaceRolesAction,
     {},
   );
-  // Set once an empty submit has been intercepted, so the very next submit —
-  // the explicit "remove all roles" confirmation — is let through rather than
-  // intercepted again.
+  // Set once an empty submit has been intercepted, to show the explicit
+  // "remove all roles" confirmation in place of the role picker.
   const [confirmingEmpty, setConfirmingEmpty] = useState(false);
+  // Whether that confirmation's own submit button may actually be pressed —
+  // see `CONFIRM_EMPTY_ARM_MS` above. False the instant the confirmation
+  // stops showing, so leaving and reopening it never inherits an earlier arm.
+  const [confirmArmed, setConfirmArmed] = useState(false);
 
   useEffect(() => {
     reportDismissible(!pending && !state.result);
   }, [pending, state.result, reportDismissible]);
+
+  // Arms the confirmation's submit button after it has genuinely been
+  // showing for `CONFIRM_EMPTY_ARM_MS`. The two places that flip
+  // `confirmingEmpty` — the interception below and "Go back" — reset
+  // `confirmArmed` to `false` themselves, in the same event, rather than this
+  // effect doing it on the way out: a `setState` call synchronous in an
+  // effect body is its own cascading-render footgun, and there is nothing
+  // here that needs the DOM to have committed first.
+  useEffect(() => {
+    if (!confirmingEmpty) return;
+    const timer = setTimeout(() => setConfirmArmed(true), CONFIRM_EMPTY_ARM_MS);
+    return () => clearTimeout(timer);
+  }, [confirmingEmpty]);
 
   if (state.result) {
     const changedCount = state.result.changed.length;
@@ -510,7 +706,7 @@ function RolesForm({
           <Button
             type="button"
             onClick={() => {
-              if (changedCount > 0) store.replace([]);
+              if (changedCount > 0) store.clear();
               onClose();
             }}
           >
@@ -527,7 +723,26 @@ function RolesForm({
 
   if (confirmingEmpty) {
     return (
-      <form action={formAction} className="flex flex-col gap-5">
+      <form
+        action={formAction}
+        onSubmit={(event) => {
+          // Re-checked here, at the moment of submission, rather than
+          // trusted from the click that raised this screen: this view
+          // renders no role checkboxes, so the set is empty by
+          // construction, but the guard belongs at the point of submit
+          // regardless of why it currently holds. `confirmArmed` is what
+          // actually stops a stray click — a second hit landing on this
+          // button before it has been showing long enough to be a
+          // deliberate press, most often the tail of a fast double-click
+          // whose first half only got this far because the screen it
+          // opened is shorter than the one it replaced.
+          const checked = new FormData(event.currentTarget).getAll("roles");
+          if (checked.length > 0 || !confirmArmed) {
+            event.preventDefault();
+          }
+        }}
+        className="flex flex-col gap-5"
+      >
         <HiddenIds ids={frozenIds} />
         <DialogHeader>
           <DialogTitle>{t.rolesDialog.confirmEmptyTitle}</DialogTitle>
@@ -546,12 +761,17 @@ function RolesForm({
           <Button
             type="button"
             variant="quiet"
-            onClick={() => setConfirmingEmpty(false)}
+            onClick={() => {
+              setConfirmingEmpty(false);
+              // A later re-entry into this screen must start unarmed again,
+              // not inherit an arming this earlier visit already earned.
+              setConfirmArmed(false);
+            }}
             disabled={pending}
           >
             {t.rolesDialog.back}
           </Button>
-          <Button type="submit" variant="danger" disabled={pending}>
+          <Button type="submit" variant="danger" disabled={pending || !confirmArmed}>
             {pending ? t.submitting : t.rolesDialog.confirmEmptySubmit}
           </Button>
         </DialogFooter>
@@ -669,7 +889,7 @@ function ResetPasswordForm({
           <Button
             type="button"
             onClick={() => {
-              if (issuedCount > 0) store.replace([]);
+              if (issuedCount > 0) store.clear();
               onClose();
             }}
           >
@@ -719,9 +939,25 @@ function ResetPasswordForm({
  * register), so the roles dialog offers exactly what the single-account card
  * does and nothing this build has to keep in step by hand.
  */
-export function SelectionBar({ dict, roles }: { dict: Dictionary; roles: Role[] }) {
+export function SelectionBar({
+  dict,
+  roles,
+  pageIds,
+}: {
+  dict: Dictionary;
+  roles: Role[];
+  /** The ids on the page currently shown — used only to say how much of the
+   * whole selection is not in view; never to limit what a bulk action below
+   * touches, which always acts on the entire selection. */
+  pageIds: string[];
+}) {
   const store = useSelectionStore();
   const count = useSyncExternalStore(store.subscribe, () => store.size(), () => 0);
+  const onThisPage = useSyncExternalStore(
+    store.subscribe,
+    () => pageIds.filter((id) => store.has(id)).length,
+    () => 0,
+  );
   const ids = useSelectedIds();
   const t = dict.accounts.selection;
   const bulk = t.bulk;
@@ -729,6 +965,12 @@ export function SelectionBar({ dict, roles }: { dict: Dictionary; roles: Role[] 
   // (a page is 50 rows), but the bar still refuses to send more than the
   // backend will accept rather than relying on that staying true.
   const tooMany = count > MAX_BULK_ACCOUNTS;
+  // How much of the selection this page cannot show — the honesty a
+  // selection that outlives a search now owes: an administrator who picked
+  // twelve accounts, searched for something else, and can currently see
+  // three of them needs to be told the other nine are still part of what
+  // "Delete" below would touch.
+  const offPage = count - onThisPage;
 
   if (count === 0) return null;
 
@@ -736,7 +978,12 @@ export function SelectionBar({ dict, roles }: { dict: Dictionary; roles: Role[] 
     <div className="flex flex-wrap items-center gap-3 border border-line-2 bg-panel px-4 py-2.5">
       <p role="status" aria-live="polite" className="font-mono text-data text-ink-2">
         {t.count.replace("{n}", String(count))}
+        {offPage > 0 ? (
+          <span className="text-warn"> · {t.offPage.replace("{n}", String(offPage))}</span>
+        ) : null}
       </p>
+
+      <SelectionListDialog dict={dict} />
 
       <div data-slot="selection-actions" className="flex flex-1 flex-wrap items-center gap-2">
         <ActionDialog
@@ -844,7 +1091,7 @@ export function SelectionBar({ dict, roles }: { dict: Dictionary; roles: Role[] 
 
       <button
         type="button"
-        onClick={() => store.replace([])}
+        onClick={() => store.clear()}
         className={cn(buttonVariants({ variant: "quiet", size: "sm" }))}
       >
         {t.clear}
