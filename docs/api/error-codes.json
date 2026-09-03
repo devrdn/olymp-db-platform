@@ -222,6 +222,10 @@
       "meaning": "No such question in this contest. Also the answer when the question belongs to another contest: that it exists elsewhere is not the caller's business."
     },
     {
+      "code": "reason_required",
+      "meaning": "Blocking or deleting an account has to say why. The reason is stored with the account and read by whoever asks about it later."
+    },
+    {
       "code": "same_password",
       "meaning": "The new password is the one already in use."
     },
@@ -232,6 +236,10 @@
     {
       "code": "story_not_found",
       "meaning": "The contest has no story yet."
+    },
+    {
+      "code": "too_many_accounts",
+      "meaning": "More accounts were selected than one operation carries. The message says the limit."
     },
     {
       "code": "too_many_attempts",
