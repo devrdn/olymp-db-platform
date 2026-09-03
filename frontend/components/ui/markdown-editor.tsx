@@ -1,12 +1,11 @@
 "use client";
 
-import { Crepe } from "@milkdown/crepe";
+import type { Crepe } from "@milkdown/crepe";
 import { Maximize2, Minimize2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
-import { pasteAsMarkdown } from "./paste-as-markdown";
 
 import "@milkdown/crepe/theme/common/style.css";
 import "./markdown-editor.css";
@@ -61,8 +60,11 @@ export function MarkdownEditor({
   placeholder?: string;
   readOnly?: boolean;
   className?: string;
-  /** What the one toggle says, in each of its two states. */
-  labels: { expand: string; collapse: string };
+  /**
+   * What the one toggle says in each of its two states, and what to say when
+   * the editor could not be loaded at all.
+   */
+  labels: { expand: string; collapse: string; unavailable: string };
 }) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<Crepe | null>(null);
@@ -76,54 +78,43 @@ export function MarkdownEditor({
   // the caret on every keystroke.
   const initial = useRef(defaultValue);
 
+  // Whether the editor itself could be loaded. Not a detail: its bundle
+  // contains a regular expression with a lookbehind and a class static block,
+  // both of which are syntax rather than behaviour, so a browser that lacks
+  // them throws while parsing and nothing in the chunk ever runs. Safari
+  // learned both in 16.4; before that the box rendered, stayed empty, and its
+  // own controls did nothing — a silent failure with no way to tell it from a
+  // bug of ours.
+  //
+  // Neither can be transpiled away — there is no downlevel form of a
+  // lookbehind — so the editor has to be allowed not to arrive.
+  const [unavailable, setUnavailable] = useState(false);
+
   useEffect(() => {
     if (!host.current) return;
 
-    const crepe = new Crepe({
-      root: host.current,
-      defaultValue: initial.current,
-      features: {
-        // Off deliberately. Images are governed by SPEC 10.1 and are not
-        // uploaded here; LaTeX is not a thing a crime story needs; and an
-        // assistant feature would send an author's draft somewhere this
-        // installation does not control.
-        [Crepe.Feature.ImageBlock]: false,
-        [Crepe.Feature.Latex]: false,
-        [Crepe.Feature.AI]: false,
-      },
-      featureConfigs: {
-        [Crepe.Feature.BlockEdit]: {
-          blockHandle: {
-            // Pinned to the left, with no middleware. Crepe's default flips
-            // the handle to the right of the block when it decides there is
-            // not enough room on the left — and a control that changes sides
-            // is one somebody has to look for. It also lands past the text,
-            // which is where the stray horizontal scroll bar came from.
-            getPlacement: () => "left",
-            middleware: [],
-            // Closer than the default 16, so the pair of controls reaches
-            // 74px rather than 82 and fits the gutter with room to spare.
-            getOffset: () => 8,
-          },
-        },
-      },
-    });
-
-    // The document is Markdown; a paste should be too.
-    crepe.editor.use(pasteAsMarkdown);
-
-    crepe.on((api) => api.markdownUpdated((_ctx, value) => setMarkdown(value)));
-
     let live = true;
-    crepe.create().then(() => {
-      if (!live) return void crepe.destroy();
-      editor.current = crepe;
-    });
+    let started: Crepe | null = null;
+
+    // Imported here rather than at the top, so that a chunk which cannot be
+    // parsed becomes a rejected promise instead of a page that half works.
+    void Promise.all([import("@milkdown/crepe"), import("./paste-as-markdown")])
+      .then(([{ Crepe }, { pasteAsMarkdown }]) => {
+        if (!live || !host.current) return;
+        started = build(Crepe, host.current, initial.current, pasteAsMarkdown, setMarkdown);
+        return started.create().then(() => {
+          if (!live) return void started?.destroy();
+          editor.current = started;
+        });
+      })
+      .catch(() => {
+        if (live) setUnavailable(true);
+      });
 
     return () => {
       live = false;
       editor.current = null;
-      void crepe.destroy();
+      void started?.destroy();
     };
   }, []);
 
@@ -180,7 +171,7 @@ export function MarkdownEditor({
         className,
       )}
     >
-      <div className="flex justify-end pb-1.5">
+      <div className="flex justify-end pb-1.5" hidden={unavailable}>
         <button
           type="button"
           onClick={toggle}
@@ -197,7 +188,30 @@ export function MarkdownEditor({
         </button>
       </div>
 
+      {unavailable ? (
+        // The story is Markdown, so a plain field is the whole document and
+        // not a degraded view of it: what is lost is seeing it laid out, not
+        // being able to write it. Said out loud, because an author who is not
+        // told will spend the afternoon wondering what happened to the
+        // formatting buttons.
+        <>
+          <p role="status" className="pb-1.5 text-small text-ink-2">
+            {labels.unavailable}
+          </p>
+          <textarea
+            name={name}
+            // The prop, not the captured ref: a textarea is uncontrolled, so
+            // React reads this once and a later prop would be ignored anyway.
+            defaultValue={defaultValue}
+            placeholder={placeholder}
+            readOnly={readOnly}
+            spellCheck={false}
+            className="min-h-40 w-full resize-y border border-edge bg-bg p-3 font-mono text-body text-ink outline-none focus-visible:border-accent narrow:h-[32rem]"
+          />
+        </>
+      ) : null}
       <div
+        hidden={unavailable}
         ref={host}
         data-editor-host
         data-placeholder={placeholder}
@@ -240,7 +254,61 @@ export function MarkdownEditor({
               "min-h-40 narrow:h-[32rem] narrow:overflow-x-hidden narrow:overflow-y-auto narrow:pl-24",
         )}
       />
-      <input type="hidden" name={name} value={markdown} />
+      {/* The field the form sends, when the editor is the one holding the
+          document. With the fallback the textarea carries the name itself, so
+          there is never a second field under it. */}
+      {unavailable ? null : <input type="hidden" name={name} value={markdown} />}
     </div>
   );
+}
+
+/**
+ * Builds the editor once its module has arrived.
+ *
+ * At module scope and taking the class as an argument, because the import that
+ * produces it is deliberately dynamic: a bundle that cannot be parsed has to
+ * become a rejected promise rather than a page that half works.
+ */
+function build(
+  Crepe: typeof import("@milkdown/crepe").Crepe,
+  root: HTMLElement,
+  defaultValue: string,
+  pasteAsMarkdown: typeof import("./paste-as-markdown").pasteAsMarkdown,
+  onChange: (markdown: string) => void,
+) {
+  const crepe = new Crepe({
+    root,
+    defaultValue,
+    features: {
+      // Off deliberately. Images are governed by SPEC 10.1 and are not
+      // uploaded here; LaTeX is not a thing a crime story needs; and an
+      // assistant feature would send an author's draft somewhere this
+      // installation does not control.
+      [Crepe.Feature.ImageBlock]: false,
+      [Crepe.Feature.Latex]: false,
+      [Crepe.Feature.AI]: false,
+    },
+    featureConfigs: {
+      [Crepe.Feature.BlockEdit]: {
+        blockHandle: {
+          // Pinned to the left, with no middleware. Crepe's default flips the
+          // handle to the right of the block when it decides there is not
+          // enough room on the left — and a control that changes sides is one
+          // somebody has to look for. It also lands past the text, which is
+          // where the stray horizontal scroll bar came from.
+          getPlacement: () => "left",
+          middleware: [],
+          // Closer than the default 16, so the pair of controls reaches 74px
+          // rather than 82 and fits the gutter with room to spare.
+          getOffset: () => 8,
+        },
+      },
+    },
+  });
+
+  // The document is Markdown; a paste should be too.
+  crepe.editor.use(pasteAsMarkdown);
+  crepe.on((api) => api.markdownUpdated((_ctx, value) => onChange(value)));
+
+  return crepe;
 }

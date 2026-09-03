@@ -163,6 +163,7 @@ const ro = {
       lede: "Ce citește participantul înainte de a deschide baza de date. Fiecare limbă declarată are nevoie de una.",
       fallback: "implicită",
       placeholder: "Sera era încuiată pe dinăuntru…",
+      unavailable: "Acest browser nu poate rula editorul formatat, așa că povestea este afișată ca Markdown. Totul se salvează la fel; lipsește doar previzualizarea. Safari are nevoie de versiunea 16.4 sau mai nouă.",
       expand: "Deschideți pe tot ecranul",
       collapse: "Închideți modul pe tot ecranul",
       preview: "Previzualizare",

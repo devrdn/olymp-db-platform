@@ -167,6 +167,7 @@ const en = {
       lede: "What a participant reads before they open the database. Every declared language needs one.",
       fallback: "default",
       placeholder: "The greenhouse was locked from the inside…",
+      unavailable: "This browser cannot run the formatted editor, so the story is shown as Markdown. Everything still saves; only the preview is missing. Safari needs version 16.4 or newer.",
       expand: "Open full screen",
       collapse: "Close full screen",
       preview: "Preview",
