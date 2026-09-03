@@ -1,9 +1,10 @@
 name: frontend
 
-# Only what this component owns, plus the API's published contract: the error
-# dictionary is checked against docs/api/error-codes.json, so a change there is
-# a change to what this interface must be able to say. That file is the entire
-# dependency — nothing here reads the server's source.
+# Only what this component owns, plus the API's published contracts: the error
+# dictionary is checked against docs/api/error-codes.json, and the audit
+# dictionary against docs/api/audit-actions.json, so a change to either is a
+# change to what this interface must be able to say. Those files are the
+# entire dependency — nothing here reads the server's source.
 #
 # See the note in backend.yml before making these required checks.
 # Images for the interface are built on every push to main and published only
@@ -19,11 +20,13 @@ on:
     paths:
       - "frontend/**"
       - "docs/api/error-codes.json"
+      - "docs/api/audit-actions.json"
       - ".github/workflows/frontend.yml"
   pull_request:
     paths:
       - "frontend/**"
       - "docs/api/error-codes.json"
+      - "docs/api/audit-actions.json"
       - ".github/workflows/frontend.yml"
 
 # Least privilege: the workflow only reads the repository.

@@ -113,11 +113,22 @@ func scanUser(row pgx.Row) (users.User, error) {
 // users.Service.Create's duplicate check, BootstrapAdmin's idempotency
 // check — has to inspect the returned Status itself; ByLogin only orders the
 // candidates, it does not decide who is allowed to treat which one as absent.
+//
+// A login can go through delete, recreate, delete again, so more than one
+// *deleted* row can legitimately share lower(login) too — the live-wins ORDER
+// BY above says nothing about which of those wins when nothing live matches.
+// `u.status_changed_at DESC` breaks that tie by picking the row deleted most
+// recently: it is the one that held the login last, so it is the row whose
+// history — who deleted it, and why — an administrator asking "what happened
+// to this login" actually wants, and it is also the row auth.Service.Login
+// will name in refusing a former owner access. `u.id DESC` is a last resort
+// after that, only reached if two rows were deleted in the same instant, to
+// keep the result deterministic even then rather than merely likely.
 func (r *Users) ByLogin(ctx context.Context, login string) (users.User, error) {
 	row := r.querier(ctx).QueryRow(ctx,
 		`SELECT `+userColumns+` FROM users u `+userJoin+`
 		 WHERE lower(u.login) = lower($1)
-		 ORDER BY (u.status = 'deleted')
+		 ORDER BY (u.status = 'deleted'), u.status_changed_at DESC, u.id DESC
 		 LIMIT 1`, login)
 	return scanUser(row)
 }

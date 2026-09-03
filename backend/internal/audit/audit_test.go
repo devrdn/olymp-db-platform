@@ -2,7 +2,11 @@ package audit
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -274,35 +278,33 @@ func TestRecordManyPropagatesAStorageFailure(t *testing.T) {
 	}
 }
 
-// TestEveryActionIsListed reads audit.go's own source and checks every
-// `ActionXxx = "..."` constant it declares against Actions().
+// TestEveryActionIsListed parses every non-test source file of this package
+// and checks each `ActionXxx = "..."` constant it declares against Actions().
 //
 // A test that instead repeated the 30-odd strings by hand would prove
 // nothing: it would drift the same way Actions() itself could, and the two
 // hand-kept lists would agree right up until the day a reviewer approved a
-// change that touched only one of them. Reading the source is what makes a
+// change that touched only one of them. Parsing the source is what makes a
 // constant declared and not enumerated a build failure instead of a support
 // ticket — which is exactly the gap that left `user.delete` and
 // `user.restore` reaching the trail with no wording and no way for the
 // filter to find them.
+//
+// This reads the whole package directory, not one named file. An earlier
+// version read audit.go by name, which happened to work only because every
+// Action constant lived there — a constant declared in another file of this
+// package, or a rename of this one, would have passed both directions of the
+// check while staying unlisted. Depending on the package rather than a
+// filename is what closes that.
 func TestEveryActionIsListed(t *testing.T) {
-	source := readSource(t, "audit.go")
+	declared := declaredActionConstants(t)
 
 	listed := make(map[string]bool, len(Actions()))
 	for _, action := range Actions() {
 		listed[action] = true
 	}
 
-	for _, line := range strings.Split(source, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "Action") {
-			continue
-		}
-		name, rest, ok := strings.Cut(trimmed, " = ")
-		if !ok {
-			continue
-		}
-		value := strings.Trim(strings.TrimSpace(rest), `"`)
+	for name, value := range declared {
 		if !listed[value] {
 			t.Errorf("%s (%q) is declared but not returned by Actions()", name, value)
 		}
@@ -310,28 +312,18 @@ func TestEveryActionIsListed(t *testing.T) {
 }
 
 // TestActionsHasNoStrayEntry is the other direction: everything Actions()
-// returns is backed by a real constant. Without it, a typo or a removed
-// constant left behind in the actions slice would validate an ?action=
-// filter for a code the trail can never actually carry.
+// returns is backed by a real constant, somewhere in the package. Without it,
+// a typo or a removed constant left behind in the actions slice would
+// validate an ?action= filter for a code the trail can never actually carry.
 func TestActionsHasNoStrayEntry(t *testing.T) {
-	source := readSource(t, "audit.go")
-
 	declared := make(map[string]bool)
-	for _, line := range strings.Split(source, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "Action") {
-			continue
-		}
-		_, rest, ok := strings.Cut(trimmed, " = ")
-		if !ok {
-			continue
-		}
-		declared[strings.Trim(strings.TrimSpace(rest), `"`)] = true
+	for _, value := range declaredActionConstants(t) {
+		declared[value] = true
 	}
 
 	for _, action := range Actions() {
 		if !declared[action] {
-			t.Errorf("Actions() returns %q, which no constant in audit.go declares", action)
+			t.Errorf("Actions() returns %q, which no Action constant in this package declares", action)
 		}
 	}
 }
@@ -350,11 +342,59 @@ func TestIsActionAcceptsEveryDeclaredActionAndNothingElse(t *testing.T) {
 	}
 }
 
-func readSource(t *testing.T, name string) string {
+// declaredActionConstants parses every non-test .go file in this package's
+// own directory and returns each top-level `ActionXxx = "..."` constant it
+// finds, keyed by the constant's name.
+//
+// go/parser rather than a scan of one file's text: a directory holds every
+// source file of the package regardless of what any of them is named, so a
+// constant declared in changes.go — or a file added tomorrow — is found the
+// same way one in audit.go is. Test files are excluded on purpose; a
+// constant declared only for a test would not be a real action.
+func declaredActionConstants(t *testing.T) map[string]string {
 	t.Helper()
-	data, err := os.ReadFile(name)
+
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(info os.FileInfo) bool {
+		return !strings.HasSuffix(info.Name(), "_test.go")
+	}, 0)
 	if err != nil {
-		t.Fatalf("reading %s: %v", name, err)
+		t.Fatalf("parsing package audit: %v", err)
 	}
-	return string(data)
+
+	declared := make(map[string]string)
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			for _, decl := range file.Decls {
+				genDecl, ok := decl.(*ast.GenDecl)
+				if !ok || genDecl.Tok != token.CONST {
+					continue
+				}
+				for _, spec := range genDecl.Specs {
+					valueSpec, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for i, name := range valueSpec.Names {
+						if !strings.HasPrefix(name.Name, "Action") {
+							continue
+						}
+						if i >= len(valueSpec.Values) {
+							continue
+						}
+						lit, ok := valueSpec.Values[i].(*ast.BasicLit)
+						if !ok || lit.Kind != token.STRING {
+							continue
+						}
+						value, err := strconv.Unquote(lit.Value)
+						if err != nil {
+							continue
+						}
+						declared[name.Name] = value
+					}
+				}
+			}
+		}
+	}
+	return declared
 }

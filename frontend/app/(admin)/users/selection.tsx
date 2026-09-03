@@ -71,6 +71,11 @@ class SelectionStore {
   // actual mutation keeps the reference stable between emits.
   private cachedSelected: string[] | null = null;
   private cachedList: SelectedAccount[] | null = null;
+  // Whose selection this is, as of the last `syncOwner` call. `undefined`
+  // until that first call — deliberately distinct from every real value
+  // `owner` carries (`string | null`) so a fresh store's first sync always
+  // "matches" rather than clearing entries that cannot exist yet.
+  private owner: string | null | undefined = undefined;
 
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -126,6 +131,33 @@ class SelectionStore {
     this.emit();
   };
 
+  /**
+   * Scopes this store to whoever is signed in, clearing it the moment that
+   * changes.
+   *
+   * The store now lives in a layout precisely so a pick survives a search
+   * (see the class doc above) — the same React identity that makes that work
+   * is exactly what could let a pick survive further than that. Next keeps a
+   * client-side cache of previously rendered route segments to make
+   * back/forward navigation instant and avoid layout shift
+   * (`node_modules/next/dist/docs/01-app/03-api-reference/05-config/01-next-config-js/staleTimes.md`:
+   * "This doesn't change back/forward caching behavior..."), and nothing
+   * about that cache is scoped to who is signed in. Rather than establishing
+   * whether it can actually resurrect this component's state across a
+   * sign-out and a different administrator signing in — in the same tab, a
+   * still-open back-navigation reaching a cached copy of this tree — `owner`
+   * is checked every time `SelectionProvider` runs, and a change clears the
+   * selection outright, regardless of *why* this instance is being asked
+   * about a different administrator than the one it last held picks for.
+   */
+  syncOwner = (owner: string | null) => {
+    if (this.owner === owner) return;
+    this.owner = owner;
+    if (this.entries.size === 0) return;
+    this.entries.clear();
+    this.emit();
+  };
+
   private emit() {
     this.cachedSelected = null;
     this.cachedList = null;
@@ -152,9 +184,26 @@ function useSelectionStore(): SelectionStore {
  * The instance itself travels through context, which is fine — it never
  * changes identity, so nothing that reads it re-renders when the selection
  * does. What must never live in context is the selected set itself.
+ *
+ * `owner` is the signed-in administrator's id, read fresh, server-side, by
+ * `layout.tsx` on every request that reaches it — see `SelectionStore.syncOwner`
+ * for why a plain `useState` here is not enough on its own to keep a
+ * selection from outliving whoever made it. Optional and defaulted to
+ * `null` for the many tests in this file that exercise the selection
+ * mechanics and have no administrator identity to give it; `layout.tsx`
+ * always passes a real one.
  */
-export function SelectionProvider({ children }: { children: React.ReactNode }) {
+export function SelectionProvider({
+  owner = null,
+  children,
+}: {
+  owner?: string | null;
+  children: React.ReactNode;
+}) {
   const [store] = useState(() => new SelectionStore());
+  useEffect(() => {
+    store.syncOwner(owner);
+  }, [store, owner]);
   return <SelectionContext.Provider value={store}>{children}</SelectionContext.Provider>;
 }
 
