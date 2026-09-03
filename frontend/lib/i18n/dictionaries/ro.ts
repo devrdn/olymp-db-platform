@@ -504,6 +504,7 @@ const ro = {
         resetPassword: "Resetați parolele",
         tooMany: "Este mai mult decât poate procesa o singură operațiune (cel mult {n}). Restrângeți selecția.",
         cancel: "Anulați",
+        close: "Închideți",
         confirm: "Confirmați",
         submitting: "Se procesează",
         reasonLabel: "Motiv",
@@ -524,6 +525,11 @@ const ro = {
           title: "Schimbați rolurile pentru {n} conturi",
           description: "Înlocuiește setul de roluri al fiecărui cont selectat exact cu ce este bifat aici.",
           submit: "Înlocuiți rolurile",
+          confirmEmptyTitle: "Eliminați toate rolurile?",
+          confirmEmptyBody:
+            "Niciun rol nu este bifat. La continuare, vor fi eliminate toate rolurile din toate cele {n} conturi selectate.",
+          confirmEmptySubmit: "Eliminați toate rolurile",
+          back: "Înapoi",
         },
         resetDialog: {
           title: "Resetați parolele pentru {n} conturi",
@@ -533,6 +539,7 @@ const ro = {
           handover: "Predați fiecare parolă proprietarului. Este afișată o singură dată și nu mai poate fi recuperată.",
           copy: "Copiați",
           copied: "Copiat",
+          none: "Nicio parolă nu a fost resetată.",
         },
         changed: "{n} schimbate",
         skipped: "{n} omise",

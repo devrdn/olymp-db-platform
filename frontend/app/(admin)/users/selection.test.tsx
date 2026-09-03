@@ -1,7 +1,7 @@
 import { Profiler } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, describe, expect, test, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 import { MAX_BULK_ACCOUNTS } from "@/lib/api/accounts-terms";
@@ -64,6 +64,15 @@ let ru: Dictionary;
 beforeAll(async () => {
   en = await getDictionary("en");
   ru = await getDictionary("ru");
+});
+
+// The bulk action mocks are module-level `vi.fn()`s shared by every test in
+// this file; without clearing their call history between tests, a test that
+// asserts `not.toHaveBeenCalled()` would see calls made by an earlier test.
+// This only clears `.mock.calls` and friends, not a mock's implementation, so
+// the default stub each one carries (an empty successful result) survives.
+beforeEach(() => {
+  vi.clearAllMocks();
 });
 
 /** Renders the bar with a selection already picked, in the Russian locale the
@@ -384,6 +393,238 @@ describe("bulk actions: roles and password reset", () => {
 
     expect(await screen.findByText("swordfish-1")).toBeVisible();
     expect(screen.getByText("ivanov")).toBeVisible();
+  });
+});
+
+describe("bulk actions: an empty roles submit needs a second, explicit step", () => {
+  test("does not reach the action when nothing is checked, and names the count", async () => {
+    const roles: Role[] = [{ code: "admin", name: "Administrator" }];
+    await renderBar({ selected: ["a", "b"], roles });
+
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.roles }));
+    await userEvent.click(
+      screen.getByRole("button", { name: ru.accounts.selection.bulk.rolesDialog.submit }),
+    );
+
+    expect(bulkReplaceRolesAction).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(ru.accounts.selection.bulk.rolesDialog.confirmEmptyTitle),
+    ).toBeVisible();
+    expect(
+      screen.getByText(ru.accounts.selection.bulk.rolesDialog.confirmEmptyBody.replace("{n}", "2")),
+    ).toBeVisible();
+  });
+
+  test("submits the empty set only after the explicit confirmation", async () => {
+    bulkReplaceRolesAction.mockResolvedValueOnce({ result: { changed: ["a"], skipped: [] } });
+    const roles: Role[] = [{ code: "admin", name: "Administrator" }];
+    await renderBar({ selected: ["a"], roles });
+
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.roles }));
+    await userEvent.click(
+      screen.getByRole("button", { name: ru.accounts.selection.bulk.rolesDialog.submit }),
+    );
+    expect(bulkReplaceRolesAction).not.toHaveBeenCalled();
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: ru.accounts.selection.bulk.rolesDialog.confirmEmptySubmit,
+      }),
+    );
+
+    expect(bulkReplaceRolesAction).toHaveBeenCalled();
+    const form = bulkReplaceRolesAction.mock.calls[0]![1] as FormData;
+    expect(form.getAll("roles")).toEqual([]);
+    expect(form.getAll("ids")).toEqual(["a"]);
+  });
+
+  test("going back from the confirmation returns to the checkbox list without submitting", async () => {
+    const roles: Role[] = [{ code: "admin", name: "Administrator" }];
+    await renderBar({ selected: ["a"], roles });
+
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.roles }));
+    await userEvent.click(
+      screen.getByRole("button", { name: ru.accounts.selection.bulk.rolesDialog.submit }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: ru.accounts.selection.bulk.rolesDialog.back }),
+    );
+
+    expect(bulkReplaceRolesAction).not.toHaveBeenCalled();
+    expect(screen.getByRole("checkbox", { name: /Administrator/ })).toBeVisible();
+  });
+
+  // Already covered by "the roles dialog replaces the role set with exactly
+  // what is checked" above: ticking at least one role still submits in a
+  // single step, with no confirmation screen in between.
+});
+
+describe("bulk dialogs: dismissal is blocked while pending or holding a result", () => {
+  test("Escape closes the dialog before anything has been submitted", async () => {
+    await renderBar({ selected: ["a"] });
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.unblock }));
+    expect(screen.getByRole("button", { name: ru.accounts.selection.bulk.confirm })).toBeVisible();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(
+      screen.queryByRole("button", { name: ru.accounts.selection.bulk.confirm }),
+    ).not.toBeInTheDocument();
+  });
+
+  test("Escape does not close the dialog while the request is pending", async () => {
+    // Held open under this test's own control rather than left to hang
+    // forever: an action promise that never settles leaves React's own
+    // pending-transition bookkeeping stuck, which then bleeds into whichever
+    // test runs next against the same mock. Resolving it before this test
+    // ends (below) keeps the test isolated.
+    let resolveAction: (value: { code?: string; result?: unknown }) => void = () => {};
+    bulkUnblockAction.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveAction = resolve;
+        }),
+    );
+    await renderBar({ selected: ["a"] });
+
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.unblock }));
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.confirm }));
+    await screen.findByRole("button", { name: ru.accounts.selection.bulk.submitting });
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.getByRole("button", { name: ru.accounts.selection.bulk.submitting })).toBeVisible();
+    expect(screen.getByRole("button", { name: ru.accounts.selection.bulk.close })).toBeDisabled();
+
+    resolveAction({ result: { changed: ["a"], skipped: [] } });
+    await screen.findByText(ru.accounts.selection.bulk.changed.replace("{n}", "1"));
+  });
+
+  test("Escape does not close the dialog while a result is on screen", async () => {
+    bulkUnblockAction.mockResolvedValueOnce({ result: { changed: ["a"], skipped: [] } });
+    await renderBar({ selected: ["a"] });
+
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.unblock }));
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.confirm }));
+    await screen.findByText(ru.accounts.selection.bulk.changed.replace("{n}", "1"));
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.getByText(ru.accounts.selection.bulk.changed.replace("{n}", "1"))).toBeVisible();
+    expect(screen.getByRole("button", { name: ru.accounts.selection.bulk.close })).toBeDisabled();
+  });
+
+  test("the explicit Done button still closes the dialog once a result is shown", async () => {
+    bulkUnblockAction.mockResolvedValueOnce({ result: { changed: ["a"], skipped: [] } });
+    await renderBar({ selected: ["a"] });
+
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.unblock }));
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.confirm }));
+    await screen.findByText(ru.accounts.selection.bulk.changed.replace("{n}", "1"));
+
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.done }));
+
+    expect(
+      screen.queryByText(ru.accounts.selection.bulk.changed.replace("{n}", "1")),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("bulk dialog: the corner control reads as close, not cancel", () => {
+  test("names the corner X 'close' rather than reusing the cancel wording", async () => {
+    await renderBar({ selected: ["a"] });
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.block }));
+
+    // The footer's own Cancel button keeps its own label; the corner control
+    // is a distinct, generic "close" — not the same string as either.
+    expect(screen.getByRole("button", { name: ru.accounts.selection.bulk.close })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: ru.accounts.selection.bulk.cancel }),
+    ).toBeVisible();
+  });
+});
+
+describe("bulk actions: the reason error clears as soon as it is corrected", () => {
+  test("typing a real reason clears the red line without a second submit attempt", async () => {
+    await renderBar({ selected: ["a"] });
+
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.block }));
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.confirm }));
+    const field = screen.getByLabelText(ru.accounts.selection.bulk.reasonLabel);
+    expect(screen.getByText(/укажите причину/i)).toBeVisible();
+    expect(field).toHaveAttribute("aria-invalid", "true");
+
+    await userEvent.type(field, "cheating");
+
+    expect(screen.queryByText(/укажите причину/i)).not.toBeInTheDocument();
+    expect(field).not.toHaveAttribute("aria-invalid");
+  });
+
+  test("a field left whitespace-only does not clear the error", async () => {
+    await renderBar({ selected: ["a"] });
+
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.block }));
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.confirm }));
+    await userEvent.type(screen.getByLabelText(ru.accounts.selection.bulk.reasonLabel), "   ");
+
+    expect(screen.getByText(/укажите причину/i)).toBeVisible();
+  });
+});
+
+describe("bulk outcome: the selection only clears after a run that changed something", () => {
+  test("clears the selection once Done is pressed after a run that changed an account", async () => {
+    bulkUnblockAction.mockResolvedValueOnce({ result: { changed: ["a"], skipped: [] } });
+    render(
+      <SelectionProvider>
+        <RowCheckbox id="a" label="a" />
+        <SelectionBar dict={ru} roles={[]} />
+      </SelectionProvider>,
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: "a" }));
+
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.unblock }));
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.confirm }));
+    await screen.findByText(ru.accounts.selection.bulk.changed.replace("{n}", "1"));
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.done }));
+
+    expect(screen.getByRole("checkbox", { name: "a" })).not.toBeChecked();
+    expect(screen.queryByText(/выбран/)).not.toBeInTheDocument();
+  });
+
+  test("keeps the selection when a run changed nothing, so it can be corrected and retried", async () => {
+    bulkUnblockAction.mockResolvedValueOnce({
+      result: { changed: [], skipped: [{ id: "a", login: "ivanov", reason: "already_in_status" }] },
+    });
+    render(
+      <SelectionProvider>
+        <RowCheckbox id="a" label="a" />
+        <SelectionBar dict={ru} roles={[]} />
+      </SelectionProvider>,
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: "a" }));
+
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.unblock }));
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.confirm }));
+    await screen.findByText(ru.accounts.selection.bulk.changed.replace("{n}", "0"));
+    await userEvent.click(screen.getByRole("button", { name: ru.accounts.selection.bulk.done }));
+
+    expect(screen.getByRole("checkbox", { name: "a" })).toBeChecked();
+  });
+});
+
+describe("bulk password reset: an empty result says so", () => {
+  test("says plainly that nothing was reset when there is nothing to show", async () => {
+    bulkResetPasswordAction.mockResolvedValueOnce({ result: { issued: [], skipped: [] } });
+    await renderBar({ selected: ["a"] });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: ru.accounts.selection.bulk.resetPassword }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: ru.accounts.selection.bulk.resetDialog.submit }),
+    );
+
+    expect(await screen.findByText(ru.accounts.selection.bulk.resetDialog.none)).toBeVisible();
   });
 });
 

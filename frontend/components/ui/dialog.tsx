@@ -4,7 +4,7 @@ import * as React from "react";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { X } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 /**
@@ -21,8 +21,41 @@ import { cn } from "@/lib/utils";
  *   colour written once through a token is already correct in both themes.
  */
 
-function Dialog({ ...props }: DialogPrimitive.Root.Props) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />;
+/**
+ * `dismissible` (default `true`) is the policy this component was missing:
+ * with nothing to say otherwise, Escape, an outside click and the corner X
+ * always closed the popup, which is safe for a plain confirmation but wrong
+ * for a dialog that is mid-request or is holding a result the caller must
+ * acknowledge before it can be lost — a bulk password reset's one-time
+ * passwords, for one. Pass `dismissible={false}` for that window; the caller
+ * decides when, this component only enforces it.
+ *
+ * Escape and the close button route through `onOpenChange` regardless of
+ * `disablePointerDismissal` (that prop only governs an outside press), so
+ * both are blocked the same way: the change event fires and this cancels it
+ * via `eventDetails.cancel()`, Base UI's own mechanism for refusing a close
+ * (see `DialogRoot.ChangeEventDetails`) — nothing here reaches for a
+ * hand-rolled keydown listener.
+ */
+function Dialog({
+  dismissible = true,
+  onOpenChange,
+  ...props
+}: DialogPrimitive.Root.Props & { dismissible?: boolean }) {
+  return (
+    <DialogPrimitive.Root
+      data-slot="dialog"
+      disablePointerDismissal={!dismissible}
+      onOpenChange={(open, eventDetails) => {
+        if (!open && !dismissible) {
+          eventDetails.cancel();
+          return;
+        }
+        onOpenChange?.(open, eventDetails);
+      }}
+      {...props}
+    />
+  );
 }
 
 function DialogTrigger({ ...props }: DialogPrimitive.Trigger.Props) {
@@ -52,13 +85,20 @@ function DialogBackdrop({ className, ...props }: DialogPrimitive.Backdrop.Props)
   );
 }
 
-/** The window itself. `closeLabel` names the corner control for assistive tech. */
+/**
+ * The window itself. `closeLabel` names the corner control for assistive
+ * tech. `dismissible` (default `true`) disables that control — rather than
+ * hiding it, so the layout does not jump — when the caller's `Dialog` is
+ * refusing Escape and outside clicks too; the two props are meant to travel
+ * together.
+ */
 function DialogContent({
   className,
   children,
   closeLabel,
+  dismissible = true,
   ...props
-}: DialogPrimitive.Popup.Props & { closeLabel: string }) {
+}: DialogPrimitive.Popup.Props & { closeLabel: string; dismissible?: boolean }) {
   return (
     <DialogPortal>
       <DialogBackdrop />
@@ -75,9 +115,14 @@ function DialogContent({
         {...props}
       >
         {children}
+        {/* Styled with `buttonVariants` directly rather than through a
+            `Button` — `DialogPrimitive.Close` already renders its own
+            native button, the same way the selection bar's own "Clear
+            selection" control does below its own `buttonVariants` call. */}
         <DialogPrimitive.Close
           data-slot="dialog-close"
-          render={<Button variant="quiet" size="icon" className="absolute top-3 right-3" />}
+          disabled={!dismissible}
+          className={cn(buttonVariants({ variant: "quiet", size: "icon" }), "absolute top-3 right-3")}
         >
           <X />
           <span className="sr-only">{closeLabel}</span>
