@@ -492,7 +492,7 @@ const en = {
       roles: "Roles",
       lastSeen: "Last signed in",
     },
-    status: { active: "active", blocked: "blocked" },
+    status: { active: "active", blocked: "blocked", deleted: "deleted" },
     handoverPending: "handover password",
     never: "never",
     noRoles: "none",

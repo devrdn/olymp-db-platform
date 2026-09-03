@@ -1,6 +1,13 @@
 import { describe, expect, test } from "vitest";
 
-import { accountListSchema, accountSchema, roleListSchema } from "./accounts";
+import {
+  accountListSchema,
+  accountSchema,
+  bulkPasswordResetResultSchema,
+  bulkResultSchema,
+  roleListSchema,
+  skippedAccountSchema,
+} from "./accounts";
 
 const wire = {
   id: "9a1f0c3e-2b44-4e77-8d0a-1c5b8e91a4d6",
@@ -48,6 +55,14 @@ describe("accountSchema", () => {
     // badge three components later.
     expect(() => accountSchema.parse({ ...wire, status: "banished" })).toThrow();
   });
+
+  test("reads a soft-deleted account", () => {
+    // The row stays, only its status moves: deleted is an ordinary status the
+    // list renders, not an account that disappears from the API's answers.
+    const account = accountSchema.parse({ ...wire, status: "deleted" });
+
+    expect(account.status).toBe("deleted");
+  });
 });
 
 describe("accountListSchema", () => {
@@ -70,5 +85,74 @@ describe("roleListSchema", () => {
     });
 
     expect(roles.items.map((role) => role.code)).toEqual(["student", "admin"]);
+  });
+});
+
+describe("skippedAccountSchema", () => {
+  test("reads a reason from the known vocabulary", () => {
+    const skipped = skippedAccountSchema.parse({
+      id: "9a1f0c3e-2b44-4e77-8d0a-1c5b8e91a4d6",
+      login: "ivanov",
+      reason: "last_administrator",
+    });
+
+    expect(skipped.reason).toBe("last_administrator");
+  });
+
+  test("keeps a reason it does not recognise rather than rejecting the row", () => {
+    // A newer backend can ship a skip reason before this build knows the
+    // word for it. The row is still an outcome the administrator has to see,
+    // so parsing must not throw and must not drop the field.
+    const skipped = skippedAccountSchema.parse({
+      id: "9a1f0c3e-2b44-4e77-8d0a-1c5b8e91a4d6",
+      login: "ivanov",
+      reason: "invented_later",
+    });
+
+    expect(skipped.reason).toBe("invented_later");
+  });
+});
+
+describe("bulkResultSchema", () => {
+  test("reads a bulk result, unknown skip reasons included", () => {
+    const parsed = bulkResultSchema.parse({
+      changed: ["8f1a0c3e-2b44-4e77-8d0a-1c5b8e91a4d6"],
+      skipped: [
+        { id: "1a2b3c4d-2b44-4e77-8d0a-1c5b8e91a4d6", login: "ivanov", reason: "invented_later" },
+      ],
+    });
+
+    expect(parsed.changed).toEqual(["8f1a0c3e-2b44-4e77-8d0a-1c5b8e91a4d6"]);
+    expect(parsed.skipped[0].reason).toBe("invented_later");
+  });
+
+  test("reads an empty selection outcome", () => {
+    // Every id in the request could be skipped; that is a 200 with an empty
+    // `changed`, not an error, and the schema must not require a non-empty
+    // list.
+    const parsed = bulkResultSchema.parse({ changed: [], skipped: [] });
+
+    expect(parsed.changed).toEqual([]);
+    expect(parsed.skipped).toEqual([]);
+  });
+});
+
+describe("bulkPasswordResetResultSchema", () => {
+  test("reads the passwords issued, in the interface's own casing", () => {
+    const parsed = bulkPasswordResetResultSchema.parse({
+      issued: [
+        {
+          id: "9a1f0c3e-2b44-4e77-8d0a-1c5b8e91a4d6",
+          login: "s.popescu",
+          one_time_password: "Xk9-mQ2p",
+        },
+      ],
+      skipped: [
+        { id: "1a2b3c4d-2b44-4e77-8d0a-1c5b8e91a4d6", login: "deleted.one", reason: "deleted" },
+      ],
+    });
+
+    expect(parsed.issued[0]).toMatchObject({ login: "s.popescu", oneTimePassword: "Xk9-mQ2p" });
+    expect(parsed.skipped[0].reason).toBe("deleted");
   });
 });
