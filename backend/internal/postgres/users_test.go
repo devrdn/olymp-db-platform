@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -223,6 +225,48 @@ func TestDeletedAccountReleasesItsLogin(t *testing.T) {
 		}
 		if second.ID == first.ID {
 			t.Error("Create() returned the same id as the deleted account")
+		}
+	})
+}
+
+// TestRestoreIsRefusedByAReclaimedLogin proves a guarantee that only the real
+// database can prove: the login a deletion releases is held back by a partial
+// unique index (WHERE status <> 'deleted'), not by application code, and a
+// restore that would collide with a live account now holding it is refused
+// before it happens. Run through users.Service — the code a request actually
+// takes, TakenAmong included — rather than by asserting on the repository
+// method alone, and against PostgreSQL rather than the in-memory fake,
+// because an index is exactly the part a fake cannot exercise.
+func TestRestoreIsRefusedByAReclaimedLogin(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		service := users.NewService(repo, audit.New(NewAuditSink(testPool)), storage.NewUnitOfWork(testPool))
+
+		admin := makeUser(t, ctx, "reclaimed-login-admin")
+		gone := makeUser(t, ctx, "reclaimed-login-ivanov")
+		if err := service.Delete(ctx, admin.ID, gone.ID, "left the university"); err != nil {
+			t.Fatalf("Delete() = %v", err)
+		}
+
+		// A new account reclaims the login the deletion released.
+		if _, err := repo.Create(ctx, users.User{
+			Login: "reclaimed-login-ivanov", FullName: "New Ivanov", PasswordHash: "x", Status: users.StatusActive,
+		}); err != nil {
+			t.Fatalf("Create() = %v", err)
+		}
+
+		err := service.Restore(ctx, admin.ID, gone.ID)
+		if !errors.Is(err, users.ErrLoginTaken) {
+			t.Fatalf("Restore() = %v, want ErrLoginTaken", err)
+		}
+
+		// The refusal must leave the account exactly where it was.
+		stored, getErr := repo.ByID(ctx, gone.ID)
+		if getErr != nil {
+			t.Fatalf("ByID() = %v", getErr)
+		}
+		if stored.Status != users.StatusDeleted {
+			t.Errorf("Status = %q, want the refused restore to leave it deleted", stored.Status)
 		}
 	})
 }

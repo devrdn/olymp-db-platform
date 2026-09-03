@@ -153,6 +153,25 @@ func TestBlockedAccountIsRejectedEvenWithTheRightPassword(t *testing.T) {
 	}
 }
 
+// TestDeletedAccountIsRejectedEvenWithTheRightPassword is the central claim
+// the whole feature rests on: deletion is a status, not a column, and sign-in
+// already refuses anything whose status is not active. The account's password
+// is still correct and its row still exists — the refusal has to come from
+// the status alone.
+func TestDeletedAccountIsRejectedEvenWithTheRightPassword(t *testing.T) {
+	f := newFixture(t)
+	_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusDeleted, users.StatusChange{})
+
+	result, err := f.service.Login(context.Background(), loginCmd(testPassword))
+
+	if !errors.Is(err, ErrAccountBlocked) {
+		t.Errorf("err = %v, want ErrAccountBlocked", err)
+	}
+	if result.Token != "" {
+		t.Error("a deleted account received a session")
+	}
+}
+
 func TestBlockedAccountLooksLikeAnyOtherFailureToSomeoneGuessing(t *testing.T) {
 	// The account owner deserves to be told they are blocked, but only after
 	// proving they own it. A wrong guess must not reveal that the login exists.

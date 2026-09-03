@@ -6,13 +6,21 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/devrdn/db-contest/backend/internal/api"
+	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/health"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
+	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/platform/server"
+	"github.com/devrdn/db-contest/backend/internal/rbac"
+	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/devrdn/db-contest/backend/internal/users/userstest"
+	"github.com/go-chi/chi/v5"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -277,5 +285,152 @@ func TestDegradedServiceStillMeasuresTraffic(t *testing.T) {
 
 	if !strings.Contains(startupLog.String(), "http metrics") {
 		t.Errorf("log backend produced no metric record: %s", startupLog.String())
+	}
+}
+
+// deletionFixture mounts the account-management endpoints and the
+// authentication endpoints on one router, sharing one account store and one
+// session store — the two halves of the deletion round trip, wired the way
+// main.go wires them, rather than each tested against its own handler alone.
+type deletionFixture struct {
+	router http.Handler
+	repo   *userstest.Repository
+	admin  users.User
+	cookie *http.Cookie
+}
+
+func newDeletionFixture(t *testing.T) *deletionFixture {
+	t.Helper()
+
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+
+	repo := userstest.New()
+	repo.GrantRole("admin", rbac.PermissionUsersManage)
+	admin := repo.Add(users.User{Login: "root", FullName: "Root", Status: users.StatusActive, Roles: []string{"admin"}})
+
+	log := logging.New("error", io.Discard)
+	sessions := auth.NewSessionStore(c, time.Hour)
+	adminToken, err := sessions.Create(context.Background(), auth.Principal{UserID: admin.ID, Login: admin.Login})
+	if err != nil {
+		t.Fatalf("session Create() returned error: %v", err)
+	}
+
+	authService := auth.NewService(auth.ServiceConfig{
+		Users: repo, Sessions: sessions, Audit: audit.New(&apiSink{}), Limiter: auth.NewLimiter(c), Logger: log,
+	})
+	mw := auth.NewMiddleware(auth.MiddlewareConfig{
+		Sessions: sessions, Users: repo,
+		Authorizer: rbac.New(noRoles{}), Cookies: auth.NewCookieWriter(false), Logger: log,
+	})
+	usersService := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{})
+
+	router := chi.NewRouter()
+	api.NewUsersHandler(usersService, repo, mw, log).Mount(router)
+	api.NewAuthHandler(authService, usersService, repo, mw, auth.NewCookieWriter(false), log).Mount(router)
+
+	return &deletionFixture{
+		router: router,
+		repo:   repo,
+		admin:  admin,
+		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: adminToken},
+	}
+}
+
+// asAdmin sends a request carrying the administrator's session cookie.
+func (f *deletionFixture) asAdmin(method, path, body string) *httptest.ResponseRecorder {
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(f.cookie)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	return rec
+}
+
+// signIn attempts a login with no session cookie, the way an anonymous client
+// would.
+func (f *deletionFixture) signIn(login, plaintext string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/auth/login",
+		strings.NewReader(`{"login":"`+login+`","password":"`+plaintext+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	return rec
+}
+
+// TestDeletionAndBulkRoundTrip is the whole path the design promises,
+// end to end over HTTP: two accounts, deleted together by one bulk call,
+// vanish from the register an administrator reads by default; restoring one
+// brings it back to the register and to being able to sign in, while the
+// other stays exactly as locked out as the day it was deleted.
+func TestDeletionAndBulkRoundTrip(t *testing.T) {
+	f := newDeletionFixture(t)
+	hash, err := password.Hash(testPassword)
+	if err != nil {
+		t.Fatalf("password.Hash() returned error: %v", err)
+	}
+	first := f.repo.Add(users.User{
+		Login: "orlov", FullName: "Orlov", PasswordHash: hash, Status: users.StatusActive,
+	})
+	second := f.repo.Add(users.User{
+		Login: "popa", FullName: "Popa", PasswordHash: hash, Status: users.StatusActive,
+	})
+
+	// Both signed in successfully before anything happened to them.
+	if rec := f.signIn("orlov", testPassword); rec.Code != http.StatusOK {
+		t.Fatalf("orlov could not sign in before deletion: status = %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	if rec := f.signIn("popa", testPassword); rec.Code != http.StatusOK {
+		t.Fatalf("popa could not sign in before deletion: status = %d (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	// Select both and delete them in one bulk call.
+	rec := f.asAdmin(http.MethodPost, "/users/bulk/status", `{"ids":["`+
+		first.ID.String()+`","`+second.ID.String()+`"],"status":"deleted","reason":"graduated"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bulk delete status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var bulkBody struct {
+		Changed []string `json:"changed"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &bulkBody); err != nil {
+		t.Fatalf("bulk delete response is not JSON: %v", err)
+	}
+	if len(bulkBody.Changed) != 2 {
+		t.Fatalf("bulk delete changed %v, want both accounts", bulkBody.Changed)
+	}
+
+	// The default listing is the register an administrator reads; a deleted
+	// account is not in it.
+	rec = f.asAdmin(http.MethodGet, "/users?limit=200", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"orlov"`) || strings.Contains(rec.Body.String(), `"popa"`) {
+		t.Errorf("the default listing still names a deleted account: %s", rec.Body.String())
+	}
+
+	// Restore one of the two.
+	rec = f.asAdmin(http.MethodPost, "/users/"+first.ID.String()+"/restore", "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("restore status = %d, want 204 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	// The restored account signs in again with its unchanged password...
+	rec = f.signIn("orlov", testPassword)
+	if rec.Code != http.StatusOK {
+		t.Errorf("restored account could not sign in: status = %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	// ...while the one nobody restored is still refused.
+	rec = f.signIn("popa", testPassword)
+	if rec.Code == http.StatusOK {
+		t.Error("the account that was never restored signed in successfully")
+	}
+	if code := errorCode(t, rec); code != "account_blocked" {
+		t.Errorf("popa's sign-in code = %q, want account_blocked", code)
 	}
 }

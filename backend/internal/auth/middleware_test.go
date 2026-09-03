@@ -133,6 +133,34 @@ func TestBlockedAccountLosesTheSessionEntirely(t *testing.T) {
 	}
 }
 
+// TestAuthenticateRejectsADeletedAccountHoldingAValidSession proves the
+// second door deletion closes: the account's password and session are both
+// still technically valid, but the middleware must refuse it on the strength
+// of its status alone, on the very next request — not whenever the session
+// happens to expire.
+func TestAuthenticateRejectsADeletedAccountHoldingAValidSession(t *testing.T) {
+	f := newMiddlewareFixture(t, staticRoles{})
+	_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusDeleted, users.StatusChange{})
+	rec := httptest.NewRecorder()
+
+	f.mw.Authenticate(http.HandlerFunc(okHandler)).ServeHTTP(rec, authed(f.token))
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 for a deleted account", rec.Code)
+	}
+}
+
+func TestDeletedAccountLosesTheSessionEntirely(t *testing.T) {
+	f := newMiddlewareFixture(t, staticRoles{})
+	_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusDeleted, users.StatusChange{})
+
+	f.mw.Authenticate(http.HandlerFunc(okHandler)).ServeHTTP(httptest.NewRecorder(), authed(f.token))
+
+	if _, err := f.sessions.Get(context.Background(), f.token); err != ErrSessionNotFound {
+		t.Error("the session of a deleted account was left in the store")
+	}
+}
+
 func TestAuthenticateRejectsASessionFromAnEarlierGeneration(t *testing.T) {
 	// This is how "log out everywhere" reaches sessions on other devices.
 	f := newMiddlewareFixture(t, staticRoles{})
