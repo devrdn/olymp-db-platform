@@ -151,6 +151,56 @@ func TestListHidesDeletedUnlessAsked(t *testing.T) {
 	})
 }
 
+// TestByIDNamesTheActorWhoChangedStatus proves the join that replaced the
+// account card's second GET /users/{id}: the actor's login now comes back on
+// the same row, resolved by the query itself rather than a follow-up
+// request. Run against the real database (make test-db) rather than the
+// in-memory fake, because the LEFT JOIN — and in particular that it is a
+// LEFT and not an INNER join — is exactly the part a fake cannot exercise.
+func TestByIDNamesTheActorWhoChangedStatus(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+
+		admin := makeUser(t, ctx, "actor-login-admin")
+		target := makeUser(t, ctx, "actor-login-target")
+		if err := repo.SetStatus(ctx, []uuid.UUID{target.ID}, users.StatusBlocked,
+			users.StatusChange{Reason: "cheating", By: admin.ID, At: time.Now()}); err != nil {
+			t.Fatalf("SetStatus() = %v", err)
+		}
+
+		found, err := repo.ByID(ctx, target.ID)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
+		}
+		if found.StatusChangedByLogin != admin.Login {
+			t.Errorf("StatusChangedByLogin = %q, want the blocking administrator's login %q",
+				found.StatusChangedByLogin, admin.Login)
+		}
+	})
+}
+
+// TestByIDReportsNoActorForAFreshAccount is the LEFT JOIN's other half: an
+// account nobody has ever blocked or deleted has NULL in status_changed_by,
+// and an INNER join would have dropped the row's status columns — or the
+// whole row, depending on how the join was written — instead of reporting
+// an empty login.
+func TestByIDReportsNoActorForAFreshAccount(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+
+		fresh := makeUser(t, ctx, "actor-login-fresh")
+
+		found, err := repo.ByID(ctx, fresh.ID)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
+		}
+		if found.StatusChangedByLogin != "" {
+			t.Errorf("StatusChangedByLogin = %q, want empty: nobody has changed this account's status",
+				found.StatusChangedByLogin)
+		}
+	})
+}
+
 func TestDeletedAccountReleasesItsLogin(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
