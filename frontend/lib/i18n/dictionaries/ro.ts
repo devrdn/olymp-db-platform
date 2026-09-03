@@ -491,6 +491,12 @@ const ro = {
     handoverPending: "parolă predată",
     never: "niciodată",
     noRoles: "niciunul",
+    selection: {
+      pickAccount: "Selectați {name}",
+      pickPage: "Selectați toată pagina",
+      count: "{n} selectate",
+      clear: "Anulați selecția",
+    },
     search: "Utilizator, nume sau e-mail",
     filter: "Afișează",
     anyStatus: "Orice stare",
