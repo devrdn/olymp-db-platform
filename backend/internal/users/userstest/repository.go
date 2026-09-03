@@ -290,8 +290,9 @@ func (r *Repository) RecordLogin(_ context.Context, id uuid.UUID, at time.Time) 
 }
 
 // TakenAmong mirrors the real repository's restore-conflict check: a deleted
-// account among ids whose login or email a live account now holds.
-func (r *Repository) TakenAmong(_ context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
+// account among ids whose login or email a live account now holds, saying
+// which of the two each one hit.
+func (r *Repository) TakenAmong(_ context.Context, ids []uuid.UUID) ([]users.TakenConflict, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -303,21 +304,27 @@ func (r *Repository) TakenAmong(_ context.Context, ids []uuid.UUID) ([]uuid.UUID
 		want[id] = struct{}{}
 	}
 
-	var taken []uuid.UUID
+	var taken []users.TakenConflict
 	for id := range want {
 		deleted, ok := r.byID[id]
 		if !ok || deleted.Status != users.StatusDeleted {
 			continue
 		}
+		var c users.TakenConflict
 		for _, live := range r.byID {
 			if live.Status == users.StatusDeleted {
 				continue
 			}
-			if strings.EqualFold(live.Login, deleted.Login) ||
-				(deleted.Email != "" && live.Email == deleted.Email) {
-				taken = append(taken, id)
-				break
+			if strings.EqualFold(live.Login, deleted.Login) {
+				c.Login = true
 			}
+			if deleted.Email != "" && live.Email == deleted.Email {
+				c.Email = true
+			}
+		}
+		if c.Login || c.Email {
+			c.ID = id
+			taken = append(taken, c)
 		}
 	}
 	return taken, nil
