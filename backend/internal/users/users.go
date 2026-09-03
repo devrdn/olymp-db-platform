@@ -70,6 +70,13 @@ var (
 	// and deleting are answered to afterwards, and "no reason given" is not an
 	// answer the trail can carry.
 	ErrReasonRequired = errors.New("a reason is required")
+	// ErrAccountDeleted refuses a single-account operation that assumes the
+	// account can still be reached — a profile edit, a password reset, a
+	// role change — on one that is deleted. Their bulk counterparts
+	// (BulkReplaceRoles, BulkResetPassword) already skip a deleted account
+	// for the same reason (SkipDeleted); this is what a single-account
+	// caller sees instead of a silent no-op or a change nobody can use.
+	ErrAccountDeleted = errors.New("this account is deleted")
 )
 
 // Statuses is every state an account can be in, for validating a filter
@@ -129,8 +136,15 @@ type StatusChange struct {
 
 // Repository is the storage the service needs.
 type Repository interface {
-	// ByLogin resolves an account by its login, case-insensitively. It returns
-	// ErrNotFound when there is no such account.
+	// ByLogin resolves an account by its login, case-insensitively, preferring
+	// a live account over a deleted one when both share the login — deletion
+	// releases a login precisely so it can be reused, so a deleted row and its
+	// login's new owner can coexist, and the live one must always win. It
+	// returns ErrNotFound only when nothing at all matches; when the login
+	// belongs to a deleted account and nothing has reclaimed it, that account
+	// is still what comes back, and a caller for whom that must not count as
+	// "found" (a duplicate-login check, an idempotency check) has to look at
+	// Status itself.
 	ByLogin(ctx context.Context, login string) (User, error)
 	ByID(ctx context.Context, id uuid.UUID) (User, error)
 	// ByIDs resolves the accounts that exist among the ids, in no particular

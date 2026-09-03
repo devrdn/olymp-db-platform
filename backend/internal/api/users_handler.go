@@ -532,6 +532,12 @@ func (h *UsersHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, users.ErrReasonRequired):
 		httpx.Error(w, r, http.StatusBadRequest, codeReasonRequired,
 			"A reason is required")
+	case errors.Is(err, users.ErrAccountDeleted):
+		// 409, not 403, the same choice as ErrLastAdministrator above and for
+		// the same reason: the caller holds the right to do this, and it is
+		// the account's own state — deleted — that refuses it, not a
+		// permission they lack.
+		httpx.Error(w, r, http.StatusConflict, codeAccountDeleted, "This account is deleted")
 	case errors.Is(err, users.ErrTooManyAccounts):
 		httpx.Error(w, r, http.StatusBadRequest, codeTooManyAccounts, err.Error())
 	case errors.Is(err, users.ErrRosterTooLarge), errors.Is(err, users.ErrInvalidAccount):
