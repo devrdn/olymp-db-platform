@@ -188,7 +188,7 @@ func TestBlockRetiresEverySessionOfTheAccount(t *testing.T) {
 	user := f.addUser(t, "petrov", "some password")
 	before, _ := f.repo.Get(user.ID)
 
-	if err := f.service.Block(context.Background(), f.actor, user.ID); err != nil {
+	if err := f.service.Block(context.Background(), f.actor, user.ID, "cheating in the October contest"); err != nil {
 		t.Fatalf("Block() returned error: %v", err)
 	}
 
@@ -205,7 +205,7 @@ func TestBlockIsAudited(t *testing.T) {
 	f := newFixture(t)
 	user := f.addUser(t, "petrov", "some password")
 
-	_ = f.service.Block(context.Background(), f.actor, user.ID)
+	_ = f.service.Block(context.Background(), f.actor, user.ID, "cheating in the October contest")
 
 	if got := f.sink.actions(); len(got) != 1 || got[0] != audit.ActionUserBlock {
 		t.Errorf("audit actions = %v, want one %q", got, audit.ActionUserBlock)
@@ -218,7 +218,7 @@ func TestAdministratorsCannotBlockThemselves(t *testing.T) {
 	f := newFixture(t)
 	user := f.addUser(t, "admin", "some password")
 
-	err := f.service.Block(context.Background(), user.ID, user.ID)
+	err := f.service.Block(context.Background(), user.ID, user.ID, "some reason")
 
 	if !errors.Is(err, users.ErrCannotActOnSelf) {
 		t.Errorf("err = %v, want ErrCannotActOnSelf", err)
@@ -228,7 +228,7 @@ func TestAdministratorsCannotBlockThemselves(t *testing.T) {
 func TestUnblockRestoresAccess(t *testing.T) {
 	f := newFixture(t)
 	user := f.addUser(t, "petrov", "some password")
-	_ = f.service.Block(context.Background(), f.actor, user.ID)
+	_ = f.service.Block(context.Background(), f.actor, user.ID, "cheating in the October contest")
 
 	if err := f.service.Unblock(context.Background(), f.actor, user.ID); err != nil {
 		t.Fatalf("Unblock() returned error: %v", err)
@@ -237,6 +237,53 @@ func TestUnblockRestoresAccess(t *testing.T) {
 	after, _ := f.repo.Get(user.ID)
 	if after.Status != users.StatusActive {
 		t.Errorf("Status = %q, want active", after.Status)
+	}
+}
+
+func TestBlockRequiresAReason(t *testing.T) {
+	// Blocking is a thing an administrator is answered to for later, and "no
+	// reason given" is not an answer the trail can carry.
+	f := newFixture(t)
+	target := f.addUser(t, "ivanov", "some password")
+
+	err := f.service.Block(context.Background(), f.actor, target.ID, "   ")
+
+	if !errors.Is(err, users.ErrReasonRequired) {
+		t.Errorf("err = %v, want ErrReasonRequired", err)
+	}
+
+	// And the account was not touched on the way to refusing.
+	after, _ := f.repo.Get(target.ID)
+	if after.Status != users.StatusActive {
+		t.Errorf("Status = %q, want active; a refused block must not touch the account", after.Status)
+	}
+}
+
+func TestBlockBoundsTheReason(t *testing.T) {
+	f := newFixture(t)
+	target := f.addUser(t, "ivanov", "some password")
+
+	err := f.service.Block(context.Background(), f.actor, target.ID, strings.Repeat("x", users.MaxStatusReasonLength+1))
+
+	if !errors.Is(err, users.ErrInvalidAccount) {
+		t.Errorf("err = %v, want ErrInvalidAccount", err)
+	}
+}
+
+func TestBlockKeepsTheReason(t *testing.T) {
+	f := newFixture(t)
+	target := f.addUser(t, "ivanov", "some password")
+
+	if err := f.service.Block(context.Background(), f.actor, target.ID, "cheating in the October contest"); err != nil {
+		t.Fatalf("Block() returned error: %v", err)
+	}
+
+	after, _ := f.repo.Get(target.ID)
+	if after.StatusReason != "cheating in the October contest" {
+		t.Errorf("StatusReason = %q, want %q", after.StatusReason, "cheating in the October contest")
+	}
+	if after.StatusChangedBy == nil || *after.StatusChangedBy != f.actor {
+		t.Errorf("StatusChangedBy = %v, want %v", after.StatusChangedBy, f.actor)
 	}
 }
 
@@ -413,7 +460,7 @@ func TestOperationsOnAMissingAccountReportNotFound(t *testing.T) {
 	missing := uuid.New()
 	ctx := context.Background()
 
-	if err := f.service.Block(ctx, f.actor, missing); !errors.Is(err, users.ErrNotFound) {
+	if err := f.service.Block(ctx, f.actor, missing, "some reason"); !errors.Is(err, users.ErrNotFound) {
 		t.Errorf("Block() = %v, want ErrNotFound", err)
 	}
 	if _, err := f.service.ResetPassword(ctx, f.actor, missing); !errors.Is(err, users.ErrNotFound) {
@@ -518,7 +565,7 @@ func TestEveryMultiWriteOperationRunsInsideTheUnitOfWork(t *testing.T) {
 			_, err := f.service.Create(ctx, users.CreateCommand{ActorID: f.actor, Login: "new", FullName: "New User"})
 			return err
 		}},
-		{"Block", func() error { return f.service.Block(ctx, f.actor, user.ID) }},
+		{"Block", func() error { return f.service.Block(ctx, f.actor, user.ID, "some reason") }},
 		{"Unblock", func() error { return f.service.Unblock(ctx, f.actor, user.ID) }},
 		{"UpdateProfile", func() error { return f.service.UpdateProfile(ctx, f.actor, user.ID, "New Name", "") }},
 		{"ReplaceRoles", func() error { return f.service.ReplaceRoles(ctx, f.actor, user.ID, []string{"student"}) }},
@@ -550,7 +597,7 @@ func TestAFailedAuditWriteAbortsTheOperation(t *testing.T) {
 	user := f.addUser(t, "petrov", "some password")
 	f.sink.err = context.DeadlineExceeded
 
-	err := f.service.Block(context.Background(), f.actor, user.ID)
+	err := f.service.Block(context.Background(), f.actor, user.ID, "cheating in the October contest")
 
 	if err == nil {
 		t.Error("Block succeeded although the audit write failed")
@@ -777,7 +824,7 @@ func TestTheLastAdministratorCannotBeBlocked(t *testing.T) {
 		t.Fatalf("ReplaceRoles() = %v", err)
 	}
 
-	err := f.service.Block(ctx, other.ID, admin.ID)
+	err := f.service.Block(ctx, other.ID, admin.ID, "some reason")
 
 	if !errors.Is(err, users.ErrLastAdministrator) {
 		t.Errorf("Block() = %v, want it to refuse the last administrator", err)
