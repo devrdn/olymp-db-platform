@@ -5,7 +5,7 @@ import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { ENROLLMENTS, QUESTION_MODES, TIMINGS } from "@/lib/api/contests";
+import { ENROLLMENTS, QUESTION_MODES, TIMINGS } from "@/lib/api/contests-terms";
 import { LOCALES, LOCALE_NAMES, type Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";

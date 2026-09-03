@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useTransition } from "react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { ACCOUNT_STATUSES } from "@/lib/api/accounts";
+import { ACCOUNT_STATUSES } from "@/lib/api/accounts-terms";
 import { debounce } from "@/lib/format/debounce";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";

@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+import { ENROLLMENTS, QUESTION_MODES, TIMINGS } from "./contests-terms";
+
+export { ENROLLMENTS, QUESTION_MODES, TIMINGS } from "./contests-terms";
+
+
 /**
  * The wire shapes of the contest itself.
  *
@@ -14,10 +19,6 @@ import { z } from "zod";
  */
 
 export const CONTEST_STATUSES = ["draft", "published", "running", "finished", "archived"] as const;
-export const ENROLLMENTS = ["open", "invite_only"] as const;
-export const QUESTION_MODES = ["multi", "single"] as const;
-export const TIMINGS = ["fixed", "individual"] as const;
-
 export type ContestStatus = (typeof CONTEST_STATUSES)[number];
 export type Enrollment = (typeof ENROLLMENTS)[number];
 export type QuestionMode = (typeof QUESTION_MODES)[number];

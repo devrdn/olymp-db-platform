@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 
 import { buttonVariants } from "@/components/ui/button";
-import { imageHref, type ImageKind } from "@/lib/api/settings";
+import { imageHref, type ImageKind } from "@/lib/api/settings-terms";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
