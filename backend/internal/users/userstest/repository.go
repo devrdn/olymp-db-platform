@@ -24,6 +24,10 @@ type Repository struct {
 	permissions map[string][]string
 	// Err, when set, is returned by every method, to exercise failure paths.
 	Err error
+	// CountActiveWithRoleCalls counts invocations, so a test can assert the
+	// administrator budget was asked at most once for a whole selection —
+	// or never, when laziness means it was never needed at all.
+	CountActiveWithRoleCalls int
 }
 
 // New returns an empty repository whose roles grant no permissions.
@@ -335,6 +339,7 @@ func (r *Repository) CountActiveWithRole(_ context.Context, roleCode string) (in
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	r.CountActiveWithRoleCalls++
 	count := 0
 	for _, u := range r.byID {
 		if u.Status == users.StatusActive && slices.Contains(u.Roles, roleCode) {
