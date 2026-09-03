@@ -6,14 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Tag } from "@/components/ui/tag";
-import {
-  ENROLLMENTS,
-  QUESTION_MODES,
-  TIMINGS,
-  type Contest,
-  type ContestSummary,
-} from "@/lib/api/contests";
-import { SQL_MODES, type SqlPolicy } from "@/lib/api/policy";
+import { ENROLLMENTS, QUESTION_MODES, TIMINGS } from "@/lib/api/contests-terms";
+import { type Contest, type ContestSummary } from "@/lib/api/contests";
+import { SQL_MODES } from "@/lib/api/policy-terms";
+import { type SqlPolicy } from "@/lib/api/policy";
 import { wallClockFromInstant } from "@/lib/format/datetime";
 import { LOCALES, LOCALE_NAMES, type Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";

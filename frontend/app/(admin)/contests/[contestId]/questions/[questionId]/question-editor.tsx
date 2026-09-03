@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { MATCH_KINDS, QUESTION_KINDS, type Question } from "@/lib/api/content";
+import { MATCH_KINDS, QUESTION_KINDS } from "@/lib/api/content-terms";
+import { type Question } from "@/lib/api/content";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 

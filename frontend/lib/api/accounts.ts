@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+import { ACCOUNT_STATUSES } from "./accounts-terms";
+
+export { ACCOUNT_STATUSES, type AccountStatus } from "./accounts-terms";
+
 /**
  * The wire shapes of an account and of the roles it may hold.
  *
@@ -9,8 +13,6 @@ import { z } from "zod";
  * happens once, here.
  */
 
-export const ACCOUNT_STATUSES = ["active", "blocked"] as const;
-export type AccountStatus = (typeof ACCOUNT_STATUSES)[number];
 
 export const accountSchema = z
   .object({

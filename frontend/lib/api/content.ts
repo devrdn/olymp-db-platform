@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+
+import { MATCH_KINDS, QUESTION_KINDS } from "./content-terms";
+
+export { MATCH_KINDS, QUESTION_KINDS, answerable, untranslated } from "./content-terms";
+
+
 /**
  * The wire shapes of what an author writes: the crime story and the questions.
  *
@@ -9,9 +15,6 @@ import { z } from "zod";
  * make one module the place to look for everything, which is the same as
  * having no place to look.
  */
-
-export const QUESTION_KINDS = ["text", "choice", "final"] as const;
-export const MATCH_KINDS = ["exact", "exact_ci", "regex"] as const;
 
 export type QuestionKind = (typeof QUESTION_KINDS)[number];
 export type MatchKind = (typeof MATCH_KINDS)[number];
@@ -105,10 +108,6 @@ export type Question = z.infer<typeof questionSchema>;
 export const questionListSchema = z.object({ items: z.array(questionSchema) });
 
 /** Which languages still have no text for this question. */
-export function untranslated(question: Question, languages: string[]): string[] {
-  return languages.filter((lang) => !question.texts[lang]?.bodyMd);
-}
-
 /**
  * Whether a question can be answered at all.
  *
@@ -116,6 +115,3 @@ export function untranslated(question: Question, languages: string[]): string[] 
  * out at the publish gate rather than while writing it. Naming it in the list
  * is cheaper for everyone.
  */
-export function answerable(question: Question): boolean {
-  return question.answers.length > 0;
-}

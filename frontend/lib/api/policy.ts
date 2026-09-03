@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+import { SQL_MODES } from "./policy-terms";
+
+export { SQL_MODES } from "./policy-terms";
+
+
 /**
  * The wire shape of a contest's SQL access policy.
  *
@@ -9,7 +14,6 @@ import { z } from "zod";
  * same reason the Go side gives the policy a store of its own.
  */
 
-export const SQL_MODES = ["read_only", "read_write"] as const;
 export type SqlMode = (typeof SQL_MODES)[number];
 
 /**

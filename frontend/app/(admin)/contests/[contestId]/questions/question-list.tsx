@@ -6,7 +6,8 @@ import { useActionState } from "react";
 import { StateView } from "@/components/product/state-view";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
-import { answerable, untranslated, type Question } from "@/lib/api/content";
+import { answerable, untranslated } from "@/lib/api/content-terms";
+import { type Question } from "@/lib/api/content";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 

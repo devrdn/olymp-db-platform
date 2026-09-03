@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+
+export { removable } from "./people-terms";
+
+
 /**
  * The wire shapes of who runs a contest and who takes part in it.
  *
@@ -92,10 +96,6 @@ export type ImportResult = z.infer<typeof importResultSchema>;
  * part of the record of the contest. Excluding them is a disqualification,
  * which keeps everything they did.
  */
-export function removable(participant: Participant): boolean {
-  return participant.status === "registered";
-}
-
 /**
  * Turns a pasted list into the logins the import endpoint takes.
  *
