@@ -21,6 +21,14 @@ func (s *recordingSink) Append(_ context.Context, e Entry) error {
 	return nil
 }
 
+func (s *recordingSink) AppendMany(_ context.Context, entries []Entry) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.entries = append(s.entries, entries...)
+	return nil
+}
+
 func TestRecordStoresTheAction(t *testing.T) {
 	sink := &recordingSink{}
 	recorder := New(sink)
@@ -180,5 +188,86 @@ func TestFilterClampsThePageSize(t *testing.T) {
 func TestFilterFillsInAPageSize(t *testing.T) {
 	if got := (Filter{}).Normalize(); got.Limit <= 0 {
 		t.Errorf("Normalize().Limit = %d, want a positive default", got.Limit)
+	}
+}
+
+func TestRecordManyWritesEveryEntryInOneCall(t *testing.T) {
+	sink := &recordingSink{}
+	actor := uuid.New()
+
+	err := New(sink).RecordMany(context.Background(), []Entry{
+		{ActorID: &actor, Action: "user.block", Entity: "user", EntityID: "u-1"},
+		{ActorID: &actor, Action: "user.block", Entity: "user", EntityID: "u-2"},
+	})
+
+	if err != nil {
+		t.Fatalf("RecordMany() = %v", err)
+	}
+	if len(sink.entries) != 2 {
+		t.Fatalf("sink holds %d entries, want 2", len(sink.entries))
+	}
+}
+
+func TestRecordManyDoesNothingForNoEntries(t *testing.T) {
+	sink := &recordingSink{}
+
+	if err := New(sink).RecordMany(context.Background(), nil); err != nil {
+		t.Fatalf("RecordMany(nil) = %v", err)
+	}
+	if len(sink.entries) != 0 {
+		t.Errorf("RecordMany(nil) wrote %d entries, want none", len(sink.entries))
+	}
+}
+
+func TestRecordManyRejectsAnEntryWithoutAnAction(t *testing.T) {
+	// One bad entry in a batch must fail the batch, the same way one bad
+	// entry fails Record — a partially-written trail for one operation is
+	// worse than none.
+	sink := &recordingSink{}
+
+	err := New(sink).RecordMany(context.Background(), []Entry{
+		{Action: "user.block"},
+		{Entity: "user"},
+	})
+
+	if err == nil {
+		t.Fatal("RecordMany() accepted an entry with no action")
+	}
+	if len(sink.entries) != 0 {
+		t.Error("RecordMany() wrote entries despite the invalid one")
+	}
+}
+
+func TestRecordManyRedactsAndFillsOriginLikeRecord(t *testing.T) {
+	// Record and RecordMany share their per-entry preparation; this exercises
+	// the batch path against the same behaviour TestRecordFillsOriginFromThe-
+	// RequestContext and TestRecordStripsSensitiveFieldsFromThePayload assert
+	// for the single-entry path, so the two cannot quietly drift apart.
+	sink := &recordingSink{}
+	ctx := WithRequestMeta(context.Background(), "203.0.113.7", "Mozilla/5.0")
+
+	err := New(sink).RecordMany(ctx, []Entry{
+		{Action: "user.create", Payload: map[string]any{"login": "ivanov", "password": "hunter2"}},
+	})
+
+	if err != nil {
+		t.Fatalf("RecordMany() = %v", err)
+	}
+	got := sink.entries[0]
+	if got.IP != "203.0.113.7" || got.UserAgent != "Mozilla/5.0" {
+		t.Errorf("origin = %q/%q, want the context origin", got.IP, got.UserAgent)
+	}
+	if _, present := got.Payload["password"]; present {
+		t.Error("RecordMany() did not redact the payload")
+	}
+}
+
+func TestRecordManyPropagatesAStorageFailure(t *testing.T) {
+	sink := &recordingSink{err: context.DeadlineExceeded}
+
+	err := New(sink).RecordMany(context.Background(), []Entry{{Action: "user.block"}})
+
+	if err == nil {
+		t.Fatal("RecordMany() hid a storage failure")
 	}
 }

@@ -21,6 +21,8 @@ type apiSink struct{}
 
 func (apiSink) Append(context.Context, audit.Entry) error { return nil }
 
+func (apiSink) AppendMany(context.Context, []audit.Entry) error { return nil }
+
 // noRoles answers every contest-role lookup with "not staff".
 type noRoles struct{}
 

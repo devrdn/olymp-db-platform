@@ -585,6 +585,17 @@ func (s *Sink) Append(ctx context.Context, e audit.Entry) error {
 	return nil
 }
 
+// AppendMany appends every entry the same way Append does, one at a time:
+// what a test asserts on is the resulting state, not the round trips it took.
+func (s *Sink) AppendMany(ctx context.Context, entries []audit.Entry) error {
+	for _, e := range entries {
+		if err := s.Append(ctx, e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Recorded reports whether an entry with that action was written.
 func (s *Sink) Recorded(action string) bool {
 	return slices.Contains(s.Actions(), action)

@@ -94,6 +94,10 @@ type Entry struct {
 // test doubles.
 type Sink interface {
 	Append(ctx context.Context, e Entry) error
+	// AppendMany stores entries in one statement. A bulk operation writes one
+	// entry per account, and a round trip each would undo the reason the
+	// operation is batched at all.
+	AppendMany(ctx context.Context, entries []Entry) error
 }
 
 // Recorder validates and sanitises entries before handing them to a sink.
@@ -111,8 +115,47 @@ func New(sink Sink) *Recorder {
 // When the surrounding request runs inside a unit of work, the sink writes
 // through the ambient transaction, which is what ties the record to the action.
 func (r *Recorder) Record(ctx context.Context, e Entry) error {
+	prepared, err := prepareEntry(ctx, e)
+	if err != nil {
+		return err
+	}
+	if err := r.sink.Append(ctx, prepared); err != nil {
+		return fmt.Errorf("append audit entry: %w", err)
+	}
+	return nil
+}
+
+// RecordMany writes entries that belong to one operation, such as the
+// accounts a single bulk action touched. One bad entry fails the whole call,
+// the same way one bad entry fails Record: a partial trail for one operation
+// is worse than none.
+func (r *Recorder) RecordMany(ctx context.Context, entries []Entry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	prepared := make([]Entry, len(entries))
+	for i, e := range entries {
+		p, err := prepareEntry(ctx, e)
+		if err != nil {
+			return err
+		}
+		prepared[i] = p
+	}
+
+	if err := r.sink.AppendMany(ctx, prepared); err != nil {
+		return fmt.Errorf("append audit entries: %w", err)
+	}
+	return nil
+}
+
+// prepareEntry validates and sanitises one entry before it reaches a sink:
+// the empty-action check, payload redaction, and inheriting the request's IP
+// and user agent when the entry does not name its own. Record and RecordMany
+// both call it, so the single and batch paths cannot drift apart.
+func prepareEntry(ctx context.Context, e Entry) (Entry, error) {
 	if e.Action == "" {
-		return errors.New("audit entry has no action")
+		return Entry{}, errors.New("audit entry has no action")
 	}
 
 	e.Payload = redact(e.Payload)
@@ -127,11 +170,7 @@ func (r *Recorder) Record(ctx context.Context, e Entry) error {
 			e.UserAgent = meta.userAgent
 		}
 	}
-
-	if err := r.sink.Append(ctx, e); err != nil {
-		return fmt.Errorf("append audit entry: %w", err)
-	}
-	return nil
+	return e, nil
 }
 
 // metaKey carries the request origin through the context.

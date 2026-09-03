@@ -283,6 +283,11 @@ func (c *capturingSink) Append(_ context.Context, e audit.Entry) error {
 	return nil
 }
 
+func (c *capturingSink) AppendMany(_ context.Context, entries []audit.Entry) error {
+	c.entries = append(c.entries, entries...)
+	return nil
+}
+
 func TestScrapeEndpointIsServedWhenTheBackendHasOne(t *testing.T) {
 	deps := testDeps()
 	deps.Metrics = metrics.NewPrometheus()

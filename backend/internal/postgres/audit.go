@@ -52,6 +52,61 @@ func (s *AuditSink) Append(ctx context.Context, e audit.Entry) error {
 	return nil
 }
 
+// AppendMany writes entries in one statement.
+//
+// A bulk operation writes one entry per account, and a round trip each would
+// undo the reason the operation is batched at all. Every column travels as
+// text and is cast in the SELECT — the same trick ReplaceTexts and Save use
+// for a jsonb column — so the statement needs no array codec beyond text[].
+func (s *AuditSink) AppendMany(ctx context.Context, entries []audit.Entry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	q := storage.QuerierFrom(ctx, s.pool)
+
+	actorIDs := make([]*string, len(entries))
+	actions := make([]string, len(entries))
+	entities := make([]*string, len(entries))
+	entityIDs := make([]*string, len(entries))
+	payloads := make([]*string, len(entries))
+	ips := make([]*string, len(entries))
+	userAgents := make([]*string, len(entries))
+
+	for i, e := range entries {
+		if e.ActorID != nil {
+			id := e.ActorID.String()
+			actorIDs[i] = &id
+		}
+		actions[i] = e.Action
+		entities[i] = nullIfEmpty(e.Entity)
+		entityIDs[i] = nullIfEmpty(e.EntityID)
+		if len(e.Payload) > 0 {
+			encoded, err := json.Marshal(e.Payload)
+			if err != nil {
+				return fmt.Errorf("encode audit payload: %w", err)
+			}
+			text := string(encoded)
+			payloads[i] = &text
+		}
+		if addr := parseIP(e.IP); addr != nil {
+			text := addr.String()
+			ips[i] = &text
+		}
+		userAgents[i] = nullIfEmpty(e.UserAgent)
+	}
+
+	_, err := q.Exec(ctx, `
+		INSERT INTO audit_log (actor_id, action, entity, entity_id, payload, ip, user_agent)
+		SELECT t.actor_id::uuid, t.action, t.entity, t.entity_id, t.payload::jsonb, t.ip::inet, t.user_agent
+		FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])
+		  AS t(actor_id, action, entity, entity_id, payload, ip, user_agent)`,
+		actorIDs, actions, entities, entityIDs, payloads, ips, userAgents)
+	if err != nil {
+		return fmt.Errorf("append audit entries: %w", err)
+	}
+	return nil
+}
+
 // parseIP converts an address for the `inet` column, returning nil for
 // anything unparseable rather than failing the action being recorded.
 func parseIP(value string) *netip.Addr {

@@ -93,6 +93,31 @@ func (r *Users) ByID(ctx context.Context, id uuid.UUID) (users.User, error) {
 	return scanUser(row)
 }
 
+// ByIDs resolves the accounts that exist among the ids.
+//
+// ANY($1) is a membership test against the users table, not a join against
+// the array — a repeated id in ids still returns that account once, and a
+// missing one is simply absent rather than users.ErrNotFound: telling the
+// caller which of its ids exist is the whole job.
+func (r *Users) ByIDs(ctx context.Context, ids []uuid.UUID) ([]users.User, error) {
+	rows, err := r.querier(ctx).Query(ctx,
+		`SELECT `+userColumns+` FROM users u WHERE u.id = ANY($1)`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("read accounts: %w", err)
+	}
+	defer rows.Close()
+
+	var found []users.User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		found = append(found, u)
+	}
+	return found, rows.Err()
+}
+
 // Create stores a new account.
 func (r *Users) Create(ctx context.Context, u users.User) (users.User, error) {
 	var email *string
@@ -211,6 +236,26 @@ func (r *Users) SetPassword(ctx context.Context, id uuid.UUID, hash string, must
 		WHERE id = $1`, id, hash, mustChange)
 }
 
+// SetPasswordMany stores a digest per account and marks each one as carrying
+// a one-time password, in one statement rather than one per account.
+func (r *Users) SetPasswordMany(ctx context.Context, creds []users.Credential) error {
+	ids := make([]uuid.UUID, len(creds))
+	hashes := make([]string, len(creds))
+	for i, c := range creds {
+		ids[i], hashes[i] = c.UserID, c.Hash
+	}
+	_, err := r.querier(ctx).Exec(ctx, `
+		UPDATE users u
+		SET password_hash = c.hash, must_change_password = true,
+		    password_changed_at = now(), updated_at = now()
+		FROM unnest($1::uuid[], $2::text[]) AS c(id, hash)
+		WHERE u.id = c.id`, ids, hashes)
+	if err != nil {
+		return fmt.Errorf("set passwords: %w", err)
+	}
+	return nil
+}
+
 // BumpSessionGeneration retires every session issued for the account.
 func (r *Users) BumpSessionGeneration(ctx context.Context, id uuid.UUID) (int64, error) {
 	var generation int64
@@ -226,6 +271,19 @@ func (r *Users) BumpSessionGeneration(ctx context.Context, id uuid.UUID) (int64,
 		return 0, fmt.Errorf("bump session generation: %w", err)
 	}
 	return generation, nil
+}
+
+// BumpSessionGenerationMany retires every session of every named account. A
+// missing id is skipped rather than reported, matching SetStatus: the bulk
+// path resolves accounts before writing and reports a missing one itself.
+func (r *Users) BumpSessionGenerationMany(ctx context.Context, ids []uuid.UUID) error {
+	_, err := r.querier(ctx).Exec(ctx, `
+		UPDATE users SET session_generation = session_generation + 1, updated_at = now()
+		WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return fmt.Errorf("retire sessions: %w", err)
+	}
+	return nil
 }
 
 // RecordLogin stamps a successful sign-in.
@@ -250,6 +308,37 @@ func (r *Users) CountActiveWithRole(ctx context.Context, roleCode string) (int, 
 		return 0, fmt.Errorf("count accounts holding %q: %w", roleCode, err)
 	}
 	return count, nil
+}
+
+// TakenAmong returns the deleted accounts among ids whose login or email a
+// live account now holds.
+//
+// Checked before a bulk restore's transaction rather than by it: a restore
+// that would collide is refused up front, without aborting the accounts
+// around it that would have succeeded.
+func (r *Users) TakenAmong(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := r.querier(ctx).Query(ctx, `
+		SELECT d.id
+		FROM users d
+		WHERE d.id = ANY($1) AND d.status = 'deleted' AND EXISTS (
+			SELECT 1 FROM users a
+			WHERE a.status <> 'deleted'
+			  AND (lower(a.login) = lower(d.login)
+			       OR (a.email IS NOT NULL AND a.email = d.email)))`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("check restore conflicts: %w", err)
+	}
+	defer rows.Close()
+
+	var taken []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan restore conflict: %w", err)
+		}
+		taken = append(taken, id)
+	}
+	return taken, rows.Err()
 }
 
 // Roles lists the installation's global roles, ordered by code so the
@@ -302,6 +391,65 @@ func (r *Users) ReplaceRoles(ctx context.Context, id uuid.UUID, roleCodes []stri
 			len(roleCodes)-int(tag.RowsAffected()), len(roleCodes))
 	}
 	return nil
+}
+
+// ReplaceRolesMany sets the same roles on every named account, in one
+// delete and one insert rather than one pair per account.
+func (r *Users) ReplaceRolesMany(ctx context.Context, ids []uuid.UUID, roleCodes []string) error {
+	q := r.querier(ctx)
+
+	if _, err := q.Exec(ctx, `DELETE FROM user_roles WHERE user_id = ANY($1)`, ids); err != nil {
+		return fmt.Errorf("clear roles: %w", err)
+	}
+	// Roles are a set an account holds, not a sequence of assignments: a
+	// caller-supplied duplicate must not inflate what "one row per code"
+	// means below, or a harmless repeat gets reported as an unknown role.
+	roleCodes = distinctRoleCodes(roleCodes)
+	if len(roleCodes) == 0 {
+		return nil
+	}
+
+	// The cross join is the batch form of the single-account insert: every
+	// named account against every named role, in one statement.
+	tag, err := q.Exec(ctx, `
+		INSERT INTO user_roles (user_id, role_id)
+		SELECT u.id, r.id
+		FROM unnest($1::uuid[]) AS u(id)
+		CROSS JOIN roles r
+		WHERE r.code = ANY($2)`, ids, roleCodes)
+	if err != nil {
+		return fmt.Errorf("assign roles: %w", err)
+	}
+	// Unknown codes are dropped by the join rather than refused by it, so the
+	// row count is what turns a typo into an error instead of a silent
+	// half-applied change: every account should have gained every code. The
+	// row count is always an exact multiple of len(ids) — each matched role
+	// contributes one row per account — so the division below is exact.
+	if want := len(ids) * len(roleCodes); int(tag.RowsAffected()) != want {
+		matched := 0
+		if len(ids) > 0 {
+			matched = int(tag.RowsAffected()) / len(ids)
+		}
+		return fmt.Errorf("assign roles: %d of %d codes are not known roles",
+			len(roleCodes)-matched, len(roleCodes))
+	}
+	return nil
+}
+
+// distinctRoleCodes drops repeats while keeping order, so a caller-supplied
+// duplicate cannot be counted as a second, unknown role by the row-count
+// check in ReplaceRolesMany.
+func distinctRoleCodes(codes []string) []string {
+	seen := make(map[string]struct{}, len(codes))
+	out := make([]string, 0, len(codes))
+	for _, code := range codes {
+		if _, dup := seen[code]; dup {
+			continue
+		}
+		seen[code] = struct{}{}
+		out = append(out, code)
+	}
+	return out
 }
 
 // nullIfEmptyUUID stores NULL rather than the zero UUID, so a system-initiated
