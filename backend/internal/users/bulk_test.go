@@ -360,3 +360,55 @@ func TestBulkStatusOpensNoTransactionWhenNothingSurvives(t *testing.T) {
 		t.Errorf("uow.Calls = %d, want 0", f.uow.Calls)
 	}
 }
+
+// TestBulkBlockSkipsASecondDeletedAccountWithEmptyEmailField guards the guard
+// that prevents two deleted accounts with no email from colliding with each
+// other when both leave the deleted status in the same selection. The email
+// arm of the reclaim fold is guarded by u.Email != "" to avoid treating two
+// accounts with no email as if they share a value, which only this test
+// exercises: the existing shared-login test would still pass without this
+// guard because the login arm fires first.
+func TestBulkBlockSkipsASecondDeletedAccountWithEmptyEmailField(t *testing.T) {
+	f := newBulkFixture(t)
+	// Two deleted accounts with different logins and no email at all.
+	first := f.repo.Add(users.User{Login: "first", FullName: "First", PasswordHash: "x"})
+	second := f.repo.Add(users.User{Login: "second", FullName: "Second", PasswordHash: "x"})
+	other := f.createUser(t, "unrelated")
+
+	if _, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+		[]uuid.UUID{first.ID, second.ID}, users.StatusDeleted, "left"); err != nil {
+		t.Fatalf("BulkSetStatus() deleting = %v", err)
+	}
+
+	res, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+		[]uuid.UUID{first.ID, second.ID, other.ID}, users.StatusBlocked, "sweep")
+	if err != nil {
+		t.Fatalf("BulkSetStatus() returned error: %v", err)
+	}
+
+	changed := map[uuid.UUID]bool{}
+	for _, id := range res.Changed {
+		changed[id] = true
+	}
+	if !changed[first.ID] || !changed[second.ID] || !changed[other.ID] {
+		t.Fatalf("Changed = %v, want all three accounts: both deleted accounts with empty email must not collide with each other", res.Changed)
+	}
+	if len(res.Skipped) != 0 {
+		t.Errorf("Skipped = %v, want none", res.Skipped)
+	}
+}
+
+// TestBulkSetStatusRefusesEmptySelection guards the branch in boundSelection
+// that refuses a selection with no accounts. An empty slice should return an
+// error wrapped in ErrInvalidAccount rather than proceeding to apply zero
+// accounts, which would succeed trivially and miss the guard's purpose.
+func TestBulkSetStatusRefusesEmptySelection(t *testing.T) {
+	f := newBulkFixture(t)
+
+	_, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+		[]uuid.UUID{}, users.StatusBlocked, "why")
+
+	if !errors.Is(err, users.ErrInvalidAccount) {
+		t.Errorf("err = %v, want ErrInvalidAccount", err)
+	}
+}
