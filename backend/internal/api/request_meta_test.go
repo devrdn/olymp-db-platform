@@ -18,6 +18,11 @@ func (s *metaSink) Append(_ context.Context, e audit.Entry) error {
 	return nil
 }
 
+func (s *metaSink) AppendMany(_ context.Context, entries []audit.Entry) error {
+	s.entries = append(s.entries, entries...)
+	return nil
+}
+
 // recordDuring serves one request through the middleware and returns the audit
 // entry the handler wrote from the request context.
 func recordDuring(t *testing.T, req *http.Request) audit.Entry {

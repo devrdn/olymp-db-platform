@@ -248,6 +248,55 @@ func TestSomethingSinceDeletedKeepsItsEntryWithoutAName(t *testing.T) {
 	})
 }
 
+func TestAppendManyWritesEveryEntryInOneStatement(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		actor := makeUser(t, ctx, "auditor-many")
+
+		err := NewAuditSink(testPool).AppendMany(ctx, []audit.Entry{
+			{ActorID: &actor.ID, Action: "user.block", Entity: "user", EntityID: "u-1", IP: "10.0.0.1",
+				UserAgent: "Admin/1.0", Payload: map[string]any{"reason": "left"}},
+			{Action: "contest.status_change", Entity: "contest", EntityID: "c-1"},
+		})
+		if err != nil {
+			t.Fatalf("AppendMany() = %v", err)
+		}
+
+		found, total, err := NewAuditTrail(testPool).List(ctx, audit.Filter{Actor: actor.ID, Limit: 5}.Normalize())
+		if err != nil {
+			t.Fatalf("List() = %v", err)
+		}
+		if total != 1 || len(found) != 1 {
+			t.Fatalf("found %d of %d entries for the actor, want 1 of 1", len(found), total)
+		}
+		if found[0].IP != "10.0.0.1" || found[0].UserAgent != "Admin/1.0" {
+			t.Errorf("entry = %+v, want the ip and user agent kept", found[0])
+		}
+		if found[0].Payload["reason"] != "left" {
+			t.Errorf("payload = %v, want it read back", found[0].Payload)
+		}
+
+		found, total, err = NewAuditTrail(testPool).List(ctx,
+			audit.Filter{Entity: "contest", EntityID: "c-1", Limit: 5}.Normalize())
+		if err != nil {
+			t.Fatalf("List() for the system entry = %v", err)
+		}
+		if total != 1 || len(found) != 1 {
+			t.Fatalf("found %d of %d entries for the contest, want 1 of 1", len(found), total)
+		}
+		if found[0].ActorID != nil {
+			t.Errorf("actor = %v, want none for a system entry", found[0].ActorID)
+		}
+	})
+}
+
+func TestAppendManyDoesNothingForNoEntries(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		if err := NewAuditSink(testPool).AppendMany(ctx, nil); err != nil {
+			t.Fatalf("AppendMany(nil) = %v", err)
+		}
+	})
+}
+
 func TestAnEntityIdThatIsNotAnIdentifierDoesNotBreakTheQuery(t *testing.T) {
 	// entity_id is text, and nothing constrains it to a UUID. A cast in the
 	// join would turn one odd row into a failure for the whole page.

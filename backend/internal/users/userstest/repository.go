@@ -107,6 +107,28 @@ func (r *Repository) ByID(_ context.Context, id uuid.UUID) (users.User, error) {
 	return r.withPermissions(u), nil
 }
 
+// ByIDs mirrors the real repository's ANY($1): a repeated id in ids returns
+// that account once, and a missing one is simply absent rather than an error.
+func (r *Repository) ByIDs(_ context.Context, ids []uuid.UUID) ([]users.User, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return nil, r.Err
+	}
+	want := make(map[uuid.UUID]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+	var found []users.User
+	for id := range want {
+		if u, ok := r.byID[id]; ok {
+			found = append(found, r.withPermissions(u))
+		}
+	}
+	return found, nil
+}
+
 func (r *Repository) Create(_ context.Context, u users.User) (users.User, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -202,6 +224,30 @@ func (r *Repository) SetPassword(_ context.Context, id uuid.UUID, hash string, m
 	})
 }
 
+// SetPasswordMany mirrors the real repository: a missing account is skipped
+// rather than reported.
+func (r *Repository) SetPasswordMany(_ context.Context, creds []users.Credential) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return r.Err
+	}
+	now := time.Now().UTC()
+	for _, c := range creds {
+		u, ok := r.byID[c.UserID]
+		if !ok {
+			continue
+		}
+		u.PasswordHash = c.Hash
+		u.MustChangePassword = true
+		u.PasswordChangedAt = &now
+		u.UpdatedAt = now
+		r.byID[c.UserID] = u
+	}
+	return nil
+}
+
 func (r *Repository) BumpSessionGeneration(_ context.Context, id uuid.UUID) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -218,8 +264,63 @@ func (r *Repository) BumpSessionGeneration(_ context.Context, id uuid.UUID) (int
 	return u.SessionGeneration, nil
 }
 
+// BumpSessionGenerationMany mirrors the real repository: a missing account is
+// skipped rather than reported.
+func (r *Repository) BumpSessionGenerationMany(_ context.Context, ids []uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return r.Err
+	}
+	for _, id := range ids {
+		u, ok := r.byID[id]
+		if !ok {
+			continue
+		}
+		u.SessionGeneration++
+		u.UpdatedAt = time.Now().UTC()
+		r.byID[id] = u
+	}
+	return nil
+}
+
 func (r *Repository) RecordLogin(_ context.Context, id uuid.UUID, at time.Time) error {
 	return r.mutate(id, func(u *users.User) { u.LastLoginAt = &at })
+}
+
+// TakenAmong mirrors the real repository's restore-conflict check: a deleted
+// account among ids whose login or email a live account now holds.
+func (r *Repository) TakenAmong(_ context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return nil, r.Err
+	}
+	want := make(map[uuid.UUID]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+
+	var taken []uuid.UUID
+	for id := range want {
+		deleted, ok := r.byID[id]
+		if !ok || deleted.Status != users.StatusDeleted {
+			continue
+		}
+		for _, live := range r.byID {
+			if live.Status == users.StatusDeleted {
+				continue
+			}
+			if strings.EqualFold(live.Login, deleted.Login) ||
+				(deleted.Email != "" && live.Email == deleted.Email) {
+				taken = append(taken, id)
+				break
+			}
+		}
+	}
+	return taken, nil
 }
 
 // CountActiveWithRole counts the accounts holding the role that can sign in.
@@ -259,6 +360,27 @@ func (r *Repository) ReplaceRoles(_ context.Context, id uuid.UUID, roleCodes []s
 		u.Roles = append([]string(nil), roleCodes...)
 		u.UpdatedAt = time.Now().UTC()
 	})
+}
+
+// ReplaceRolesMany mirrors the real repository: a missing account is skipped
+// rather than reported.
+func (r *Repository) ReplaceRolesMany(_ context.Context, ids []uuid.UUID, roleCodes []string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return r.Err
+	}
+	for _, id := range ids {
+		u, ok := r.byID[id]
+		if !ok {
+			continue
+		}
+		u.Roles = append([]string(nil), roleCodes...)
+		u.UpdatedAt = time.Now().UTC()
+		r.byID[id] = u
+	}
+	return nil
 }
 
 // withPermissions mirrors the production repository: permissions arrive with
