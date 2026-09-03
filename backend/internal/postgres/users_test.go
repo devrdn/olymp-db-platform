@@ -296,6 +296,50 @@ func TestByLoginStillFindsAnAccountThatIsOnlyDeleted(t *testing.T) {
 	})
 }
 
+// TestByLoginBreaksATieAmongSeveralDeletedRowsByRecency is ByLogin's other
+// guarantee only the real database can prove: a login can be deleted,
+// recreated and deleted again, leaving more than one deleted row sharing
+// lower(login) with nothing live among them. Before status_changed_at was
+// added as a tiebreaker, ORDER BY (u.status = 'deleted') alone left the two
+// deleted rows in whatever order an unordered SELECT happened to return them
+// — undefined, and untested, the same class of bug the live-wins ordering
+// exists to close. This proves the more recently deleted row — the one whose
+// history actually answers "what happened to this login" — wins.
+func TestByLoginBreaksATieAmongSeveralDeletedRowsByRecency(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+
+		older := makeUser(t, ctx, "bylogin-several-deleted-ivanov")
+		if err := repo.SetStatus(ctx, []uuid.UUID{older.ID}, users.StatusDeleted,
+			users.StatusChange{
+				Reason: "created by mistake", By: older.ID, At: time.Now().Add(-time.Hour),
+			}); err != nil {
+			t.Fatalf("SetStatus() for the older row = %v", err)
+		}
+
+		newer, err := repo.Create(ctx, users.User{
+			Login: "bylogin-several-deleted-ivanov", FullName: "Second Ivanov", PasswordHash: "y",
+			Status: users.StatusActive,
+		})
+		if err != nil {
+			t.Fatalf("Create() after the first delete = %v", err)
+		}
+		if err := repo.SetStatus(ctx, []uuid.UUID{newer.ID}, users.StatusDeleted,
+			users.StatusChange{Reason: "left the university", By: newer.ID, At: time.Now()}); err != nil {
+			t.Fatalf("SetStatus() for the newer row = %v", err)
+		}
+
+		found, err := repo.ByLogin(ctx, "bylogin-several-deleted-ivanov")
+		if err != nil {
+			t.Fatalf("ByLogin() = %v, want the more recently deleted account rather than ErrNotFound", err)
+		}
+		if found.ID != newer.ID {
+			t.Errorf("ByLogin() = %v, want %v — the more recently deleted row (%v) must win over the older one (%v)",
+				found.ID, newer.ID, newer.ID, older.ID)
+		}
+	})
+}
+
 // TestRestoreIsRefusedByAReclaimedLogin proves a guarantee that only the real
 // database can prove: the login a deletion releases is held back by a partial
 // unique index (WHERE status <> 'deleted'), not by application code, and a

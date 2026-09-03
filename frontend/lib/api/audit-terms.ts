@@ -10,14 +10,25 @@
  *
  * Nothing in the running interface reads this list — the audit filter is
  * populated from `GET /audit/actions` beside the trail, precisely so a code
- * added on the server appears in the dropdown without a frontend change. What
- * this list is for is `dictionary.test.ts`'s translation-coverage test: it is
- * the one place able to say "these are the actions that exist" without a
- * server running, so a constant added on the Go side and never given wording
- * on this one is still a build failure rather than an entry that shows its
- * raw code by surprise on the audit screen. Keeping it in step with
- * audit.go's constants is on whoever adds the next one, same as the other
- * lists in this file.
+ * added on the server appears in the dropdown without a frontend change.
+ *
+ * It used to be what `dictionary.test.ts`'s translation-coverage test
+ * checked the dictionaries against — the one place able to say "these are
+ * the actions that exist" without a server running. Being hand-typed, that
+ * made it a second copy of the server's vocabulary nothing tied to the
+ * first: an action added to `audit.go` and to `Actions()`, and never copied
+ * here, satisfied the Go guard (which reads the same source) and that test
+ * (which read this same list) at once — exactly the drift this file was
+ * meant to catch, recurring one layer up.
+ *
+ * `dictionary.test.ts` now reads `docs/api/audit-actions.json` instead — the
+ * contract `backend/cmd/auditcontract` generates from `Actions()`, the same
+ * way `frontend/scripts/error-codes.mjs` reads `docs/api/error-codes.json`
+ * rather than a hand-typed copy of the server's error codes. This array is
+ * still checked against that contract (`dictionary.test.ts`'s own
+ * "AUDIT_ACTIONS mirrors the contract exactly"), so it stays honest for
+ * whatever else wants the vocabulary without a server running, but it is no
+ * longer the thing anything else is checked against.
  */
 export const AUDIT_ACTIONS = [
   "auth.login",

@@ -1,3 +1,5 @@
+import { fetchIdentity } from "@/lib/auth/session";
+
 import { SelectionProvider } from "./selection";
 
 /**
@@ -17,13 +19,21 @@ import { SelectionProvider } from "./selection";
  * (the same layout element, a completely different `children` subtree) to
  * confirm the store instance really does survive it.
  *
+ * The same durability is why `owner` is fetched here and handed to
+ * `SelectionProvider`: a component that is deliberately built to keep its
+ * state across a navigation is also one that could keep it across more than
+ * a search, and `SelectionStore.syncOwner` is what stops a pick from
+ * surviving a change of who is signed in. `identity` is read the same way
+ * `AdminLayout` reads it one level up (tolerated on failure, never a
+ * redirect) — this layout decorates nothing and gates nothing, so the worst
+ * a server that cannot be asked costs is a selection scoped to `null`
+ * instead of a real id, not a broken page.
+ *
  * This also wraps `/users/[userId]`, since a layout covers every route
  * below it in the segment — harmless there, as that screen reads no
  * selection context of its own.
- *
- * Kept to exactly this: nothing here reads `searchParams` or fetches
- * anything, so there is nothing a search could leave stale.
  */
-export default function UsersLayout({ children }: { children: React.ReactNode }) {
-  return <SelectionProvider>{children}</SelectionProvider>;
+export default async function UsersLayout({ children }: { children: React.ReactNode }) {
+  const identity = await fetchIdentity().catch(() => null);
+  return <SelectionProvider owner={identity?.id ?? null}>{children}</SelectionProvider>;
 }
