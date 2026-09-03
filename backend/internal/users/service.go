@@ -321,23 +321,31 @@ func (s *Service) ReplaceRoles(ctx context.Context, actorID, userID uuid.UUID, r
 	})
 }
 
+// entry builds an audit entry for an action on an account.
+//
+// record and the bulk operations both build entries through this, so the
+// single and batch trails cannot drift apart.
+func (s *Service) entry(actorID uuid.UUID, action string, subject uuid.UUID, payload map[string]any) audit.Entry {
+	var actor *uuid.UUID
+	if actorID != uuid.Nil {
+		actor = &actorID
+	}
+	return audit.Entry{
+		ActorID:  actor,
+		Action:   action,
+		Entity:   "user",
+		EntityID: subject.String(),
+		Payload:  payload,
+	}
+}
+
 // record appends an audit entry for an action on an account.
 //
 // A failure is returned rather than swallowed: for privileged operations, an
 // action nobody can account for afterwards is worse than a failed one. Callers
 // run these inside a unit of work, so the action rolls back with the entry.
 func (s *Service) record(ctx context.Context, actorID uuid.UUID, action string, subject uuid.UUID, payload map[string]any) error {
-	var actor *uuid.UUID
-	if actorID != uuid.Nil {
-		actor = &actorID
-	}
-	return s.audit.Record(ctx, audit.Entry{
-		ActorID:  actor,
-		Action:   action,
-		Entity:   "user",
-		EntityID: subject.String(),
-		Payload:  payload,
-	})
+	return s.audit.Record(ctx, s.entry(actorID, action, subject, payload))
 }
 
 // validateAccount checks the descriptive fields an account is created or

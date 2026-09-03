@@ -19,13 +19,19 @@ import (
 // Action codes. Constants rather than literals so a rename is a compile error
 // and the set is discoverable.
 const (
-	ActionAuthLogin         = "auth.login"
-	ActionAuthLoginFailed   = "auth.login_failed"
-	ActionAuthLogout        = "auth.logout"
-	ActionUserCreate        = "user.create"
-	ActionUserUpdate        = "user.update"
-	ActionUserBlock         = "user.block"
-	ActionUserUnblock       = "user.unblock"
+	ActionAuthLogin       = "auth.login"
+	ActionAuthLoginFailed = "auth.login_failed"
+	ActionAuthLogout      = "auth.logout"
+	ActionUserCreate      = "user.create"
+	ActionUserUpdate      = "user.update"
+	ActionUserBlock       = "user.block"
+	ActionUserUnblock     = "user.unblock"
+	// ActionUserDelete and ActionUserRestore exist because coming back to
+	// active is two different events: an account returning from a block was
+	// unblocked, one returning from deletion was restored, and the trail has
+	// to say which.
+	ActionUserDelete        = "user.delete"
+	ActionUserRestore       = "user.restore"
 	ActionUserRolesChange   = "user.roles_change"
 	ActionUserPasswordReset = "user.password_reset"
 	ActionPasswordChange    = "user.password_change"
