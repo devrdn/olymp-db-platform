@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 )
 
 // MaxBulkAccounts bounds one operation. The request body is bounded at a
@@ -288,6 +290,167 @@ func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uu
 		return BulkResult{}, err
 	}
 	return BulkResult{Changed: changed, Skipped: sel.skipped}, nil
+}
+
+// BulkReplaceRoles sets the same roles on a selection of accounts.
+//
+// The demotion guard mirrors the single-account ReplaceRoles: the budget is
+// only at risk when the new role set does not keep the administrator role,
+// and only an account that can administer today is one to protect.
+func (s *Service) BulkReplaceRoles(ctx context.Context, actorID uuid.UUID, ids []uuid.UUID, roleCodes []string) (BulkResult, error) {
+	if err := boundSelection(ids); err != nil {
+		return BulkResult{}, err
+	}
+	// Lazy, exactly as BulkSetStatus's: a selection that turns out to hold no
+	// active administrator never spends the count query.
+	budget := s.newAdminBudget(ctx)
+	keepsAdmin := slices.Contains(roleCodes, RoleAdmin)
+
+	sel, err := s.classify(ctx, ids, func(u User) string {
+		// A deleted account cannot sign in, so giving it roles is pointless —
+		// and it must not spend the administrator budget either.
+		if u.Status == StatusDeleted {
+			return SkipDeleted
+		}
+		if holdsAdmin(u.Roles) && u.IsActive() && !keepsAdmin && !budget.spend() {
+			return SkipLastAdministrator
+		}
+		return ""
+	})
+	if err != nil {
+		return BulkResult{}, err
+	}
+	if budget.err != nil {
+		return BulkResult{}, budget.err
+	}
+	if len(sel.accepted) == 0 {
+		return BulkResult{Skipped: sel.skipped}, nil
+	}
+
+	changed := make([]uuid.UUID, len(sel.accepted))
+	entries := make([]audit.Entry, len(sel.accepted))
+	for i, u := range sel.accepted {
+		changed[i] = u.ID
+		changes := audit.NewChanges()
+		changes.Set("roles", u.Roles, roleCodes)
+		entries[i] = s.entry(actorID, audit.ActionUserRolesChange, u.ID, changes.Payload())
+	}
+
+	err = s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.repo.ReplaceRolesMany(ctx, changed, roleCodes); err != nil {
+			return err
+		}
+		// New limits have to bite immediately: a demotion that waited for the
+		// next login would leave someone exercising rights they no longer hold.
+		if err := s.repo.BumpSessionGenerationMany(ctx, changed); err != nil {
+			return err
+		}
+		return s.audit.RecordMany(ctx, entries)
+	})
+	if err != nil {
+		return BulkResult{}, err
+	}
+	return BulkResult{Changed: changed, Skipped: sel.skipped}, nil
+}
+
+// IssuedPassword is one account's new one-time password, to be handed over.
+type IssuedPassword struct {
+	ID    uuid.UUID
+	Login string
+	// OneTimePassword is shown once and never stored in the clear.
+	OneTimePassword string
+}
+
+// BulkPasswordResult reports the passwords issued and the accounts skipped.
+type BulkPasswordResult struct {
+	Issued  []IssuedPassword
+	Skipped []SkippedAccount
+}
+
+// hashWorkers bounds the parallel hashing.
+//
+// argon2id is deliberately expensive — tens of milliseconds and a large
+// buffer per call — so five hundred of them in sequence is most of a minute,
+// and five hundred at once is a memory spike an administrator can trigger
+// from a form. The same reasoning, and the same number, as
+// provisioning.DefaultWorkers.
+const hashWorkers = 3
+
+// BulkResetPassword issues a new one-time password per selected account.
+//
+// Every account gets its own password: one password issued to a group would
+// be one password to share. Hashing runs on a bounded pool of workers ahead
+// of the transaction, because it is the expensive part; a failure there —
+// the machine, not the account — aborts the whole operation rather than
+// turning into a skipped row, matching CLAUDE.md's rule that only a
+// row-level reason from the closed skip vocabulary may become a skip.
+func (s *Service) BulkResetPassword(ctx context.Context, actorID uuid.UUID, ids []uuid.UUID) (BulkPasswordResult, error) {
+	if err := boundSelection(ids); err != nil {
+		return BulkPasswordResult{}, err
+	}
+
+	sel, err := s.classify(ctx, ids, func(u User) string {
+		// A deleted account cannot sign in, so a new password for it is
+		// pointless.
+		if u.Status == StatusDeleted {
+			return SkipDeleted
+		}
+		return ""
+	})
+	if err != nil {
+		return BulkPasswordResult{}, err
+	}
+	if len(sel.accepted) == 0 {
+		return BulkPasswordResult{Skipped: sel.skipped}, nil
+	}
+
+	issued := make([]IssuedPassword, len(sel.accepted))
+	creds := make([]Credential, len(sel.accepted))
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(hashWorkers)
+	for i, u := range sel.accepted {
+		group.Go(func() error {
+			if groupCtx.Err() != nil {
+				return groupCtx.Err()
+			}
+			oneTime, err := generatePassword()
+			if err != nil {
+				return err
+			}
+			hash, err := password.Hash(oneTime)
+			if err != nil {
+				return fmt.Errorf("hash password: %w", err)
+			}
+			// Each goroutine writes only its own index, so this needs no lock.
+			issued[i] = IssuedPassword{ID: u.ID, Login: u.Login, OneTimePassword: oneTime}
+			creds[i] = Credential{UserID: u.ID, Hash: hash}
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return BulkPasswordResult{}, err
+	}
+
+	changed := make([]uuid.UUID, len(sel.accepted))
+	entries := make([]audit.Entry, len(sel.accepted))
+	for i, u := range sel.accepted {
+		changed[i] = u.ID
+		entries[i] = s.entry(actorID, audit.ActionUserPasswordReset, u.ID, nil)
+	}
+
+	err = s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.repo.SetPasswordMany(ctx, creds); err != nil {
+			return err
+		}
+		if err := s.repo.BumpSessionGenerationMany(ctx, changed); err != nil {
+			return err
+		}
+		return s.audit.RecordMany(ctx, entries)
+	})
+	if err != nil {
+		return BulkPasswordResult{}, err
+	}
+	return BulkPasswordResult{Issued: issued, Skipped: sel.skipped}, nil
 }
 
 func boundSelection(ids []uuid.UUID) error {
