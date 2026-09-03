@@ -103,8 +103,10 @@ func (r *Repository) Create(_ context.Context, u users.User) (users.User, error)
 	if r.Err != nil {
 		return users.User{}, r.Err
 	}
+	// A deleted account does not hold its login hostage; mirrors the partial
+	// unique index in internal/postgres/users.go.
 	for _, existing := range r.byID {
-		if strings.EqualFold(existing.Login, u.Login) {
+		if existing.Status != users.StatusDeleted && strings.EqualFold(existing.Login, u.Login) {
 			return users.User{}, users.ErrLoginTaken
 		}
 	}
@@ -129,7 +131,14 @@ func (r *Repository) List(_ context.Context, f users.Filter) ([]users.User, int,
 
 	var matched []users.User
 	for _, u := range r.byID {
-		if f.Status != "" && u.Status != f.Status {
+		// An empty status means the register an administrator reads, which is
+		// not "every row": a deleted account appears only when asked for by
+		// name. Mirrors the WHERE clause in internal/postgres/users.go.
+		if f.Status == "" {
+			if u.Status == users.StatusDeleted {
+				continue
+			}
+		} else if u.Status != f.Status {
 			continue
 		}
 		if f.Query != "" && !containsFold(u.Login, f.Query) && !containsFold(u.FullName, f.Query) {
@@ -155,11 +164,21 @@ func (r *Repository) UpdateProfile(_ context.Context, id uuid.UUID, fullName, em
 	})
 }
 
-func (r *Repository) SetStatus(_ context.Context, id uuid.UUID, status string) error {
-	return r.mutate(id, func(u *users.User) {
-		u.Status = status
-		u.UpdatedAt = time.Now().UTC()
-	})
+func (r *Repository) SetStatus(_ context.Context, ids []uuid.UUID, status string, change users.StatusChange) error {
+	for _, id := range ids {
+		if err := r.mutate(id, func(u *users.User) {
+			u.Status = status
+			u.StatusReason = change.Reason
+			at := change.At
+			u.StatusChangedAt = &at
+			by := change.By
+			u.StatusChangedBy = &by
+			u.UpdatedAt = time.Now().UTC()
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Repository) SetPassword(_ context.Context, id uuid.UUID, hash string, mustChange bool) error {

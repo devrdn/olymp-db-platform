@@ -9,6 +9,7 @@ import (
 	"net/mail"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
@@ -154,7 +155,8 @@ func (s *Service) Block(ctx context.Context, actorID, userID uuid.UUID) error {
 	}
 
 	return s.uow.Do(ctx, func(ctx context.Context) error {
-		if err := s.repo.SetStatus(ctx, userID, StatusBlocked); err != nil {
+		change := StatusChange{By: actorID, At: time.Now()}
+		if err := s.repo.SetStatus(ctx, []uuid.UUID{userID}, StatusBlocked, change); err != nil {
 			return err
 		}
 		// Without this the account keeps working in every tab that is already
@@ -173,7 +175,8 @@ func (s *Service) Unblock(ctx context.Context, actorID, userID uuid.UUID) error 
 		return err
 	}
 	return s.uow.Do(ctx, func(ctx context.Context) error {
-		if err := s.repo.SetStatus(ctx, userID, StatusActive); err != nil {
+		change := StatusChange{By: actorID, At: time.Now()}
+		if err := s.repo.SetStatus(ctx, []uuid.UUID{userID}, StatusActive, change); err != nil {
 			return err
 		}
 		return s.record(ctx, actorID, audit.ActionUserUnblock, userID, nil)
