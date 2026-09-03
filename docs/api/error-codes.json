@@ -6,6 +6,10 @@
       "meaning": "The account exists and the password was right, but it is blocked. Only ever sent after a correct password: the owner may know, a guesser may not."
     },
     {
+      "code": "account_deleted",
+      "meaning": "The operation assumes the account can still be reached — a profile edit, a password reset, a role change — and this one is deleted."
+    },
+    {
       "code": "address_not_allowed",
       "meaning": "The contest restricts participation to certain networks and this request did not come from one. Applies to participants only; staff are never checked against it."
     },

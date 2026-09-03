@@ -182,28 +182,30 @@ export function AccountCard({
         </Panel>
       ) : null}
 
-      <Panel title={t.profile}>
-        {/* Keyed on what the server last returned, so a saved value replaces
-            what was typed rather than the field keeping a stale draft. */}
-        <form key={account.fullName + account.email} action={saveProfile} className="flex flex-col gap-5">
-          <input type="hidden" name="userId" value={account.id} />
+      {offered.profile ? (
+        <Panel title={t.profile}>
+          {/* Keyed on what the server last returned, so a saved value replaces
+              what was typed rather than the field keeping a stale draft. */}
+          <form key={account.fullName + account.email} action={saveProfile} className="flex flex-col gap-5">
+            <input type="hidden" name="userId" value={account.id} />
 
-          <Field id="full_name" label={t.fullName}>
-            <Input name="full_name" defaultValue={account.fullName} required />
-          </Field>
+            <Field id="full_name" label={t.fullName}>
+              <Input name="full_name" defaultValue={account.fullName} required />
+            </Field>
 
-          <Field id="email" label={t.email}>
-            <Input name="email" type="email" defaultValue={account.email ?? ""} />
-          </Field>
+            <Field id="email" label={t.email}>
+              <Input name="email" type="email" defaultValue={account.email ?? ""} />
+            </Field>
 
-          <div className="flex flex-wrap items-center gap-4">
-            <Button type="submit" disabled={savingProfile}>
-              {savingProfile ? t.saving : t.save}
-            </Button>
-            <Outcome state={profile} dict={dict} />
-          </div>
-        </form>
-      </Panel>
+            <div className="flex flex-wrap items-center gap-4">
+              <Button type="submit" disabled={savingProfile}>
+                {savingProfile ? t.saving : t.save}
+              </Button>
+              <Outcome state={profile} dict={dict} />
+            </div>
+          </form>
+        </Panel>
+      ) : null}
 
       {offered.roles ? (
         <Panel title={t.roles} hint={t.rolesHint}>

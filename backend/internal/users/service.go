@@ -81,8 +81,18 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (CreateResult, 
 	// Check before writing so the caller gets a clear error rather than a
 	// constraint violation; the unique index remains the real guarantee
 	// against a concurrent duplicate.
-	if _, err := s.repo.ByLogin(ctx, login); err == nil {
-		return CreateResult{}, ErrLoginTaken
+	//
+	// ByLogin still returns a deleted account when nothing live has reclaimed
+	// its login (see its comment in internal/postgres/users.go) — that is
+	// deliberate for sign-in, but here it must not read as "taken": a deleted
+	// account is exactly the case this recreates, and refusing it would be
+	// the false ErrLoginTaken the deletion feature exists to avoid. The
+	// partial unique index does not cover deleted rows either, so the
+	// database agrees the login is free.
+	if existing, err := s.repo.ByLogin(ctx, login); err == nil {
+		if existing.Status != StatusDeleted {
+			return CreateResult{}, ErrLoginTaken
+		}
 	} else if !errors.Is(err, ErrNotFound) {
 		return CreateResult{}, err
 	}
@@ -267,8 +277,16 @@ func (s *Service) ChangePassword(ctx context.Context, cmd ChangePasswordCommand)
 // ResetPassword issues a fresh one-time password for an account the user can
 // no longer reach, and returns it for the administrator to hand over.
 func (s *Service) ResetPassword(ctx context.Context, actorID, userID uuid.UUID) (string, error) {
-	if _, err := s.repo.ByID(ctx, userID); err != nil {
+	user, err := s.repo.ByID(ctx, userID)
+	if err != nil {
 		return "", err
+	}
+	// A deleted account cannot sign in, so a new password for it is
+	// pointless — the same reasoning BulkResetPassword already applies to a
+	// selection (see SkipDeleted); this is what the single-account path
+	// answers with instead of quietly issuing a password nobody can use.
+	if user.Status == StatusDeleted {
+		return "", ErrAccountDeleted
 	}
 
 	oneTime, err := generatePassword()
@@ -301,6 +319,14 @@ func (s *Service) UpdateProfile(ctx context.Context, actorID, userID uuid.UUID, 
 	if err != nil {
 		return err
 	}
+	// A deleted account has no screen to read the new name or email from, and
+	// no live index entry to check the new email against — editing it is not
+	// a change anybody can observe. Neither bulk nor single-account path had
+	// a guard here before; this gives the single-account one the same refusal
+	// the other two single-account writes below now carry.
+	if current.Status == StatusDeleted {
+		return ErrAccountDeleted
+	}
 
 	fullName, email = strings.TrimSpace(fullName), strings.TrimSpace(email)
 	if err := validateAccount(current.Login, fullName, email); err != nil {
@@ -324,6 +350,12 @@ func (s *Service) ReplaceRoles(ctx context.Context, actorID, userID uuid.UUID, r
 	user, err := s.repo.ByID(ctx, userID)
 	if err != nil {
 		return err
+	}
+	// A deleted account cannot sign in, so giving it roles is pointless —
+	// mirroring BulkReplaceRoles's own SkipDeleted guard, which skips a
+	// deleted account in a selection for the same reason.
+	if user.Status == StatusDeleted {
+		return ErrAccountDeleted
 	}
 
 	// Taking the administrator role away from the only one left leaves nobody
@@ -493,9 +525,13 @@ type BootstrapResult struct {
 func (s *Service) BootstrapAdmin(ctx context.Context, login, fullName string) (BootstrapResult, error) {
 	existing, err := s.repo.ByLogin(ctx, login)
 	switch {
-	case err == nil:
+	// A deleted match is not the reachable administrator this is idempotent
+	// about — its login is free, exactly as Create treats it — so this falls
+	// through to creating a fresh one below rather than reporting the
+	// deleted account as "already exists".
+	case err == nil && existing.Status != StatusDeleted:
 		return BootstrapResult{User: existing}, nil
-	case !errors.Is(err, ErrNotFound):
+	case err != nil && !errors.Is(err, ErrNotFound):
 		return BootstrapResult{}, err
 	}
 
