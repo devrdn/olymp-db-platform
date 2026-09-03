@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
@@ -95,7 +96,8 @@ func TestCountingAdministratorsIgnoresTheOnesWhoCannotSignIn(t *testing.T) {
 				t.Fatalf("ReplaceRoles() = %v", err)
 			}
 		}
-		if err := repo.SetStatus(ctx, blocked.ID, users.StatusBlocked); err != nil {
+		if err := repo.SetStatus(ctx, []uuid.UUID{blocked.ID}, users.StatusBlocked,
+			users.StatusChange{By: active.ID, At: time.Now()}); err != nil {
 			t.Fatalf("SetStatus() = %v", err)
 		}
 
@@ -109,6 +111,68 @@ func TestCountingAdministratorsIgnoresTheOnesWhoCannotSignIn(t *testing.T) {
 		if count != before+1 {
 			t.Errorf("CountActiveWithRole() = %d, want %d: the blocked one must not count",
 				count, before+1)
+		}
+	})
+}
+
+func TestListHidesDeletedUnlessAsked(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+
+		live := makeUser(t, ctx, "list-hides-deleted-live")
+		gone := makeUser(t, ctx, "list-hides-deleted-gone")
+		if err := repo.SetStatus(ctx, []uuid.UUID{gone.ID}, users.StatusDeleted,
+			users.StatusChange{Reason: "left the university", By: live.ID, At: time.Now()}); err != nil {
+			t.Fatalf("SetStatus() = %v", err)
+		}
+
+		// The default listing is the register an administrator reads: a deleted
+		// account is not in it. Scoped to these two logins, since a real
+		// installation already has other accounts in it.
+		found, total, err := repo.List(ctx, users.Filter{Query: "list-hides-deleted"})
+		if err != nil {
+			t.Fatalf("List() = %v", err)
+		}
+		if total != 1 || len(found) != 1 || found[0].ID != live.ID {
+			t.Fatalf("List() = %+v, total %d, want only %v", found, total, live.ID)
+		}
+
+		// Asked for by name, it is.
+		found, total, err = repo.List(ctx, users.Filter{Query: "list-hides-deleted", Status: users.StatusDeleted})
+		if err != nil {
+			t.Fatalf("List() with status = %v", err)
+		}
+		if total != 1 || len(found) != 1 || found[0].ID != gone.ID {
+			t.Fatalf("List() with status = %+v, total %d, want only %v", found, total, gone.ID)
+		}
+		if found[0].StatusReason != "left the university" {
+			t.Errorf("StatusReason = %q, want %q", found[0].StatusReason, "left the university")
+		}
+	})
+}
+
+func TestDeletedAccountReleasesItsLogin(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+
+		first := makeUser(t, ctx, "released-login-ivanov")
+		if err := repo.SetStatus(ctx, []uuid.UUID{first.ID}, users.StatusDeleted,
+			users.StatusChange{Reason: "created by mistake", By: first.ID, At: time.Now()}); err != nil {
+			t.Fatalf("SetStatus() = %v", err)
+		}
+
+		// The whole point of releasing the login: the same one can be created
+		// again. Status must be given explicitly — Create inserts exactly the
+		// value it is handed rather than relying on the column's default.
+		second, err := repo.Create(ctx, users.User{
+			Login: "released-login-ivanov", FullName: "Ivanov", PasswordHash: "x",
+			Status: users.StatusActive,
+		})
+		if err != nil {
+			t.Fatalf("Create() after delete = %v", err)
+		}
+		if second.ID == first.ID {
+			t.Error("Create() returned the same id as the deleted account")
 		}
 	})
 }

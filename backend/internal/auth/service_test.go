@@ -14,6 +14,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/users/userstest"
+	"github.com/google/uuid"
 )
 
 // collectingSink keeps audit entries for assertions.
@@ -135,7 +136,7 @@ func TestUnknownLoginStillSpendsTheHashingTime(t *testing.T) {
 
 func TestBlockedAccountIsRejectedEvenWithTheRightPassword(t *testing.T) {
 	f := newFixture(t)
-	_ = f.repo.SetStatus(context.Background(), f.user.ID, users.StatusBlocked)
+	_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusBlocked, users.StatusChange{})
 
 	result, err := f.service.Login(context.Background(), loginCmd(testPassword))
 
@@ -151,7 +152,7 @@ func TestBlockedAccountLooksLikeAnyOtherFailureToSomeoneGuessing(t *testing.T) {
 	// The account owner deserves to be told they are blocked, but only after
 	// proving they own it. A wrong guess must not reveal that the login exists.
 	f := newFixture(t)
-	_ = f.repo.SetStatus(context.Background(), f.user.ID, users.StatusBlocked)
+	_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusBlocked, users.StatusChange{})
 
 	_, err := f.service.Login(context.Background(), loginCmd("wrong password"))
 
