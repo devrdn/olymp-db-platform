@@ -873,3 +873,145 @@ func TestUpdateProfileRefusesAMalformedEmail(t *testing.T) {
 		t.Errorf("UpdateProfile() = %v, want ErrInvalidAccount", err)
 	}
 }
+
+// Delete and Restore are wrappers over BulkSetStatus with a selection of one
+// (see setStatus in service.go), so the guards below are the same ones
+// bulk_test.go exercises for a selection: what is new here is only that a
+// refusal comes back as the sentinel rather than a skip, because for a single
+// account the skip is the whole outcome.
+
+func TestDeleteRefusesTheLastAdministrator(t *testing.T) {
+	f := newBulkFixture(t)
+	only := f.createAdmin(t, "admin-one")
+
+	err := f.service.Delete(context.Background(), f.admin.ID, only.ID, "left the university")
+
+	if !errors.Is(err, users.ErrLastAdministrator) {
+		t.Errorf("Delete() = %v, want ErrLastAdministrator", err)
+	}
+}
+
+func TestDeleteRefusesYourself(t *testing.T) {
+	f := newBulkFixture(t)
+
+	err := f.service.Delete(context.Background(), f.admin.ID, f.admin.ID, "why not")
+
+	if !errors.Is(err, users.ErrCannotActOnSelf) {
+		t.Errorf("Delete() = %v, want ErrCannotActOnSelf", err)
+	}
+}
+
+func TestDeleteRetiresTheSessions(t *testing.T) {
+	f := newBulkFixture(t)
+	target := f.createUser(t, "ivanov")
+	before := target.SessionGeneration
+
+	if err := f.service.Delete(context.Background(), f.admin.ID, target.ID, "graduated"); err != nil {
+		t.Fatalf("Delete() returned error: %v", err)
+	}
+
+	after, err := f.repo.ByID(context.Background(), target.ID)
+	if err != nil {
+		t.Fatalf("ByID() returned error: %v", err)
+	}
+	if after.Status != users.StatusDeleted {
+		t.Errorf("Status = %q, want deleted", after.Status)
+	}
+	if after.SessionGeneration <= before {
+		t.Error("the session generation was not advanced, so open sessions survive")
+	}
+}
+
+func TestDeleteRequiresAReason(t *testing.T) {
+	// Deletion is answered to exactly as blocking is: "no reason given" is not
+	// an answer the trail can carry.
+	f := newBulkFixture(t)
+	target := f.createUser(t, "ivanov")
+
+	err := f.service.Delete(context.Background(), f.admin.ID, target.ID, "   ")
+
+	if !errors.Is(err, users.ErrReasonRequired) {
+		t.Errorf("Delete() = %v, want ErrReasonRequired", err)
+	}
+}
+
+func TestDeleteIsAudited(t *testing.T) {
+	f := newBulkFixture(t)
+	target := f.createUser(t, "ivanov")
+
+	_ = f.service.Delete(context.Background(), f.admin.ID, target.ID, "graduated")
+
+	if got := f.sink.actions(); len(got) != 1 || got[0] != audit.ActionUserDelete {
+		t.Errorf("audit actions = %v, want one %q", got, audit.ActionUserDelete)
+	}
+}
+
+func TestRestoreBringsBackADeletedAccount(t *testing.T) {
+	f := newBulkFixture(t)
+	target := f.createUser(t, "ivanov")
+	if err := f.service.Delete(context.Background(), f.admin.ID, target.ID, "mistake"); err != nil {
+		t.Fatalf("Delete() returned error: %v", err)
+	}
+
+	if err := f.service.Restore(context.Background(), f.admin.ID, target.ID); err != nil {
+		t.Fatalf("Restore() returned error: %v", err)
+	}
+
+	after, err := f.repo.ByID(context.Background(), target.ID)
+	if err != nil {
+		t.Fatalf("ByID() returned error: %v", err)
+	}
+	if after.Status != users.StatusActive {
+		t.Errorf("Status = %q, want active", after.Status)
+	}
+}
+
+func TestRestoreIsAudited(t *testing.T) {
+	f := newBulkFixture(t)
+	target := f.createUser(t, "ivanov")
+	if err := f.service.Delete(context.Background(), f.admin.ID, target.ID, "mistake"); err != nil {
+		t.Fatalf("Delete() returned error: %v", err)
+	}
+	f.sink.entries = nil // isolate what Restore itself records
+
+	_ = f.service.Restore(context.Background(), f.admin.ID, target.ID)
+
+	if got := f.sink.actions(); len(got) != 1 || got[0] != audit.ActionUserRestore {
+		t.Errorf("audit actions = %v, want one %q", got, audit.ActionUserRestore)
+	}
+}
+
+func TestRestoreRefusesWhenTheLoginWasTaken(t *testing.T) {
+	// The direct price of releasing the login on deletion: it can be taken by
+	// somebody else before the account comes back.
+	f := newBulkFixture(t)
+	gone := f.createUser(t, "ivanov")
+	if err := f.service.Delete(context.Background(), f.admin.ID, gone.ID, "mistake"); err != nil {
+		t.Fatalf("Delete() returned error: %v", err)
+	}
+	f.createUser(t, "ivanov")
+
+	err := f.service.Restore(context.Background(), f.admin.ID, gone.ID)
+
+	if !errors.Is(err, users.ErrLoginTaken) {
+		t.Errorf("Restore() = %v, want ErrLoginTaken", err)
+	}
+}
+
+func TestRestoreRefusesWhenTheEmailWasTaken(t *testing.T) {
+	// The same price, paid on the other field a deleted account releases.
+	f := newBulkFixture(t)
+	gone := f.repo.Add(users.User{
+		Login: "gone-by-email", Email: "shared@example.com", FullName: "Gone", PasswordHash: "x",
+	})
+	if err := f.service.Delete(context.Background(), f.admin.ID, gone.ID, "mistake"); err != nil {
+		t.Fatalf("Delete() returned error: %v", err)
+	}
+	f.repo.Add(users.User{Login: "someone-else", Email: "shared@example.com", FullName: "Live", PasswordHash: "x"})
+
+	err := f.service.Restore(context.Background(), f.admin.ID, gone.ID)
+
+	if !errors.Is(err, users.ErrEmailTaken) {
+		t.Errorf("Restore() = %v, want ErrEmailTaken", err)
+	}
+}

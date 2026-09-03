@@ -9,7 +9,6 @@ import (
 	"net/mail"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
@@ -136,58 +135,79 @@ func (s *Service) ByID(ctx context.Context, id uuid.UUID) (User, error) {
 	return s.repo.ByID(ctx, id)
 }
 
+// setStatus is the single-account form of BulkSetStatus.
+//
+// One implementation serves both surfaces, so the guards — refusing
+// yourself, the last administrator, or a login another account has taken —
+// cannot drift apart between them. What differs is only how a refusal is
+// reported: a bulk caller gets a skip with a reason, because the rest of its
+// selection still applies; a single-account caller gets the sentinel,
+// because for them the skip is the whole outcome and a silent success would
+// be a lie.
+func (s *Service) setStatus(ctx context.Context, actorID, userID uuid.UUID, status, reason string) error {
+	res, err := s.BulkSetStatus(ctx, actorID, []uuid.UUID{userID}, status, reason)
+	if err != nil {
+		return err
+	}
+	if len(res.Skipped) == 0 {
+		return nil
+	}
+	switch res.Skipped[0].Reason {
+	case SkipNotFound:
+		return ErrNotFound
+	case SkipSelf:
+		return ErrCannotActOnSelf
+	case SkipLastAdministrator:
+		return ErrLastAdministrator
+	case SkipLoginTaken:
+		return ErrLoginTaken
+	case SkipEmailTaken:
+		return ErrEmailTaken
+	case SkipAlreadyInStatus:
+		// The caller wanted the account in that status and it already is.
+		// That is a success, not a refusal.
+		return nil
+	default:
+		// Every reason BulkSetStatus can actually produce is named above,
+		// including SkipDeleted (BulkSetStatus never emits it today — it
+		// belongs to the bulk role and password operations, which must skip a
+		// deleted account rather than touch it — but it is still a name in the
+		// shared vocabulary). Falling through to a silent success here would
+		// misreport a refusal this code has not been taught about yet, so an
+		// unrecognised reason is surfaced as an error instead of guessed at.
+		return fmt.Errorf("users: unhandled skip reason %q for a single-account operation", res.Skipped[0].Reason)
+	}
+}
+
 // Block denies an account access and ends the sessions it already has.
 //
 // The reason is mandatory: blocking is a thing an administrator is answered
 // to for later, and "no reason given" is not an answer the trail can carry.
 func (s *Service) Block(ctx context.Context, actorID, userID uuid.UUID, reason string) error {
-	reason, err := validateReason(reason)
-	if err != nil {
-		return err
-	}
-	if actorID == userID {
-		return ErrCannotActOnSelf
-	}
-	user, err := s.repo.ByID(ctx, userID)
-	if err != nil {
-		return err
-	}
-
-	// The same lockout by the other door. Blocking yourself is already
-	// refused, but two administrators can block each other down to none.
-	if holdsAdmin(user.Roles) {
-		if err := s.refuseIfLastAdmin(ctx, user); err != nil {
-			return err
-		}
-	}
-
-	return s.uow.Do(ctx, func(ctx context.Context) error {
-		change := StatusChange{Reason: reason, By: actorID, At: time.Now()}
-		if err := s.repo.SetStatus(ctx, []uuid.UUID{userID}, StatusBlocked, change); err != nil {
-			return err
-		}
-		// Without this the account keeps working in every tab that is already
-		// open, which is precisely the situation blocking exists to stop.
-		if _, err := s.repo.BumpSessionGeneration(ctx, userID); err != nil {
-			return err
-		}
-		return s.record(ctx, actorID, audit.ActionUserBlock, userID, map[string]any{"reason": reason})
-	})
+	return s.setStatus(ctx, actorID, userID, StatusBlocked, reason)
 }
 
 // Unblock restores access. Existing sessions stay retired: the account has to
 // sign in again.
 func (s *Service) Unblock(ctx context.Context, actorID, userID uuid.UUID) error {
-	if _, err := s.repo.ByID(ctx, userID); err != nil {
-		return err
-	}
-	return s.uow.Do(ctx, func(ctx context.Context) error {
-		change := StatusChange{By: actorID, At: time.Now()}
-		if err := s.repo.SetStatus(ctx, []uuid.UUID{userID}, StatusActive, change); err != nil {
-			return err
-		}
-		return s.record(ctx, actorID, audit.ActionUserUnblock, userID, nil)
-	})
+	return s.setStatus(ctx, actorID, userID, StatusActive, "")
+}
+
+// Delete removes an account without removing what it did.
+//
+// The row stays, so results and the audit trail keep their subject, and the
+// account cannot sign in, does not count as an administrator and no longer
+// holds its login. The reason is mandatory for the same reason blocking's is:
+// deletion is answered to later.
+func (s *Service) Delete(ctx context.Context, actorID, userID uuid.UUID, reason string) error {
+	return s.setStatus(ctx, actorID, userID, StatusDeleted, reason)
+}
+
+// Restore brings a deleted account back to active. It refuses with
+// ErrLoginTaken or ErrEmailTaken when a live account has taken the login or
+// email in the meantime — the direct price of releasing them on deletion.
+func (s *Service) Restore(ctx context.Context, actorID, userID uuid.UUID) error {
+	return s.setStatus(ctx, actorID, userID, StatusActive, "")
 }
 
 // ChangePasswordCommand is a user changing their own password.
