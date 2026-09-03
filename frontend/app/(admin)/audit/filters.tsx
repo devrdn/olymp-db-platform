@@ -35,7 +35,10 @@ export function AuditFilters({
   entity: string;
   from: string;
   to: string;
-  /** The codes actually present, so the list offers no dead choice. */
+  /**
+   * Every action this installation can record, fetched from the server
+   * rather than scraped off the current page — see the note on AuditPage.
+   */
   actions: string[];
   dict: Dictionary;
 }) {

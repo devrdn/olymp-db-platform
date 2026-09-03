@@ -37,6 +37,16 @@ export const auditPageSchema = z.object({
   total: z.number(),
 });
 
+/**
+ * The vocabulary the trail can be filtered by, as the server publishes it.
+ *
+ * Fetched rather than built from the page in hand. Actions are declared in
+ * the domain (`audit.Actions()`), and a list built by scanning the rows on
+ * screen can only ever offer an action that has already happened to be shown
+ * — a filter that can only find what has already been found is not a filter.
+ */
+export const auditActionsSchema = z.object({ items: z.array(z.string()) });
+
 export type AuditEntry = z.infer<typeof auditEntrySchema>;
 
 /** What the filters may narrow by. Each one narrows an index the table has. */

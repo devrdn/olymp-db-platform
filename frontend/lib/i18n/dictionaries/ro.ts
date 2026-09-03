@@ -696,6 +696,8 @@ const ro = {
       "user.update": "A modificat un cont",
       "user.block": "A blocat un cont",
       "user.unblock": "A deblocat un cont",
+      "user.delete": "A șters un cont",
+      "user.restore": "A restaurat un cont",
       "user.roles_change": "A schimbat rolurile unui cont",
       "user.password_reset": "A resetat o parolă",
       "user.password_change": "Și-a schimbat parola",
@@ -719,6 +721,7 @@ const ro = {
       "participant.disqualify": "A descalificat un participant",
       "participant.enroll": "S-a înscris la o olimpiadă",
       "contest.access_denied": "A fost refuzat de restricția de rețea",
+      "settings.change": "A schimbat setările instalării",
     },
   },
   screens: {

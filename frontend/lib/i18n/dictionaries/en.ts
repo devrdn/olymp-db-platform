@@ -721,6 +721,8 @@ const en = {
       "user.update": "Changed an account",
       "user.block": "Blocked an account",
       "user.unblock": "Unblocked an account",
+      "user.delete": "Deleted an account",
+      "user.restore": "Restored an account",
       "user.roles_change": "Changed an account's roles",
       "user.password_reset": "Reset a password",
       "user.password_change": "Changed their own password",
@@ -744,6 +746,7 @@ const en = {
       "participant.disqualify": "Disqualified a participant",
       "participant.enroll": "Signed up for a contest",
       "contest.access_denied": "Was refused by the network restriction",
+      "settings.change": "Changed the installation's settings",
     },
   },
   screens: {
