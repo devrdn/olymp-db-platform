@@ -287,6 +287,22 @@ function build(
       [Crepe.Feature.ImageBlock]: false,
       [Crepe.Feature.Latex]: false,
       [Crepe.Feature.AI]: false,
+      // And the code block's own editor, which crashes.
+      //
+      // It embeds CodeMirror inside the document, and the two keep separate
+      // ideas of where the caret is. When they disagree, ProseMirror maps a
+      // selection into the block and CodeMirror refuses it —
+      // `RangeError: Selection points outside of document`, thrown from
+      // `readDOMChange` while somebody is typing. It is the dependency's bug
+      // and not one this side can guard against: the position is computed and
+      // applied entirely inside it.
+      //
+      // Nothing is lost that this product wanted. A crime story does not need
+      // a syntax-highlighted editor, and a fenced block is still a fenced
+      // block — written, saved and rendered as Markdown, just edited as the
+      // plain text it already is. The SQL of an olympiad is typed in the
+      // console, which is a real editor for exactly that.
+      [Crepe.Feature.CodeMirror]: false,
     },
     featureConfigs: {
       [Crepe.Feature.BlockEdit]: {

@@ -37,6 +37,27 @@ describe("the real editor", () => {
     const field = document.querySelector('input[name="story"]') as HTMLInputElement;
     expect(field.value).toContain("# A heading");
   });
+
+  // The code block's own editor is off, because it crashes. What must survive
+  // that is the block itself: a fence is still written, saved and rendered as
+  // Markdown, and only the syntax highlighting while editing is gone.
+  test("a fenced code block survives with its editor turned off", async () => {
+    const story = "Before.\n\n```sql\nSELECT 1;\n```\n\nAfter.";
+    render(
+      <MarkdownEditor
+        name="story"
+        defaultValue={story}
+        labels={{ expand: "e", collapse: "c", unavailable: "plain" }}
+      />,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 800));
+
+    expect(document.querySelector(".ProseMirror")?.textContent).toContain("SELECT 1;");
+
+    const field = document.querySelector('input[name="story"]') as HTMLInputElement;
+    expect(field.value).toContain("```");
+    expect(field.value).toContain("SELECT 1;");
+  });
 });
 
 /**
