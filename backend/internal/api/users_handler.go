@@ -138,24 +138,27 @@ type UserResponse struct {
 	// rather than as an empty history to render.
 	StatusReason    string `json:"status_reason,omitempty"`
 	StatusChangedAt string `json:"status_changed_at,omitempty"`
-	// StatusChangedBy is the actor's id, not their name: this response is a
-	// pure mapping of one row and does not join against another to resolve
-	// one. The caller that needs a name (the account card) already holds the
-	// same GET /users/{id} it can point at that id.
+	// StatusChangedBy is the actor's id.
 	StatusChangedBy string `json:"status_changed_by,omitempty"`
+	// StatusChangedByLogin is that actor's login, resolved by the repository's
+	// own query (a LEFT JOIN against users, in internal/postgres/users.go) so
+	// the account card can name them without a second request for one login.
+	// Empty exactly when StatusChangedBy is.
+	StatusChangedByLogin string `json:"status_changed_by_login,omitempty"`
 }
 
 func toUserResponse(u users.User) UserResponse {
 	out := UserResponse{
-		ID:                 u.ID.String(),
-		Login:              u.Login,
-		Email:              u.Email,
-		FullName:           u.FullName,
-		Status:             u.Status,
-		Roles:              u.Roles,
-		MustChangePassword: u.MustChangePassword,
-		CreatedAt:          u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
-		StatusReason:       u.StatusReason,
+		ID:                   u.ID.String(),
+		Login:                u.Login,
+		Email:                u.Email,
+		FullName:             u.FullName,
+		Status:               u.Status,
+		Roles:                u.Roles,
+		MustChangePassword:   u.MustChangePassword,
+		CreatedAt:            u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		StatusReason:         u.StatusReason,
+		StatusChangedByLogin: u.StatusChangedByLogin,
 	}
 	if u.LastLoginAt != nil {
 		out.LastLoginAt = u.LastLoginAt.UTC().Format("2006-01-02T15:04:05Z")
@@ -166,6 +169,24 @@ func toUserResponse(u users.User) UserResponse {
 	if u.StatusChangedBy != nil {
 		out.StatusChangedBy = u.StatusChangedBy.String()
 	}
+	return out
+}
+
+// toIdentityResponse is what a signed-in account learns about itself.
+//
+// toUserResponse is shared with the account-management screens, which is
+// what let status_changed_at and status_changed_by ride along into the
+// sign-in response the account owner receives: an administrator's UUID and
+// the moment they acted, neither of which is that account owner's business.
+// The reason text needs no such stripping — an active account's reason is
+// always empty — but the metadata is cleared explicitly here so a future
+// field on UserResponse defaults to hidden on this path instead of leaking
+// by omission.
+func toIdentityResponse(u users.User) UserResponse {
+	out := toUserResponse(u)
+	out.StatusChangedAt = ""
+	out.StatusChangedBy = ""
+	out.StatusChangedByLogin = ""
 	return out
 }
 

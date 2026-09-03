@@ -32,11 +32,14 @@ export const accountSchema = z
     must_change_password: z.boolean().default(false),
     last_login_at: z.string().optional(),
     created_at: z.string(),
-    // All three empty for an account nobody has ever blocked or deleted — see
+    // All four empty for an account nobody has ever blocked or deleted — see
     // `UserResponse` in `backend/internal/api/users_handler.go`.
     status_reason: z.string().optional(),
     status_changed_at: z.string().optional(),
     status_changed_by: z.string().optional(),
+    // The actor's login, resolved by the repository's own query (a LEFT JOIN,
+    // not a second `GET /users/{id}`) — see `internal/postgres/users.go`.
+    status_changed_by_login: z.string().optional(),
   })
   .transform((raw) => ({
     id: raw.id,
@@ -57,8 +60,14 @@ export const accountSchema = z
     /** "" for an account nobody has blocked or deleted — never rendered as a frame. */
     statusReason: raw.status_reason ?? "",
     statusChangedAt: raw.status_changed_at,
-    /** The changing actor's id. The account card resolves it to a name by asking `/users/{id}` again. */
+    /** The changing actor's id. */
     statusChangedBy: raw.status_changed_by,
+    /**
+     * The changing actor's login, already resolved by the server's own query
+     * — no second request needed to name them. "" when statusChangedBy is,
+     * or (rarely) when the actor's id names no account.
+     */
+    statusChangedByLogin: raw.status_changed_by_login ?? "",
   }));
 
 export type Account = z.infer<typeof accountSchema>;

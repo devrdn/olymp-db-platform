@@ -39,7 +39,16 @@ const userColumns = `
 		JOIN permissions p ON p.id = rp.permission_id
 		WHERE ur.user_id = u.id
 		ORDER BY p.code
-	), '{}')`
+	), '{}'),
+	COALESCE(a.login, '')`
+
+// userJoin resolves the login of the account named by status_changed_by, so
+// the account card can name the actor without a second request for one
+// login. LEFT, not an inner join: an account nobody has ever blocked or
+// deleted has NULL there, and it must still come back — the COALESCE above
+// turns the resulting NULL login into "", matching how the other
+// status-change columns already report "nothing to explain".
+const userJoin = `LEFT JOIN users a ON a.id = u.status_changed_by`
 
 // Users implements users.Repository; the assertion fails the build here
 // rather than at wiring time if the interface and this type drift apart.
@@ -68,6 +77,7 @@ func scanUser(row pgx.Row) (users.User, error) {
 		&u.StatusReason, &u.StatusChangedAt, &u.StatusChangedBy,
 		&u.SessionGeneration, &u.MustChangePassword, &u.PasswordChangedAt,
 		&u.LastLoginAt, &u.CreatedAt, &u.UpdatedAt, &u.Roles, &u.Permissions,
+		&u.StatusChangedByLogin,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return users.User{}, users.ErrNotFound
@@ -82,14 +92,14 @@ func scanUser(row pgx.Row) (users.User, error) {
 // lower(login).
 func (r *Users) ByLogin(ctx context.Context, login string) (users.User, error) {
 	row := r.querier(ctx).QueryRow(ctx,
-		`SELECT `+userColumns+` FROM users u WHERE lower(u.login) = lower($1)`, login)
+		`SELECT `+userColumns+` FROM users u `+userJoin+` WHERE lower(u.login) = lower($1)`, login)
 	return scanUser(row)
 }
 
 // ByID resolves an account by identifier.
 func (r *Users) ByID(ctx context.Context, id uuid.UUID) (users.User, error) {
 	row := r.querier(ctx).QueryRow(ctx,
-		`SELECT `+userColumns+` FROM users u WHERE u.id = $1`, id)
+		`SELECT `+userColumns+` FROM users u `+userJoin+` WHERE u.id = $1`, id)
 	return scanUser(row)
 }
 
@@ -101,7 +111,7 @@ func (r *Users) ByID(ctx context.Context, id uuid.UUID) (users.User, error) {
 // caller which of its ids exist is the whole job.
 func (r *Users) ByIDs(ctx context.Context, ids []uuid.UUID) ([]users.User, error) {
 	rows, err := r.querier(ctx).Query(ctx,
-		`SELECT `+userColumns+` FROM users u WHERE u.id = ANY($1)`, ids)
+		`SELECT `+userColumns+` FROM users u `+userJoin+` WHERE u.id = ANY($1)`, ids)
 	if err != nil {
 		return nil, fmt.Errorf("read accounts: %w", err)
 	}
@@ -131,7 +141,7 @@ func (r *Users) Create(ctx context.Context, u users.User) (users.User, error) {
 			VALUES ($1, $2, $3, $4, $5, $6)
 			RETURNING *
 		)
-		SELECT `+userColumns+` FROM inserted u`,
+		SELECT `+userColumns+` FROM inserted u `+userJoin,
 		u.Login, email, u.PasswordHash, u.FullName, u.Status, u.MustChangePassword)
 
 	created, err := scanUser(row)
@@ -169,7 +179,7 @@ func (r *Users) List(ctx context.Context, f users.Filter) ([]users.User, int, er
 	}
 
 	rows, err := q.Query(ctx,
-		`SELECT `+userColumns+` FROM users u`+where+` ORDER BY u.login LIMIT $3 OFFSET $4`,
+		`SELECT `+userColumns+` FROM users u `+userJoin+where+` ORDER BY u.login LIMIT $3 OFFSET $4`,
 		needle, f.Status, f.Limit, f.Offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list users: %w", err)

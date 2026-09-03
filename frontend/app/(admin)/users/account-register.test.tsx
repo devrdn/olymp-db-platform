@@ -34,6 +34,7 @@ const account = (over: Partial<Account> = {}): Account => ({
   statusReason: "",
   statusChangedAt: undefined,
   statusChangedBy: undefined,
+  statusChangedByLogin: "",
   ...over,
 });
 

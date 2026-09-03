@@ -90,6 +90,12 @@ type User struct {
 	StatusReason    string
 	StatusChangedAt *time.Time
 	StatusChangedBy *uuid.UUID
+	// StatusChangedByLogin is the login of the account named by
+	// StatusChangedBy, resolved by the repository's own query rather than a
+	// second lookup: the account card needs a name for the actor, and a soft
+	// delete never removes the row, so the join always has one to find. Empty
+	// when StatusChangedBy is nil.
+	StatusChangedByLogin string
 	// PasswordHash is the argon2id digest. It never leaves the server and is
 	// stripped from anything the API returns.
 	PasswordHash string
