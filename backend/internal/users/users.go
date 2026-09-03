@@ -39,6 +39,13 @@ const (
 	MaxEmailLength    = 254
 )
 
+// MaxStatusReasonLength bounds the explanation stored with a status.
+//
+// The column is unbounded text and the request body is bounded at a
+// megabyte, so without this a block reason could be a megabyte read by every
+// administrator who opens the account.
+const MaxStatusReasonLength = 500
+
 // Errors the service reports to its callers.
 var (
 	ErrNotFound = errors.New("user not found")
@@ -59,6 +66,10 @@ var (
 	// a login that already exists and never looks at what roles it still
 	// holds, so recovery is hand-written SQL against production.
 	ErrLastAdministrator = errors.New("this would leave the installation without an administrator")
+	// ErrReasonRequired refuses a status change nobody accounted for. Blocking
+	// and deleting are answered to afterwards, and "no reason given" is not an
+	// answer the trail can carry.
+	ErrReasonRequired = errors.New("a reason is required")
 )
 
 // Statuses is every state an account can be in, for validating a filter

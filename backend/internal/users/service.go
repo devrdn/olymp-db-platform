@@ -137,7 +137,14 @@ func (s *Service) ByID(ctx context.Context, id uuid.UUID) (User, error) {
 }
 
 // Block denies an account access and ends the sessions it already has.
-func (s *Service) Block(ctx context.Context, actorID, userID uuid.UUID) error {
+//
+// The reason is mandatory: blocking is a thing an administrator is answered
+// to for later, and "no reason given" is not an answer the trail can carry.
+func (s *Service) Block(ctx context.Context, actorID, userID uuid.UUID, reason string) error {
+	reason, err := validateReason(reason)
+	if err != nil {
+		return err
+	}
 	if actorID == userID {
 		return ErrCannotActOnSelf
 	}
@@ -155,7 +162,7 @@ func (s *Service) Block(ctx context.Context, actorID, userID uuid.UUID) error {
 	}
 
 	return s.uow.Do(ctx, func(ctx context.Context) error {
-		change := StatusChange{By: actorID, At: time.Now()}
+		change := StatusChange{Reason: reason, By: actorID, At: time.Now()}
 		if err := s.repo.SetStatus(ctx, []uuid.UUID{userID}, StatusBlocked, change); err != nil {
 			return err
 		}
@@ -164,7 +171,7 @@ func (s *Service) Block(ctx context.Context, actorID, userID uuid.UUID) error {
 		if _, err := s.repo.BumpSessionGeneration(ctx, userID); err != nil {
 			return err
 		}
-		return s.record(ctx, actorID, audit.ActionUserBlock, userID, nil)
+		return s.record(ctx, actorID, audit.ActionUserBlock, userID, map[string]any{"reason": reason})
 	})
 }
 
@@ -363,6 +370,19 @@ func validateAccount(login, fullName, email string) error {
 		return fmt.Errorf("%w: %q is not an email address", ErrInvalidAccount, email)
 	}
 	return nil
+}
+
+// validateReason checks the explanation a status change carries.
+func validateReason(reason string) (string, error) {
+	reason = strings.TrimSpace(reason)
+	switch {
+	case reason == "":
+		return "", ErrReasonRequired
+	case len(reason) > MaxStatusReasonLength:
+		return "", fmt.Errorf("%w: the reason must be at most %d characters",
+			ErrInvalidAccount, MaxStatusReasonLength)
+	}
+	return reason, nil
 }
 
 // validatePassword applies the policy.

@@ -326,14 +326,28 @@ func (h *UsersHandler) updateProfile(w http.ResponseWriter, r *http.Request) {
 	httpx.NoContent(w, r)
 }
 
+// blockRequest carries why the account is being blocked. The service refuses
+// an empty reason: blocking is answered to afterwards, and this task leaves
+// that refusal reaching the client as an internal error — a later task maps
+// it to its own 4xx.
+type blockRequest struct {
+	Reason string `json:"reason"`
+}
+
 func (h *UsersHandler) block(w http.ResponseWriter, r *http.Request) {
 	id, ok := h.accountID(w, r)
 	if !ok {
 		return
 	}
 
+	var req blockRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+		return
+	}
+
 	identity, _ := auth.IdentityFrom(r.Context())
-	if err := h.service.Block(r.Context(), identity.UserID, id); err != nil {
+	if err := h.service.Block(r.Context(), identity.UserID, id, req.Reason); err != nil {
 		h.fail(w, r, err)
 		return
 	}
