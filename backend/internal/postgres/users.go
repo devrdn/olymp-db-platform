@@ -239,9 +239,26 @@ func (r *Users) SetPassword(ctx context.Context, id uuid.UUID, hash string, must
 // SetPasswordMany stores a digest per account and marks each one as carrying
 // a one-time password, in one statement rather than one per account.
 func (r *Users) SetPasswordMany(ctx context.Context, creds []users.Credential) error {
+	if len(creds) == 0 {
+		return nil
+	}
+
 	ids := make([]uuid.UUID, len(creds))
 	hashes := make([]string, len(creds))
+	seen := make(map[uuid.UUID]struct{}, len(creds))
 	for i, c := range creds {
+		if _, dup := seen[c.UserID]; dup {
+			// A repeated id here is not a harmless repeat the way it is for
+			// ReplaceRolesMany's roleCodes: two Credentials for the same
+			// account can carry different hashes, and unnest's join against
+			// UPDATE ... FROM applies an unspecified one of them with no
+			// error. Silently picking or deduplicating would hide that the
+			// caller lost track of its own selection at the exact moment it
+			// matters — which password the account actually ends up with —
+			// so this is refused instead.
+			return fmt.Errorf("set passwords: account %s is named more than once", c.UserID)
+		}
+		seen[c.UserID] = struct{}{}
 		ids[i], hashes[i] = c.UserID, c.Hash
 	}
 	_, err := r.querier(ctx).Exec(ctx, `
@@ -398,6 +415,14 @@ func (r *Users) ReplaceRoles(ctx context.Context, id uuid.UUID, roleCodes []stri
 func (r *Users) ReplaceRolesMany(ctx context.Context, ids []uuid.UUID, roleCodes []string) error {
 	q := r.querier(ctx)
 
+	// Accounts are a set here too, matching roleCodes below: a repeated id is
+	// harmless because both copies want the identical set of roles, unlike
+	// SetPasswordMany where two copies can disagree on which password wins
+	// and are refused instead. Left alone, a repeated id would make the
+	// CROSS JOIN insert two identical (user_id, role_id) rows and trip the
+	// user_roles primary key instead of being absorbed the way it is here.
+	ids = distinctUserIDs(ids)
+
 	if _, err := q.Exec(ctx, `DELETE FROM user_roles WHERE user_id = ANY($1)`, ids); err != nil {
 		return fmt.Errorf("clear roles: %w", err)
 	}
@@ -448,6 +473,22 @@ func distinctRoleCodes(codes []string) []string {
 		}
 		seen[code] = struct{}{}
 		out = append(out, code)
+	}
+	return out
+}
+
+// distinctUserIDs drops repeats while keeping order, the uuid.UUID
+// counterpart to distinctRoleCodes: a repeated id must not inflate what "one
+// row per account" means in the row-count check that follows it.
+func distinctUserIDs(ids []uuid.UUID) []uuid.UUID {
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	out := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
 	}
 	return out
 }

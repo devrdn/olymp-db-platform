@@ -325,6 +325,37 @@ func TestSetPasswordManyStoresADigestPerAccount(t *testing.T) {
 	})
 }
 
+func TestSetPasswordManyRefusesADuplicatedAccount(t *testing.T) {
+	// Two Credentials naming the same account can carry different hashes;
+	// unnest's join has no way to prefer one, so PostgreSQL would apply an
+	// unspecified one with no error. This must be refused, not silently
+	// resolved, or the password handed to the person may not be the one
+	// stored.
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		u := makeUser(t, ctx, "setpw-many-dup")
+
+		err := repo.SetPasswordMany(ctx, []users.Credential{
+			{UserID: u.ID, Hash: "hash-one"},
+			{UserID: u.ID, Hash: "hash-two"},
+		})
+		if err == nil {
+			t.Fatal("SetPasswordMany() with a duplicated account succeeded")
+		}
+		if want := fmt.Sprintf("set passwords: account %s is named more than once", u.ID); err.Error() != want {
+			t.Errorf("err = %q, want %q", err.Error(), want)
+		}
+
+		got, err := repo.ByID(ctx, u.ID)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
+		}
+		if got.PasswordHash != "not-a-real-hash" {
+			t.Errorf("password hash = %q, want the refusal to leave it untouched", got.PasswordHash)
+		}
+	})
+}
+
 func TestReplaceRolesManySetsTheSameRolesOnEveryAccount(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
@@ -383,6 +414,30 @@ func TestReplaceRolesManyTreatsARepeatedCodeAsOne(t *testing.T) {
 		}
 		if len(got.Roles) != 1 || got.Roles[0] != "organizer" {
 			t.Errorf("roles = %v, want a single organizer role, not one per repeat", got.Roles)
+		}
+	})
+}
+
+func TestReplaceRolesManyTreatsARepeatedIDAsOne(t *testing.T) {
+	// Unlike SetPasswordMany, a repeated id here is harmless: both copies
+	// want the identical set of roles. Left alone, the CROSS JOIN insert
+	// would produce two identical (user_id, role_id) rows for the repeat and
+	// trip the user_roles primary key instead of being absorbed like this.
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		u := makeUser(t, ctx, "roles-many-dup-id")
+
+		err := repo.ReplaceRolesMany(ctx, []uuid.UUID{u.ID, u.ID}, []string{"organizer"})
+		if err != nil {
+			t.Fatalf("ReplaceRolesMany() with a repeated id = %v", err)
+		}
+
+		got, err := repo.ByID(ctx, u.ID)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
+		}
+		if len(got.Roles) != 1 || got.Roles[0] != "organizer" {
+			t.Errorf("roles = %v, want a single organizer role, not one per repeated id", got.Roles)
 		}
 	})
 }
