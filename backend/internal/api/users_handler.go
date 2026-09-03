@@ -61,11 +61,23 @@ func (h *UsersHandler) Mount(r chi.Router) {
 		r.Post("/", h.create)
 		r.Post("/import", h.importRoster)
 
+		// A sibling of the single-account routes rather than a query on them:
+		// the selection is the subject. Registered before the /{userID} group
+		// so chi resolves the literal "bulk" segment here rather than reading
+		// it as an account identifier.
+		r.Route("/bulk", func(r chi.Router) {
+			r.Post("/status", h.bulkStatus)
+			r.Post("/roles", h.bulkRoles)
+			r.Post("/password-reset", h.bulkResetPassword)
+		})
+
 		r.Route("/{"+userIDParam+"}", func(r chi.Router) {
 			r.Get("/", h.byID)
 			r.Patch("/", h.updateProfile)
 			r.Post("/block", h.block)
 			r.Post("/unblock", h.unblock)
+			r.Post("/delete", h.deleteAccount)
+			r.Post("/restore", h.restore)
 			r.Post("/password-reset", h.resetPassword)
 			r.Put("/roles", h.replaceRoles)
 		})
@@ -327,9 +339,7 @@ func (h *UsersHandler) updateProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 // blockRequest carries why the account is being blocked. The service refuses
-// an empty reason: blocking is answered to afterwards, and this task leaves
-// that refusal reaching the client as an internal error — a later task maps
-// it to its own 4xx.
+// an empty reason with users.ErrReasonRequired, which fail maps to a 400.
 type blockRequest struct {
 	Reason string `json:"reason"`
 }
@@ -362,6 +372,46 @@ func (h *UsersHandler) unblock(w http.ResponseWriter, r *http.Request) {
 
 	identity, _ := auth.IdentityFrom(r.Context())
 	if err := h.service.Unblock(r.Context(), identity.UserID, id); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.NoContent(w, r)
+}
+
+// deleteRequest carries why the account is being deleted. The service refuses
+// an empty reason with users.ErrReasonRequired, which fail maps to a 400.
+type deleteRequest struct {
+	Reason string `json:"reason"`
+}
+
+func (h *UsersHandler) deleteAccount(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.accountID(w, r)
+	if !ok {
+		return
+	}
+
+	var req deleteRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+		return
+	}
+
+	identity, _ := auth.IdentityFrom(r.Context())
+	if err := h.service.Delete(r.Context(), identity.UserID, id, req.Reason); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.NoContent(w, r)
+}
+
+func (h *UsersHandler) restore(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.accountID(w, r)
+	if !ok {
+		return
+	}
+
+	identity, _ := auth.IdentityFrom(r.Context())
+	if err := h.service.Restore(r.Context(), identity.UserID, id); err != nil {
 		h.fail(w, r, err)
 		return
 	}
@@ -439,6 +489,11 @@ func (h *UsersHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, users.ErrCannotActOnSelf):
 		httpx.Error(w, r, http.StatusBadRequest, codeCannotActOnSelf,
 			"This operation cannot be performed on your own account")
+	case errors.Is(err, users.ErrReasonRequired):
+		httpx.Error(w, r, http.StatusBadRequest, codeReasonRequired,
+			"A reason is required")
+	case errors.Is(err, users.ErrTooManyAccounts):
+		httpx.Error(w, r, http.StatusBadRequest, codeTooManyAccounts, err.Error())
 	case errors.Is(err, users.ErrRosterTooLarge), errors.Is(err, users.ErrInvalidAccount):
 		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 	case errors.Is(err, users.ErrWeakPassword), errors.Is(err, users.ErrSamePassword):
