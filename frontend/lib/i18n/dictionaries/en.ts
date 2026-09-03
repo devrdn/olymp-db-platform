@@ -514,6 +514,14 @@ const en = {
       pickAccount: "Select {name}",
       pickPage: "Select the whole page",
       count: "{n} selected",
+      // Shown next to the count whenever part of the selection was picked on
+      // an earlier search or another page and is not among the rows on
+      // screen right now — a selection that can now outlive a search must
+      // say so plainly, since a bulk action below acts on all of it either way.
+      offPage: "{n} not on this page",
+      view: "View selection",
+      viewTitle: "Selected accounts",
+      unpick: "Remove {name} from the selection",
       clear: "Clear selection",
       /**
        * The actions a selection offers, and the outcome of running one.

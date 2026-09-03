@@ -107,6 +107,7 @@ export function AccountRegister({
                 <th scope="col" className={cn(HEAD, "w-8 pr-0")}>
                   <SelectAllCheckbox
                     ids={accounts.map((account) => account.id)}
+                    displays={Object.fromEntries(accounts.map((a) => [a.id, a.login]))}
                     label={t.selection.pickPage}
                   />
                 </th>
@@ -137,6 +138,7 @@ export function AccountRegister({
                     <RowCheckbox
                       id={account.id}
                       label={t.selection.pickAccount.replace("{name}", account.fullName)}
+                      display={account.login}
                     />
                   </td>
 
