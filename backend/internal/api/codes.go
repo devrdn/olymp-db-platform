@@ -134,6 +134,10 @@ var (
 		"The operation would lock the caller out of their own account, so it is refused on oneself.")
 	codeUserNotFound = httpx.NewCode("user_not_found",
 		"No account with that identifier or login exists.")
+	codeReasonRequired = httpx.NewCode("reason_required",
+		"Blocking or deleting an account has to say why. The reason is stored with the account and read by whoever asks about it later.")
+	codeTooManyAccounts = httpx.NewCode("too_many_accounts",
+		"More accounts were selected than one operation carries. The message says the limit.")
 
 	// --- Contest lifecycle --------------------------------------------------
 

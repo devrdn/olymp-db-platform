@@ -187,6 +187,20 @@ func TestBlockEndpointBlocksTheAccount(t *testing.T) {
 	}
 }
 
+func TestBlockWithoutAReasonIsABadRequest(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	target := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr"})
+
+	rec := f.do(http.MethodPost, "/users/"+target.ID.String()+"/block", `{"reason":"  "}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "reason_required" {
+		t.Errorf("code = %q, want reason_required", code)
+	}
+}
+
 func TestBlockingYourOwnAccountIsRefused(t *testing.T) {
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 
@@ -214,6 +228,53 @@ func TestPasswordResetEndpointReturnsTheNewPassword(t *testing.T) {
 	}
 	if body.OneTimePassword == "" {
 		t.Error("the reset returned no password to hand over")
+	}
+}
+
+func TestDeleteEndpointDeletesTheAccount(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	target := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr"})
+
+	rec := f.do(http.MethodPost, "/users/"+target.ID.String()+"/delete", `{"reason":"graduated"}`)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (body: %s)", rec.Code, rec.Body.String())
+	}
+	stored, _ := f.repo.Get(target.ID)
+	if stored.Status != users.StatusDeleted {
+		t.Errorf("Status = %q, want deleted", stored.Status)
+	}
+	if stored.StatusReason != "graduated" {
+		t.Errorf("StatusReason = %q, want the reason from the request", stored.StatusReason)
+	}
+}
+
+func TestDeleteWithoutAReasonIsABadRequest(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	target := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr"})
+
+	rec := f.do(http.MethodPost, "/users/"+target.ID.String()+"/delete", `{"reason":"  "}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "reason_required" {
+		t.Errorf("code = %q, want reason_required", code)
+	}
+}
+
+func TestRestoreEndpointRestoresTheAccount(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	target := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr", Status: users.StatusDeleted})
+
+	rec := f.do(http.MethodPost, "/users/"+target.ID.String()+"/restore", "")
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (body: %s)", rec.Code, rec.Body.String())
+	}
+	stored, _ := f.repo.Get(target.ID)
+	if stored.Status != users.StatusActive {
+		t.Errorf("Status = %q, want active", stored.Status)
 	}
 }
 
