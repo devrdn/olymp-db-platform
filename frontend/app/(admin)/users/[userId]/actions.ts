@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { passwordResetSchema } from "@/lib/api/accounts";
+import { deleteAccount, passwordResetSchema, restoreAccount } from "@/lib/api/accounts";
 import { ApiError } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
 import { serverRequest } from "@/lib/api/server";
@@ -26,12 +26,18 @@ function subject(form: FormData): string | null {
   return isId(userId) ? userId : null;
 }
 
-async function attempt(
-  userId: string,
-  init: { method: string; body?: unknown },
-  path = "",
-): Promise<AccountState> {
-  const failure = await serverRequest(`/users/${userId}${path}`, init).then(
+/**
+ * Runs one request against an account, translates the failure into what
+ * `Outcome` in `account-card.tsx` looks up, and revalidates on success.
+ *
+ * Takes the request itself rather than a method and a path: block and unblock
+ * are one raw call each, but delete and restore go through `deleteAccount`
+ * and `restoreAccount` from `lib/api/accounts` instead of reassembling their
+ * routes here — the same functions `../bulk-actions.ts` reaches for its own
+ * calls, so the route is spent once rather than invented at every call site.
+ */
+async function attempt(action: () => Promise<unknown>): Promise<AccountState> {
+  const failure = await action().then(
     () => null,
     (error: unknown) => error,
   );
@@ -54,10 +60,12 @@ export async function updateProfileAction(
   const fullName = String(form.get("full_name") ?? "").trim();
   if (fullName === "") return { code: "invalid_request" };
 
-  return attempt(userId, {
-    method: "PATCH",
-    body: { full_name: fullName, email: String(form.get("email") ?? "").trim() },
-  });
+  return attempt(() =>
+    serverRequest(`/users/${userId}`, {
+      method: "PATCH",
+      body: { full_name: fullName, email: String(form.get("email") ?? "").trim() },
+    }),
+  );
 }
 
 export async function replaceRolesAction(
@@ -72,14 +80,27 @@ export async function replaceRolesAction(
   // somebody wants while they sort out who a person is.
   const roles = form.getAll("roles").map(String).filter(Boolean);
 
-  return attempt(userId, { method: "PUT", body: { roles } }, "/roles");
+  return attempt(() => serverRequest(`/users/${userId}/roles`, { method: "PUT", body: { roles } }));
+}
+
+/** The reason a status change is refused to leave the screen without: empty or whitespace-only. */
+function requiredReason(form: FormData): string | null {
+  const reason = String(form.get("reason") ?? "").trim();
+  return reason === "" ? null : reason;
 }
 
 export async function blockAction(_previous: AccountState, form: FormData): Promise<AccountState> {
   const userId = subject(form);
   if (!userId) return { code: "invalid_user_id" };
 
-  return attempt(userId, { method: "POST" }, "/block");
+  // The server has required a reason since early in this branch
+  // (`users.ErrReasonRequired`); this card used to send none at all, which
+  // made every block from here fail. Caught before the request leaves, the
+  // same way the bulk block dialog catches it.
+  const reason = requiredReason(form);
+  if (reason === null) return { code: "reason_required" };
+
+  return attempt(() => serverRequest(`/users/${userId}/block`, { method: "POST", body: { reason } }));
 }
 
 export async function unblockAction(
@@ -89,7 +110,40 @@ export async function unblockAction(
   const userId = subject(form);
   if (!userId) return { code: "invalid_user_id" };
 
-  return attempt(userId, { method: "POST" }, "/unblock");
+  // Returning to the ordinary state needs no justification — see
+  // `users.Service.Unblock`.
+  return attempt(() => serverRequest(`/users/${userId}/unblock`, { method: "POST" }));
+}
+
+/**
+ * Soft-deletes the account. Same rule as blocking: an empty or
+ * whitespace-only reason never reaches the server.
+ */
+export async function deleteAction(_previous: AccountState, form: FormData): Promise<AccountState> {
+  const userId = subject(form);
+  if (!userId) return { code: "invalid_user_id" };
+
+  const reason = requiredReason(form);
+  if (reason === null) return { code: "reason_required" };
+
+  return attempt(() => deleteAccount(userId, reason));
+}
+
+/**
+ * Reverses a soft delete. Can fail with `login_taken` or `email_taken` when a
+ * live account has since claimed the login or the email — the direct price of
+ * releasing them on deletion — and `Outcome` already renders each under its
+ * own name, so the administrator learns which one to resolve rather than
+ * being told only that the restore failed.
+ */
+export async function restoreAction(
+  _previous: AccountState,
+  form: FormData,
+): Promise<AccountState> {
+  const userId = subject(form);
+  if (!userId) return { code: "invalid_user_id" };
+
+  return attempt(() => restoreAccount(userId));
 }
 
 export type ResetState = AccountState & { oneTimePassword?: string };

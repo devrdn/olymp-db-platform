@@ -31,6 +31,9 @@ const account = (over: Partial<Account> = {}): Account => ({
   mustChangePassword: false,
   lastLoginAt: "2026-03-01T10:00:00Z",
   createdAt: "2026-02-01T10:00:00Z",
+  statusReason: "",
+  statusChangedAt: undefined,
+  statusChangedBy: undefined,
   ...over,
 });
 
