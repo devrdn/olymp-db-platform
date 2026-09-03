@@ -295,6 +295,64 @@ func TestBlockKeepsTheReason(t *testing.T) {
 	}
 }
 
+// TestReblockingWithANewReasonUpdatesTheStoredReason guards the regression
+// the old unconditional-skip behaviour would reintroduce: an administrator
+// who blocks an account, then blocks it again with a stronger reason, must
+// see that second decision land. The old Block body wrote unconditionally;
+// routing through BulkSetStatus's "already in status" skip must not silently
+// discard it.
+func TestReblockingWithANewReasonUpdatesTheStoredReason(t *testing.T) {
+	f := newFixture(t)
+	target := f.addUser(t, "ivanov", "some password")
+	if err := f.service.Block(context.Background(), f.actor, target.ID, "suspected cheating"); err != nil {
+		t.Fatalf("first Block() returned error: %v", err)
+	}
+	f.sink.entries = nil // isolate what the second block records
+
+	if err := f.service.Block(context.Background(), f.actor, target.ID,
+		"confirmed cheating in the October contest"); err != nil {
+		t.Fatalf("second Block() returned error: %v", err)
+	}
+
+	after, _ := f.repo.Get(target.ID)
+	if after.StatusReason != "confirmed cheating in the October contest" {
+		t.Errorf("StatusReason = %q, want the corrected reason", after.StatusReason)
+	}
+	if got := f.sink.actions(); len(got) != 1 || got[0] != audit.ActionUserBlock {
+		t.Errorf("audit actions = %v, want one %q recording the second decision", got, audit.ActionUserBlock)
+	}
+}
+
+// TestReblockingWithTheIdenticalReasonIsANoOp is the other half of the same
+// rule: when nothing would actually change — same status, same reason — the
+// account is skipped, the stored reason is untouched, and nothing new is
+// audited.
+func TestReblockingWithTheIdenticalReasonIsANoOp(t *testing.T) {
+	f := newFixture(t)
+	target := f.addUser(t, "ivanov", "some password")
+	if err := f.service.Block(context.Background(), f.actor, target.ID, "suspected cheating"); err != nil {
+		t.Fatalf("first Block() returned error: %v", err)
+	}
+	before, _ := f.repo.Get(target.ID)
+	f.sink.entries = nil
+	callsBefore := f.uow.Calls
+
+	if err := f.service.Block(context.Background(), f.actor, target.ID, "suspected cheating"); err != nil {
+		t.Fatalf("second Block() returned error: %v", err)
+	}
+
+	after, _ := f.repo.Get(target.ID)
+	if after.StatusReason != before.StatusReason {
+		t.Errorf("StatusReason = %q, want it unchanged at %q", after.StatusReason, before.StatusReason)
+	}
+	if len(f.sink.entries) != 0 {
+		t.Errorf("audit entries = %v, want none recorded for a no-op", f.sink.entries)
+	}
+	if f.uow.Calls != callsBefore {
+		t.Errorf("uow.Calls = %d, want %d: a no-op must not open a transaction", f.uow.Calls, callsBefore)
+	}
+}
+
 func TestChangePasswordRequiresTheCurrentOne(t *testing.T) {
 	// Otherwise anyone who borrows an unlocked browser takes the account over.
 	f := newFixture(t)
