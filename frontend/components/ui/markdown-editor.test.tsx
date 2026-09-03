@@ -33,7 +33,7 @@ vi.mock("@milkdown/crepe", () => ({
 
 import { MarkdownEditor } from "./markdown-editor";
 
-const labels = { expand: "Open full screen", collapse: "Close full screen" };
+const labels = { expand: "Open full screen", collapse: "Close full screen", unavailable: "нет" };
 
 afterEach(() => {
   document.body.style.overflow = "";
