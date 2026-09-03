@@ -173,7 +173,7 @@ func TestBlockEndpointBlocksTheAccount(t *testing.T) {
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 	target := f.repo.Add(users.User{Login: "petrov", FullName: "Pyotr"})
 
-	rec := f.do(http.MethodPost, "/users/"+target.ID.String()+"/block", "")
+	rec := f.do(http.MethodPost, "/users/"+target.ID.String()+"/block", `{"reason":"cheating in the October contest"}`)
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204 (body: %s)", rec.Code, rec.Body.String())
@@ -182,12 +182,15 @@ func TestBlockEndpointBlocksTheAccount(t *testing.T) {
 	if stored.Status != users.StatusBlocked {
 		t.Errorf("Status = %q, want blocked", stored.Status)
 	}
+	if stored.StatusReason != "cheating in the October contest" {
+		t.Errorf("StatusReason = %q, want the reason from the request", stored.StatusReason)
+	}
 }
 
 func TestBlockingYourOwnAccountIsRefused(t *testing.T) {
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 
-	rec := f.do(http.MethodPost, "/users/"+f.admin.ID.String()+"/block", "")
+	rec := f.do(http.MethodPost, "/users/"+f.admin.ID.String()+"/block", `{"reason":"some reason"}`)
 
 	if rec.Code != http.StatusBadRequest && rec.Code != http.StatusConflict {
 		t.Errorf("status = %d, want the self-block to be refused", rec.Code)
@@ -217,7 +220,7 @@ func TestPasswordResetEndpointReturnsTheNewPassword(t *testing.T) {
 func TestUnknownAccountIsReportedAsNotFound(t *testing.T) {
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 
-	rec := f.do(http.MethodPost, "/users/"+uuid.NewString()+"/block", "")
+	rec := f.do(http.MethodPost, "/users/"+uuid.NewString()+"/block", `{"reason":"some reason"}`)
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
