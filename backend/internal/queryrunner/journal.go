@@ -3,6 +3,7 @@ package queryrunner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"time"
@@ -30,6 +31,16 @@ type Entry struct {
 	RequestID uuid.UUID
 	SQL       string
 }
+
+// ErrJournalUnavailable wraps a failure to open the journal row itself — the
+// core database being unreachable, or refusing the write outright (a giant
+// statement defeating its own to_tsvector index, say).
+//
+// Marked apart for the same reason ErrUnavailable is marked apart one layer
+// up: this is not the query being wrong, it is the record-keeping around it
+// failing, and a participant shown the database's own words for it would be
+// shown a sentence about our infrastructure rather than about their SQL.
+var ErrJournalUnavailable = errors.New("the query could not be journalled")
 
 // Outcome closes it.
 type Outcome struct {
@@ -103,7 +114,7 @@ func (j *Journalled) Run(ctx context.Context, req Request, requestID uuid.UUID) 
 		SQL:          req.SQL,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrJournalUnavailable, err)
 	}
 
 	started := time.Now()

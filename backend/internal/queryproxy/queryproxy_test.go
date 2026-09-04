@@ -3,6 +3,7 @@ package queryproxy_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"strings"
 	"testing"
@@ -24,9 +25,16 @@ import (
 type people struct {
 	participant contests.Participant
 	err         error
+	// calls counts how often ByUser was reached, when a test needs to prove a
+	// check upstream of it stopped a request before it got here. A pointer so
+	// the value receiver below can still record into it.
+	calls *int
 }
 
 func (p people) ByUser(context.Context, uuid.UUID, uuid.UUID) (contests.Participant, error) {
+	if p.calls != nil {
+		*p.calls++
+	}
 	return p.participant, p.err
 }
 
@@ -75,9 +83,14 @@ type runner struct {
 	gotID     uuid.UUID
 	result    *queryrunner.Result
 	err       error
+	// calls counts how often Run was reached, so a test can prove a check
+	// upstream of the façade's own call to the runner stopped a request
+	// before the journal it wraps was ever written to.
+	calls int
 }
 
 func (r *runner) Run(_ context.Context, req queryrunner.Request, id uuid.UUID) (*queryrunner.Result, error) {
+	r.calls++
 	r.got, r.gotID = req, id
 	if r.quotaSink != nil {
 		*r.quotaSink = req.DiskQuotaBytes
@@ -451,5 +464,161 @@ func TestEveryOutcomeTheRunnerReportsIsRecognisedAsOurs(t *testing.T) {
 				t.Fatalf("error = %v, want it to still be %v", err, outcome)
 			}
 		})
+	}
+}
+
+// A failure to open the journal row is ours, not the database refusing the
+// participant's SQL — the query never reached it — so even a contest that
+// hides its schema must not swallow this one as ErrDatabaseDeclined.
+func TestAJournalFailureIsNotSwallowedByAClosedCatalogue(t *testing.T) {
+	closed := sqlpolicy.ReadOnly()
+	closed.AllowCatalog = false
+
+	service := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+		contestStore{contest: contests.Contest{Status: contests.StatusRunning}},
+		games{game: provisioning.Contest{Policy: closed}},
+		&databases{database: "x"},
+		&runner{err: fmt.Errorf("%w: %w", queryrunner.ErrJournalUnavailable, errors.New("dial tcp: connection refused"))},
+	)
+
+	_, err := service.Run(t.Context(), command())
+	if errors.Is(err, queryproxy.ErrDatabaseDeclined) {
+		t.Fatalf("a journal failure was swallowed as the database refusing the query: %v", err)
+	}
+	if !errors.Is(err, queryrunner.ErrJournalUnavailable) {
+		t.Fatalf("error = %v, want it to still be ErrJournalUnavailable", err)
+	}
+}
+
+// A megabyte of attacker text must never reach the journal. The true bound
+// lives in the checker (sqlpolicy.MaxQueryBytes), well downstream of the
+// write the façade's caller makes before ever reaching it — this one is
+// enforced first, costs nothing but a comparison, and stops before even the
+// participant is looked up.
+func TestAQueryOverTheLengthBoundIsRefusedBeforeAnythingIsRead(t *testing.T) {
+	calls := 0
+	service := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}, calls: &calls},
+		contestStore{contest: contests.Contest{Status: contests.StatusRunning}},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	)
+
+	cmd := command()
+	cmd.SQL = "SELECT " + strings.Repeat("a", sqlpolicy.MaxQueryBytes+1)
+
+	_, err := service.Run(t.Context(), cmd)
+
+	var refusal *sqlpolicy.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("error = %v, want a refusal", err)
+	}
+	if refusal.Code != sqlpolicy.CodeTooLong {
+		t.Fatalf("code = %q, want %q", refusal.Code, sqlpolicy.CodeTooLong)
+	}
+	if calls != 0 {
+		t.Fatalf("the participant was looked up before the length was checked (%d calls)", calls)
+	}
+}
+
+// A query within the bound is unaffected: the check refuses length and
+// nothing else.
+func TestAQueryWithinTheLengthBoundIsUnaffected(t *testing.T) {
+	service, _, _ := fixture(t)
+	cmd := command()
+	cmd.SQL = "SELECT " + strings.Repeat("a", sqlpolicy.MaxQueryBytes-100)
+
+	if _, err := service.Run(t.Context(), cmd); err != nil {
+		t.Fatalf("a query within the bound was refused: %v", err)
+	}
+}
+
+// A refused query must cost this façade's own rate check, not a row in
+// query_log: the Query Runner's own limiter sits behind the journal write the
+// façade's caller makes before ever reaching it (CLAUDE.md's security rule
+// 13 — a refused query still counts against the rate, and now it is counted
+// before the expensive step rather than after).
+func TestAParticipantAskingTooFastIsRefusedBeforeTheRunnerIsReached(t *testing.T) {
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning,
+		Settings: contests.Settings{QueryRateLimitPerMin: 1},
+	}
+	registration := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}
+	run := &runner{result: &queryrunner.Result{Columns: []string{"a"}}}
+	service := queryproxy.New(
+		people{participant: registration},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{ID: contest.ID, Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, run,
+	)
+
+	if _, err := service.Run(t.Context(), command()); err != nil {
+		t.Fatalf("the first query in the minute: %v", err)
+	}
+	if run.calls != 1 {
+		t.Fatalf("the runner was reached %d times for the first query, want 1", run.calls)
+	}
+
+	_, err := service.Run(t.Context(), command())
+	if !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("error = %v, want ErrTooManyQueries", err)
+	}
+	if run.calls != 1 {
+		t.Fatalf("the runner was reached by a query that should have been refused for its rate (calls=%d)", run.calls)
+	}
+}
+
+// query_rate_limit_per_min used to be stored, validated and served without
+// ever reaching anything that checked it — this proves it now does, and that
+// a contest which left it at zero still gets the installation's own default
+// rather than no limit at all.
+func TestTheContestsOwnRateLimitIsEnforced(t *testing.T) {
+	strict := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Settings: contests.Settings{QueryRateLimitPerMin: 1}}
+	lenient := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning} // zero: installation default
+
+	strictService := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+		contestStore{contest: strict},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	)
+	lenientService := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+		contestStore{contest: lenient},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	)
+
+	if _, err := strictService.Run(t.Context(), command()); err != nil {
+		t.Fatalf("the strict contest's first query: %v", err)
+	}
+	if _, err := strictService.Run(t.Context(), command()); !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("the strict contest's second query: %v, want ErrTooManyQueries", err)
+	}
+
+	for i := range 5 {
+		if _, err := lenientService.Run(t.Context(), command()); err != nil {
+			t.Fatalf("the lenient contest's query %d was refused: %v", i+1, err)
+		}
+	}
+}
+
+// WithPerMinuteDefault changes what a contest with no rate of its own falls
+// back to, so the façade's own pre-check can be kept in step with whatever
+// QUERY_PER_MINUTE the Query Runner was actually deployed with.
+func TestWithPerMinuteDefaultOverridesTheFallback(t *testing.T) {
+	service := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+		contestStore{contest: contests.Contest{Status: contests.StatusRunning}},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	).WithPerMinuteDefault(1)
+
+	if _, err := service.Run(t.Context(), command()); err != nil {
+		t.Fatalf("the first query: %v", err)
+	}
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("error = %v, want ErrTooManyQueries", err)
 	}
 }

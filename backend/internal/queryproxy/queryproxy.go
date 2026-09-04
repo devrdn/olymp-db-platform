@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
@@ -117,21 +118,57 @@ type Service struct {
 	games     Games
 	databases Databases
 	runner    Executor
+	// rate is a second instance of the Query Runner's own sliding-window
+	// limiter, kept here for the one thing the runner cannot do: refuse a
+	// query before the journal writes it. The two processes cannot share one
+	// instance, but they share the one implementation (queryrunner.RateLimiter).
+	rate *queryrunner.RateLimiter
+	// perMinuteDefault is the rate a contest gets when its organiser left
+	// query_rate_limit_per_min at zero. New supplies the architecture's own
+	// figure (section 5); WithPerMinuteDefault lets the deployment's actual
+	// configuration override it.
+	perMinuteDefault int
 }
 
 // New assembles the façade.
 func New(people People, contests Contests, games Games, databases Databases, runner Executor) *Service {
-	return &Service{people: people, contests: contests, games: games, databases: databases, runner: runner}
+	return &Service{
+		people: people, contests: contests, games: games, databases: databases, runner: runner,
+		rate:             queryrunner.NewRateLimiter(0, time.Minute),
+		perMinuteDefault: queryrunner.DefaultLimits().PerMinute,
+	}
+}
+
+// WithPerMinuteDefault sets the rate a contest falls back to when its
+// organiser left query_rate_limit_per_min at zero, so this façade's own
+// pre-check matches whatever QUERY_PER_MINUTE the Query Runner was actually
+// deployed with rather than the architecture's own figure. Zero or negative
+// leaves the default untouched.
+func (s *Service) WithPerMinuteDefault(perMinute int) *Service {
+	if perMinute > 0 {
+		s.perMinuteDefault = perMinute
+	}
+	return s
 }
 
 // Run answers one query, or says why it will not.
 //
-// The order is cheapest first and most-revealing last. Who is asking is a
-// single row; whether the contest is running is another; only then is a
-// database provisioned, which may create one, and only then does anything
-// reach the Query Runner. A query from somebody who is not a participant must
-// not cost a CREATE DATABASE.
+// The order is cheapest first and most-revealing last. The query's own length
+// is checked before anything is read or written, because that costs nothing
+// but a comparison and refusing it late costs a row in query_log — the true
+// bound lives in the checker (sqlpolicy.MaxQueryBytes), well downstream of
+// the journal write this façade's caller makes before ever reaching it. Who
+// is asking is a single row; whether the contest is running is another; the
+// rate check comes next and for the same reason as the length check — still
+// ahead of the journal write — and only then is a database provisioned,
+// which may create one, and only then does anything reach the Query Runner.
+// A query from somebody who is not a participant must not cost a CREATE
+// DATABASE.
 func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, error) {
+	if len(cmd.SQL) > sqlpolicy.MaxQueryBytes {
+		return nil, &sqlpolicy.Refusal{Code: sqlpolicy.CodeTooLong, Subject: fmt.Sprintf("%d bytes", len(cmd.SQL))}
+	}
+
 	participant, err := s.people.ByUser(ctx, cmd.ContestID, cmd.UserID)
 	switch {
 	case errors.Is(err, contests.ErrParticipantNotFound):
@@ -153,6 +190,18 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 	}
 	if !contest.AllowsAddress(cmd.Address) {
 		return nil, ErrAddressNotAllowed
+	}
+
+	// The same registration a refusal is journalled against, so a participant
+	// asking too fast meets the same limit here as at the Query Runner — and
+	// meets it before a row is written rather than after, which is the only
+	// difference between the two checks.
+	limit := contest.Settings.QueryRateLimitPerMin
+	if limit == 0 {
+		limit = s.perMinuteDefault
+	}
+	if err = s.rate.Admit(participant.ID.String(), limit); err != nil {
+		return nil, err
 	}
 
 	game, err := s.games.Game(ctx, cmd.ContestID)
@@ -208,6 +257,12 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 func speaksForTheDatabase(err error) bool {
 	var refusal *sqlpolicy.Refusal
 	if errors.As(err, &refusal) {
+		return false
+	}
+	// A failure to journal the query is ours, not the database refusing the
+	// participant's SQL — it never got that far — and it is not among
+	// Outcomes() because it never crosses to the Query Runner at all.
+	if errors.Is(err, queryrunner.ErrJournalUnavailable) {
 		return false
 	}
 	for _, ours := range queryrunner.Outcomes() {

@@ -195,6 +195,15 @@ func (h *ConsoleHandler) fail(w http.ResponseWriter, r *http.Request, err error)
 		h.log.ErrorContext(r.Context(), "a query could not be answered", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 		return
+	case errors.Is(err, queryrunner.ErrJournalUnavailable):
+		// The query never reached the database: opening its journal row
+		// failed first. That is ours, not the participant's SQL being wrong,
+		// so it gets the same treatment as the query service being down
+		// rather than the database's own words below — which are shown only
+		// for a query that actually reached the database.
+		h.log.ErrorContext(r.Context(), "a query could not be journalled", "error", err)
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+		return
 	}
 
 	// What is left is the database refusing the query on its own terms — a

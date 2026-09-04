@@ -165,7 +165,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 				games,
 				databases,
 				queryrunner.NewJournalled(client, postgres.NewQueryLog(pool), log),
-			)
+			).WithPerMinuteDefault(cfg.QueryPerMinute)
 		}
 	}
 

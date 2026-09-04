@@ -124,8 +124,16 @@ func TestAQueryThatCannotBeRecordedDoesNotRun(t *testing.T) {
 	runner, rec, database := journalled(t, queryrunner.DefaultLimits(), checker.NewChecker())
 	rec.beginErr = errors.New("the core database is unreachable")
 
-	if _, err := runner.Run(t.Context(), request(database, `SELECT 1`), uuid.New()); err == nil {
+	_, err := runner.Run(t.Context(), request(database, `SELECT 1`), uuid.New())
+	if err == nil {
 		t.Fatal("the query ran without being recorded")
+	}
+	// Wrapped as ours rather than left as the bare error Begin returned: the
+	// caller has to be able to tell "the journal could not be opened" apart
+	// from "the database refused the participant's SQL", and errors.Is is how
+	// it does that.
+	if !errors.Is(err, queryrunner.ErrJournalUnavailable) {
+		t.Fatalf("error = %v, want it to wrap ErrJournalUnavailable", err)
 	}
 	if len(rec.order) != 1 {
 		t.Fatalf("call order = %v; nothing should follow a failed begin", rec.order)
