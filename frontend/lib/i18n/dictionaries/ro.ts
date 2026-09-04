@@ -100,6 +100,16 @@ const ro = {
     backToRegister: "← Toate olimpiadele",
     untitled: "Olimpiadă fără titlu",
     breadcrumb: "Firimituri",
+    titleEditor: {
+      edit: "Editează titlul",
+      heading: "Titlu și descriere",
+      hint: "Cum se numește olimpiada oriunde apare, în fiecare limbă declarată.",
+      title: "Titlu",
+      description: "Descriere scurtă",
+      otherLanguages: "Alte limbi",
+      cancel: "Anulați",
+      close: "Închideți",
+    },
     tabs: {
       overview: "Prezentare",
       story: "Poveste",
@@ -347,15 +357,9 @@ const ro = {
       },
       languages: {
         heading: "Limbi",
-        hint: "Fiecare limbă declarată are nevoie de un set complet de texte înainte de publicare.",
+        hint: "Fiecare limbă declarată are nevoie de un set complet de texte înainte de publicare. Titlul propriu-zis se editează acum în partea de sus a acestui spațiu de lucru — aici doar se adaugă sau se elimină o limbă.",
         fallback: "implicită",
         warning: "Eliminarea unei limbi elimină odată cu ea titlurile, povestea și textele întrebărilor.",
-      },
-      titles: {
-        heading: "Titlu și descriere",
-        hint: "Cum se numește olimpiada oriunde apare, în fiecare limbă declarată.",
-        title: "Titlu",
-        description: "Descriere scurtă",
       },
       policy: {
         heading: "Acces SQL",

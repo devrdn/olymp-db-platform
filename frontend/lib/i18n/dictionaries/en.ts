@@ -104,6 +104,23 @@ const en = {
     backToRegister: "← All contests",
     untitled: "Untitled contest",
     breadcrumb: "Breadcrumb",
+    /**
+     * The name, edited from the heading rather than hunted for in settings.
+     * One field is open by default — the language the contest falls back
+     * to, which is what an author reaches for almost every time — and every
+     * other declared language sits one click away, behind `otherLanguages`,
+     * rather than crowding the short path.
+     */
+    titleEditor: {
+      edit: "Edit title",
+      heading: "Title and description",
+      hint: "How the contest is named wherever it appears, in each declared language.",
+      title: "Title",
+      description: "Short description",
+      otherLanguages: "Other languages",
+      cancel: "Cancel",
+      close: "Close",
+    },
     tabs: {
       overview: "Overview",
       story: "Story",
@@ -351,15 +368,9 @@ const en = {
       },
       languages: {
         heading: "Languages",
-        hint: "Every declared language needs a full set of texts before the contest can be published.",
+        hint: "Every declared language needs a full set of texts before the contest can be published. The title itself is edited at the top of this workspace now — this is only where a language enters or leaves the set.",
         fallback: "default",
         warning: "Dropping a language drops its titles, its story and its question texts with it.",
-      },
-      titles: {
-        heading: "Title and description",
-        hint: "How the contest is named wherever it appears, in each declared language.",
-        title: "Title",
-        description: "Short description",
       },
       policy: {
         heading: "SQL access",
