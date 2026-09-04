@@ -496,13 +496,27 @@ func TestAJournalFailureIsNotSwallowedByAClosedCatalogue(t *testing.T) {
 // write the façade's caller makes before ever reaching it — this one is
 // enforced first, costs nothing but a comparison, and stops before even the
 // participant is looked up.
-func TestAQueryOverTheLengthBoundIsRefusedBeforeAnythingIsRead(t *testing.T) {
+// An oversized query is still refused for its length, but it now costs the
+// same rate-limit accounting an ordinary query does — the participant and the
+// contest are still looked up, because that is what the rate check is keyed
+// and bounded by, and only then is the length compared. What it must never
+// reach is anything downstream of the rate check: a database is not
+// provisioned and the Query Runner is not called for a query this cheap a
+// comparison already refuses.
+//
+// This used to refuse before the participant was ever looked up, which meant
+// an oversized query never called the rate check at all — refused for free,
+// as many times a minute as the network allowed, against no budget
+// (CLAUDE.md rule 13 — a refused query still counts against the rate).
+func TestAQueryOverTheLengthBoundIsRefusedAfterTheRateCheckAndBeforeAnythingElse(t *testing.T) {
 	calls := 0
+	db := &databases{database: "x"}
+	run := &runner{result: &queryrunner.Result{}}
 	service := queryproxy.New(
 		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}, calls: &calls},
 		contestStore{contest: contests.Contest{Status: contests.StatusRunning}},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
-		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+		db, run,
 	)
 
 	cmd := command()
@@ -517,8 +531,43 @@ func TestAQueryOverTheLengthBoundIsRefusedBeforeAnythingIsRead(t *testing.T) {
 	if refusal.Code != sqlpolicy.CodeTooLong {
 		t.Fatalf("code = %q, want %q", refusal.Code, sqlpolicy.CodeTooLong)
 	}
-	if calls != 0 {
-		t.Fatalf("the participant was looked up before the length was checked (%d calls)", calls)
+	if calls != 1 {
+		t.Fatalf("the participant was looked up %d times, want 1 — the rate check needs it", calls)
+	}
+	if db.asked != nil {
+		t.Fatalf("a database was provisioned for a query that was refused for its length")
+	}
+	if run.calls != 0 {
+		t.Fatalf("the runner was reached %d times for a query that was refused for its length", run.calls)
+	}
+}
+
+// An oversized query still costs its share of the rate budget: it is not a
+// free way to make a participant's real queries meet the limit sooner, but it
+// is not a way to dodge the limit either.
+func TestAQueryOverTheLengthBoundStillCountsAgainstTheRate(t *testing.T) {
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning,
+		Settings: contests.Settings{QueryRateLimitPerMin: 1},
+	}
+	registration := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}
+	service := queryproxy.New(
+		people{participant: registration},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{ID: contest.ID, Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	)
+
+	oversized := command()
+	oversized.SQL = "SELECT " + strings.Repeat("a", sqlpolicy.MaxQueryBytes+1)
+
+	var refusal *sqlpolicy.Refusal
+	if _, err := service.Run(t.Context(), oversized); !errors.As(err, &refusal) || refusal.Code != sqlpolicy.CodeTooLong {
+		t.Fatalf("the oversized query: error = %v, want CodeTooLong", err)
+	}
+
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("a legitimate query right after: error = %v, want ErrTooManyQueries", err)
 	}
 }
 
@@ -620,5 +669,88 @@ func TestWithPerMinuteDefaultOverridesTheFallback(t *testing.T) {
 	}
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryrunner.ErrTooManyQueries) {
 		t.Fatalf("error = %v, want ErrTooManyQueries", err)
+	}
+}
+
+// An organiser could previously raise a contest's own rate above the
+// installation's, and the number meant nothing: this façade's pre-check
+// admitted every one of them, each paying the journal write, right up until
+// the Query Runner's own limiter — enforcing the installation's true figure —
+// refused the rest anyway. Measured with the installation at 3 and the
+// contest set to 5: only 3 may pass, not 5.
+func TestAContestCannotSetALooserRateThanTheInstallation(t *testing.T) {
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning,
+		Settings: contests.Settings{QueryRateLimitPerMin: 5},
+	}
+	service := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{ID: contest.ID, Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	).WithPerMinuteDefault(3)
+
+	admitted := 0
+	var last error
+	for range 5 {
+		if _, err := service.Run(t.Context(), command()); err != nil {
+			last = err
+			break
+		}
+		admitted++
+	}
+	if admitted != 3 {
+		t.Fatalf("admitted %d queries before a refusal, want 3 (the installation's own figure)", admitted)
+	}
+	if !errors.Is(last, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("the refusal was %v, want ErrTooManyQueries", last)
+	}
+}
+
+// The reverse direction already worked and must keep working: a contest
+// tightening its own rate below the installation's is exactly what the
+// setting is for.
+func TestAContestMaySetAStricterRateThanTheInstallation(t *testing.T) {
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning,
+		Settings: contests.Settings{QueryRateLimitPerMin: 2},
+	}
+	service := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{ID: contest.ID, Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	).WithPerMinuteDefault(30)
+
+	for i := range 2 {
+		if _, err := service.Run(t.Context(), command()); err != nil {
+			t.Fatalf("query %d of the contest's own allowance: %v", i+1, err)
+		}
+	}
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("error = %v, want ErrTooManyQueries", err)
+	}
+}
+
+// An installation with no limit of its own (WithPerMinuteDefault(0), the same
+// "no limit" convention config.Runner.PerMinute uses) has no ceiling for a
+// contest's own setting to be clamped against — the contest's own number is
+// what governs, however high it is.
+func TestAContestsRateIsNotClampedWhenTheInstallationHasNoLimit(t *testing.T) {
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning,
+		Settings: contests.Settings{QueryRateLimitPerMin: 50},
+	}
+	service := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{ID: contest.ID, Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	).WithPerMinuteDefault(0)
+
+	for i := range 50 {
+		if _, err := service.Run(t.Context(), command()); err != nil {
+			t.Fatalf("query %d of 50, within the contest's own allowance: %v", i+1, err)
+		}
 	}
 }

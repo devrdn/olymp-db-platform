@@ -96,11 +96,19 @@ type Config struct {
 	MaxLoginAttemptsPerAddress int
 	// QueryPerMinute is how often a participant with no contest-specific rate
 	// may ask, for the console's own pre-check ahead of the query journal.
-	// Zero means "not stated", and queryproxy supplies its own default — the
-	// number is a rule about the SQL console's load, so it belongs to that
-	// package rather than here (see MaxLoginAttemptsPerAddress above for the
-	// same reasoning). It exists at all so this figure can be kept equal to
-	// the Query Runner's own QUERY_PER_MINUTE, which this process never reads.
+	// The number is a rule about the SQL console's load, so it belongs to
+	// that package rather than here (see MaxLoginAttemptsPerAddress above for
+	// the same reasoning). It exists at all so this figure can be kept equal
+	// to the Query Runner's own QUERY_PER_MINUTE (internal/platform/config's
+	// Runner.PerMinute), which this process never reads — and "equal" now
+	// includes what zero means: leaving the variable unset defaults both
+	// processes to the architecture's own 30, and setting it to 0 explicitly
+	// means no limit on both sides, rather than "no limit" on one and
+	// "unstated, use 30" on the other. A pre-check that believed a looser
+	// number than the Query Runner would actually enforce used to let a
+	// contest's own rate exceed the installation's without the journal write
+	// it costs ever refusing anything (queryproxy.effectiveRateLimit is where
+	// the two are reconciled).
 	QueryPerMinute int
 }
 
@@ -139,7 +147,10 @@ func Load() (Config, error) {
 	if cfg.MaxLoginAttemptsPerAddress, err = intEnv("MAX_LOGIN_ATTEMPTS_PER_ADDRESS", 0); err != nil {
 		return Config{}, err
 	}
-	if cfg.QueryPerMinute, err = intEnv("QUERY_PER_MINUTE", 0); err != nil {
+	// 30 unset, matching the Query Runner's own default for the same
+	// variable (LoadRunner's QUERY_PER_MINUTE) — see the field's doc comment
+	// for why the two must agree, including what zero means once it is set.
+	if cfg.QueryPerMinute, err = intEnv("QUERY_PER_MINUTE", 30); err != nil {
 		return Config{}, err
 	}
 

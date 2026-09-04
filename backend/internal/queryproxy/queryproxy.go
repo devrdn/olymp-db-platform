@@ -124,9 +124,12 @@ type Service struct {
 	// instance, but they share the one implementation (queryrunner.RateLimiter).
 	rate *queryrunner.RateLimiter
 	// perMinuteDefault is the rate a contest gets when its organiser left
-	// query_rate_limit_per_min at zero. New supplies the architecture's own
+	// query_rate_limit_per_min at zero, and — since effectiveRateLimit treats
+	// it as the installation's own ceiling — the most any contest's own
+	// setting is allowed to ask for. New supplies the architecture's own
 	// figure (section 5); WithPerMinuteDefault lets the deployment's actual
-	// configuration override it.
+	// configuration override it. Zero means the installation itself has no
+	// limit, the same convention config.Runner.PerMinute uses.
 	perMinuteDefault int
 }
 
@@ -140,35 +143,63 @@ func New(people People, contests Contests, games Games, databases Databases, run
 }
 
 // WithPerMinuteDefault sets the rate a contest falls back to when its
-// organiser left query_rate_limit_per_min at zero, so this façade's own
-// pre-check matches whatever QUERY_PER_MINUTE the Query Runner was actually
-// deployed with rather than the architecture's own figure. Zero or negative
-// leaves the default untouched.
+// organiser left query_rate_limit_per_min at zero, and the ceiling
+// effectiveRateLimit will not let any contest's own setting exceed — so this
+// façade's own pre-check matches whatever QUERY_PER_MINUTE the Query Runner
+// was actually deployed with rather than the architecture's own figure.
+// Zero means the deployment's installation has no limit at all, the same
+// meaning config.Runner.PerMinute gives the same variable; negative is
+// refused rather than silently ignored, since Config.Load never produces one
+// and a caller passing one is a bug this should not hide.
 func (s *Service) WithPerMinuteDefault(perMinute int) *Service {
-	if perMinute > 0 {
+	if perMinute >= 0 {
 		s.perMinuteDefault = perMinute
 	}
 	return s
 }
 
+// effectiveRateLimit resolves a contest's own rate against the installation's,
+// so that the number an organiser sets describes what will actually happen.
+//
+// Zero means "no limit" on both sides, by the same convention
+// perMinuteDefault documents: a contest left at zero defers to the
+// installation, and an installation left at zero has no ceiling for anything
+// to defer to, so a contest's explicit number is never clamped against it. An
+// installation that does state one is a genuine ceiling — an organiser could
+// previously ask for more than the Query Runner would ever honour, and every
+// query above the installation's own rate still paid this façade's journal
+// write before the Runner refused it for the same reason a second time
+// (the finding this closes). Below the ceiling, or with no ceiling to be
+// below, the contest's own number is what is enforced — a stricter contest
+// setting than the installation's already worked correctly and stays
+// unchanged.
+func effectiveRateLimit(contestLimit, installationLimit int) int {
+	if contestLimit <= 0 {
+		return installationLimit
+	}
+	if installationLimit > 0 && contestLimit > installationLimit {
+		return installationLimit
+	}
+	return contestLimit
+}
+
 // Run answers one query, or says why it will not.
 //
-// The order is cheapest first and most-revealing last. The query's own length
-// is checked before anything is read or written, because that costs nothing
-// but a comparison and refusing it late costs a row in query_log — the true
-// bound lives in the checker (sqlpolicy.MaxQueryBytes), well downstream of
-// the journal write this façade's caller makes before ever reaching it. Who
-// is asking is a single row; whether the contest is running is another; the
-// rate check comes next and for the same reason as the length check — still
-// ahead of the journal write — and only then is a database provisioned,
-// which may create one, and only then does anything reach the Query Runner.
-// A query from somebody who is not a participant must not cost a CREATE
-// DATABASE.
+// The order is cheapest first and most-revealing last, with one deliberate
+// exception. Who is asking is a single row; whether the contest is running
+// and holds this address is decided from another; the rate check comes next,
+// keyed by the registration those two rows named — and only then is the
+// query's own length checked, even though it costs nothing but a comparison
+// and could be tested first. Checking it first used to mean an oversized
+// query never called the rate check at all: refused for free, over and over,
+// against no budget (CLAUDE.md rule 13 — a refused query still counts against
+// the rate, because refusing it still cost something). The two lookups above
+// are the same ones an ordinary query pays regardless, so an oversized one
+// now costs exactly what a legitimate one does, plus the one comparison that
+// refuses it — instead of nothing. Only then is a database provisioned, which
+// may create one, and only then does anything reach the Query Runner. A query
+// from somebody who is not a participant must not cost a CREATE DATABASE.
 func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, error) {
-	if len(cmd.SQL) > sqlpolicy.MaxQueryBytes {
-		return nil, &sqlpolicy.Refusal{Code: sqlpolicy.CodeTooLong, Subject: fmt.Sprintf("%d bytes", len(cmd.SQL))}
-	}
-
 	participant, err := s.people.ByUser(ctx, cmd.ContestID, cmd.UserID)
 	switch {
 	case errors.Is(err, contests.ErrParticipantNotFound):
@@ -195,13 +226,16 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 	// The same registration a refusal is journalled against, so a participant
 	// asking too fast meets the same limit here as at the Query Runner — and
 	// meets it before a row is written rather than after, which is the only
-	// difference between the two checks.
-	limit := contest.Settings.QueryRateLimitPerMin
-	if limit == 0 {
-		limit = s.perMinuteDefault
-	}
+	// difference between the two checks. effectiveRateLimit is what keeps this
+	// number honest against the installation's own: see its doc for why a
+	// contest cannot ask for more than the Query Runner would actually honour.
+	limit := effectiveRateLimit(contest.Settings.QueryRateLimitPerMin, s.perMinuteDefault)
 	if err = s.rate.Admit(participant.ID.String(), limit); err != nil {
 		return nil, err
+	}
+
+	if len(cmd.SQL) > sqlpolicy.MaxQueryBytes {
+		return nil, &sqlpolicy.Refusal{Code: sqlpolicy.CodeTooLong, Subject: fmt.Sprintf("%d bytes", len(cmd.SQL))}
 	}
 
 	game, err := s.games.Game(ctx, cmd.ContestID)
