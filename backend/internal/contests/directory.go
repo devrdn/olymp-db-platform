@@ -25,13 +25,24 @@ const MaxDirectoryQueryLength = 100
 // return a page of unrelated accounts to the very first keystroke a picker
 // sent.
 //
-// This is a courtesy for the ordinary case, not a defence against
+// The number is 3, not a rounder-feeling 2, because 3 is what
+// migration 000016's trigram indexes actually need: pg_trgm pads a value with
+// two leading spaces and one trailing one before cutting it into
+// three-character trigrams, so a two-character pattern produces none, and
+// PostgreSQL cannot use a trigram index to serve a predicate it extracted no
+// trigram from — it falls back to a sequential scan of the whole users table,
+// on an endpoint every contest's staff reaches, on every debounced keystroke.
+// TestSearchPredicateUsesTheTrigramIndexes (internal/postgres/users_test.go)
+// proves this at exactly this length; lowering the constant for a friendlier
+// feel silently brings the sequential scan back.
+//
+// This is also a courtesy for the ordinary case, not a defence against
 // enumeration, and it must not be described as one — see SearchPeople's own
-// comment for what actually bounds who can run this search at all. Two
-// characters still leaves hundreds of combinations for a determined
+// comment for what actually bounds who can run this search at all. Three
+// characters still leaves thousands of combinations for a determined
 // permission holder to walk through; it only stops the search from
 // answering a single keystroke with a page of strangers.
-const MinDirectoryQueryLength = 2
+const MinDirectoryQueryLength = 3
 
 // DirectorySearchDefaultLimit and DirectorySearchMaxLimit bound how many
 // candidates a picker gets back for one search. A typeahead needs enough

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -411,6 +412,39 @@ func TestAddressThrottleIsSpentBeforeAccountCountersAreCreated(t *testing.T) {
 	// the address was allowed. The eight refused attempts left nothing behind.
 	if got := c.Len(); got != 3 {
 		t.Errorf("the cache holds %d counters, want 3: refused attempts created account keys", got)
+	}
+}
+
+func TestAnOverlongLoginNeverBecomesARateLimitKey(t *testing.T) {
+	// accountSubject turns the login into a rate-limit cache key verbatim. No
+	// real account's login can exceed users.MaxLoginLength, so a longer one
+	// must be refused before it can mint a counter of its own size — an
+	// unauthenticated caller could otherwise fill the in-process cache with
+	// megabyte-sized keys, one request at a time. The address counter above
+	// it in checkThrottle still gets spent, which is what c.Len() == 1 (and
+	// not 0) below proves.
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+
+	service := NewService(ServiceConfig{
+		Users:    userstest.New(),
+		Sessions: NewSessionStore(c, time.Hour),
+		Audit:    audit.New(&collectingSink{}),
+		Limiter:  NewLimiter(c),
+		Logger:   logging.New("error", io.Discard),
+	})
+
+	overlong := strings.Repeat("a", users.MaxLoginLength+1)
+	_, err := service.Login(context.Background(), LoginCommand{
+		Login: overlong, Password: "whatever", IP: "10.0.0.9",
+	})
+
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("Login() with an overlong login = %v, want ErrInvalidCredentials", err)
+	}
+	if got := c.Len(); got != 1 {
+		t.Errorf("the cache holds %d counters, want 1 (the address only) — "+
+			"the overlong login minted a counter of its own", got)
 	}
 }
 

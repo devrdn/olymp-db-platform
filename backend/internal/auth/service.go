@@ -247,6 +247,19 @@ func (s *Service) checkThrottle(ctx context.Context, cmd LoginCommand) error {
 		}
 	}
 
+	// accountSubject turns the login into a rate-limit cache key verbatim, and
+	// nothing before this point has bounded it: the request body is capped at
+	// a megabyte, not the login field inside it. No real account's login can
+	// exceed users.MaxLoginLength, so a longer one is refused here, before it
+	// can mint a key of its own size — the same guard CLAUDE.md's rule 5 asks
+	// for, one step earlier. The answer is the ordinary "wrong login" one,
+	// deliberately: this must not become a way to tell an existing login from
+	// one that could never exist, and the address check above still applies,
+	// so this is not a way around the per-address throttle either.
+	if len(cmd.Login) > users.MaxLoginLength {
+		return ErrInvalidCredentials
+	}
+
 	allowed, err := s.limiter.Allow(ctx, accountSubject(cmd.Login), maxLoginAttemptsPerAccount, loginAttemptWindow)
 	if err != nil {
 		return err

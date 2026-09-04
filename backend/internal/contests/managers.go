@@ -8,6 +8,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
+	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 )
 
@@ -80,6 +81,16 @@ func (s *Service) GrantManager(ctx context.Context, actorID, contestID, userID u
 	user, err := s.users.ByID(ctx, userID)
 	if err != nil {
 		return err
+	}
+	// users.Repository.ByID returns a deleted account rather than
+	// ErrNotFound — the row stays so the audit trail keeps its subject — and
+	// a deleted account can never sign in, so appointing one would staff the
+	// contest with somebody who can never act on it. This is a single
+	// account, not a roster, so the outcome is one refusal rather than a
+	// skip: reusing users.ErrAccountDeleted, which single-account operations
+	// on a deleted account already answer with, needs no new code or wording.
+	if user.Status == users.StatusDeleted {
+		return users.ErrAccountDeleted
 	}
 	// Overwriting the owner's own row would demote them by another route.
 	if existing, err := s.managers.Get(ctx, contestID, userID); err == nil && existing.Role == rbac.RoleOwner {

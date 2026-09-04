@@ -752,6 +752,8 @@ func (h *ContestsHandler) fail(w http.ResponseWriter, r *http.Request, err error
 		httpx.Error(w, r, http.StatusNotFound, codeManagerNotFound, "This user does not staff the contest")
 	case errors.Is(err, users.ErrNotFound):
 		httpx.Error(w, r, http.StatusNotFound, codeUserNotFound, "User not found")
+	case errors.Is(err, users.ErrAccountDeleted):
+		httpx.Error(w, r, http.StatusConflict, codeAccountDeleted, "This account is deleted")
 
 	case errors.Is(err, contests.ErrNotPublishable):
 		// The gate answers with a code and the whole list of what is missing.

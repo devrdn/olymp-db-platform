@@ -85,6 +85,28 @@ func TestOwnershipIsNotHandedOverThroughTheStaffList(t *testing.T) {
 	}
 }
 
+func TestAppointingADeletedAccountIsRefusedWithAConflict(t *testing.T) {
+	// A deleted account can never sign in; appointing it would staff the
+	// contest with somebody who can never act on it. contests.Service.GrantManager
+	// refuses it with users.ErrAccountDeleted, which the handler's fail switch
+	// must map to a declared code rather than an internal error.
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+	deleted := f.stores.Users.Add(users.User{
+		Login: "gone", FullName: "gone", Status: users.StatusDeleted,
+	})
+
+	rec := f.do(http.MethodPut,
+		"/contests/"+c.ID.String()+"/managers/"+deleted.ID.String(), `{"role": "manager"}`)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "account_deleted" {
+		t.Errorf("error code = %q, want account_deleted", code)
+	}
+}
+
 func TestImportingARosterReportsWhatItCouldNotUse(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusPublished)

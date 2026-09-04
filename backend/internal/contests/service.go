@@ -29,6 +29,10 @@ type UserDirectory interface {
 	// email — the picker behind Service.SearchPeople. limit is already
 	// bounded by the caller (see MaxDirectoryQueryLength and
 	// DirectorySearchMaxLimit in directory.go); this method trusts it.
+	// SearchPeople reads only ID, Login and FullName off the result — the
+	// real implementation (internal/postgres/users.go) populates exactly
+	// those and leaves everything else zero rather than running userColumns'
+	// role and permission subqueries for a picker that throws them away.
 	Search(ctx context.Context, query string, limit int) ([]users.User, error)
 }
 

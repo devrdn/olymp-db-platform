@@ -283,12 +283,25 @@ func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsComman
 // addOne registers one resolved account, recording why it was skipped when it
 // was.
 //
+// A deleted account is skipped under the same reason as one that was never
+// found: users.Repository.ByLogin deliberately still returns a deleted row
+// when nothing live has reclaimed its login, so a roster entry for a former
+// student would otherwise resolve to an account that can never sign in and
+// be reported as added. From the roster's point of view the login does not
+// resolve to a usable account either way, so it reads the same to whoever
+// pasted it in, and needs no reason of its own in three locales.
+//
 // Whether the person is already taking part is decided by the write, not by a
 // lookup first: the guarantee is a unique index, and two organizers importing
 // overlapping rosters at the same moment would both pass a lookup. Treating
 // that verdict as an ordinary skip is what keeps one such row from failing the
 // other three hundred.
 func (s *Service) addOne(ctx context.Context, cmd AddParticipantsCommand, c Contest, user users.User, result *AddParticipantsResult) error {
+	if user.Status == users.StatusDeleted {
+		result.skip(user.Login, SkipUnknownAccount)
+		return nil
+	}
+
 	if _, err := s.registrations.Add(ctx, c.ID, user.ID); err != nil {
 		if errors.Is(err, ErrAlreadyEnrolled) {
 			result.skip(user.Login, SkipAlreadyEnrolled)

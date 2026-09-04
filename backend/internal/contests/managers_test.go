@@ -48,6 +48,22 @@ func TestAppointingAnAccountThatDoesNotExistIsRefused(t *testing.T) {
 	}
 }
 
+func TestAppointingADeletedAccountIsRefused(t *testing.T) {
+	// users.Repository.ByID returns a deleted account rather than
+	// ErrNotFound — the row stays so the audit trail keeps its subject — and
+	// a deleted account can never sign in, so appointing it would staff the
+	// contest with somebody who can never act on it.
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	deleted := f.Users.Add(users.User{Login: "gone", FullName: "gone", Status: users.StatusDeleted})
+
+	err := f.Service.GrantManager(context.Background(), uuid.New(), c.ID, deleted.ID, rbac.RoleManager)
+
+	if !errors.Is(err, users.ErrAccountDeleted) {
+		t.Errorf("GrantManager() = %v, want users.ErrAccountDeleted", err)
+	}
+}
+
 func TestOwnershipCannotBeHandedOverThroughTheStaffList(t *testing.T) {
 	// Two owners make "who may appoint staff" ambiguous, and the staff list is
 	// not where a transfer of ownership should quietly happen.

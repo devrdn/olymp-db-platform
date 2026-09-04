@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { ApiError, request } from "@/lib/api/client";
+import { MIN_DIRECTORY_QUERY_LENGTH } from "@/lib/api/people-terms";
 import { debounce, type Debounced } from "@/lib/format/debounce";
 
 /**
@@ -110,7 +111,12 @@ export function PersonPicker({
   useEffect(() => {
     const debounced = debounce((query: string) => {
       const trimmed = query.trim();
-      if (trimmed === "") {
+      // Mirrors the server's own floor (MIN_DIRECTORY_QUERY_LENGTH, from
+      // contests.MinDirectoryQueryLength): below it the directory endpoint
+      // always answers with an empty list, so asking is a round trip spent on
+      // an answer already known. An empty box is covered by the same check —
+      // it is shorter than the minimum too.
+      if (trimmed.length < MIN_DIRECTORY_QUERY_LENGTH) {
         generation.current += 1;
         setOptions([]);
         setLoading(false);
@@ -181,10 +187,13 @@ export function PersonPicker({
           if (next) runSearchRef.current?.cancel();
         }}
         placeholder={placeholder}
-        // Blank while nothing has been typed yet or a search is still in
-        // flight: "no matches" is only true once an answer has actually come
-        // back for what is currently in the box.
-        emptyMessage={loading || inputValue.trim() === "" ? "" : noResultsText}
+        // Blank below the minimum a search actually runs at, or while one is
+        // in flight: "no matches" is only true once an answer has actually
+        // come back for what is currently in the box, and nothing shorter
+        // than MIN_DIRECTORY_QUERY_LENGTH ever asked.
+        emptyMessage={
+          loading || inputValue.trim().length < MIN_DIRECTORY_QUERY_LENGTH ? "" : noResultsText
+        }
         statusMessage={status}
         disabled={disabled}
         describedBy={`${id}-help`}

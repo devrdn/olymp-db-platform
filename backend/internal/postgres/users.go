@@ -285,12 +285,23 @@ func (r *Users) List(ctx context.Context, f users.Filter) ([]users.User, int, er
 // count. Routing through List would spend a second sequential pass over the
 // table computing an answer this method would then throw away, on every
 // debounced keystroke a picker sends.
+//
+// It does not select userColumns either, and for the same reason: that
+// projection carries two correlated ARRAY(...) subqueries for roles and
+// permissions and a join for the status-changer's login, none of which
+// contests.Service.SearchPeople reads — it turns every row into a Person of
+// just a login and a full name. Running those subqueries for up to
+// DirectorySearchMaxLimit rows on every keystroke a picker sends would be
+// work spent computing an answer nobody asked for, on a search every
+// contest's staff can reach. The returned users.User carries only ID, Login
+// and FullName; every other field is its zero value, which is fine for the
+// one caller this method has.
 func (r *Users) Search(ctx context.Context, query string, limit int) ([]users.User, error) {
 	f := users.Filter{Query: query, Limit: limit}.Normalize()
 	needle := escapeLike(f.Query)
 
 	rows, err := r.querier(ctx).Query(ctx,
-		`SELECT `+userColumns+` FROM users u `+userJoin+usersSearchWhere+` ORDER BY u.login LIMIT $3`,
+		`SELECT u.id, u.login, u.full_name FROM users u`+usersSearchWhere+` ORDER BY u.login LIMIT $3`,
 		needle, f.Status, f.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("search users: %w", err)
@@ -299,9 +310,9 @@ func (r *Users) Search(ctx context.Context, query string, limit int) ([]users.Us
 
 	var found []users.User
 	for rows.Next() {
-		u, err := scanUser(rows)
-		if err != nil {
-			return nil, err
+		var u users.User
+		if err := rows.Scan(&u.ID, &u.Login, &u.FullName); err != nil {
+			return nil, fmt.Errorf("scan search result: %w", err)
 		}
 		found = append(found, u)
 	}

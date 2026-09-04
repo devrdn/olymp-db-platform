@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
@@ -767,45 +770,106 @@ func TestSearchEscapesAPercentSoItDoesNotMatchEveryRow(t *testing.T) {
 // single disjunct in the OR is not indexable (COALESCE(u.email, "") ILIKE
 // ..., the shape this predicate had before the fix), a Seq Scan is the
 // *only* plan PostgreSQL can produce, penalty or not.
+//
+// Run at two lengths, not one: a long word ("ivanov") proves the predicate is
+// indexable at all, but says nothing about whether
+// contests.MinDirectoryQueryLength is actually short enough to matter — a
+// pattern that is not itself padded (unlike the values pg_trgm indexes,
+// '%needle%' has no fixed start or end to pad against) extracts a complete
+// trigram only from three characters or more. Below that, GIN does not
+// refuse the plan: it answers "no keys extracted" by scanning every entry in
+// its own index rather than falling back to a literal Seq Scan, so the two
+// checks above — no Seq Scan, and the trigram indexes are named in the plan —
+// pass at two characters exactly as they do at six, and would not have caught
+// MinDirectoryQueryLength being set to 2. What does is the cost: scanning
+// every entry costs orders of magnitude more than a genuinely restrictive
+// lookup, so the ratio between the minimum-length query's cost and the long
+// word's is what actually proves the index narrows the search rather than
+// merely being named in the plan.
 func TestSearchPredicateUsesTheTrigramIndexes(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		q := NewUsers(testPool).querier(ctx)
+	queries := []string{"ivanov", strings.Repeat("z", contests.MinDirectoryQueryLength)}
+	costs := make([]float64, len(queries))
 
-		if _, err := q.Exec(ctx, "SET LOCAL enable_seqscan = off"); err != nil {
-			t.Fatalf("disable seq scan: %v", err)
-		}
+	for i, query := range queries {
+		t.Run(fmt.Sprintf("query length %d", len(query)), func(t *testing.T) {
+			withTx(t, func(ctx context.Context) {
+				q := NewUsers(testPool).querier(ctx)
 
-		rows, err := q.Query(ctx,
-			`EXPLAIN SELECT u.id FROM users u WHERE `+usersSearchMatch, "ivanov")
-		if err != nil {
-			t.Fatalf("EXPLAIN search predicate: %v", err)
-		}
-		defer rows.Close()
+				if _, err := q.Exec(ctx, "SET LOCAL enable_seqscan = off"); err != nil {
+					t.Fatalf("disable seq scan: %v", err)
+				}
 
-		var plan strings.Builder
-		for rows.Next() {
-			var line string
-			if err := rows.Scan(&line); err != nil {
-				t.Fatalf("scan plan line: %v", err)
-			}
-			plan.WriteString(line)
-			plan.WriteString("\n")
-		}
-		if err := rows.Err(); err != nil {
-			t.Fatalf("read plan: %v", err)
-		}
+				rows, err := q.Query(ctx,
+					`EXPLAIN SELECT u.id FROM users u WHERE `+usersSearchMatch, query)
+				if err != nil {
+					t.Fatalf("EXPLAIN search predicate: %v", err)
+				}
+				defer rows.Close()
 
-		got := plan.String()
-		if strings.Contains(got, "Seq Scan") {
-			t.Fatalf("search predicate forced a sequential scan even with sequential scans disabled — "+
-				"a disjunct in usersSearchMatch is not indexable:\n%s", got)
-		}
-		for _, idx := range []string{"users_login_trgm_idx", "users_full_name_trgm_idx", "users_email_trgm_idx"} {
-			if !strings.Contains(got, idx) {
-				t.Errorf("plan does not use %s — the OR could not be split into index scans:\n%s", idx, got)
-			}
-		}
-	})
+				var plan strings.Builder
+				for rows.Next() {
+					var line string
+					if err := rows.Scan(&line); err != nil {
+						t.Fatalf("scan plan line: %v", err)
+					}
+					plan.WriteString(line)
+					plan.WriteString("\n")
+				}
+				if err := rows.Err(); err != nil {
+					t.Fatalf("read plan: %v", err)
+				}
+
+				got := plan.String()
+				if strings.Contains(got, "Seq Scan") {
+					t.Fatalf("search predicate for query length %d forced a sequential scan even with "+
+						"sequential scans disabled — a disjunct in usersSearchMatch is not indexable at "+
+						"this length:\n%s", len(query), got)
+				}
+				for _, idx := range []string{"users_login_trgm_idx", "users_full_name_trgm_idx", "users_email_trgm_idx"} {
+					if !strings.Contains(got, idx) {
+						t.Errorf("plan for query length %d does not use %s — the OR could not be split "+
+							"into index scans:\n%s", len(query), idx, got)
+					}
+				}
+				costs[i] = topPlanCost(t, got)
+			})
+		})
+	}
+
+	// costRatioCeiling is comfortably above what two genuinely indexed
+	// lookups differ by (the same predicate shape, just different literal
+	// text) and comfortably below the ~300x this repository's development
+	// data showed between a real trigram lookup and GIN's every-entry
+	// fallback for a pattern with no complete trigram — see this test's own
+	// EXPLAIN output for both, captured in the commit that added this check.
+	const costRatioCeiling = 20
+	if ratio := costs[1] / costs[0]; ratio > costRatioCeiling {
+		t.Errorf("the plan at the minimum query length (%q) costs %.0fx the plan for a longer word "+
+			"(%.0f vs %.0f) — MinDirectoryQueryLength is short enough that pg_trgm extracts no complete "+
+			"trigram and GIN falls back to scanning every entry in the index instead of narrowing the "+
+			"search", queries[1], ratio, costs[1], costs[0])
+	}
+}
+
+// explainCostPattern reads the total estimated cost off an EXPLAIN plan's
+// first line, of the form "... (cost=0.00..97.80 rows=1 width=16)".
+var explainCostPattern = regexp.MustCompile(`cost=[0-9.]+\.\.([0-9.]+)`)
+
+// topPlanCost extracts the top plan node's total cost, the number
+// TestSearchPredicateUsesTheTrigramIndexes compares between query lengths to
+// tell a genuinely restrictive index lookup from GIN's full-index fallback —
+// both mention the same index names in the plan, so the names alone cannot.
+func topPlanCost(t *testing.T, plan string) float64 {
+	t.Helper()
+	m := explainCostPattern.FindStringSubmatch(plan)
+	if m == nil {
+		t.Fatalf("could not find a cost in the plan:\n%s", plan)
+	}
+	cost, err := strconv.ParseFloat(m[1], 64)
+	if err != nil {
+		t.Fatalf("parse plan cost %q: %v", m[1], err)
+	}
+	return cost
 }
 
 // queryCounter is a pgx.QueryTracer that only counts: how many statements a
