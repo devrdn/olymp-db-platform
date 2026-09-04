@@ -191,6 +191,37 @@ describe("PersonPicker, choosing a result", () => {
   });
 });
 
+describe("PersonPicker, showing the email", () => {
+  // The owner asked for the email in the picker so two same-named accounts
+  // can be told apart (backend/internal/api/contest_people_handler.go's
+  // PersonResponse now carries it). Both halves of that change get their own
+  // test: an account with one shows it, and an account without one does not
+  // render a stray separator pointing at nothing.
+  test("an account with an email shows it next to the login", async () => {
+    const withEmail = { ...candidate, email: "sergei@example.edu" };
+    request.mockResolvedValue({ items: [withEmail] });
+    const user = userEvent.setup();
+    renderInForm();
+
+    await user.type(screen.getByRole("combobox"), "ivanov");
+
+    expect(await screen.findByText("s.ivanov · sergei@example.edu")).toBeInTheDocument();
+  });
+
+  test("an account with no email shows only the login, with no trailing separator", async () => {
+    // `candidate` carries no `email` key at all — exactly what PersonResponse
+    // sends for an account that never set one (its `omitempty` tag).
+    request.mockResolvedValue({ items: [candidate] });
+    const user = userEvent.setup();
+    renderInForm();
+
+    await user.type(screen.getByRole("combobox"), "ivanov");
+
+    const description = await screen.findByText("s.ivanov");
+    expect(description.textContent).toBe("s.ivanov");
+  });
+});
+
 describe("PersonPicker, what it announces", () => {
   test("the field's accessible name is the label the caller gave it", () => {
     renderInForm();
