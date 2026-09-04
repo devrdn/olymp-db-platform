@@ -175,6 +175,24 @@ func TestLoginRejectsWrongCredentialsWith401(t *testing.T) {
 	}
 }
 
+func TestLoginRejectsAnOverlongLoginTheSameWayAsAWrongOne(t *testing.T) {
+	// A login longer than any real account can have (users.MaxLoginLength)
+	// must be answered exactly like an ordinary wrong login — not a code of
+	// its own, which would let a caller use the length bound to tell an
+	// existing login from an impossible one.
+	f := newHandlerFixture(t)
+	overlong := strings.Repeat("a", users.MaxLoginLength+1)
+
+	rec := f.post("/auth/login", `{"login":"`+overlong+`","password":"whatever"}`)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "invalid_credentials" {
+		t.Errorf("error code = %q, want invalid_credentials", code)
+	}
+}
+
 func TestLoginRejectsAMalformedBody(t *testing.T) {
 	f := newHandlerFixture(t)
 

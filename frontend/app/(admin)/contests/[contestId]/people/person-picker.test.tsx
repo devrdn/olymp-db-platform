@@ -95,6 +95,20 @@ describe("PersonPicker, debouncing", () => {
 
     expect(request).not.toHaveBeenCalled();
   });
+
+  test("a query shorter than the server's minimum asks nothing at all", async () => {
+    // MIN_DIRECTORY_QUERY_LENGTH mirrors contests.MinDirectoryQueryLength,
+    // which the directory endpoint always answers below with an empty list —
+    // a round trip the picker should not spend on an answer it already
+    // knows.
+    const user = userEvent.setup();
+    renderInForm();
+
+    await user.type(screen.getByRole("combobox"), "iv");
+    await new Promise((resolve) => setTimeout(resolve, 350));
+
+    expect(request).not.toHaveBeenCalled();
+  });
 });
 
 describe("PersonPicker, choosing a result", () => {

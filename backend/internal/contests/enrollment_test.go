@@ -11,6 +11,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
+	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 )
 
@@ -174,6 +175,56 @@ func TestImportReportsTheLoginsItCouldNotUse(t *testing.T) {
 	}
 	if reasons["s.popescu"] != contests.SkipAlreadyEnrolled {
 		t.Errorf("the repeated login skipped as %q, want %q", reasons["s.popescu"], contests.SkipAlreadyEnrolled)
+	}
+}
+
+func TestImportSkipsADeletedAccountsLogin(t *testing.T) {
+	// users.Repository.ByLogin deliberately still returns a deleted account
+	// when nothing live has reclaimed its login — a pasted roster naming a
+	// former student's login must not become a registration for an account
+	// that can never sign in, and it must be reported as skipped rather than
+	// silently added.
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+	f.Users.Add(users.User{Login: "s.removed", FullName: "s.removed", Status: users.StatusDeleted})
+
+	result, err := f.Service.AddParticipants(context.Background(), contests.AddParticipantsCommand{
+		ActorID:   uuid.New(),
+		ContestID: c.ID,
+		Logins:    []string{"s.removed"},
+	})
+	if err != nil {
+		t.Fatalf("AddParticipants() = %v", err)
+	}
+	if result.Added != 0 {
+		t.Errorf("added = %d, want 0", result.Added)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0].Reason != contests.SkipUnknownAccount {
+		t.Fatalf("skipped = %+v, want one entry reasoned %q", result.Skipped, contests.SkipUnknownAccount)
+	}
+}
+
+func TestImportSkipsADeletedAccountsID(t *testing.T) {
+	// The same guard applies whether the roster names the person by login or
+	// by identifier: users.Repository.ByID returns a deleted account too, the
+	// row staying so the audit trail keeps its subject.
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+	deleted := f.Users.Add(users.User{Login: "s.removed2", FullName: "s.removed2", Status: users.StatusDeleted})
+
+	result, err := f.Service.AddParticipants(context.Background(), contests.AddParticipantsCommand{
+		ActorID:   uuid.New(),
+		ContestID: c.ID,
+		UserIDs:   []uuid.UUID{deleted.ID},
+	})
+	if err != nil {
+		t.Fatalf("AddParticipants() = %v", err)
+	}
+	if result.Added != 0 {
+		t.Errorf("added = %d, want 0", result.Added)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0].Reason != contests.SkipUnknownAccount {
+		t.Fatalf("skipped = %+v, want one entry reasoned %q", result.Skipped, contests.SkipUnknownAccount)
 	}
 }
 

@@ -12,3 +12,16 @@ import type { Participant } from "./people";
 export function removable(participant: Participant): boolean {
   return participant.status === "registered";
 }
+
+/**
+ * The least a directory search box needs before it is worth asking the
+ * server. Mirrors contests.MinDirectoryQueryLength
+ * (backend/internal/contests/directory.go), which is set to what
+ * migration 000016's trigram indexes actually need — below it PostgreSQL
+ * cannot use them and falls back to a sequential scan, so the server always
+ * answers a shorter query with nothing. One constant rather than a second
+ * copy of the number: a search box that asked at two characters while the
+ * server only answers from three would spend a round trip on every such
+ * keystroke for an answer it already knows is empty.
+ */
+export const MIN_DIRECTORY_QUERY_LENGTH = 3;

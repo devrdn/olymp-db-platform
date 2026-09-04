@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { cache } from "react";
 
 import { callerHeaders } from "@/lib/api/caller";
 import { API_PREFIX } from "@/lib/api/client";
@@ -73,8 +74,17 @@ export class IdentityUnavailableError extends Error {
  * are told to sign in again — which is the bug that kept being reported as
  * "it throws me to login on every click" and never reproduced, because
  * reproducing it needs the API to blink at the moment somebody navigates.
+ *
+ * Wrapped in React's `cache()` so the admin layout, the users layout and an
+ * account page — each of which calls this to render one request — share one
+ * round trip instead of asking `/auth/me` two or three times for the same
+ * answer. `cache()` is safe here specifically because its memoization is
+ * scoped to one request: React gives each request its own cache with nothing
+ * shared between them, so this cannot hand one visitor's identity to
+ * another's — unlike a module-level variable, which would, since a Node
+ * process serves many requests through the same module instance.
  */
-export async function fetchIdentity(): Promise<CurrentIdentity | null> {
+export const fetchIdentity = cache(async (): Promise<CurrentIdentity | null> => {
   const header = await sessionHeader();
   if (!header.cookie) return null;
 
@@ -84,7 +94,7 @@ export async function fetchIdentity(): Promise<CurrentIdentity | null> {
   }).catch(() => null);
 
   return identityFrom(response);
-}
+});
 
 /**
  * Reads one `/auth/me` response, separated from the fetch so the decision it
