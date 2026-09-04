@@ -394,7 +394,6 @@ const ro = {
     },
     facts: {
       heading: "Cum este configurată",
-      format: "Format",
       timing: "Timp",
       enrollment: "Înscriere",
       duration: "Fiecare participant are",

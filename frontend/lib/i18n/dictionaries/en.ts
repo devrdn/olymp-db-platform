@@ -407,7 +407,6 @@ const en = {
     },
     facts: {
       heading: "How it is set up",
-      format: "Format",
       timing: "Timing",
       enrollment: "Enrollment",
       duration: "Each participant has",

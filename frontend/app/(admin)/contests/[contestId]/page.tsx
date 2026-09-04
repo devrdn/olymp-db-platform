@@ -69,7 +69,10 @@ export default async function ContestOverviewPage(props: PageProps<"/contests/[c
             value, repeated. A grid of divs would say the same thing to a
             sighted reader and nothing at all to anyone else. */}
         <dl className="grid gap-x-10 gap-y-5 narrow:grid-cols-2">
-          <Fact term={t.facts.format} value={dict.contests.mode[contest.questionMode]} />
+          {/* The format is not repeated here: the header above already
+              carries it, on this exact page, as the mode badge beside the
+              status tag. A second copy in this list would be the same word
+              read twice without a step in between. */}
           <Fact term={t.facts.timing} value={t.timing[contest.timing]} />
           <Fact
             term={t.facts.enrollment}

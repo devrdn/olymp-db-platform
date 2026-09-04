@@ -394,7 +394,6 @@ const ru = {
     },
     facts: {
       heading: "Как настроена",
-      format: "Формат",
       timing: "Тайминг",
       enrollment: "Запись",
       duration: "У каждого участника",
