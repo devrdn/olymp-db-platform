@@ -229,6 +229,53 @@ func (h *ContestsHandler) addParticipants(w http.ResponseWriter, r *http.Request
 	httpx.JSON(w, r, http.StatusOK, importResponse{Added: result.Added, Skipped: skipped})
 }
 
+// PersonResponse is the least a picker needs to tell two accounts apart: a
+// name to show and a login to read, plus the identifier the grant and add
+// endpoints act on.
+//
+// Deliberately not UserResponse (users_handler.go). This search runs behind
+// participant.manage rather than users.manage, reachable by every contest's
+// staff — an email address is not what disambiguates two candidates here,
+// the login already does, since it is unique — and publishing the wider
+// account object here would be the first time this search reaches beyond
+// the administrator screens it was built for.
+type PersonResponse struct {
+	UserID   string `json:"user_id"`
+	Login    string `json:"login"`
+	FullName string `json:"full_name"`
+}
+
+func toPersonResponse(p contests.Person) PersonResponse {
+	return PersonResponse{UserID: p.UserID.String(), Login: p.Login, FullName: p.FullName}
+}
+
+type directoryResponse struct {
+	Items []PersonResponse `json:"items"`
+}
+
+// directorySearch is the picker behind both the staff form and the
+// participant form: type a few characters of a login, a name or an email,
+// get back who might be meant. One endpoint for both, since both forms are
+// looking for the same kind of thing — a person, not yet the account object
+// the administrator screens need.
+//
+// Not scoped by the contest in the URL beyond the permission check the route
+// already carries (RequireContestPermission, in Mount): every account in the
+// installation is a candidate for staffing or joining any contest.
+func (h *ContestsHandler) directorySearch(w http.ResponseWriter, r *http.Request) {
+	found, err := h.service.SearchPeople(r.Context(), r.URL.Query().Get("q"), intParam(r, "limit"))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+
+	items := make([]PersonResponse, 0, len(found))
+	for _, p := range found {
+		items = append(items, toPersonResponse(p))
+	}
+	httpx.JSON(w, r, http.StatusOK, directoryResponse{Items: items})
+}
+
 func (h *ContestsHandler) removeParticipant(w http.ResponseWriter, r *http.Request) {
 	contestID, ok := h.contestID(w, r)
 	if !ok {

@@ -116,6 +116,13 @@ func (h *ContestsHandler) Mount(r chi.Router) {
 				r.Post("/participants", h.addParticipants)
 				r.Delete("/participants/{"+memberIDParam+"}", h.removeParticipant)
 				r.Post("/participants/{"+memberIDParam+"}/disqualify", h.disqualifyParticipant)
+
+				// Behind participant.manage rather than a permission of its own:
+				// every contest role that may see this screen's staff and
+				// participants already carries it (rbac's managerPermissions
+				// grants contest.view and participant.manage together), so this
+				// is not a wider door than the people screen itself.
+				r.Get("/people/directory", h.directorySearch)
 			})
 		})
 	})
@@ -785,7 +792,8 @@ func (h *ContestsHandler) fail(w http.ResponseWriter, r *http.Request, err error
 		errors.Is(err, contests.ErrInvalidPolicy),
 		errors.Is(err, contests.ErrInvalidRole),
 		errors.Is(err, contests.ErrUnknownLanguage),
-		errors.Is(err, contests.ErrRosterTooLarge):
+		errors.Is(err, contests.ErrRosterTooLarge),
+		errors.Is(err, contests.ErrQueryTooLong):
 		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 
 	default:
