@@ -2,13 +2,14 @@ import { Band } from "@/components/layout/band";
 import { ContestWindow } from "@/components/product/contest-window";
 import { Tag } from "@/components/ui/tag";
 import { questionListSchema, untranslated } from "@/lib/api/content";
-import { publishCheckSchema, titleIn, type ContestStatus } from "@/lib/api/contests";
+import { contentEditable, publishCheckSchema, titleIn, type ContestStatus } from "@/lib/api/contests";
 import { PUBLISH_PROBLEMS } from "@/lib/api/publish-gate";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 import { ContestCrumbs } from "./contest-crumbs";
 import { ContestNav, type NavGroup } from "./contest-nav";
 import { loadContest, loadContestResource } from "./contest";
+import { TitleEditor } from "./title-editor";
 
 /** One tone per state, and the accent spent only on what is happening now. */
 const STATUS_TONE: Record<ContestStatus, "live" | "good" | "mute"> = {
@@ -79,11 +80,22 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
         />
 
         <div className="flex min-w-0 flex-col gap-3">
-          <h1 className="max-w-head text-h2 text-balance text-ink">
-            {/* A draft has no title until somebody writes one, and a blank
-                heading tells the author nothing about what they have open. */}
-            {titleIn(contest, locale) || <span className="text-ink-3">{t.untitled}</span>}
-          </h1>
+          <div className="flex flex-wrap items-baseline gap-3">
+            <h1 className="max-w-head text-h2 text-balance text-ink">
+              {/* A draft has no title until somebody writes one, and a blank
+                  heading tells the author nothing about what they have open. */}
+              {titleIn(contest, locale) || <span className="text-ink-3">{t.untitled}</span>}
+            </h1>
+
+            {/* The name, editable from the one place every screen of this
+                contest already shows it — see `title-editor.tsx` for why it
+                moved here from a settings panel. */}
+            <TitleEditor
+              contest={contest}
+              editable={contentEditable(contest.status)}
+              dict={dict}
+            />
+          </div>
 
           <div className="flex flex-wrap items-center gap-3">
             <Tag tone={STATUS_TONE[contest.status]}>{dict.contests.status[contest.status]}</Tag>

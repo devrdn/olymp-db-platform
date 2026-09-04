@@ -9,6 +9,59 @@ import { serverRequest } from "@/lib/api/server";
 
 export type StatusState = { code?: string; moved?: ContestStatus };
 
+export type TitleState = { code?: string; saved?: boolean };
+
+/**
+ * The titles and descriptions, replaced as a set.
+ *
+ * `PUT` on the wire, a full replacement in meaning — the same reason the
+ * language set is: what has to stay consistent is the whole set, and a half
+ * applied one is exactly what the publish gate would have to guess about.
+ * `TitleEditor` only ever shows one declared language open by default, but
+ * its form still carries every one of them (the rest sit behind a
+ * disclosure), so this still receives the complete set on every save.
+ *
+ * Lives here, at the contest's root, rather than under `settings/`: the
+ * screen that edits the name moved to the workspace header, and an action is
+ * filed beside whoever calls it.
+ */
+export async function saveTranslationsAction(
+  _previous: TitleState,
+  form: FormData,
+): Promise<TitleState> {
+  const contestId = form.get("contestId");
+  if (!isId(contestId)) return { code: "invalid_contest_id" };
+
+  const translations: Record<string, { title: string; description?: string }> = {};
+
+  for (const [key, value] of form.entries()) {
+    if (!key.startsWith("title.")) continue;
+    const title = String(value).trim();
+    if (!title) continue;
+
+    const lang = key.slice("title.".length);
+    const description = String(form.get(`description.${lang}`) ?? "").trim();
+    translations[lang] = description ? { title, description } : { title };
+  }
+
+  const failure = await serverRequest(`/contests/${contestId}/translations`, {
+    method: "PUT",
+    body: { translations },
+  }).then(
+    () => null,
+    (error: unknown) => error,
+  );
+
+  if (failure) return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+
+  // The title is printed in the header, in the breadcrumb and on the
+  // register behind them. All of it is now stale.
+  revalidatePath("/contests");
+  revalidatePath(`/contests/${contestId}`, "layout");
+
+  return { saved: true };
+}
+
 /**
  * Moving a contest between states.
  *
