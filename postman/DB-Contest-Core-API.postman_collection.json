@@ -1271,7 +1271,7 @@
                 "participants"
               ]
             },
-            "description": "Logins as well as identifiers, because the practical input is a roster pasted out of a spreadsheet.\n\nPartial success is the honest outcome: one mistyped login must not reject the other three hundred rows. `skipped[]` names each row it could not use and why — `unknown_account` or `already_enrolled`.\n\nThe contest's network restriction does **not** apply here: it governs where a participant may work from, not where the organizer sits while preparing the roster.\n\nResponses: 200 `{ added, skipped[] }` · 400 · 409 `not_editable` (finished/archived)",
+            "description": "Logins as well as identifiers, because the practical input is a roster pasted out of a spreadsheet.\n\nPartial success is the honest outcome: one mistyped login must not reject the other three hundred rows. `skipped[]` names each row it could not use and why — `unknown_account`, `already_enrolled` or `account_blocked`.\n\nThe contest's network restriction does **not** apply here: it governs where a participant may work from, not where the organizer sits while preparing the roster.\n\nResponses: 200 `{ added, skipped[] }` · 400 · 409 `not_editable` (finished/archived)",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"logins\": [\n    \"s.popescu\",\n    \"i.ivanov\"\n  ],\n  \"user_ids\": []\n}",
@@ -1324,6 +1324,39 @@
               ]
             },
             "description": "Excludes them while keeping everything they did.\n\nResponses: 204 · 404"
+          },
+          "response": []
+        },
+        {
+          "name": "Search the people directory",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/people/directory?q=ivanov&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "people",
+                "directory"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "ivanov",
+                  "description": "A substring of a login, full name or email, at least 3 characters (shorter always answers with nothing)."
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Page size, capped server-side at 20."
+                }
+              ]
+            },
+            "description": "The picker behind both the staff form and the one-person participant form: type a few characters of a login, a name or an email, get back who might be meant. Not scoped to the contest beyond the `participant.manage` permission the route itself checks — every account in the installation is a candidate for staffing or joining any contest.\n\nOnly an active account is offered: a blocked or deleted one can never sign in, so it is left out rather than shown as a candidate that would only fail if chosen.\n\nResponses: 200 `{ items: PersonResponse[] }` · 400 `invalid_request` (query over 100 characters)"
           },
           "response": []
         },

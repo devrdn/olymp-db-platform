@@ -150,6 +150,14 @@ type RegistrationRepository interface {
 const (
 	SkipUnknownAccount  = "unknown_account"
 	SkipAlreadyEnrolled = "already_enrolled"
+	// SkipAccountBlocked is a distinct reason from SkipUnknownAccount on
+	// purpose. A deleted account's login is not usably an account at all
+	// from the roster's point of view — the login might as well not exist —
+	// but a blocked one still is somebody with a name, just one who cannot
+	// currently sign in, and that is worth telling the person pasting the
+	// list apart from a plain typo. All three locale dictionaries already
+	// carry workspace.people.import.reason.account_blocked for it.
+	SkipAccountBlocked = "account_blocked"
 )
 
 // maxRosterEntries bounds one import of participants.
@@ -291,6 +299,13 @@ func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsComman
 // resolve to a usable account either way, so it reads the same to whoever
 // pasted it in, and needs no reason of its own in three locales.
 //
+// A blocked account is skipped too, but under its own reason
+// (SkipAccountBlocked) rather than folded into the deleted case above: unlike
+// a deleted account it is still somebody real, and auth.Service.Login and
+// auth.Middleware both refuse it for the same reason this does — enrolling it
+// would put on the roster a participant who can never sign in to sit the
+// contest.
+//
 // Whether the person is already taking part is decided by the write, not by a
 // lookup first: the guarantee is a unique index, and two organizers importing
 // overlapping rosters at the same moment would both pass a lookup. Treating
@@ -299,6 +314,10 @@ func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsComman
 func (s *Service) addOne(ctx context.Context, cmd AddParticipantsCommand, c Contest, user users.User, result *AddParticipantsResult) error {
 	if user.Status == users.StatusDeleted {
 		result.skip(user.Login, SkipUnknownAccount)
+		return nil
+	}
+	if user.Status == users.StatusBlocked {
+		result.skip(user.Login, SkipAccountBlocked)
 		return nil
 	}
 

@@ -77,6 +77,18 @@ var (
 	// for the same reason (SkipDeleted); this is what a single-account
 	// caller sees instead of a silent no-op or a change nobody can use.
 	ErrAccountDeleted = errors.New("this account is deleted")
+	// ErrAccountBlocked refuses a single-account operation that assumes the
+	// account can be used for what it is about to be given — appointing it to
+	// a contest's staff, say — on one that is blocked. Distinct from
+	// auth.ErrAccountBlocked, which auth.Service.Login answers with after a
+	// correct password: that one reports a sign-in attempt by the account
+	// itself, this one a change somebody else is making about it, and the two
+	// must not be confused for one another in a stack trace or a test
+	// failure. A blocked account cannot sign in either way, so granting it
+	// anything is exactly the ErrAccountDeleted case above with a status that
+	// still leaves the row reachable for everything else an administrator
+	// does with it.
+	ErrAccountBlocked = errors.New("this account is blocked")
 )
 
 // Statuses is every state an account can be in, for validating a filter

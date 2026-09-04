@@ -7,7 +7,7 @@ import { isId } from "@/lib/api/ids";
 import { importResultSchema, parseLogins, type ImportResult } from "@/lib/api/people";
 import { serverRequest } from "@/lib/api/server";
 
-export type PeopleState = { code?: string; done?: boolean };
+export type PeopleState = { code?: string; done?: boolean; skipReason?: string };
 export type ImportState = { code?: string; result?: ImportResult };
 
 /** Both identifiers reach a request path, so both are checked before they do. */
@@ -108,6 +108,15 @@ export async function disqualifyParticipantAction(
  * person to an account id, and re-typing their login for the server to
  * resolve a second time would throw that resolution away and reopen the
  * chance of a typo the picker exists to close.
+ *
+ * Routed through the same `importResultSchema` the roster import uses,
+ * rather than through `attempt()`: the endpoint the two share always answers
+ * 200 with `{ added, skipped }`, never a 4xx, for a person already on the
+ * roster. `attempt()` turns any 2xx into `{ done: true }`, so picking
+ * somebody already enrolled used to report success with nothing added. A
+ * chosen candidate can still land in `skipped` — enrolled by somebody else a
+ * moment earlier, or no longer a usable account by the time the form
+ * submits — and that has to be told apart from an actual success.
  */
 export async function addParticipantAction(
   _previous: PeopleState,
@@ -116,11 +125,20 @@ export async function addParticipantAction(
   const at = pair(form);
   if (!at) return { code: "invalid_user_id" };
 
-  return attempt(
-    `/contests/${at.contestId}/participants`,
-    { method: "POST", body: { user_ids: [at.userId] } },
-    at.contestId,
+  const outcome = await serverRequest(`/contests/${at.contestId}/participants`, {
+    method: "POST",
+    body: { user_ids: [at.userId] },
+  }).then(
+    (payload) => importResultSchema.parse(payload),
+    (error: unknown) => (error instanceof ApiError ? error : null),
   );
+
+  if (outcome instanceof ApiError) return { code: outcome.code };
+  if (outcome === null) return { code: "unreachable" };
+  if (outcome.added === 0) return { skipReason: outcome.skipped[0]?.reason };
+
+  revalidatePath(`/contests/${at.contestId}`, "layout");
+  return { done: true };
 }
 
 /**

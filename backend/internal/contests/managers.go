@@ -89,8 +89,16 @@ func (s *Service) GrantManager(ctx context.Context, actorID, contestID, userID u
 	// account, not a roster, so the outcome is one refusal rather than a
 	// skip: reusing users.ErrAccountDeleted, which single-account operations
 	// on a deleted account already answer with, needs no new code or wording.
+	//
+	// A blocked account is refused the same way: auth.Service.Login and
+	// auth.Middleware both refuse it too, so appointing one would staff the
+	// contest with somebody who can never act on it either, for exactly the
+	// reason ErrAccountDeleted gives for itself just above.
 	if user.Status == users.StatusDeleted {
 		return users.ErrAccountDeleted
+	}
+	if user.Status == users.StatusBlocked {
+		return users.ErrAccountBlocked
 	}
 	// Overwriting the owner's own row would demote them by another route.
 	if existing, err := s.managers.Get(ctx, contestID, userID); err == nil && existing.Role == rbac.RoleOwner {

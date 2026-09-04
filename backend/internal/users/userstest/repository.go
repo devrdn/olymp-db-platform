@@ -194,11 +194,13 @@ func (r *Repository) List(_ context.Context, f users.Filter) ([]users.User, int,
 }
 
 // Search resolves accounts whose login, full name or email contains query
-// (case-insensitively), mirroring the real repository's default listing: a
-// deleted account never comes back from a search. Results are ordered by
-// login and cut to limit, the same as the real query's `ORDER BY u.login
-// LIMIT`, so a test asserting which page came back is not at the mercy of Go's
-// unspecified map iteration order.
+// (case-insensitively), mirroring the real repository's picker query: only an
+// active account comes back, not a deleted or a blocked one — the latter can
+// never sign in, so offering it to a picker would let staff appoint or enrol
+// somebody who can never act on it. Results are ordered by login and cut to
+// limit, the same as the real query's `ORDER BY u.login LIMIT`, so a test
+// asserting which page came back is not at the mercy of Go's unspecified map
+// iteration order.
 func (r *Repository) Search(_ context.Context, query string, limit int) ([]users.User, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -209,7 +211,7 @@ func (r *Repository) Search(_ context.Context, query string, limit int) ([]users
 
 	var found []users.User
 	for _, u := range r.byID {
-		if u.Status == users.StatusDeleted {
+		if u.Status != users.StatusActive {
 			continue
 		}
 		if !containsFold(u.Login, query) && !containsFold(u.FullName, query) && !containsFold(u.Email, query) {

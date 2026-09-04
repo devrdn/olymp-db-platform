@@ -102,7 +102,12 @@ type Person struct {
 // out, only a faster way to use one it already grants.
 func (s *Service) SearchPeople(ctx context.Context, query string, limit int) ([]Person, error) {
 	query = strings.TrimSpace(query)
-	if len(query) > MaxDirectoryQueryLength {
+	// Both bounds count runes, not bytes: the message says "characters", and
+	// pg_trgm's own trigrams are cut on characters too (see
+	// MinDirectoryQueryLength's comment). len() counts bytes, so a hundred
+	// Cyrillic characters — about two hundred bytes in UTF-8 — used to be
+	// refused by a message claiming a limit the caller had not actually hit.
+	if utf8.RuneCountInString(query) > MaxDirectoryQueryLength {
 		return nil, fmt.Errorf("%w: at most %d characters", ErrQueryTooLong, MaxDirectoryQueryLength)
 	}
 	if utf8.RuneCountInString(query) < MinDirectoryQueryLength {
