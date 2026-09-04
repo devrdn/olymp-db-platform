@@ -28,12 +28,16 @@ export default async function ContestOverviewPage(props: PageProps<"/contests/[c
     activeDictionary(),
   ]);
 
-  // Deduplicated against the layout's own call: same pass, same request.
-  const contest = await loadContest(contestId);
-
-  const check = await loadContestResource(contestId, "/publish-check", (payload) =>
-    publishCheckSchema.parse(payload),
-  );
+  // Both deduplicated against the layout's own calls (same pass, same
+  // request) and, unlike a sequential pair of awaits, run concurrently with
+  // each other rather than one after the other: neither depends on what the
+  // other returns.
+  const [contest, check] = await Promise.all([
+    loadContest(contestId),
+    loadContestResource(contestId, "/publish-check", (payload) =>
+      publishCheckSchema.parse(payload),
+    ),
+  ]);
 
   const languages = contest.languages.map((l) => l.code);
   const gate = check ? summarisePublishCheck(check, languages) : null;
