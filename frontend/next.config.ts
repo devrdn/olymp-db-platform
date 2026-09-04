@@ -1,5 +1,8 @@
 import type { NextConfig } from "next";
 
+import { apiOrigin } from "./lib/api/config";
+import { API_PREFIX } from "./lib/api/client";
+
 /**
  * Headers the interface sends on every document.
  *
@@ -81,6 +84,43 @@ const nextConfig: NextConfig = {
       : [...securityHeaders, { key: "Content-Security-Policy", value: contentSecurityPolicy }];
 
     return [{ source: "/:path*", headers }];
+  },
+
+  /**
+   * The one origin, wherever this runs.
+   *
+   * Almost everything the interface asks the API for is asked by the Next
+   * server, which dials the API directly. The settings images are the
+   * exception: they are an `<img>` src, so the *browser* fetches them, from
+   * whatever origin the page came from. Behind the reverse proxy that is the
+   * proxy, which owns `/api/*` and forwards it. Run without one — which
+   * `make front-start` does, and it is a production build, so gating this on
+   * the environment would not have helped — the request lands on this
+   * application, which does not serve that prefix, and every settings image
+   * answers with an HTML 404 instead of a picture.
+   *
+   * So the application carries the route itself, for the same reason the
+   * security headers above are set here rather than in the proxy: a deployment
+   * that fronts this differently should not silently lose a feature. Behind a
+   * proxy this costs nothing, because the proxy takes `/api/*` before the
+   * request ever reaches Next.
+   */
+  async rewrites() {
+    /**
+     * `apiOrigin()` refuses to guess in production, which is right for a
+     * request that has to arrive somewhere and wrong here: this also runs at
+     * build time, where the address is neither known nor needed. An unknown
+     * address means no rule — the deployment that hid it is the one with a
+     * proxy in front — and a server-side call still fails loudly at run time.
+     */
+    let origin: string;
+    try {
+      origin = apiOrigin();
+    } catch {
+      return [];
+    }
+
+    return [{ source: `${API_PREFIX}/:path*`, destination: `${origin}${API_PREFIX}/:path*` }];
   },
 };
 
