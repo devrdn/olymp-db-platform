@@ -17,6 +17,25 @@ import (
 // a row is written before its query runs and updated with the result after, so
 // the application is allowed to update the outcome fields of its own row.
 // audit_log stays strictly append-only.
+//
+// # A row this journal never sees
+//
+// Everything that reaches Begin does so under a request that a policy, a
+// rate, or the database itself may still refuse — that is the whole of
+// section 5, point 7's "journal everything, including what validation
+// rejects". One refusal is not in that "everything": queryproxy.Service's own
+// pre-check refuses a participant asking too fast, or one whose SQL is over
+// the length bound, *before* Begin is ever called — that is the entire point
+// of that check (see queryproxy.Service.Run's doc), since the alternative is
+// a journal row, and the GIN index it costs, for a query that never touched
+// the database. So the panel described in docs/ARCHITECTURE.md §9.1, and the
+// per-participant counts reporting builds over this table, undercount rate
+// refusals by however many this façade caught first — accepted rather than
+// worked around, because working around it means paying the row the fix was
+// written to avoid. What still counts a rate refusal, at whatever coarseness
+// the panel does not offer, is the ordinary per-route HTTP metric
+// (platform/metrics.Recorder.ObserveRequest) on this endpoint's 429s — no new
+// metric was added for this, because that one already answers "how often".
 type QueryLog struct{ pool *pgxpool.Pool }
 
 var _ queryrunner.Journal = (*QueryLog)(nil)
