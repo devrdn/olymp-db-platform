@@ -38,20 +38,47 @@ func TestSearchPeopleMatchesLoginNameOrEmail(t *testing.T) {
 	}
 }
 
-// TestSearchPeopleReturnsNothingForAnEmptyQuery guards against the picker
-// becoming a way to browse the whole installation's roster: search-as-you-type
-// only ever asks once somebody has typed something, so nothing typed answers
-// nothing found rather than the first page of every account.
-func TestSearchPeopleReturnsNothingForAnEmptyQuery(t *testing.T) {
+// TestSearchPeopleReturnsNothingBelowTheMinimumLength guards the common,
+// cheap case a directory search should not do: answer a single keystroke —
+// `?q=a`, the incident MinDirectoryQueryLength was added for — with a page
+// of unrelated accounts. It is not a defence against a determined
+// enumeration; see that constant's own comment for what actually bounds who
+// may run this search. An empty box and a lone character both come back
+// with nothing, and neither ever reaches the repository.
+func TestSearchPeopleReturnsNothingBelowTheMinimumLength(t *testing.T) {
 	f := conteststest.NewFixture()
-	f.Users.Add(users.User{Login: "s.ivanov", FullName: "Ivanov", Status: users.StatusActive})
+	// A login containing "a" so a gap in the bound — not a lack of matching
+	// data — is the only way this test could see a result.
+	f.Users.Add(users.User{Login: "a-ivanov", FullName: "Ivanov", Status: users.StatusActive})
 
-	found, err := f.Service.SearchPeople(context.Background(), "   ", 0)
-	if err != nil {
-		t.Fatalf("SearchPeople(empty) = %v", err)
+	for _, query := range []string{"", "   ", "a"} {
+		found, err := f.Service.SearchPeople(context.Background(), query, 0)
+		if err != nil {
+			t.Fatalf("SearchPeople(%q) = %v", query, err)
+		}
+		if len(found) != 0 {
+			t.Errorf("SearchPeople(%q) = %+v, want nothing below the minimum length", query, found)
+		}
 	}
-	if len(found) != 0 {
-		t.Errorf("SearchPeople(empty) = %+v, want no results", found)
+}
+
+// TestSearchPeopleSearchesAtTheMinimumLength proves the bound is inclusive:
+// exactly MinDirectoryQueryLength characters is enough to run a search, not
+// one more.
+func TestSearchPeopleSearchesAtTheMinimumLength(t *testing.T) {
+	f := conteststest.NewFixture()
+	needle := strings.Repeat("z", contests.MinDirectoryQueryLength)
+	target := f.Users.Add(users.User{
+		Login: needle + "-ivanov", FullName: "Ivanov", Status: users.StatusActive,
+	})
+	f.Users.Add(users.User{Login: "unrelated", FullName: "Someone Else", Status: users.StatusActive})
+
+	found, err := f.Service.SearchPeople(context.Background(), needle, 0)
+	if err != nil {
+		t.Fatalf("SearchPeople(%q) = %v", needle, err)
+	}
+	if len(found) != 1 || found[0].UserID != target.ID {
+		t.Errorf("SearchPeople(%q) = %+v, want only %v", needle, found, target.ID)
 	}
 }
 
