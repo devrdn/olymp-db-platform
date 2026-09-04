@@ -718,6 +718,31 @@ func TestSearchMatchesLoginNameOrEmail(t *testing.T) {
 			if len(found) != 1 || found[0].ID != target.ID {
 				t.Fatalf("Search(%q) = %+v, want only %v", query, found, target.ID)
 			}
+			if found[0].Email != "search-target@example.edu" {
+				t.Errorf("Search(%q) email = %q, want the account's own address", query, found[0].Email)
+			}
+		}
+	})
+}
+
+// TestSearchReturnsACleanEmptyEmailForAnAccountWithoutOne proves the other
+// half of publishing the email: the column is nullable, and a picker reading
+// a non-empty Email as "worth showing" would be wrong the moment a NULL
+// column scanned back as a literal "<nil>" or similar instead of "".
+func TestSearchReturnsACleanEmptyEmailForAnAccountWithoutOne(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		makeUser(t, ctx, "search-noemail-ivanov")
+
+		found, err := repo.Search(ctx, "search-noemail-ivanov", 10)
+		if err != nil {
+			t.Fatalf("Search() = %v", err)
+		}
+		if len(found) != 1 {
+			t.Fatalf("Search() = %+v, want exactly one match", found)
+		}
+		if found[0].Email != "" {
+			t.Errorf("Search() email = %q, want an empty string for an account with no email set", found[0].Email)
 		}
 	})
 }

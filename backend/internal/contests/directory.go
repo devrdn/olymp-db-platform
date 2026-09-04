@@ -59,21 +59,29 @@ const (
 // could legitimately produce.
 var ErrQueryTooLong = errors.New("search text is too long")
 
-// Person is the least an organiser needs to tell two accounts apart when
-// searching for somebody to appoint or enrol: a name to read, a login to
-// act on.
+// Person is what an organiser sees when searching for somebody to appoint or
+// enrol: a name to read, a login to act on, and — since the owner's decision
+// below — an email to tell two people of the same name apart.
 //
-// Deliberately not the wider users.User. This search runs behind
-// participant.manage rather than users.manage (internal/rbac), so it reaches
-// far more roles than the administrator screens that type was built for, and
-// an email address is not what disambiguates two candidates here — the login
-// already does, since it is unique. Publishing it here would be the first
-// time this search reaches beyond users.manage, and CLAUDE.md's own rule is
-// not to share personal data beyond what the task needs.
+// Deliberately still not the wider users.User: no status, no roles, no
+// password state, nothing the administrator screens carry that a picker has
+// no use for. The email is the one field that used to be withheld here too.
+// This search runs behind participant.manage rather than users.manage
+// (internal/rbac), so it reaches far more roles than the administrator
+// screens users.User was built for; publishing the email widens what every
+// one of those roles can read about any account in the installation, on
+// every contest they hold that permission on, not only the one they are
+// looking at. The owner weighed that against a login not always being enough
+// to tell two "Ivanov"s apart — a login is unique but not memorable, and a
+// full name is memorable but not unique — and decided the email is worth
+// showing anyway. It is not empty: an account with no email set reaches the
+// caller as Person.Email == "", never a value that reads as an address
+// somebody actually gave.
 type Person struct {
 	UserID   uuid.UUID
 	Login    string
 	FullName string
+	Email    string
 }
 
 // SearchPeople resolves the accounts an organiser might mean when appointing
@@ -95,11 +103,17 @@ type Person struct {
 // enumeration: the actual boundary on who may run this search at all is the
 // contest-scoped participant.manage permission the HTTP layer checks before
 // SearchPeople runs. Somebody who already holds that permission can still
-// walk every short combination and, a search at a time, see every account in
-// the installation — but a login and a full name are exactly what that
-// permission already lets its holder see on any contest's own staff and
-// participant lists, so that is not a new capability this endpoint hands
-// out, only a faster way to use one it already grants.
+// walk every short combination and, a search at a time, see every account's
+// login, full name and email in the installation. The login and the full
+// name are not a new capability this endpoint hands out — that permission
+// already lets its holder see both on any contest's own staff and
+// participant lists. The email is: it appears on no such list, so this is
+// the one place holding participant.manage on a single contest reads an
+// email address for every account in the installation, not only the ones
+// the holder actually shares a contest with. A security review named this
+// trade-off explicitly and the owner accepted it anyway, weighing it against
+// a login not always being enough to tell two people of the same name apart
+// — see Person's own comment for the fuller reasoning.
 func (s *Service) SearchPeople(ctx context.Context, query string, limit int) ([]Person, error) {
 	query = strings.TrimSpace(query)
 	// Both bounds count runes, not bytes: the message says "characters", and
@@ -127,7 +141,7 @@ func (s *Service) SearchPeople(ctx context.Context, query string, limit int) ([]
 	}
 	out := make([]Person, 0, len(found))
 	for _, u := range found {
-		out = append(out, Person{UserID: u.ID, Login: u.Login, FullName: u.FullName})
+		out = append(out, Person{UserID: u.ID, Login: u.Login, FullName: u.FullName, Email: u.Email})
 	}
 	return out, nil
 }

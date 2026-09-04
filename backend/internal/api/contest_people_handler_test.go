@@ -345,10 +345,14 @@ func TestDirectorySearchFindsACandidateByLoginNameOrEmail(t *testing.T) {
 	}
 }
 
-// TestDirectorySearchDoesNotPublishAnEmailAddress guards the response shape:
-// this endpoint reaches every contest's staff, not only users.manage, and an
-// email address is not what a picker needs to tell two candidates apart.
-func TestDirectorySearchDoesNotPublishAnEmailAddress(t *testing.T) {
+// TestDirectorySearchPublishesTheEmailAddress guards the response shape after
+// the owner's decision to show the email in the picker (see PersonResponse's
+// own comment for the trade they accepted): this endpoint reaches every
+// contest's staff, not only users.manage, so returning the email here widens
+// what that wider audience can read about any account in the installation —
+// a cost the owner weighed against telling two same-named candidates apart
+// and chose to pay.
+func TestDirectorySearchPublishesTheEmailAddress(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
 	f.stores.Users.Add(users.User{
@@ -362,8 +366,28 @@ func TestDirectorySearchDoesNotPublishAnEmailAddress(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("items = %v, want 1", items)
 	}
+	if got := items[0].(map[string]any)["email"]; got != "sergei@example.edu" {
+		t.Errorf("email = %v, want the account's own address", got)
+	}
+}
+
+// TestDirectorySearchOmitsAnEmptyEmailRatherThanPublishingAnEmptyString
+// guards the other half of that decision: an account that never set an email
+// must not come back as `"email": ""`, which reads as an address that was
+// looked up and found blank rather than one that was never given.
+func TestDirectorySearchOmitsAnEmptyEmailRatherThanPublishingAnEmptyString(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+	f.addAccount("s.ivanov")
+
+	rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/people/directory?q=ivanov", "")
+
+	items, _ := decode(t, rec)["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("items = %v, want 1", items)
+	}
 	if _, present := items[0].(map[string]any)["email"]; present {
-		t.Errorf("the directory picker published an email address: %v", items[0])
+		t.Errorf("an account with no email published the field anyway: %v", items[0])
 	}
 }
 

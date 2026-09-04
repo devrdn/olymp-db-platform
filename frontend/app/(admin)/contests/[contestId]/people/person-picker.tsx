@@ -20,24 +20,33 @@ import { debounce, type Debounced } from "@/lib/format/debounce";
  */
 const SEARCH_PAUSE_MS = 300;
 
-/** The least the directory returns: enough to tell two candidates apart and
- * to submit the right one (see backend/internal/api/contest_people_handler.go's
- * PersonResponse). */
-export type Candidate = { userId: string; login: string; fullName: string };
+/** What the directory returns: enough to tell two candidates apart, submit
+ * the right one, and — since the owner decided the trade in
+ * backend/internal/api/contest_people_handler.go's PersonResponse is worth
+ * it — an email for when the login and the name alone still leave two
+ * "Ivanov"s standing. Empty for an account that never set one; see
+ * `describeCandidate` below for how that empty value is kept from showing up
+ * as a stray separator in the popup. */
+export type Candidate = { userId: string; login: string; fullName: string; email: string };
 
 function isRawCandidate(
   value: unknown,
-): value is { user_id: string; login: string; full_name: string } {
+): value is { user_id: string; login: string; full_name: string; email?: string } {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
-  return typeof v.user_id === "string" && typeof v.login === "string" && typeof v.full_name === "string";
+  return (
+    typeof v.user_id === "string" &&
+    typeof v.login === "string" &&
+    typeof v.full_name === "string" &&
+    (v.email === undefined || typeof v.email === "string")
+  );
 }
 
 /**
  * Parsed by hand rather than through `lib/api/people`'s zod schemas: this file
  * is a client component, and a schema module calls `z.object()` at load time,
  * which would ship zod's parser to every browser that opens this screen for
- * three fields it already trusts its own backend to shape correctly.
+ * four fields it already trusts its own backend to shape correctly.
  */
 function parseDirectory(payload: unknown): Candidate[] {
   if (!payload || typeof payload !== "object") return [];
@@ -45,11 +54,29 @@ function parseDirectory(payload: unknown): Candidate[] {
   if (!Array.isArray(items)) return [];
   return items
     .filter(isRawCandidate)
-    .map((raw) => ({ userId: raw.user_id, login: raw.login, fullName: raw.full_name }));
+    .map((raw) => ({
+      userId: raw.user_id,
+      login: raw.login,
+      fullName: raw.full_name,
+      // PersonResponse omits the key entirely for an account with none
+      // (`omitempty`, so it never has to publish `"email": ""`) — read back
+      // here as the same empty string the rest of this file treats as
+      // "nothing to show", rather than as `undefined` needing its own check
+      // everywhere the value is used.
+      email: raw.email ?? "",
+    }));
+}
+
+/** The popup's second line: a login always tells two accounts apart on its
+ * own, and an email joins it now that the owner has accepted the trade of
+ * showing one — but only when the account has one, so an account with none
+ * shows a bare login rather than a separator pointing at nothing. */
+function describeCandidate(candidate: Candidate): string {
+  return candidate.email ? `${candidate.login} · ${candidate.email}` : candidate.login;
 }
 
 function toOption(candidate: Candidate): ComboboxOption<Candidate> {
-  return { key: candidate.userId, value: candidate, label: candidate.fullName, description: candidate.login };
+  return { key: candidate.userId, value: candidate, label: candidate.fullName, description: describeCandidate(candidate) };
 }
 
 /**
