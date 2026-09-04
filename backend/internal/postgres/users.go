@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
@@ -53,6 +54,11 @@ const userJoin = `LEFT JOIN users a ON a.id = u.status_changed_by`
 // Users implements users.Repository; the assertion fails the build here
 // rather than at wiring time if the interface and this type drift apart.
 var _ users.Repository = (*Users)(nil)
+
+// Users also implements contests.UserDirectory: the staff and participant
+// pickers resolve candidates through the same repository the account screens
+// use, rather than a second copy of the same query.
+var _ contests.UserDirectory = (*Users)(nil)
 
 // Users stores accounts in PostgreSQL.
 type Users struct {
@@ -236,6 +242,19 @@ func (r *Users) List(ctx context.Context, f users.Filter) ([]users.User, int, er
 	}
 
 	return found, total, nil
+}
+
+// Search resolves accounts by a substring of their login, full name or
+// email — the picker behind contests.Service.SearchPeople
+// (internal/contests's UserDirectory). It is List with the picker's own
+// bounds already applied and no interest in the total: a typeahead shows a
+// handful of matches, never a page count.
+func (r *Users) Search(ctx context.Context, query string, limit int) ([]users.User, error) {
+	found, _, err := r.List(ctx, users.Filter{Query: query, Limit: limit})
+	if err != nil {
+		return nil, fmt.Errorf("search users: %w", err)
+	}
+	return found, nil
 }
 
 // UpdateProfile changes the descriptive fields.

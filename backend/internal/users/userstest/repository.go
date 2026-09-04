@@ -193,6 +193,37 @@ func (r *Repository) List(_ context.Context, f users.Filter) ([]users.User, int,
 	return matched[f.Offset:end], total, nil
 }
 
+// Search resolves accounts whose login, full name or email contains query
+// (case-insensitively), mirroring the real repository's default listing: a
+// deleted account never comes back from a search. Results are ordered by
+// login and cut to limit, the same as the real query's `ORDER BY u.login
+// LIMIT`, so a test asserting which page came back is not at the mercy of Go's
+// unspecified map iteration order.
+func (r *Repository) Search(_ context.Context, query string, limit int) ([]users.User, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.Err != nil {
+		return nil, r.Err
+	}
+
+	var found []users.User
+	for _, u := range r.byID {
+		if u.Status == users.StatusDeleted {
+			continue
+		}
+		if !containsFold(u.Login, query) && !containsFold(u.FullName, query) && !containsFold(u.Email, query) {
+			continue
+		}
+		found = append(found, u)
+	}
+	slices.SortFunc(found, func(a, b users.User) int { return strings.Compare(a.Login, b.Login) })
+	if limit > 0 && len(found) > limit {
+		found = found[:limit]
+	}
+	return found, nil
+}
+
 func (r *Repository) UpdateProfile(_ context.Context, id uuid.UUID, fullName, email string) error {
 	return r.mutate(id, func(u *users.User) {
 		u.FullName = fullName

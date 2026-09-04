@@ -298,12 +298,21 @@ const en = {
       managers: {
         heading: "Staff",
         hint: "A manager may edit the contest and its content. The owner is not granted or revoked here: handing a contest over is a separate act, not a side effect of editing a list.",
-        add: "Appoint by identifier",
+        add: "Appoint a manager",
         addAction: "Appoint",
         adding: "Appointing",
-        idPlaceholder: "00000000-0000-0000-0000-000000000000",
-        idHint: "The account's identifier, copied from the users screen. The API appoints by identifier, and this build has no directory to search.",
         revoke: "Remove",
+      },
+      // Shared by the manager picker and the one-person participant picker
+      // below — one vocabulary for one control, used in two places.
+      picker: {
+        placeholder: "Search by login, name or email…",
+        helpText: "Type to search. Arrow keys move through the results, Enter chooses one, Escape closes the list.",
+        searching: "Searching…",
+        noResults: "No matches",
+        searchFailed: "The search could not be reached. Try again.",
+        change: "Change",
+        selected: "Selected: {name} ({login})",
       },
       participants: {
         heading: "Participants",
@@ -318,9 +327,15 @@ const en = {
           body: "Paste a list of logins below, or leave enrolment open and let participants sign themselves up.",
         },
       },
+      addOne: {
+        heading: "Add one participant",
+        hint: "Search for somebody by login, name or email, then choose them from the list. To add many at once, use the list below instead.",
+        action: "Add",
+        adding: "Adding",
+      },
       import: {
         heading: "Add participants",
-        hint: "One login per line, or separated by commas. A line that cannot be added is reported with its reason; the rest still go in.",
+        hint: "For many at once: one login per line, or separated by commas. A line that cannot be added is reported with its reason; the rest still go in.",
         placeholder: "st12345\nst12346\nst12347",
         action: "Add them",
         importing: "Adding",

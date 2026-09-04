@@ -102,6 +102,28 @@ export async function disqualifyParticipantAction(
 }
 
 /**
+ * Adding one participant, chosen from the directory picker.
+ *
+ * Sends `user_ids` rather than `logins` — the picker already resolved a
+ * person to an account id, and re-typing their login for the server to
+ * resolve a second time would throw that resolution away and reopen the
+ * chance of a typo the picker exists to close.
+ */
+export async function addParticipantAction(
+  _previous: PeopleState,
+  form: FormData,
+): Promise<PeopleState> {
+  const at = pair(form);
+  if (!at) return { code: "invalid_user_id" };
+
+  return attempt(
+    `/contests/${at.contestId}/participants`,
+    { method: "POST", body: { user_ids: [at.userId] } },
+    at.contestId,
+  );
+}
+
+/**
  * Importing a list of participants.
  *
  * Logins, not identifiers: what an organiser has in hand is a column of

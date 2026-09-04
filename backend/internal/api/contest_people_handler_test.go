@@ -240,6 +240,103 @@ func TestSignupFromInsideTheAllowedNetworkIsAccepted(t *testing.T) {
 	}
 }
 
+// TestDirectorySearchIsRefusedWithoutParticipantManage pins the permission
+// this endpoint was built behind: an account with no standing on the contest
+// — not even a manager, let alone a stranger — gets a 403, not a directory.
+func TestDirectorySearchIsRefusedWithoutParticipantManage(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.stores.SeedContest(contests.StatusDraft)
+	f.addAccount("s.ivanov")
+
+	rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/people/directory?q=ivanov", "")
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestDirectorySearchIsUsableByAManagerNotOnlyTheOwner proves the permission
+// choice: participant.manage, which every manager carries — not
+// contest.manage, which only the owner does — because the participant
+// picker on this same screen is a manager's ordinary work, not the owner's
+// alone.
+func TestDirectorySearchIsUsableByAManagerNotOnlyTheOwner(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.stores.SeedContest(contests.StatusDraft)
+	if err := f.stores.Managers.Grant(t.Context(), contests.Manager{
+		ContestID: c.ID, UserID: f.actor.ID, Role: rbac.RoleManager, GrantedBy: uuid.New(),
+	}); err != nil {
+		t.Fatalf("Grant() returned error: %v", err)
+	}
+	f.addAccount("s.ivanov")
+
+	rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/people/directory?q=ivanov", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestDirectorySearchFindsACandidateByLoginNameOrEmail pins the owner's own
+// requirement (also proven at the domain level in
+// internal/contests/directory_test.go): the picker matches a login, a name,
+// or an email.
+func TestDirectorySearchFindsACandidateByLoginNameOrEmail(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+	candidate := f.stores.Users.Add(users.User{
+		Login: "s.ivanov", FullName: "Ivanov Sergei", Email: "sergei@example.edu",
+		Status: users.StatusActive,
+	})
+
+	for _, q := range []string{"ivanov", "Sergei", "sergei@example"} {
+		rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/people/directory?q="+q, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("query %q: status = %d, want 200 (%s)", q, rec.Code, rec.Body.String())
+		}
+		items, _ := decode(t, rec)["items"].([]any)
+		if len(items) != 1 || items[0].(map[string]any)["user_id"] != candidate.ID.String() {
+			t.Errorf("query %q: items = %v, want only %v", q, items, candidate.ID)
+		}
+	}
+}
+
+// TestDirectorySearchDoesNotPublishAnEmailAddress guards the response shape:
+// this endpoint reaches every contest's staff, not only users.manage, and an
+// email address is not what a picker needs to tell two candidates apart.
+func TestDirectorySearchDoesNotPublishAnEmailAddress(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+	f.stores.Users.Add(users.User{
+		Login: "s.ivanov", FullName: "Ivanov Sergei", Email: "sergei@example.edu",
+		Status: users.StatusActive,
+	})
+
+	rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/people/directory?q=ivanov", "")
+
+	items, _ := decode(t, rec)["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("items = %v, want 1", items)
+	}
+	if _, present := items[0].(map[string]any)["email"]; present {
+		t.Errorf("the directory picker published an email address: %v", items[0])
+	}
+}
+
+// TestDirectorySearchRefusesAnOverlongQuery proves the domain's own bound
+// (contests.MaxDirectoryQueryLength) reaches the client as a 400, not a 500.
+func TestDirectorySearchRefusesAnOverlongQuery(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+
+	rec := f.do(http.MethodGet,
+		"/contests/"+c.ID.String()+"/people/directory?q="+strings.Repeat("a", contests.MaxDirectoryQueryLength+1), "")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
 // addAccount stores an account the contest endpoints can resolve.
 func (f *contestFixture) addAccount(login string) users.User {
 	return f.stores.Users.Add(users.User{
