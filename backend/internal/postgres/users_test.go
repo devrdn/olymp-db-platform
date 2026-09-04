@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,7 +14,9 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func uniqueErr(constraint string) error {
@@ -735,4 +740,122 @@ func TestSearchEscapesAPercentSoItDoesNotMatchEveryRow(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestSearchPredicateUsesTheTrigramIndexes proves, on the database itself
+// rather than by reading the SQL, that usersSearchMatch is something the
+// planner can actually serve from migration 000016's trigram indexes.
+//
+// It EXPLAINs usersSearchMatch on its own, apart from usersSearchWhere's
+// status condition: the users table carries a partial unique index on email
+// (WHERE status <> 'deleted', from migration 000015) that the planner can use
+// to satisfy the status half of the full predicate on this table's small
+// development row count, without ever touching the trigram indexes for the
+// OR half — which would make this test pass for the wrong reason no matter
+// what usersSearchMatch says, since a plan avoiding a Seq Scan by way of an
+// unrelated index still avoids a Seq Scan. Dropping the status condition
+// removes that escape hatch, so the only way left to avoid scanning the
+// table is to actually use the three trigram indexes this predicate is
+// meant to be served by.
+//
+// The proof does not depend on row counts or ANALYZE statistics otherwise —
+// those only change which plan is *cheapest*, and this test is not about
+// cost. It is about which plans *exist* at all. With sequential scans
+// disabled (SET LOCAL enable_seqscan = off), the planner still falls back to
+// a Seq Scan whenever it is the only valid way to answer the query —
+// disabling a scan type discourages it, it does not forbid it. So if a
+// single disjunct in the OR is not indexable (COALESCE(u.email, "") ILIKE
+// ..., the shape this predicate had before the fix), a Seq Scan is the
+// *only* plan PostgreSQL can produce, penalty or not.
+func TestSearchPredicateUsesTheTrigramIndexes(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		q := NewUsers(testPool).querier(ctx)
+
+		if _, err := q.Exec(ctx, "SET LOCAL enable_seqscan = off"); err != nil {
+			t.Fatalf("disable seq scan: %v", err)
+		}
+
+		rows, err := q.Query(ctx,
+			`EXPLAIN SELECT u.id FROM users u WHERE `+usersSearchMatch, "ivanov")
+		if err != nil {
+			t.Fatalf("EXPLAIN search predicate: %v", err)
+		}
+		defer rows.Close()
+
+		var plan strings.Builder
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				t.Fatalf("scan plan line: %v", err)
+			}
+			plan.WriteString(line)
+			plan.WriteString("\n")
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("read plan: %v", err)
+		}
+
+		got := plan.String()
+		if strings.Contains(got, "Seq Scan") {
+			t.Fatalf("search predicate forced a sequential scan even with sequential scans disabled — "+
+				"a disjunct in usersSearchMatch is not indexable:\n%s", got)
+		}
+		for _, idx := range []string{"users_login_trgm_idx", "users_full_name_trgm_idx", "users_email_trgm_idx"} {
+			if !strings.Contains(got, idx) {
+				t.Errorf("plan does not use %s — the OR could not be split into index scans:\n%s", idx, got)
+			}
+		}
+	})
+}
+
+// queryCounter is a pgx.QueryTracer that only counts: how many statements a
+// connection sent, nothing about their content. TestSearchDoesNotComputeADiscardedCount
+// uses it to prove Search sends exactly one, on the real driver rather than
+// by reading Search's body.
+type queryCounter struct{ n atomic.Int64 }
+
+func (c *queryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	c.n.Add(1)
+	return ctx
+}
+
+func (c *queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// TestSearchDoesNotComputeADiscardedCount proves the other half of Finding 1:
+// before this fix, Search called List, and List unconditionally ran a
+// "SELECT count(*)" whose result Search then threw away — two statements
+// sent to PostgreSQL for every debounced keystroke a picker sends, on a path
+// now reachable by every contest's staff. This counts the statements a real
+// connection actually sends for one Search call and fails the moment there
+// is more than the one SELECT the picker needs.
+//
+// It opens its own traced pool rather than instrumenting testPool: testPool
+// is shared by the whole package's test run, so tracing it would count every
+// other test's queries too.
+func TestSearchDoesNotComputeADiscardedCount(t *testing.T) {
+	dsn := os.Getenv("CORE_DB_DSN")
+	if dsn == "" {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse CORE_DB_DSN: %v", err)
+	}
+	counter := &queryCounter{}
+	cfg.ConnConfig.Tracer = counter
+
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open traced pool: %v", err)
+	}
+	defer pool.Close()
+
+	if _, err := NewUsers(pool).Search(context.Background(), "no-such-account-zzz", 10); err != nil {
+		t.Fatalf("Search() = %v", err)
+	}
+
+	if got := counter.n.Load(); got != 1 {
+		t.Errorf("Search() sent %d statements, want exactly 1 (no discarded count(*))", got)
+	}
 }

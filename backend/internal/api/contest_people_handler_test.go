@@ -323,6 +323,27 @@ func TestDirectorySearchDoesNotPublishAnEmailAddress(t *testing.T) {
 	}
 }
 
+// TestDirectorySearchReturnsNothingBelowTheMinimumLength proves
+// contests.MinDirectoryQueryLength reaches the client as an empty result,
+// not an error: a debounced picker sends every keystroke including the
+// first one, and a query below the minimum should look exactly like nothing
+// having been typed yet, not like a request that failed.
+func TestDirectorySearchReturnsNothingBelowTheMinimumLength(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+	f.addAccount("a-ivanov")
+
+	rec := f.do(http.MethodGet, "/contests/"+c.ID.String()+"/people/directory?q=a", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	items, _ := decode(t, rec)["items"].([]any)
+	if len(items) != 0 {
+		t.Errorf("items = %v, want none below the minimum query length", items)
+	}
+}
+
 // TestDirectorySearchRefusesAnOverlongQuery proves the domain's own bound
 // (contests.MaxDirectoryQueryLength) reaches the client as a 400, not a 500.
 func TestDirectorySearchRefusesAnOverlongQuery(t *testing.T) {

@@ -51,6 +51,43 @@ const userColumns = `
 // status-change columns already report "nothing to explain".
 const userJoin = `LEFT JOIN users a ON a.id = u.status_changed_by`
 
+// usersSearchMatch is the login-or-name-or-email half of usersSearchWhere,
+// pulled out on its own so a test can EXPLAIN it apart from the status
+// condition below — see users_test.go's TestSearchPredicateUsesTheTrigramIndexes
+// for why the two cannot be judged together.
+//
+// Every ILIKE reads a bare column, not COALESCE(u.email, "") — migration
+// 000016_directory_search_indexes adds trigram indexes on exactly the bare
+// login, full_name and email columns, and PostgreSQL will not match a
+// plain-column index to a COALESCE(...) expression. Because the three
+// conditions are OR'd together, that one non-indexable disjunct used to force
+// a sequential scan of the whole table for the clause, so the login and
+// full_name trigram indexes went unused as well — on a search every
+// contest's staff can now reach, not only the handful of administrators the
+// account screen serves.
+//
+// Dropping the wrapper does not change which rows match: email is a nullable
+// column, and `u.email ILIKE '%x%'` on a NULL email evaluates to NULL, which
+// a WHERE clause treats exactly like `COALESCE(u.email, "") ILIKE '%x%'`
+// evaluating to false — both exclude the row. The wrapper was never needed
+// for correctness, only for a habit of never comparing directly against a
+// nullable column; here that habit is what made the column unindexable.
+const usersSearchMatch = `(u.login ILIKE '%' || $1 || '%'
+	            OR u.full_name ILIKE '%' || $1 || '%'
+	            OR u.email ILIKE '%' || $1 || '%')`
+
+// usersSearchWhere is the predicate List and Search both filter by: a login,
+// full name or email that contains the query, restricted to the requested
+// status. List and Search share the literal string rather than each writing
+// their own, so the two can never drift apart on what "matches" means.
+//
+// The empty-query branch ($1 = "") short-circuits usersSearchMatch entirely,
+// so an empty query is never limited by what that predicate can or cannot
+// index.
+const usersSearchWhere = `
+	WHERE ($1 = '' OR ` + usersSearchMatch + `)
+	  AND (CASE WHEN $2 = '' THEN u.status <> 'deleted' ELSE u.status = $2 END)`
+
 // Users implements users.Repository; the assertion fails the build here
 // rather than at wiring time if the interface and this type drift apart.
 var _ users.Repository = (*Users)(nil)
@@ -210,19 +247,13 @@ func (r *Users) List(ctx context.Context, f users.Filter) ([]users.User, int, er
 	//
 	// An empty status means the register an administrator reads, which is not
 	// "every row": a deleted account appears only when asked for by name.
-	const where = `
-		WHERE ($1 = '' OR u.login ILIKE '%' || $1 || '%'
-		            OR u.full_name ILIKE '%' || $1 || '%'
-		            OR COALESCE(u.email, '') ILIKE '%' || $1 || '%')
-		  AND (CASE WHEN $2 = '' THEN u.status <> 'deleted' ELSE u.status = $2 END)`
-
 	var total int
-	if err := q.QueryRow(ctx, `SELECT count(*) FROM users u`+where, needle, f.Status).Scan(&total); err != nil {
+	if err := q.QueryRow(ctx, `SELECT count(*) FROM users u`+usersSearchWhere, needle, f.Status).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count users: %w", err)
 	}
 
 	rows, err := q.Query(ctx,
-		`SELECT `+userColumns+` FROM users u `+userJoin+where+` ORDER BY u.login LIMIT $3 OFFSET $4`,
+		`SELECT `+userColumns+` FROM users u `+userJoin+usersSearchWhere+` ORDER BY u.login LIMIT $3 OFFSET $4`,
 		needle, f.Status, f.Limit, f.Offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list users: %w", err)
@@ -246,12 +277,35 @@ func (r *Users) List(ctx context.Context, f users.Filter) ([]users.User, int, er
 
 // Search resolves accounts by a substring of their login, full name or
 // email — the picker behind contests.Service.SearchPeople
-// (internal/contests's UserDirectory). It is List with the picker's own
-// bounds already applied and no interest in the total: a typeahead shows a
-// handful of matches, never a page count.
+// (internal/contests's UserDirectory).
+//
+// It shares List's predicate (usersSearchWhere) but is not implemented as a
+// call to List: List always runs a "SELECT count(*)" for its total, and a
+// typeahead has no use for one — it shows a handful of matches, never a page
+// count. Routing through List would spend a second sequential pass over the
+// table computing an answer this method would then throw away, on every
+// debounced keystroke a picker sends.
 func (r *Users) Search(ctx context.Context, query string, limit int) ([]users.User, error) {
-	found, _, err := r.List(ctx, users.Filter{Query: query, Limit: limit})
+	f := users.Filter{Query: query, Limit: limit}.Normalize()
+	needle := escapeLike(f.Query)
+
+	rows, err := r.querier(ctx).Query(ctx,
+		`SELECT `+userColumns+` FROM users u `+userJoin+usersSearchWhere+` ORDER BY u.login LIMIT $3`,
+		needle, f.Status, f.Limit)
 	if err != nil {
+		return nil, fmt.Errorf("search users: %w", err)
+	}
+	defer rows.Close()
+
+	var found []users.User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		found = append(found, u)
+	}
+	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("search users: %w", err)
 	}
 	return found, nil
