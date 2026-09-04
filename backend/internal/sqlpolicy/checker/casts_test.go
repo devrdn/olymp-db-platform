@@ -79,3 +79,56 @@ func TestAnOrdinaryCastStillPasses(t *testing.T) {
 		t.Run(sql, func(t *testing.T) { allow(t, sql, sqlpolicy.ReadOnly()) })
 	}
 }
+
+// A reg* pseudo-type is a name to look up in the catalog whether it names a
+// value's type or a column's — and a column definition is where the deny-list
+// used to have nothing to say. A regrole column filled through an ordinary
+// ::oid cast and read back is the same existence oracle as the cast form,
+// just paid for in bulk instead of one row at a time, and allow_catalog makes
+// no difference to it because ClassifyRelation never sees a type name.
+func TestARegTypeColumnIsRefusedWhateverItNames(t *testing.T) {
+	closed := sqlpolicy.ReadWrite("evidence")
+	closed.AllowOwnTables = true
+	closed.AllowCatalog = false
+
+	for _, regType := range []string{"regrole", "regclass", "regprocedure", "regnamespace"} {
+		t.Run(regType, func(t *testing.T) {
+			r := refusal(t, `CREATE TABLE work.r (c `+regType+`)`, closed)
+			if r.Code != sqlpolicy.CodeCatalogNotReadable {
+				t.Fatalf("code = %q, want %q", r.Code, sqlpolicy.CodeCatalogNotReadable)
+			}
+		})
+	}
+}
+
+// The attack the review found: fill the column through an ordinary cast
+// (::oid is not itself a catalog lookup), then read it back — regrole's own
+// output function is what turns the OID into a role name, not anything the
+// checker sees as a cast. The column definition is refused before either
+// statement matters, which is where this has to be caught: by the time a row
+// exists, the checker is not in the loop.
+func TestARegTypeColumnIsRefusedEvenFilledThroughAnOrdinaryCast(t *testing.T) {
+	p := sqlpolicy.ReadWrite("evidence")
+	p.AllowOwnTables = true
+
+	refusal(t, `CREATE TABLE work.r (c regrole)`, p)
+}
+
+// A temporary table is a separate permission from a participant's own tables,
+// but the same grammar shape, and the same escape route: it is checked here
+// too.
+func TestARegTypeColumnIsRefusedInATemporaryTableToo(t *testing.T) {
+	p := sqlpolicy.ReadWrite("evidence")
+	p.AllowTempTables = true
+
+	refusal(t, `CREATE TEMP TABLE t (c regrole)`, p)
+}
+
+// Ordinary column types must keep working: a fix that refused every column
+// definition would close the oracle by making CREATE TABLE useless.
+func TestOrdinaryColumnTypesStillPass(t *testing.T) {
+	p := sqlpolicy.ReadWrite("evidence")
+	p.AllowOwnTables = true
+
+	allow(t, `CREATE TABLE work.notes (a int, b text, c numeric(10,2), d timestamptz, e int[])`, p)
+}

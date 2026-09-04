@@ -230,6 +230,23 @@ func (c *Checker) enter(m protoreflect.Message, p sqlpolicy.Policy, depth int) e
 	if node, ok := m.Interface().(*pg.Node); ok {
 		return c.walkNode(node, p, depth)
 	}
+	// A type name reaches here, rather than through walkNode above, whenever
+	// the grammar embeds it directly on a field typed *pg.TypeName instead of
+	// wrapping it in the generic Node oneof — ColumnDef.TypeName is the
+	// reachable case (a column's type, in a CREATE TABLE a contest that
+	// permits own or temporary tables allows), and the same shape recurs on a
+	// handful of constructs this package already refuses by kind before ever
+	// reaching their type name (XMLTABLE's columns, JSON_TABLE's, CREATE
+	// DOMAIN's). The walk found none of them checked: descending into a
+	// message that is not a Node skipped straight to its own fields, and
+	// nothing upstream of here ever classified a bare *pg.TypeName as
+	// anything to look at. Checked here, once, so a reg* cast cannot reach
+	// storage by riding a column definition instead of an expression.
+	if tn, ok := m.Interface().(*pg.TypeName); ok {
+		if err := castAllowed(tn); err != nil {
+			return err
+		}
+	}
 	if depth > maxDepth {
 		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeTooDeep, Subject: fmt.Sprintf("more than %d levels", maxDepth)}
 	}
@@ -264,6 +281,12 @@ func (c *Checker) visit(node *pg.Node, p sqlpolicy.Policy) error {
 		return sqlValueAllowed(n.SqlvalueFunction)
 	case *pg.Node_TypeCast:
 		return castAllowed(n.TypeCast.GetTypeName())
+	case *pg.Node_TypeName:
+		// A type name can also arrive wrapped in the generic Node oneof
+		// rather than sitting on a typed *pg.TypeName field — enter's own
+		// check below only sees the latter shape, so this is the former's
+		// counterpart, for the same reason as the TypeCast case above.
+		return castAllowed(n.TypeName)
 	}
 	return nil
 }
