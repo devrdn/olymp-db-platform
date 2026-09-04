@@ -348,10 +348,12 @@ function AddOneParticipant({ contestId, dict }: { contestId: string; dict: Dicti
     <form action={formAction} className="flex flex-col gap-3 border-t border-line pt-5">
       <input type="hidden" name="contestId" value={contestId} />
 
-      <div className="flex flex-col gap-1.5">
-        <h4 className="font-mono text-label text-ink-3 uppercase">{t.addOne.heading}</h4>
-        <p className="max-w-body text-small text-ink-2">{t.addOne.hint}</p>
-      </div>
+      {/* No heading of its own: `PersonPicker` below renders "Add one
+          participant" as the field's own visible label, and a heading
+          repeating it word for word would be the same fact said twice in a
+          row — see `ImportParticipants` just below, whose own label plays
+          the same double duty. */}
+      <p className="max-w-body text-small text-ink-2">{t.addOne.hint}</p>
 
       <div className="flex flex-wrap items-end gap-3">
         <PersonPicker
