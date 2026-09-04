@@ -107,6 +107,28 @@ func TestAppointingADeletedAccountIsRefusedWithAConflict(t *testing.T) {
 	}
 }
 
+func TestAppointingABlockedAccountIsRefusedWithAConflict(t *testing.T) {
+	// A blocked account can never sign in either — auth.Service.Login and
+	// auth.Middleware both refuse it — so appointing one is refused for the
+	// same reason as a deleted account, just above, and answers with the
+	// same wire code the login flow already uses for it.
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+	blocked := f.stores.Users.Add(users.User{
+		Login: "blocked", FullName: "blocked", Status: users.StatusBlocked,
+	})
+
+	rec := f.do(http.MethodPut,
+		"/contests/"+c.ID.String()+"/managers/"+blocked.ID.String(), `{"role": "manager"}`)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "account_blocked" {
+		t.Errorf("error code = %q, want account_blocked", code)
+	}
+}
+
 func TestImportingARosterReportsWhatItCouldNotUse(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusPublished)

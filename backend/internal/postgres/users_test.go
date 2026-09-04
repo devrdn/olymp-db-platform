@@ -722,6 +722,37 @@ func TestSearchMatchesLoginNameOrEmail(t *testing.T) {
 	})
 }
 
+// TestSearchExcludesABlockedAccount proves the picker's own filter on the
+// real database, not only on the in-memory fake contests_test exercises: a
+// blocked account can never sign in (auth.Service.Login and auth.Middleware
+// both refuse it), so it must not come back as a candidate to appoint or
+// enrol.
+func TestSearchExcludesABlockedAccount(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		blocked := makeUser(t, ctx, "search-blocked-ivanov")
+		if err := repo.UpdateProfile(ctx, blocked.ID, "Search Blocked Ivanov", ""); err != nil {
+			t.Fatalf("UpdateProfile() = %v", err)
+		}
+		if err := repo.SetStatus(ctx, []uuid.UUID{blocked.ID}, users.StatusBlocked,
+			users.StatusChange{Reason: "test", At: time.Now()}); err != nil {
+			t.Fatalf("SetStatus() = %v", err)
+		}
+		live := makeUser(t, ctx, "search-live-ivanov")
+		if err := repo.UpdateProfile(ctx, live.ID, "Search Live Ivanov", ""); err != nil {
+			t.Fatalf("UpdateProfile() = %v", err)
+		}
+
+		found, err := repo.Search(ctx, "ivanov", 10)
+		if err != nil {
+			t.Fatalf("Search() = %v", err)
+		}
+		if len(found) != 1 || found[0].ID != live.ID {
+			t.Fatalf("Search() = %+v, want only the live account %v", found, live.ID)
+		}
+	})
+}
+
 // TestSearchEscapesAPercentSoItDoesNotMatchEveryRow guards CLAUDE.md's rule
 // 3: a parameter stops injection, not a change of meaning. An unescaped '%'
 // in the search box is a LIKE wildcard that would match every row in the

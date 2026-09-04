@@ -37,7 +37,7 @@ beforeEach(() => {
  */
 describe("addParticipantAction", () => {
   test("sends the chosen candidate's id as user_ids, and revalidates the contest", async () => {
-    serverRequest.mockResolvedValueOnce(undefined);
+    serverRequest.mockResolvedValueOnce({ added: 1, skipped: [] });
 
     const state = await addParticipantAction({}, form({ contestId, userId }));
 
@@ -59,13 +59,33 @@ describe("addParticipantAction", () => {
     expect(serverRequest).not.toHaveBeenCalled();
   });
 
-  test("surfaces the server's own error code on failure", async () => {
-    const { ApiError } = await import("@/lib/api/client");
-    serverRequest.mockRejectedValueOnce(new ApiError("already_enrolled", 409, "already enrolled"));
+  /**
+   * The endpoint this shares with the roster import always answers 200 with
+   * `{ added, skipped }` — it has no 409 for "already enrolled", because
+   * AddParticipants.addOne catches that case itself and reports it as a
+   * skip (see contests.SkipAlreadyEnrolled). A candidate the picker offered
+   * can still fail to land — enrolled by somebody else a moment earlier —
+   * and that has to read as something other than a plain success.
+   */
+  test("reports the skip reason when the chosen candidate was not actually added", async () => {
+    serverRequest.mockResolvedValueOnce({
+      added: 0,
+      skipped: [{ ref: userId, reason: "already_enrolled" }],
+    });
 
     const state = await addParticipantAction({}, form({ contestId, userId }));
 
-    expect(state).toEqual({ code: "already_enrolled" });
+    expect(state).toEqual({ skipReason: "already_enrolled" });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  test("surfaces the server's own error code on a genuine failure", async () => {
+    const { ApiError } = await import("@/lib/api/client");
+    serverRequest.mockRejectedValueOnce(new ApiError("not_editable", 409, "not editable"));
+
+    const state = await addParticipantAction({}, form({ contestId, userId }));
+
+    expect(state).toEqual({ code: "not_editable" });
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 });

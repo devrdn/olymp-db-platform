@@ -296,8 +296,17 @@ func (r *Users) List(ctx context.Context, f users.Filter) ([]users.User, int, er
 // contest's staff can reach. The returned users.User carries only ID, Login
 // and FullName; every other field is its zero value, which is fine for the
 // one caller this method has.
+//
+// The status is pinned to StatusActive rather than left empty. List's own
+// empty status means "the register an administrator reads" — every account
+// except a deleted one, blocked included, because an administrator has to be
+// able to find a blocked account to unblock it. A picker is a different
+// question: it offers a candidate to appoint or enrol, and a blocked account
+// is exactly as unusable there as a deleted one — auth.Service.Login and
+// auth.Middleware both refuse it, so offering it here only lets staff appoint
+// or enrol somebody who can never act on it and be told the server succeeded.
 func (r *Users) Search(ctx context.Context, query string, limit int) ([]users.User, error) {
-	f := users.Filter{Query: query, Limit: limit}.Normalize()
+	f := users.Filter{Query: query, Status: users.StatusActive, Limit: limit}.Normalize()
 	needle := escapeLike(f.Query)
 
 	rows, err := r.querier(ctx).Query(ctx,

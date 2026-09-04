@@ -95,6 +95,46 @@ func TestSearchPeopleRefusesAnOverlongQuery(t *testing.T) {
 	}
 }
 
+// TestSearchPeopleCountsTheQueryBoundInCharactersNotBytes guards the two
+// bounds on the same field agreeing on what they count. MinDirectoryQueryLength
+// was already a rune count (it has to be, to match what pg_trgm extracts a
+// trigram from); MaxDirectoryQueryLength used to be checked with len(), which
+// counts bytes. A hundred-character Cyrillic query is about two hundred bytes
+// in UTF-8, so it used to be refused by a message claiming "at most 100
+// characters" — a limit it had not actually reached.
+func TestSearchPeopleCountsTheQueryBoundInCharactersNotBytes(t *testing.T) {
+	f := conteststest.NewFixture()
+
+	atTheLimit := strings.Repeat("ф", contests.MaxDirectoryQueryLength)
+	if _, err := f.Service.SearchPeople(context.Background(), atTheLimit, 0); err != nil {
+		t.Errorf("SearchPeople() at the character limit = %v, want no error", err)
+	}
+
+	overTheLimit := strings.Repeat("ф", contests.MaxDirectoryQueryLength+1)
+	if _, err := f.Service.SearchPeople(context.Background(), overTheLimit, 0); !errors.Is(err, contests.ErrQueryTooLong) {
+		t.Errorf("SearchPeople() over the character limit = %v, want ErrQueryTooLong", err)
+	}
+}
+
+// TestSearchPeopleExcludesABlockedAccount guards the other half of Finding 1:
+// a blocked account can never sign in (auth.Service.Login and
+// auth.Middleware both refuse it), so offering it as a candidate here would
+// let staff appoint or enrol somebody who can never act on it, and be told
+// the server succeeded.
+func TestSearchPeopleExcludesABlockedAccount(t *testing.T) {
+	f := conteststest.NewFixture()
+	f.Users.Add(users.User{Login: "s.blocked-ivanov", FullName: "Ivanov", Status: users.StatusBlocked})
+	live := f.Users.Add(users.User{Login: "s.live-ivanov", FullName: "Ivanov", Status: users.StatusActive})
+
+	found, err := f.Service.SearchPeople(context.Background(), "ivanov", 0)
+	if err != nil {
+		t.Fatalf("SearchPeople() = %v", err)
+	}
+	if len(found) != 1 || found[0].UserID != live.ID {
+		t.Errorf("SearchPeople() = %+v, want only the live account %v", found, live.ID)
+	}
+}
+
 // TestSearchPeopleClampsAnUnreasonableLimit proves the picker's own ceiling
 // holds regardless of what a caller asks for — a typeahead needs a handful of
 // matches to disambiguate, not a page of the whole install.
