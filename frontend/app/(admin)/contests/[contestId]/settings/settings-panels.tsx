@@ -19,7 +19,6 @@ import {
   saveLanguagesAction,
   savePolicyAction,
   saveSettingsAction,
-  saveTranslationsAction,
   type SettingsState,
 } from "./actions";
 
@@ -336,11 +335,13 @@ export function ContestPanel({
 }
 
 /**
- * The language set and the titles.
+ * The language set the contest is authored in.
  *
- * Two forms, because they are two endpoints and the order matters: a language
- * has to be declared before there is anywhere to put its title. They sit
- * together because that is the order an author works in.
+ * The title itself moved to `TitleEditor`, at the top of the workspace — see
+ * that file's own doc comment. This panel stays, because *which* languages
+ * exist is still a configuration decision: dropping one here drops its title,
+ * its story and its question texts with it, which is exactly the kind of
+ * consequence a settings screen is for.
  */
 export function LanguagePanel({
   contest,
@@ -421,64 +422,6 @@ export function LanguagePanel({
         {/* Dropping a language drops its texts with it. Said before the save,
             not discovered after it. */}
         <p className="max-w-body text-small text-ink-3">{t.languages.warning}</p>
-
-        <SaveRow state={state} pending={pending} editable={editable} dict={dict} />
-      </Panel>
-    </form>
-  );
-}
-
-export function TranslationPanel({
-  contest,
-  editable,
-  dict,
-}: {
-  contest: Contest;
-  editable: boolean;
-  dict: Dictionary;
-}) {
-  const t = dict.workspace.settings;
-  const [state, formAction, pending] = useActionState<SettingsState, FormData>(
-    saveTranslationsAction,
-    {},
-  );
-
-  const declared = contest.languages.map((l) => l.code);
-
-  // Keyed like the schedule above, and for the same reason: these fields are
-  // uncontrolled, so the saved copy only reaches them through a fresh mount.
-  return (
-    <form key={contest.updatedAt} action={formAction} className="contents">
-      <Panel title={t.titles.heading} hint={t.titles.hint}>
-        <input type="hidden" name="contestId" value={contest.id} />
-
-        {declared.length === 0 ? (
-          <p className="max-w-body text-body text-ink-3">{dict.workspace.story.noLanguages}</p>
-        ) : (
-          <div className="grid gap-8 narrow:grid-cols-2">
-            {declared.map((lang) => (
-              <div key={lang} className="flex flex-col gap-4">
-                <span className="font-mono text-label text-ink uppercase">{lang}</span>
-
-                <Field id={`title-${lang}`} label={t.titles.title}>
-                  <Input
-                    name={`title.${lang}`}
-                    defaultValue={contest.translations[lang]?.title ?? ""}
-                    disabled={!editable}
-                  />
-                </Field>
-
-                <Field id={`description-${lang}`} label={t.titles.description}>
-                  <Input
-                    name={`description.${lang}`}
-                    defaultValue={contest.translations[lang]?.description ?? ""}
-                    disabled={!editable}
-                  />
-                </Field>
-              </div>
-            ))}
-          </div>
-        )}
 
         <SaveRow state={state} pending={pending} editable={editable} dict={dict} />
       </Panel>

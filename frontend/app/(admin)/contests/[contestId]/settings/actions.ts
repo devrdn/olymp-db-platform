@@ -155,37 +155,6 @@ export async function saveLanguagesAction(
 }
 
 /**
- * The titles and descriptions, replaced as a set for the same reason the
- * languages are: what has to be consistent is the whole set, and a half
- * applied one is exactly what the publish gate would have to guess about.
- */
-export async function saveTranslationsAction(
-  _previous: SettingsState,
-  form: FormData,
-): Promise<SettingsState> {
-  const contestId = form.get("contestId");
-  if (!isId(contestId)) return { code: "invalid_contest_id" };
-
-  const translations: Record<string, { title: string; description?: string }> = {};
-
-  for (const [key, value] of form.entries()) {
-    if (!key.startsWith("title.")) continue;
-    const title = String(value).trim();
-    if (!title) continue;
-
-    const lang = key.slice("title.".length);
-    const description = String(form.get(`description.${lang}`) ?? "").trim();
-    translations[lang] = description ? { title, description } : { title };
-  }
-
-  return attempt(
-    `/contests/${contestId}/translations`,
-    { method: "PUT", body: { translations } },
-    contestId,
-  );
-}
-
-/**
  * The SQL access policy.
  *
  * Table names are checked here as well as on the server. They become GRANT
