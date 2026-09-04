@@ -228,6 +228,32 @@ func TestImportSkipsADeletedAccountsID(t *testing.T) {
 	}
 }
 
+func TestImportSkipsABlockedAccount(t *testing.T) {
+	// A blocked account can never sign in — auth.Service.Login and
+	// auth.Middleware both refuse it — so a roster entry naming one must not
+	// be reported as added. Unlike a deleted account it is still somebody
+	// real, so it gets its own reason (SkipAccountBlocked) rather than being
+	// folded into SkipUnknownAccount.
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+	f.Users.Add(users.User{Login: "s.blocked", FullName: "s.blocked", Status: users.StatusBlocked})
+
+	result, err := f.Service.AddParticipants(context.Background(), contests.AddParticipantsCommand{
+		ActorID:   uuid.New(),
+		ContestID: c.ID,
+		Logins:    []string{"s.blocked"},
+	})
+	if err != nil {
+		t.Fatalf("AddParticipants() = %v", err)
+	}
+	if result.Added != 0 {
+		t.Errorf("added = %d, want 0", result.Added)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0].Reason != contests.SkipAccountBlocked {
+		t.Fatalf("skipped = %+v, want one entry reasoned %q", result.Skipped, contests.SkipAccountBlocked)
+	}
+}
+
 func TestParticipantsCannotBeAddedToAFinishedContest(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)

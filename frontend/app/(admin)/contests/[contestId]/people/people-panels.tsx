@@ -343,6 +343,12 @@ function AddOneParticipant({ contestId, dict }: { contestId: string; dict: Dicti
     {},
   );
   const failure = message(state.code, dict);
+  // Not an API error: the server answered 200 and skipped the one entry it
+  // was given, the same shape the roster import reports a row by, so it is
+  // read through the same reason vocabulary rather than `dict.errors`.
+  const skipped = state.skipReason
+    ? ((t.import.reason as Record<string, string>)[state.skipReason] ?? state.skipReason)
+    : null;
 
   return (
     <form action={formAction} className="flex flex-col gap-3 border-t border-line pt-5">
@@ -374,6 +380,12 @@ function AddOneParticipant({ contestId, dict }: { contestId: string; dict: Dicti
           {pending ? t.addOne.adding : t.addOne.action}
         </Button>
       </div>
+
+      {skipped ? (
+        <p role="alert" className="max-w-body text-small text-warn">
+          {skipped}
+        </p>
+      ) : null}
 
       {failure ? (
         <p role="alert" className="max-w-body text-small text-bad">

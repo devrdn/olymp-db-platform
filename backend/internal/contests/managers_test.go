@@ -64,6 +64,22 @@ func TestAppointingADeletedAccountIsRefused(t *testing.T) {
 	}
 }
 
+func TestAppointingABlockedAccountIsRefused(t *testing.T) {
+	// auth.Service.Login and auth.Middleware both refuse a blocked account, so
+	// appointing one would staff the contest with somebody who can never act
+	// on it — the same reason TestAppointingADeletedAccountIsRefused gives for
+	// a deleted one, just above.
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	blocked := f.Users.Add(users.User{Login: "blocked", FullName: "blocked", Status: users.StatusBlocked})
+
+	err := f.Service.GrantManager(context.Background(), uuid.New(), c.ID, blocked.ID, rbac.RoleManager)
+
+	if !errors.Is(err, users.ErrAccountBlocked) {
+		t.Errorf("GrantManager() = %v, want users.ErrAccountBlocked", err)
+	}
+}
+
 func TestOwnershipCannotBeHandedOverThroughTheStaffList(t *testing.T) {
 	// Two owners make "who may appoint staff" ambiguous, and the staff list is
 	// not where a transfer of ownership should quietly happen.
