@@ -109,7 +109,10 @@ type Settings struct {
 	// open until the contest starts.
 	EnrollmentDeadline *time.Time `json:"enrollment_deadline,omitempty"`
 	// QueryRateLimitPerMin caps a participant's SQL queries; zero means the
-	// installation default. The game loop reads it.
+	// installation default. Read by queryproxy.Service, which enforces it
+	// ahead of the query journal — not by the Query Runner, which has no
+	// notion of one contest's settings and enforces only the installation's
+	// own QUERY_PER_MINUTE.
 	QueryRateLimitPerMin int `json:"query_rate_limit_per_min,omitempty"`
 	// GracePeriodMin keeps game databases alive after the finish, so somebody
 	// who lost their connection at the buzzer is not wiped out immediately.

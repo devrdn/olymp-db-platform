@@ -39,6 +39,19 @@ const (
 // maxIdentifier is PostgreSQL's own limit on an unquoted name (NAMEDATALEN-1).
 const maxIdentifier = 63
 
+// MaxQueryBytes bounds one submitted query, before it is parsed or stored.
+//
+// Declared here rather than inside the checker, even though the checker is
+// what enforces it against the parser: the façade in front of the Query
+// Runner refuses an oversized query before writing it anywhere, and it must
+// not link the checker to know the same number — the checker carries
+// PostgreSQL's own parser through cgo, and the façade is compiled into the
+// Core API, which must not (see internal/sqlpolicy/checker's own doc
+// comment on maxQueryBytes, and CLAUDE.md's Go layout rule 7). One constant
+// in the package both already import is what keeps a query that passes the
+// façade's check from being refused for length a second time downstream.
+const MaxQueryBytes = 64 << 10
+
 // DefaultDiskQuotaRatio is how many times its template a participant's
 // database may grow to when nobody chose a number. Five is the figure section
 // 4.1 names.
