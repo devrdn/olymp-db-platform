@@ -290,12 +290,21 @@ func (r *Users) List(ctx context.Context, f users.Filter) ([]users.User, int, er
 // projection carries two correlated ARRAY(...) subqueries for roles and
 // permissions and a join for the status-changer's login, none of which
 // contests.Service.SearchPeople reads — it turns every row into a Person of
-// just a login and a full name. Running those subqueries for up to
-// DirectorySearchMaxLimit rows on every keystroke a picker sends would be
-// work spent computing an answer nobody asked for, on a search every
-// contest's staff can reach. The returned users.User carries only ID, Login
-// and FullName; every other field is its zero value, which is fine for the
-// one caller this method has.
+// a login, a full name and an email, nothing more. Running those subqueries
+// for up to DirectorySearchMaxLimit rows on every keystroke a picker sends
+// would be work spent computing an answer nobody asked for, on a search
+// every contest's staff can reach. The returned users.User carries only ID,
+// Login, FullName and Email; every other field is its zero value, which is
+// fine for the one caller this method has.
+//
+// The email is read as COALESCE(u.email, ''), same as userColumns above: the
+// column is nullable, and contests.Person.Email must come back as "" for an
+// account with none, not a value that reads as an address somebody actually
+// gave. This COALESCE costs nothing extra on the plan the way the one on
+// usersSearchMatch's own predicate did (see that constant's comment) — it
+// wraps a selected column, not one being matched by an index, so it neither
+// touches the trigram indexes nor adds a join or a subquery: the projection
+// widens by one plain column, the query shape stays the same.
 //
 // The status is pinned to StatusActive rather than left empty. List's own
 // empty status means "the register an administrator reads" — every account
@@ -310,7 +319,7 @@ func (r *Users) Search(ctx context.Context, query string, limit int) ([]users.Us
 	needle := escapeLike(f.Query)
 
 	rows, err := r.querier(ctx).Query(ctx,
-		`SELECT u.id, u.login, u.full_name FROM users u`+usersSearchWhere+` ORDER BY u.login LIMIT $3`,
+		`SELECT u.id, u.login, u.full_name, COALESCE(u.email, '') FROM users u`+usersSearchWhere+` ORDER BY u.login LIMIT $3`,
 		needle, f.Status, f.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("search users: %w", err)
@@ -320,7 +329,7 @@ func (r *Users) Search(ctx context.Context, query string, limit int) ([]users.Us
 	var found []users.User
 	for rows.Next() {
 		var u users.User
-		if err := rows.Scan(&u.ID, &u.Login, &u.FullName); err != nil {
+		if err := rows.Scan(&u.ID, &u.Login, &u.FullName, &u.Email); err != nil {
 			return nil, fmt.Errorf("scan search result: %w", err)
 		}
 		found = append(found, u)

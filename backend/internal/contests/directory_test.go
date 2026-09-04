@@ -35,6 +35,30 @@ func TestSearchPeopleMatchesLoginNameOrEmail(t *testing.T) {
 		if len(found) != 1 || found[0].UserID != target.ID {
 			t.Errorf("SearchPeople(%q) = %+v, want only %v", query, found, target.ID)
 		}
+		if found[0].Email != target.Email {
+			t.Errorf("SearchPeople(%q) email = %q, want %q", query, found[0].Email, target.Email)
+		}
+	}
+}
+
+// TestSearchPeopleReturnsACleanEmptyEmailForAnAccountWithoutOne guards the
+// other half of the owner's decision to publish the email: an account that
+// never set one must come back with the field simply empty, not with some
+// value that reads as an address nobody actually gave — the picker later
+// treats a non-empty Email as one worth showing.
+func TestSearchPeopleReturnsACleanEmptyEmailForAnAccountWithoutOne(t *testing.T) {
+	f := conteststest.NewFixture()
+	target := f.Users.Add(users.User{Login: "s.noemail-ivanov", FullName: "Ivanov", Status: users.StatusActive})
+
+	found, err := f.Service.SearchPeople(context.Background(), "ivanov", 0)
+	if err != nil {
+		t.Fatalf("SearchPeople() = %v", err)
+	}
+	if len(found) != 1 || found[0].UserID != target.ID {
+		t.Fatalf("SearchPeople() = %+v, want only %v", found, target.ID)
+	}
+	if found[0].Email != "" {
+		t.Errorf("SearchPeople() email = %q, want an empty string for an account with none", found[0].Email)
 	}
 }
 

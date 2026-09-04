@@ -229,24 +229,34 @@ func (h *ContestsHandler) addParticipants(w http.ResponseWriter, r *http.Request
 	httpx.JSON(w, r, http.StatusOK, importResponse{Added: result.Added, Skipped: skipped})
 }
 
-// PersonResponse is the least a picker needs to tell two accounts apart: a
-// name to show and a login to read, plus the identifier the grant and add
-// endpoints act on.
+// PersonResponse is what a picker needs to tell two accounts apart: a name
+// to show, a login and now an email to read, plus the identifier the grant
+// and add endpoints act on.
 //
-// Deliberately not UserResponse (users_handler.go). This search runs behind
-// participant.manage rather than users.manage, reachable by every contest's
-// staff — an email address is not what disambiguates two candidates here,
-// the login already does, since it is unique — and publishing the wider
-// account object here would be the first time this search reaches beyond
-// the administrator screens it was built for.
+// Deliberately still not UserResponse (users_handler.go) — no status, no
+// roles, no password state. The email used to be withheld for the same
+// reason those still are: this search runs behind participant.manage rather
+// than users.manage, reachable by every contest's staff, so returning it
+// here reaches every account in the installation from a permission scoped to
+// one contest, not only the administrator screens users.manage was built
+// for. A security review named that cost explicitly, and the owner accepted
+// it anyway: a login is unique but not something a person recognises at a
+// glance, and a full name is the opposite, so neither alone reliably tells
+// two "Ivanov"s apart — an email does. See contests.Person for the fuller
+// reasoning behind the trade.
+//
+// Email is `omitempty`: an account that never set one must come back with
+// the key simply absent, not `"email": ""` — a value that reads as an
+// address looked up and found blank, rather than one nobody ever gave.
 type PersonResponse struct {
 	UserID   string `json:"user_id"`
 	Login    string `json:"login"`
 	FullName string `json:"full_name"`
+	Email    string `json:"email,omitempty"`
 }
 
 func toPersonResponse(p contests.Person) PersonResponse {
-	return PersonResponse{UserID: p.UserID.String(), Login: p.Login, FullName: p.FullName}
+	return PersonResponse{UserID: p.UserID.String(), Login: p.Login, FullName: p.FullName, Email: p.Email}
 }
 
 type directoryResponse struct {
