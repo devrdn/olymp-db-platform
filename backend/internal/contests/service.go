@@ -19,11 +19,17 @@ import (
 var ErrNotEditable = errors.New("contest can no longer be edited")
 
 // UserDirectory is the slice of the account repository this package needs:
-// resolving the people it appoints and enrolls. It is deliberately two
-// methods wide — contests neither create accounts nor change them.
+// resolving the people it appoints and enrolls, and finding them by a typed
+// search. It is deliberately three methods wide and no more — contests
+// neither create accounts nor change them.
 type UserDirectory interface {
 	ByID(ctx context.Context, id uuid.UUID) (users.User, error)
 	ByLogin(ctx context.Context, login string) (users.User, error)
+	// Search resolves accounts by a substring of their login, full name or
+	// email — the picker behind Service.SearchPeople. limit is already
+	// bounded by the caller (see MaxDirectoryQueryLength and
+	// DirectorySearchMaxLimit in directory.go); this method trusts it.
+	Search(ctx context.Context, query string, limit int) ([]users.User, error)
 }
 
 // ServiceConfig collects the storage a Service needs. Every field is an

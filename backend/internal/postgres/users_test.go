@@ -687,3 +687,52 @@ func TestReplaceRolesManyTreatsARepeatedIDAsOne(t *testing.T) {
 		}
 	})
 }
+
+// TestSearchMatchesLoginNameOrEmail runs the real ILIKE query behind
+// contests.Service.SearchPeople (internal/contests's UserDirectory.Search)
+// against PostgreSQL, so the claim that it matches a login, a name and an
+// email is proven against the actual SQL rather than only the in-memory
+// fake.
+func TestSearchMatchesLoginNameOrEmail(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		target := makeUser(t, ctx, "search-target-ivanov")
+		if err := repo.UpdateProfile(ctx, target.ID, "Search Target Ivanov", "search-target@example.edu"); err != nil {
+			t.Fatalf("UpdateProfile() = %v", err)
+		}
+		makeUser(t, ctx, "search-target-other")
+
+		for _, query := range []string{"search-target-ivanov", "Target Ivanov", "search-target@example"} {
+			found, err := repo.Search(ctx, query, 10)
+			if err != nil {
+				t.Fatalf("Search(%q) = %v", query, err)
+			}
+			if len(found) != 1 || found[0].ID != target.ID {
+				t.Fatalf("Search(%q) = %+v, want only %v", query, found, target.ID)
+			}
+		}
+	})
+}
+
+// TestSearchEscapesAPercentSoItDoesNotMatchEveryRow guards CLAUDE.md's rule
+// 3: a parameter stops injection, not a change of meaning. An unescaped '%'
+// in the search box is a LIKE wildcard that would match every row in the
+// table — exactly the "meaning" defect escapeLike (like.go) exists to close,
+// now reachable by every contest's staff rather than only users.manage.
+func TestSearchEscapesAPercentSoItDoesNotMatchEveryRow(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		makeUser(t, ctx, "escape-test-account")
+
+		found, err := repo.Search(ctx, "%", 200)
+		if err != nil {
+			t.Fatalf("Search(%%) = %v", err)
+		}
+		for _, u := range found {
+			if u.Login == "escape-test-account" {
+				t.Fatalf("Search(%%) matched %q — the '%%' was read as a wildcard instead of a literal character",
+					u.Login)
+			}
+		}
+	})
+}

@@ -4,7 +4,6 @@ import { useActionState } from "react";
 
 import { StateView } from "@/components/product/state-view";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Tag } from "@/components/ui/tag";
 import { Textarea } from "@/components/ui/textarea";
 import { removable } from "@/lib/api/people-terms";
@@ -15,6 +14,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
 import {
+  addParticipantAction,
   disqualifyParticipantAction,
   grantManagerAction,
   importParticipantsAction,
@@ -23,6 +23,7 @@ import {
   type ImportState,
   type PeopleState,
 } from "./actions";
+import { PersonPicker } from "./person-picker";
 
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
@@ -130,23 +131,24 @@ function GrantManager({ contestId, dict }: { contestId: string; dict: Dictionary
       <input type="hidden" name="contestId" value={contestId} />
 
       <div className="flex flex-wrap items-end gap-3">
-        <div className="flex flex-col gap-2">
-          <label htmlFor="managerId" className="font-mono text-label text-ink-3 uppercase">
-            {t.managers.add}
-          </label>
-          {/* An identifier, not a login: the API grants by user id and this
-              build has no directory to search. The users screen is where an
-              administrator copies one from, and saying so beats a field that
-              silently wants something the author does not have. */}
-          <Input id="managerId" name="userId" placeholder={t.managers.idPlaceholder} className="w-96 max-w-full" />
-        </div>
+        <PersonPicker
+          id="managerId"
+          name="userId"
+          contestId={contestId}
+          label={t.managers.add}
+          placeholder={t.picker.placeholder}
+          helpText={t.picker.helpText}
+          searchingText={t.picker.searching}
+          noResultsText={t.picker.noResults}
+          searchFailedText={t.picker.searchFailed}
+          changeText={t.picker.change}
+          selectedTemplate={t.picker.selected}
+        />
 
         <Button type="submit" variant="secondary" disabled={pending}>
           {pending ? t.managers.adding : t.managers.addAction}
         </Button>
       </div>
-
-      <p className="max-w-body text-small text-ink-3">{t.managers.idHint}</p>
 
       {failure ? (
         <p role="alert" className="max-w-body text-small text-bad">
@@ -275,6 +277,7 @@ export function ParticipantPanel({
         </div>
       )}
 
+      <AddOneParticipant contestId={contestId} dict={dict} />
       <ImportParticipants contestId={contestId} dict={dict} />
     </section>
   );
@@ -316,6 +319,62 @@ function RowAction({
 
       {failure ? (
         <p role="alert" className="max-w-40 text-small text-balance text-bad">
+          {failure}
+        </p>
+      ) : null}
+    </form>
+  );
+}
+
+/**
+ * One person, found by searching rather than by pasting an identifier.
+ *
+ * Kept apart from `ImportParticipants` below on purpose, and headed
+ * differently: this is for the one name an organiser has in mind right now,
+ * that is for the roster a whole cohort arrives as. Reaching for the wrong
+ * one costs nothing — both end at the same `POST /participants` — but a
+ * screen offering both without saying which is which is the confusion the
+ * separate headings exist to close.
+ */
+function AddOneParticipant({ contestId, dict }: { contestId: string; dict: Dictionary }) {
+  const t = dict.workspace.people;
+  const [state, formAction, pending] = useActionState<PeopleState, FormData>(
+    addParticipantAction,
+    {},
+  );
+  const failure = message(state.code, dict);
+
+  return (
+    <form action={formAction} className="flex flex-col gap-3 border-t border-line pt-5">
+      <input type="hidden" name="contestId" value={contestId} />
+
+      <div className="flex flex-col gap-1.5">
+        <h4 className="font-mono text-label text-ink-3 uppercase">{t.addOne.heading}</h4>
+        <p className="max-w-body text-small text-ink-2">{t.addOne.hint}</p>
+      </div>
+
+      <div className="flex flex-wrap items-end gap-3">
+        <PersonPicker
+          id="participantId"
+          name="userId"
+          contestId={contestId}
+          label={t.addOne.heading}
+          placeholder={t.picker.placeholder}
+          helpText={t.picker.helpText}
+          searchingText={t.picker.searching}
+          noResultsText={t.picker.noResults}
+          searchFailedText={t.picker.searchFailed}
+          changeText={t.picker.change}
+          selectedTemplate={t.picker.selected}
+        />
+
+        <Button type="submit" variant="secondary" disabled={pending}>
+          {pending ? t.addOne.adding : t.addOne.action}
+        </Button>
+      </div>
+
+      {failure ? (
+        <p role="alert" className="max-w-body text-small text-bad">
           {failure}
         </p>
       ) : null}
