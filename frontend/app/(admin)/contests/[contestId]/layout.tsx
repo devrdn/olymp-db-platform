@@ -54,11 +54,22 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
     activeDictionary(),
   ]);
 
-  const contest = await loadContest(contestId);
+  // `contest` and the publish gate are independent requests — the gate needs
+  // only the id, not anything the contest fetch returns — so they run
+  // concurrently rather than the gate waiting out a round trip it never
+  // needed to. The overview page (`page.tsx`) asks the same gate endpoint
+  // again; `fetch`'s own request memoisation collapses that into the one
+  // call already in flight from here, same pass, same request.
+  const [contest, check] = await Promise.all([
+    loadContest(contestId),
+    loadContestResource(contestId, "/publish-check", (payload) =>
+      publishCheckSchema.parse(payload),
+    ).catch(() => null),
+  ]);
   const t = dict.workspace;
   const base = `/contests/${contest.id}`;
 
-  const groups = await navigation(contestId, base, contest.languages.map((l) => l.code), dict);
+  const groups = await navigation(contestId, base, contest.languages.map((l) => l.code), dict, check);
 
   return (
     <>
@@ -135,21 +146,22 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
  * is impossible and returns every problem at once. Read here, its flat list
  * becomes a mark against the section that owns the work.
  *
- * A gate that cannot be reached is not an error worth a screen: the sections
- * are still there and still work. The navigation simply says nothing, which is
- * honest — it does not know.
+ * `check` is fetched by the caller, alongside the contest itself, rather than
+ * by this function: the gate needs only the contest id, so waiting for the
+ * contest to resolve first — which awaiting it in here would do, since this
+ * is called after that await — is a round trip this owes nobody. A gate that
+ * cannot be reached is not an error worth a screen: the sections are still
+ * there and still work. The navigation simply says nothing, which is honest —
+ * it does not know.
  */
 async function navigation(
   contestId: string,
   base: string,
   languages: string[],
   dict: Awaited<ReturnType<typeof activeDictionary>>,
+  check: ReturnType<typeof publishCheckSchema.parse> | null,
 ): Promise<NavGroup[]> {
   const t = dict.workspace;
-
-  const check = await loadContestResource(contestId, "/publish-check", (payload) =>
-    publishCheckSchema.parse(payload),
-  ).catch(() => null);
 
   const problems = check?.problems ?? [];
   const has = (code: string) => problems.some((p) => p.code === code);
