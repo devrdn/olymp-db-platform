@@ -44,6 +44,7 @@ export function Combobox<T>({
   statusMessage,
   disabled,
   className,
+  describedBy,
 }: {
   id: string;
   label: string;
@@ -59,6 +60,12 @@ export function Combobox<T>({
   statusMessage?: string;
   disabled?: boolean;
   className?: string;
+  /** id of a paragraph elsewhere on the page — a hint, a "Selected: …" line
+   * — that describes this control. Wired to the input's own
+   * `aria-describedby` rather than left for the caller to attach by hand,
+   * which is how a describing paragraph ends up in the DOM with nothing
+   * pointing at it. */
+  describedBy?: string;
 }) {
   return (
     <ComboboxPrimitive.Root
@@ -87,6 +94,7 @@ export function Combobox<T>({
       <ComboboxPrimitive.Input
         id={id}
         placeholder={placeholder}
+        aria-describedby={describedBy}
         className={cn(
           "h-(--control-h) w-full min-w-0 border border-edge bg-transparent px-3",
           "text-control text-ink placeholder:text-ink-3",

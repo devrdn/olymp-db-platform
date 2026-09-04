@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 // `vi.mock` factories are hoisted above every import in this file, so the mock
 // has to be built through `vi.hoisted` rather than a plain top-level `const`.
@@ -182,5 +182,41 @@ describe("PersonPicker, what it announces", () => {
     renderInForm();
 
     expect(screen.getByRole("combobox", { name: en.workspace.people.addOne.heading })).toBeInTheDocument();
+  });
+
+  // The help paragraph carries an id (`${id}-help`) so it can double as the
+  // "Selected: …" announcement once a choice is made — but an id nothing
+  // points at is not wired to anything a screen reader would read out for
+  // the field itself. This pins the wiring, not just the id's existence.
+  test("the input is described by the paragraph beneath it", () => {
+    renderInForm();
+
+    const input = screen.getByRole("combobox");
+    expect(input).toHaveAccessibleDescription(en.workspace.people.picker.helpText);
+  });
+});
+
+describe("PersonPicker, when a search fails", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // An ApiError (the request reached the server and it said no) is already
+  // shown in words via searchFailedText — nothing more to do. Anything else
+  // (a network failure, a bug in parseDirectory) is unexpected on top of
+  // that, and the failure handler used to rethrow it from inside a `.catch`
+  // with nothing further downstream to receive it: an unhandled promise
+  // rejection nobody building this screen would see. It has to land
+  // somewhere a developer can actually find it instead.
+  test("an error that is not an ApiError is logged instead of becoming an unhandled rejection", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    request.mockRejectedValue(new TypeError("network is down"));
+    const user = userEvent.setup();
+    renderInForm();
+
+    await user.type(screen.getByRole("combobox"), "ivan");
+    await new Promise((resolve) => setTimeout(resolve, 350));
+
+    expect(consoleError).toHaveBeenCalled();
   });
 });

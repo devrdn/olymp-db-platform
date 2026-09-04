@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -16,6 +17,21 @@ import (
 // storage — including one that only ever reaches a WHERE clause — carries an
 // explicit bound rather than whatever a caller chose to send.
 const MaxDirectoryQueryLength = 100
+
+// MinDirectoryQueryLength is the shortest text SearchPeople will turn into a
+// database query. Below it — including the empty string — the search behaves
+// exactly like nothing having been typed: no results, and no request reaches
+// the repository at all. It answered a concrete incident: `?q=a` used to
+// return a page of unrelated accounts to the very first keystroke a picker
+// sent.
+//
+// This is a courtesy for the ordinary case, not a defence against
+// enumeration, and it must not be described as one — see SearchPeople's own
+// comment for what actually bounds who can run this search at all. Two
+// characters still leaves hundreds of combinations for a determined
+// permission holder to walk through; it only stops the search from
+// answering a single keystroke with a page of strangers.
+const MinDirectoryQueryLength = 2
 
 // DirectorySearchDefaultLimit and DirectorySearchMaxLimit bound how many
 // candidates a picker gets back for one search. A typeahead needs enough
@@ -61,16 +77,24 @@ type Person struct {
 // so this reaches exactly the people who already work the people screen, not
 // a wider audience than that.
 //
-// An empty query returns no results rather than the first page of every
-// account: search-as-you-type only ever asks once somebody has typed
-// something, and answering nothing to nothing is what keeps a directory
-// search from becoming a way to browse the whole roster.
+// A query shorter than MinDirectoryQueryLength — including an empty one —
+// returns no results without ever reaching the database: search-as-you-type
+// only asks once somebody has typed something resembling a login or a name.
+// That is a guard against the cheap, accidental case, not against
+// enumeration: the actual boundary on who may run this search at all is the
+// contest-scoped participant.manage permission the HTTP layer checks before
+// SearchPeople runs. Somebody who already holds that permission can still
+// walk every short combination and, a search at a time, see every account in
+// the installation — but a login and a full name are exactly what that
+// permission already lets its holder see on any contest's own staff and
+// participant lists, so that is not a new capability this endpoint hands
+// out, only a faster way to use one it already grants.
 func (s *Service) SearchPeople(ctx context.Context, query string, limit int) ([]Person, error) {
 	query = strings.TrimSpace(query)
 	if len(query) > MaxDirectoryQueryLength {
 		return nil, fmt.Errorf("%w: at most %d characters", ErrQueryTooLong, MaxDirectoryQueryLength)
 	}
-	if query == "" {
+	if utf8.RuneCountInString(query) < MinDirectoryQueryLength {
 		return []Person{}, nil
 	}
 

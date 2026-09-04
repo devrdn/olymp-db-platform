@@ -131,7 +131,14 @@ export function PersonPicker({
           if (thisGeneration !== generation.current) return;
           setOptions([]);
           setFailed(true);
-          if (!(error instanceof ApiError)) throw error;
+          // failed/searchFailedText already tells the person the search did
+          // not work; an error that is not even an ApiError (a network
+          // failure, a bug in parseDirectory) is unexpected on top of that,
+          // and worth a place a developer can actually see it. Rethrowing
+          // here would not do that — nothing downstream of this .catch
+          // handles a rethrow, so it would only become an unhandled
+          // rejection, visible to nobody in particular.
+          if (!(error instanceof ApiError)) console.error("directory search failed", error);
         })
         .finally(() => {
           if (thisGeneration === generation.current) setLoading(false);
@@ -180,6 +187,7 @@ export function PersonPicker({
         emptyMessage={loading || inputValue.trim() === "" ? "" : noResultsText}
         statusMessage={status}
         disabled={disabled}
+        describedBy={`${id}-help`}
       />
 
       {/* `role="status"` + `aria-live="polite"`: the moment a choice is made
