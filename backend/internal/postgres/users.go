@@ -297,7 +297,7 @@ func (r *Users) List(ctx context.Context, f users.Filter) ([]users.User, int, er
 // Login, FullName and Email; every other field is its zero value, which is
 // fine for the one caller this method has.
 //
-// The email is read as COALESCE(u.email, ''), same as userColumns above: the
+// The email is coalesced to an empty string, same as userColumns above: the
 // column is nullable, and contests.Person.Email must come back as "" for an
 // account with none, not a value that reads as an address somebody actually
 // gave. This COALESCE costs nothing extra on the plan the way the one on
