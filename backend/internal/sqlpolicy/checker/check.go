@@ -24,7 +24,13 @@ const maxDepth = 100
 // tree several times the size of its input, and the HTTP layer's own body
 // limit is a different layer's decision that this one should not depend on
 // being set. Far longer than any query a person writes by hand.
-const maxQueryBytes = 64 << 10
+//
+// sqlpolicy.MaxQueryBytes rather than a number of this package's own: the
+// façade in front of the Query Runner refuses an oversized query before
+// writing it anywhere, and the two bounds drifting apart would mean a query
+// that passed the façade's check reaching this one only to be refused for the
+// same reason a second time.
+const maxQueryBytes = sqlpolicy.MaxQueryBytes
 
 // Checker decides whether a query stays within a policy.
 //
@@ -256,6 +262,8 @@ func (c *Checker) visit(node *pg.Node, p sqlpolicy.Policy) error {
 		return relationAllowed(n.RangeVar, p)
 	case *pg.Node_SqlvalueFunction:
 		return sqlValueAllowed(n.SqlvalueFunction)
+	case *pg.Node_TypeCast:
+		return castAllowed(n.TypeCast.GetTypeName())
 	}
 	return nil
 }
@@ -342,6 +350,60 @@ func relationAllowed(rel *pg.RangeVar, p sqlpolicy.Policy) error {
 		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeCatalogNotAllowed, Subject: rel.GetRelname()}
 	}
 	return nil
+}
+
+// regTypes are the pseudo-types PostgreSQL resolves by looking a name up in
+// the catalog and handing back its OID: 'name'::regclass for a relation,
+// ::regrole for a role, and so on through functions, operators, namespaces
+// and the rest. A cast to one of these is not a value conversion, it is a
+// catalog lookup wearing a cast's syntax — and unlike a SELECT against the
+// catalog, the catalog rules never see it (kindOf classifies range_var, not
+// type_cast), so it reaches every object in the installation regardless of
+// what the contest's policy allows to be read directly. Refused
+// unconditionally, the same as the sensitive catalogs themselves: no policy
+// setting is meant to open this back up.
+var regTypes = names(
+	"regclass", "regproc", "regprocedure", "regoper", "regoperator",
+	"regtype", "regrole", "regnamespace", "regconfig", "regdictionary",
+	"regcollation",
+)
+
+// castAllowed refuses a cast to a reg* pseudo-type, however it is spelled.
+func castAllowed(tn *pg.TypeName) error {
+	name, isReg := regTypeName(tn)
+	if !isReg {
+		return nil
+	}
+	return &sqlpolicy.Refusal{Code: sqlpolicy.CodeCatalogNotReadable, Subject: name}
+}
+
+// regTypeName reduces a parsed type name to its bare, lower-cased spelling
+// and reports whether that spelling is one of regTypes.
+//
+// The same reduction functionName makes for a call: PostgreSQL accepts both
+// `regclass` and the schema-qualified `pg_catalog.regclass` for the same
+// type, and a check that only caught one of them would be a check anyone gets
+// past by adding or removing eleven characters.
+func regTypeName(tn *pg.TypeName) (string, bool) {
+	parts := make([]string, 0, len(tn.GetNames()))
+	for _, part := range tn.GetNames() {
+		parts = append(parts, part.GetString_().GetSval())
+	}
+
+	var bare string
+	switch len(parts) {
+	case 1:
+		bare = strings.ToLower(parts[0])
+	case 2:
+		if strings.ToLower(parts[0]) != "pg_catalog" {
+			return "", false
+		}
+		bare = strings.ToLower(parts[1])
+	default:
+		return "", false
+	}
+	_, isReg := regTypes[bare]
+	return bare, isReg
 }
 
 // kindOf names a node by the grammar's own name for it — `select_stmt`,

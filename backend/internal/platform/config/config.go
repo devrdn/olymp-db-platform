@@ -94,6 +94,14 @@ type Config struct {
 	// only guesses: a hall of students behind one NAT address is one address
 	// here. Raise it where the whole cohort shares an address.
 	MaxLoginAttemptsPerAddress int
+	// QueryPerMinute is how often a participant with no contest-specific rate
+	// may ask, for the console's own pre-check ahead of the query journal.
+	// Zero means "not stated", and queryproxy supplies its own default — the
+	// number is a rule about the SQL console's load, so it belongs to that
+	// package rather than here (see MaxLoginAttemptsPerAddress above for the
+	// same reasoning). It exists at all so this figure can be kept equal to
+	// the Query Runner's own QUERY_PER_MINUTE, which this process never reads.
+	QueryPerMinute int
 }
 
 // Load reads configuration from the environment, applying defaults for
@@ -129,6 +137,9 @@ func Load() (Config, error) {
 	// package rather than here — and this one must not import it: platform
 	// packages do not depend on a domain (CLAUDE.md, Go layout rule 7).
 	if cfg.MaxLoginAttemptsPerAddress, err = intEnv("MAX_LOGIN_ATTEMPTS_PER_ADDRESS", 0); err != nil {
+		return Config{}, err
+	}
+	if cfg.QueryPerMinute, err = intEnv("QUERY_PER_MINUTE", 0); err != nil {
 		return Config{}, err
 	}
 

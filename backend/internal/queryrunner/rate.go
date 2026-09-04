@@ -51,7 +51,15 @@ func newWindow(limit int, over time.Duration, now func() time.Time) *window {
 // lockout — and the point is to slow somebody down, not to remove them from
 // the contest.
 func (w *window) admit(participant string) error {
-	if w.limit <= 0 {
+	return w.admitAt(participant, w.limit)
+}
+
+// admitAt is admit with the limit made explicit, so a caller who knows a more
+// specific rate than the instance's own — a contest's configured limit, in
+// particular — can enforce that one against the same sliding window instead
+// of a second one of its own.
+func (w *window) admitAt(participant string, limit int) error {
+	if limit <= 0 {
 		return nil
 	}
 
@@ -74,13 +82,41 @@ func (w *window) admit(participant string) error {
 		}
 	}
 
-	if len(kept) >= w.limit {
+	if len(kept) >= limit {
 		w.seen[participant] = kept
 		return ErrTooManyQueries
 	}
 
 	w.seen[participant] = append(kept, now)
 	return nil
+}
+
+// RateLimiter bounds how often one key may pass, in a sliding window.
+//
+// Exported so that a caller elsewhere in the process can enforce a rate the
+// Runner does not know — a contest's own configured limit, decided by an
+// organiser long before a query reaches this package — against the same
+// sliding-window logic the Runner's own per-instance check uses, rather than
+// a second implementation of it. The Query Runner and the façade in front of
+// it are separate processes, so this is still a second *instance*; it is
+// never a second *algorithm*.
+type RateLimiter struct{ w *window }
+
+// NewRateLimiter returns a limiter whose default is defaultLimit passes of
+// one key per the given interval. Zero means the caller has no default of its
+// own to fall back to.
+func NewRateLimiter(defaultLimit int, over time.Duration) *RateLimiter {
+	return &RateLimiter{w: newWindow(defaultLimit, over, nil)}
+}
+
+// Admit records one pass of key and reports whether it is within limit passes
+// of the configured interval. limit of zero or less falls back to the
+// limiter's own default.
+func (r *RateLimiter) Admit(key string, limit int) error {
+	if limit <= 0 {
+		limit = r.w.limit
+	}
+	return r.w.admitAt(key, limit)
 }
 
 // prune drops participants with nothing left in the window.

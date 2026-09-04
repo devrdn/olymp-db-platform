@@ -1,10 +1,28 @@
 package api_test
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/api"
+	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/platform/cache"
+	"github.com/devrdn/db-contest/backend/internal/platform/logging"
+	"github.com/devrdn/db-contest/backend/internal/queryproxy"
+	"github.com/devrdn/db-contest/backend/internal/queryrunner"
+	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/devrdn/db-contest/backend/internal/users/userstest"
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 // The validator's vocabulary and the API's are two lists, and the interface
@@ -22,5 +40,134 @@ func TestEveryRefusalHasACodeOfItsOwn(t *testing.T) {
 				t.Fatalf("%q has no API code, so a participant meeting it is told nothing", code)
 			}
 		})
+	}
+}
+
+// fakeConsole answers with whatever a test asked for, so the handler's own
+// mapping from an error to a status and a code can be exercised without
+// wiring the whole façade behind it.
+type fakeConsole struct {
+	result *queryrunner.Result
+	err    error
+}
+
+func (c fakeConsole) Run(context.Context, queryproxy.Command) (*queryrunner.Result, error) {
+	return c.result, c.err
+}
+
+// consoleFixture mounts the console endpoint behind a session for one
+// authenticated participant.
+type consoleFixture struct {
+	router http.Handler
+	cookie *http.Cookie
+}
+
+func newConsoleFixture(t *testing.T, console api.Console) *consoleFixture {
+	t.Helper()
+
+	userRepo := userstest.New()
+	actor := userRepo.Add(users.User{Login: "participant", FullName: "Participant", Status: users.StatusActive})
+
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+
+	log := logging.New("error", io.Discard)
+	sessions := auth.NewSessionStore(c, time.Hour)
+	token, err := sessions.Create(t.Context(), auth.Principal{UserID: actor.ID, Login: actor.Login})
+	if err != nil {
+		t.Fatalf("session Create() returned error: %v", err)
+	}
+
+	mw := auth.NewMiddleware(auth.MiddlewareConfig{
+		Sessions: sessions, Users: userRepo,
+		Authorizer: rbac.New(noRoles{}),
+		Cookies:    auth.NewCookieWriter(false), Logger: log,
+	})
+
+	router := chi.NewRouter()
+	api.NewConsoleHandler(console, mw, log).Mount(router)
+
+	return &consoleFixture{
+		router: router,
+		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: token},
+	}
+}
+
+func (f *consoleFixture) run(sql string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost,
+		"/contests/"+uuid.New().String()+"/query", strings.NewReader(`{"sql":`+strconvQuote(sql)+`}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(f.cookie)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	return rec
+}
+
+// strconvQuote is a tiny JSON string literal, good enough for the plain SQL
+// these tests send — a dedicated encoder would be answering a question this
+// package's real JSON decoding already covers elsewhere.
+func strconvQuote(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		if r == '"' || r == '\\' {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// CLAUDE.md's security rule 1: every refusal the console can answer with
+// needs a declared sentinel, a mapping in fail(), and a test asserting the
+// 4xx. This is that test, for the length bound queryproxy now enforces
+// before a query ever reaches the journal.
+func TestAQueryOverTheLengthBoundIsA400(t *testing.T) {
+	fixture := newConsoleFixture(t, fakeConsole{
+		err: &sqlpolicy.Refusal{Code: sqlpolicy.CodeTooLong, Subject: "70000 bytes"},
+	})
+
+	rec := fixture.run("SELECT 1")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "query_too_long" {
+		t.Fatalf("code = %q, want %q", code, "query_too_long")
+	}
+}
+
+// A participant asking faster than the contest allows meets the same code
+// whether the runner or this façade's own pre-check caught them — the two are
+// the same limit, checked in two places, and the participant should not be
+// able to tell which one refused.
+func TestAQueryRefusedForItsRateIsA429(t *testing.T) {
+	fixture := newConsoleFixture(t, fakeConsole{err: queryrunner.ErrTooManyQueries})
+
+	rec := fixture.run("SELECT 1")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusTooManyRequests, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "query_too_often" {
+		t.Fatalf("code = %q, want %q", code, "query_too_often")
+	}
+}
+
+// A journal that could not be opened is ours, not the participant's SQL being
+// wrong, and the finding this closes is exactly a raw database error reaching
+// the client as a 400 for it. It gets the same 500 the query service being
+// unreachable gets, and none of the database's own words.
+func TestAJournalFailureIsA500NotARawDatabaseError(t *testing.T) {
+	underlying := errors.New(`ERROR: string is too long for tsvector (SQLSTATE 54001)`)
+	fixture := newConsoleFixture(t, fakeConsole{
+		err: fmt.Errorf("%w: %w", queryrunner.ErrJournalUnavailable, underlying),
+	})
+
+	rec := fixture.run("SELECT 1")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "tsvector") {
+		t.Fatalf("the database's own words reached the client: %s", rec.Body.String())
 	}
 }

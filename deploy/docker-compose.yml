@@ -271,6 +271,12 @@ services:
       # The console reaches the Query Runner over the private network; the
       # runner's own port is published nowhere.
       QUERY_RUNNER_ADDR: ${QUERY_RUNNER_ADDR:-queryrunner:9100}
+      # The same figure the queryrunner service below is given, so the
+      # console's own pre-check (ahead of the query journal) refuses a
+      # participant asking too fast at the same rate the Query Runner would —
+      # not the architecture's own default, which may not be what this
+      # deployment actually runs with.
+      QUERY_PER_MINUTE: ${QUERY_PER_MINUTE:-30}
     # No host port: Caddy is the only way in. The development overlay exposes
     # the API directly for debugging.
     depends_on:
