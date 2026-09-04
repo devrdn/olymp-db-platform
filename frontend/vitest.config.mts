@@ -11,6 +11,10 @@ export default defineConfig({
     // the convention here is that a test sits beside its source. It was
     // outside the glob while the proxy was sending every signed-out visitor
     // into a redirect loop, and an untested file is how that stayed unnoticed.
-    include: ["{app,lib,components}/**/*.test.{ts,tsx}", "proxy.test.ts"],
+    include: [
+      "{app,lib,components}/**/*.test.{ts,tsx}",
+      "proxy.test.ts",
+      "next.config.test.ts",
+    ],
   },
 });
