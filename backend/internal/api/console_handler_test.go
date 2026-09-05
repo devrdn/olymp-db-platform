@@ -153,6 +153,24 @@ func TestAQueryRefusedForItsRateIsA429(t *testing.T) {
 	}
 }
 
+// CLAUDE.md's security rule 1 again, this time for the sentinel
+// queryproxy.Service now returns for a deadline computed by contests.Deadline
+// (docs/ARCHITECTURE.md §8) as much as for a contest whose status alone says
+// it is not running — the façade does not distinguish the two to its caller,
+// and this handler must still turn either into the same 409 a participant
+// can act on.
+func TestAParticipantPastTheirDeadlineGetsA409(t *testing.T) {
+	fixture := newConsoleFixture(t, fakeConsole{err: queryproxy.ErrContestNotRunning})
+
+	rec := fixture.run("SELECT 1")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "contest_not_running" {
+		t.Fatalf("code = %q, want %q", code, "contest_not_running")
+	}
+}
+
 // A journal that could not be opened is ours, not the participant's SQL being
 // wrong, and the finding this closes is exactly a raw database error reaching
 // the client as a 400 for it. It gets the same 500 the query service being

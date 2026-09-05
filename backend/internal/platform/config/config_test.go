@@ -237,6 +237,42 @@ func TestSessionLifetimeIsConfigurable(t *testing.T) {
 	}
 }
 
+func TestDeadlineGraceDefaultsToFiveSeconds(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.DeadlineGrace != 5*time.Second {
+		t.Errorf("DeadlineGrace = %v, want 5s", cfg.DeadlineGrace)
+	}
+}
+
+func TestDeadlineGraceIsConfigurable(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("DEADLINE_GRACE", "2s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.DeadlineGrace != 2*time.Second {
+		t.Errorf("DeadlineGrace = %v, want 2s", cfg.DeadlineGrace)
+	}
+}
+
+func TestNegativeDeadlineGraceIsRejected(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("DEADLINE_GRACE", "-1s")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted a negative DEADLINE_GRACE, want error")
+	}
+}
+
 func TestCookieIsSecureOutsideDevelopment(t *testing.T) {
 	// The dangerous default is the insecure one, so production must not have
 	// to remember a flag to get it right.

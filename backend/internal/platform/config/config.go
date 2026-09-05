@@ -110,6 +110,14 @@ type Config struct {
 	// it costs ever refusing anything (queryproxy.effectiveRateLimit is where
 	// the two are reconciled).
 	QueryPerMinute int
+	// DeadlineGrace is the network-latency allowance added to a participant's
+	// deadline (docs/ARCHITECTURE.md §8) before an action arriving after it is
+	// refused. It exists because a request sent an instant before the
+	// deadline can arrive an instant after it; the number is a rule about
+	// timing, not about this process, so — like QueryPerMinute above — it
+	// belongs to the package that enforces it (queryproxy.Service.WithGrace)
+	// rather than to a constant duplicated wherever a deadline is checked.
+	DeadlineGrace time.Duration
 }
 
 // Load reads configuration from the environment, applying defaults for
@@ -152,6 +160,13 @@ func Load() (Config, error) {
 	// for why the two must agree, including what zero means once it is set.
 	if cfg.QueryPerMinute, err = intEnv("QUERY_PER_MINUTE", 30); err != nil {
 		return Config{}, err
+	}
+	// Five seconds unset, the figure docs/ARCHITECTURE.md §8 names.
+	if cfg.DeadlineGrace, err = durationEnv("DEADLINE_GRACE", 5*time.Second); err != nil {
+		return Config{}, err
+	}
+	if cfg.DeadlineGrace < 0 {
+		return Config{}, fmt.Errorf("DEADLINE_GRACE cannot be negative, got %s", cfg.DeadlineGrace)
 	}
 
 	cfg.GameProvisionerDSN = os.Getenv("GAME_PROVISIONER_DSN")
