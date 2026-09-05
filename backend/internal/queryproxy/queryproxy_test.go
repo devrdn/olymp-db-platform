@@ -36,6 +36,10 @@ type people struct {
 	// check upstream of it stopped a request before it got here. A pointer so
 	// the value receiver below can still record into it.
 	calls *int
+	// starts counts how often Start was reached, and startErr lets a test
+	// simulate the write failing.
+	starts   *int
+	startErr error
 }
 
 func (p people) ByUser(context.Context, uuid.UUID, uuid.UUID) (contests.Participant, error) {
@@ -43,6 +47,23 @@ func (p people) ByUser(context.Context, uuid.UUID, uuid.UUID) (contests.Particip
 		*p.calls++
 	}
 	return p.participant, p.err
+}
+
+// Start mirrors what postgres.Registrations.Start guarantees: it sets
+// StartedAt and moves the status to active together, once, and reports how
+// often it was actually reached so a test can prove an already-started
+// participant costs no further call.
+func (p people) Start(_ context.Context, _ uuid.UUID, now time.Time) (contests.Participant, error) {
+	if p.starts != nil {
+		*p.starts++
+	}
+	if p.startErr != nil {
+		return contests.Participant{}, p.startErr
+	}
+	started := p.participant
+	started.StartedAt = &now
+	started.Status = contests.RegistrationActive
+	return started, nil
 }
 
 type contestStore struct {
@@ -299,27 +320,109 @@ func TestAnIndividualParticipantStillWithinTheirOwnWindowIsUnaffected(t *testing
 	}
 }
 
-// An individual-timing participant who has not started has no deadline for
-// the formula to produce (contests.Deadline returns ok=false), and the
-// façade must fail closed rather than let them query without limit.
-func TestAnIndividualParticipantWhoHasNotStartedCannotQueryYet(t *testing.T) {
+// The defect finding 1 closes: nothing ever wrote registrations.started_at,
+// so an individual-timing participant who had not started got ok=false from
+// contests.Deadline forever and was refused on every query, permanently,
+// while the contest and its own status both reported "running". Their first
+// query is now the deliberate action that starts their own clock (§8), and
+// is answered like any other query inside a fresh window rather than
+// refused.
+func TestAnIndividualParticipantsFirstQueryStartsTheirClock(t *testing.T) {
 	farFuture := time.Now().Add(24 * time.Hour)
 	duration := 30
 	contest := contests.Contest{
 		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingIndividual,
 		DurationMin: &duration, EndsAt: &farFuture,
 	}
+	starts := 0
 	service := queryproxy.New(
 		people{participant: contests.Participant{
 			ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered,
-		}},
+		}, starts: &starts},
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
 	)
 
-	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrContestNotRunning) {
-		t.Fatalf("error = %v, want ErrContestNotRunning", err)
+	if _, err := service.Run(t.Context(), command()); err != nil {
+		t.Fatalf("the participant's first query: %v", err)
+	}
+	if starts != 1 {
+		t.Fatalf("Start was called %d times, want 1", starts)
+	}
+}
+
+// A second query must not restart the clock, or cost a write at all: the
+// façade only calls Start when the participant it already read back carries
+// no StartedAt.
+func TestASecondQueryDoesNotRestartAnAlreadyStartedParticipant(t *testing.T) {
+	farFuture := time.Now().Add(24 * time.Hour)
+	started := time.Now().Add(-time.Minute)
+	duration := 30
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingIndividual,
+		DurationMin: &duration, EndsAt: &farFuture,
+	}
+	starts := 0
+	service := queryproxy.New(
+		people{participant: contests.Participant{
+			ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive, StartedAt: &started,
+		}, starts: &starts},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	)
+
+	if _, err := service.Run(t.Context(), command()); err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	if starts != 0 {
+		t.Fatalf("Start was called %d times for a participant who had already started, want 0", starts)
+	}
+}
+
+// A fixed-timing participant's own clock is never touched: fixed timing
+// shares one window, and Deadline never consults StartedAt for it (§8).
+func TestAFixedTimingParticipantsClockIsNeverStarted(t *testing.T) {
+	starts := 0
+	service := queryproxy.New(
+		people{participant: contests.Participant{
+			ID: uuid.New(), Status: contests.RegistrationActive,
+		}, starts: &starts},
+		contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	)
+
+	if _, err := service.Run(t.Context(), command()); err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	if starts != 0 {
+		t.Fatalf("Start was called %d times for a fixed-timing participant, want 0", starts)
+	}
+}
+
+// A failure to start the clock is ours, not the participant's query being
+// wrong — the same treatment every other lookup failure in Run gets.
+func TestAFailureToStartTheClockIsMarkedAsOurs(t *testing.T) {
+	farFuture := time.Now().Add(24 * time.Hour)
+	duration := 30
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingIndividual,
+		DurationMin: &duration, EndsAt: &farFuture,
+	}
+	broken := errors.New("dial tcp 172.28.0.5:5432: connection refused")
+	service := queryproxy.New(
+		people{participant: contests.Participant{
+			ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered,
+		}, startErr: broken},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	)
+
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrUnavailable) {
+		t.Fatalf("error = %v, want ErrUnavailable", err)
 	}
 }
 
@@ -755,6 +858,81 @@ func TestAParticipantAskingTooFastIsRefusedBeforeTheRunnerIsReached(t *testing.T
 	if run.calls != 1 {
 		t.Fatalf("the runner was reached by a query that should have been refused for its rate (calls=%d)", run.calls)
 	}
+}
+
+// Finding 4: a query refused for the contest's own timing still costs the
+// participant and contest lookups above it, and before this fix the deadline
+// refusal returned before the rate check ever ran — so a participant
+// hammering this endpoint after their own deadline (or before the contest
+// opened) met no limiter at all, indefinitely. The rate check now runs ahead
+// of that refusal, so it is what eventually stops the hammering.
+func TestARequestRefusedByTheDeadlineStillCountsAgainstTheRate(t *testing.T) {
+	deadline := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &deadline,
+		Settings: contests.Settings{QueryRateLimitPerMin: 1},
+	}
+	registration := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}
+	service := queryproxy.New(
+		people{participant: registration},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	).WithClock(func() time.Time { return deadline.Add(time.Minute) })
+
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrContestNotRunning) {
+		t.Fatalf("the first query past the deadline: error = %v, want ErrContestNotRunning", err)
+	}
+
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("a second query in the same state: error = %v, want ErrTooManyQueries — the first should have counted", err)
+	}
+}
+
+// The same defect, on the other refusal the rate check used to sit behind: a
+// contest that has not opened yet.
+func TestARequestRefusedBecauseTheContestIsNotRunningStillCountsAgainstTheRate(t *testing.T) {
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusPublished,
+		Settings: contests.Settings{QueryRateLimitPerMin: 1},
+	}
+	registration := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered}
+	service := queryproxy.New(
+		people{participant: registration},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	)
+
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrContestNotRunning) {
+		t.Fatalf("the first query before the contest opened: error = %v, want ErrContestNotRunning", err)
+	}
+
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("a second query in the same state: error = %v, want ErrTooManyQueries — the first should have counted", err)
+	}
+}
+
+// Finding 7: WithGrace and WithPerMinuteDefault must agree about a negative
+// value. config.Load never produces one for either DEADLINE_GRACE or
+// QUERY_PER_MINUTE, so a caller passing one here is a bug in the wiring, not
+// deployment input to fail closed on quietly.
+func TestWithGracePanicsOnANegativeValue(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("WithGrace(-1s) did not panic")
+		}
+	}()
+	queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}).WithGrace(-time.Second)
+}
+
+func TestWithPerMinuteDefaultPanicsOnANegativeValue(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("WithPerMinuteDefault(-1) did not panic")
+		}
+	}()
+	queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}).WithPerMinuteDefault(-1)
 }
 
 // query_rate_limit_per_min used to be stored, validated and served without

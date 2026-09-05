@@ -90,13 +90,16 @@ test: ## Run the unit tests
 test-race: ## Run the tests with the race detector
 	cd $(BACKEND) && go test -race ./...
 
-# The repository tests run their SQL against a real PostgreSQL, each inside a
-# transaction that is rolled back, so they leave nothing behind. Without
-# CORE_DB_DSN they skip instead of failing: a developer with no database to
-# hand can still run `make test`. This target is what makes sure the SQL is
-# actually exercised — `make dev-up` first.
+# The repository tests run their SQL against a real PostgreSQL, most inside a
+# transaction that is rolled back so they leave nothing behind; a few — where
+# the point is what happens between two separate connections, not one, such
+# as queryproxy's own guarantee that it and postgres.Registrations agree
+# about what "started" means — commit their own fixture and delete it
+# afterwards instead. Without CORE_DB_DSN they skip rather than failing: a
+# developer with no database to hand can still run `make test`. This target
+# is what makes sure the SQL is actually exercised — `make dev-up` first.
 test-db: require-env ## Run the repository tests against the development database
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go test -count=1 ./internal/postgres/... ./internal/provisioning/...
+	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go test -count=1 ./internal/postgres/... ./internal/provisioning/... ./internal/queryproxy/...
 
 # The game cluster tests connect as the participant's own database role and
 # provoke what it must not be able to do. They cannot be faked: every guarantee

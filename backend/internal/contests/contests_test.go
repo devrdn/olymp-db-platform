@@ -231,6 +231,35 @@ func TestValidateRejectsIndividualTimingWithoutADuration(t *testing.T) {
 	}
 }
 
+// The bound this closes (finding 5): Deadline computes
+// time.Duration(*DurationMin) * time.Minute in int64 nanoseconds, which wraps
+// to a deadline in the past well past this figure — silently locking out
+// every participant of the contest that carried it. A week is already far
+// longer than any real-time olympiad sitting, so this is refused at the
+// domain boundary rather than reaching storage to overflow later.
+func TestValidateRejectsAnIndividualDurationPastTheBound(t *testing.T) {
+	c := validContest()
+	c.Timing = contests.TimingIndividual
+	tooLong := 7*24*60 + 1
+	c.DurationMin = &tooLong
+
+	if err := c.Validate(); !errors.Is(err, contests.ErrInvalidContest) {
+		t.Errorf("Validate() = %v, want contests.ErrInvalidContest", err)
+	}
+}
+
+// The bound is inclusive: exactly a week is still accepted.
+func TestValidateAcceptsAnIndividualDurationAtTheBound(t *testing.T) {
+	c := validContest()
+	c.Timing = contests.TimingIndividual
+	atBound := 7 * 24 * 60
+	c.DurationMin = &atBound
+
+	if err := c.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil", err)
+	}
+}
+
 func TestValidateRejectsFixedTimingCarryingADuration(t *testing.T) {
 	// A stray duration nothing reads is a setting an organizer would trust.
 	c := validContest()

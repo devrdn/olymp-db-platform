@@ -56,6 +56,17 @@ const (
 	TimingIndividual = "individual"
 )
 
+// maxDurationMin bounds an individual contest's per-participant session.
+//
+// Deadline (deadline.go) computes time.Duration(*DurationMin) * time.Minute,
+// which is arithmetic in int64 nanoseconds: past roughly 1.5e8 minutes it
+// overflows and wraps to a deadline in the past, silently locking out every
+// participant of the contest that triggered it. A week — 7*24*60 minutes —
+// is already far longer than any real-time olympiad sitting, in person or
+// online, and staying orders of magnitude below the overflow point rather
+// than merely under it is what makes this a bound and not a near miss.
+const maxDurationMin = 7 * 24 * 60
+
 // Errors the domain reports. They are the vocabulary the HTTP layer maps to
 // status codes, so each names a distinct situation a client can act on.
 var (
@@ -251,6 +262,10 @@ func (c Contest) Validate() error {
 	case TimingIndividual:
 		if c.DurationMin == nil || *c.DurationMin <= 0 {
 			return fmt.Errorf("%w: an individual contest needs a positive duration", ErrInvalidContest)
+		}
+		if *c.DurationMin > maxDurationMin {
+			return fmt.Errorf("%w: duration_min of %d exceeds the %d-minute bound",
+				ErrInvalidContest, *c.DurationMin, maxDurationMin)
 		}
 	default:
 		return fmt.Errorf("%w: unknown timing %q", ErrInvalidContest, c.Timing)

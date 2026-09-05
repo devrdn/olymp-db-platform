@@ -86,9 +86,20 @@ type Participant struct {
 
 // HasStarted reports whether the participant has begun working.
 //
-// Both the timestamp and the status are consulted because either can arrive
-// first: the status moves when a session opens, the timestamp when the clock
-// starts.
+// StartedAt is the authoritative fact: it is the one value Deadline
+// (deadline.go) can compute an individual participant's window from, so
+// anything this reports as "started" without it would tell queryproxy one
+// thing and the deadline formula another. The status is still consulted
+// because it is a legitimate second reading of the same fact, not a
+// competing one — RegistrationRepository.Start is the only place that ever
+// moves a registration to RegistrationActive, and it always sets StartedAt
+// in that same write (see postgres.Registrations.Start). Nothing in this
+// codebase may set the status alone: a hypothetical caller that did would
+// make this method disagree with Deadline about a participant who has
+// nothing for the formula to add duration_min to, which is exactly the bug
+// finding 1 fixed. Kept as an OR rather than collapsed to the timestamp alone
+// so a registration touched only through SetStatus (RegistrationFinished, by
+// a future path with its own timestamp field) still reads as started here.
 func (p Participant) HasStarted() bool {
 	return p.StartedAt != nil ||
 		p.Status == RegistrationActive ||
@@ -134,7 +145,25 @@ type RegistrationRepository interface {
 	// Remove deletes a registration outright.
 	Remove(ctx context.Context, contestID, userID uuid.UUID) error
 	// SetStatus changes a registration's status.
+	//
+	// Reserved for transitions that carry no timestamp of their own —
+	// disqualification, today. A move to RegistrationActive or
+	// RegistrationFinished must go through Start (or its future finishing
+	// counterpart) instead, so the status and the timestamp that HasStarted
+	// and Deadline both read are never set one without the other.
 	SetStatus(ctx context.Context, registrationID uuid.UUID, status string) error
+	// Start records now as the participant's first deliberate action against
+	// the game — a SQL query today, an answer submission once that path
+	// exists — if they have not already begun. It is the one seam both paths
+	// share, and the only place that ever sets StartedAt or moves a
+	// registration to RegistrationActive: it does both together, atomically,
+	// so HasStarted and Deadline can never be told two different stories.
+	//
+	// Two concurrent first actions must agree on one start time, and a
+	// participant who has already started must never have it moved — an
+	// implementation does this with a single conditional UPDATE keyed on
+	// "started_at IS NULL", never a read followed by a write.
+	Start(ctx context.Context, registrationID uuid.UUID, now time.Time) (Participant, error)
 	// EnrolledIn reports which of these contests the user is registered for.
 	//
 	// One question, one query: a catalogue of twenty rows must not become
