@@ -145,6 +145,38 @@ func TestStartingATwiceStartedParticipantKeepsTheFirstTime(t *testing.T) {
 	})
 }
 
+// Finding 4: the UPDATE used to guard only started_at IS NULL, not status —
+// so a disqualification landing between a caller's lookup of the participant
+// and this call would be silently undone, moving them straight to 'active'
+// as if nothing had happened. The status guard means Start now leaves a
+// disqualified registration exactly as it found it.
+func TestStartingADisqualifiedParticipantDoesNotReactivateThem(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewRegistrations(testPool)
+		author := makeUser(t, ctx, "author-dq-start")
+		student := makeUser(t, ctx, "student-dq-start")
+		id := makeContest(t, ctx, author.ID)
+		added, err := repo.Add(ctx, id, student.ID)
+		if err != nil {
+			t.Fatalf("Add() = %v", err)
+		}
+		if err := repo.SetStatus(ctx, added.ID, contests.RegistrationDisqualified); err != nil {
+			t.Fatalf("SetStatus() = %v", err)
+		}
+
+		got, err := repo.Start(ctx, added.ID, time.Now())
+		if err != nil {
+			t.Fatalf("Start() = %v", err)
+		}
+		if got.Status != contests.RegistrationDisqualified {
+			t.Errorf("status after Start() = %q, want %q (unchanged)", got.Status, contests.RegistrationDisqualified)
+		}
+		if got.StartedAt != nil {
+			t.Errorf("StartedAt after Start() = %v, want nil — a disqualified registration was never started", got.StartedAt)
+		}
+	})
+}
+
 // Starting a registration that does not exist reports ErrParticipantNotFound,
 // the same as every other lookup on a bad id.
 func TestStartingAnUnknownRegistrationIsReportedAsNotFound(t *testing.T) {

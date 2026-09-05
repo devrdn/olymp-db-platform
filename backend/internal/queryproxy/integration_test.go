@@ -58,17 +58,24 @@ func makeIntegrationUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 }
 
 // makeRunningIndividualContest inserts a contest already running under
-// individual timing, with the exact fields contests.Deadline reads. Direct
-// SQL rather than the contests service: reaching "running" through the
-// service means walking draft → published → running, which is the lifecycle
-// package's own concern and only noise here.
-func makeRunningIndividualContest(t *testing.T, ctx context.Context, pool *pgxpool.Pool, author uuid.UUID, durationMin int, endsAt time.Time) uuid.UUID {
+// individual timing, with the exact fields contests.Deadline (and, since
+// finding 1, Contest.OpenForStart) read. Direct SQL rather than the contests
+// service: reaching "running" through the service means walking
+// draft → published → running, which is the lifecycle package's own concern
+// and only noise here.
+//
+// startsAt is a parameter rather than the database's own now() minus an
+// interval: the test below drives queryproxy with its own pinned clock
+// (WithClock), which has nothing to do with the wall-clock time this fixture
+// is created at, and OpenForStart compares starts_at against that pinned
+// clock, not against when the row was inserted.
+func makeRunningIndividualContest(t *testing.T, ctx context.Context, pool *pgxpool.Pool, author uuid.UUID, durationMin int, startsAt, endsAt time.Time) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
 	err := pool.QueryRow(ctx, `
 		INSERT INTO contests (created_by, status, timing, duration_min, starts_at, ends_at)
-		VALUES ($1, 'running', 'individual', $2, now() - interval '1 hour', $3)
-		RETURNING id`, author, durationMin, endsAt).Scan(&id)
+		VALUES ($1, 'running', 'individual', $2, $3, $4)
+		RETURNING id`, author, durationMin, startsAt, endsAt).Scan(&id)
 	if err != nil {
 		t.Fatalf("create contest: %v", err)
 	}
@@ -88,7 +95,17 @@ func TestAnIndividualParticipantCanQueryOnceTheirFirstActionStartsTheClockAndCan
 	author := makeIntegrationUser(t, ctx, pool, "author-"+uuid.NewString()[:8])
 	student := makeIntegrationUser(t, ctx, pool, "student-"+uuid.NewString()[:8])
 	const durationMin = 10
-	contestID := makeRunningIndividualContest(t, ctx, pool, author, durationMin, time.Now().Add(24*time.Hour))
+	// "Now" is pinned and advanced by the test rather than raced against the
+	// wall clock: Run uses the same clock for both starting the participant
+	// and comparing their deadline, so the two calls below are exactly ten
+	// minutes and one second apart from the façade's own point of view. The
+	// contest's own starts_at has to be pinned against this same clock, not
+	// the database's own now(): OpenForStart (finding 1) compares starts_at
+	// to whatever clock Run is given, and a fixture stamped by the real wall
+	// clock would place a fixed 2026 test date outside a window that opened
+	// today.
+	clock := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	contestID := makeRunningIndividualContest(t, ctx, pool, author, durationMin, clock.Add(-time.Hour), clock.Add(24*time.Hour))
 	t.Cleanup(func() {
 		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -99,12 +116,6 @@ func TestAnIndividualParticipantCanQueryOnceTheirFirstActionStartsTheClockAndCan
 	if _, err := registrations.Add(ctx, contestID, student); err != nil {
 		t.Fatalf("Add() = %v", err)
 	}
-
-	// "Now" is pinned and advanced by the test rather than raced against the
-	// wall clock: Run uses the same clock for both starting the participant
-	// and comparing their deadline, so the two calls below are exactly ten
-	// minutes and one second apart from the façade's own point of view.
-	clock := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
 	service := queryproxy.New(
 		registrations,
 		postgres.NewContests(pool),

@@ -157,3 +157,58 @@ func TestUnknownTimingHasNoDeadline(t *testing.T) {
 		t.Error("Deadline() ok = true for an unrecognised timing, want false (fail closed)")
 	}
 }
+
+// Finding 1: contest.Status alone used to gate whether an individual
+// participant's first action could start their clock, and status is a
+// manual step an organiser can move to "running" hours before starts_at.
+// OpenForStart is the wall-clock check that closes that gap — before the
+// window opens, nothing may start.
+func TestOpenForStartRefusesBeforeStartsAt(t *testing.T) {
+	starts := deadlineBase
+	c := contests.Contest{StartsAt: at(starts)}
+
+	if c.OpenForStart(starts.Add(-time.Minute)) {
+		t.Error("OpenForStart() = true a minute before starts_at, want false")
+	}
+}
+
+func TestOpenForStartRefusesAfterEndsAt(t *testing.T) {
+	ends := deadlineBase
+	c := contests.Contest{EndsAt: at(ends)}
+
+	if c.OpenForStart(ends.Add(time.Minute)) {
+		t.Error("OpenForStart() = true a minute after ends_at, want false")
+	}
+}
+
+func TestOpenForStartAcceptsInsideTheWindow(t *testing.T) {
+	starts := deadlineBase
+	ends := deadlineBase.Add(2 * time.Hour)
+	c := contests.Contest{StartsAt: at(starts), EndsAt: at(ends)}
+
+	if !c.OpenForStart(starts.Add(time.Hour)) {
+		t.Error("OpenForStart() = false in the middle of the window, want true")
+	}
+}
+
+// An individual contest may run with no ends_at at all (see
+// TestIndividualTimingWithNoContestEndUsesDurationAlone) — a nil bound must
+// not be read as "already closed".
+func TestOpenForStartWithNoEndsAtIsNeverClosedByTime(t *testing.T) {
+	c := contests.Contest{StartsAt: at(deadlineBase)}
+
+	if !c.OpenForStart(deadlineBase.Add(365 * 24 * time.Hour)) {
+		t.Error("OpenForStart() = false with no ends_at, want true — nothing bounds it")
+	}
+}
+
+// A zero-value StartsAt must not be read as "opens immediately" turning into
+// "always open" once ends_at is also unset — this only documents that an
+// unset starts_at does not itself refuse.
+func TestOpenForStartWithNoStartsAtIsOpenImmediately(t *testing.T) {
+	c := contests.Contest{}
+
+	if !c.OpenForStart(deadlineBase) {
+		t.Error("OpenForStart() = false with no starts_at, want true — it opens immediately")
+	}
+}

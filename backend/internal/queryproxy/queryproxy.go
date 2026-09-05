@@ -127,6 +127,12 @@ type Service struct {
 	// limiter, kept here for the one thing the runner cannot do: refuse a
 	// query before the journal writes it. The two processes cannot share one
 	// instance, but they share the one implementation (queryrunner.RateLimiter).
+	// One instance serves two different keys: the authenticated caller
+	// (cmd.UserID), checked first and before any lookup at all because it is
+	// the only bounded thing Run has to key on before a registration is even
+	// found; and the registration (participant.ID), checked once one exists,
+	// against whatever that specific contest allows. Neither key's counters
+	// interfere with the other's.
 	rate *queryrunner.RateLimiter
 	// perMinuteDefault is the rate a contest gets when its organiser left
 	// query_rate_limit_per_min at zero, and — since effectiveRateLimit treats
@@ -237,30 +243,68 @@ func effectiveRateLimit(contestLimit, installationLimit int) int {
 
 // Run answers one query, or says why it will not.
 //
-// The order is cheapest first and most-revealing last, with one deliberate
-// exception. Who is asking is a single row; the contest is another — and the
-// rate check comes right after those two, keyed by the registration they
-// named, ahead of every refusal downstream of it (contest not running, the
-// participant's own deadline, the address restriction, the query's own
-// length). A refused query still cost these two lookups, and used to cost
-// them for free, over and over, with nothing in front of it counting the
-// attempt (CLAUDE.md rule 13 — a refused query still counts against the
-// rate, because refusing it still cost something): an individual participant
-// hammering this endpoint after their own deadline passed, or before their
-// contest opened, met no limiter at all, because every refusal on that path
-// used to return before the rate check ever ran. Now every one of them is
-// admitted or refused by the same limiter first, and only a query that
-// clears it is charged the work below. Only after the rate check does a
-// not-yet-started individual participant get their clock started — starting
-// is itself contingent on the contest being open, checked just above — and
-// only then is the deadline that start produces compared against the clock.
-// Last is the query's own length, cheaper than any of the above but placed
-// after them so it is never a free way to dodge the rate: an oversized query
-// pays the same lookups and the same rate check a legitimate one does. Only
-// then is a database provisioned, which may create one, and only then does
-// anything reach the Query Runner. A query from somebody who is not a
-// participant must not cost a CREATE DATABASE.
+// The order is cheapest first and most-revealing last, with two deliberate
+// exceptions.
+//
+// The first runs before anything else and before any lookup at all: a rate
+// check keyed by the authenticated caller (finding 3). cmd.ContestID is
+// attacker-chosen and unbounded — any UUID at all, most naming no contest —
+// so a caller who names a random one every time would pay nothing but a
+// session read to reach ErrNotAParticipant, over and over, with no limiter in
+// front of it: the participant lookup below (and, for somebody who is a
+// participant but disqualified or finished, the contest lookup after it too)
+// used to run on every one of those requests for free. cmd.UserID is the
+// opposite of unbounded: one key per authenticated account, decided at
+// sign-in and never supplied by the request, so a caller cannot mint a fresh
+// one just by asking. It is checked against s.perMinuteDefault — the
+// installation's own figure — because no contest has been looked up yet to
+// ask for one of its own, and perMinuteDefault is already the ceiling
+// effectiveRateLimit never lets any contest's own setting exceed, so nothing
+// admitted here could have been refused by a contest-specific limit anyway
+// (CLAUDE.md rules 5 and 13).
+//
+// The second is the existing registration-keyed check below: who is asking is
+// a single row, the contest is another, and the rate check comes right after
+// those two, keyed by the registration they named, ahead of every refusal
+// downstream of it. A refused query still cost these two lookups, and used to
+// cost them for free, over and over, with nothing beyond the check above
+// counting the attempt: an individual participant hammering this endpoint
+// after their own deadline passed, or before their contest opened, met no
+// limiter of its own otherwise. Now every one of them is admitted or refused
+// by the same limiter, keyed by their own registration this time so a
+// contest's own tighter setting is what binds, and only a query that clears
+// it is charged the work below.
+//
+// What still needs its own registration is checked next — is the contest
+// running at all, and (the one formula every timing check in the system uses,
+// §8) has this participant's own deadline passed — because both are already
+// answerable from what the two lookups above returned and neither has to
+// wait for anything else. The one exception is a not-yet-started individual
+// participant, who has no deadline to compare against yet: for that one case
+// this checks the contest's own window instead (finding 1) and leaves the
+// deadline check itself for after the clock is actually started, further
+// down.
+//
+// Only past that does the address restriction, the query's own length and the
+// game's existence get checked, each cheaper than a database round trip and
+// each placed so an oversized or misdirected query pays the same lookups and
+// the same rate check a legitimate one does rather than dodging them for
+// free. Only then is a database provisioned, which may create one. And only
+// once every one of those has admitted the request does a not-yet-started
+// individual participant's clock actually start (finding 2): starting it any
+// earlier meant a query refused for its address, its length, an unprovisioned
+// game, or a provisioning failure still cost that participant their own first
+// minute, permanently, for a request that was never going to be answered
+// anyway. A query the SQL validator itself rejects still starts the clock —
+// validation happens downstream in the Query Runner, past everything this
+// façade checks — which is left as is: the participant did act deliberately
+// against the game, and by the time the validator speaks the request has
+// already cleared every check that is this façade's to make.
 func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, error) {
+	if err := s.rate.Admit(cmd.UserID.String(), s.perMinuteDefault); err != nil {
+		return nil, err
+	}
+
 	participant, err := s.people.ByUser(ctx, cmd.ContestID, cmd.UserID)
 	switch {
 	case errors.Is(err, contests.ErrParticipantNotFound):
@@ -294,38 +338,31 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		return nil, ErrContestNotRunning
 	}
 
-	// The first deliberate action against the game is what starts an
-	// individual participant's own clock (§8, the fix for finding 1) — never a
-	// page load, and never anything the client's own timing can influence.
-	// Gated on the contest already being confirmed running above: starting is
-	// only possible inside [starts_at, ends_at], and a first action outside
-	// that window is refused by the deadline check below without ever
-	// reaching here, exactly as it already refuses everything else outside
-	// the window. A participant who has already started costs no write here —
-	// Start itself is the guard against a second one, but checking StartedAt
-	// first means an individual participant's second and subsequent queries
-	// in the same session touch the registration row at all only through the
-	// read Run already paid for.
-	if contest.Timing == contests.TimingIndividual && participant.StartedAt == nil {
-		if participant, err = s.people.Start(ctx, participant.ID, s.now()); err != nil {
-			return nil, fmt.Errorf("%w: start the participant's clock: %w", ErrUnavailable, err)
-		}
-	}
+	// Whether this call could be the deliberate action that starts an
+	// individual participant's own clock (§8). Fixed timing never starts a
+	// clock at all, and a participant who already has one does not get a
+	// second — Start's own guard is "started_at IS NULL", but reading
+	// StartedAt here first is what keeps every query after the first from
+	// touching the registration row through anything but the read this
+	// function already paid for.
+	firstAction := contest.Timing == contests.TimingIndividual && participant.StartedAt == nil
 
-	// The one formula every timing check in the system uses (§8), and the
-	// guarantee that closing does not depend on the scheduler: a fixed
-	// contest past its own ends_at, or an individual participant past their
-	// own started_at+duration_min, is refused here on the server's own clock
-	// even if contests.Status has not (yet, or ever, with a dead scheduler)
-	// caught up to "finished". ok is false for a state with no deadline to
-	// compare against — an individual participant Start could not start (the
-	// contest was not running a moment ago after all), or an invariant
-	// Contest.Validate would have refused — and that is refused the same way
-	// rather than treated as no limit at all.
-	deadline, ok := contests.Deadline(contest, participant)
-	if !ok || s.now().After(deadline.Add(s.grace)) {
+	if firstAction {
+		// Finding 1: contest.Status is a manual step in an organiser's own
+		// workflow and says nothing about the wall clock — it can be moved to
+		// "running" hours before starts_at. Deadline cannot be asked yet
+		// either: it needs a StartedAt this participant does not have. So the
+		// one thing there is to check before starting is the window itself,
+		// and getting this refusal right here, before the address, length and
+		// provisioning checks below, means a query outside the window never
+		// pays for any of them either.
+		if !contest.OpenForStart(s.now()) {
+			return nil, ErrContestNotRunning
+		}
+	} else if s.deadlinePassed(contest, participant) {
 		return nil, ErrContestNotRunning
 	}
+
 	if !contest.AllowsAddress(cmd.Address) {
 		return nil, ErrAddressNotAllowed
 	}
@@ -357,6 +394,21 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		}
 	}
 
+	// Every other refusal has now had its say — the query is otherwise
+	// admitted, and only now does a not-yet-started individual participant's
+	// first deliberate action actually start their own clock (finding 2).
+	// The window was already confirmed open above; nothing between then and
+	// here can have moved it, short of the contest's own ends_at arriving
+	// mid-request, which deadlinePassed below still catches.
+	if firstAction {
+		if participant, err = s.people.Start(ctx, participant.ID, s.now()); err != nil {
+			return nil, fmt.Errorf("%w: start the participant's clock: %w", ErrUnavailable, err)
+		}
+		if s.deadlinePassed(contest, participant) {
+			return nil, ErrContestNotRunning
+		}
+	}
+
 	result, err := s.runner.Run(ctx, queryrunner.Request{
 		Registration:   participant.ID,
 		Database:       database,
@@ -374,6 +426,20 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		return nil, ErrDatabaseDeclined
 	}
 	return result, err
+}
+
+// deadlinePassed reports whether contest is no longer open to participant, by
+// the one formula every timing check in the system uses (contests.Deadline,
+// §8): a fixed contest past its own ends_at, or an individual participant
+// past their own started_at+duration_min, is refused here on the server's own
+// clock even if contests.Status has not (yet, or ever, with a dead scheduler)
+// caught up to "finished". ok is false for a state with no deadline to
+// compare against at all — an individual participant who has not started, or
+// an invariant Contest.Validate would have refused — and that is treated as
+// passed rather than as no limit.
+func (s *Service) deadlinePassed(contest contests.Contest, participant contests.Participant) bool {
+	deadline, ok := contests.Deadline(contest, participant)
+	return !ok || s.now().After(deadline.Add(s.grace))
 }
 
 // speaksForTheDatabase reports an error that carries PostgreSQL's own words
