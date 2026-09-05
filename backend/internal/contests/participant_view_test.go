@@ -3,6 +3,8 @@ package contests_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
@@ -220,6 +222,36 @@ func TestQuestionsClosesAQuestionOnceEveryAttemptIsSpent(t *testing.T) {
 	}
 	if *found[0].AttemptsRemaining != 0 {
 		t.Fatalf("attempts remaining = %d, want 0", *found[0].AttemptsRemaining)
+	}
+}
+
+// Finding 5: a question missing the resolved language is left out of the
+// list rather than served with an empty body — the same defensive choice
+// Story makes with ErrStoryNotFound, applied per question because this is a
+// list rather than one resource. The publish gate makes this unreachable for
+// a running contest, but the reader must still answer this way rather than
+// leak an empty-bodied entry.
+func TestQuestionsOmitsAQuestionMissingTheResolvedLanguage(t *testing.T) {
+	reader, _, questions, _ := newReader()
+	contestID := uuid.New()
+	withEnglish := questions.Put(contests.Question{
+		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
+		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}},
+	})
+	questions.Put(contests.Question{
+		ContestID: contestID, Ord: 2, Kind: contests.KindText, Points: 5, IsVisible: true,
+		Texts: map[string]contests.QuestionText{"ru": {BodyMD: "Кто это сделал?"}},
+	})
+
+	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en")
+	if err != nil {
+		t.Fatalf("Questions() = %v", err)
+	}
+	if len(found) != 1 || found[0].ID != withEnglish.ID {
+		t.Fatalf("found = %+v, want only the question with an English body", found)
+	}
+	if strings.Contains(strings.ToLower(fmt.Sprint(found)), "сделал") {
+		t.Fatalf("the question with no English body still leaked its Russian one: %+v", found)
 	}
 }
 

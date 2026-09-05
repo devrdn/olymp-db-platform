@@ -173,6 +173,84 @@ func TestReorderOutsideATransactionIsRefused(t *testing.T) {
 	}
 }
 
+// Finding 2: the participant-facing query is a genuinely different
+// statement, not List() filtered in Go — this proves it against a real
+// database: a hidden question is absent, a visible one is resolved to the
+// requested language, and VisibleQuestion carries nothing about the
+// reference answer (there is no field for it to carry — see the type).
+func TestForContestServesOnlyVisibleQuestionsInTheResolvedLanguage(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewQuestions(testPool)
+		author := makeUser(t, ctx, "author-q-forcontest")
+		id := makeContest(t, ctx, author.ID)
+
+		visible, err := repo.Create(ctx, contests.Question{ContestID: id, Kind: contests.KindText, Points: 10, IsVisible: true})
+		if err != nil {
+			t.Fatalf("Create() visible = %v", err)
+		}
+		hidden, err := repo.Create(ctx, contests.Question{ContestID: id, Kind: contests.KindText, Points: 5, IsVisible: false})
+		if err != nil {
+			t.Fatalf("Create() hidden = %v", err)
+		}
+		if err := repo.ReplaceTexts(ctx, visible.ID, map[string]contests.QuestionText{
+			"en": {BodyMD: "Who did it?"},
+		}); err != nil {
+			t.Fatalf("ReplaceTexts() visible = %v", err)
+		}
+		if err := repo.ReplaceAnswers(ctx, visible.ID, []contests.Answer{
+			{MatchKind: contests.MatchExactCI, Value: "the butler"},
+		}); err != nil {
+			t.Fatalf("ReplaceAnswers() = %v", err)
+		}
+		if err := repo.ReplaceTexts(ctx, hidden.ID, map[string]contests.QuestionText{
+			"en": {BodyMD: "What weapon?"},
+		}); err != nil {
+			t.Fatalf("ReplaceTexts() hidden = %v", err)
+		}
+
+		found, err := repo.ForContest(ctx, id, "en")
+		if err != nil {
+			t.Fatalf("ForContest() = %v", err)
+		}
+		if len(found) != 1 || found[0].ID != visible.ID {
+			t.Fatalf("found = %+v, want only the visible question", found)
+		}
+		if found[0].BodyMD != "Who did it?" {
+			t.Fatalf("body = %q, want the English wording", found[0].BodyMD)
+		}
+		// contests.VisibleQuestion has no field for a reference answer at
+		// all — the compiler is the proof there is nothing here to leak.
+	})
+}
+
+// The other half of finding 5: a question with no translation in the
+// requested language is left out, not served with an empty body.
+func TestForContestOmitsAQuestionMissingTheRequestedLanguage(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewQuestions(testPool)
+		author := makeUser(t, ctx, "author-q-forcontest-lang")
+		id := makeContest(t, ctx, author.ID)
+
+		q, err := repo.Create(ctx, contests.Question{ContestID: id, Kind: contests.KindText, IsVisible: true})
+		if err != nil {
+			t.Fatalf("Create() = %v", err)
+		}
+		if err := repo.ReplaceTexts(ctx, q.ID, map[string]contests.QuestionText{
+			"ru": {BodyMD: "Кто это сделал?"},
+		}); err != nil {
+			t.Fatalf("ReplaceTexts() = %v", err)
+		}
+
+		found, err := repo.ForContest(ctx, id, "en")
+		if err != nil {
+			t.Fatalf("ForContest() = %v", err)
+		}
+		if len(found) != 0 {
+			t.Fatalf("found = %+v, want none — the question has no English body", found)
+		}
+	})
+}
+
 func TestDeletingAQuestionThatIsNotThereIsReported(t *testing.T) {
 	// Silently succeeding would let a stale editor tab report that it removed
 	// something it did not.

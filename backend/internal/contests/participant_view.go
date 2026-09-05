@@ -14,7 +14,9 @@ import (
 // stripped off. A hidden question is left out here by never being read into
 // the result in the first place, and a reference answer is a field this type
 // does not have — there is no "forgot to filter" here, because there is
-// nothing to remember to filter (§6.1).
+// nothing to remember to filter (§6.1). questions is VisibleQuestionRepository,
+// not QuestionRepository: a different query, built for this projection, not
+// the staff one reused with a filter bolted on (see VisibleQuestionRepository).
 //
 // Reader answers only "what may be shown"; whether the caller may ask at all
 // — enrolled, the contest running, the address allowed — is
@@ -23,12 +25,12 @@ import (
 // "may this student see this contest" is the bug this project keeps finding.
 type Reader struct {
 	stories   StoryRepository
-	questions QuestionRepository
+	questions VisibleQuestionRepository
 	attempts  AttemptStore
 }
 
 // NewReader assembles a participant-facing content reader.
-func NewReader(stories StoryRepository, questions QuestionRepository, attempts AttemptStore) *Reader {
+func NewReader(stories StoryRepository, questions VisibleQuestionRepository, attempts AttemptStore) *Reader {
 	return &Reader{stories: stories, questions: questions, attempts: attempts}
 }
 
@@ -57,9 +59,18 @@ func (r *Reader) Story(ctx context.Context, contestID uuid.UUID, lang string) (s
 // ParticipantQuestion is one visible question as its participant sees it: its
 // wording, its points, and where they stand on it — never a reference answer,
 // never a penalty setting, never anything about anybody else's attempts.
+//
+// There is deliberately no display position on this type. The staff ordinal
+// (Question.Ord) is dense across every question of a contest, visible ones
+// included, so it counts what is hidden and says where: three visible
+// questions numbered 1, 3, 4, 7 name exactly three hidden ones and place them
+// precisely, which is the one fact §6.1 says a participant must work out
+// rather than read off a field. The list this type comes back in already
+// carries the only ordering a participant needs — Reader.Questions returns
+// visible questions in display order — so there is nothing an ordinal field
+// would add except that leak.
 type ParticipantQuestion struct {
 	ID        uuid.UUID
-	Ord       int
 	Kind      string
 	Points    int
 	ChoiceIDs []string
@@ -77,11 +88,41 @@ type ParticipantQuestion struct {
 	Closed bool
 }
 
+// VisibleQuestion is one question already filtered and resolved for a
+// participant: is_visible, in one language, with no reference answer read at
+// all — the projection VisibleQuestionRepository owns, before Reader adds
+// this participant's own attempt state to it.
+type VisibleQuestion struct {
+	ID          uuid.UUID
+	Kind        string
+	Points      int
+	MaxAttempts *int
+	ChoiceIDs   []string
+	BodyMD      string
+	Choices     map[string]string
+}
+
+// VisibleQuestionRepository is the participant-facing read of a contest's
+// questions — a different query from QuestionRepository.List, built for this
+// projection rather than the staff one with a filter added on top. See
+// QuestionRepository's own doc for why the two must not share an
+// implementation.
+type VisibleQuestionRepository interface {
+	// ForContest returns the contest's questions that are visible
+	// (is_visible) and have a translation in lang, in display order, with no
+	// reference answer selected at all. A question without a body in lang is
+	// left out rather than served with an empty one — the same defensive
+	// choice Story makes with ErrStoryNotFound (§6.2), applied per question
+	// since this is a list rather than one resource.
+	ForContest(ctx context.Context, contestID uuid.UUID, lang string) ([]VisibleQuestion, error)
+}
+
 // Questions returns the contest's visible questions, in display order, with
 // wording resolved to lang and this participant's own attempt state — never a
-// hidden question (is_visible = false) and never a reference answer.
+// hidden question (is_visible = false) and never a reference answer, because
+// VisibleQuestionRepository never reads one into memory in the first place.
 func (r *Reader) Questions(ctx context.Context, contestID, registrationID uuid.UUID, lang string) ([]ParticipantQuestion, error) {
-	all, err := r.questions.List(ctx, contestID)
+	visible, err := r.questions.ForContest(ctx, contestID, lang)
 	if err != nil {
 		return nil, err
 	}
@@ -90,26 +131,21 @@ func (r *Reader) Questions(ctx context.Context, contestID, registrationID uuid.U
 		return nil, err
 	}
 
-	visible := make([]ParticipantQuestion, 0, len(all))
-	for _, q := range all {
-		if !q.IsVisible {
-			continue
-		}
-		text := q.Texts[lang]
+	out := make([]ParticipantQuestion, 0, len(visible))
+	for _, q := range visible {
 		used := stats[q.ID]
-		visible = append(visible, ParticipantQuestion{
+		out = append(out, ParticipantQuestion{
 			ID:                q.ID,
-			Ord:               q.Ord,
 			Kind:              q.Kind,
 			Points:            q.Points,
 			ChoiceIDs:         q.ChoiceIDs,
-			BodyMD:            text.BodyMD,
-			Choices:           text.Choices,
+			BodyMD:            q.BodyMD,
+			Choices:           q.Choices,
 			AttemptsRemaining: attemptsRemaining(q.MaxAttempts, used.Attempts),
 			Closed:            isClosed(q.MaxAttempts, used),
 		})
 	}
-	return visible, nil
+	return out, nil
 }
 
 // attemptsRemaining is nil for a question with no cap, and never negative —

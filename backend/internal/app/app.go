@@ -221,15 +221,37 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}
 	if console != nil {
 		modules = append(modules, api.NewConsoleHandler(console, authMiddleware, log))
-		// The participant's own read of a running contest — the story and the
-		// visible questions — needs exactly the admission queryproxy.Service
-		// already grants the console, and nothing the console additionally
-		// needs (no game cluster, no Query Runner): mounted alongside it,
-		// under the same "is there a game circuit at all" condition, since
-		// Access is queryproxy's, not a capability of its own.
-		reader := contests.NewReader(postgres.NewStories(pool), postgres.NewQuestions(pool), postgres.NewAttempts(pool))
-		modules = append(modules, api.NewParticipantHandler(console, reader, authMiddleware, log, cfg.DefaultLocale))
 	}
+
+	// The participant's own read of a running contest — the story and the
+	// visible questions — needs queryproxy.Service.Access and .AdmitRead, and
+	// neither ever reaches a game lookup, provisioning or the Query Runner:
+	// those are Run's alone. So this is mounted unconditionally rather than
+	// under "is there a game circuit at all" — a deployment with no game
+	// cluster still runs an olympiad's registration and its participants
+	// still have a story to read, and gating it on the console would give
+	// them a 404 on their own contest for a dependency this endpoint does not
+	// have.
+	//
+	// When there is a console, its Service is reused outright rather than a
+	// second one built here: AdmitRead shares Run's own rate limiter and key
+	// namespace (queryproxy.Service.AdmitRead), so a participant who
+	// alternates between running queries and polling this endpoint spends one
+	// account-wide budget, not two that add together past the installation's
+	// intended rate. Without a console there is no Run to share a budget
+	// with, so a fresh Service is built from the same two repositories the
+	// console would have used (People, Contests) and nils for the three
+	// collaborators only Run calls (Games, Databases, Executor) — Access and
+	// AdmitRead never touch them.
+	participantAccess := console
+	if participantAccess == nil {
+		participantAccess = queryproxy.New(
+			postgres.NewRegistrations(pool), postgres.NewContests(pool),
+			nil, nil, nil,
+		).WithPerMinuteDefault(cfg.QueryPerMinute).WithGrace(cfg.DeadlineGrace)
+	}
+	reader := contests.NewReader(postgres.NewStories(pool), postgres.NewQuestions(pool), postgres.NewAttempts(pool))
+	modules = append(modules, api.NewParticipantHandler(participantAccess, reader, authMiddleware, log, cfg.DefaultLocale))
 
 	deps := api.Deps{
 		Logger:    log,
