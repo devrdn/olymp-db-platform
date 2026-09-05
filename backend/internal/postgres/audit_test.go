@@ -11,20 +11,30 @@ import (
 )
 
 // writeTrail stores a few entries for one actor and returns them.
-func writeTrail(t *testing.T, ctx context.Context, actor uuid.UUID) {
+// writeTrail lays down one actor's two entries and one system entry, and
+// returns the contest identifier the system entry names.
+//
+// The identifier is fresh every call because the trail is append-only and this
+// database is shared: a test that asked "how many contest.status_change
+// entries are there" would be asking about every run that ever touched this
+// database, not about its own. Naming its own subject is what makes the
+// assertion true a second time.
+func writeTrail(t *testing.T, ctx context.Context, actor uuid.UUID) string {
 	t.Helper()
 
+	contestID := "c-" + uuid.NewString()
 	sink := NewAuditSink(testPool)
 	for _, e := range []audit.Entry{
 		{ActorID: &actor, Action: "user.create", Entity: "user", EntityID: "u-1", IP: "10.0.0.1"},
 		{ActorID: &actor, Action: "user.block", Entity: "user", EntityID: "u-1"},
-		{Action: "contest.status_change", Entity: "contest", EntityID: "c-1",
+		{Action: "contest.status_change", Entity: "contest", EntityID: contestID,
 			Payload: map[string]any{"to": "published"}},
 	} {
 		if err := sink.Append(ctx, e); err != nil {
 			t.Fatalf("Append() = %v", err)
 		}
 	}
+	return contestID
 }
 
 func TestTheTrailComesBackNewestFirst(t *testing.T) {
@@ -76,10 +86,11 @@ func TestTheTrailNamesTheActorRatherThanItsIdentifier(t *testing.T) {
 func TestASystemEventHasNoActorAndSaysSo(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		actor := makeUser(t, ctx, "auditor-system")
-		writeTrail(t, ctx, actor.ID)
+		contestID := writeTrail(t, ctx, actor.ID)
 
 		found, _, err := NewAuditTrail(testPool).List(ctx,
-			audit.Filter{Action: "contest.status_change", Limit: 10}.Normalize())
+			audit.Filter{Action: "contest.status_change", Entity: "contest",
+				EntityID: contestID, Limit: 10}.Normalize())
 		if err != nil {
 			t.Fatalf("List() = %v", err)
 		}
