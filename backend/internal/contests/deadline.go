@@ -52,3 +52,31 @@ func Deadline(c Contest, p Participant) (deadline time.Time, ok bool) {
 		return time.Time{}, false
 	}
 }
+
+// OpenForStart reports whether now falls inside the contest's own window —
+// [starts_at, ends_at] — the wall-clock fact an individual participant's
+// first action must satisfy before it may ever write registrations.started_at
+// (§8, finding 1).
+//
+// Deliberately independent of Contest.Status: status is a manual step in an
+// organiser's own workflow and can be moved to "running" hours before
+// starts_at, or left at "running" long after ends_at by a scheduler that
+// never ticked. Neither says anything about the wall clock, and queryproxy
+// already has its own status check for what status alone is good for — this
+// answers a different question, and is checked in addition to it, not instead
+// of it.
+//
+// A nil bound is open on that side: starts_at unset means the contest opens
+// immediately, ends_at unset means it never closes on its own. This mirrors
+// what CheckPublishable already tolerates — an individual contest must have a
+// starts_at to publish, but not an ends_at — so both are reachable in
+// production, not merely type-level possibilities.
+func (c Contest) OpenForStart(now time.Time) bool {
+	if c.StartsAt != nil && now.Before(*c.StartsAt) {
+		return false
+	}
+	if c.EndsAt != nil && now.After(*c.EndsAt) {
+		return false
+	}
+	return true
+}
