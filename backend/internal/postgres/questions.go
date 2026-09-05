@@ -13,8 +13,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Questions implements contests.QuestionRepository.
-var _ contests.QuestionRepository = (*Questions)(nil)
+// Questions implements contests.QuestionRepository and, separately,
+// contests.VisibleQuestionRepository — two narrow interfaces over one table,
+// backed by two different queries (see ForContest).
+var (
+	_ contests.QuestionRepository        = (*Questions)(nil)
+	_ contests.VisibleQuestionRepository = (*Questions)(nil)
+)
 
 // questionColumns is the projection every question read shares.
 //
@@ -128,6 +133,59 @@ func (r *Questions) List(ctx context.Context, contestID uuid.UUID) ([]contests.Q
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list questions: %w", err)
+	}
+	return found, nil
+}
+
+// ForContest implements contests.VisibleQuestionRepository: the
+// participant-facing projection, and a genuinely different query from List
+// rather than the same one filtered in Go.
+//
+// The reference-answer table is not named anywhere in this statement — there
+// is no SELECT against question_answers to forget here, which is what makes
+// "never a reference answer over the wire" true at this boundary rather than
+// merely true of ParticipantQuestion's fields. Only is_visible rows are
+// selected, and only the one language asked for: the inner join to
+// question_translations on lang = $2 is what keeps a hidden question, every
+// other language's text, and every reference answer out of the result set
+// and out of the bytes PostgreSQL sends back, rather than reading all of it
+// and discarding what the caller did not want.
+//
+// A question with no translation in lang is simply absent from the result —
+// the inner join drops it — instead of coming back with an empty body. That
+// mirrors Story's own ErrStoryNotFound for the same defensive case (a
+// contest missing a declared language should not happen once it is running,
+// but a read here answers the same way "never authored" does rather than
+// showing an empty page as if it were the question).
+func (r *Questions) ForContest(ctx context.Context, contestID uuid.UUID, lang string) ([]contests.VisibleQuestion, error) {
+	rows, err := r.querier(ctx).Query(ctx, `
+		SELECT q.id, q.kind, q.points, q.max_attempts, q.choice_ids,
+		       qt.body_md, COALESCE(qt.choices, '{}'::jsonb)
+		FROM questions q
+		JOIN question_translations qt ON qt.question_id = q.id AND qt.lang = $2
+		WHERE q.contest_id = $1 AND q.is_visible
+		ORDER BY q.ord`, contestID, lang)
+	if err != nil {
+		return nil, fmt.Errorf("list visible questions: %w", err)
+	}
+	defer rows.Close()
+
+	var found []contests.VisibleQuestion
+	for rows.Next() {
+		var (
+			q       contests.VisibleQuestion
+			choices []byte
+		)
+		if err := rows.Scan(&q.ID, &q.Kind, &q.Points, &q.MaxAttempts, &q.ChoiceIDs, &q.BodyMD, &choices); err != nil {
+			return nil, fmt.Errorf("scan visible question: %w", err)
+		}
+		if err := json.Unmarshal(choices, &q.Choices); err != nil {
+			return nil, fmt.Errorf("decode choice labels: %w", err)
+		}
+		found = append(found, q)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list visible questions: %w", err)
 	}
 	return found, nil
 }

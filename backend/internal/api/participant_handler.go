@@ -11,6 +11,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
+	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
@@ -34,9 +35,16 @@ import (
 
 // ParticipantAccess is the slice of queryproxy.Service this handler needs: is
 // the caller allowed into this contest right now, and who and what did that
-// resolve to.
+// resolve to — plus the same pre-lookup rate check Run itself pays before it
+// will take a query (CLAUDE.md rule 13: a read that costs database round
+// trips needs the same charge a query does, not a free pass because nothing
+// here executes SQL of the participant's own).
 type ParticipantAccess interface {
 	Access(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error)
+	// AdmitRead applies the caller's own rate budget before Access runs its
+	// lookups. See queryproxy.Service.AdmitRead for why the key (userID) is
+	// bounded and why it is checked ahead of everything else.
+	AdmitRead(userID uuid.UUID) error
 }
 
 // ParticipantHandler serves a participant's own view of a running contest.
@@ -85,14 +93,26 @@ func (h *ParticipantHandler) Mount(r chi.Router) {
 // named in the URL, through the one façade both this handler and the SQL
 // console ask (queryproxy.Service.Access). Every route below calls this
 // first and only proceeds to Reader once it succeeds.
+//
+// AdmitRead runs before Access and before the URL is even parsed into
+// anything Access could look up with: it is the same order Run itself uses
+// (a rate check keyed by the account, ahead of any lookup at all), so a
+// caller cannot spend Access's two database round trips — or, on
+// /play/questions, Reader's own two more — for free by asking as fast as the
+// network allows.
 func (h *ParticipantHandler) admit(w http.ResponseWriter, r *http.Request) (contests.Participant, contests.Contest, bool) {
+	identity, _ := auth.IdentityFrom(r.Context())
+	if err := h.access.AdmitRead(identity.UserID); err != nil {
+		h.fail(w, r, err)
+		return contests.Participant{}, contests.Contest{}, false
+	}
+
 	contestID, err := uuid.Parse(chi.URLParam(r, contestIDParam))
 	if err != nil {
 		httpx.Error(w, r, http.StatusBadRequest, auth.CodeInvalidContestID, "Contest identifier is not valid")
 		return contests.Participant{}, contests.Contest{}, false
 	}
 
-	identity, _ := auth.IdentityFrom(r.Context())
 	participant, contest, err := h.access.Access(r.Context(), contestID, identity.UserID, clientAddress(r))
 	if err != nil {
 		h.fail(w, r, err)
@@ -135,9 +155,12 @@ func (h *ParticipantHandler) story(w http.ResponseWriter, r *http.Request) {
 // max_attempts itself — attempts_remaining is derived once, here, so a
 // client never has to (and never could) work out "closed" from a setting it
 // was not given.
+// There is deliberately no ordinal field here (see ParticipantQuestion's own
+// doc): the items array already arrives in display order, and a number dense
+// across hidden questions too would tell the caller exactly how many
+// questions are hidden and where.
 type participantQuestionResponse struct {
 	ID        string            `json:"id"`
-	Ord       int               `json:"ord"`
 	Kind      string            `json:"kind"`
 	Points    int               `json:"points"`
 	ChoiceIDs []string          `json:"choice_ids"`
@@ -152,7 +175,6 @@ type participantQuestionResponse struct {
 func toParticipantQuestionResponse(q contests.ParticipantQuestion) participantQuestionResponse {
 	out := participantQuestionResponse{
 		ID:                q.ID.String(),
-		Ord:               q.Ord,
 		Kind:              q.Kind,
 		Points:            q.Points,
 		ChoiceIDs:         q.ChoiceIDs,
@@ -192,13 +214,16 @@ func (h *ParticipantHandler) questions(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, participantQuestionListResponse{Lang: lang, Items: items})
 }
 
-// fail maps a refusal from queryproxy.Service.Access, or from the reader, to
-// a response.
+// fail maps a refusal from queryproxy.Service.AdmitRead, from
+// queryproxy.Service.Access, or from the reader, to a response.
 //
 // CLAUDE.md rule 1: every one of these is a declared sentinel with a mapping
 // here and a handler test asserting the 4xx it produces.
 func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, queryrunner.ErrTooManyQueries):
+		httpx.Error(w, r, http.StatusTooManyRequests, codeQueryTooOften,
+			"This caller is asking faster than this installation allows")
 	case errors.Is(err, queryproxy.ErrNotAParticipant):
 		// The same answer whether the caller never registered, was
 		// disqualified, or the contest named in the URL belongs to somebody

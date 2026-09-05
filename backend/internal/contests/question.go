@@ -181,9 +181,10 @@ func validateAnswersFor(q Question, answers []Answer) error {
 // answers.
 //
 // Every read here is a staff read and carries the reference answers with it.
-// The participant-facing path does not reuse these methods: it needs a
-// language-resolved projection with the answers absent by construction, which
-// is a different query rather than the same one with a flag.
+// The participant-facing path does not reuse these methods: it asks
+// VisibleQuestionRepository instead, which is a different query — one
+// language, is_visible only, no reference answer selected at all — rather
+// than this one with a flag.
 type QuestionRepository interface {
 	// List returns the contest's questions in display order, with their text
 	// and reference answers.

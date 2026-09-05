@@ -18,6 +18,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
+	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/users/userstest"
@@ -36,9 +37,19 @@ type fakeAccess struct {
 	// gotContestID records what Access was asked about, so a test can prove
 	// the identifier came from the URL.
 	gotContestID uuid.UUID
+	// admitReadErr is what AdmitRead answers; nil means every caller is
+	// admitted. accessCalled records whether Access was reached, so a test
+	// can prove a refusal here stops the request before Access's own lookups.
+	admitReadErr error
+	accessCalled bool
+}
+
+func (a *fakeAccess) AdmitRead(uuid.UUID) error {
+	return a.admitReadErr
 }
 
 func (a *fakeAccess) Access(_ context.Context, contestID, _ uuid.UUID, _ netip.Addr) (contests.Participant, contests.Contest, error) {
+	a.accessCalled = true
 	a.gotContestID = contestID
 	return a.participant, a.contest, a.err
 }
@@ -150,6 +161,61 @@ func TestAHiddenQuestionIsAbsentFromTheParticipantsList(t *testing.T) {
 	}
 }
 
+// Finding 1: the response must carry no display position at all. A dense
+// ordinal — 1, 3, 4, 7 — would tell the caller exactly how many questions are
+// hidden and precisely where each one sits, which is the one fact §6.1 says a
+// participant must work out rather than read off a field. The items array
+// already arrives in display order, so there is nothing an ordinal would add
+// except that leak.
+func TestTheQuestionsResponseCarriesNoOrdinal(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{
+		ID: contestID, Status: contests.StatusRunning,
+		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
+	}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+
+	// Three visible questions with two hidden ones between them, so a dense
+	// staff ordinal would visibly skip (1, then 4, 5 — never 2 or 3).
+	f.questions.Put(contests.Question{
+		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 1, IsVisible: true,
+		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Q1"}},
+	})
+	f.questions.Put(contests.Question{
+		ContestID: contestID, Ord: 2, Kind: contests.KindText, Points: 1, IsVisible: false,
+		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Hidden A"}},
+	})
+	f.questions.Put(contests.Question{
+		ContestID: contestID, Ord: 3, Kind: contests.KindText, Points: 1, IsVisible: false,
+		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Hidden B"}},
+	})
+	f.questions.Put(contests.Question{
+		ContestID: contestID, Ord: 4, Kind: contests.KindText, Points: 1, IsVisible: true,
+		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Q2"}},
+	})
+
+	rec := f.get("/contests/" + contestID.String() + "/play/questions")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"ord"`) {
+		t.Fatalf("the response carries a display position, which counts and places the hidden questions: %s", rec.Body.String())
+	}
+
+	var payload struct {
+		Items []struct {
+			BodyMD string `json:"body_md"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(payload.Items) != 2 || payload.Items[0].BodyMD != "Q1" || payload.Items[1].BodyMD != "Q2" {
+		t.Fatalf("items = %+v, want Q1 then Q2 in display order with nothing to say how far apart they are", payload.Items)
+	}
+}
+
 // The reference answer must never appear anywhere in the response, for a
 // visible question either.
 func TestAReferenceAnswerNeverAppearsInTheQuestionsResponse(t *testing.T) {
@@ -229,6 +295,74 @@ func TestAParticipantOfAnotherContestLearnsNothingAboutThisOne(t *testing.T) {
 	}
 	if code := errorCode(t, rec); code != "not_a_participant" {
 		t.Fatalf("code = %q, want not_a_participant", code)
+	}
+}
+
+// Finding 3: a caller over their own rate budget is refused before Access
+// ever runs its lookups — the same order Run itself uses, and the same
+// sentinel the console maps to 429 (queryrunner.ErrTooManyQueries,
+// codeQueryTooOften).
+func TestARateLimitRefusalIsA429AndNeverReachesAccess(t *testing.T) {
+	for _, path := range []string{"story", "questions"} {
+		t.Run(path, func(t *testing.T) {
+			f := newParticipantFixture(t)
+			f.access.admitReadErr = queryrunner.ErrTooManyQueries
+
+			rec := f.get("/contests/" + uuid.New().String() + "/play/" + path)
+			if rec.Code != http.StatusTooManyRequests {
+				t.Fatalf("status = %d, want 429 (body: %s)", rec.Code, rec.Body.String())
+			}
+			if code := errorCode(t, rec); code != "query_too_often" {
+				t.Fatalf("code = %q, want query_too_often", code)
+			}
+			if f.access.accessCalled {
+				t.Fatal("Access was called after AdmitRead refused — the rate check must run first, before Access's own lookups")
+			}
+		})
+	}
+}
+
+// A caller within their own rate budget is unaffected: AdmitRead admits them
+// and Access runs exactly as it always has.
+func TestACallerWithinTheRateBudgetStillReachesAccess(t *testing.T) {
+	f := newParticipantFixture(t)
+	f.access.contest = contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning,
+		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
+	}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	if _, err := f.stories.Save(context.Background(), f.access.contest.ID, map[string]string{"en": "A body."}); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+
+	rec := f.get("/contests/" + f.access.contest.ID.String() + "/play/story")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if !f.access.accessCalled {
+		t.Fatal("Access was never called for a caller within their rate budget")
+	}
+}
+
+// Finding 4: contests.ErrStoryNotFound must map to 404 — a sentinel with a
+// mapping in fail() and, until now, no test asserting it.
+func TestAMissingStoryIsA404(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{
+		ID: contestID, Status: contests.StatusRunning,
+		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
+	}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	// No story saved: f.stories has nothing for contestID, so the reader
+	// answers contests.ErrStoryNotFound.
+
+	rec := f.get("/contests/" + contestID.String() + "/play/story")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "story_not_found" {
+		t.Fatalf("code = %q, want story_not_found", code)
 	}
 }
 
