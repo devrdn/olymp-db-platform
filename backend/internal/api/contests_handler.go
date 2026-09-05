@@ -12,7 +12,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
-	"github.com/devrdn/db-contest/backend/internal/platform/i18n"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/go-chi/chi/v5"
@@ -239,29 +238,16 @@ func (h *ContestsHandler) toSummary(r *http.Request, c contests.Contest) Contest
 
 // negotiate picks the language to answer in.
 //
-// Everything language-dependent goes through platform/i18n.Match, so "which
-// language did they get, and why" has one answer (§6.2). The order is the
-// explicit request, then the browser's preferences, then the account's, then
-// the contest's default, then the installation's.
+// A thin wrapper over negotiateLang, which every language-dependent handler
+// in this package shares — see its doc for the resolution order (§6.2).
 func (h *ContestsHandler) negotiate(r *http.Request, c contests.Contest) string {
-	var preferred []string
-	if explicit := r.URL.Query().Get("lang"); explicit != "" {
-		preferred = append(preferred, explicit)
-	}
-	preferred = append(preferred, i18n.ParseAcceptLanguage(r.Header.Get("Accept-Language"))...)
-
-	fallback := c.DefaultLanguage()
-	if fallback == "" {
-		fallback = h.defaultLocale
-	}
-
 	available := c.LanguageCodes()
 	if len(available) == 0 {
 		// A contest that has not chosen its languages yet still has authored
 		// text; answering from what exists beats answering with nothing.
 		available = translationCodes(c)
 	}
-	return i18n.Match(preferred, available, fallback)
+	return negotiateLang(r, available, c.DefaultLanguage(), h.defaultLocale)
 }
 
 func translationCodes(c contests.Contest) []string {
