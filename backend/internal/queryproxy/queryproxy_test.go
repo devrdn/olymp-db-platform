@@ -426,6 +426,164 @@ func TestAFailureToStartTheClockIsMarkedAsOurs(t *testing.T) {
 	}
 }
 
+// Finding 1, the critical scenario: an organiser can flip contests.Status to
+// "running" hours before starts_at — a manual step in their own workflow that
+// says nothing about the wall clock. Before this fix that was the only thing
+// queryproxy checked before starting an individual participant's clock, so a
+// student's exploratory query the evening before a 09:00 contest would set
+// their own started_at to that evening, and their whole duration_min would
+// burn before the olympiad even opened — permanently, since nothing can clear
+// started_at once Start has written it. The fix compares the wall clock to
+// the contest's own window and refuses without writing anything.
+func TestAFirstQueryBeforeStartsAtStartsNoClock(t *testing.T) {
+	now := time.Now()
+	opensTomorrowMorning := now.Add(13 * time.Hour)
+	farFuture := now.Add(48 * time.Hour)
+	duration := 120
+	contest := contests.Contest{
+		// An organiser's early flip: Status is already "running", but
+		// starts_at is still hours away.
+		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingIndividual,
+		DurationMin: &duration, StartsAt: &opensTomorrowMorning, EndsAt: &farFuture,
+	}
+	starts := 0
+	service := queryproxy.New(
+		people{participant: contests.Participant{
+			ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered,
+		}, starts: &starts},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	)
+
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrContestNotRunning) {
+		t.Fatalf("a first query before starts_at: error = %v, want ErrContestNotRunning", err)
+	}
+	if starts != 0 {
+		t.Fatalf("Start was called %d times for a query before starts_at, want 0 — nothing may brick this participant", starts)
+	}
+}
+
+// The same window, checked at its other edge: a dead scheduler that never
+// moved a finished individual contest's status out of "running" must not let
+// a participant who never queried before now start a clock past ends_at
+// either.
+func TestAFirstQueryAfterEndsAtStartsNoClock(t *testing.T) {
+	now := time.Now()
+	opened := now.Add(-2 * time.Hour)
+	closed := now.Add(-time.Minute)
+	duration := 30
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingIndividual,
+		DurationMin: &duration, StartsAt: &opened, EndsAt: &closed,
+	}
+	starts := 0
+	service := queryproxy.New(
+		people{participant: contests.Participant{
+			ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered,
+		}, starts: &starts},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	)
+
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrContestNotRunning) {
+		t.Fatalf("a first query after ends_at: error = %v, want ErrContestNotRunning", err)
+	}
+	if starts != 0 {
+		t.Fatalf("Start was called %d times for a query after ends_at, want 0", starts)
+	}
+}
+
+// Finding 2: before this fix, an individual participant's first query started
+// their clock before the address restriction was checked, so a query from
+// outside the contest's own network burned their first minute and was then
+// refused anyway — the same bricking finding 1 closes, milder. The clock must
+// start only once the request is otherwise admitted.
+func TestADisallowedAddressDoesNotStartTheClock(t *testing.T) {
+	farFuture := time.Now().Add(24 * time.Hour)
+	duration := 30
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingIndividual,
+		DurationMin: &duration, EndsAt: &farFuture,
+		AllowedCIDRs: []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")},
+	}
+	starts := 0
+	service := queryproxy.New(
+		people{participant: contests.Participant{
+			ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered,
+		}, starts: &starts},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	)
+
+	fromHome := command()
+	fromHome.Address = netip.MustParseAddr("203.0.113.7")
+	if _, err := service.Run(t.Context(), fromHome); !errors.Is(err, queryproxy.ErrAddressNotAllowed) {
+		t.Fatalf("error = %v, want ErrAddressNotAllowed", err)
+	}
+	if starts != 0 {
+		t.Fatalf("Start was called %d times for a query from a disallowed address, want 0", starts)
+	}
+}
+
+// The same finding, for an oversized first query.
+func TestAnOversizedFirstQueryDoesNotStartTheClock(t *testing.T) {
+	farFuture := time.Now().Add(24 * time.Hour)
+	duration := 30
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingIndividual,
+		DurationMin: &duration, EndsAt: &farFuture,
+	}
+	starts := 0
+	service := queryproxy.New(
+		people{participant: contests.Participant{
+			ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered,
+		}, starts: &starts},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	)
+
+	cmd := command()
+	cmd.SQL = "SELECT " + strings.Repeat("a", sqlpolicy.MaxQueryBytes+1)
+
+	var refusal *sqlpolicy.Refusal
+	if _, err := service.Run(t.Context(), cmd); !errors.As(err, &refusal) || refusal.Code != sqlpolicy.CodeTooLong {
+		t.Fatalf("error = %v, want CodeTooLong", err)
+	}
+	if starts != 0 {
+		t.Fatalf("Start was called %d times for an oversized first query, want 0", starts)
+	}
+}
+
+// And for a contest whose game was never provisioned.
+func TestANotYetProvisionedContestDoesNotStartTheClock(t *testing.T) {
+	farFuture := time.Now().Add(24 * time.Hour)
+	duration := 30
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingIndividual,
+		DurationMin: &duration, EndsAt: &farFuture,
+	}
+	starts := 0
+	service := queryproxy.New(
+		people{participant: contests.Participant{
+			ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered,
+		}, starts: &starts},
+		contestStore{contest: contest},
+		games{err: provisioning.ErrNoGame},
+		&databases{}, &runner{},
+	)
+
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrNoGameYet) {
+		t.Fatalf("error = %v, want ErrNoGameYet", err)
+	}
+	if starts != 0 {
+		t.Fatalf("Start was called %d times for a contest with no game yet, want 0", starts)
+	}
+}
+
 // The grace period exists for network latency, applies only to acceptance and
 // never to what a participant is shown — a query that reaches the server a
 // few seconds after the deadline is still honoured, but one that arrives
@@ -910,6 +1068,101 @@ func TestARequestRefusedBecauseTheContestIsNotRunningStillCountsAgainstTheRate(t
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryrunner.ErrTooManyQueries) {
 		t.Fatalf("a second query in the same state: error = %v, want ErrTooManyQueries — the first should have counted", err)
+	}
+}
+
+// Finding 3: ErrNotAParticipant, the disqualified refusal and the finished
+// refusal all used to return before either rate check ever ran, so any
+// authenticated caller could loop this endpoint against a random contest
+// identifier forever — each request costing a session read plus this lookup
+// — with nothing counting the attempt. The fix is a check keyed by the
+// authenticated caller (cmd.UserID), bounded because it is one key per
+// account rather than one key per string a caller can invent, and run before
+// the participant is even looked up. These three tests reuse one Command (so
+// cmd.UserID stays fixed across calls, the way one real caller's requests
+// would) and prove the lookup itself is only ever reached once the limiter
+// admits the request.
+func TestANeverRegisteredCallerEventuallyMeetsTheLimiterBeforeTheLookup(t *testing.T) {
+	calls := 0
+	service := queryproxy.New(
+		people{err: contests.ErrParticipantNotFound, calls: &calls},
+		contestStore{}, games{}, &databases{}, &runner{},
+	).WithPerMinuteDefault(1)
+	cmd := command()
+
+	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, queryproxy.ErrNotAParticipant) {
+		t.Fatalf("the first request: error = %v, want ErrNotAParticipant", err)
+	}
+	if calls != 1 {
+		t.Fatalf("the participant was looked up %d times after 1 request, want 1", calls)
+	}
+
+	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("a second request from the same caller: error = %v, want ErrTooManyQueries", err)
+	}
+	if calls != 1 {
+		t.Fatalf("the participant was looked up %d times after the rate limiter should have refused the second request, want still 1", calls)
+	}
+}
+
+func TestADisqualifiedCallerEventuallyMeetsTheLimiterBeforeTheLookup(t *testing.T) {
+	calls := 0
+	service := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationDisqualified}, calls: &calls},
+		contestStore{}, games{}, &databases{}, &runner{},
+	).WithPerMinuteDefault(1)
+	cmd := command()
+
+	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, queryproxy.ErrNotAParticipant) {
+		t.Fatalf("the first request: error = %v, want ErrNotAParticipant", err)
+	}
+	if calls != 1 {
+		t.Fatalf("the participant was looked up %d times after 1 request, want 1", calls)
+	}
+
+	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("a second request from the same caller: error = %v, want ErrTooManyQueries", err)
+	}
+	if calls != 1 {
+		t.Fatalf("the participant was looked up %d times after the rate limiter should have refused the second request, want still 1", calls)
+	}
+}
+
+func TestAFinishedCallerEventuallyMeetsTheLimiterBeforeTheLookup(t *testing.T) {
+	calls := 0
+	service := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationFinished}, calls: &calls},
+		contestStore{}, games{}, &databases{}, &runner{},
+	).WithPerMinuteDefault(1)
+	cmd := command()
+
+	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, queryproxy.ErrFinished) {
+		t.Fatalf("the first request: error = %v, want ErrFinished", err)
+	}
+	if calls != 1 {
+		t.Fatalf("the participant was looked up %d times after 1 request, want 1", calls)
+	}
+
+	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("a second request from the same caller: error = %v, want ErrTooManyQueries", err)
+	}
+	if calls != 1 {
+		t.Fatalf("the participant was looked up %d times after the rate limiter should have refused the second request, want still 1", calls)
+	}
+}
+
+// A legitimate participant is unaffected by the new early check: it is keyed
+// by the authenticated caller and set to the installation's own ceiling,
+// which effectiveRateLimit already guarantees no contest-specific check below
+// it will ever be looser than.
+func TestALegitimateParticipantIsUnaffectedByTheEarlyRateCheck(t *testing.T) {
+	service, _, _ := fixture(t)
+	cmd := command()
+
+	for i := range 3 {
+		if _, err := service.Run(t.Context(), cmd); err != nil {
+			t.Fatalf("query %d from a legitimate participant: %v", i+1, err)
+		}
 	}
 }
 

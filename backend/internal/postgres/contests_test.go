@@ -10,6 +10,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestContestSurvivesARoundTrip(t *testing.T) {
@@ -75,6 +76,49 @@ func TestUnknownContestIsNotFound(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		if _, err := NewContests(testPool).ByID(ctx, uuid.New()); !errors.Is(err, contests.ErrNotFound) {
 			t.Errorf("ByID() = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+// checkViolation is the SQLSTATE PostgreSQL raises for a CHECK constraint.
+const checkViolation = "23514"
+
+// Finding 5: internal/contests.Contest.Validate was the only thing bounding
+// duration_min before this migration — a row written by hand, or one that
+// predates the check, was not, and Deadline's
+// time.Duration(*DurationMin)*time.Minute arithmetic overflows and wraps to a
+// deadline in the past well before an int this size otherwise would. This
+// goes straight through Exec rather than the repository, the same way a
+// hand-written row or a pre-migration one would have reached the table: the
+// domain's own Create was never in a position to stop either.
+func TestDurationMinIsBoundedAtTheDatabaseToo(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-duration-bound")
+		const overTheBound = 10081 // maxDurationMin (contests.go) + 1
+
+		_, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+			`INSERT INTO contests (created_by, timing, duration_min) VALUES ($1, 'individual', $2)`,
+			author.ID, overTheBound)
+
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != checkViolation {
+			t.Fatalf("insert with duration_min = %d: err = %v, want a %s check violation", overTheBound, err, checkViolation)
+		}
+	})
+}
+
+// A duration exactly at the bound is still accepted — this is a ceiling, not
+// a tighter limit than the domain's own.
+func TestDurationMinAtTheBoundIsAcceptedByTheDatabase(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-duration-at-bound")
+		const atTheBound = 10080 // maxDurationMin (contests.go)
+
+		_, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+			`INSERT INTO contests (created_by, timing, duration_min) VALUES ($1, 'individual', $2)`,
+			author.ID, atTheBound)
+		if err != nil {
+			t.Fatalf("insert with duration_min = %d (the bound itself): %v", atTheBound, err)
 		}
 	})
 }

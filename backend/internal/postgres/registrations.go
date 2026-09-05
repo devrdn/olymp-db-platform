@@ -178,6 +178,18 @@ func (r *Registrations) Remove(ctx context.Context, contestID, userID uuid.UUID)
 // first, so an individual participant's later queries pay no further write —
 // the same discipline CLAUDE.md rule 6 asks of a session touch.
 //
+// The WHERE also requires status = 'registered' (finding 4), not only
+// started_at IS NULL: a registration disqualified before it ever started
+// still has started_at IS NULL — SetStatus never touches that column — and
+// without this second guard a disqualification landing between a caller's
+// lookup of the participant and this call would be silently undone, moving
+// them straight to 'active' as if nothing had happened. 'registered' is the
+// only status this method's own WHERE ever has to match against, because
+// every other status either already has started_at set or, for
+// 'disqualified', must not be reopened by this method at all — an explicit
+// allow-list rather than excluding 'disqualified' by name, so a future status
+// this method was never taught about is refused rather than silently started.
+//
 // A caller who loses the race still has to learn the start time the winner
 // set, and that read must be its own statement, not folded into the same one
 // as the UPDATE: PostgreSQL takes one snapshot per statement under READ
@@ -190,18 +202,29 @@ func (r *Registrations) Remove(ctx context.Context, contestID, userID uuid.UUID)
 // participant with no StartedAt at all, silently reintroducing the bug this
 // method exists to close. The fix is the second, separate statement below,
 // which gets a fresh snapshot of its own.
+//
+// This whole argument is specific to READ COMMITTED, which is what the pool
+// this repository shares actually runs at today because nothing in
+// internal/platform/storage ever raises it. Under REPEATABLE READ or
+// SERIALIZABLE a transaction's first statement fixes its snapshot for every
+// statement after it, so a losing racer's second statement would keep
+// reading the pre-UPDATE snapshot rather than picking up the winner's
+// commit — the version with started_at still null — and the guarantee this
+// doc comment argues for would silently stop holding. Anybody changing the
+// pool's isolation level has to re-read this method, not only trust that its
+// tests still pass.
 func (r *Registrations) Start(ctx context.Context, registrationID uuid.UUID, now time.Time) (contests.Participant, error) {
 	querier := r.querier(ctx)
 	p, err := scanParticipant(querier.QueryRow(ctx, `
 		WITH updated AS (
 			UPDATE registrations
 			SET started_at = $2, status = $3
-			WHERE id = $1 AND started_at IS NULL
+			WHERE id = $1 AND started_at IS NULL AND status = $4
 			RETURNING *
 		)
 		SELECT `+participantColumns+`
 		FROM updated r JOIN users u ON u.id = r.user_id`,
-		registrationID, now, contests.RegistrationActive))
+		registrationID, now, contests.RegistrationActive, contests.RegistrationRegistered))
 	switch {
 	case err == nil:
 		return p, nil
