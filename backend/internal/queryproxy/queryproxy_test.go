@@ -738,6 +738,127 @@ func TestWhereTheSchemaIsHiddenTheDatabaseDoesNotSpellItOut(t *testing.T) {
 	}
 }
 
+// accessFixture builds a Service with only the two collaborators Access
+// touches faked with anything meaningful — games, the database pool and the
+// runner never enter Access at all, and passing them zero values here is
+// itself part of what this file proves about the method.
+func accessFixture(people queryproxy.People, contest contestStore) *queryproxy.Service {
+	return queryproxy.New(people, contest, games{}, &databases{}, &runner{})
+}
+
+// Access is the admission the participant-facing read endpoints (the story,
+// the questions) require, and it is meant to be exactly what Run already
+// checks before taking a query — minus the rate limit and the SQL-specific
+// work, neither of which a read costs. This is the same table TestWhoMayAskAndWhen
+// drives through Run, driven through Access instead, so the two are proven to
+// agree rather than merely asserted to.
+func TestAccessAgreesWithRunAboutWhoMayAskAndWhen(t *testing.T) {
+	for name, given := range map[string]struct {
+		people  people
+		contest contests.Contest
+		want    error
+	}{
+		"somebody who never registered": {
+			people:  people{err: contests.ErrParticipantNotFound},
+			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow},
+			want:    queryproxy.ErrNotAParticipant,
+		},
+		"a contest that has not started": {
+			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+			contest: contests.Contest{Status: contests.StatusPublished},
+			want:    queryproxy.ErrContestNotRunning,
+		},
+		"a contest that has finished": {
+			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+			contest: contests.Contest{Status: contests.StatusFinished},
+			want:    queryproxy.ErrContestNotRunning,
+		},
+		"somebody disqualified": {
+			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationDisqualified}},
+			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow},
+			want:    queryproxy.ErrNotAParticipant,
+		},
+		"somebody who has finished": {
+			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationFinished}},
+			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow},
+			want:    queryproxy.ErrFinished,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service := accessFixture(given.people, contestStore{contest: given.contest})
+
+			_, _, err := service.Access(t.Context(), uuid.New(), uuid.New(), netip.Addr{})
+			if !errors.Is(err, given.want) {
+				t.Fatalf("error = %v, want %v", err, given.want)
+			}
+		})
+	}
+}
+
+// A fixed contest past its own ends_at must refuse a read exactly as it
+// refuses a query (§8): the deadline formula is the one this project has, and
+// a read that used a second one would be readable past the moment writing
+// stops being possible.
+func TestAccessRefusesAFixedContestPastItsDeadline(t *testing.T) {
+	past := time.Now().Add(-time.Minute)
+	contest := contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &past}
+	service := accessFixture(people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}}, contestStore{contest: contest})
+
+	if _, _, err := service.Access(t.Context(), uuid.New(), uuid.New(), netip.Addr{}); !errors.Is(err, queryproxy.ErrContestNotRunning) {
+		t.Fatalf("error = %v, want ErrContestNotRunning", err)
+	}
+}
+
+// An individual participant who has not started yet has nothing for the
+// deadline formula to compute from — Access must fall back to the contest's
+// own window (contest.OpenForStart), exactly as Run does before it will ever
+// start a clock, and it must not start one either: reading is not the
+// deliberate action that does that.
+func TestAccessLetsAnIndividualParticipantReadBeforeTheyHaveStartedAndNeverStartsTheirClock(t *testing.T) {
+	future := time.Now().Add(time.Hour)
+	duration := 30
+	contest := contests.Contest{
+		Status: contests.StatusRunning, Timing: contests.TimingIndividual,
+		DurationMin: &duration, EndsAt: &future,
+	}
+	starts := 0
+	p := people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}, starts: &starts}
+	service := accessFixture(p, contestStore{contest: contest})
+
+	participant, gotContest, err := service.Access(t.Context(), uuid.New(), uuid.New(), netip.Addr{})
+	if err != nil {
+		t.Fatalf("Access() = %v, want nil (their window is open even though they have not started)", err)
+	}
+	if participant.StartedAt != nil {
+		t.Fatalf("Access started the participant's clock, which is Run's job on a deliberate action, not a read's")
+	}
+	if starts != 0 {
+		t.Fatalf("Start was called %d times by a read, want 0", starts)
+	}
+	if gotContest.Status != contests.StatusRunning {
+		t.Fatalf("contest returned = %+v", gotContest)
+	}
+}
+
+// A query from outside the contest's own network is refused, and Access must
+// refuse a read from the same address the same way — the restriction applies
+// to the participant, not to which endpoint they asked.
+func TestAccessChecksTheAddressRestriction(t *testing.T) {
+	inRoom := netip.MustParsePrefix("10.20.0.0/16")
+	contest := contests.Contest{
+		Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow,
+		AllowedCIDRs: []netip.Prefix{inRoom},
+	}
+	service := accessFixture(people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}}, contestStore{contest: contest})
+
+	if _, _, err := service.Access(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("203.0.113.7")); !errors.Is(err, queryproxy.ErrAddressNotAllowed) {
+		t.Fatalf("error = %v, want ErrAddressNotAllowed", err)
+	}
+	if _, _, err := service.Access(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("10.20.3.4")); err != nil {
+		t.Fatalf("a read from the contest's own network was refused: %v", err)
+	}
+}
+
 // What is held back is the database speaking for itself, and nothing else. A
 // refusal and the runner's own outcomes carry codes the interface turns into
 // sentences, and swallowing one would leave a participant with less than the

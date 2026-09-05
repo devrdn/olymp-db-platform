@@ -550,6 +550,36 @@ func (r *Policies) Save(_ context.Context, p contests.SQLPolicy) error {
 	return nil
 }
 
+// Attempts is an in-memory contests.AttemptStore.
+type Attempts struct {
+	byRegistration map[uuid.UUID]map[uuid.UUID]contests.AttemptStats
+}
+
+var _ contests.AttemptStore = (*Attempts)(nil)
+
+// NewAttempts returns an empty attempt store.
+func NewAttempts() *Attempts {
+	return &Attempts{byRegistration: map[uuid.UUID]map[uuid.UUID]contests.AttemptStats{}}
+}
+
+// Put stages one registration's attempt count and correctness on a question,
+// as the real repository would derive it from the submissions it has
+// recorded.
+func (r *Attempts) Put(registrationID, questionID uuid.UUID, stats contests.AttemptStats) {
+	if r.byRegistration[registrationID] == nil {
+		r.byRegistration[registrationID] = map[uuid.UUID]contests.AttemptStats{}
+	}
+	r.byRegistration[registrationID][questionID] = stats
+}
+
+func (r *Attempts) ForRegistration(_ context.Context, registrationID uuid.UUID) (map[uuid.UUID]contests.AttemptStats, error) {
+	out := make(map[uuid.UUID]contests.AttemptStats, len(r.byRegistration[registrationID]))
+	for id, stats := range r.byRegistration[registrationID] {
+		out[id] = stats
+	}
+	return out, nil
+}
+
 // Languages is a fixed language catalog.
 type Languages struct {
 	Available []contests.Language

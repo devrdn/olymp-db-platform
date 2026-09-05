@@ -221,6 +221,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}
 	if console != nil {
 		modules = append(modules, api.NewConsoleHandler(console, authMiddleware, log))
+		// The participant's own read of a running contest — the story and the
+		// visible questions — needs exactly the admission queryproxy.Service
+		// already grants the console, and nothing the console additionally
+		// needs (no game cluster, no Query Runner): mounted alongside it,
+		// under the same "is there a game circuit at all" condition, since
+		// Access is queryproxy's, not a capability of its own.
+		reader := contests.NewReader(postgres.NewStories(pool), postgres.NewQuestions(pool), postgres.NewAttempts(pool))
+		modules = append(modules, api.NewParticipantHandler(console, reader, authMiddleware, log, cfg.DefaultLocale))
 	}
 
 	deps := api.Deps{
