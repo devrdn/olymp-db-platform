@@ -131,7 +131,21 @@ type Service struct {
 	// configuration override it. Zero means the installation itself has no
 	// limit, the same convention config.Runner.PerMinute uses.
 	perMinuteDefault int
+	// now is the clock Run compares a participant's deadline against. A field
+	// rather than a bare time.Now() call so a test can hold "now" still next
+	// to a deadline it names explicitly, instead of racing the wall clock.
+	now func() time.Time
+	// grace is the network-latency allowance added to a deadline before Run
+	// refuses a query for arriving too late (§8). It is never subtracted from
+	// what a participant is shown — nothing here renders a deadline, and the
+	// day something does, it must call contests.Deadline without this.
+	grace time.Duration
 }
+
+// defaultGrace is the network-latency allowance a deployment gets unless
+// WithGrace says otherwise — the "about 5 seconds" docs/ARCHITECTURE.md §8
+// names.
+const defaultGrace = 5 * time.Second
 
 // New assembles the façade.
 func New(people People, contests Contests, games Games, databases Databases, runner Executor) *Service {
@@ -139,7 +153,31 @@ func New(people People, contests Contests, games Games, databases Databases, run
 		people: people, contests: contests, games: games, databases: databases, runner: runner,
 		rate:             queryrunner.NewRateLimiter(0, time.Minute),
 		perMinuteDefault: queryrunner.DefaultLimits().PerMinute,
+		now:              func() time.Time { return time.Now().UTC() },
+		grace:            defaultGrace,
 	}
+}
+
+// WithClock overrides the wall clock Run compares a participant's deadline
+// against. A deployment never calls this and gets time.Now().UTC(); tests use
+// it to place "now" precisely relative to a deadline instead of racing it.
+func (s *Service) WithClock(now func() time.Time) *Service {
+	if now != nil {
+		s.now = now
+	}
+	return s
+}
+
+// WithGrace overrides the network-latency allowance New defaults to five
+// seconds, so a deployment's own configuration decides what "just in time"
+// means here the same way it will for the submission path and SSE — all
+// three add this on top of the one contests.Deadline formula rather than
+// keeping a grace of their own.
+func (s *Service) WithGrace(grace time.Duration) *Service {
+	if grace >= 0 {
+		s.grace = grace
+	}
+	return s
 }
 
 // WithPerMinuteDefault sets the rate a contest falls back to when its
@@ -186,8 +224,10 @@ func effectiveRateLimit(contestLimit, installationLimit int) int {
 // Run answers one query, or says why it will not.
 //
 // The order is cheapest first and most-revealing last, with one deliberate
-// exception. Who is asking is a single row; whether the contest is running
-// and holds this address is decided from another; the rate check comes next,
+// exception. Who is asking is a single row; whether the contest is running —
+// which now means both its status and the participant's own deadline, per
+// contests.Deadline — and holds this address is decided from another; the
+// rate check comes next,
 // keyed by the registration those two rows named — and only then is the
 // query's own length checked, even though it costs nothing but a comparison
 // and could be tested first. Checking it first used to mean an oversized
@@ -217,6 +257,19 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		return nil, fmt.Errorf("%w: look up the contest: %w", ErrUnavailable, err)
 	}
 	if contest.Status != contests.StatusRunning {
+		return nil, ErrContestNotRunning
+	}
+	// The one formula every timing check in the system uses (§8), and the
+	// guarantee that closing does not depend on the scheduler: a fixed
+	// contest past its own ends_at, or an individual participant past their
+	// own started_at+duration_min, is refused here on the server's own clock
+	// even if contests.Status has not (yet, or ever, with a dead scheduler)
+	// caught up to "finished". ok is false for a state with no deadline to
+	// compare against — an individual participant who has not started, or an
+	// invariant Contest.Validate would have refused — and that is refused the
+	// same way rather than treated as no limit at all.
+	deadline, ok := contests.Deadline(contest, participant)
+	if !ok || s.now().After(deadline.Add(s.grace)) {
 		return nil, ErrContestNotRunning
 	}
 	if !contest.AllowsAddress(cmd.Address) {
