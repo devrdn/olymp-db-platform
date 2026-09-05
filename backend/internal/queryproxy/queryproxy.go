@@ -305,16 +305,9 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		return nil, err
 	}
 
-	participant, err := s.people.ByUser(ctx, cmd.ContestID, cmd.UserID)
-	switch {
-	case errors.Is(err, contests.ErrParticipantNotFound):
-		return nil, ErrNotAParticipant
-	case err != nil:
-		return nil, fmt.Errorf("%w: look up the participant: %w", ErrUnavailable, err)
-	case participant.Status == contests.RegistrationDisqualified:
-		return nil, ErrNotAParticipant
-	case participant.Status == contests.RegistrationFinished:
-		return nil, ErrFinished
+	participant, err := s.lookupParticipant(ctx, cmd.ContestID, cmd.UserID)
+	if err != nil {
+		return nil, err
 	}
 
 	contest, err := s.contests.ByID(ctx, cmd.ContestID)
@@ -334,37 +327,27 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		return nil, err
 	}
 
-	if contest.Status != contests.StatusRunning {
-		return nil, ErrContestNotRunning
-	}
-
 	// Whether this call could be the deliberate action that starts an
 	// individual participant's own clock (§8). Fixed timing never starts a
 	// clock at all, and a participant who already has one does not get a
 	// second — Start's own guard is "started_at IS NULL", but reading
 	// StartedAt here first is what keeps every query after the first from
 	// touching the registration row through anything but the read this
-	// function already paid for.
+	// function already paid for. Recomputed here rather than read back from
+	// Admitted below: it is a comparison of two values already in hand, not a
+	// lookup, so recomputing it costs nothing and Admitted has no reason to
+	// hand back a fact its caller can already see for itself.
 	firstAction := contest.Timing == contests.TimingIndividual && participant.StartedAt == nil
 
-	if firstAction {
-		// Finding 1: contest.Status is a manual step in an organiser's own
-		// workflow and says nothing about the wall clock — it can be moved to
-		// "running" hours before starts_at. Deadline cannot be asked yet
-		// either: it needs a StartedAt this participant does not have. So the
-		// one thing there is to check before starting is the window itself,
-		// and getting this refusal right here, before the address, length and
-		// provisioning checks below, means a query outside the window never
-		// pays for any of them either.
-		if !contest.OpenForStart(s.now()) {
-			return nil, ErrContestNotRunning
-		}
-	} else if s.deadlinePassed(contest, participant) {
-		return nil, ErrContestNotRunning
-	}
-
-	if !contest.AllowsAddress(cmd.Address) {
-		return nil, ErrAddressNotAllowed
+	// Is the contest running for this participant right now, and are they
+	// calling from an address it allows — the same admission the
+	// participant-facing read endpoints require before showing the story or
+	// the questions (see Access). Run adds its own rate limiting around this
+	// call rather than folding it in, because a refused query still has to
+	// count against the caller's rate (finding 3, see the doc above), and a
+	// read of the story never costs a rate check at all.
+	if err := s.Admitted(contest, participant, cmd.Address); err != nil {
+		return nil, err
 	}
 
 	if len(cmd.SQL) > sqlpolicy.MaxQueryBytes {
@@ -426,6 +409,94 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		return nil, ErrDatabaseDeclined
 	}
 	return result, err
+}
+
+// lookupParticipant resolves who is asking, folding "never registered" and
+// "disqualified" into the one answer a caller probing a contest should not be
+// able to tell apart (ErrNotAParticipant) and reporting a finished participant
+// separately (ErrFinished), which is a different sentence to send them.
+//
+// Factored out of Run so the participant-facing read endpoints (Access) start
+// from the same lookup rather than a second one that could drift from it —
+// this project's own history is full of the bug two implementations of "who
+// is this and are they still in" makes.
+func (s *Service) lookupParticipant(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, error) {
+	participant, err := s.people.ByUser(ctx, contestID, userID)
+	switch {
+	case errors.Is(err, contests.ErrParticipantNotFound):
+		return contests.Participant{}, ErrNotAParticipant
+	case err != nil:
+		return contests.Participant{}, fmt.Errorf("%w: look up the participant: %w", ErrUnavailable, err)
+	case participant.Status == contests.RegistrationDisqualified:
+		return contests.Participant{}, ErrNotAParticipant
+	case participant.Status == contests.RegistrationFinished:
+		return contests.Participant{}, ErrFinished
+	}
+	return participant, nil
+}
+
+// Admitted reports whether participant may interact with contest right now:
+// its window is open to them and their address is allowed. It never starts an
+// individual participant's clock — that stays Run's own job, once every other
+// check downstream has had its say (§8, finding 2) — so a caller that only
+// wants to know "is this still open to me" can ask without the side effect of
+// asking.
+//
+// The one rule of timing this codebase has (§8) is contests.Deadline, and this
+// is the one place both Run and Access compare against it: a not-yet-started
+// individual participant has no deadline for that formula to compute yet, so
+// their own window is checked instead (contest.OpenForStart) exactly as Run's
+// own doc explains for finding 1; everybody else is checked against their own
+// deadline, grace included, by deadlinePassed.
+func (s *Service) Admitted(contest contests.Contest, participant contests.Participant, addr netip.Addr) error {
+	if contest.Status != contests.StatusRunning {
+		return ErrContestNotRunning
+	}
+
+	firstAction := contest.Timing == contests.TimingIndividual && participant.StartedAt == nil
+	if firstAction {
+		if !contest.OpenForStart(s.now()) {
+			return ErrContestNotRunning
+		}
+	} else if s.deadlinePassed(contest, participant) {
+		return ErrContestNotRunning
+	}
+
+	if !contest.AllowsAddress(addr) {
+		return ErrAddressNotAllowed
+	}
+	return nil
+}
+
+// Access resolves who is asking and confirms they may currently interact with
+// contestID, for a caller that only wants to look — the participant-facing
+// story and questions endpoints, not the SQL console.
+//
+// This is deliberately the same admission Run requires before it will take a
+// query — registered and not disqualified or finished, the contest running
+// (or, for an individual participant who has not started, its own window
+// open), their own deadline not passed, their address allowed — and nothing
+// more: no rate limit, no game lookup, no database provisioning, because
+// reading the story costs none of what running a query against the
+// participant's own database costs. It is exposed here rather than
+// reimplemented beside the read endpoints because "may this student see this
+// contest" answered twice, even slightly differently, is exactly the shape of
+// bug this project keeps finding.
+func (s *Service) Access(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error) {
+	participant, err := s.lookupParticipant(ctx, contestID, userID)
+	if err != nil {
+		return contests.Participant{}, contests.Contest{}, err
+	}
+
+	contest, err := s.contests.ByID(ctx, contestID)
+	if err != nil {
+		return contests.Participant{}, contests.Contest{}, fmt.Errorf("%w: look up the contest: %w", ErrUnavailable, err)
+	}
+
+	if err := s.Admitted(contest, participant, addr); err != nil {
+		return contests.Participant{}, contests.Contest{}, err
+	}
+	return participant, contest, nil
 }
 
 // deadlinePassed reports whether contest is no longer open to participant, by

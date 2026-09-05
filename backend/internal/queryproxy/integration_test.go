@@ -3,6 +3,7 @@ package queryproxy_test
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"os"
 	"testing"
 	"time"
@@ -154,5 +155,108 @@ func TestAnIndividualParticipantCanQueryOnceTheirFirstActionStartsTheClockAndCan
 	clock = clock.Add(durationMin * time.Minute)
 	if _, err := service.Run(ctx, cmd); !errors.Is(err, queryproxy.ErrContestNotRunning) {
 		t.Fatalf("a query past the participant's own deadline: error = %v, want ErrContestNotRunning", err)
+	}
+}
+
+// makeRunningFixedContest inserts a contest already running under fixed
+// timing, sharing one window for every participant.
+func makeRunningFixedContest(t *testing.T, ctx context.Context, pool *pgxpool.Pool, author uuid.UUID, endsAt time.Time) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	err := pool.QueryRow(ctx, `
+		INSERT INTO contests (created_by, status, timing, ends_at)
+		VALUES ($1, 'running', 'fixed', $2)
+		RETURNING id`, author, endsAt).Scan(&id)
+	if err != nil {
+		t.Fatalf("create contest: %v", err)
+	}
+	return id
+}
+
+// TestAccessAgainstTheRealSchemaAnswersTheOwnersOwnStandingCheck proves, on
+// the real schema rather than a fake, the exact question the task brief ends
+// on: can a student read another contest's business, a disqualified
+// participant's own contest, or a contest that is not running, through
+// Access — the one admission this package now shares between the SQL console
+// and the participant-facing story/questions endpoints.
+func TestAccessAgainstTheRealSchemaAnswersTheOwnersOwnStandingCheck(t *testing.T) {
+	pool := integrationPool(t)
+	ctx := context.Background()
+
+	author := makeIntegrationUser(t, ctx, pool, "author-"+uuid.NewString()[:8])
+	enrolled := makeIntegrationUser(t, ctx, pool, "enrolled-"+uuid.NewString()[:8])
+	stranger := makeIntegrationUser(t, ctx, pool, "stranger-"+uuid.NewString()[:8])
+	disqualified := makeIntegrationUser(t, ctx, pool, "disq-"+uuid.NewString()[:8])
+
+	farFuture := time.Now().Add(24 * time.Hour)
+	running := makeRunningFixedContest(t, ctx, pool, author, farFuture)
+	elsewhere := makeRunningFixedContest(t, ctx, pool, author, farFuture)
+	past := time.Now().Add(-time.Minute)
+	notRunningAnymore := makeRunningFixedContest(t, ctx, pool, author, past)
+	for _, id := range []uuid.UUID{running, elsewhere, notRunningAnymore} {
+		t.Cleanup(func() {
+			clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			_, _ = pool.Exec(clean, `DELETE FROM contests WHERE id = $1`, id)
+		})
+	}
+
+	registrations := postgres.NewRegistrations(pool)
+	if _, err := registrations.Add(ctx, running, enrolled); err != nil {
+		t.Fatalf("enrol the participant: %v", err)
+	}
+	if _, err := registrations.Add(ctx, elsewhere, stranger); err != nil {
+		t.Fatalf("enrol the stranger elsewhere: %v", err)
+	}
+	if _, err := registrations.Add(ctx, running, disqualified); err != nil {
+		t.Fatalf("enrol the participant to disqualify: %v", err)
+	}
+	disqualifiedReg, err := registrations.ByUser(ctx, running, disqualified)
+	if err != nil {
+		t.Fatalf("ByUser() = %v", err)
+	}
+	if err := registrations.SetStatus(ctx, disqualifiedReg.ID, contests.RegistrationDisqualified); err != nil {
+		t.Fatalf("SetStatus() = %v", err)
+	}
+	if _, err := registrations.Add(ctx, notRunningAnymore, enrolled); err != nil {
+		t.Fatalf("enrol into the finished contest: %v", err)
+	}
+
+	service := queryproxy.New(
+		registrations, postgres.NewContests(pool),
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{},
+	)
+
+	// The enrolled participant of the running contest gets in.
+	if _, _, err := service.Access(ctx, running, enrolled, netip.Addr{}); err != nil {
+		t.Fatalf("an enrolled participant of a running contest was refused: %v", err)
+	}
+
+	// A stranger to this contest — enrolled somewhere else entirely — gets
+	// exactly the same refusal a caller naming a contest ID that names
+	// nothing at all would (ErrNotAParticipant), never a 404 that would
+	// confirm this contest exists and never anything else about it.
+	if _, _, err := service.Access(ctx, running, stranger, netip.Addr{}); !errors.Is(err, queryproxy.ErrNotAParticipant) {
+		t.Fatalf("a stranger to this contest: error = %v, want ErrNotAParticipant", err)
+	}
+
+	// A contest ID that names nothing at all reads the same way.
+	if _, _, err := service.Access(ctx, uuid.New(), enrolled, netip.Addr{}); !errors.Is(err, queryproxy.ErrNotAParticipant) {
+		t.Fatalf("a contest that does not exist: error = %v, want ErrNotAParticipant", err)
+	}
+
+	// A disqualified participant of this very contest is refused the same
+	// way — disqualification must not read as "not registered" to the
+	// caller, but it must read as the same code a stranger gets.
+	if _, _, err := service.Access(ctx, running, disqualified, netip.Addr{}); !errors.Is(err, queryproxy.ErrNotAParticipant) {
+		t.Fatalf("a disqualified participant: error = %v, want ErrNotAParticipant", err)
+	}
+
+	// A contest past its own ends_at is refused even though nothing here ever
+	// flips contests.status to finished — the same deadline formula Run
+	// checks before taking a query.
+	if _, _, err := service.Access(ctx, notRunningAnymore, enrolled, netip.Addr{}); !errors.Is(err, queryproxy.ErrContestNotRunning) {
+		t.Fatalf("a contest past its own deadline: error = %v, want ErrContestNotRunning", err)
 	}
 }
