@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
@@ -163,6 +164,58 @@ func (r *Registrations) Remove(ctx context.Context, contestID, userID uuid.UUID)
 		return contests.ErrParticipantNotFound
 	}
 	return nil
+}
+
+// Start records now as the participant's first deliberate action against the
+// game, if they have not already begun (finding 1).
+//
+// The UPDATE is the whole guarantee for the write: it can only ever set
+// started_at once per row, because its own WHERE re-reads started_at under
+// the row lock it takes, so a second transaction racing for the same
+// registration blocks on that lock and, once the first commits, finds
+// started_at no longer null and updates nothing — no read-then-write gap for
+// either side to land in. Called on every action and a no-op after the
+// first, so an individual participant's later queries pay no further write —
+// the same discipline CLAUDE.md rule 6 asks of a session touch.
+//
+// A caller who loses the race still has to learn the start time the winner
+// set, and that read must be its own statement, not folded into the same one
+// as the UPDATE: PostgreSQL takes one snapshot per statement under READ
+// COMMITTED, and a plain SELECT sharing the UPDATE's statement would read
+// against the snapshot from before the UPDATE blocked on the row lock — the
+// version with started_at still null — even after the UPDATE itself
+// re-checks the lock and correctly sees the winner's commit. A first version
+// of this method folded both into one statement with a UNION ALL and passed
+// every test run alone; under real concurrency it handed some racers back a
+// participant with no StartedAt at all, silently reintroducing the bug this
+// method exists to close. The fix is the second, separate statement below,
+// which gets a fresh snapshot of its own.
+func (r *Registrations) Start(ctx context.Context, registrationID uuid.UUID, now time.Time) (contests.Participant, error) {
+	querier := r.querier(ctx)
+	p, err := scanParticipant(querier.QueryRow(ctx, `
+		WITH updated AS (
+			UPDATE registrations
+			SET started_at = $2, status = $3
+			WHERE id = $1 AND started_at IS NULL
+			RETURNING *
+		)
+		SELECT `+participantColumns+`
+		FROM updated r JOIN users u ON u.id = r.user_id`,
+		registrationID, now, contests.RegistrationActive))
+	switch {
+	case err == nil:
+		return p, nil
+	case errors.Is(err, contests.ErrParticipantNotFound):
+		// Lost the race, or this is not the first call for this registration.
+		// A fresh statement, so it reads whatever is committed now rather
+		// than what was committed when this call started (see the doc above).
+		return scanParticipant(querier.QueryRow(ctx, `
+			SELECT `+participantColumns+`
+			FROM registrations r JOIN users u ON u.id = r.user_id
+			WHERE r.id = $1`, registrationID))
+	default:
+		return contests.Participant{}, err
+	}
 }
 
 // SetStatus changes a registration's status.

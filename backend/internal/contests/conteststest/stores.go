@@ -15,6 +15,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
@@ -502,6 +503,24 @@ func (r *Registrations) SetStatus(_ context.Context, registrationID uuid.UUID, s
 	p.Status = status
 	r.byID[registrationID] = p
 	return nil
+}
+
+// Start mirrors postgres.Registrations.Start: it sets StartedAt and moves the
+// status to active together, and only the first call for a registration has
+// any effect — a second one reads back what the first wrote instead of
+// moving the clock.
+func (r *Registrations) Start(_ context.Context, registrationID uuid.UUID, now time.Time) (contests.Participant, error) {
+	p, ok := r.byID[registrationID]
+	if !ok {
+		return contests.Participant{}, contests.ErrParticipantNotFound
+	}
+	if p.StartedAt == nil {
+		started := now
+		p.StartedAt = &started
+		p.Status = contests.RegistrationActive
+		r.byID[registrationID] = p
+	}
+	return p, nil
 }
 
 // Policies is an in-memory contests.PolicyStore.

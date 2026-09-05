@@ -67,9 +67,14 @@ var (
 	ErrDatabaseDeclined = errors.New("the database refused the query")
 )
 
-// People answers who is asking.
+// People answers who is asking, and starts their clock.
 type People interface {
 	ByUser(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, error)
+	// Start records now as the participant's first deliberate action, if they
+	// have not already begun. The narrow slice of contests.RegistrationRepository
+	// this façade needs — see contests.RegistrationRepository.Start for the
+	// concurrency guarantee every implementation must provide.
+	Start(ctx context.Context, registrationID uuid.UUID, now time.Time) (contests.Participant, error)
 }
 
 // Contests answers what they are asking about.
@@ -173,10 +178,16 @@ func (s *Service) WithClock(now func() time.Time) *Service {
 // means here the same way it will for the submission path and SSE — all
 // three add this on top of the one contests.Deadline formula rather than
 // keeping a grace of their own.
+//
+// Panics on a negative grace, the same as WithPerMinuteDefault does on a
+// negative rate: config.Load never produces one (DEADLINE_GRACE is rejected
+// there first), so a caller passing one is a bug in the wiring, not
+// deployment input to fail closed on quietly.
 func (s *Service) WithGrace(grace time.Duration) *Service {
-	if grace >= 0 {
-		s.grace = grace
+	if grace < 0 {
+		panic(fmt.Sprintf("queryproxy: negative grace %s", grace))
 	}
+	s.grace = grace
 	return s
 }
 
@@ -186,13 +197,16 @@ func (s *Service) WithGrace(grace time.Duration) *Service {
 // façade's own pre-check matches whatever QUERY_PER_MINUTE the Query Runner
 // was actually deployed with rather than the architecture's own figure.
 // Zero means the deployment's installation has no limit at all, the same
-// meaning config.Runner.PerMinute gives the same variable; negative is
-// refused rather than silently ignored, since Config.Load never produces one
-// and a caller passing one is a bug this should not hide.
+// meaning config.Runner.PerMinute gives the same variable; negative panics
+// rather than being silently ignored, since Config.Load never produces one
+// and a caller passing one is a bug this should not hide. WithGrace agrees:
+// the same reasoning applies to a negative grace, and the two options must
+// not disagree about what a bad value deserves.
 func (s *Service) WithPerMinuteDefault(perMinute int) *Service {
-	if perMinute >= 0 {
-		s.perMinuteDefault = perMinute
+	if perMinute < 0 {
+		panic(fmt.Sprintf("queryproxy: negative per-minute default %d", perMinute))
 	}
+	s.perMinuteDefault = perMinute
 	return s
 }
 
@@ -224,21 +238,28 @@ func effectiveRateLimit(contestLimit, installationLimit int) int {
 // Run answers one query, or says why it will not.
 //
 // The order is cheapest first and most-revealing last, with one deliberate
-// exception. Who is asking is a single row; whether the contest is running —
-// which now means both its status and the participant's own deadline, per
-// contests.Deadline — and holds this address is decided from another; the
-// rate check comes next,
-// keyed by the registration those two rows named — and only then is the
-// query's own length checked, even though it costs nothing but a comparison
-// and could be tested first. Checking it first used to mean an oversized
-// query never called the rate check at all: refused for free, over and over,
-// against no budget (CLAUDE.md rule 13 — a refused query still counts against
-// the rate, because refusing it still cost something). The two lookups above
-// are the same ones an ordinary query pays regardless, so an oversized one
-// now costs exactly what a legitimate one does, plus the one comparison that
-// refuses it — instead of nothing. Only then is a database provisioned, which
-// may create one, and only then does anything reach the Query Runner. A query
-// from somebody who is not a participant must not cost a CREATE DATABASE.
+// exception. Who is asking is a single row; the contest is another — and the
+// rate check comes right after those two, keyed by the registration they
+// named, ahead of every refusal downstream of it (contest not running, the
+// participant's own deadline, the address restriction, the query's own
+// length). A refused query still cost these two lookups, and used to cost
+// them for free, over and over, with nothing in front of it counting the
+// attempt (CLAUDE.md rule 13 — a refused query still counts against the
+// rate, because refusing it still cost something): an individual participant
+// hammering this endpoint after their own deadline passed, or before their
+// contest opened, met no limiter at all, because every refusal on that path
+// used to return before the rate check ever ran. Now every one of them is
+// admitted or refused by the same limiter first, and only a query that
+// clears it is charged the work below. Only after the rate check does a
+// not-yet-started individual participant get their clock started — starting
+// is itself contingent on the contest being open, checked just above — and
+// only then is the deadline that start produces compared against the clock.
+// Last is the query's own length, cheaper than any of the above but placed
+// after them so it is never a free way to dodge the rate: an oversized query
+// pays the same lookups and the same rate check a legitimate one does. Only
+// then is a database provisioned, which may create one, and only then does
+// anything reach the Query Runner. A query from somebody who is not a
+// participant must not cost a CREATE DATABASE.
 func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, error) {
 	participant, err := s.people.ByUser(ctx, cmd.ContestID, cmd.UserID)
 	switch {
@@ -256,35 +277,57 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 	if err != nil {
 		return nil, fmt.Errorf("%w: look up the contest: %w", ErrUnavailable, err)
 	}
+
+	// The same registration a refusal is journalled against, so a participant
+	// asking too fast — or hammering this endpoint while every answer is a
+	// refusal — meets the same limit here as at the Query Runner, and meets
+	// it before any of the refusals below rather than after. effectiveRateLimit
+	// is what keeps this number honest against the installation's own: see its
+	// doc for why a contest cannot ask for more than the Query Runner would
+	// actually honour.
+	limit := effectiveRateLimit(contest.Settings.QueryRateLimitPerMin, s.perMinuteDefault)
+	if err = s.rate.Admit(participant.ID.String(), limit); err != nil {
+		return nil, err
+	}
+
 	if contest.Status != contests.StatusRunning {
 		return nil, ErrContestNotRunning
 	}
+
+	// The first deliberate action against the game is what starts an
+	// individual participant's own clock (§8, the fix for finding 1) — never a
+	// page load, and never anything the client's own timing can influence.
+	// Gated on the contest already being confirmed running above: starting is
+	// only possible inside [starts_at, ends_at], and a first action outside
+	// that window is refused by the deadline check below without ever
+	// reaching here, exactly as it already refuses everything else outside
+	// the window. A participant who has already started costs no write here —
+	// Start itself is the guard against a second one, but checking StartedAt
+	// first means an individual participant's second and subsequent queries
+	// in the same session touch the registration row at all only through the
+	// read Run already paid for.
+	if contest.Timing == contests.TimingIndividual && participant.StartedAt == nil {
+		if participant, err = s.people.Start(ctx, participant.ID, s.now()); err != nil {
+			return nil, fmt.Errorf("%w: start the participant's clock: %w", ErrUnavailable, err)
+		}
+	}
+
 	// The one formula every timing check in the system uses (§8), and the
 	// guarantee that closing does not depend on the scheduler: a fixed
 	// contest past its own ends_at, or an individual participant past their
 	// own started_at+duration_min, is refused here on the server's own clock
 	// even if contests.Status has not (yet, or ever, with a dead scheduler)
 	// caught up to "finished". ok is false for a state with no deadline to
-	// compare against — an individual participant who has not started, or an
-	// invariant Contest.Validate would have refused — and that is refused the
-	// same way rather than treated as no limit at all.
+	// compare against — an individual participant Start could not start (the
+	// contest was not running a moment ago after all), or an invariant
+	// Contest.Validate would have refused — and that is refused the same way
+	// rather than treated as no limit at all.
 	deadline, ok := contests.Deadline(contest, participant)
 	if !ok || s.now().After(deadline.Add(s.grace)) {
 		return nil, ErrContestNotRunning
 	}
 	if !contest.AllowsAddress(cmd.Address) {
 		return nil, ErrAddressNotAllowed
-	}
-
-	// The same registration a refusal is journalled against, so a participant
-	// asking too fast meets the same limit here as at the Query Runner — and
-	// meets it before a row is written rather than after, which is the only
-	// difference between the two checks. effectiveRateLimit is what keeps this
-	// number honest against the installation's own: see its doc for why a
-	// contest cannot ask for more than the Query Runner would actually honour.
-	limit := effectiveRateLimit(contest.Settings.QueryRateLimitPerMin, s.perMinuteDefault)
-	if err = s.rate.Admit(participant.ID.String(), limit); err != nil {
-		return nil, err
 	}
 
 	if len(cmd.SQL) > sqlpolicy.MaxQueryBytes {

@@ -277,6 +277,11 @@ services:
       # not the architecture's own default, which may not be what this
       # deployment actually runs with.
       QUERY_PER_MINUTE: ${QUERY_PER_MINUTE:-30}
+      # The contest clock's own grace (docs/ARCHITECTURE.md §8) — not
+      # QUERY_DEADLINE above, which is the Query Runner's unrelated per-query
+      # execution timeout. This one is consumed here, by queryproxy.Service,
+      # never by the Query Runner.
+      DEADLINE_GRACE: ${DEADLINE_GRACE:-5s}
     # No host port: Caddy is the only way in. The development overlay exposes
     # the API directly for debugging.
     depends_on:
