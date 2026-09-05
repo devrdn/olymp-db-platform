@@ -209,7 +209,10 @@ type Questions struct {
 	byID map[uuid.UUID]contests.Question
 }
 
-var _ contests.QuestionRepository = (*Questions)(nil)
+var (
+	_ contests.QuestionRepository        = (*Questions)(nil)
+	_ contests.VisibleQuestionRepository = (*Questions)(nil)
+)
 
 // NewQuestions returns an empty question store.
 func NewQuestions() *Questions {
@@ -233,6 +236,33 @@ func (r *Questions) List(_ context.Context, contestID uuid.UUID) ([]contests.Que
 		}
 	}
 	slices.SortFunc(found, func(a, b contests.Question) int { return a.Ord - b.Ord })
+	return found, nil
+}
+
+// ForContest implements contests.VisibleQuestionRepository the same way the
+// real repository's query does: only is_visible questions, in display order,
+// and only those carrying a body in lang — a missing translation drops the
+// question from the result rather than serving an empty one.
+func (r *Questions) ForContest(ctx context.Context, contestID uuid.UUID, lang string) ([]contests.VisibleQuestion, error) {
+	all, err := r.List(ctx, contestID)
+	if err != nil {
+		return nil, err
+	}
+
+	var found []contests.VisibleQuestion
+	for _, q := range all {
+		if !q.IsVisible {
+			continue
+		}
+		text, ok := q.Texts[lang]
+		if !ok {
+			continue
+		}
+		found = append(found, contests.VisibleQuestion{
+			ID: q.ID, Kind: q.Kind, Points: q.Points, MaxAttempts: q.MaxAttempts,
+			ChoiceIDs: q.ChoiceIDs, BodyMD: text.BodyMD, Choices: text.Choices,
+		})
+	}
 	return found, nil
 }
 

@@ -476,12 +476,20 @@ func (s *Service) Admitted(contest contests.Contest, participant contests.Partic
 // query — registered and not disqualified or finished, the contest running
 // (or, for an individual participant who has not started, its own window
 // open), their own deadline not passed, their address allowed — and nothing
-// more: no rate limit, no game lookup, no database provisioning, because
-// reading the story costs none of what running a query against the
+// more: no rate limit of its own, no game lookup, no database provisioning,
+// because reading the story costs none of what running a query against the
 // participant's own database costs. It is exposed here rather than
 // reimplemented beside the read endpoints because "may this student see this
 // contest" answered twice, even slightly differently, is exactly the shape of
 // bug this project keeps finding.
+//
+// "No rate limit of its own" is not "no rate limit at all": the two lookups
+// here are still a cost a caller can spend for free unless something charges
+// for it, exactly the reasoning Run's own doc gives for checking a rate
+// before any lookup. AdmitRead is that charge, kept a separate method rather
+// than folded into this one so a caller that already holds a fresh
+// contests.Participant and contests.Contest — Run itself, mid-query — can
+// still ask Admitted without paying twice.
 func (s *Service) Access(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error) {
 	participant, err := s.lookupParticipant(ctx, contestID, userID)
 	if err != nil {
@@ -497,6 +505,27 @@ func (s *Service) Access(ctx context.Context, contestID, userID uuid.UUID, addr 
 		return contests.Participant{}, contests.Contest{}, err
 	}
 	return participant, contest, nil
+}
+
+// AdmitRead applies, to the participant-facing read endpoints, the same
+// pre-lookup rate check Run applies to itself (see Run's own doc): keyed by
+// the authenticated caller's userID, against the installation's own
+// perMinuteDefault, before Access ever runs its two lookups.
+//
+// The key is bounded the same way Run's first check is bounded: one per
+// authenticated account, assigned at sign-in and never supplied by the
+// request, so a caller cannot mint a fresh counter just by asking (CLAUDE.md
+// rule 5) — unlike cmd.ContestID, which is attacker-chosen and would let a
+// caller who names a fresh random contest every time build an unbounded
+// number of counters instead of spending down its own one.
+//
+// This shares s.rate — the same instance and the same key namespace Run's
+// first check uses — rather than a second limiter of its own: a participant
+// who alternates between running queries and polling the story or the
+// question list spends one account-wide budget either way, not two that add
+// together into double the intended rate.
+func (s *Service) AdmitRead(userID uuid.UUID) error {
+	return s.rate.Admit(userID.String(), s.perMinuteDefault)
 }
 
 // deadlinePassed reports whether contest is no longer open to participant, by

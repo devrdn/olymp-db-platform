@@ -1445,3 +1445,55 @@ func TestAContestsRateIsNotClampedWhenTheInstallationHasNoLimit(t *testing.T) {
 		}
 	}
 }
+
+// Finding 3: the participant-facing read endpoints (the story, the question
+// list) get a rate check of their own, AdmitRead — and it shares the exact
+// instance and key namespace Run's own pre-lookup check uses, rather than a
+// second limiter that would let a caller alternate between running queries
+// and polling these endpoints to spend two budgets instead of one.
+func TestAdmitReadSharesRunsOwnPerAccountBudget(t *testing.T) {
+	service := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+		contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	).WithPerMinuteDefault(1)
+
+	userID := uuid.New()
+	cmd := command()
+	cmd.UserID = userID
+
+	if _, err := service.Run(t.Context(), cmd); err != nil {
+		t.Fatalf("the first query from this account: %v", err)
+	}
+
+	if err := service.AdmitRead(userID); !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("AdmitRead() right after this account's own query = %v, want ErrTooManyQueries — the budget must be shared with Run, not doubled", err)
+	}
+}
+
+// The key is bounded because it is the authenticated account, not anything
+// the caller supplies in the request: a fresh account has spent nothing,
+// however many contests, real or invented, the refused account tried first.
+func TestAdmitReadIsKeyedPerAccountNotShared(t *testing.T) {
+	service := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+		contestStore{contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	).WithPerMinuteDefault(1)
+
+	spent := uuid.New()
+	cmd := command()
+	cmd.UserID = spent
+	if _, err := service.Run(t.Context(), cmd); err != nil {
+		t.Fatalf("spending the first account's budget: %v", err)
+	}
+	if err := service.AdmitRead(spent); !errors.Is(err, queryrunner.ErrTooManyQueries) {
+		t.Fatalf("AdmitRead() for the spent account = %v, want ErrTooManyQueries", err)
+	}
+
+	if err := service.AdmitRead(uuid.New()); err != nil {
+		t.Fatalf("AdmitRead() for an account that made no request = %v, want nil", err)
+	}
+}
