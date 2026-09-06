@@ -725,6 +725,7 @@ const ro = {
       "contest.update": "A modificat o olimpiadă",
       "contest.delete": "A șters o olimpiadă",
       "contest.status_change": "A mutat o olimpiadă în altă stare",
+      "contest.start_blocked": "O olimpiadă nu a început: nu mai trece verificarea de publicare",
       "contest.languages_change": "A schimbat limbile olimpiadei",
       "contest.translations_change": "A schimbat titlurile olimpiadei",
       "contest.policy_change": "A schimbat politica SQL",

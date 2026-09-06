@@ -763,6 +763,7 @@ const en = {
       "contest.update": "Changed a contest",
       "contest.delete": "Deleted a contest",
       "contest.status_change": "Moved a contest to another state",
+      "contest.start_blocked": "A contest did not start: it no longer passes the publication check",
       "contest.languages_change": "Changed a contest's languages",
       "contest.translations_change": "Changed a contest's titles",
       "contest.policy_change": "Changed the SQL policy",

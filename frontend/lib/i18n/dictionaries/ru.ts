@@ -725,6 +725,7 @@ const ru = {
       "contest.update": "Изменил олимпиаду",
       "contest.delete": "Удалил олимпиаду",
       "contest.status_change": "Перевёл олимпиаду в другое состояние",
+      "contest.start_blocked": "Олимпиада не началась: она больше не проходит проверку публикации",
       "contest.languages_change": "Изменил языки олимпиады",
       "contest.translations_change": "Изменил названия олимпиады",
       "contest.policy_change": "Изменил политику SQL",

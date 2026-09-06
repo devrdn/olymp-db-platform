@@ -49,6 +49,7 @@ export const AUDIT_ACTIONS = [
   "contest.update",
   "contest.delete",
   "contest.status_change",
+  "contest.start_blocked",
   "contest.languages_change",
   "contest.translations_change",
   "contest.policy_change",
