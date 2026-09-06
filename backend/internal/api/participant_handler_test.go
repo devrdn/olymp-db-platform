@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,7 +34,13 @@ import (
 type fakeAccess struct {
 	participant contests.Participant
 	contest     contests.Contest
-	err         error
+	// err is guarded by mu rather than left a bare field: the events handler
+	// tests (events_handler_test.go) change it while a connection's own
+	// goroutine is concurrently calling Access on every resync tick — a
+	// scenario nothing in this file needed until that one had a channel
+	// left open across several ticks.
+	mu  sync.Mutex
+	err error
 	// gotContestID records what Access was asked about, so a test can prove
 	// the identifier came from the URL.
 	gotContestID uuid.UUID
@@ -51,7 +58,18 @@ func (a *fakeAccess) AdmitRead(uuid.UUID) error {
 func (a *fakeAccess) Access(_ context.Context, contestID, _ uuid.UUID, _ netip.Addr) (contests.Participant, contests.Contest, error) {
 	a.accessCalled = true
 	a.gotContestID = contestID
-	return a.participant, a.contest, a.err
+	a.mu.Lock()
+	err := a.err
+	a.mu.Unlock()
+	return a.participant, a.contest, err
+}
+
+// setErr changes what Access answers with, safely against a connection's own
+// goroutine reading it concurrently on its next resync tick.
+func (a *fakeAccess) setErr(err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.err = err
 }
 
 // fakeSubmitter answers Submit with whatever a test staged, so the answer

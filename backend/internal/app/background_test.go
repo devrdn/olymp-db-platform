@@ -69,6 +69,33 @@ func TestAFailingJobKeepsItsSchedule(t *testing.T) {
 	}
 }
 
+// advanceContestSchedule wraps whatever contests.Scheduler.Advance answers
+// into a task; the scheduler's own rules (the lock, the two bulk moves, the
+// audit trail) are exercised where they are declared
+// (internal/contests/schedule_test.go), so this only has to prove the
+// wrapping itself: a tick that failed is reported, and one that moved
+// something is not silently unremarkable in the log the operator watches.
+func TestAdvanceContestScheduleReportsFailureAndSilenceOtherwise(t *testing.T) {
+	failure := errors.New("database is away")
+	job := advanceContestSchedule(quiet(), func(context.Context) (int, int, error) {
+		return 0, 0, failure
+	})
+
+	if err := job.run(t.Context()); !errors.Is(err, failure) {
+		t.Fatalf("run() = %v, want %v", err, failure)
+	}
+}
+
+func TestAdvanceContestScheduleSucceedsWhenNothingMoved(t *testing.T) {
+	job := advanceContestSchedule(quiet(), func(context.Context) (int, int, error) {
+		return 0, 0, nil
+	})
+
+	if err := job.run(t.Context()); err != nil {
+		t.Fatalf("run() = %v, want nil for a tick that moved nothing", err)
+	}
+}
+
 // The sweep is the second half of the two-phase journal: rows are written
 // before a query runs so that a crash leaves evidence, and evidence nobody
 // closes says `running` for ever.

@@ -273,6 +273,84 @@ func (r *Contests) SetStatus(ctx context.Context, id uuid.UUID, from, to string)
 	return contests.ErrStatusChanged
 }
 
+var _ contests.ScheduleRepository = (*Contests)(nil)
+
+// scheduleLockKey is the advisory lock every replica's scheduler tick
+// competes for (§8, contests.Scheduler). Distinct from gamedb's own
+// prepareLock — a different constant only so the two are easy to tell apart
+// at a glance; they could not collide anyway, since PostgreSQL keeps a
+// session's advisory locks scoped to the database it is connected to, and
+// this one and the game cluster's are never the same database.
+const scheduleLockKey = 8_531_204_477_119_003_2
+
+// TryLock attempts the scheduler's advisory lock for the ambient transaction.
+//
+// pg_try_advisory_xact_lock never blocks — a losing replica finds out
+// immediately rather than queueing behind the winner — and releases
+// automatically at the end of the transaction that acquired it, whether by
+// commit or rollback. That is what keeps the lock from ever being held
+// between ticks: nothing in this package's code releases it explicitly, and
+// nothing has to.
+func (r *Contests) TryLock(ctx context.Context) (bool, error) {
+	var acquired bool
+	if err := r.querier(ctx).QueryRow(ctx,
+		`SELECT pg_try_advisory_xact_lock($1)`, int64(scheduleLockKey),
+	).Scan(&acquired); err != nil {
+		return false, fmt.Errorf("acquire the schedule lock: %w", err)
+	}
+	return acquired, nil
+}
+
+// AdvanceRunning moves every published contest whose starts_at has arrived to
+// running, by this database's own clock — the same reasoning
+// postgres.Submissions applies to a deadline (now() here is PostgreSQL's own,
+// not a value computed in this process and handed down), so that every
+// replica racing for TryLock agrees about which contests qualify regardless
+// of how its own wall clock happens to be skewed.
+func (r *Contests) AdvanceRunning(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := r.querier(ctx).Query(ctx,
+		`UPDATE contests SET status = $1, updated_at = now()
+		 WHERE status = $2 AND starts_at IS NOT NULL AND starts_at <= now()
+		 RETURNING id`,
+		contests.StatusRunning, contests.StatusPublished)
+	if err != nil {
+		return nil, fmt.Errorf("advance contests to running: %w", err)
+	}
+	return scanIDs(rows)
+}
+
+// AdvanceFinished moves every running contest whose ends_at has passed to
+// finished. A contest with no ends_at (individual timing needs none to
+// publish) never matches this WHERE clause, and stays running until an
+// organizer moves it by hand — the same absence CheckPublishable already
+// tolerates for that timing model.
+func (r *Contests) AdvanceFinished(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := r.querier(ctx).Query(ctx,
+		`UPDATE contests SET status = $1, updated_at = now()
+		 WHERE status = $2 AND ends_at IS NOT NULL AND ends_at <= now()
+		 RETURNING id`,
+		contests.StatusFinished, contests.StatusRunning)
+	if err != nil {
+		return nil, fmt.Errorf("advance contests to finished: %w", err)
+	}
+	return scanIDs(rows)
+}
+
+// scanIDs collects a single uuid column, closing rows itself so every caller
+// does not have to remember to.
+func scanIDs(rows pgx.Rows) ([]uuid.UUID, error) {
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // Delete removes a contest. Everything hanging off it goes with it through the
 // schema's cascades, so there is nothing to clean up by hand.
 func (r *Contests) Delete(ctx context.Context, id uuid.UUID) error {

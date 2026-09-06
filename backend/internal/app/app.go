@@ -217,6 +217,18 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Logger:     log,
 	})
 
+	// The background half of §8: published → running → finished without an
+	// organizer asking, one advisory-locked tick at a time
+	// (internal/app/background.go's own doc for the interval). A second
+	// postgres.Contests rather than the one contestService already holds:
+	// both wrap the same pool and the same table, so the two cost nothing
+	// beyond the struct itself, and Scheduler asks for
+	// contests.ScheduleRepository — a narrower thing than contestService's
+	// own contests.Repository — which is easiest to see when it is handed
+	// its own value instead of borrowing a field out of another component.
+	scheduler := contests.NewScheduler(postgres.NewContests(pool), auditRecorder, storage.NewUnitOfWork(pool))
+	a.tasks = append(a.tasks, advanceContestSchedule(log, scheduler.Advance))
+
 	modules := []api.Module{
 		api.NewAuthHandler(authService, userService, userRepo, authMiddleware, cookies, log),
 		api.NewUsersHandler(userService, userRepo, authMiddleware, log),
@@ -270,6 +282,15 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// uses — not a second implementation of the answering rules, and not a
 	// second Submissions repository either.
 	modules = append(modules, api.NewParticipantHandler(participantAccess, reader, contestService, authMiddleware, log, cfg.DefaultLocale))
+	// The SSE channel (§8) shares participantAccess with the endpoints above
+	// for the same reason: one Access, one AdmitRead budget, not a second
+	// admission decision that could drift from the first. ctx.Done() is the
+	// same context main.go cancels on SIGINT/SIGTERM and Run waits on before
+	// draining the servers — passed here, not derived fresh, so an open
+	// connection's next select sees the shutdown at the same instant Run
+	// starts one, rather than after whatever this constructor happened to do
+	// with a context of its own (see EventsHandler's own doc).
+	modules = append(modules, api.NewEventsHandler(participantAccess, authMiddleware, log, ctx.Done()))
 
 	deps := api.Deps{
 		Logger:    log,

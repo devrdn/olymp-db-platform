@@ -856,6 +856,11 @@ type Sink struct {
 	// with — so this is a list rather than a flag, and a test names which
 	// entries it expects to find in it.
 	Loose []audit.Entry
+	// AppendManyErr, when set, is what AppendMany returns instead of
+	// recording anything — a test's way of standing for the trail itself
+	// failing (a full disk, a database that is away) so a caller relying on
+	// RecordMany can prove it does not swallow that failure.
+	AppendManyErr error
 }
 
 var _ audit.Sink = (*Sink)(nil)
@@ -874,6 +879,9 @@ func (s *Sink) Append(ctx context.Context, e audit.Entry) error {
 // AppendMany appends every entry the same way Append does, one at a time:
 // what a test asserts on is the resulting state, not the round trips it took.
 func (s *Sink) AppendMany(ctx context.Context, entries []audit.Entry) error {
+	if s.AppendManyErr != nil {
+		return s.AppendManyErr
+	}
 	for _, e := range entries {
 		if err := s.Append(ctx, e); err != nil {
 			return err
