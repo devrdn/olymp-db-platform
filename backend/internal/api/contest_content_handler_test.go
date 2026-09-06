@@ -80,6 +80,75 @@ func TestAQuestionCanBeCreatedHidden(t *testing.T) {
 	}
 }
 
+// Finding 1: penalty_pct had no field on questionRequest/QuestionResponse at
+// all, so an organizer could never set it through the API that creates and
+// edits questions.
+func TestAQuestionsPenaltySurvivesARoundTripThroughTheAPI(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+
+	rec := f.do(http.MethodPost, "/contests/"+c.ID.String()+"/questions",
+		`{"kind": "text", "points": 10, "penalty_pct": 25}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (%s)", rec.Code, rec.Body.String())
+	}
+	if got := decode(t, rec)["penalty_pct"]; got != float64(25) {
+		t.Errorf("penalty_pct = %v, want 25", got)
+	}
+}
+
+// The worse half of finding 1: internal/contests.Service.UpdateQuestion used
+// to assign cmd.PenaltyPct unconditionally, so any PATCH — even one only
+// about the wording — silently reset a penalty configured earlier back to
+// zero. An edit that never mentions penalty_pct must leave it alone.
+func TestUpdatingAQuestionPreservesAnUnmentionedPenalty(t *testing.T) {
+	f := newContestFixture(t, rbac.PermissionContestCreate)
+	c := f.ownedContest(t, contests.StatusDraft)
+	q := f.stores.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 1, Kind: contests.KindText, Points: 10, PenaltyPct: 40, IsVisible: true,
+	})
+
+	rec := f.do(http.MethodPatch, questionPath(c.ID, q.ID.String()), `{
+		"kind": "text",
+		"points": 12
+	}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	body := decode(t, rec)
+	if body["penalty_pct"] != float64(40) {
+		t.Errorf("penalty_pct = %v, want 40 (unchanged by an edit that never mentioned it)", body["penalty_pct"])
+	}
+	if body["points"] != float64(12) {
+		t.Errorf("points = %v, want 12 (the field the request did mention)", body["points"])
+	}
+}
+
+// The penalty can still be changed on purpose — "absent leaves it alone"
+// must not become "it can never move again".
+func TestUpdatingAQuestionCanChangeThePenalty(t *testing.T) {
+	f := newContestFixture(t, rbac.PermissionContestCreate)
+	c := f.ownedContest(t, contests.StatusDraft)
+	q := f.stores.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 1, Kind: contests.KindText, Points: 10, PenaltyPct: 40, IsVisible: true,
+	})
+
+	rec := f.do(http.MethodPatch, questionPath(c.ID, q.ID.String()), `{
+		"kind": "text",
+		"points": 10,
+		"penalty_pct": 0
+	}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if body := decode(t, rec); body["penalty_pct"] != float64(0) {
+		t.Errorf("penalty_pct = %v, want 0 (explicitly set)", body["penalty_pct"])
+	}
+}
+
 func TestStaffSeeTheReferenceAnswers(t *testing.T) {
 	// They are the authors. The participant-facing view is a different
 	// projection, not this one with a field removed.
@@ -217,6 +286,32 @@ func TestSavingAQuestionWholeAnswersWithIt(t *testing.T) {
 	body := decode(t, rec)
 	if body["points"] != float64(8) {
 		t.Errorf("points = %v, want 8", body["points"])
+	}
+}
+
+// The same "absent leaves it alone" guarantee applies to PUT
+// (SaveQuestion), not only PATCH — both write through
+// contests.Question.PenaltyPct, and both used to overwrite it unconditionally.
+func TestSavingAQuestionWholePreservesAnUnmentionedPenalty(t *testing.T) {
+	f := newContestFixture(t, rbac.PermissionContestCreate)
+	c := f.ownedContest(t, contests.StatusDraft)
+	q := f.stores.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 1, Kind: contests.KindText, Points: 5, PenaltyPct: 30, IsVisible: true,
+		Answers: []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the butler"}},
+	})
+
+	rec := f.do(http.MethodPut, "/contests/"+c.ID.String()+"/questions/"+q.ID.String(), `{
+		"kind": "text",
+		"points": 8,
+		"texts": {"en": {"body_md": "Who did it?"}},
+		"answers": [{"match_kind": "exact_ci", "value": "the gardener"}]
+	}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if body := decode(t, rec); body["penalty_pct"] != float64(30) {
+		t.Errorf("penalty_pct = %v, want 30 (unchanged by a save that never mentioned it)", body["penalty_pct"])
 	}
 }
 

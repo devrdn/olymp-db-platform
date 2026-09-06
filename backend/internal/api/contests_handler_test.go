@@ -364,6 +364,55 @@ func TestNetworkRestrictionsAreReadBackAsWritten(t *testing.T) {
 	}
 }
 
+// Finding 1: progression and scoring were decided and enforced in the
+// domain (§6.1.1) but had no field on the request or response DTO, so an
+// organizer could never reach either through the API. Round-tripped here the
+// same way the network restriction is above.
+func TestProgressionAndScoringSurviveARoundTripThroughTheAPI(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(),
+		`{"progression": "sequential", "scoring": "winner"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+
+	body := decode(t, rec)
+	if body["progression"] != "sequential" {
+		t.Errorf("progression = %v, want sequential", body["progression"])
+	}
+	if body["scoring"] != "winner" {
+		t.Errorf("scoring = %v, want winner", body["scoring"])
+	}
+}
+
+// An update that never mentions progression or scoring must leave both
+// alone — the same "absent means unchanged" rule enrollment and
+// question_mode already follow (contests.UpdateCommand's own doc).
+func TestUpdatingAContestPreservesUnmentionedProgressionAndScoring(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+	set := f.do(http.MethodPatch, "/contests/"+c.ID.String(),
+		`{"progression": "sequential", "scoring": "winner"}`)
+	if set.Code != http.StatusOK {
+		t.Fatalf("setup PATCH status = %d, want 200 (%s)", set.Code, set.Body.String())
+	}
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(), `{"enrollment": "open"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+
+	body := decode(t, rec)
+	if body["progression"] != "sequential" {
+		t.Errorf("progression = %v, want it to survive an unrelated update", body["progression"])
+	}
+	if body["scoring"] != "winner" {
+		t.Errorf("scoring = %v, want it to survive an unrelated update", body["scoring"])
+	}
+}
+
 func TestAMalformedNetworkIsRejected(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)

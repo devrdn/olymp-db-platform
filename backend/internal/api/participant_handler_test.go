@@ -115,7 +115,7 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 	stories := conteststest.NewStories()
 	questions := conteststest.NewQuestions()
 	attempts := conteststest.NewAttempts()
-	reader := contests.NewReader(stories, questions, attempts)
+	reader := contests.NewReader(stories, questions, attempts, nil)
 	access := &fakeAccess{}
 	submitter := &fakeSubmitter{}
 
@@ -543,7 +543,7 @@ func TestParticipantRoutesDoNotShadowTheStaffContentEndpoints(t *testing.T) {
 	// Both handlers mounted over one router, exactly as app.go mounts them.
 	router := chi.NewRouter()
 	api.NewContestsHandler(stores.Service, mw, log, "en").Mount(router)
-	reader := contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts())
+	reader := contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts(), stores.Sequence)
 	access := &fakeAccess{err: queryproxy.ErrNotAParticipant}
 	api.NewParticipantHandler(access, reader, stores.Service, mw, log, "en").Mount(router)
 
@@ -781,7 +781,7 @@ func TestSevenConcurrentAnswersEndUpAsARefusalNotAnInternalError(t *testing.T) {
 	})
 
 	access := &fakeAccess{participant: p, contest: c}
-	reader := contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts())
+	reader := contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts(), stores.Sequence)
 	router := chi.NewRouter()
 	// stores.Service, not a fakeSubmitter: what answers here is the real
 	// retry loop.

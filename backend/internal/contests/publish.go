@@ -30,6 +30,22 @@ const (
 	// contest, clock still running, and this is the one moment that trap can
 	// still be caught rather than discovered live.
 	ProblemSequentialNeedsMaxAttempts = "sequential_needs_max_attempts"
+	// ProblemSequentialHidesQuestion names a hidden question (is_visible =
+	// false) that has another question ordered after it in a sequential
+	// contest (§6.1.1). Sequential progression closes a question by a
+	// correct answer or by spending every attempt, and both require a
+	// submission — but a participant is never given a hidden question's
+	// identifier (VisibleQuestionRepository.ForContest never selects one), so
+	// it can never receive a submission and never close. Every question
+	// ordered after it is then unreachable for the rest of the contest: the
+	// same trap ProblemSequentialNeedsMaxAttempts exists to catch, in the one
+	// shape that check misses, since a hidden question can carry a perfectly
+	// good max_attempts and still never be spent. Hidden questions work
+	// exactly as authored in free progression and in single-question mode
+	// (§6.1) — sequential is the one progression where invisibility itself
+	// becomes the lockout, which is why the refusal lives here rather than
+	// forbidding is_visible = false outright.
+	ProblemSequentialHidesQuestion = "sequential_hides_question"
 )
 
 // PublishProblem is one reason a contest is not ready.
@@ -114,16 +130,43 @@ func CheckPublishable(c Contest, story Story, questions []Question) error {
 		})
 	}
 
+	// The highest display position among this contest's questions — computed
+	// once, rather than assuming questions arrives sorted by Ord, since
+	// CheckPublishable is exported and this is the only thing below that
+	// needs "is anything ordered after this one" rather than a per-question
+	// fact.
+	maxOrd := 0
+	for _, q := range questions {
+		if q.Ord > maxOrd {
+			maxOrd = q.Ord
+		}
+	}
+
 	for _, q := range questions {
 		checkQuestionPublishable(q, langs, add)
-		// §6.1.1: sequential progression opens the next question only once
-		// the previous one is closed — answered correctly, or every attempt
-		// spent. A question with no attempt cap can only ever close the
-		// first way, so a participant stuck on it never reaches anything
-		// after it; refusing this at publish is refusing the one shape of
-		// contest that can trap a participant on the day it costs most.
-		if c.Progression == ProgressionSequential && q.MaxAttempts == nil {
-			add(PublishProblem{Code: ProblemSequentialNeedsMaxAttempts, QuestionID: q.ID})
+		if c.Progression == ProgressionSequential {
+			// §6.1.1: sequential progression opens the next question only
+			// once the previous one is closed — answered correctly, or every
+			// attempt spent. A question with no attempt cap can only ever
+			// close the first way, so a participant stuck on it never
+			// reaches anything after it; refusing this at publish is
+			// refusing the one shape of contest that can trap a participant
+			// on the day it costs most.
+			if q.MaxAttempts == nil {
+				add(PublishProblem{Code: ProblemSequentialNeedsMaxAttempts, QuestionID: q.ID})
+			}
+			// A hidden question can never receive a submission (a
+			// participant is never given its identifier), so it can never
+			// close — not by a correct answer, and not by exhausting
+			// max_attempts either, however that field is set. Everything
+			// ordered after it is then unreachable for the rest of the
+			// contest: the same lockout as above, in the one shape that
+			// check does not see. A hidden question with nothing after it is
+			// unaffected — it works exactly as authored, the way it does in
+			// free progression.
+			if !q.IsVisible && q.Ord < maxOrd {
+				add(PublishProblem{Code: ProblemSequentialHidesQuestion, QuestionID: q.ID})
+			}
 		}
 	}
 

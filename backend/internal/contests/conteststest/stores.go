@@ -774,6 +774,42 @@ func (g *SequentialProgress) Open(ctx context.Context, contestID, registrationID
 	return true, nil
 }
 
+// Frontier mirrors postgres.Sequence.Frontier: the question of contestID
+// lowest in display order that is not yet closed for registrationID, or
+// uuid.Nil once every question is closed.
+func (g *SequentialProgress) Frontier(ctx context.Context, contestID, registrationID uuid.UUID) (uuid.UUID, error) {
+	all, err := g.questions.List(ctx, contestID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	var frontier uuid.UUID
+	frontierOrd := 0
+	haveFrontier := false
+	for _, q := range all {
+		submissions := g.submissions.All(registrationID, q.ID)
+		closed := false
+		for _, s := range submissions {
+			if s.IsCorrect {
+				closed = true
+				break
+			}
+		}
+		if !closed && q.MaxAttempts != nil && len(submissions) >= *q.MaxAttempts {
+			closed = true
+		}
+		if closed {
+			continue
+		}
+		if !haveFrontier || q.Ord < frontierOrd {
+			frontier = q.ID
+			frontierOrd = q.Ord
+			haveFrontier = true
+		}
+	}
+	return frontier, nil
+}
+
 // All lists every submission stored for this registration and question, in
 // the order they were inserted, so a test can inspect exactly what was
 // written.

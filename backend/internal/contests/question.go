@@ -42,6 +42,17 @@ const maxChoices = 50
 // value past 100 would misstate what the organizer configured).
 const maxPenaltyPct = 100
 
+// maxPoints bounds questions.points, an int4 column. points_awarded's own
+// computation (postgres.Submissions.Insert) multiplies a per-attempt penalty
+// derived from this value by the number of attempts already committed to
+// this question, inside Postgres's own int4 arithmetic — an unbounded value
+// here turns a wrong attempt into "integer out of range" for the database, a
+// 500 for the student rather than a scored answer (finding 4). Ten million is
+// several orders of magnitude past any real question's worth and stays far
+// below where that arithmetic could ever approach int4's ceiling, even
+// multiplied by every attempt a contest could plausibly see.
+const maxPoints = 10_000_000
+
 // Errors about questions and their answers.
 var (
 	ErrQuestionNotFound = errors.New("question not found")
@@ -105,8 +116,8 @@ func (q Question) Validate() error {
 	if !slices.Contains([]string{KindText, KindChoice, KindFinal}, q.Kind) {
 		return fmt.Errorf("%w: unknown kind %q", ErrInvalidQuestion, q.Kind)
 	}
-	if q.Points < 0 {
-		return fmt.Errorf("%w: points must not be negative", ErrInvalidQuestion)
+	if q.Points < 0 || q.Points > maxPoints {
+		return fmt.Errorf("%w: points must be between 0 and %d", ErrInvalidQuestion, maxPoints)
 	}
 	// Zero attempts is a question nobody can answer, which is never what was
 	// meant; "unlimited" is expressed by leaving the field unset.
@@ -244,9 +255,12 @@ type QuestionCommand struct {
 	Kind        string
 	Points      int
 	MaxAttempts *int
-	// PenaltyPct is what percent of Points a wrong attempt costs (§6.1.1);
-	// zero (not stated) means no penalty.
-	PenaltyPct int
+	// PenaltyPct is what percent of Points a wrong attempt costs (§6.1.1). A
+	// pointer, like IsVisible, but for the opposite reason: zero is a
+	// meaningful value here (no penalty at all), so "not sent" has to be
+	// distinguishable from "set to zero" — nil leaves whatever is already
+	// stored alone on an update, and defaults to no penalty on create.
+	PenaltyPct *int
 	// IsVisible is a pointer so that "not stated" means visible. Hiding a
 	// question is the deliberate choice, and the ordinary case must not depend
 	// on remembering to say so.
@@ -296,9 +310,11 @@ func (s *Service) AddQuestion(ctx context.Context, cmd QuestionCommand) (Questio
 		Kind:        orDefault(cmd.Kind, KindText),
 		Points:      cmd.Points,
 		MaxAttempts: cmd.MaxAttempts,
-		PenaltyPct:  cmd.PenaltyPct,
 		IsVisible:   cmd.IsVisible == nil || *cmd.IsVisible,
 		ChoiceIDs:   cmd.ChoiceIDs,
+	}
+	if cmd.PenaltyPct != nil {
+		q.PenaltyPct = *cmd.PenaltyPct
 	}
 	if err := q.Validate(); err != nil {
 		return Question{}, err
@@ -344,7 +360,14 @@ func (s *Service) UpdateQuestion(ctx context.Context, cmd QuestionCommand) (Ques
 	updated.Kind = orDefault(cmd.Kind, current.Kind)
 	updated.Points = cmd.Points
 	updated.MaxAttempts = cmd.MaxAttempts
-	updated.PenaltyPct = cmd.PenaltyPct
+	// nil leaves the stored penalty alone. Unlike the fields above, zero is a
+	// meaningful value here (no penalty at all), so this cannot be "always
+	// overwrite" the way Points is — a caller that never learned about
+	// penalties in the first place must not silently reset one it never
+	// mentioned (finding 1).
+	if cmd.PenaltyPct != nil {
+		updated.PenaltyPct = *cmd.PenaltyPct
+	}
 	updated.ChoiceIDs = cmd.ChoiceIDs
 	if cmd.IsVisible != nil {
 		updated.IsVisible = *cmd.IsVisible
@@ -385,11 +408,13 @@ type SaveQuestionCommand struct {
 	Kind        string
 	Points      int
 	MaxAttempts *int
-	PenaltyPct  int
-	IsVisible   *bool
-	ChoiceIDs   []string
-	Texts       map[string]QuestionText
-	Answers     []Answer
+	// PenaltyPct: nil leaves the stored penalty alone, see QuestionCommand's
+	// own doc for why this cannot be a plain int.
+	PenaltyPct *int
+	IsVisible  *bool
+	ChoiceIDs  []string
+	Texts      map[string]QuestionText
+	Answers    []Answer
 }
 
 // SaveQuestion replaces a question whole, in one transaction.
@@ -424,7 +449,10 @@ func (s *Service) SaveQuestion(ctx context.Context, cmd SaveQuestionCommand) (Qu
 	updated.Kind = orDefault(cmd.Kind, current.Kind)
 	updated.Points = cmd.Points
 	updated.MaxAttempts = cmd.MaxAttempts
-	updated.PenaltyPct = cmd.PenaltyPct
+	// Same reason as UpdateQuestion's: absent must not mean "reset to zero".
+	if cmd.PenaltyPct != nil {
+		updated.PenaltyPct = *cmd.PenaltyPct
+	}
 	updated.ChoiceIDs = cmd.ChoiceIDs
 	if cmd.IsVisible != nil {
 		updated.IsVisible = *cmd.IsVisible
