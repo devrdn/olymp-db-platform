@@ -78,6 +78,36 @@ func sweepQueryLog(log *slog.Logger, sweep func(context.Context, time.Duration) 
 	}
 }
 
+// scheduleTickInterval bounds how long a dead replica can delay a contest's
+// published → running or running → finished transition (§8): each tick is a
+// fresh competition for contests.Scheduler's advisory lock, never held
+// between ticks, so a dead replica costs the next tick nothing but the one it
+// missed. Short because this gates what a participant's own screen and
+// events channel report the moment a contest's window opens or closes, not
+// because the lock itself is expensive to ask for — two indexed UPDATEs and
+// one pg_try_advisory_xact_lock, whether or not either UPDATE matches a row.
+const scheduleTickInterval = 15 * time.Second
+
+// advanceContestSchedule runs one tick of the background scheduler
+// (contests.Scheduler.Advance): move every contest whose window opened or
+// closed, or do nothing this tick because another replica already has it.
+func advanceContestSchedule(log *slog.Logger, advance func(context.Context) (int, int, error)) task {
+	return task{
+		name:  "contest-schedule",
+		every: scheduleTickInterval,
+		run: func(ctx context.Context) error {
+			started, finished, err := advance(ctx)
+			if err != nil {
+				return err
+			}
+			if started > 0 || finished > 0 {
+				log.InfoContext(ctx, "advanced the contest schedule", "started", started, "finished", finished)
+			}
+			return nil
+		},
+	}
+}
+
 // tendPools keeps every live contest's pool stocked and free of stale copies.
 //
 // The background half of section 4.2, and the reason a participant arriving
