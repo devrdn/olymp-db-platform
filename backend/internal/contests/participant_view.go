@@ -27,11 +27,19 @@ type Reader struct {
 	stories   StoryRepository
 	questions VisibleQuestionRepository
 	attempts  AttemptStore
+	// sequence resolves which question is currently answerable under
+	// sequential progression (finding 3). Optional at the type level for the
+	// same reason Service's own field is (see ServiceConfig.Sequence's doc):
+	// Questions only ever reads it when the contest it is asked about has
+	// actually turned progression to sequential, so a caller with nothing to
+	// do with that — or an installation that never turns it on — need not
+	// supply one.
+	sequence SequentialGate
 }
 
 // NewReader assembles a participant-facing content reader.
-func NewReader(stories StoryRepository, questions VisibleQuestionRepository, attempts AttemptStore) *Reader {
-	return &Reader{stories: stories, questions: questions, attempts: attempts}
+func NewReader(stories StoryRepository, questions VisibleQuestionRepository, attempts AttemptStore, sequence SequentialGate) *Reader {
+	return &Reader{stories: stories, questions: questions, attempts: attempts, sequence: sequence}
 }
 
 // Story returns the contest's story in lang, or ErrStoryNotFound.
@@ -86,6 +94,22 @@ type ParticipantQuestion struct {
 	// decisions (§6.1) — a hidden question stays answerable, and a visible
 	// closed one stays visible, just with nothing left to submit.
 	Closed bool
+	// CanAnswer reports whether Submit would currently accept an answer for
+	// this question. In free progression and single-question mode it is
+	// simply !Closed — nothing else ever gates a submission there. In
+	// sequential progression (§6.1.1) it is also false for every unclosed
+	// question except the one lowest in display order: the same rule
+	// Service.Submit itself enforces (ErrQuestionNotOpen), surfaced here so a
+	// participant can tell which of several unclosed questions to work on
+	// without probing each one and collecting refusals (finding 3).
+	//
+	// This never exposes a display position, only "yes" or "no" per question
+	// already in the list — the same guarantee ParticipantQuestion's missing
+	// ordinal field protects (see its own doc): a hidden question's existence
+	// and place in the order still cannot be read off this field, since it
+	// is computed from the same ord sequence SequentialGate already
+	// consults, is_visible included, and never returned.
+	CanAnswer bool
 }
 
 // VisibleQuestion is one question already filtered and resolved for a
@@ -121,7 +145,16 @@ type VisibleQuestionRepository interface {
 // wording resolved to lang and this participant's own attempt state — never a
 // hidden question (is_visible = false) and never a reference answer, because
 // VisibleQuestionRepository never reads one into memory in the first place.
-func (r *Reader) Questions(ctx context.Context, contestID, registrationID uuid.UUID, lang string) ([]ParticipantQuestion, error) {
+//
+// progression is the contest's own contests.Progression (ProgressionFree or
+// ProgressionSequential), the same value Service.Submit already keys its own
+// order check on — Reader takes it as given rather than loading the contest
+// itself, since the caller (the participant handler) already has it from the
+// same Access call that admitted the request. It costs one extra round trip,
+// to r.sequence, and only when progression is actually sequential: free
+// progression and single-question mode have nothing this could add, since
+// every unclosed question is already answerable there (finding 3).
+func (r *Reader) Questions(ctx context.Context, contestID, registrationID uuid.UUID, lang, progression string) ([]ParticipantQuestion, error) {
 	visible, err := r.questions.ForContest(ctx, contestID, lang)
 	if err != nil {
 		return nil, err
@@ -131,9 +164,29 @@ func (r *Reader) Questions(ctx context.Context, contestID, registrationID uuid.U
 		return nil, err
 	}
 
+	// The one question, if any, sequential progression currently allows an
+	// answer for — the lowest in display order that is not yet closed,
+	// hidden questions counted exactly as visible ones (§6.1.1), the same
+	// rule postgres.Sequence.Open already enforces at Submit. Resolved once
+	// here rather than per question: a per-question call would cost as many
+	// round trips as this list has entries, for a fact that is the same
+	// answer every time it is asked in the same request.
+	var frontier uuid.UUID
+	if progression == ProgressionSequential {
+		frontier, err = r.sequence.Frontier(ctx, contestID, registrationID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	out := make([]ParticipantQuestion, 0, len(visible))
 	for _, q := range visible {
 		used := stats[q.ID]
+		closed := isClosed(q.MaxAttempts, used)
+		canAnswer := !closed
+		if progression == ProgressionSequential {
+			canAnswer = !closed && q.ID == frontier
+		}
 		out = append(out, ParticipantQuestion{
 			ID:                q.ID,
 			Kind:              q.Kind,
@@ -142,7 +195,8 @@ func (r *Reader) Questions(ctx context.Context, contestID, registrationID uuid.U
 			BodyMD:            q.BodyMD,
 			Choices:           q.Choices,
 			AttemptsRemaining: attemptsRemaining(q.MaxAttempts, used.Attempts),
-			Closed:            isClosed(q.MaxAttempts, used),
+			Closed:            closed,
+			CanAnswer:         canAnswer,
 		})
 	}
 	return out, nil

@@ -28,4 +28,12 @@ type SequentialGate interface {
 	// own Question.Ord; a question with nothing before it (the first in
 	// display order) is trivially open.
 	Open(ctx context.Context, contestID, registrationID uuid.UUID, ord int) (bool, error)
+	// Frontier reports which question of contestID is currently open for
+	// registrationID: the one lowest in display order that is not yet
+	// closed. It is uuid.Nil once every question is closed. Consulted by
+	// Reader.Questions (finding 3) to tell a participant which of several
+	// unclosed questions may actually be answered right now, without asking
+	// Open once per question in the list — the same fact, in one statement
+	// instead of one per candidate.
+	Frontier(ctx context.Context, contestID, registrationID uuid.UUID) (uuid.UUID, error)
 }

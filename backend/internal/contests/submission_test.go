@@ -37,9 +37,10 @@ func sequentialContest(f *conteststest.Fixture) contests.Contest {
 
 // §6.1.1: the penalty is worked out at the moment of answering and written
 // once to points_awarded; it must never be recomputed from whatever the
-// setting reads afterwards. Two wrong attempts at 50% of a 10-point question
-// leave 10 - 2*5 = 0 for a correct third try — and once the organizer raises
-// the penalty afterwards, the score already on the books must not move.
+// setting reads afterwards. One wrong attempt at 50% of a 10-point question
+// leaves 10 - 1*5 = 5 for a correct second try — and once the organizer
+// raises the penalty afterwards, the score already on the books must not
+// move.
 func TestSubmitAppliesThePenaltyAtAnswerTimeAndKeepsItAfterASettingChange(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)
