@@ -59,9 +59,20 @@ func (a *fakeAccess) Access(_ context.Context, contestID, _ uuid.UUID, _ netip.A
 	a.accessCalled = true
 	a.gotContestID = contestID
 	a.mu.Lock()
-	err := a.err
-	a.mu.Unlock()
-	return a.participant, a.contest, err
+	defer a.mu.Unlock()
+	return a.participant, a.contest, a.err
+}
+
+// AccessForEvents answers with whatever a test staged, exactly like Access —
+// the events handler tests care about what the handler does with the
+// participant and contest a test hands it, not about re-deriving
+// queryproxy.Service's own admission rule (proven in its own package,
+// internal/queryproxy/queryproxy_test.go). This fake never distinguishes the
+// one status AccessForEvents admits that Access would not
+// (contests.StatusPublished) — a test controls that simply by staging
+// f.access.contest.Status itself.
+func (a *fakeAccess) AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error) {
+	return a.Access(ctx, contestID, userID, addr)
 }
 
 // setErr changes what Access answers with, safely against a connection's own
@@ -70,6 +81,17 @@ func (a *fakeAccess) setErr(err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.err = err
+}
+
+// setContest changes what Access answers a contest with, safely against a
+// connection's own goroutine reading it concurrently on its next resync tick
+// — a test's way of staging the published → running transition mid-connection
+// (finding 4) without a second implementation of "who is this and are they
+// still in".
+func (a *fakeAccess) setContest(c contests.Contest) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.contest = c
 }
 
 // fakeSubmitter answers Submit with whatever a test staged, so the answer

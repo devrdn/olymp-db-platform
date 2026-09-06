@@ -19,6 +19,10 @@ type Prometheus struct {
 	registry *prometheus.Registry
 	requests *prometheus.CounterVec
 	duration *prometheus.HistogramVec
+	// streamDuration is where a long-lived response's own duration lands
+	// instead of duration (finding 5) — see Recorder.ObserveRequest's own
+	// doc for why the two must not share buckets.
+	streamDuration *prometheus.HistogramVec
 }
 
 // NewPrometheus returns a recorder backed by a registry that already carries
@@ -41,15 +45,31 @@ func NewPrometheus() *Prometheus {
 			Help:    "HTTP request latency by method and route.",
 			Buckets: prometheus.DefBuckets,
 		}, []string{"method", "route"}),
+		// Seconds through hours, not milliseconds through seconds: a
+		// streaming response's "duration" is how long the connection stayed
+		// open, which for the events channel can be the length of a whole
+		// contest (finding 5).
+		streamDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "http_stream_duration_seconds",
+			Help:    "Duration of long-lived streaming responses (e.g. SSE) by method and route.",
+			Buckets: []float64{1, 5, 15, 30, 60, 300, 900, 1800, 3600, 7200, 14400},
+		}, []string{"method", "route"}),
 	}
-	reg.MustRegister(p.requests, p.duration)
+	reg.MustRegister(p.requests, p.duration, p.streamDuration)
 
 	return p
 }
 
-// ObserveRequest records one request.
-func (p *Prometheus) ObserveRequest(method, route string, status int, d time.Duration) {
+// ObserveRequest records one request. streaming routes its duration into
+// http_stream_duration_seconds instead of http_request_duration_seconds —
+// see Recorder.ObserveRequest's own doc (finding 5). The request count is
+// unaffected either way.
+func (p *Prometheus) ObserveRequest(method, route string, status int, d time.Duration, streaming bool) {
 	p.requests.WithLabelValues(method, route, strconv.Itoa(status)).Inc()
+	if streaming {
+		p.streamDuration.WithLabelValues(method, route).Observe(d.Seconds())
+		return
+	}
 	p.duration.WithLabelValues(method, route).Observe(d.Seconds())
 }
 

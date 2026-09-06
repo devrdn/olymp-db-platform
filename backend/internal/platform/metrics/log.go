@@ -29,6 +29,11 @@ type bucketKey struct {
 	method string
 	route  string
 	status int
+	// streaming keeps a long-lived response's aggregate apart from ordinary
+	// requests on the same route (finding 5) — the same reasoning
+	// Prometheus.streamDuration exists for, applied to this backend's own
+	// digest instead of a histogram.
+	streaming bool
 }
 
 type bucket struct {
@@ -49,9 +54,13 @@ func NewLog(log *slog.Logger, interval time.Duration) *Log {
 	}
 }
 
-// ObserveRequest folds one request into its aggregate.
-func (l *Log) ObserveRequest(method, route string, status int, d time.Duration) {
-	key := bucketKey{method: method, route: route, status: status}
+// ObserveRequest folds one request into its aggregate. streaming keeps a
+// long-lived response's own aggregate apart from ordinary requests on the
+// same route (finding 5) — Flush reports the two separately rather than
+// blending a connection that can last a whole contest into the same average
+// and max as everything else on that route.
+func (l *Log) ObserveRequest(method, route string, status int, d time.Duration, streaming bool) {
+	key := bucketKey{method: method, route: route, status: status, streaming: streaming}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -103,6 +112,7 @@ func (l *Log) Flush() {
 			"method", key.method,
 			"route", key.route,
 			"status", key.status,
+			"streaming", key.streaming,
 			"count", b.count,
 			"avg_ms", (b.totalNs/b.count)/int64(time.Millisecond),
 			"max_ms", b.maxNs/int64(time.Millisecond),

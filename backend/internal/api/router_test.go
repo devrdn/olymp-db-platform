@@ -419,6 +419,6 @@ func TestAPanickingRequestIsStillCountedAndLogged(t *testing.T) {
 // countingRecorder keeps the last observation, which is all this needs.
 type countingRecorder struct{ status int }
 
-func (c *countingRecorder) ObserveRequest(_, _ string, status int, _ time.Duration) {
+func (c *countingRecorder) ObserveRequest(_, _ string, status int, _ time.Duration, _ bool) {
 	c.status = status
 }

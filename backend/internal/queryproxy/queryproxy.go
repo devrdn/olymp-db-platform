@@ -491,6 +491,23 @@ func (s *Service) Admitted(contest contests.Contest, participant contests.Partic
 // contests.Participant and contests.Contest — Run itself, mid-query — can
 // still ask Admitted without paying twice.
 func (s *Service) Access(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error) {
+	participant, contest, err := s.resolve(ctx, contestID, userID)
+	if err != nil {
+		return contests.Participant{}, contests.Contest{}, err
+	}
+
+	if err := s.Admitted(contest, participant, addr); err != nil {
+		return contests.Participant{}, contests.Contest{}, err
+	}
+	return participant, contest, nil
+}
+
+// resolve is the pair of lookups both Access and AccessForEvents need before
+// either applies its own admission rule to the result: who is asking, and
+// the contest they are asking about. Factored out so the two reads
+// themselves cannot drift between the two callers the way lookupParticipant's
+// own doc already worries about for "who is this and are they still in".
+func (s *Service) resolve(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, contests.Contest, error) {
 	participant, err := s.lookupParticipant(ctx, contestID, userID)
 	if err != nil {
 		return contests.Participant{}, contests.Contest{}, err
@@ -499,6 +516,40 @@ func (s *Service) Access(ctx context.Context, contestID, userID uuid.UUID, addr 
 	contest, err := s.contests.ByID(ctx, contestID)
 	if err != nil {
 		return contests.Participant{}, contests.Contest{}, fmt.Errorf("%w: look up the contest: %w", ErrUnavailable, err)
+	}
+	return participant, contest, nil
+}
+
+// AccessForEvents resolves who is asking and confirms they may hold the
+// events channel open for contestID right now (§8, finding 4) — Access's own
+// admission, with exactly one status added to what it accepts: published and
+// not yet started.
+//
+// Without this, a participant enrolled before starts_at could never observe
+// the published → running transition on this channel at all: Access refuses
+// a contest that has not started, so the channel itself would already have
+// been refused before that transition could ever be announced on it, and a
+// waiting participant would have nothing to do but poll — exactly what this
+// channel exists to replace (§8).
+//
+// Nothing else is admitted that Access would refuse: the participant must
+// still be registered, not disqualified or finished (resolve's own
+// lookupParticipant), and their address still has to satisfy the contest's
+// own network restriction. Reading the story, the questions, or answering a
+// question still goes through Access unchanged — this widens only what the
+// channel may be held open for, never what a participant connected to it may
+// do.
+func (s *Service) AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error) {
+	participant, contest, err := s.resolve(ctx, contestID, userID)
+	if err != nil {
+		return contests.Participant{}, contests.Contest{}, err
+	}
+
+	if contest.Status == contests.StatusPublished {
+		if !contest.AllowsAddress(addr) {
+			return contests.Participant{}, contests.Contest{}, ErrAddressNotAllowed
+		}
+		return participant, contest, nil
 	}
 
 	if err := s.Admitted(contest, participant, addr); err != nil {

@@ -24,8 +24,20 @@ const (
 //
 // Implementations must be safe for concurrent use and must never fail: metrics
 // are diagnostics, and losing them may not affect serving a contest.
+//
+// streaming marks a long-lived response — an SSE channel that can stay open
+// for the length of a contest (internal/api/events_handler.go) — whose own
+// duration is not what the shared request-duration histogram's buckets, or
+// the p99 read off them, are meant to describe (finding 5): one such
+// connection would otherwise be the single slowest "request" the service
+// ever serves, on every scrape, and would own that p99 outright. A streaming
+// request is still counted; its duration lands in a histogram of its own
+// instead of the one every ordinary request shares. Middleware sets it from
+// whatever the handler told it via MarkStreaming — a call site that never
+// does so always passes false, which is the correct default for every
+// existing request in this service.
 type Recorder interface {
-	ObserveRequest(method, route string, status int, d time.Duration)
+	ObserveRequest(method, route string, status int, d time.Duration, streaming bool)
 }
 
 // Scraper is the optional interface for backends that expose a pull endpoint.
@@ -60,4 +72,4 @@ func New(backend string, log *slog.Logger) (Recorder, error) {
 type Noop struct{}
 
 // ObserveRequest does nothing.
-func (Noop) ObserveRequest(string, string, int, time.Duration) {}
+func (Noop) ObserveRequest(string, string, int, time.Duration, bool) {}
