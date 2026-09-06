@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { StateView } from "@/components/product/state-view";
 import { buttonVariants } from "@/components/ui/button";
-import { AUDIT_PAGE, summariseChanges, type AuditEntry } from "@/lib/api/audit";
+import { AUDIT_PAGE, blockedProblems, summariseChanges, type AuditEntry } from "@/lib/api/audit";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
@@ -125,6 +125,7 @@ export function AuditTrailRegister({
                       record's raw data begins — these are field names as the
                       API spells them, not sentences. */}
                   <ChangeSummary payload={entry.payload} label={t.unchanged} />
+                  <BlockedProblems payload={entry.payload} dict={dict} />
                 </td>
                 <td className={cn(CELL, "text-small text-ink-2")}>
                   <Subject entry={entry} dict={dict} />
@@ -219,6 +220,37 @@ function ChangeSummary({
         ))}
       </dl>
     </details>
+  );
+}
+
+/**
+ * Why a `contest.start_blocked` entry happened.
+ *
+ * "A contest did not start" names the symptom; an organizer opens the trail
+ * for the reason, and the reason is exactly the closed vocabulary the
+ * publish gate's own screen already renders (`workspace.gate.problems` —
+ * `app/(admin)/contests/[contestId]/publish-gate.tsx`'s `global` list). Reused
+ * here rather than invented again: the same small dot-and-sentence bullet,
+ * scaled to a register row instead of a full report. A code with no wording
+ * yet is still shown, raw, in the monospace register — the same rule
+ * ChangeSummary and Subject already apply, because a blocked contest with an
+ * unreadable reason is no better than one with none at all.
+ */
+function BlockedProblems({ payload, dict }: { payload: AuditEntry["payload"]; dict: Dictionary }) {
+  const codes = blockedProblems(payload);
+  if (codes.length === 0) return null;
+
+  const problems = dict.workspace.gate.problems as Record<string, string>;
+
+  return (
+    <ul className="mt-1.5 flex flex-col gap-1">
+      {codes.map((code, index) => (
+        <li key={`${code}-${index}`} className="flex gap-2 text-small text-ink-2">
+          <span aria-hidden className="mt-1.5 size-1 shrink-0 rounded-full bg-warn" />
+          <span>{problems[code] ?? <span className="font-mono text-data">{code}</span>}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 

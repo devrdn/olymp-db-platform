@@ -3,11 +3,14 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -224,4 +227,48 @@ func (r *AuditTrail) List(ctx context.Context, f audit.Filter) ([]audit.Record, 
 		return nil, 0, fmt.Errorf("read audit trail: %w", err)
 	}
 	return found, total, nil
+}
+
+// LatestStartBlocked implements the narrow read contests.Scheduler needs to
+// keep finding 1's guarantee — a blocked contest recorded once, not once a
+// tick: the problem codes of the newest audit entry for contestID, and
+// whether that newest entry is itself a contest.start_blocked one at all.
+//
+// A single row on (entity, entity_id) — the same index Filter's own doc
+// names — rather than List's paged, joined query: Advance asks this once per
+// contest the gate just refused, and needs nothing List computes beyond it.
+func (r *AuditTrail) LatestStartBlocked(ctx context.Context, contestID uuid.UUID) ([]string, bool, error) {
+	var (
+		action  string
+		payload []byte
+	)
+	err := storage.QuerierFrom(ctx, r.pool).QueryRow(ctx, `
+		SELECT action, COALESCE(payload, '{}'::jsonb)
+		FROM audit_log
+		WHERE entity = 'contest' AND entity_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1`,
+		contestID.String(),
+	).Scan(&action, &payload)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("read latest audit entry for contest %s: %w", contestID, err)
+	}
+	if action != audit.ActionContestStartBlocked {
+		// Something else is the newest entry for this contest — an edit, a
+		// manual transition, the contest actually starting — so whatever
+		// refusal came before it is no longer the story; a fresh block
+		// deserves its own entry.
+		return nil, false, nil
+	}
+
+	var decoded struct {
+		Problems []string `json:"problems"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		return nil, false, fmt.Errorf("decode audit payload for contest %s: %w", contestID, err)
+	}
+	return decoded.Problems, true, nil
 }

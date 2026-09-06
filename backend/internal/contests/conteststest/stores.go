@@ -883,6 +883,27 @@ func (s *Sink) Append(ctx context.Context, e audit.Entry) error {
 	return nil
 }
 
+// LatestStartBlocked implements the narrow read contests.Scheduler's own
+// dedup check needs (finding 1) directly off Entries: the same in-memory log
+// Append and AppendMany already build stands in for the one real audit_log
+// table postgres.AuditSink writes and postgres.AuditTrail reads, so "the
+// newest entry on file for this contest" is simply the last matching one in
+// append order — no separate fake to keep in sync with this one.
+func (s *Sink) LatestStartBlocked(_ context.Context, contestID uuid.UUID) ([]string, bool, error) {
+	for i := len(s.Entries) - 1; i >= 0; i-- {
+		e := s.Entries[i]
+		if e.Entity != "contest" || e.EntityID != contestID.String() {
+			continue
+		}
+		if e.Action != audit.ActionContestStartBlocked {
+			return nil, false, nil
+		}
+		codes, _ := e.Payload["problems"].([]string)
+		return codes, true, nil
+	}
+	return nil, false, nil
+}
+
 // AppendMany appends every entry the same way Append does, one at a time:
 // what a test asserts on is the resulting state, not the round trips it took.
 func (s *Sink) AppendMany(ctx context.Context, entries []audit.Entry) error {

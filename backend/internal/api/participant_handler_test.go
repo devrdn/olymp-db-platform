@@ -49,6 +49,11 @@ type fakeAccess struct {
 	// can prove a refusal here stops the request before Access's own lookups.
 	admitReadErr error
 	accessCalled bool
+	// delay, when set, is how long AccessForEvents waits before answering —
+	// events_handler_test.go's own way of standing for a resync tick's two
+	// lookups running slow (finding 2), without a real, adjustable-latency
+	// store behind this fake.
+	delay time.Duration
 }
 
 func (a *fakeAccess) AdmitRead(uuid.UUID) error {
@@ -72,7 +77,26 @@ func (a *fakeAccess) Access(_ context.Context, contestID, _ uuid.UUID, _ netip.A
 // (contests.StatusPublished) — a test controls that simply by staging
 // f.access.contest.Status itself.
 func (a *fakeAccess) AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error) {
+	a.mu.Lock()
+	delay := a.delay
+	a.mu.Unlock()
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return contests.Participant{}, contests.Contest{}, ctx.Err()
+		}
+	}
 	return a.Access(ctx, contestID, userID, addr)
+}
+
+// setDelay stages how long the next AccessForEvents calls take to answer
+// (finding 2), safely against a connection's own goroutine reading it
+// concurrently on its next resync tick.
+func (a *fakeAccess) setDelay(d time.Duration) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.delay = d
 }
 
 // setErr changes what Access answers with, safely against a connection's own

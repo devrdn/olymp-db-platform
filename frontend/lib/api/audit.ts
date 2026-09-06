@@ -136,6 +136,20 @@ export function summariseChanges(
   return { changes, unchanged: false };
 }
 
+/**
+ * The problem codes a `contest.start_blocked` entry carries
+ * (`backend/internal/contests/schedule.go`'s `startBlockedEntry`) — the same
+ * closed vocabulary the publish gate's own screen already has wording for
+ * (`workspace.gate.problems`), read back here rather than left in the raw
+ * payload. An entry that is not a block, or one written before this field
+ * existed, simply has none.
+ */
+export function blockedProblems(payload: Record<string, unknown> | undefined): string[] {
+  const raw = payload?.problems;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((code): code is string => typeof code === "string");
+}
+
 /** The shortest honest rendering of a recorded value. */
 function renderValue(value: unknown): string {
   if (value === null || value === undefined) return "—";

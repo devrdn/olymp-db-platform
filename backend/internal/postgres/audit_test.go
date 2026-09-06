@@ -308,6 +308,90 @@ func TestAppendManyDoesNothingForNoEntries(t *testing.T) {
 	})
 }
 
+// TestLatestStartBlockedFindsNothingForAContestWithNoEntries covers the
+// ordinary case contests.Scheduler hits on the very first tick a contest is
+// ever due: nothing has been recorded for it yet, so there is no prior block
+// to compare against.
+func TestLatestStartBlockedFindsNothingForAContestWithNoEntries(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		problems, found, err := NewAuditTrail(testPool).LatestStartBlocked(ctx, uuid.New())
+		if err != nil {
+			t.Fatalf("LatestStartBlocked() = %v", err)
+		}
+		if found {
+			t.Errorf("found = true with problems %v, want false for a contest with no audit history", problems)
+		}
+	})
+}
+
+// TestLatestStartBlockedReturnsTheNewestBlocksCodes is finding 1's own
+// dedup query: contests.Scheduler compares this tick's refusal against
+// whatever it returns, so it must report the newest entry's codes, not the
+// first one's, when the contest was blocked more than once for different
+// reasons.
+func TestLatestStartBlockedReturnsTheNewestBlocksCodes(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contestID := uuid.New()
+		sink := NewAuditSink(testPool)
+		if err := sink.Append(ctx, audit.Entry{
+			Action: "contest.start_blocked", Entity: "contest", EntityID: contestID.String(),
+			Payload: map[string]any{"problems": []string{"no_story"}},
+		}); err != nil {
+			t.Fatalf("Append() first block = %v", err)
+		}
+		if err := sink.Append(ctx, audit.Entry{
+			Action: "contest.start_blocked", Entity: "contest", EntityID: contestID.String(),
+			Payload: map[string]any{"problems": []string{"no_questions"}},
+		}); err != nil {
+			t.Fatalf("Append() second block = %v", err)
+		}
+
+		problems, found, err := NewAuditTrail(testPool).LatestStartBlocked(ctx, contestID)
+		if err != nil {
+			t.Fatalf("LatestStartBlocked() = %v", err)
+		}
+		if !found {
+			t.Fatal("found = false, want true — the contest has a start_blocked entry")
+		}
+		if len(problems) != 1 || problems[0] != "no_questions" {
+			t.Errorf("problems = %v, want [no_questions] — the newest entry, not the first", problems)
+		}
+	})
+}
+
+// TestLatestStartBlockedFindsNothingOnceSomethingElseIsNewer proves the other
+// half of finding 1: once anything but a start_blocked entry becomes the
+// newest one on file for a contest — here, its status actually changing —
+// the prior block is no longer "the same refusal as last tick", so
+// contests.Scheduler must be told there is nothing to compare against and
+// write a fresh entry the next time this contest is blocked.
+func TestLatestStartBlockedFindsNothingOnceSomethingElseIsNewer(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contestID := uuid.New()
+		sink := NewAuditSink(testPool)
+		if err := sink.Append(ctx, audit.Entry{
+			Action: "contest.start_blocked", Entity: "contest", EntityID: contestID.String(),
+			Payload: map[string]any{"problems": []string{"no_story"}},
+		}); err != nil {
+			t.Fatalf("Append() block = %v", err)
+		}
+		if err := sink.Append(ctx, audit.Entry{
+			Action: "contest.status_change", Entity: "contest", EntityID: contestID.String(),
+			Payload: map[string]any{"changes": map[string]any{"status": map[string]any{"from": "published", "to": "running"}}},
+		}); err != nil {
+			t.Fatalf("Append() status change = %v", err)
+		}
+
+		problems, found, err := NewAuditTrail(testPool).LatestStartBlocked(ctx, contestID)
+		if err != nil {
+			t.Fatalf("LatestStartBlocked() = %v", err)
+		}
+		if found {
+			t.Errorf("found = true with problems %v, want false once the contest actually started", problems)
+		}
+	})
+}
+
 func TestAnEntityIdThatIsNotAnIdentifierDoesNotBreakTheQuery(t *testing.T) {
 	// entity_id is text, and nothing constrains it to a UUID. A cast in the
 	// join would turn one odd row into a failure for the whole page.

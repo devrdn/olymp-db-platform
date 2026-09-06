@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 
 import { AUDIT_ACTIONS } from "../api/audit-terms";
+import { PUBLISH_PROBLEMS } from "../api/publish-gate";
 import { LOCALES } from "./config";
 import { getDictionary } from "./dictionary";
 
@@ -80,6 +81,38 @@ describe("getDictionary", () => {
       const translated = dict.audit.actions as Record<string, string>;
       for (const action of actions) {
         expect(translated[action], `missing translation for "${action}"`).toBeTypeOf("string");
+      }
+    }
+  });
+
+  test("every publish-gate problem code has a translation in every locale", async () => {
+    // The publication gate's problem codes are the second closed vocabulary
+    // the audit trail now renders, alongside the actions above
+    // (`contest.start_blocked`'s payload, `trail.tsx`'s `BlockedProblems`) —
+    // and the same failure the action coverage test above exists to catch
+    // (a code reaching the interface with no wording in any language)
+    // applies to it just as much: the constructor's own gate report
+    // (`publish-gate.tsx`) reads from this exact same key.
+    //
+    // Unlike audit actions, there is no generated contract to check this
+    // list against (`docs/api/audit-actions.json`'s own counterpart does not
+    // exist for these): CheckPublishable's problem codes are plain Go string
+    // constants, not values behind a declared-type registry the way
+    // httpx.Error's codes are, so nothing on the backend publishes them as
+    // data yet. PUBLISH_PROBLEMS is this side's own closed list — the same
+    // status AUDIT_ACTIONS itself held before the contract existed — and this
+    // is what closes the one drift that actually surfaced in review: two
+    // sequential-progression codes (`sequential_needs_max_attempts`,
+    // `sequential_hides_question`) reaching CheckPublishable with no wording
+    // anywhere in this interface. A generated backend contract remains the
+    // more exact fix if this vocabulary keeps growing.
+    const codes = Object.values(PUBLISH_PROBLEMS);
+    const dictionaries = await Promise.all(LOCALES.map((locale) => getDictionary(locale)));
+
+    for (const dict of dictionaries) {
+      const translated = dict.workspace.gate.problems as Record<string, string>;
+      for (const code of codes) {
+        expect(translated[code], `missing translation for "${code}"`).toBeTypeOf("string");
       }
     }
   });
