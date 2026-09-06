@@ -30,24 +30,22 @@ func (r *Submissions) querier(ctx context.Context) storage.Querier {
 	return storage.QuerierFrom(ctx, r.pool)
 }
 
-// Now returns the core database's own clock (§8). A SELECT of PostgreSQL's
-// own now(), not time.Now() read in this process: the deadline guarantee
-// submission.go builds on this must not depend on the application server's
-// clock agreeing with the database's, only on the one clock the write itself
-// lands by.
-func (r *Submissions) Now(ctx context.Context) (time.Time, error) {
-	var now time.Time
-	if err := r.querier(ctx).QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
-		return time.Time{}, fmt.Errorf("read the core database's clock: %w", err)
-	}
-	return now, nil
-}
-
-// Insert writes one submission row, computing its own attempt number and
-// enforcing "closed" (already correct, or every attempt spent) in the same
-// statement — no count read first, and nothing here can be exceeded by two
-// callers racing each other (finding 3, docs/ARCHITECTURE.md §8, and see
+// Insert writes one submission row, computing its own attempt number,
+// checking req.Deadline and enforcing "closed" (already correct, or every
+// attempt spent) all in the same statement — no count read first, no clock
+// read first, and nothing here can be exceeded by two callers racing each
+// other (finding 3, §8, finding 4, finding 5; see
 // contests.SubmissionRepository's own doc).
+//
+// now() here is PostgreSQL's own clock, not time.Now() read in this process
+// (§8) — and, because there is no explicit transaction wrapped around this
+// one statement for the common case (contests.Service.submitOnce opens one
+// only when a score update must land atomically with the write), now() is
+// this statement's own execution time rather than a value pinned at some
+// earlier BEGIN. That is what removes the gap finding 4 describes: the
+// deadline is compared against the database's clock at the very moment the
+// row is written, not at a moment read earlier and carried into a separate
+// comparison.
 //
 // Filtered by (registration_id, question_id), the leading two columns of the
 // table's own UNIQUE (registration_id, question_id, attempt_no) constraint —
@@ -78,22 +76,26 @@ func (r *Submissions) Now(ctx context.Context) (time.Time, error) {
 func (r *Submissions) Insert(ctx context.Context, req contests.SubmissionRequest) (contests.Submission, error) {
 	row := r.querier(ctx).QueryRow(ctx, `
 		INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct, points_awarded, submitted_at)
-		SELECT $1, $2, COALESCE(MAX(s.attempt_no), 0) + 1, $3, $4, $5, $6
+		SELECT $1, $2, COALESCE(MAX(s.attempt_no), 0) + 1, $3, $4, $5, now()
 		FROM submissions s
 		WHERE s.registration_id = $1 AND s.question_id = $2
 		HAVING COUNT(*) FILTER (WHERE s.is_correct) = 0
-		   AND ($7::int IS NULL OR COUNT(*) < $7::int)
+		   AND ($6::int IS NULL OR COUNT(*) < $6::int)
+		   AND now() < $7::timestamptz
 		RETURNING id, registration_id, question_id, attempt_no, value, is_correct, points_awarded, submitted_at`,
-		req.RegistrationID, req.QuestionID, req.Value, req.IsCorrect, req.PointsAwarded, req.SubmittedAt, req.MaxAttempts)
+		req.RegistrationID, req.QuestionID, req.Value, req.IsCorrect, req.PointsAwarded, req.MaxAttempts, req.Deadline)
 
 	var out contests.Submission
 	err := row.Scan(&out.ID, &out.RegistrationID, &out.QuestionID, &out.AttemptNo,
 		&out.Value, &out.IsCorrect, &out.PointsAwarded, &out.SubmittedAt)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		// The HAVING clause produced no row: this registration has already
-		// answered the question correctly, or spent every attempt it had.
-		return contests.Submission{}, contests.ErrQuestionClosed
+		// The HAVING clause produced no row for one of two reasons this one
+		// statement cannot itself tell apart, and only refusals pay for
+		// telling them apart (the common, successful case never reaches
+		// here): explainRefusal asks a second, cheap question — no table
+		// scan, just a comparison against now() — to decide which.
+		return contests.Submission{}, r.explainRefusal(ctx, req.Deadline)
 	case err != nil:
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
@@ -106,4 +108,21 @@ func (r *Submissions) Insert(ctx context.Context, req contests.SubmissionRequest
 		return contests.Submission{}, fmt.Errorf("insert submission: %w", err)
 	}
 	return out, nil
+}
+
+// explainRefusal decides, only once Insert already knows nothing was
+// written, whether that was because the deadline had passed or because the
+// question was already closed (already answered correctly, or every attempt
+// spent) — the same priority Insert's own HAVING clause would give the
+// deadline if it could report a reason directly, and the same one this
+// codebase used before the two checks were folded into one statement.
+func (r *Submissions) explainRefusal(ctx context.Context, deadline time.Time) error {
+	var passed bool
+	if err := r.querier(ctx).QueryRow(ctx, `SELECT now() >= $1::timestamptz`, deadline).Scan(&passed); err != nil {
+		return fmt.Errorf("check whether the deadline had passed: %w", err)
+	}
+	if passed {
+		return contests.ErrDeadlinePassed
+	}
+	return contests.ErrQuestionClosed
 }

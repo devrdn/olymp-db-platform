@@ -22,6 +22,10 @@
       "meaning": "The submitted answer is longer than this installation accepts. The message names the limit."
     },
     {
+      "code": "attempt_conflict",
+      "meaning": "Too many submissions to this exact question arrived at the same moment for the retry to resolve. Nothing was recorded; submitting again is the right response."
+    },
+    {
       "code": "cannot_act_on_self",
       "meaning": "The operation would lock the caller out of their own account, so it is refused on oneself."
     },

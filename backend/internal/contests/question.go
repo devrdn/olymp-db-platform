@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/google/uuid"
@@ -148,6 +149,18 @@ func (q Question) HasChoice(id string) bool {
 func (a Answer) Validate() error {
 	if strings.TrimSpace(a.Value) == "" {
 		return fmt.Errorf("%w: the value must not be empty", ErrInvalidAnswer)
+	}
+	// The same bound a submitted answer carries (maxAnswerRunes,
+	// submission.go): a reference answer is a name, a short phrase or a
+	// choice identifier, never more than a sentence, and this is the one
+	// place CLAUDE.md rule 2 asks the bound to live — every column this
+	// value reaches is unbounded text, and nothing before storage otherwise
+	// stops an authored regex pattern from being arbitrarily long (finding
+	// 6). RE2 compiles in time linear in pattern length with no
+	// backtracking blow-up, so this is a bound on storage and on staff
+	// authoring effort, not a defence against a compilation attack.
+	if utf8.RuneCountInString(a.Value) > maxAnswerRunes {
+		return fmt.Errorf("%w: at most %d characters", ErrInvalidAnswer, maxAnswerRunes)
 	}
 	if !slices.Contains([]string{MatchExact, MatchExactCI, MatchRegex}, a.MatchKind) {
 		return fmt.Errorf("%w: unknown match kind %q", ErrInvalidAnswer, a.MatchKind)
