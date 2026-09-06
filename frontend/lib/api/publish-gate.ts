@@ -19,6 +19,14 @@ export const PUBLISH_PROBLEMS = {
   missingChoiceLabel: "missing_choice_label",
   noReferenceAnswer: "no_reference_answer",
   noSchedule: "no_schedule",
+  // Sequential-progression-only refusals (backend/internal/contests/publish.go):
+  // a question with no attempt cap, or a hidden one with another ordered
+  // after it, either of which could trap a participant on the day it costs
+  // most. Neither has a cell of its own — both name a question, not a
+  // language — so they fall into the same global list every other
+  // contest-wide problem does.
+  sequentialNeedsMaxAttempts: "sequential_needs_max_attempts",
+  sequentialHidesQuestion: "sequential_hides_question",
 } as const;
 
 export type PublishProblem = {

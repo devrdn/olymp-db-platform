@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
@@ -67,6 +68,29 @@ type scheduleQuestions interface {
 	List(ctx context.Context, contestID uuid.UUID) ([]Question, error)
 }
 
+// blockedContests is what Advance needs from the audit trail itself to keep
+// finding 1's guarantee — a contest's refusal recorded once, not once a tick,
+// for as long as nothing about it changes: the newest entry already on file
+// for one contest, when that entry is itself a start_blocked one.
+//
+// Narrower than audit.Reader on purpose: List answers a paged, filtered,
+// joined question an admin screen asks ("who did what to this contest, one
+// page at a time"); Advance asks a single yes/no per blocked contest, and
+// only for the contests DueToStart returned this tick — ordinarily zero or
+// one — so this stays one indexed lookup rather than reaching for the wider
+// query's cost.
+type blockedContests interface {
+	// LatestStartBlocked reports the problem codes carried by the newest
+	// audit entry for contestID, and whether that newest entry is itself a
+	// contest.start_blocked entry at all. found is false both when there is
+	// no entry yet for this contest and when the newest one is something
+	// else — an edit, a manual transition, the contest actually starting —
+	// which means something happened to it since the last refusal and a
+	// fresh block deserves its own entry even if the codes turn out the same
+	// as before.
+	LatestStartBlocked(ctx context.Context, contestID uuid.UUID) (problems []string, found bool, err error)
+}
+
 // Scheduler moves contests along their published → running → finished
 // lifecycle without an organizer asking (§8).
 //
@@ -94,13 +118,14 @@ type Scheduler struct {
 	repo      ScheduleRepository
 	stories   scheduleStories
 	questions scheduleQuestions
+	blocked   blockedContests
 	audit     *audit.Recorder
 	uow       storage.UnitOfWork
 }
 
 // NewScheduler assembles the background scheduler.
-func NewScheduler(repo ScheduleRepository, stories scheduleStories, questions scheduleQuestions, auditRecorder *audit.Recorder, uow storage.UnitOfWork) *Scheduler {
-	return &Scheduler{repo: repo, stories: stories, questions: questions, audit: auditRecorder, uow: uow}
+func NewScheduler(repo ScheduleRepository, stories scheduleStories, questions scheduleQuestions, blocked blockedContests, auditRecorder *audit.Recorder, uow storage.UnitOfWork) *Scheduler {
+	return &Scheduler{repo: repo, stories: stories, questions: questions, blocked: blocked, audit: auditRecorder, uow: uow}
 }
 
 // checkPublishable is the body behind both Service.checkPublishable and
@@ -136,6 +161,26 @@ func checkPublishable(ctx context.Context, stories scheduleStories, questions sc
 // audit trail is where an organizer finds out why nothing happened at
 // starts_at (finding 1).
 //
+// A refused contest is left exactly as published, so DueToStart's own
+// WHERE clause (status = published AND starts_at <= now()) matches it again
+// on every following tick until somebody fixes it. Recording a fresh entry
+// each time would make the trail itself the noise finding 1 named — a
+// contest published on Friday with a Saturday start and a deleted story
+// would write one entry per tick, forever, and bury the very record an
+// organizer opens the trail to read. So blockedContests.LatestStartBlocked
+// is checked first: a tick writes nothing when the newest entry already on
+// file for this contest says the same thing with the same problem codes,
+// and writes a fresh one the moment that stops being true — a different
+// code because something else broke, or no start_blocked entry at all
+// because the contest was fixed, started, or edited since. Recording once
+// per distinct state was chosen over parking the contest in a status of its
+// own: a blocked contest is still exactly "published" to every other rule in
+// this package (an organizer can still edit it, still start it by hand, and
+// Service.Transition already holds the identical gate for that path), and a
+// new status would mean teaching every place that reads status about a
+// state that changes nothing about what is allowed — for one row that an
+// index on (entity, entity_id) already answers cheaply.
+//
 // The gate runs once per contest DueToStart returned, never once per
 // published contest in the installation: the query that returns them is
 // already narrowed to status and starts_at, so a tick's cost is proportional
@@ -167,7 +212,14 @@ func (s *Scheduler) Advance(ctx context.Context) (started, finished int, err err
 			case gateErr == nil:
 				// Ready — fall through to the move below.
 			case errors.Is(gateErr, ErrNotPublishable):
-				entries = append(entries, startBlockedEntry(c.ID, gateErr))
+				codes := problemCodesOf(gateErr)
+				prev, found, err := s.blocked.LatestStartBlocked(ctx, c.ID)
+				if err != nil {
+					return fmt.Errorf("check prior block for contest %s: %w", c.ID, err)
+				}
+				if !found || !sameProblemCodes(prev, codes) {
+					entries = append(entries, startBlockedEntry(c.ID, codes))
+				}
 				continue
 			default:
 				// Not a gate refusal but an infrastructure failure (the
@@ -232,7 +284,20 @@ func scheduleEntry(contestID uuid.UUID, from, to string) audit.Entry {
 // (api/contests_handler.go's problemsOf), rather than a sentence: an
 // organizer's screen is what turns a code into wording, in whatever language
 // it speaks, the same as every other refusal this gate can report.
-func startBlockedEntry(contestID uuid.UUID, gateErr error) audit.Entry {
+func startBlockedEntry(contestID uuid.UUID, codes []string) audit.Entry {
+	return audit.Entry{
+		Action:   audit.ActionContestStartBlocked,
+		Entity:   "contest",
+		EntityID: contestID.String(),
+		Payload:  map[string]any{"problems": codes},
+	}
+}
+
+// problemCodesOf reads the machine-readable codes out of a CheckPublishable
+// refusal, in the order NotPublishableError carries them — the same codes
+// api/contests_handler.go's problemsOf reports over HTTP, and what
+// startBlockedEntry and LatestStartBlocked's comparison both work from.
+func problemCodesOf(gateErr error) []string {
 	var notReady *NotPublishableError
 	codes := []string{}
 	if errors.As(gateErr, &notReady) {
@@ -240,10 +305,21 @@ func startBlockedEntry(contestID uuid.UUID, gateErr error) audit.Entry {
 			codes = append(codes, p.Code)
 		}
 	}
-	return audit.Entry{
-		Action:   audit.ActionContestStartBlocked,
-		Entity:   "contest",
-		EntityID: contestID.String(),
-		Payload:  map[string]any{"problems": codes},
+	return codes
+}
+
+// sameProblemCodes reports whether a and b name the same set of problems,
+// regardless of order: CheckPublishable's own order only ever moves when the
+// contest's languages or questions themselves changed, which is exactly a
+// case where a fresh entry is wanted anyway, so comparing as sets rather than
+// sequences costs nothing and asks for nothing more than "is this the same
+// refusal as last tick".
+func sameProblemCodes(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
 	}
+	a, b = slices.Clone(a), slices.Clone(b)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
 }

@@ -171,6 +171,11 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 
 	userRepo := postgres.NewUsers(pool)
 	auditRecorder := audit.New(postgres.NewAuditSink(pool))
+	// The one reader of the audit trail, shared by the scheduler's own
+	// dedup check (finding 1, below) and the admin-facing handler further
+	// down: both read the same table through the same narrow type, and there
+	// is no reason to pay for two.
+	auditTrail := postgres.NewAuditTrail(pool)
 	sessions := auth.NewSessionStore(cacheBackend, cfg.SessionTTL)
 	cookies := auth.NewCookieWriter(cfg.CookieSecure)
 
@@ -231,11 +236,13 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// publish gate Service.Transition holds before letting a contest reach
 	// running (finding 1): the scheduler is a second door into that step,
 	// and it must not open onto a contest whose story or questions vanished
-	// after publication.
+	// after publication. auditTrail is what lets it record a block once
+	// rather than once a tick: the same reader the admin handler uses below.
 	scheduler := contests.NewScheduler(
 		postgres.NewContests(pool),
 		postgres.NewStories(pool),
 		postgres.NewQuestions(pool),
+		auditTrail,
 		auditRecorder,
 		storage.NewUnitOfWork(pool),
 	)
@@ -250,7 +257,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		api.NewContestsHandler(contestService, authMiddleware, log, cfg.DefaultLocale),
 		// The trail is written by every module above; this is the only way
 		// to read it back, and it is behind its own permission.
-		api.NewAuditHandler(postgres.NewAuditTrail(pool), authMiddleware, log),
+		api.NewAuditHandler(auditTrail, authMiddleware, log),
 	}
 	if console != nil {
 		modules = append(modules, api.NewConsoleHandler(console, authMiddleware, log))

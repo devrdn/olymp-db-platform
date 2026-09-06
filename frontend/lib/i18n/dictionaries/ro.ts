@@ -166,6 +166,8 @@ const ro = {
         missing_choice_label: "O variantă nu are etichetă într-o limbă declarată.",
         no_reference_answer: "O întrebare nu are răspuns de referință, deci nimic nu o poate corecta.",
         no_schedule: "Olimpiada nu are început și sfârșit.",
+        sequential_needs_max_attempts: "O întrebare nu are limită de încercări, așa că un participant blocat pe ea în ordine secvențială nu ar putea trece mai departe.",
+        sequential_hides_question: "O întrebare ascunsă în ordine secvențială are o altă întrebare după ea, care nu ar putea fi niciodată atinsă.",
       },
     },
     story: {

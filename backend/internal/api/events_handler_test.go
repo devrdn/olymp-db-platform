@@ -751,6 +751,84 @@ func TestEventsReclaimsAConnectionBlockedOnAWrite(t *testing.T) {
 	}
 }
 
+// deadlineAwareWriter enforces the deadline it is given the way a real
+// net.Conn does: a Write attempted after that deadline has already elapsed
+// fails immediately with a timeout, whatever the peer is actually doing —
+// finding 2's own failure mode, when a deadline is armed before a slow
+// lookup rather than before the write it is meant to bound, and is already
+// spent by the time that write is attempted. Unlike stalledWriter above, a
+// write here never blocks and never fails once its deadline has not yet
+// passed: this fake exists to show a healthy write surviving a slow lookup,
+// not a genuinely stalled client being reclaimed.
+type deadlineAwareWriter struct {
+	header http.Header
+
+	mu       sync.Mutex
+	deadline time.Time
+	buf      bytes.Buffer
+}
+
+func newDeadlineAwareWriter() *deadlineAwareWriter {
+	return &deadlineAwareWriter{header: http.Header{}}
+}
+
+func (w *deadlineAwareWriter) Header() http.Header { return w.header }
+func (w *deadlineAwareWriter) WriteHeader(int)     {}
+func (w *deadlineAwareWriter) Flush()              {}
+
+func (w *deadlineAwareWriter) SetWriteDeadline(t time.Time) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.deadline = t
+	return nil
+}
+
+func (w *deadlineAwareWriter) Write(b []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.deadline.IsZero() && time.Now().After(w.deadline) {
+		return 0, os.ErrDeadlineExceeded
+	}
+	return w.buf.Write(b)
+}
+
+// TestEventsResyncArmsTheWriteDeadlineAfterTheLookupsNotBeforeThem is finding
+// 2's own regression test. AccessForEvents is two database reads, and the
+// deadline this handler arms exists to bound the write that follows, not the
+// wait for its own storage. A resync tick whose lookups alone take longer
+// than writeTimeout must not disconnect an otherwise-healthy client just
+// because the deadline was set before those lookups started rather than
+// after they returned.
+func TestEventsResyncArmsTheWriteDeadlineAfterTheLookupsNotBeforeThem(t *testing.T) {
+	f := newEventsFixture(t)
+	f.handler.WithResyncInterval(5 * time.Millisecond).WithWriteTimeout(10 * time.Millisecond)
+	contestID := uuid.New()
+	ends := time.Now().Add(time.Hour)
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	// Longer than writeTimeout on its own: with the deadline armed before
+	// this lookup, it would already be spent by the time the write that
+	// follows is even attempted.
+	f.access.setDelay(40 * time.Millisecond)
+
+	req, cancel := f.request(contestID)
+	w := newDeadlineAwareWriter()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.router.ServeHTTP(w, req)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("the connection ended on its own — a slow resync lookup must not cost the following write its deadline")
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	cancel()
+	waitDone(t, done)
+}
+
 // noFlushRecorder is a ResponseWriter that supports neither Flush nor a write
 // deadline — standing in for a reverse proxy or test harness exposing
 // neither optional interface. http.ResponseController.Flush then returns

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { auditSearch, dayBounds, summariseChanges } from "./audit";
+import { auditSearch, blockedProblems, dayBounds, summariseChanges } from "./audit";
 
 describe("auditSearch", () => {
   test("leaves out what was not asked for", () => {
@@ -84,5 +84,25 @@ describe("summariseChanges", () => {
   test("has nothing to say about an entry that records no change set", () => {
     expect(summariseChanges({ login: "root" })).toEqual({ changes: [], unchanged: false });
     expect(summariseChanges(undefined)).toEqual({ changes: [], unchanged: false });
+  });
+});
+
+describe("blockedProblems", () => {
+  test("reads the codes off a contest.start_blocked entry's payload", () => {
+    expect(blockedProblems({ problems: ["no_story", "no_questions"] })).toEqual([
+      "no_story",
+      "no_questions",
+    ]);
+  });
+
+  test("has nothing to say about an entry that carries no problems", () => {
+    expect(blockedProblems({ changes: {} })).toEqual([]);
+    expect(blockedProblems(undefined)).toEqual([]);
+  });
+
+  test("drops anything that is not a string, rather than rendering it raw", () => {
+    // The payload is read straight off the wire; a shape this reader does not
+    // expect must not become a React child.
+    expect(blockedProblems({ problems: ["no_story", 12, null] })).toEqual(["no_story"]);
   });
 });
