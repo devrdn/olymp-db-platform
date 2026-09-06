@@ -54,6 +54,26 @@ func (a *fakeAccess) Access(_ context.Context, contestID, _ uuid.UUID, _ netip.A
 	return a.participant, a.contest, a.err
 }
 
+// fakeSubmitter answers Submit with whatever a test staged, so the answer
+// endpoint's own request wiring and error mapping can be exercised without a
+// real contests.Service behind it — that behaviour is proven where
+// contests.Service owns it (internal/contests/submission_test.go).
+type fakeSubmitter struct {
+	outcome contests.SubmitOutcome
+	err     error
+	// gotCmd records what Submit was asked, so a test can prove the
+	// question identifier and the value came from the request rather than
+	// being invented here.
+	gotCmd contests.SubmitCommand
+	called bool
+}
+
+func (s *fakeSubmitter) Submit(_ context.Context, cmd contests.SubmitCommand) (contests.SubmitOutcome, error) {
+	s.called = true
+	s.gotCmd = cmd
+	return s.outcome, s.err
+}
+
 // participantFixture mounts the participant endpoints behind a session, with
 // a fake Access and a real Reader over in-memory stores — the same
 // conteststest fakes internal/contests's own Reader tests use, so what is
@@ -62,6 +82,7 @@ func (a *fakeAccess) Access(_ context.Context, contestID, _ uuid.UUID, _ netip.A
 type participantFixture struct {
 	router    http.Handler
 	access    *fakeAccess
+	submitter *fakeSubmitter
 	stories   *conteststest.Stories
 	questions *conteststest.Questions
 	attempts  *conteststest.Attempts
@@ -96,12 +117,13 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 	attempts := conteststest.NewAttempts()
 	reader := contests.NewReader(stories, questions, attempts)
 	access := &fakeAccess{}
+	submitter := &fakeSubmitter{}
 
 	router := chi.NewRouter()
-	api.NewParticipantHandler(access, reader, mw, log, "en").Mount(router)
+	api.NewParticipantHandler(access, reader, submitter, mw, log, "en").Mount(router)
 
 	return &participantFixture{
-		router: router, access: access,
+		router: router, access: access, submitter: submitter,
 		stories: stories, questions: questions, attempts: attempts,
 		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: token},
 	}
@@ -109,6 +131,15 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 
 func (f *participantFixture) get(path string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.AddCookie(f.cookie)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	return rec
+}
+
+func (f *participantFixture) post(path, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(f.cookie)
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, req)
@@ -514,7 +545,7 @@ func TestParticipantRoutesDoNotShadowTheStaffContentEndpoints(t *testing.T) {
 	api.NewContestsHandler(stores.Service, mw, log, "en").Mount(router)
 	reader := contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts())
 	access := &fakeAccess{err: queryproxy.ErrNotAParticipant}
-	api.NewParticipantHandler(access, reader, mw, log, "en").Mount(router)
+	api.NewParticipantHandler(access, reader, stores.Service, mw, log, "en").Mount(router)
 
 	do := func(path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -554,5 +585,153 @@ func TestParticipantRoutesDoNotShadowTheStaffContentEndpoints(t *testing.T) {
 	}
 	if code := errorCode(t, participant); code != "not_a_participant" {
 		t.Fatalf("code = %q, want not_a_participant (proving this handler, not the staff route's RBAC, answered)", code)
+	}
+}
+
+// The answer endpoint sends Submit exactly what the URL and the body carry —
+// never a value invented by the handler, and never a participant or contest
+// other than what Access just resolved.
+func TestAnswerSubmitsTheURLsQuestionAndTheBodysValue(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	questionID := uuid.New()
+	participantID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: participantID}
+
+	rec := f.post("/contests/"+contestID.String()+"/questions/"+questionID.String()+"/answer",
+		`{"value":"the butler"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if !f.submitter.called {
+		t.Fatal("Submit was never called")
+	}
+	got := f.submitter.gotCmd
+	if got.QuestionID != questionID {
+		t.Fatalf("QuestionID = %s, want %s (from the URL)", got.QuestionID, questionID)
+	}
+	if got.Value != "the butler" {
+		t.Fatalf("Value = %q, want %q (from the body)", got.Value, "the butler")
+	}
+	if got.Participant.ID != participantID || got.Contest.ID != contestID {
+		t.Fatalf("command = %+v, want the participant and contest Access resolved", got)
+	}
+}
+
+// The response carries exactly what SubmitOutcome says — never more, never
+// a reference answer.
+func TestAnswerReturnsTheOutcome(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	remaining := 2
+	f.submitter.outcome = contests.SubmitOutcome{
+		Correct: true, PointsAwarded: 10, AttemptsRemaining: &remaining, Closed: true,
+	}
+
+	rec := f.post("/contests/"+contestID.String()+"/questions/"+uuid.New().String()+"/answer", `{"value":"yes"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Correct           bool `json:"correct"`
+		PointsAwarded     int  `json:"points_awarded"`
+		AttemptsRemaining *int `json:"attempts_remaining"`
+		Closed            bool `json:"closed"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !payload.Correct || payload.PointsAwarded != 10 || payload.AttemptsRemaining == nil ||
+		*payload.AttemptsRemaining != 2 || !payload.Closed {
+		t.Fatalf("payload = %+v, want the staged outcome", payload)
+	}
+}
+
+// CLAUDE.md rule 1: every refusal contests.Service.Submit can answer with
+// needs a declared sentinel, a mapping in fail(), and a test asserting the
+// 4xx.
+func TestAnswerRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{"question not found", contests.ErrQuestionNotFound, http.StatusNotFound, "question_not_found"},
+		{"answer too long", contests.ErrAnswerTooLong, http.StatusBadRequest, "answer_too_long"},
+		{"question closed", contests.ErrQuestionClosed, http.StatusConflict, "question_closed"},
+		{"deadline passed", contests.ErrDeadlinePassed, http.StatusConflict, "deadline_passed"},
+		{"not a participant", queryproxy.ErrNotAParticipant, http.StatusForbidden, "not_a_participant"},
+		{"contest not running", queryproxy.ErrContestNotRunning, http.StatusConflict, "contest_not_running"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newParticipantFixture(t)
+			contestID := uuid.New()
+			f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+			f.access.participant = contests.Participant{ID: uuid.New()}
+			f.submitter.err = tc.err
+
+			rec := f.post("/contests/"+contestID.String()+"/questions/"+uuid.New().String()+"/answer", `{"value":"x"}`)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body: %s)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if code := errorCode(t, rec); code != tc.wantCode {
+				t.Fatalf("code = %q, want %q", code, tc.wantCode)
+			}
+		})
+	}
+}
+
+// A question identifier that is not a UUID is a 400, and Submit is never
+// called with garbage.
+func TestAnswerWithAnInvalidQuestionIDIsA400(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+
+	rec := f.post("/contests/"+contestID.String()+"/questions/not-a-uuid/answer", `{"value":"x"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if f.submitter.called {
+		t.Fatal("Submit was called with an invalid question identifier")
+	}
+}
+
+// A malformed body is a 400, and Submit is never called.
+func TestAnswerWithAnInvalidBodyIsA400(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+
+	rec := f.post("/contests/"+contestID.String()+"/questions/"+uuid.New().String()+"/answer", `not json`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if f.submitter.called {
+		t.Fatal("Submit was called with a body that could not be decoded")
+	}
+}
+
+// Finding 3 (queryproxy's own, reused here): a caller over their own rate
+// budget is refused before Access — and before Submit — ever run.
+func TestAnswerRateLimitRefusalIsA429AndNeverReachesSubmit(t *testing.T) {
+	f := newParticipantFixture(t)
+	f.access.admitReadErr = queryrunner.ErrTooManyQueries
+
+	rec := f.post("/contests/"+uuid.New().String()+"/questions/"+uuid.New().String()+"/answer", `{"value":"x"}`)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "query_too_often" {
+		t.Fatalf("code = %q, want query_too_often", code)
+	}
+	if f.access.accessCalled || f.submitter.called {
+		t.Fatal("Access or Submit was reached after AdmitRead refused")
 	}
 }

@@ -173,6 +173,16 @@ type RegistrationRepository interface {
 	// the domain type it would have to be filled, or left wrong, everywhere a
 	// contest is loaded.
 	EnrolledIn(ctx context.Context, userID uuid.UUID, contestIDs []uuid.UUID) (map[uuid.UUID]bool, error)
+	// AddScore adds delta to the registration's total_score — an atomic
+	// increment (`total_score = total_score + delta`), never a read of the
+	// current value followed by a write of a new one. Two answers scoring at
+	// the same moment (different questions, or the retry submission.go's own
+	// attempt-race makes) must not let one increment overwrite the other; an
+	// increment expressed in SQL cannot lose one side of that the way a
+	// read-modify-write in Go could. Called only when delta is positive
+	// (submission.go's own doc explains why a wrong answer never calls this
+	// at all).
+	AddScore(ctx context.Context, registrationID uuid.UUID, delta int) error
 }
 
 // Why an entry of an import produced no registration.

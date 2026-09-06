@@ -16,8 +16,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// The two read-only endpoints a participant of a running contest uses to see
-// what they are working on: the story, and the visible questions.
+// The endpoints a participant of a running contest uses to work on it: two
+// read-only ones — the story, and the visible questions — and one that
+// writes, answering a question.
 //
 // What may never reach a response here, under any parameter, in any
 // language, in any error message: a reference answer, a hidden question
@@ -31,7 +32,10 @@ import (
 // address allowed). This handler asks it and nothing else: no permission
 // check, because taking part in a contest is a registration, not a
 // permission an administrator grants — the façade looks the registration up,
-// the same way ConsoleHandler does.
+// the same way ConsoleHandler does. answer builds on the very same admission
+// rather than a second one of its own (contests.SubmitCommand's own doc
+// explains why contests.Service.Submit could not ask Access itself, and why
+// that is this handler's job instead).
 
 // ParticipantAccess is the slice of queryproxy.Service this handler needs: is
 // the caller allowed into this contest right now, and who and what did that
@@ -47,23 +51,32 @@ type ParticipantAccess interface {
 	AdmitRead(userID uuid.UUID) error
 }
 
-// ParticipantHandler serves a participant's own view of a running contest.
+// Submitter is the slice of contests.Service this handler needs to record an
+// answer — declared here, narrow, rather than the handler holding the whole
+// service (Go layout rule 3): everything this file does with it is one call.
+type Submitter interface {
+	Submit(ctx context.Context, cmd contests.SubmitCommand) (contests.SubmitOutcome, error)
+}
+
+// ParticipantHandler serves a participant's own view of, and actions on, a
+// running contest.
 type ParticipantHandler struct {
-	access ParticipantAccess
-	reader *contests.Reader
-	mw     *auth.Middleware
-	log    *slog.Logger
+	access    ParticipantAccess
+	reader    *contests.Reader
+	submitter Submitter
+	mw        *auth.Middleware
+	log       *slog.Logger
 	// defaultLocale answers when a request expresses no usable preference and
 	// the contest narrows nothing down (§6.2).
 	defaultLocale string
 }
 
 // NewParticipantHandler assembles the endpoints.
-func NewParticipantHandler(access ParticipantAccess, reader *contests.Reader, mw *auth.Middleware, log *slog.Logger, defaultLocale string) *ParticipantHandler {
+func NewParticipantHandler(access ParticipantAccess, reader *contests.Reader, submitter Submitter, mw *auth.Middleware, log *slog.Logger, defaultLocale string) *ParticipantHandler {
 	if defaultLocale == "" {
 		defaultLocale = "en"
 	}
-	return &ParticipantHandler{access: access, reader: reader, mw: mw, log: log, defaultLocale: defaultLocale}
+	return &ParticipantHandler{access: access, reader: reader, submitter: submitter, mw: mw, log: log, defaultLocale: defaultLocale}
 }
 
 // Mount registers the routes.
@@ -81,11 +94,18 @@ func NewParticipantHandler(access ParticipantAccess, reader *contests.Reader, mw
 // racing for the same URL — and it matches the participant screen's own
 // namespace the plan already commits to (frontend/app/(participant)/contests/
 // [contestId]/play/*).
+// answer is mounted at /contests/{id}/questions/{questionId}/answer rather
+// than under /play: it names a question directly, the way the staff endpoints
+// already do (/contests/{id}/questions/{questionId}), and there is no risk of
+// the Mount-order collision the doc above warns about — ContestsHandler never
+// registers POST on that exact path, only GET/PATCH/PUT/DELETE without the
+// /answer suffix.
 func (h *ParticipantHandler) Mount(r chi.Router) {
 	r.Group(func(r chi.Router) {
 		r.Use(h.mw.Authenticate)
 		r.Get("/contests/{"+contestIDParam+"}/play/story", h.story)
 		r.Get("/contests/{"+contestIDParam+"}/play/questions", h.questions)
+		r.Post("/contests/{"+contestIDParam+"}/questions/{"+questionIDParam+"}/answer", h.answer)
 	})
 }
 
@@ -214,8 +234,66 @@ func (h *ParticipantHandler) questions(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, participantQuestionListResponse{Lang: lang, Items: items})
 }
 
+// answerRequest is the body of POST .../answer: one value, compared against
+// the question's reference answers server-side (§6) — never anything that
+// would let the request itself say which question it thinks is right.
+type answerRequest struct {
+	Value string `json:"value"`
+}
+
+// answerResponse is what a participant learns after answering: never a
+// reference answer, only what SubmitOutcome already carries — the same two
+// derived facts (attempts_remaining, closed) the questions list computes for
+// every question, by the same two functions, so this response can never
+// describe "closed" differently from what a follow-up GET .../play/questions
+// would say.
+type answerResponse struct {
+	Correct           bool `json:"correct"`
+	PointsAwarded     int  `json:"points_awarded"`
+	AttemptsRemaining *int `json:"attempts_remaining,omitempty"`
+	Closed            bool `json:"closed"`
+}
+
+func (h *ParticipantHandler) answer(w http.ResponseWriter, r *http.Request) {
+	participant, contest, ok := h.admit(w, r)
+	if !ok {
+		return
+	}
+
+	questionID, err := uuid.Parse(chi.URLParam(r, questionIDParam))
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidQuestionID, "Question identifier is not valid")
+		return
+	}
+
+	var req answerRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+		return
+	}
+
+	outcome, err := h.submitter.Submit(r.Context(), contests.SubmitCommand{
+		Participant: participant,
+		Contest:     contest,
+		QuestionID:  questionID,
+		Value:       req.Value,
+	})
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+
+	httpx.JSON(w, r, http.StatusOK, answerResponse{
+		Correct:           outcome.Correct,
+		PointsAwarded:     outcome.PointsAwarded,
+		AttemptsRemaining: outcome.AttemptsRemaining,
+		Closed:            outcome.Closed,
+	})
+}
+
 // fail maps a refusal from queryproxy.Service.AdmitRead, from
-// queryproxy.Service.Access, or from the reader, to a response.
+// queryproxy.Service.Access, from the reader, or from contests.Service.Submit,
+// to a response.
 //
 // CLAUDE.md rule 1: every one of these is a declared sentinel with a mapping
 // here and a handler test asserting the 4xx it produces.
@@ -239,6 +317,18 @@ func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err er
 			"This contest is only available from the university network")
 	case errors.Is(err, contests.ErrStoryNotFound):
 		httpx.Error(w, r, http.StatusNotFound, codeStoryNotFound, "This contest has no story yet")
+	case errors.Is(err, contests.ErrQuestionNotFound):
+		// Also the answer when the question named in the URL belongs to
+		// another contest: that it exists elsewhere is not this caller's
+		// business (contests.Service.Submit's own doc).
+		httpx.Error(w, r, http.StatusNotFound, codeQuestionNotFound, "No such question in this contest")
+	case errors.Is(err, contests.ErrAnswerTooLong):
+		httpx.Error(w, r, http.StatusBadRequest, codeAnswerTooLong, err.Error())
+	case errors.Is(err, contests.ErrQuestionClosed):
+		httpx.Error(w, r, http.StatusConflict, codeQuestionClosed,
+			"This question is already answered correctly, or every attempt has been used")
+	case errors.Is(err, contests.ErrDeadlinePassed):
+		httpx.Error(w, r, http.StatusConflict, codeDeadlinePassed, "The deadline for this contest has passed")
 	case errors.Is(err, queryproxy.ErrUnavailable):
 		h.log.ErrorContext(r.Context(), "could not resolve participant access", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
