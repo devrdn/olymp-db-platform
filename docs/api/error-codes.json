@@ -18,6 +18,10 @@
       "meaning": "The account already takes part in this contest."
     },
     {
+      "code": "answer_too_long",
+      "meaning": "The submitted answer is longer than this installation accepts. The message names the limit."
+    },
+    {
       "code": "cannot_act_on_self",
       "meaning": "The operation would lock the caller out of their own account, so it is refused on oneself."
     },
@@ -32,6 +36,10 @@
     {
       "code": "cross_origin",
       "meaning": "The request carried an Origin the server does not serve. Sent for a write that a browser made from another site."
+    },
+    {
+      "code": "deadline_passed",
+      "meaning": "The participant's own deadline has passed, checked against the core database's own clock at the moment the answer was written — independent of whether the contest's status has caught up to it yet."
     },
     {
       "code": "email_taken",
@@ -220,6 +228,10 @@
     {
       "code": "query_too_often",
       "meaning": "This participant is asking faster than the contest allows."
+    },
+    {
+      "code": "question_closed",
+      "meaning": "This question can no longer be answered by this participant: they already answered it correctly, or every attempt is spent."
     },
     {
       "code": "question_not_found",

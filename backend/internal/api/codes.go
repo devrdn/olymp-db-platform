@@ -175,4 +175,13 @@ var (
 		"The contest is not accepting sign-ups: it does not invite them, it is in the wrong state, or the deadline has passed.")
 	codeAddressNotAllowed = httpx.NewCode("address_not_allowed",
 		"The contest restricts participation to certain networks and this request did not come from one. Applies to participants only; staff are never checked against it.")
+
+	// --- Answering a question ------------------------------------------------
+
+	codeAnswerTooLong = httpx.NewCode("answer_too_long",
+		"The submitted answer is longer than this installation accepts. The message names the limit.")
+	codeQuestionClosed = httpx.NewCode("question_closed",
+		"This question can no longer be answered by this participant: they already answered it correctly, or every attempt is spent.")
+	codeDeadlinePassed = httpx.NewCode("deadline_passed",
+		"The participant's own deadline has passed, checked against the core database's own clock at the moment the answer was written — independent of whether the contest's status has caught up to it yet.")
 )

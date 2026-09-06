@@ -9,10 +9,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// makeSubmission inserts a raw submission row. There is no writer to call yet
-// (Task 3's own repository, once the answer path exists) — this is the
-// shape the schema commits to, and what Attempts.ForRegistration must read
-// back correctly.
+// makeSubmission inserts a raw submission row directly, bypassing
+// Submissions.Insert (submissions.go): these tests are about what
+// Attempts.ForRegistration reads back, not about how a row gets written, and
+// a raw insert lets a test state an attempt count and correctness outright
+// rather than replaying Insert's own attempt-numbering rules to get there.
 func makeSubmission(t *testing.T, ctx context.Context, registration, question uuid.UUID, attemptNo int, correct bool) {
 	t.Helper()
 	_, err := storage.QuerierFrom(ctx, testPool).Exec(ctx, `

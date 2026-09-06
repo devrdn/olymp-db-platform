@@ -2,6 +2,8 @@ package conteststest
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
@@ -26,6 +28,7 @@ type Fixture struct {
 	Registrations *Registrations
 	Policies      *Policies
 	Languages     *Languages
+	Submissions   *Submissions
 	Users         *userstest.Repository
 	Audit         *Sink
 	UnitOfWork    *UnitOfWork
@@ -42,6 +45,7 @@ func NewFixture() *Fixture {
 		Registrations: NewRegistrations(),
 		Policies:      NewPolicies(),
 		Languages:     NewLanguages(),
+		Submissions:   NewSubmissions(),
 		Users:         userstest.New(),
 		Audit:         NewSink(),
 		UnitOfWork:    &UnitOfWork{},
@@ -55,6 +59,13 @@ func NewFixture() *Fixture {
 		}
 		return user.Login, user.FullName
 	}
+	// The submission store's own clock defaults to the same fixture.Now a
+	// test already controls for the application clock — the honest default,
+	// since the two only need to differ when a test is specifically
+	// exercising the gap between them (§8's whole reason for asking the core
+	// database's own clock rather than trusting the caller's).
+	f.Submissions.Clock = func() time.Time { return f.Now }
+
 	f.Service = contests.NewService(contests.ServiceConfig{
 		Contests:      f.Contests,
 		Stories:       f.Stories,
@@ -63,10 +74,15 @@ func NewFixture() *Fixture {
 		Registrations: f.Registrations,
 		Policies:      f.Policies,
 		Languages:     f.Languages,
+		Submissions:   f.Submissions,
 		Users:         f.Users,
 		Audit:         audit.New(f.Audit),
 		UnitOfWork:    f.UnitOfWork,
 		Now:           func() time.Time { return f.Now },
+		// Quiet by default: a test exercising submission.go's own defensive
+		// log line (a malformed reference answer) should not spray a fixed
+		// test suite's output with it.
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	return f
 }
