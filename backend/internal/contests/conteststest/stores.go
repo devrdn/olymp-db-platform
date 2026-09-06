@@ -625,6 +625,7 @@ func (r *Attempts) ForRegistration(_ context.Context, registrationID uuid.UUID) 
 //
 // It mirrors what the real repository's one INSERT statement guarantees
 // (postgres.Submissions.Insert): a submission is refused with
+// ErrDeadlinePassed once the clock has reached req.Deadline, or with
 // ErrQuestionClosed once the question is already answered correctly or every
 // attempt is spent, and otherwise takes the next attempt number. It does not
 // reproduce the real repository's concurrency guarantee — a Go map has no
@@ -635,8 +636,9 @@ func (r *Attempts) ForRegistration(_ context.Context, registrationID uuid.UUID) 
 // Submit's own retry loop deterministically, without a second goroutine.
 type Submissions struct {
 	byKey map[submissionKey][]contests.Submission
-	// Clock answers Now(); nil defaults to the real wall clock so a test that
-	// never sets it still gets a moving clock rather than the zero value.
+	// Clock answers what Insert checks req.Deadline against; nil defaults to
+	// the real wall clock so a test that never sets it still gets a moving
+	// clock rather than the zero value.
 	Clock func() time.Time
 	// ConflictsRemaining makes the next this-many Insert calls return
 	// ErrAttemptConflict instead of writing anything, simulating a
@@ -656,17 +658,26 @@ func NewSubmissions() *Submissions {
 	return &Submissions{byKey: map[submissionKey][]contests.Submission{}}
 }
 
-func (r *Submissions) Now(context.Context) (time.Time, error) {
+func (r *Submissions) now() time.Time {
 	if r.Clock != nil {
-		return r.Clock(), nil
+		return r.Clock()
 	}
-	return time.Now().UTC(), nil
+	return time.Now().UTC()
 }
 
 func (r *Submissions) Insert(_ context.Context, req contests.SubmissionRequest) (contests.Submission, error) {
 	if r.ConflictsRemaining > 0 {
 		r.ConflictsRemaining--
 		return contests.Submission{}, contests.ErrAttemptConflict
+	}
+
+	now := r.now()
+	// The deadline, checked here against this call's own clock reading,
+	// takes priority over "closed" — the same order the real statement's
+	// HAVING clause and its own fallback query resolve it in
+	// (postgres.Submissions.Insert).
+	if !now.Before(req.Deadline) {
+		return contests.Submission{}, contests.ErrDeadlinePassed
 	}
 
 	key := submissionKey{req.RegistrationID, req.QuestionID}
@@ -689,7 +700,7 @@ func (r *Submissions) Insert(_ context.Context, req contests.SubmissionRequest) 
 		Value:          req.Value,
 		IsCorrect:      req.IsCorrect,
 		PointsAwarded:  req.PointsAwarded,
-		SubmittedAt:    req.SubmittedAt,
+		SubmittedAt:    now,
 	}
 	r.byKey[key] = append(existing, s)
 	return s, nil

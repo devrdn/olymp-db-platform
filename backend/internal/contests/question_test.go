@@ -120,6 +120,32 @@ func TestAnswerAcceptsAWorkingRegularExpression(t *testing.T) {
 	}
 }
 
+// Finding 6: a reference answer carries no length bound of its own, even
+// though every column it reaches is unbounded text and CLAUDE.md rule 2 puts
+// the bound in the domain. 1001 characters is one more than the bound a
+// submitted answer already carries (maxAnswerRunes, submission.go) — the
+// same figure, since a reference answer is never longer than what it is
+// meant to match.
+func TestAnswerRejectsAnOverlongValue(t *testing.T) {
+	a := contests.Answer{MatchKind: contests.MatchExact, Value: strings.Repeat("a", 1001)}
+
+	if err := a.Validate(); !errors.Is(err, contests.ErrInvalidAnswer) {
+		t.Errorf("Validate() = %v, want contests.ErrInvalidAnswer", err)
+	}
+}
+
+// The same bound applies to a regex pattern, not only to a plain value: an
+// authored pattern is stored the same way and compiled the same way, and
+// nothing about match_kind = regex exempts it from the limit every other
+// reference answer carries.
+func TestAnswerRejectsAnOverlongRegularExpression(t *testing.T) {
+	a := contests.Answer{MatchKind: contests.MatchRegex, Value: strings.Repeat("a", 1001)}
+
+	if err := a.Validate(); !errors.Is(err, contests.ErrInvalidAnswer) {
+		t.Errorf("Validate() = %v, want contests.ErrInvalidAnswer", err)
+	}
+}
+
 func TestQuestionsAreAppendedInOrder(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)

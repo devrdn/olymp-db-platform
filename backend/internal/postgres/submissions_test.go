@@ -12,19 +12,10 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestNowReadsTheCoreDatabasesClock(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		before := time.Now().UTC().Add(-5 * time.Second)
-		got, err := NewSubmissions(testPool).Now(ctx)
-		if err != nil {
-			t.Fatalf("Now() = %v", err)
-		}
-		after := time.Now().UTC().Add(5 * time.Second)
-		if got.Before(before) || got.After(after) {
-			t.Fatalf("Now() = %v, want something close to the wall clock (between %v and %v)", got, before, after)
-		}
-	})
-}
+// farDeadline is a deadline no test below means to trip — every test that is
+// not specifically about the deadline uses it, so an unrelated failure never
+// reads as "the deadline check misfired".
+var farDeadline = time.Now().UTC().Add(24 * time.Hour)
 
 func TestInsertTakesTheNextAttemptNumber(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
@@ -40,7 +31,7 @@ func TestInsertTakesTheNextAttemptNumber(t *testing.T) {
 		repo := NewSubmissions(testPool)
 		first, err := repo.Insert(ctx, contests.SubmissionRequest{
 			RegistrationID: registrationID, QuestionID: q.ID, Value: "wrong",
-			SubmittedAt: time.Now().UTC(),
+			Deadline: farDeadline,
 		})
 		if err != nil {
 			t.Fatalf("first Insert() = %v", err)
@@ -48,10 +39,13 @@ func TestInsertTakesTheNextAttemptNumber(t *testing.T) {
 		if first.AttemptNo != 1 {
 			t.Fatalf("first AttemptNo = %d, want 1", first.AttemptNo)
 		}
+		if first.SubmittedAt.IsZero() {
+			t.Fatal("SubmittedAt is zero, want the database's own now()")
+		}
 
 		second, err := repo.Insert(ctx, contests.SubmissionRequest{
 			RegistrationID: registrationID, QuestionID: q.ID, Value: "still wrong",
-			SubmittedAt: time.Now().UTC(),
+			Deadline: farDeadline,
 		})
 		if err != nil {
 			t.Fatalf("second Insert() = %v", err)
@@ -76,14 +70,14 @@ func TestInsertRefusesOnceAlreadyCorrect(t *testing.T) {
 		repo := NewSubmissions(testPool)
 		if _, err := repo.Insert(ctx, contests.SubmissionRequest{
 			RegistrationID: registrationID, QuestionID: q.ID, Value: "correct", IsCorrect: true, PointsAwarded: 10,
-			SubmittedAt: time.Now().UTC(),
+			Deadline: farDeadline,
 		}); err != nil {
 			t.Fatalf("first Insert() = %v", err)
 		}
 
 		_, err = repo.Insert(ctx, contests.SubmissionRequest{
 			RegistrationID: registrationID, QuestionID: q.ID, Value: "correct again",
-			SubmittedAt: time.Now().UTC(),
+			Deadline: farDeadline,
 		})
 		if !errors.Is(err, contests.ErrQuestionClosed) {
 			t.Fatalf("second Insert() error = %v, want ErrQuestionClosed", err)
@@ -107,7 +101,7 @@ func TestInsertRefusesOnceMaxAttemptsIsSpent(t *testing.T) {
 		for i := 0; i < max; i++ {
 			if _, err := repo.Insert(ctx, contests.SubmissionRequest{
 				RegistrationID: registrationID, QuestionID: q.ID, Value: "wrong",
-				SubmittedAt: time.Now().UTC(), MaxAttempts: &max,
+				Deadline: farDeadline, MaxAttempts: &max,
 			}); err != nil {
 				t.Fatalf("Insert() attempt %d = %v", i+1, err)
 			}
@@ -115,10 +109,81 @@ func TestInsertRefusesOnceMaxAttemptsIsSpent(t *testing.T) {
 
 		_, err = repo.Insert(ctx, contests.SubmissionRequest{
 			RegistrationID: registrationID, QuestionID: q.ID, Value: "one more",
-			SubmittedAt: time.Now().UTC(), MaxAttempts: &max,
+			Deadline: farDeadline, MaxAttempts: &max,
 		})
 		if !errors.Is(err, contests.ErrQuestionClosed) {
 			t.Fatalf("error = %v, want ErrQuestionClosed", err)
+		}
+	})
+}
+
+// §8, finding 4, finding 5: the deadline is checked against the database's
+// own clock inside Insert's own statement, not a value read earlier by the
+// caller — proven here by giving Insert a deadline that has already passed
+// and confirming the row is refused rather than written.
+func TestInsertRefusesAfterTheDeadline(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-submit-4")
+		student := makeUser(t, ctx, "student-submit-4")
+		contestID := makeContest(t, ctx, author.ID)
+		registrationID := makeRegistration(t, ctx, contestID, student.ID)
+		q, err := NewQuestions(testPool).Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
+		if err != nil {
+			t.Fatalf("Create() = %v", err)
+		}
+
+		repo := NewSubmissions(testPool)
+		_, err = repo.Insert(ctx, contests.SubmissionRequest{
+			RegistrationID: registrationID, QuestionID: q.ID, Value: "too late",
+			Deadline: time.Now().UTC().Add(-time.Hour),
+		})
+		if !errors.Is(err, contests.ErrDeadlinePassed) {
+			t.Fatalf("error = %v, want ErrDeadlinePassed", err)
+		}
+
+		var stored int
+		if err := testPool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM submissions WHERE registration_id = $1 AND question_id = $2`,
+			registrationID, q.ID).Scan(&stored); err != nil {
+			t.Fatalf("count stored submissions: %v", err)
+		}
+		if stored != 0 {
+			t.Fatalf("stored = %d, want 0 — a submission past its deadline must not be written", stored)
+		}
+	})
+}
+
+// When both a passed deadline and a closed question would refuse the write,
+// the deadline is what the caller learns about — the same priority this
+// codebase gave the two checks before they were folded into Insert's own
+// statement (submission.go's own doc).
+func TestInsertPrefersDeadlinePassedOverQuestionClosed(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-submit-5")
+		student := makeUser(t, ctx, "student-submit-5")
+		contestID := makeContest(t, ctx, author.ID)
+		registrationID := makeRegistration(t, ctx, contestID, student.ID)
+		q, err := NewQuestions(testPool).Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
+		if err != nil {
+			t.Fatalf("Create() = %v", err)
+		}
+
+		repo := NewSubmissions(testPool)
+		if _, err := repo.Insert(ctx, contests.SubmissionRequest{
+			RegistrationID: registrationID, QuestionID: q.ID, Value: "correct", IsCorrect: true, PointsAwarded: 10,
+			Deadline: farDeadline,
+		}); err != nil {
+			t.Fatalf("first Insert() = %v", err)
+		}
+
+		// The question is already closed (answered correctly above) and the
+		// deadline given here has already passed too.
+		_, err = repo.Insert(ctx, contests.SubmissionRequest{
+			RegistrationID: registrationID, QuestionID: q.ID, Value: "too late as well",
+			Deadline: time.Now().UTC().Add(-time.Hour),
+		})
+		if !errors.Is(err, contests.ErrDeadlinePassed) {
+			t.Fatalf("error = %v, want ErrDeadlinePassed (priority over an already-closed question)", err)
 		}
 	})
 }
@@ -194,7 +259,7 @@ func TestInsertConcurrentlyNeverExceedsMaxAttemptsOrDuplicatesAnAttemptNumber(t 
 			max := maxAttempts
 			s, err := repo.Insert(context.Background(), contests.SubmissionRequest{
 				RegistrationID: registrationID, QuestionID: question.ID,
-				Value: "wrong", SubmittedAt: time.Now().UTC(), MaxAttempts: &max,
+				Value: "wrong", Deadline: farDeadline, MaxAttempts: &max,
 			})
 			results <- outcome{s, err}
 		}(i)

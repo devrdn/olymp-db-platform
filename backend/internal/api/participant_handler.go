@@ -329,6 +329,12 @@ func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err er
 			"This question is already answered correctly, or every attempt has been used")
 	case errors.Is(err, contests.ErrDeadlinePassed):
 		httpx.Error(w, r, http.StatusConflict, codeDeadlinePassed, "The deadline for this contest has passed")
+	case errors.Is(err, contests.ErrTooManyAttemptConflicts):
+		// Finding 1: running out of retries is a fact about this exact
+		// moment, not an outage — the same 409 family as codeQuestionClosed
+		// and codeStatusChanged, and the same honest instruction: try again.
+		httpx.Error(w, r, http.StatusConflict, codeAttemptConflict,
+			"Too many submissions to this question arrived at once; try again")
 	case errors.Is(err, queryproxy.ErrUnavailable):
 		h.log.ErrorContext(r.Context(), "could not resolve participant access", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")

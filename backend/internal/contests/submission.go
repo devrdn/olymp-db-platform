@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"regexp"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ var (
 	ErrQuestionClosed = errors.New("this question is closed")
 	// ErrDeadlinePassed is a submission that arrived after this
 	// participant's own deadline, checked against the core database's own
-	// clock inside the same transaction as the write (§8) — a second,
+	// clock inside the same statement as the write (§8) — a second,
 	// authoritative check, not a repeat of whatever the caller already
 	// confirmed on the way in (queryproxy.Service.Access): the two happen at
 	// different moments, and only this one gets to be the last word on
@@ -37,8 +38,19 @@ var (
 	// them land, and this is what the loser gets back. It is not a
 	// participant-facing outcome — Submit retries on it internally (see
 	// maxAttemptRetries) — so it carries no mapping in any HTTP handler and a
-	// caller of Submit should never see it returned.
+	// caller of Submit should never see it returned bare (see
+	// ErrTooManyAttemptConflicts for what a caller does see once retrying
+	// stops helping).
 	ErrAttemptConflict = errors.New("lost the race for this attempt number")
+	// ErrTooManyAttemptConflicts is what a caller of Submit actually sees
+	// once every retry has lost the same race (finding 1): unlike
+	// ErrAttemptConflict, this one is participant-facing and carries a
+	// mapping in the HTTP layer, because running out of retries is not this
+	// installation failing — it is a specific, honest fact about the
+	// request ("too many people answered this exact question at this exact
+	// moment; try again"), and the participant can act on it by resubmitting
+	// rather than reading an internal error.
+	ErrTooManyAttemptConflicts = errors.New("too many concurrent submissions to this question; try again")
 )
 
 // maxAnswerRunes bounds a submitted answer.
@@ -54,19 +66,34 @@ const maxAnswerRunes = 1000
 
 // maxAttemptRetries bounds how many times Submit retries after losing the
 // attempt-number race (ErrAttemptConflict): two truly simultaneous
-// submissions to the very same question by the very same registration — the
-// only thing that ever produces this conflict, since every other submission
-// this registration makes targets a different question or arrives after the
-// first has already committed. No human doubles-clicks fast enough to need
-// more than a couple of retries; the bound exists so a bug that made every
-// retry conflict again fails loudly instead of spinning forever.
+// submissions to the very same question by the very same registration —
+// ordinarily the only thing that ever produces this conflict, since every
+// other submission this registration makes targets a different question or
+// arrives after the first has already committed. It also bounds what
+// genuinely simultaneous submissions cost: concurrency here is strictly
+// serialised by the table's own unique constraint, one winner per round, so
+// the k-th of k truly simultaneous answers needs up to k tries — beyond this
+// bound, Submit gives up rather than spinning (and rather than costing the
+// database one more blocked transaction on the very tuple everyone is
+// contending for) and returns ErrTooManyAttemptConflicts instead.
 const maxAttemptRetries = 5
 
-// defaultSubmissionGrace is the network-latency allowance Submit adds to a
-// deadline unless ServiceConfig.Grace says otherwise, matching queryproxy's
-// own defaultGrace: the two paths add the same margin on top of the one
-// contests.Deadline formula (§8), never a grace of their own.
-const defaultSubmissionGrace = 5 * time.Second
+// attemptBackoffBase is the smallest delay Submit waits before retrying a
+// lost attempt-number race, doubled each further retry and randomised by
+// half (see attemptBackoff): small enough that a genuine one-off conflict is
+// barely noticeable, and large enough that a burst of truly simultaneous
+// submitters spreads its retries across time instead of hammering the same
+// row again in lockstep on every single round (finding 1).
+const attemptBackoffBase = 4 * time.Millisecond
+
+// attemptBackoff is how long Submit waits before retrying the attempt-number
+// race for the (attempt+1)-th time: an exponentially growing base, jittered
+// by up to half so that several submitters who lost the same round do not
+// all wake up and collide again at the same instant.
+func attemptBackoff(attempt int) time.Duration {
+	base := attemptBackoffBase << uint(attempt) // #nosec G115 -- attempt is bounded by maxAttemptRetries
+	return base/2 + time.Duration(rand.Int64N(int64(base/2)+1))
+}
 
 // Submission is one participant's answer, as recorded.
 type Submission struct {
@@ -93,32 +120,42 @@ type SubmissionRequest struct {
 	Value          string
 	IsCorrect      bool
 	PointsAwarded  int
-	SubmittedAt    time.Time
+	// Deadline is this participant's own deadline, grace already added
+	// (contests.Deadline plus Service.grace, summed once by Submit before
+	// the retry loop starts) — the instant at or after which Insert must
+	// refuse the write regardless of attempts remaining. Checked by the
+	// implementation against its own clock at the moment it actually writes
+	// the row, not against a value Submit read earlier (finding 4, finding
+	// 5): the guarantee section 8 asks for is that the clock, the deadline
+	// and the row that depends on them cannot disagree, and folding the
+	// check into the same operation that writes submitted_at is what makes
+	// that true by construction rather than by two statements agreeing.
+	Deadline time.Time
 	// MaxAttempts is nil for a question with no cap.
 	MaxAttempts *int
 }
 
 // SubmissionRepository records participants' answers.
 //
-// Deliberately two operations and no more: a count-then-check-then-insert
+// Deliberately one operation and no more: a count-then-check-then-insert
 // repository is exactly the read-then-write shape the race (finding 3) asks
-// this not to be. Everything Submit needs to decide and write an answer
-// happens inside Insert's own statement instead.
+// this not to be, and a separate clock read ahead of the write is exactly the
+// extra round trip and the extra staleness (finding 4, finding 5) folding the
+// deadline into Insert removes. Everything Submit needs to decide and write
+// an answer happens inside Insert's own statement instead.
 type SubmissionRepository interface {
-	// Now returns the core database's own clock (§8: "по часам core-БД").
-	// Submit compares this, not the application server's time.Now, against
-	// the participant's deadline — the guarantee that a late answer is
-	// refused must not depend on the two processes' clocks agreeing, only on
-	// the one clock the write itself lands by.
-	Now(ctx context.Context) (time.Time, error)
 	// Insert writes one submission row, computing its own attempt number from
-	// this registration/question's own history in the same statement rather
-	// than reading a count first (finding 3): if the rows already committed
-	// for this registration and question show it answered correctly already,
-	// or every attempt already spent against req.MaxAttempts, nothing is
-	// inserted and ErrQuestionClosed is returned. If two calls truly
-	// overlap — both reading a snapshot before either has committed — and
-	// compute the same next attempt number, the table's own
+	// this registration/question's own history and checking req.Deadline
+	// against its own clock, both in the same statement rather than reading
+	// either first (finding 3, finding 4, finding 5): if the rows already
+	// committed for this registration and question show it answered
+	// correctly already, or every attempt already spent against
+	// req.MaxAttempts, or the clock has reached req.Deadline, nothing is
+	// inserted and ErrQuestionClosed or ErrDeadlinePassed is returned
+	// (deadline takes priority when both apply, matching the order this
+	// codebase checked them in before they were folded into one statement).
+	// If two calls truly overlap — both reading a snapshot before either has
+	// committed — and compute the same next attempt number, the table's own
 	// UNIQUE (registration_id, question_id, attempt_no) lets only one land;
 	// the other gets ErrAttemptConflict and Submit retries it from a fresh
 	// read (see Service.Submit) rather than this method ever reading the
@@ -165,9 +202,21 @@ type SubmitOutcome struct {
 	Closed            bool
 }
 
-// Submit records one participant's answer to one question, grades it and
-// updates their score, all inside one transaction with the deadline check
-// (§8).
+// Submit records one participant's answer to one question, grades it and, if
+// it is worth anything, updates their score.
+//
+// Grading happens once, before the write is ever attempted, and is never
+// repeated across a retry: it is pure CPU over q.Answers, decided entirely by
+// q and cmd.Value, neither of which a retry changes, so recomputing it on
+// every one of maxAttemptRetries tries would recompile every reference
+// pattern again for a race that has nothing to do with grading (finding 5).
+// Whether the write itself needs a transaction is decided by what grading
+// found: a wrong answer, or a correct one worth zero points, is one atomic
+// INSERT and nothing else — the deadline check, the attempt number and
+// submitted_at are all one statement (§8, finding 5) — while a correct
+// answer worth something opens the one transaction that must cover both the
+// insert and the score update, so a crash between them can never leave one
+// without the other.
 func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome, error) {
 	if utf8.RuneCountInString(cmd.Value) > maxAnswerRunes {
 		return SubmitOutcome{}, fmt.Errorf("%w: at most %d characters", ErrAnswerTooLong, maxAnswerRunes)
@@ -207,20 +256,30 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 	if !ok {
 		return SubmitOutcome{}, ErrDeadlinePassed
 	}
+	// Grace added once, here, rather than inside every retry: it is a fixed
+	// installation setting, not something that could change between tries.
+	deadlineWithGrace := deadline.Add(s.grace)
 
-	var (
-		result  Submission
-		correct bool
-	)
+	correct := s.grade(ctx, q, cmd.Value)
+	points := 0
+	if correct {
+		points = q.Points
+	}
+
+	var result Submission
 	for attempt := 0; ; attempt++ {
-		result, correct, err = s.submitOnce(ctx, participant.ID, q, cmd.Value, deadline)
+		result, err = s.submitOnce(ctx, participant.ID, q, cmd.Value, correct, points, deadlineWithGrace)
 		if !errors.Is(err, ErrAttemptConflict) {
 			break
 		}
 		if attempt >= maxAttemptRetries {
-			return SubmitOutcome{}, fmt.Errorf(
-				"record the answer: lost the attempt race %d times in a row: %w", maxAttemptRetries, err)
+			return SubmitOutcome{}, fmt.Errorf("%w: lost the attempt race %d times in a row: %w",
+				ErrTooManyAttemptConflicts, maxAttemptRetries+1, err)
 		}
+		// A refused attempt still cost a round trip; waiting a little before
+		// the next one keeps a burst of simultaneous losers from retrying in
+		// lockstep and colliding again immediately (finding 1).
+		s.sleep(attemptBackoff(attempt))
 	}
 	if err != nil {
 		return SubmitOutcome{}, err
@@ -234,68 +293,45 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 	}, nil
 }
 
-// submitOnce is one attempt at writing the answer: the core database's own
-// clock, the deadline check against it, grading, the insert and — only when
-// this attempt is newly correct — the score update, all in the one
-// transaction §8 requires. Called more than once only when Insert reports
-// ErrAttemptConflict (finding 3), in which case nothing here has taken
-// effect (the transaction never committed) and Submit calls it again.
-func (s *Service) submitOnce(ctx context.Context, registrationID uuid.UUID, q Question, value string, deadline time.Time) (Submission, bool, error) {
-	var (
-		result  Submission
-		correct bool
-	)
+// submitOnce writes one attempt: the deadline check, the attempt-number
+// arithmetic and the insert are Insert's own single statement (§8, finding
+// 5) — called more than once only when Insert reports ErrAttemptConflict
+// (finding 3), in which case nothing here has taken effect and Submit calls
+// it again.
+//
+// A unit of work wraps the write only when points > 0: a correct answer that
+// earns something must not be able to record without also scoring, or the
+// reverse, so the insert and AddScore share one transaction. A wrong answer,
+// or a correct one worth zero points, needs no transaction at all — the
+// insert is a single statement and is atomic on its own — and opening one
+// anyway would hold a pooled connection for a second round trip (COMMIT)
+// that changes nothing (CLAUDE.md rule 6: a write needs a reason, and so does
+// a transaction).
+func (s *Service) submitOnce(ctx context.Context, registrationID uuid.UUID, q Question, value string, correct bool, points int, deadline time.Time) (Submission, error) {
+	req := SubmissionRequest{
+		RegistrationID: registrationID,
+		QuestionID:     q.ID,
+		Value:          value,
+		IsCorrect:      correct,
+		PointsAwarded:  points,
+		Deadline:       deadline,
+		MaxAttempts:    q.MaxAttempts,
+	}
+
+	if points <= 0 {
+		return s.submissions.Insert(ctx, req)
+	}
+
+	var result Submission
 	err := s.uow.Do(ctx, func(ctx context.Context) error {
-		now, err := s.submissions.Now(ctx)
-		if err != nil {
-			return fmt.Errorf("read the core database's clock: %w", err)
-		}
-		// The core database's own clock against the one deadline formula in
-		// this codebase (§8) — checked here, inside the write's own
-		// transaction, so the guarantee does not depend on the scheduler
-		// having moved the contest to "finished", or on the application
-		// server's clock agreeing with the database's.
-		if !now.Before(deadline.Add(s.grace)) {
-			return ErrDeadlinePassed
-		}
-
-		correct = s.grade(ctx, q, value)
-		// Scoring is currently just the question's own nominal value on a
-		// correct answer, nothing on a wrong one — §6.1.1's planned penalty
-		// (a percentage taken per wrong attempt, floored at zero) is
-		// deliberately not built here; this is the one place it plugs in,
-		// against q and the attempt just graded, still inside this same
-		// transaction and still written once to points_awarded.
-		points := 0
-		if correct {
-			points = q.Points
-		}
-
-		result, err = s.submissions.Insert(ctx, SubmissionRequest{
-			RegistrationID: registrationID,
-			QuestionID:     q.ID,
-			Value:          value,
-			IsCorrect:      correct,
-			PointsAwarded:  points,
-			SubmittedAt:    now,
-			MaxAttempts:    q.MaxAttempts,
-		})
+		var err error
+		result, err = s.submissions.Insert(ctx, req)
 		if err != nil {
 			return err
 		}
-
-		// Only when this attempt actually earns something: a middleware
-		// write needs a reason (CLAUDE.md rule 6), and the same discipline
-		// applies to any write on this hot path — an incorrect attempt, the
-		// common case, must not pay for a score update that would add zero.
-		if points > 0 {
-			if err := s.registrations.AddScore(ctx, registrationID, points); err != nil {
-				return err
-			}
-		}
-		return nil
+		return s.registrations.AddScore(ctx, registrationID, points)
 	})
-	return result, correct, err
+	return result, err
 }
 
 // matchAnswer reports whether value satisfies one reference answer, by that
@@ -341,7 +377,8 @@ func matchAnswer(a Answer, value string) (bool, error) {
 // the case that matters, so there is none: a question carries a handful of
 // short, staff-written reference answers, and recompiling all of them is
 // microseconds next to the several database round trips one submission
-// already pays.
+// already pays — and, since finding 5, is done once per Submit rather than
+// once per retry.
 //
 // A pattern that still fails to compile here — defence in depth, not an
 // expected path, since Validate already rejected this at authoring time — is
