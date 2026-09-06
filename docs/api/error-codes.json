@@ -242,6 +242,10 @@
       "meaning": "No such question in this contest. Also the answer when the question belongs to another contest: that it exists elsewhere is not the caller's business."
     },
     {
+      "code": "question_not_open",
+      "meaning": "The contest answers questions in sequence and a question ordered before this one is not closed yet — not answered correctly, and not out of attempts. Answer the earlier one first."
+    },
+    {
       "code": "reason_required",
       "meaning": "Blocking or deleting an account has to say why. The reason is stored with the account and read by whoever asks about it later."
     },

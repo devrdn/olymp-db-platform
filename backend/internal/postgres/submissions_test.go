@@ -69,7 +69,7 @@ func TestInsertRefusesOnceAlreadyCorrect(t *testing.T) {
 
 		repo := NewSubmissions(testPool)
 		if _, err := repo.Insert(ctx, contests.SubmissionRequest{
-			RegistrationID: registrationID, QuestionID: q.ID, Value: "correct", IsCorrect: true, PointsAwarded: 10,
+			RegistrationID: registrationID, QuestionID: q.ID, Value: "correct", IsCorrect: true, Points: 10,
 			Deadline: farDeadline,
 		}); err != nil {
 			t.Fatalf("first Insert() = %v", err)
@@ -170,7 +170,7 @@ func TestInsertPrefersDeadlinePassedOverQuestionClosed(t *testing.T) {
 
 		repo := NewSubmissions(testPool)
 		if _, err := repo.Insert(ctx, contests.SubmissionRequest{
-			RegistrationID: registrationID, QuestionID: q.ID, Value: "correct", IsCorrect: true, PointsAwarded: 10,
+			RegistrationID: registrationID, QuestionID: q.ID, Value: "correct", IsCorrect: true, Points: 10,
 			Deadline: farDeadline,
 		}); err != nil {
 			t.Fatalf("first Insert() = %v", err)
@@ -184,6 +184,71 @@ func TestInsertPrefersDeadlinePassedOverQuestionClosed(t *testing.T) {
 		})
 		if !errors.Is(err, contests.ErrDeadlinePassed) {
 			t.Fatalf("error = %v, want ErrDeadlinePassed (priority over an already-closed question)", err)
+		}
+	})
+}
+
+// §6.1.1: points_awarded is computed inside Insert's own statement from the
+// same already-committed attempt count the attempt number comes from — two
+// wrong attempts at 50% of a 10-point question leave 10 - 2*5 = 0 for a
+// correct third try, floored at zero rather than going negative.
+func TestInsertAppliesThePenaltyFromTheAlreadyCommittedAttemptCount(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-submit-6")
+		student := makeUser(t, ctx, "student-submit-6")
+		contestID := makeContest(t, ctx, author.ID)
+		registrationID := makeRegistration(t, ctx, contestID, student.ID)
+		q, err := NewQuestions(testPool).Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
+		if err != nil {
+			t.Fatalf("Create() = %v", err)
+		}
+
+		repo := NewSubmissions(testPool)
+		for i := 0; i < 2; i++ {
+			if _, err := repo.Insert(ctx, contests.SubmissionRequest{
+				RegistrationID: registrationID, QuestionID: q.ID, Value: "wrong",
+				Points: 10, PenaltyPerAttempt: 5, Deadline: farDeadline,
+			}); err != nil {
+				t.Fatalf("wrong attempt %d: Insert() = %v", i+1, err)
+			}
+		}
+
+		correct, err := repo.Insert(ctx, contests.SubmissionRequest{
+			RegistrationID: registrationID, QuestionID: q.ID, Value: "correct", IsCorrect: true,
+			Points: 10, PenaltyPerAttempt: 5, Deadline: farDeadline,
+		})
+		if err != nil {
+			t.Fatalf("correct attempt: Insert() = %v", err)
+		}
+		if correct.PointsAwarded != 0 {
+			t.Fatalf("PointsAwarded = %d, want 0 (10 - 2*5, floored at zero)", correct.PointsAwarded)
+		}
+	})
+}
+
+// A wrong attempt always scores zero, whatever Points and PenaltyPerAttempt
+// say — the CASE in Insert's own statement takes the ELSE branch outright.
+func TestInsertNeverAwardsPointsForAWrongAnswer(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-submit-7")
+		student := makeUser(t, ctx, "student-submit-7")
+		contestID := makeContest(t, ctx, author.ID)
+		registrationID := makeRegistration(t, ctx, contestID, student.ID)
+		q, err := NewQuestions(testPool).Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
+		if err != nil {
+			t.Fatalf("Create() = %v", err)
+		}
+
+		repo := NewSubmissions(testPool)
+		wrong, err := repo.Insert(ctx, contests.SubmissionRequest{
+			RegistrationID: registrationID, QuestionID: q.ID, Value: "wrong",
+			Points: 10, PenaltyPerAttempt: 0, Deadline: farDeadline,
+		})
+		if err != nil {
+			t.Fatalf("Insert() = %v", err)
+		}
+		if wrong.PointsAwarded != 0 {
+			t.Fatalf("PointsAwarded = %d, want 0 for a wrong answer", wrong.PointsAwarded)
 		}
 	})
 }

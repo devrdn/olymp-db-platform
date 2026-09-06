@@ -699,11 +699,79 @@ func (r *Submissions) Insert(_ context.Context, req contests.SubmissionRequest) 
 		AttemptNo:      len(existing) + 1,
 		Value:          req.Value,
 		IsCorrect:      req.IsCorrect,
-		PointsAwarded:  req.PointsAwarded,
-		SubmittedAt:    now,
+		// Mirrors the real statement's own computation (§6.1.1,
+		// postgres.Submissions.Insert): the question's face value minus the
+		// per-attempt penalty times however many attempts are already
+		// committed (len(existing), the same count used for AttemptNo above),
+		// floored at zero, and only when this attempt is itself correct.
+		PointsAwarded: pointsAwarded(req, len(existing)),
+		SubmittedAt:   now,
 	}
 	r.byKey[key] = append(existing, s)
 	return s, nil
+}
+
+// pointsAwarded computes what one attempt earns, the same way the real
+// statement does (§6.1.1): nothing for a wrong answer, and for a correct one
+// the face value minus the penalty already run up by priorAttempts, never
+// below zero.
+func pointsAwarded(req contests.SubmissionRequest, priorAttempts int) int {
+	if !req.IsCorrect {
+		return 0
+	}
+	awarded := req.Points - priorAttempts*req.PenaltyPerAttempt
+	if awarded < 0 {
+		awarded = 0
+	}
+	return awarded
+}
+
+// SequentialProgress is an in-memory contests.SequentialGate, derived from
+// the same two stores Submit itself consults in production — which questions
+// exist and in what order, and what a registration has already submitted to
+// each — rather than a store of its own a test could forget to keep in sync
+// with what Submit actually wrote.
+type SequentialProgress struct {
+	questions   *Questions
+	submissions *Submissions
+}
+
+var _ contests.SequentialGate = (*SequentialProgress)(nil)
+
+// NewSequentialProgress derives sequential-progression state from the given
+// question and submission stores.
+func NewSequentialProgress(questions *Questions, submissions *Submissions) *SequentialProgress {
+	return &SequentialProgress{questions: questions, submissions: submissions}
+}
+
+// Open mirrors postgres.Sequence.Open: every question of contestID ordered
+// strictly before ord must be closed — answered correctly, or every attempt
+// spent — for registrationID.
+func (g *SequentialProgress) Open(ctx context.Context, contestID, registrationID uuid.UUID, ord int) (bool, error) {
+	all, err := g.questions.List(ctx, contestID)
+	if err != nil {
+		return false, err
+	}
+	for _, q := range all {
+		if q.Ord >= ord {
+			continue
+		}
+		submissions := g.submissions.All(registrationID, q.ID)
+		closed := false
+		for _, s := range submissions {
+			if s.IsCorrect {
+				closed = true
+				break
+			}
+		}
+		if !closed && q.MaxAttempts != nil && len(submissions) >= *q.MaxAttempts {
+			closed = true
+		}
+		if !closed {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // All lists every submission stored for this registration and question, in

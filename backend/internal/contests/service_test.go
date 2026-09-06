@@ -307,6 +307,8 @@ func TestAContestCanBeSwitchedBackToAFixedWindow(t *testing.T) {
 		Status:       contests.StatusDraft,
 		Enrollment:   contests.EnrollmentInviteOnly,
 		QuestionMode: contests.QuestionModeMulti,
+		Progression:  contests.ProgressionFree,
+		Scoring:      contests.ScoringPoints,
 		Timing:       contests.TimingIndividual,
 		DurationMin:  &minutes,
 	})

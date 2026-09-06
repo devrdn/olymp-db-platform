@@ -48,6 +48,39 @@ const (
 	QuestionModeSingle = "single"
 )
 
+// Progression models, see docs/ARCHITECTURE.md §6.1.1. Only meaningful when
+// QuestionMode is QuestionModeMulti — a single-question contest has no
+// "next" question for either one to say anything about.
+const (
+	// ProgressionFree lets a participant answer any still-open question in
+	// any order — today's behaviour, and the default.
+	ProgressionFree = "free"
+	// ProgressionSequential opens the next question only once the previous
+	// one is closed: answered correctly, or every attempt spent. The second
+	// condition is the one that matters — opening only on a correct answer
+	// would trap a participant who is stuck for the rest of the contest,
+	// clock still running. Enforced by Service.Submit, never by the
+	// interface alone.
+	ProgressionSequential = "sequential"
+)
+
+// Scoring models, see docs/ARCHITECTURE.md §6.1.1. Decides how a result is
+// derived from submissions, never what is written to them: every submission
+// is graded and scored identically in both modes, so switching between them
+// mid-contest cannot destroy data.
+const (
+	// ScoringPoints sums points_awarded across a registration's submissions —
+	// today's behaviour, and the default.
+	ScoringPoints = "points"
+	// ScoringWinner has only a winner: whoever first answered the contest's
+	// final question correctly. The per-attempt penalty (questions.penalty_pct)
+	// is defined in points and stops meaning anything once points stop being
+	// the result, so Service.Submit skips it in this mode — not because the
+	// configured percentage is forbidden here, but because a contest's
+	// scoring mode may change and the setting must survive that.
+	ScoringWinner = "winner"
+)
+
 // Timing models, see docs/ARCHITECTURE.md §8.
 const (
 	// TimingFixed gives everybody the same window.
@@ -89,7 +122,13 @@ type Contest struct {
 	Enrollment string
 	// QuestionMode decides whether the contest asks one question or several.
 	QuestionMode string
-	Timing       string
+	// Progression decides the order questions may be answered in (see
+	// ProgressionFree, ProgressionSequential).
+	Progression string
+	// Scoring decides how a result is derived from submissions (see
+	// ScoringPoints, ScoringWinner).
+	Scoring string
+	Timing  string
 	// DurationMin is the per-participant session length, set only for
 	// TimingIndividual.
 	DurationMin *int
@@ -253,6 +292,12 @@ func (c Contest) Validate() error {
 	if !slices.Contains([]string{QuestionModeMulti, QuestionModeSingle}, c.QuestionMode) {
 		return fmt.Errorf("%w: unknown question mode %q", ErrInvalidContest, c.QuestionMode)
 	}
+	if !slices.Contains([]string{ProgressionFree, ProgressionSequential}, c.Progression) {
+		return fmt.Errorf("%w: unknown progression %q", ErrInvalidContest, c.Progression)
+	}
+	if !slices.Contains([]string{ScoringPoints, ScoringWinner}, c.Scoring) {
+		return fmt.Errorf("%w: unknown scoring mode %q", ErrInvalidContest, c.Scoring)
+	}
 
 	switch c.Timing {
 	case TimingFixed:
@@ -396,6 +441,8 @@ func (c Contest) auditFields() map[string]any {
 	return map[string]any{
 		"enrollment":               c.Enrollment,
 		"question_mode":            c.QuestionMode,
+		"progression":              c.Progression,
+		"scoring":                  c.Scoring,
 		"timing":                   c.Timing,
 		"duration_min":             c.DurationMin,
 		"starts_at":                c.StartsAt,

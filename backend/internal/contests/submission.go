@@ -51,6 +51,15 @@ var (
 	// moment; try again"), and the participant can act on it by resubmitting
 	// rather than reading an internal error.
 	ErrTooManyAttemptConflicts = errors.New("too many concurrent submissions to this question; try again")
+	// ErrQuestionNotOpen is a question this registration may not answer yet:
+	// the contest's progression is sequential (§6.1.1) and a question ordered
+	// before this one is not closed — not answered correctly, and not out of
+	// attempts either. Distinct from ErrQuestionClosed, which is the opposite
+	// end of a question's life (nothing more to submit); this one names a
+	// question that was never reachable in the first place. The server
+	// checks this, not the interface: hiding an unopened question in the UI
+	// is not what stops a direct request from answering it out of order.
+	ErrQuestionNotOpen = errors.New("this question has not opened yet")
 )
 
 // maxAnswerRunes bounds a submitted answer.
@@ -119,7 +128,21 @@ type SubmissionRequest struct {
 	QuestionID     uuid.UUID
 	Value          string
 	IsCorrect      bool
-	PointsAwarded  int
+	// Points is the question's own face value — what a correct answer is
+	// worth with no wrong attempts behind it. Not what gets written to
+	// points_awarded: Insert computes the actual amount itself (Points minus
+	// PenaltyPerAttempt times however many attempts are already committed,
+	// floored at zero, §6.1.1), atomically with the same count it uses to
+	// assign the attempt number, so the two can never disagree about how
+	// many attempts came before this one.
+	Points int
+	// PenaltyPerAttempt is how many points each already-committed wrong
+	// attempt costs against Points — precomputed once by Service.Submit from
+	// the question's own penalty_pct (zero when the contest ignores it, see
+	// Contest.Scoring) — never a percentage carried into the statement for
+	// Insert to multiply out itself, since the multiplication has nothing to
+	// do with the race the statement exists to close.
+	PenaltyPerAttempt int
 	// Deadline is this participant's own deadline, grace already added
 	// (contests.Deadline plus Service.grace, summed once by Submit before
 	// the retry loop starts) — the instant at or after which Insert must
@@ -159,7 +182,12 @@ type SubmissionRepository interface {
 	// UNIQUE (registration_id, question_id, attempt_no) lets only one land;
 	// the other gets ErrAttemptConflict and Submit retries it from a fresh
 	// read (see Service.Submit) rather than this method ever reading the
-	// count and then writing it.
+	// count and then writing it. The same already-committed count also
+	// decides points_awarded when req.IsCorrect (§6.1.1): req.Points minus
+	// req.PenaltyPerAttempt times the number of attempts already committed,
+	// floored at zero — computed from the identical snapshot the attempt
+	// number comes from, so a penalty can never be based on a count that
+	// disagrees with the attempt number this same row is given.
 	Insert(ctx context.Context, req SubmissionRequest) (Submission, error)
 }
 
@@ -210,13 +238,12 @@ type SubmitOutcome struct {
 // q and cmd.Value, neither of which a retry changes, so recomputing it on
 // every one of maxAttemptRetries tries would recompile every reference
 // pattern again for a race that has nothing to do with grading (finding 5).
-// Whether the write itself needs a transaction is decided by what grading
-// found: a wrong answer, or a correct one worth zero points, is one atomic
-// INSERT and nothing else — the deadline check, the attempt number and
-// submitted_at are all one statement (§8, finding 5) — while a correct
-// answer worth something opens the one transaction that must cover both the
-// insert and the score update, so a crash between them can never leave one
-// without the other.
+// What a correct answer is actually worth is not decided here, though: the
+// penalty (§6.1.1) depends on how many wrong attempts already landed, and
+// that count is only known once Insert reads its own committed rows, so
+// Submit hands Insert the question's face value and its per-attempt penalty
+// and lets it work out the final number atomically, the same way it already
+// works out the attempt number.
 func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome, error) {
 	if utf8.RuneCountInString(cmd.Value) > maxAnswerRunes {
 		return SubmitOutcome{}, fmt.Errorf("%w: at most %d characters", ErrAnswerTooLong, maxAnswerRunes)
@@ -240,6 +267,21 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 	// "not answerable" are different decisions (§6.1), and this path only
 	// ever makes the second one.
 
+	// §6.1.1: in a sequential contest, this question may only be answered
+	// once every question ordered before it is closed. Consulted only when
+	// progression is actually sequential and the mode is multi (sequential
+	// means nothing at single — the one question has nothing before it) — a
+	// contest that never turns this on pays no extra round trip for it.
+	if cmd.Contest.Progression == ProgressionSequential && cmd.Contest.QuestionMode == QuestionModeMulti {
+		open, err := s.sequence.Open(ctx, cmd.Contest.ID, cmd.Participant.ID, q.Ord)
+		if err != nil {
+			return SubmitOutcome{}, fmt.Errorf("check whether question %s has opened: %w", q.ID, err)
+		}
+		if !open {
+			return SubmitOutcome{}, ErrQuestionNotOpen
+		}
+	}
+
 	participant := cmd.Participant
 	if cmd.Contest.Timing == TimingIndividual && participant.StartedAt == nil {
 		// The same seam queryproxy.Service.Run uses for the identical
@@ -261,14 +303,11 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 	deadlineWithGrace := deadline.Add(s.grace)
 
 	correct := s.grade(ctx, q, cmd.Value)
-	points := 0
-	if correct {
-		points = q.Points
-	}
+	penaltyPerAttempt := penaltyAmount(q, cmd.Contest)
 
 	var result Submission
 	for attempt := 0; ; attempt++ {
-		result, err = s.submitOnce(ctx, participant.ID, q, cmd.Value, correct, points, deadlineWithGrace)
+		result, err = s.submitOnce(ctx, participant.ID, q, cmd.Value, correct, penaltyPerAttempt, deadlineWithGrace)
 		if !errors.Is(err, ErrAttemptConflict) {
 			break
 		}
@@ -293,32 +332,50 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 	}, nil
 }
 
+// penaltyAmount is how many points one wrong attempt costs against q's own
+// face value (§6.1.1): a percentage of q.Points, floored to an integer, or
+// zero outright once c.Scoring says points are not the result — the penalty
+// is defined in points, and stops meaning anything once points stop being
+// what a result is. Not a flat refusal by configuration: a contest's scoring
+// mode may change, and the percentage an organizer set must still be there,
+// unapplied, if it changes back.
+func penaltyAmount(q Question, c Contest) int {
+	if c.Scoring == ScoringWinner {
+		return 0
+	}
+	return q.Points * q.PenaltyPct / 100
+}
+
 // submitOnce writes one attempt: the deadline check, the attempt-number
-// arithmetic and the insert are Insert's own single statement (§8, finding
-// 5) — called more than once only when Insert reports ErrAttemptConflict
-// (finding 3), in which case nothing here has taken effect and Submit calls
-// it again.
+// arithmetic and the penalty computation are all Insert's own single
+// statement (§8, finding 5; §6.1.1) — called more than once only when Insert
+// reports ErrAttemptConflict (finding 3), in which case nothing here has
+// taken effect and Submit calls it again.
 //
-// A unit of work wraps the write only when points > 0: a correct answer that
-// earns something must not be able to record without also scoring, or the
-// reverse, so the insert and AddScore share one transaction. A wrong answer,
-// or a correct one worth zero points, needs no transaction at all — the
-// insert is a single statement and is atomic on its own — and opening one
-// anyway would hold a pooled connection for a second round trip (COMMIT)
-// that changes nothing (CLAUDE.md rule 6: a write needs a reason, and so does
-// a transaction).
-func (s *Service) submitOnce(ctx context.Context, registrationID uuid.UUID, q Question, value string, correct bool, points int, deadline time.Time) (Submission, error) {
+// A unit of work wraps the write whenever a correct answer could possibly
+// earn something — q.Points > 0 — because how much it actually earns is not
+// known until Insert computes it from however many wrong attempts already
+// landed; that amount might still turn out to be zero (the penalty already
+// exhausted the question, §6.1.1's own floor), in which case the score update
+// is skipped inside the same transaction rather than writing a zero delta
+// (CLAUDE.md rule 6). A wrong answer, or a question worth zero points to
+// begin with, needs no transaction at all — points_awarded is provably zero
+// either way without asking the database anything — and opening one anyway
+// would hold a pooled connection for a second round trip (COMMIT) that
+// changes nothing.
+func (s *Service) submitOnce(ctx context.Context, registrationID uuid.UUID, q Question, value string, correct bool, penaltyPerAttempt int, deadline time.Time) (Submission, error) {
 	req := SubmissionRequest{
-		RegistrationID: registrationID,
-		QuestionID:     q.ID,
-		Value:          value,
-		IsCorrect:      correct,
-		PointsAwarded:  points,
-		Deadline:       deadline,
-		MaxAttempts:    q.MaxAttempts,
+		RegistrationID:    registrationID,
+		QuestionID:        q.ID,
+		Value:             value,
+		IsCorrect:         correct,
+		Points:            q.Points,
+		PenaltyPerAttempt: penaltyPerAttempt,
+		Deadline:          deadline,
+		MaxAttempts:       q.MaxAttempts,
 	}
 
-	if points <= 0 {
+	if !correct || q.Points <= 0 {
 		return s.submissions.Insert(ctx, req)
 	}
 
@@ -329,7 +386,14 @@ func (s *Service) submitOnce(ctx context.Context, registrationID uuid.UUID, q Qu
 		if err != nil {
 			return err
 		}
-		return s.registrations.AddScore(ctx, registrationID, points)
+		if result.PointsAwarded <= 0 {
+			// The penalty already consumed the whole face value before this
+			// attempt landed (§6.1.1's floor): nothing observable changes,
+			// and a write with nothing to show for it is the one CLAUDE.md
+			// rule 6 asks skipped.
+			return nil
+		}
+		return s.registrations.AddScore(ctx, registrationID, result.PointsAwarded)
 	})
 	return result, err
 }
