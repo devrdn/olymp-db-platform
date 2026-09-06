@@ -27,7 +27,7 @@ var (
 // The participant-facing path does not reuse this query: it needs a
 // language-resolved projection with the answers absent by construction.
 const questionColumns = `
-	q.id, q.contest_id, q.ord, q.kind, q.points, q.max_attempts, q.is_visible, q.choice_ids,
+	q.id, q.contest_id, q.ord, q.kind, q.points, q.max_attempts, q.penalty_pct, q.is_visible, q.choice_ids,
 	COALESCE((
 		SELECT json_object_agg(qt.lang, json_build_object('body_md', qt.body_md,
 		                                                  'choices', COALESCE(qt.choices, '{}'::jsonb)))
@@ -71,7 +71,7 @@ func scanQuestion(row pgx.Row) (contests.Question, error) {
 		texts   []byte
 		answers []byte
 	)
-	err := row.Scan(&q.ID, &q.ContestID, &q.Ord, &q.Kind, &q.Points, &q.MaxAttempts,
+	err := row.Scan(&q.ID, &q.ContestID, &q.Ord, &q.Kind, &q.Points, &q.MaxAttempts, &q.PenaltyPct,
 		&q.IsVisible, &q.ChoiceIDs, &texts, &answers)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return contests.Question{}, contests.ErrQuestionNotFound
@@ -121,7 +121,7 @@ func (r *Questions) List(ctx context.Context, contestID uuid.UUID) ([]contests.Q
 			texts   []byte
 			answers []byte
 		)
-		if err := rows.Scan(&q.ID, &q.ContestID, &q.Ord, &q.Kind, &q.Points, &q.MaxAttempts,
+		if err := rows.Scan(&q.ID, &q.ContestID, &q.Ord, &q.Kind, &q.Points, &q.MaxAttempts, &q.PenaltyPct,
 			&q.IsVisible, &q.ChoiceIDs, &texts, &answers); err != nil {
 			return nil, fmt.Errorf("scan question: %w", err)
 		}
@@ -222,14 +222,14 @@ func (r *Questions) Create(ctx context.Context, q contests.Question) (contests.Q
 
 	return scanQuestion(querier.QueryRow(ctx, `
 		WITH inserted AS (
-			INSERT INTO questions (contest_id, ord, kind, points, max_attempts, is_visible, choice_ids)
+			INSERT INTO questions (contest_id, ord, kind, points, max_attempts, penalty_pct, is_visible, choice_ids)
 			VALUES ($1,
 			        (SELECT COALESCE(MAX(ord), 0) + 1 FROM questions WHERE contest_id = $1),
-			        $2, $3, $4, $5, $6)
+			        $2, $3, $4, $5, $6, $7)
 			RETURNING *
 		)
 		SELECT `+questionColumns+` FROM inserted q`,
-		q.ContestID, q.Kind, q.Points, q.MaxAttempts, q.IsVisible, stringList(q.ChoiceIDs)))
+		q.ContestID, q.Kind, q.Points, q.MaxAttempts, q.PenaltyPct, q.IsVisible, stringList(q.ChoiceIDs)))
 }
 
 // lockContest serialises everything that allocates a position within one
@@ -254,9 +254,9 @@ func lockContest(ctx context.Context, q storage.Querier, contestID uuid.UUID) er
 func (r *Questions) Update(ctx context.Context, q contests.Question) error {
 	tag, err := r.querier(ctx).Exec(ctx, `
 		UPDATE questions
-		SET kind = $2, points = $3, max_attempts = $4, is_visible = $5, choice_ids = $6
+		SET kind = $2, points = $3, max_attempts = $4, penalty_pct = $5, is_visible = $6, choice_ids = $7
 		WHERE id = $1`,
-		q.ID, q.Kind, q.Points, q.MaxAttempts, q.IsVisible, stringList(q.ChoiceIDs))
+		q.ID, q.Kind, q.Points, q.MaxAttempts, q.PenaltyPct, q.IsVisible, stringList(q.ChoiceIDs))
 	if err != nil {
 		return fmt.Errorf("update question: %w", err)
 	}

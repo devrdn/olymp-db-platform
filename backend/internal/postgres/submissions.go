@@ -31,11 +31,23 @@ func (r *Submissions) querier(ctx context.Context) storage.Querier {
 }
 
 // Insert writes one submission row, computing its own attempt number,
-// checking req.Deadline and enforcing "closed" (already correct, or every
-// attempt spent) all in the same statement — no count read first, no clock
-// read first, and nothing here can be exceeded by two callers racing each
-// other (finding 3, §8, finding 4, finding 5; see
-// contests.SubmissionRepository's own doc).
+// checking req.Deadline, enforcing "closed" (already correct, or every
+// attempt spent) and computing the penalty-adjusted points_awarded (§6.1.1)
+// all in the same statement — no count read first, no clock read first, and
+// nothing here can be exceeded by two callers racing each other (finding 3,
+// §8, finding 4, finding 5; see contests.SubmissionRepository's own doc).
+//
+// points_awarded is CASE WHEN is_correct THEN GREATEST(0, req.Points -
+// req.PenaltyPerAttempt * <attempts already committed>) ELSE 0 END — the same
+// COALESCE(MAX(s.attempt_no), 0) the attempt number itself is built from, so
+// the penalty is always charged against exactly the attempts that landed
+// before this one, never a count read a moment apart from the one that
+// numbered this attempt. GREATEST(0, …) is §6.1.1's floor: a question can
+// never take a participant below zero, and once it reaches zero every
+// further wrong attempt already scored nothing (is_correct = false takes the
+// ELSE branch) while a further correct one still floors at zero rather than
+// going negative — which is what makes "remaining attempts are free" true by
+// construction rather than a case this statement has to special-case.
 //
 // now() here is PostgreSQL's own clock, not time.Now() read in this process
 // (§8) — and, because there is no explicit transaction wrapped around this
@@ -76,14 +88,16 @@ func (r *Submissions) querier(ctx context.Context) storage.Querier {
 func (r *Submissions) Insert(ctx context.Context, req contests.SubmissionRequest) (contests.Submission, error) {
 	row := r.querier(ctx).QueryRow(ctx, `
 		INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct, points_awarded, submitted_at)
-		SELECT $1, $2, COALESCE(MAX(s.attempt_no), 0) + 1, $3, $4, $5, now()
+		SELECT $1, $2, COALESCE(MAX(s.attempt_no), 0) + 1, $3, $4,
+		       CASE WHEN $4 THEN GREATEST(0, $5::int - COALESCE(MAX(s.attempt_no), 0) * $6::int) ELSE 0 END,
+		       now()
 		FROM submissions s
 		WHERE s.registration_id = $1 AND s.question_id = $2
 		HAVING COUNT(*) FILTER (WHERE s.is_correct) = 0
-		   AND ($6::int IS NULL OR COUNT(*) < $6::int)
-		   AND now() < $7::timestamptz
+		   AND ($7::int IS NULL OR COUNT(*) < $7::int)
+		   AND now() < $8::timestamptz
 		RETURNING id, registration_id, question_id, attempt_no, value, is_correct, points_awarded, submitted_at`,
-		req.RegistrationID, req.QuestionID, req.Value, req.IsCorrect, req.PointsAwarded, req.MaxAttempts, req.Deadline)
+		req.RegistrationID, req.QuestionID, req.Value, req.IsCorrect, req.Points, req.PenaltyPerAttempt, req.MaxAttempts, req.Deadline)
 
 	var out contests.Submission
 	err := row.Scan(&out.ID, &out.RegistrationID, &out.QuestionID, &out.AttemptNo,

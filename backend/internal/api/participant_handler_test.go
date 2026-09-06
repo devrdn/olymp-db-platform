@@ -663,6 +663,9 @@ func TestAnswerRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 		{"question not found", contests.ErrQuestionNotFound, http.StatusNotFound, "question_not_found"},
 		{"answer too long", contests.ErrAnswerTooLong, http.StatusBadRequest, "answer_too_long"},
 		{"question closed", contests.ErrQuestionClosed, http.StatusConflict, "question_closed"},
+		// §6.1.1: a sequential contest refuses an answer to a question a
+		// registration has not opened yet, whatever the interface shows.
+		{"question not open", contests.ErrQuestionNotOpen, http.StatusConflict, "question_not_open"},
 		{"deadline passed", contests.ErrDeadlinePassed, http.StatusConflict, "deadline_passed"},
 		// Finding 1: seven concurrent answers to the very same question can
 		// run contests.Service.Submit out of retries; before this fix the

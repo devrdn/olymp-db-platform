@@ -327,6 +327,14 @@ func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err er
 	case errors.Is(err, contests.ErrQuestionClosed):
 		httpx.Error(w, r, http.StatusConflict, codeQuestionClosed,
 			"This question is already answered correctly, or every attempt has been used")
+	case errors.Is(err, contests.ErrQuestionNotOpen):
+		// §6.1.1: the server is what enforces sequential order, not the
+		// interface — a direct request naming a question that has not opened
+		// yet is refused here, the same 409 family as codeQuestionClosed
+		// (another fact about this question's current state, not a
+		// permission the caller lacks).
+		httpx.Error(w, r, http.StatusConflict, codeQuestionNotOpen,
+			"A question ordered before this one is not closed yet")
 	case errors.Is(err, contests.ErrDeadlinePassed):
 		httpx.Error(w, r, http.StatusConflict, codeDeadlinePassed, "The deadline for this contest has passed")
 	case errors.Is(err, contests.ErrTooManyAttemptConflicts):

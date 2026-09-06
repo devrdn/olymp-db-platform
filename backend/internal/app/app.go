@@ -207,11 +207,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		// console (cfg.DeadlineGrace): §8 names one deadline formula and one
 		// grace, not one per path.
 		Submissions: postgres.NewSubmissions(pool),
-		Grace:       cfg.DeadlineGrace,
-		Users:       userRepo,
-		Audit:       auditRecorder,
-		UnitOfWork:  storage.NewUnitOfWork(pool),
-		Logger:      log,
+		// Answers whether a question has opened yet in a sequential contest
+		// (§6.1.1); only ever consulted when a contest turns that on.
+		Sequence:   postgres.NewSequence(pool),
+		Grace:      cfg.DeadlineGrace,
+		Users:      userRepo,
+		Audit:      auditRecorder,
+		UnitOfWork: storage.NewUnitOfWork(pool),
+		Logger:     log,
 	})
 
 	modules := []api.Module{

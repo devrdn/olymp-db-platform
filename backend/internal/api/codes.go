@@ -186,4 +186,6 @@ var (
 		"The participant's own deadline has passed, checked against the core database's own clock at the moment the answer was written — independent of whether the contest's status has caught up to it yet.")
 	codeAttemptConflict = httpx.NewCode("attempt_conflict",
 		"Too many submissions to this exact question arrived at the same moment for the retry to resolve. Nothing was recorded; submitting again is the right response.")
+	codeQuestionNotOpen = httpx.NewCode("question_not_open",
+		"The contest answers questions in sequence and a question ordered before this one is not closed yet — not answered correctly, and not out of attempts. Answer the earlier one first.")
 )

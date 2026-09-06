@@ -35,6 +35,13 @@ const (
 // unbounded payload for the participant.
 const maxChoices = 50
 
+// maxPenaltyPct bounds questions.penalty_pct: a percentage, and CLAUDE.md
+// rule 2 asks for a range rather than "any integer". 100 is the natural
+// ceiling — a wrong attempt can cost at most the question's own face value,
+// never more (§6.1.1's own floor-at-zero rule holds regardless, but a stored
+// value past 100 would misstate what the organizer configured).
+const maxPenaltyPct = 100
+
 // Errors about questions and their answers.
 var (
 	ErrQuestionNotFound = errors.New("question not found")
@@ -53,6 +60,11 @@ type Question struct {
 	Points int
 	// MaxAttempts is nil when the participant may keep trying.
 	MaxAttempts *int
+	// PenaltyPct is what percent of Points a wrong attempt costs (§6.1.1),
+	// 0..100, zero by default meaning no penalty at all — today's behaviour.
+	// Applied once, at the moment of answering, and never recomputed: see
+	// Service.Submit for where the amount is actually worked out and why.
+	PenaltyPct int
 	// IsVisible decides whether the participant is shown the question text at
 	// all. A hidden question still scores: working out what is being asked is
 	// then part of the puzzle (see §6.1).
@@ -100,6 +112,9 @@ func (q Question) Validate() error {
 	// meant; "unlimited" is expressed by leaving the field unset.
 	if q.MaxAttempts != nil && *q.MaxAttempts <= 0 {
 		return fmt.Errorf("%w: the attempt limit must be positive", ErrInvalidQuestion)
+	}
+	if q.PenaltyPct < 0 || q.PenaltyPct > maxPenaltyPct {
+		return fmt.Errorf("%w: penalty_pct must be between 0 and %d", ErrInvalidQuestion, maxPenaltyPct)
 	}
 	return q.validateChoices()
 }
@@ -229,6 +244,9 @@ type QuestionCommand struct {
 	Kind        string
 	Points      int
 	MaxAttempts *int
+	// PenaltyPct is what percent of Points a wrong attempt costs (§6.1.1);
+	// zero (not stated) means no penalty.
+	PenaltyPct int
 	// IsVisible is a pointer so that "not stated" means visible. Hiding a
 	// question is the deliberate choice, and the ordinary case must not depend
 	// on remembering to say so.
@@ -278,6 +296,7 @@ func (s *Service) AddQuestion(ctx context.Context, cmd QuestionCommand) (Questio
 		Kind:        orDefault(cmd.Kind, KindText),
 		Points:      cmd.Points,
 		MaxAttempts: cmd.MaxAttempts,
+		PenaltyPct:  cmd.PenaltyPct,
 		IsVisible:   cmd.IsVisible == nil || *cmd.IsVisible,
 		ChoiceIDs:   cmd.ChoiceIDs,
 	}
@@ -325,6 +344,7 @@ func (s *Service) UpdateQuestion(ctx context.Context, cmd QuestionCommand) (Ques
 	updated.Kind = orDefault(cmd.Kind, current.Kind)
 	updated.Points = cmd.Points
 	updated.MaxAttempts = cmd.MaxAttempts
+	updated.PenaltyPct = cmd.PenaltyPct
 	updated.ChoiceIDs = cmd.ChoiceIDs
 	if cmd.IsVisible != nil {
 		updated.IsVisible = *cmd.IsVisible
@@ -365,6 +385,7 @@ type SaveQuestionCommand struct {
 	Kind        string
 	Points      int
 	MaxAttempts *int
+	PenaltyPct  int
 	IsVisible   *bool
 	ChoiceIDs   []string
 	Texts       map[string]QuestionText
@@ -403,6 +424,7 @@ func (s *Service) SaveQuestion(ctx context.Context, cmd SaveQuestionCommand) (Qu
 	updated.Kind = orDefault(cmd.Kind, current.Kind)
 	updated.Points = cmd.Points
 	updated.MaxAttempts = cmd.MaxAttempts
+	updated.PenaltyPct = cmd.PenaltyPct
 	updated.ChoiceIDs = cmd.ChoiceIDs
 	if cmd.IsVisible != nil {
 		updated.IsVisible = *cmd.IsVisible
@@ -622,6 +644,7 @@ func (q Question) auditFields() map[string]any {
 		"kind":         q.Kind,
 		"points":       q.Points,
 		"max_attempts": q.MaxAttempts,
+		"penalty_pct":  q.PenaltyPct,
 		"is_visible":   q.IsVisible,
 		"choice_ids":   q.ChoiceIDs,
 	}

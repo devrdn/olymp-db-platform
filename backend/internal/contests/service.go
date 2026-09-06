@@ -58,8 +58,15 @@ type ServiceConfig struct {
 	// only method that ever touches this field, so nothing else is affected
 	// by leaving it unset.
 	Submissions SubmissionRepository
-	Audit       *audit.Recorder
-	UnitOfWork  storage.UnitOfWork
+	// Sequence answers whether a question may be answered yet in a sequential
+	// contest (§6.1.1, sequence.go). Optional at the type level for the same
+	// reason Submissions is: only Submit ever reads it, and only when a
+	// contest's progression is actually sequential — a caller with nothing to
+	// do with answering questions, or an installation that never turns this
+	// on, need not supply one.
+	Sequence   SequentialGate
+	Audit      *audit.Recorder
+	UnitOfWork storage.UnitOfWork
 	// Now is the clock, injected so the enrollment deadline is testable.
 	Now func() time.Time
 	// Grace is the network-latency allowance Submit adds to a participant's
@@ -99,6 +106,7 @@ type Service struct {
 	languages     LanguageCatalog
 	users         UserDirectory
 	submissions   SubmissionRepository
+	sequence      SequentialGate
 	audit         *audit.Recorder
 	uow           storage.UnitOfWork
 	now           func() time.Time
@@ -134,6 +142,7 @@ func NewService(cfg ServiceConfig) *Service {
 		languages:     cfg.Languages,
 		users:         cfg.Users,
 		submissions:   cfg.Submissions,
+		sequence:      cfg.Sequence,
 		audit:         cfg.Audit,
 		uow:           cfg.UnitOfWork,
 		now:           now,
@@ -149,6 +158,12 @@ type CreateCommand struct {
 	ActorID      uuid.UUID
 	Enrollment   string
 	QuestionMode string
+	// Progression decides the order questions may be answered in, empty
+	// defaulting to ProgressionFree (§6.1.1).
+	Progression string
+	// Scoring decides how a result is derived from submissions, empty
+	// defaulting to ScoringPoints (§6.1.1).
+	Scoring      string
 	Timing       string
 	DurationMin  *int
 	StartsAt     *time.Time
@@ -165,6 +180,8 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (Contest, error
 		Status:       StatusDraft,
 		Enrollment:   orDefault(cmd.Enrollment, EnrollmentInviteOnly),
 		QuestionMode: orDefault(cmd.QuestionMode, QuestionModeMulti),
+		Progression:  orDefault(cmd.Progression, ProgressionFree),
+		Scoring:      orDefault(cmd.Scoring, ScoringPoints),
 		Timing:       orDefault(cmd.Timing, TimingFixed),
 		DurationMin:  cmd.DurationMin,
 		StartsAt:     cmd.StartsAt,
@@ -220,6 +237,8 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (Contest, error
 		return s.record(ctx, cmd.ActorID, audit.ActionContestCreate, created.ID, map[string]any{
 			"enrollment":    created.Enrollment,
 			"question_mode": created.QuestionMode,
+			"progression":   created.Progression,
+			"scoring":       created.Scoring,
 			"timing":        created.Timing,
 		})
 	})
@@ -237,6 +256,8 @@ type UpdateCommand struct {
 	ContestID    uuid.UUID
 	Enrollment   string
 	QuestionMode string
+	Progression  string
+	Scoring      string
 	Timing       string
 	DurationMin  *int
 	StartsAt     *time.Time
@@ -263,6 +284,12 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 	}
 	if cmd.QuestionMode != "" {
 		updated.QuestionMode = cmd.QuestionMode
+	}
+	if cmd.Progression != "" {
+		updated.Progression = cmd.Progression
+	}
+	if cmd.Scoring != "" {
+		updated.Scoring = cmd.Scoring
 	}
 	if cmd.Timing != "" {
 		updated.Timing = cmd.Timing
@@ -324,6 +351,17 @@ func checkRunningChange(current, updated Contest) error {
 	switch {
 	case current.QuestionMode != updated.QuestionMode:
 		return fmt.Errorf("%w: the question mode cannot change while it runs", ErrNotEditable)
+	case current.Progression != updated.Progression:
+		// Same reasoning as question_mode: a participant already mid-sequence
+		// has answered under one order or the other, and switching it under
+		// them changes which question they are allowed to be looking at.
+		return fmt.Errorf("%w: the progression cannot change while it runs", ErrNotEditable)
+	case current.Scoring != updated.Scoring:
+		// The penalty is applied or skipped per submission, at the moment of
+		// answering (§6.1.1): moving this mid-run would make earlier answers
+		// in the same contest disagree with later ones about whether the
+		// penalty counted, for a reason no participant could see.
+		return fmt.Errorf("%w: the scoring mode cannot change while it runs", ErrNotEditable)
 	case current.Timing != updated.Timing:
 		return fmt.Errorf("%w: the timing model cannot change while it runs", ErrNotEditable)
 	case !equalDuration(current.DurationMin, updated.DurationMin):
