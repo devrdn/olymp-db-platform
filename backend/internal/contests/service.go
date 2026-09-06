@@ -52,23 +52,40 @@ type ServiceConfig struct {
 	Users         UserDirectory
 	// Submissions records participants' answers (submission.go). Optional at
 	// the type level so every existing caller that has nothing to do with
-	// answering questions keeps compiling unchanged; Service.Submit fails
-	// clearly if it is ever called without one having been wired in.
+	// answering questions keeps compiling unchanged; a Service assembled
+	// without one panics the first time Submit is called, the same way a nil
+	// map panics on write rather than silently discarding — Submit is the
+	// only method that ever touches this field, so nothing else is affected
+	// by leaving it unset.
 	Submissions SubmissionRepository
 	Audit       *audit.Recorder
 	UnitOfWork  storage.UnitOfWork
 	// Now is the clock, injected so the enrollment deadline is testable.
 	Now func() time.Time
 	// Grace is the network-latency allowance Submit adds to a participant's
-	// deadline before refusing an answer for arriving late (§8). Zero takes
-	// defaultSubmissionGrace, matching queryproxy's own default — the two
-	// paths share one grace, not one apiece.
+	// deadline before refusing an answer for arriving late (§8), matching
+	// queryproxy's own default so the two paths share one grace, not one
+	// apiece. Taken exactly as given, including zero: an installation that
+	// sets DEADLINE_GRACE=0 means no grace, not "unset", and config.Load is
+	// the one place that already resolves "unset" to five seconds before
+	// this field is ever populated (internal/app/app.go passes
+	// cfg.DeadlineGrace straight through) — a second default here would
+	// override that deliberate choice right back to five seconds (finding
+	// 2). A caller with nothing to do with answering questions, and so no
+	// opinion on Grace, simply gets zero, which is harmless because Submit
+	// is the only method that reads it.
 	Grace time.Duration
 	// Logger records the one thing Submit ever has to log rather than fail
 	// on: a reference answer whose regex does not compile (submission.go's
 	// own grade). Defaults to slog.Default() so a caller that never sets it
 	// still gets that anomaly reported somewhere rather than a nil pointer.
 	Logger *slog.Logger
+	// Sleep is what Submit waits with between a lost attempt-number race and
+	// its next retry (submission.go's own attemptBackoff). Defaults to
+	// time.Sleep; a test that wants its retries instant sets this to a
+	// no-op instead of waiting on the real clock for a scenario it is
+	// forcing deterministically.
+	Sleep func(time.Duration)
 }
 
 // Service holds the rules of authoring and running a contest.
@@ -87,6 +104,7 @@ type Service struct {
 	now           func() time.Time
 	grace         time.Duration
 	log           *slog.Logger
+	sleep         func(time.Duration)
 }
 
 // NewService assembles the contest service.
@@ -95,13 +113,16 @@ func NewService(cfg ServiceConfig) *Service {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
+	// cfg.Grace is taken exactly as given, zero included — see its own doc
+	// for why a second default here would be finding 2 all over again.
 	grace := cfg.Grace
-	if grace == 0 {
-		grace = defaultSubmissionGrace
-	}
 	log := cfg.Logger
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(os.Stderr, nil))
+	}
+	sleep := cfg.Sleep
+	if sleep == nil {
+		sleep = time.Sleep
 	}
 	return &Service{
 		contests:      cfg.Contests,
@@ -118,6 +139,7 @@ func NewService(cfg ServiceConfig) *Service {
 		now:           now,
 		grace:         grace,
 		log:           log,
+		sleep:         sleep,
 	}
 }
 

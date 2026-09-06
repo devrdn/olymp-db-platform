@@ -83,6 +83,12 @@ func NewFixture() *Fixture {
 		// log line (a malformed reference answer) should not spray a fixed
 		// test suite's output with it.
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		// A test that forces the attempt-race retry loop (ConflictsRemaining)
+		// is exercising the loop's own logic, not the real clock — waiting
+		// out attemptBackoff's real jitter on every one of those retries
+		// would make the suite slower for nothing a fixture-backed test
+		// could ever observe.
+		Sleep: func(time.Duration) {},
 	})
 	return f
 }

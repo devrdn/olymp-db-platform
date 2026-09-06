@@ -664,6 +664,11 @@ func TestAnswerRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 		{"answer too long", contests.ErrAnswerTooLong, http.StatusBadRequest, "answer_too_long"},
 		{"question closed", contests.ErrQuestionClosed, http.StatusConflict, "question_closed"},
 		{"deadline passed", contests.ErrDeadlinePassed, http.StatusConflict, "deadline_passed"},
+		// Finding 1: seven concurrent answers to the very same question can
+		// run contests.Service.Submit out of retries; before this fix the
+		// handler had no case for it and a real outage and this ordinary
+		// contention answered the same way — internal_error, 500.
+		{"too many concurrent attempts", contests.ErrTooManyAttemptConflicts, http.StatusConflict, "attempt_conflict"},
 		{"not a participant", queryproxy.ErrNotAParticipant, http.StatusForbidden, "not_a_participant"},
 		{"contest not running", queryproxy.ErrContestNotRunning, http.StatusConflict, "contest_not_running"},
 	} {
@@ -715,6 +720,83 @@ func TestAnswerWithAnInvalidBodyIsA400(t *testing.T) {
 	}
 	if f.submitter.called {
 		t.Fatal("Submit was called with a body that could not be decoded")
+	}
+}
+
+// Finding 1, end to end: the review's own scenario is seven simultaneous
+// answers to the very same question outrunning contests.Service.Submit's own
+// retry bound — every retry loses the attempt-number race, and Submit used
+// to hand the caller an error the handler had no case for (a 500,
+// indistinguishable from a real outage) rather than the refusal a
+// participant can act on. This drives that scenario through the real
+// contests.Service (not fakeSubmitter's canned error) and the real handler,
+// so what is under test is Submit's own retry loop and fail()'s own mapping
+// together, not either one asserted in isolation.
+//
+// conteststest.Submissions.ConflictsRemaining stands in for the seven
+// simultaneous racers — the same technique
+// TestSubmitGivesUpAfterTooManyConflicts uses at the service level (its own
+// doc explains why: a Go map has no analogue of the table's own UNIQUE
+// constraint racing two real transactions, so the genuine race is proven
+// against PostgreSQL instead, in
+// internal/postgres/submissions_test.go and
+// TestInsertConcurrentlyNeverExceedsMaxAttemptsOrDuplicatesAnAttemptNumber).
+// What this test adds on top is the part that repository-level proof cannot
+// reach on its own: that running out of retries surfaces as a 4xx, not a
+// 5xx.
+func TestSevenConcurrentAnswersEndUpAsARefusalNotAnInternalError(t *testing.T) {
+	stores := conteststest.NewFixture()
+	starts := conteststest.FixtureNow.Add(-time.Hour)
+	ends := conteststest.FixtureNow.Add(time.Hour)
+	c := stores.Contests.Put(contests.Contest{
+		Status: contests.StatusRunning, Timing: contests.TimingFixed,
+		StartsAt: &starts, EndsAt: &ends,
+	})
+	user := stores.AddUser("racing-student")
+	p := stores.Registrations.Put(contests.Participant{
+		ContestID: c.ID, UserID: user.ID, Status: contests.RegistrationActive,
+	})
+	q := stores.Questions.Put(contests.Question{ContestID: c.ID, Kind: contests.KindText, IsVisible: true})
+
+	// However many of the seven actually lost every round, this is what it
+	// looks like from Submit's side: its own retry loop never once sees
+	// anything but a conflict.
+	stores.Submissions.ConflictsRemaining = 1000
+
+	c2 := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c2.Close() })
+	log := logging.New("error", io.Discard)
+	sessions := auth.NewSessionStore(c2, time.Hour)
+	token, err := sessions.Create(t.Context(), auth.Principal{UserID: user.ID, Login: user.Login})
+	if err != nil {
+		t.Fatalf("session Create() = %v", err)
+	}
+	mw := auth.NewMiddleware(auth.MiddlewareConfig{
+		Sessions: sessions, Users: stores.Users,
+		Authorizer: rbac.New(noRoles{}),
+		Cookies:    auth.NewCookieWriter(false), Logger: log,
+	})
+
+	access := &fakeAccess{participant: p, contest: c}
+	reader := contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts())
+	router := chi.NewRouter()
+	// stores.Service, not a fakeSubmitter: what answers here is the real
+	// retry loop.
+	api.NewParticipantHandler(access, reader, stores.Service, mw, log, "en").Mount(router)
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/contests/"+c.ID.String()+"/questions/"+q.ID.String()+"/answer",
+		strings.NewReader(`{"value":"anything"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: token})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "attempt_conflict" {
+		t.Fatalf("code = %q, want attempt_conflict (body: %s)", code, rec.Body.String())
 	}
 }
 

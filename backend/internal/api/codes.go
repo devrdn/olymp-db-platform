@@ -184,4 +184,6 @@ var (
 		"This question can no longer be answered by this participant: they already answered it correctly, or every attempt is spent.")
 	codeDeadlinePassed = httpx.NewCode("deadline_passed",
 		"The participant's own deadline has passed, checked against the core database's own clock at the moment the answer was written — independent of whether the contest's status has caught up to it yet.")
+	codeAttemptConflict = httpx.NewCode("attempt_conflict",
+		"Too many submissions to this exact question arrived at the same moment for the retry to resolve. Nothing was recorded; submitting again is the right response.")
 )
