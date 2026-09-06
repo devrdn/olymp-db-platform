@@ -25,7 +25,7 @@ var _ contests.Repository = (*Contests)(nil)
 // together with them, and loading them separately would be both an N+1 and a
 // chance for the two to disagree.
 const contestColumns = `
-	c.id, c.status, c.enrollment, c.question_mode, c.timing, c.duration_min,
+	c.id, c.status, c.enrollment, c.question_mode, c.progression, c.scoring, c.timing, c.duration_min,
 	c.starts_at, c.ends_at, c.allowed_cidrs, c.settings, c.created_by,
 	c.created_at, c.updated_at,
 	COALESCE((
@@ -76,7 +76,7 @@ func scanContest(row pgx.Row) (contests.Contest, error) {
 		translations []byte
 	)
 	err := row.Scan(
-		&c.ID, &c.Status, &c.Enrollment, &c.QuestionMode, &c.Timing, &c.DurationMin,
+		&c.ID, &c.Status, &c.Enrollment, &c.QuestionMode, &c.Progression, &c.Scoring, &c.Timing, &c.DurationMin,
 		&c.StartsAt, &c.EndsAt, &c.AllowedCIDRs, &settings, &c.CreatedBy,
 		&c.CreatedAt, &c.UpdatedAt, &languages, &translations,
 	)
@@ -128,13 +128,13 @@ func (r *Contests) Create(ctx context.Context, c contests.Contest) (contests.Con
 
 	row := r.querier(ctx).QueryRow(ctx, `
 		WITH inserted AS (
-			INSERT INTO contests (status, enrollment, question_mode, timing, duration_min,
+			INSERT INTO contests (status, enrollment, question_mode, progression, scoring, timing, duration_min,
 			                      starts_at, ends_at, allowed_cidrs, settings, created_by)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 			RETURNING *
 		)
 		SELECT `+contestColumns+` FROM inserted c`,
-		c.Status, c.Enrollment, c.QuestionMode, c.Timing, c.DurationMin,
+		c.Status, c.Enrollment, c.QuestionMode, c.Progression, c.Scoring, c.Timing, c.DurationMin,
 		c.StartsAt, c.EndsAt, cidrList(c.AllowedCIDRs), settings, c.CreatedBy)
 
 	return scanContest(row)
@@ -200,7 +200,7 @@ func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Cont
 			translations []byte
 		)
 		if err := rows.Scan(
-			&c.ID, &c.Status, &c.Enrollment, &c.QuestionMode, &c.Timing, &c.DurationMin,
+			&c.ID, &c.Status, &c.Enrollment, &c.QuestionMode, &c.Progression, &c.Scoring, &c.Timing, &c.DurationMin,
 			&c.StartsAt, &c.EndsAt, &c.AllowedCIDRs, &settings, &c.CreatedBy,
 			&c.CreatedAt, &c.UpdatedAt, &languages, &translations, &total,
 		); err != nil {
@@ -231,11 +231,11 @@ func (r *Contests) Update(ctx context.Context, c contests.Contest) error {
 
 	tag, err := r.querier(ctx).Exec(ctx, `
 		UPDATE contests
-		SET enrollment = $2, question_mode = $3, timing = $4, duration_min = $5,
-		    starts_at = $6, ends_at = $7, allowed_cidrs = $8, settings = $9,
+		SET enrollment = $2, question_mode = $3, progression = $4, scoring = $5, timing = $6, duration_min = $7,
+		    starts_at = $8, ends_at = $9, allowed_cidrs = $10, settings = $11,
 		    updated_at = now()
 		WHERE id = $1`,
-		c.ID, c.Enrollment, c.QuestionMode, c.Timing, c.DurationMin,
+		c.ID, c.Enrollment, c.QuestionMode, c.Progression, c.Scoring, c.Timing, c.DurationMin,
 		c.StartsAt, c.EndsAt, cidrList(c.AllowedCIDRs), settings)
 	if err != nil {
 		return fmt.Errorf("update contest: %w", err)

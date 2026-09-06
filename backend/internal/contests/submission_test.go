@@ -22,6 +22,278 @@ func runningFixedContest(f *conteststest.Fixture) contests.Contest {
 	})
 }
 
+// sequentialContest is a running, multi-question contest with progression
+// set to sequential (§6.1.1) — the one combination Submit's own order check
+// ever consults.
+func sequentialContest(f *conteststest.Fixture) contests.Contest {
+	starts := conteststest.FixtureNow.Add(-time.Hour)
+	ends := conteststest.FixtureNow.Add(time.Hour)
+	return f.Contests.Put(contests.Contest{
+		Status: contests.StatusRunning, Timing: contests.TimingFixed,
+		QuestionMode: contests.QuestionModeMulti, Progression: contests.ProgressionSequential,
+		StartsAt: &starts, EndsAt: &ends,
+	})
+}
+
+// §6.1.1: the penalty is worked out at the moment of answering and written
+// once to points_awarded; it must never be recomputed from whatever the
+// setting reads afterwards. Two wrong attempts at 50% of a 10-point question
+// leave 10 - 2*5 = 0 for a correct third try — and once the organizer raises
+// the penalty afterwards, the score already on the books must not move.
+func TestSubmitAppliesThePenaltyAtAnswerTimeAndKeepsItAfterASettingChange(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := runningFixedContest(f)
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
+	max := 5
+	q := f.Questions.Put(contests.Question{
+		ContestID: c.ID, Kind: contests.KindText, Points: 10, PenaltyPct: 50, MaxAttempts: &max, IsVisible: true,
+		Answers: []contests.Answer{{MatchKind: contests.MatchExact, Value: "yes"}},
+	})
+
+	for i := 0; i < 1; i++ {
+		if _, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+			Participant: p, Contest: c, QuestionID: q.ID, Value: "no",
+		}); err != nil {
+			t.Fatalf("wrong attempt %d: Submit() = %v", i+1, err)
+		}
+	}
+
+	outcome, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q.ID, Value: "yes",
+	})
+	if err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+	// One wrong attempt already spent, 50% of 10 each: 10 - 1*5 = 5.
+	if !outcome.Correct || outcome.PointsAwarded != 5 {
+		t.Fatalf("outcome = %+v, want a correct answer worth 5 points", outcome)
+	}
+
+	stored, err := f.Registrations.ByUser(t.Context(), c.ID, p.UserID)
+	if err != nil {
+		t.Fatalf("ByUser() = %v", err)
+	}
+	if stored.TotalScore != 5 {
+		t.Fatalf("TotalScore = %d, want 5", stored.TotalScore)
+	}
+
+	// The organizer raises the penalty well after the fact. The row already
+	// written, and the total already derived from it, must not move — a
+	// live recomputation would let this single edit rewrite every score
+	// already earned on this question.
+	q.PenaltyPct = 100
+	f.Questions.Put(q)
+
+	restored, err := f.Registrations.ByUser(t.Context(), c.ID, p.UserID)
+	if err != nil {
+		t.Fatalf("ByUser() = %v", err)
+	}
+	if restored.TotalScore != 5 {
+		t.Fatalf("TotalScore after the setting changed = %d, want 5 (unchanged)", restored.TotalScore)
+	}
+	if got := f.Submissions.All(p.ID, q.ID)[1].PointsAwarded; got != 5 {
+		t.Fatalf("the stored submission's PointsAwarded = %d, want 5 (unchanged)", got)
+	}
+}
+
+// §6.1.1's floor: a question can never take a participant below zero, even
+// when the penalty configured would mathematically demand it.
+func TestSubmitPenaltyNeverGoesBelowZero(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := runningFixedContest(f)
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
+	max := 3
+	q := f.Questions.Put(contests.Question{
+		ContestID: c.ID, Kind: contests.KindText, Points: 10, PenaltyPct: 100, MaxAttempts: &max, IsVisible: true,
+		Answers: []contests.Answer{{MatchKind: contests.MatchExact, Value: "yes"}},
+	})
+
+	for i := 0; i < 2; i++ {
+		if _, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+			Participant: p, Contest: c, QuestionID: q.ID, Value: "no",
+		}); err != nil {
+			t.Fatalf("wrong attempt %d: Submit() = %v", i+1, err)
+		}
+	}
+
+	// Two wrong attempts at 100% of 10 each would demand -10; the third,
+	// correct attempt must floor at zero rather than go negative.
+	outcome, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q.ID, Value: "yes",
+	})
+	if err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+	if !outcome.Correct || outcome.PointsAwarded != 0 {
+		t.Fatalf("outcome = %+v, want a correct answer worth 0 points, not negative", outcome)
+	}
+
+	stored, err := f.Registrations.ByUser(t.Context(), c.ID, p.UserID)
+	if err != nil {
+		t.Fatalf("ByUser() = %v", err)
+	}
+	if stored.TotalScore != 0 {
+		t.Fatalf("TotalScore = %d, want 0", stored.TotalScore)
+	}
+}
+
+// §6.1.1: once the penalty has already zeroed a question, the remaining
+// attempts must stay usable rather than being refused early — the point of
+// further attempts is reaching the answer, not paying for trying again.
+func TestSubmitLeavesRemainingAttemptsFreeOnceThePenaltyZeroesTheQuestion(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := runningFixedContest(f)
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
+	max := 5
+	q := f.Questions.Put(contests.Question{
+		ContestID: c.ID, Kind: contests.KindText, Points: 10, PenaltyPct: 100, MaxAttempts: &max, IsVisible: true,
+		Answers: []contests.Answer{{MatchKind: contests.MatchExact, Value: "yes"}},
+	})
+
+	// The first wrong attempt alone already demands the full 10 points back;
+	// every attempt after it is "free" in the sense that matters here — none
+	// of them may be refused as if the question had already closed.
+	for i := 0; i < 3; i++ {
+		outcome, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+			Participant: p, Contest: c, QuestionID: q.ID, Value: "no",
+		})
+		if err != nil {
+			t.Fatalf("wrong attempt %d: Submit() = %v", i+1, err)
+		}
+		if outcome.Closed {
+			t.Fatalf("wrong attempt %d reports Closed = true, want it still open", i+1)
+		}
+	}
+
+	outcome, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q.ID, Value: "yes",
+	})
+	if err != nil {
+		t.Fatalf("final Submit() = %v, want the question still answerable", err)
+	}
+	if !outcome.Correct || outcome.PointsAwarded != 0 {
+		t.Fatalf("outcome = %+v, want a correct, zero-point answer", outcome)
+	}
+}
+
+// §6.1.1: in winner mode the penalty is not applied — not forbidden by
+// configuration, because the contest's scoring mode may change back, but
+// simply skipped while it is in force.
+func TestSubmitIgnoresThePenaltyInWinnerMode(t *testing.T) {
+	f := conteststest.NewFixture()
+	starts := conteststest.FixtureNow.Add(-time.Hour)
+	ends := conteststest.FixtureNow.Add(time.Hour)
+	c := f.Contests.Put(contests.Contest{
+		Status: contests.StatusRunning, Timing: contests.TimingFixed, Scoring: contests.ScoringWinner,
+		StartsAt: &starts, EndsAt: &ends,
+	})
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
+	max := 3
+	q := f.Questions.Put(contests.Question{
+		ContestID: c.ID, Kind: contests.KindFinal, Points: 10, PenaltyPct: 50, MaxAttempts: &max, IsVisible: true,
+		Answers: []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the butler"}},
+	})
+
+	if _, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q.ID, Value: "the gardener",
+	}); err != nil {
+		t.Fatalf("wrong attempt: Submit() = %v", err)
+	}
+
+	outcome, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q.ID, Value: "The Butler",
+	})
+	if err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+	if !outcome.Correct || outcome.PointsAwarded != 10 {
+		t.Fatalf("outcome = %+v, want the full 10 points — winner mode ignores the penalty", outcome)
+	}
+}
+
+// §6.1.1: sequential progression refuses an answer to a question ordered
+// after one that is not closed yet — proven here by a direct Submit call, not
+// by anything the interface would have hidden, since the server is what
+// enforces this.
+func TestSubmitRefusesAnUnopenedQuestionInASequentialContest(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := sequentialContest(f)
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
+	f.Questions.Put(contests.Question{ContestID: c.ID, Ord: 1, Kind: contests.KindText, IsVisible: true})
+	q2 := f.Questions.Put(contests.Question{ContestID: c.ID, Ord: 2, Kind: contests.KindText, IsVisible: true})
+
+	_, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q2.ID, Value: "anything",
+	})
+	if !errors.Is(err, contests.ErrQuestionNotOpen) {
+		t.Fatalf("error = %v, want ErrQuestionNotOpen — question 1 is not closed yet", err)
+	}
+}
+
+// §6.1.1: the second condition of "closed" — every attempt spent — is what
+// opens the next question just as a correct answer would. Without it a
+// participant stuck on the first question would be locked out of the rest of
+// the contest for good.
+func TestSubmitOpensTheNextQuestionOnceAttemptsAreExhausted(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := sequentialContest(f)
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
+	max := 1
+	q1 := f.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 1, Kind: contests.KindText, MaxAttempts: &max, IsVisible: true,
+		Answers: []contests.Answer{{MatchKind: contests.MatchExact, Value: "correct"}},
+	})
+	q2 := f.Questions.Put(contests.Question{ContestID: c.ID, Ord: 2, Kind: contests.KindText, IsVisible: true})
+
+	if _, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q1.ID, Value: "wrong",
+	}); err != nil {
+		t.Fatalf("spending the only attempt on question 1: Submit() = %v", err)
+	}
+
+	if _, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q2.ID, Value: "anything",
+	}); err != nil {
+		t.Fatalf("Submit() on question 2 = %v, want it open now that question 1's attempts are spent", err)
+	}
+}
+
+// §6.1.1: hidden questions count in the sequence exactly as visible ones do —
+// "not shown" and "not answerable" are different decisions.
+func TestSubmitSequenceCountsAHiddenQuestion(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := sequentialContest(f)
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
+	q1 := f.Questions.Put(contests.Question{
+		ContestID: c.ID, Ord: 1, Kind: contests.KindText, IsVisible: false,
+		Answers: []contests.Answer{{MatchKind: contests.MatchExact, Value: "correct"}},
+	})
+	q2 := f.Questions.Put(contests.Question{ContestID: c.ID, Ord: 2, Kind: contests.KindText, IsVisible: true})
+
+	_, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q2.ID, Value: "anything",
+	})
+	if !errors.Is(err, contests.ErrQuestionNotOpen) {
+		t.Fatalf("error = %v, want ErrQuestionNotOpen — the hidden question 1 is not closed yet", err)
+	}
+
+	// Closing the hidden question the ordinary way — a correct answer — is
+	// what §6.1 already proves gradable for a hidden question
+	// (TestSubmitGradesAHiddenQuestion); here it is also what unblocks
+	// question 2.
+	if _, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q1.ID, Value: "correct",
+	}); err != nil {
+		t.Fatalf("answering the hidden question 1 = %v", err)
+	}
+
+	if _, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q2.ID, Value: "anything",
+	}); err != nil {
+		t.Fatalf("Submit() on question 2 = %v, want it open now that the hidden question 1 is closed", err)
+	}
+}
+
 func TestSubmitScoresACorrectAnswer(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := runningFixedContest(f)

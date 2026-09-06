@@ -28,6 +28,8 @@ func TestContestSurvivesARoundTrip(t *testing.T) {
 			Status:       contests.StatusDraft,
 			Enrollment:   contests.EnrollmentOpen,
 			QuestionMode: contests.QuestionModeSingle,
+			Progression:  contests.ProgressionSequential,
+			Scoring:      contests.ScoringWinner,
 			Timing:       contests.TimingIndividual,
 			DurationMin:  &minutes,
 			StartsAt:     &start,
@@ -54,6 +56,10 @@ func TestContestSurvivesARoundTrip(t *testing.T) {
 			t.Errorf("enrollment = %q, want open", loaded.Enrollment)
 		case loaded.QuestionMode != contests.QuestionModeSingle:
 			t.Errorf("question mode = %q, want single", loaded.QuestionMode)
+		case loaded.Progression != contests.ProgressionSequential:
+			t.Errorf("progression = %q, want sequential", loaded.Progression)
+		case loaded.Scoring != contests.ScoringWinner:
+			t.Errorf("scoring = %q, want winner", loaded.Scoring)
 		case loaded.Timing != contests.TimingIndividual:
 			t.Errorf("timing = %q, want individual", loaded.Timing)
 		case loaded.DurationMin == nil || *loaded.DurationMin != minutes:

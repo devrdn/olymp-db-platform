@@ -29,6 +29,7 @@ type Fixture struct {
 	Policies      *Policies
 	Languages     *Languages
 	Submissions   *Submissions
+	Sequence      *SequentialProgress
 	Users         *userstest.Repository
 	Audit         *Sink
 	UnitOfWork    *UnitOfWork
@@ -51,6 +52,9 @@ func NewFixture() *Fixture {
 		UnitOfWork:    &UnitOfWork{},
 		Now:           FixtureNow,
 	}
+	// Derived from the same question and submission stores above, not a
+	// third store of its own — see SequentialProgress's own doc.
+	f.Sequence = NewSequentialProgress(f.Questions, f.Submissions)
 	// Participants carry the login the real repository joins in.
 	f.Registrations.Accounts = func(ctx context.Context, id uuid.UUID) (string, string) {
 		user, err := f.Users.ByID(ctx, id)
@@ -75,6 +79,7 @@ func NewFixture() *Fixture {
 		Policies:      f.Policies,
 		Languages:     f.Languages,
 		Submissions:   f.Submissions,
+		Sequence:      f.Sequence,
 		Users:         f.Users,
 		Audit:         audit.New(f.Audit),
 		UnitOfWork:    f.UnitOfWork,
@@ -137,6 +142,8 @@ func (f *Fixture) SeedContest(status string) contests.Contest {
 		Status:       status,
 		Enrollment:   contests.EnrollmentInviteOnly,
 		QuestionMode: contests.QuestionModeMulti,
+		Progression:  contests.ProgressionFree,
+		Scoring:      contests.ScoringPoints,
 		Timing:       contests.TimingFixed,
 		StartsAt:     &start,
 		EndsAt:       &end,

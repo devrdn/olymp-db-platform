@@ -228,6 +228,35 @@ func TestGateReportsEveryProblemAtOnce(t *testing.T) {
 	}
 }
 
+// §6.1.1: sequential progression opens the next question only when the
+// previous one is closed, and a question with no attempt cap can only ever
+// close by a correct answer — trapping a participant who is stuck for the
+// rest of the contest. The gate refuses this at publish, the one moment it
+// can still be caught rather than discovered live.
+func TestGateRefusesSequentialWithAQuestionWithNoMaxAttempts(t *testing.T) {
+	c, story, questions := publishable()
+	c.Progression = contests.ProgressionSequential
+	// publishable()'s one question already has MaxAttempts unset.
+
+	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
+	if !contains(codes, contests.ProblemSequentialNeedsMaxAttempts) {
+		t.Errorf("problems = %v, want %s", codes, contests.ProblemSequentialNeedsMaxAttempts)
+	}
+}
+
+// The same contest passes once every question carries an attempt cap: the
+// gate is about the trap, not about progression itself.
+func TestGateAcceptsSequentialOnceEveryQuestionHasMaxAttempts(t *testing.T) {
+	c, story, questions := publishable()
+	c.Progression = contests.ProgressionSequential
+	max := 3
+	questions[0].MaxAttempts = &max
+
+	if err := contests.CheckPublishable(c, story, questions); err != nil {
+		t.Errorf("contests.CheckPublishable() = %v, want nil", err)
+	}
+}
+
 func TestNotPublishableMatchesItsSentinel(t *testing.T) {
 	c, story, _ := publishable()
 

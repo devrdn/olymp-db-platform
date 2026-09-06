@@ -140,6 +140,8 @@ func validContest() contests.Contest {
 		Status:       contests.StatusDraft,
 		Enrollment:   contests.EnrollmentInviteOnly,
 		QuestionMode: contests.QuestionModeMulti,
+		Progression:  contests.ProgressionFree,
+		Scoring:      contests.ScoringPoints,
 		Timing:       contests.TimingFixed,
 		Languages:    []contests.ContestLanguage{{Code: "en", IsDefault: true}, {Code: "ro"}},
 	}
