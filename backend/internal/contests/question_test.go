@@ -37,6 +37,27 @@ func TestQuestionRejectsNegativePoints(t *testing.T) {
 	}
 }
 
+// Finding 4: points had a floor but no ceiling, and points_awarded's own
+// computation (postgres.Submissions.Insert) multiplies a per-attempt
+// penalty derived from it against Postgres's own int4 arithmetic — an
+// unbounded value turns a wrong attempt into "integer out of range" for the
+// database rather than a scored answer.
+func TestQuestionRejectsAnOverlargePointsValue(t *testing.T) {
+	q := contests.Question{Kind: contests.KindText, Points: 10_000_001}
+
+	if err := q.Validate(); !errors.Is(err, contests.ErrInvalidQuestion) {
+		t.Errorf("Validate() = %v, want contests.ErrInvalidQuestion", err)
+	}
+}
+
+func TestQuestionAcceptsPointsAtTheCeiling(t *testing.T) {
+	q := contests.Question{Kind: contests.KindText, Points: 10_000_000}
+
+	if err := q.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil", err)
+	}
+}
+
 func TestQuestionRejectsAnAttemptLimitOfZero(t *testing.T) {
 	// Zero attempts is a question nobody can answer, which is never what the
 	// organizer meant; "unlimited" is expressed by leaving it unset.
@@ -391,6 +412,90 @@ func TestChangingAQuestionRecordsWhichFieldMoved(t *testing.T) {
 	}
 	if payload["question_id"] != created.ID.String() {
 		t.Errorf("payload = %v, want it to still name the question", payload)
+	}
+}
+
+// Finding 1: UpdateQuestion used to assign cmd.PenaltyPct unconditionally, a
+// plain int defaulting to zero — so any PATCH that never mentioned a penalty
+// silently reset one configured out of band back to zero. PenaltyPct is a
+// pointer for exactly this reason: nil must leave the stored value alone,
+// the same way IsVisible's own nil already does for visibility.
+func TestUpdateQuestionPreservesAnUnmentionedPenalty(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	penalty := 40
+	cmd := questionCmd(c.ID)
+	cmd.PenaltyPct = &penalty
+	created, err := f.Service.AddQuestion(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("AddQuestion() = %v", err)
+	}
+
+	// An edit that only changes the wording's face value — PenaltyPct left
+	// nil, exactly what a client that has never heard of penalties sends.
+	updated, err := f.Service.UpdateQuestion(context.Background(), contests.QuestionCommand{
+		ActorID: uuid.New(), ContestID: c.ID, QuestionID: created.ID,
+		Kind: contests.KindText, Points: 12,
+	})
+	if err != nil {
+		t.Fatalf("UpdateQuestion() = %v", err)
+	}
+	if updated.PenaltyPct != 40 {
+		t.Errorf("PenaltyPct = %d, want 40 (unchanged by an edit that never mentioned it)", updated.PenaltyPct)
+	}
+	if updated.Points != 12 {
+		t.Errorf("Points = %d, want 12 (the field the command did mention)", updated.Points)
+	}
+}
+
+// The penalty can still be changed on purpose — "nil leaves it alone" must
+// not become "it can never move again".
+func TestUpdateQuestionCanChangeThePenalty(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	penalty := 40
+	cmd := questionCmd(c.ID)
+	cmd.PenaltyPct = &penalty
+	created, err := f.Service.AddQuestion(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("AddQuestion() = %v", err)
+	}
+
+	zero := 0
+	updated, err := f.Service.UpdateQuestion(context.Background(), contests.QuestionCommand{
+		ActorID: uuid.New(), ContestID: c.ID, QuestionID: created.ID,
+		Kind: contests.KindText, Points: 5, PenaltyPct: &zero,
+	})
+	if err != nil {
+		t.Fatalf("UpdateQuestion() = %v", err)
+	}
+	if updated.PenaltyPct != 0 {
+		t.Errorf("PenaltyPct = %d, want 0 (explicitly set)", updated.PenaltyPct)
+	}
+}
+
+// SaveQuestion (PUT) shares the same rule: it too must not clobber a penalty
+// its own caller never mentioned.
+func TestSaveQuestionPreservesAnUnmentionedPenalty(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	penalty := 30
+	cmd := questionCmd(c.ID)
+	cmd.PenaltyPct = &penalty
+	created, err := f.Service.AddQuestion(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("AddQuestion() = %v", err)
+	}
+
+	saved, err := f.Service.SaveQuestion(context.Background(), contests.SaveQuestionCommand{
+		ActorID: uuid.New(), ContestID: c.ID, QuestionID: created.ID,
+		Kind: contests.KindText, Points: 8,
+	})
+	if err != nil {
+		t.Fatalf("SaveQuestion() = %v", err)
+	}
+	if saved.PenaltyPct != 30 {
+		t.Errorf("PenaltyPct = %d, want 30 (unchanged by a save that never mentioned it)", saved.PenaltyPct)
 	}
 }
 

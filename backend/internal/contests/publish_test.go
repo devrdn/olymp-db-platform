@@ -257,6 +257,50 @@ func TestGateAcceptsSequentialOnceEveryQuestionHasMaxAttempts(t *testing.T) {
 	}
 }
 
+// §6.1.1: a hidden question can never receive a submission — a participant is
+// never given its identifier — so it can never close, and everything ordered
+// after it in a sequential contest becomes unreachable for the rest of the
+// contest. That holds even with a perfectly good max_attempts on the hidden
+// question itself, which is the one shape ProblemSequentialNeedsMaxAttempts
+// does not catch.
+func TestGateRefusesSequentialWithAHiddenQuestionBeforeAnother(t *testing.T) {
+	c, story, questions := publishable()
+	c.Progression = contests.ProgressionSequential
+	max := 3
+	questions[0].MaxAttempts = &max
+	questions[0].Ord = 1
+	questions[0].IsVisible = false
+	second := questions[0]
+	second.ID = uuid.New()
+	second.Ord = 2
+	second.IsVisible = true
+	questions = append(questions, second)
+
+	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
+	if !contains(codes, contests.ProblemSequentialHidesQuestion) {
+		t.Errorf("problems = %v, want %s", codes, contests.ProblemSequentialHidesQuestion)
+	}
+}
+
+// A hidden question with nothing ordered after it blocks nothing, and works
+// exactly as authored — the same as it would in free progression.
+func TestGateAcceptsSequentialWithAHiddenLastQuestion(t *testing.T) {
+	c, story, questions := publishable()
+	c.Progression = contests.ProgressionSequential
+	max := 3
+	questions[0].MaxAttempts = &max
+	questions[0].Ord = 1
+	second := questions[0]
+	second.ID = uuid.New()
+	second.Ord = 2
+	second.IsVisible = false
+	questions = append(questions, second)
+
+	if err := contests.CheckPublishable(c, story, questions); err != nil {
+		t.Errorf("contests.CheckPublishable() = %v, want nil", err)
+	}
+}
+
 func TestNotPublishableMatchesItsSentinel(t *testing.T) {
 	c, story, _ := publishable()
 

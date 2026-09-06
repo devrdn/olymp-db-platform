@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/google/uuid"
 )
 
 // A question with nothing ordered before it is trivially open.
@@ -166,6 +167,141 @@ func TestSequenceOpenCountsAHiddenQuestion(t *testing.T) {
 		}
 		if !open {
 			t.Error("Open() = false, want true — the hidden question 1 is now closed")
+		}
+	})
+}
+
+// Finding 3: with nothing closed yet, the frontier is the first question in
+// display order — the same question Open already answers "trivially open"
+// for.
+func TestSequenceFrontierIsTheFirstQuestionWhenNothingIsClosed(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-front-1")
+		student := makeUser(t, ctx, "student-front-1")
+		contestID := makeContest(t, ctx, author.ID)
+		registrationID := makeRegistration(t, ctx, contestID, student.ID)
+		questions := NewQuestions(testPool)
+		q1, err := questions.Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
+		if err != nil {
+			t.Fatalf("Create() q1 = %v", err)
+		}
+		if _, err := questions.Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true}); err != nil {
+			t.Fatalf("Create() q2 = %v", err)
+		}
+
+		frontier, err := NewSequence(testPool).Frontier(ctx, contestID, registrationID)
+		if err != nil {
+			t.Fatalf("Frontier() = %v", err)
+		}
+		if frontier != q1.ID {
+			t.Errorf("Frontier() = %s, want the first question %s", frontier, q1.ID)
+		}
+	})
+}
+
+// Once the frontier question is answered correctly, the next one becomes the
+// frontier.
+func TestSequenceFrontierMovesOnceTheOpenQuestionIsAnsweredCorrectly(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-front-2")
+		student := makeUser(t, ctx, "student-front-2")
+		contestID := makeContest(t, ctx, author.ID)
+		registrationID := makeRegistration(t, ctx, contestID, student.ID)
+		questions := NewQuestions(testPool)
+		q1, err := questions.Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
+		if err != nil {
+			t.Fatalf("Create() q1 = %v", err)
+		}
+		q2, err := questions.Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
+		if err != nil {
+			t.Fatalf("Create() q2 = %v", err)
+		}
+
+		if _, err := NewSubmissions(testPool).Insert(ctx, contests.SubmissionRequest{
+			RegistrationID: registrationID, QuestionID: q1.ID, Value: "correct", IsCorrect: true,
+			Points: 5, Deadline: farDeadline,
+		}); err != nil {
+			t.Fatalf("Insert() = %v", err)
+		}
+
+		frontier, err := NewSequence(testPool).Frontier(ctx, contestID, registrationID)
+		if err != nil {
+			t.Fatalf("Frontier() = %v", err)
+		}
+		if frontier != q2.ID {
+			t.Errorf("Frontier() = %s, want the second question %s once the first is closed", frontier, q2.ID)
+		}
+	})
+}
+
+// The frontier still counts a hidden question exactly as a visible one
+// (§6.1.1) — it moves past it only once it, too, is closed.
+func TestSequenceFrontierCountsAHiddenQuestion(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-front-3")
+		student := makeUser(t, ctx, "student-front-3")
+		contestID := makeContest(t, ctx, author.ID)
+		registrationID := makeRegistration(t, ctx, contestID, student.ID)
+		questions := NewQuestions(testPool)
+		hidden, err := questions.Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: false})
+		if err != nil {
+			t.Fatalf("Create() hidden = %v", err)
+		}
+		visible, err := questions.Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
+		if err != nil {
+			t.Fatalf("Create() visible = %v", err)
+		}
+
+		frontier, err := NewSequence(testPool).Frontier(ctx, contestID, registrationID)
+		if err != nil {
+			t.Fatalf("Frontier() = %v", err)
+		}
+		if frontier != hidden.ID {
+			t.Errorf("Frontier() = %s, want the hidden question %s — it is still first in order", frontier, hidden.ID)
+		}
+
+		if _, err := NewSubmissions(testPool).Insert(ctx, contests.SubmissionRequest{
+			RegistrationID: registrationID, QuestionID: hidden.ID, Value: "correct", IsCorrect: true,
+			Points: 5, Deadline: farDeadline,
+		}); err != nil {
+			t.Fatalf("Insert() = %v", err)
+		}
+
+		frontier, err = NewSequence(testPool).Frontier(ctx, contestID, registrationID)
+		if err != nil {
+			t.Fatalf("Frontier() = %v", err)
+		}
+		if frontier != visible.ID {
+			t.Errorf("Frontier() = %s, want the visible question %s once the hidden one closes", frontier, visible.ID)
+		}
+	})
+}
+
+// Once every question is closed, there is nothing left to point at.
+func TestSequenceFrontierIsNilOnceEveryQuestionIsClosed(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-front-4")
+		student := makeUser(t, ctx, "student-front-4")
+		contestID := makeContest(t, ctx, author.ID)
+		registrationID := makeRegistration(t, ctx, contestID, student.ID)
+		q1, err := NewQuestions(testPool).Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
+		if err != nil {
+			t.Fatalf("Create() q1 = %v", err)
+		}
+
+		if _, err := NewSubmissions(testPool).Insert(ctx, contests.SubmissionRequest{
+			RegistrationID: registrationID, QuestionID: q1.ID, Value: "correct", IsCorrect: true,
+			Points: 5, Deadline: farDeadline,
+		}); err != nil {
+			t.Fatalf("Insert() = %v", err)
+		}
+
+		frontier, err := NewSequence(testPool).Frontier(ctx, contestID, registrationID)
+		if err != nil {
+			t.Fatalf("Frontier() = %v", err)
+		}
+		if frontier != uuid.Nil {
+			t.Errorf("Frontier() = %s, want uuid.Nil — every question is closed", frontier)
 		}
 	})
 }

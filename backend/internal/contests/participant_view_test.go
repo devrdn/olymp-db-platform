@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
@@ -16,7 +17,25 @@ func newReader() (*contests.Reader, *conteststest.Stories, *conteststest.Questio
 	stories := conteststest.NewStories()
 	questions := conteststest.NewQuestions()
 	attempts := conteststest.NewAttempts()
-	return contests.NewReader(stories, questions, attempts), stories, questions, attempts
+	// A gate is still required (Reader.Questions only ever calls it for a
+	// sequential contest), but none of the tests using this helper ask about
+	// sequential progression — see newSequentialReader for those, which
+	// exposes the submission store this derives from so a test can close a
+	// question.
+	sequence := conteststest.NewSequentialProgress(questions, conteststest.NewSubmissions())
+	return contests.NewReader(stories, questions, attempts, sequence), stories, questions, attempts
+}
+
+// newSequentialReader is newReader with its sequential gate's own submission
+// store exposed, for a test that needs to close a question and watch the
+// answerable frontier move (finding 3).
+func newSequentialReader() (*contests.Reader, *conteststest.Questions, *conteststest.Attempts, *conteststest.Submissions) {
+	questions := conteststest.NewQuestions()
+	attempts := conteststest.NewAttempts()
+	submissions := conteststest.NewSubmissions()
+	sequence := conteststest.NewSequentialProgress(questions, submissions)
+	reader := contests.NewReader(conteststest.NewStories(), questions, attempts, sequence)
+	return reader, questions, attempts, submissions
 }
 
 func TestStoryReturnsTheBodyInTheResolvedLanguage(t *testing.T) {
@@ -77,7 +96,7 @@ func TestQuestionsOmitsHiddenQuestions(t *testing.T) {
 		Answers: []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "candlestick"}},
 	})
 
-	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en")
+	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en", contests.ProgressionFree)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
@@ -104,7 +123,7 @@ func TestQuestionsNeverCarryReferenceAnswers(t *testing.T) {
 		Answers: []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the butler"}},
 	})
 
-	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en")
+	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en", contests.ProgressionFree)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
@@ -128,7 +147,7 @@ func TestQuestionsResolvesTheWordingToTheRequestedLanguage(t *testing.T) {
 		},
 	})
 
-	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "ru")
+	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "ru", contests.ProgressionFree)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
@@ -163,7 +182,7 @@ func TestQuestionsReportsAttemptsRemainingAndClosed(t *testing.T) {
 	// unlimited and, implicitly, a fresh registration on capped: no entry at
 	// all, which must read as "never attempted" rather than an error.
 
-	found, err := reader.Questions(t.Context(), contestID, registrationID, "en")
+	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", contests.ProgressionFree)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
@@ -213,7 +232,7 @@ func TestQuestionsClosesAQuestionOnceEveryAttemptIsSpent(t *testing.T) {
 	})
 	attempts.Put(registrationID, q.ID, contests.AttemptStats{Attempts: 2})
 
-	found, err := reader.Questions(t.Context(), contestID, registrationID, "en")
+	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", contests.ProgressionFree)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
@@ -243,7 +262,7 @@ func TestQuestionsOmitsAQuestionMissingTheResolvedLanguage(t *testing.T) {
 		Texts: map[string]contests.QuestionText{"ru": {BodyMD: "Кто это сделал?"}},
 	})
 
-	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en")
+	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en", contests.ProgressionFree)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
@@ -263,11 +282,130 @@ func TestQuestionsIsEmptyForAContestWithNoVisibleQuestions(t *testing.T) {
 		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Secret."}},
 	})
 
-	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en")
+	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en", contests.ProgressionFree)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
 	if len(found) != 0 {
 		t.Fatalf("found = %+v, want none", found)
+	}
+}
+
+// Outside sequential progression nothing else gates a submission beyond
+// "closed", so CanAnswer must simply agree with !Closed for every question —
+// free progression and single-question mode have no frontier of their own
+// (finding 3).
+func TestQuestionsCanAnswerMatchesClosedOutsideSequentialProgression(t *testing.T) {
+	reader, _, questions, attempts := newReader()
+	contestID := uuid.New()
+	registrationID := uuid.New()
+	maxAttempts := 1
+
+	open := questions.Put(contests.Question{
+		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
+		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}},
+	})
+	closed := questions.Put(contests.Question{
+		ContestID: contestID, Ord: 2, Kind: contests.KindText, Points: 5, IsVisible: true,
+		MaxAttempts: &maxAttempts,
+		Texts:       map[string]contests.QuestionText{"en": {BodyMD: "What weapon?"}},
+	})
+	attempts.Put(registrationID, closed.ID, contests.AttemptStats{Attempts: 1})
+
+	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", contests.ProgressionFree)
+	if err != nil {
+		t.Fatalf("Questions() = %v", err)
+	}
+	byID := map[uuid.UUID]contests.ParticipantQuestion{}
+	for _, q := range found {
+		byID[q.ID] = q
+	}
+
+	if !byID[open.ID].CanAnswer {
+		t.Errorf("open question CanAnswer = false, want true")
+	}
+	if byID[closed.ID].CanAnswer {
+		t.Errorf("closed question CanAnswer = true, want false")
+	}
+}
+
+// §6.1.1, finding 3: sequential progression only ever lets one question be
+// answered at a time — the one lowest in display order that is not yet
+// closed. A participant looking at several unclosed questions must be able
+// to tell which one that is without probing each and collecting refusals.
+func TestQuestionsMarksOnlyTheSequentialFrontierAnswerable(t *testing.T) {
+	reader, questions, _, _ := newSequentialReader()
+	contestID := uuid.New()
+	registrationID := uuid.New()
+
+	first := questions.Put(contests.Question{
+		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
+		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}},
+	})
+	second := questions.Put(contests.Question{
+		ContestID: contestID, Ord: 2, Kind: contests.KindText, Points: 5, IsVisible: true,
+		Texts: map[string]contests.QuestionText{"en": {BodyMD: "What weapon?"}},
+	})
+
+	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", contests.ProgressionSequential)
+	if err != nil {
+		t.Fatalf("Questions() = %v", err)
+	}
+	byID := map[uuid.UUID]contests.ParticipantQuestion{}
+	for _, q := range found {
+		byID[q.ID] = q
+	}
+
+	if !byID[first.ID].CanAnswer {
+		t.Errorf("first question CanAnswer = false, want true (nothing has closed it yet)")
+	}
+	if byID[second.ID].CanAnswer {
+		t.Errorf("second question CanAnswer = true, want false (the first has not closed)")
+	}
+}
+
+// The frontier moves forward, by exactly one question, once the question
+// holding it closes.
+func TestQuestionsMovesTheSequentialFrontierOnceAQuestionCloses(t *testing.T) {
+	reader, questions, attempts, submissions := newSequentialReader()
+	contestID := uuid.New()
+	registrationID := uuid.New()
+
+	first := questions.Put(contests.Question{
+		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
+		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}},
+	})
+	second := questions.Put(contests.Question{
+		ContestID: contestID, Ord: 2, Kind: contests.KindText, Points: 5, IsVisible: true,
+		Texts: map[string]contests.QuestionText{"en": {BodyMD: "What weapon?"}},
+	})
+
+	// Close the first question: a correct submission, mirrored on both the
+	// attempt stats Reader itself reads and the submissions the sequential
+	// gate derives its own answer from. Production keeps the two in sync by
+	// writing one row to one table; the fakes stand in for two different
+	// repositories, so the test writes both.
+	if _, err := submissions.Insert(t.Context(), contests.SubmissionRequest{
+		RegistrationID: registrationID, QuestionID: first.ID, Value: "yes",
+		IsCorrect: true, Points: first.Points, Deadline: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("Insert() = %v", err)
+	}
+	attempts.Put(registrationID, first.ID, contests.AttemptStats{Attempts: 1, Correct: true})
+
+	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", contests.ProgressionSequential)
+	if err != nil {
+		t.Fatalf("Questions() = %v", err)
+	}
+	byID := map[uuid.UUID]contests.ParticipantQuestion{}
+	for _, q := range found {
+		byID[q.ID] = q
+	}
+
+	if byID[first.ID].CanAnswer {
+		t.Errorf("closed first question CanAnswer = true, want false")
+	}
+	if !byID[second.ID].CanAnswer {
+		t.Errorf("second question CanAnswer = false, want true (the first is now closed)")
 	}
 }

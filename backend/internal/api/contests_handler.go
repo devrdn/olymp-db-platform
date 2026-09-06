@@ -132,10 +132,16 @@ func (h *ContestsHandler) Mount(r chi.Router) {
 // A dedicated type rather than the domain object, for the same reason accounts
 // have one: direct serialisation publishes whatever field is added next.
 type ContestResponse struct {
-	ID           string                         `json:"id"`
-	Status       string                         `json:"status"`
-	Enrollment   string                         `json:"enrollment"`
-	QuestionMode string                         `json:"question_mode"`
+	ID           string `json:"id"`
+	Status       string `json:"status"`
+	Enrollment   string `json:"enrollment"`
+	QuestionMode string `json:"question_mode"`
+	// Progression decides the order questions may be answered in (§6.1.1):
+	// contests.ProgressionFree or contests.ProgressionSequential.
+	Progression string `json:"progression"`
+	// Scoring decides how a result is derived from submissions (§6.1.1):
+	// contests.ScoringPoints or contests.ScoringWinner.
+	Scoring      string                         `json:"scoring"`
 	Timing       string                         `json:"timing"`
 	DurationMin  *int                           `json:"duration_min,omitempty"`
 	StartsAt     string                         `json:"starts_at,omitempty"`
@@ -193,6 +199,8 @@ func toContestResponse(c contests.Contest) ContestResponse {
 		Status:       c.Status,
 		Enrollment:   c.Enrollment,
 		QuestionMode: c.QuestionMode,
+		Progression:  c.Progression,
+		Scoring:      c.Scoring,
 		Timing:       c.Timing,
 		DurationMin:  c.DurationMin,
 		StartsAt:     formatTime(c.StartsAt),
@@ -359,8 +367,14 @@ func boolParam(r *http.Request, name string) (*bool, error) {
 }
 
 type contestRequest struct {
-	Enrollment   string                         `json:"enrollment"`
-	QuestionMode string                         `json:"question_mode"`
+	Enrollment   string `json:"enrollment"`
+	QuestionMode string `json:"question_mode"`
+	// Progression and Scoring follow Enrollment/QuestionMode's own rule: an
+	// empty string on update means "leave it alone" (see UpdateCommand's
+	// doc), and on create means "use the domain's default" (see
+	// CreateCommand's doc) — neither is a value an organizer can mean to set.
+	Progression  string                         `json:"progression"`
+	Scoring      string                         `json:"scoring"`
 	Timing       string                         `json:"timing"`
 	DurationMin  *int                           `json:"duration_min"`
 	StartsAt     *string                        `json:"starts_at"`
@@ -399,6 +413,8 @@ func (h *ContestsHandler) create(w http.ResponseWriter, r *http.Request) {
 		ActorID:      identity.UserID,
 		Enrollment:   req.Enrollment,
 		QuestionMode: req.QuestionMode,
+		Progression:  req.Progression,
+		Scoring:      req.Scoring,
 		Timing:       req.Timing,
 		DurationMin:  req.DurationMin,
 		StartsAt:     starts,
@@ -457,6 +473,8 @@ func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {
 		ContestID:    id,
 		Enrollment:   req.Enrollment,
 		QuestionMode: req.QuestionMode,
+		Progression:  req.Progression,
+		Scoring:      req.Scoring,
 		Timing:       req.Timing,
 		DurationMin:  req.DurationMin,
 		StartsAt:     starts,

@@ -84,6 +84,10 @@ type QuestionResponse struct {
 	Kind        string `json:"kind"`
 	Points      int    `json:"points"`
 	MaxAttempts *int   `json:"max_attempts,omitempty"`
+	// PenaltyPct is what percent of Points a wrong attempt costs (§6.1.1),
+	// always returned — zero is "no penalty", a meaningful value in its own
+	// right, not an absent one.
+	PenaltyPct int `json:"penalty_pct"`
 	// IsVisible reports whether participants are shown the question text at
 	// all; a hidden question still scores (§6.1).
 	IsVisible bool                            `json:"is_visible"`
@@ -113,6 +117,7 @@ func toQuestionResponse(q contests.Question) QuestionResponse {
 		Kind:        q.Kind,
 		Points:      q.Points,
 		MaxAttempts: q.MaxAttempts,
+		PenaltyPct:  q.PenaltyPct,
 		IsVisible:   q.IsVisible,
 		ChoiceIDs:   q.ChoiceIDs,
 		Texts:       make(map[string]QuestionTextResponse, len(q.Texts)),
@@ -173,6 +178,11 @@ type questionRequest struct {
 	Kind        string `json:"kind"`
 	Points      int    `json:"points"`
 	MaxAttempts *int   `json:"max_attempts"`
+	// PenaltyPct is a pointer so that omitting it means "leave the stored
+	// penalty alone" rather than "reset it to zero" (finding 1): zero is a
+	// meaningful value (no penalty), so absence has to read differently from
+	// it, the same distinction IsVisible already makes for its own field.
+	PenaltyPct *int `json:"penalty_pct"`
 	// IsVisible is a pointer so that omitting it means visible: hiding a
 	// question is the deliberate choice, and the ordinary case must not depend
 	// on remembering to say so.
@@ -189,6 +199,7 @@ func (req questionRequest) command(contestID, questionID, actorID uuid.UUID) con
 		Kind:        req.Kind,
 		Points:      req.Points,
 		MaxAttempts: req.MaxAttempts,
+		PenaltyPct:  req.PenaltyPct,
 		IsVisible:   req.IsVisible,
 		ChoiceIDs:   req.ChoiceIDs,
 		Texts:       toDomainTexts(req.Texts),
@@ -352,6 +363,7 @@ func (h *ContestsHandler) saveQuestion(w http.ResponseWriter, r *http.Request) {
 		Kind:        req.Kind,
 		Points:      req.Points,
 		MaxAttempts: req.MaxAttempts,
+		PenaltyPct:  req.PenaltyPct,
 		IsVisible:   req.IsVisible,
 		ChoiceIDs:   req.ChoiceIDs,
 		Texts:       toDomainTexts(req.Texts),

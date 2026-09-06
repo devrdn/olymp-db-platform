@@ -259,7 +259,13 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			nil, nil, nil,
 		).WithPerMinuteDefault(cfg.QueryPerMinute).WithGrace(cfg.DeadlineGrace)
 	}
-	reader := contests.NewReader(postgres.NewStories(pool), postgres.NewQuestions(pool), postgres.NewAttempts(pool))
+	// Sequence is a second instance of the same postgres.Sequence contestService
+	// already holds one of (both are pool-backed, stateless readers): Reader
+	// and Service sit in different packages and neither imports the other's
+	// wiring, so each is handed its own rather than the two sharing a field
+	// that would have to cross that boundary.
+	reader := contests.NewReader(
+		postgres.NewStories(pool), postgres.NewQuestions(pool), postgres.NewAttempts(pool), postgres.NewSequence(pool))
 	// Submit is the same contestService every staff endpoint above already
 	// uses — not a second implementation of the answering rules, and not a
 	// second Submissions repository either.

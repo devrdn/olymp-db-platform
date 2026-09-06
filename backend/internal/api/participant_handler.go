@@ -190,6 +190,13 @@ type participantQuestionResponse struct {
 	// zero, because zero would read as "no attempts left".
 	AttemptsRemaining *int `json:"attempts_remaining,omitempty"`
 	Closed            bool `json:"closed"`
+	// CanAnswer says whether the participant may submit to this question
+	// right now — always true for an unclosed question, except in a
+	// sequential contest where it is true for only one of them at a time
+	// (§6.1.1, finding 3). Without it a sequential contest shows several
+	// unclosed questions with nothing to say which one is actually open,
+	// and the participant finds out by trying each and collecting refusals.
+	CanAnswer bool `json:"can_answer"`
 }
 
 func toParticipantQuestionResponse(q contests.ParticipantQuestion) participantQuestionResponse {
@@ -202,6 +209,7 @@ func toParticipantQuestionResponse(q contests.ParticipantQuestion) participantQu
 		Choices:           q.Choices,
 		AttemptsRemaining: q.AttemptsRemaining,
 		Closed:            q.Closed,
+		CanAnswer:         q.CanAnswer,
 	}
 	if out.ChoiceIDs == nil {
 		out.ChoiceIDs = []string{}
@@ -221,7 +229,7 @@ func (h *ParticipantHandler) questions(w http.ResponseWriter, r *http.Request) {
 	}
 	lang := h.languageFor(r, contest)
 
-	found, err := h.reader.Questions(r.Context(), contest.ID, participant.ID, lang)
+	found, err := h.reader.Questions(r.Context(), contest.ID, participant.ID, lang, contest.Progression)
 	if err != nil {
 		h.fail(w, r, err)
 		return
