@@ -177,6 +177,8 @@ const en = {
         missing_choice_label: "A choice has no label in a declared language.",
         no_reference_answer: "A question has no reference answer, so nothing could mark it.",
         no_schedule: "The contest has no start and end.",
+        sequential_needs_max_attempts: "A question has no attempt limit, so a participant stuck on it in sequential order could never move on.",
+        sequential_hides_question: "A hidden question in sequential order has another question after it, which could never be reached.",
       },
     },
     story: {

@@ -383,7 +383,13 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 		case <-h.shutdown:
 			return
 		case <-ticker.C:
-			h.setWriteDeadline(rc)
+			// Armed after the lookups below, not before: AccessForEvents is
+			// two database reads, and a deadline meant to bound how long this
+			// goroutine may block trying to write must not start ticking
+			// against time this request spends waiting on the server's own
+			// storage (finding 2). A resync whose lookups run slow would
+			// otherwise disconnect an honest, still-enrolled client for a
+			// delay entirely on this side of the connection.
 			newParticipant, newContest, err := h.access.AccessForEvents(r.Context(), contestID, identity.UserID, addr)
 			if err != nil {
 				// A store that is briefly away is not a refusal of this
@@ -407,6 +413,7 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 				// business" rule the read endpoints already apply to a
 				// refusal that is not about the contest's own clock.
 				if errors.Is(err, queryproxy.ErrFinished) || errors.Is(err, queryproxy.ErrContestNotRunning) {
+					h.setWriteDeadline(rc)
 					if writeEvent(w, eventContestFinished, statusPayload{Status: contests.StatusFinished}) == nil {
 						_ = rc.Flush()
 					}
@@ -419,6 +426,9 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 			// against a zero value and wrongly announce a fresh start.
 			wasRunning := contest.Status == contests.StatusRunning
 			participant, contest = newParticipant, newContest
+			// The lookups are done; everything from here writes to the
+			// connection, so this is where the deadline belongs (finding 2).
+			h.setWriteDeadline(rc)
 			// The published → running transition, announced the moment a
 			// tick observes it (finding 4) — the one case connect-time
 			// could never cover, since Access itself refuses a contest that

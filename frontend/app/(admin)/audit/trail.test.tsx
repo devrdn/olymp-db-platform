@@ -172,6 +172,53 @@ describe("AuditTrailRegister, what an action changed", () => {
   });
 });
 
+// Finding 3: a contest.start_blocked entry names why, via the same problem
+// codes the publish gate's own screen already carries wording for
+// (workspace.gate.problems) — an organizer reading "a contest did not
+// start" must be able to see which check failed without leaving the trail.
+describe("AuditTrailRegister, why a contest did not start", () => {
+  const blocked = (problems: string[]) =>
+    entry({ action: "contest.start_blocked", entity_id: "c-1", payload: { problems } });
+
+  test("names the reason in the reader's own language", () => {
+    render(<AuditTrailRegister entries={[blocked(["no_story"])]} {...props} dict={dict} />);
+
+    expect(screen.getByText(dict.workspace.gate.problems.no_story)).toBeInTheDocument();
+  });
+
+  test("lists every problem the gate reported, not just the first", () => {
+    render(
+      <AuditTrailRegister
+        entries={[blocked(["no_story", "no_questions"])]}
+        {...props}
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByText(dict.workspace.gate.problems.no_story)).toBeInTheDocument();
+    expect(screen.getByText(dict.workspace.gate.problems.no_questions)).toBeInTheDocument();
+  });
+
+  test("shows a code it has no wording for rather than dropping it", () => {
+    // The same rule as an unknown action: the trail is a record, and this is
+    // the one line that names why a contest is stuck — hiding it because the
+    // interface has not caught up would be worse than showing it raw.
+    render(
+      <AuditTrailRegister entries={[blocked(["a_future_check"])]} {...props} dict={dict} />,
+    );
+
+    expect(screen.getByText("a_future_check")).toBeInTheDocument();
+  });
+
+  test("adds nothing for an entry with no problems to report", () => {
+    const { container } = render(
+      <AuditTrailRegister entries={[entry({ action: "contest.status_change" })]} {...props} dict={dict} />,
+    );
+
+    expect(container.querySelector("ul")).toBeNull();
+  });
+});
+
 describe("AuditTrailRegister, what the action was about", () => {
   test("names the contest and links to it", () => {
     // "Changed the reference answers · Contest" answers half a question. The

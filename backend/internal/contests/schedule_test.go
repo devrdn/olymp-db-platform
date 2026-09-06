@@ -32,7 +32,7 @@ func newScheduler() schedulerFixture {
 	sink := conteststest.NewSink()
 	uow := &conteststest.UnitOfWork{}
 	return schedulerFixture{
-		scheduler: contests.NewScheduler(repo, stories, questions, audit.New(sink), uow),
+		scheduler: contests.NewScheduler(repo, stories, questions, sink, audit.New(sink), uow),
 		repo:      repo, stories: stories, questions: questions, sink: sink, uow: uow,
 	}
 }
@@ -181,6 +181,99 @@ func TestAdvanceBlocksAContestThatFailsThePublishGate(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("problems = %v, want it to include %q", problems, contests.ProblemNoStory)
+	}
+}
+
+// TestAdvanceRecordsTheBlockOnceAcrossManyConsecutiveTicks is finding 1's own
+// regression test: a contest whose window opened but whose story disappeared
+// stays published, so DueToStart keeps matching it every tick until somebody
+// fixes it. Before this change each of those ticks appended its own
+// start_blocked entry — the trail growing without bound for exactly the
+// contest an organizer most needs to be able to find in it.
+func TestAdvanceRecordsTheBlockOnceAcrossManyConsecutiveTicks(t *testing.T) {
+	f := newScheduler()
+	c, _, questions := publishable()
+	for _, q := range questions {
+		q.ContestID = c.ID
+		f.questions.Put(q)
+	}
+	f.repo.Due = []contests.Contest{c}
+
+	const ticks = 5
+	for i := 0; i < ticks; i++ {
+		if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
+			t.Fatalf("Advance() tick %d = %v", i, err)
+		}
+	}
+
+	if len(f.sink.Entries) != 1 {
+		t.Fatalf("audit entries after %d identical ticks = %d, want exactly 1", ticks, len(f.sink.Entries))
+	}
+	if f.sink.Entries[0].Action != audit.ActionContestStartBlocked {
+		t.Errorf("action = %q, want %q", f.sink.Entries[0].Action, audit.ActionContestStartBlocked)
+	}
+}
+
+// TestAdvanceRecordsASecondEntryWhenABlockedContestIsFixedAndBrokenAgain
+// proves the point of the dedup above is to stop repetition, not to stop
+// reporting: once anything else has been recorded for the contest since the
+// last block — here, the gate actually passing and the contest starting —
+// the very next refusal must get its own entry again, even carrying the same
+// problem codes as the first one did.
+func TestAdvanceRecordsASecondEntryWhenABlockedContestIsFixedAndBrokenAgain(t *testing.T) {
+	f := newScheduler()
+	c, _, questions := publishable()
+	for _, q := range questions {
+		q.ContestID = c.ID
+		f.questions.Put(q)
+	}
+	f.repo.Due = []contests.Contest{c}
+
+	// First tick: no story yet, blocked and recorded.
+	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
+		t.Fatalf("Advance() first tick = %v", err)
+	}
+	if len(f.sink.Entries) != 1 {
+		t.Fatalf("audit entries after the first block = %d, want 1", len(f.sink.Entries))
+	}
+
+	// A repeat of the identical problem must still be swallowed.
+	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
+		t.Fatalf("Advance() repeat tick = %v", err)
+	}
+	if len(f.sink.Entries) != 1 {
+		t.Fatalf("audit entries after a repeat of the same block = %d, want still 1", len(f.sink.Entries))
+	}
+
+	// The organizer fixes it: the story arrives, and this tick's gate passes
+	// and starts the contest — a different entry, standing for "something
+	// changed since the last block".
+	_, story, _ := publishable()
+	f.stories.Save(context.Background(), c.ID, story.Bodies)
+	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
+		t.Fatalf("Advance() fix tick = %v", err)
+	}
+
+	// The organizer breaks it again — the manual equivalent of Transition
+	// putting the contest back to published with the story removed a second
+	// time — and it becomes due once more.
+	if err := f.stories.Delete(context.Background(), c.ID); err != nil {
+		t.Fatalf("Delete() = %v", err)
+	}
+	f.repo.Due = []contests.Contest{c}
+
+	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
+		t.Fatalf("Advance() second break tick = %v", err)
+	}
+
+	var blocked []audit.Entry
+	for _, e := range f.sink.Entries {
+		if e.Action == audit.ActionContestStartBlocked {
+			blocked = append(blocked, e)
+		}
+	}
+	if len(blocked) != 2 {
+		t.Fatalf("start_blocked entries = %d, want 2 — the second break is a fresh refusal, not a repeat", len(blocked))
 	}
 }
 
