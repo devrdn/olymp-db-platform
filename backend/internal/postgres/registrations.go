@@ -241,6 +241,25 @@ func (r *Registrations) Start(ctx context.Context, registrationID uuid.UUID, now
 	}
 }
 
+// AddScore adds delta to the registration's total_score with a single atomic
+// UPDATE, never a read of the current value followed by a write — two
+// submissions scoring at the same moment (different questions answered
+// concurrently, or submission.go's own retry after losing the attempt race)
+// each issue their own `total_score = total_score + $2`, and PostgreSQL
+// serialises the two statements against the same row rather than letting the
+// second overwrite what the first added.
+func (r *Registrations) AddScore(ctx context.Context, registrationID uuid.UUID, delta int) error {
+	tag, err := r.querier(ctx).Exec(ctx,
+		`UPDATE registrations SET total_score = total_score + $2 WHERE id = $1`, registrationID, delta)
+	if err != nil {
+		return fmt.Errorf("add to registration score: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return contests.ErrParticipantNotFound
+	}
+	return nil
+}
+
 // SetStatus changes a registration's status.
 func (r *Registrations) SetStatus(ctx context.Context, registrationID uuid.UUID, status string) error {
 	tag, err := r.querier(ctx).Exec(ctx,

@@ -203,9 +203,15 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Registrations: postgres.NewRegistrations(pool),
 		Policies:      postgres.NewSQLPolicies(pool),
 		Languages:     postgres.NewLanguages(pool),
-		Users:         userRepo,
-		Audit:         auditRecorder,
-		UnitOfWork:    storage.NewUnitOfWork(pool),
+		// Records answers (submission.go). The same grace as queryproxy's own
+		// console (cfg.DeadlineGrace): §8 names one deadline formula and one
+		// grace, not one per path.
+		Submissions: postgres.NewSubmissions(pool),
+		Grace:       cfg.DeadlineGrace,
+		Users:       userRepo,
+		Audit:       auditRecorder,
+		UnitOfWork:  storage.NewUnitOfWork(pool),
+		Logger:      log,
 	})
 
 	modules := []api.Module{
@@ -251,7 +257,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		).WithPerMinuteDefault(cfg.QueryPerMinute).WithGrace(cfg.DeadlineGrace)
 	}
 	reader := contests.NewReader(postgres.NewStories(pool), postgres.NewQuestions(pool), postgres.NewAttempts(pool))
-	modules = append(modules, api.NewParticipantHandler(participantAccess, reader, authMiddleware, log, cfg.DefaultLocale))
+	// Submit is the same contestService every staff endpoint above already
+	// uses — not a second implementation of the answering rules, and not a
+	// second Submissions repository either.
+	modules = append(modules, api.NewParticipantHandler(participantAccess, reader, contestService, authMiddleware, log, cfg.DefaultLocale))
 
 	deps := api.Deps{
 		Logger:    log,

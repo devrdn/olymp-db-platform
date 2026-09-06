@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -48,10 +50,25 @@ type ServiceConfig struct {
 	Policies      PolicyStore
 	Languages     LanguageCatalog
 	Users         UserDirectory
-	Audit         *audit.Recorder
-	UnitOfWork    storage.UnitOfWork
+	// Submissions records participants' answers (submission.go). Optional at
+	// the type level so every existing caller that has nothing to do with
+	// answering questions keeps compiling unchanged; Service.Submit fails
+	// clearly if it is ever called without one having been wired in.
+	Submissions SubmissionRepository
+	Audit       *audit.Recorder
+	UnitOfWork  storage.UnitOfWork
 	// Now is the clock, injected so the enrollment deadline is testable.
 	Now func() time.Time
+	// Grace is the network-latency allowance Submit adds to a participant's
+	// deadline before refusing an answer for arriving late (§8). Zero takes
+	// defaultSubmissionGrace, matching queryproxy's own default — the two
+	// paths share one grace, not one apiece.
+	Grace time.Duration
+	// Logger records the one thing Submit ever has to log rather than fail
+	// on: a reference answer whose regex does not compile (submission.go's
+	// own grade). Defaults to slog.Default() so a caller that never sets it
+	// still gets that anomaly reported somewhere rather than a nil pointer.
+	Logger *slog.Logger
 }
 
 // Service holds the rules of authoring and running a contest.
@@ -64,9 +81,12 @@ type Service struct {
 	policies      PolicyStore
 	languages     LanguageCatalog
 	users         UserDirectory
+	submissions   SubmissionRepository
 	audit         *audit.Recorder
 	uow           storage.UnitOfWork
 	now           func() time.Time
+	grace         time.Duration
+	log           *slog.Logger
 }
 
 // NewService assembles the contest service.
@@ -74,6 +94,14 @@ func NewService(cfg ServiceConfig) *Service {
 	now := cfg.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
+	}
+	grace := cfg.Grace
+	if grace == 0 {
+		grace = defaultSubmissionGrace
+	}
+	log := cfg.Logger
+	if log == nil {
+		log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
 	return &Service{
 		contests:      cfg.Contests,
@@ -84,9 +112,12 @@ func NewService(cfg ServiceConfig) *Service {
 		policies:      cfg.Policies,
 		languages:     cfg.Languages,
 		users:         cfg.Users,
+		submissions:   cfg.Submissions,
 		audit:         cfg.Audit,
 		uow:           cfg.UnitOfWork,
 		now:           now,
+		grace:         grace,
+		log:           log,
 	}
 }
 

@@ -553,6 +553,17 @@ func (r *Registrations) Start(_ context.Context, registrationID uuid.UUID, now t
 	return p, nil
 }
 
+// AddScore mirrors the real repository's atomic increment.
+func (r *Registrations) AddScore(_ context.Context, registrationID uuid.UUID, delta int) error {
+	p, ok := r.byID[registrationID]
+	if !ok {
+		return contests.ErrParticipantNotFound
+	}
+	p.TotalScore += delta
+	r.byID[registrationID] = p
+	return nil
+}
+
 // Policies is an in-memory contests.PolicyStore.
 type Policies struct {
 	byContest map[uuid.UUID]contests.SQLPolicy
@@ -608,6 +619,87 @@ func (r *Attempts) ForRegistration(_ context.Context, registrationID uuid.UUID) 
 		out[id] = stats
 	}
 	return out, nil
+}
+
+// Submissions is an in-memory contests.SubmissionRepository.
+//
+// It mirrors what the real repository's one INSERT statement guarantees
+// (postgres.Submissions.Insert): a submission is refused with
+// ErrQuestionClosed once the question is already answered correctly or every
+// attempt is spent, and otherwise takes the next attempt number. It does not
+// reproduce the real repository's concurrency guarantee — a Go map has no
+// analogue of the table's own UNIQUE constraint racing two transactions — so
+// the genuine race (finding 3) is proven where it can actually happen,
+// against PostgreSQL (internal/postgres/submissions_test.go), not here.
+// ConflictsRemaining exists so a Service-level test can still exercise
+// Submit's own retry loop deterministically, without a second goroutine.
+type Submissions struct {
+	byKey map[submissionKey][]contests.Submission
+	// Clock answers Now(); nil defaults to the real wall clock so a test that
+	// never sets it still gets a moving clock rather than the zero value.
+	Clock func() time.Time
+	// ConflictsRemaining makes the next this-many Insert calls return
+	// ErrAttemptConflict instead of writing anything, simulating a
+	// submission that lost the attempt-number race and must be retried.
+	ConflictsRemaining int
+}
+
+type submissionKey struct {
+	registrationID uuid.UUID
+	questionID     uuid.UUID
+}
+
+var _ contests.SubmissionRepository = (*Submissions)(nil)
+
+// NewSubmissions returns an empty submission store.
+func NewSubmissions() *Submissions {
+	return &Submissions{byKey: map[submissionKey][]contests.Submission{}}
+}
+
+func (r *Submissions) Now(context.Context) (time.Time, error) {
+	if r.Clock != nil {
+		return r.Clock(), nil
+	}
+	return time.Now().UTC(), nil
+}
+
+func (r *Submissions) Insert(_ context.Context, req contests.SubmissionRequest) (contests.Submission, error) {
+	if r.ConflictsRemaining > 0 {
+		r.ConflictsRemaining--
+		return contests.Submission{}, contests.ErrAttemptConflict
+	}
+
+	key := submissionKey{req.RegistrationID, req.QuestionID}
+	existing := r.byKey[key]
+
+	for _, s := range existing {
+		if s.IsCorrect {
+			return contests.Submission{}, contests.ErrQuestionClosed
+		}
+	}
+	if req.MaxAttempts != nil && len(existing) >= *req.MaxAttempts {
+		return contests.Submission{}, contests.ErrQuestionClosed
+	}
+
+	s := contests.Submission{
+		ID:             uuid.New(),
+		RegistrationID: req.RegistrationID,
+		QuestionID:     req.QuestionID,
+		AttemptNo:      len(existing) + 1,
+		Value:          req.Value,
+		IsCorrect:      req.IsCorrect,
+		PointsAwarded:  req.PointsAwarded,
+		SubmittedAt:    req.SubmittedAt,
+	}
+	r.byKey[key] = append(existing, s)
+	return s, nil
+}
+
+// All lists every submission stored for this registration and question, in
+// the order they were inserted, so a test can inspect exactly what was
+// written.
+func (r *Submissions) All(registrationID, questionID uuid.UUID) []contests.Submission {
+	return append([]contests.Submission(nil), r.byKey[submissionKey{registrationID, questionID}]...)
 }
 
 // Languages is a fixed language catalog.
