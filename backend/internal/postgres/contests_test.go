@@ -522,6 +522,180 @@ func TestEnrolledInReportsOnlyTheCallersOwnRegistrations(t *testing.T) {
 	})
 }
 
+// TestTryLockRefusesASecondHolderUntilTheFirstEndsItsTransaction proves the
+// guarantee contests.Scheduler's whole design rests on across two real
+// connections, not one: pg_try_advisory_xact_lock is a lock between database
+// sessions, and a test that only ever opens one transaction could not tell
+// the difference between "this call cannot get the lock" and "this call
+// forgot to ask" (CLAUDE.md rule 10 — prove it on the path the deployment
+// uses).
+func TestTryLockRefusesASecondHolderUntilTheFirstEndsItsTransaction(t *testing.T) {
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	repo := NewContests(testPool)
+	ctx := context.Background()
+
+	holding := make(chan struct{})
+	release := make(chan struct{})
+	firstDone := make(chan error, 1)
+
+	go func() {
+		firstDone <- storage.NewUnitOfWork(testPool).Do(ctx, func(ctx context.Context) error {
+			ok, err := repo.TryLock(ctx)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return errors.New("first caller did not get an uncontested lock")
+			}
+			close(holding)
+			<-release
+			return errRollback
+		})
+	}()
+
+	<-holding
+	err := storage.NewUnitOfWork(testPool).Do(ctx, func(ctx context.Context) error {
+		ok, err := repo.TryLock(ctx)
+		if err != nil {
+			return err
+		}
+		if ok {
+			t.Error("a second, independent transaction acquired the lock while the first still holds it")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("second TryLock() attempt failed: %v", err)
+	}
+
+	close(release)
+	if err := <-firstDone; err != nil && !errors.Is(err, errRollback) {
+		t.Fatalf("first transaction failed: %v", err)
+	}
+
+	err = storage.NewUnitOfWork(testPool).Do(ctx, func(ctx context.Context) error {
+		ok, err := repo.TryLock(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			t.Error("lock is still held after the transaction that acquired it ended")
+		}
+		return errRollback
+	})
+	if err != nil && !errors.Is(err, errRollback) {
+		t.Fatalf("third TryLock() attempt failed: %v", err)
+	}
+}
+
+// setSchedule puts a seeded contest (already valid by makeContest's own
+// column defaults) into the status and window an AdvanceRunning or
+// AdvanceFinished test needs, without fighting the enumerated CHECK
+// constraints a hand-built contests.Contest would have to satisfy on every
+// other field.
+func setSchedule(t *testing.T, ctx context.Context, id uuid.UUID, status string, startsAt, endsAt *time.Time) {
+	t.Helper()
+	_, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+		`UPDATE contests SET status = $2, starts_at = $3, ends_at = $4 WHERE id = $1`,
+		id, status, startsAt, endsAt)
+	if err != nil {
+		t.Fatalf("set contest schedule: %v", err)
+	}
+}
+
+func TestAdvanceRunningMovesOnlyPublishedContestsPastTheirStart(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewContests(testPool)
+		author := makeUser(t, ctx, "author-advance-running")
+		past := time.Now().Add(-time.Hour)
+		future := time.Now().Add(time.Hour)
+
+		due := makeContest(t, ctx, author.ID)
+		setSchedule(t, ctx, due, contests.StatusPublished, &past, nil)
+		notYet := makeContest(t, ctx, author.ID)
+		setSchedule(t, ctx, notYet, contests.StatusPublished, &future, nil)
+		alreadyRunning := makeContest(t, ctx, author.ID)
+		setSchedule(t, ctx, alreadyRunning, contests.StatusRunning, &past, nil)
+
+		moved, err := repo.AdvanceRunning(ctx)
+		if err != nil {
+			t.Fatalf("AdvanceRunning() = %v", err)
+		}
+
+		if !idInList(moved, due) {
+			t.Errorf("AdvanceRunning() = %v, want it to include the due contest %s", moved, due)
+		}
+		if idInList(moved, notYet) {
+			t.Errorf("AdvanceRunning() moved a contest whose start is still in the future")
+		}
+		if idInList(moved, alreadyRunning) {
+			t.Errorf("AdvanceRunning() moved a contest that was already running")
+		}
+
+		loaded, _ := repo.ByID(ctx, due)
+		if loaded.Status != contests.StatusRunning {
+			t.Errorf("due contest's status = %q, want running", loaded.Status)
+		}
+		stillPublished, _ := repo.ByID(ctx, notYet)
+		if stillPublished.Status != contests.StatusPublished {
+			t.Errorf("not-yet-due contest's status = %q, want it left published", stillPublished.Status)
+		}
+	})
+}
+
+func TestAdvanceFinishedMovesOnlyRunningContestsPastTheirEnd(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewContests(testPool)
+		author := makeUser(t, ctx, "author-advance-finished")
+		past := time.Now().Add(-time.Hour)
+		future := time.Now().Add(time.Hour)
+
+		over := makeContest(t, ctx, author.ID)
+		setSchedule(t, ctx, over, contests.StatusRunning, nil, &past)
+		stillOpen := makeContest(t, ctx, author.ID)
+		setSchedule(t, ctx, stillOpen, contests.StatusRunning, nil, &future)
+		// Individual timing needs no ends_at to publish (CheckPublishable): a
+		// contest left with none must never be swept up here, or an
+		// organizer's still-open olympiad closes itself for no reason anybody
+		// set.
+		noEnd := makeContest(t, ctx, author.ID)
+		setSchedule(t, ctx, noEnd, contests.StatusRunning, nil, nil)
+
+		moved, err := repo.AdvanceFinished(ctx)
+		if err != nil {
+			t.Fatalf("AdvanceFinished() = %v", err)
+		}
+
+		if !idInList(moved, over) {
+			t.Errorf("AdvanceFinished() = %v, want it to include the overdue contest %s", moved, over)
+		}
+		if idInList(moved, stillOpen) {
+			t.Errorf("AdvanceFinished() moved a contest whose end is still in the future")
+		}
+		if idInList(moved, noEnd) {
+			t.Errorf("AdvanceFinished() moved a contest with no ends_at at all")
+		}
+
+		loaded, _ := repo.ByID(ctx, over)
+		if loaded.Status != contests.StatusFinished {
+			t.Errorf("overdue contest's status = %q, want finished", loaded.Status)
+		}
+	})
+}
+
+// idInList reports whether id is among moved, for the AdvanceRunning and
+// AdvanceFinished tests above.
+func idInList(moved []uuid.UUID, id uuid.UUID) bool {
+	for _, m := range moved {
+		if m == id {
+			return true
+		}
+	}
+	return false
+}
+
 // idSet indexes a listing by identifier, for readable assertions.
 func idSet(found []contests.Contest) map[uuid.UUID]bool {
 	seen := make(map[uuid.UUID]bool, len(found))

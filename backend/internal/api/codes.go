@@ -176,6 +176,11 @@ var (
 	codeAddressNotAllowed = httpx.NewCode("address_not_allowed",
 		"The contest restricts participation to certain networks and this request did not come from one. Applies to participants only; staff are never checked against it.")
 
+	// --- The events channel --------------------------------------------------
+
+	codeTooManyConnections = httpx.NewCode("too_many_connections",
+		"This participant already holds as many live event channels for this contest as this installation allows open at once. Close one of the others — another tab, a stale connection — and try again.")
+
 	// --- Answering a question ------------------------------------------------
 
 	codeAnswerTooLong = httpx.NewCode("answer_too_long",

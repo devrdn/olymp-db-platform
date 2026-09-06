@@ -270,6 +270,10 @@
       "meaning": "Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account. Try again later."
     },
     {
+      "code": "too_many_connections",
+      "meaning": "This participant already holds as many live event channels for this contest as this installation allows open at once. Close one of the others — another tab, a stale connection — and try again."
+    },
+    {
       "code": "unauthenticated",
       "meaning": "There is no valid session. Sign in and retry."
     },
