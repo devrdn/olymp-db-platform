@@ -1,10 +1,12 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +17,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
+	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
@@ -508,6 +511,284 @@ func TestEventsFreesASlotForAnotherConnectionAfterOneCloses(t *testing.T) {
 	waitForSubstring(t, rec3, "event: sync")
 	cancel3()
 	waitDone(t, done3)
+}
+
+// Finding 6: nothing asserted the response actually announces itself as an
+// event stream.
+func TestEventsSetsTheEventStreamContentType(t *testing.T) {
+	f := newEventsFixture(t)
+	contestID := uuid.New()
+	ends := time.Now().Add(time.Hour)
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.handler.WithResyncInterval(time.Hour)
+
+	req, cancel := f.request(contestID)
+	rec, done := f.serve(req)
+	waitForSubstring(t, rec, "event: sync")
+	cancel()
+	waitDone(t, done)
+
+	if ct := rec.Result().Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want text/event-stream", ct)
+	}
+}
+
+// Finding 5: a connection held open for the length of a contest must not
+// silently rejoin the shared request-duration histogram just because nothing
+// wired MarkStreaming into this handler — routed through the real
+// metrics.Middleware, not a fake, since what is under test is the wiring
+// itself.
+func TestEventsMarksItselfStreamingForMetrics(t *testing.T) {
+	f := newEventsFixture(t)
+	contestID := uuid.New()
+	ends := time.Now().Add(time.Hour)
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.handler.WithResyncInterval(time.Hour)
+
+	rec := metrics.NewPrometheus()
+	router := chi.NewRouter()
+	router.Use(metrics.Middleware(rec))
+	f.handler.Mount(router)
+
+	req, cancel := f.request(contestID)
+	defer cancel()
+	w := newSyncedRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		router.ServeHTTP(w, req)
+	}()
+	waitForSubstring(t, w, "event: sync")
+	cancel()
+	waitDone(t, done)
+
+	scrape := httptest.NewRecorder()
+	rec.ScrapeHandler().ServeHTTP(scrape, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := scrape.Body.String()
+	if !strings.Contains(body, `http_stream_duration_seconds_count{method="GET",route="/contests/{contestID}/events"} 1`) {
+		t.Fatalf("the events route did not mark itself streaming: %s", body)
+	}
+}
+
+// Finding 3: the stream must pace a client that does reconnect, rather than
+// leaving it on EventSource's own undeclared three-second default.
+func TestEventsSendsARetryFieldToPaceReconnects(t *testing.T) {
+	f := newEventsFixture(t)
+	contestID := uuid.New()
+	ends := time.Now().Add(time.Hour)
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.handler.WithResyncInterval(45 * time.Second)
+
+	req, cancel := f.request(contestID)
+	rec, done := f.serve(req)
+	waitForSubstring(t, rec, "retry:")
+	cancel()
+	waitDone(t, done)
+
+	if !strings.Contains(rec.String(), "retry: 45000") {
+		t.Fatalf("no retry field pacing reconnects to the resync interval: %s", rec.String())
+	}
+}
+
+// Finding 3: a store that is briefly away must not close a connection an
+// honest, still-enrolled participant did nothing to lose — closing on the
+// first blip is exactly what turns a flaky link into a reconnect storm that
+// spends the SQL console's own budget.
+func TestEventsToleratesATransientAccessFailureOnATick(t *testing.T) {
+	f := newEventsFixture(t)
+	contestID := uuid.New()
+	ends := time.Now().Add(time.Hour)
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.handler.WithResyncInterval(testResync)
+
+	req, cancel := f.request(contestID)
+	defer cancel()
+	rec, done := f.serve(req)
+	waitForSubstring(t, rec, "event: sync")
+
+	f.access.setErr(queryproxy.ErrUnavailable)
+	select {
+	case <-done:
+		t.Fatal("the channel closed on a transient failure instead of retrying the next tick")
+	case <-time.After(10 * testResync):
+	}
+
+	f.access.setErr(nil)
+	waitForCount(t, rec, "event: sync", 2)
+
+	cancel()
+	waitDone(t, done)
+
+	if strings.Contains(rec.String(), "contest_finished") {
+		t.Fatalf("a transient failure was reported as the contest finishing: %s", rec.String())
+	}
+}
+
+// Finding 4: an enrolled participant may hold the channel for a contest that
+// is published and not yet started, so the published → running transition
+// can be announced on it instead of a waiting client having nothing to do
+// but poll.
+func TestEventsHoldsOpenForAPublishedContestAndAnnouncesTheTransitionOnATick(t *testing.T) {
+	f := newEventsFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusPublished}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.handler.WithResyncInterval(testResync)
+
+	req, cancel := f.request(contestID)
+	defer cancel()
+	rec, done := f.serve(req)
+
+	waitForSubstring(t, rec, "event: sync")
+	if strings.Contains(rec.String(), "event: contest_started") {
+		t.Fatalf("contest_started was sent for a contest that has not started yet: %s", rec.String())
+	}
+
+	ends := time.Now().Add(time.Hour)
+	f.access.setContest(contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends})
+	waitForSubstring(t, rec, "event: contest_started")
+
+	cancel()
+	waitDone(t, done)
+
+	if !strings.Contains(rec.String(), `"status":"running"`) {
+		t.Fatalf("contest_started did not carry the running status: %s", rec.String())
+	}
+}
+
+// stalledWriter simulates a client that completed the SSE handshake and then
+// stopped reading (finding 2): the first stallAfter writes succeed
+// immediately, standing for whatever the client actually read before it went
+// silent, and every write after that blocks until the deadline most recently
+// set via SetWriteDeadline, then fails — exactly what a real socket with a
+// zero receive window does once a write deadline finally catches up with it,
+// compressed to a test-sized interval via EventsHandler.WithWriteTimeout so
+// the test does not wait out ten real seconds.
+type stalledWriter struct {
+	header http.Header
+
+	mu         sync.Mutex
+	deadline   time.Time
+	writes     int
+	stallAfter int
+}
+
+func newStalledWriter(stallAfter int) *stalledWriter {
+	return &stalledWriter{header: http.Header{}, stallAfter: stallAfter}
+}
+
+func (w *stalledWriter) Header() http.Header { return w.header }
+func (w *stalledWriter) WriteHeader(int)     {}
+func (w *stalledWriter) Flush()              {}
+
+func (w *stalledWriter) SetWriteDeadline(t time.Time) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.deadline = t
+	return nil
+}
+
+func (w *stalledWriter) Write(b []byte) (int, error) {
+	w.mu.Lock()
+	w.writes++
+	stall := w.writes > w.stallAfter
+	deadline := w.deadline
+	w.mu.Unlock()
+
+	if !stall {
+		return len(b), nil
+	}
+	if deadline.IsZero() {
+		// No deadline was ever set: block forever, the same as a write to a
+		// real socket whose peer stopped reading when nothing ever bounds
+		// how long that write may take.
+		select {}
+	}
+	if wait := time.Until(deadline); wait > 0 {
+		time.Sleep(wait)
+	}
+	return 0, os.ErrDeadlineExceeded
+}
+
+// Finding 2: a client that completes the handshake and then never reads
+// again must not hold this handler's goroutine — and the connection-limit
+// slot, and shutdown's own responsiveness — for the rest of the process.
+func TestEventsReclaimsAConnectionBlockedOnAWrite(t *testing.T) {
+	f := newEventsFixture(t)
+	f.handler.WithResyncInterval(5 * time.Millisecond).WithWriteTimeout(20 * time.Millisecond)
+	contestID := uuid.New()
+	ends := time.Now().Add(time.Hour)
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+	participant := contests.Participant{ID: uuid.New()}
+	f.access.participant = participant
+
+	req, cancel := f.request(contestID)
+	defer cancel()
+
+	// The connect sequence writes retry, sync and contest_started — three
+	// writes — before the first Flush; let those through so the handler
+	// gets past connecting at all, and stall everything after, the way a
+	// client that goes silent right after the handshake would.
+	w := newStalledWriter(3)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.router.ServeHTTP(w, req)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a write blocked past writeTimeout did not release the handler")
+	}
+
+	if got := f.handler.ActiveConnections(participant.ID); got != 0 {
+		t.Fatalf("ActiveConnections() = %d after a stalled write, want 0 — the slot must still be released", got)
+	}
+}
+
+// noFlushRecorder is a ResponseWriter that supports neither Flush nor a write
+// deadline — standing in for a reverse proxy or test harness exposing
+// neither optional interface. http.ResponseController.Flush then returns
+// http.ErrNotSupported, and this proves the handler treats that exactly like
+// a write failure: return after the one flush attempt it could still make,
+// rather than loop forever assuming a future flush will succeed (finding 6).
+type noFlushRecorder struct {
+	header http.Header
+	body   bytes.Buffer
+}
+
+func newNoFlushRecorder() *noFlushRecorder             { return &noFlushRecorder{header: http.Header{}} }
+func (r *noFlushRecorder) Header() http.Header         { return r.header }
+func (r *noFlushRecorder) Write(b []byte) (int, error) { return r.body.Write(b) }
+func (r *noFlushRecorder) WriteHeader(int)             {}
+
+func TestEventsReturnsAfterOneFlushAttemptWhenTheResponseWriterCannotFlush(t *testing.T) {
+	f := newEventsFixture(t)
+	contestID := uuid.New()
+	ends := time.Now().Add(time.Hour)
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.handler.WithResyncInterval(time.Hour)
+
+	req, cancel := f.request(contestID)
+	defer cancel()
+
+	rec := newNoFlushRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.router.ServeHTTP(rec, req)
+	}()
+	waitDone(t, done)
+
+	if !strings.Contains(rec.body.String(), "event: sync") {
+		t.Fatalf("the sync event that precedes the failed flush is missing: %s", rec.body.String())
+	}
 }
 
 // waitForSubstring polls rec's buffer until it contains want, or fails the

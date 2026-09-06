@@ -280,7 +280,7 @@ func TestDegradedServiceStillMeasuresTraffic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("metrics.New returned error: %v", err)
 	}
-	rec.ObserveRequest(http.MethodGet, "/api/v1/version", 200, 3*time.Millisecond)
+	rec.ObserveRequest(http.MethodGet, "/api/v1/version", 200, 3*time.Millisecond, false)
 	rec.(*metrics.Log).Flush()
 
 	if !strings.Contains(startupLog.String(), "http metrics") {

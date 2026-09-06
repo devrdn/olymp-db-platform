@@ -453,16 +453,11 @@ func (s *Service) CheckPublish(ctx context.Context, contestID uuid.UUID) error {
 	return s.checkPublishable(ctx, c)
 }
 
+// checkPublishable delegates to the package-level function schedule.go's
+// Scheduler shares with this method — the same question, asked from
+// Service's own wider StoryRepository and QuestionRepository.
 func (s *Service) checkPublishable(ctx context.Context, c Contest) error {
-	story, err := s.stories.ByContest(ctx, c.ID)
-	if err != nil && !errors.Is(err, ErrStoryNotFound) {
-		return err
-	}
-	questions, err := s.questions.List(ctx, c.ID)
-	if err != nil {
-		return err
-	}
-	return CheckPublishable(c, story, questions)
+	return checkPublishable(ctx, s.stories, s.questions, c)
 }
 
 // Transition moves a contest along its lifecycle.

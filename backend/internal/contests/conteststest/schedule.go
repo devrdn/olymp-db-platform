@@ -17,16 +17,36 @@ type Schedule struct {
 	Acquired bool
 	LockErr  error
 
-	Started    []uuid.UUID
-	StartedErr error
+	// Due stages what DueToStart returns: full contest rows, since the
+	// scheduler now re-runs the publish gate against each of them before
+	// deciding to move anything (finding 1). The story and questions behind
+	// that gate live in whatever Stories and Questions fakes a test wires up
+	// alongside this one, keyed by the same contest ids.
+	Due    []contests.Contest
+	DueErr error
+
+	// Raced maps a contest id to the error its SetStatus call should return
+	// instead of moving it — ErrStatusChanged or ErrNotFound, standing for a
+	// concurrent manual Transition (or a delete) that decided the contest's
+	// fate between DueToStart's read and Advance's write. Absent from the
+	// map, or a nil value, means the call succeeds.
+	Raced map[uuid.UUID]error
+	// SetStatusErr, when set, is what every SetStatus call returns instead
+	// of moving anything or consulting Raced — an infrastructure failure
+	// rather than a race any particular contest lost.
+	SetStatusErr error
+	// Moved collects the ids SetStatus actually moved to running, in call
+	// order, so a test can check which of Due's contests were started
+	// without re-deriving CheckPublishable itself.
+	Moved []uuid.UUID
 
 	Finished    []uuid.UUID
 	FinishedErr error
 
-	// LockCalls, RunningCalls and FinishedCalls count how many times each was
-	// asked, so a test can prove a lost lock stops the tick before either
-	// bulk move ever runs.
-	LockCalls, RunningCalls, FinishedCalls int
+	// LockCalls, DueCalls, SetStatusCalls and FinishedCalls count how many
+	// times each was asked, so a test can prove a lost lock stops the tick
+	// before any of the others ever run.
+	LockCalls, DueCalls, SetStatusCalls, FinishedCalls int
 }
 
 var _ contests.ScheduleRepository = (*Schedule)(nil)
@@ -40,9 +60,21 @@ func (s *Schedule) TryLock(context.Context) (bool, error) {
 	return s.Acquired, s.LockErr
 }
 
-func (s *Schedule) AdvanceRunning(context.Context) ([]uuid.UUID, error) {
-	s.RunningCalls++
-	return s.Started, s.StartedErr
+func (s *Schedule) DueToStart(context.Context) ([]contests.Contest, error) {
+	s.DueCalls++
+	return s.Due, s.DueErr
+}
+
+func (s *Schedule) SetStatus(_ context.Context, id uuid.UUID, from, to string) error {
+	s.SetStatusCalls++
+	if s.SetStatusErr != nil {
+		return s.SetStatusErr
+	}
+	if err := s.Raced[id]; err != nil {
+		return err
+	}
+	s.Moved = append(s.Moved, id)
+	return nil
 }
 
 func (s *Schedule) AdvanceFinished(context.Context) ([]uuid.UUID, error) {

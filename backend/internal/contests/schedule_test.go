@@ -11,61 +11,95 @@ import (
 	"github.com/google/uuid"
 )
 
+// schedulerFixture is everything one Scheduler test needs, assembled so a
+// test only ever has to name the pieces it actually stages.
+type schedulerFixture struct {
+	scheduler *contests.Scheduler
+	repo      *conteststest.Schedule
+	stories   *conteststest.Stories
+	questions *conteststest.Questions
+	sink      *conteststest.Sink
+	uow       *conteststest.UnitOfWork
+}
+
 // newScheduler assembles a Scheduler over the in-memory fakes, mirroring
 // conteststest.NewFixture's own wiring for the pieces Scheduler actually
 // uses.
-func newScheduler() (*contests.Scheduler, *conteststest.Schedule, *conteststest.Sink, *conteststest.UnitOfWork) {
+func newScheduler() schedulerFixture {
 	repo := conteststest.NewSchedule()
+	stories := conteststest.NewStories()
+	questions := conteststest.NewQuestions()
 	sink := conteststest.NewSink()
 	uow := &conteststest.UnitOfWork{}
-	return contests.NewScheduler(repo, audit.New(sink), uow), repo, sink, uow
+	return schedulerFixture{
+		scheduler: contests.NewScheduler(repo, stories, questions, audit.New(sink), uow),
+		repo:      repo, stories: stories, questions: questions, sink: sink, uow: uow,
+	}
+}
+
+// duePublishable stages a contest that passes CheckPublishable, together
+// with the story and question a test's Stories/Questions fakes need to carry
+// to answer that way — the same fixture publish_test.go's own publishable()
+// builds, wired into the stores a Scheduler test reads from instead of
+// passed straight to CheckPublishable.
+func duePublishable(f schedulerFixture) contests.Contest {
+	c, story, questions := publishable()
+	f.stories.Save(context.Background(), c.ID, story.Bodies)
+	for _, q := range questions {
+		q.ContestID = c.ID
+		f.questions.Put(q)
+	}
+	return c
 }
 
 func TestAdvanceDoesNothingWhenAnotherReplicaHoldsTheLock(t *testing.T) {
-	scheduler, repo, sink, uow := newScheduler()
-	repo.Acquired = false
-	repo.Started = []uuid.UUID{uuid.New()}
+	f := newScheduler()
+	f.repo.Acquired = false
+	f.repo.Due = []contests.Contest{{ID: uuid.New()}}
 
-	started, finished, err := scheduler.Advance(context.Background())
+	started, finished, err := f.scheduler.Advance(context.Background())
 	if err != nil {
 		t.Fatalf("Advance() = %v", err)
 	}
 	if started != 0 || finished != 0 {
 		t.Errorf("started, finished = %d, %d, want 0, 0 when the lock was lost", started, finished)
 	}
-	if repo.RunningCalls != 0 || repo.FinishedCalls != 0 {
-		t.Error("a lost lock must stop the tick before either bulk move runs")
+	if f.repo.DueCalls != 0 || f.repo.FinishedCalls != 0 {
+		t.Error("a lost lock must stop the tick before either move ever runs")
 	}
-	if len(sink.Entries) != 0 {
-		t.Errorf("audit entries = %v, want none for a tick that moved nothing", sink.Actions())
+	if len(f.sink.Entries) != 0 {
+		t.Errorf("audit entries = %v, want none for a tick that moved nothing", f.sink.Actions())
 	}
-	if uow.Calls != 1 {
-		t.Errorf("UnitOfWork.Calls = %d, want exactly 1", uow.Calls)
+	if f.uow.Calls != 1 {
+		t.Errorf("UnitOfWork.Calls = %d, want exactly 1", f.uow.Calls)
 	}
 }
 
-func TestAdvanceMovesAndAuditsEveryContestTheLockLets(t *testing.T) {
-	scheduler, repo, sink, uow := newScheduler()
-	started := uuid.New()
+func TestAdvanceStartsAContestThatPassesThePublishGateAndFinishesAnOverdueOne(t *testing.T) {
+	f := newScheduler()
+	due := duePublishable(f)
+	f.repo.Due = []contests.Contest{due}
 	finished := uuid.New()
-	repo.Started = []uuid.UUID{started}
-	repo.Finished = []uuid.UUID{finished}
+	f.repo.Finished = []uuid.UUID{finished}
 
-	gotStarted, gotFinished, err := scheduler.Advance(context.Background())
+	gotStarted, gotFinished, err := f.scheduler.Advance(context.Background())
 	if err != nil {
 		t.Fatalf("Advance() = %v", err)
 	}
 	if gotStarted != 1 || gotFinished != 1 {
 		t.Errorf("started, finished = %d, %d, want 1, 1", gotStarted, gotFinished)
 	}
-	if uow.Calls != 1 {
-		t.Errorf("UnitOfWork.Calls = %d, want exactly 1 — one tick, one transaction", uow.Calls)
+	if len(f.repo.Moved) != 1 || f.repo.Moved[0] != due.ID {
+		t.Errorf("SetStatus moved %v, want exactly [%s]", f.repo.Moved, due.ID)
+	}
+	if f.uow.Calls != 1 {
+		t.Errorf("UnitOfWork.Calls = %d, want exactly 1 — one tick, one transaction", f.uow.Calls)
 	}
 
-	if len(sink.Entries) != 2 {
-		t.Fatalf("audit entries = %d, want 2 (one per moved contest)", len(sink.Entries))
+	if len(f.sink.Entries) != 2 {
+		t.Fatalf("audit entries = %d, want 2 (one per moved contest)", len(f.sink.Entries))
 	}
-	for _, e := range sink.Entries {
+	for _, e := range f.sink.Entries {
 		if e.Action != audit.ActionContestStatusChange {
 			t.Errorf("action = %q, want %q", e.Action, audit.ActionContestStatusChange)
 		}
@@ -78,12 +112,12 @@ func TestAdvanceMovesAndAuditsEveryContestTheLockLets(t *testing.T) {
 	}
 
 	byEntity := map[string]audit.Entry{}
-	for _, e := range sink.Entries {
+	for _, e := range f.sink.Entries {
 		byEntity[e.EntityID] = e
 	}
-	startedChange, ok := byEntity[started.String()].Payload["changes"].(map[string]any)["status"]
+	startedChange, ok := byEntity[due.ID.String()].Payload["changes"].(map[string]any)["status"]
 	if !ok {
-		t.Fatalf("no status change recorded for the started contest: %v", sink.Entries)
+		t.Fatalf("no status change recorded for the started contest: %v", f.sink.Entries)
 	}
 	if from, ok := startedChange.(map[string]any)["from"]; !ok || from != contests.StatusPublished {
 		t.Errorf("started contest's status change from = %v, want %q", from, contests.StatusPublished)
@@ -98,49 +132,162 @@ func TestAdvanceMovesAndAuditsEveryContestTheLockLets(t *testing.T) {
 	}
 }
 
-func TestAdvanceRecordsNothingWhenTheLockIsWonAndNothingMoved(t *testing.T) {
-	scheduler, _, sink, uow := newScheduler()
+// TestAdvanceBlocksAContestThatFailsThePublishGate is finding 1's own test:
+// the scheduler is the one door into a contest that admitted no gate before
+// this change, and a contest whose story disappeared after publication (an
+// organizer deleted it, or never wrote one at all) must not be let through
+// just because starts_at arrived.
+func TestAdvanceBlocksAContestThatFailsThePublishGate(t *testing.T) {
+	f := newScheduler()
+	c, _, questions := publishable()
+	// Every question is staged, but the story never is — CheckPublishable's
+	// ProblemNoStory, the same refusal a manual Transition would hit.
+	for _, q := range questions {
+		q.ContestID = c.ID
+		f.questions.Put(q)
+	}
+	f.repo.Due = []contests.Contest{c}
 
-	started, finished, err := scheduler.Advance(context.Background())
+	started, finished, err := f.scheduler.Advance(context.Background())
+	if err != nil {
+		t.Fatalf("Advance() = %v", err)
+	}
+	if started != 0 || finished != 0 {
+		t.Errorf("started, finished = %d, %d, want 0, 0 — the gate refused this contest", started, finished)
+	}
+	if f.repo.SetStatusCalls != 0 {
+		t.Error("a contest that failed the publish gate must never reach SetStatus")
+	}
+
+	if len(f.sink.Entries) != 1 {
+		t.Fatalf("audit entries = %d, want exactly 1 — the block must still be visible", len(f.sink.Entries))
+	}
+	entry := f.sink.Entries[0]
+	if entry.Action != audit.ActionContestStartBlocked {
+		t.Errorf("action = %q, want %q", entry.Action, audit.ActionContestStartBlocked)
+	}
+	if entry.EntityID != c.ID.String() {
+		t.Errorf("entity id = %q, want %q", entry.EntityID, c.ID.String())
+	}
+	problems, ok := entry.Payload["problems"].([]string)
+	if !ok {
+		t.Fatalf("payload problems = %v, want a []string", entry.Payload["problems"])
+	}
+	found := false
+	for _, p := range problems {
+		if p == contests.ProblemNoStory {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("problems = %v, want it to include %q", problems, contests.ProblemNoStory)
+	}
+}
+
+func TestAdvanceRecordsNothingWhenTheLockIsWonAndNothingMoved(t *testing.T) {
+	f := newScheduler()
+
+	started, finished, err := f.scheduler.Advance(context.Background())
 	if err != nil {
 		t.Fatalf("Advance() = %v", err)
 	}
 	if started != 0 || finished != 0 {
 		t.Errorf("started, finished = %d, %d, want 0, 0", started, finished)
 	}
-	if len(sink.Entries) != 0 {
-		t.Errorf("audit entries = %v, want none — an empty tick is not an event", sink.Actions())
+	if len(f.sink.Entries) != 0 {
+		t.Errorf("audit entries = %v, want none — an empty tick is not an event", f.sink.Actions())
 	}
-	if uow.Calls != 1 {
-		t.Errorf("UnitOfWork.Calls = %d, want exactly 1", uow.Calls)
+	if f.uow.Calls != 1 {
+		t.Errorf("UnitOfWork.Calls = %d, want exactly 1", f.uow.Calls)
 	}
 }
 
 func TestAdvanceFailsWithoutRecordingWhenTheAuditSinkFails(t *testing.T) {
-	scheduler, repo, sink, _ := newScheduler()
-	repo.Started = []uuid.UUID{uuid.New()}
+	f := newScheduler()
+	f.repo.Finished = []uuid.UUID{uuid.New()}
 	failure := errors.New("audit sink is down")
-	sink.AppendManyErr = failure
+	f.sink.AppendManyErr = failure
 
-	_, _, err := scheduler.Advance(context.Background())
+	_, _, err := f.scheduler.Advance(context.Background())
 	if !errors.Is(err, failure) {
 		t.Errorf("Advance() = %v, want an error wrapping %v", err, failure)
 	}
 }
 
-func TestAdvanceFailsWhenTheBulkMoveFails(t *testing.T) {
-	scheduler, repo, sink, _ := newScheduler()
+func TestAdvanceFailsWhenFindingDueContestsFails(t *testing.T) {
+	f := newScheduler()
 	failure := errors.New("database is away")
-	repo.StartedErr = failure
+	f.repo.DueErr = failure
 
-	_, _, err := scheduler.Advance(context.Background())
+	_, _, err := f.scheduler.Advance(context.Background())
 	if !errors.Is(err, failure) {
 		t.Errorf("Advance() = %v, want an error wrapping %v", err, failure)
 	}
-	if repo.FinishedCalls != 0 {
-		t.Error("a failed move to running must not still attempt the move to finished")
+	if f.repo.FinishedCalls != 0 {
+		t.Error("a failed search for due contests must not still attempt the move to finished")
 	}
-	if len(sink.Entries) != 0 {
-		t.Error("nothing should be audited when the move itself failed")
+	if len(f.sink.Entries) != 0 {
+		t.Error("nothing should be audited when the search itself failed")
+	}
+}
+
+func TestAdvanceFailsWhenAdvancingToFinishedFails(t *testing.T) {
+	f := newScheduler()
+	failure := errors.New("database is away")
+	f.repo.FinishedErr = failure
+
+	_, _, err := f.scheduler.Advance(context.Background())
+	if !errors.Is(err, failure) {
+		t.Errorf("Advance() = %v, want an error wrapping %v", err, failure)
+	}
+	if len(f.sink.Entries) != 0 {
+		t.Error("nothing should be audited when the finishing move failed")
+	}
+}
+
+// TestAdvanceFailsWhenThePublishGateItselfFails proves the gate's own
+// database reads are not mistaken for the gate's verdict: a story store that
+// is away must abort the tick (CLAUDE.md rule 8 — only a row-level sentinel
+// becomes "skipped"; anything else surfaces), not be read as "no story" and
+// audited as a blocked contest.
+func TestAdvanceFailsWhenThePublishGateItselfFails(t *testing.T) {
+	f := newScheduler()
+	c, _, _ := publishable()
+	f.repo.Due = []contests.Contest{c}
+	failure := errors.New("story store is away")
+	f.stories.Err = failure
+
+	_, _, err := f.scheduler.Advance(context.Background())
+	if !errors.Is(err, failure) {
+		t.Errorf("Advance() = %v, want an error wrapping %v", err, failure)
+	}
+	if f.repo.SetStatusCalls != 0 {
+		t.Error("a gate that could not even be evaluated must not still move the contest")
+	}
+	if len(f.sink.Entries) != 0 {
+		t.Error("nothing should be audited when the gate itself failed to run")
+	}
+}
+
+// TestAdvanceSkipsAContestThatRacedWithAManualTransition covers the other
+// reason SetStatus can fail beyond a real error: a concurrent manual
+// Transition (or a delete) moved the contest between DueToStart's read and
+// this tick's write. That is somebody else's decision and somebody else's
+// audit entry, not this tick's failure.
+func TestAdvanceSkipsAContestThatRacedWithAManualTransition(t *testing.T) {
+	f := newScheduler()
+	due := duePublishable(f)
+	f.repo.Due = []contests.Contest{due}
+	f.repo.Raced = map[uuid.UUID]error{due.ID: contests.ErrStatusChanged}
+
+	started, _, err := f.scheduler.Advance(context.Background())
+	if err != nil {
+		t.Fatalf("Advance() = %v, want the race to be skipped rather than fail the tick", err)
+	}
+	if started != 0 {
+		t.Errorf("started = %d, want 0 — a raced contest was not this tick's to move", started)
+	}
+	if len(f.sink.Entries) != 0 {
+		t.Error("a raced contest must not get this tick's own audit entry")
 	}
 }

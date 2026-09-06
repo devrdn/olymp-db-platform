@@ -172,6 +172,10 @@ func (r *Contests) ReplaceTranslations(_ context.Context, id uuid.UUID, translat
 // Stories is an in-memory contests.StoryRepository.
 type Stories struct {
 	byContest map[uuid.UUID]contests.Story
+	// Err, when set, is what ByContest returns instead of a lookup — a
+	// database away, which a caller must propagate, not mistake for a
+	// contest that simply has no story yet.
+	Err error
 }
 
 var _ contests.StoryRepository = (*Stories)(nil)
@@ -182,6 +186,9 @@ func NewStories() *Stories {
 }
 
 func (r *Stories) ByContest(_ context.Context, contestID uuid.UUID) (contests.Story, error) {
+	if r.Err != nil {
+		return contests.Story{}, r.Err
+	}
 	story, ok := r.byContest[contestID]
 	if !ok {
 		return contests.Story{}, contests.ErrStoryNotFound
