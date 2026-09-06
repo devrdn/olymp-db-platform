@@ -591,7 +591,7 @@ func TestTryLockRefusesASecondHolderUntilTheFirstEndsItsTransaction(t *testing.T
 }
 
 // setSchedule puts a seeded contest (already valid by makeContest's own
-// column defaults) into the status and window an AdvanceRunning or
+// column defaults) into the status and window a DueToStart or
 // AdvanceFinished test needs, without fighting the enumerated CHECK
 // constraints a hand-built contests.Contest would have to satisfy on every
 // other field.
@@ -605,10 +605,10 @@ func setSchedule(t *testing.T, ctx context.Context, id uuid.UUID, status string,
 	}
 }
 
-func TestAdvanceRunningMovesOnlyPublishedContestsPastTheirStart(t *testing.T) {
+func TestDueToStartFindsOnlyPublishedContestsPastTheirStart(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewContests(testPool)
-		author := makeUser(t, ctx, "author-advance-running")
+		author := makeUser(t, ctx, "author-due-to-start")
 		past := time.Now().Add(-time.Hour)
 		future := time.Now().Add(time.Hour)
 
@@ -619,28 +619,28 @@ func TestAdvanceRunningMovesOnlyPublishedContestsPastTheirStart(t *testing.T) {
 		alreadyRunning := makeContest(t, ctx, author.ID)
 		setSchedule(t, ctx, alreadyRunning, contests.StatusRunning, &past, nil)
 
-		moved, err := repo.AdvanceRunning(ctx)
+		found, err := repo.DueToStart(ctx)
 		if err != nil {
-			t.Fatalf("AdvanceRunning() = %v", err)
+			t.Fatalf("DueToStart() = %v", err)
 		}
 
-		if !idInList(moved, due) {
-			t.Errorf("AdvanceRunning() = %v, want it to include the due contest %s", moved, due)
+		seen := idSet(found)
+		if !seen[due] {
+			t.Errorf("DueToStart() = %v, want it to include the due contest %s", seen, due)
 		}
-		if idInList(moved, notYet) {
-			t.Errorf("AdvanceRunning() moved a contest whose start is still in the future")
+		if seen[notYet] {
+			t.Error("DueToStart() returned a contest whose start is still in the future")
 		}
-		if idInList(moved, alreadyRunning) {
-			t.Errorf("AdvanceRunning() moved a contest that was already running")
+		if seen[alreadyRunning] {
+			t.Error("DueToStart() returned a contest that was already running")
 		}
 
+		// DueToStart only reads: Scheduler decides whether a candidate may
+		// move once it has re-run the publish gate against it (finding 1),
+		// and this method has no business making that call itself.
 		loaded, _ := repo.ByID(ctx, due)
-		if loaded.Status != contests.StatusRunning {
-			t.Errorf("due contest's status = %q, want running", loaded.Status)
-		}
-		stillPublished, _ := repo.ByID(ctx, notYet)
-		if stillPublished.Status != contests.StatusPublished {
-			t.Errorf("not-yet-due contest's status = %q, want it left published", stillPublished.Status)
+		if loaded.Status != contests.StatusPublished {
+			t.Errorf("DueToStart() moved a contest by itself; status = %q, want it left published", loaded.Status)
 		}
 	})
 }
@@ -685,8 +685,8 @@ func TestAdvanceFinishedMovesOnlyRunningContestsPastTheirEnd(t *testing.T) {
 	})
 }
 
-// idInList reports whether id is among moved, for the AdvanceRunning and
-// AdvanceFinished tests above.
+// idInList reports whether id is among moved, for the AdvanceFinished test
+// above.
 func idInList(moved []uuid.UUID, id uuid.UUID) bool {
 	for _, m := range moved {
 		if m == id {

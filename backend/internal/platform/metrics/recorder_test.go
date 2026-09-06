@@ -28,8 +28,9 @@ func TestEveryBackendAcceptsObservationsWithoutFailing(t *testing.T) {
 	// need special handling at the call site.
 	for name, rec := range allBackends(t) {
 		t.Run(name, func(t *testing.T) {
-			rec.ObserveRequest(http.MethodGet, "/api/v1/version", 200, 5*time.Millisecond)
-			rec.ObserveRequest(http.MethodPost, "/api/v1/contests", 500, time.Second)
+			rec.ObserveRequest(http.MethodGet, "/api/v1/version", 200, 5*time.Millisecond, false)
+			rec.ObserveRequest(http.MethodPost, "/api/v1/contests", 500, time.Second, false)
+			rec.ObserveRequest(http.MethodGet, "/api/v1/contests/{contestID}/events", 200, time.Hour, true)
 		})
 	}
 }
@@ -52,9 +53,9 @@ func TestLogBackendReportsAggregatedCounts(t *testing.T) {
 	var buf bytes.Buffer
 	rec := NewLog(logging.New("info", &buf), time.Minute)
 
-	rec.ObserveRequest(http.MethodGet, "/api/v1/version", 200, 10*time.Millisecond)
-	rec.ObserveRequest(http.MethodGet, "/api/v1/version", 200, 30*time.Millisecond)
-	rec.ObserveRequest(http.MethodGet, "/api/v1/version", 500, 20*time.Millisecond)
+	rec.ObserveRequest(http.MethodGet, "/api/v1/version", 200, 10*time.Millisecond, false)
+	rec.ObserveRequest(http.MethodGet, "/api/v1/version", 200, 30*time.Millisecond, false)
+	rec.ObserveRequest(http.MethodGet, "/api/v1/version", 500, 20*time.Millisecond, false)
 	rec.Flush()
 
 	// One record per method+route+status group, not one per request: the
@@ -88,8 +89,8 @@ func TestLogBackendReportsLatency(t *testing.T) {
 	var buf bytes.Buffer
 	rec := NewLog(logging.New("info", &buf), time.Minute)
 
-	rec.ObserveRequest(http.MethodGet, "/slow", 200, 100*time.Millisecond)
-	rec.ObserveRequest(http.MethodGet, "/slow", 200, 300*time.Millisecond)
+	rec.ObserveRequest(http.MethodGet, "/slow", 200, 100*time.Millisecond, false)
+	rec.ObserveRequest(http.MethodGet, "/slow", 200, 300*time.Millisecond, false)
 	rec.Flush()
 
 	r := decodeRecords(t, &buf)[0]
@@ -106,7 +107,7 @@ func TestLogBackendResetsCountersAfterFlush(t *testing.T) {
 	// restate the whole history.
 	var buf bytes.Buffer
 	rec := NewLog(logging.New("info", &buf), time.Minute)
-	rec.ObserveRequest(http.MethodGet, "/x", 200, time.Millisecond)
+	rec.ObserveRequest(http.MethodGet, "/x", 200, time.Millisecond, false)
 	rec.Flush()
 	buf.Reset()
 
@@ -145,6 +146,111 @@ func TestNewRejectsUnknownBackend(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "statsd") {
 		t.Errorf("error %q does not name the offending value", err)
+	}
+}
+
+// Finding 5: a long-lived response (an SSE channel that can stay open for the
+// length of a contest) must not land in the same histogram as ordinary
+// requests, or that one connection would own the service's own p99 the
+// moment it closes.
+func TestPrometheusRoutesAStreamingObservationToItsOwnHistogram(t *testing.T) {
+	p := NewPrometheus()
+	p.ObserveRequest(http.MethodGet, "/contests/{contestID}/events", 200, time.Hour, true)
+	p.ObserveRequest(http.MethodGet, "/api/v1/version", 200, 5*time.Millisecond, false)
+
+	rec := httptest.NewRecorder()
+	p.ScrapeHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+
+	if !strings.Contains(body, `http_stream_duration_seconds_count{method="GET",route="/contests/{contestID}/events"} 1`) {
+		t.Errorf("the streaming observation did not reach http_stream_duration_seconds: %s", body)
+	}
+	if strings.Contains(body, `http_request_duration_seconds_count{method="GET",route="/contests/{contestID}/events"}`) {
+		t.Errorf("the streaming observation also landed in the shared request-duration histogram: %s", body)
+	}
+	if !strings.Contains(body, `http_requests_total{method="GET",route="/api/v1/version",status="200"} 1`) {
+		t.Errorf("an ordinary request was not counted: %s", body)
+	}
+}
+
+// The other direction: an ordinary request must never appear in the stream
+// histogram just because that histogram now exists.
+func TestPrometheusLeavesOrdinaryRequestsOutOfTheStreamHistogram(t *testing.T) {
+	p := NewPrometheus()
+	p.ObserveRequest(http.MethodGet, "/api/v1/version", 200, 5*time.Millisecond, false)
+
+	rec := httptest.NewRecorder()
+	p.ScrapeHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	if strings.Contains(rec.Body.String(), "http_stream_duration_seconds_count{") {
+		t.Errorf("an ordinary request produced a series in the stream histogram: %s", rec.Body.String())
+	}
+}
+
+// The log backend's own version of the same split: one aggregate for the
+// streaming observations on a route, a separate one for the ordinary
+// requests on the same route, never folded into one count or one average.
+func TestLogBackendReportsStreamingSeparatelyFromOrdinaryRequests(t *testing.T) {
+	var buf bytes.Buffer
+	rec := NewLog(logging.New("info", &buf), time.Minute)
+
+	rec.ObserveRequest(http.MethodGet, "/contests/{contestID}/events", 200, time.Hour, true)
+	rec.ObserveRequest(http.MethodGet, "/contests/{contestID}/events", 200, 5*time.Millisecond, false)
+	rec.Flush()
+
+	var streaming, ordinary map[string]any
+	for _, r := range decodeRecords(t, &buf) {
+		if r["route"] != "/contests/{contestID}/events" {
+			continue
+		}
+		if r["streaming"] == true {
+			streaming = r
+		} else {
+			ordinary = r
+		}
+	}
+	if streaming == nil || ordinary == nil {
+		t.Fatalf("want one streaming and one ordinary aggregate for the same route, got: %s", buf.String())
+	}
+	if streaming["count"] != float64(1) || ordinary["count"] != float64(1) {
+		t.Errorf("streaming = %v, ordinary = %v, want one request folded into each, not blended together", streaming, ordinary)
+	}
+}
+
+// MarkStreaming is how a handler tells Middleware which histogram its own
+// response belongs in; this proves the mailbox Middleware plants in the
+// context actually reaches ObserveRequest.
+func TestMarkStreamingReachesTheRecorderThroughMiddleware(t *testing.T) {
+	p := NewPrometheus()
+	handler := Middleware(p)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		MarkStreaming(r)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/contests/{contestID}/events", nil))
+
+	rec := httptest.NewRecorder()
+	p.ScrapeHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(rec.Body.String(), `http_stream_duration_seconds_count{method="GET",route="unknown"} 1`) {
+		t.Errorf("MarkStreaming did not route the observation to the stream histogram: %s", rec.Body.String())
+	}
+}
+
+// A handler that never calls MarkStreaming must keep counting toward the
+// shared histogram — marking is opt-in per handler, not the default for
+// everything that happens to run through Middleware.
+func TestMiddlewareDefaultsToTheSharedHistogramWithoutMarkStreaming(t *testing.T) {
+	p := NewPrometheus()
+	handler := Middleware(p)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+
+	rec := httptest.NewRecorder()
+	p.ScrapeHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if strings.Contains(rec.Body.String(), "http_stream_duration_seconds_count{") {
+		t.Errorf("an unmarked handler's response reached the stream histogram: %s", rec.Body.String())
 	}
 }
 

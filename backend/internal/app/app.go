@@ -219,14 +219,26 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 
 	// The background half of §8: published → running → finished without an
 	// organizer asking, one advisory-locked tick at a time
-	// (internal/app/background.go's own doc for the interval). A second
-	// postgres.Contests rather than the one contestService already holds:
-	// both wrap the same pool and the same table, so the two cost nothing
-	// beyond the struct itself, and Scheduler asks for
-	// contests.ScheduleRepository — a narrower thing than contestService's
-	// own contests.Repository — which is easiest to see when it is handed
-	// its own value instead of borrowing a field out of another component.
-	scheduler := contests.NewScheduler(postgres.NewContests(pool), auditRecorder, storage.NewUnitOfWork(pool))
+	// (internal/app/background.go's own doc for the interval). Second
+	// postgres.Contests, Stories and Questions values rather than the ones
+	// contestService already holds: all of them wrap the same pool and the
+	// same tables, so this costs nothing beyond the structs themselves, and
+	// Scheduler asks for narrower things than contestService's own
+	// contests.Repository, contests.StoryRepository and
+	// contests.QuestionRepository — easiest to see when it is handed its own
+	// values instead of borrowing fields out of another component. The
+	// story and question reads are what let the scheduler hold the same
+	// publish gate Service.Transition holds before letting a contest reach
+	// running (finding 1): the scheduler is a second door into that step,
+	// and it must not open onto a contest whose story or questions vanished
+	// after publication.
+	scheduler := contests.NewScheduler(
+		postgres.NewContests(pool),
+		postgres.NewStories(pool),
+		postgres.NewQuestions(pool),
+		auditRecorder,
+		storage.NewUnitOfWork(pool),
+	)
 	a.tasks = append(a.tasks, advanceContestSchedule(log, scheduler.Advance))
 
 	modules := []api.Module{

@@ -60,6 +60,14 @@ const (
 	// contest's network restriction: the same entry that proves the rule works
 	// is the signal that somebody tried from an outside device (§7.1).
 	ActionContestAccessDenied = "contest.access_denied"
+	// ActionContestStartBlocked records a contest whose starts_at arrived
+	// while contests.Scheduler's tick held the lock, but which the same
+	// publish gate Service.Transition enforces (CheckPublishable) refused —
+	// a story removed, a question deleted, after publication (§8). The
+	// contest is left published rather than opened with nothing in it, and
+	// this is how an organizer finds out why, instead of from a student's
+	// support ticket.
+	ActionContestStartBlocked = "contest.start_blocked"
 
 	// ActionSettingsChange records a change to what the installation calls
 	// itself and how it looks. It is entity "settings" with no identifier:
@@ -87,7 +95,7 @@ var actions = []string{
 	ActionAnswersChange, ActionManagerGrant, ActionManagerRevoke,
 
 	ActionParticipantAdd, ActionParticipantRemove, ActionParticipantDisqualify,
-	ActionParticipantEnroll, ActionContestAccessDenied,
+	ActionParticipantEnroll, ActionContestAccessDenied, ActionContestStartBlocked,
 
 	ActionSettingsChange,
 }

@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -23,9 +24,17 @@ func Middleware(rec Recorder) func(http.Handler) http.Handler {
 			started := time.Now()
 			sr := httpx.NewStatusRecorder(w)
 
+			// A fresh mailbox per request: MarkStreaming flips it from inside
+			// the handler, once it knows this response will be a long-lived
+			// stream rather than an ordinary one (finding 5) — read back here,
+			// after the handler has returned, since that is the only point
+			// this middleware runs any code of its own again.
+			streaming := new(bool)
+			r = r.WithContext(context.WithValue(r.Context(), streamingKey{}, streaming))
+
 			next.ServeHTTP(sr, r)
 
-			rec.ObserveRequest(r.Method, routePattern(r), sr.Status(), time.Since(started))
+			rec.ObserveRequest(r.Method, routePattern(r), sr.Status(), time.Since(started), *streaming)
 		})
 	}
 }

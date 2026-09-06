@@ -33,6 +33,7 @@
     "participant.disqualify",
     "participant.enroll",
     "contest.access_denied",
+    "contest.start_blocked",
     "settings.change"
   ]
 }

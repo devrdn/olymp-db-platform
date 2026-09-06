@@ -301,22 +301,42 @@ func (r *Contests) TryLock(ctx context.Context) (bool, error) {
 	return acquired, nil
 }
 
-// AdvanceRunning moves every published contest whose starts_at has arrived to
-// running, by this database's own clock — the same reasoning
-// postgres.Submissions applies to a deadline (now() here is PostgreSQL's own,
-// not a value computed in this process and handed down), so that every
-// replica racing for TryLock agrees about which contests qualify regardless
-// of how its own wall clock happens to be skewed.
-func (r *Contests) AdvanceRunning(ctx context.Context) ([]uuid.UUID, error) {
+// DueToStart returns every published contest whose starts_at has arrived, by
+// this database's own clock — the same reasoning postgres.Submissions applies
+// to a deadline (now() here is PostgreSQL's own, not a value computed in this
+// process and handed down), so that every replica racing for TryLock agrees
+// about which contests qualify regardless of how its own wall clock happens
+// to be skewed.
+//
+// Full rows, not ids: the caller re-checks CheckPublishable against each one
+// before starting it (finding 1 — the scheduler is now a second door into a
+// contest, and it must hold the same invariant Service.Transition does), and
+// that needs the contest's languages, translations, timing and mode alongside
+// it, exactly what ByID returns. This is also what keeps a tick cheap: the
+// WHERE clause is on indexed columns and matches only what would actually
+// move, so the gate this runs per contest is paid for contests due right now,
+// never for the rest of the installation's published ones sitting on a future
+// starts_at.
+func (r *Contests) DueToStart(ctx context.Context) ([]contests.Contest, error) {
 	rows, err := r.querier(ctx).Query(ctx,
-		`UPDATE contests SET status = $1, updated_at = now()
-		 WHERE status = $2 AND starts_at IS NOT NULL AND starts_at <= now()
-		 RETURNING id`,
-		contests.StatusRunning, contests.StatusPublished)
+		`SELECT `+contestColumns+`
+		 FROM contests c
+		 WHERE c.status = $1 AND c.starts_at IS NOT NULL AND c.starts_at <= now()`,
+		contests.StatusPublished)
 	if err != nil {
-		return nil, fmt.Errorf("advance contests to running: %w", err)
+		return nil, fmt.Errorf("find contests due to start: %w", err)
 	}
-	return scanIDs(rows)
+	defer rows.Close()
+
+	var due []contests.Contest
+	for rows.Next() {
+		c, err := scanContest(rows)
+		if err != nil {
+			return nil, err
+		}
+		due = append(due, c)
+	}
+	return due, rows.Err()
 }
 
 // AdvanceFinished moves every running contest whose ends_at has passed to

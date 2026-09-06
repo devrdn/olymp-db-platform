@@ -859,6 +859,78 @@ func TestAccessChecksTheAddressRestriction(t *testing.T) {
 	}
 }
 
+// AccessForEvents is Access with exactly one status added to what it admits
+// (finding 4, docs/ARCHITECTURE.md §8): published and not yet started, so the
+// events channel can be held open across the published → running transition
+// instead of refusing a participant until Access itself would succeed.
+//
+// The table below is the same shape TestAccessAgreesWithRunAboutWhoMayAskAndWhen
+// drives through Access, minus the one row this method exists to change: "a
+// contest that has not started" moves from a refusal to an admission, and
+// every other row must refuse exactly as it always did.
+func TestAccessForEventsAdmitsExactlyOneMoreStatusThanAccess(t *testing.T) {
+	for name, given := range map[string]struct {
+		people  people
+		contest contests.Contest
+		want    error
+	}{
+		"a contest that is published and has not started": {
+			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}},
+			contest: contests.Contest{Status: contests.StatusPublished},
+			want:    nil,
+		},
+		"somebody who never registered": {
+			people:  people{err: contests.ErrParticipantNotFound},
+			contest: contests.Contest{Status: contests.StatusPublished},
+			want:    queryproxy.ErrNotAParticipant,
+		},
+		"somebody disqualified, even for a published contest": {
+			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationDisqualified}},
+			contest: contests.Contest{Status: contests.StatusPublished},
+			want:    queryproxy.ErrNotAParticipant,
+		},
+		"a contest that has finished": {
+			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+			contest: contests.Contest{Status: contests.StatusFinished},
+			want:    queryproxy.ErrContestNotRunning,
+		},
+		"a contest still a draft": {
+			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}},
+			contest: contests.Contest{Status: contests.StatusDraft},
+			want:    queryproxy.ErrContestNotRunning,
+		},
+		"a running contest, exactly as Access itself admits it": {
+			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow},
+			want:    nil,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service := accessFixture(given.people, contestStore{contest: given.contest})
+
+			_, _, err := service.AccessForEvents(t.Context(), uuid.New(), uuid.New(), netip.Addr{})
+			if !errors.Is(err, given.want) {
+				t.Fatalf("error = %v, want %v", err, given.want)
+			}
+		})
+	}
+}
+
+// The network restriction is not waived just because the contest has not
+// started yet — it applies to the participant, not to the contest's status.
+func TestAccessForEventsStillChecksTheAddressRestrictionForAPublishedContest(t *testing.T) {
+	inRoom := netip.MustParsePrefix("10.20.0.0/16")
+	contest := contests.Contest{Status: contests.StatusPublished, AllowedCIDRs: []netip.Prefix{inRoom}}
+	service := accessFixture(people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}}, contestStore{contest: contest})
+
+	if _, _, err := service.AccessForEvents(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("203.0.113.7")); !errors.Is(err, queryproxy.ErrAddressNotAllowed) {
+		t.Fatalf("error = %v, want ErrAddressNotAllowed", err)
+	}
+	if _, _, err := service.AccessForEvents(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("10.20.3.4")); err != nil {
+		t.Fatalf("a read from the contest's own network was refused for a published contest: %v", err)
+	}
+}
+
 // What is held back is the database speaking for itself, and nothing else. A
 // refusal and the runner's own outcomes carry codes the interface turns into
 // sentences, and swallowing one would leave a participant with less than the
