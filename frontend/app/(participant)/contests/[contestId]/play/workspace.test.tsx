@@ -58,7 +58,12 @@ vi.mock("./side-panel", async (importOriginal) => {
   };
 });
 
-function show() {
+const A_SCHEMA = {
+  truncated: false,
+  tables: [{ name: "guests", columns: [{ name: "id", type: "uuid", nullable: false, references: "" }] }],
+};
+
+function show(schema: typeof A_SCHEMA | null = null) {
   return render(
     <Workspace
       contestId="c1"
@@ -66,6 +71,7 @@ function show() {
       storyBody={<p>A body in the stacks.</p>}
       storyUnavailable={null}
       questionEntries={[]}
+      schema={schema}
       initialLog={freshInitialLog()}
       locale="en"
       dict={en}
@@ -204,5 +210,26 @@ describe("the play workspace", () => {
 
     expect(renderCounts.result).toBe(resultRendersBefore);
     expect(renderCounts.side).toBe(sideRendersBefore);
+  });
+});
+
+// The design's left column (docs/design/preview.html, "SQL-консоль"). It is
+// absent rather than empty in a contest that closed its catalogues: leaving
+// the column in place would spend a fifth of the screen saying nothing, and
+// the panel would be the very oracle the closed catalogue is hiding.
+describe("the schema column", () => {
+  test("is there when the contest shows its schema", () => {
+    show(A_SCHEMA);
+
+    expect(screen.getByRole("region", { name: en.participant.play.schema.heading })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /guests/ })).toBeInTheDocument();
+  });
+
+  test("is absent entirely in a contest that hides it", () => {
+    show(null);
+
+    expect(
+      screen.queryByRole("region", { name: en.participant.play.schema.heading }),
+    ).not.toBeInTheDocument();
   });
 });
