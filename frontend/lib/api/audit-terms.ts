@@ -61,6 +61,7 @@ export const AUDIT_ACTIONS = [
   "contest.question_delete",
   "contest.question_reorder",
   "contest.answers_change",
+  "contest.package_export",
   "contest.manager_grant",
   "contest.manager_revoke",
 

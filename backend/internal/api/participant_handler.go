@@ -2,10 +2,13 @@ package api
 
 import (
 	"context"
+	"encoding/csv"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"strconv"
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/contests"
@@ -71,6 +74,16 @@ type Submitter interface {
 // implements this too.
 type QueryHistory interface {
 	History(ctx context.Context, registrationID uuid.UUID, limit, offset int) ([]queryrunner.HistoryEntry, int, error)
+	// ExportHistory streams every one of that registration's rows, oldest
+	// first, for the CSV download beside the paged read. Two methods on one
+	// interface rather than two interfaces, because they are two reads of one
+	// table by one handler — and one implementation, postgres.QueryLog, which
+	// is also what writes it.
+	//
+	// A yield that fails stops the stream: the caller is writing to a socket,
+	// and a client that hung up must not have the rest of the log read out of
+	// the database on its behalf.
+	ExportHistory(ctx context.Context, registrationID uuid.UUID, yield func(queryrunner.HistoryEntry) error) error
 }
 
 // ParticipantHandler serves a participant's own view of, and actions on, a
@@ -122,6 +135,12 @@ func (h *ParticipantHandler) Mount(r chi.Router) {
 		r.Get("/contests/{"+contestIDParam+"}/play/story", h.story)
 		r.Get("/contests/{"+contestIDParam+"}/play/questions", h.questions)
 		r.Get("/contests/{"+contestIDParam+"}/play/log", h.queryLog)
+		// The same log as a file (§9.1). A distinct last segment rather than
+		// a ?format= on the route above: what the two return differs in more
+		// than encoding — one is a page and the other is the whole session —
+		// and a content type is not something a client should have to ask for
+		// in a query string it might forget.
+		r.Get("/contests/{"+contestIDParam+"}/play/log.csv", h.queryLogCSV)
 		r.Get("/contests/{"+contestIDParam+"}/play/schema", h.schema)
 		r.Post("/contests/{"+contestIDParam+"}/questions/{"+questionIDParam+"}/answer", h.answer)
 	})
@@ -326,6 +345,116 @@ func (h *ParticipantHandler) queryLog(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	httpx.JSON(w, r, http.StatusOK, queryLogResponse{Items: items, Total: total})
+}
+
+// queryLogCSVColumns is the file's header row, and the order of every row
+// under it. The same facts the panel shows, plus the error text — a
+// spreadsheet has room for it where a table column does not.
+var queryLogCSVColumns = []string{"executed_at", "status", "duration_ms", "row_count", "error", "sql"}
+
+// queryLogCSV serves GET .../play/log.csv: this participant's whole query
+// log as a file, and only theirs.
+//
+// Streamed, not bounded — the opposite choice from the contest package next
+// door, and for the opposite reason. A log has no natural size: a participant
+// who never stops querying over a two-hour olympiad puts hundreds of rows in
+// it, and a file quietly missing most of them is not a record of anything. So
+// there is no page here (§9.1 is explicit that CSV streams row by row with no
+// volume ceiling), and what keeps memory flat instead is that a row is
+// written to the socket as it arrives: postgres.QueryLog.ExportHistory hands
+// them over one at a time, csv.Writer's own bufio flushes when its buffer
+// fills, and nothing accumulates a log's worth of anything. The package is
+// bounded because a partial package is corrupt; the log is streamed because a
+// partial log is the only alternative to no log at all.
+//
+// The rate budget comes first (admit, and CLAUDE.md rule 13): this is the
+// most expensive read this handler offers, so it is the last one that should
+// be free.
+//
+// Whose rows: participant.ID, resolved by Access from the session and the
+// contest in the URL. Nothing the request carries selects a registration, and
+// there is no staff route to this endpoint — the admin journal panel of §9.1,
+// which is the thing that would name somebody else's registration, is not
+// built yet and will not be built here.
+func (h *ParticipantHandler) queryLogCSV(w http.ResponseWriter, r *http.Request) {
+	participant, contest, ok := h.admit(w, r)
+	if !ok {
+		return
+	}
+
+	// Headers cannot be set once a byte is written, and whether the read even
+	// starts is only known when the first row arrives (or the stream ends).
+	// So the response is opened by this closure, called at most once: either
+	// from the first row, or from the empty case below. A failure before it
+	// runs still has a status line to spend, and spends it on saying so.
+	writer := csv.NewWriter(w)
+	opened := false
+	open := func() error {
+		opened = true
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		// The identifier, not the contest's title: a title is authored text
+		// in any script and this header is ASCII.
+		w.Header().Set("Content-Disposition",
+			fmt.Sprintf("attachment; filename=%q", "query-log-"+contest.ID.String()+".csv"))
+		w.WriteHeader(http.StatusOK)
+		return writer.Write(queryLogCSVColumns)
+	}
+
+	err := h.history.ExportHistory(r.Context(), participant.ID, func(entry queryrunner.HistoryEntry) error {
+		if !opened {
+			if err := open(); err != nil {
+				return err
+			}
+		}
+		return writer.Write([]string{
+			entry.ExecutedAt.UTC().Format(timeLayout),
+			string(entry.Status),
+			// Empty rather than zero for a row still running: an empty cell
+			// is how CSV says "not recorded", and a zero here would read as a
+			// query that took no time and returned nothing.
+			optionalNumber(entry.DurationMs),
+			optionalNumber(entry.RowCount),
+			// The same guard the paged read applies, not a second opinion
+			// about it: this file reads the same unsanitised column, and a
+			// download is the more convenient way round a guard than a page
+			// is, because it arrives as a document somebody keeps.
+			participantSafeError(entry.Status, entry.Error),
+			entry.SQL,
+		})
+	})
+	if err != nil {
+		if !opened {
+			h.log.ErrorContext(r.Context(), "could not read the participant's query log for export", "error", err)
+			httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+			return
+		}
+		// The status line is already out and said 200. Logged rather than
+		// swallowed: what the participant has is a file that stops early, and
+		// the log is the only place that fact survives.
+		h.log.ErrorContext(r.Context(), "the participant's query log export stopped early", "error", err)
+	}
+
+	// A participant who ran nothing still gets a file: a header row and no
+	// rows under it. A zero-byte download is indistinguishable from a failed
+	// one.
+	if !opened {
+		if err := open(); err != nil {
+			h.log.ErrorContext(r.Context(), "could not write the query log export header", "error", err)
+			return
+		}
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		h.log.ErrorContext(r.Context(), "could not finish the query log export", "error", err)
+	}
+}
+
+// optionalNumber renders a count that may not have been recorded yet.
+func optionalNumber(value *int) string {
+	if value == nil {
+		return ""
+	}
+	return strconv.Itoa(*value)
 }
 
 // answerRequest is the body of POST .../answer: one value, compared against

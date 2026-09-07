@@ -50,6 +50,13 @@ type ServiceConfig struct {
 	Policies      PolicyStore
 	Languages     LanguageCatalog
 	Users         UserDirectory
+	// Game reads the SQL one contest's game is built from, for
+	// Service.ExportPackage and nothing else. Optional at the type level for
+	// the same reason Submissions is: a deployment with no game cluster wires
+	// none (internal/app builds the game half only when there is a cluster),
+	// and a package from such an installation simply carries no game rather
+	// than failing over a circuit the contest never had.
+	Game GameSource
 	// Submissions records participants' answers (submission.go). Optional at
 	// the type level so every existing caller that has nothing to do with
 	// answering questions keeps compiling unchanged; a Service assembled
@@ -120,6 +127,7 @@ type Service struct {
 	policies        PolicyStore
 	languages       LanguageCatalog
 	users           UserDirectory
+	game            GameSource
 	submissions     SubmissionRepository
 	sequence        SequentialGate
 	audit           *audit.Recorder
@@ -157,6 +165,7 @@ func NewService(cfg ServiceConfig) *Service {
 		policies:        cfg.Policies,
 		languages:       cfg.Languages,
 		users:           cfg.Users,
+		game:            cfg.Game,
 		submissions:     cfg.Submissions,
 		sequence:        cfg.Sequence,
 		audit:           cfg.Audit,

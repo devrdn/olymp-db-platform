@@ -471,7 +471,46 @@ shell is built from.
 
 **Built so far:** Button, Input, Label, Field, Tag, Skeleton, StateView, Band,
 AppBar, Mark, PublicShell, AdminShell, ContestRegister, LanguageSwitcher,
-ThemeToggle.
+ThemeToggle, ExportMenu.
+
+### 11.1 ExportMenu
+
+The decision: a download is a link, not a button that fetches.
+
+**What leaves the server is decided by the server.** `ExportMenu` renders one
+anchor per format, pointed at the endpoint that produces it, with `download`
+set. It fetches nothing, holds nothing and serialises nothing. That is not
+minimalism: a control that built the file in the page could only ever offer
+what the page had already been given, and on both surfaces that is the wrong
+amount. The participant's log panel holds one page of fifty rows out of a
+session that can run to hundreds — a "download" handing over the fifty would be
+the wrong answer in the format that looks most authoritative. The contest
+package is worse: it carries the reference answers, which are never sent to a
+page at all, so there is nothing in the browser to assemble it from and there
+must not be.
+
+**It is called a menu because it is meant to grow into one.** Architecture
+§9.1 promises NDJSON and XLSX beside CSV on the administrator's journal panel,
+which is not built. Today each surface offers exactly one format, so each
+renders a list of one — not a disclosure widget concealing a single item, which
+is a click charged for nothing.
+
+**Two surfaces carry it.** On the contest overview, one JSON link: the whole
+contest as a file to author again next year. On the participant's query-log
+panel, one CSV link: their own session as a file, offered only once there is a
+row in it. Nothing else does; a screen that has no data worth taking away does
+not get an empty group heading, because a screen reader announces one all the
+same.
+
+**The format name is not translated.** "CSV" and "JSON" are proper nouns in all
+three languages, and the extension on the saved file says the same word again.
+What is translated is the accessible name, which says *what* is being
+downloaded rather than only how — the two links would otherwise both read
+"download" to somebody who reaches the page through them.
+
+**Nothing about the file's name is decided here.** `download` is a suggestion;
+the server's `Content-Disposition` is what a browser actually obeys, and both
+endpoints set one. Deciding it twice is how the two answers start disagreeing.
 
 ## 12. Directory structure
 

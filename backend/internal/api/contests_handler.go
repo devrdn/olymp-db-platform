@@ -103,6 +103,16 @@ func (h *ContestsHandler) Mount(r chi.Router) {
 				r.Delete("/questions/{"+questionIDParam+"}", h.deleteQuestion)
 				r.Put("/questions/{"+questionIDParam+"}/texts", h.setQuestionTexts)
 				r.Put("/questions/{"+questionIDParam+"}/answers", h.setAnswers)
+
+				// The contest as a file (contest_package.go). In this group
+				// and not the contest.view one above, deliberately: the
+				// package carries the reference answers, so it belongs to the
+				// permission that means "may write those answers" rather than
+				// the one that means "may look at this contest"
+				// (docs/ARCHITECTURE.md §15, item 12). A GET among writes is
+				// what that decision costs, and it is the cheaper of the two
+				// prices.
+				r.Get("/export", h.exportPackage)
 			})
 
 			// Appointing staff is the owner's alone.
@@ -801,6 +811,13 @@ func (h *ContestsHandler) fail(w http.ResponseWriter, r *http.Request, err error
 		// client's dictionary already carries a message for it — reused
 		// rather than declared a second time under a name of its own.
 		httpx.Error(w, r, http.StatusConflict, codeAccountBlocked, "This account is blocked")
+
+	case errors.Is(err, contests.ErrPackageTooLarge):
+		// 422 rather than 500: the request was understood and the contest is
+		// real, it simply carries more questions than one package holds. Its
+		// own code rather than invalid_request, because the caller sent no
+		// field to correct — what has to change is the contest.
+		httpx.Error(w, r, http.StatusUnprocessableEntity, codePackageTooLarge, err.Error())
 
 	case errors.Is(err, contests.ErrNotPublishable):
 		// The gate answers with a code and the whole list of what is missing.

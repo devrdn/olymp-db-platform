@@ -209,6 +209,16 @@ const en = {
         archived: "Archive",
       },
     },
+    /**
+     * The contest as a file (docs/ARCHITECTURE.md §15, item 12). The lede
+     * says what is in it and, in the same breath, why the control is on a
+     * page only editors reach: it is the answer key.
+     */
+    export: {
+      heading: "Export",
+      lede: "The whole contest as one file: its languages and titles, the story in each of them, every question with its choices and reference answers, the SQL policy and the game script. It is a full answer key, so it is offered only to those who may edit the contest.",
+      label: "Download the contest package as JSON",
+    },
     gate: {
       heading: "Ready to publish",
       ready: "Everything the gate asks for is in place.",
@@ -890,6 +900,11 @@ const en = {
           failed: "Could not load the query log.",
           retry: "Try again",
           durationMs: "{n} ms",
+          /** The whole session as a file, beside the page of it on screen. */
+          export: {
+            heading: "Export",
+            label: "Download your whole query log as CSV",
+          },
           columns: {
             sql: "Query",
             status: "Status",
@@ -1016,6 +1031,7 @@ const en = {
       "contest.question_delete": "Deleted a question",
       "contest.question_reorder": "Reordered the questions",
       "contest.answers_change": "Changed the reference answers",
+      "contest.package_export": "Exported the contest package",
       "contest.manager_grant": "Appointed a manager",
       "contest.manager_revoke": "Removed a manager",
       "participant.add": "Added a participant",
@@ -1077,6 +1093,7 @@ const en = {
     status_changed: "Somebody else moved this contest while you were deciding. Reload to see where it is now — nothing you did was saved.",
     not_editable: "A contest in this state cannot be changed.",
     not_publishable: "The contest is not ready to publish yet.",
+    package_too_large: "The contest has more questions than one exported package holds.",
     enrollment_closed: "Enrollment for this contest is closed.",
     already_enrolled: "You are already enrolled in this contest.",
     participant_started: "This participant has already started and can only be disqualified.",

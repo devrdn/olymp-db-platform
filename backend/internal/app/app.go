@@ -249,6 +249,19 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	})
 	userService := users.NewService(userRepo, auditRecorder, storage.NewUnitOfWork(pool))
 
+	// The game script the contest package carries (contests.GameSource,
+	// Service.ExportPackage). Assigned through a declared interface variable
+	// rather than handed the pointer directly: gameAuthoring is nil in a
+	// deployment with no game cluster, and a nil *provisioning.Games stored
+	// in an interface field is not a nil interface — the export would take
+	// the "there is a game to read" branch and dereference it. Left nil here
+	// instead, the package simply carries no game, which is the honest state
+	// of such an installation.
+	var packageGames contests.GameSource
+	if gameAuthoring != nil {
+		packageGames = gameAuthoring
+	}
+
 	// The contest module: everything an organizer authors and runs. It is
 	// assembled from the same repositories pattern — the domain declares what
 	// it needs, internal/postgres implements it — so nothing below this line
@@ -261,6 +274,9 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Registrations: postgres.NewRegistrations(pool),
 		Policies:      postgres.NewSQLPolicies(pool),
 		Languages:     postgres.NewLanguages(pool),
+		// Read only by Service.ExportPackage, and nil where this deployment
+		// has no game cluster at all — see packageGames above.
+		Game: packageGames,
 		// Records answers (submission.go). The same grace as queryproxy's own
 		// console (cfg.DeadlineGrace): §8 names one deadline formula and one
 		// grace, not one per path.
