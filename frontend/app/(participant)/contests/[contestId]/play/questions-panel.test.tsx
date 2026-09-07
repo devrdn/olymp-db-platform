@@ -299,3 +299,117 @@ describe("the questions panel", () => {
     expect(await screen.findByText(en.participant.play.questions.refreshFailed)).toBeInTheDocument();
   });
 });
+
+/**
+ * The state of every question at a glance, which is the whole reason the
+ * design's own card carries a tag beside the points: a participant halfway
+ * through an olympiad should not have to open four cards to find the one they
+ * are on.
+ */
+describe("a question's state", () => {
+  const t = en.participant.play.questions.status;
+
+  function threeQuestions(
+    ...overrides: [Partial<PlayQuestion>, Partial<PlayQuestion>, Partial<PlayQuestion>]
+  ) {
+    return overrides.map((o, i) => entry({ id: `q${i + 1}`, ...o }, i + 1));
+  }
+
+  test("marks the first still-open question as the one being worked on", () => {
+    render(
+      <QuestionsPanel
+        contestId="c1"
+        items={threeQuestions(
+          { closed: true, correct: true },
+          { closed: false, canAnswer: true },
+          { closed: false, canAnswer: false },
+        )}
+        dict={en}
+      />,
+    );
+
+    expect(screen.getByText(t.accepted)).toBeInTheDocument();
+    expect(screen.getByText(t.current)).toBeInTheDocument();
+    // Exactly one is current: two would be no mark at all.
+    expect(screen.queryAllByText(t.current)).toHaveLength(1);
+  });
+
+  // "Accepted" and "attempts spent" both close a question and mean opposite
+  // things. Collapsing them would tell a participant they solved something
+  // they did not.
+  test("tells a closed question that was answered from one that ran out of attempts", () => {
+    render(
+      <QuestionsPanel
+        contestId="c1"
+        items={threeQuestions(
+          { closed: true, correct: true },
+          { closed: true, correct: false },
+          { closed: false, canAnswer: true },
+        )}
+        dict={en}
+      />,
+    );
+
+    expect(screen.getByText(t.accepted)).toBeInTheDocument();
+    expect(screen.getByText(t.spent)).toBeInTheDocument();
+  });
+
+  // §6.1.1 puts sequential order on the server; this only names the question
+  // the server is waiting on, so "after 2" beats "not yet".
+  test("names the question a locked one is waiting on", () => {
+    render(
+      <QuestionsPanel
+        contestId="c1"
+        items={threeQuestions(
+          { closed: true, correct: true },
+          { closed: false, canAnswer: true },
+          { closed: false, canAnswer: false },
+        )}
+        dict={en}
+      />,
+    );
+
+    expect(screen.getByText(t.after.replace("{n}", "2"))).toBeInTheDocument();
+  });
+
+  // Nothing is being worked on when nothing can be answered — after the
+  // deadline, or before the contest opens, the server marks every question
+  // unanswerable while leaving them open. Marking one "current" then would
+  // point a participant at work they cannot do.
+  test("marks nothing as current when the server says nothing can be answered", () => {
+    render(
+      <QuestionsPanel
+        contestId="c1"
+        items={threeQuestions(
+          { closed: false, canAnswer: false },
+          { closed: false, canAnswer: false },
+          { closed: false, canAnswer: false },
+        )}
+        dict={en}
+      />,
+    );
+
+    expect(screen.queryByText(t.current)).not.toBeInTheDocument();
+    // And the row is not marked either. The tag alone would have hidden this:
+    // a locked question already reads "after N", so only the mark on the row
+    // itself says which question the participant is on.
+    expect(document.querySelector('[aria-current="step"]')).toBeNull();
+  });
+
+  test("an olympiad with everything answered marks nothing as current", () => {
+    render(
+      <QuestionsPanel
+        contestId="c1"
+        items={threeQuestions(
+          { closed: true, correct: true },
+          { closed: true, correct: true },
+          { closed: true, correct: false },
+        )}
+        dict={en}
+      />,
+    );
+
+    expect(screen.queryByText(t.current)).not.toBeInTheDocument();
+    expect(screen.queryAllByText(t.accepted)).toHaveLength(2);
+  });
+});

@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tag } from "@/components/ui/tag";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import type { PlayQuestion } from "@/lib/api/play";
 import { cn } from "@/lib/utils";
@@ -87,6 +88,11 @@ export function QuestionsPanel({
     return <p className="text-body text-ink-2">{t.empty}</p>;
   }
 
+  // The question the participant is working on: the first one still open to
+  // them. Decided here rather than in the card, because a card cannot see the
+  // others and "current" is a fact about the list.
+  const currentIndex = entries.find(({ question }) => !question.closed && question.canAnswer)?.index;
+
   return (
     <div className="flex flex-col gap-4">
       {refreshFailed ? (
@@ -100,12 +106,29 @@ export function QuestionsPanel({
           keeps everything else in. */}
       <div className="flex flex-col divide-y divide-line">
         {entries.map(({ question, index, body }) => (
-          <div key={question.id} className="py-5 first:pt-0 last:pb-0">
+          <div
+            key={question.id}
+            // The mark the design draws as a wash, said out loud as well. A
+            // row distinguished only by a background is undistinguished for
+            // anybody not looking at it — the same reasoning the workspace
+            // navigation already applies to its own current section.
+            aria-current={index === currentIndex ? "step" : undefined}
+            className={cn(
+              "px-3 py-5 first:pt-3 last:pb-3",
+              // The one the participant is on, marked the way the design
+              // marks it: a wash, not a border. Everything on this screen is
+              // already separated by rules, and a second kind of line here
+              // would read as a nested box (SPEC.md §3: no nested plates).
+              index === currentIndex && "bg-accent-wash",
+            )}
+          >
             <QuestionCard
               contestId={contestId}
               question={question}
               index={index}
               body={body}
+              current={index === currentIndex}
+              blockedBy={index === currentIndex ? undefined : blockedBy(entries, index)}
               dict={dict}
               onClosed={onClosed}
             />
@@ -121,6 +144,8 @@ function QuestionCard({
   question,
   index,
   body,
+  current,
+  blockedBy,
   dict,
   onClosed,
 }: {
@@ -128,6 +153,10 @@ function QuestionCard({
   question: PlayQuestion;
   index: number;
   body: ReactNode;
+  /** Whether this is the question the participant is working on. */
+  current: boolean;
+  /** The question that has to close before this one opens, if any. */
+  blockedBy?: number;
   dict: Dictionary;
   onClosed: () => void;
 }) {
@@ -198,9 +227,19 @@ function QuestionCard({
           <span className="sr-only">{t.numberLabel.replace("{n}", String(index))}</span>
           <div className="min-w-0">{body}</div>
         </div>
-        <span className="shrink-0 font-mono text-label text-ink-3 uppercase">
-          {t.points.replace("{n}", String(question.points))}
-        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          <QuestionStatus
+            closed={closed}
+            correct={correct}
+            current={current}
+            locked={locked}
+            blockedBy={blockedBy}
+            t={t}
+          />
+          <span className="font-mono text-label text-ink-3 uppercase">
+            {t.points.replace("{n}", String(question.points))}
+          </span>
+        </div>
       </div>
 
       {closed ? (
@@ -301,4 +340,55 @@ function Refusal({ state, dict }: { state: Extract<AnswerState, { kind: "refused
       ) : null}
     </div>
   );
+}
+
+/**
+ * Which question has to close before `index` opens.
+ *
+ * The one immediately before it that is still open — sequential progression
+ * is what makes a question unanswerable, and §6.1.1 puts the rule on the
+ * server; this only names the question the server is waiting on, so the
+ * participant is told "after 4" instead of "not yet".
+ */
+function blockedBy(entries: QuestionEntry[], index: number): number | undefined {
+  for (let i = index - 2; i >= 0; i--) {
+    if (!entries[i].question.closed) return entries[i].index;
+  }
+  return undefined;
+}
+
+/**
+ * A question's state, in the one word the design's own card carries.
+ *
+ * Four states and not five: a question closed without a correct answer is
+ * "attempts spent", which is a different sentence from "accepted" and a
+ * different one again from "not answered yet" — collapsing the first two
+ * would tell a participant they had solved something they had not.
+ */
+function QuestionStatus({
+  closed,
+  correct,
+  current,
+  locked,
+  blockedBy,
+  t,
+}: {
+  closed: boolean;
+  correct?: boolean;
+  current: boolean;
+  locked: boolean;
+  blockedBy?: number;
+  t: Dictionary["participant"]["play"]["questions"];
+}) {
+  if (closed) {
+    return correct ? <Tag tone="good">{t.status.accepted}</Tag> : <Tag tone="mute">{t.status.spent}</Tag>;
+  }
+  if (locked) {
+    return (
+      <Tag tone="mute">
+        {blockedBy !== undefined ? t.status.after.replace("{n}", String(blockedBy)) : t.status.open}
+      </Tag>
+    );
+  }
+  return current ? <Tag tone="ink">{t.status.current}</Tag> : <Tag tone="mute">{t.status.open}</Tag>;
 }
