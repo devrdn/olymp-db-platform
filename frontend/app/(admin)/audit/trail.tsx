@@ -2,7 +2,13 @@ import Link from "next/link";
 
 import { StateView } from "@/components/product/state-view";
 import { buttonVariants } from "@/components/ui/button";
-import { AUDIT_PAGE, blockedProblems, summariseChanges, type AuditEntry } from "@/lib/api/audit";
+import {
+  AUDIT_PAGE,
+  blockedProblems,
+  loginFailureReason,
+  summariseChanges,
+  type AuditEntry,
+} from "@/lib/api/audit";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
@@ -126,6 +132,7 @@ export function AuditTrailRegister({
                       API spells them, not sentences. */}
                   <ChangeSummary payload={entry.payload} label={t.unchanged} />
                   <BlockedProblems payload={entry.payload} dict={dict} />
+                  <LoginFailureReason payload={entry.payload} dict={dict} />
                 </td>
                 <td className={cn(CELL, "text-small text-ink-2")}>
                   <Subject entry={entry} dict={dict} />
@@ -251,6 +258,31 @@ function BlockedProblems({ payload, dict }: { payload: AuditEntry["payload"]; di
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * Why an `auth.login_failed` entry happened.
+ *
+ * "Failed to sign in" names the event; an administrator investigating an
+ * incident cannot tell a mistyped password from a blocked account from a
+ * sweep of guesses without knowing which — three different conversations to
+ * have. The reason is the closed vocabulary `backend/internal/auth`'s
+ * `Reason*` constants declare, read back the same way `BlockedProblems`
+ * reads `contest.start_blocked`'s problem codes: a code with no wording yet
+ * is shown raw rather than dropped, because a login-failure line with an
+ * unreadable reason is no better than one with none.
+ */
+function LoginFailureReason({ payload, dict }: { payload: AuditEntry["payload"]; dict: Dictionary }) {
+  const reason = loginFailureReason(payload);
+  if (!reason) return null;
+
+  const reasons = dict.audit.failureReasons as Record<string, string>;
+
+  return (
+    <p className="mt-1 text-small text-ink-2">
+      {reasons[reason] ?? <span className="font-mono text-data">{reason}</span>}
+    </p>
   );
 }
 

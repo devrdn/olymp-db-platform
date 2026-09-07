@@ -900,6 +900,15 @@ const en = {
       "contest.access_denied": "Was refused by the network restriction",
       "settings.change": "Changed the installation's settings",
     },
+    // Why an auth.login_failed entry happened — the closed vocabulary
+    // backend/internal/auth's Reason* constants declare. Never say more than
+    // the endpoint itself discloses: which half of a wrong guess was wrong is
+    // exactly what the endpoint never says, so neither does this.
+    failureReasons: {
+      invalid_credentials: "Wrong login or password",
+      account_blocked: "The account is blocked",
+      too_many_attempts: "Too many attempts",
+    },
   },
   screens: {
     notFound: {
