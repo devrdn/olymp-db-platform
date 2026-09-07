@@ -167,12 +167,16 @@ func TestExtendGraceLengthensAFinishedContestsGracePeriod(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)
 
-	updated, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, 120)
+	// c never set an explicit grace, so the grace actually in force is the
+	// fixture's installation default (conteststest.FixtureDefaultGraceMin) —
+	// the requested value has to clear that, not merely be positive.
+	grace := conteststest.FixtureDefaultGraceMin + 60
+	updated, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, grace)
 	if err != nil {
 		t.Fatalf("ExtendGrace() = %v", err)
 	}
-	if updated.Settings.GracePeriodMin != 120 {
-		t.Fatalf("GracePeriodMin = %d, want 120", updated.Settings.GracePeriodMin)
+	if updated.Settings.GracePeriodMin != grace {
+		t.Fatalf("GracePeriodMin = %d, want %d", updated.Settings.GracePeriodMin, grace)
 	}
 }
 
@@ -182,7 +186,8 @@ func TestExtendGraceAlsoReachesAnArchivedContest(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusArchived)
 
-	if _, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, 60); err != nil {
+	grace := conteststest.FixtureDefaultGraceMin + 60
+	if _, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, grace); err != nil {
 		t.Fatalf("ExtendGrace() = %v", err)
 	}
 }
@@ -205,19 +210,21 @@ func TestExtendGraceRefusesToShortenAnExplicitlyConfiguredGrace(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)
 
-	if _, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, 500); err != nil {
+	first := conteststest.FixtureDefaultGraceMin + 500
+	if _, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, first); err != nil {
 		t.Fatalf("setup ExtendGrace() = %v", err)
 	}
 
-	_, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, 100)
+	_, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, first-400)
 	if !errors.Is(err, contests.ErrInvalidContest) {
 		t.Errorf("ExtendGrace() = %v, want ErrInvalidContest", err)
 	}
 }
 
 // A contest that never configured an explicit grace reads as 0 — "defer to
-// the installation default" — and this package has no view of that default
-// to compare against, so the first explicit value is accepted outright.
+// the installation default" — and the first explicit value it accepts has to
+// actually clear that default (ServiceConfig.DefaultGraceMin), not merely be
+// positive.
 func TestExtendGraceAcceptsTheFirstExplicitValueWhenNoneWasConfigured(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)
@@ -225,12 +232,54 @@ func TestExtendGraceAcceptsTheFirstExplicitValueWhenNoneWasConfigured(t *testing
 		t.Fatalf("setup: GracePeriodMin = %d, want 0", c.Settings.GracePeriodMin)
 	}
 
-	updated, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, 30)
+	grace := conteststest.FixtureDefaultGraceMin + 30
+	updated, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, grace)
 	if err != nil {
 		t.Fatalf("ExtendGrace() = %v", err)
 	}
-	if updated.Settings.GracePeriodMin != 30 {
-		t.Fatalf("GracePeriodMin = %d, want 30", updated.Settings.GracePeriodMin)
+	if updated.Settings.GracePeriodMin != grace {
+		t.Fatalf("GracePeriodMin = %d, want %d", updated.Settings.GracePeriodMin, grace)
+	}
+}
+
+// The finding this guards against: a contest that never set an explicit
+// grace is governed by the installation default, and ExtendGrace used to
+// compare a requested value against the stored zero instead of that default
+// — so any positive value, including one far below the real default, read as
+// an extension. ExtendGrace(…, 60) against a contest defaulting to 24 hours
+// used to cut retention to one hour outright; it must be refused instead.
+func TestExtendGraceRefusesAValueThatDoesNotClearTheInstallationDefault(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusFinished)
+	if c.Settings.GracePeriodMin != 0 {
+		t.Fatalf("setup: GracePeriodMin = %d, want 0", c.Settings.GracePeriodMin)
+	}
+
+	_, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, 60)
+	if !errors.Is(err, contests.ErrInvalidContest) {
+		t.Errorf("ExtendGrace() = %v, want ErrInvalidContest", err)
+	}
+	// And the stored settings must be untouched — a refused call is not a
+	// half-applied one.
+	stored, err := f.Contests.ByID(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	if stored.Settings.GracePeriodMin != 0 {
+		t.Errorf("GracePeriodMin = %d, want unchanged 0", stored.Settings.GracePeriodMin)
+	}
+}
+
+// A value exactly at the installation default does not extend it either —
+// the comparison is "does not extend", the same "<=" the explicit-grace path
+// above already uses, applied consistently to the default.
+func TestExtendGraceRefusesAValueEqualToTheInstallationDefault(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusFinished)
+
+	_, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, conteststest.FixtureDefaultGraceMin)
+	if !errors.Is(err, contests.ErrInvalidContest) {
+		t.Errorf("ExtendGrace() = %v, want ErrInvalidContest", err)
 	}
 }
 
@@ -253,7 +302,7 @@ func TestExtendGraceRecordsOnlyTheGraceField(t *testing.T) {
 	c := f.SeedContest(contests.StatusFinished)
 	actor := uuid.New()
 
-	if _, err := f.Service.ExtendGrace(context.Background(), actor, c.ID, 180); err != nil {
+	if _, err := f.Service.ExtendGrace(context.Background(), actor, c.ID, conteststest.FixtureDefaultGraceMin+180); err != nil {
 		t.Fatalf("ExtendGrace() = %v", err)
 	}
 

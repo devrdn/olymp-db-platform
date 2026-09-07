@@ -233,6 +233,12 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Audit:      auditRecorder,
 		UnitOfWork: storage.NewUnitOfWork(pool),
 		Logger:     log,
+		// The same number reclaimInstances below hands the reclaim sweep
+		// (finding 1): Service.ExtendGrace has to compare an organizer's
+		// requested grace against the grace actually in force, and for a
+		// contest that never set one explicitly that is this installation
+		// default, not zero.
+		DefaultGraceMin: cfg.GameInstanceGraceMin,
 	})
 
 	// The background half of §8: published → running → finished without an

@@ -93,26 +93,42 @@ type ServiceConfig struct {
 	// no-op instead of waiting on the real clock for a scenario it is
 	// forcing deterministically.
 	Sleep func(time.Duration)
+	// DefaultGraceMin is the installation's own default grace period
+	// (config.GameInstanceGraceMin, GAME_INSTANCE_GRACE_MIN) — the grace that
+	// actually governs a contest for as long as its own
+	// Settings.GracePeriodMin reads zero (GracePeriodMin's own doc). Service.
+	// ExtendGrace compares an organizer's requested value against this
+	// number, not against the stored zero, when a contest never set an
+	// explicit grace: internal/postgres/gameinstances.go's reclaimDeadline
+	// already falls back to this same installation default for that same
+	// contest, so comparing against anything else would let ExtendGrace
+	// accept a value the sweep does not actually treat as an extension.
+	// Zero (a caller with nothing to do with reclaim, same as Grace above)
+	// means ExtendGrace requires nothing more than a positive value the
+	// first time — harmless, since such a caller never constructs a Service
+	// a contest's own game databases are reclaimed through.
+	DefaultGraceMin int
 }
 
 // Service holds the rules of authoring and running a contest.
 type Service struct {
-	contests      Repository
-	stories       StoryRepository
-	questions     QuestionRepository
-	managers      ManagerRepository
-	registrations RegistrationRepository
-	policies      PolicyStore
-	languages     LanguageCatalog
-	users         UserDirectory
-	submissions   SubmissionRepository
-	sequence      SequentialGate
-	audit         *audit.Recorder
-	uow           storage.UnitOfWork
-	now           func() time.Time
-	grace         time.Duration
-	log           *slog.Logger
-	sleep         func(time.Duration)
+	contests        Repository
+	stories         StoryRepository
+	questions       QuestionRepository
+	managers        ManagerRepository
+	registrations   RegistrationRepository
+	policies        PolicyStore
+	languages       LanguageCatalog
+	users           UserDirectory
+	submissions     SubmissionRepository
+	sequence        SequentialGate
+	audit           *audit.Recorder
+	uow             storage.UnitOfWork
+	now             func() time.Time
+	grace           time.Duration
+	log             *slog.Logger
+	sleep           func(time.Duration)
+	defaultGraceMin int
 }
 
 // NewService assembles the contest service.
@@ -133,22 +149,23 @@ func NewService(cfg ServiceConfig) *Service {
 		sleep = time.Sleep
 	}
 	return &Service{
-		contests:      cfg.Contests,
-		stories:       cfg.Stories,
-		questions:     cfg.Questions,
-		managers:      cfg.Managers,
-		registrations: cfg.Registrations,
-		policies:      cfg.Policies,
-		languages:     cfg.Languages,
-		users:         cfg.Users,
-		submissions:   cfg.Submissions,
-		sequence:      cfg.Sequence,
-		audit:         cfg.Audit,
-		uow:           cfg.UnitOfWork,
-		now:           now,
-		grace:         grace,
-		log:           log,
-		sleep:         sleep,
+		contests:        cfg.Contests,
+		stories:         cfg.Stories,
+		questions:       cfg.Questions,
+		managers:        cfg.Managers,
+		registrations:   cfg.Registrations,
+		policies:        cfg.Policies,
+		languages:       cfg.Languages,
+		users:           cfg.Users,
+		submissions:     cfg.Submissions,
+		sequence:        cfg.Sequence,
+		audit:           cfg.Audit,
+		uow:             cfg.UnitOfWork,
+		now:             now,
+		grace:           grace,
+		log:             log,
+		sleep:           sleep,
+		defaultGraceMin: cfg.DefaultGraceMin,
 	}
 }
 
@@ -352,11 +369,35 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 //
 // graceMin may only grow: refusing to shorten it here is what keeps this
 // method reading as "buy more time" rather than a general settings edit that
-// merely happens to be reachable once finished. A contest that never set an
-// explicit grace (current.Settings.GracePeriodMin == 0, meaning "defer to
-// the installation default" — see the field's own doc) accepts any bound,
-// positive graceMin as its first explicit one: this package has no view of
-// the installation's own configured default to compare against.
+// merely happens to be reachable once finished. The comparison is against
+// the grace actually in force — current.Settings.GracePeriodMin when the
+// contest set one explicitly, s.defaultGraceMin (the installation's own
+// GAME_INSTANCE_GRACE_MIN, threaded through ServiceConfig.DefaultGraceMin)
+// when it did not — never against the stored zero itself. Comparing against
+// the raw zero used to accept any positive graceMin as a contest's "first
+// explicit" grace, including one far below the installation default the
+// reclaim sweep (internal/postgres/gameinstances.go's reclaimDeadline) was
+// actually enforcing: ExtendGrace(…, 60) against a contest that never
+// configured a grace read as an extension, was recorded as one (0 → 60), and
+// in fact cut the real 24-hour default down to one hour, moving the reclaim
+// deadline to minutes away. Comparing against the effective grace instead
+// means a value that does not clear the installation default is refused
+// exactly like a value that does not clear an explicit one.
+//
+// The Update call below still bumps updated_at (internal/postgres/
+// contests.go), and that column is what reclaimDeadline measures from — but
+// that is safe here specifically, and only here: ExtendGrace is the one
+// write this package lets reach a finished or archived contest at all (the
+// status guard just above; the ordinary Update refuses both statuses
+// outright), so no unrelated settings edit can ever piggyback on this same
+// timestamp bump. And because graceMin is now required to strictly exceed
+// the effective grace that was already governing the deadline, resetting
+// the anchor to "now" can only ever push that deadline later than it already
+// was: now >= the contest's own updated_at, and the new grace is larger than
+// the one the old deadline was computed from, so new_deadline = now +
+// graceMin is later than old_deadline = old updated_at + effective grace
+// however long ago the contest actually finished. The method never produces
+// a deadline earlier than the one it replaces.
 func (s *Service) ExtendGrace(ctx context.Context, actorID, contestID uuid.UUID, graceMin int) (Contest, error) {
 	current, err := s.contests.ByID(ctx, contestID)
 	if err != nil {
@@ -367,10 +408,14 @@ func (s *Service) ExtendGrace(ctx context.Context, actorID, contestID uuid.UUID,
 			"%w: the grace period is set through the ordinary settings while the contest is %s",
 			ErrNotEditable, current.Status)
 	}
-	if current.Settings.GracePeriodMin > 0 && graceMin <= current.Settings.GracePeriodMin {
+	effective := current.Settings.GracePeriodMin
+	if effective <= 0 {
+		effective = s.defaultGraceMin
+	}
+	if graceMin <= effective {
 		return Contest{}, fmt.Errorf(
 			"%w: %d does not extend the current %d-minute grace period",
-			ErrInvalidContest, graceMin, current.Settings.GracePeriodMin)
+			ErrInvalidContest, graceMin, effective)
 	}
 
 	updated := current

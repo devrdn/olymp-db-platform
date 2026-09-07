@@ -494,6 +494,48 @@ func TestReclaimableExcludesInstancesAlreadyDropped(t *testing.T) {
 	}
 }
 
+// A tight limit must spend itself on whoever has been overdue the longest,
+// not on whichever contest's UUID happens to sort first (finding 2:
+// contest_id is UUID order, unrelated to how overdue a candidate is, so a
+// large contest that sorts first used to consume every tick's whole batch
+// while everyone else waited behind it). Ordering by deadline instead of
+// contest_id is what this test proves: the contest finished longer ago comes
+// back before the one finished more recently, regardless of which of the two
+// randomly generated UUIDs is numerically smaller.
+func TestReclaimableOrdersTheOldestDeadlineFirst(t *testing.T) {
+	repo := NewGameInstances(testPool)
+
+	older := reclaimContest(t, "finished", 4*time.Hour, nil)
+	if err := repo.AddSpare(t.Context(), older, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+		t.Fatalf("adding an instance: %v", err)
+	}
+	newer := reclaimContest(t, "finished", 2*time.Hour, nil)
+	if err := repo.AddSpare(t.Context(), newer, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+		t.Fatalf("adding an instance: %v", err)
+	}
+
+	candidates, err := repo.Reclaimable(t.Context(), 60, provisioning.ReclaimBatchLimit)
+	if err != nil {
+		t.Fatalf("reclaimable: %v", err)
+	}
+	olderIdx, newerIdx := -1, -1
+	for i, c := range candidates {
+		switch c.ContestID {
+		case older:
+			olderIdx = i
+		case newer:
+			newerIdx = i
+		}
+	}
+	if olderIdx == -1 || newerIdx == -1 {
+		t.Fatalf("both contests must be offered; older found=%v newer found=%v", olderIdx != -1, newerIdx != -1)
+	}
+	if olderIdx >= newerIdx {
+		t.Fatalf("the contest overdue since 4h ago is at index %d, the one overdue since 2h ago is at index %d; "+
+			"want the older deadline first regardless of contest_id order", olderIdx, newerIdx)
+	}
+}
+
 // The row survives, in the terminal status the schema has carried since
 // migration 3 for exactly this — an organizer's audit search has to have
 // something to find even once the database itself is gone.
@@ -618,6 +660,39 @@ func TestReclaimableTemplatesExcludesAnUnbuiltOrAlreadyDroppedTemplate(t *testin
 				t.Fatalf("a %s template was offered for reclaim", status)
 			}
 		}
+	}
+}
+
+// The same fairness Reclaimable's own ordering test proves, for the largest
+// database a contest owns: the template belonging to the longer-overdue
+// contest comes back first, regardless of contest_id order.
+func TestReclaimableTemplatesOrdersTheOldestDeadlineFirst(t *testing.T) {
+	repo := NewGameInstances(testPool)
+
+	older := reclaimContest(t, "finished", 4*time.Hour, nil)
+	reclaimTemplate(t, older, "ready")
+	newer := reclaimContest(t, "finished", 2*time.Hour, nil)
+	reclaimTemplate(t, newer, "ready")
+
+	templates, err := repo.ReclaimableTemplates(t.Context(), 60, provisioning.ReclaimBatchLimit)
+	if err != nil {
+		t.Fatalf("reclaimable templates: %v", err)
+	}
+	olderIdx, newerIdx := -1, -1
+	for i, tpl := range templates {
+		switch tpl.ContestID {
+		case older:
+			olderIdx = i
+		case newer:
+			newerIdx = i
+		}
+	}
+	if olderIdx == -1 || newerIdx == -1 {
+		t.Fatalf("both templates must be offered; older found=%v newer found=%v", olderIdx != -1, newerIdx != -1)
+	}
+	if olderIdx >= newerIdx {
+		t.Fatalf("the template overdue since 4h ago is at index %d, the one overdue since 2h ago is at index %d; "+
+			"want the older deadline first regardless of contest_id order", olderIdx, newerIdx)
 	}
 }
 
