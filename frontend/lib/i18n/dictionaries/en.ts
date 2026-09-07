@@ -668,6 +668,40 @@ const en = {
       reference: "If you report this, quote {id}.",
       null: "null",
     },
+    play: {
+      waiting: {
+        body: "This screen updates on its own the moment the contest starts. Keep this tab open.",
+        startsAt: "Scheduled to start at {time}.",
+      },
+      unavailable: {
+        body: "This contest is not open for play right now.",
+      },
+      finishedTag: "finished",
+      clock: {
+        waiting: "Not started yet",
+        notStarted: "Starts with your first action",
+        timeUp: "Time is up",
+      },
+      story: {
+        heading: "The story",
+      },
+      questions: {
+        heading: "Questions",
+        empty: "There are no questions to answer yet.",
+        points: "{n} pts",
+        attemptsLeft: "{n} attempts left",
+        noAttempts: "No attempts left",
+        closed: "Closed.",
+        locked: "Answer the earlier question first.",
+        answerLabel: "Your answer",
+        placeholder: "Type your answer",
+        submit: "Submit",
+        submitting: "Submitting…",
+        correct: "Correct! +{n} points.",
+        incorrect: "Not correct.",
+        reference: "If you report this, quote {id}.",
+      },
+    },
     mine: {
       heading: "My contests",
       countLabel: "you are in",
@@ -881,6 +915,18 @@ const en = {
       "The answer is too large to return. Narrow it with a WHERE or fewer columns.",
     contest_finished:
       "You have finished this contest. The console is closed for you.",
+    answer_too_long:
+      "That answer is longer than this installation accepts.",
+    question_closed:
+      "This question is already answered correctly, or every attempt is used.",
+    deadline_passed:
+      "Your own deadline for this contest has passed.",
+    attempt_conflict:
+      "Too many attempts at this question arrived at once. Try again.",
+    question_not_open:
+      "This contest answers questions in order. Answer the earlier one first.",
+    too_many_connections:
+      "You already have as many live connections to this contest as this installation allows. Close another tab and try again.",
     query_declined:
       "The database refused that query. This contest hides its schema, so the reason is not shown — discovering the tables is part of it.",
     query_service_down:
