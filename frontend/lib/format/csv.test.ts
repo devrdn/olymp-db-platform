@@ -48,4 +48,37 @@ describe("toCsv", () => {
 
     expect(csv).toBe("id,note\r\n");
   });
+
+  // Finding 8: Excel, LibreOffice and Sheets all read a cell starting
+  // `=`, `+`, `-` or `@` as a formula rather than as text. This is the
+  // student's own data opened by that same student, not an attacker's
+  // payload, but a leading apostrophe — the ordinary way to say "this is
+  // text" to a spreadsheet — costs nothing.
+  test.each(["=SUM(A1:A2)", "+1", "-1", "@cmd"])("prefixes a cell beginning %s with an apostrophe", (value) => {
+    const csv = toCsv(["formula"], [[value]]);
+
+    expect(csv).toBe(`formula\r\n'${value}\r\n`);
+  });
+
+  test("leaves an ordinary cell without a leading apostrophe untouched", () => {
+    const csv = toCsv(["id"], [["42"]]);
+
+    expect(csv).toBe("id\r\n42\r\n");
+  });
+
+  // A column alias can begin with any of those characters just as easily as
+  // a value can, and the header row opens in the same spreadsheet.
+  test("prefixes a formula-looking column name the same way", () => {
+    const csv = toCsv(["=col"], [["1"]]);
+
+    expect(csv).toBe("'=col\r\n1\r\n");
+  });
+
+  // Neutralising a formula must not skip the ordinary RFC 4180 quoting a
+  // field still needs.
+  test("still quotes a neutralised field that also contains a comma", () => {
+    const csv = toCsv(["note"], [["=A1, bloodied"]]);
+
+    expect(csv).toBe('note\r\n"\'=A1, bloodied"\r\n');
+  });
 });
