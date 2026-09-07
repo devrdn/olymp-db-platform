@@ -9,6 +9,9 @@ export {
   SKIP_REASONS,
   type SkipReason,
   MAX_BULK_ACCOUNTS,
+  IMPORT_SKIP_REASONS,
+  type ImportSkipReason,
+  MAX_IMPORT_ROWS,
 } from "./accounts-terms";
 
 /**
@@ -101,7 +104,36 @@ export const createdAccountSchema = z.object({
   one_time_password: z.string(),
 });
 
+export type CreatedAccount = z.infer<typeof createdAccountSchema>;
+
 export const passwordResetSchema = z.object({ one_time_password: z.string() });
+
+/**
+ * One row of a roster an import declined to create.
+ *
+ * No `id`, unlike `skippedAccountSchema` below: that one names an account a
+ * bulk operation found and chose not to touch, and this one never became an
+ * account at all — the login it was given on the roster is the only thing
+ * left to find the line by.
+ */
+export const importSkippedRowSchema = z.object({ login: z.string(), reason: z.string() });
+
+export type ImportSkippedRow = z.infer<typeof importSkippedRowSchema>;
+
+/**
+ * What importing a roster did: every account it created, one-time password
+ * included, and every row it could not use, with why.
+ *
+ * Partial success, the same honesty `bulkResultSchema` reports: one taken
+ * login must not cost the rest of the roster the accounts they could have
+ * had, and whoever pasted the list has to see which line to fix.
+ */
+export const importResultSchema = z.object({
+  created: z.array(createdAccountSchema),
+  skipped: z.array(importSkippedRowSchema),
+});
+
+export type ImportResult = z.infer<typeof importResultSchema>;
 
 /**
  * One account a bulk operation declined to touch.
@@ -164,6 +196,50 @@ export const bulkPasswordResetResultSchema = z.object({
 });
 
 export type BulkPasswordResetResult = z.infer<typeof bulkPasswordResetResultSchema>;
+
+/**
+ * Registers one account.
+ *
+ * The server generates the password — an administrator never chooses one
+ * that outlives the handover — and returns it exactly once, here, in
+ * `CreatedAccount.one_time_password`. Not stored in clear and not
+ * retrievable again: a lost one is a reset, the same as every other one-time
+ * password this screen issues.
+ */
+export async function createAccount(cmd: {
+  login: string;
+  fullName: string;
+  email: string;
+  roles: string[];
+}): Promise<CreatedAccount> {
+  const payload = await serverRequest("/users", {
+    method: "POST",
+    body: { login: cmd.login, full_name: cmd.fullName, email: cmd.email, roles: cmd.roles },
+  });
+  return createdAccountSchema.parse(payload);
+}
+
+/**
+ * Registers a whole roster at once — a department's list rather than one
+ * request per person, thirty round trips and thirty chances to lose one.
+ *
+ * Every account created gets the same generated, one-time password
+ * `createAccount` issues; every row that could not be used comes back with
+ * why, from the closed vocabulary `IMPORT_SKIP_REASONS` names.
+ */
+export async function importAccounts(
+  rows: { login: string; fullName: string; email: string }[],
+  roles: string[],
+): Promise<ImportResult> {
+  const payload = await serverRequest("/users/import", {
+    method: "POST",
+    body: {
+      rows: rows.map((row) => ({ login: row.login, full_name: row.fullName, email: row.email })),
+      roles,
+    },
+  });
+  return importResultSchema.parse(payload);
+}
 
 /**
  * Soft-deletes one account. The server refuses an empty reason
