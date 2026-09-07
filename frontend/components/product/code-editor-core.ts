@@ -156,10 +156,34 @@ export function mountEditor(
     ariaLabel: string;
     placeholder: string;
     onChange: (text: string) => void;
+    /**
+     * Run the query, from ⌘↵ (Ctrl+Enter) inside the editor.
+     *
+     * Bound here rather than on the surrounding form, and ahead of
+     * `defaultKeymap`, because CodeMirror's own default for `Mod-Enter` is
+     * `insertBlankLine`: a listener on the form would never see the key, and
+     * the participant would get an empty line where the design's own toolbar
+     * promises `Выполнить ⌘↵`.
+     */
+    onSubmit?: () => void;
   },
 ): EditorView {
   const extensions: Extension[] = [
     history(),
+    // Before defaultKeymap, so this wins Mod-Enter from `insertBlankLine`.
+    ...(opts.onSubmit
+      ? [
+          keymap.of([
+            {
+              key: "Mod-Enter",
+              run: () => {
+                opts.onSubmit?.();
+                return true;
+              },
+            },
+          ]),
+        ]
+      : []),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     sql({ dialect: PostgreSQL }),
     syntaxHighlighting(highlightStyle),

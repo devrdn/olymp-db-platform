@@ -115,8 +115,8 @@ describe("the play workspace", () => {
     show();
 
     expect(screen.getByRole("textbox")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.result })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.log })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.participant.play.workspace.tabs.result })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.participant.play.workspace.tabs.log })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.story })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.questions })).toBeInTheDocument();
   });
@@ -130,10 +130,10 @@ describe("the play workspace", () => {
     await userEvent.click(editor);
     await userEvent.keyboard("SELECT * FROM suspects");
 
-    await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.log }));
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.log }));
     await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.story }));
     await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.questions }));
-    await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.result }));
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.result }));
 
     // Not a form control any more (CodeMirror's content div), so the text is
     // read the way any other rendered content is, not through `.value`.
@@ -145,7 +145,7 @@ describe("the play workspace", () => {
     await waitForRealEditor(container);
     const editor = screen.getByRole("textbox");
 
-    await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.log }));
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.log }));
 
     expect(screen.getByRole("textbox")).toBe(editor);
   });
@@ -159,12 +159,12 @@ describe("the play workspace", () => {
       result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 },
     };
     show();
-    await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.log }));
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.log }));
     await runQuery();
 
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
-    expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.result })).toHaveAttribute(
-      "aria-selected",
+    expect(screen.getByRole("button", { name: en.participant.play.workspace.tabs.result })).toHaveAttribute(
+      "aria-pressed",
       "true",
     );
   });
@@ -191,7 +191,7 @@ describe("the play workspace", () => {
     show();
     const before = logCalls.count;
 
-    await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.log }));
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.log }));
 
     await waitFor(() => expect(logCalls.count).toBeGreaterThan(before));
   });
@@ -205,8 +205,8 @@ describe("the play workspace", () => {
     const resultRendersBefore = renderCounts.result;
     const sideRendersBefore = renderCounts.side;
 
-    await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.log }));
-    await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.result }));
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.log }));
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.result }));
 
     expect(renderCounts.result).toBe(resultRendersBefore);
     expect(renderCounts.side).toBe(sideRendersBefore);
