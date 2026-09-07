@@ -13,10 +13,19 @@ about the code: where things are, and where a new thing goes.
 From the repository root, which is where the environment lives:
 
 ```bash
-make dev-up     # PostgreSQL and Redis
-make run        # the API, on the host
-make front      # this, on the host
+make dev-up      # PostgreSQL and Redis
+make game-roles  # once: the game cluster's participant roles
+make runner      # the Query Runner, on the host
+make run         # the API, on the host
+make front       # this, on the host
 ```
+
+The Query Runner is not optional for the play screen. Without it the API
+mounts no console endpoint, so a participant can neither run a query nor see
+the schema panel — the panel hangs off the same service, because a schema is
+only worth showing on a screen where queries can be run. The deployed stack
+already runs it (`deploy/docker-compose.yml`); only development had to be
+told to.
 
 `make front` derives `API_ORIGIN` from `deploy/.env`, the same file the API and
 the containers read, so a port changes in one place. `make front-check` runs
