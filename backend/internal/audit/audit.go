@@ -68,6 +68,14 @@ const (
 	// this is how an organizer finds out why, instead of from a student's
 	// support ticket.
 	ActionContestStartBlocked = "contest.start_blocked"
+	// ActionGameInstanceReclaim records one participant's database dropped by
+	// the background reclaim sweep (§2.4, §4.2): a contest finished, its
+	// configured grace period passed, and the database is gone. System-
+	// generated (nil actor), the same as ActionContestStartBlocked — nobody
+	// asked for this one — and it exists so an organizer who cannot find a
+	// database learns from the trail what removed it, and when, rather than
+	// filing a support ticket about a missing instance.
+	ActionGameInstanceReclaim = "contest.instance_reclaimed"
 
 	// ActionSettingsChange records a change to what the installation calls
 	// itself and how it looks. It is entity "settings" with no identifier:
@@ -96,6 +104,7 @@ var actions = []string{
 
 	ActionParticipantAdd, ActionParticipantRemove, ActionParticipantDisqualify,
 	ActionParticipantEnroll, ActionContestAccessDenied, ActionContestStartBlocked,
+	ActionGameInstanceReclaim,
 
 	ActionSettingsChange,
 }

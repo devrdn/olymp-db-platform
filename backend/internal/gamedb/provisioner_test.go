@@ -400,3 +400,76 @@ func TestAnUnknownCopyStrategyIsRefusedUpFront(t *testing.T) {
 		t.Fatal("an unknown copy strategy was accepted")
 	}
 }
+
+// The reclaim sweep (internal/provisioning.Service.Reclaim) must never sever
+// a connection to decide whether a database is safe to remove — only
+// PostgreSQL's own refusal proves that, and this is what has to provoke it
+// for real: a plain DROP DATABASE against a database with an open connection
+// really does refuse, and DropIdle's job is to read that refusal as "leave it
+// for next time" rather than as an error worth reporting.
+func TestDropIdleLeavesABusyDatabaseAloneAndDropsAnIdleOne(t *testing.T) {
+	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
+
+	instance := named(t, "inst")
+	if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
+		t.Fatalf("creating the instance: %v", err)
+	}
+
+	// A live connection, standing in for a query the Query Runner is still
+	// executing against this instance.
+	reader := connectAs(t, roleReader, testReaderPassword, instance)
+	if _, err := reader.Exec(t.Context(), `SELECT 1`); err != nil {
+		t.Fatalf("using the connection: %v", err)
+	}
+
+	dropped, err := p.DropIdle(t.Context(), instance)
+	if err != nil {
+		t.Fatalf("dropping a busy database returned an error: %v", err)
+	}
+	if dropped {
+		t.Fatal("a database with a live connection was dropped")
+	}
+	if !instanceExists(t, instance) {
+		t.Fatal("the busy instance was removed anyway")
+	}
+
+	if err := reader.Close(t.Context()); err != nil {
+		t.Fatalf("closing the connection: %v", err)
+	}
+
+	dropped, err = p.DropIdle(t.Context(), instance)
+	if err != nil {
+		t.Fatalf("dropping an idle database: %v", err)
+	}
+	if !dropped {
+		t.Fatal("an idle database was not dropped")
+	}
+	if instanceExists(t, instance) {
+		t.Fatal("an idle instance was still there after DropIdle")
+	}
+}
+
+// A name that has already been dropped, or never existed, is not an error —
+// the reclaim sweep must be able to retry a database it already removed
+// without that counting as a failure.
+func TestDropIdleOnANameThatDoesNotExist(t *testing.T) {
+	p := provisioner(t)
+
+	dropped, err := p.DropIdle(t.Context(), named(t, "ghost"))
+	if err != nil {
+		t.Fatalf("dropping a database that was never created: %v", err)
+	}
+	if !dropped {
+		t.Fatal("dropped = false for a name that never existed, want true (IF EXISTS)")
+	}
+}
+
+func instanceExists(t *testing.T, name string) bool {
+	t.Helper()
+	var exists bool
+	if err := admin(t).QueryRow(t.Context(),
+		`SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)`, name).Scan(&exists); err != nil {
+		t.Fatalf("looking for %s: %v", name, err)
+	}
+	return exists
+}

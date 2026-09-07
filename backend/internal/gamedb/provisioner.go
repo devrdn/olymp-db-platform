@@ -202,6 +202,36 @@ func (p *Provisioner) Drop(ctx context.Context, name string) error {
 	return nil
 }
 
+// DropIdle removes name only if nobody is connected to it, and reports
+// whether it did.
+//
+// No FORCE, on purpose — the opposite choice from Drop just above, for a
+// caller with the opposite knowledge. Drop's two callers know a connection
+// left over is a forgotten one: a participant looking at their own reset
+// button, or a rebuild's own leftover session on the template nobody else
+// should be touching. The reclaim sweep (internal/provisioning.Service.
+// Reclaim) knows no such thing about a game instance — it cannot tell a
+// forgotten session from a query the Query Runner is still running this very
+// moment — so it must never assume the former. A plain DROP DATABASE already
+// refuses by itself while anything is connected (the same SQLSTATE 55006
+// CreateInstance above clears from a template with FORCE); here that refusal
+// is exactly the answer wanted; it is reported back rather than cleared.
+func (p *Provisioner) DropIdle(ctx context.Context, name string) (dropped bool, err error) {
+	if !sqlpolicy.PlainIdentifier(name) {
+		return false, fmt.Errorf("%w: %q", ErrBadName, name)
+	}
+	_, err = p.admin.Exec(ctx, `DROP DATABASE IF EXISTS `+QuoteIdentifier(name))
+	if err == nil {
+		return true, nil
+	}
+
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "55006" {
+		return false, nil
+	}
+	return false, fmt.Errorf("drop %s: %w", name, err)
+}
+
 func (p *Provisioner) connect(ctx context.Context, database string) (*pgx.Conn, error) {
 	target := *p.base
 	target.Path = "/" + database

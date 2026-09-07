@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 )
 
@@ -123,6 +124,38 @@ func tendPools(log *slog.Logger, service *provisioning.Service, depth int) task 
 			made, dropped, err := service.Tend(ctx, func(provisioning.Contest) int { return depth })
 			if made > 0 || dropped > 0 {
 				log.InfoContext(ctx, "tended the game pools", "created", made, "dropped", dropped)
+			}
+			return err
+		},
+	}
+}
+
+// reclaimInstances drops every participant database whose contest finished
+// longer ago than its grace period, and marks its row 'dropped' — the
+// background half of §2.4. reclaim is provisioning.Service.Reclaim, taken as
+// a function so the wrapping here (the log line, the metrics pair) can be
+// proven without standing up a real Service; Reclaim's own rules — the grace
+// period, leaving a busy database for the next tick, one failure not
+// stopping the rest — are exercised where they are declared
+// (internal/provisioning/reclaim_test.go and, for the busy-database refusal
+// against a real cluster, internal/gamedb/provisioner_test.go).
+//
+// The same ten-minute cadence as tendPools: a grace period is configured in
+// minutes at the shortest, so nothing meaningful is lost by checking on the
+// same schedule the pool is already tended on rather than a faster one.
+func reclaimInstances(log *slog.Logger, reclaim func(context.Context, int) (int, int, error), graceMin int, counters *metrics.GameReclaimCounters) task {
+	return task{
+		name:  "game-reclaim",
+		every: 10 * time.Minute,
+		run: func(ctx context.Context) error {
+			reclaimed, failed, err := reclaim(ctx, graceMin)
+			counters.Add(reclaimed, failed)
+			if reclaimed > 0 || failed > 0 {
+				// Worth a line even on success: this is the number an
+				// organizer who cannot find a database has no other way to
+				// notice moved at all, short of reading the audit trail one
+				// contest at a time.
+				log.InfoContext(ctx, "reclaimed game instances", "reclaimed", reclaimed, "failed", failed)
 			}
 			return err
 		},

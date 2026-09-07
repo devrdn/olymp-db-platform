@@ -23,6 +23,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
 )
@@ -67,6 +69,15 @@ type Repository interface {
 	// Game returns one contest's game, or ErrNoGame. Named apart from Of
 	// above, which answers about a registration rather than a contest.
 	Game(ctx context.Context, contestID uuid.UUID) (Contest, error)
+	// Reclaimable lists every not-yet-dropped instance of a contest that
+	// reached the finished status longer ago than its own grace period — or,
+	// for a contest that never configured one, longer ago than
+	// installationGraceMin. See ReclaimCandidate and Service.Reclaim.
+	Reclaimable(ctx context.Context, installationGraceMin int) ([]ReclaimCandidate, error)
+	// MarkDropped moves one instance to the terminal 'dropped' status. The row
+	// stays — deleting it would leave an organizer's audit search with
+	// nothing to point to once the database itself is gone.
+	MarkDropped(ctx context.Context, database string) error
 }
 
 // Cluster is the part of the game cluster this service drives.
@@ -79,6 +90,12 @@ type Cluster interface {
 	CreateInstance(ctx context.Context, template, instance string, policy sqlpolicy.Policy) error
 	Drop(ctx context.Context, name string) error
 	DatabaseSize(ctx context.Context, name string) (int64, error)
+	// DropIdle removes name only if nobody is connected to it, and reports
+	// whether it did. Unlike Drop, it never forces a connection closed — the
+	// reclaim sweep (its only caller) has no way to tell a forgotten session
+	// apart from a query the Query Runner is still running, so it must never
+	// assume the former. See gamedb.Provisioner.DropIdle's own doc.
+	DropIdle(ctx context.Context, name string) (dropped bool, err error)
 }
 
 // Contest is what the service needs to know about one olympiad.
@@ -94,6 +111,11 @@ type Service struct {
 	repo    Repository
 	cluster Cluster
 	workers int
+	// audit and uow are set by WithAudit. Both nil until then, which Reclaim
+	// treats as "record nothing" — see its own doc for who actually leaves
+	// them unset.
+	audit *audit.Recorder
+	uow   storage.UnitOfWork
 }
 
 // DefaultWorkers is how many copies are made at once. Section 4.2 says two to
@@ -112,6 +134,18 @@ func (s *Service) WithWorkers(workers int) *Service {
 		workers = 1
 	}
 	s.workers = workers
+	return s
+}
+
+// WithAudit lets Reclaim record what it drops, in the same core-database
+// transaction as marking the row dropped — every real deployment supplies
+// this (internal/app wires it beside every other background job's own
+// audit). Left unset, Reclaim still drops databases and marks rows; it simply
+// audits nothing, which is only ever correct in a test exercising Reclaim
+// apart from the audit trail.
+func (s *Service) WithAudit(rec *audit.Recorder, uow storage.UnitOfWork) *Service {
+	s.audit = rec
+	s.uow = uow
 	return s
 }
 
