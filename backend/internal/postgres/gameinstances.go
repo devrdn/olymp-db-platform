@@ -169,6 +169,40 @@ func (r *GameInstances) SpareCount(ctx context.Context, contest uuid.UUID, versi
 
 // AllCurrent reports whether every instance of a contest came from the current
 // template. Section 4.2 makes it a precondition for starting.
+// WaitingParticipants counts the registrations of one contest that hold no
+// current copy — the number of people who would queue for CREATE DATABASE if
+// they all arrived now.
+//
+// This is what the pool's depth has to be sized from. A flat depth is a bet
+// that no more than that many people turn up, and losing that bet does not
+// degrade gracefully: every participant past it waits for a database to be
+// copied inside their own page load, through a maintenance pool of ten
+// connections, at the one moment three hundred of them arrive at once.
+//
+// "Current" is the same pair of conditions Ensure uses to decide it can hand
+// an existing copy back: not dropped, and made from a template at least as
+// new as the contest's. A stale copy is one Invalidate is about to remove, so
+// counting it as provisioned would size the pool for a database that is
+// already going away.
+func (r *GameInstances) WaitingParticipants(ctx context.Context, contest uuid.UUID, version int) (int, error) {
+	var waiting int
+	err := r.querier(ctx).QueryRow(ctx, `
+		SELECT count(*)
+		FROM registrations r
+		WHERE r.contest_id = $1
+		  AND r.status <> 'disqualified'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM game_instances g
+		      WHERE g.registration_id = r.id
+		        AND g.status <> 'dropped'
+		        AND g.template_version >= $2
+		  )`, contest, version).Scan(&waiting)
+	if err != nil {
+		return 0, fmt.Errorf("count participants without a copy: %w", err)
+	}
+	return waiting, nil
+}
+
 func (r *GameInstances) AllCurrent(ctx context.Context, contest uuid.UUID, version int) (bool, error) {
 	var behind int
 	err := r.querier(ctx).QueryRow(ctx, `
