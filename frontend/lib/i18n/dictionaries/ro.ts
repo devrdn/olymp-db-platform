@@ -876,6 +876,8 @@ const ro = {
       "contest.languages_change": "A schimbat limbile olimpiadei",
       "contest.translations_change": "A schimbat titlurile olimpiadei",
       "contest.policy_change": "A schimbat politica SQL",
+      "contest.game_script_set": "A scris SQL-ul bazei de joc",
+      "contest.game_built": "Baza de joc a fost construită",
       "contest.story_change": "A modificat povestea",
       "contest.question_create": "A adăugat o întrebare",
       "contest.question_update": "A modificat o întrebare",
@@ -959,6 +961,12 @@ const ro = {
       "Baza de date a acestei olimpiade nu este încă pregătită. Nu este greșeala dumneavoastră — încercați peste puțin timp.",
     schema_hidden:
       "Această olimpiadă nu arată structura bazei de date. Descoperirea ei face parte din problemă.",
+    game_script_empty:
+      "SQL-ul jocului este gol. Un șablon gol construiește o bază goală, iar fiecare întrebare ar răspunde că tabelul nu există.",
+    game_script_too_long:
+      "SQL-ul jocului depășește limita. Dacă are nevoie de multe rânduri, generați-le cu INSERT ... SELECT generate_series — mai scurt și mai ușor de verificat.",
+    game_not_editable:
+      "Jocul acestei olimpiade nu mai poate fi înlocuit. Înlocuirea ridică versiunea șablonului, ceea ce face copiile tuturor participanților învechite — ar fi șterse și create din nou.",
     query_parse_error:
       "PostgreSQL nu a putut citi interogarea. Cuvintele lui sunt mai jos.",
     query_not_one_statement:

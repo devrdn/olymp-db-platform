@@ -55,9 +55,7 @@ func buildTemplate(t *testing.T, policy sqlpolicy.Policy) (*gamedb.Provisioner, 
 
 	p := provisioner(t)
 	template := named(t, "tpl")
-	if err := p.BuildTemplate(t.Context(), gamedb.TemplateSpec{
-		Name: template, Script: detectiveScript, Policy: policy,
-	}); err != nil {
+	if err := p.BuildTemplate(t.Context(), template, detectiveScript, policy); err != nil {
 		t.Fatalf("building the template: %v", err)
 	}
 	return p, template, policy
@@ -201,11 +199,8 @@ func TestAnInstanceInheritsTheCatalogueRules(t *testing.T) {
 func TestATemplateCanBeRebuiltAndCopiedStraightAfter(t *testing.T) {
 	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
 
-	if err := p.BuildTemplate(t.Context(), gamedb.TemplateSpec{
-		Name:   template,
-		Script: `CREATE TABLE suspects (id int); INSERT INTO suspects VALUES (7);`,
-		Policy: sqlpolicy.ReadOnly(),
-	}); err != nil {
+	if err := p.BuildTemplate(t.Context(), template,
+		`CREATE TABLE suspects (id int); INSERT INTO suspects VALUES (7);`, sqlpolicy.ReadOnly()); err != nil {
 		t.Fatalf("rebuilding: %v", err)
 	}
 
@@ -260,11 +255,8 @@ func TestABrokenScriptLeavesNoTemplateBehind(t *testing.T) {
 	p := provisioner(t)
 	template := named(t, "tpl")
 
-	err := p.BuildTemplate(t.Context(), gamedb.TemplateSpec{
-		Name:   template,
-		Script: `CREATE TABLE fine (x int); CREATE TABLE oops (x nosuchtype);`,
-		Policy: sqlpolicy.ReadOnly(),
-	})
+	err := p.BuildTemplate(t.Context(), template,
+		`CREATE TABLE fine (x int); CREATE TABLE oops (x nosuchtype);`, sqlpolicy.ReadOnly())
 	if err == nil {
 		t.Fatal("a broken script built a template")
 	}
@@ -292,9 +284,7 @@ func TestADatabaseNameThatIsNotAPlainIdentifierIsRefused(t *testing.T) {
 		strings.Repeat("x", 64),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := p.BuildTemplate(t.Context(), gamedb.TemplateSpec{
-				Name: name, Script: `SELECT 1`, Policy: sqlpolicy.ReadOnly(),
-			}); err == nil {
+			if err := p.BuildTemplate(t.Context(), name, `SELECT 1`, sqlpolicy.ReadOnly()); err == nil {
 				t.Fatalf("built a template called %q", name)
 			}
 		})

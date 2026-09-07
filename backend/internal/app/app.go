@@ -124,6 +124,11 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 
 	// The SQL console, when there is a game cluster and a runner to reach.
 	var console *queryproxy.Service
+	// The game's authoring half — the script and the build. Nil in a
+	// deployment with no game cluster configured, where there is nothing to
+	// build a template on; the endpoints are then not mounted, the same way
+	// the console's are not.
+	var gameAuthoring *provisioning.Games
 
 	// Provisioning is optional: a deployment with no game cluster has nothing
 	// to provision, and refusing to start would make the game circuit a
@@ -154,6 +159,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			WithWorkers(cfg.ProvisionWorkers).
 			WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
 		a.tasks = append(a.tasks, tendPools(log, databases, cfg.PoolDepth))
+
+		// The other half of a contest's game: the script an organiser writes
+		// and the template built from it. `games` is the same
+		// postgres.GameInstances the pool uses — one table, two jobs — and
+		// `cluster` the same provisioner.
+		gameAuthoring = provisioning.NewGames(games, cluster, games).
+			WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
+		a.tasks = append(a.tasks, buildGames(log, gameAuthoring))
 		// The background half of §2.4: a contest's participant databases
 		// outlive it by exactly its configured grace, never longer, and
 		// never a moment less. GameReclaimCounters degrades to a no-op on
@@ -291,6 +304,12 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}
 	if console != nil {
 		modules = append(modules, api.NewConsoleHandler(console, authMiddleware, log))
+	}
+	// Mounted only where a game cluster is configured: without one there is
+	// nothing to build a template on, and an endpoint that took a script it
+	// could never build would be a worse answer than no endpoint.
+	if gameAuthoring != nil {
+		modules = append(modules, api.NewGameHandler(gameAuthoring, authMiddleware, log))
 	}
 
 	// The participant's own read of a running contest — the story, the

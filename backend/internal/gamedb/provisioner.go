@@ -14,20 +14,6 @@ import (
 // ErrBadName is a database name that cannot be spelled safely.
 var ErrBadName = errors.New("not a plain database name")
 
-// TemplateSpec is everything needed to build one contest's template.
-type TemplateSpec struct {
-	Name string
-	// Script is the SQL an author uploaded: the game's schema and its data.
-	//
-	// It runs with the provisioning role's privileges, so it is staff-trusted
-	// input, not participant input. Running it as a non-superuser would be a
-	// real boundary and is deliberately not claimed here: `SET ROLE` would be
-	// undone by a `RESET ROLE` in the script itself, and a separate
-	// non-superuser connection needs a credential that does not exist yet.
-	Script string
-	Policy sqlpolicy.Policy
-}
-
 // CopyStrategy is how PostgreSQL makes a copy of a template.
 //
 // A real choice with a measurable answer, which is why it is configuration and
@@ -93,26 +79,32 @@ func NewProvisioner(admin Cluster, adminDSN string) (*Provisioner, error) {
 // with no connection left on the template, because CREATE DATABASE refuses
 // while its source has one — the template discipline of section 4.2, kept here
 // rather than left for the caller to remember.
-func (p *Provisioner) BuildTemplate(ctx context.Context, spec TemplateSpec) error {
-	if !sqlpolicy.PlainIdentifier(spec.Name) {
-		return fmt.Errorf("%w: %q", ErrBadName, spec.Name)
+// script is the SQL an author uploaded: the game's schema and its data. It
+// runs with the provisioning role's privileges, so it is staff-trusted input,
+// not participant input. Running it as a non-superuser would be a real
+// boundary and is deliberately not claimed here: `SET ROLE` would be undone
+// by a `RESET ROLE` in the script itself, and a separate non-superuser
+// connection needs a credential that does not exist yet.
+func (p *Provisioner) BuildTemplate(ctx context.Context, name, script string, policy sqlpolicy.Policy) error {
+	if !sqlpolicy.PlainIdentifier(name) {
+		return fmt.Errorf("%w: %q", ErrBadName, name)
 	}
-	if err := spec.Policy.Validate(); err != nil {
+	if err := policy.Validate(); err != nil {
 		return err
 	}
 
-	if err := p.Drop(ctx, spec.Name); err != nil {
+	if err := p.Drop(ctx, name); err != nil {
 		return err
 	}
-	if _, err := p.admin.Exec(ctx, `CREATE DATABASE `+QuoteIdentifier(spec.Name)); err != nil {
+	if _, err := p.admin.Exec(ctx, `CREATE DATABASE `+QuoteIdentifier(name)); err != nil {
 		return fmt.Errorf("create the template: %w", err)
 	}
 
-	if err := p.fill(ctx, spec); err != nil {
+	if err := p.fill(ctx, name, script, policy); err != nil {
 		// A half-built template is worse than none: it is a database somebody
 		// can copy, holding part of a contest. Removed, and the failure is the
 		// build's, not a later mystery.
-		_ = p.Drop(context.WithoutCancel(ctx), spec.Name)
+		_ = p.Drop(context.WithoutCancel(ctx), name)
 		return err
 	}
 	return nil
@@ -120,8 +112,8 @@ func (p *Provisioner) BuildTemplate(ctx context.Context, spec TemplateSpec) erro
 
 // fill runs the author's script and applies the contest's privileges, over a
 // connection that is closed again before it returns.
-func (p *Provisioner) fill(ctx context.Context, spec TemplateSpec) error {
-	conn, err := p.connect(ctx, spec.Name)
+func (p *Provisioner) fill(ctx context.Context, name, script string, policy sqlpolicy.Policy) error {
+	conn, err := p.connect(ctx, name)
 	if err != nil {
 		return err
 	}
@@ -129,10 +121,10 @@ func (p *Provisioner) fill(ctx context.Context, spec TemplateSpec) error {
 
 	// One Exec with no arguments goes over the simple protocol, which is what
 	// lets an uploaded script be many statements — the shape a person writes.
-	if _, err := conn.Exec(ctx, spec.Script); err != nil {
+	if _, err := conn.Exec(ctx, script); err != nil {
 		return fmt.Errorf("run the game script: %w", err)
 	}
-	if err := grantPolicy(ctx, conn, spec.Policy); err != nil {
+	if err := grantPolicy(ctx, conn, policy); err != nil {
 		return err
 	}
 	return HardenDatabase(ctx, conn)

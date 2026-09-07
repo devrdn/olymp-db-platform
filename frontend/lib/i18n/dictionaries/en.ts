@@ -937,6 +937,8 @@ const en = {
       "contest.languages_change": "Changed a contest's languages",
       "contest.translations_change": "Changed a contest's titles",
       "contest.policy_change": "Changed the SQL policy",
+      "contest.game_script_set": "Wrote the game database's SQL",
+      "contest.game_built": "The game database was built",
       "contest.story_change": "Changed the story",
       "contest.question_create": "Added a question",
       "contest.question_update": "Changed a question",
@@ -1024,6 +1026,12 @@ const en = {
       "This contest's database has not been prepared yet. Nothing you did — try again shortly.",
     schema_hidden:
       "This olympiad does not show the database's structure. Finding it is part of the puzzle.",
+    game_script_empty:
+      "The game's SQL is empty. An empty template builds an empty database, and every question would answer with a missing table.",
+    game_script_too_long:
+      "The game's SQL is longer than allowed. If it needs many rows, generate them with INSERT ... SELECT generate_series — shorter, and easier to review.",
+    game_not_editable:
+      "This contest's game can no longer be replaced. Replacing it raises the template's version, which makes every participant's copy stale — they would be dropped and made again.",
     query_parse_error:
       "PostgreSQL could not read that query. Its own words are below.",
     query_not_one_statement:
