@@ -294,12 +294,26 @@ func TestLiveListsOnlyContestsWorthProvisioningFor(t *testing.T) {
 // in this process, so backdating it here is what stands in for "finished
 // this long ago" without waiting for real time to pass. graceMin, when not
 // nil, becomes the contest's own settings.grace_period_min.
-func reclaimContest(t *testing.T, status string, age time.Duration, graceMin *int) uuid.UUID {
+//
+// Every Reclaimable test below calls this from inside withTx, on purpose:
+// Reclaim is installation-wide (its own doc), and internal/provisioning's
+// own reclaim_test.go really drops whatever the shared database offers it,
+// on a schedule this package does not control. `go test ./...` runs that
+// package concurrently with this one against the same PostgreSQL, so a row
+// committed here would be a real, live candidate for somebody else's Reclaim
+// call before this test ever got to read it back — not merely crowded out
+// of a batch limit's window, but genuinely gone. Writing through
+// storage.QuerierFrom(ctx, testPool) keeps the insert on the caller's own
+// transaction, invisible to any other session until it commits, which it
+// never does — withTx always rolls back. That is the same lever
+// audit_test.go's writeTrail reaches for (scoping, not a wider limit or a
+// different pass order), applied one level earlier because here the shared
+// state a concurrent process could touch is mutable, not merely readable.
+func reclaimContest(t *testing.T, ctx context.Context, status string, age time.Duration, graceMin *int) uuid.UUID {
 	t.Helper()
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
 	}
-	ctx := t.Context()
 	author := makeUser(t, ctx, "reclaim-"+uuid.NewString()[:8])
 
 	settings := "{}"
@@ -308,23 +322,18 @@ func reclaimContest(t *testing.T, status string, age time.Duration, graceMin *in
 	}
 
 	var id uuid.UUID
-	if err := testPool.QueryRow(ctx,
+	if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
 		`INSERT INTO contests (created_by, status, settings, updated_at)
 		 VALUES ($1, $2, $3::jsonb, now() - make_interval(mins => $4::int))
 		 RETURNING id`, author.ID, status, settings, int(age.Minutes())).Scan(&id); err != nil {
 		t.Fatalf("create contest: %v", err)
 	}
-	t.Cleanup(func() {
-		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		_, _ = testPool.Exec(clean, `DELETE FROM contests WHERE id = $1`, id)
-	})
 	return id
 }
 
 // reclaimableContestIDs is the set of contest ids Reclaimable actually
-// offered, so a test can ask "was mine in there" without being upset by
-// leftovers from a test running concurrently against the same database.
+// offered, so a test can ask "was mine in there" rather than trust the
+// result's raw length or order.
 func reclaimableContestIDs(candidates []provisioning.ReclaimCandidate) map[uuid.UUID]bool {
 	found := make(map[uuid.UUID]bool, len(candidates))
 	for _, c := range candidates {
@@ -337,37 +346,41 @@ func reclaimableContestIDs(candidates []provisioning.ReclaimCandidate) map[uuid.
 // grace of its own configured, is exactly the ordinary case the sweep exists
 // for.
 func TestReclaimableFindsAFinishedContestPastItsGrace(t *testing.T) {
-	contest := reclaimContest(t, "finished", 2*time.Hour, nil)
-	repo := NewGameInstances(testPool)
-	if err := repo.AddSpare(t.Context(), contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
-		t.Fatalf("adding an instance: %v", err)
-	}
+	withTx(t, func(ctx context.Context) {
+		contest := reclaimContest(t, ctx, "finished", 2*time.Hour, nil)
+		repo := NewGameInstances(testPool)
+		if err := repo.AddSpare(ctx, contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+			t.Fatalf("adding an instance: %v", err)
+		}
 
-	candidates, err := repo.Reclaimable(t.Context(), 60, provisioning.ReclaimBatchLimit)
-	if err != nil {
-		t.Fatalf("reclaimable: %v", err)
-	}
-	if !reclaimableContestIDs(candidates)[contest] {
-		t.Fatal("a finished contest past its grace was not offered for reclaim")
-	}
+		candidates, err := repo.Reclaimable(ctx, 60, provisioning.ReclaimBatchLimit)
+		if err != nil {
+			t.Fatalf("reclaimable: %v", err)
+		}
+		if !reclaimableContestIDs(candidates)[contest] {
+			t.Fatal("a finished contest past its grace was not offered for reclaim")
+		}
+	})
 }
 
 // The grace exists precisely to protect this: a contest finished a moment ago
 // must not be touched yet.
 func TestReclaimableSkipsAContestStillWithinGrace(t *testing.T) {
-	contest := reclaimContest(t, "finished", 5*time.Minute, nil)
-	repo := NewGameInstances(testPool)
-	if err := repo.AddSpare(t.Context(), contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
-		t.Fatalf("adding an instance: %v", err)
-	}
+	withTx(t, func(ctx context.Context) {
+		contest := reclaimContest(t, ctx, "finished", 5*time.Minute, nil)
+		repo := NewGameInstances(testPool)
+		if err := repo.AddSpare(ctx, contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+			t.Fatalf("adding an instance: %v", err)
+		}
 
-	candidates, err := repo.Reclaimable(t.Context(), 60, provisioning.ReclaimBatchLimit)
-	if err != nil {
-		t.Fatalf("reclaimable: %v", err)
-	}
-	if reclaimableContestIDs(candidates)[contest] {
-		t.Fatal("a contest still inside its grace was offered for reclaim")
-	}
+		candidates, err := repo.Reclaimable(ctx, 60, provisioning.ReclaimBatchLimit)
+		if err != nil {
+			t.Fatalf("reclaimable: %v", err)
+		}
+		if reclaimableContestIDs(candidates)[contest] {
+			t.Fatal("a contest still inside its grace was offered for reclaim")
+		}
+	})
 }
 
 // Archiving is the ordinary "put this away" action an organizer reaches for
@@ -376,43 +389,47 @@ func TestReclaimableSkipsAContestStillWithinGrace(t *testing.T) {
 // instances from the sweep forever. That was the unbounded leak this widened
 // status filter exists to close.
 func TestReclaimableIncludesAnArchivedContestPastItsGrace(t *testing.T) {
-	contest := reclaimContest(t, "archived", 2*time.Hour, nil)
-	repo := NewGameInstances(testPool)
-	if err := repo.AddSpare(t.Context(), contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
-		t.Fatalf("adding an instance: %v", err)
-	}
+	withTx(t, func(ctx context.Context) {
+		contest := reclaimContest(t, ctx, "archived", 2*time.Hour, nil)
+		repo := NewGameInstances(testPool)
+		if err := repo.AddSpare(ctx, contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+			t.Fatalf("adding an instance: %v", err)
+		}
 
-	candidates, err := repo.Reclaimable(t.Context(), 60, provisioning.ReclaimBatchLimit)
-	if err != nil {
-		t.Fatalf("reclaimable: %v", err)
-	}
-	if !reclaimableContestIDs(candidates)[contest] {
-		t.Fatal("an archived contest past its grace was not offered for reclaim")
-	}
+		candidates, err := repo.Reclaimable(ctx, 60, provisioning.ReclaimBatchLimit)
+		if err != nil {
+			t.Fatalf("reclaimable: %v", err)
+		}
+		if !reclaimableContestIDs(candidates)[contest] {
+			t.Fatal("an archived contest past its grace was not offered for reclaim")
+		}
+	})
 }
 
 // limit is what stops a fresh deployment's first tick from asking the
 // cluster to drop every historical instance in one call — the deploy-day
 // hazard provisioning.ReclaimBatchLimit's own doc explains. Two candidates of
-// its own guarantee at least two rows exist regardless of anything a
-// concurrently running test package happens to have left behind, so a limit
-// of one must return exactly one either way.
+// its own guarantee at least two rows exist inside this test's own
+// transaction, regardless of anything else in the shared database, so a
+// limit of one must return exactly one either way.
 func TestReclaimableLimitCapsHowManyInstancesOneCallReturns(t *testing.T) {
-	repo := NewGameInstances(testPool)
-	for range 2 {
-		contest := reclaimContest(t, "finished", 2*time.Hour, nil)
-		if err := repo.AddSpare(t.Context(), contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
-			t.Fatalf("adding an instance: %v", err)
+	withTx(t, func(ctx context.Context) {
+		repo := NewGameInstances(testPool)
+		for range 2 {
+			contest := reclaimContest(t, ctx, "finished", 2*time.Hour, nil)
+			if err := repo.AddSpare(ctx, contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+				t.Fatalf("adding an instance: %v", err)
+			}
 		}
-	}
 
-	candidates, err := repo.Reclaimable(t.Context(), 60, 1)
-	if err != nil {
-		t.Fatalf("reclaimable: %v", err)
-	}
-	if len(candidates) != 1 {
-		t.Fatalf("got %d candidates with limit 1, want exactly 1", len(candidates))
-	}
+		candidates, err := repo.Reclaimable(ctx, 60, 1)
+		if err != nil {
+			t.Fatalf("reclaimable: %v", err)
+		}
+		if len(candidates) != 1 {
+			t.Fatalf("got %d candidates with limit 1, want exactly 1", len(candidates))
+		}
+	})
 }
 
 // A running or published contest is never a candidate, however old its
@@ -420,78 +437,86 @@ func TestReclaimableLimitCapsHowManyInstancesOneCallReturns(t *testing.T) {
 // finishing (an organizer editing settings, §4.1), and none of them say the
 // contest is over.
 func TestReclaimableNeverTouchesARunningOrPublishedContest(t *testing.T) {
-	repo := NewGameInstances(testPool)
+	withTx(t, func(ctx context.Context) {
+		repo := NewGameInstances(testPool)
 
-	for _, status := range []string{"running", "published", "draft"} {
-		contest := reclaimContest(t, status, 30*24*time.Hour, nil)
-		if err := repo.AddSpare(t.Context(), contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
-			t.Fatalf("adding an instance to a %s contest: %v", status, err)
-		}
+		for _, status := range []string{"running", "published", "draft"} {
+			contest := reclaimContest(t, ctx, status, 30*24*time.Hour, nil)
+			if err := repo.AddSpare(ctx, contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+				t.Fatalf("adding an instance to a %s contest: %v", status, err)
+			}
 
-		candidates, err := repo.Reclaimable(t.Context(), 1, provisioning.ReclaimBatchLimit)
-		if err != nil {
-			t.Fatalf("reclaimable: %v", err)
+			candidates, err := repo.Reclaimable(ctx, 1, provisioning.ReclaimBatchLimit)
+			if err != nil {
+				t.Fatalf("reclaimable: %v", err)
+			}
+			if reclaimableContestIDs(candidates)[contest] {
+				t.Fatalf("a %s contest was offered for reclaim", status)
+			}
 		}
-		if reclaimableContestIDs(candidates)[contest] {
-			t.Fatalf("a %s contest was offered for reclaim", status)
-		}
-	}
+	})
 }
 
 // A contest's own grace_period_min is what actually governs it — the
 // installation's own figure is only what an unconfigured contest defers to.
 func TestReclaimableHonoursTheContestsOwnGracePeriod(t *testing.T) {
-	repo := NewGameInstances(testPool)
+	withTx(t, func(ctx context.Context) {
+		repo := NewGameInstances(testPool)
 
-	short := 5
-	// Finished 10 minutes ago; its own 5-minute grace has passed although the
-	// installation default below would not have let it through on its own.
-	tighter := reclaimContest(t, "finished", 10*time.Minute, &short)
-	if err := repo.AddSpare(t.Context(), tighter, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
-		t.Fatalf("adding an instance: %v", err)
-	}
+		short := 5
+		// Finished 10 minutes ago; its own 5-minute grace has passed although
+		// the installation default below would not have let it through on
+		// its own.
+		tighter := reclaimContest(t, ctx, "finished", 10*time.Minute, &short)
+		if err := repo.AddSpare(ctx, tighter, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+			t.Fatalf("adding an instance: %v", err)
+		}
 
-	long := 1000
-	// Finished 10 minutes ago too, but its own grace is nowhere near over,
-	// although the installation default alone would have let it through.
-	looser := reclaimContest(t, "finished", 10*time.Minute, &long)
-	if err := repo.AddSpare(t.Context(), looser, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
-		t.Fatalf("adding an instance: %v", err)
-	}
+		long := 1000
+		// Finished 10 minutes ago too, but its own grace is nowhere near
+		// over, although the installation default alone would have let it
+		// through.
+		looser := reclaimContest(t, ctx, "finished", 10*time.Minute, &long)
+		if err := repo.AddSpare(ctx, looser, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+			t.Fatalf("adding an instance: %v", err)
+		}
 
-	candidates, err := repo.Reclaimable(t.Context(), 60, provisioning.ReclaimBatchLimit)
-	if err != nil {
-		t.Fatalf("reclaimable: %v", err)
-	}
-	found := reclaimableContestIDs(candidates)
-	if !found[tighter] {
-		t.Fatal("a contest whose own tighter grace had passed was not offered")
-	}
-	if found[looser] {
-		t.Fatal("a contest whose own longer grace had not passed was offered anyway")
-	}
+		candidates, err := repo.Reclaimable(ctx, 60, provisioning.ReclaimBatchLimit)
+		if err != nil {
+			t.Fatalf("reclaimable: %v", err)
+		}
+		found := reclaimableContestIDs(candidates)
+		if !found[tighter] {
+			t.Fatal("a contest whose own tighter grace had passed was not offered")
+		}
+		if found[looser] {
+			t.Fatal("a contest whose own longer grace had not passed was offered anyway")
+		}
+	})
 }
 
 // An instance already marked dropped is history, not work: offering it again
 // would have the sweep asking the cluster to drop something twice.
 func TestReclaimableExcludesInstancesAlreadyDropped(t *testing.T) {
-	contest := reclaimContest(t, "finished", 2*time.Hour, nil)
-	repo := NewGameInstances(testPool)
-	database := "reclaim_" + uuid.NewString()[:12]
-	if err := repo.AddSpare(t.Context(), contest, database, 1); err != nil {
-		t.Fatalf("adding an instance: %v", err)
-	}
-	if err := repo.MarkDropped(t.Context(), database); err != nil {
-		t.Fatalf("marking dropped: %v", err)
-	}
+	withTx(t, func(ctx context.Context) {
+		contest := reclaimContest(t, ctx, "finished", 2*time.Hour, nil)
+		repo := NewGameInstances(testPool)
+		database := "reclaim_" + uuid.NewString()[:12]
+		if err := repo.AddSpare(ctx, contest, database, 1); err != nil {
+			t.Fatalf("adding an instance: %v", err)
+		}
+		if err := repo.MarkDropped(ctx, database); err != nil {
+			t.Fatalf("marking dropped: %v", err)
+		}
 
-	candidates, err := repo.Reclaimable(t.Context(), 60, provisioning.ReclaimBatchLimit)
-	if err != nil {
-		t.Fatalf("reclaimable: %v", err)
-	}
-	if reclaimableContestIDs(candidates)[contest] {
-		t.Fatal("an already-dropped instance was offered for reclaim again")
-	}
+		candidates, err := repo.Reclaimable(ctx, 60, provisioning.ReclaimBatchLimit)
+		if err != nil {
+			t.Fatalf("reclaimable: %v", err)
+		}
+		if reclaimableContestIDs(candidates)[contest] {
+			t.Fatal("an already-dropped instance was offered for reclaim again")
+		}
+	})
 }
 
 // A tight limit must spend itself on whoever has been overdue the longest,
@@ -503,37 +528,39 @@ func TestReclaimableExcludesInstancesAlreadyDropped(t *testing.T) {
 // back before the one finished more recently, regardless of which of the two
 // randomly generated UUIDs is numerically smaller.
 func TestReclaimableOrdersTheOldestDeadlineFirst(t *testing.T) {
-	repo := NewGameInstances(testPool)
+	withTx(t, func(ctx context.Context) {
+		repo := NewGameInstances(testPool)
 
-	older := reclaimContest(t, "finished", 4*time.Hour, nil)
-	if err := repo.AddSpare(t.Context(), older, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
-		t.Fatalf("adding an instance: %v", err)
-	}
-	newer := reclaimContest(t, "finished", 2*time.Hour, nil)
-	if err := repo.AddSpare(t.Context(), newer, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
-		t.Fatalf("adding an instance: %v", err)
-	}
-
-	candidates, err := repo.Reclaimable(t.Context(), 60, provisioning.ReclaimBatchLimit)
-	if err != nil {
-		t.Fatalf("reclaimable: %v", err)
-	}
-	olderIdx, newerIdx := -1, -1
-	for i, c := range candidates {
-		switch c.ContestID {
-		case older:
-			olderIdx = i
-		case newer:
-			newerIdx = i
+		older := reclaimContest(t, ctx, "finished", 4*time.Hour, nil)
+		if err := repo.AddSpare(ctx, older, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+			t.Fatalf("adding an instance: %v", err)
 		}
-	}
-	if olderIdx == -1 || newerIdx == -1 {
-		t.Fatalf("both contests must be offered; older found=%v newer found=%v", olderIdx != -1, newerIdx != -1)
-	}
-	if olderIdx >= newerIdx {
-		t.Fatalf("the contest overdue since 4h ago is at index %d, the one overdue since 2h ago is at index %d; "+
-			"want the older deadline first regardless of contest_id order", olderIdx, newerIdx)
-	}
+		newer := reclaimContest(t, ctx, "finished", 2*time.Hour, nil)
+		if err := repo.AddSpare(ctx, newer, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+			t.Fatalf("adding an instance: %v", err)
+		}
+
+		candidates, err := repo.Reclaimable(ctx, 60, provisioning.ReclaimBatchLimit)
+		if err != nil {
+			t.Fatalf("reclaimable: %v", err)
+		}
+		olderIdx, newerIdx := -1, -1
+		for i, c := range candidates {
+			switch c.ContestID {
+			case older:
+				olderIdx = i
+			case newer:
+				newerIdx = i
+			}
+		}
+		if olderIdx == -1 || newerIdx == -1 {
+			t.Fatalf("both contests must be offered; older found=%v newer found=%v", olderIdx != -1, newerIdx != -1)
+		}
+		if olderIdx >= newerIdx {
+			t.Fatalf("the contest overdue since 4h ago is at index %d, the one overdue since 2h ago is at index %d; "+
+				"want the older deadline first regardless of contest_id order", olderIdx, newerIdx)
+		}
+	})
 }
 
 // The row survives, in the terminal status the schema has carried since
@@ -584,10 +611,13 @@ func TestTheActiveInstancesIndexExists(t *testing.T) {
 
 // reclaimTemplate stores a template database for contest in the given
 // status, so a ReclaimableTemplates test has something to offer or exclude.
-func reclaimTemplate(t *testing.T, contest uuid.UUID, status string) string {
+// Like reclaimContest, it writes through the ctx's ambient transaction (or
+// the raw pool when there is none) — every call site below passes the ctx
+// withTx hands its body, for the same reason reclaimContest's own doc gives.
+func reclaimTemplate(t *testing.T, ctx context.Context, contest uuid.UUID, status string) string {
 	t.Helper()
 	database := "reclaim_tpl_" + uuid.NewString()[:12]
-	if _, err := testPool.Exec(t.Context(),
+	if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
 		`INSERT INTO game_templates (contest_id, template_db, init_script, status, version)
 		 VALUES ($1, $2, 'SELECT 1', $3, 1)`, contest, database, status); err != nil {
 		t.Fatalf("create template: %v", err)
@@ -598,122 +628,132 @@ func reclaimTemplate(t *testing.T, contest uuid.UUID, status string) string {
 // The largest single database a contest owns is offered once the contest is
 // finished past its grace and nothing is left that still needs it.
 func TestReclaimableTemplatesOffersATemplateWithNoInstancesLeft(t *testing.T) {
-	contest := reclaimContest(t, "finished", 2*time.Hour, nil)
-	database := reclaimTemplate(t, contest, "ready")
-	repo := NewGameInstances(testPool)
+	withTx(t, func(ctx context.Context) {
+		contest := reclaimContest(t, ctx, "finished", 2*time.Hour, nil)
+		database := reclaimTemplate(t, ctx, contest, "ready")
+		repo := NewGameInstances(testPool)
 
-	templates, err := repo.ReclaimableTemplates(t.Context(), 60, provisioning.ReclaimBatchLimit)
-	if err != nil {
-		t.Fatalf("reclaimable templates: %v", err)
-	}
-	found := false
-	for _, tpl := range templates {
-		if tpl.ContestID == contest {
-			found = true
-			if tpl.Database != database {
-				t.Fatalf("template database = %q, want %q", tpl.Database, database)
+		templates, err := repo.ReclaimableTemplates(ctx, 60, provisioning.ReclaimBatchLimit)
+		if err != nil {
+			t.Fatalf("reclaimable templates: %v", err)
+		}
+		found := false
+		for _, tpl := range templates {
+			if tpl.ContestID == contest {
+				found = true
+				if tpl.Database != database {
+					t.Fatalf("template database = %q, want %q", tpl.Database, database)
+				}
 			}
 		}
-	}
-	if !found {
-		t.Fatal("a template with no instances left was not offered for reclaim")
-	}
+		if !found {
+			t.Fatal("a template with no instances left was not offered for reclaim")
+		}
+	})
 }
 
 // A template must never be offered while one of its own instances could
 // still be recreated from it — dropping the source ahead of what depends on
 // it would be exactly the ordering Reclaim's own doc says is backwards.
 func TestReclaimableTemplatesExcludesATemplateWithALiveInstanceStillThere(t *testing.T) {
-	contest := reclaimContest(t, "finished", 2*time.Hour, nil)
-	reclaimTemplate(t, contest, "ready")
-	repo := NewGameInstances(testPool)
-	if err := repo.AddSpare(t.Context(), contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
-		t.Fatalf("adding an instance: %v", err)
-	}
-
-	templates, err := repo.ReclaimableTemplates(t.Context(), 60, provisioning.ReclaimBatchLimit)
-	if err != nil {
-		t.Fatalf("reclaimable templates: %v", err)
-	}
-	for _, tpl := range templates {
-		if tpl.ContestID == contest {
-			t.Fatal("a template was offered while a live instance still needed it")
+	withTx(t, func(ctx context.Context) {
+		contest := reclaimContest(t, ctx, "finished", 2*time.Hour, nil)
+		reclaimTemplate(t, ctx, contest, "ready")
+		repo := NewGameInstances(testPool)
+		if err := repo.AddSpare(ctx, contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+			t.Fatalf("adding an instance: %v", err)
 		}
-	}
+
+		templates, err := repo.ReclaimableTemplates(ctx, 60, provisioning.ReclaimBatchLimit)
+		if err != nil {
+			t.Fatalf("reclaimable templates: %v", err)
+		}
+		for _, tpl := range templates {
+			if tpl.ContestID == contest {
+				t.Fatal("a template was offered while a live instance still needed it")
+			}
+		}
+	})
 }
 
 // Only a built template ('ready') has a database on disk to remove; an
 // unbuilt or already-reclaimed one is nothing the cluster can be asked to
 // drop twice.
 func TestReclaimableTemplatesExcludesAnUnbuiltOrAlreadyDroppedTemplate(t *testing.T) {
-	repo := NewGameInstances(testPool)
-	for _, status := range []string{"pending", "building", "failed", "dropped"} {
-		contest := reclaimContest(t, "finished", 2*time.Hour, nil)
-		reclaimTemplate(t, contest, status)
+	withTx(t, func(ctx context.Context) {
+		repo := NewGameInstances(testPool)
+		for _, status := range []string{"pending", "building", "failed", "dropped"} {
+			contest := reclaimContest(t, ctx, "finished", 2*time.Hour, nil)
+			reclaimTemplate(t, ctx, contest, status)
 
-		templates, err := repo.ReclaimableTemplates(t.Context(), 60, provisioning.ReclaimBatchLimit)
-		if err != nil {
-			t.Fatalf("reclaimable templates (%s): %v", status, err)
-		}
-		for _, tpl := range templates {
-			if tpl.ContestID == contest {
-				t.Fatalf("a %s template was offered for reclaim", status)
+			templates, err := repo.ReclaimableTemplates(ctx, 60, provisioning.ReclaimBatchLimit)
+			if err != nil {
+				t.Fatalf("reclaimable templates (%s): %v", status, err)
+			}
+			for _, tpl := range templates {
+				if tpl.ContestID == contest {
+					t.Fatalf("a %s template was offered for reclaim", status)
+				}
 			}
 		}
-	}
+	})
 }
 
 // The same fairness Reclaimable's own ordering test proves, for the largest
 // database a contest owns: the template belonging to the longer-overdue
 // contest comes back first, regardless of contest_id order.
 func TestReclaimableTemplatesOrdersTheOldestDeadlineFirst(t *testing.T) {
-	repo := NewGameInstances(testPool)
+	withTx(t, func(ctx context.Context) {
+		repo := NewGameInstances(testPool)
 
-	older := reclaimContest(t, "finished", 4*time.Hour, nil)
-	reclaimTemplate(t, older, "ready")
-	newer := reclaimContest(t, "finished", 2*time.Hour, nil)
-	reclaimTemplate(t, newer, "ready")
+		older := reclaimContest(t, ctx, "finished", 4*time.Hour, nil)
+		reclaimTemplate(t, ctx, older, "ready")
+		newer := reclaimContest(t, ctx, "finished", 2*time.Hour, nil)
+		reclaimTemplate(t, ctx, newer, "ready")
 
-	templates, err := repo.ReclaimableTemplates(t.Context(), 60, provisioning.ReclaimBatchLimit)
-	if err != nil {
-		t.Fatalf("reclaimable templates: %v", err)
-	}
-	olderIdx, newerIdx := -1, -1
-	for i, tpl := range templates {
-		switch tpl.ContestID {
-		case older:
-			olderIdx = i
-		case newer:
-			newerIdx = i
+		templates, err := repo.ReclaimableTemplates(ctx, 60, provisioning.ReclaimBatchLimit)
+		if err != nil {
+			t.Fatalf("reclaimable templates: %v", err)
 		}
-	}
-	if olderIdx == -1 || newerIdx == -1 {
-		t.Fatalf("both templates must be offered; older found=%v newer found=%v", olderIdx != -1, newerIdx != -1)
-	}
-	if olderIdx >= newerIdx {
-		t.Fatalf("the template overdue since 4h ago is at index %d, the one overdue since 2h ago is at index %d; "+
-			"want the older deadline first regardless of contest_id order", olderIdx, newerIdx)
-	}
+		olderIdx, newerIdx := -1, -1
+		for i, tpl := range templates {
+			switch tpl.ContestID {
+			case older:
+				olderIdx = i
+			case newer:
+				newerIdx = i
+			}
+		}
+		if olderIdx == -1 || newerIdx == -1 {
+			t.Fatalf("both templates must be offered; older found=%v newer found=%v", olderIdx != -1, newerIdx != -1)
+		}
+		if olderIdx >= newerIdx {
+			t.Fatalf("the template overdue since 4h ago is at index %d, the one overdue since 2h ago is at index %d; "+
+				"want the older deadline first regardless of contest_id order", olderIdx, newerIdx)
+		}
+	})
 }
 
 // The row survives as history, the same convention MarkDropped keeps for an
 // instance — an organizer's audit search has to have something to find even
 // once the database itself is gone.
 func TestMarkTemplateDroppedLeavesTheRowBehindAsHistory(t *testing.T) {
-	contest := reclaimContest(t, "finished", 2*time.Hour, nil)
-	reclaimTemplate(t, contest, "ready")
-	repo := NewGameInstances(testPool)
+	withTx(t, func(ctx context.Context) {
+		contest := reclaimContest(t, ctx, "finished", 2*time.Hour, nil)
+		reclaimTemplate(t, ctx, contest, "ready")
+		repo := NewGameInstances(testPool)
 
-	if err := repo.MarkTemplateDropped(t.Context(), contest); err != nil {
-		t.Fatalf("mark template dropped: %v", err)
-	}
+		if err := repo.MarkTemplateDropped(ctx, contest); err != nil {
+			t.Fatalf("mark template dropped: %v", err)
+		}
 
-	var status string
-	if err := testPool.QueryRow(t.Context(),
-		`SELECT status FROM game_templates WHERE contest_id = $1`, contest).Scan(&status); err != nil {
-		t.Fatalf("the row was removed rather than marked: %v", err)
-	}
-	if status != "dropped" {
-		t.Fatalf("status = %q, want %q", status, "dropped")
-	}
+		var status string
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+			`SELECT status FROM game_templates WHERE contest_id = $1`, contest).Scan(&status); err != nil {
+			t.Fatalf("the row was removed rather than marked: %v", err)
+		}
+		if status != "dropped" {
+			t.Fatalf("status = %q, want %q", status, "dropped")
+		}
+	})
 }
