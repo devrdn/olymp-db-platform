@@ -151,6 +151,10 @@ type Service struct {
 	// what a participant is shown — nothing here renders a deadline, and the
 	// day something does, it must call contests.Deadline without this.
 	grace time.Duration
+	// schemas answers what a contest's game looks like, for the console's
+	// schema panel. Set by WithSchemas and nil until then — see Schema for
+	// why a build that never wired it refuses rather than panicking.
+	schemas Schemas
 }
 
 // defaultGrace is the network-latency allowance a deployment gets unless
