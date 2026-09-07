@@ -742,6 +742,7 @@ const ro = {
           loadMore: "Încărcați mai vechi",
           loadingMore: "Se încarcă…",
           failed: "Nu s-a putut încărca jurnalul de interogări.",
+          retry: "Încercați din nou",
           durationMs: "{n} ms",
           columns: {
             sql: "Interogare",

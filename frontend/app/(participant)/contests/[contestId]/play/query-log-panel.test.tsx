@@ -20,8 +20,8 @@ function show(props: Partial<React.ComponentProps<typeof QueryLogPanel>> = {}) {
   return render(
     <QueryLogPanel
       contestId="c1"
-      initial={{ items: [entry("SELECT 1")], total: 1 }}
-      refreshToken={0}
+      initial={{ items: [entry("SELECT 1")], total: 1, failed: false }}
+      active
       locale="en"
       dict={en}
       {...props}
@@ -42,14 +42,36 @@ describe("the query log panel", () => {
   });
 
   test("says nothing has run yet when the log is empty", () => {
-    show({ initial: { items: [], total: 0 } });
+    show({ initial: { items: [], total: 0, failed: false } });
 
     expect(screen.getByText(en.participant.play.workspace.log.empty)).toBeInTheDocument();
   });
 
+  // Finding 4: an empty log and a log the server could not read must not
+  // look identical — a participant checking what they already tried has no
+  // way to tell a real answer from a shrug otherwise, and `total` being zero
+  // hides the ordinary "load more" retry too.
+  test("a log the server could not read says so, not that nothing has run yet", () => {
+    show({ initial: { items: [], total: 0, failed: true } });
+
+    expect(screen.queryByText(en.participant.play.workspace.log.empty)).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(en.participant.play.workspace.log.failed);
+    expect(screen.getByRole("button", { name: en.participant.play.workspace.log.retry })).toBeInTheDocument();
+  });
+
+  test("retrying a failed empty log fetches the first page again", async () => {
+    fetchQueryLogAction.mockResolvedValueOnce({ kind: "ok", items: [entry("SELECT 1")], total: 1 });
+    show({ initial: { items: [], total: 0, failed: true } });
+
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.log.retry }));
+
+    await waitFor(() => expect(screen.getByText("SELECT 1")).toBeInTheDocument());
+    expect(fetchQueryLogAction).toHaveBeenCalledWith("c1", QUERY_LOG_PAGE_SIZE, 0);
+  });
+
   test("a row still running carries no duration or row count", () => {
     show({
-      initial: { items: [entry("SELECT pg_sleep(5)", { status: "running", durationMs: undefined, rowCount: undefined })], total: 1 },
+      initial: { items: [entry("SELECT pg_sleep(5)", { status: "running", durationMs: undefined, rowCount: undefined })], total: 1, failed: false },
     });
 
     const row = screen.getByText("SELECT pg_sleep(5)").closest("tr")!;
@@ -60,24 +82,24 @@ describe("the query log panel", () => {
   // not lose their history — proven here by seeding QueryLogPanel with a
   // server-fetched initial page, exactly what page.tsx hands it on reload.
   test("a reload sees the history the server already fetched, with no gap", () => {
-    show({ initial: { items: [entry("SELECT 1"), entry("SELECT 2")], total: 2 } });
+    show({ initial: { items: [entry("SELECT 1"), entry("SELECT 2")], total: 2, failed: false } });
 
     expect(screen.getByText("SELECT 1")).toBeInTheDocument();
     expect(screen.getByText("SELECT 2")).toBeInTheDocument();
   });
 
   test("offers to load more only when more rows exist", () => {
-    const { unmount } = show({ initial: { items: [entry("SELECT 1")], total: 1 } });
+    const { unmount } = show({ initial: { items: [entry("SELECT 1")], total: 1, failed: false } });
     expect(screen.queryByRole("button", { name: en.participant.play.workspace.log.loadMore })).not.toBeInTheDocument();
     unmount();
 
-    show({ initial: { items: [entry("SELECT 1")], total: 2 } });
+    show({ initial: { items: [entry("SELECT 1")], total: 2, failed: false } });
     expect(screen.getByRole("button", { name: en.participant.play.workspace.log.loadMore })).toBeInTheDocument();
   });
 
   test("load more appends the next page rather than replacing the first", async () => {
     fetchQueryLogAction.mockResolvedValueOnce({ kind: "ok", items: [entry("SELECT 2")], total: 2 });
-    show({ initial: { items: [entry("SELECT 1")], total: 2 } });
+    show({ initial: { items: [entry("SELECT 1")], total: 2, failed: false } });
 
     await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.log.loadMore }));
 
@@ -86,42 +108,66 @@ describe("the query log panel", () => {
     expect(fetchQueryLogAction).toHaveBeenCalledWith("c1", QUERY_LOG_PAGE_SIZE, 1);
   });
 
-  // A refresh triggered by refreshToken re-fetches at least as many rows as
-  // were already loaded, so a participant who pressed "load more" a few
-  // times does not see the list shrink back to one page the moment a fresh
-  // query lands.
-  test("a new query refreshes the log without shrinking an already-expanded page", async () => {
-    fetchQueryLogAction.mockResolvedValueOnce({
-      kind: "ok",
-      items: [entry("SELECT 3"), entry("SELECT 2"), entry("SELECT 1")],
-      total: 3,
-    });
-    const { rerender } = show({ initial: { items: [entry("SELECT 2"), entry("SELECT 1")], total: 2 }, refreshToken: 0 });
+  test("a failed load more leaves the existing rows on screen, with a way to retry", async () => {
+    fetchQueryLogAction.mockResolvedValueOnce({ kind: "refused", code: "unreachable" });
+    show({ initial: { items: [entry("SELECT 1")], total: 2, failed: false } });
+
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.log.loadMore }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(en.participant.play.workspace.log.failed));
+    expect(screen.getByText("SELECT 1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.participant.play.workspace.log.retry })).toBeInTheDocument();
+  });
+
+  // Finding 3: this panel stays mounted at all times, so it has to notice a
+  // query that ran while it was hidden — but only by refetching on the
+  // transition into being shown, never on mount for data page.tsx already
+  // fetched server-side.
+  test("does not refetch on mount even when it starts active", () => {
+    show({ active: true });
+
+    expect(fetchQueryLogAction).not.toHaveBeenCalled();
+  });
+
+  test("refetches on the transition into being the active tab", async () => {
+    fetchQueryLogAction.mockResolvedValueOnce({ kind: "ok", items: [entry("SELECT 2"), entry("SELECT 1")], total: 2 });
+    const { rerender } = show({ active: false, initial: { items: [entry("SELECT 1")], total: 1, failed: false } });
+    expect(fetchQueryLogAction).not.toHaveBeenCalled();
 
     rerender(
       <QueryLogPanel
         contestId="c1"
-        initial={{ items: [entry("SELECT 2"), entry("SELECT 1")], total: 2 }}
-        refreshToken={1}
+        initial={{ items: [entry("SELECT 1")], total: 1, failed: false }}
+        active
         locale="en"
         dict={en}
       />,
     );
 
-    await waitFor(() => expect(screen.getByText("SELECT 3")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("SELECT 2")).toBeInTheDocument());
     // Never fewer than a full page, even when fewer rows were loaded: the
     // refresh asks for at least QUERY_LOG_PAGE_SIZE, not the smaller count
     // that happened to be on screen.
     expect(fetchQueryLogAction).toHaveBeenCalledWith("c1", QUERY_LOG_PAGE_SIZE, 0);
   });
 
-  test("a failed refresh leaves the existing rows on screen", async () => {
-    fetchQueryLogAction.mockResolvedValueOnce({ kind: "refused", code: "unreachable" });
-    const { rerender } = show({ refreshToken: 0 });
+  test("does not refetch again while it stays the active tab", async () => {
+    const { rerender } = show({ active: true });
+    expect(fetchQueryLogAction).not.toHaveBeenCalled();
 
-    rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1 }} refreshToken={1} locale="en" dict={en} />);
+    rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active locale="en" dict={en} />);
+
+    expect(fetchQueryLogAction).not.toHaveBeenCalled();
+  });
+
+  test("a failed refresh on becoming active leaves the existing rows on screen", async () => {
+    fetchQueryLogAction.mockResolvedValueOnce({ kind: "refused", code: "unreachable" });
+    const { rerender } = show({ active: false });
+
+    rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active locale="en" dict={en} />);
 
     await waitFor(() => expect(fetchQueryLogAction).toHaveBeenCalled());
     expect(screen.getByText("SELECT 1")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(en.participant.play.workspace.log.failed);
   });
 });

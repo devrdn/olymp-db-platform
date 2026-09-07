@@ -166,18 +166,29 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   // is a record of what already happened, not something the console needs to
   // function: a participant should still be able to read the story and run
   // queries even if this one read failed (a transient database error, say),
-  // and QueryLogPanel's own client-side refresh (on the console's next run)
-  // gets another chance at it.
-  let initialLog: { items: QueryLogEntry[]; total: number } = { items: [], total: 0 };
+  // and QueryLogPanel's own client-side retry gets another chance at it.
+  //
+  // `failed` carries which of those two happened (finding 4): an empty log
+  // and a log this request could not read degrade to the exact same
+  // `{items: [], total: 0}` shape otherwise, and QueryLogPanel rendered them
+  // as the identical "you have not run a query yet" — indistinguishable from
+  // a real answer, and with no way to retry since a `total` of zero hides
+  // "load more" too.
+  let initialLog: { items: QueryLogEntry[]; total: number; failed: boolean } = {
+    items: [],
+    total: 0,
+    failed: false,
+  };
   if (logResult.status === "fulfilled") {
-    initialLog = queryLogResponseSchema.parse(logResult.value);
+    initialLog = { ...queryLogResponseSchema.parse(logResult.value), failed: false };
   } else {
     const error = logResult.reason;
     if (error instanceof ApiError && SCREEN_UNAVAILABLE_CODES.has(error.code)) {
       return <UnavailablePage title={contest.title} body={errors[error.code]} />;
     }
     // Any other failure (a transient 500, an unreachable API): degrade
-    // rather than crash. The log stays empty until the client refreshes it.
+    // rather than crash, but say so — see `failed`'s own doc just above.
+    initialLog = { items: [], total: 0, failed: true };
   }
 
   // Rendered here, once, on the server: `StoryText` runs `react-markdown`, a
@@ -257,7 +268,18 @@ function WaitingRoom({
 
   return (
     <div className="flex flex-col gap-6">
-      <PlayHeader contestId={contest.id} title={contest.title} waitingForStart dict={dict} />
+      {/* PlayHeader's own border is meant to run the full width of the
+          content column, not stop at it (its own doc: "edge to edge").
+          Inside `Band`, that column carries `px-10`/`max-narrow:px-4.5` of
+          padding this bar sits under like any other content — so without
+          this negative margin cancelling exactly that padding, the border
+          stopped short of both edges (finding 7, the regression the
+          implementer flagged). The workspace's own use of PlayHeader needs
+          none of this: it renders entirely outside `Band`, already full
+          width. */}
+      <div className="-mx-10 max-narrow:-mx-4.5">
+        <PlayHeader contestId={contest.id} title={contest.title} waitingForStart dict={dict} />
+      </div>
       <div className="flex max-w-body flex-col gap-2">
         <p className="text-body text-ink">{t.body}</p>
         {startsAt ? <p className="text-small text-ink-2">{t.startsAt.replace("{time}", startsAt)}</p> : null}
