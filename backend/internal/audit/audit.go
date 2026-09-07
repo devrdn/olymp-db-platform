@@ -43,14 +43,22 @@ const (
 	ActionContestLanguages    = "contest.languages_change"
 	ActionContestTranslations = "contest.translations_change"
 	ActionContestPolicyChange = "contest.policy_change"
-	ActionContestStoryChange  = "contest.story_change"
-	ActionQuestionCreate      = "contest.question_create"
-	ActionQuestionUpdate      = "contest.question_update"
-	ActionQuestionDelete      = "contest.question_delete"
-	ActionQuestionReorder     = "contest.question_reorder"
-	ActionAnswersChange       = "contest.answers_change"
-	ActionManagerGrant        = "contest.manager_grant"
-	ActionManagerRevoke       = "contest.manager_revoke"
+	// The SQL an author uploads as the game, and the build made from
+	// it. Two actions and not one: writing the script is a person
+	// deciding something, and the build is what the cluster then did
+	// with it — minutes later, possibly failing, with nobody at the
+	// keyboard. A trail that folded them together could not answer
+	// "was the game that ran the one the organiser wrote".
+	ActionGameScriptSet      = "contest.game_script_set"
+	ActionGameBuilt          = "contest.game_built"
+	ActionContestStoryChange = "contest.story_change"
+	ActionQuestionCreate     = "contest.question_create"
+	ActionQuestionUpdate     = "contest.question_update"
+	ActionQuestionDelete     = "contest.question_delete"
+	ActionQuestionReorder    = "contest.question_reorder"
+	ActionAnswersChange      = "contest.answers_change"
+	ActionManagerGrant       = "contest.manager_grant"
+	ActionManagerRevoke      = "contest.manager_revoke"
 
 	ActionParticipantAdd        = "participant.add"
 	ActionParticipantRemove     = "participant.remove"
@@ -105,7 +113,8 @@ var actions = []string{
 
 	ActionContestCreate, ActionContestUpdate, ActionContestDelete,
 	ActionContestStatusChange, ActionContestLanguages, ActionContestTranslations,
-	ActionContestPolicyChange, ActionContestStoryChange, ActionQuestionCreate,
+	ActionContestPolicyChange, ActionGameScriptSet, ActionGameBuilt,
+	ActionContestStoryChange, ActionQuestionCreate,
 	ActionQuestionUpdate, ActionQuestionDelete, ActionQuestionReorder,
 	ActionAnswersChange, ActionManagerGrant, ActionManagerRevoke,
 

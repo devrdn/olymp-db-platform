@@ -52,6 +52,12 @@ var (
 		"The participant has already finished. Their answers are in, and the console closes with them.")
 	codeNoGameYet = httpx.NewCode("no_game_yet",
 		"The contest's game database has not been built. Nobody's mistake and nothing to do with the query.")
+	codeGameScriptEmpty = httpx.NewCode("game_script_empty",
+		"The game script is empty. An empty template builds an empty database, and every question in the contest would answer \"no such table\".")
+	codeGameScriptTooLong = httpx.NewCode("game_script_too_long",
+		"The game script is past the size one game may carry. A game that needs more rows than this writes them with INSERT ... SELECT generate_series, which is shorter and easier to review.")
+	codeGameNotEditable = httpx.NewCode("game_not_editable",
+		"The contest's game can no longer be replaced. Replacing it raises the template's version, which makes every participant's copy stale — and a stale copy is dropped and made again, so in a running olympiad it would take every participant's database at once.")
 	codeSchemaHidden = httpx.NewCode("schema_hidden",
 		"This contest does not show the game's schema. A rule of this olympiad rather than a missing thing: the organiser closed the catalogues so the shape has to be found by playing, and serving it from the console's panel would hand over exactly what that withholds.")
 

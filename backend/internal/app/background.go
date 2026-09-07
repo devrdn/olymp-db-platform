@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -211,6 +212,60 @@ func reclaimInstances(log *slog.Logger, reclaim func(context.Context, int) (prov
 				}
 			}
 			return err
+		},
+	}
+}
+
+// buildGamesEvery is how often the builder looks for a game waiting to be
+// built.
+//
+// Short, unlike every other job in this file, because on the other end of it
+// is an organiser who has just pressed save and is watching a status. Each
+// tick that finds nothing is one indexed row read; a tick that finds
+// something does minutes of work and the next one simply finds nothing while
+// it runs.
+const buildGamesEvery = 5 * time.Second
+
+// staleBuildAfter is how long a game may sit in `building` before another
+// tick takes it back.
+//
+// This is not "how long a build may take" — a build that is still running
+// holds nothing that stops a second one starting beside it, so the figure has
+// to be comfortably longer than any real build rather than a timeout on one.
+// Fifteen minutes is far past the seconds an olympiad's game actually takes
+// and far short of leaving somebody watching a dead spinner for an afternoon.
+const staleBuildAfter = 15 * time.Minute
+
+// buildGames builds one waiting game per tick.
+//
+// The job exists because building creates a database and runs an author's
+// whole script inside it, which is not something to hold an HTTP request open
+// for — and because an API that dies mid-build has to leave the work
+// recoverable rather than a row stuck in `building` for ever.
+func buildGames(log *slog.Logger, games *provisioning.Games) task {
+	return task{
+		name:  "game-build",
+		every: buildGamesEvery,
+		run: func(ctx context.Context) error {
+			built, err := games.Build(ctx, staleBuildAfter)
+			if errors.Is(err, provisioning.ErrNoGame) {
+				// Nothing waiting, which is what almost every tick finds.
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if built.Status == provisioning.TemplateFailed {
+				// The organiser sees this on their own screen; the line is
+				// here so an operator reading the log knows why a contest
+				// cannot be published.
+				log.WarnContext(ctx, "a game failed to build",
+					"contest", built.ContestID, "version", built.Version, "error", built.BuildError)
+				return nil
+			}
+			log.InfoContext(ctx, "built a game",
+				"contest", built.ContestID, "version", built.Version, "database", built.Database)
+			return nil
 		},
 	}
 }

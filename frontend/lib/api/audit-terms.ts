@@ -53,6 +53,8 @@ export const AUDIT_ACTIONS = [
   "contest.languages_change",
   "contest.translations_change",
   "contest.policy_change",
+  "contest.game_script_set",
+  "contest.game_built",
   "contest.story_change",
   "contest.question_create",
   "contest.question_update",
