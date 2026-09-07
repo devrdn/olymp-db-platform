@@ -213,3 +213,21 @@ func contestFor(t *testing.T, registrations int) (provisioning.Contest, []uuid.U
 		ID: id, Template: "game_tpl_test", Version: 1, Policy: sqlpolicy.ReadOnly(),
 	}, people
 }
+
+// markTemplateReady stores a 'ready' template database for contest, directly
+// against the real schema — the same row gamedb.Provisioner.BuildTemplate
+// would leave behind, which nothing in provisioning.Repository creates for a
+// test to reuse (BuildTemplate itself belongs to internal/gamedb, one layer
+// below this package). Cleanup is contestFor's own: game_templates.contest_id
+// cascades on the contest's own delete (migration 3).
+func markTemplateReady(t *testing.T, contest uuid.UUID, database string) {
+	t.Helper()
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
+	}
+	if _, err := testPool.Exec(t.Context(),
+		`INSERT INTO game_templates (contest_id, template_db, init_script, status, version)
+		 VALUES ($1, $2, 'SELECT 1', 'ready', 1)`, contest, database); err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+}

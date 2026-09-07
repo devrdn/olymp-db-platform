@@ -339,6 +339,61 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 	return updated, nil
 }
 
+// ExtendGrace lengthens how long a finished or archived contest's game
+// databases survive before the reclaim sweep drops them (§2.4).
+//
+// SettingsEditable is false for both statuses, and everything else about a
+// finished contest stays exactly that immutable — this is the one narrow
+// exception, not a second door into Update. Without it an organizer who
+// discovers, after the contest already finished, that the reports are not
+// done or a dispute is open has no recourse but an installation-wide
+// environment variable and a restart, or hand-written SQL against a
+// database whose only real safety net was the grace period itself.
+//
+// graceMin may only grow: refusing to shorten it here is what keeps this
+// method reading as "buy more time" rather than a general settings edit that
+// merely happens to be reachable once finished. A contest that never set an
+// explicit grace (current.Settings.GracePeriodMin == 0, meaning "defer to
+// the installation default" — see the field's own doc) accepts any bound,
+// positive graceMin as its first explicit one: this package has no view of
+// the installation's own configured default to compare against.
+func (s *Service) ExtendGrace(ctx context.Context, actorID, contestID uuid.UUID, graceMin int) (Contest, error) {
+	current, err := s.contests.ByID(ctx, contestID)
+	if err != nil {
+		return Contest{}, err
+	}
+	if current.Status != StatusFinished && current.Status != StatusArchived {
+		return Contest{}, fmt.Errorf(
+			"%w: the grace period is set through the ordinary settings while the contest is %s",
+			ErrNotEditable, current.Status)
+	}
+	if current.Settings.GracePeriodMin > 0 && graceMin <= current.Settings.GracePeriodMin {
+		return Contest{}, fmt.Errorf(
+			"%w: %d does not extend the current %d-minute grace period",
+			ErrInvalidContest, graceMin, current.Settings.GracePeriodMin)
+	}
+
+	updated := current
+	updated.Settings.GracePeriodMin = graceMin
+	if err := updated.Validate(); err != nil {
+		return Contest{}, err
+	}
+
+	changes := audit.NewChanges()
+	changes.Set("grace_period_min", current.Settings.GracePeriodMin, graceMin)
+
+	err = s.uow.Do(ctx, func(ctx context.Context) error {
+		if err := s.contests.Update(ctx, updated); err != nil {
+			return err
+		}
+		return s.record(ctx, actorID, audit.ActionContestUpdate, contestID, changes.Payload())
+	})
+	if err != nil {
+		return Contest{}, err
+	}
+	return updated, nil
+}
+
 // checkRunningChange refuses the fields that must not move mid-flight.
 //
 // Extending a window or correcting a network range helps participants; the

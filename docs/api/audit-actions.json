@@ -35,6 +35,7 @@
     "contest.access_denied",
     "contest.start_blocked",
     "contest.instance_reclaimed",
+    "contest.template_reclaimed",
     "settings.change"
   ]
 }

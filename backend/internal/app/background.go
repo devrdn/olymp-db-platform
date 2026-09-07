@@ -143,19 +143,35 @@ func tendPools(log *slog.Logger, service *provisioning.Service, depth int) task 
 // The same ten-minute cadence as tendPools: a grace period is configured in
 // minutes at the shortest, so nothing meaningful is lost by checking on the
 // same schedule the pool is already tended on rather than a faster one.
-func reclaimInstances(log *slog.Logger, reclaim func(context.Context, int) (int, int, error), graceMin int, counters *metrics.GameReclaimCounters) task {
+func reclaimInstances(log *slog.Logger, reclaim func(context.Context, int) (provisioning.ReclaimResult, error), graceMin int, counters *metrics.GameReclaimCounters) task {
 	return task{
 		name:  "game-reclaim",
 		every: 10 * time.Minute,
 		run: func(ctx context.Context) error {
-			reclaimed, failed, err := reclaim(ctx, graceMin)
-			counters.Add(reclaimed, failed)
-			if reclaimed > 0 || failed > 0 {
-				// Worth a line even on success: this is the number an
+			result, err := reclaim(ctx, graceMin)
+			counters.AddInstances(result.Reclaimed, result.Skipped, result.Failed)
+			counters.AddTemplates(result.TemplatesReclaimed, result.TemplatesFailed)
+			if result.Reclaimed > 0 || result.Skipped > 0 || result.Failed > 0 ||
+				result.TemplatesReclaimed > 0 || result.TemplatesFailed > 0 {
+				// Worth a line even on plain success: this is the number an
 				// organizer who cannot find a database has no other way to
 				// notice moved at all, short of reading the audit trail one
-				// contest at a time.
-				log.InfoContext(ctx, "reclaimed game instances", "reclaimed", reclaimed, "failed", failed)
+				// contest at a time. Skipped is included here on purpose —
+				// "reclaimed=0 failed=0" used to read as "nothing to do" even
+				// when every candidate was left busy for the next tick.
+				log.InfoContext(ctx, "reclaimed game instances",
+					"reclaimed", result.Reclaimed, "skipped", result.Skipped, "failed", result.Failed,
+					"templates_reclaimed", result.TemplatesReclaimed, "templates_failed", result.TemplatesFailed)
+			}
+			// Named separately from the summary line above rather than
+			// folded into it: a database stuck this long past its grace is
+			// not "one more of the routine skips a busy tick always has", it
+			// is the specific thing an operator should go look at, and a log
+			// line with one row per instance is what lets them find it by
+			// searching for the database name rather than the tick.
+			for _, s := range result.Stuck {
+				log.WarnContext(ctx, "a game instance has been busy long past its grace deadline",
+					"database", s.Database, "contest", s.ContestID, "overdue", s.Overdue.Round(time.Minute).String())
 			}
 			return err
 		},
