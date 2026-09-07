@@ -758,6 +758,11 @@ const en = {
       running: "Running…",
       hint: "One statement at a time.",
       rowCount: "{count} rows",
+      meter: {
+        rows: "rows",
+        time: "time",
+        ms: "{n} ms",
+      },
       truncated: "Showing the first {count} rows. The answer is longer than that.",
       affected: "{count} rows changed.",
       noRows: "The query ran and matched nothing.",

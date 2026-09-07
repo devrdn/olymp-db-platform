@@ -48,25 +48,54 @@ export function ResultPanel({ state, dict }: { state: ConsoleState; dict: Dictio
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        {result.truncated ? (
-          <p role="status" className="text-small text-ink-2">
-            {t.truncated.replace("{count}", String(result.rows.length))}
-          </p>
-        ) : (
-          <p className="text-small text-ink-2">{t.rowCount.replace("{count}", String(result.rows.length))}</p>
-        )}
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* The meter row the design puts between the editor and the table
+          (docs/design/preview.html, "SQL-консоль"): a run's own facts, in one
+          quiet line, rather than a sentence per fact above the data. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-4 border-b border-line px-3 py-1.5 font-mono text-label text-ink-3 uppercase">
+        <span>
+          {t.meter.rows} <b className="font-medium text-ink tabular-nums">{result.rows.length}</b>
+        </span>
+        {/* Absent, not zero, when the answer did not come from a statement
+            this build timed — an unmeasured duration and a measured 0 ms are
+            different facts, and printing "0 мс" for the first reads as a
+            broken meter. */}
+        {result.duration_micros !== undefined ? (
+          <span>
+            {t.meter.time}{" "}
+            <b className="font-medium text-ink tabular-nums">
+              {t.meter.ms.replace("{n}", String(Math.max(1, Math.round(result.duration_micros / 1000))))}
+            </b>
+          </span>
+        ) : null}
+        <div className="flex-1" />
         <DownloadButton columns={result.columns} rows={result.rows} label={dict.participant.play.workspace.download} />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto border border-edge">
+      <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
+        {result.truncated ? (
+          <p role="status" className="shrink-0 text-small text-warn">
+            {t.truncated.replace("{count}", String(result.rows.length))}
+          </p>
+        ) : null}
+
+        <div className="min-h-0 flex-1 overflow-auto border border-edge">
         <table className="w-full border-collapse text-body">
           <thead className="sticky top-0 bg-surface">
             <tr className="border-b border-edge">
               {result.columns.map((column, i) => (
-                <th key={`${column}-${i}`} className="p-2 text-left font-medium text-ink">
+                <th
+                  key={`${column}-${i}`}
+                  className="p-2 text-left align-bottom font-mono text-label text-ink-3 uppercase"
+                >
                   {column}
+                  {/* The type under the name, the way the design draws it. A
+                      column whose type this build could not name simply has
+                      nothing under it — better a missing label than a wrong
+                      one (see the handler's column_types contract). */}
+                  {result.column_types?.[i] ? (
+                    <span className="block font-normal normal-case">{result.column_types[i]}</span>
+                  ) : null}
                 </th>
               ))}
             </tr>
@@ -84,11 +113,14 @@ export function ResultPanel({ state, dict }: { state: ConsoleState; dict: Dictio
                 ))}
               </tr>
             ))}
-          </tbody>
-        </table>
-      </div>
+            </tbody>
+          </table>
+        </div>
 
-      {result.rows.length === 0 ? <p className="text-small text-ink-2">{t.noRows}</p> : null}
+        {result.rows.length === 0 ? (
+          <p className="shrink-0 text-small text-ink-2">{t.noRows}</p>
+        ) : null}
+      </div>
     </div>
   );
 }

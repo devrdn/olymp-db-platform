@@ -104,3 +104,99 @@ describe("the result panel", () => {
     expect(revoked).toHaveBeenCalledWith("blob:mock");
   });
 });
+
+/**
+ * The meter row and the column types the design puts around the table
+ * (docs/design/preview.html, "SQL-консоль"). Both arrived on the wire only
+ * recently; before that the table said how many rows in a sentence and named
+ * no types at all.
+ */
+describe("what the table says about itself", () => {
+  const t = en.participant.console;
+
+  test("counts the rows and says how long the statement took", () => {
+    render(
+      <ResultPanel
+        state={{
+          kind: "answer",
+          result: {
+            columns: ["id"],
+            column_types: ["uuid"],
+            rows: [["1"], ["2"]],
+            truncated: false,
+            rows_affected: 0,
+            duration_micros: 38_000,
+          },
+        }}
+        dict={en}
+      />,
+    );
+
+    // The count lives beside its own label, not anywhere the digit happens
+    // to appear — a two-row result also has a cell reading "2".
+    const meter = screen.getByText(t.meter.rows).closest("span");
+    expect(meter).toHaveTextContent("2");
+    expect(screen.getByText(t.meter.ms.replace("{n}", "38"))).toBeInTheDocument();
+  });
+
+  // An unmeasured duration and a measured zero are different facts, and
+  // printing "0 ms" for the first reads as a broken meter.
+  test("says nothing about time when the answer carried no duration", () => {
+    render(
+      <ResultPanel
+        state={{
+          kind: "answer",
+          result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 },
+        }}
+        dict={en}
+      />,
+    );
+
+    expect(screen.queryByText(t.meter.time)).not.toBeInTheDocument();
+  });
+
+  test("prints each column's type under its name", () => {
+    render(
+      <ResultPanel
+        state={{
+          kind: "answer",
+          result: {
+            columns: ["full_name", "at"],
+            column_types: ["text", "timestamp with time zone"],
+            rows: [["Margot", "2024-11-09"]],
+            truncated: false,
+            rows_affected: 0,
+          },
+        }}
+        dict={en}
+      />,
+    );
+
+    expect(screen.getByText("text")).toBeInTheDocument();
+    expect(screen.getByText("timestamp with time zone")).toBeInTheDocument();
+  });
+
+  // Better a missing label than a wrong one: an organiser's own enum exists
+  // only in that one game database, and the driver's type map cannot name it.
+  test("leaves a column bare when its type could not be named", () => {
+    render(
+      <ResultPanel
+        state={{
+          kind: "answer",
+          result: {
+            columns: ["mood"],
+            column_types: [""],
+            rows: [["cheerful"]],
+            truncated: false,
+            rows_affected: 0,
+          },
+        }}
+        dict={en}
+      />,
+    );
+
+    const header = screen.getByRole("columnheader");
+    expect(header).toHaveTextContent("mood");
+    expect(header.querySelector("span")).toBeNull();
+  });
+});
