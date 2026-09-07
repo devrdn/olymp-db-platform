@@ -38,6 +38,11 @@ REDIS_PORT       ?= 6379
 ADMIN_LOGIN      ?= admin
 ADMIN_NAME       ?= System Administrator
 API_PORT         ?= 8080
+# Where `make runner` listens and `make run` dials. One variable, because the
+# Query Runner reads it as its listen address and the API as the address to
+# reach it at, and a development stack where those two disagree is a stack
+# where the console is silently off.
+QUERY_RUNNER_ADDR ?= localhost:9100
 
 CORE_DB_DSN ?= postgres://$(CORE_DB_USER):$(CORE_DB_PASSWORD)@localhost:$(CORE_DB_PORT)/$(CORE_DB_NAME)?sslmode=disable
 # The game cluster, as the provisioning role. Only the development overlay
@@ -217,10 +222,10 @@ require-env:
 # same superuser the game-cluster tests use; a deployment keeps it apart from
 # the participant roles (see config.GameProvisionerDSN).
 #
-# QUERY_RUNNER_ADDR is deliberately still absent: the dev stack has no Query
-# Runner, so the console endpoint stays unmounted and a participant cannot run
-# SQL here. That is a separate gap and it is honest about itself — the API
-# logs that the console is off rather than pretending.
+# QUERY_RUNNER_ADDR points at `make runner`. Without it the console endpoint
+# is never mounted, so a participant can neither run a query nor see the
+# schema panel — the panel hangs off the same service, because a schema is
+# only worth showing on a screen where queries can be run.
 #
 # Loopback is trusted so the interface running on the host (`make front`) may
 # hand a forwarded address on, the way the web container does behind Caddy in
@@ -230,6 +235,7 @@ require-env:
 run: require-env ## Run the API against the dev infrastructure
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" REDIS_ADDR="$(REDIS_ADDR)" \
 		GAME_PROVISIONER_DSN="$(GAME_DB_DSN)" \
+		QUERY_RUNNER_ADDR="$(QUERY_RUNNER_ADDR)" \
 		TRUSTED_PROXIES="127.0.0.1,::1" \
 		ENV=development LOG_LEVEL=debug go run ./cmd/api
 
@@ -354,6 +360,33 @@ restore: require-env ## Replace the core database from a dump (FILE=path CONFIRM
 		if [ $$result -eq 0 ]; then echo "restored $(CORE_DB_NAME) from $(FILE)"; \
 		else echo "restore FAILED — the database is in an unknown state, do not run an olympiad on it"; fi; \
 		exit $$result
+
+# The two halves of the game circuit that are not the API.
+#
+# `game-roles` is the same one-shot job the deploy runs (cmd/gamedb): it
+# creates the participant roles the Query Runner connects as, and the
+# restrictions they work under. Idempotent, so running it again is how a
+# restriction added in a later release reaches a cluster that already exists.
+#
+# `runner` is the Query Runner itself. A separate process on purpose — it
+# links PostgreSQL's parser through cgo to check a query before running it,
+# which is C code reading text an adversary chose, and a crash there must not
+# be a way to end sign-in and the timer (cmd/queryrunner's own doc). It is
+# also the only process that holds the participant roles' credentials, which
+# is why the API above is given the provisioner's and never these.
+.PHONY: game-roles
+game-roles: require-env ## Create the game cluster's participant roles
+	cd $(BACKEND) && GAME_DB_ADMIN_DSN="$(GAME_DB_DSN)" \
+		GAME_READER_PASSWORD="$(GAME_READER_PASSWORD)" \
+		GAME_WRITER_PASSWORD="$(GAME_WRITER_PASSWORD)" \
+		go run ./cmd/gamedb
+
+.PHONY: runner
+runner: require-env ## Run the Query Runner against the dev game cluster
+	cd $(BACKEND) && \
+		GAME_DB_DSN="postgres://game_reader:$(GAME_READER_PASSWORD)@localhost:$(GAME_DB_PORT)/postgres?sslmode=disable" \
+		GAME_DB_WRITER_DSN="postgres://game_writer:$(GAME_WRITER_PASSWORD)@localhost:$(GAME_DB_PORT)/postgres?sslmode=disable" \
+		ENV=development LOG_LEVEL=debug go run ./cmd/queryrunner
 
 dev-up: ## Start PostgreSQL and Redis for local development
 	$(COMPOSE_DEV) up -d pg-core pg-game redis
