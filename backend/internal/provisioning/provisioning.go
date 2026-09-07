@@ -70,6 +70,10 @@ type Repository interface {
 	Stale(ctx context.Context, contest uuid.UUID, version int) ([]Stale, error)
 	Forget(ctx context.Context, database string) error
 	SpareCount(ctx context.Context, contest uuid.UUID, version int) (int, error)
+	// WaitingParticipants counts the registrations of one contest that hold
+	// no current copy — what the pool's depth has to be sized from, so that
+	// nobody waits for CREATE DATABASE inside their own page load.
+	WaitingParticipants(ctx context.Context, contest uuid.UUID, version int) (int, error)
 	AllCurrent(ctx context.Context, contest uuid.UUID, version int) (bool, error)
 	// Live lists the contests whose pool is worth keeping stocked: published
 	// or running, with a template that finished building.
@@ -384,7 +388,16 @@ func (s *Service) Reset(ctx context.Context, contest Contest, registration uuid.
 // point: CREATE DATABASE happens while nobody is waiting, so that the moment a
 // participant needs a copy is a row update. A contest that fails is logged and
 // the others are still tended; one broken template must not stop the rest.
-func (s *Service) Tend(ctx context.Context, depth func(Contest) int) (made, dropped int, err error) {
+// Depth answers how many spare copies one contest should keep ready.
+//
+// A function rather than a number, and one that may fail, because the honest
+// answer depends on the roster: a flat depth is a bet that no more than that
+// many participants turn up, and losing it does not degrade gracefully —
+// everybody past it waits for a database to be copied inside their own page
+// load, at the one moment they all arrive.
+type Depth func(ctx context.Context, contest Contest) (int, error)
+
+func (s *Service) Tend(ctx context.Context, depth Depth) (made, dropped int, err error) {
 	contests, err := s.repo.Live(ctx)
 	if err != nil {
 		return 0, 0, err
@@ -402,7 +415,13 @@ func (s *Service) Tend(ctx context.Context, depth func(Contest) int) (made, drop
 			continue
 		}
 
-		added, err := s.TopUp(ctx, contest, depth(contest))
+		want, err := depth(ctx, contest)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("contest %s: %w", contest.ID, err))
+			continue
+		}
+
+		added, err := s.TopUp(ctx, contest, want)
 		made += added
 		if err != nil {
 			failures = append(failures, fmt.Errorf("contest %s: %w", contest.ID, err))
@@ -486,4 +505,28 @@ func (s *Service) Databases(ctx context.Context, contest Contest) (spare int, er
 		return 0, fmt.Errorf("read the pool depth: %w", err)
 	}
 	return spare, nil
+}
+
+// RosterDepth is the depth a contest's own roster asks for: everybody without
+// a current copy, plus headroom for the people who enrol next, capped so that
+// one enormous contest cannot ask the cluster for more than a deployment is
+// willing to hold.
+//
+// The headroom is what makes a late self-enrolment free rather than a wait,
+// and the cap is what keeps a mistyped roster from filling a disk. Both come
+// from the deployment (GAME_POOL_DEPTH and GAME_POOL_MAX); neither is a
+// guess this package is entitled to make.
+func (s *Service) RosterDepth(headroom, max int) Depth {
+	return func(ctx context.Context, contest Contest) (int, error) {
+		waiting, err := s.repo.WaitingParticipants(ctx, contest.ID, contest.Version)
+		if err != nil {
+			return 0, fmt.Errorf("size the pool for contest %s: %w", contest.ID, err)
+		}
+
+		want := waiting + headroom
+		if max > 0 && want > max {
+			return max, nil
+		}
+		return want, nil
+	}
 }
