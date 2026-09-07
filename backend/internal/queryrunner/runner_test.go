@@ -515,3 +515,87 @@ func TestARefusedQueryStillCountsAgainstTheRate(t *testing.T) {
 		t.Fatalf("error = %v, want ErrTooManyQueries after two refused queries", err)
 	}
 }
+
+// The console prints a column's type under its name, beside a schema panel
+// that got its own from format_type(). This is the assertion that the two
+// panels of one screen agree: `timestamp with time zone`, not the driver's
+// `timestamptz`, and resolved from the row description the query already
+// carried rather than from a second trip to the catalogue.
+func TestAResultNamesEachColumnsType(t *testing.T) {
+	runner, database := setup(t)
+
+	result, err := runner.Run(t.Context(), request(database,
+		`SELECT 'Margot'::text AS full_name, now() AS at, 1 AS n FROM evidence LIMIT 1`))
+	if err != nil {
+		t.Fatalf("running: %v", err)
+	}
+
+	want := []string{"text", "timestamp with time zone", "integer"}
+	if len(result.ColumnTypes) != len(result.Columns) {
+		t.Fatalf("%d columns but %d types: %v / %v",
+			len(result.Columns), len(result.ColumnTypes), result.Columns, result.ColumnTypes)
+	}
+	for i := range want {
+		if result.ColumnTypes[i] != want[i] {
+			t.Fatalf("type of %q = %q, want %q (all: %v)",
+				result.Columns[i], result.ColumnTypes[i], want[i], result.ColumnTypes)
+		}
+	}
+}
+
+// The meter under the editor says how long the query took. Two things have to
+// hold for that number to be worth printing: it is not zero, and it is a
+// proper part of the call rather than the whole of it — opening the
+// connection, beginning the transaction and answering over the wire are this
+// platform's costs, not the participant's query's.
+func TestAResultSaysHowLongTheStatementTook(t *testing.T) {
+	runner, database := setup(t)
+
+	before := time.Now()
+	result, err := runner.Run(t.Context(), request(database, `SELECT id FROM evidence`))
+	whole := time.Since(before)
+	if err != nil {
+		t.Fatalf("running: %v", err)
+	}
+
+	if result.Duration <= 0 {
+		t.Fatalf("duration = %v; the statement was not timed at all", result.Duration)
+	}
+
+	// The untimed part of the call has to be the larger half, and that is a
+	// fact about round trips rather than about this machine's speed. Opening
+	// a connection is a TCP handshake, an authentication exchange and a
+	// startup packet — three round trips before any SQL is sent — while
+	// reading two rows out of a two-row table is one. A duration that had the
+	// connection folded into it leaves almost nothing outside itself, which
+	// is the shape this catches.
+	if outside := whole - result.Duration; outside < result.Duration {
+		t.Fatalf("the statement was timed at %v of a %v call, leaving only %v for "+
+			"opening the connection and beginning the transaction; those are this "+
+			"platform's costs and are being charged to the participant's query",
+			result.Duration, whole, outside)
+	}
+}
+
+// And it has to be a measurement rather than a constant: a statement that
+// makes the server do real work registers more than a trivial one. Two
+// million rows counted server-side is tens of milliseconds; reading two rows
+// out of a tiny table is well under one.
+func TestTheDurationMeasuresTheStatementAndNotSomethingConstant(t *testing.T) {
+	runner, database := setup(t)
+
+	cheap, err := runner.Run(t.Context(), request(database, `SELECT id FROM evidence`))
+	if err != nil {
+		t.Fatalf("running the cheap query: %v", err)
+	}
+	costly, err := runner.Run(t.Context(),
+		request(database, `SELECT count(*) FROM generate_series(1, 2000000)`))
+	if err != nil {
+		t.Fatalf("running the costly query: %v", err)
+	}
+
+	if costly.Duration <= cheap.Duration {
+		t.Fatalf("counting two million rows took %v and reading two rows took %v; "+
+			"the duration is not measuring the statement", costly.Duration, cheap.Duration)
+	}
+}

@@ -54,12 +54,40 @@ type runQueryRequest struct {
 
 type runQueryResponse struct {
 	Columns []string `json:"columns"`
-	Rows    [][]any  `json:"rows"`
+	// ColumnTypes names each column's type — `text`, `timestamp with time
+	// zone` — in the same vocabulary the schema panel gets from the catalogue,
+	// so the console can print it under the column's name.
+	//
+	// A list beside `columns` rather than a list of objects in place of it,
+	// and the reason is what already reads this body. `columns` is a list of
+	// strings today: the CSV export takes one (frontend/lib/format/csv.ts) and
+	// the results table draws its header from one. Turning it into objects
+	// would be a change every one of those has to make in the same commit or
+	// the console stops working — for a label under a heading. A second key
+	// is additive: a client that has never heard of it keeps working, and one
+	// that has reads the nth type under the nth name.
+	//
+	// The cost of the choice is that the two lists can fall out of step, so
+	// the guarantee is written down here and kept at the source: either empty,
+	// or exactly as long as `columns`. An entry can be empty on its own, for a
+	// type the runner could not name.
+	ColumnTypes []string `json:"column_types"`
+	Rows        [][]any  `json:"rows"`
 	// Truncated says the answer is longer than what is here. A flag rather
 	// than a silent cut: nine hundred rows of nine thousand, unannounced, is a
 	// wrong answer rather than a short one.
 	Truncated    bool  `json:"truncated"`
 	RowsAffected int64 `json:"rows_affected"`
+	// DurationMicros is how long the statement itself took — the meter under
+	// the editor. Microseconds rather than milliseconds because the meter
+	// rounds to milliseconds to show it, and a value already rounded here
+	// would make every quick query read "0 мс".
+	//
+	// The statement and nothing around it: not the connection, not the queue,
+	// not this request. Zero means the runner did not report one, which is
+	// what an older runner and a query that never reached the database both
+	// look like.
+	DurationMicros int64 `json:"duration_micros"`
 }
 
 func (h *ConsoleHandler) run(w http.ResponseWriter, r *http.Request) {
@@ -95,9 +123,20 @@ func (h *ConsoleHandler) run(w http.ResponseWriter, r *http.Request) {
 
 	// Never nil in the body: a client that has to distinguish `null` from `[]`
 	// before it can draw a table is a client with a bug waiting.
-	answer := runQueryResponse{Columns: result.Columns, Rows: result.Rows, Truncated: result.Truncated, RowsAffected: result.RowsAffected}
+	answer := runQueryResponse{
+		Columns:      result.Columns,
+		ColumnTypes:  result.ColumnTypes,
+		Rows:         result.Rows,
+		Truncated:    result.Truncated,
+		RowsAffected: result.RowsAffected,
+		// Microseconds, the unit the field's name promises.
+		DurationMicros: result.Duration.Microseconds(),
+	}
 	if answer.Columns == nil {
 		answer.Columns = []string{}
+	}
+	if answer.ColumnTypes == nil {
+		answer.ColumnTypes = []string{}
 	}
 	if answer.Rows == nil {
 		answer.Rows = [][]any{}

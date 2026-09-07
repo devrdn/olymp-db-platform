@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -11,7 +12,14 @@ import (
 // Result is what a participant gets back.
 type Result struct {
 	Columns []string
-	Rows    [][]any
+	// ColumnTypes names each column's type in the spelling PostgreSQL itself
+	// would print, so the console can put it under the column's name the way
+	// the schema panel puts it beside a table's. Either empty, or exactly as
+	// long as Columns and in the same order — the two lists are read
+	// together. An entry can be empty on its own for a type this build cannot
+	// name; see typename.go.
+	ColumnTypes []string
+	Rows        [][]any
 	// Truncated says the answer is longer than what is here — by rows, by
 	// bytes, or both. A flag rather than a silent cut: a participant reading
 	// nine hundred rows of a nine thousand row answer and not being told has
@@ -21,6 +29,16 @@ type Result struct {
 	// answers with a count rather than with rows. Zero for a read, and zero
 	// for a write whose RETURNING clause produced rows — those are its answer.
 	RowsAffected int64
+	// Duration is how long the statement itself took: from handing it to the
+	// database to having read the last row that fits within the limits.
+	//
+	// Deliberately not the whole call. Opening the connection, beginning the
+	// transaction, waiting behind admission control and crossing the wire to
+	// the Core API are this platform's costs; what the console's meter is
+	// answering is "was my query slow", and charging our costs to a
+	// participant's query is how a person spends a contest optimising a join
+	// that was never the problem.
+	Duration time.Duration
 }
 
 // resultAlias names the wrapper's subquery. Deliberately unlikely to collide
@@ -68,14 +86,26 @@ func trimStatement(sql string) string {
 // them says so, and the day a connection comes from a pool the other would
 // send the query outside the read-only transaction without a word.
 func collect(ctx context.Context, tx pgx.Tx, statement string, limits Limits, write bool) (*Result, error) {
+	// The clock starts here and stops when the last row this answer will carry
+	// has been read. It is the statement's own execution and nothing around it
+	// — see Result.Duration.
+	started := time.Now()
+
 	rows, err := tx.Query(ctx, statement)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	result := &Result{}
-	for _, field := range rows.FieldDescriptions() {
+	fields := rows.FieldDescriptions()
+	result := &Result{
+		// Named from the OIDs the row description already carried, using the
+		// connection's own type map. No second statement: the participant is
+		// waiting, and a catalogue lookup per result would double the queries
+		// this cluster serves.
+		ColumnTypes: columnTypes(fields, tx.Conn().TypeMap()),
+	}
+	for _, field := range fields {
 		result.Columns = append(result.Columns, field.Name)
 	}
 
@@ -120,6 +150,8 @@ func collect(ctx context.Context, tx pgx.Tx, statement string, limits Limits, wr
 			result.RowsAffected = rows.CommandTag().RowsAffected()
 		}
 	}
+
+	result.Duration = time.Since(started)
 	return result, nil
 }
 
