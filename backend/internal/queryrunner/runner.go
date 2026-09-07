@@ -80,6 +80,29 @@ func Outcomes() []error {
 	}
 }
 
+// DatabaseError is PostgreSQL speaking for itself about this query: a
+// relation that does not exist, a type error, a privilege the participant's
+// role does not have.
+//
+// A type of its own rather than a plain error, because "these words came from
+// the database, about the query that was asked" is a fact every layer above
+// has to act on and none of them can infer. They are the one words in this
+// system that are safe to repeat to a participant — "relation \"guests\" does
+// not exist" is the most useful sentence there is — and a failure of ours
+// wearing the same shape is a connection string handed to whoever asked.
+//
+// The counterpart of Outcomes(): that names what is ours, this names what is
+// the database's, and everything else is ours by default rather than the
+// database's by default. The default is the direction that matters, because
+// it is what an error nobody anticipated falls into.
+type DatabaseError struct {
+	// Message is the database's own text, and nothing this process wrote
+	// around it.
+	Message string
+}
+
+func (e *DatabaseError) Error() string { return e.Message }
+
 // Limits bound one execution and the instance as a whole.
 type Limits struct {
 	// Deadline bounds one query, and is the bound that holds against SQL the

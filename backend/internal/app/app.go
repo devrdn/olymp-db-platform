@@ -129,6 +129,11 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// build a template on; the endpoints are then not mounted, the same way
 	// the console's are not.
 	var gameAuthoring *provisioning.Games
+	// The pool half of the same screen: the databases that already exist for
+	// a contest, and dropping one that has gone wrong. Nil in the same
+	// deployments gameAuthoring is nil in — both are built inside the block
+	// below, so the handler never sees one without the other.
+	var gameDatabases *provisioning.Service
 
 	// Provisioning is optional: a deployment with no game cluster has nothing
 	// to provision, and refusing to start would make the game circuit a
@@ -159,6 +164,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			WithWorkers(cfg.ProvisionWorkers).
 			WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
 		a.tasks = append(a.tasks, tendPools(log, databases, cfg.PoolDepth))
+		gameDatabases = databases
 
 		// The other half of a contest's game: the script an organiser writes
 		// and the template built from it. `games` is the same
@@ -319,7 +325,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// nothing to build a template on, and an endpoint that took a script it
 	// could never build would be a worse answer than no endpoint.
 	if gameAuthoring != nil {
-		modules = append(modules, api.NewGameHandler(gameAuthoring, authMiddleware, log))
+		modules = append(modules, api.NewGameHandler(gameAuthoring, gameDatabases, authMiddleware, log))
 	}
 
 	// The participant's own read of a running contest — the story, the

@@ -258,10 +258,28 @@ func (h *ConsoleHandler) fail(w http.ResponseWriter, r *http.Request, err error)
 		return
 	}
 
-	// What is left is the database refusing the query on its own terms — a
-	// missing table, a type error. The participant is shown its words, which
-	// are the useful ones.
-	httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	// The database refusing the query on its own terms — a missing table, a
+	// type error — is the one failure whose own words go out. They are the
+	// useful ones: "relation \"guests\" does not exist" is the sentence that
+	// says what to change. (A contest that hides its schema never gets here:
+	// queryproxy turns this into ErrDatabaseDeclined above, because there the
+	// same sentence is a way to enumerate the schema.)
+	var database *queryrunner.DatabaseError
+	if errors.As(err, &database) {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, database.Error())
+		return
+	}
+
+	// And everything else is ours. Written as "only a named database error
+	// speaks" rather than as "what is left must be the database", because the
+	// two differ precisely on the error nobody anticipated — and that one used
+	// to leave here as a 400 carrying the game cluster's address, its role
+	// name and the participant's own database name, telling them to fix a
+	// query that was fine. The default is now the answer that is safe to give
+	// about a failure whose contents are unknown; making a new failure visible
+	// to a participant takes a deliberate line above rather than an omission.
+	h.log.ErrorContext(r.Context(), "a query failed for a reason that is not the database's", "error", err)
+	httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 }
 
 // refusalCodes maps the validator's vocabulary to the API's.

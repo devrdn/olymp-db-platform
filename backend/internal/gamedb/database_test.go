@@ -30,7 +30,7 @@ func setupGame(t *testing.T) (*pgx.Conn, string) {
 	t.Helper()
 
 	database := gameDatabase(t)
-	return connectAs(t, roleReader, testReaderPassword, database), database
+	return connectAs(t, roleReader, testReaderPassword(t), database), database
 }
 
 func TestTheReaderCanReadTheGame(t *testing.T) {
@@ -161,7 +161,7 @@ func TestTheHardeningIsInheritedByACopyOfTheTemplate(t *testing.T) {
 	// a reason that has nothing to do with the test.
 	t.Cleanup(func() { gamedbtest.Drop(copyName) })
 
-	reader := connectAs(t, roleReader, testReaderPassword, copyName)
+	reader := connectAs(t, roleReader, testReaderPassword(t), copyName)
 
 	refused(t, reader, `SELECT count(*) FROM pg_database`)
 	var rows int
@@ -185,7 +185,7 @@ func TestTheParticipantRoleCannotReachTheMaintenanceDatabases(t *testing.T) {
 
 	for _, database := range []string{"postgres", "template1", maintenance} {
 		t.Run(database, func(t *testing.T) {
-			err := tryConnectAs(t, roleReader, testReaderPassword, database)
+			err := tryConnectAs(t, roleReader, testReaderPassword(t), database)
 			if err == nil {
 				t.Fatalf("the reader connected to %s", database)
 			}
@@ -259,7 +259,7 @@ func TestADatabaseCreatedWithNoTemplateIsHardenedAnyway(t *testing.T) {
 	}
 	t.Cleanup(func() { gamedbtest.Drop(name) })
 
-	reader := connectAs(t, roleReader, testReaderPassword, name)
+	reader := connectAs(t, roleReader, testReaderPassword(t), name)
 	refused(t, reader, `SELECT count(*) FROM pg_database`)
 	refused(t, reader, `SELECT count(*) FROM pg_stat_activity`)
 }

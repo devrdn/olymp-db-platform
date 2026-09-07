@@ -13,6 +13,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
+	"github.com/devrdn/db-contest/backend/internal/rpc"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
 )
@@ -741,7 +742,10 @@ func TestWhereTheSchemaIsHiddenTheDatabaseDoesNotSpellItOut(t *testing.T) {
 		)
 	}
 
-	probe := errors.New(`ERROR: relation "salaries" does not exist (SQLSTATE 42P01)`)
+	// The database's own words, named as such — which is how the client
+	// hands them over (rpc.errorFor) and the only shape this may act on: a
+	// failure of ours must not be able to wear them.
+	probe := &queryrunner.DatabaseError{Message: `ERROR: relation "salaries" does not exist (SQLSTATE 42P01)`}
 
 	_, err := build(closed, probe).Run(t.Context(), command())
 	if !errors.Is(err, queryproxy.ErrDatabaseDeclined) {
@@ -968,6 +972,13 @@ func TestClosingTheCataloguesDoesNotSwallowOurOwnAnswers(t *testing.T) {
 		"asking too fast": queryrunner.ErrTooManyQueries,
 		"a full disk":     queryrunner.ErrDiskFull,
 		"a huge answer":   queryrunner.ErrResultTooLarge,
+		// The query service failing to answer is the one that used to be
+		// swallowed here: not a refusal, not a timeout, not on any list of
+		// ours this package knew about — so a contest that hides its schema
+		// reported its own outage to the participant as "the database refused
+		// that query", and nobody looking at the console could tell.
+		"the query service failing": fmt.Errorf("%w: connecting to the game database: dial tcp [::1]:5433: connect: connection refused",
+			rpc.ErrUnreachable),
 	} {
 		t.Run(name, func(t *testing.T) {
 			service := queryproxy.New(

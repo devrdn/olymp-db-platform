@@ -155,6 +155,16 @@ message Failure {
     // alone was larger than the whole allowance, so there is no prefix of it
     // to show. Distinct from a truncated result, which is an answer.
     KIND_RESULT_TOO_LARGE = 9;
+    // This service failed, and it is not about the query: the game cluster
+    // could not be connected to, or something here went wrong. The database
+    // never saw the SQL, so there is nothing in it for the participant to
+    // fix — and `message` here is the one that must never be repeated to
+    // them, because it carries the cluster's address and role names.
+    //
+    // Every kind above is an answer to the question that was asked. This one
+    // says the question was never answered, which is why it is not
+    // KIND_DATABASE_ERROR with a different sentence.
+    KIND_INTERNAL = 10;
   }
 
   Kind kind = 1;

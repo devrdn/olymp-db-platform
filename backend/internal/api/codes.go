@@ -60,6 +60,10 @@ var (
 		"The game script is past the size one game may carry. A game that needs more rows than this writes them with INSERT ... SELECT generate_series, which is shorter and easier to review.")
 	codeGameNotEditable = httpx.NewCode("game_not_editable",
 		"The contest's game can no longer be replaced. Replacing it raises the template's version, which makes every participant's copy stale — and a stale copy is dropped and made again, so in a running olympiad it would take every participant's database at once.")
+	codeGameInstanceNotFound = httpx.NewCode("game_instance_not_found",
+		"This contest owns no database by that name. Also the answer when the database belongs to another contest: that it exists elsewhere is not the caller's business, and a contest-scoped permission that said otherwise would not be contest-scoped.")
+	codeGameInstanceAlreadyDropped = httpx.NewCode("game_instance_already_dropped",
+		"The database has already been removed — by the reclaim sweep once the contest's grace period passed, or by somebody else while this page was open. Nothing was changed; reloading the list shows the current state.")
 	codeSchemaHidden = httpx.NewCode("schema_hidden",
 		"This contest does not show the game's schema. A rule of this olympiad rather than a missing thing: the organiser closed the catalogues so the shape has to be found by playing, and serving it from the console's panel would hand over exactly what that withholds.")
 

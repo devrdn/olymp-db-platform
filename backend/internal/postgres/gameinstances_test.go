@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -756,4 +757,173 @@ func TestMarkTemplateDroppedLeavesTheRowBehindAsHistory(t *testing.T) {
 			t.Fatalf("status = %q, want %q", status, "dropped")
 		}
 	})
+}
+
+// The organizer's list of a contest's databases. It has to carry both kinds
+// of row — a spare nobody holds and a participant's own copy — and it has to
+// name the holder, because "which of these is Ivan's" is the question the
+// screen exists to answer.
+func TestInstancesListsSparesAndClaimedCopiesAlike(t *testing.T) {
+	contest, people := contestWithSpares(t, 2, 1)
+	repo := NewGameInstances(testPool)
+
+	claimed, err := repo.ClaimSpare(t.Context(), contest, people[0], 1)
+	if err != nil {
+		t.Fatalf("setup: claiming a spare: %v", err)
+	}
+
+	list, err := repo.Instances(t.Context(), contest, 100)
+	if err != nil {
+		t.Fatalf("Instances: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("listed %d rows, want the 2 this contest has", len(list))
+	}
+
+	var held, spare int
+	for _, row := range list {
+		switch {
+		case row.Database == claimed:
+			held++
+			if row.Registration == nil || *row.Registration != people[0] {
+				t.Fatalf("the claimed copy came back with registration %v, want %v", row.Registration, people[0])
+			}
+			if row.ParticipantLogin == "" {
+				t.Fatal("the claimed copy names nobody; the screen cannot say whose it is")
+			}
+			if row.Status != "ready" || row.TemplateVersion != 1 {
+				t.Fatalf("the claimed copy is %q at version %d, want ready at 1", row.Status, row.TemplateVersion)
+			}
+			if row.CreatedAt.IsZero() {
+				t.Fatal("the claimed copy carries no creation time")
+			}
+		default:
+			spare++
+			if row.Registration != nil {
+				t.Fatalf("%s is held by %v but nobody claimed it", row.Database, row.Registration)
+			}
+			if row.ParticipantLogin != "" {
+				t.Fatalf("a spare names %q as its holder", row.ParticipantLogin)
+			}
+		}
+	}
+	if held != 1 || spare != 1 {
+		t.Fatalf("%d claimed and %d spare, want one of each", held, spare)
+	}
+}
+
+// A contest-scoped screen must never show another contest's rows: db_name is
+// unique installation-wide, so scoping is the query's job and nothing above
+// it can add the scope back.
+func TestInstancesNeverCrossesIntoAnotherContest(t *testing.T) {
+	mine, _ := contestWithSpares(t, 1, 0)
+	theirs, _ := contestWithSpares(t, 3, 0)
+	repo := NewGameInstances(testPool)
+
+	list, err := repo.Instances(t.Context(), mine, 100)
+	if err != nil {
+		t.Fatalf("Instances: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("listed %d rows for a contest with one spare; %s has three", len(list), theirs)
+	}
+}
+
+// The bound is the caller's, and the query has to honour it — otherwise the
+// "there are more than this" the service reports is a guess.
+func TestInstancesHonoursTheLimitItIsGiven(t *testing.T) {
+	contest, _ := contestWithSpares(t, 4, 0)
+	repo := NewGameInstances(testPool)
+
+	list, err := repo.Instances(t.Context(), contest, 2)
+	if err != nil {
+		t.Fatalf("Instances: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("listed %d rows for a limit of 2", len(list))
+	}
+}
+
+// A row already reclaimed still appears: it is what the trail's payload
+// points at, and an organizer who cannot find a database wants to see that it
+// was there and is gone, not an absence.
+func TestInstancesKeepsShowingADroppedRow(t *testing.T) {
+	contest, _ := contestWithSpares(t, 1, 0)
+	repo := NewGameInstances(testPool)
+
+	first, err := repo.Instances(t.Context(), contest, 100)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("setup: %v (%d rows)", err, len(first))
+	}
+	if err := repo.MarkDropped(t.Context(), first[0].Database); err != nil {
+		t.Fatalf("mark dropped: %v", err)
+	}
+
+	after, err := repo.Instances(t.Context(), contest, 100)
+	if err != nil {
+		t.Fatalf("Instances: %v", err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("listed %d rows; a dropped row is history and must stay visible", len(after))
+	}
+	if after[0].Status != "dropped" {
+		t.Fatalf("status = %q, want dropped", after[0].Status)
+	}
+}
+
+// The lookup a destructive action is decided on. Scoped to the contest, so
+// naming another contest's database is "no such database" rather than a way
+// to drop it with a permission over this one.
+func TestInstanceNamedIsScopedToItsOwnContest(t *testing.T) {
+	mine, _ := contestWithSpares(t, 1, 0)
+	theirs, _ := contestWithSpares(t, 1, 0)
+	repo := NewGameInstances(testPool)
+
+	ours, err := repo.Instances(t.Context(), mine, 10)
+	if err != nil || len(ours) != 1 {
+		t.Fatalf("setup: %v (%d rows)", err, len(ours))
+	}
+	elsewhere, err := repo.Instances(t.Context(), theirs, 10)
+	if err != nil || len(elsewhere) != 1 {
+		t.Fatalf("setup: %v (%d rows)", err, len(elsewhere))
+	}
+
+	found, err := repo.InstanceNamed(t.Context(), mine, ours[0].Database)
+	if err != nil {
+		t.Fatalf("InstanceNamed on our own database: %v", err)
+	}
+	if found.Database != ours[0].Database {
+		t.Fatalf("found %q, want %q", found.Database, ours[0].Database)
+	}
+
+	if _, err := repo.InstanceNamed(t.Context(), mine, elsewhere[0].Database); !errors.Is(err, provisioning.ErrInstanceNotFound) {
+		t.Fatalf("looking up another contest's database returned %v, want ErrInstanceNotFound", err)
+	}
+	if _, err := repo.InstanceNamed(t.Context(), mine, "game_no_such_database"); !errors.Is(err, provisioning.ErrInstanceNotFound) {
+		t.Fatalf("looking up a name that does not exist returned %v, want ErrInstanceNotFound", err)
+	}
+}
+
+// CLAUDE.md rule 7 again, in its weaker form: Instances above does not add a
+// predicate, it adds a second reader for one migration 12 already serves —
+// and the comment above the query says so. This is what stops that comment
+// from becoming a lie: the index has to exist, and contest_id has to be its
+// leading column, or `WHERE contest_id = $1` is a sequential scan of a table
+// that only ever grows.
+func TestTheContestInstancesIndexLeadsWithTheContest(t *testing.T) {
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
+	}
+
+	var definition string
+	err := testPool.QueryRow(t.Context(), `
+		SELECT indexdef FROM pg_indexes
+		WHERE tablename = 'game_instances' AND indexname = 'game_instances_contest_version_idx'`).
+		Scan(&definition)
+	if err != nil {
+		t.Fatalf("game_instances_contest_version_idx is missing (run make migrate-up): %v", err)
+	}
+	if !strings.Contains(definition, "(contest_id") {
+		t.Fatalf("contest_id does not lead the index: %s", definition)
+	}
 }

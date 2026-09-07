@@ -1,6 +1,7 @@
 package gamedb_test
 
 import (
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -15,8 +16,8 @@ func TestPreparingTheClusterIsIdempotent(t *testing.T) {
 	requireCluster(t)
 
 	if err := gamedb.PrepareCluster(t.Context(), admin(t), gamedb.Roles{
-		ReaderPassword: gamedbtest.ReaderPassword,
-		WriterPassword: gamedbtest.WriterPassword,
+		ReaderPassword: gamedbtest.ReaderPassword(t),
+		WriterPassword: gamedbtest.WriterPassword(t),
 	}); err != nil {
 		t.Fatalf("a second run failed: %v", err)
 	}
@@ -29,7 +30,7 @@ func TestPreparingTheClusterIsIdempotent(t *testing.T) {
 func TestTheReaderStartsWithTheIntendedSettings(t *testing.T) {
 	// A game database, not the maintenance one: the reader is deliberately
 	// barred from that, which the last test in database_test.go proves.
-	conn := connectAs(t, roleReader, testReaderPassword, scratchDatabase(t))
+	conn := connectAs(t, roleReader, testReaderPassword(t), scratchDatabase(t))
 
 	for setting, want := range map[string]string{
 		"default_transaction_read_only":       "on",
@@ -63,7 +64,7 @@ func TestTheReaderStartsWithTheIntendedSettings(t *testing.T) {
 // It is written down as a test because the alternative is that somebody later
 // reads `ALTER ROLE ... SET statement_timeout` and believes it is a limit.
 func TestWhatTheRoleSettingsDoNotGuarantee(t *testing.T) {
-	conn := connectAs(t, roleReader, testReaderPassword, scratchDatabase(t))
+	conn := connectAs(t, roleReader, testReaderPassword(t), scratchDatabase(t))
 
 	for _, statement := range []string{
 		"SET statement_timeout = 0",
@@ -129,8 +130,8 @@ func TestPreparingTheClusterSurvivesConcurrentRuns(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			failures <- gamedb.PrepareCluster(t.Context(), pool, gamedb.Roles{
-				ReaderPassword: gamedbtest.ReaderPassword,
-				WriterPassword: gamedbtest.WriterPassword,
+				ReaderPassword: gamedbtest.ReaderPassword(t),
+				WriterPassword: gamedbtest.WriterPassword(t),
 			})
 		}()
 	}
@@ -141,5 +142,35 @@ func TestPreparingTheClusterSurvivesConcurrentRuns(t *testing.T) {
 		if err != nil {
 			t.Fatalf("a concurrent run failed: %v", err)
 		}
+	}
+}
+
+// `make test-game` must not lock out `make runner`.
+//
+// The tests and a development stack share one cluster and one pair of roles,
+// and every test run prepares those roles again. It used to prepare them with
+// passwords of the harness's own, so the first `make test-game` after a stack
+// was started took the Query Runner's credentials away from it — silently,
+// until a participant ran a query and the console answered with the cluster's
+// address. This asserts the property directly: after a test run has prepared
+// the cluster, the credentials the deployment uses still open a connection.
+func TestPreparingTheClusterForTestsLeavesTheDeploymentsCredentialsWorking(t *testing.T) {
+	// Scratch prepares the cluster on the way, so this is the state a test run
+	// leaves a developer's machine in.
+	database := scratchDatabase(t)
+
+	for _, role := range []struct{ name, variable string }{
+		{gamedb.RoleReader, "GAME_READER_PASSWORD"},
+		{gamedb.RoleWriter, "GAME_WRITER_PASSWORD"},
+	} {
+		t.Run(role.name, func(t *testing.T) {
+			password := os.Getenv(role.variable)
+			if password == "" {
+				t.Fatalf("%s is not set, so what a running stack authenticates with is unknown; run `make test-game`", role.variable)
+			}
+			if err := tryConnectAs(t, role.name, password, database); err != nil {
+				t.Fatalf("a test run took %s away from the running stack: %v", role.name, err)
+			}
+		})
 	}
 }

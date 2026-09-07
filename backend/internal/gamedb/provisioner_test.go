@@ -69,7 +69,7 @@ func TestATemplateHoldsTheAuthorsSchemaAndData(t *testing.T) {
 		t.Fatalf("creating the instance: %v", err)
 	}
 
-	reader := connectAs(t, roleReader, testReaderPassword, instance)
+	reader := connectAs(t, roleReader, testReaderPassword(t), instance)
 	var suspects int
 	if err := reader.QueryRow(t.Context(), `SELECT count(*) FROM suspects`).Scan(&suspects); err != nil {
 		t.Fatalf("a participant cannot read the game: %v", err)
@@ -91,12 +91,12 @@ func TestTwoInstancesDoNotShareData(t *testing.T) {
 		}
 	}
 
-	writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword, first)
+	writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword(t), first)
 	if _, err := writer.Exec(t.Context(), `INSERT INTO evidence (note) VALUES ('planted')`); err != nil {
 		t.Fatalf("the writer cannot write to a writable table: %v", err)
 	}
 
-	other := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword, second)
+	other := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword(t), second)
 	var rows int
 	if err := other.QueryRow(t.Context(), `SELECT count(*) FROM evidence`).Scan(&rows); err != nil {
 		t.Fatalf("reading the second instance: %v", err)
@@ -117,7 +117,7 @@ func TestAReadOnlyTemplateGrantsNothingThatWrites(t *testing.T) {
 		t.Fatalf("creating the instance: %v", err)
 	}
 
-	reader := connectAs(t, roleReader, testReaderPassword, instance)
+	reader := connectAs(t, roleReader, testReaderPassword(t), instance)
 	if _, err := reader.Exec(t.Context(), `SET default_transaction_read_only = off`); err != nil {
 		t.Fatalf("could not turn the default off: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestWritingReachesOnlyTheTablesThePolicyNames(t *testing.T) {
 		t.Fatalf("creating the instance: %v", err)
 	}
 
-	writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword, instance)
+	writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword(t), instance)
 
 	if _, err := writer.Exec(t.Context(), `INSERT INTO evidence (note) VALUES ('a note')`); err != nil {
 		t.Fatalf("the named table is not writable: %v", err)
@@ -167,7 +167,7 @@ func TestOwnObjectsLiveInWorkAndNowhereElse(t *testing.T) {
 		t.Fatalf("creating the instance: %v", err)
 	}
 
-	writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword, instance)
+	writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword(t), instance)
 
 	if _, err := writer.Exec(t.Context(), `CREATE TABLE work.notes (x int)`); err != nil {
 		t.Fatalf("their own schema is not writable: %v", err)
@@ -188,7 +188,7 @@ func TestAnInstanceInheritsTheCatalogueRules(t *testing.T) {
 		t.Fatalf("creating the instance: %v", err)
 	}
 
-	reader := connectAs(t, roleReader, testReaderPassword, instance)
+	reader := connectAs(t, roleReader, testReaderPassword(t), instance)
 	refused(t, reader, `SELECT count(*) FROM pg_database`)
 	refused(t, reader, `SELECT count(*) FROM pg_stat_activity`)
 }
@@ -209,7 +209,7 @@ func TestATemplateCanBeRebuiltAndCopiedStraightAfter(t *testing.T) {
 		t.Fatalf("copying straight after a rebuild: %v", err)
 	}
 
-	reader := connectAs(t, roleReader, testReaderPassword, instance)
+	reader := connectAs(t, roleReader, testReaderPassword(t), instance)
 	var only int
 	if err := reader.QueryRow(t.Context(), `SELECT id FROM suspects`).Scan(&only); err != nil {
 		t.Fatalf("the rebuilt data is not there: %v", err)
@@ -229,7 +229,7 @@ func TestResettingReplacesTheInstanceUnderALiveConnection(t *testing.T) {
 		t.Fatalf("creating the instance: %v", err)
 	}
 
-	writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword, instance)
+	writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword(t), instance)
 	if _, err := writer.Exec(t.Context(), `DELETE FROM evidence`); err != nil {
 		t.Fatalf("emptying the table: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestResettingReplacesTheInstanceUnderALiveConnection(t *testing.T) {
 		t.Fatalf("resetting: %v", err)
 	}
 
-	fresh := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword, instance)
+	fresh := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword(t), instance)
 	var rows int
 	if err := fresh.QueryRow(t.Context(), `SELECT count(*) FROM evidence`).Scan(&rows); err != nil {
 		t.Fatalf("reading the reset instance: %v", err)
@@ -307,7 +307,7 @@ func TestTemporaryTablesFollowThePolicyOnEveryInstance(t *testing.T) {
 			t.Fatalf("creating the instance: %v", err)
 		}
 
-		writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword, instance)
+		writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword(t), instance)
 		refused(t, writer, `CREATE TEMP TABLE scratch (x int)`)
 	})
 
@@ -321,7 +321,7 @@ func TestTemporaryTablesFollowThePolicyOnEveryInstance(t *testing.T) {
 			t.Fatalf("creating the instance: %v", err)
 		}
 
-		writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword, instance)
+		writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword(t), instance)
 		if _, err := writer.Exec(t.Context(), `CREATE TEMP TABLE scratch (x int)`); err != nil {
 			t.Fatalf("temporary tables were refused although the policy allows them: %v", err)
 		}
@@ -340,8 +340,8 @@ func TestAnInstanceRefusesMoreConnectionsThanAParticipantCanNeed(t *testing.T) {
 	}
 
 	// Two is the allowance: a query running while its replacement is opened.
-	first := connectAs(t, roleReader, testReaderPassword, instance)
-	second := connectAs(t, roleReader, testReaderPassword, instance)
+	first := connectAs(t, roleReader, testReaderPassword(t), instance)
+	second := connectAs(t, roleReader, testReaderPassword(t), instance)
 	if err := first.Ping(t.Context()); err != nil {
 		t.Fatalf("the first connection is not usable: %v", err)
 	}
@@ -349,7 +349,7 @@ func TestAnInstanceRefusesMoreConnectionsThanAParticipantCanNeed(t *testing.T) {
 		t.Fatalf("the second connection is not usable: %v", err)
 	}
 
-	if err := tryConnectAs(t, roleReader, testReaderPassword, instance); err == nil {
+	if err := tryConnectAs(t, roleReader, testReaderPassword(t), instance); err == nil {
 		t.Fatal("a third connection to one participant's database was allowed")
 	}
 }
@@ -371,7 +371,7 @@ func TestEitherCopyStrategyProducesAUsableDatabase(t *testing.T) {
 				t.Fatalf("copying with %s: %v", strategy, err)
 			}
 
-			reader := connectAs(t, roleReader, testReaderPassword, instance)
+			reader := connectAs(t, roleReader, testReaderPassword(t), instance)
 			var suspects int
 			if err := reader.QueryRow(t.Context(), `SELECT count(*) FROM suspects`).Scan(&suspects); err != nil {
 				t.Fatalf("the copy is not usable: %v", err)
@@ -407,7 +407,7 @@ func TestDropIdleLeavesABusyDatabaseAloneAndDropsAnIdleOne(t *testing.T) {
 
 	// A live connection, standing in for a query the Query Runner is still
 	// executing against this instance.
-	reader := connectAs(t, roleReader, testReaderPassword, instance)
+	reader := connectAs(t, roleReader, testReaderPassword(t), instance)
 	if _, err := reader.Exec(t.Context(), `SELECT 1`); err != nil {
 		t.Fatalf("using the connection: %v", err)
 	}
@@ -462,4 +462,73 @@ func instanceExists(t *testing.T, name string) bool {
 		t.Fatalf("looking for %s: %v", name, err)
 	}
 	return exists
+}
+
+// The organizer's database screen measures a whole contest's copies at once.
+// One statement rather than one per database, because that page asks about
+// every copy a contest owns and a round trip each would be hundreds of them.
+func TestDatabaseSizesMeasuresAWholeListAtOnce(t *testing.T) {
+	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
+
+	first := named(t, "one")
+	second := named(t, "two")
+	for _, instance := range []string{first, second} {
+		if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
+			t.Fatalf("creating %s: %v", instance, err)
+		}
+	}
+
+	sizes, err := p.DatabaseSizes(t.Context(), []string{first, second})
+	if err != nil {
+		t.Fatalf("DatabaseSizes: %v", err)
+	}
+	if len(sizes) != 2 {
+		t.Fatalf("measured %d databases, want 2: %v", len(sizes), sizes)
+	}
+	for _, instance := range []string{first, second} {
+		if sizes[instance] <= 0 {
+			t.Fatalf("%s came back as %d bytes; a real database is never zero", instance, sizes[instance])
+		}
+	}
+}
+
+// A name that is not on the cluster is left out of the answer rather than
+// failing it. pg_database_size raises an error for one, so measuring by
+// calling it per name would let a single database dropped between the
+// core-database read and this call cost a whole screen its sizes — and a
+// size is a decoration, not the thing the screen is for.
+func TestDatabaseSizesLeavesOutANameThatIsNotThere(t *testing.T) {
+	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
+
+	instance := named(t, "real")
+	if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
+		t.Fatalf("creating the instance: %v", err)
+	}
+	ghost := named(t, "ghost")
+
+	sizes, err := p.DatabaseSizes(t.Context(), []string{instance, ghost})
+	if err != nil {
+		t.Fatalf("a name that does not exist failed the whole batch: %v", err)
+	}
+	if _, measured := sizes[ghost]; measured {
+		t.Fatalf("%s was measured although it does not exist", ghost)
+	}
+	if sizes[instance] <= 0 {
+		t.Fatalf("%s came back as %d bytes", instance, sizes[instance])
+	}
+}
+
+// An empty list costs no round trip: the organizer's list is filtered to the
+// databases that still exist, and a contest whose copies are all reclaimed
+// leaves nothing to ask about.
+func TestDatabaseSizesOfNothingAsksNothing(t *testing.T) {
+	p := provisioner(t)
+
+	sizes, err := p.DatabaseSizes(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("DatabaseSizes(nil): %v", err)
+	}
+	if len(sizes) != 0 {
+		t.Fatalf("measured %d databases from an empty list", len(sizes))
+	}
 }
