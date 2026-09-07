@@ -712,6 +712,11 @@ const ro = {
       running: "Se execută…",
       hint: "Câte o instrucțiune pe rând.",
       rowCount: "Rânduri: {count}",
+      meter: {
+        rows: "rânduri",
+        time: "timp",
+        ms: "{n} ms",
+      },
       truncated: "Se afișează primele {count} rânduri. Răspunsul este mai lung.",
       affected: "Rânduri modificate: {count}.",
       noRows: "Interogarea s-a executat și nu a găsit nimic.",
