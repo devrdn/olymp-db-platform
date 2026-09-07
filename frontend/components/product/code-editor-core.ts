@@ -8,11 +8,18 @@
  * module dynamically; a static `import` of this file from anywhere else
  * would put CodeMirror back on the critical path.
  */
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { PostgreSQL, sql } from "@codemirror/lang-sql";
 import { HighlightStyle, bracketMatching, syntaxHighlighting } from "@codemirror/language";
 import { EditorState, StateEffect, StateField, type Extension, type Text } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, keymap, placeholder } from "@codemirror/view";
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  keymap,
+  lineNumbers,
+  placeholder,
+} from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 
 /**
@@ -75,7 +82,21 @@ const editorTheme = EditorView.theme({
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
     backgroundColor: "var(--accent-wash)",
   },
-  ".cm-gutters": { display: "none" },
+  // The line numbers the design draws down the left of the editor
+  // (docs/design/preview.html, "SQL-консоль"). Quiet: the number is a
+  // reference, not content, so it takes ink-3 and no fill of its own — a
+  // gutter with a background would be a second panel inside a panel, which
+  // §3 forbids.
+  ".cm-gutters": {
+    backgroundColor: "transparent",
+    border: "none",
+    color: "var(--ink-3)",
+    fontVariantNumeric: "tabular-nums",
+  },
+  ".cm-lineNumbers .cm-gutterElement": { padding: "0 0.5rem 0 0.75rem", minWidth: "2.25rem" },
+  // The active line's own number, so a participant reading an error position
+  // can find the line without counting.
+  ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--ink)" },
   ".cm-scroller": { overflow: "auto" },
   ".cm-placeholder": { color: "var(--ink-3)" },
   // `bracketMatching()` below brings its own `EditorView.baseTheme` for
@@ -170,6 +191,7 @@ export function mountEditor(
 ): EditorView {
   const extensions: Extension[] = [
     history(),
+    lineNumbers(),
     // Before defaultKeymap, so this wins Mod-Enter from `insertBlankLine`.
     ...(opts.onSubmit
       ? [
@@ -184,7 +206,16 @@ export function mountEditor(
           ]),
         ]
       : []),
-    keymap.of([...defaultKeymap, ...historyKeymap]),
+    // `indentWithTab` after the defaults, because it is a fallback rather
+    // than an override: Tab keeps its ordinary meaning wherever CodeMirror
+    // already has one, and indents otherwise.
+    //
+    // It does take Tab away from moving focus, which is a real cost for a
+    // keyboard user. CodeMirror's own answer is the one kept here: Escape
+    // first, then Tab, leaves the editor — and the participant's console is
+    // a place people type SQL into for two hours, where a Tab that jumps to
+    // the next control is the surprising behaviour.
+    keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
     sql({ dialect: PostgreSQL }),
     syntaxHighlighting(highlightStyle),
     bracketMatching(),
