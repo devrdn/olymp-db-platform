@@ -163,7 +163,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		databases := provisioning.New(games, cluster).
 			WithWorkers(cfg.ProvisionWorkers).
 			WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
-		a.tasks = append(a.tasks, tendPools(log, databases, cfg.PoolDepth))
+		a.tasks = append(a.tasks, tendPools(log, databases, cfg.PoolDepth, cfg.PoolMax))
 		gameDatabases = databases
 
 		// The other half of a contest's game: the script an organiser writes

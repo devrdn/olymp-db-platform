@@ -382,3 +382,54 @@ func TestARowIsNotMarkedDroppedWhenTheClusterRefused(t *testing.T) {
 		t.Fatal("the row was marked dropped although the database is still there")
 	}
 }
+
+// The pool's depth is the roster's, not a number somebody guessed.
+//
+// A flat depth is a bet that no more than that many participants turn up, and
+// losing it does not degrade gracefully: everybody past it waits for CREATE
+// DATABASE inside their own page load, through a maintenance pool of ten
+// connections, at the one moment three hundred of them arrive at once.
+func TestThePoolIsSizedFromTheRosterAndNotFromAFlatNumber(t *testing.T) {
+	service, _, contest, _ := serviceFor(t, 10)
+
+	want, err := service.RosterDepth(3, 0)(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("sizing: %v", err)
+	}
+	// Everybody waiting, plus the headroom that makes a late enrolment free
+	// rather than a wait.
+	if want != 13 {
+		t.Fatalf("asked for %d spares for ten waiting participants, want 13", want)
+	}
+}
+
+// A mistyped roster must not be able to ask the cluster for more than the
+// deployment is willing to hold.
+func TestTheRosterCannotAskForMoreThanTheDeploymentAllows(t *testing.T) {
+	service, _, contest, _ := serviceFor(t, 10)
+
+	want, err := service.RosterDepth(3, 5)(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("sizing: %v", err)
+	}
+	if want != 5 {
+		t.Fatalf("asked for %d spares against a cap of 5", want)
+	}
+}
+
+// Somebody who already holds a copy is not waiting for one, and counting them
+// would have the tender make a spare nobody will ever claim.
+func TestAParticipantWhoAlreadyHasACopyIsNotCountedAsWaiting(t *testing.T) {
+	service, _, contest, people := serviceFor(t, 1)
+	if _, err := service.Ensure(t.Context(), contest, people[0]); err != nil {
+		t.Fatalf("provide a copy: %v", err)
+	}
+
+	want, err := service.RosterDepth(0, 0)(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("sizing: %v", err)
+	}
+	if want != 0 {
+		t.Fatalf("counted %d waiting when the only participant already has a copy", want)
+	}
+}

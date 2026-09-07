@@ -117,12 +117,14 @@ func advanceContestSchedule(log *slog.Logger, advance func(context.Context) (int
 // nothing depends on it. Every ten minutes rather than every minute — a pool
 // drains at the speed people register, which is not a per-minute event, and
 // each tick may create databases.
-func tendPools(log *slog.Logger, service *provisioning.Service, depth int) task {
+// tendPools keeps every live contest's pool as deep as its own roster asks
+// for — see provisioning.Service.RosterDepth, and the flat depth it replaces.
+func tendPools(log *slog.Logger, service *provisioning.Service, headroom, max int) task {
 	return task{
 		name:  "game-pool",
 		every: 10 * time.Minute,
 		run: func(ctx context.Context) error {
-			made, dropped, err := service.Tend(ctx, func(provisioning.Contest) int { return depth })
+			made, dropped, err := service.Tend(ctx, service.RosterDepth(headroom, max))
 			if made > 0 || dropped > 0 {
 				log.InfoContext(ctx, "tended the game pools", "created", made, "dropped", dropped)
 			}
