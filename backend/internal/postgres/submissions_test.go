@@ -226,6 +226,61 @@ func TestInsertAppliesThePenaltyFromTheAlreadyCommittedAttemptCount(t *testing.T
 	})
 }
 
+// Finding 4 (corrected): the penalty multiplication used to run in
+// PostgreSQL's own int4 arithmetic, which a question anywhere near the
+// domain's own points ceiling overflows well before any contest could
+// plausibly need this many attempts on one question — the maxPoints doc
+// comment in internal/contests/question.go used to claim otherwise. Insert
+// now casts that multiplication to bigint, so the combination this test
+// drives at — the largest penalty the domain allows on the largest question
+// it allows — still succeeds instead of surfacing "integer out of range" as
+// a 500 for whichever student's attempt happens to tip it over.
+func TestInsertNeverOverflowsInt4AtTheDomainsOwnPointsAndPenaltyCeiling(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-submit-8")
+		student := makeUser(t, ctx, "student-submit-8")
+		contestID := makeContest(t, ctx, author.ID)
+		registrationID := makeRegistration(t, ctx, contestID, student.ID)
+		q, err := NewQuestions(testPool).Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
+		if err != nil {
+			t.Fatalf("Create() = %v", err)
+		}
+
+		// A 100% penalty (the largest questions.penalty_pct permits) on a
+		// question worth the domain's own points ceiling — the combination
+		// that makes the penalty multiplication as large as it can ever get
+		// for a single attempt.
+		const points = 10_000_000
+		const penaltyPerAttempt = points
+
+		// 215 already-committed wrong attempts is exactly where
+		// 215 * 10,000,000 first exceeds int4's own ceiling
+		// (2,147,483,647) — the count Insert's own statement multiplies the
+		// penalty by for whichever attempt comes next.
+		const alreadyCommitted = 215
+		repo := NewSubmissions(testPool)
+		for i := 0; i < alreadyCommitted; i++ {
+			if _, err := repo.Insert(ctx, contests.SubmissionRequest{
+				RegistrationID: registrationID, QuestionID: q.ID, Value: "wrong",
+				Points: points, PenaltyPerAttempt: penaltyPerAttempt, Deadline: farDeadline,
+			}); err != nil {
+				t.Fatalf("wrong attempt %d: Insert() = %v", i+1, err)
+			}
+		}
+
+		correct, err := repo.Insert(ctx, contests.SubmissionRequest{
+			RegistrationID: registrationID, QuestionID: q.ID, Value: "correct", IsCorrect: true,
+			Points: points, PenaltyPerAttempt: penaltyPerAttempt, Deadline: farDeadline,
+		})
+		if err != nil {
+			t.Fatalf("correct attempt after %d wrong ones: Insert() = %v (want no int4 overflow)", alreadyCommitted, err)
+		}
+		if correct.PointsAwarded != 0 {
+			t.Fatalf("PointsAwarded = %d, want 0 (the penalty floors it long before this many attempts)", correct.PointsAwarded)
+		}
+	})
+}
+
 // A wrong attempt always scores zero, whatever Points and PenaltyPerAttempt
 // say — the CASE in Insert's own statement takes the ELSE branch outright.
 func TestInsertNeverAwardsPointsForAWrongAnswer(t *testing.T) {

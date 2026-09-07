@@ -269,10 +269,10 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 
 	// §6.1.1: in a sequential contest, this question may only be answered
 	// once every question ordered before it is closed. Consulted only when
-	// progression is actually sequential and the mode is multi (sequential
+	// SequentialActive says progression is actually in effect (sequential
 	// means nothing at single — the one question has nothing before it) — a
 	// contest that never turns this on pays no extra round trip for it.
-	if cmd.Contest.Progression == ProgressionSequential && cmd.Contest.QuestionMode == QuestionModeMulti {
+	if cmd.Contest.SequentialActive() {
 		open, err := s.sequence.Open(ctx, cmd.Contest.ID, cmd.Participant.ID, q.Ord)
 		if err != nil {
 			return SubmitOutcome{}, fmt.Errorf("check whether question %s has opened: %w", q.ID, err)

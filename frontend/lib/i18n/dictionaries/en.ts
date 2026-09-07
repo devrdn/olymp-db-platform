@@ -139,6 +139,14 @@ const en = {
       fixed: "Shared window",
       individual: "Own time each",
     },
+    progression: {
+      free: "Any order",
+      sequential: "In order",
+    },
+    scoring: {
+      points: "Points",
+      winner: "First to solve",
+    },
     status: {
       terminal: "This contest has reached its final state.",
       move: {
@@ -250,6 +258,10 @@ const en = {
         attempts: "Attempts",
         attemptsHint: "Leave empty for unlimited.",
         unlimited: "unlimited",
+        sequentialNeedsAttempts: "This contest opens questions in order (Settings → Its shape). A question left unlimited here blocks publishing: a participant stuck on it would have nothing left to move on to.",
+        penalty: "Penalty per wrong attempt, %",
+        penaltyHint: "Percent of this question's own points, lost for every wrong attempt already made on it. Never takes the question below zero, and never applies while the contest's scoring is set to first to solve.",
+        penaltyPreview: "Right now, a wrong attempt costs {n} of {points} points.",
         choices: "Option identifiers",
         choicesHint: "Short, stable, language-independent — a, b, c. The answer is one of these, never a label, which is what keeps checking independent of the language read.",
         visible: "Show this question to participants",
@@ -360,6 +372,7 @@ const en = {
         hint: "The window stays editable while the contest is running: extending it after a power cut is exactly what a running contest needs.",
         startsAt: "Starts",
         endsAt: "Ends",
+        endsAtIndividualHint: "Optional for individual timing. Left empty, the contest stays running until you finish it yourself — nothing ends it automatically.",
         enrollmentDeadline: "Enrolment closes",
         enrollmentDeadlineHint: "Optional. Leave empty to keep enrolment open until the contest starts.",
         grace: "Grace period, minutes",
@@ -373,6 +386,12 @@ const en = {
         timing: "Timing",
         duration: "Minutes per participant",
         durationHint: "Counted from their own start, and never past the contest's end.",
+        order: "Question order",
+        orderHint: "Any order lets a participant answer any open question whenever they like. In order opens the next question only once the previous one is closed — answered correctly, or every attempt spent.",
+        sequentialWarning: "In order needs every question to have an attempt limit. A question left unlimited traps a stuck participant with nothing left to do, so publishing is refused until every one has a limit.",
+        scoring: "Scoring",
+        scoringHint: "Points sums every question's own points, penalty included. First to solve has only a winner: whoever is first to answer the final question correctly.",
+        winnerIgnoresPenalty: "The per-attempt penalty set on each question is ignored while scoring is first to solve.",
       },
       access: {
         heading: "Who may enter, and from where",

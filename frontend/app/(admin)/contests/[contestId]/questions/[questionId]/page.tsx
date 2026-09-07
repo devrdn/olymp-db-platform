@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 
 import { Tag } from "@/components/ui/tag";
 import { questionSchema } from "@/lib/api/content";
-import { contentEditable } from "@/lib/api/contests";
+import { contentEditable, sequentialActive } from "@/lib/api/contests";
 import { isId } from "@/lib/api/ids";
 import { activeDictionary } from "@/lib/i18n/server";
 
@@ -66,6 +66,7 @@ export default async function QuestionPage(
         question={question}
         languages={contest.languages.map((l) => l.code)}
         editable={editable}
+        sequentialActive={sequentialActive(contest)}
         dict={dict}
       />
     </div>

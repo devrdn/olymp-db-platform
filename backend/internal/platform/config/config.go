@@ -109,6 +109,15 @@ type Config struct {
 	// contest's own rate exceed the installation's without the journal write
 	// it costs ever refusing anything (queryproxy.effectiveRateLimit is where
 	// the two are reconciled).
+	//
+	// It is not only a query ceiling any more, either. queryproxy.Service's
+	// events channel and its own read endpoints (the story, the question
+	// list) now spend this same account-wide budget, under the same key, so
+	// that a participant who alternates between running queries and polling
+	// those endpoints cannot spend two budgets that add up to more load than
+	// one (queryproxy.Service.AdmitRead's own doc). An operator raising this
+	// number to give the SQL console more headroom is raising the ceiling on
+	// that other traffic too, not just on queries.
 	QueryPerMinute int
 	// DeadlineGrace is the network-latency allowance added to a participant's
 	// deadline (docs/ARCHITECTURE.md §8) before an action arriving after it is

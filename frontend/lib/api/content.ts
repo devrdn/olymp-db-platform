@@ -81,6 +81,11 @@ export const questionSchema = z
     kind: z.enum(QUESTION_KINDS),
     points: z.number(),
     max_attempts: z.number().nullish(),
+    // §6.1.1: percent of this question's own points, lost per wrong attempt.
+    // Always returned — zero is "no penalty", a meaningful value in its own
+    // right, not an absent one, the same distinction the API's own
+    // QuestionResponse.PenaltyPct doc makes.
+    penalty_pct: z.number(),
     is_visible: z.boolean(),
     choice_ids: z.array(z.string()),
     texts: z.record(z.string(), questionTextSchema),
@@ -92,6 +97,7 @@ export const questionSchema = z
     kind: raw.kind,
     points: raw.points,
     maxAttempts: raw.max_attempts ?? undefined,
+    penaltyPct: raw.penalty_pct,
     /**
      * A hidden question exists in full — points, reference answers and all —
      * it is simply not shown. Working out what is being asked is part of the

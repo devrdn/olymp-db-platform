@@ -31,11 +31,50 @@ describe("questionFrom", () => {
         kind: "text",
         points: 5,
         max_attempts: null,
+        penalty_pct: null,
         is_visible: true,
         choice_ids: [],
         texts: { en: { body_md: "Who did it?" } },
         answers: [{ match_kind: "exact_ci", value: "the butler" }],
       },
+    });
+  });
+
+  // Finding 1: the penalty is a pointer on the wire, and blank has to mean
+  // "leave the stored value alone" rather than "reset it to zero" — zero is
+  // itself a meaningful setting (no penalty), and an editor that always sent
+  // it for an untouched field would silently clear a penalty set through the
+  // API. This is what fails against a form that always sends a plain number:
+  // saving any other change to a question with a penalty already configured
+  // would zero it out.
+  test("leaves the penalty alone when its box is untouched, never zeroing it", () => {
+    expect(questionFrom(form(base))).toMatchObject({ body: { penalty_pct: null } });
+    expect(questionFrom(form([...base, ["penaltyPct", ""]]))).toMatchObject({
+      body: { penalty_pct: null },
+    });
+  });
+
+  test("reads a configured penalty, zero included, as the real value it is", () => {
+    expect(questionFrom(form([...base, ["penaltyPct", "0"]]))).toMatchObject({
+      body: { penalty_pct: 0 },
+    });
+    expect(questionFrom(form([...base, ["penaltyPct", "25"]]))).toMatchObject({
+      body: { penalty_pct: 25 },
+    });
+  });
+
+  test("refuses a penalty outside 0 to 100", () => {
+    expect(questionFrom(form([...base, ["penaltyPct", "-1"]]))).toEqual({
+      ok: false,
+      code: "invalid_request",
+    });
+    expect(questionFrom(form([...base, ["penaltyPct", "101"]]))).toEqual({
+      ok: false,
+      code: "invalid_request",
+    });
+    expect(questionFrom(form([...base, ["penaltyPct", "many"]]))).toEqual({
+      ok: false,
+      code: "invalid_request",
     });
   });
 

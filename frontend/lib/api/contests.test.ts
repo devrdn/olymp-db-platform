@@ -6,6 +6,7 @@ import {
   contestSchema,
   defaultLanguage,
   NEXT_STATUSES,
+  sequentialActive,
   settingsEditable,
   shapeEditable,
   titleIn,
@@ -47,6 +48,8 @@ const detail = {
   status: "draft",
   enrollment: "invite_only",
   question_mode: "single",
+  progression: "free",
+  scoring: "points",
   timing: "individual",
   duration_min: 90,
   starts_at: "2026-11-08T19:00:00Z",
@@ -71,6 +74,8 @@ describe("contestSchema", () => {
 
     expect(parsed).toMatchObject({
       questionMode: "single",
+      progression: "free",
+      scoring: "points",
       timing: "individual",
       durationMin: 90,
       allowedCidrs: ["10.24.0.0/16"],
@@ -190,5 +195,17 @@ describe("NEXT_STATUSES", () => {
   test("never offers a jump that skips running", () => {
     expect(NEXT_STATUSES.draft).not.toContain("running");
     expect(NEXT_STATUSES.published).not.toContain("finished");
+  });
+});
+
+// Finding 4: the question editor and the settings panel must read this rule
+// from the one place the Go side also reads it from (contests.Contest's own
+// SequentialActive), not repeat the two-field comparison themselves.
+describe("sequentialActive", () => {
+  test("is true only under sequential progression and multi question mode", () => {
+    expect(sequentialActive({ progression: "sequential", questionMode: "multi" })).toBe(true);
+    expect(sequentialActive({ progression: "sequential", questionMode: "single" })).toBe(false);
+    expect(sequentialActive({ progression: "free", questionMode: "multi" })).toBe(false);
+    expect(sequentialActive({ progression: "free", questionMode: "single" })).toBe(false);
   });
 });

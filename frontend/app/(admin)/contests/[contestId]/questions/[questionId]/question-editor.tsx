@@ -35,12 +35,19 @@ export function QuestionEditor({
   question,
   languages,
   editable,
+  sequentialActive,
   dict,
 }: {
   contestId: string;
   question: Question;
   languages: string[];
   editable: boolean;
+  // Whether this contest's own sequential progression (§6.1.1) is actually
+  // in effect — contests.sequentialActive on the wire side, computed once by
+  // the page from the contest it already loaded, rather than this editor
+  // reading contest.progression and contest.questionMode itself and risking
+  // a second copy of that rule (finding 4).
+  sequentialActive: boolean;
   dict: Dictionary;
 }) {
   // The option identifiers are edited in the shape form and labelled in the
@@ -67,6 +74,7 @@ export function QuestionEditor({
       <ShapeSection
         question={question}
         editable={editable}
+        sequentialActive={sequentialActive}
         dict={dict}
         kind={kind}
         onKind={setKind}
@@ -161,6 +169,7 @@ function SaveRow({
 function ShapeSection({
   question,
   editable,
+  sequentialActive,
   dict,
   kind,
   onKind,
@@ -169,6 +178,7 @@ function ShapeSection({
 }: {
   question: Question;
   editable: boolean;
+  sequentialActive: boolean;
   dict: Dictionary;
   kind: string;
   onKind: (value: Question["kind"]) => void;
@@ -176,6 +186,18 @@ function ShapeSection({
   onChoiceIds: (value: string[]) => void;
 }) {
   const t = dict.workspace.question;
+
+  // Tracked only so the penalty preview and the sequential-attempts warning
+  // below can react as an organizer types, the same reason choiceIds above is
+  // mirrored into state — the inputs themselves stay uncontrolled
+  // (defaultValue), so a save that revalidates the page still shows the
+  // server's own copy rather than fighting it.
+  const [points, setPoints] = useState(question.points);
+  const [penaltyPct, setPenaltyPct] = useState<number | null>(question.penaltyPct);
+  const [unlimitedAttempts, setUnlimitedAttempts] = useState(question.maxAttempts == null);
+
+  const penaltyPerAttempt = Math.floor((points * (penaltyPct ?? 0)) / 100);
+
   return (
     <>
       <Section title={t.shape.heading} hint={t.shape.hint}>
@@ -211,6 +233,10 @@ function ShapeSection({
               min={0}
               step={1}
               defaultValue={question.points}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                setPoints(Number.isFinite(value) && value >= 0 ? value : 0);
+              }}
               disabled={!editable}
             />
           </Field>
@@ -223,10 +249,49 @@ function ShapeSection({
               step={1}
               defaultValue={question.maxAttempts ?? ""}
               placeholder={t.shape.unlimited}
+              onChange={(event) => setUnlimitedAttempts(event.target.value.trim() === "")}
               disabled={!editable}
             />
           </Field>
         </div>
+
+        {/* The publish gate refuses exactly this combination under sequential
+            progression (§6.1.1): a stuck participant would have nothing left
+            to move on to. Said here, at the setting that would trigger it,
+            rather than left for an organizer to discover at publish time. */}
+        {sequentialActive && unlimitedAttempts ? (
+          <p className="max-w-body text-small text-warn">{t.shape.sequentialNeedsAttempts}</p>
+        ) : null}
+
+        <Field id="penaltyPct" label={t.shape.penalty} hint={t.shape.penaltyHint}>
+          <Input
+            name="penaltyPct"
+            type="number"
+            min={0}
+            max={100}
+            step={1}
+            defaultValue={question.penaltyPct}
+            onChange={(event) => {
+              const raw = event.target.value.trim();
+              if (raw === "") {
+                setPenaltyPct(null);
+                return;
+              }
+              const value = Number(raw);
+              setPenaltyPct(Number.isFinite(value) ? value : null);
+            }}
+            disabled={!editable}
+            className="max-w-40"
+          />
+        </Field>
+
+        {/* What the setting above actually means for this question, worked
+            out instead of left for an organizer to compute by hand (§6.1.1). */}
+        <p className="-mt-3 max-w-body text-small text-ink-3">
+          {t.shape.penaltyPreview
+            .replace("{n}", String(penaltyPerAttempt))
+            .replace("{points}", String(points))}
+        </p>
 
         {/* Only a choice question has options, and the API refuses them on any
             other kind — so the field disappears with the kind rather than

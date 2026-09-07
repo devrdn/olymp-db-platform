@@ -5,10 +5,14 @@ import { revalidatePath } from "next/cache";
 import { ApiError } from "@/lib/api/client";
 import {
   ENROLLMENTS,
+  PROGRESSIONS,
   QUESTION_MODES,
+  SCORINGS,
   TIMINGS,
   type Enrollment,
+  type Progression,
   type QuestionMode,
+  type Scoring,
   type Timing,
 } from "@/lib/api/contests";
 import { isId } from "@/lib/api/ids";
@@ -66,10 +70,10 @@ function moment(value: FormDataEntryValue | null): string | null {
  * Two different freezes apply, and the form obeys both. Settings stay editable
  * while the contest runs — extending the window after a power cut is exactly
  * what a running contest needs — but the shape does not: the question format,
- * the timing model and the session length are what people are already
- * answering under. The frozen fields are submitted unchanged from what the
- * contest already holds, so a running contest's shape survives a save of its
- * schedule.
+ * the question order, the scoring mode, the timing model and the session
+ * length are what people are already answering under. The frozen fields are
+ * submitted unchanged from what the contest already holds, so a running
+ * contest's shape survives a save of its schedule.
  */
 export async function saveSettingsAction(
   _previous: SettingsState,
@@ -104,6 +108,8 @@ export async function saveSettingsAction(
       body: {
         enrollment: oneOf<Enrollment>(form.get("enrollment"), ENROLLMENTS) ?? "invite_only",
         question_mode: oneOf<QuestionMode>(form.get("questionMode"), QUESTION_MODES) ?? "multi",
+        progression: oneOf<Progression>(form.get("progression"), PROGRESSIONS) ?? "free",
+        scoring: oneOf<Scoring>(form.get("scoring"), SCORINGS) ?? "points",
         timing,
         duration_min: durationMin,
         starts_at: moment(form.get("startsAt")),

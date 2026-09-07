@@ -8,6 +8,7 @@ const question = {
   kind: "choice",
   points: 10,
   max_attempts: 3,
+  penalty_pct: 0,
   is_visible: true,
   choice_ids: ["a", "b", "c"],
   texts: {
@@ -21,7 +22,13 @@ describe("questionSchema", () => {
   test("parses a question with its texts and reference answers", () => {
     const parsed = questionSchema.parse(question);
 
-    expect(parsed).toMatchObject({ kind: "choice", points: 10, maxAttempts: 3, isVisible: true });
+    expect(parsed).toMatchObject({
+      kind: "choice",
+      points: 10,
+      maxAttempts: 3,
+      penaltyPct: 0,
+      isVisible: true,
+    });
     expect(parsed.choiceIds).toEqual(["a", "b", "c"]);
     expect(parsed.texts.en.bodyMd).toBe("Who was in the greenhouse?");
     expect(parsed.answers[0]).toMatchObject({ matchKind: "exact", value: "a" });
