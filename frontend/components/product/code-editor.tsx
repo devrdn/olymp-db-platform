@@ -38,6 +38,17 @@ export type CodeEditorProps = {
    * mounts (see the mount effect below).
    */
   errorPosition?: number;
+  /**
+   * Changes identity once per run that could have produced `errorPosition` —
+   * pass the settled action state itself, or any value that is a *new*
+   * reference each time, not just a new number. `errorPosition` alone is not
+   * enough: a refusal at the same character as the one before is the same
+   * number, so an effect keyed on `errorPosition` never re-fires for it, and
+   * the underline that CodeMirror's own error field clears on every edit
+   * never comes back (finding 4). Only used to distinguish "another run
+   * settled" from "nothing happened" — its value is never read.
+   */
+  errorToken?: unknown;
   className?: string;
 };
 
@@ -94,6 +105,7 @@ export function CodeEditor({
   getInitialValue,
   onChange,
   errorPosition,
+  errorToken,
   className,
 }: CodeEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -125,11 +137,29 @@ export function CodeEditor({
   useLayoutEffect(() => {
     const el = fallbackRef.current;
     const initial = getInitialValue();
-    if (el && initial !== "") el.value = initial;
+    if (el && initial !== "") {
+      el.value = initial;
+    } else if (el && el.value !== "") {
+      // The fallback holds text `getInitialValue` does not know about: it
+      // was typed before hydration, into a server-rendered `<textarea>`
+      // that accepts input from first paint but whose React `onInput`
+      // handler is not listening yet. Nothing reported that text anywhere,
+      // so the mirror `ConsoleEditor` submits from is still empty even
+      // though this field visibly holds a whole query (finding 2) — report
+      // it now, through the exact same path a live edit takes, so the
+      // mirror catches up before anything can read it.
+      onChangeRef.current(el.value);
+    }
     // Runs once, right after the fallback's own first commit — see the
     // comment above for why this cannot be read during render instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // What to restore once the host is actually visible — read once, in the
+  // mount effect below, before the fallback unmounts out from under the
+  // participant. Not applied there directly; see the `ready`-keyed effect
+  // just below this one for why.
+  const pendingFocusRef = useRef<{ anchor: number; head: number } | null>(null);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -142,26 +172,25 @@ export function CodeEditor({
     void import("./code-editor-core").then((core) => {
       if (!live || !host) return;
       // Read before the swap below can possibly move focus anywhere else.
-      const hadFocus = fallbackRef.current != null && document.activeElement === fallbackRef.current;
+      const fallback = fallbackRef.current;
+      const hadFocus = fallback != null && document.activeElement === fallback;
       const view = core.mountEditor(host, {
-        doc: fallbackRef.current?.value ?? getInitialValue(),
+        doc: fallback?.value ?? getInitialValue(),
         ariaLabel,
         placeholder: placeholderText,
         onChange: (text) => onChangeRef.current(text),
       });
       viewRef.current = view;
       if (errorPosition != null) core.setErrorPosition(view, errorPosition);
-      setReady(true);
       // A participant typing in the fallback field the instant the chunk
       // finishes loading must not have their cursor dropped on the floor —
-      // the fallback is about to unmount out from under them. Focus moves to
-      // the real editor, and the caret goes to the end of what they had
-      // already typed, so the next keystroke continues where the last one
-      // left off rather than landing at the start of the document.
-      if (hadFocus) {
-        view.focus();
-        view.dispatch({ selection: { anchor: view.state.doc.length } });
-      }
+      // the fallback is about to unmount out from under them. The fallback's
+      // own selection is carried over verbatim (finding 3): forcing the
+      // caret to the end would yank it away from a participant who had
+      // clicked back into the middle of their query to fix a typo.
+      pendingFocusRef.current =
+        hadFocus && fallback ? { anchor: fallback.selectionStart, head: fallback.selectionEnd } : null;
+      setReady(true);
     });
 
     return () => {
@@ -176,11 +205,39 @@ export function CodeEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Restores focus and the caret only once the host has actually stopped
+  // being `invisible` (finding 1). `setReady(true)` above is a batched state
+  // update — the DOM still carries the `invisible` class (`visibility:
+  // hidden`) at the moment that callback runs, and `focus()` inside a
+  // `visibility:hidden` subtree is a documented no-op, so calling it there
+  // moved focus to nothing and every subsequent keystroke went to `<body>`.
+  // A layout effect keyed on `ready` runs after React has committed the DOM
+  // without that class, so the host is genuinely visible and focusable by
+  // the time this runs.
+  useLayoutEffect(() => {
+    if (!ready) return;
+    const pending = pendingFocusRef.current;
+    if (!pending) return;
+    pendingFocusRef.current = null;
+    const view = viewRef.current;
+    if (!view) return;
+    const docLength = view.state.doc.length;
+    view.focus();
+    view.dispatch({
+      selection: {
+        anchor: Math.min(pending.anchor, docLength),
+        head: Math.min(pending.head, docLength),
+      },
+    });
+  }, [ready]);
+
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     void import("./code-editor-core").then((core) => core.setErrorPosition(view, errorPosition ?? null));
-  }, [errorPosition]);
+    // errorToken is a dependency on purpose, even though the effect body
+    // never reads it — see the prop's own doc comment (finding 4).
+  }, [errorPosition, errorToken]);
 
   return (
     <div className={cn("relative", className)}>
