@@ -33,3 +33,20 @@ export type SkipReason = (typeof SKIP_REASONS)[number];
 
 /** The most accounts one operation carries. Mirrors users.MaxBulkAccounts. */
 export const MAX_BULK_ACCOUNTS = 500;
+
+/**
+ * Why one row of a roster import produced no account.
+ *
+ * A separate vocabulary from SKIP_REASONS above, and a smaller one: a bulk
+ * status/roles/password-reset operation acts on accounts that already exist,
+ * so it can find one gone, itself, the last administrator. Import only ever
+ * creates one, so a row can fail it in exactly three ways — the server's own
+ * (`users.SkipLoginTaken` and its siblings in
+ * backend/internal/users/service.go's `Import`). A reason this list does not
+ * name is shown raw rather than dropped, the same rule SKIP_REASONS follows.
+ */
+export const IMPORT_SKIP_REASONS = ["login_taken", "email_taken", "invalid_row"] as const;
+export type ImportSkipReason = (typeof IMPORT_SKIP_REASONS)[number];
+
+/** The most rows one import carries. Mirrors users.maxImportRows. */
+export const MAX_IMPORT_ROWS = 500;

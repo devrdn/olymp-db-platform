@@ -5,6 +5,9 @@ import {
   accountSchema,
   bulkPasswordResetResultSchema,
   bulkResultSchema,
+  createdAccountSchema,
+  importResultSchema,
+  importSkippedRowSchema,
   roleListSchema,
   skippedAccountSchema,
 } from "./accounts";
@@ -165,6 +168,52 @@ describe("bulkResultSchema", () => {
     const parsed = bulkResultSchema.parse({ changed: [], skipped: [] });
 
     expect(parsed.changed).toEqual([]);
+    expect(parsed.skipped).toEqual([]);
+  });
+});
+
+describe("createdAccountSchema", () => {
+  test("carries the account and the one-time password, exactly as the wire spells the second", () => {
+    // No transform on `one_time_password`: unlike the account nested inside
+    // it, this field is read by its wire name everywhere it is used
+    // (`resetPasswordAction` does the same for `passwordResetSchema`).
+    const parsed = createdAccountSchema.parse({ user: wire, one_time_password: "Xk9-mQ2p" });
+
+    expect(parsed.user).toMatchObject({ login: "s.popescu", fullName: "Sergiu Popescu" });
+    expect(parsed.one_time_password).toBe("Xk9-mQ2p");
+  });
+});
+
+describe("importSkippedRowSchema", () => {
+  test("reads a row by its login alone — it never became an account, so there is no id to carry", () => {
+    const skipped = importSkippedRowSchema.parse({ login: "s.popescu", reason: "login_taken" });
+
+    expect(skipped).toEqual({ login: "s.popescu", reason: "login_taken" });
+  });
+
+  test("keeps a reason it does not recognise rather than rejecting the row", () => {
+    const skipped = importSkippedRowSchema.parse({ login: "s.popescu", reason: "invented_later" });
+
+    expect(skipped.reason).toBe("invented_later");
+  });
+});
+
+describe("importResultSchema", () => {
+  test("reads what an import created, one-time passwords included, and what it skipped", () => {
+    const parsed = importResultSchema.parse({
+      created: [{ user: wire, one_time_password: "Xk9-mQ2p" }],
+      skipped: [{ login: "i.ivanov", reason: "invalid_row" }],
+    });
+
+    expect(parsed.created[0].user.login).toBe("s.popescu");
+    expect(parsed.created[0].one_time_password).toBe("Xk9-mQ2p");
+    expect(parsed.skipped[0]).toEqual({ login: "i.ivanov", reason: "invalid_row" });
+  });
+
+  test("reads an import that created nothing and skipped nothing", () => {
+    const parsed = importResultSchema.parse({ created: [], skipped: [] });
+
+    expect(parsed.created).toEqual([]);
     expect(parsed.skipped).toEqual([]);
   });
 });

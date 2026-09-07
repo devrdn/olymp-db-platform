@@ -670,6 +670,57 @@ const en = {
     },
     newerPage: "Newer",
     olderPage: "Older",
+    /**
+     * Adding an account to the installation: one person, or a whole roster.
+     *
+     * `roster.reason` is the closed vocabulary `POST /users/import` answers
+     * with (`IMPORT_SKIP_REASONS` in `lib/api/accounts-terms.ts`) — a
+     * smaller one than `selection.bulk.reason` above, because import can
+     * only ever collide with an existing login or email, or carry a row
+     * that never made a usable account. A reason this list does not name is
+     * shown raw rather than dropped, the same rule that list follows.
+     */
+    create: {
+      new: "New account",
+      import: "Import a roster",
+      cancel: "Cancel",
+      close: "Close",
+      done: "Done",
+      one: {
+        title: "New account",
+        login: "Login",
+        fullName: "Full name",
+        email: "Email",
+        rolesLabel: "Roles",
+        submit: "Create",
+        creating: "Creating",
+        createdTitle: "Account created",
+        handover: "Hand this over to its owner. It is shown once and cannot be retrieved again.",
+      },
+      roster: {
+        title: "Import a roster",
+        hint: "One line per person: login, full name, and optionally email, separated by commas.",
+        rosterLabel: "Roster",
+        placeholder: "s.popescu, Sergiu Popescu\ni.ivanov, Ivan Ivanov, i@example.edu",
+        rolesLabel: "Roles",
+        submit: "Import",
+        importing: "Importing",
+        createdTitle: "Accounts created",
+        handover: "Hand each one over to its owner. Shown once and cannot be retrieved again.",
+        created: "{n} created",
+        skipped: "{n} skipped",
+        none: "Nothing was imported.",
+        copy: "Copy",
+        copied: "Copied",
+        copyAll: "Copy all passwords",
+        copiedAll: "Copied all",
+        reason: {
+          login_taken: "the login is already taken",
+          email_taken: "the email is already in use",
+          invalid_row: "not a usable row — check the login and the full name",
+        },
+      },
+    },
   },
   participant: {
     console: {
