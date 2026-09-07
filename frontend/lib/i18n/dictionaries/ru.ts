@@ -712,6 +712,7 @@ const ru = {
       hint: "По одному запросу за раз.",
       rowCount: "Строк: {count}",
       meter: {
+        ok: "выполнен",
         rows: "строк",
         time: "время",
         ms: "{n} мс",
@@ -733,7 +734,8 @@ const ru = {
       finishedTag: "завершена",
       clock: {
         waiting: "Ещё не началась",
-        notStarted: "Начнётся с вашего первого действия",
+        notStarted: "Отсчёт начнётся с вашего первого запроса",
+        syncing: "синхронизация…",
         timeUp: "Время вышло",
         fiveMinutesLeft: "Осталось пять минут.",
       },

@@ -87,7 +87,13 @@ const RECONNECT_MAX_DELAY_MS = 60_000;
  */
 export function useContestEvents(contestId: string, initialPhase: ContestPhase = "waiting") {
   const offsetRef = useRef(0);
-  const deadlineRef = useRef<number | null>(null);
+  // Three states, not two. `undefined` is "no sync has arrived yet"; `null`
+  // is "a sync arrived and the server said this participant has no deadline",
+  // which happens only under individual timing before their first action.
+  // Conflating them is what put "Starts with your first action" on the screen
+  // of a fixed-window contest for the moment before the channel connected —
+  // a sentence that is not merely early there, it is false.
+  const deadlineRef = useRef<number | null | undefined>(undefined);
   const [phase, setPhase] = useState<ContestPhase>(initialPhase);
   const [channelError, setChannelError] = useState<string | null>(null);
 

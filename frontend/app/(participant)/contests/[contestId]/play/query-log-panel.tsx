@@ -173,7 +173,9 @@ export function QueryLogPanel({
     <div className="flex min-h-0 flex-1 flex-col gap-2 p-4">
       <div className="min-h-0 flex-1 overflow-auto border border-edge">
         <table className="w-full border-collapse text-body">
-          <thead className="sticky top-0 bg-surface">
+          {/* Opaque, and in a colour this design system actually has: a sticky
+              head with no fill is a head the rows scroll through. */}
+          <thead className="sticky top-0 bg-bg">
             <tr className="border-b border-edge">
               <th className="p-2 text-left font-medium text-ink">{t.columns.sql}</th>
               <th className="p-2 text-left font-medium text-ink">{t.columns.status}</th>
