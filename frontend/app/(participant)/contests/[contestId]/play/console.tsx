@@ -30,9 +30,17 @@ export function ConsoleEditor({
   contestId,
   dict,
   onResult,
+  actions,
 }: {
   contestId: string;
   dict: Dictionary;
+  /**
+   * Controls the surrounding screen wants at the right end of the console's
+   * toolbar — the query log and the CSV download. They belong to the
+   * workspace, not to this form, and passing them in is what keeps this
+   * component about one thing: the query, and running it.
+   */
+  actions?: React.ReactNode;
   /**
    * Called once per completed run — including a refusal — never while one is
    * still in flight. `useActionState`'s own `state` only changes value when
@@ -72,6 +80,7 @@ export function ConsoleEditor({
   // the empty string, so it gets the same imperative restore finding 2's own
   // textarea used to need, just aimed at a field nobody looks at instead of
   // the one everybody does.
+  const formRef = useRef<HTMLFormElement>(null);
   const mirrorRef = useRef<HTMLTextAreaElement>(null);
   const lastTyped = useRef("");
 
@@ -92,7 +101,7 @@ export function ConsoleEditor({
   });
 
   return (
-    <form action={run} className="flex min-h-0 flex-1 flex-col gap-3 p-4">
+    <form ref={formRef} action={run} className="flex min-h-0 flex-1 flex-col">
       <input type="hidden" name="contestId" value={contestId} />
       {/*
        * The real form field: what the browser restores across a soft reload
@@ -115,9 +124,33 @@ export function ConsoleEditor({
         tabIndex={-1}
         className="sr-only"
       />
-      <div className="flex min-h-0 flex-1 flex-col gap-2">
+      {/* The toolbar the design puts above the editor, not below it
+          (docs/design/preview.html, "SQL-консоль"): the action a participant
+          reaches for most is at the top of the pane, where it does not move
+          when the result underneath changes height. `actions` is whatever the
+          screen around this console wants beside it — the query log and the
+          CSV download are the workspace's, not the form's. */}
+      <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
+        <button
+          type="submit"
+          disabled={running}
+          className={cn(buttonVariants({ variant: "primary", size: "sm" }))}
+        >
+          {running ? t.running : t.run}
+          {/* Decorative: the shortcut is bound in the editor, and reading
+              "command return" after every button label is noise. */}
+          <span aria-hidden="true" className="ml-1.5 font-mono text-label opacity-60">
+            ⌘↵
+          </span>
+        </button>
+        <div className="flex-1" />
+        {actions}
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col">
         <CodeEditor
           className="min-h-0 flex-1"
+          onSubmit={() => formRef.current?.requestSubmit()}
           ariaLabel={t.label}
           placeholder={t.placeholder}
           getInitialValue={() => mirrorRef.current?.value ?? ""}
@@ -133,12 +166,6 @@ export function ConsoleEditor({
           // (finding 4).
           errorToken={state}
         />
-      </div>
-      <div className="flex shrink-0 items-center gap-3">
-        <button type="submit" disabled={running} className={cn(buttonVariants({ variant: "primary" }))}>
-          {running ? t.running : t.run}
-        </button>
-        <span className="text-small text-ink-2">{t.hint}</span>
       </div>
     </form>
   );

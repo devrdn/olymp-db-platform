@@ -2,7 +2,6 @@
 
 import { memo, useState } from "react";
 
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { QuestionEntry } from "./questions-panel";
 import type { QueryLogEntry } from "@/lib/api/querylog";
@@ -169,6 +168,25 @@ export function Workspace({
             <ConsoleEditor
               contestId={contestId}
               dict={dict}
+              actions={
+                // The design's toolbar carries the query log as a button
+                // rather than a tab strip over the result
+                // (docs/design/preview.html): the result is what the pane
+                // below is *for*, and a tab strip above it says the two are
+                // equals. They are not — one is the answer to what was just
+                // typed, the other is a record of what already happened.
+                <>
+                  <ToolbarButton
+                    active={bottomTab === "result"}
+                    onClick={() => setBottomTab("result")}
+                  >
+                    {t.tabs.result}
+                  </ToolbarButton>
+                  <ToolbarButton active={bottomTab === "log"} onClick={() => setBottomTab("log")}>
+                    {t.tabs.log}
+                  </ToolbarButton>
+                </>
+              }
               onResult={(state) => {
                 setLastResult(state);
                 // Finding 3: this used to also bump a token that made
@@ -185,19 +203,27 @@ export function Workspace({
               }}
             />
           </div>
-          <Tabs
-            value={bottomTab}
-            onValueChange={(value) => setBottomTab(String(value))}
-            className="min-h-0 max-narrow:min-h-80"
-          >
-            <TabsList>
-              <TabsTrigger value="result">{t.tabs.result}</TabsTrigger>
-              <TabsTrigger value="log">{t.tabs.log}</TabsTrigger>
-            </TabsList>
-            <TabsContent value="result" className="min-h-0 overflow-hidden">
+
+          {/* Both stay mounted: switching to the log and back must not lose
+              the result that is on screen, nor the log's own scroll position.
+              Hidden with a class rather than the `hidden` attribute, because
+              these panes are flex containers and `display:flex` would win
+              over the attribute's own `display:none`. */}
+          <div className="flex min-h-0 flex-col">
+            <div
+              className={cn(
+                "min-h-0 flex-1 overflow-hidden",
+                bottomTab === "result" ? "flex flex-col" : "hidden",
+              )}
+            >
               <MemoResultPanel state={lastResult} dict={dict} />
-            </TabsContent>
-            <TabsContent value="log" className="min-h-0 overflow-hidden">
+            </div>
+            <div
+              className={cn(
+                "min-h-0 flex-1 overflow-hidden",
+                bottomTab === "log" ? "flex flex-col" : "hidden",
+              )}
+            >
               <MemoQueryLogPanel
                 contestId={contestId}
                 initial={initialLog}
@@ -205,8 +231,8 @@ export function Workspace({
                 locale={locale}
                 dict={dict}
               />
-            </TabsContent>
-          </Tabs>
+            </div>
+          </div>
         </div>
 
         {/* The story/questions side: below the console column on a narrow
@@ -226,5 +252,37 @@ export function Workspace({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * One of the small buttons at the right end of the console's toolbar.
+ *
+ * Not a Tabs trigger. The design's toolbar is a row of quiet buttons — the
+ * only filled thing on it is Run — and marking the current one with a wash
+ * rather than an underline is what keeps the row reading as controls instead
+ * of as a second navigation.
+ */
+function ToolbarButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "rounded-full px-2.5 py-1 text-control-sm transition-colors duration-(--t-input) ease-standard",
+        active ? "bg-sunk text-ink" : "text-ink-2 hover:bg-sunk hover:text-ink",
+      )}
+    >
+      {children}
+    </button>
   );
 }

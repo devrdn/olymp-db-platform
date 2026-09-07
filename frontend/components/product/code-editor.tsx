@@ -30,6 +30,17 @@ export type CodeEditorProps = {
    */
   onChange: (text: string) => void;
   /**
+   * Run whatever this editor is for, from ⌘↵ (Ctrl+Enter) — the shortcut the
+   * design's own toolbar prints on its Run button.
+   *
+   * Passed down to the editor's keymap rather than handled on the surrounding
+   * form: CodeMirror's default for `Mod-Enter` is `insertBlankLine`, so a
+   * form-level listener would never see the key and the participant would get
+   * an empty line instead of an answer. Omitted where there is nothing to run
+   * — the game-script editor saves with a button and no shortcut.
+   */
+  onSubmit?: () => void;
+  /**
    * A 1-based character offset into the document — PostgreSQL's own
    * convention — or `undefined` for "nothing to point at". Changing this
    * moves the underline; it does not touch the document. Has no effect while
@@ -106,6 +117,7 @@ export function CodeEditor({
   onChange,
   errorPosition,
   errorToken,
+  onSubmit,
   className,
 }: CodeEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -121,8 +133,10 @@ export function CodeEditor({
   // on elsewhere refuses a ref write in the render body outright, since a
   // render can in principle run without ever committing.
   const onChangeRef = useRef(onChange);
+  const onSubmitRef = useRef(onSubmit);
   useEffect(() => {
     onChangeRef.current = onChange;
+    onSubmitRef.current = onSubmit;
   });
 
   // Seeds the fallback field with whatever `getInitialValue` reports — a
@@ -179,6 +193,10 @@ export function CodeEditor({
         ariaLabel,
         placeholder: placeholderText,
         onChange: (text) => onChangeRef.current(text),
+        // Read fresh through the ref for the same reason `onChange` is: the
+        // editor is built once and the callback is an inline closure that is
+        // recreated on every render of whatever owns this component.
+        onSubmit: onSubmit ? () => onSubmitRef.current?.() : undefined,
       });
       viewRef.current = view;
       if (errorPosition != null) core.setErrorPosition(view, errorPosition);
