@@ -713,6 +713,7 @@ const ro = {
       hint: "Câte o instrucțiune pe rând.",
       rowCount: "Rânduri: {count}",
       meter: {
+        ok: "executat",
         rows: "rânduri",
         time: "timp",
         ms: "{n} ms",
@@ -734,7 +735,8 @@ const ro = {
       finishedTag: "încheiată",
       clock: {
         waiting: "Nu a început încă",
-        notStarted: "Începe odată cu prima dumneavoastră acțiune",
+        notStarted: "Cronometrul pornește la prima interogare",
+        syncing: "sincronizare…",
         timeUp: "Timpul a expirat",
         fiveMinutesLeft: "Mai sunt cinci minute.",
       },

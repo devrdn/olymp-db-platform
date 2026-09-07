@@ -9,7 +9,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 
 type EventsSnapshot = {
   offsetRef: { current: number };
-  deadlineRef: { current: number | null };
+  deadlineRef: { current: number | null | undefined };
   phase: ContestPhase;
   channelError?: string | null;
 };
@@ -52,6 +52,18 @@ describe("PlayHeader", () => {
     render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
     expect(screen.getByRole("timer")).toHaveTextContent(/1:2\d|1:3\d/);
+  });
+
+  // The bug this separates two states to prevent. Before the events channel
+  // has synced once, nothing on the client knows this participant's deadline
+  // — and a fixed-window contest, which is most of them, was being told its
+  // countdown starts with the participant's first action. Not early: false.
+  test("says it is synchronising rather than claiming how the contest is timed", () => {
+    events.current = { offsetRef: { current: 0 }, deadlineRef: { current: undefined }, phase: "running" };
+    render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+
+    expect(screen.getByRole("timer")).toHaveTextContent(en.participant.play.clock.syncing);
+    expect(screen.getByRole("timer")).not.toHaveTextContent(en.participant.play.clock.notStarted);
   });
 
   test("says a deadline has not started rather than showing a blank clock", () => {

@@ -53,6 +53,16 @@ export function ResultPanel({ state, dict }: { state: ConsoleState; dict: Dictio
           (docs/design/preview.html, "SQL-консоль"): a run's own facts, in one
           quiet line, rather than a sentence per fact above the data. */}
       <div className="flex shrink-0 flex-wrap items-center gap-4 border-b border-line px-3 py-1.5 font-mono text-label text-ink-3 uppercase">
+        {/* The run's own verdict, in the two colours the palette keeps for
+            exactly this (good / bad). A participant should be able to tell a
+            query that worked from one that did not without reading the row —
+            and until now they could not tell them apart at all, because the
+            failing branch was painted in a colour this design system does not
+            have. */}
+        <span className="flex items-center gap-1.5 text-good normal-case">
+          <span aria-hidden="true" className="size-1.5 rounded-full bg-good" />
+          {t.meter.ok}
+        </span>
         <span>
           {t.meter.rows} <b className="font-medium text-ink tabular-nums">{result.rows.length}</b>
         </span>
@@ -81,7 +91,9 @@ export function ResultPanel({ state, dict }: { state: ConsoleState; dict: Dictio
 
         <div className="min-h-0 flex-1 overflow-auto border border-edge">
         <table className="w-full border-collapse text-body">
-          <thead className="sticky top-0 bg-surface">
+          {/* Opaque, and in a colour this design system actually has: a sticky
+              head with no fill is a head the rows scroll through. */}
+          <thead className="sticky top-0 bg-bg">
             <tr className="border-b border-edge">
               {result.columns.map((column, i) => (
                 <th
@@ -190,7 +202,10 @@ function Refusal({ state, dict }: { state: Extract<ConsoleState, { kind: "refuse
       role="status"
       className={cn(
         "border p-3 text-body",
-        passing ? "border-edge bg-surface text-ink" : "border-danger/40 bg-danger/5 text-ink",
+        // `bad` and `bad-wash`, which are in the palette — the previous
+        // `danger` was in no stylesheet at all, so Tailwind emitted nothing
+        // and a refused query and a "try again in a moment" looked identical.
+        passing ? "border-line-2 bg-sunk text-ink" : "border-bad/40 bg-bad-wash text-ink",
       )}
     >
       {message}

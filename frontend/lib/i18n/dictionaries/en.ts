@@ -759,6 +759,7 @@ const en = {
       hint: "One statement at a time.",
       rowCount: "{count} rows",
       meter: {
+        ok: "ok",
         rows: "rows",
         time: "time",
         ms: "{n} ms",
@@ -780,7 +781,8 @@ const en = {
       finishedTag: "finished",
       clock: {
         waiting: "Not started yet",
-        notStarted: "Starts with your first action",
+        notStarted: "Your countdown starts with your first query",
+        syncing: "synchronising…",
         timeUp: "Time is up",
         // Announced once, to a screen reader only, the moment the countdown
         // crosses five minutes remaining — see PlayClock's own doc (finding

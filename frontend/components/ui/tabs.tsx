@@ -174,7 +174,7 @@ function TabsTrigger({
         "transition-colors duration-(--t-input) ease-standard",
         "hover:text-ink",
         isSelected && "border-ink text-ink",
-        "outline-none focus-visible:ring-2 focus-visible:ring-accent-ink focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
+        "outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
         className,
       )}
       {...props}
