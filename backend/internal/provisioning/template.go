@@ -165,6 +165,31 @@ func (g *Games) Of(ctx context.Context, contestID uuid.UUID) (Template, error) {
 	return g.repo.Template(ctx, contestID)
 }
 
+// Script returns the SQL one contest's game is built from, and whether the
+// contest has a game at all.
+//
+// It satisfies contests.GameSource — the one method the contest package's
+// export asks of a game, declared over there by the consumer (Go layout rule
+// 3) so that the contest package never imports this one. Of returns the whole
+// Template, statuses, versions and build errors included, and none of that is
+// part of a contest package: what an organizer re-authors is the script.
+//
+// A contest with no game is an absent game, not an error — exporting a draft
+// whose game has not been written yet is ordinary. Anything else is reported,
+// because "no game" makes the export succeed with a package that carries
+// none, and a storage failure quietly wearing that answer would ship an
+// incomplete package as a complete one.
+func (g *Games) Script(ctx context.Context, contestID uuid.UUID) (string, bool, error) {
+	template, err := g.repo.Template(ctx, contestID)
+	switch {
+	case errors.Is(err, ErrNoGame):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("read the contest's game: %w", err)
+	}
+	return template.Script, true, nil
+}
+
 // SetScript stores the SQL one contest's game is built from.
 //
 // It does not build. Storing puts the game back to pending and a worker picks

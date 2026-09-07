@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -332,4 +333,89 @@ func statusOf(t *testing.T, ctx context.Context, id int64) string {
 		t.Fatalf("read status: %v", err)
 	}
 	return status
+}
+
+// ExportHistory is the streamed read behind the participant's CSV download.
+// The same guarantee History carries, and the one that makes this endpoint
+// safe to hand a participant at all: it never yields another registration's
+// rows. Asserted here rather than trusted to look right, because the CSV path
+// writes what it is given straight to the socket and there is no page size
+// left to notice a stranger's statement in.
+func TestExportHistoryStreamsOnlyThisRegistrationsOwnRows(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		mine := someRegistration(t, ctx)
+		someoneElses := someRegistration(t, ctx)
+
+		completeRow(t, ctx, log, mine, "SELECT * FROM suspects", queryrunner.StatusOK, 12, 250)
+		completeRow(t, ctx, log, someoneElses, "SELECT * FROM secrets", queryrunner.StatusOK, 1, 10)
+
+		var seen []string
+		if err := log.ExportHistory(ctx, mine, func(entry queryrunner.HistoryEntry) error {
+			seen = append(seen, entry.SQL)
+			return nil
+		}); err != nil {
+			t.Fatalf("ExportHistory: %v", err)
+		}
+		if len(seen) != 1 || seen[0] != "SELECT * FROM suspects" {
+			t.Fatalf("streamed %v, want exactly this registration's own statement", seen)
+		}
+	})
+}
+
+// Oldest first, and unpaged: the file is a record of one session, read top to
+// bottom, and every row of it is in there — see ExportHistory's own doc.
+func TestExportHistoryStreamsTheWholeLogOldestFirst(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+
+		statements := []string{"SELECT 1", "SELECT 2", "SELECT 3"}
+		for i, sql := range statements {
+			completeRow(t, ctx, log, registration, sql, queryrunner.StatusOK, 1, 1)
+			minutesAgo := len(statements) - i
+			if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+				`UPDATE query_log SET executed_at = executed_at - ($2 * interval '1 minute')
+				 WHERE registration_id = $1 AND sql_text = $3`,
+				registration, minutesAgo, sql); err != nil {
+				t.Fatalf("spacing out row %d: %v", i, err)
+			}
+		}
+
+		var seen []string
+		if err := log.ExportHistory(ctx, registration, func(entry queryrunner.HistoryEntry) error {
+			seen = append(seen, entry.SQL)
+			return nil
+		}); err != nil {
+			t.Fatalf("ExportHistory: %v", err)
+		}
+		if len(seen) != 3 || seen[0] != "SELECT 1" || seen[2] != "SELECT 3" {
+			t.Fatalf("streamed %v, want every row oldest first", seen)
+		}
+	})
+}
+
+// A yield that fails stops the stream and surfaces: the caller is writing to
+// a socket, and a client that hung up must not have the rest of the log read
+// out of the database on its behalf.
+func TestExportHistoryStopsWhenTheCallerCannotTakeAnotherRow(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+		completeRow(t, ctx, log, registration, "SELECT 1", queryrunner.StatusOK, 1, 1)
+		completeRow(t, ctx, log, registration, "SELECT 2", queryrunner.StatusOK, 1, 1)
+
+		broken := errors.New("the client hung up")
+		seen := 0
+		err := log.ExportHistory(ctx, registration, func(queryrunner.HistoryEntry) error {
+			seen++
+			return broken
+		})
+		if !errors.Is(err, broken) {
+			t.Fatalf("ExportHistory returned %v, want the caller's own error", err)
+		}
+		if seen != 1 {
+			t.Fatalf("kept going for %d rows after the caller refused one", seen)
+		}
+	})
 }

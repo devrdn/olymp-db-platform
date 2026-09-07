@@ -59,6 +59,14 @@ const (
 	ActionAnswersChange      = "contest.answers_change"
 	ActionManagerGrant       = "contest.manager_grant"
 	ActionManagerRevoke      = "contest.manager_revoke"
+	// ActionContestPackageExport records a whole contest leaving the
+	// installation as a file: its questions, its settings and — the reason
+	// this needs a trail at all — its reference answers. Nothing is changed
+	// by it, so unlike most of the actions above it is not recorded for the
+	// sake of "who changed this"; it is recorded because a full answer key
+	// walked out of the door and somebody may later need to know whose
+	// account it left through. The payload carries counts only (§9.2).
+	ActionContestPackageExport = "contest.package_export"
 
 	ActionParticipantAdd        = "participant.add"
 	ActionParticipantRemove     = "participant.remove"
@@ -126,6 +134,7 @@ var actions = []string{
 	ActionContestStoryChange, ActionQuestionCreate,
 	ActionQuestionUpdate, ActionQuestionDelete, ActionQuestionReorder,
 	ActionAnswersChange, ActionManagerGrant, ActionManagerRevoke,
+	ActionContestPackageExport,
 
 	ActionParticipantAdd, ActionParticipantRemove, ActionParticipantDisqualify,
 	ActionParticipantEnroll, ActionContestAccessDenied, ActionContestStartBlocked,

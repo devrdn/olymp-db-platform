@@ -932,6 +932,34 @@ func (s *Sink) Actions() []string {
 	return actions
 }
 
+// Games is an in-memory contests.GameSource: the SQL an organizer wrote as
+// one contest's game, without any of the template lifecycle that lives in
+// internal/provisioning.
+type Games struct {
+	byContest map[uuid.UUID]string
+	// Err, when set, is what Script returns instead of a script — a test's
+	// way of standing for the game's own storage being away.
+	Err error
+}
+
+var _ contests.GameSource = (*Games)(nil)
+
+// NewGames returns an empty game store.
+func NewGames() *Games { return &Games{byContest: map[uuid.UUID]string{}} }
+
+// Put stores the script one contest's game is built from.
+func (r *Games) Put(contestID uuid.UUID, script string) {
+	r.byContest[contestID] = script
+}
+
+func (r *Games) Script(_ context.Context, contestID uuid.UUID) (string, bool, error) {
+	if r.Err != nil {
+		return "", false, r.Err
+	}
+	script, ok := r.byContest[contestID]
+	return script, ok, nil
+}
+
 // maps copies a map so a stored value cannot be mutated through the caller's
 // reference.
 func maps(in map[string]string) map[string]string {

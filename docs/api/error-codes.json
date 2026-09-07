@@ -166,6 +166,10 @@
       "meaning": "Ownership cannot be granted or removed through the staff list. A contest with two owners has an ambiguous one, and with none has nobody who may appoint anybody."
     },
     {
+      "code": "package_too_large",
+      "meaning": "The contest carries more questions than one exported package holds. Refused rather than cut short: a package missing questions is not a smaller contest but one whose answer key no longer matches, and nothing in the file would say so. The message names the limit."
+    },
+    {
       "code": "participant_not_found",
       "meaning": "That account does not take part in this contest."
     },

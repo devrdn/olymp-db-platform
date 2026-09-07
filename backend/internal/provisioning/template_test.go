@@ -22,7 +22,10 @@ type templateStore struct {
 	policy   sqlpolicy.Policy
 	claims   int
 	claimErr error
-	finished []finish
+	// templateErr, when set, is what Template returns instead of a row — a
+	// storage failure rather than a contest that simply has no game.
+	templateErr error
+	finished    []finish
 }
 
 type finish struct {
@@ -48,6 +51,9 @@ func (s *templateStore) SaveScript(_ context.Context, contestID uuid.UUID, datab
 func (s *templateStore) Template(context.Context, uuid.UUID) (provisioning.Template, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.templateErr != nil {
+		return provisioning.Template{}, s.templateErr
+	}
 	if !s.present {
 		return provisioning.Template{}, provisioning.ErrNoGame
 	}
@@ -274,5 +280,45 @@ func TestBuildingWithNothingWaitingSaysSoRatherThanFailing(t *testing.T) {
 	}
 	if len(cluster.names) != 0 {
 		t.Fatal("built something with nothing claimed")
+	}
+}
+
+func TestTheScriptIsReadableForTheExportAndAContestWithoutOneIsNotAnError(t *testing.T) {
+	// contests.GameSource, the narrow view the contest package's export asks
+	// for. A contest whose game has not been written yet exports without one
+	// rather than failing, so "no game" must not surface here as an error.
+	service, _, _ := games(true)
+
+	script, ok, err := service.Script(t.Context(), uuid.New())
+	if err != nil {
+		t.Fatalf("Script() on a contest with no game returned error: %v", err)
+	}
+	if ok || script != "" {
+		t.Fatalf("Script() answered %q (present: %v), want an absent game", script, ok)
+	}
+
+	contest := uuid.New()
+	if _, err := service.SetScript(t.Context(), uuid.New(), contest, `CREATE TABLE suspects (id int);`); err != nil {
+		t.Fatalf("SetScript() returned error: %v", err)
+	}
+
+	script, ok, err = service.Script(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("Script() returned error: %v", err)
+	}
+	if !ok || script != `CREATE TABLE suspects (id int);` {
+		t.Fatalf("Script() answered %q (present: %v)", script, ok)
+	}
+}
+
+func TestAFailingGameStoreIsReportedRatherThanReadAsNoGame(t *testing.T) {
+	// The difference matters: "no game" makes the export succeed with a
+	// package that has none, so a storage failure quietly wearing that
+	// answer would ship an incomplete package as a complete one.
+	store := &templateStore{templateErr: errors.New("the database is away")}
+	service := provisioning.NewGames(store, &buildCluster{}, authoring{editable: true})
+
+	if _, _, err := service.Script(t.Context(), uuid.New()); err == nil {
+		t.Fatal("Script() swallowed a storage failure")
 	}
 }
