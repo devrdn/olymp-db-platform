@@ -9,6 +9,25 @@
 // Without GAME_DB_DSN every helper skips the test rather than failing it: a
 // developer with no cluster to hand can still run `make test`. `make test-game`
 // is what makes sure they actually run.
+//
+// # Why it does not invent credentials
+//
+// The cluster it prepares is the same one `make dev-up` starts and the same
+// pair of roles `make runner` connects as — game_reader and game_writer are
+// cluster-wide, and preparing them states their passwords. So a harness with
+// passwords of its own is a test run that silently takes a running Query
+// Runner's credentials away from it: every query after it fails to connect,
+// and the participant is the one who finds out. That is not hypothetical. It
+// is where the connection failure a console once displayed came from.
+//
+// The roles stay shared, because what these tests prove is what PostgreSQL
+// refuses to *those* roles as the deploy prepares them — a copy under another
+// name would be a copy of the code under test rather than the thing itself.
+// What changes is where the passwords come from: GAME_READER_PASSWORD and
+// GAME_WRITER_PASSWORD, the same two variables the deployment sets, so
+// preparing the cluster for a test writes back exactly what is already there.
+// Missing, they are a hard failure and never a default — a harness guessing a
+// password here is the whole defect.
 package gamedbtest
 
 import (
@@ -25,18 +44,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// The passwords the two participant roles are given while under test.
-//
-// Fixed rather than generated so that a failing run can be reproduced by hand
-// against the same cluster. They are only ever set on a developer's local
-// pg-game container by the tests themselves; a real installation's passwords
-// come from the environment and never from here. This package is imported by
-// test binaries alone.
-//
-// #nosec G101 -- test fixtures for a local container, not a credential.
+// The environment the deployment's own credentials arrive in — the two
+// variables deploy/.env sets, docker-compose passes to the Query Runner, and
+// `make test-game` passes to the tests.
 const (
-	ReaderPassword = "reader-under-test"
-	WriterPassword = "writer-under-test"
+	readerPasswordVar = "GAME_READER_PASSWORD" // #nosec G101 -- a variable's name.
+	writerPasswordVar = "GAME_WRITER_PASSWORD" // #nosec G101 -- a variable's name.
 )
 
 var (
@@ -70,8 +83,39 @@ func connect() {
 	pool = p
 }
 
-// Admin returns a pool as the provisioning role, with the cluster prepared.
-func Admin(t *testing.T) *pgxpool.Pool {
+// ReaderPassword and WriterPassword are what the two participant roles
+// authenticate with, for the tests that connect as one of them.
+//
+// The deployment's, read from the environment rather than chosen here: see the
+// package comment. A test binary that has a cluster but no credentials for it
+// stops rather than making some up, because making some up is what breaks the
+// stack the developer is running.
+func ReaderPassword(t *testing.T) string { t.Helper(); return credential(t, readerPasswordVar) }
+
+func WriterPassword(t *testing.T) string { t.Helper(); return credential(t, writerPasswordVar) }
+
+func credential(t *testing.T, variable string) string {
+	t.Helper()
+
+	requireCluster(t)
+
+	password := os.Getenv(variable)
+	if password == "" {
+		// Loud, and on the first test that needs it. The alternative — a
+		// password of the harness's own — is silent until somebody's running
+		// Query Runner cannot authenticate any more, which is a failure that
+		// surfaces during a contest rather than during a test run.
+		t.Fatalf("%s is not set. These tests prepare the cluster's shared %s and %s roles, "+
+			"so they need the passwords the deployment already uses rather than passwords of "+
+			"their own — run `make test-game`, which passes them from deploy/.env.",
+			variable, gamedb.RoleReader, gamedb.RoleWriter)
+	}
+	return password
+}
+
+// requireCluster opens the cluster, skipping the test where there is none to
+// open and failing where there is one that cannot be reached.
+func requireCluster(t *testing.T) {
 	t.Helper()
 
 	once.Do(connect)
@@ -81,10 +125,20 @@ func Admin(t *testing.T) *pgxpool.Pool {
 	if pool == nil {
 		t.Skip("GAME_DB_DSN is not set; run `make test-game`")
 	}
+}
 
+// Admin returns a pool as the provisioning role, with the cluster prepared.
+func Admin(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+
+	requireCluster(t)
+
+	// The deployment's own passwords, so that preparing the cluster for a test
+	// writes back what a running Query Runner is already using instead of
+	// locking it out.
 	if err := gamedb.PrepareCluster(t.Context(), pool, gamedb.Roles{
-		ReaderPassword: ReaderPassword,
-		WriterPassword: WriterPassword,
+		ReaderPassword: ReaderPassword(t),
+		WriterPassword: WriterPassword(t),
 	}); err != nil {
 		t.Fatalf("preparing the cluster: %v", err)
 	}

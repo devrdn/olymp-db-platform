@@ -70,6 +70,18 @@ type cluster struct {
 	failIdleDrop map[string]error
 	idleDropped  []string
 
+	// sized, sizeCalls and sizesFail are how the organizer's database list is
+	// observed: which names the cluster was asked to measure, in how many
+	// calls, and what happens to the list when measuring fails outright.
+	sized     []string
+	sizeCalls int
+	sizesFail error
+
+	// dropFail makes the forcing Drop refuse, which is how the organizer's
+	// own drop is checked for the order it does things in: the row must not
+	// be marked dropped over a database that is still on the cluster.
+	dropFail error
+
 	// idleCalls records every DropIdle call and what it returned, busy and
 	// failed ones included — unlike idleDropped, which only ever grows on a
 	// success. Reclaim is installation-wide (its own doc), so one test's
@@ -125,12 +137,59 @@ func (c *cluster) DatabaseSize(context.Context, string) (int64, error) {
 	return 1 << 20, nil
 }
 
+// DatabaseSizes answers a megabyte for every name it is asked about, unless a
+// test has set sizesFail — the case Service.Instances has to survive without
+// refusing the list, since the rows come from the core database and the sizes
+// come from a second system that can be down while it is fine.
+func (c *cluster) DatabaseSizes(_ context.Context, names []string) (map[string]int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.sized = append(c.sized, names...)
+	c.sizeCalls++
+	if c.sizesFail != nil {
+		return nil, c.sizesFail
+	}
+	sizes := make(map[string]int64, len(names))
+	for _, name := range names {
+		sizes[name] = 1 << 20
+	}
+	return sizes, nil
+}
+
+// sizeReads is every name DatabaseSizes was asked about, and how many calls it
+// took — the second is what proves the list costs one round trip rather than
+// one per database.
+func (c *cluster) sizeReads() (names []string, calls int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.sized...), c.sizeCalls
+}
+
 func (c *cluster) Drop(_ context.Context, name string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.dropFail != nil {
+		return c.dropFail
+	}
 	c.dropped = append(c.dropped, name)
 	return nil
+}
+
+// droppedByForce reports whether Drop — the forcing one, not DropIdle — was
+// asked to remove name. `dropped` also collects what Invalidate and
+// CreateInstance's own pre-drop did, so a test that cares which of the two
+// paths removed a database asks by name rather than by count.
+func droppedByForce(c *cluster, name string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, dropped := range c.dropped {
+		if dropped == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *cluster) counts() (made, dropped int) {

@@ -679,28 +679,20 @@ func (s *Service) deadlinePassed(contest contests.Contest, participant contests.
 }
 
 // speaksForTheDatabase reports an error that carries PostgreSQL's own words
-// rather than one of ours.
+// about this query rather than one of ours.
 //
-// Written as "none of the answers we produce" rather than as a list of driver
-// errors: a new sentinel of ours is something this must keep passing through,
-// and a new shape of database error is something it must keep catching. Only
-// one of those two lists can be kept complete by hand, so the check is against
-// ours.
+// It asks the error what it is. This used to be written the other way round —
+// "none of the answers we produce, therefore the database's" — on the
+// reasoning that only the list of ours can be kept complete by hand. The
+// reasoning was sound and the default was not: a runner that could not reach
+// the game cluster is on neither list, so in the one contest that withholds
+// the database's words its own outage was reported to the participant as the
+// database refusing their query. The runner now names the database's words
+// where they arrive (queryrunner.DatabaseError, set by the client in
+// rpc.errorFor), so the question can be asked directly, and everything else —
+// including a failure this package has never heard of — passes through as
+// what it is.
 func speaksForTheDatabase(err error) bool {
-	var refusal *sqlpolicy.Refusal
-	if errors.As(err, &refusal) {
-		return false
-	}
-	// A failure to journal the query is ours, not the database refusing the
-	// participant's SQL — it never got that far — and it is not among
-	// Outcomes() because it never crosses to the Query Runner at all.
-	if errors.Is(err, queryrunner.ErrJournalUnavailable) {
-		return false
-	}
-	for _, ours := range queryrunner.Outcomes() {
-		if errors.Is(err, ours) {
-			return false
-		}
-	}
-	return true
+	var database *queryrunner.DatabaseError
+	return errors.As(err, &database)
 }

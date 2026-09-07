@@ -47,8 +47,8 @@ func clusterFor(t *testing.T, database string) *queryrunner.Cluster {
 	t.Helper()
 
 	cluster, err := queryrunner.NewCluster(
-		gamedbtest.DSN(t, gamedb.RoleReader, gamedbtest.ReaderPassword, database),
-		gamedbtest.DSN(t, gamedb.RoleWriter, gamedbtest.WriterPassword, database))
+		gamedbtest.DSN(t, gamedb.RoleReader, gamedbtest.ReaderPassword(t), database),
+		gamedbtest.DSN(t, gamedb.RoleWriter, gamedbtest.WriterPassword(t), database))
 	if err != nil {
 		t.Fatalf("building the cluster connector: %v", err)
 	}

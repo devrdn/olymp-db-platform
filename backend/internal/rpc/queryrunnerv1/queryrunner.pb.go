@@ -71,21 +71,32 @@ const (
 	// alone was larger than the whole allowance, so there is no prefix of it
 	// to show. Distinct from a truncated result, which is an answer.
 	Failure_KIND_RESULT_TOO_LARGE Failure_Kind = 9
+	// This service failed, and it is not about the query: the game cluster
+	// could not be connected to, or something here went wrong. The database
+	// never saw the SQL, so there is nothing in it for the participant to
+	// fix — and `message` here is the one that must never be repeated to
+	// them, because it carries the cluster's address and role names.
+	//
+	// Every kind above is an answer to the question that was asked. This one
+	// says the question was never answered, which is why it is not
+	// KIND_DATABASE_ERROR with a different sentence.
+	Failure_KIND_INTERNAL Failure_Kind = 10
 )
 
 // Enum value maps for Failure_Kind.
 var (
 	Failure_Kind_name = map[int32]string{
-		0: "KIND_UNSPECIFIED",
-		1: "KIND_REFUSED",
-		2: "KIND_BUSY",
-		3: "KIND_ALREADY_RUNNING",
-		4: "KIND_TIMEOUT",
-		5: "KIND_DATABASE_ERROR",
-		6: "KIND_CANCELLED",
-		7: "KIND_RATE_LIMITED",
-		8: "KIND_DISK_FULL",
-		9: "KIND_RESULT_TOO_LARGE",
+		0:  "KIND_UNSPECIFIED",
+		1:  "KIND_REFUSED",
+		2:  "KIND_BUSY",
+		3:  "KIND_ALREADY_RUNNING",
+		4:  "KIND_TIMEOUT",
+		5:  "KIND_DATABASE_ERROR",
+		6:  "KIND_CANCELLED",
+		7:  "KIND_RATE_LIMITED",
+		8:  "KIND_DISK_FULL",
+		9:  "KIND_RESULT_TOO_LARGE",
+		10: "KIND_INTERNAL",
 	}
 	Failure_Kind_value = map[string]int32{
 		"KIND_UNSPECIFIED":      0,
@@ -98,6 +109,7 @@ var (
 		"KIND_RATE_LIMITED":     7,
 		"KIND_DISK_FULL":        8,
 		"KIND_RESULT_TOO_LARGE": 9,
+		"KIND_INTERNAL":         10,
 	}
 )
 
@@ -710,12 +722,12 @@ const file_queryrunner_v1_queryrunner_proto_rawDesc = "" +
 	"\x05cells\x18\x01 \x03(\v2\x1e.dbcontest.queryrunner.v1.CellR\x05cells\"3\n" +
 	"\x04Cell\x12\x17\n" +
 	"\ais_null\x18\x01 \x01(\bR\x06isNull\x12\x12\n" +
-	"\x04text\x18\x02 \x01(\tR\x04text\"\xec\x02\n" +
+	"\x04text\x18\x02 \x01(\tR\x04text\"\xff\x02\n" +
 	"\aFailure\x12:\n" +
 	"\x04kind\x18\x01 \x01(\x0e2&.dbcontest.queryrunner.v1.Failure.KindR\x04kind\x12\x12\n" +
 	"\x04code\x18\x02 \x01(\tR\x04code\x12\x18\n" +
 	"\asubject\x18\x03 \x01(\tR\asubject\x12\x18\n" +
-	"\amessage\x18\x04 \x01(\tR\amessage\"\xdc\x01\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\"\xef\x01\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fKIND_REFUSED\x10\x01\x12\r\n" +
@@ -726,7 +738,9 @@ const file_queryrunner_v1_queryrunner_proto_rawDesc = "" +
 	"\x0eKIND_CANCELLED\x10\x06\x12\x15\n" +
 	"\x11KIND_RATE_LIMITED\x10\a\x12\x12\n" +
 	"\x0eKIND_DISK_FULL\x10\b\x12\x19\n" +
-	"\x15KIND_RESULT_TOO_LARGE\x10\t2a\n" +
+	"\x15KIND_RESULT_TOO_LARGE\x10\t\x12\x11\n" +
+	"\rKIND_INTERNAL\x10\n" +
+	"2a\n" +
 	"\vQueryRunner\x12R\n" +
 	"\x03Run\x12$.dbcontest.queryrunner.v1.RunRequest\x1a%.dbcontest.queryrunner.v1.RunResponseBAZ?github.com/devrdn/db-contest/backend/internal/rpc/queryrunnerv1b\beditionsp\xe8\a"
 

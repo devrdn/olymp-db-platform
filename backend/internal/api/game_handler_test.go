@@ -50,12 +50,38 @@ func (g *fakeGames) SetScript(_ context.Context, actorID, _ uuid.UUID, script st
 	return g.template, nil
 }
 
+// fakeDatabases stands in for provisioning.Service's own half: the rows an
+// organizer reads and the drop they ask for. What the drop actually does to a
+// cluster is tested where the service lives; here the questions are the URL,
+// the permission, the shape of the answer and the name of every refusal.
+type fakeDatabases struct {
+	list       provisioning.InstanceList
+	listErr    error
+	dropErr    error
+	droppedDB  string
+	dropActor  uuid.UUID
+	dropTarget uuid.UUID
+}
+
+func (d *fakeDatabases) Instances(context.Context, uuid.UUID) (provisioning.InstanceList, error) {
+	return d.list, d.listErr
+}
+
+func (d *fakeDatabases) DropInstance(_ context.Context, actorID, contestID uuid.UUID, database string) (provisioning.InstanceRecord, error) {
+	d.dropActor, d.dropTarget, d.droppedDB = actorID, contestID, database
+	if d.dropErr != nil {
+		return provisioning.InstanceRecord{}, d.dropErr
+	}
+	return provisioning.InstanceRecord{Database: database, Status: provisioning.InstanceStatusDropped}, nil
+}
+
 type gameFixture struct {
-	router http.Handler
-	games  *fakeGames
-	stores *conteststest.Fixture
-	actor  users.User
-	cookie *http.Cookie
+	router    http.Handler
+	games     *fakeGames
+	databases *fakeDatabases
+	stores    *conteststest.Fixture
+	actor     users.User
+	cookie    *http.Cookie
 }
 
 func newGameFixture(t *testing.T, permissions ...string) *gameFixture {
@@ -84,11 +110,12 @@ func newGameFixture(t *testing.T, permissions ...string) *gameFixture {
 	})
 
 	games := &fakeGames{}
+	databases := &fakeDatabases{}
 	router := chi.NewRouter()
-	api.NewGameHandler(games, mw, log).Mount(router)
+	api.NewGameHandler(games, databases, mw, log).Mount(router)
 
 	return &gameFixture{
-		router: router, games: games, stores: stores, actor: actor,
+		router: router, games: games, databases: databases, stores: stores, actor: actor,
 		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: token},
 	}
 }
@@ -242,5 +269,169 @@ func TestGameEndpointsRefuseAContestIdentifierThatIsNotAUUID(t *testing.T) {
 
 	if rec := f.do(http.MethodGet, "/contests/not-a-uuid/game", ""); rec.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400", rec.Code)
+	}
+}
+
+// registrationID is a stable pointer for a fixture row's holder.
+func registrationID(id uuid.UUID) *uuid.UUID { return &id }
+
+// What the screen is for: which databases exist, whose each one is, and how
+// much disk it takes. A spare and a participant's copy are one row apart, and
+// the answer has to tell them apart.
+func TestTheInstanceListNamesTheHolderOfEveryCopy(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	held := uuid.New()
+	f.databases.list = provisioning.InstanceList{
+		Instances: []provisioning.InstanceRecord{
+			{
+				Database: "game_c1_u1", Registration: registrationID(held),
+				ParticipantLogin: "ivan", ParticipantName: "Ivan Petrov",
+				TemplateVersion: 2, Status: "ready",
+				SizeBytes: 4 << 20, SizeKnown: true,
+				CreatedAt: time.Now(), UpdatedAt: time.Now(),
+			},
+			{Database: "game_pool_c1_a", TemplateVersion: 2, Status: "ready"},
+		},
+		Truncated: true,
+	}
+
+	rec := f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game/instances", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+
+	body := decode(t, rec)
+	if body["truncated"] != true {
+		t.Fatalf("truncated came back %v; the screen must be able to say there are more", body["truncated"])
+	}
+	rows, ok := body["instances"].([]any)
+	if !ok || len(rows) != 2 {
+		t.Fatalf("instances came back %v", body["instances"])
+	}
+
+	first := rows[0].(map[string]any)
+	if first["database"] != "game_c1_u1" || first["participant"] != "ivan" {
+		t.Fatalf("the held copy came back %v", first)
+	}
+	if first["spare"] != false {
+		t.Fatalf("a claimed copy is reported as spare: %v", first)
+	}
+	if first["registration_id"] != held.String() {
+		t.Fatalf("registration_id came back %v, want %v", first["registration_id"], held)
+	}
+	if first["size_bytes"].(float64) != float64(4<<20) || first["size_known"] != true {
+		t.Fatalf("the size came back %v / %v", first["size_bytes"], first["size_known"])
+	}
+
+	second := rows[1].(map[string]any)
+	if second["spare"] != true {
+		t.Fatalf("the unclaimed copy is not reported as spare: %v", second)
+	}
+	if second["participant"] != "" {
+		t.Fatalf("a spare names %v as its holder", second["participant"])
+	}
+	// A size the cluster could not give must not read as a database of zero
+	// bytes, which on this screen would mean "empty" rather than "unknown".
+	if second["size_known"] != false {
+		t.Fatalf("a size nobody read is reported as known: %v", second)
+	}
+}
+
+// The destructive half. The organiser's identity has to reach the service —
+// nothing can be recorded against them otherwise — and so does the contest,
+// which is what scopes the drop to their own olympiad.
+func TestDroppingADatabaseReachesTheServiceWithTheActorAndTheContest(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contest := uuid.New()
+
+	rec := f.do(http.MethodDelete, "/contests/"+contest.String()+"/game/instances/game_c1_u1", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body)
+	}
+	if f.databases.droppedDB != "game_c1_u1" {
+		t.Fatalf("the service was asked about %q", f.databases.droppedDB)
+	}
+	if f.databases.dropActor != f.actor.ID {
+		t.Fatal("the actor did not reach the service, so nothing could be recorded against them")
+	}
+	if f.databases.dropTarget != contest {
+		t.Fatalf("the contest reached the service as %v, want %v", f.databases.dropTarget, contest)
+	}
+	if decode(t, rec)["status"] != "dropped" {
+		t.Fatalf("the answer does not say the database is gone: %s", rec.Body)
+	}
+}
+
+// CLAUDE.md rule 1: every refusal is a sentinel the handler names, so a stale
+// page is told which of the two things happened rather than "internal error".
+func TestEveryInstanceRefusalHasItsOwnCode(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"another contest's database", provisioning.ErrInstanceNotFound, http.StatusNotFound, "game_instance_not_found"},
+		{"already gone", provisioning.ErrInstanceAlreadyDropped, http.StatusConflict, "game_instance_already_dropped"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newGameFixture(t, rbac.PermissionContestAdminAll)
+			f.databases.dropErr = tc.err
+
+			rec := f.do(http.MethodDelete, "/contests/"+uuid.NewString()+"/game/instances/game_c1_u1", "")
+			if rec.Code != tc.status {
+				t.Fatalf("status %d, want %d: %s", rec.Code, tc.status, rec.Body)
+			}
+			if code := errorCode(t, rec); code != tc.code {
+				t.Fatalf("code %q, want %q", code, tc.code)
+			}
+		})
+	}
+}
+
+// Dropping somebody's database is destructive and contest-scoped, so it sits
+// behind the same gate as writing the script.
+//
+// The same limit applies here that TestWritingTheScriptIsRefusedToAnAccount
+// ThatIsNotStaffOnTheContest documents: no contest role grants view without
+// edit, so nothing here can tell contest.view and contest.edit apart on a
+// route. What it can prove is that the gate exists and discriminates — a
+// stranger is refused, and a manager, who is the person on duty when a
+// database goes wrong mid-olympiad, is not.
+func TestDroppingADatabaseIsRefusedToAnAccountThatIsNotStaffOnTheContest(t *testing.T) {
+	f := newGameFixture(t)
+
+	rec := f.do(http.MethodDelete, "/contests/"+uuid.NewString()+"/game/instances/game_c1_u1", "")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d, want 403: %s", rec.Code, rec.Body)
+	}
+	if f.databases.droppedDB != "" {
+		t.Fatalf("%q reached the service despite the refusal", f.databases.droppedDB)
+	}
+}
+
+func TestAManagerOfTheContestMayDropOneOfItsDatabases(t *testing.T) {
+	f := newGameFixture(t)
+	contest := uuid.New()
+	if err := f.stores.Managers.Grant(context.Background(), contests.Manager{
+		ContestID: contest, UserID: f.actor.ID, Role: rbac.RoleManager,
+	}); err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+
+	rec := f.do(http.MethodDelete, "/contests/"+contest.String()+"/game/instances/game_c1_u1", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body)
+	}
+}
+
+// Reading the list is behind the contest's own view permission, so a stranger
+// cannot learn which databases an olympiad owns.
+func TestTheInstanceListIsRefusedToAnAccountThatIsNotStaffOnTheContest(t *testing.T) {
+	f := newGameFixture(t)
+
+	rec := f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game/instances", "")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d, want 403: %s", rec.Code, rec.Body)
 	}
 }

@@ -110,8 +110,19 @@ test-db: require-env ## Run the repository tests against the development databas
 # provoke what it must not be able to do. They cannot be faked: every guarantee
 # under test is a refusal by PostgreSQL, not by our code. `make dev-up` first —
 # it starts pg-game along with the core database.
+#
+# The two role passwords travel with the DSN because these tests prepare the
+# cluster, and preparing it states what game_reader and game_writer
+# authenticate with. They are the same roles `make runner` connects as, so a
+# harness with passwords of its own would take a running Query Runner's
+# credentials away mid-session; given the deployment's own, a test run writes
+# back what is already there and both keep working. Missing, the tests stop
+# and say so rather than inventing a password (internal/gamedb/gamedbtest).
+GAME_ROLE_PASSWORDS := GAME_READER_PASSWORD="$(GAME_READER_PASSWORD)" GAME_WRITER_PASSWORD="$(GAME_WRITER_PASSWORD)"
+
 test-game: require-env ## Run the game cluster tests against the development cluster
-	cd $(BACKEND) && GAME_DB_DSN="$(GAME_DB_DSN)" go test -count=1 ./internal/gamedb/... ./internal/queryrunner/... ./internal/rpc/...
+	cd $(BACKEND) && GAME_DB_DSN="$(GAME_DB_DSN)" $(GAME_ROLE_PASSWORDS) \
+		go test -count=1 ./internal/gamedb/... ./internal/queryrunner/... ./internal/rpc/...
 
 # The one test that crosses both clusters: a script saved in the core database
 # has to become a real database on the game cluster. Every other test of that
@@ -119,7 +130,7 @@ test-game: require-env ## Run the game cluster tests against the development clu
 # caller at all.
 .PHONY: test-game-build
 test-game-build:
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" GAME_DB_DSN="$(GAME_DB_DSN)" \
+	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" GAME_DB_DSN="$(GAME_DB_DSN)" $(GAME_ROLE_PASSWORDS) \
 		go test -count=1 -run TestAScriptSavedInTheCoreDatabase ./internal/provisioning/
 
 # The contract between the Core API and the Query Runner. Generated code is

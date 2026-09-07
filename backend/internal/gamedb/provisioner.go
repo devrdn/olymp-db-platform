@@ -251,3 +251,44 @@ func (p *Provisioner) DatabaseSize(ctx context.Context, name string) (int64, err
 	}
 	return size, nil
 }
+
+// DatabaseSizes is DatabaseSize for a whole list, in one round trip.
+//
+// The organizer's database screen asks about every copy a contest owns at
+// once, and one statement each would be hundreds of round trips for one page.
+//
+// It reads pg_database rather than calling pg_database_size(name) per row for
+// a second reason as well: pg_database_size raises an error for a name that
+// does not exist, so a single database dropped between the core-database read
+// and this call would cost the whole list its sizes. Joining against the
+// catalogue instead simply leaves that name out of the result, which is what
+// the interface has to cope with anyway — a size is a decoration, and its
+// absence is not a failure.
+func (p *Provisioner) DatabaseSizes(ctx context.Context, names []string) (map[string]int64, error) {
+	sizes := make(map[string]int64, len(names))
+	if len(names) == 0 {
+		return sizes, nil
+	}
+
+	rows, err := p.admin.Query(ctx,
+		`SELECT datname, pg_database_size(oid) FROM pg_database WHERE datname = ANY($1)`, names)
+	if err != nil {
+		return nil, fmt.Errorf("read database sizes: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			name string
+			size int64
+		)
+		if err := rows.Scan(&name, &size); err != nil {
+			return nil, fmt.Errorf("scan a database size: %w", err)
+		}
+		sizes[name] = size
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read database sizes: %w", err)
+	}
+	return sizes, nil
+}

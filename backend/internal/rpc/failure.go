@@ -16,10 +16,12 @@ package rpc
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	pb "github.com/devrdn/db-contest/backend/internal/rpc/queryrunnerv1"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // failureFor turns what the runner returned into what the wire carries.
@@ -57,8 +59,42 @@ func failureFor(err error) *pb.Failure {
 	case errors.Is(err, queryrunner.ErrCanceled), errors.Is(err, context.Canceled):
 		return &pb.Failure{Kind: pb.Failure_KIND_CANCELLED.Enum(), Message: ptr(err.Error())}
 	default:
+		return classify(err)
+	}
+}
+
+// classify decides, for an error nothing above recognised, whether the
+// database refused this query or this service failed.
+//
+// By what the error *is*, never by what is left over. Only PostgreSQL's own
+// error about a statement — a *pgconn.PgError — is the database refusing
+// anything; everything else is ours, because the alternative default hands a
+// participant an explanation of our infrastructure and tells them their SQL
+// was wrong. The message travels in both cases: it is what the journal and the
+// technical log read, and the contract says it is never repeated to the person
+// asking (Failure.message).
+//
+// The order of the two checks is the whole of this function. A cluster that
+// refuses a login answers with a PgError (SQLSTATE 28P01), and pgx hands it
+// back nested inside a *pgconn.ConnectError — alongside every address it
+// dialled and the database it asked for. Asking "is there a PgError in here"
+// first therefore answers yes for a connection that never opened, which is how
+// the game cluster's host, port and role name reached a participant's console
+// under "check the fields you filled in". A connection failure is named first,
+// and it is not a database error however it failed: the database never saw the
+// query.
+func classify(err error) *pb.Failure {
+	internal := &pb.Failure{Kind: pb.Failure_KIND_INTERNAL.Enum(), Message: ptr(err.Error())}
+
+	var connect *pgconn.ConnectError
+	if errors.As(err, &connect) {
+		return internal
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
 		return &pb.Failure{Kind: pb.Failure_KIND_DATABASE_ERROR.Enum(), Message: ptr(err.Error())}
 	}
+	return internal
 }
 
 // errorFor turns the wire's answer back into the error the caller expects.
@@ -93,7 +129,25 @@ func errorFor(failure *pb.Failure) error {
 	case pb.Failure_KIND_CANCELLED:
 		return queryrunner.ErrCanceled
 	case pb.Failure_KIND_DATABASE_ERROR:
-		return errors.New(failure.GetMessage())
+		// Named as the database's own, so that the layers above show its
+		// words because they decided to and not because they ran out of
+		// cases.
+		return &queryrunner.DatabaseError{Message: failure.GetMessage()}
+	case pb.Failure_KIND_INTERNAL:
+		// ErrUnreachable rather than queryproxy.ErrUnavailable, for two
+		// reasons. The Core API already answers this one with 503 and "the
+		// query service is unavailable" — a generic sentence, and a status
+		// that says "try again" rather than "your request was bad", which is
+		// exactly right for a runner that could not reach the game cluster;
+		// its 500 counterpart reads as a bug of ours that a retry will not
+		// help. And the dependency: the façade consumes this package through
+		// an interface it declares itself, so reaching up into it from here
+		// for a sentinel would point that arrow backwards.
+		//
+		// The message rides along for the log — %s and not %w, because there
+		// is nothing left of the far side's error to unwrap, only its text —
+		// and the handler answers from the sentinel, never from this string.
+		return fmt.Errorf("%w: %s", ErrUnreachable, failure.GetMessage())
 	default:
 		// A kind this build does not know is still a failure. Reporting it as
 		// success because the enum is unfamiliar would turn a newer runner

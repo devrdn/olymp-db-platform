@@ -67,11 +67,16 @@ type Conn interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-// Cluster is a connection that can also open a transaction, which preparing
-// the cluster needs and hardening one database does not.
+// Cluster is a connection that can also open a transaction and read many
+// rows — what preparing the cluster and reporting on it need, and what
+// hardening one database does not.
 type Cluster interface {
 	Conn
 	Begin(ctx context.Context) (pgx.Tx, error)
+	// Query is used only to read the cluster's own catalogue for a whole list
+	// at once (Provisioner.DatabaseSizes). Nothing that touches a
+	// participant's data goes through here — that is the Query Runner's.
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
 // prepareLock is the advisory lock every run of PrepareCluster takes.

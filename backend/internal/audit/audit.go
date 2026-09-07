@@ -84,6 +84,15 @@ const (
 	// database learns from the trail what removed it, and when, rather than
 	// filing a support ticket about a missing instance.
 	ActionGameInstanceReclaim = "contest.instance_reclaimed"
+	// ActionGameInstanceDrop records one database removed because an
+	// organizer asked for it — the copy that had gone wrong and had to be
+	// remade. Its own action code beside ActionGameInstanceReclaim rather
+	// than sharing it: that one is the timer, with no actor, meaning "the
+	// grace period ran out"; this one names the person who decided a
+	// participant's copy was broken, in the middle of an olympiad. Folding
+	// the two together would leave the trail unable to answer which of them
+	// took a database away, which is the first question anybody asks.
+	ActionGameInstanceDrop = "contest.instance_dropped"
 	// ActionGameTemplateReclaim records a contest's template database dropped
 	// by the same sweep, once every instance copied from it is already gone
 	// (§2.4). The template is the largest single database a contest owns;
@@ -120,7 +129,7 @@ var actions = []string{
 
 	ActionParticipantAdd, ActionParticipantRemove, ActionParticipantDisqualify,
 	ActionParticipantEnroll, ActionContestAccessDenied, ActionContestStartBlocked,
-	ActionGameInstanceReclaim, ActionGameTemplateReclaim,
+	ActionGameInstanceReclaim, ActionGameTemplateReclaim, ActionGameInstanceDrop,
 
 	ActionSettingsChange,
 }

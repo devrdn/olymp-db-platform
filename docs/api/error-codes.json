@@ -58,6 +58,14 @@
       "meaning": "The signed-in account may not perform this action here."
     },
     {
+      "code": "game_instance_already_dropped",
+      "meaning": "The database has already been removed — by the reclaim sweep once the contest's grace period passed, or by somebody else while this page was open. Nothing was changed; reloading the list shows the current state."
+    },
+    {
+      "code": "game_instance_not_found",
+      "meaning": "This contest owns no database by that name. Also the answer when the database belongs to another contest: that it exists elsewhere is not the caller's business, and a contest-scoped permission that said otherwise would not be contest-scoped."
+    },
+    {
       "code": "game_not_editable",
       "meaning": "The contest's game can no longer be replaced. Replacing it raises the template's version, which makes every participant's copy stale — and a stale copy is dropped and made again, so in a running olympiad it would take every participant's database at once."
     },

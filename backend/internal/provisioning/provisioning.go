@@ -101,6 +101,17 @@ type Repository interface {
 	// 'dropped' status, the same convention MarkDropped keeps for an
 	// instance's row.
 	MarkTemplateDropped(ctx context.Context, contestID uuid.UUID) error
+	// Instances lists up to limit of one contest's rows — spare copies,
+	// participants' own, and the dropped ones kept as history — newest
+	// last. limit is the caller's bound rather than the query's own, so
+	// Service.Instances can ask for one more than it will show and know
+	// whether there are more (CLAUDE.md rule 2).
+	Instances(ctx context.Context, contest uuid.UUID, limit int) ([]InstanceRecord, error)
+	// InstanceNamed reads one row of a contest by database name, or
+	// ErrInstanceNotFound. Scoped to the contest deliberately: db_name is
+	// unique across the installation, so a lookup by name alone would let a
+	// contest-scoped permission reach another contest's database.
+	InstanceNamed(ctx context.Context, contest uuid.UUID, database string) (InstanceRecord, error)
 }
 
 // Cluster is the part of the game cluster this service drives.
@@ -113,6 +124,14 @@ type Cluster interface {
 	CreateInstance(ctx context.Context, template, instance string, policy sqlpolicy.Policy) error
 	Drop(ctx context.Context, name string) error
 	DatabaseSize(ctx context.Context, name string) (int64, error)
+	// DatabaseSizes is DatabaseSize for a whole list, in one round trip.
+	// Apart from it rather than a loop over it, because the organizer's
+	// database list asks about every copy a contest owns at once and a
+	// round trip each would be hundreds of them for one screen. Names that
+	// no longer exist are absent from the result rather than an error: the
+	// list is read from the core database and the cluster is a second system
+	// that may already have moved on.
+	DatabaseSizes(ctx context.Context, names []string) (map[string]int64, error)
 	// DropIdle removes name only if nobody is connected to it, and reports
 	// whether it did. Unlike Drop, it never forces a connection closed — the
 	// reclaim sweep (its only caller) has no way to tell a forgotten session

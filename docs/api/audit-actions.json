@@ -38,6 +38,7 @@
     "contest.start_blocked",
     "contest.instance_reclaimed",
     "contest.template_reclaimed",
+    "contest.instance_dropped",
     "settings.change"
   ]
 }

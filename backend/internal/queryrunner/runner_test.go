@@ -419,7 +419,7 @@ func TestARunnerWithoutAWriterRefusesAReadWriteContest(t *testing.T) {
 		`GRANT SELECT ON ALL TABLES IN SCHEMA public TO `+gamedb.RoleReader,
 	)
 	cluster, err := queryrunner.NewCluster(
-		gamedbtest.DSN(t, gamedb.RoleReader, gamedbtest.ReaderPassword, database), "")
+		gamedbtest.DSN(t, gamedb.RoleReader, gamedbtest.ReaderPassword(t), database), "")
 	if err != nil {
 		t.Fatalf("building the cluster connector: %v", err)
 	}
