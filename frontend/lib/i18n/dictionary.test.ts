@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, test } from "vitest";
 
+import { LOGIN_FAILURE_REASONS } from "../api/audit";
 import { AUDIT_ACTIONS } from "../api/audit-terms";
 import { PUBLISH_PROBLEMS } from "../api/publish-gate";
 import { LOCALES } from "./config";
@@ -111,6 +112,28 @@ describe("getDictionary", () => {
 
     for (const dict of dictionaries) {
       const translated = dict.workspace.gate.problems as Record<string, string>;
+      for (const code of codes) {
+        expect(translated[code], `missing translation for "${code}"`).toBeTypeOf("string");
+      }
+    }
+  });
+
+  test("every login-failure reason has a translation in every locale", async () => {
+    // A third closed vocabulary the audit trail renders, alongside the
+    // action codes and the publish-gate problem codes above
+    // (`auth.login_failed`'s payload, `trail.tsx`'s `LoginFailureReason`).
+    // Same failure to guard against: a reason reaching the interface with no
+    // wording in any language, which is exactly what "Failed to sign in"
+    // with no reason at all looked like before this vocabulary existed.
+    //
+    // No generated backend contract for this one either (the same gap
+    // PUBLISH_PROBLEMS documents above) — LOGIN_FAILURE_REASONS is this
+    // side's own closed list, checked here.
+    const codes = Object.values(LOGIN_FAILURE_REASONS);
+    const dictionaries = await Promise.all(LOCALES.map((locale) => getDictionary(locale)));
+
+    for (const dict of dictionaries) {
+      const translated = dict.audit.failureReasons as Record<string, string>;
       for (const code of codes) {
         expect(translated[code], `missing translation for "${code}"`).toBeTypeOf("string");
       }

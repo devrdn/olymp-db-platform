@@ -57,6 +57,30 @@ var (
 	ErrTooManyAttempts = errors.New("too many login attempts")
 )
 
+// Login-failure reasons carried in the auth.login_failed audit payload.
+//
+// A closed set, not free text, for the same reason audit.Actions() is a
+// closed set rather than whatever string a call site happens to pass: the
+// trail is read by more people than the one investigating an incident, kept
+// for a year, and the interface has to translate every reason into three
+// languages — which only works against a fixed vocabulary.
+//
+// Exactly three, matching what the login endpoint itself ever distinguishes
+// (architecture §7.2), and no finer: a wrong password and a login that does
+// not exist are both ReasonInvalidCredentials, because the endpoint answers
+// them identically and at the same time — recording which one happened would
+// put in permanent storage a distinction the wire deliberately erases, and an
+// administrator reading the trail would become the oracle the endpoint was
+// built to deny everyone else. Both throttle windows (per address, per
+// account — see checkThrottle) collapse into ReasonTooManyAttempts for the
+// same reason: the caller is told "too many attempts" either way, never which
+// counter tripped.
+const (
+	ReasonInvalidCredentials = "invalid_credentials"
+	ReasonAccountBlocked     = "account_blocked"
+	ReasonTooManyAttempts    = "too_many_attempts"
+)
+
 // ServiceConfig collects the service's collaborators.
 type ServiceConfig struct {
 	Users    UserStore
@@ -146,14 +170,14 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 	}
 
 	if !found || !matched {
-		s.recordFailure(ctx, cmd, "invalid_credentials")
+		s.recordFailure(ctx, cmd, ReasonInvalidCredentials)
 		return LoginResult{}, ErrInvalidCredentials
 	}
 
 	// The password checked out, so the caller owns the account and may be told
 	// why it is refused.
 	if !user.IsActive() {
-		s.recordFailure(ctx, cmd, "account_blocked")
+		s.recordFailure(ctx, cmd, ReasonAccountBlocked)
 		return LoginResult{}, ErrAccountBlocked
 	}
 
@@ -242,7 +266,7 @@ func (s *Service) checkThrottle(ctx context.Context, cmd LoginCommand) error {
 			return err
 		}
 		if !allowed {
-			s.recordFailure(ctx, cmd, "throttled_address")
+			s.recordFailure(ctx, cmd, ReasonTooManyAttempts)
 			return ErrTooManyAttempts
 		}
 	}
@@ -265,7 +289,7 @@ func (s *Service) checkThrottle(ctx context.Context, cmd LoginCommand) error {
 		return err
 	}
 	if !allowed {
-		s.recordFailure(ctx, cmd, "throttled_account")
+		s.recordFailure(ctx, cmd, ReasonTooManyAttempts)
 		return ErrTooManyAttempts
 	}
 
@@ -313,7 +337,10 @@ func (s *Service) upgradeHash(ctx context.Context, user users.User, plaintext st
 }
 
 // recordFailure writes a failed attempt to the trail. The login is recorded
-// (it is what an investigation searches by); the password never is.
+// (it is what an investigation searches by); the password never is. reason is
+// always one of the Reason* constants above — every call site in this file
+// names one, and that is what keeps the payload a closed vocabulary rather
+// than whatever text a future call site might be tempted to pass.
 func (s *Service) recordFailure(ctx context.Context, cmd LoginCommand, reason string) {
 	s.record(ctx, audit.Entry{
 		Action:    audit.ActionAuthLoginFailed,

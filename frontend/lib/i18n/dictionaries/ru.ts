@@ -843,6 +843,11 @@ const ru = {
       "contest.access_denied": "Отклонён сетевым ограничением",
       "settings.change": "Изменил настройки установки",
     },
+    failureReasons: {
+      invalid_credentials: "Неверный логин или пароль",
+      account_blocked: "Аккаунт заблокирован",
+      too_many_attempts: "Слишком много попыток",
+    },
   },
   screens: {
     notFound: {

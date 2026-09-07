@@ -150,6 +150,38 @@ export function blockedProblems(payload: Record<string, unknown> | undefined): s
   return raw.filter((code): code is string => typeof code === "string");
 }
 
+/**
+ * The closed vocabulary an `auth.login_failed` entry's `reason` can carry
+ * (`backend/internal/auth/service.go`'s `Reason*` constants).
+ *
+ * Three codes, matching exactly what the login endpoint itself ever
+ * distinguishes (architecture §7.2): a wrong password and a login that does
+ * not exist both record `invalidCredentials`, because the endpoint answers
+ * them identically and at the same time — recording which one happened would
+ * put in a year-old, widely-read table a distinction the wire deliberately
+ * erases. `accountBlocked` is safe to record because the endpoint itself only
+ * ever discloses it after the same password matched, so a reader learns
+ * nothing the caller was not already told. The same closed-list treatment as
+ * `PUBLISH_PROBLEMS` below, and for the same reason: nothing on the backend
+ * publishes this vocabulary as a generated contract yet, so this list is what
+ * `dictionary.test.ts` checks the dictionaries against.
+ */
+export const LOGIN_FAILURE_REASONS = {
+  invalidCredentials: "invalid_credentials",
+  accountBlocked: "account_blocked",
+  tooManyAttempts: "too_many_attempts",
+} as const;
+
+/**
+ * The reason an `auth.login_failed` entry carries, read back from its
+ * payload. An entry with no reason (written before this field existed, or
+ * not a login failure at all) simply has none.
+ */
+export function loginFailureReason(payload: Record<string, unknown> | undefined): string | undefined {
+  const reason = payload?.reason;
+  return typeof reason === "string" ? reason : undefined;
+}
+
 /** The shortest honest rendering of a recorded value. */
 function renderValue(value: unknown): string {
   if (value === null || value === undefined) return "—";
