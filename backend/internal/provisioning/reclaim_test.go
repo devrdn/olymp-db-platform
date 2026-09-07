@@ -100,6 +100,55 @@ func templateStatusOf(t *testing.T, contest uuid.UUID) string {
 	return status
 }
 
+// Reclaim is installation-wide by design (its own doc): one call sweeps
+// every contest in the shared database that is due, not only the one a test
+// just set up. Under `go test ./...` that database is not this package's
+// alone — internal/postgres's own Reclaimable tests commit real finished and
+// archived contests directly, outside a transaction, precisely because the
+// point of those tests is what a second connection sees. A ReclaimResult's
+// totals, and a fake cluster's or sink's raw contents, can therefore carry
+// somebody else's contest alongside this test's own. The helpers below are
+// how every test below asks about its own row without being upset by that —
+// scoping is the lever, the same one audit_test.go's writeTrail chose for
+// the identical problem, not a smaller batch limit (Reclaim's own limit
+// stays what production uses, see its doc) and not a different pass order
+// (the ordering is a guarantee this package tests directly elsewhere).
+
+// wasDropped reports whether the cluster actually dropped database — built
+// on outcomeOf (support_test.go) so it answers about this one database
+// regardless of whatever else the same installation-wide pass processed.
+func wasDropped(fake *cluster, database string) bool {
+	dropped, _, _ := fake.outcomeOf(database)
+	return dropped
+}
+
+// entriesFor returns just the entries s recorded about contest — s is a
+// fresh sink per test, but the one Reclaim call it backs is installation-
+// wide, so it can carry another contest's entry too when that other
+// contest's own reclaim happened to fall in the same pass.
+func entriesFor(s *sink, contest uuid.UUID) []audit.Entry {
+	var found []audit.Entry
+	id := contest.String()
+	for _, e := range s.entries {
+		if e.EntityID == id {
+			found = append(found, e)
+		}
+	}
+	return found
+}
+
+// stuckEntryFor finds database's own entry in result.Stuck, if any — the
+// list can name another package's overdue candidate in the same pass, so a
+// test asks for its own by name rather than trusting the list's length.
+func stuckEntryFor(result provisioning.ReclaimResult, database string) (provisioning.StuckInstance, bool) {
+	for _, s := range result.Stuck {
+		if s.Database == database {
+			return s, true
+		}
+	}
+	return provisioning.StuckInstance{}, false
+}
+
 // The ordinary case: a contest finished well past its grace, one instance,
 // nothing in the way. Covers the row ending 'dropped' rather than deleted,
 // and the audit entry an organizer would find it by.
@@ -116,20 +165,18 @@ func TestReclaimDropsAnInstanceOfAContestPastItsGrace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reclaim: %v", err)
 	}
-	if result.Reclaimed != 1 || result.Skipped != 0 || result.Failed != 0 {
-		t.Fatalf("result = %+v, want reclaimed=1 skipped=0 failed=0", result)
-	}
-	if drops := fake.idleDrops(); len(drops) != 1 || drops[0] != database {
-		t.Fatalf("the cluster dropped %v, want [%s]", drops, database)
+	if !wasDropped(fake, database) {
+		t.Fatalf("the cluster was never asked to drop %s; result = %+v", database, result)
 	}
 	if status := statusOf(t, database); status != "dropped" {
 		t.Fatalf("status = %q, want %q — the row must survive, not be deleted", status, "dropped")
 	}
 
-	if len(s.entries) != 1 {
-		t.Fatalf("%d audit entries were written, want 1", len(s.entries))
+	entries := entriesFor(s, contest.ID)
+	if len(entries) != 1 {
+		t.Fatalf("%d audit entries were written about this contest, want 1 (found %+v)", len(entries), entries)
 	}
-	entry := s.entries[0]
+	entry := entries[0]
 	if entry.Action != audit.ActionGameInstanceReclaim || entry.Entity != "contest" || entry.EntityID != contest.ID.String() {
 		t.Fatalf("audit entry = %+v; wrong action or entity", entry)
 	}
@@ -158,11 +205,11 @@ func TestReclaimDropsAnInstanceOfAnArchivedContestPastItsGrace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reclaim: %v", err)
 	}
-	if result.Reclaimed != 1 {
-		t.Fatalf("reclaimed = %d, want 1 for an archived contest past its grace", result.Reclaimed)
+	if !wasDropped(fake, database) {
+		t.Fatalf("an archived contest past its grace was not dropped; result = %+v", result)
 	}
-	if drops := fake.idleDrops(); len(drops) != 1 || drops[0] != database {
-		t.Fatalf("the cluster dropped %v, want [%s]", drops, database)
+	if status := statusOf(t, database); status != "dropped" {
+		t.Fatalf("status = %q, want %q", status, "dropped")
 	}
 }
 
@@ -180,17 +227,18 @@ func TestReclaimLeavesAnInstanceInsideItsGraceAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reclaim: %v", err)
 	}
-	if result.Reclaimed != 0 || result.Skipped != 0 || result.Failed != 0 {
-		t.Fatalf("result = %+v, want everything zero", result)
-	}
-	if drops := fake.idleDrops(); len(drops) != 0 {
-		t.Fatalf("the cluster was asked to drop %v inside the grace", drops)
+	// Reclaimable's own WHERE clause (internal/postgres/gameinstances.go)
+	// excludes an instance still inside its grace before Reclaim ever sees
+	// it, so the cluster must never even have been asked about it — no
+	// membership check on idleDrops needed, the call itself must be absent.
+	if _, _, called := fake.outcomeOf(database); called {
+		t.Fatalf("the cluster was asked about %s inside its grace; result = %+v", database, result)
 	}
 	if status := statusOf(t, database); status == "dropped" {
 		t.Fatal("an instance inside its grace was marked dropped")
 	}
-	if len(s.entries) != 0 {
-		t.Fatal("an instance inside its grace was audited as reclaimed")
+	if entries := entriesFor(s, contest.ID); len(entries) != 0 {
+		t.Fatalf("an instance inside its grace was audited as reclaimed: %+v", entries)
 	}
 }
 
@@ -203,16 +251,28 @@ func TestReclaimNeverTouchesAContestThatHasNotFinished(t *testing.T) {
 	}
 	// contestFor leaves the contest at whatever status a fresh contest
 	// starts at (draft) — never touched by finishContest, on purpose.
+	var databases []string
+	for _, inst := range instancesOf(t, contest.ID) {
+		databases = append(databases, inst.Database)
+	}
+	if len(databases) != 2 {
+		t.Fatalf("setup: %d instances, want 2", len(databases))
+	}
 
-	result, err := service.Reclaim(t.Context(), 0)
-	if err != nil {
+	if _, err := service.Reclaim(t.Context(), 0); err != nil {
 		t.Fatalf("reclaim: %v", err)
 	}
-	if result.Reclaimed != 0 || result.Failed != 0 {
-		t.Fatalf("result = %+v against a contest that never finished, want reclaimed=0 failed=0", result)
-	}
-	if drops := fake.idleDrops(); len(drops) != 0 {
-		t.Fatalf("the cluster was asked to drop %v of a contest that never finished", drops)
+	// Reclaimable's WHERE clause excludes any instance of a contest whose
+	// status is not 'finished' or 'archived', so the cluster must never have
+	// been asked about either database — a running contest's instances are
+	// not even offered, never mind reclaimed.
+	for _, database := range databases {
+		if _, _, called := fake.outcomeOf(database); called {
+			t.Fatalf("the cluster was asked about %s of a contest that never finished", database)
+		}
+		if status := statusOf(t, database); status == "dropped" {
+			t.Fatalf("%s was reclaimed although its contest never finished", database)
+		}
 	}
 }
 
@@ -235,17 +295,26 @@ func TestReclaimLeavesABusyDatabaseForTheNextTick(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reclaim: %v", err)
 	}
-	if result.Reclaimed != 0 || result.Failed != 0 {
-		t.Fatalf("result = %+v against a busy database, want reclaimed=0 failed=0 — busy is not failure", result)
+	// outcomeOf is what proves "busy is not failure" for this database
+	// specifically: DropIdle must have been called (the candidate was
+	// offered, not silently dropped from the batch) and must have reported
+	// neither dropped nor an error — the same (false, nil) PostgreSQL itself
+	// returns for a plain DROP DATABASE against a live connection. Reading
+	// result.Skipped instead would also count every other reclaimable row
+	// this same installation-wide pass happened to skip, which a test
+	// running under `go test ./...` does not own.
+	dropped, dropErr, called := fake.outcomeOf(database)
+	if !called {
+		t.Fatalf("the cluster was never asked about %s; result = %+v", database, result)
 	}
-	if result.Skipped != 1 {
-		t.Fatalf("skipped = %d, want 1 — a busy database used to vanish into reclaimed=0 failed=0 unnoticed", result.Skipped)
+	if dropped || dropErr != nil {
+		t.Fatalf("DropIdle(%s) = (%v, %v), want (false, nil) for a busy database", database, dropped, dropErr)
 	}
 	if status := statusOf(t, database); status == "dropped" {
 		t.Fatal("a busy database's row was marked dropped anyway")
 	}
-	if len(s.entries) != 0 {
-		t.Fatal("a busy database was audited as reclaimed")
+	if entries := entriesFor(s, contest.ID); len(entries) != 0 {
+		t.Fatalf("a busy database was audited as reclaimed: %+v", entries)
 	}
 }
 
@@ -267,8 +336,12 @@ func TestReclaimDoesNotCallABusyDatabaseStuckRightAfterItsGrace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reclaim: %v", err)
 	}
-	if len(result.Stuck) != 0 {
-		t.Fatalf("stuck = %+v, want none this soon past the grace", result.Stuck)
+	// result.Stuck can legitimately carry another package's own overdue
+	// candidate from the same installation-wide pass — asking for this
+	// database by name is what keeps the assertion about this test's own
+	// row rather than the whole pass's list.
+	if _, found := stuckEntryFor(result, database); found {
+		t.Fatalf("%s was named stuck this soon past the grace; stuck = %+v", database, result.Stuck)
 	}
 }
 
@@ -291,15 +364,16 @@ func TestReclaimNamesADatabaseStuckFarPastItsGrace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reclaim: %v", err)
 	}
-	if result.Skipped != 1 {
-		t.Fatalf("skipped = %d, want 1", result.Skipped)
+	dropped, dropErr, called := fake.outcomeOf(database)
+	if !called || dropped || dropErr != nil {
+		t.Fatalf("DropIdle(%s) = (%v, %v, called=%v), want (false, nil, true)", database, dropped, dropErr, called)
 	}
-	if len(result.Stuck) != 1 {
-		t.Fatalf("stuck = %+v, want exactly one entry", result.Stuck)
+	stuck, found := stuckEntryFor(result, database)
+	if !found {
+		t.Fatalf("%s was not named stuck; stuck = %+v", database, result.Stuck)
 	}
-	stuck := result.Stuck[0]
-	if stuck.Database != database || stuck.ContestID != contest.ID {
-		t.Fatalf("stuck entry = %+v, want database=%s contest=%s", stuck, database, contest.ID)
+	if stuck.ContestID != contest.ID {
+		t.Fatalf("stuck entry = %+v, want contest=%s", stuck, contest.ID)
 	}
 	if stuck.Overdue < 24*time.Hour {
 		t.Fatalf("overdue = %s, want more than 24h", stuck.Overdue)
@@ -321,15 +395,18 @@ func TestReclaimOneFailureLeavesTheRestReclaimed(t *testing.T) {
 	fake.failIdleDropOf(broken, errors.New("the cluster refused"))
 	finishContest(t, contest.ID, 120)
 
-	result, err := service.Reclaim(t.Context(), 60)
-	if err == nil {
+	if _, err := service.Reclaim(t.Context(), 60); err == nil {
 		t.Fatal("a failing instance produced no error from Reclaim")
 	}
-	if result.Reclaimed != 1 || result.Failed != 1 {
-		t.Fatalf("result = %+v, want reclaimed=1 failed=1", result)
+	dropped, dropErr, called := fake.outcomeOf(broken)
+	if !called || dropped || dropErr == nil {
+		t.Fatalf("DropIdle(%s) = (%v, %v, called=%v), want (false, non-nil, true)", broken, dropped, dropErr, called)
 	}
 	if status := statusOf(t, broken); status == "dropped" {
 		t.Fatal("a database whose drop failed was marked dropped anyway")
+	}
+	if !wasDropped(fake, other) {
+		t.Fatalf("%s was not dropped — one failure must not stop the rest", other)
 	}
 	if status := statusOf(t, other); status != "dropped" {
 		t.Fatalf("the other instance's status = %q, want dropped — one failure must not stop the rest", status)
@@ -348,31 +425,50 @@ func TestReclaimDropsATemplateOnceItsInstancesAreGone(t *testing.T) {
 	markTemplateReady(t, contest.ID, templateDB)
 	finishContest(t, contest.ID, 120)
 
-	result, err := service.Reclaim(t.Context(), 60)
-	if err != nil {
+	if _, err := service.Reclaim(t.Context(), 60); err != nil {
 		t.Fatalf("reclaim: %v", err)
 	}
-	if result.Reclaimed != 1 {
-		t.Fatalf("reclaimed = %d, want 1", result.Reclaimed)
+	if !wasDropped(fake, database) {
+		t.Fatalf("the instance %s was not dropped", database)
 	}
-	if result.TemplatesReclaimed != 1 || result.TemplatesFailed != 0 {
-		t.Fatalf("result = %+v, want templates_reclaimed=1 templates_failed=0", result)
+	if status := statusOf(t, database); status != "dropped" {
+		t.Fatalf("instance status = %q, want %q", status, "dropped")
 	}
-	drops := fake.idleDrops()
-	if len(drops) != 2 {
-		t.Fatalf("the cluster dropped %v, want the instance and the template", drops)
-	}
-	if drops[0] != database || drops[1] != templateDB {
-		t.Fatalf("dropped %v in order, want [%s %s] — the instance before its template", drops, database, templateDB)
+	if !wasDropped(fake, templateDB) {
+		t.Fatalf("the template %s was not dropped", templateDB)
 	}
 	if status := templateStatusOf(t, contest.ID); status != "dropped" {
 		t.Fatalf("template status = %q, want %q", status, "dropped")
 	}
 
-	if len(s.entries) != 2 {
-		t.Fatalf("%d audit entries were written, want 2 (the instance and the template)", len(s.entries))
+	// Both belong to the same pass's single sequential drop list
+	// (fake.idleDrops), so their positions in it — whatever else that same
+	// installation-wide pass also dropped around them — still prove the
+	// instance went before its own template, exactly as Reclaim's own doc
+	// promises (reclaimTemplates runs after the instance loop).
+	drops := fake.idleDrops()
+	instanceIdx, templateIdx := -1, -1
+	for i, d := range drops {
+		switch d {
+		case database:
+			instanceIdx = i
+		case templateDB:
+			templateIdx = i
+		}
 	}
-	templateEntry := s.entries[1]
+	if instanceIdx == -1 || templateIdx == -1 {
+		t.Fatalf("drops = %v, want both %s and %s in it", drops, database, templateDB)
+	}
+	if instanceIdx >= templateIdx {
+		t.Fatalf("the instance is at index %d and its template at %d in %v, want the instance first",
+			instanceIdx, templateIdx, drops)
+	}
+
+	entries := entriesFor(s, contest.ID)
+	if len(entries) != 2 {
+		t.Fatalf("%d audit entries were written about this contest, want 2 (the instance and the template): %+v", len(entries), entries)
+	}
+	templateEntry := entries[1]
 	if templateEntry.Action != audit.ActionGameTemplateReclaim || templateEntry.EntityID != contest.ID.String() {
 		t.Fatalf("template audit entry = %+v; wrong action or entity", templateEntry)
 	}
@@ -395,17 +491,15 @@ func TestReclaimLeavesTheTemplateAloneWhileAnInstanceIsStillBusy(t *testing.T) {
 	markTemplateReady(t, contest.ID, templateDB)
 	finishContest(t, contest.ID, 120)
 
-	result, err := service.Reclaim(t.Context(), 60)
-	if err != nil {
+	if _, err := service.Reclaim(t.Context(), 60); err != nil {
 		t.Fatalf("reclaim: %v", err)
 	}
-	if result.TemplatesReclaimed != 0 {
-		t.Fatalf("templates reclaimed = %d while an instance was still busy, want 0", result.TemplatesReclaimed)
-	}
-	for _, d := range fake.idleDrops() {
-		if d == templateDB {
-			t.Fatal("the template was dropped while an instance still needed it")
-		}
+	// ReclaimableTemplates' own NOT EXISTS clause (internal/postgres/
+	// gameinstances.go) excludes a template while any of its instances is
+	// still live, so the cluster must never even have been asked about this
+	// template — called must be false, not merely "returned not dropped".
+	if _, _, called := fake.outcomeOf(templateDB); called {
+		t.Fatal("the cluster was asked about the template while an instance still needed it")
 	}
 	if status := templateStatusOf(t, contest.ID); status == "dropped" {
 		t.Fatal("the template was marked dropped while an instance still needed it")
