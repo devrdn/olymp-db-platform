@@ -273,6 +273,48 @@ func TestNegativeDeadlineGraceIsRejected(t *testing.T) {
 	}
 }
 
+// GameInstanceGraceMin is what a contest's own grace_period_min defers to
+// when it is left at zero (provisioning.effectiveGrace's convention, the same
+// one QueryPerMinute documents above): an installation that never configures
+// this still keeps every participant's database for a day after their
+// contest finishes, rather than reclaiming on the very first tick after the
+// feature ships.
+func TestGameInstanceGraceDefaultsToADay(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.GameInstanceGraceMin != 24*60 {
+		t.Errorf("GameInstanceGraceMin = %d, want 1440 (24h)", cfg.GameInstanceGraceMin)
+	}
+}
+
+func TestGameInstanceGraceIsConfigurable(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("GAME_INSTANCE_GRACE_MIN", "30")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.GameInstanceGraceMin != 30 {
+		t.Errorf("GameInstanceGraceMin = %d, want 30", cfg.GameInstanceGraceMin)
+	}
+}
+
+func TestNegativeGameInstanceGraceIsRejected(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("GAME_INSTANCE_GRACE_MIN", "-1")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted a negative GAME_INSTANCE_GRACE_MIN, want error")
+	}
+}
+
 func TestCookieIsSecureOutsideDevelopment(t *testing.T) {
 	// The dangerous default is the insecure one, so production must not have
 	// to remember a flag to get it right.

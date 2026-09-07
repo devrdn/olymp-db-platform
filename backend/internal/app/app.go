@@ -116,6 +116,12 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// half-built (section 5, point 7).
 	a.tasks = append(a.tasks, sweepQueryLog(log, postgres.NewQueryLog(pool).SweepAbandoned))
 
+	// Moved ahead of the provisioning block below so the reclaim sweep can be
+	// built WithAudit: an organizer who cannot find a database learns from
+	// this trail what removed it, and the recorder needs to exist before
+	// anything can be handed it.
+	auditRecorder := audit.New(postgres.NewAuditSink(pool))
+
 	// The SQL console, when there is a game cluster and a runner to reach.
 	var console *queryproxy.Service
 
@@ -144,8 +150,16 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			return nil, err
 		}
 		games := postgres.NewGameInstances(pool)
-		databases := provisioning.New(games, cluster).WithWorkers(cfg.ProvisionWorkers)
+		databases := provisioning.New(games, cluster).
+			WithWorkers(cfg.ProvisionWorkers).
+			WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
 		a.tasks = append(a.tasks, tendPools(log, databases, cfg.PoolDepth))
+		// The background half of §2.4: a contest's participant databases
+		// outlive it by exactly its configured grace, never longer, and
+		// never a moment less. GameReclaimCounters degrades to a no-op on
+		// whatever METRICS_BACKEND is not Prometheus — see its own doc.
+		a.tasks = append(a.tasks, reclaimInstances(
+			log, databases.Reclaim, cfg.GameInstanceGraceMin, metrics.NewGameReclaimCounters(recorder)))
 
 		// The console needs a Query Runner to talk to. Without one the rest of
 		// provisioning still works — pools are kept stocked — and the endpoint
@@ -170,7 +184,6 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}
 
 	userRepo := postgres.NewUsers(pool)
-	auditRecorder := audit.New(postgres.NewAuditSink(pool))
 	// The one reader of the audit trail, shared by the scheduler's own
 	// dedup check (finding 1, below) and the admin-facing handler further
 	// down: both read the same table through the same narrow type, and there

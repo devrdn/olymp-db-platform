@@ -264,3 +264,63 @@ func (r *GameInstances) Live(ctx context.Context) ([]provisioning.Contest, error
 	}
 	return out, nil
 }
+
+// Reclaimable lists every not-yet-dropped instance of a contest that reached
+// 'finished' longer ago than its grace period allows.
+//
+// The finish moment is the contest's own updated_at, never a value computed
+// in this process: SetStatus and AdvanceFinished (contests.go) both set it in
+// the same statement that moves status to finished, whether the move was an
+// organizer's or the scheduler's, so this is the same clock DueToStart and
+// AdvanceFinished already trust for "has enough time passed" (their own
+// reasoning about replica clock skew applies here too — now() is this
+// database's own).
+//
+// A contest's settings.grace_period_min governs it when set; a contest that
+// never configured one (the JSON key absent, coalesce's 0) defers to
+// installationGraceMin — provisioning.Service.Reclaim's own caller supplies
+// the installation's configured default, the same "contest overrides,
+// installation is the fallback" convention queryproxy.effectiveRateLimit
+// documents for QueryRateLimitPerMin.
+func (r *GameInstances) Reclaimable(ctx context.Context, installationGraceMin int) ([]provisioning.ReclaimCandidate, error) {
+	rows, err := r.querier(ctx).Query(ctx, `
+		SELECT i.db_name, i.contest_id, i.registration_id
+		FROM game_instances i
+		JOIN contests c ON c.id = i.contest_id
+		WHERE c.status = 'finished'
+		  AND i.status <> 'dropped'
+		  AND c.updated_at + make_interval(mins => CASE
+		        WHEN coalesce((c.settings->>'grace_period_min')::int, 0) > 0
+		          THEN (c.settings->>'grace_period_min')::int
+		        ELSE $1
+		      END) <= now()
+		ORDER BY c.id, i.created_at`, installationGraceMin)
+	if err != nil {
+		return nil, fmt.Errorf("list reclaimable instances: %w", err)
+	}
+	defer rows.Close()
+
+	var out []provisioning.ReclaimCandidate
+	for rows.Next() {
+		var c provisioning.ReclaimCandidate
+		if err := rows.Scan(&c.Database, &c.ContestID, &c.Registration); err != nil {
+			return nil, fmt.Errorf("scan a reclaimable instance: %w", err)
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list reclaimable instances: %w", err)
+	}
+	return out, nil
+}
+
+// MarkDropped moves one instance to the terminal 'dropped' status. An update
+// rather than Forget's delete: the row is what an organizer's audit search
+// still has to point to once the database itself is gone from the cluster.
+func (r *GameInstances) MarkDropped(ctx context.Context, database string) error {
+	if _, err := r.querier(ctx).Exec(ctx,
+		`UPDATE game_instances SET status = 'dropped', updated_at = now() WHERE db_name = $1`, database); err != nil {
+		return fmt.Errorf("mark %s dropped: %w", database, err)
+	}
+	return nil
+}
