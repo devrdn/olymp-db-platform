@@ -96,7 +96,7 @@ export function QuestionsPanel({
   return (
     <div className="flex flex-col gap-4">
       {refreshFailed ? (
-        <p role="alert" className="border border-edge bg-sunk p-2.5 text-small text-ink">
+        <p role="alert" className="border border-line-2 bg-sunk p-2.5 text-small text-ink">
           {t.refreshFailed}
         </p>
       ) : null}
