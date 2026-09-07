@@ -5,9 +5,6 @@ import { activeDictionary } from "@/lib/i18n/server";
 import { loadContest, loadContestResource } from "../contest";
 import { GameEditor } from "./game-editor";
 
-/** What the API answers for a contest whose game has never been written. */
-const ABSENT = gameSchema.parse({ status: "absent" });
-
 /**
  * The contest's game database.
  *
@@ -25,8 +22,17 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
 
   const [contest, game, script] = await Promise.all([
     loadContest(contestId),
-    loadContestResource(contestId, "/game", (payload) => gameSchema.parse(payload)),
-    loadContestResource(contestId, "/game/script", (payload) => gameScriptSchema.parse(payload)),
+    // `notFoundIsEmpty` because a 404 here is not a wrong address: the game
+    // endpoints are mounted only where a game cluster is configured, so an
+    // installation without one answers 404 for every contest. Left to become
+    // a not-found page, that told an organiser their link was wrong when the
+    // truth is that this deployment has nowhere to build a game.
+    loadContestResource(contestId, "/game", (payload) => gameSchema.parse(payload), {
+      notFoundIsEmpty: true,
+    }),
+    loadContestResource(contestId, "/game/script", (payload) => gameScriptSchema.parse(payload), {
+      notFoundIsEmpty: true,
+    }),
   ]);
 
   const t = dict.workspace.game;
@@ -38,18 +44,17 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
         <p className="max-w-body text-body text-ink-2">{t.lede}</p>
       </div>
 
-      {/* `loadContestResource` is typed to allow null because it can be told
-          to read a 404 as "nothing written yet". It is not told that here, and
-          it does not need to be: a contest with no game answers 200 with the
-          status `absent`. The fallbacks are what that answer would have said,
-          so an impossible null renders the same screen rather than a crash. */}
-      <GameEditor
-        contestId={contestId}
-        initial={game ?? ABSENT}
-        initialScript={script?.script ?? ""}
-        editable={contentEditable(contest.status)}
-        dict={dict}
-      />
+      {game === null ? (
+        <p className="max-w-body text-body text-ink-2">{t.unavailable}</p>
+      ) : (
+        <GameEditor
+          contestId={contestId}
+          initial={game}
+          initialScript={script?.script ?? ""}
+          editable={contentEditable(contest.status)}
+          dict={dict}
+        />
+      )}
     </div>
   );
 }
