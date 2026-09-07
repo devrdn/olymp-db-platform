@@ -14,6 +14,7 @@ import { ConsoleEditor } from "./console";
 import { PlayHeader } from "./play-header";
 import { QueryLogPanel } from "./query-log-panel";
 import { ResultPanel } from "./result-panel";
+import { PaneHandle, usePaneWidths } from "./pane-splitter";
 import { SchemaPanel } from "./schema-panel";
 import { SidePanel } from "./side-panel";
 
@@ -94,6 +95,7 @@ export function Workspace({
   // an editor: seeing what a query just did is the point of running it, and
   // a participant should not have to go looking for the tab that shows it.
   const [bottomTab, setBottomTab] = useState("result");
+  const { containerRef, widths, commit } = usePaneWidths(contestId);
 
   return (
     // The fixed, no-page-scroll VS Code shape is a `narrow:` (>=760px)
@@ -131,11 +133,25 @@ export function Workspace({
           the panel is absent rather than empty there, and leaving its column
           in place would spend a fifth of the screen saying nothing. */}
       <div
+        ref={containerRef}
+        style={
+          {
+            "--pane-schema": `${widths.schema}rem`,
+            "--pane-side": `${widths.side}rem`,
+          } as React.CSSProperties
+        }
         className={cn(
           "grid min-h-0 grid-cols-1 narrow:flex-1",
-          schema !== null
-            ? "narrow:grid-cols-[13.25rem_minmax(0,1fr)_15.75rem]"
-            : "narrow:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]",
+          // The two hairlines between the panes are grid columns of their own,
+          // so dragging one changes a width and never a margin.
+          // Two panes from `narrow`, three only from `wide`. Measured: at a
+          // 768px viewport the three-pane layout leaves the editor and the
+          // result table 302px between them, which is a result table that
+          // scrolls sideways on every query. The schema stacks below the
+          // console until there is room for it beside.
+          "narrow:grid-cols-[minmax(0,1fr)_1px_var(--pane-side)]",
+          schema !== null &&
+            "wide:grid-cols-[var(--pane-schema)_1px_minmax(0,1fr)_1px_var(--pane-side)]",
         )}
       >
         {schema !== null ? (
@@ -151,16 +167,27 @@ export function Workspace({
           // console cell below). With `max-h-80` on the narrow fallback the
           // column has a bounded height rather than a definite one, which is
           // why the panel's own scroller sits inside it and not here.
-          <div className="flex min-h-0 flex-col border-line narrow:border-r max-narrow:order-2 max-narrow:max-h-80 max-narrow:border-t">
+          <div className="flex min-h-0 flex-col border-line max-wide:order-2 max-wide:col-span-full max-wide:max-h-80 max-wide:border-t">
             <MemoSchemaPanel schema={schema} dict={dict} />
           </div>
+        ) : null}
+        {schema !== null ? (
+          <PaneHandle
+            label={t.panes.schema}
+            property="--pane-schema"
+            rem={widths.schema}
+            direction={1}
+            containerRef={containerRef}
+            onResize={(rem) => commit({ ...widths, schema: rem })}
+            className="max-wide:hidden"
+          />
         ) : null}
         {/* The console side: the editor on top, always visible, and the
             result/log tabs below it, sized 55/45 of this column's height —
             fixed on a workspace-height screen; on the narrow fallback each
             gets a comfortable minimum instead of a share of a height that no
             longer applies. */}
-        <div className="grid min-h-0 grid-rows-[minmax(0,11fr)_minmax(0,9fr)] border-line narrow:border-r max-narrow:order-1 max-narrow:grid-rows-none max-narrow:border-b">
+        <div className="grid min-h-0 grid-rows-[minmax(0,11fr)_minmax(0,9fr)] border-line max-wide:order-1 max-narrow:grid-rows-none max-narrow:border-b">
           {/* A flex column, not a block: the console's form claims the cell
               with flex-1, and flex-1 is inert inside a block parent — which
               left the editor with no height at all. */}
@@ -235,13 +262,23 @@ export function Workspace({
           </div>
         </div>
 
+        <PaneHandle
+          label={t.panes.side}
+          property="--pane-side"
+          rem={widths.side}
+          direction={-1}
+          containerRef={containerRef}
+          onResize={(rem) => commit({ ...widths, side: rem })}
+          className="max-narrow:hidden"
+        />
+
         {/* The story/questions side: below the console column on a narrow
             screen rather than beside it — the same "collapse to one track,
             keep every panel" reset the rest of the direction uses
             (SPEC.md §5's own mobile reset) — one instance, one state, so a
             half-typed answer survives a resize the same way it survives a
             tab switch. */}
-        <div className="min-h-0 max-narrow:order-3 max-narrow:min-h-100 max-narrow:border-t max-narrow:border-line">
+        <div className="min-h-0 max-wide:order-3 max-narrow:min-h-100 max-narrow:border-t max-narrow:border-line">
           <MemoSidePanel
             storyBody={storyBody}
             storyUnavailable={storyUnavailable}
