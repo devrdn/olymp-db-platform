@@ -221,3 +221,33 @@ describe("the SQL editor", () => {
     await waitFor(() => expect(container.querySelector(".cm-error-position")).toBeInTheDocument());
   });
 });
+
+/**
+ * The shortcut the design prints on the Run button itself.
+ *
+ * Bound inside the editor's keymap rather than on the form, and ahead of
+ * CodeMirror's own defaults: `Mod-Enter` there is `insertBlankLine`, so a
+ * listener on the form would never see the key and a participant reaching for
+ * it would get an empty line instead of an answer.
+ */
+describe("⌘↵", () => {
+  test("runs the query from inside the editor", async () => {
+    answer.current = {
+      kind: "answer",
+      result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 },
+    };
+    const onResult = vi.fn();
+    const { container } = render(<ConsoleEditor contestId="c1" dict={en} onResult={onResult} />);
+    await waitForRealEditor(container);
+
+    runQueryAction.mockClear();
+    await userEvent.click(screen.getByRole("textbox"));
+    await userEvent.keyboard("SELECT 1");
+    // Ctrl, not Cmd: CodeMirror resolves `Mod` by platform, and the test
+    // environment is not a Mac. A participant on a Mac presses ⌘↵ and reaches
+    // the same binding.
+    await userEvent.keyboard("{Control>}{Enter}{/Control}");
+
+    await waitFor(() => expect(runQueryAction).toHaveBeenCalled());
+  });
+});
