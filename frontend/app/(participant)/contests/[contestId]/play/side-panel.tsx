@@ -35,14 +35,20 @@ export function SidePanel({
         <TabsTrigger value="story">{t.story}</TabsTrigger>
         <TabsTrigger value="questions">{t.questions}</TabsTrigger>
       </TabsList>
-      <TabsContent value="story" className="overflow-y-auto p-4">
+      {/* Neither tab has a child that needs to fill the panel's height —
+          the story is prose and the questions are a form, both laid out
+          and scrolled the ordinary block way — so `fill={false}` keeps
+          `TabsContent` a plain block box rather than a flex container
+          (finding 3: forcing `flex-col` here bought nothing and turned
+          every direct child into a flex item). */}
+      <TabsContent value="story" fill={false} className="overflow-y-auto p-4">
         {storyUnavailable !== null ? (
           <p className="text-body text-ink-2">{storyUnavailable}</p>
         ) : (
           storyBody
         )}
       </TabsContent>
-      <TabsContent value="questions" className="overflow-y-auto p-4">
+      <TabsContent value="questions" fill={false} className="overflow-y-auto p-4">
         <QuestionsPanel contestId={contestId} items={questionEntries} dict={dict} />
       </TabsContent>
     </Tabs>
