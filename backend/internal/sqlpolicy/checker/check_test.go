@@ -99,7 +99,8 @@ func TestNothingToRun(t *testing.T) {
 }
 
 func TestAQueryThatDoesNotParse(t *testing.T) {
-	r := refusal(t, `SELEC * FROM suspects`, sqlpolicy.ReadOnly())
+	sql := `SELEC * FROM suspects`
+	r := refusal(t, sql, sqlpolicy.ReadOnly())
 	if r.Code != sqlpolicy.CodeParseError {
 		t.Fatalf("code = %q, want %q", r.Code, sqlpolicy.CodeParseError)
 	}
@@ -107,6 +108,13 @@ func TestAQueryThatDoesNotParse(t *testing.T) {
 	// student here, so it is carried rather than replaced.
 	if !strings.Contains(strings.ToLower(r.Subject), "selec") {
 		t.Fatalf("the refusal does not carry the parser's message: %q", r.Subject)
+	}
+	// The parser is PostgreSQL's own, so the position it names is a real
+	// character offset into sql, not merely a nonzero placeholder — a
+	// participant reading the console must be able to find the character it
+	// points at rather than have to trust that it is somewhere.
+	if r.Position <= 0 || r.Position > len(sql) {
+		t.Fatalf("position = %d, want a 1-based offset into %q (len %d)", r.Position, sql, len(sql))
 	}
 }
 

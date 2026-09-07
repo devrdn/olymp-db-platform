@@ -73,6 +73,18 @@ function show() {
   );
 }
 
+/**
+ * CodeMirror arrives through a dynamic `import()` (code-editor.tsx's own doc
+ * comment says why); until it resolves, the console shows a plain, always-
+ * typable fallback field in its place. A test about the *editor's own DOM
+ * node* — not about typing, which works through either — waits for the real
+ * one first, so the fallback→CodeMirror swap is not mistaken for whatever
+ * the test is actually checking.
+ */
+async function waitForRealEditor(container: HTMLElement) {
+  await waitFor(() => expect(container.querySelector(".cm-editor")).toBeInTheDocument());
+}
+
 async function runQuery() {
   await userEvent.type(screen.getByRole("textbox"), "SELECT 1");
   await userEvent.click(screen.getByRole("button", { name: en.participant.console.run }));
@@ -101,11 +113,14 @@ describe("the play workspace", () => {
     await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.questions }));
     await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.result }));
 
-    expect(screen.getByRole("textbox")).toHaveValue("SELECT * FROM suspects");
+    // Not a form control any more (CodeMirror's content div), so the text is
+    // read the way any other rendered content is, not through `.value`.
+    expect(screen.getByRole("textbox")).toHaveTextContent("SELECT * FROM suspects");
   });
 
   test("switching a tab does not remount the editor's own DOM node", async () => {
-    show();
+    const { container } = show();
+    await waitForRealEditor(container);
     const editor = screen.getByRole("textbox");
 
     await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.log }));

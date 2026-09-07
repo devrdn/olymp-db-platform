@@ -30,6 +30,15 @@ const (
 type Refusal struct {
 	Code    Code
 	Subject string
+	// Position is where in the query text the refusal is about, as a 1-based
+	// character offset — PostgreSQL's own convention for reporting a syntax
+	// error's location (errposition()), and what CodeParseError's parser
+	// gives back verbatim, since it is PostgreSQL's own parser. Zero means
+	// "no position", which is both Go's zero value and the parser's own way
+	// of saying the same thing, and is true of every refusal but a parse
+	// error: the checker's other codes are about a whole statement or a named
+	// construct, not a place in the text.
+	Position int
 }
 
 func (r *Refusal) Error() string {
