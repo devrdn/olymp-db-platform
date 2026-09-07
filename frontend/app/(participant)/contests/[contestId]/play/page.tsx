@@ -17,6 +17,7 @@ import type { Locale } from "@/lib/i18n/config";
 
 import { PlayHeader } from "./play-header";
 import type { QuestionEntry } from "./questions-panel";
+import { ReloadLink } from "./reload-link";
 import { Workspace } from "./workspace";
 
 export async function generateMetadata() {
@@ -111,7 +112,7 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
     // draft, finished or archived: none of these ever becomes `running`
     // while this screen stays open, so there is nothing to wait for and
     // nothing worth opening a connection over.
-    return <UnavailablePage title={contest.title} body={dict.participant.play.unavailable.body} />;
+    return <UnavailablePage title={contest.title} body={dict.participant.play.unavailable.body} dict={dict} />;
   }
 
   // Fetched together, and answered mostly independently (finding 2): the
@@ -133,7 +134,7 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   if (questionsResult.status === "rejected") {
     const error = questionsResult.reason;
     if (error instanceof ApiError && SCREEN_UNAVAILABLE_CODES.has(error.code)) {
-      return <UnavailablePage title={contest.title} body={errors[error.code]} />;
+      return <UnavailablePage title={contest.title} body={errors[error.code]} code={error.code} dict={dict} />;
     }
     throw error;
   }
@@ -152,7 +153,7 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   } else {
     const error = storyResult.reason;
     if (error instanceof ApiError && SCREEN_UNAVAILABLE_CODES.has(error.code)) {
-      return <UnavailablePage title={contest.title} body={errors[error.code]} />;
+      return <UnavailablePage title={contest.title} body={errors[error.code]} code={error.code} dict={dict} />;
     }
     if (error instanceof ApiError && error.code === "story_not_found") {
       storyUnavailable = errors.story_not_found;
@@ -186,7 +187,7 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   } else {
     const error = logResult.reason;
     if (error instanceof ApiError && SCREEN_UNAVAILABLE_CODES.has(error.code)) {
-      return <UnavailablePage title={contest.title} body={errors[error.code]} />;
+      return <UnavailablePage title={contest.title} body={errors[error.code]} code={error.code} dict={dict} />;
     }
     // Any other failure (a transient 500, an unreachable API): degrade
     // rather than crash, but say so — see `failed`'s own doc just above.
@@ -238,12 +239,34 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
 }
 
 /** The plain "nothing to show" screen every non-running status and every whole-screen refusal (SCREEN_UNAVAILABLE_CODES) reduces to. */
-function UnavailablePage({ title, body }: { title: string; body: string }) {
+/**
+ * The plain "nothing to show" screen.
+ *
+ * One of the codes that lands here is not like the others, and treating it
+ * the same took a participant out of an olympiad for reloading. A rate limit
+ * lifts by itself within the minute; `contest_finished`, `not_a_participant`
+ * and an address outside the network do not lift at all. SPEC.md's own state
+ * list calls the first `blocked` and requires it to carry "the reason and the
+ * moment it lifts", so it says so and offers the way back — which is the same
+ * address, once the minute has passed.
+ */
+function UnavailablePage({
+  title,
+  body,
+  code,
+  dict,
+}: {
+  title: string;
+  body: string;
+  code?: string;
+  dict: Dictionary;
+}) {
   return (
     <Band fill>
       <div className="flex flex-col gap-4">
         <h1 className="text-h2 text-ink">{title}</h1>
         <p className="max-w-body text-body text-ink">{body}</p>
+        {code === "query_too_often" ? <ReloadLink dict={dict} /> : null}
       </div>
     </Band>
   );

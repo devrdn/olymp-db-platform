@@ -756,6 +756,7 @@ const ru = {
       },
       unavailable: {
         body: "Эта олимпиада сейчас не открыта для игры.",
+        retry: "Попробовать снова",
       },
       finishedTag: "завершена",
       clock: {
