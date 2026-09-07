@@ -228,3 +228,51 @@ describe("the SQL editor", () => {
     expect(screen.getByRole("textbox")).toHaveAccessibleName("Your query");
   });
 });
+
+/**
+ * The gutter and the Tab key the design's editor has
+ * (docs/design/preview.html, "SQL-консоль": the numbers 1..7 run down the
+ * left of the query).
+ */
+describe("the editor's own affordances", () => {
+  test("numbers the lines", async () => {
+    const { container } = render(
+      <CodeEditor
+        ariaLabel="query"
+        placeholder="SELECT"
+        getInitialValue={() => "SELECT 1\nFROM guests\nWHERE id = 2"}
+        onChange={() => {}}
+      />,
+    );
+    await waitFor(() => expect(container.querySelector(".cm-editor")).toBeInTheDocument());
+
+    const gutter = container.querySelector(".cm-lineNumbers");
+    expect(gutter).not.toBeNull();
+    expect(gutter).toHaveTextContent("1");
+    expect(gutter).toHaveTextContent("3");
+  });
+
+  // Two hours of typing SQL is not a form: Tab indents here, and Escape then
+  // Tab is how a keyboard user leaves.
+  test("indents with Tab instead of leaving the field", async () => {
+    const user = userEvent.setup();
+    let text = "";
+    const { container } = render(
+      <CodeEditor
+        ariaLabel="query"
+        placeholder="SELECT"
+        getInitialValue={() => "SELECT"}
+        onChange={(value) => {
+          text = value;
+        }}
+      />,
+    );
+    await waitFor(() => expect(container.querySelector(".cm-editor")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("textbox"));
+    await user.keyboard("{Tab}");
+
+    expect(text).not.toBe("");
+    expect(text.length).toBeGreaterThan("SELECT".length);
+  });
+});
