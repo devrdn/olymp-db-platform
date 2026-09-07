@@ -14,10 +14,14 @@ describe("ContestWindow", () => {
   test("prints one day and a time range when a contest begins and ends on it", () => {
     const { container } = render(<ContestWindow startsAt={MORNING} endsAt={AFTERNOON} {...props} />);
 
-    // English is a 12-hour locale, and the meridiem is the reason the second
-    // line used to break: "01:00 PM" is wider than the column expected.
-    expect(container).toHaveTextContent("10:00 AM");
-    expect(container).toHaveTextContent("01:00 PM");
+    // The meridiem is gone from every locale, English included. It was the
+    // reason this second line used to break — "01:00 PM" is wider than the
+    // column expected — and it left one more hydration trap behind it: the
+    // space before AM/PM is U+202F in some ICU versions and an ordinary space
+    // in others (lib/format/datetime.ts).
+    expect(container).toHaveTextContent("10:00");
+    expect(container).toHaveTextContent("13:00");
+    expect(container).not.toHaveTextContent(/[AP]M/);
     // The date belongs to the first line only; printing it twice is what made
     // the column overflow and break between the hour and the meridiem.
     expect(container.textContent?.match(/May/g) ?? []).toHaveLength(1);
@@ -54,6 +58,6 @@ describe("ContestWindow", () => {
     const { container } = render(<ContestWindow startsAt={MORNING} {...props} />);
 
     expect(container).not.toHaveTextContent("to");
-    expect(container).toHaveTextContent("10:00 AM");
+    expect(container).toHaveTextContent("10:00");
   });
 });

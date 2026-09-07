@@ -1,12 +1,22 @@
 /**
  * Interface dates.
  *
- * Two rules the spec is strict about. The timezone is explicit rather than the
- * runtime's, because a Server Component and the browser that hydrates it would
- * otherwise disagree and React would report a mismatch. And this formatter is
- * for interface text only: values inside a query result grid are shown exactly
- * as PostgreSQL returned them, so a participant can match what they see to
- * what they wrote.
+ * Three rules, and the first two are about the same failure: a Server
+ * Component and the browser that hydrates it must produce the same string,
+ * character for character, or React throws the tree away and says so.
+ *
+ * The timezone is explicit rather than the runtime's — the same instant is a
+ * different calendar day in Chisinau and in UTC. And nothing here asks the
+ * locale data to *join* anything: the string CLDR uses between a date and a
+ * time differs by ICU version, so Node 22 renders `Sep 7, 2026, 11:38 PM`
+ * where a newer Chrome renders `Sep 7, 2026 at 11:38 PM`. That was a real
+ * mismatch on the participant's query log, and it is not reproducible on a
+ * machine whose browser happens to carry Node's ICU — which is most of them,
+ * until it is not.
+ *
+ * The third rule: this formatter is for interface text only. Values inside a
+ * query result grid are shown exactly as PostgreSQL returned them, so a
+ * participant can match what they see to what they wrote.
  */
 
 /** The installation's timezone. One place to change when a deployment moves. */
@@ -19,16 +29,12 @@ function resolve({ timeZone = DEFAULT_TIME_ZONE, locale = "ru-RU" }: Options) {
 }
 
 export function formatMoment(iso: string, options: Options = {}): string {
-  const { timeZone, locale } = resolve(options);
-
-  return new Intl.DateTimeFormat(locale, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone,
-  }).format(new Date(iso));
+  // Composed rather than asked for as one skeleton. A single
+  // `Intl.DateTimeFormat` carrying both date and time fields picks the join
+  // from the locale data, and that join is exactly what moves between ICU
+  // versions (see the file doc). This comma is ours, so every runtime agrees
+  // on it.
+  return `${formatDay(iso, options)}, ${formatTime(iso, options)}`;
 }
 
 /** The date alone, for a value whose time is carried on its own line. */
@@ -43,13 +49,22 @@ export function formatDay(iso: string, options: Options = {}): string {
   }).format(new Date(iso));
 }
 
-/** The time alone, in the installation's timezone. */
+/**
+ * The time alone, in the installation's timezone, on a 24-hour clock.
+ *
+ * `h23` in every locale, English included. Two reasons, and the second is why
+ * it is here rather than a preference: a competition reads deadlines off this
+ * clock and "12:00" must not be ambiguous, and the space some ICU versions put
+ * before AM/PM is U+202F where others use an ordinary one — the same
+ * hydration trap as the date-time join, one field along.
+ */
 export function formatTime(iso: string, options: Options = {}): string {
   const { timeZone, locale } = resolve(options);
 
   return new Intl.DateTimeFormat(locale, {
     hour: "2-digit",
     minute: "2-digit",
+    hourCycle: "h23",
     timeZone,
   }).format(new Date(iso));
 }
