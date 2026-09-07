@@ -69,6 +69,24 @@ type cluster struct {
 	busy         map[string]bool
 	failIdleDrop map[string]error
 	idleDropped  []string
+
+	// idleCalls records every DropIdle call and what it returned, busy and
+	// failed ones included — unlike idleDropped, which only ever grows on a
+	// success. Reclaim is installation-wide (its own doc), so one test's
+	// Reclaim call can also process another package's real reclaimable rows
+	// sharing the same database (internal/postgres's own Reclaimable tests
+	// commit theirs outside a transaction on purpose); an aggregate count off
+	// ReclaimResult would then be a claim about that install, not about this
+	// test's own row. outcomeOf below is how a test asks what happened to
+	// its own database specifically, regardless of what else this pass swept.
+	idleCalls []idleCall
+}
+
+// idleCall is one DropIdle invocation and what the fake told the caller.
+type idleCall struct {
+	name    string
+	dropped bool
+	err     error
 }
 
 func (c *cluster) CreateInstance(_ context.Context, _, instance string, _ sqlpolicy.Policy) error {
@@ -130,13 +148,31 @@ func (c *cluster) DropIdle(_ context.Context, name string) (bool, error) {
 	defer c.mu.Unlock()
 
 	if err, ok := c.failIdleDrop[name]; ok {
+		c.idleCalls = append(c.idleCalls, idleCall{name: name, err: err})
 		return false, err
 	}
 	if c.busy[name] {
+		c.idleCalls = append(c.idleCalls, idleCall{name: name})
 		return false, nil
 	}
 	c.idleDropped = append(c.idleDropped, name)
+	c.idleCalls = append(c.idleCalls, idleCall{name: name, dropped: true})
 	return true, nil
+}
+
+// outcomeOf returns what DropIdle told the caller the last time it was asked
+// about name, and whether it was ever asked about it at all — the answer a
+// test needs about its own database, independent of every other candidate
+// the same installation-wide pass also happened to process.
+func (c *cluster) outcomeOf(name string) (dropped bool, err error, called bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := len(c.idleCalls) - 1; i >= 0; i-- {
+		if c.idleCalls[i].name == name {
+			return c.idleCalls[i].dropped, c.idleCalls[i].err, true
+		}
+	}
+	return false, nil, false
 }
 
 func (c *cluster) idleDrops() []string {
