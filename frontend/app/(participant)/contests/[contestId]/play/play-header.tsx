@@ -86,7 +86,7 @@ export function PlayHeader({
 }
 
 /** What the countdown needs to compute a display: a moment, and the offset and deadline as of that moment. */
-type ClockSnapshot = { now: number; offset: number; deadline: number | null };
+type ClockSnapshot = { now: number; offset: number; deadline: number | null | undefined };
 
 /**
  * The countdown itself.
@@ -112,12 +112,12 @@ function PlayClock({
   dict,
 }: {
   offsetRef: React.RefObject<number>;
-  deadlineRef: React.RefObject<number | null>;
+  deadlineRef: React.RefObject<number | null | undefined>;
   phase: "waiting" | "running" | "finished";
   dict: Dictionary;
 }) {
   const t = dict.participant.play.clock;
-  const [snapshot, setSnapshot] = useState<ClockSnapshot>({ now: 0, offset: 0, deadline: null });
+  const [snapshot, setSnapshot] = useState<ClockSnapshot>({ now: 0, offset: 0, deadline: undefined });
 
   useEffect(() => {
     // Nothing reads `snapshot` outside the running branch below — "waiting"
@@ -199,11 +199,22 @@ function PlayClock({
   }
 
   const { deadline } = snapshot;
+  if (deadline === undefined) {
+    // No sync has arrived yet. The clock is a fact the server owns, and the
+    // honest thing to show while waiting for it is that we are waiting —
+    // not a claim about how this contest is timed.
+    return (
+      <>
+        {live}
+        <ClockText tone="ink-3">{t.syncing}</ClockText>
+      </>
+    );
+  }
   if (deadline === null) {
-    // Running, but this participant's own timer has not started — the
-    // individual-timing case where the deadline arrives with their first
-    // action, not with the contest's own start (Deadline's own doc on the Go
-    // side). Showing a blank clock here would read as a bug; this says why.
+    // A sync arrived and carried no deadline, which the server only does for
+    // an individual-timing participant who has not started: their deadline
+    // arrives with their first action, not with the contest's own start
+    // (Deadline's own doc on the Go side).
     return (
       <>
         {live}
@@ -244,14 +255,15 @@ type Milestone = "none" | "five" | "timeup";
 
 /** What PlayClock's own countdown math would show, reduced to just the milestone the live region cares about (see PlayClock's own doc, finding 7). */
 function clockMilestone(phase: "waiting" | "running" | "finished", snapshot: ClockSnapshot): Milestone {
-  if (phase !== "running" || snapshot.deadline === null) return "none";
+  // `null` and `undefined` alike: there is no deadline to be near.
+  if (phase !== "running" || snapshot.deadline == null) return "none";
   const remainingMs = snapshot.deadline - (snapshot.now + snapshot.offset);
   if (remainingMs <= 0) return "timeup";
   if (remainingMs <= 5 * 60_000) return "five";
   return "none";
 }
 
-function ClockText({ tone, children }: { tone: "ink" | "ink-2" | "warn" | "bad"; children: React.ReactNode }) {
+function ClockText({ tone, children }: { tone: "ink" | "ink-2" | "ink-3" | "warn" | "bad"; children: React.ReactNode }) {
   return (
     <span
       role="timer"
@@ -260,6 +272,7 @@ function ClockText({ tone, children }: { tone: "ink" | "ink-2" | "warn" | "bad";
         "shrink-0 font-mono text-row tabular-nums",
         tone === "ink" && "text-ink",
         tone === "ink-2" && "text-ink-2",
+        tone === "ink-3" && "text-ink-3",
         tone === "warn" && "text-warn",
         tone === "bad" && "text-bad",
       )}
