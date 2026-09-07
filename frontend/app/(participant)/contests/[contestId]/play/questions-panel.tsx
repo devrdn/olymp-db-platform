@@ -11,8 +11,21 @@ import { cn } from "@/lib/utils";
 
 import { refreshQuestionsAction, submitAnswerAction, type AnswerState } from "./actions";
 
-/** One question's data, paired with its wording already rendered — see QuestionsPanel's own doc for why the rendering happens before this ever reaches the client. */
-export type QuestionEntry = { question: PlayQuestion; body: ReactNode };
+/**
+ * One question's data, paired with its wording already rendered — see
+ * QuestionsPanel's own doc for why the rendering happens before this ever
+ * reaches the client.
+ *
+ * `index` is the question's own place in this list, 1-based — rendered as a
+ * sibling of `body` rather than folded into the Markdown that produced it
+ * (finding 6): `body` is the result of running the question's own wording
+ * through a Markdown parser, and a question that opens with a heading, a
+ * list or a fenced block has that block broken by whatever text is
+ * concatenated in front of it. Keeping the number as its own element means
+ * it can never collide with the structure of whatever the question's own
+ * wording turns out to be.
+ */
+export type QuestionEntry = { question: PlayQuestion; index: number; body: ReactNode };
 
 /**
  * The questions, and the one field each has for answering.
@@ -42,6 +55,12 @@ export function QuestionsPanel({
 }) {
   const t = dict.participant.play.questions;
   const [entries, setEntries] = useState(items);
+  // Whether the last re-read this panel asked for was refused (finding 6): a
+  // sequential contest that just closed its open question depends on this
+  // refetch to unlock the next one, and a refusal here previously vanished
+  // silently — the next question stayed locked with nothing on screen saying
+  // a reload would fix it.
+  const [refreshFailed, setRefreshFailed] = useState(false);
 
   // A question closing is the one moment that can change what the rest of
   // the list looks like — a sequential contest opens the next one the
@@ -52,7 +71,11 @@ export function QuestionsPanel({
   // there is no reason to ask for it — or to parse it — a second time.
   const onClosed = useCallback(async () => {
     const result = await refreshQuestionsAction(contestId);
-    if (result.kind !== "ok") return;
+    if (result.kind !== "ok") {
+      setRefreshFailed(true);
+      return;
+    }
+    setRefreshFailed(false);
     const byId = new Map(result.items.map((q) => [q.id, q]));
     setEntries((prev) => prev.map((entry) => {
       const fresh = byId.get(entry.question.id);
@@ -65,22 +88,30 @@ export function QuestionsPanel({
   }
 
   return (
-    // A ruled list, not a stack of boxes: this direction draws its structure
-    // from dividers rather than cards (Band's own doc), and a register of
-    // questions is exactly the register this system already keeps everything
-    // else in.
-    <div className="flex flex-col divide-y divide-line">
-      {entries.map(({ question, body }) => (
-        <div key={question.id} className="py-5 first:pt-0 last:pb-0">
-          <QuestionCard
-            contestId={contestId}
-            question={question}
-            body={body}
-            dict={dict}
-            onClosed={onClosed}
-          />
-        </div>
-      ))}
+    <div className="flex flex-col gap-4">
+      {refreshFailed ? (
+        <p role="alert" className="border border-edge bg-sunk p-2.5 text-small text-ink">
+          {t.refreshFailed}
+        </p>
+      ) : null}
+      {/* A ruled list, not a stack of boxes: this direction draws its
+          structure from dividers rather than cards (Band's own doc), and a
+          register of questions is exactly the register this system already
+          keeps everything else in. */}
+      <div className="flex flex-col divide-y divide-line">
+        {entries.map(({ question, index, body }) => (
+          <div key={question.id} className="py-5 first:pt-0 last:pb-0">
+            <QuestionCard
+              contestId={contestId}
+              question={question}
+              index={index}
+              body={body}
+              dict={dict}
+              onClosed={onClosed}
+            />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -88,12 +119,14 @@ export function QuestionsPanel({
 function QuestionCard({
   contestId,
   question,
+  index,
   body,
   dict,
   onClosed,
 }: {
   contestId: string;
   question: PlayQuestion;
+  index: number;
   body: ReactNode;
   dict: Dictionary;
   onClosed: () => void;
@@ -108,6 +141,12 @@ function QuestionCard({
   // list's own reading until there has been one.
   const attemptsRemaining = state.kind === "answer" ? state.result.attemptsRemaining : question.attemptsRemaining;
   const closed = state.kind === "answer" ? state.result.closed : question.closed;
+  // Same fallback for the verdict itself (finding 5): a page load or a
+  // reload has no submission of its own to read a verdict from, only what
+  // the server's own projection already carries for a question closed on an
+  // earlier visit — correct or not, and for how many points.
+  const correct = state.kind === "answer" ? state.result.correct : question.correct;
+  const pointsAwarded = state.kind === "answer" ? state.result.pointsAwarded : question.pointsAwarded;
   const locked = !closed && !question.canAnswer;
 
   const onClosedRef = useRef(onClosed);
@@ -115,20 +154,27 @@ function QuestionCard({
     onClosedRef.current = onClosed;
   }, [onClosed]);
 
-  // The field clears after every attempt, right or wrong: a wrong guess still
-  // spent one, and leaving it sitting in the box under the verdict reads as
-  // an answer waiting to be sent rather than one already judged.
+  // The field is controlled, rather than left to the browser (finding 3):
+  // React's own form Actions reset an uncontrolled field's DOM value the
+  // instant the action settles, for every outcome — a refusal included. Left
+  // alone, `attempt_conflict` and `query_too_often` both say "try again"
+  // while the very thing they ask the student to try again with has already
+  // been deleted out from under them. Controlling it is what lets this
+  // component decide, rather than the browser: cleared once an attempt is
+  // actually recorded (right or wrong — a wrong guess still spent one, and
+  // leaving it under the verdict reads as an answer waiting to be sent
+  // rather than one already judged), left untouched on a refusal.
   //
   // Bumped during render rather than from an Effect — the pattern React's own
   // docs describe for "adjust state when something changes": comparing the
   // latest value against what was last seen, and correcting the state that
   // depends on it before this render commits, rather than committing once and
   // scheduling a second render to fix it up.
+  const [value, setValue] = useState("");
   const [seenState, setSeenState] = useState(state);
-  const [formKey, setFormKey] = useState(0);
   if (state !== seenState) {
     setSeenState(state);
-    if (state.kind !== "idle") setFormKey((key) => key + 1);
+    if (state.kind === "answer") setValue("");
   }
 
   // Notifying the panel that this question closed *is* a side effect — a
@@ -145,7 +191,13 @@ function QuestionCard({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        {body}
+        <div className="flex min-w-0 items-baseline gap-2">
+          <span aria-hidden="true" className="shrink-0 font-mono text-label text-ink-3">
+            {index}.
+          </span>
+          <span className="sr-only">{t.numberLabel.replace("{n}", String(index))}</span>
+          <div className="min-w-0">{body}</div>
+        </div>
         <span className="shrink-0 font-mono text-label text-ink-3 uppercase">
           {t.points.replace("{n}", String(question.points))}
         </span>
@@ -154,19 +206,15 @@ function QuestionCard({
       {closed ? (
         <div className="flex flex-col gap-1.5">
           <p className="text-small text-ink-3">{t.closed}</p>
-          {/* The verdict from the very submission that closed it — losing
-              this the instant the question closes would hide the one
-              feedback a correct final attempt exists to give. */}
-          {state.kind === "answer" ? (
-            <Verdict correct={state.result.correct} points={state.result.pointsAwarded} dict={dict} />
-          ) : null}
+          {/* The verdict from whatever closed it — the live submission if
+              this render followed one, or the server's own record of an
+              earlier one otherwise (finding 5): losing this the instant a
+              question closes, or the instant the page reloads, would hide
+              the one feedback a correct answer exists to give. */}
+          <Verdict correct={correct} points={pointsAwarded} dict={dict} />
         </div>
       ) : (
-        <form
-          action={formAction}
-          className="flex flex-col gap-2.5"
-          key={formKey}
-        >
+        <form action={formAction} className="flex flex-col gap-2.5">
           <input type="hidden" name="contestId" value={contestId} />
           <input type="hidden" name="questionId" value={question.id} />
 
@@ -179,6 +227,8 @@ function QuestionCard({
                     type="radio"
                     name="value"
                     value={choiceId}
+                    checked={value === choiceId}
+                    onChange={() => setValue(choiceId)}
                     disabled={pending || locked}
                     className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
                   />
@@ -189,6 +239,8 @@ function QuestionCard({
           ) : (
             <Input
               name="value"
+              value={value}
+              onChange={(event) => setValue(event.target.value)}
               placeholder={t.placeholder}
               disabled={pending || locked}
               aria-label={t.answerLabel}

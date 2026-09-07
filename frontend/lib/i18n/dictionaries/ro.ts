@@ -644,6 +644,7 @@ const ro = {
         waiting: "Nu a început încă",
         notStarted: "Începe odată cu prima dumneavoastră acțiune",
         timeUp: "Timpul a expirat",
+        fiveMinutesLeft: "Mai sunt cinci minute.",
       },
       story: {
         heading: "Povestea",
@@ -663,6 +664,8 @@ const ro = {
         correct: "Corect! +{n} puncte.",
         incorrect: "Incorect.",
         reference: "Dacă raportați acest lucru, menționați {id}.",
+        numberLabel: "Întrebarea {n}",
+        refreshFailed: "Nu s-a putut verifica dacă s-a deschis o întrebare nouă. Reîncărcați pagina pentru starea curentă.",
       },
     },
     mine: {

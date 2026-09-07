@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
 import type { ContestPhase } from "./use-contest-events";
@@ -7,7 +7,12 @@ import type { ContestPhase } from "./use-contest-events";
 const refresh = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 
-type EventsSnapshot = { offsetRef: { current: number }; deadlineRef: { current: number | null }; phase: ContestPhase };
+type EventsSnapshot = {
+  offsetRef: { current: number };
+  deadlineRef: { current: number | null };
+  phase: ContestPhase;
+  channelError?: string | null;
+};
 
 // The hook itself is tested on its own (use-contest-events.test.ts); this
 // stands in for it so the header can be proven against every phase without
@@ -84,5 +89,105 @@ describe("PlayHeader", () => {
     render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
 
     expect(screen.getByText(en.participant.play.finishedTag)).toBeInTheDocument();
+  });
+
+  // Finding 1: the events channel this clock runs on can fail outright (a
+  // connection limit, a rate limit, this account losing access) and the
+  // hook exposes it as `channelError` — previously nothing on screen could
+  // render it at all.
+  test("shows a translated reason when the events channel itself fails", () => {
+    events.current = {
+      offsetRef: { current: 0 },
+      deadlineRef: { current: null },
+      phase: "running",
+      channelError: "too_many_connections",
+    };
+    render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+
+    expect(screen.getByText(en.errors.too_many_connections)).toBeInTheDocument();
+  });
+
+  test("shows no channel notice when the channel has no error", () => {
+    events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running", channelError: null };
+    render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+
+    expect(screen.queryByText(en.errors.too_many_connections)).not.toBeInTheDocument();
+  });
+
+  // Finding 6: nothing reads the clock's own snapshot while the contest is
+  // waiting or finished, so ticking an interval for either is a render for
+  // nothing.
+  describe("the clock's own interval", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    test("does not tick while waiting", () => {
+      const setIntervalSpy = vi.spyOn(window, "setInterval");
+      events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting" };
+      render(<PlayHeader contestId="c1" title="X" waitingForStart dict={en} />);
+
+      expect(setIntervalSpy).not.toHaveBeenCalled();
+    });
+
+    test("does not tick once finished", () => {
+      const setIntervalSpy = vi.spyOn(window, "setInterval");
+      events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "finished" };
+      render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+
+      expect(setIntervalSpy).not.toHaveBeenCalled();
+    });
+
+    test("ticks while running", () => {
+      const setIntervalSpy = vi.spyOn(window, "setInterval");
+      events.current = { offsetRef: { current: 0 }, deadlineRef: { current: Date.now() + 90_000 }, phase: "running" };
+      render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+
+      expect(setIntervalSpy).toHaveBeenCalled();
+    });
+  });
+
+  // Finding 7: the clock is `aria-live="off"`, on purpose (reading a
+  // two-hour countdown aloud every second would drown a screen reader user
+  // in chatter) — but that means a threshold worth interrupting for has to
+  // be announced some other way.
+  describe("the clock's screen-reader announcement", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    test("announces five minutes remaining once the countdown crosses that threshold", () => {
+      vi.useFakeTimers();
+      const deadline = Date.now() + 5 * 60_000 + 1_000;
+      events.current = { offsetRef: { current: 0 }, deadlineRef: { current: deadline }, phase: "running" };
+      render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+
+      expect(screen.queryByText(en.participant.play.clock.fiveMinutesLeft)).not.toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+
+      expect(screen.getByText(en.participant.play.clock.fiveMinutesLeft)).toBeInTheDocument();
+    });
+
+    test("announces time is up once the countdown reaches zero", () => {
+      vi.useFakeTimers();
+      const deadline = Date.now() + 1_000;
+      events.current = { offsetRef: { current: 0 }, deadlineRef: { current: deadline }, phase: "running" };
+      render(<PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />);
+
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+
+      // Two elements now carry this exact text: the visible, aria-live="off"
+      // clock (unaffected — proven by the existing "does not disable
+      // anything" test) and the hidden live region this test is actually
+      // about. getAllByText, not getByText, is what that duplication calls
+      // for.
+      const matches = screen.getAllByText(en.participant.play.clock.timeUp);
+      expect(matches.some((el) => el.getAttribute("aria-live") === "polite")).toBe(true);
+    });
   });
 });

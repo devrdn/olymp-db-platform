@@ -94,6 +94,19 @@ type ParticipantQuestion struct {
 	// decisions (§6.1) — a hidden question stays answerable, and a visible
 	// closed one stays visible, just with nothing left to submit.
 	Closed bool
+	// Correct reports whether one of this registration's own attempts on
+	// this question was right. Meaningless — always false — while Closed is
+	// false, since an unclosed question has not been won yet; the reason a
+	// closed one carries this at all is completeness: a participant who
+	// reloads the page has no other way to tell "closed because solved" from
+	// "closed because every attempt is spent" (finding 5, docs/ARCHITECTURE.md).
+	Correct bool
+	// PointsAwarded is what this registration actually earned on this
+	// question — 0 until Correct is true, the penalty-adjusted award
+	// afterwards (AttemptStats.PointsAwarded's own doc). Never a reference
+	// answer and never another participant's score; only this registration's
+	// own, the same number a follow-up submission's own response would carry.
+	PointsAwarded int
 	// CanAnswer reports whether Submit would currently accept an answer for
 	// this question. In free progression and single-question mode it is
 	// simply !Closed — nothing else ever gates a submission there. In
@@ -197,6 +210,8 @@ func (r *Reader) Questions(ctx context.Context, contestID, registrationID uuid.U
 			AttemptsRemaining: attemptsRemaining(q.MaxAttempts, used.Attempts),
 			Closed:            closed,
 			CanAnswer:         canAnswer,
+			Correct:           used.Correct,
+			PointsAwarded:     used.PointsAwarded,
 		})
 	}
 	return out, nil

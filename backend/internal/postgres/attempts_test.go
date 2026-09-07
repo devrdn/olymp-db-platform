@@ -16,10 +16,18 @@ import (
 // rather than replaying Insert's own attempt-numbering rules to get there.
 func makeSubmission(t *testing.T, ctx context.Context, registration, question uuid.UUID, attemptNo int, correct bool) {
 	t.Helper()
+	makeSubmissionWithPoints(t, ctx, registration, question, attemptNo, correct, 0)
+}
+
+// makeSubmissionWithPoints is makeSubmission plus an explicit points_awarded,
+// for a test that needs to prove Attempts.ForRegistration sums it rather than
+// merely reading correctness (finding 5).
+func makeSubmissionWithPoints(t *testing.T, ctx context.Context, registration, question uuid.UUID, attemptNo int, correct bool, pointsAwarded int) {
+	t.Helper()
 	_, err := storage.QuerierFrom(ctx, testPool).Exec(ctx, `
-		INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct)
-		VALUES ($1, $2, $3, 'an answer', $4)`,
-		registration, question, attemptNo, correct)
+		INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct, points_awarded)
+		VALUES ($1, $2, $3, 'an answer', $4, $5)`,
+		registration, question, attemptNo, correct, pointsAwarded)
 	if err != nil {
 		t.Fatalf("insert submission: %v", err)
 	}
@@ -64,6 +72,44 @@ func TestAttemptsForRegistrationCountsAttemptsAndCorrectness(t *testing.T) {
 		}
 		if _, ok := stats[untouched.ID]; ok {
 			t.Fatalf("an untouched question had an entry: %+v", stats[untouched.ID])
+		}
+	})
+}
+
+// Finding 5: the sum rides the same query rather than a second round trip.
+// Only the winning attempt ever carries a non-zero points_awarded, so the sum
+// across every submission on a question is exactly that attempt's own award.
+func TestAttemptsForRegistrationSumsPointsAwarded(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-attempts-points")
+		student := makeUser(t, ctx, "student-attempts-points")
+		contestID := makeContest(t, ctx, author.ID)
+		registrationID := makeRegistration(t, ctx, contestID, student.ID)
+
+		questions := NewQuestions(testPool)
+		solved, err := questions.Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
+		if err != nil {
+			t.Fatalf("Create() = %v", err)
+		}
+		missed, err := questions.Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
+		if err != nil {
+			t.Fatalf("Create() = %v", err)
+		}
+
+		makeSubmissionWithPoints(t, ctx, registrationID, solved.ID, 1, false, 0)
+		makeSubmissionWithPoints(t, ctx, registrationID, solved.ID, 2, true, 8)
+		makeSubmissionWithPoints(t, ctx, registrationID, missed.ID, 1, false, 0)
+
+		stats, err := NewAttempts(testPool).ForRegistration(ctx, registrationID)
+		if err != nil {
+			t.Fatalf("ForRegistration() = %v", err)
+		}
+
+		if got := stats[solved.ID]; !got.Correct || got.PointsAwarded != 8 {
+			t.Fatalf("solved question stats = %+v, want {Correct: true, PointsAwarded: 8}", got)
+		}
+		if got := stats[missed.ID]; got.Correct || got.PointsAwarded != 0 {
+			t.Fatalf("missed question stats = %+v, want {Correct: false, PointsAwarded: 0}", got)
 		}
 	})
 }
