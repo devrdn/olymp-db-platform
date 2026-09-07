@@ -225,3 +225,32 @@ func TestAJournalFailureIsA500NotARawDatabaseError(t *testing.T) {
 		t.Fatalf("the database's own words reached the client: %s", rec.Body.String())
 	}
 }
+
+// CLAUDE.md's security rule 1 again, for the refusal that closes the console
+// once nothing of the contest is still answerable. A 409 and a code of its
+// own: the interface has to be able to say "there is nothing left to run a
+// query for" rather than "you are not allowed here", and it chooses that
+// sentence by the code alone.
+func TestAConsoleWithNothingLeftToAnswerIsA409(t *testing.T) {
+	fixture := newConsoleFixture(t, fakeConsole{err: queryproxy.ErrNothingLeftToAnswer})
+
+	rec := fixture.run("SELECT 1")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "nothing_left_to_answer" {
+		t.Fatalf("code = %q, want %q", code, "nothing_left_to_answer")
+	}
+}
+
+// And it is not the same answer as a participant who has actually finished:
+// finishing closes the whole play screen, this closes one panel of it, and a
+// client that cannot tell them apart shows the wrong screen to one of them.
+func TestNothingLeftToAnswerIsNotTheSameCodeAsHavingFinished(t *testing.T) {
+	nothingLeft := errorCode(t, newConsoleFixture(t, fakeConsole{err: queryproxy.ErrNothingLeftToAnswer}).run("SELECT 1"))
+	finished := errorCode(t, newConsoleFixture(t, fakeConsole{err: queryproxy.ErrFinished}).run("SELECT 1"))
+
+	if nothingLeft == finished {
+		t.Fatalf("both answered %q — the interface cannot tell a closed console from a closed contest", nothingLeft)
+	}
+}

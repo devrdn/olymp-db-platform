@@ -41,6 +41,24 @@ var (
 	// ErrFinished is a participant who has already finished. Their answers
 	// are in; the console closing with them is the point of finishing.
 	ErrFinished = errors.New("the participant has finished")
+	// ErrNothingLeftToAnswer is a participant for whom no question of the
+	// contest is still answerable: every one of them is either answered
+	// correctly or out of attempts. The console exists to help somebody
+	// arrive at an answer, and running a query cannot lead to one any more,
+	// so it stops taking queries — a participant otherwise keeps an
+	// execution slot, a database and a journal writer for a contest they can
+	// no longer score a point in.
+	//
+	// Deliberately not ErrFinished, and deliberately not a status write
+	// either. Finishing is a fact about the registration and it closes the
+	// whole play screen: lookupParticipant turns
+	// contests.RegistrationFinished into ErrFinished for Access as well, so
+	// marking somebody finished here would take away the story, the question
+	// list, the results and the timer along with the console. This is only
+	// about the console, only about right now, and it reverses itself the
+	// moment the contest gives them something to answer again — an organiser
+	// raising max_attempts, or making a hidden question visible.
+	ErrNothingLeftToAnswer = errors.New("no question of this contest is still answerable")
 	// ErrAddressNotAllowed is a query from outside the network the contest is
 	// held on. Checked on every query and not only at enrolment: a restriction
 	// that is applied once is a restriction somebody walks out of the room
@@ -92,6 +110,20 @@ type Games interface {
 type Databases interface {
 	Ensure(ctx context.Context, contest provisioning.Contest, registration uuid.UUID) (string, error)
 	Quota(ctx context.Context, contest provisioning.Contest) (int64, error)
+}
+
+// Answerable answers the one question the console needs before it will take
+// another query: is there still a question in this contest this registration
+// could get an answer out of?
+//
+// Narrow on purpose (CLAUDE.md rule 3). postgres.Answerable implements it in
+// one statement, and "still answerable" there is the same definition
+// contests.Reader already shows the participant on their own question list —
+// visible, not answered correctly, attempts not spent. The two must not
+// drift: a list that says a question can still be answered while this says
+// otherwise takes the console away from somebody with work still to do.
+type Answerable interface {
+	AnswerableLeft(ctx context.Context, contestID, registrationID uuid.UUID) (bool, error)
 }
 
 // Executor runs the query and journals it. In a deployment that is a client of
@@ -155,6 +187,10 @@ type Service struct {
 	// schema panel. Set by WithSchemas and nil until then — see Schema for
 	// why a build that never wired it refuses rather than panicking.
 	schemas Schemas
+	// answerable answers whether this participant still has a question to
+	// work towards. Set by WithAnswerable and nil until then — see that
+	// option for why a build that never wired it runs the query anyway.
+	answerable Answerable
 }
 
 // defaultGrace is the network-latency allowance a deployment gets unless
@@ -217,6 +253,24 @@ func (s *Service) WithPerMinuteDefault(perMinute int) *Service {
 		panic(fmt.Sprintf("queryproxy: negative per-minute default %d", perMinute))
 	}
 	s.perMinuteDefault = perMinute
+	return s
+}
+
+// WithAnswerable supplies the reader behind Run's "is anything still
+// answerable" check (ErrNothingLeftToAnswer).
+//
+// An option rather than a constructor argument, and one that fails *open*:
+// a build that never wired it runs the query, exactly as this façade did
+// before the check existed. That is the opposite direction from WithSchemas,
+// and deliberately so. A missing schema reader costs a participant one panel
+// they can play without; a missing reader here, failing closed, would refuse
+// every query from every participant of every contest, and it would do it
+// mid-olympiad with no way for anybody to tell it apart from a contest that
+// really is over. The console staying open for somebody with nothing left to
+// answer is the state this whole check exists to improve on — it is not a
+// state anything breaks in.
+func (s *Service) WithAnswerable(answerable Answerable) *Service {
+	s.answerable = answerable
 	return s
 }
 
@@ -293,7 +347,21 @@ func effectiveRateLimit(contestLimit, installationLimit int) int {
 // game's existence get checked, each cheaper than a database round trip and
 // each placed so an oversized or misdirected query pays the same lookups and
 // the same rate check a legitimate one does rather than dodging them for
-// free. Only then is a database provisioned, which may create one. And only
+// free.
+//
+// Between the length check and the game lookup sits the one check that costs
+// a round trip of its own: has this participant anything left to answer at
+// all (ErrNothingLeftToAnswer)? After the two checks above it because those
+// are comparisons of values already in hand and this is a query; before the
+// game lookup and before provisioning because a participant who can no
+// longer score a point must not be able to make this service create them a
+// database, nor ask the game cluster for a template, by asking for one.
+// After the rate check for the same reason every other refusal is (finding
+// 3): a refused query still costs this read, so it still counts. It is
+// skipped entirely when nothing was wired to answer it — see WithAnswerable
+// for why a missing wire lets the query through rather than refusing it.
+//
+// Only then is a database provisioned, which may create one. And only
 // once every one of those has admitted the request does a not-yet-started
 // individual participant's clock actually start (finding 2): starting it any
 // earlier meant a query refused for its address, its length, an unprovisioned
@@ -356,6 +424,19 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 
 	if len(cmd.SQL) > sqlpolicy.MaxQueryBytes {
 		return nil, &sqlpolicy.Refusal{Code: sqlpolicy.CodeTooLong, Subject: fmt.Sprintf("%d bytes", len(cmd.SQL))}
+	}
+
+	// Nothing left to work towards closes the console and nothing else (see
+	// ErrNothingLeftToAnswer). nil means this build wired no reader, which
+	// fails open: the query runs, as it did before this check existed.
+	if s.answerable != nil {
+		left, err := s.answerable.AnswerableLeft(ctx, cmd.ContestID, participant.ID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: work out what is still answerable: %w", ErrUnavailable, err)
+		}
+		if !left {
+			return nil, ErrNothingLeftToAnswer
+		}
 	}
 
 	game, err := s.games.Game(ctx, cmd.ContestID)

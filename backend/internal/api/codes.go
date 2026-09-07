@@ -50,6 +50,8 @@ var (
 		"The contest has not started, or has finished. Queries are taken only while it runs.")
 	codeContestFinished = httpx.NewCode("contest_finished",
 		"The participant has already finished. Their answers are in, and the console closes with them.")
+	codeNothingLeftToAnswer = httpx.NewCode("nothing_left_to_answer",
+		"No question of this contest can still be answered by this participant: every one is either answered correctly or out of attempts, so running a query cannot lead to an answer any more and the console stops taking them. A fact about the contest's current state and not a permission the caller lacks — nothing else closes: the story, the questions, the results and the timer stay open, and the console reopens if the contest gives them something to answer again.")
 	codeNoGameYet = httpx.NewCode("no_game_yet",
 		"The contest's game database has not been built. Nobody's mistake and nothing to do with the query.")
 	codeGameScriptEmpty = httpx.NewCode("game_script_empty",
