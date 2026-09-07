@@ -184,6 +184,13 @@
      fields go, the column takes the full width, and every asymmetric grid
      collapses to a single track. */
   --breakpoint-narrow: 47.5rem;
+  /* Where the console can afford three panes at once.
+     The two side panes are 212px and 252px by default, so below this the
+     editor and the result table are left barely three hundred pixels between
+     them — measured at a 768px viewport, which is a portrait tablet, a device
+     an olympiad hall really has. Above it the middle pane keeps more than
+     five hundred. */
+  --breakpoint-wide: 64rem;
 
   --container-column: 110rem;
   --container-head: 20ch;
