@@ -803,6 +803,7 @@ const en = {
       },
       unavailable: {
         body: "This contest is not open for play right now.",
+        retry: "Try again",
       },
       finishedTag: "finished",
       clock: {

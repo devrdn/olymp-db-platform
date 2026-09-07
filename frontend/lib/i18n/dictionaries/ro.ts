@@ -757,6 +757,7 @@ const ro = {
       },
       unavailable: {
         body: "Această olimpiadă nu este deschisă pentru joc acum.",
+        retry: "Încearcă din nou",
       },
       finishedTag: "încheiată",
       clock: {

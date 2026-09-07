@@ -3,7 +3,9 @@ package api_test
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
@@ -139,5 +141,76 @@ func TestSchemaEndpointRefusesAContestIdentifierThatIsNotAUUID(t *testing.T) {
 	}
 	if f.access.schemaAsked != uuid.Nil {
 		t.Fatal("looked the schema up for an identifier that never parsed")
+	}
+}
+
+// The journal is written before anything sanitises anything, so reading the
+// column back was a way round both of the console's guards at once.
+func TestTheQueryLogNeverHandsBackAFailureOfOurs(t *testing.T) {
+	f := newParticipantFixture(t)
+	f.history.items = []queryrunner.HistoryEntry{
+		{
+			SQL:    "select * from guests;",
+			Status: queryrunner.StatusError,
+			Error: "connecting to the game database: failed to connect to `user=game_reader " +
+				"database=game_pool_ce678159661a1_57c5ba38100c`: 127.0.0.1:5433 (localhost): " +
+				`failed SASL auth: FATAL: password authentication failed for user "game_reader"`,
+			ExecutedAt: time.Now().UTC(),
+		},
+	}
+
+	rec := f.get("/contests/" + uuid.NewString() + "/play/log?limit=10&offset=0")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	for _, secret := range []string{"game_reader", "game_pool_ce678159661a1", "5433", "password authentication"} {
+		if strings.Contains(rec.Body.String(), secret) {
+			t.Fatalf("%q reached the participant through the query log: %s", secret, rec.Body)
+		}
+	}
+	// The fact still travels: the status is what the panel renders.
+	if !strings.Contains(rec.Body.String(), `"status":"error"`) {
+		t.Fatalf("the row lost its status as well: %s", rec.Body)
+	}
+}
+
+// The same reading, in a contest that hides its schema: the console
+// deliberately withholds PostgreSQL's own words so a participant cannot
+// enumerate a closed catalogue one guess at a time. Reading them back out of
+// the log restored exactly that oracle.
+func TestTheQueryLogIsNotAnOracleForAHiddenSchema(t *testing.T) {
+	f := newParticipantFixture(t)
+	f.history.items = []queryrunner.HistoryEntry{
+		{
+			SQL:        "select * from suspects;",
+			Status:     queryrunner.StatusError,
+			Error:      `ERROR: relation "suspects" does not exist (SQLSTATE 42P01)`,
+			ExecutedAt: time.Now().UTC(),
+		},
+	}
+
+	rec := f.get("/contests/" + uuid.NewString() + "/play/log?limit=10&offset=0")
+	if strings.Contains(rec.Body.String(), "does not exist") || strings.Contains(rec.Body.String(), "suspects\"") {
+		t.Fatalf("the database's own words reached the participant: %s", rec.Body)
+	}
+}
+
+// And the one text that is theirs still arrives. A refusal from the SQL
+// validator is about the query they typed, and "syntax error at or near" is
+// the most useful thing they can be told.
+func TestTheQueryLogStillShowsARefusalOfTheirOwnQuery(t *testing.T) {
+	f := newParticipantFixture(t)
+	f.history.items = []queryrunner.HistoryEntry{
+		{
+			SQL:        "fksdf;",
+			Status:     queryrunner.StatusRejected,
+			Error:      `parse_error: syntax error at or near "fksdf"`,
+			ExecutedAt: time.Now().UTC(),
+		},
+	}
+
+	rec := f.get("/contests/" + uuid.NewString() + "/play/log?limit=10&offset=0")
+	if !strings.Contains(rec.Body.String(), "syntax error at or near") {
+		t.Fatalf("the participant's own refusal was withheld too: %s", rec.Body)
 	}
 }

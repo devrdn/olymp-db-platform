@@ -319,7 +319,7 @@ func (h *ParticipantHandler) queryLog(w http.ResponseWriter, r *http.Request) {
 		items = append(items, queryLogEntryResponse{
 			SQL:        entry.SQL,
 			Status:     string(entry.Status),
-			Error:      entry.Error,
+			Error:      participantSafeError(entry.Status, entry.Error),
 			DurationMs: entry.DurationMs,
 			RowCount:   entry.RowCount,
 			ExecutedAt: entry.ExecutedAt.UTC().Format(timeLayout),
@@ -517,4 +517,37 @@ func (h *ParticipantHandler) schema(w http.ResponseWriter, r *http.Request) {
 		answer.Tables = append(answer.Tables, schemaTable{Name: table.Name, Columns: columns})
 	}
 	httpx.JSON(w, r, http.StatusOK, answer)
+}
+
+// participantSafeError is the journalled failure, reduced to what this
+// participant may be told.
+//
+// `query_log.error_text` is written by queryrunner.Journalled straight from
+// the error the run produced, *before* anything above it sanitises anything.
+// Both of the console's own guards are therefore bypassed by reading the
+// column back: ConsoleHandler.fail, which turns a failure of ours into a
+// generic sentence, and queryproxy's ErrDatabaseDeclined, which withholds
+// PostgreSQL's own words in a contest that hides its schema. Returned
+// verbatim, this endpoint handed back the game cluster's host, port and role
+// together with the participant's own internal database name — and let anyone
+// reconstruct a hidden schema one guess at a time: ask the console, read the
+// real "relation does not exist" here.
+//
+// So it is a whitelist by status, not a search for bad strings. A `rejected`
+// row is the SQL validator refusing the participant's own query — "syntax
+// error at or near" is a fact about text they typed, and the most useful
+// thing they can be told. Every other status covers a failure that reached,
+// or tried to reach, something that is not theirs, and the status alone says
+// what happened.
+//
+// The cost is real and worth naming: in a contest whose catalogues are open,
+// PostgreSQL's own words about a missing relation no longer appear in the
+// log, though the console still shows them at the moment of the run.
+// Recovering that needs the journal to record what *kind* of failure it was
+// rather than only its text, which is a column this does not add.
+func participantSafeError(status queryrunner.Status, text string) string {
+	if status == queryrunner.StatusRejected {
+		return text
+	}
+	return ""
 }

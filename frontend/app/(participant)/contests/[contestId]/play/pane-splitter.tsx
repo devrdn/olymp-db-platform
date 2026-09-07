@@ -170,8 +170,12 @@ export function PaneHandle({
 }) {
   const dragging = useRef<{ startX: number; startRem: number } | null>(null);
 
-  const rootFontSize = () =>
-    parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  // Read once, when the drag starts, not on every pointer event.
+  // `getComputedStyle` is a synchronous style read, and reading on the next
+  // event flushes the write from the previous one — a forced recalculation of
+  // a grid whose middle column may hold a thousand-row table, per pointer
+  // event. The root font size cannot change mid-drag.
+  const remRef = useRef(16);
 
   return (
     <div
@@ -202,6 +206,7 @@ export function PaneHandle({
       }}
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture(event.pointerId);
+        remRef.current = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
         dragging.current = { startX: event.clientX, startRem: rem };
       }}
       onPointerMove={(event) => {
@@ -209,7 +214,7 @@ export function PaneHandle({
         const container = containerRef.current;
         if (!drag || !container) return;
 
-        const moved = ((event.clientX - drag.startX) / rootFontSize()) * direction;
+        const moved = ((event.clientX - drag.startX) / remRef.current) * direction;
         const next = clamp(drag.startRem + moved);
         // Straight onto the DOM: see this file's own doc for why this does not
         // go through state until the pointer is released.
@@ -221,7 +226,7 @@ export function PaneHandle({
         dragging.current = null;
         if (!drag || !container) return;
 
-        const moved = ((event.clientX - drag.startX) / rootFontSize()) * direction;
+        const moved = ((event.clientX - drag.startX) / remRef.current) * direction;
         onResize(clamp(drag.startRem + moved));
       }}
     />
