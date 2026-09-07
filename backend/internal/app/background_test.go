@@ -1,10 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -173,5 +175,99 @@ func TestReclaimInstancesReportsSkippedAndStuckWithoutError(t *testing.T) {
 
 	if err := job.run(t.Context()); err != nil {
 		t.Fatalf("run() = %v, want nil for a tick that only skipped busy databases", err)
+	}
+}
+
+// stuckWarningLines counts the "busy long past its grace deadline" warning
+// lines logged so far — the fact finding 3 asks about: one line the first
+// time a database becomes stuck, silence on every following tick where
+// nothing about it changed.
+func stuckWarningLines(buf *bytes.Buffer) int {
+	return strings.Count(buf.String(), "busy long past its grace deadline")
+}
+
+// A database stuck at the same overdue duration tick after tick — the
+// ordinary steady state for as long as something stays connected to it — must
+// warn once, not once every ten minutes (144 lines a day per database before
+// this fix). Crossing another full day overdue is a real change and gets its
+// own line.
+func TestReclaimInstancesWarnsOnceThenOnlyWhenAnotherDayPasses(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	counters := metrics.NewGameReclaimCounters(metrics.Noop{})
+	contest := uuid.New()
+
+	overdue := 30 * time.Hour // already past stuckAfter (24h), one day in
+	job := reclaimInstances(log, func(context.Context, int) (provisioning.ReclaimResult, error) {
+		return provisioning.ReclaimResult{
+			Stuck: []provisioning.StuckInstance{{Database: "game_c1_u1", ContestID: contest, Overdue: overdue}},
+		}, nil
+	}, 60, counters)
+
+	if err := job.run(t.Context()); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+	if got := stuckWarningLines(&buf); got != 1 {
+		t.Fatalf("first tick logged %d warnings, want 1", got)
+	}
+
+	// Still the same database, still stuck, ten minutes (one tick) more
+	// overdue — the same day, so no new line.
+	overdue += 10 * time.Minute
+	if err := job.run(t.Context()); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+	if got := stuckWarningLines(&buf); got != 1 {
+		t.Fatalf("tick with no day crossed logged %d warnings total, want still 1", got)
+	}
+
+	// Now a full day further overdue — worth its own line.
+	overdue += 24 * time.Hour
+	if err := job.run(t.Context()); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+	if got := stuckWarningLines(&buf); got != 2 {
+		t.Fatalf("tick that crossed another day logged %d warnings total, want 2", got)
+	}
+}
+
+// A database that stops being stuck (reclaimed, or simply freed up) and later
+// gets stuck again is a new fact, not a continuation of the old one — it must
+// warn again rather than staying silent because this process warned about the
+// same database name once before.
+func TestReclaimInstancesWarnsAgainAfterRecoveringAndGettingStuckAgain(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	counters := metrics.NewGameReclaimCounters(metrics.Noop{})
+	contest := uuid.New()
+	stuck := true
+
+	job := reclaimInstances(log, func(context.Context, int) (provisioning.ReclaimResult, error) {
+		if !stuck {
+			return provisioning.ReclaimResult{}, nil
+		}
+		return provisioning.ReclaimResult{
+			Stuck: []provisioning.StuckInstance{{Database: "game_c1_u1", ContestID: contest, Overdue: 30 * time.Hour}},
+		}, nil
+	}, 60, counters)
+
+	if err := job.run(t.Context()); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+	if got := stuckWarningLines(&buf); got != 1 {
+		t.Fatalf("first tick logged %d warnings, want 1", got)
+	}
+
+	stuck = false
+	if err := job.run(t.Context()); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+
+	stuck = true
+	if err := job.run(t.Context()); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+	if got := stuckWarningLines(&buf); got != 2 {
+		t.Fatalf("after recovering and getting stuck again, warnings = %d, want 2", got)
 	}
 }

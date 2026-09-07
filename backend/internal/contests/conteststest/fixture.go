@@ -17,6 +17,13 @@ import (
 // on a deadline can state times relative to something stable.
 var FixtureNow = time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
 
+// FixtureDefaultGraceMin is the fixture's stand-in for the installation's own
+// GAME_INSTANCE_GRACE_MIN (config.GameInstanceGraceMin) — the real default is
+// 24 hours (internal/platform/config/config.go), and this mirrors that
+// number so a test can exercise Service.ExtendGrace against a realistic
+// installation default rather than the fixture's own arbitrary zero.
+const FixtureDefaultGraceMin = 24 * 60
+
 // Fixture is a contest service wired to in-memory storage, with each store
 // exposed so a test can arrange the state it needs and inspect what happened.
 type Fixture struct {
@@ -94,6 +101,8 @@ func NewFixture() *Fixture {
 		// would make the suite slower for nothing a fixture-backed test
 		// could ever observe.
 		Sleep: func(time.Duration) {},
+		// See FixtureDefaultGraceMin's own doc.
+		DefaultGraceMin: FixtureDefaultGraceMin,
 	})
 	return f
 }

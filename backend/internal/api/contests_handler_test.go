@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -318,7 +319,13 @@ func TestExtendingTheGracePeriodOfAFinishedContestSucceeds(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusFinished)
 
-	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String()+"/grace", `{"grace_period_min": 120}`)
+	// c never set an explicit grace, so the grace actually in force is the
+	// fixture's stand-in for the installation default
+	// (conteststest.FixtureDefaultGraceMin, 24h) — the requested value has to
+	// clear that, not merely be positive (finding 1).
+	grace := conteststest.FixtureDefaultGraceMin + 60
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String()+"/grace",
+		fmt.Sprintf(`{"grace_period_min": %d}`, grace))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
@@ -328,8 +335,28 @@ func TestExtendingTheGracePeriodOfAFinishedContestSucceeds(t *testing.T) {
 	if !ok {
 		t.Fatalf("response carries no settings object: %s", rec.Body.String())
 	}
-	if settings["grace_period_min"] != float64(120) {
-		t.Errorf("settings.grace_period_min = %v, want 120", settings["grace_period_min"])
+	if settings["grace_period_min"] != float64(grace) {
+		t.Errorf("settings.grace_period_min = %v, want %d", settings["grace_period_min"], grace)
+	}
+}
+
+// The installation default is what actually governs a contest that never set
+// an explicit grace, so a value that does not clear it must be refused the
+// same as shortening an explicit one would be — not silently accepted as the
+// contest's "first explicit" value (finding 1: this door used to read 0 → 60
+// as an extension while it was really cutting a 24-hour default to one
+// hour).
+func TestExtendingTheGracePeriodBelowTheInstallationDefaultIsRejected(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusFinished)
+	if c.Settings.GracePeriodMin != 0 {
+		t.Fatalf("setup: GracePeriodMin = %d, want 0", c.Settings.GracePeriodMin)
+	}
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String()+"/grace", `{"grace_period_min": 60}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
 	}
 }
 
@@ -351,7 +378,8 @@ func TestExtendingTheGracePeriodOfARunningContestIsAConflict(t *testing.T) {
 func TestShorteningAnAlreadyExtendedGracePeriodIsRejected(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusFinished)
-	if _, err := f.service.ExtendGrace(t.Context(), f.actor.ID, c.ID, 500); err != nil {
+	extended := conteststest.FixtureDefaultGraceMin + 60
+	if _, err := f.service.ExtendGrace(t.Context(), f.actor.ID, c.ID, extended); err != nil {
 		t.Fatalf("setup ExtendGrace() = %v", err)
 	}
 

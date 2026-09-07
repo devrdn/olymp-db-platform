@@ -120,7 +120,24 @@ type ReclaimResult struct {
 //
 // Both the instance list and the template list are capped at
 // ReclaimBatchLimit — see its own doc for why an unbounded pass is exactly
-// the failure a fresh deployment's first tick would otherwise hit.
+// the failure a fresh deployment's first tick would otherwise hit. One tick
+// can therefore issue up to 2*ReclaimBatchLimit sequential DROP DATABASE
+// statements (400 today), and that combined cost is safe next to a live
+// olympiad running on the same cluster for three separate reasons, not one:
+// candidates come only from Reclaimable and ReclaimableTemplates, both
+// filtered to c.status IN ('finished', 'archived') — a running or published
+// contest's own databases are never even offered, so nothing here competes
+// with a live contest for the same rows; DropIdle (internal/gamedb) takes no
+// FORCE, so a database anything is still connected to — including one whose
+// grace merely ran out while the Query Runner is mid-query — is left for the
+// next tick rather than interrupted; and the loop above is sequential, one
+// DropIdle awaited to completion before the next starts, so the cluster
+// never sees more than one DROP DATABASE in flight from this pass at a time,
+// however large the batch. What a full batch still costs is real disk I/O
+// spread over the tick's ten-minute window rather than concurrent load
+// spiking against a live contest's own connections — the reason 200 (not a
+// larger number that would drain a backlog faster) was chosen in the first
+// place, per ReclaimBatchLimit's own doc.
 func (s *Service) Reclaim(ctx context.Context, installationGraceMin int) (ReclaimResult, error) {
 	var result ReclaimResult
 	var failures []error
