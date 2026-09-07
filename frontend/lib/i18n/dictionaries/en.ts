@@ -1007,6 +1007,8 @@ const en = {
       "The contest is not running, so it takes no queries.",
     no_game_yet:
       "This contest's database has not been prepared yet. Nothing you did — try again shortly.",
+    schema_hidden:
+      "This olympiad does not show the database's structure. Finding it is part of the puzzle.",
     query_parse_error:
       "PostgreSQL could not read that query. Its own words are below.",
     query_not_one_statement:

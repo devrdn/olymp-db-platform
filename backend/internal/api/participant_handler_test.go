@@ -19,6 +19,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
+	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
@@ -55,6 +56,22 @@ type fakeAccess struct {
 	// lookups running slow (finding 2), without a real, adjustable-latency
 	// store behind this fake.
 	delay time.Duration
+	// schema and schemaErr are what Schema answers, and schemaAsked records
+	// which contest it was asked about — the same shape gotContestID gives
+	// Access, for the same reason.
+	schema      provisioning.Schema
+	schemaErr   error
+	schemaAsked uuid.UUID
+}
+
+func (a *fakeAccess) Schema(_ context.Context, contestID, _ uuid.UUID, _ netip.Addr) (provisioning.Schema, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.schemaAsked = contestID
+	if a.schemaErr != nil {
+		return provisioning.Schema{}, a.schemaErr
+	}
+	return a.schema, nil
 }
 
 func (a *fakeAccess) AdmitRead(uuid.UUID) error {

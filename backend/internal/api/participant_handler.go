@@ -10,6 +10,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
+	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/go-chi/chi/v5"
@@ -49,6 +50,11 @@ type ParticipantAccess interface {
 	// lookups. See queryproxy.Service.AdmitRead for why the key (userID) is
 	// bounded and why it is checked ahead of everything else.
 	AdmitRead(userID uuid.UUID) error
+	// Schema describes the contest's game, for the console's schema panel. It
+	// applies Access's own admission itself and then the one rule that is its
+	// own: a contest that closed its catalogues does not show its shape here
+	// either (queryproxy.ErrSchemaHidden).
+	Schema(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (provisioning.Schema, error)
 }
 
 // Submitter is the slice of contests.Service this handler needs to record an
@@ -116,6 +122,7 @@ func (h *ParticipantHandler) Mount(r chi.Router) {
 		r.Get("/contests/{"+contestIDParam+"}/play/story", h.story)
 		r.Get("/contests/{"+contestIDParam+"}/play/questions", h.questions)
 		r.Get("/contests/{"+contestIDParam+"}/play/log", h.queryLog)
+		r.Get("/contests/{"+contestIDParam+"}/play/schema", h.schema)
 		r.Post("/contests/{"+contestIDParam+"}/questions/{"+questionIDParam+"}/answer", h.answer)
 	})
 }
@@ -399,6 +406,13 @@ func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err er
 		httpx.Error(w, r, http.StatusConflict, codeContestNotRunning, "The contest is not running")
 	case errors.Is(err, queryproxy.ErrFinished):
 		httpx.Error(w, r, http.StatusConflict, codeContestFinished, "The participant has already finished")
+	case errors.Is(err, queryproxy.ErrSchemaHidden):
+		// A rule of the game, not an outage and not a missing resource: the
+		// contest exists and the caller is in it. The interface reads this
+		// code and simply does not offer the panel.
+		httpx.Error(w, r, http.StatusForbidden, codeSchemaHidden, "This contest does not show the game's schema")
+	case errors.Is(err, queryproxy.ErrNoGameYet):
+		httpx.Error(w, r, http.StatusConflict, codeNoGameYet, "The contest has no game database yet")
 	case errors.Is(err, queryproxy.ErrAddressNotAllowed):
 		httpx.Error(w, r, http.StatusForbidden, codeAddressNotAllowed,
 			"This contest is only available from the university network")
@@ -437,4 +451,70 @@ func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err er
 		h.log.ErrorContext(r.Context(), "participant content could not be read", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 	}
+}
+
+// schemaResponse is the game's shape, as the console's schema panel draws it.
+type schemaResponse struct {
+	Tables []schemaTable `json:"tables"`
+	// Truncated says the game has more than the panel is being shown. The
+	// same flag a truncated query result carries, for the same reason: a
+	// short answer presented as a complete one is a wrong answer.
+	Truncated bool `json:"truncated"`
+}
+
+type schemaTable struct {
+	Name    string         `json:"name"`
+	Columns []schemaColumn `json:"columns"`
+}
+
+type schemaColumn struct {
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	Nullable   bool   `json:"nullable"`
+	References string `json:"references"`
+}
+
+// schema answers what the game looks like.
+//
+// A read like the story and the questions, so it goes through the same admit
+// — the rate budget first, then the one place that answers "may this student
+// see this contest". The refusal that is this endpoint's own,
+// ErrSchemaHidden, is a 403 rather than a 404: the contest exists and the
+// participant is in it; what they are being told is that this olympiad does
+// not hand its schema over, which is a rule of the game rather than a
+// missing thing.
+func (h *ParticipantHandler) schema(w http.ResponseWriter, r *http.Request) {
+	identity, _ := auth.IdentityFrom(r.Context())
+
+	contestID, err := uuid.Parse(chi.URLParam(r, contestIDParam))
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, "The contest identifier is not a UUID")
+		return
+	}
+	if err := h.access.AdmitRead(identity.UserID); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+
+	schema, err := h.access.Schema(r.Context(), contestID, identity.UserID, clientAddress(r))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+
+	// Never nil in the body, the same rule the query result follows: a client
+	// that has to tell `null` from `[]` before it can draw a tree is a client
+	// with a bug waiting.
+	answer := schemaResponse{Tables: make([]schemaTable, 0, len(schema.Tables)), Truncated: schema.Truncated}
+	for _, table := range schema.Tables {
+		columns := make([]schemaColumn, 0, len(table.Columns))
+		for _, column := range table.Columns {
+			columns = append(columns, schemaColumn{
+				Name: column.Name, Type: column.Type,
+				Nullable: column.Nullable, References: column.References,
+			})
+		}
+		answer.Tables = append(answer.Tables, schemaTable{Name: table.Name, Columns: columns})
+	}
+	httpx.JSON(w, r, http.StatusOK, answer)
 }

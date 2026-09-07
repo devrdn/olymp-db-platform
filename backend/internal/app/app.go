@@ -179,7 +179,18 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 				games,
 				databases,
 				queryrunner.NewJournalled(client, postgres.NewQueryLog(pool), log),
-			).WithPerMinuteDefault(cfg.QueryPerMinute).WithGrace(cfg.DeadlineGrace)
+			).WithPerMinuteDefault(cfg.QueryPerMinute).WithGrace(cfg.DeadlineGrace).
+				// The console's schema panel. Wired here and only here: the
+				// console-less Service built further down for the participant
+				// read endpoints has no game cluster to read a schema from,
+				// and answers ErrSchemaHidden rather than pretending to.
+				//
+				// `games` is both halves of the cache — it is the same
+				// postgres.GameInstances the pool tender already holds — and
+				// `cluster` is the game cluster itself. One catalogue read
+				// per template between every participant of a contest; see
+				// provisioning.SchemaReader.
+				WithSchemas(provisioning.NewSchemaReader(games, cluster))
 		}
 	}
 

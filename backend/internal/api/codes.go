@@ -52,6 +52,8 @@ var (
 		"The participant has already finished. Their answers are in, and the console closes with them.")
 	codeNoGameYet = httpx.NewCode("no_game_yet",
 		"The contest's game database has not been built. Nobody's mistake and nothing to do with the query.")
+	codeSchemaHidden = httpx.NewCode("schema_hidden",
+		"This contest does not show the game's schema. A rule of this olympiad rather than a missing thing: the organiser closed the catalogues so the shape has to be found by playing, and serving it from the console's panel would hand over exactly what that withholds.")
 
 	codeQueryServiceDown = httpx.NewCode("query_service_down",
 		"The Query Runner could not be reached. Nothing to do with the query, and a retry is the right response rather than an edit.")

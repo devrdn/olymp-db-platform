@@ -942,6 +942,8 @@ const ro = {
       "Olimpiada nu se desfășoară, deci nu acceptă interogări.",
     no_game_yet:
       "Baza de date a acestei olimpiade nu este încă pregătită. Nu este greșeala dumneavoastră — încercați peste puțin timp.",
+    schema_hidden:
+      "Această olimpiadă nu arată structura bazei de date. Descoperirea ei face parte din problemă.",
     query_parse_error:
       "PostgreSQL nu a putut citi interogarea. Cuvintele lui sunt mai jos.",
     query_not_one_statement:
