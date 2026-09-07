@@ -119,7 +119,10 @@ export function Workspace({
             gets a comfortable minimum instead of a share of a height that no
             longer applies. */}
         <div className="grid min-h-0 grid-rows-[minmax(0,11fr)_minmax(0,9fr)] border-line narrow:border-r max-narrow:grid-rows-none max-narrow:border-b">
-          <div className="min-h-0 border-b border-line max-narrow:min-h-80">
+          {/* A flex column, not a block: the console's form claims the cell
+              with flex-1, and flex-1 is inert inside a block parent — which
+              left the editor with no height at all. */}
+          <div className="flex min-h-0 flex-col border-b border-line max-narrow:min-h-80">
             <ConsoleEditor
               contestId={contestId}
               dict={dict}
