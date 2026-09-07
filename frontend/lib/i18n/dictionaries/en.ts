@@ -1052,6 +1052,8 @@ const en = {
       "This contest's database has not been prepared yet. Nothing you did — try again shortly.",
     schema_hidden:
       "This olympiad does not show the database's structure. Finding it is part of the puzzle.",
+    nothing_left_to_answer:
+      "Every question here is either answered or out of attempts, so there is nothing left to work towards and the console has closed. The story, your answers and the results stay where they are.",
     game_script_empty:
       "The game's SQL is empty. An empty template builds an empty database, and every question would answer with a missing table.",
     game_script_too_long:

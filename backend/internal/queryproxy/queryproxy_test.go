@@ -78,10 +78,32 @@ func (c contestStore) ByID(context.Context, uuid.UUID) (contests.Contest, error)
 type games struct {
 	game provisioning.Contest
 	err  error
+	// calls counts how often Game was reached, so a test can prove a check
+	// placed ahead of the game lookup really did stop the request before it.
+	// A pointer for the same reason people.calls is one: the receiver is a
+	// value.
+	calls *int
 }
 
 func (g games) Game(context.Context, uuid.UUID) (provisioning.Contest, error) {
+	if g.calls != nil {
+		*g.calls++
+	}
 	return g.game, g.err
+}
+
+// answerable is the fake behind queryproxy.Answerable: whether this contest
+// still has a question this registration could get an answer out of, plus a
+// counter so a test can prove the question was (or was not) asked at all.
+type answerable struct {
+	left  bool
+	err   error
+	calls int
+}
+
+func (a *answerable) AnswerableLeft(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
+	a.calls++
+	return a.left, a.err
 }
 
 type databases struct {
@@ -1567,5 +1589,111 @@ func TestAdmitReadIsKeyedPerAccountNotShared(t *testing.T) {
 
 	if err := service.AdmitRead(uuid.New()); err != nil {
 		t.Fatalf("AdmitRead() for an account that made no request = %v, want nil", err)
+	}
+}
+
+// The console closes once no question of the contest is still answerable to
+// this participant — every one of them either answered correctly or out of
+// attempts. Running SQL cannot lead to an answer any more, so the endpoint
+// that exists to help them answer stops taking queries.
+func TestAParticipantWithNothingLeftToAnswerIsRefusedTheConsole(t *testing.T) {
+	service, _, run := fixture(t)
+	service.WithAnswerable(&answerable{left: false})
+
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrNothingLeftToAnswer) {
+		t.Fatalf("error = %v, want ErrNothingLeftToAnswer", err)
+	}
+	if run.calls != 0 {
+		t.Fatalf("the runner was reached %d times, want 0 — a refused query is never journalled or executed", run.calls)
+	}
+}
+
+// The refusal is not the end of the registration: it is narrower than
+// ErrFinished, which closes the whole play screen. Nothing here writes
+// contests.RegistrationFinished, and the read endpoints that share this
+// service's own admission stay open — the story, the questions, the timer.
+func TestNothingLeftToAnswerDoesNotCloseTheReadEndpoints(t *testing.T) {
+	service, _, _ := fixture(t)
+	service.WithAnswerable(&answerable{left: false})
+
+	cmd := command()
+	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, queryproxy.ErrNothingLeftToAnswer) {
+		t.Fatalf("Run() = %v, want ErrNothingLeftToAnswer", err)
+	}
+	if _, _, err := service.Access(t.Context(), cmd.ContestID, cmd.UserID, cmd.Address); err != nil {
+		t.Fatalf("Access() = %v, want nil — only the console closes, not the play screen", err)
+	}
+}
+
+// A participant with a question still open is untouched: this must not have
+// turned every console into a refusal.
+func TestAParticipantWithAQuestionStillOpenKeepsTheConsole(t *testing.T) {
+	service, _, run := fixture(t)
+	answers := &answerable{left: true}
+	service.WithAnswerable(answers)
+
+	if _, err := service.Run(t.Context(), command()); err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	if answers.calls != 1 {
+		t.Fatalf("AnswerableLeft was asked %d times, want exactly 1", answers.calls)
+	}
+	if run.calls != 1 {
+		t.Fatalf("the runner was reached %d times, want 1", run.calls)
+	}
+}
+
+// A build that never wired the reader fails open. A missing wire must not
+// lock every participant out of the console mid-olympiad, which is the
+// direction the schema panel's own missing wire already fails in
+// (WithSchemas).
+func TestAServiceWithNoAnswerableWiredStillRunsQueries(t *testing.T) {
+	service, _, run := fixture(t)
+
+	if _, err := service.Run(t.Context(), command()); err != nil {
+		t.Fatalf("running with no Answerable wired: %v", err)
+	}
+	if run.calls != 1 {
+		t.Fatalf("the runner was reached %d times, want 1", run.calls)
+	}
+}
+
+// The check is placed ahead of the game lookup and of provisioning: a refused
+// query must not create a participant's database, and must not ask the game
+// cluster anything either.
+func TestNothingLeftToAnswerIsRefusedBeforeAnyDatabaseIsProvisioned(t *testing.T) {
+	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
+	gameCalls := 0
+	db := &databases{database: "game_c1_u1"}
+	service := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}, calls: &gameCalls},
+		db, &runner{result: &queryrunner.Result{}},
+	).WithAnswerable(&answerable{left: false})
+
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrNothingLeftToAnswer) {
+		t.Fatalf("error = %v, want ErrNothingLeftToAnswer", err)
+	}
+	if gameCalls != 0 {
+		t.Fatalf("the game was looked up %d times, want 0", gameCalls)
+	}
+	if db.asked != nil {
+		t.Fatalf("a database was provisioned for a refused query: %+v", db.asked)
+	}
+}
+
+// The reader failing is ours, not the participant's query being wrong — and
+// it must not read as "you have nothing left to do" either.
+func TestAFailingAnswerableReadsAsUnavailableAndNotAsARefusal(t *testing.T) {
+	service, _, _ := fixture(t)
+	service.WithAnswerable(&answerable{err: errors.New("the core database is down")})
+
+	_, err := service.Run(t.Context(), command())
+	if !errors.Is(err, queryproxy.ErrUnavailable) {
+		t.Fatalf("error = %v, want ErrUnavailable", err)
+	}
+	if errors.Is(err, queryproxy.ErrNothingLeftToAnswer) {
+		t.Fatal("a failed read was reported as nothing left to answer")
 	}
 }

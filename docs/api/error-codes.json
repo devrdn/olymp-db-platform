@@ -150,6 +150,10 @@
       "meaning": "The contest is not ready to be published or started. The response carries `problems`, every reason at once, each naming the language or question at fault."
     },
     {
+      "code": "nothing_left_to_answer",
+      "meaning": "No question of this contest can still be answered by this participant: every one is either answered correctly or out of attempts, so running a query cannot lead to an answer any more and the console stops taking them. A fact about the contest's current state and not a permission the caller lacks — nothing else closes: the story, the questions, the results and the timer stay open, and the console reopens if the contest gives them something to answer again."
+    },
+    {
       "code": "owner_immutable",
       "meaning": "Ownership cannot be granted or removed through the staff list. A contest with two owners has an ambiguous one, and with none has nobody who may appoint anybody."
     },
