@@ -681,6 +681,10 @@ const en = {
         waiting: "Not started yet",
         notStarted: "Starts with your first action",
         timeUp: "Time is up",
+        // Announced once, to a screen reader only, the moment the countdown
+        // crosses five minutes remaining — see PlayClock's own doc (finding
+        // 7) for why five minutes and not some other threshold.
+        fiveMinutesLeft: "Five minutes remaining.",
       },
       story: {
         heading: "The story",
@@ -700,6 +704,14 @@ const en = {
         correct: "Correct! +{n} points.",
         incorrect: "Not correct.",
         reference: "If you report this, quote {id}.",
+        // Read only by assistive technology, beside the visible "1." marker
+        // (finding 6) — a sighted participant already reads the number, so
+        // this exists solely for the reader that cannot see it.
+        numberLabel: "Question {n}",
+        // Finding 6: a sequential contest's next question depends on this
+        // re-read to unlock; a refusal here previously vanished silently,
+        // leaving that question locked with no way to tell why.
+        refreshFailed: "Could not check whether a new question opened. Reload the page to see the latest state.",
       },
     },
     mine: {

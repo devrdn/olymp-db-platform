@@ -216,6 +216,53 @@ func TestQuestionsReportsAttemptsRemainingAndClosed(t *testing.T) {
 	}
 }
 
+// Finding 5: a reloaded screen has no other way to tell "closed because
+// solved" from "closed because every attempt is spent" — both looked like a
+// bare "Closed." before Correct and PointsAwarded existed on this type.
+func TestQuestionsReportsCorrectAndPointsAwarded(t *testing.T) {
+	reader, _, questions, attempts := newReader()
+	contestID := uuid.New()
+	registrationID := uuid.New()
+	maxAttempts := 3
+
+	solved := questions.Put(contests.Question{
+		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
+		MaxAttempts: &maxAttempts,
+		Texts:       map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}},
+	})
+	exhausted := questions.Put(contests.Question{
+		ContestID: contestID, Ord: 2, Kind: contests.KindText, Points: 5, IsVisible: true,
+		MaxAttempts: &maxAttempts,
+		Texts:       map[string]contests.QuestionText{"en": {BodyMD: "What weapon?"}},
+	})
+	untouched := questions.Put(contests.Question{
+		ContestID: contestID, Ord: 3, Kind: contests.KindText, Points: 5, IsVisible: true,
+		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Where?"}},
+	})
+
+	attempts.Put(registrationID, solved.ID, contests.AttemptStats{Attempts: 2, Correct: true, PointsAwarded: 8})
+	attempts.Put(registrationID, exhausted.ID, contests.AttemptStats{Attempts: 3, Correct: false, PointsAwarded: 0})
+
+	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", contests.ProgressionFree)
+	if err != nil {
+		t.Fatalf("Questions() = %v", err)
+	}
+	byID := map[uuid.UUID]contests.ParticipantQuestion{}
+	for _, q := range found {
+		byID[q.ID] = q
+	}
+
+	if got := byID[solved.ID]; !got.Correct || got.PointsAwarded != 8 {
+		t.Fatalf("solved question = %+v, want {Correct: true, PointsAwarded: 8}", got)
+	}
+	if got := byID[exhausted.ID]; got.Correct || got.PointsAwarded != 0 {
+		t.Fatalf("exhausted question = %+v, want {Correct: false, PointsAwarded: 0}", got)
+	}
+	if got := byID[untouched.ID]; got.Correct || got.PointsAwarded != 0 {
+		t.Fatalf("untouched question = %+v, want {Correct: false, PointsAwarded: 0}", got)
+	}
+}
+
 // A participant who exhausted every attempt without ever answering correctly
 // is closed too — the other half of "closed" (§6.1.1: answered correctly or
 // out of attempts).

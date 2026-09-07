@@ -37,8 +37,13 @@ func (r *Attempts) querier(ctx context.Context) storage.Querier {
 // the index that constraint creates already serves this query, so no
 // migration is owed alongside it (CLAUDE.md rule 7).
 func (r *Attempts) ForRegistration(ctx context.Context, registrationID uuid.UUID) (map[uuid.UUID]contests.AttemptStats, error) {
+	// SUM(points_awarded) rides along on the same query and the same index
+	// (this function's own doc) rather than a second round trip: only a
+	// correct submission ever carries a non-zero points_awarded, so the sum
+	// is exactly the one winning attempt's award, or zero when there is none
+	// (contests.AttemptStats.PointsAwarded's own doc).
 	rows, err := r.querier(ctx).Query(ctx, `
-		SELECT question_id, COUNT(*), bool_or(is_correct)
+		SELECT question_id, COUNT(*), bool_or(is_correct), COALESCE(SUM(points_awarded), 0)
 		FROM submissions
 		WHERE registration_id = $1
 		GROUP BY question_id`,
@@ -54,7 +59,7 @@ func (r *Attempts) ForRegistration(ctx context.Context, registrationID uuid.UUID
 			questionID uuid.UUID
 			stats      contests.AttemptStats
 		)
-		if err := rows.Scan(&questionID, &stats.Attempts, &stats.Correct); err != nil {
+		if err := rows.Scan(&questionID, &stats.Attempts, &stats.Correct, &stats.PointsAwarded); err != nil {
 			return nil, fmt.Errorf("scan attempt stats for registration %s: %w", registrationID, err)
 		}
 		out[questionID] = stats

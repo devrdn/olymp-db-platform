@@ -48,6 +48,15 @@ export const playQuestionSchema = z
      * position in the list.
      */
     can_answer: z.boolean(),
+    /**
+     * Whether one of this participant's own attempts was right, and what it
+     * earned — finding 5: without these, a question reloaded after closing
+     * reads as "Closed." whether it was won or run out of attempts, and a
+     * student cannot tell which without spending another attempt to find
+     * out. Always present, never a reference answer or anyone else's score.
+     */
+    correct: z.boolean(),
+    points_awarded: z.number(),
   })
   .transform((raw) => ({
     id: raw.id,
@@ -59,6 +68,8 @@ export const playQuestionSchema = z
     attemptsRemaining: raw.attempts_remaining ?? undefined,
     closed: raw.closed,
     canAnswer: raw.can_answer,
+    correct: raw.correct,
+    pointsAwarded: raw.points_awarded,
   }));
 
 export type PlayQuestion = z.infer<typeof playQuestionSchema>;

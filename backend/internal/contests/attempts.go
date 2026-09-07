@@ -7,10 +7,19 @@ import (
 )
 
 // AttemptStats is what a registration has already done on one question: how
-// many attempts it has spent, and whether one of them was correct.
+// many attempts it has spent, whether one of them was correct, and how many
+// points that earned.
 type AttemptStats struct {
 	Attempts int
 	Correct  bool
+	// PointsAwarded is the sum of points_awarded across every submission this
+	// registration has made on the question. Only a correct submission ever
+	// carries a non-zero points_awarded (postgres.Submissions.Insert's own
+	// doc), and a question closes the instant one succeeds, so in practice
+	// this is either 0 (never solved) or the one winning attempt's own
+	// penalty-adjusted award — summing is what lets one query answer both
+	// without a second read keyed on is_correct.
+	PointsAwarded int
 }
 
 // AttemptStore answers what a participant has already tried, for the

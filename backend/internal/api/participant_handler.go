@@ -197,6 +197,15 @@ type participantQuestionResponse struct {
 	// unclosed questions with nothing to say which one is actually open,
 	// and the participant finds out by trying each and collecting refusals.
 	CanAnswer bool `json:"can_answer"`
+	// Correct and PointsAwarded (finding 5) are what let a reloaded screen
+	// tell "closed because solved" from "closed because every attempt is
+	// spent" — before this, both looked identical once Closed was true.
+	// Always present, not omitted at zero/false: a question this
+	// registration never got right must read as exactly that, the same way
+	// answerResponse's own PointsAwarded is never omitted for a wrong
+	// attempt.
+	Correct       bool `json:"correct"`
+	PointsAwarded int  `json:"points_awarded"`
 }
 
 func toParticipantQuestionResponse(q contests.ParticipantQuestion) participantQuestionResponse {
@@ -210,6 +219,8 @@ func toParticipantQuestionResponse(q contests.ParticipantQuestion) participantQu
 		AttemptsRemaining: q.AttemptsRemaining,
 		Closed:            q.Closed,
 		CanAnswer:         q.CanAnswer,
+		Correct:           q.Correct,
+		PointsAwarded:     q.PointsAwarded,
 	}
 	if out.ChoiceIDs == nil {
 		out.ChoiceIDs = []string{}
