@@ -53,8 +53,12 @@ describe("the SQL editor", () => {
     const onResult = vi.fn();
     await run(onResult);
 
-    // Once for the initial idle state, once for the completed run.
-    expect(onResult).toHaveBeenLastCalledWith(answer.current);
+    // Once for the initial idle state, once for the completed run — and
+    // waited for rather than asserted straight after the click, because the
+    // action settles on a later microtask than `userEvent.click` awaits.
+    // Asserting immediately passed on an idle machine and failed under a
+    // full-suite run, which is a flaky test rather than a caught bug.
+    await waitFor(() => expect(onResult).toHaveBeenLastCalledWith(answer.current));
   });
 
   test("reports a refusal the same way it reports an answer", async () => {
@@ -62,7 +66,7 @@ describe("the SQL editor", () => {
     const onResult = vi.fn();
     await run(onResult);
 
-    expect(onResult).toHaveBeenLastCalledWith(answer.current);
+    await waitFor(() => expect(onResult).toHaveBeenLastCalledWith(answer.current));
   });
 
   test("shows nothing about the previous result — that lives in ResultPanel now", async () => {
