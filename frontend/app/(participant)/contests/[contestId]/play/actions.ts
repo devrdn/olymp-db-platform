@@ -17,7 +17,7 @@ import { activeLocale } from "@/lib/i18n/server";
 export type ConsoleState =
   | { kind: "idle" }
   | { kind: "answer"; result: QueryResult }
-  | { kind: "refused"; code: string; subject?: string; requestId?: string };
+  | { kind: "refused"; code: string; subject?: string; requestId?: string; position?: number };
 
 /**
  * Runs one query as the signed-in participant.
@@ -31,11 +31,18 @@ export async function runQueryAction(
   form: FormData,
 ): Promise<ConsoleState> {
   const contestId = String(form.get("contestId") ?? "");
-  const sql = String(form.get("sql") ?? "").trim();
+  // Not trimmed before it is sent: the checker parses exactly this string, so
+  // a syntax error's position is a character offset into it, and the editor
+  // the console draws it back into holds the same untrimmed text. Trimming
+  // here would shift every position after the first character by however
+  // much leading whitespace the participant's editor happened to have —
+  // small, and exactly the kind of one-off count-the-characters error this
+  // feature exists to remove.
+  const sql = String(form.get("sql") ?? "");
 
   // An empty console is not a query. Sending it would spend the participant's
   // rate limit on nothing and answer with a parse error about the emptiness.
-  if (!contestId || sql === "") return { kind: "idle" };
+  if (!contestId || sql.trim() === "") return { kind: "idle" };
 
   try {
     const payload = await serverRequest(`/contests/${contestId}/query`, {
@@ -53,6 +60,7 @@ export async function runQueryAction(
         code: error.code,
         subject: error.subject,
         requestId: error.requestId,
+        position: error.position,
       };
     }
     return { kind: "refused", code: "unreachable" };

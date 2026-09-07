@@ -100,4 +100,28 @@ describe("what an error is about", () => {
       subject: undefined,
     });
   });
+
+  // A syntax error is the one refusal that names a place in the text — the
+  // console needs the character PostgreSQL's own parser pointed at, not just
+  // its words.
+  test("carries the position a syntax error named beside the code", async () => {
+    const fetchImpl = respondWith(
+      { error: { code: "query_parse_error", message: "bad" }, subject: 'syntax error at or near "FRO"', position: 15 },
+      400,
+    );
+
+    await expect(request("/x", { fetchImpl })).rejects.toMatchObject({
+      code: "query_parse_error",
+      position: 15,
+    });
+  });
+
+  test("leaves the position undefined when the server named none", async () => {
+    const fetchImpl = respondWith({ error: { code: "query_too_long", message: "no" } }, 400);
+
+    await expect(request("/x", { fetchImpl })).rejects.toMatchObject({
+      code: "query_too_long",
+      position: undefined,
+    });
+  });
 });

@@ -137,6 +137,42 @@ func TestAQueryOverTheLengthBoundIsA400(t *testing.T) {
 	}
 }
 
+// A syntax error carries a position so the console can point at the
+// character rather than making a participant count them under a timer — the
+// position pg_query's own C parser reported, not a value this handler
+// invents.
+func TestAParseErrorCarriesThePositionInTheText(t *testing.T) {
+	fixture := newConsoleFixture(t, fakeConsole{
+		err: &sqlpolicy.Refusal{Code: sqlpolicy.CodeParseError, Subject: `syntax error at or near "FRO"`, Position: 15},
+	})
+
+	rec := fixture.run("SELECT * FRO suspects")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	body := decode(t, rec)
+	position, ok := body["position"].(float64)
+	if !ok || int(position) != 15 {
+		t.Fatalf("position = %v, want 15 (body: %s)", body["position"], rec.Body.String())
+	}
+}
+
+// A refusal that names no position — every code but a parse error — must not
+// invent one: zero is a real character offset (the first one), so a client
+// distinguishing "no position" from "the first character" needs the key
+// absent, not present and zero.
+func TestARefusalWithNoPositionCarriesNoPositionField(t *testing.T) {
+	fixture := newConsoleFixture(t, fakeConsole{
+		err: &sqlpolicy.Refusal{Code: sqlpolicy.CodeTooLong, Subject: "70000 bytes"},
+	})
+
+	rec := fixture.run("SELECT 1")
+	body := decode(t, rec)
+	if _, present := body["position"]; present {
+		t.Fatalf("a refusal with no position sent one anyway: %s", rec.Body.String())
+	}
+}
+
 // A participant asking faster than the contest allows meets the same code
 // whether the runner or this façade's own pre-check caught them — the two are
 // the same limit, checked in two places, and the participant should not be

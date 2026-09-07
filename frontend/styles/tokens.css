@@ -44,6 +44,16 @@
   --bad: #a32a21;
   --bad-wash: #f7e6e4;
 
+  /* SQL highlighting, section 3.1's own sub-palette. A keyword and a comment
+     already have a semantic token (accent, ink-3); a function, a string and a
+     number do not read as any of the eleven above, so they get one each here
+     rather than being written into CodeEditor's theme as literal colours —
+     the rule the token layer exists to enforce applies to the editor exactly
+     as it applies to a component. */
+  --sql-function: #1f4e79;
+  --sql-string: #8a5510;
+  --sql-number: #8f3a14;
+
   --scrim-a: rgb(255 255 255 / 0.97);
   --scrim-b: rgb(255 255 255 / 0.72);
 
@@ -82,6 +92,9 @@
   --dark-warn-wash: rgb(213 154 62 / 0.12);
   --dark-bad: #e0796d;
   --dark-bad-wash: rgb(224 121 109 / 0.12);
+  --dark-sql-function: #7fb2e5;
+  --dark-sql-string: #d5a75e;
+  --dark-sql-number: #e0956b;
   --dark-scrim-a: rgb(10 11 15 / 0.97);
   --dark-scrim-b: rgb(10 11 15 / 0.72);
 }
@@ -115,6 +128,9 @@
   --warn-wash: var(--dark-warn-wash);
   --bad: var(--dark-bad);
   --bad-wash: var(--dark-bad-wash);
+  --sql-function: var(--dark-sql-function);
+  --sql-string: var(--dark-sql-string);
+  --sql-number: var(--dark-sql-number);
   --scrim-a: var(--dark-scrim-a);
   --scrim-b: var(--dark-scrim-b);
   color-scheme: dark;
@@ -145,6 +161,9 @@
     --warn-wash: var(--dark-warn-wash);
     --bad: var(--dark-bad);
     --bad-wash: var(--dark-bad-wash);
+    --sql-function: var(--dark-sql-function);
+    --sql-string: var(--dark-sql-string);
+    --sql-number: var(--dark-sql-number);
     --scrim-a: var(--dark-scrim-a);
     --scrim-b: var(--dark-scrim-b);
     color-scheme: dark;

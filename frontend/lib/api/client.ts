@@ -61,14 +61,33 @@ export class ApiError extends Error {
    * unactionable answer that uploading a picture used to give.
    */
   readonly subject?: string;
+  /**
+   * Where in the query text the refusal is about — a 1-based character
+   * offset, PostgreSQL's own convention (`errposition()`), and set only for a
+   * syntax error, which is the one refusal that names a place in the text
+   * rather than a whole statement or a construct.
+   *
+   * `undefined`, not `0`, means "no position": the API omits the key rather
+   * than sending zero, because zero is the first character and a real
+   * position, not an absent one.
+   */
+  readonly position?: number;
 
-  constructor(code: string, status: number, message: string, requestId?: string, subject?: string) {
+  constructor(
+    code: string,
+    status: number,
+    message: string,
+    requestId?: string,
+    subject?: string,
+    position?: number,
+  ) {
     super(message);
     this.name = "ApiError";
     this.code = code;
     this.status = status;
     this.requestId = requestId;
     this.subject = subject;
+    this.position = position;
   }
 }
 
@@ -76,6 +95,8 @@ type ErrorEnvelope = {
   error: { code: string; message: string; request_id?: string };
   /** Named beside the error rather than inside it; see ApiError.subject. */
   subject?: string;
+  /** Named beside the error the same way subject is; see ApiError.position. */
+  position?: number;
 };
 
 export async function request(path: string, options: RequestOptions = {}): Promise<unknown> {
@@ -120,6 +141,7 @@ async function toApiError(response: Response): Promise<ApiError> {
         body.error.message,
         body.error.request_id,
         typeof body.subject === "string" ? body.subject : undefined,
+        typeof body.position === "number" ? body.position : undefined,
       );
     }
   } catch {

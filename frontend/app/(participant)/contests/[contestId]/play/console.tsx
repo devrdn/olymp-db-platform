@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useLayoutEffect, useRef } from "react";
 
+import { CodeEditor } from "@/components/product/code-editor";
 import { buttonVariants } from "@/components/ui/button";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
@@ -12,14 +13,14 @@ import { runQueryAction, type ConsoleState } from "./actions";
  * The SQL editor — the thing a participant types in, always visible, never
  * behind a tab (Task 3's own requirement).
  *
- * This is deliberately just the input: the textarea, the run button, the
- * hint. What a run produced — a table, a row count, a refusal — is not
- * rendered here at all; it goes to `onResult`, and `ResultPanel` (in the
- * "Result" tab of the panel below) is what shows it. Two VS Code habits
- * follow from splitting it this way: the editor's own DOM never changes
- * shape when a query answers (nothing to remount, no risk of losing the
- * textarea's scroll position or the caret), and a build's own output belongs
- * in a panel, not stitched under the code that produced it.
+ * This is deliberately just the input: CodeMirror, the run button, the hint.
+ * What a run produced — a table, a row count, a refusal — is not rendered
+ * here at all; it goes to `onResult`, and `ResultPanel` (in the "Result" tab
+ * of the panel below) is what shows it. Two VS Code habits follow from
+ * splitting it this way: the editor's own DOM never changes shape when a
+ * query answers (nothing to remount, no risk of losing scroll position or
+ * the caret), and a build's own output belongs in a panel, not stitched
+ * under the code that produced it.
  *
  * The button is disabled while a query is in flight, and that is not polish:
  * a participant may have one query running at a time, so a second press earns
@@ -57,49 +58,34 @@ export function ConsoleEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
 
-  // Finding 2: this textarea is deliberately uncontrolled (no `value` prop,
-  // no `onChange`) — that is what keeps every keystroke from re-rendering
-  // ResultPanel and the rest of this tree, and it is a property this fix
-  // must not give up. But React 19 calls `requestFormReset` on this form the
-  // instant a run starts (before the action even settles), and the native
-  // reset algorithm sets an uncontrolled field's `.value` back to its
-  // `.defaultValue`. A syntax error — or any refusal at all — would silently
-  // erase the query a participant was mid-debugging, for the whole two
-  // hours.
-  //
-  // Passing a `defaultValue` prop that tracks the latest keystroke (tried
-  // first) is not allowed either, for a narrower reason: that means reading
-  // a ref's `.current` during render to compute the prop, and the
-  // `react-hooks/refs` rule refuses that outright — refs may only be read in
-  // an event handler or an effect, never in the render body itself, because
-  // a render can in principle run without ever committing.
-  //
-  // So the restore happens imperatively, after the fact: `lastTyped` is a
-  // ref, updated by `onInput` (fired on every keystroke — chosen only
-  // because it is not the *controlled*-input `onChange` contract) — a ref
-  // write schedules no render, so the typing path stays exactly as free of
-  // renders as it already was. `useLayoutEffect` runs after every commit,
-  // synchronously before the browser paints — which is to say, after
-  // `requestFormReset`'s own DOM mutation has already run (both are part of
-  // the same commit, and the reset happens during the earlier mutation
-  // phase) but before anything is drawn. If the field's `.value` no longer
-  // matches what was actually typed, this puts it back before there is
-  // anything to see — never a visible flash of an emptied field.
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // CodeMirror owns the visible query text from the moment it mounts, and a
+  // native `<textarea>`/`<input>` is the only thing `requestFormReset` (React
+  // 19 calls it on this form the instant a run starts, before the action even
+  // settles) can reach — CodeMirror's contentEditable div is not a form
+  // control, so the reset that used to wipe a participant's query on a
+  // refusal (finding 2) cannot touch it at all. What the reset *does* still
+  // reach is `mirror` below: the hidden, visually-suppressed textarea that is
+  // the actual `name="sql"` field the browser's own FormData is built from at
+  // submit time. Losing sync there has no visible consequence — the
+  // participant never sees this node — but it would silently turn the next
+  // "Run" click (with nothing retyped since the last one) into a query for
+  // the empty string, so it gets the same imperative restore finding 2's own
+  // textarea used to need, just aimed at a field nobody looks at instead of
+  // the one everybody does.
+  const mirrorRef = useRef<HTMLTextAreaElement>(null);
   const lastTyped = useRef("");
 
   useLayoutEffect(() => {
-    const el = textareaRef.current;
+    const el = mirrorRef.current;
     // Guard against the empty ref on mount: `lastTyped` starts at `""`
-    // because no `onInput` has fired yet, but the textarea's own `.value`
-    // may already hold something real — a browser-restored form value
-    // across a soft reload, or a server-rendered value React's hydration
-    // reused. Restoring blindly here would erase that value the instant
-    // this effect first runs, which is the same loss of work this effect
-    // exists to prevent. When `lastTyped` is genuinely empty (untouched,
-    // or the participant deliberately cleared the field), the native
-    // reset's own target value is also `""`, so skipping the write here
-    // costs nothing.
+    // because CodeEditor has not reported a change yet, but the mirror's own
+    // `.value` may already hold something real — a browser-restored form
+    // value across a soft reload, or a server-rendered value React's
+    // hydration reused. Restoring blindly here would erase that value the
+    // instant this effect first runs, which is the loss of work this effect
+    // exists to prevent. When `lastTyped` is genuinely empty (untouched, or
+    // the participant deliberately cleared the field), the native reset's own
+    // target value is also `""`, so skipping the write here costs nothing.
     if (el && lastTyped.current !== "" && el.value !== lastTyped.current) {
       el.value = lastTyped.current;
     }
@@ -108,19 +94,40 @@ export function ConsoleEditor({
   return (
     <form action={run} className="flex min-h-0 flex-1 flex-col gap-3 p-4">
       <input type="hidden" name="contestId" value={contestId} />
-      <label className="flex min-h-0 flex-1 flex-col gap-2">
-        <span className="sr-only">{t.label}</span>
-        <textarea
-          ref={textareaRef}
-          name="sql"
-          spellCheck={false}
+      {/*
+       * The real form field: what the browser restores across a soft reload
+       * (the same mechanism the plain-textarea implementation relied on,
+       * still a native textarea here for exactly that reason) and what
+       * FormData reads at submit time. `sr-only` hides it visually without
+       * `display:none` — kept a normal, laid-out node, because the
+       * restoration this depends on is a browser behaviour tied to a form
+       * control existing in the DOM, not to it being visible. `aria-hidden`
+       * plus a negative `tabIndex` keep it out of the accessibility tree and
+       * the tab order; CodeEditor below carries the same `t.label` as its own
+       * `aria-label`, so nothing is announced twice and nothing is announced
+       * zero times.
+       */}
+      <textarea
+        ref={mirrorRef}
+        name="sql"
+        defaultValue=""
+        aria-hidden="true"
+        tabIndex={-1}
+        className="sr-only"
+      />
+      <div className="flex min-h-0 flex-1 flex-col gap-2">
+        <CodeEditor
+          className="min-h-0 flex-1"
+          ariaLabel={t.label}
           placeholder={t.placeholder}
-          onInput={(event) => {
-            lastTyped.current = event.currentTarget.value;
+          getInitialValue={() => mirrorRef.current?.value ?? ""}
+          onChange={(text) => {
+            lastTyped.current = text;
+            if (mirrorRef.current) mirrorRef.current.value = text;
           }}
-          className="min-h-0 w-full flex-1 resize-none border border-edge bg-bg p-3 font-mono text-body text-ink outline-none focus-visible:border-accent"
+          errorPosition={state.kind === "refused" ? state.position : undefined}
         />
-      </label>
+      </div>
       <div className="flex shrink-0 items-center gap-3">
         <button type="submit" disabled={running} className={cn(buttonVariants({ variant: "primary" }))}>
           {running ? t.running : t.run}
