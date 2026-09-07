@@ -728,6 +728,37 @@ const ro = {
         numberLabel: "Întrebarea {n}",
         refreshFailed: "Nu s-a putut verifica dacă s-a deschis o întrebare nouă. Reîncărcați pagina pentru starea curentă.",
       },
+      workspace: {
+        tabs: {
+          result: "Rezultat",
+          log: "Jurnal de interogări",
+          story: "Povestea",
+          questions: "Întrebări",
+        },
+        download: "Descărcați CSV",
+        resultEmpty: "Executați o interogare pentru a vedea rezultatul aici.",
+        log: {
+          empty: "Nu ați executat încă nicio interogare.",
+          loadMore: "Încărcați mai vechi",
+          loadingMore: "Se încarcă…",
+          failed: "Nu s-a putut încărca jurnalul de interogări.",
+          durationMs: "{n} ms",
+          columns: {
+            sql: "Interogare",
+            status: "Stare",
+            duration: "Durată",
+            rows: "Rânduri",
+            when: "Când",
+          },
+          status: {
+            running: "Se execută",
+            ok: "OK",
+            rejected: "Respinsă",
+            error: "Eroare",
+            timeout: "Timp expirat",
+          },
+        },
+      },
     },
     mine: {
       heading: "Olimpiadele mele",

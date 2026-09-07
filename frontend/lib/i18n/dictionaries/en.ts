@@ -783,6 +783,42 @@ const en = {
         // leaving that question locked with no way to tell why.
         refreshFailed: "Could not check whether a new question opened. Reload the page to see the latest state.",
       },
+      // The full-screen workspace's own vocabulary (Task 3): the two tab
+      // groups beside the console, the download, and the query log's own
+      // table. Kept apart from `console` and the two panels above so a
+      // translator can find "what does the workspace itself say" in one
+      // place rather than scattered across the older story/questions keys.
+      workspace: {
+        tabs: {
+          result: "Result",
+          log: "Query log",
+          story: "Story",
+          questions: "Questions",
+        },
+        download: "Download CSV",
+        resultEmpty: "Run a query to see its result here.",
+        log: {
+          empty: "You have not run a query yet.",
+          loadMore: "Load older",
+          loadingMore: "Loading…",
+          failed: "Could not load the query log.",
+          durationMs: "{n} ms",
+          columns: {
+            sql: "Query",
+            status: "Status",
+            duration: "Time",
+            rows: "Rows",
+            when: "When",
+          },
+          status: {
+            running: "Running",
+            ok: "OK",
+            rejected: "Rejected",
+            error: "Error",
+            timeout: "Timed out",
+          },
+        },
+      },
     },
     mine: {
       heading: "My contests",

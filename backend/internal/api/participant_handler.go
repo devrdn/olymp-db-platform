@@ -16,9 +16,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// The endpoints a participant of a running contest uses to work on it: two
-// read-only ones — the story, and the visible questions — and one that
-// writes, answering a question.
+// The endpoints a participant of a running contest uses to work on it: three
+// read-only ones — the story, the visible questions, and this participant's
+// own query log — and one that writes, answering a question.
 //
 // What may never reach a response here, under any parameter, in any
 // language, in any error message: a reference answer, a hidden question
@@ -58,11 +58,21 @@ type Submitter interface {
 	Submit(ctx context.Context, cmd contests.SubmitCommand) (contests.SubmitOutcome, error)
 }
 
+// QueryHistory is the read side of the query log this handler needs: one
+// registration's own rows, newest first, paged. Declared here rather than in
+// queryrunner (Go layout rule 3) because this handler is the only consumer —
+// postgres.QueryLog, which already implements Journal for the write side,
+// implements this too.
+type QueryHistory interface {
+	History(ctx context.Context, registrationID uuid.UUID, limit, offset int) ([]queryrunner.HistoryEntry, int, error)
+}
+
 // ParticipantHandler serves a participant's own view of, and actions on, a
 // running contest.
 type ParticipantHandler struct {
 	access    ParticipantAccess
 	reader    *contests.Reader
+	history   QueryHistory
 	submitter Submitter
 	mw        *auth.Middleware
 	log       *slog.Logger
@@ -72,11 +82,11 @@ type ParticipantHandler struct {
 }
 
 // NewParticipantHandler assembles the endpoints.
-func NewParticipantHandler(access ParticipantAccess, reader *contests.Reader, submitter Submitter, mw *auth.Middleware, log *slog.Logger, defaultLocale string) *ParticipantHandler {
+func NewParticipantHandler(access ParticipantAccess, reader *contests.Reader, history QueryHistory, submitter Submitter, mw *auth.Middleware, log *slog.Logger, defaultLocale string) *ParticipantHandler {
 	if defaultLocale == "" {
 		defaultLocale = "en"
 	}
-	return &ParticipantHandler{access: access, reader: reader, submitter: submitter, mw: mw, log: log, defaultLocale: defaultLocale}
+	return &ParticipantHandler{access: access, reader: reader, history: history, submitter: submitter, mw: mw, log: log, defaultLocale: defaultLocale}
 }
 
 // Mount registers the routes.
@@ -105,6 +115,7 @@ func (h *ParticipantHandler) Mount(r chi.Router) {
 		r.Use(h.mw.Authenticate)
 		r.Get("/contests/{"+contestIDParam+"}/play/story", h.story)
 		r.Get("/contests/{"+contestIDParam+"}/play/questions", h.questions)
+		r.Get("/contests/{"+contestIDParam+"}/play/log", h.queryLog)
 		r.Post("/contests/{"+contestIDParam+"}/questions/{"+questionIDParam+"}/answer", h.answer)
 	})
 }
@@ -251,6 +262,63 @@ func (h *ParticipantHandler) questions(w http.ResponseWriter, r *http.Request) {
 		items = append(items, toParticipantQuestionResponse(q))
 	}
 	httpx.JSON(w, r, http.StatusOK, participantQuestionListResponse{Lang: lang, Items: items})
+}
+
+// queryLogEntryResponse is one row of the participant's own query log —
+// never another participant's, and nothing this endpoint could leak beyond
+// what query_log already carries for exactly this: the statement, how it
+// ended, and when.
+type queryLogEntryResponse struct {
+	SQL    string `json:"sql"`
+	Status string `json:"status"`
+	// Error is omitted for a query that did not fail.
+	Error string `json:"error,omitempty"`
+	// DurationMs and RowCount are omitted rather than zero for a row still
+	// running — see queryrunner.HistoryEntry's own doc.
+	DurationMs *int   `json:"duration_ms,omitempty"`
+	RowCount   *int   `json:"row_count,omitempty"`
+	ExecutedAt string `json:"executed_at"`
+}
+
+// queryLogResponse is one page of the log, newest first, with the total
+// count so the interface can offer "load more" without guessing whether
+// there is any.
+type queryLogResponse struct {
+	Items []queryLogEntryResponse `json:"items"`
+	Total int                     `json:"total"`
+}
+
+// queryLog serves GET .../play/log: this participant's own query history,
+// and only theirs. limit and offset come straight from the query string —
+// h.history.History clamps them itself (queryrunner.NormalizeHistoryPage), so
+// a caller asking for an unreasonable page gets the largest page this
+// installation allows rather than a refusal (CLAUDE.md rule 2: the bound is
+// the domain's, enforced where the data is read, not merely accepted here).
+func (h *ParticipantHandler) queryLog(w http.ResponseWriter, r *http.Request) {
+	participant, _, ok := h.admit(w, r)
+	if !ok {
+		return
+	}
+
+	found, total, err := h.history.History(r.Context(), participant.ID, intParam(r, "limit"), intParam(r, "offset"))
+	if err != nil {
+		h.log.ErrorContext(r.Context(), "could not read the participant's query history", "error", err)
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+		return
+	}
+
+	items := make([]queryLogEntryResponse, 0, len(found))
+	for _, entry := range found {
+		items = append(items, queryLogEntryResponse{
+			SQL:        entry.SQL,
+			Status:     string(entry.Status),
+			Error:      entry.Error,
+			DurationMs: entry.DurationMs,
+			RowCount:   entry.RowCount,
+			ExecutedAt: entry.ExecutedAt.UTC().Format(timeLayout),
+		})
+	}
+	httpx.JSON(w, r, http.StatusOK, queryLogResponse{Items: items, Total: total})
 }
 
 // answerRequest is the body of POST .../answer: one value, compared against

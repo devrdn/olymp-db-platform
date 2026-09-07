@@ -3,6 +3,7 @@
 import { ApiError } from "@/lib/api/client";
 import { queryResultSchema, type QueryResult } from "@/lib/api/console";
 import { answerResultSchema, playQuestionListSchema, type AnswerResult, type PlayQuestion } from "@/lib/api/play";
+import { queryLogResponseSchema, type QueryLogEntry } from "@/lib/api/querylog";
 import { serverRequest } from "@/lib/api/server";
 import { activeLocale } from "@/lib/i18n/server";
 
@@ -135,6 +136,37 @@ export async function refreshQuestionsAction(contestId: string): Promise<Questio
     const locale = await activeLocale();
     const payload = await serverRequest(`/contests/${contestId}/play/questions?lang=${locale}`);
     return { kind: "ok", items: playQuestionListSchema.parse(payload).items };
+  } catch (error: unknown) {
+    if (error instanceof ApiError) return { kind: "refused", code: error.code };
+    return { kind: "refused", code: "unreachable" };
+  }
+}
+
+/** What re-reading a page of the query log turned up, or why it could not be read. */
+export type QueryLogRefreshResult =
+  | { kind: "ok"; items: QueryLogEntry[]; total: number }
+  | { kind: "refused"; code: string };
+
+/**
+ * Re-reads one page of the participant's own query log — GET .../play/log,
+ * scoped server-side to whichever registration the session resolves to
+ * (participant_handler.go's own doc: never a value this request carries).
+ *
+ * Called directly from QueryLogPanel rather than through `useActionState`, the
+ * same way refreshQuestionsAction is: this has no form, only a moment that
+ * calls for fresh data — the panel's own mount, "load more", and a query that
+ * just finished running (so a refresh survives a reload, the plan's own
+ * requirement).
+ */
+export async function fetchQueryLogAction(
+  contestId: string,
+  limit: number,
+  offset: number,
+): Promise<QueryLogRefreshResult> {
+  try {
+    const payload = await serverRequest(`/contests/${contestId}/play/log?limit=${limit}&offset=${offset}`);
+    const parsed = queryLogResponseSchema.parse(payload);
+    return { kind: "ok", items: parsed.items, total: parsed.total };
   } catch (error: unknown) {
     if (error instanceof ApiError) return { kind: "refused", code: error.code };
     return { kind: "refused", code: "unreachable" };

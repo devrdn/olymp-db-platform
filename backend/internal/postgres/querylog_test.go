@@ -156,6 +156,152 @@ func TestTheSweeperClosesAbandonedRowsAndLeavesFreshOnes(t *testing.T) {
 	})
 }
 
+// History is the participant's own read of the log this file otherwise only
+// writes to. The one guarantee worth a test of its own: it never returns
+// another registration's rows, which is the whole of what makes this safe to
+// expose to a participant at all.
+func TestHistoryReturnsOnlyThisRegistrationsOwnRows(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		mine := someRegistration(t, ctx)
+		someoneElses := someRegistration(t, ctx)
+
+		completeRow(t, ctx, log, mine, "SELECT * FROM suspects", queryrunner.StatusOK, 12, 250)
+		completeRow(t, ctx, log, someoneElses, "SELECT * FROM secrets", queryrunner.StatusOK, 1, 10)
+
+		found, total, err := log.History(ctx, mine, 0, 0)
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+		if total != 1 || len(found) != 1 {
+			t.Fatalf("found = %d, total = %d, want exactly the one row this registration owns", len(found), total)
+		}
+		if found[0].SQL != "SELECT * FROM suspects" {
+			t.Fatalf("SQL = %q, want this registration's own statement", found[0].SQL)
+		}
+	})
+}
+
+// Newest first, and duration_ms/row_count round-trip as the actual numbers
+// Complete recorded — a participant reading their own log is reading the same
+// facts the journal exists to keep.
+func TestHistoryOrdersNewestFirstAndCarriesTheRecordedOutcome(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+
+		completeRow(t, ctx, log, registration, "SELECT 1", queryrunner.StatusOK, 10, 3)
+		// A distinct executed_at is what newest-first actually orders by; the
+		// two rows would otherwise land in the same instant and the ordering
+		// this test checks would be unproven.
+		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+			`UPDATE query_log SET executed_at = executed_at - interval '1 minute' WHERE registration_id = $1`,
+			registration); err != nil {
+			t.Fatalf("backdating the first row: %v", err)
+		}
+		completeRow(t, ctx, log, registration, "SELECT 2", queryrunner.StatusRejected, 0, 0)
+
+		found, total, err := log.History(ctx, registration, 0, 0)
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+		if total != 2 || len(found) != 2 {
+			t.Fatalf("found = %d, total = %d, want 2", len(found), total)
+		}
+		if found[0].SQL != "SELECT 2" || found[1].SQL != "SELECT 1" {
+			t.Fatalf("order = [%q, %q], want the newest row first", found[0].SQL, found[1].SQL)
+		}
+		if found[1].Status != queryrunner.StatusOK || found[1].DurationMs == nil || *found[1].DurationMs != 3 ||
+			found[1].RowCount == nil || *found[1].RowCount != 10 {
+			t.Fatalf("row = %+v, want the outcome Complete recorded for it", found[1])
+		}
+	})
+}
+
+// A row a crashed process never closed is still this registration's own — the
+// participant asked it, and the log says so even while it is stuck at
+// running, with no duration or row count to report yet.
+func TestHistoryCarriesARowStillRunningWithNoDurationOrRowCount(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+		if _, err := log.Begin(ctx, queryrunner.Entry{
+			Registration: registration, RequestID: uuid.New(), SQL: "SELECT pg_sleep(5)",
+		}); err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+
+		found, _, err := log.History(ctx, registration, 0, 0)
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+		if len(found) != 1 {
+			t.Fatalf("found = %d, want exactly the one row for this registration", len(found))
+		}
+		if found[0].Status != queryrunner.StatusRunning || found[0].DurationMs != nil || found[0].RowCount != nil {
+			t.Fatalf("row = %+v, want status=running with no duration or row count yet", found[0])
+		}
+	})
+}
+
+// limit and offset actually page: the second page picks up exactly where the
+// first left off, with nothing repeated and nothing skipped.
+func TestHistoryPagesWithLimitAndOffset(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+
+		// Inserted oldest to newest, and spaced a minute apart so executed_at
+		// alone (not insertion order) is what History actually orders by.
+		statements := []string{"SELECT 1", "SELECT 2", "SELECT 3"}
+		for i, sql := range statements {
+			completeRow(t, ctx, log, registration, sql, queryrunner.StatusOK, 1, 1)
+			minutesAgo := len(statements) - i
+			if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+				`UPDATE query_log SET executed_at = executed_at - ($2 * interval '1 minute')
+				 WHERE registration_id = $1 AND sql_text = $3`,
+				registration, minutesAgo, sql); err != nil {
+				t.Fatalf("spacing out row %d: %v", i, err)
+			}
+		}
+
+		first, total, err := log.History(ctx, registration, 2, 0)
+		if err != nil {
+			t.Fatalf("History (page 1): %v", err)
+		}
+		if total != 3 || len(first) != 2 {
+			t.Fatalf("page 1 = %d rows, total = %d, want 2 rows of 3", len(first), total)
+		}
+		if first[0].SQL != "SELECT 3" || first[1].SQL != "SELECT 2" {
+			t.Fatalf("page 1 order = [%q, %q]", first[0].SQL, first[1].SQL)
+		}
+
+		second, _, err := log.History(ctx, registration, 2, 2)
+		if err != nil {
+			t.Fatalf("History (page 2): %v", err)
+		}
+		if len(second) != 1 || second[0].SQL != "SELECT 1" {
+			t.Fatalf("page 2 = %+v, want exactly the oldest row", second)
+		}
+	})
+}
+
+// completeRow opens and closes one row in a single call, for tests that only
+// care about the finished result.
+func completeRow(t *testing.T, ctx context.Context, log *QueryLog, registration uuid.UUID, sql string, status queryrunner.Status, rows, durationMs int) {
+	t.Helper()
+
+	id, err := log.Begin(ctx, queryrunner.Entry{Registration: registration, RequestID: uuid.New(), SQL: sql})
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := log.Complete(ctx, id, queryrunner.Outcome{
+		Status: status, Rows: rows, Duration: time.Duration(durationMs) * time.Millisecond,
+	}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+}
+
 func someRegistration(t *testing.T, ctx context.Context) uuid.UUID {
 	t.Helper()
 
