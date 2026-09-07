@@ -24,6 +24,62 @@ describe("formatMoment", () => {
   });
 });
 
+/**
+ * The hydration bug this file's own rules did not cover.
+ *
+ * The doc comment above pins the timezone so a Server Component and the
+ * browser that hydrates it agree — and that was one of two axes. The other is
+ * the locale data itself: the string that joins a date to a time comes from
+ * CLDR, and Node's bundled ICU is not the browser's. Node 22 and one Chrome
+ * print `Sep 7, 2026, 11:38 PM`; a newer Chrome prints `Sep 7, 2026 at
+ * 11:38 PM`, and React reported the mismatch on the participant's query log.
+ *
+ * So the join is ours, not CLDR's, and the clock is 24-hour everywhere —
+ * which also removes the next instance of the same trap, the space before
+ * AM/PM that some ICU versions render as U+202F and others as an ordinary
+ * one.
+ */
+describe("the same string in every runtime", () => {
+  const AT_NOON = "2026-11-08T10:00:00Z";
+
+  // `sv-SE` is not a locale this product offers, and that is the point: it is
+  // one where *this* runtime's CLDR already joins with a plain space instead
+  // of a comma. Asserting the join only in en/ru/ro would pass by coincidence
+  // — the whole difficulty of this bug is that the coincidence holds on the
+  // machine you are testing on and breaks on somebody's browser. Here the
+  // guarantee is checkable without a second ICU.
+  test("joins the date to the time itself, rather than letting the locale do it", () => {
+    for (const locale of ["en", "en-GB", "ru-RU", "ro-RO", "sv-SE"]) {
+      const moment = formatMoment(AT_NOON, { locale });
+
+      expect(moment).toBe(`${formatDay(AT_NOON, { locale })}, ${formatTime(AT_NOON, { locale })}`);
+      // The word CLDR inserts in a newer en, and never in an older one.
+      expect(moment).not.toMatch(/\bat\b/);
+    }
+  });
+
+  test("shows a 24-hour clock in every locale, English included", () => {
+    for (const locale of ["en", "en-GB", "ru-RU", "ro-RO"]) {
+      const time = formatTime(AT_NOON, { locale });
+
+      expect(time).toBe("12:00");
+      expect(time).not.toMatch(/[AP]M/i);
+    }
+  });
+
+  test("carries no space whose width is a matter of ICU opinion", () => {
+    for (const locale of ["en", "ru-RU", "ro-RO"]) {
+      // U+202F narrow no-break space and U+00A0 no-break space: what one ICU
+      // version puts before AM/PM and another does not.
+      expect(formatMoment(AT_NOON, { locale })).not.toMatch(/[\u202f\u00a0]/);
+    }
+  });
+
+  test("midnight is 00:00 and not 24:00", () => {
+    expect(formatTime("2026-11-07T22:00:00Z", { locale: "en" })).toBe("00:00");
+  });
+});
+
 describe("isSameDay", () => {
   test("is true for a window that starts and ends the same evening locally", () => {
     expect(isSameDay("2026-11-08T19:00:00Z", "2026-11-08T21:00:00Z")).toBe(true);
