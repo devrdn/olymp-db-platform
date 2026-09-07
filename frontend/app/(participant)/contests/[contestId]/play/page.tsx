@@ -7,6 +7,7 @@ import { contestListSchema, type ContestSummary } from "@/lib/api/contests";
 import { playQuestionListSchema, playStorySchema } from "@/lib/api/play";
 import { queryLogResponseSchema, type QueryLogEntry } from "@/lib/api/querylog";
 import { QUERY_LOG_PAGE_SIZE } from "@/lib/api/querylog-terms";
+import { gameSchemaSchema, type GameSchema } from "@/lib/api/schema";
 import { serverRequest } from "@/lib/api/server";
 import { authRecoveryRedirect } from "@/lib/auth/guard";
 import { formatMoment } from "@/lib/format/datetime";
@@ -122,10 +123,11 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   // the questions list, the log or the console still work, so `Promise.all`
   // (which would fail the whole page on either rejecting) is deliberately
   // not used here; `allSettled` lets each answer be read on its own.
-  const [storyResult, questionsResult, logResult] = await Promise.allSettled([
+  const [storyResult, questionsResult, logResult, schemaResult] = await Promise.allSettled([
     serverRequest(`/contests/${contestId}/play/story?lang=${locale}`),
     serverRequest(`/contests/${contestId}/play/questions?lang=${locale}`),
     serverRequest(`/contests/${contestId}/play/log?limit=${QUERY_LOG_PAGE_SIZE}&offset=0`),
+    serverRequest(`/contests/${contestId}/play/schema`),
   ]);
 
   if (questionsResult.status === "rejected") {
@@ -191,6 +193,17 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
     initialLog = { items: [], total: 0, failed: true };
   }
 
+  // The game's shape, for the console's schema panel. Absent rather than
+  // empty on every refusal, including the one that is a rule of the game
+  // rather than a fault: a contest that closed its catalogues answers
+  // `schema_hidden`, and discovering the shape is the puzzle there. No
+  // refusal of this read may take the screen down — a participant can play
+  // an olympiad without the panel, and could before it existed.
+  let schema: GameSchema | null = null;
+  if (schemaResult.status === "fulfilled") {
+    schema = gameSchemaSchema.parse(schemaResult.value);
+  }
+
   // Rendered here, once, on the server: `StoryText` runs `react-markdown`, a
   // real parser that costs nothing on this side of the wire and tens of
   // kilobytes gzipped on the other. A question's wording is fixed the moment
@@ -216,6 +229,7 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
       storyBody={storyBody !== null ? <StoryText markdown={storyBody} /> : null}
       storyUnavailable={storyUnavailable}
       questionEntries={questionEntries}
+      schema={schema}
       initialLog={initialLog}
       locale={locale}
       dict={dict}
