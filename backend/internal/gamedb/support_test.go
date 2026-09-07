@@ -12,10 +12,12 @@ import (
 // The arrangement these tests need lives in gamedbtest, because the Query
 // Runner's tests need the same one and two copies of it would drift. What
 // stays here is only the naming this package's own tests read best with.
-const (
-	testReaderPassword = gamedbtest.ReaderPassword
-	roleReader         = gamedb.RoleReader
-)
+const roleReader = gamedb.RoleReader
+
+// testReaderPassword is the reader's password as the deployment sets it —
+// asked for rather than compiled in, because these tests share the role with
+// whatever Query Runner the developer has running (see gamedbtest).
+func testReaderPassword(t *testing.T) string { t.Helper(); return gamedbtest.ReaderPassword(t) }
 
 func admin(t *testing.T) *pgxpool.Pool { t.Helper(); return gamedbtest.Admin(t) }
 

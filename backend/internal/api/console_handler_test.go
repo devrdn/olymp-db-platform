@@ -322,3 +322,52 @@ func TestAnEmptyAnswerCarriesEmptyListsAndNotNulls(t *testing.T) {
 		}
 	}
 }
+
+// The finding this closes, on the path it was found on: the Query Runner
+// could not connect to the game cluster, the failure was classified as the
+// database refusing the query, and the participant was handed the cluster's
+// host, port, role name and their own database's internal name — under
+// "check the fields you filled in", for a query that was fine.
+//
+// Asserted on the body, because the body is what left the building. A log
+// line saying the right thing while the response says the wrong one is the
+// defect, not the fix.
+func TestAFailureOfOursNeverReachesTheParticipantsBody(t *testing.T) {
+	// Not wrapped in any sentinel: this is the fallthrough, which is where an
+	// error nobody anticipated lands.
+	fixture := newConsoleFixture(t, fakeConsole{err: errors.New(
+		"connecting to the game database: failed to connect to `user=game_reader " +
+			"database=game_pool_ce678159661a1_57c5ba38100c`: 127.0.0.1:5433 (localhost): " +
+			`failed SASL auth: FATAL: password authentication failed for user "game_reader" (SQLSTATE 28P01)`)})
+
+	rec := fixture.run("select * from guests;")
+
+	for _, secret := range []string{"game_reader", "game_pool_ce678159661a1", "5433", "password authentication"} {
+		if strings.Contains(rec.Body.String(), secret) {
+			t.Fatalf("%q reached the participant: %s", secret, rec.Body.String())
+		}
+	}
+	// And it is ours, not theirs: a 400 tells a client to stop retrying and a
+	// participant to fix a query that was never wrong.
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	}
+}
+
+// And the one thing that is safe to repeat still is. PostgreSQL naming the
+// relation that does not exist is the most useful sentence anybody can send
+// back, and it goes out because the error says it came from the database —
+// not because the handler ran out of cases.
+func TestTheDatabasesOwnWordsStillReachTheParticipant(t *testing.T) {
+	fixture := newConsoleFixture(t, fakeConsole{
+		err: &queryrunner.DatabaseError{Message: `ERROR: relation "guests" does not exist (SQLSTATE 42P01)`},
+	})
+
+	rec := fixture.run("select * from guests;")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "guests") {
+		t.Fatalf("the database's own words were withheld: %s", rec.Body.String())
+	}
+}

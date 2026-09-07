@@ -37,8 +37,8 @@ func serving(t *testing.T, limits queryrunner.Limits, checker *checker.Checker) 
 	)
 
 	cluster, err := queryrunner.NewCluster(
-		gamedbtest.DSN(t, gamedb.RoleReader, gamedbtest.ReaderPassword, database),
-		gamedbtest.DSN(t, gamedb.RoleWriter, gamedbtest.WriterPassword, database))
+		gamedbtest.DSN(t, gamedb.RoleReader, gamedbtest.ReaderPassword(t), database),
+		gamedbtest.DSN(t, gamedb.RoleWriter, gamedbtest.WriterPassword(t), database))
 	if err != nil {
 		t.Fatalf("building the cluster connector: %v", err)
 	}
@@ -409,5 +409,32 @@ func TestAWriteCrossesTheWireWithNoColumnTypes(t *testing.T) {
 	}
 	if result.Duration <= 0 {
 		t.Fatalf("duration = %v; a write's own time did not cross the wire", result.Duration)
+	}
+}
+
+// The whole path, for the failure that started this: the runner cannot open a
+// connection, and what the Core API is handed must be ours rather than the
+// database's own words about the query.
+//
+// Through the real transport (CLAUDE.md rule 10), because that is the only
+// arrangement a deployment uses and because the classification is made on one
+// side of the contract and acted on at the other. A database that does not
+// exist fails the connection the same way a wrong password does — PostgreSQL
+// answers FATAL, so the error carries a *pgconn.PgError inside a connection
+// failure, which is exactly the shape that used to be forwarded to a
+// participant as "your query was wrong".
+func TestAConnectionTheRunnerCouldNotOpenArrivesAsOursNotTheDatabases(t *testing.T) {
+	client, _ := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
+
+	// A plain identifier, so the runner tries to connect rather than refusing
+	// the name — and no database of that name exists on the cluster.
+	_, err := client.Run(t.Context(), ask("game_no_such_database_at_all", `SELECT 1`))
+
+	if !errors.Is(err, ErrUnreachable) {
+		t.Fatalf("error = %v, want it to be ErrUnreachable", err)
+	}
+	var database *queryrunner.DatabaseError
+	if errors.As(err, &database) {
+		t.Fatalf("a connection the runner never opened arrived as the database's own words: %v", database)
 	}
 }

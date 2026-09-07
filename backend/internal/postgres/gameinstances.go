@@ -409,6 +409,87 @@ func (r *GameInstances) ReclaimableTemplates(ctx context.Context, installationGr
 	return out, nil
 }
 
+// instanceColumns is the shape both Instances and InstanceNamed return, and
+// the one join both need. Written once so the list an organizer reads and the
+// row a drop is decided on cannot disagree about what a row says.
+//
+// Two LEFT JOINs, not inner ones. registration_id is null for a spare copy,
+// and an inner join would silently drop exactly the rows the pool is made of;
+// the account behind a registration can also have been deleted, and the row
+// outlives it. coalesce is what turns both absences into the empty strings
+// InstanceRecord documents rather than a null the scan would have to carry.
+const instanceColumns = `
+	SELECT i.db_name, i.registration_id, i.template_version, i.status,
+	       i.created_at, i.updated_at,
+	       coalesce(u.login, ''), coalesce(u.full_name, '')
+	FROM game_instances i
+	LEFT JOIN registrations r ON r.id = i.registration_id
+	LEFT JOIN users u ON u.id = r.user_id`
+
+// scanInstance reads one row of instanceColumns.
+func scanInstance(row pgx.Row) (provisioning.InstanceRecord, error) {
+	var r provisioning.InstanceRecord
+	err := row.Scan(&r.Database, &r.Registration, &r.TemplateVersion, &r.Status,
+		&r.CreatedAt, &r.UpdatedAt, &r.ParticipantLogin, &r.ParticipantName)
+	return r, err
+}
+
+// Instances lists up to limit of one contest's databases, oldest first.
+//
+// Every row, including the ones already dropped: the row is what an
+// organizer's audit search points at once the database is gone
+// (MarkDropped's own doc), and a screen that hid them would answer "no such
+// database" to the very person trying to find out what happened to it.
+//
+// The filter is `contest_id = $1`, which game_instances_contest_version_idx
+// (migration 12, on (contest_id, template_version)) already serves by its
+// leading column — CLAUDE.md rule 7 wants the index in the same change as the
+// query, and here the change is that an existing index acquired a second
+// reader rather than that a new predicate arrived unserved.
+func (r *GameInstances) Instances(ctx context.Context, contest uuid.UUID, limit int) ([]provisioning.InstanceRecord, error) {
+	rows, err := r.querier(ctx).Query(ctx, instanceColumns+`
+		WHERE i.contest_id = $1
+		ORDER BY i.created_at, i.db_name
+		LIMIT $2`, contest, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list the contest's databases: %w", err)
+	}
+	defer rows.Close()
+
+	var out []provisioning.InstanceRecord
+	for rows.Next() {
+		record, err := scanInstance(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan a database row: %w", err)
+		}
+		out = append(out, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list the contest's databases: %w", err)
+	}
+	return out, nil
+}
+
+// InstanceNamed reads one of a contest's rows by database name.
+//
+// Both the contest and the name are in the WHERE clause even though db_name
+// is unique on its own. That is the authorisation boundary rather than a
+// redundancy: the caller holds a permission over one contest, and a lookup by
+// name alone would let it decide a destructive action about a database
+// belonging to somebody else's olympiad.
+func (r *GameInstances) InstanceNamed(ctx context.Context, contest uuid.UUID, database string) (provisioning.InstanceRecord, error) {
+	record, err := scanInstance(r.querier(ctx).QueryRow(ctx, instanceColumns+`
+		WHERE i.contest_id = $1 AND i.db_name = $2`, contest, database))
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return provisioning.InstanceRecord{}, provisioning.ErrInstanceNotFound
+	}
+	if err != nil {
+		return provisioning.InstanceRecord{}, fmt.Errorf("read the database row: %w", err)
+	}
+	return record, nil
+}
+
 // MarkTemplateDropped moves one contest's template to the terminal 'dropped'
 // status — MarkDropped's own convention, kept for the same reason: the row
 // is what an organizer's audit search still has to point to once the
