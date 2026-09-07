@@ -171,7 +171,7 @@ export function QueryLogPanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 p-4">
-      <div className="min-h-0 flex-1 overflow-auto border border-edge">
+      <div className="min-h-0 flex-1 overflow-auto">
         <table className="w-full border-collapse text-body">
           {/* Opaque, and in a colour this design system actually has: a sticky
               head with no fill is a head the rows scroll through. */}

@@ -64,7 +64,12 @@ const editorTheme = EditorView.theme({
     height: "100%",
     backgroundColor: "var(--sunk)",
     color: "var(--ink)",
-    border: "1px solid var(--edge)",
+    // No border. The design's editor is a `--sunk` field between the rules
+    // that separate the panes, and nothing else (docs/design/preview.html,
+    // `.ed`): "внутри окна — ни одной вложенной плашки". `--edge` is a solid
+    // mid-grey the design spends on exactly one thing, a secondary button's
+    // outline, and a box drawn in it around the editor reads as a panel
+    // inside a panel.
     fontFamily: "var(--font-mono)",
     fontSize: "var(--text-body)",
   },
