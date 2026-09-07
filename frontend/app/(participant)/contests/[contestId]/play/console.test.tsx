@@ -1,4 +1,6 @@
-import { Profiler } from "react";
+import { act, Profiler } from "react";
+import { hydrateRoot } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
@@ -82,6 +84,39 @@ describe("the SQL editor", () => {
 
     await waitFor(() => expect(onResult).toHaveBeenLastCalledWith(answer.current));
     expect(editor).toHaveValue("SELECT * FROM suspects WHERE");
+  });
+
+  // Finding 1 (regression from the finding-2 fix): the restore effect seeds
+  // `lastTyped` to `""` and runs un-gated on mount. A browser restores form
+  // field values across a soft reload independently of React, and hydration
+  // reuses that server-rendered node rather than replacing it — so the
+  // textarea can already hold real text the instant this component's effects
+  // first run, before any `onInput` has fired to populate `lastTyped`. The
+  // un-gated effect used to stomp that value with the empty ref, which is
+  // the exact loss of work finding 2 was written to prevent, just triggered
+  // a different way. This drives an actual `hydrateRoot` over server-rendered
+  // markup, not a mock of the effect, so it proves the real DOM behaviour.
+  test("a browser-restored value on the server-rendered node survives hydration", async () => {
+    const html = renderToString(<ConsoleEditor contestId="c1" dict={en} onResult={vi.fn()} />);
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    document.body.appendChild(container);
+    const textarea = container.querySelector("textarea");
+    if (!textarea) throw new Error("expected a textarea in the server-rendered markup");
+
+    // Simulate the browser's own restore, which happens before React ever
+    // attaches — hydration must not treat this as stale content to discard.
+    textarea.value = "SELECT * FROM suspects";
+
+    let root: ReturnType<typeof hydrateRoot> | undefined;
+    act(() => {
+      root = hydrateRoot(container, <ConsoleEditor contestId="c1" dict={en} onResult={vi.fn()} />);
+    });
+
+    expect(textarea.value).toBe("SELECT * FROM suspects");
+
+    root?.unmount();
+    container.remove();
   });
 
   // The property the review specifically asked not to be given up in fixing

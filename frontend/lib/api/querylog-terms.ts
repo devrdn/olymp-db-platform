@@ -21,3 +21,18 @@
  * than constant.
  */
 export const QUERY_LOG_PAGE_SIZE = 50;
+
+/**
+ * The minimum gap, in milliseconds, between two automatic refreshes of the
+ * query log triggered by switching onto its tab (`QueryLogPanel`'s own
+ * doc, finding 3 — and finding 4 of the follow-up review that tightened
+ * this). Each of those refreshes calls `AdmitRead`, which shares its
+ * per-minute budget with `Run`: a student idly toggling Result and Log back
+ * and forth spends that budget on identical data rather than on their next
+ * query, unless something makes a transition inside this window a no-op.
+ * Three seconds is long enough that no legitimate "I want to see whether
+ * that last query landed" re-entry is ever this fast, and short enough that
+ * a genuine return to the tab after doing other work still refreshes right
+ * away.
+ */
+export const QUERY_LOG_REFRESH_MIN_INTERVAL_MS = 3000;

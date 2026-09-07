@@ -49,16 +49,57 @@ describe("toCsv", () => {
     expect(csv).toBe("id,note\r\n");
   });
 
-  // Finding 8: Excel, LibreOffice and Sheets all read a cell starting
-  // `=`, `+`, `-` or `@` as a formula rather than as text. This is the
-  // student's own data opened by that same student, not an attacker's
-  // payload, but a leading apostrophe — the ordinary way to say "this is
-  // text" to a spreadsheet — costs nothing.
-  test.each(["=SUM(A1:A2)", "+1", "-1", "@cmd"])("prefixes a cell beginning %s with an apostrophe", (value) => {
+  // Finding 8: Excel, LibreOffice and Sheets all read a cell starting `=`,
+  // `@`, a tab or a carriage return as a formula rather than as text — none
+  // of those ever starts a legitimate number, so they are neutralised
+  // unconditionally. This is the student's own data opened by that same
+  // student, not an attacker's payload, but a leading apostrophe — the
+  // ordinary way to say "this is text" to a spreadsheet — costs nothing here.
+  test.each(["=SUM(A1:A2)", "@cmd"])("prefixes a cell beginning %j with an apostrophe", (value) => {
     const csv = toCsv(["formula"], [[value]]);
 
     expect(csv).toBe(`formula\r\n'${value}\r\n`);
   });
+
+  // A leading tab or carriage return is the other vector the same programs
+  // recognise.
+  test("prefixes a cell beginning with a leading tab the same way", () => {
+    const csv = toCsv(["formula"], [["\tA1"]]);
+
+    expect(csv).toBe("formula\r\n'\tA1\r\n");
+  });
+
+  // A carriage return is also an RFC 4180 character that forces quoting, so
+  // the neutralised field comes back quoted the ordinary way.
+  test("prefixes a cell beginning with a leading carriage return the same way", () => {
+    const csv = toCsv(["formula"], [["\rA1"]]);
+
+    expect(csv).toBe('formula\r\n"\'\rA1"\r\n');
+  });
+
+  // A non-numeric value starting `+` or `-` is still a spreadsheet formula
+  // risk (`-cmd|...`, `+HYPERLINK(...)`) and still gets neutralised.
+  test.each(["-total", "+HYPERLINK(evil)"])(
+    "prefixes a non-numeric cell beginning %j with an apostrophe",
+    (value) => {
+      const csv = toCsv(["formula"], [[value]]);
+
+      expect(csv).toBe(`formula\r\n'${value}\r\n`);
+    },
+  );
+
+  // Finding 2 of the follow-up review: a `+`/`-` that leads a plain number is
+  // the student's own data, not a formula, and prefixing it would turn a
+  // numeric column into text that will not sum or sort in the spreadsheet it
+  // is opened in. Only neutralise `+`/`-` when what follows is not a number.
+  test.each(["-1", "+1", "-3.14", "-1e10", "-42 "])(
+    "leaves a numeric cell beginning with a sign, %j, without a leading apostrophe",
+    (value) => {
+      const csv = toCsv(["amount"], [[value]]);
+
+      expect(csv).toBe(`amount\r\n${value}\r\n`);
+    },
+  );
 
   test("leaves an ordinary cell without a leading apostrophe untouched", () => {
     const csv = toCsv(["id"], [["42"]]);
