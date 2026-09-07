@@ -121,3 +121,29 @@ describe("StoryText against the usual payloads", () => {
     }
   });
 });
+
+/**
+ * The editor's own artefact, which every story written so far carries.
+ *
+ * Milkdown serialises an empty paragraph — and an empty table cell — as a
+ * literal `<br />`. Raw HTML is deliberately not rendered here, so without
+ * cleaning, a participant reads the four characters. The save now cleans
+ * them, but the stories already in the database do not become right by
+ * themselves, and rewriting somebody's text with a migration is not the way
+ * to make them so.
+ */
+describe("the markdown a WYSIWYG editor produced", () => {
+  test("does not print the editor's empty-paragraph breaks at the reader", () => {
+    render(<StoryText markdown={"# A title\n\n<br />\n\nA body in the stacks."} />);
+
+    expect(screen.queryByText(/<br/)).not.toBeInTheDocument();
+    expect(screen.getByText("A body in the stacks.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "A title" })).toBeInTheDocument();
+  });
+
+  test("still shows a break that lives inside a fenced block, which is content", () => {
+    render(<StoryText markdown={"```html\n<br />\n```"} />);
+
+    expect(screen.getByText(/<br \/>/)).toBeInTheDocument();
+  });
+});

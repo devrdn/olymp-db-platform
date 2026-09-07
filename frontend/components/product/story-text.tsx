@@ -1,6 +1,8 @@
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { cleanEditorMarkdown } from "@/lib/format/markdown";
+
 import { cn } from "@/lib/utils";
 
 /**
@@ -84,12 +86,19 @@ const PROSE = [
 ].join(" ");
 
 export function StoryText({ markdown, className }: { markdown: string; className?: string }) {
-  if (markdown.trim() === "") return null;
+  // Cleaned on the way out as well as on the way in (see cleanEditorMarkdown).
+  // The editor's `<br />` artefacts are stopped at the save now, but the
+  // stories already written still carry them, and raw HTML is deliberately not
+  // rendered here — so without this they arrive on a participant's screen as
+  // the four characters, printed. Doing it here rather than with a migration
+  // means nothing rewrites somebody's own text in the database.
+  const text = cleanEditorMarkdown(markdown);
+  if (text.trim() === "") return null;
 
   return (
     <div className={cn(PROSE, className)}>
       <Markdown remarkPlugins={[remarkGfm]} urlTransform={safeUrl} components={components}>
-        {markdown}
+        {text}
       </Markdown>
     </div>
   );
