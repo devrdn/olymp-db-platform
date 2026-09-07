@@ -1,8 +1,8 @@
 import { z } from "zod";
 
-import { ENROLLMENTS, QUESTION_MODES, TIMINGS } from "./contests-terms";
+import { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS } from "./contests-terms";
 
-export { ENROLLMENTS, QUESTION_MODES, TIMINGS } from "./contests-terms";
+export { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS } from "./contests-terms";
 
 
 /**
@@ -23,6 +23,8 @@ export type ContestStatus = (typeof CONTEST_STATUSES)[number];
 export type Enrollment = (typeof ENROLLMENTS)[number];
 export type QuestionMode = (typeof QUESTION_MODES)[number];
 export type Timing = (typeof TIMINGS)[number];
+export type Progression = (typeof PROGRESSIONS)[number];
+export type Scoring = (typeof SCORINGS)[number];
 
 /**
  * Which states are reachable from which, mirrored from the Go side.
@@ -131,6 +133,8 @@ export const contestSchema = z
     status: z.enum(CONTEST_STATUSES),
     enrollment: z.enum(ENROLLMENTS),
     question_mode: z.enum(QUESTION_MODES),
+    progression: z.enum(PROGRESSIONS),
+    scoring: z.enum(SCORINGS),
     timing: z.enum(TIMINGS),
     duration_min: z.number().nullish(),
     starts_at: z.string().optional(),
@@ -147,6 +151,8 @@ export const contestSchema = z
     status: raw.status,
     enrollment: raw.enrollment,
     questionMode: raw.question_mode,
+    progression: raw.progression,
+    scoring: raw.scoring,
     timing: raw.timing,
     durationMin: raw.duration_min ?? undefined,
     startsAt: raw.starts_at,
@@ -160,6 +166,20 @@ export const contestSchema = z
   }));
 
 export type Contest = z.infer<typeof contestSchema>;
+
+/**
+ * Whether sequential progression (§6.1.1) actually governs this contest.
+ *
+ * Mirrors contests.Contest.SequentialActive on the Go side (finding 4):
+ * progression alone is not enough to ask, since it means nothing at
+ * `question_mode = single` — the one question has nothing before it to wait
+ * on. Kept here as the one place the interface reads this from, rather than
+ * letting the question editor and the settings panel each repeat the
+ * two-field comparison and risk reading it differently one day.
+ */
+export function sequentialActive(contest: Pick<Contest, "progression" | "questionMode">): boolean {
+  return contest.progression === "sequential" && contest.questionMode === "multi";
+}
 
 /** The language a contest falls back to, or the first one it declares. */
 export function defaultLanguage(contest: Contest): string | undefined {

@@ -240,7 +240,15 @@ describe("useContestEvents", () => {
       expect(result.current.channelError).toBeNull();
     });
 
-    test("a failure that a fresh probe is actually admitted for reconnects at once with no error shown", async () => {
+    // Finding 3: an admitted probe used to reconnect synchronously, with the
+    // backoff reset and no timer at all. If EventSource kept failing on this
+    // exact URL while a plain fetch of it kept succeeding, that reconnected
+    // as fast as the network allowed — and every attempt still spends the
+    // query-rate budget this channel shares with the SQL console. This is
+    // what fails against the unfixed hook: `connect()` ran inline in the
+    // `.then` callback, so a new instance existed already at the first
+    // assertion below, before any time had even been asked to pass.
+    test("a failure that a fresh probe is actually admitted still waits for the floor before reconnecting", async () => {
       vi.stubGlobal(
         "fetch",
         vi.fn().mockResolvedValue({
@@ -258,6 +266,15 @@ describe("useContestEvents", () => {
       });
 
       expect(result.current.channelError).toBeNull();
+      // Not yet — an admitted probe still waits for the same floor a
+      // retryable refusal does, so a flapping connection cannot reconnect
+      // faster than the network allows.
+      expect(FakeEventSource.instances).toHaveLength(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+
       expect(FakeEventSource.instances).toHaveLength(2);
     });
 

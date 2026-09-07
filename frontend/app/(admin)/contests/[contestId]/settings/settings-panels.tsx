@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Tag } from "@/components/ui/tag";
-import { ENROLLMENTS, QUESTION_MODES, TIMINGS } from "@/lib/api/contests-terms";
+import { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS } from "@/lib/api/contests-terms";
 import { type Contest, type ContestSummary } from "@/lib/api/contests";
 import { SQL_MODES } from "@/lib/api/policy-terms";
 import { type SqlPolicy } from "@/lib/api/policy";
@@ -175,6 +175,7 @@ export function ContestPanel({
     {},
   );
   const [timing, setTiming] = useState<string>(contest.timing);
+  const [progression, setProgression] = useState<string>(contest.progression);
 
   // The form is keyed by the server's own version of what it renders.
   //
@@ -204,7 +205,11 @@ export function ContestPanel({
             />
           </Field>
 
-          <Field id="endsAt" label={t.schedule.endsAt}>
+          <Field
+            id="endsAt"
+            label={t.schedule.endsAt}
+            hint={timing === "individual" ? t.schedule.endsAtIndividualHint : undefined}
+          >
             <Input
               name="endsAt"
               type="datetime-local"
@@ -289,6 +294,46 @@ export function ContestPanel({
               />
             </Field>
           ) : null}
+        </fieldset>
+
+        {/* §6.1.1: the order questions open in, and how a result is derived
+            from submissions. Both freeze with the rest of the shape — a
+            participant already mid-sequence, or already scored one way,
+            must not have the rule under them change. */}
+        <fieldset className="flex flex-col gap-3" disabled={!shapeOpen}>
+          <legend className="pb-2 font-mono text-label text-ink-3 uppercase">
+            {t.shape.order}
+          </legend>
+          <p className="max-w-body text-small text-ink-2">{t.shape.orderHint}</p>
+          <Choices
+            name="progression"
+            values={PROGRESSIONS}
+            labels={dict.workspace.progression}
+            initial={contest.progression}
+            disabled={!shapeOpen}
+            onPick={setProgression}
+          />
+
+          {/* The publish gate refuses this combination outright (§6.1.1) — said
+              here, where the setting is chosen, rather than left for an
+              organizer to discover once publishing is already refused. */}
+          {progression === "sequential" ? (
+            <p className="max-w-body text-small text-warn">{t.shape.sequentialWarning}</p>
+          ) : null}
+        </fieldset>
+
+        <fieldset className="flex flex-col gap-3" disabled={!shapeOpen}>
+          <legend className="pb-2 font-mono text-label text-ink-3 uppercase">
+            {t.shape.scoring}
+          </legend>
+          <p className="max-w-body text-small text-ink-2">{t.shape.scoringHint}</p>
+          <Choices
+            name="scoring"
+            values={SCORINGS}
+            labels={dict.workspace.scoring}
+            initial={contest.scoring}
+            disabled={!shapeOpen}
+          />
         </fieldset>
       </Panel>
 

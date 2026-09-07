@@ -86,6 +86,34 @@ func TestSettingsStayEditableWhileRunning(t *testing.T) {
 	}
 }
 
+// Finding 4: Submit and Reader.Questions used to each repeat this same
+// two-field comparison rather than reading it from one place. This proves
+// the one place they now both call: sequential progression only takes hold
+// under QuestionModeMulti, since a single-question contest has nothing
+// before its one question to wait on.
+func TestSequentialActiveOnlyUnderMultiQuestionMode(t *testing.T) {
+	cases := []struct {
+		name         string
+		progression  string
+		questionMode string
+		want         bool
+	}{
+		{"sequential and multi", contests.ProgressionSequential, contests.QuestionModeMulti, true},
+		{"sequential but single", contests.ProgressionSequential, contests.QuestionModeSingle, false},
+		{"free and multi", contests.ProgressionFree, contests.QuestionModeMulti, false},
+		{"free and single", contests.ProgressionFree, contests.QuestionModeSingle, false},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			contest := contests.Contest{Progression: c.progression, QuestionMode: c.questionMode}
+			if got := contest.SequentialActive(); got != c.want {
+				t.Errorf("SequentialActive() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 func TestNoNetworkRestrictionAllowsEverybody(t *testing.T) {
 	c := contests.Contest{}
 

@@ -45,12 +45,16 @@ const maxPenaltyPct = 100
 // maxPoints bounds questions.points, an int4 column. points_awarded's own
 // computation (postgres.Submissions.Insert) multiplies a per-attempt penalty
 // derived from this value by the number of attempts already committed to
-// this question, inside Postgres's own int4 arithmetic — an unbounded value
-// here turns a wrong attempt into "integer out of range" for the database, a
-// 500 for the student rather than a scored answer (finding 4). Ten million is
-// several orders of magnitude past any real question's worth and stays far
-// below where that arithmetic could ever approach int4's ceiling, even
-// multiplied by every attempt a contest could plausibly see.
+// this question — a product this bound does not keep inside int4 by itself.
+// At the 100% penalty this bound still permits, the 215th attempt on a
+// question worth the full ten million already overflows int4 arithmetic
+// (finding 4), which is why that one multiplication is computed in
+// PostgreSQL's own bigint rather than relying on this constant to stay small
+// enough. What this bound actually keeps inside int4 is points_awarded
+// itself: floored at zero and never above a question's own points, the
+// column it lands in never sees more than maxPoints regardless of how many
+// attempts came before it. Ten million is several orders of magnitude past
+// any real question's worth, which is the bound's real job.
 const maxPoints = 10_000_000
 
 // Errors about questions and their answers.

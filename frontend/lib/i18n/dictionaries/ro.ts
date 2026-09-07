@@ -128,6 +128,14 @@ const ro = {
       fixed: "Fereastră comună",
       individual: "Timp propriu",
     },
+    progression: {
+      free: "Orice ordine",
+      sequential: "În ordine",
+    },
+    scoring: {
+      points: "Puncte",
+      winner: "Primul care rezolvă",
+    },
     status: {
       terminal: "Această olimpiadă a ajuns în starea finală.",
       move: {
@@ -239,6 +247,10 @@ const ro = {
         attempts: "Încercări",
         attemptsHint: "Lăsați gol pentru nelimitat.",
         unlimited: "nelimitat",
+        sequentialNeedsAttempts: "Această olimpiadă deschide întrebările în ordine (Setări → Forma ei). O întrebare lăsată nelimitată aici blochează publicarea: un participant blocat pe ea nu ar mai avea la ce trece.",
+        penalty: "Penalizare per încercare greșită, %",
+        penaltyHint: "Procent din punctajul propriu al întrebării, pierdut la fiecare încercare greșită deja făcută. Nu coboară niciodată sub zero și nu se aplică atunci când punctajul olimpiadei este pe primul care rezolvă.",
+        penaltyPreview: "Chiar acum, o încercare greșită costă {n} din {points} puncte.",
         choices: "Identificatorii variantelor",
         choicesHint: "Scurți, stabili, independenți de limbă — a, b, c. Răspunsul este unul dintre aceștia, niciodată o etichetă, și asta face verificarea independentă de limba citită.",
         visible: "Arătați această întrebare participanților",
@@ -347,6 +359,7 @@ const ro = {
         hint: "Fereastra rămâne editabilă în timpul desfășurării: prelungirea ei după o pană de curent este exact ce îi trebuie unei olimpiade în curs.",
         startsAt: "Începe",
         endsAt: "Se încheie",
+        endsAtIndividualHint: "Opțional pentru timp propriu. Lăsat gol, olimpiada rămâne în desfășurare până o încheiați chiar dumneavoastră — nimic nu o încheie automat.",
         enrollmentDeadline: "Înscrierea se închide",
         enrollmentDeadlineHint: "Opțional. Lăsați gol pentru a ține înscrierea deschisă până la start.",
         grace: "Perioadă de grație, minute",
@@ -360,6 +373,12 @@ const ro = {
         timing: "Timp",
         duration: "Minute per participant",
         durationHint: "Numărate de la startul propriu și niciodată peste sfârșitul olimpiadei.",
+        order: "Ordinea întrebărilor",
+        orderHint: "Orice ordine lasă participantul să răspundă la orice întrebare deschisă, oricând dorește. În ordine deschide întrebarea următoare doar când cea precedentă este închisă — răspunsă corect sau cu toate încercările folosite.",
+        sequentialWarning: "În ordine cere ca fiecare întrebare să aibă o limită de încercări. O întrebare lăsată nelimitată blochează un participant fără nimic la care să treacă mai departe, așa că publicarea este refuzată până când toate au o limită.",
+        scoring: "Punctaj",
+        scoringHint: "Puncte însumează punctajul propriu al fiecărei întrebări, penalizarea inclusă. Primul care rezolvă are un singur câștigător: cine răspunde primul corect la întrebarea finală.",
+        winnerIgnoresPenalty: "Penalizarea per încercare setată pe fiecare întrebare este ignorată cât timp punctajul este pe primul care rezolvă.",
       },
       access: {
         heading: "Cine poate intra și de unde",

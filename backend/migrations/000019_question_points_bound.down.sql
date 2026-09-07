@@ -1,1 +1,1 @@
-ALTER TABLE questions DROP CONSTRAINT questions_points_bounded;
+ALTER TABLE questions DROP CONSTRAINT IF EXISTS questions_points_bounded;

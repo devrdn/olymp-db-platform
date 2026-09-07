@@ -96,7 +96,7 @@ func TestQuestionsOmitsHiddenQuestions(t *testing.T) {
 		Answers: []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "candlestick"}},
 	})
 
-	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en", contests.ProgressionFree)
+	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en", false)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
@@ -123,7 +123,7 @@ func TestQuestionsNeverCarryReferenceAnswers(t *testing.T) {
 		Answers: []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the butler"}},
 	})
 
-	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en", contests.ProgressionFree)
+	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en", false)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
@@ -147,7 +147,7 @@ func TestQuestionsResolvesTheWordingToTheRequestedLanguage(t *testing.T) {
 		},
 	})
 
-	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "ru", contests.ProgressionFree)
+	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "ru", false)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
@@ -182,7 +182,7 @@ func TestQuestionsReportsAttemptsRemainingAndClosed(t *testing.T) {
 	// unlimited and, implicitly, a fresh registration on capped: no entry at
 	// all, which must read as "never attempted" rather than an error.
 
-	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", contests.ProgressionFree)
+	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", false)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
@@ -243,7 +243,7 @@ func TestQuestionsReportsCorrectAndPointsAwarded(t *testing.T) {
 	attempts.Put(registrationID, solved.ID, contests.AttemptStats{Attempts: 2, Correct: true, PointsAwarded: 8})
 	attempts.Put(registrationID, exhausted.ID, contests.AttemptStats{Attempts: 3, Correct: false, PointsAwarded: 0})
 
-	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", contests.ProgressionFree)
+	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", false)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
@@ -279,7 +279,7 @@ func TestQuestionsClosesAQuestionOnceEveryAttemptIsSpent(t *testing.T) {
 	})
 	attempts.Put(registrationID, q.ID, contests.AttemptStats{Attempts: 2})
 
-	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", contests.ProgressionFree)
+	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", false)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
@@ -309,7 +309,7 @@ func TestQuestionsOmitsAQuestionMissingTheResolvedLanguage(t *testing.T) {
 		Texts: map[string]contests.QuestionText{"ru": {BodyMD: "Кто это сделал?"}},
 	})
 
-	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en", contests.ProgressionFree)
+	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en", false)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
@@ -329,7 +329,7 @@ func TestQuestionsIsEmptyForAContestWithNoVisibleQuestions(t *testing.T) {
 		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Secret."}},
 	})
 
-	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en", contests.ProgressionFree)
+	found, err := reader.Questions(t.Context(), contestID, uuid.New(), "en", false)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
@@ -359,7 +359,7 @@ func TestQuestionsCanAnswerMatchesClosedOutsideSequentialProgression(t *testing.
 	})
 	attempts.Put(registrationID, closed.ID, contests.AttemptStats{Attempts: 1})
 
-	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", contests.ProgressionFree)
+	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", false)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
@@ -394,7 +394,7 @@ func TestQuestionsMarksOnlyTheSequentialFrontierAnswerable(t *testing.T) {
 		Texts: map[string]contests.QuestionText{"en": {BodyMD: "What weapon?"}},
 	})
 
-	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", contests.ProgressionSequential)
+	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", true)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}
@@ -440,7 +440,7 @@ func TestQuestionsMovesTheSequentialFrontierOnceAQuestionCloses(t *testing.T) {
 	}
 	attempts.Put(registrationID, first.ID, contests.AttemptStats{Attempts: 1, Correct: true})
 
-	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", contests.ProgressionSequential)
+	found, err := reader.Questions(t.Context(), contestID, registrationID, "en", true)
 	if err != nil {
 		t.Fatalf("Questions() = %v", err)
 	}

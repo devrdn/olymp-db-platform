@@ -49,14 +49,31 @@ func (r *Submissions) querier(ctx context.Context) storage.Querier {
 // going negative — which is what makes "remaining attempts are free" true by
 // construction rather than a case this statement has to special-case.
 //
+// The multiplication itself is cast to bigint before the subtraction
+// (COALESCE(...)::bigint * $6::int): req.Points and req.PenaltyPerAttempt are
+// both plain int4 columns, but their product is not — at the 100% penalty
+// contests.Question.Validate still allows, a question worth the domain's own
+// points ceiling overflows int4 arithmetic on its 215th attempt, which
+// PostgreSQL reports as "integer out of range" (finding 4): a 500 for that
+// student, not a scored attempt. Bigint arithmetic has no such ceiling at any
+// attempt count a real contest could reach, and the GREATEST(0, …) result
+// assigned into points_awarded is still bounded by req.Points either way, so
+// nothing downstream of this statement changes.
+//
 // now() here is PostgreSQL's own clock, not time.Now() read in this process
-// (§8) — and, because there is no explicit transaction wrapped around this
-// one statement for the common case (contests.Service.submitOnce opens one
-// only when a score update must land atomically with the write), now() is
-// this statement's own execution time rather than a value pinned at some
-// earlier BEGIN. That is what removes the gap finding 4 describes: the
-// deadline is compared against the database's clock at the very moment the
-// row is written, not at a moment read earlier and carried into a separate
+// (§8). For the common case this is the whole story: with no explicit
+// transaction wrapped around this one statement, now() is this statement's
+// own execution time rather than a value pinned at some earlier BEGIN. A
+// correct answer worth points is the exception — contests.Service.submitOnce
+// wraps that insert in a transaction so the score update lands atomically
+// with it, and there now() is that transaction's own start time, not this
+// statement's. The two are microseconds apart at most and change no outcome
+// this file cares about, but the deadline guarantee itself does not depend on
+// which one applies: whichever clock reading now() resolves to, it is still
+// the database's own, read no earlier than the write it gates, which is what
+// removes the gap finding 4 describes — the deadline is compared against a
+// clock that cannot be stale by more than one transaction's own duration, not
+// against a value read in this process and carried into a separate
 // comparison.
 //
 // Filtered by (registration_id, question_id), the leading two columns of the
@@ -89,7 +106,7 @@ func (r *Submissions) Insert(ctx context.Context, req contests.SubmissionRequest
 	row := r.querier(ctx).QueryRow(ctx, `
 		INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct, points_awarded, submitted_at)
 		SELECT $1, $2, COALESCE(MAX(s.attempt_no), 0) + 1, $3, $4,
-		       CASE WHEN $4 THEN GREATEST(0, $5::int - COALESCE(MAX(s.attempt_no), 0) * $6::int) ELSE 0 END,
+		       CASE WHEN $4 THEN GREATEST(0, $5::int - COALESCE(MAX(s.attempt_no), 0)::bigint * $6::int) ELSE 0 END,
 		       now()
 		FROM submissions s
 		WHERE s.registration_id = $1 AND s.question_id = $2
