@@ -95,6 +95,16 @@ export function Workspace({
     // far better than clipping three panels into one viewport-height column
     // — the same "collapse to one track" reasoning SPEC.md §5's mobile reset
     // already applies everywhere else.
+    //
+    // The bounded scroll box this layout gives the result table (finding 1
+    // of the earlier review) is therefore a `narrow:`-and-up property too:
+    // below the breakpoint the result panel is not height-constrained at
+    // all, so a full thousand-row table lays out at its natural height in
+    // the document flow — measured at over 33,000px tall — and the whole
+    // page scrolls instead of a fixed-height box scrolling inside it. That
+    // is this fallback working as designed, not the scroll fix failing
+    // below 760px; do not read a very tall narrow-mode page as the bug
+    // returning.
     // Finding 7: the app bar this route sits below (`AppBar`) is `h-12`
     // (3rem) *plus* its own `border-b` — 3rem alone is one pixel short of
     // its real height, and a "no page scroll" screen that scrolls by one

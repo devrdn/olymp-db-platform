@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
-import { QUERY_LOG_PAGE_SIZE } from "@/lib/api/querylog-terms";
+import { QUERY_LOG_PAGE_SIZE, QUERY_LOG_REFRESH_MIN_INTERVAL_MS } from "@/lib/api/querylog-terms";
 import type { QueryLogEntry } from "@/lib/api/querylog";
 
 import { QueryLogPanel } from "./query-log-panel";
@@ -169,5 +169,64 @@ describe("the query log panel", () => {
     await waitFor(() => expect(fetchQueryLogAction).toHaveBeenCalled());
     expect(screen.getByText("SELECT 1")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent(en.participant.play.workspace.log.failed);
+  });
+
+  // Finding 4 of the follow-up review: a student idly toggling Result and
+  // Log spends one AdmitRead — Run's own shared budget — on every single
+  // transition into "Log", even back into data just fetched a moment ago.
+  // A second transition inside QUERY_LOG_REFRESH_MIN_INTERVAL_MS of the
+  // first must not spend a second one.
+  test("does not refetch a second time when toggled back within the minimum refresh interval", async () => {
+    fetchQueryLogAction.mockResolvedValueOnce({ kind: "ok", items: [entry("SELECT 1")], total: 1 });
+    const { rerender } = show({ active: false, initial: { items: [entry("SELECT 1")], total: 1, failed: false } });
+
+    rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active locale="en" dict={en} />);
+    await waitFor(() => expect(fetchQueryLogAction).toHaveBeenCalledTimes(1));
+
+    // Leave, then come straight back — well inside the minimum interval.
+    rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active={false} locale="en" dict={en} />);
+    rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active locale="en" dict={en} />);
+
+    expect(fetchQueryLogAction).toHaveBeenCalledTimes(1);
+  });
+
+  // Finding 4 of the follow-up review, the other half: two refreshes can
+  // still overlap once enough real time separates the transitions that
+  // triggered them (a slow first request still in flight when a later
+  // transition starts a second). Whichever answer is actually newest must
+  // win, never whichever happens to resolve last on the wire.
+  test("a slower, superseded refresh cannot overwrite what a newer one already set", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveFirst!: (value: QueryLogRefreshResult) => void;
+      let resolveSecond!: (value: QueryLogRefreshResult) => void;
+      fetchQueryLogAction
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }));
+
+      const { rerender } = show({ active: false, initial: { items: [entry("SELECT 1")], total: 1, failed: false } });
+      rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active locale="en" dict={en} />);
+      await vi.waitFor(() => expect(fetchQueryLogAction).toHaveBeenCalledTimes(1));
+
+      // Far enough past the minimum interval for a second transition to
+      // trigger its own refresh, while the first request is still pending.
+      await vi.advanceTimersByTimeAsync(QUERY_LOG_REFRESH_MIN_INTERVAL_MS + 1);
+      rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active={false} locale="en" dict={en} />);
+      rerender(<QueryLogPanel contestId="c1" initial={{ items: [entry("SELECT 1")], total: 1, failed: false }} active locale="en" dict={en} />);
+      await vi.waitFor(() => expect(fetchQueryLogAction).toHaveBeenCalledTimes(2));
+
+      // The newer request settles first, with the truly current answer...
+      resolveSecond({ kind: "ok", items: [entry("SELECT 2")], total: 1 });
+      await vi.waitFor(() => expect(screen.getByText("SELECT 2")).toBeInTheDocument());
+
+      // ...and the older, now-stale one settles after. It must not win.
+      resolveFirst({ kind: "ok", items: [entry("SELECT 1")], total: 1 });
+      await vi.runAllTimersAsync();
+
+      expect(screen.getByText("SELECT 2")).toBeInTheDocument();
+      expect(screen.queryByText("SELECT 1")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

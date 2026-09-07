@@ -26,17 +26,35 @@ function quoteIfNeeded(value: string): string {
 
 /**
  * A field a spreadsheet reads as a formula rather than as text: Excel,
- * LibreOffice and Sheets all treat a cell beginning `=`, `+`, `-` or `@` as
- * one to evaluate, not to display (finding 8). Nothing about this download is
- * an attacker's payload — it is a student's own query result, opened by that
- * same student — but a column of negative numbers or an aggregate named
- * `-total` costs nothing to make inert, and this is meant to be opened in
- * Excel. A leading apostrophe is the ordinary way to say "this is text" to
- * every one of those programs; it is not itself written into the value a
- * plain text reader sees, only into what a spreadsheet displays.
+ * LibreOffice and Sheets all treat a cell beginning `=`, `@`, a tab or a
+ * carriage return as one to evaluate, not to display (finding 8) — and the
+ * same is true of `+` or `-`, but only when what follows is not simply a
+ * number. Nothing about this download is an attacker's payload — it is a
+ * student's own query result, opened by that same student — which is why
+ * `+`/`-` get the narrower check: a column of negative numbers is the
+ * student's own data, and prefixing every one of them with an apostrophe
+ * turns the column into left-aligned text that will not sum or sort, a real
+ * cost for a false sense of safety. `=`, `@`, a leading tab and a leading
+ * carriage return get no such exception — none of those ever starts a
+ * legitimate number — so they are always neutralised. A leading apostrophe is
+ * the ordinary way to say "this is text" to every one of those programs; it
+ * is not itself written into the value a plain text reader sees, only into
+ * what a spreadsheet displays.
  */
+function isNumericLiteral(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed !== "" && Number.isFinite(Number(trimmed));
+}
+
 function neutralizeFormula(value: string): string {
-  return /^[=+\-@]/.test(value) ? `'${value}` : value;
+  const first = value.charAt(0);
+  if (first === "=" || first === "@" || first === "\t" || first === "\r") {
+    return `'${value}`;
+  }
+  if ((first === "+" || first === "-") && !isNumericLiteral(value)) {
+    return `'${value}`;
+  }
+  return value;
 }
 
 /**

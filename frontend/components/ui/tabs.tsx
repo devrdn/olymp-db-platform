@@ -27,14 +27,20 @@ import { cn } from "@/lib/utils";
  * arrow-key focus alone — which is the pattern WAI-ARIA recommends for a
  * plain tab list and the one the previous Base UI usage already followed.
  *
- * This also fixes finding 1 by construction: `TabsContent` renders `flex
+ * This also fixes finding 1 by construction: `TabsContent` can render `flex
  * flex-col` (a flex *container*, not just a flex *item*), so a child that
  * asks for `flex-1` — `ResultPanel`'s own root, for one — actually gets a
- * height to fill rather than sizing to its content inside a block box. Every
- * panel is rendered unconditionally, always in the DOM, with `hidden` toggled
- * on the ones not selected — `[hidden]` still needs `!important` here
- * (`[&[hidden]]:hidden`) because the `flex` utility above it in the class
- * list would otherwise win the display property.
+ * height to fill rather than sizing to its content inside a block box. That
+ * is opt-in via the `fill` prop (default `true`, matching every panel that
+ * needed it first) rather than forced on every panel unconditionally
+ * (finding 3 of the follow-up review): a panel with no child that must fill
+ * the height — the story, or the questions list, both of which scroll the
+ * whole tab rather than a bounded inner child — gets a plain block box, the
+ * layout ordinary flowed content (paragraph margins included) already
+ * expects. Every panel is rendered unconditionally, always in the DOM, with
+ * `hidden` toggled on the ones not selected — `[hidden]` still needs
+ * `!important` here (`[&[hidden]]:hidden`) because the `flex` utility, when
+ * `fill` applies it, would otherwise win the display property.
  *
  * Styling follows this project's own flat, ruled direction (`dialog.tsx`'s own
  * doc explains the reasoning once): no glow, no shadow, `rounded-none`, an
@@ -182,8 +188,19 @@ function TabsContent({
   value,
   className,
   children,
+  /**
+   * Whether this panel is a flex *container* its own children can fill —
+   * `ResultPanel` and the query log both have a `flex-1` root that needs a
+   * bounded height to scroll inside (finding 1). Default `true` for that
+   * reason, but a panel that only holds ordinarily-flowing content — prose,
+   * a form — should pass `fill={false}`: forcing `flex-col` on it buys
+   * nothing (nothing inside asks to fill the height) and turns every direct
+   * child into a flex item, which is not the layout plain block content was
+   * written for (finding 3).
+   */
+  fill = true,
   ...props
-}: { value: string } & Omit<React.ComponentPropsWithoutRef<"div">, "value">) {
+}: { value: string; fill?: boolean } & Omit<React.ComponentPropsWithoutRef<"div">, "value">) {
   const { value: selected, baseId } = useTabsContext("TabsContent");
   const isSelected = selected === value;
 
@@ -202,7 +219,7 @@ function TabsContent({
       hidden={!isSelected}
       inert={!isSelected}
       tabIndex={0}
-      className={cn("flex min-h-0 flex-1 flex-col [&[hidden]]:hidden", className)}
+      className={cn("min-h-0 [&[hidden]]:hidden", fill && "flex flex-1 flex-col", className)}
       {...props}
     >
       {children}

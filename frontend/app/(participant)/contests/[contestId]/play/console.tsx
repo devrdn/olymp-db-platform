@@ -90,7 +90,17 @@ export function ConsoleEditor({
 
   useLayoutEffect(() => {
     const el = textareaRef.current;
-    if (el && el.value !== lastTyped.current) {
+    // Guard against the empty ref on mount: `lastTyped` starts at `""`
+    // because no `onInput` has fired yet, but the textarea's own `.value`
+    // may already hold something real — a browser-restored form value
+    // across a soft reload, or a server-rendered value React's hydration
+    // reused. Restoring blindly here would erase that value the instant
+    // this effect first runs, which is the same loss of work this effect
+    // exists to prevent. When `lastTyped` is genuinely empty (untouched,
+    // or the participant deliberately cleared the field), the native
+    // reset's own target value is also `""`, so skipping the write here
+    // costs nothing.
+    if (el && lastTyped.current !== "" && el.value !== lastTyped.current) {
       el.value = lastTyped.current;
     }
   });

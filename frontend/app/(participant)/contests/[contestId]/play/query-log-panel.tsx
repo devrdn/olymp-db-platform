@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { buttonVariants } from "@/components/ui/button";
-import { QUERY_LOG_PAGE_SIZE } from "@/lib/api/querylog-terms";
+import { QUERY_LOG_PAGE_SIZE, QUERY_LOG_REFRESH_MIN_INTERVAL_MS } from "@/lib/api/querylog-terms";
 import type { QueryLogEntry } from "@/lib/api/querylog";
 import { formatMoment } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -68,6 +68,25 @@ export function QueryLogPanel({
   const [loadingMore, setLoadingMore] = useState(false);
   const [failed, setFailed] = useState(initial.failed);
 
+  // Finding 4 of the follow-up review: two problems with refreshing on every
+  // transition into this tab. First, nothing stopped a superseded response
+  // from overwriting a newer one — the `cancelled` flag the very first
+  // version of this effect used (still visible in this file's own history)
+  // was dropped when this became a plain `async` callback, and two refreshes
+  // really can overlap: a slow one from an earlier transition still in
+  // flight when a later transition starts another. `requestSeq` is a ticket
+  // number bumped at the start of every refresh; a response is only applied
+  // if its ticket is still the most recent one issued, so an answer that
+  // arrives late can no longer clobber one that already landed. Second, a
+  // student who idly toggles Result and Log spent one `AdmitRead` — the
+  // budget `Run` itself shares — on every single transition, even back into
+  // data that was just fetched a moment ago; `lastRefreshAt` is when a
+  // refresh last actually ran, and the effect below skips firing another one
+  // inside `QUERY_LOG_REFRESH_MIN_INTERVAL_MS` of it. That gate applies only
+  // to the automatic, on-transition refresh: `retry` (an explicit click,
+  // always after a failure) calls this same function and always goes
+  // through, which is what a student pressing "retry" actually asked for.
+  //
   // How large a page to ask for depends on how many rows are already
   // loaded, so `refresh` closes over `items.length` directly rather than
   // over a ref holding it: reading a ref during render to avoid this
@@ -78,8 +97,13 @@ export function QueryLogPanel({
   // nothing: the effect below only ever acts on it through the
   // active-transition guard, so a changed identity with no real transition
   // re-runs the effect but calls nothing.
+  const requestSeq = useRef(0);
+  const lastRefreshAt = useRef(0);
   const refresh = useCallback(async () => {
+    const requestId = ++requestSeq.current;
+    lastRefreshAt.current = Date.now();
     const result = await fetchQueryLogAction(contestId, Math.max(items.length, QUERY_LOG_PAGE_SIZE), 0);
+    if (requestId !== requestSeq.current) return; // a newer refresh has already started; this answer is stale
     if (result.kind === "ok") {
       setItems(result.items);
       setTotal(result.total);
@@ -100,7 +124,7 @@ export function QueryLogPanel({
   // fetched server-side.
   const wasActive = useRef(active);
   useEffect(() => {
-    if (active && !wasActive.current) {
+    if (active && !wasActive.current && Date.now() - lastRefreshAt.current >= QUERY_LOG_REFRESH_MIN_INTERVAL_MS) {
       void refresh();
     }
     wasActive.current = active;
