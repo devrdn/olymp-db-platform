@@ -219,6 +219,50 @@ describe("AuditTrailRegister, why a contest did not start", () => {
   });
 });
 
+// A wrong password and a login that does not exist collapse into the same
+// reason on the wire (§7.2), and the trail must not un-collapse them — an
+// administrator reading a blocked account's failed attempt must not be able
+// to tell "wrong password" from "wrong password against a blocked account".
+describe("AuditTrailRegister, why a sign-in failed", () => {
+  const failed = (reason?: string) =>
+    entry({ action: "auth.login_failed", entity_id: "u-1", payload: { login: "s.popescu", reason } });
+
+  test("names the reason in the reader's own language", () => {
+    render(<AuditTrailRegister entries={[failed("invalid_credentials")]} {...props} dict={dict} />);
+
+    expect(screen.getByText(dict.audit.failureReasons.invalid_credentials)).toBeInTheDocument();
+  });
+
+  test("distinguishes a blocked account from a wrong guess", () => {
+    render(<AuditTrailRegister entries={[failed("account_blocked")]} {...props} dict={dict} />);
+
+    expect(screen.getByText(dict.audit.failureReasons.account_blocked)).toBeInTheDocument();
+  });
+
+  test("names throttling as its own reason", () => {
+    render(<AuditTrailRegister entries={[failed("too_many_attempts")]} {...props} dict={dict} />);
+
+    expect(screen.getByText(dict.audit.failureReasons.too_many_attempts)).toBeInTheDocument();
+  });
+
+  test("shows a reason it has no wording for rather than dropping it", () => {
+    render(<AuditTrailRegister entries={[failed("a_future_reason")]} {...props} dict={dict} />);
+
+    expect(screen.getByText("a_future_reason")).toBeInTheDocument();
+  });
+
+  test("adds nothing for an entry recorded before the reason existed", () => {
+    // The register always renders one <p> of its own (the "N recorded"
+    // count above the table), so the absence of a reason line is "still
+    // exactly one", not "none at all".
+    const { container } = render(
+      <AuditTrailRegister entries={[failed(undefined)]} {...props} dict={dict} />,
+    );
+
+    expect(container.querySelectorAll("p")).toHaveLength(1);
+  });
+});
+
 describe("AuditTrailRegister, what the action was about", () => {
   test("names the contest and links to it", () => {
     // "Changed the reference answers · Contest" answers half a question. The

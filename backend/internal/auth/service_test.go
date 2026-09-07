@@ -253,6 +253,81 @@ func TestFailedLoginIsAudited(t *testing.T) {
 	if got := f.sink.actions(); len(got) != 1 || got[0] != audit.ActionAuthLoginFailed {
 		t.Errorf("audit actions = %v, want one %q", got, audit.ActionAuthLoginFailed)
 	}
+	// The record has to say why, or an administrator reading it cannot tell a
+	// mistyped password from a blocked account from a sweep of guesses — three
+	// different conversations to have.
+	if reason := f.sink.entries[0].Payload["reason"]; reason != ReasonInvalidCredentials {
+		t.Errorf("reason = %v, want %q", reason, ReasonInvalidCredentials)
+	}
+}
+
+// TestBlockedAccountFailureRecordsWhyItIsBlocked covers the case where the
+// caller does own the account: the password matched, and only then did the
+// block refuse the sign-in. The endpoint tells this caller the account is
+// blocked (they proved ownership), so the trail recording the same fact adds
+// no distinction beyond what the wire already gave away.
+func TestBlockedAccountFailureRecordsWhyItIsBlocked(t *testing.T) {
+	f := newFixture(t)
+	_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusBlocked, users.StatusChange{})
+
+	_, _ = f.service.Login(context.Background(), loginCmd(testPassword))
+
+	if got := f.sink.actions(); len(got) != 1 || got[0] != audit.ActionAuthLoginFailed {
+		t.Fatalf("audit actions = %v, want one %q", got, audit.ActionAuthLoginFailed)
+	}
+	if reason := f.sink.entries[0].Payload["reason"]; reason != ReasonAccountBlocked {
+		t.Errorf("reason = %v, want %q", reason, ReasonAccountBlocked)
+	}
+}
+
+// TestBlockedAccountWithWrongPasswordNeverRecordsTheBlock is the trail-side
+// half of TestBlockedAccountLooksLikeAnyOtherFailureToSomeoneGuessing: a
+// wrong guess against a blocked account must record exactly what a wrong
+// guess against any other account records. Recording ReasonAccountBlocked
+// here would make the audit trail an oracle the endpoint itself was built to
+// deny — an administrator (or anyone who later gets read access to the same
+// row) would learn the account exists and is blocked from a password that
+// never matched anything.
+func TestBlockedAccountWithWrongPasswordNeverRecordsTheBlock(t *testing.T) {
+	f := newFixture(t)
+	_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusBlocked, users.StatusChange{})
+
+	_, err := f.service.Login(context.Background(), loginCmd("wrong password"))
+
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("err = %v, want ErrInvalidCredentials", err)
+	}
+	if got := f.sink.actions(); len(got) != 1 || got[0] != audit.ActionAuthLoginFailed {
+		t.Fatalf("audit actions = %v, want one %q", got, audit.ActionAuthLoginFailed)
+	}
+	if reason := f.sink.entries[0].Payload["reason"]; reason != ReasonInvalidCredentials {
+		t.Errorf("reason = %v, want %q (never %q, for a password that never matched)",
+			reason, ReasonInvalidCredentials, ReasonAccountBlocked)
+	}
+}
+
+// TestThrottledLoginRecordsTooManyAttempts covers both throttle windows: the
+// caller is told "too many attempts" either way, and the trail says no more
+// than that either.
+func TestThrottledLoginRecordsTooManyAttempts(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	var lastErr error
+	for range maxLoginAttemptsPerAccount + 1 {
+		_, lastErr = f.service.Login(ctx, loginCmd("wrong password"))
+	}
+	if !errors.Is(lastErr, ErrTooManyAttempts) {
+		t.Fatalf("err = %v, want ErrTooManyAttempts", lastErr)
+	}
+
+	last := f.sink.entries[len(f.sink.entries)-1]
+	if last.Action != audit.ActionAuthLoginFailed {
+		t.Fatalf("last recorded action = %q, want %q", last.Action, audit.ActionAuthLoginFailed)
+	}
+	if reason := last.Payload["reason"]; reason != ReasonTooManyAttempts {
+		t.Errorf("reason = %v, want %q", reason, ReasonTooManyAttempts)
+	}
 }
 
 func TestAuditNeverCarriesTheAttemptedPassword(t *testing.T) {

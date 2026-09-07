@@ -844,6 +844,11 @@ const ro = {
       "contest.access_denied": "A fost refuzat de restricția de rețea",
       "settings.change": "A schimbat setările instalării",
     },
+    failureReasons: {
+      invalid_credentials: "Utilizator sau parolă greșită",
+      account_blocked: "Contul este blocat",
+      too_many_attempts: "Prea multe încercări",
+    },
   },
   screens: {
     notFound: {
