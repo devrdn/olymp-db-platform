@@ -181,6 +181,10 @@ async function navigation(
       items: [
         { href: `${base}/story`, label: t.tabs.story, note: storyNote },
         { href: `${base}/questions`, label: t.tabs.questions, note: questionNote },
+        // Content, not setup: the game is as much what the olympiad is about
+        // as the story and the questions are, and it sits behind the same
+        // ContentEditable gate they do.
+        { href: `${base}/game`, label: t.tabs.game },
       ],
     },
     {
