@@ -187,6 +187,23 @@ hatched at 315° in one pixel on a 10 px step (`--color-pattern`) and bounded by
 rule. This holds the column without a single frame. The implementation is a
 `repeating-linear-gradient` on the outer tracks of the band's grid.
 
+**The one deliberate exception: the play workspace.** `/contests/[contestId]/play`,
+once a contest is running, renders full-bleed — no hatched fields, no content
+column, no `Band` at all. Every other screen in the product holds this rule
+because principle 1 of section 2 ("the maximum number of pixels goes to the
+data") is served by *bounding* the data's width, the way a register or a
+result table reads better at 1760 px than edge to edge on a wide monitor. The
+play workspace inverts that trade-off rather than breaking it: during an
+olympiad the "data" is the console, the result, the query log and the
+questions all at once, competing for the same screen the way panes in an
+editor do, and a hatched field on either side would be pixels taken from
+that competition and given to a decoration. The exception is scoped
+narrowly — it applies to this one route in its one "the contest is running"
+state, not to the waiting room or the unavailable screen either side of it,
+both of which are ordinary content pages and keep `Band` like everything
+else. See `frontend/app/(participant)/contests/[contestId]/play/workspace.tsx`
+for the layout itself.
+
 **The content column is up to 1760 px, the fields are
 `clamp(24px, 4.5vw, 140px)`.** The former fixed 1136 px came from the Tailwind
 CSS documentation, where a column holds prose. Here it holds a register, a query
