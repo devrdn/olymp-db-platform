@@ -402,9 +402,35 @@ type Result struct {
 	// For a statement that changes the database: how many rows it changed. A
 	// read leaves it at zero, and so does a write that returned rows through
 	// RETURNING — those are the answer, and their count is the row count.
-	RowsAffected  *int64 `protobuf:"varint,4,opt,name=rows_affected,json=rowsAffected" json:"rows_affected,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	RowsAffected *int64 `protobuf:"varint,4,opt,name=rows_affected,json=rowsAffected" json:"rows_affected,omitempty"`
+	// Each column's type, named as PostgreSQL's own format_type() would print
+	// it — `text`, `timestamp with time zone`, `uuid`. The same vocabulary the
+	// schema panel reads out of the catalogue, because the console shows the two
+	// beside each other and two spellings of one type is read as two types.
+	//
+	// A parallel list rather than a field on a column message: `columns` is
+	// already a repeated string on this contract, and widening it would mean a
+	// runner and a Core API of different versions disagreeing about the shape of
+	// every answer rather than about one optional extra.
+	//
+	// Either empty, or exactly as long as `columns` and in the same order. An
+	// individual entry is empty for a type the runner could not name — an enum
+	// or a domain an organiser's own script declared — because a participant's
+	// SELECT must never fail over a label.
+	ColumnTypes []string `protobuf:"bytes,5,rep,name=column_types,json=columnTypes" json:"column_types,omitempty"`
+	// How long the statement itself took, in microseconds.
+	//
+	// Microseconds rather than milliseconds because the console rounds to
+	// milliseconds for display, and a limit expressed in the unit being
+	// displayed makes every quick query "0 ms" — which reads as a broken meter
+	// rather than as a fast query.
+	//
+	// The statement and nothing around it: not the connection, not admission
+	// control, not this call. Those are the platform's costs, and a participant
+	// shown them spends the contest optimising a join that was never slow.
+	DurationMicros *int64 `protobuf:"varint,6,opt,name=duration_micros,json=durationMicros" json:"duration_micros,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Result) Reset() {
@@ -461,6 +487,20 @@ func (x *Result) GetTruncated() bool {
 func (x *Result) GetRowsAffected() int64 {
 	if x != nil && x.RowsAffected != nil {
 		return *x.RowsAffected
+	}
+	return 0
+}
+
+func (x *Result) GetColumnTypes() []string {
+	if x != nil {
+		return x.ColumnTypes
+	}
+	return nil
+}
+
+func (x *Result) GetDurationMicros() int64 {
+	if x != nil && x.DurationMicros != nil {
+		return *x.DurationMicros
 	}
 	return 0
 }
@@ -658,12 +698,14 @@ const file_queryrunner_v1_queryrunner_proto_rawDesc = "" +
 	"\vRunResponse\x12:\n" +
 	"\x06result\x18\x01 \x01(\v2 .dbcontest.queryrunner.v1.ResultH\x00R\x06result\x12=\n" +
 	"\afailure\x18\x02 \x01(\v2!.dbcontest.queryrunner.v1.FailureH\x00R\afailureB\t\n" +
-	"\aoutcome\"\x98\x01\n" +
+	"\aoutcome\"\xe4\x01\n" +
 	"\x06Result\x12\x18\n" +
 	"\acolumns\x18\x01 \x03(\tR\acolumns\x121\n" +
 	"\x04rows\x18\x02 \x03(\v2\x1d.dbcontest.queryrunner.v1.RowR\x04rows\x12\x1c\n" +
 	"\ttruncated\x18\x03 \x01(\bR\ttruncated\x12#\n" +
-	"\rrows_affected\x18\x04 \x01(\x03R\frowsAffected\";\n" +
+	"\rrows_affected\x18\x04 \x01(\x03R\frowsAffected\x12!\n" +
+	"\fcolumn_types\x18\x05 \x03(\tR\vcolumnTypes\x12'\n" +
+	"\x0fduration_micros\x18\x06 \x01(\x03R\x0edurationMicros\";\n" +
 	"\x03Row\x124\n" +
 	"\x05cells\x18\x01 \x03(\v2\x1e.dbcontest.queryrunner.v1.CellR\x05cells\"3\n" +
 	"\x04Cell\x12\x17\n" +

@@ -83,6 +83,32 @@ message Result {
   // read leaves it at zero, and so does a write that returned rows through
   // RETURNING — those are the answer, and their count is the row count.
   int64 rows_affected = 4;
+  // Each column's type, named as PostgreSQL's own format_type() would print
+  // it — `text`, `timestamp with time zone`, `uuid`. The same vocabulary the
+  // schema panel reads out of the catalogue, because the console shows the two
+  // beside each other and two spellings of one type is read as two types.
+  //
+  // A parallel list rather than a field on a column message: `columns` is
+  // already a repeated string on this contract, and widening it would mean a
+  // runner and a Core API of different versions disagreeing about the shape of
+  // every answer rather than about one optional extra.
+  //
+  // Either empty, or exactly as long as `columns` and in the same order. An
+  // individual entry is empty for a type the runner could not name — an enum
+  // or a domain an organiser's own script declared — because a participant's
+  // SELECT must never fail over a label.
+  repeated string column_types = 5;
+  // How long the statement itself took, in microseconds.
+  //
+  // Microseconds rather than milliseconds because the console rounds to
+  // milliseconds for display, and a limit expressed in the unit being
+  // displayed makes every quick query "0 ms" — which reads as a broken meter
+  // rather than as a fast query.
+  //
+  // The statement and nothing around it: not the connection, not admission
+  // control, not this call. Those are the platform's costs, and a participant
+  // shown them spends the contest optimising a join that was never slow.
+  int64 duration_micros = 6;
 }
 
 message Row {

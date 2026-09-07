@@ -111,7 +111,7 @@ test-db: require-env ## Run the repository tests against the development databas
 # under test is a refusal by PostgreSQL, not by our code. `make dev-up` first —
 # it starts pg-game along with the core database.
 test-game: require-env ## Run the game cluster tests against the development cluster
-	cd $(BACKEND) && GAME_DB_DSN="$(GAME_DB_DSN)" go test -count=1 ./internal/gamedb/... ./internal/queryrunner/...
+	cd $(BACKEND) && GAME_DB_DSN="$(GAME_DB_DSN)" go test -count=1 ./internal/gamedb/... ./internal/queryrunner/... ./internal/rpc/...
 
 # The one test that crosses both clusters: a script saved in the core database
 # has to become a real database on the game cluster. Every other test of that

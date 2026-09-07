@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
@@ -104,8 +105,13 @@ func (c *Client) Run(ctx context.Context, req queryrunner.Request) (*queryrunner
 		return nil, fmt.Errorf("the query service answered with neither a result nor a failure")
 	}
 	result := &queryrunner.Result{
-		Columns:      answer.GetColumns(),
-		Truncated:    answer.GetTruncated(),
+		Columns:     answer.GetColumns(),
+		ColumnTypes: answer.GetColumnTypes(),
+		Truncated:   answer.GetTruncated(),
+		// The contract carries microseconds; a Duration is nanoseconds. An
+		// older runner that names no duration sends nothing and this stays
+		// zero, which is the same thing the console shows for "not measured".
+		Duration:     time.Duration(answer.GetDurationMicros()) * time.Microsecond,
 		RowsAffected: answer.GetRowsAffected(),
 		Rows:         make([][]any, 0, len(answer.GetRows())),
 	}

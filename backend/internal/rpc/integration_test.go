@@ -324,3 +324,90 @@ func TestTheRequestIdentifierCrossesIntoTheOtherProcess(t *testing.T) {
 		t.Fatalf("the runner saw request id %q, want %q", seen, id)
 	}
 }
+
+// CLAUDE.md rule 11: a value decided on one side of this contract and shown on
+// the other has to cross it. The runner resolves a column's type from the row
+// description and times the statement it ran; both are useless unless the
+// Core API — which never holds the connection that knew either — receives
+// them. The deployment has this service in a separate process, so this is the
+// only arrangement in which the console's column types and its meter exist at
+// all.
+func TestTheColumnTypesAndTheDurationCrossTheWire(t *testing.T) {
+	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
+
+	result, err := client.Run(t.Context(), ask(database,
+		`SELECT 'Margot'::text AS full_name, now() AS at, id FROM evidence ORDER BY id LIMIT 1`))
+	if err != nil {
+		t.Fatalf("running: %v", err)
+	}
+
+	want := []string{"text", "timestamp with time zone", "integer"}
+	if len(result.ColumnTypes) != len(want) {
+		t.Fatalf("column types = %v, want %d of them", result.ColumnTypes, len(want))
+	}
+	for i := range want {
+		if result.ColumnTypes[i] != want[i] {
+			t.Fatalf("type of %q arrived as %q, want %q",
+				result.Columns[i], result.ColumnTypes[i], want[i])
+		}
+	}
+
+	if result.Duration <= 0 {
+		t.Fatalf("duration = %v; the statement's own time did not cross the wire", result.Duration)
+	}
+}
+
+// The duration crosses as a number and a unit, and only one of the two is
+// written down. A thousandfold error in either direction still arrives as a
+// plausible-looking duration, so this pins the magnitude against something
+// the test measured itself.
+//
+// Counting two million rows server-side is tens of milliseconds and cannot be
+// less than one; the whole call is the ceiling, because the answer was carried
+// by it. Nanoseconds mistaken for microseconds put the value a thousand times
+// over that ceiling, and microseconds mistaken for nanoseconds put it a
+// thousand times under the floor.
+func TestTheDurationKeepsItsUnitAcrossTheWire(t *testing.T) {
+	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
+
+	before := time.Now()
+	result, err := client.Run(t.Context(), ask(database, `SELECT count(*) FROM generate_series(1, 2000000)`))
+	whole := time.Since(before)
+	if err != nil {
+		t.Fatalf("running: %v", err)
+	}
+
+	if result.Duration < time.Millisecond {
+		t.Fatalf("counting two million rows was reported as %v; the duration arrived "+
+			"in a smaller unit than the contract's microseconds", result.Duration)
+	}
+	if result.Duration > whole {
+		t.Fatalf("the statement was reported as %v of a call that took %v in total; "+
+			"the duration arrived in a larger unit than the contract's microseconds",
+			result.Duration, whole)
+	}
+}
+
+// A write answers with a count and no columns at all. Nothing may invent a
+// list for it — an interface drawing a header from an empty answer draws an
+// empty header.
+func TestAWriteCrossesTheWireWithNoColumnTypes(t *testing.T) {
+	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
+
+	writing := ask(database, `INSERT INTO evidence VALUES (3, 'a torn ticket')`)
+	writing.Policy = sqlpolicy.ReadWrite("evidence")
+
+	result, err := client.Run(t.Context(), writing)
+	if err != nil {
+		t.Fatalf("running the insert: %v", err)
+	}
+	if len(result.ColumnTypes) != 0 {
+		t.Fatalf("a write with no columns arrived with types %v", result.ColumnTypes)
+	}
+	if result.RowsAffected != 1 {
+		t.Fatalf("rows affected = %d, want 1", result.RowsAffected)
+	}
+	if result.Duration <= 0 {
+		t.Fatalf("duration = %v; a write's own time did not cross the wire", result.Duration)
+	}
+}

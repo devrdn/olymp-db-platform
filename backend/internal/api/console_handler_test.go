@@ -254,3 +254,71 @@ func TestNothingLeftToAnswerIsNotTheSameCodeAsHavingFinished(t *testing.T) {
 		t.Fatalf("both answered %q — the interface cannot tell a closed console from a closed contest", nothingLeft)
 	}
 }
+
+// The console draws a column's type under its name and a meter under the
+// editor, and neither exists unless this handler puts them in the body. The
+// runner resolved both; this is the last boundary they have to cross
+// (CLAUDE.md rule 11).
+func TestTheAnswerCarriesTheColumnTypesAndTheDuration(t *testing.T) {
+	fixture := newConsoleFixture(t, fakeConsole{result: &queryrunner.Result{
+		Columns:     []string{"full_name", "at"},
+		ColumnTypes: []string{"text", "timestamp with time zone"},
+		Rows:        [][]any{{"Margot Feilhaber", "2024-11-09T00:14:22Z"}},
+		Duration:    38 * time.Millisecond,
+	}})
+
+	rec := fixture.run("SELECT full_name, at FROM keycard_events")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	body := decode(t, rec)
+	types, ok := body["column_types"].([]any)
+	if !ok {
+		t.Fatalf("column_types missing or not a list: %s", rec.Body.String())
+	}
+	want := []string{"text", "timestamp with time zone"}
+	if len(types) != len(want) {
+		t.Fatalf("column_types = %v, want %d of them", types, len(want))
+	}
+	for i := range want {
+		if types[i] != want[i] {
+			t.Fatalf("column_types[%d] = %v, want %q", i, types[i], want[i])
+		}
+	}
+
+	// Microseconds, because the meter rounds to milliseconds for display and a
+	// duration already rounded here would show every quick query as "0 ms".
+	micros, ok := body["duration_micros"].(float64)
+	if !ok {
+		t.Fatalf("duration_micros missing or not a number: %s", rec.Body.String())
+	}
+	if int64(micros) != (38 * time.Millisecond).Microseconds() {
+		t.Fatalf("duration_micros = %v, want %d", micros, (38 * time.Millisecond).Microseconds())
+	}
+}
+
+// The handler's own promise: never `null` for a list. A client that has to
+// tell `null` from `[]` before it can draw a table is a client with a bug
+// waiting, and the promise now covers three lists rather than two.
+func TestAnEmptyAnswerCarriesEmptyListsAndNotNulls(t *testing.T) {
+	// What a write with no RETURNING clause produces: a count, and nothing to
+	// draw a table out of.
+	fixture := newConsoleFixture(t, fakeConsole{result: &queryrunner.Result{RowsAffected: 3}})
+
+	rec := fixture.run("UPDATE evidence SET note = 'seen' WHERE id < 4")
+	body := decode(t, rec)
+
+	for _, list := range []string{"columns", "column_types", "rows"} {
+		value, present := body[list]
+		if !present {
+			t.Fatalf("%s is missing entirely: %s", list, rec.Body.String())
+		}
+		if value == nil {
+			t.Fatalf("%s was sent as null: %s", list, rec.Body.String())
+		}
+		if _, isList := value.([]any); !isList {
+			t.Fatalf("%s = %#v, want a list", list, value)
+		}
+	}
+}
