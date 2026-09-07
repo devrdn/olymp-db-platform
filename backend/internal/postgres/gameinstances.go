@@ -303,9 +303,14 @@ const reclaimDeadline = `c.updated_at + make_interval(mins => CASE
 // limit is what keeps a fresh deployment's first tick from issuing one DROP
 // DATABASE per contest that finished before this sweep existed — see
 // provisioning.ReclaimBatchLimit's own doc for the number and why. The
-// ordering (by contest, then by when an instance was created) is what makes
-// a limited pass deterministic about which candidates it takes first rather
-// than an arbitrary subset changing tick to tick.
+// ordering — by deadline, oldest debt first, contest_id and created_at only
+// to break an exact tie deterministically — is what keeps that limit fair
+// across contests: contest_id is a UUID, so ordering by it first would let
+// whichever contest happens to sort first monopolise every tick's whole
+// batch until it drains, leaving every other contest's overdue instances
+// waiting behind it for hours. Ordering by deadline instead means the limit
+// is spent on whoever has been owed a drop the longest, not on an accident
+// of UUID generation.
 func (r *GameInstances) Reclaimable(ctx context.Context, installationGraceMin, limit int) ([]provisioning.ReclaimCandidate, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		WITH candidates AS (
@@ -319,7 +324,7 @@ func (r *GameInstances) Reclaimable(ctx context.Context, installationGraceMin, l
 		SELECT db_name, contest_id, registration_id, deadline
 		FROM candidates
 		WHERE deadline <= now()
-		ORDER BY contest_id, created_at
+		ORDER BY deadline, contest_id, created_at
 		LIMIT $2`, installationGraceMin, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list reclaimable instances: %w", err)
@@ -382,7 +387,7 @@ func (r *GameInstances) ReclaimableTemplates(ctx context.Context, installationGr
 		SELECT contest_id, template_db
 		FROM candidates
 		WHERE deadline <= now()
-		ORDER BY contest_id
+		ORDER BY deadline, contest_id
 		LIMIT $2`, installationGraceMin, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list reclaimable templates: %w", err)

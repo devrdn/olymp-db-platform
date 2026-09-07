@@ -130,6 +130,17 @@ func tendPools(log *slog.Logger, service *provisioning.Service, depth int) task 
 	}
 }
 
+// stuckOverdueBucket turns a raw Overdue duration into the granularity the
+// de-duplication below actually cares about: whole days past stuckAfter.
+// Overdue grows every tick a database stays stuck, so comparing the raw
+// duration between ticks would never see two ticks agree — this is what lets
+// "still stuck, ten minutes more overdue than last tick" read as unchanged
+// while "still stuck, a full day more overdue" reads as a change worth a
+// fresh line.
+func stuckOverdueBucket(overdue time.Duration) int {
+	return int(overdue / (24 * time.Hour))
+}
+
 // reclaimInstances drops every participant database whose contest finished
 // longer ago than its grace period, and marks its row 'dropped' — the
 // background half of §2.4. reclaim is provisioning.Service.Reclaim, taken as
@@ -144,6 +155,17 @@ func tendPools(log *slog.Logger, service *provisioning.Service, depth int) task 
 // minutes at the shortest, so nothing meaningful is lost by checking on the
 // same schedule the pool is already tended on rather than a faster one.
 func reclaimInstances(log *slog.Logger, reclaim func(context.Context, int) (provisioning.ReclaimResult, error), graceMin int, counters *metrics.GameReclaimCounters) task {
+	// stuckLogged remembers, for every database this process has already
+	// warned about, the stuckOverdueBucket it was in at the last warning —
+	// what lets the run closure below log a database once when it becomes
+	// stuck and again only when that fact actually changes, rather than once
+	// every ten minutes for as long as it stays busy (144 lines a day per
+	// database otherwise: visible stops being useful and becomes noise an
+	// operator learns to ignore, which is the same as silence). Safe
+	// unlocked: runPeriodically (this file) never runs two ticks of the same
+	// task concurrently, so nothing else ever touches this map.
+	stuckLogged := make(map[string]int)
+
 	return task{
 		name:  "game-reclaim",
 		every: 10 * time.Minute,
@@ -166,12 +188,27 @@ func reclaimInstances(log *slog.Logger, reclaim func(context.Context, int) (prov
 			// Named separately from the summary line above rather than
 			// folded into it: a database stuck this long past its grace is
 			// not "one more of the routine skips a busy tick always has", it
-			// is the specific thing an operator should go look at, and a log
-			// line with one row per instance is what lets them find it by
-			// searching for the database name rather than the tick.
+			// is the specific thing an operator should go look at. But it is
+			// named once per fact, not once per tick — see stuckLogged above
+			// for why a repeat with nothing changed is silent.
+			seen := make(map[string]bool, len(result.Stuck))
 			for _, s := range result.Stuck {
-				log.WarnContext(ctx, "a game instance has been busy long past its grace deadline",
-					"database", s.Database, "contest", s.ContestID, "overdue", s.Overdue.Round(time.Minute).String())
+				seen[s.Database] = true
+				bucket := stuckOverdueBucket(s.Overdue)
+				if last, warned := stuckLogged[s.Database]; !warned || bucket != last {
+					log.WarnContext(ctx, "a game instance has been busy long past its grace deadline",
+						"database", s.Database, "contest", s.ContestID, "overdue", s.Overdue.Round(time.Minute).String())
+					stuckLogged[s.Database] = bucket
+				}
+			}
+			// Anything no longer stuck — reclaimed, or simply back under
+			// stuckAfter — starts clean. If it becomes stuck again later that
+			// is a new fact, worth its own first warning, not silence because
+			// this process once warned about the same database before.
+			for database := range stuckLogged {
+				if !seen[database] {
+					delete(stuckLogged, database)
+				}
 			}
 			return err
 		},
