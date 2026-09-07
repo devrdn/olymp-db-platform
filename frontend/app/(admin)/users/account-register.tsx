@@ -11,9 +11,10 @@ import { cn } from "@/lib/utils";
 
 // Client components, imported into this server one. Importing a client
 // component does not itself pull `"use client"` onto this file — that
-// boundary already lives inside selection.tsx — so the register stays
-// server-rendered while the boxes it renders per row are the only client
-// code on the page.
+// boundary already lives inside account-create.tsx and selection.tsx — so
+// the register stays server-rendered while the boxes and dialogs it renders
+// are the only client code on the page.
+import { AccountCreateControls } from "./account-create";
 import { RowCheckbox, SelectAllCheckbox } from "./selection";
 
 /**
@@ -75,9 +76,12 @@ export function AccountRegister({
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
         <h1 className="text-h2 text-ink">{t.heading}</h1>
-        <span className="font-mono text-data text-ink-3">
-          {total} {t.countLabel}
-        </span>
+        <div className="flex flex-wrap items-center gap-4">
+          <span className="font-mono text-data text-ink-3">
+            {total} {t.countLabel}
+          </span>
+          <AccountCreateControls roles={roles} dict={dict} />
+        </div>
       </div>
 
       {accounts.length === 0 ? (
