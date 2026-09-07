@@ -1,4 +1,5 @@
-import { render, screen } from "@testing-library/react";
+import { Profiler } from "react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 
@@ -61,5 +62,45 @@ describe("the SQL editor", () => {
 
     expect(screen.getByRole("button", { name: en.participant.console.running })).toBeDisabled();
     resolve({ kind: "idle" });
+  });
+
+  // Finding 2: React 19 calls `requestFormReset` on this form once the
+  // action settles, regardless of whether it succeeded — and the native
+  // reset algorithm wipes an uncontrolled field back to its `defaultValue`,
+  // empty here. A refused query used to erase exactly what a participant was
+  // mid-debugging. Run through a real refusal end to end (not a mock of the
+  // reset itself) so this proves the actual DOM behaviour, not an assumption
+  // about it.
+  test("a run does not clear what the participant was typing, even on a refusal", async () => {
+    answer.current = { kind: "refused", code: "query_syntax_error" };
+    const onResult = vi.fn();
+    render(<ConsoleEditor contestId="c1" dict={en} onResult={onResult} />);
+    const editor = screen.getByRole("textbox");
+
+    await userEvent.type(editor, "SELECT * FROM suspects WHERE");
+    await userEvent.click(screen.getByRole("button", { name: en.participant.console.run }));
+
+    await waitFor(() => expect(onResult).toHaveBeenLastCalledWith(answer.current));
+    expect(editor).toHaveValue("SELECT * FROM suspects WHERE");
+  });
+
+  // The property the review specifically asked not to be given up in fixing
+  // finding 2: this textarea has no `onChange`, and the fix must not add one
+  // in disguise. `Profiler`'s `onRender` only fires on an actual commit, so
+  // no call while typing is direct proof no re-render happened — not just
+  // that the DOM node survived, which reconciliation would preserve either
+  // way.
+  test("typing still triggers no re-render of the editor", async () => {
+    const onRender = vi.fn();
+    render(
+      <Profiler id="editor" onRender={onRender}>
+        <ConsoleEditor contestId="c1" dict={en} onResult={vi.fn()} />
+      </Profiler>,
+    );
+    onRender.mockClear(); // drop the mount commit; only typing matters here
+
+    await userEvent.type(screen.getByRole("textbox"), "SELECT * FROM suspects WHERE motive IS NOT NULL");
+
+    expect(onRender).not.toHaveBeenCalled();
   });
 });

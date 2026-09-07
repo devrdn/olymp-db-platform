@@ -802,6 +802,7 @@ const en = {
           loadMore: "Load older",
           loadingMore: "Loading…",
           failed: "Could not load the query log.",
+          retry: "Try again",
           durationMs: "{n} ms",
           columns: {
             sql: "Query",

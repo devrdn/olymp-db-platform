@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useState } from "react";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { QuestionEntry } from "./questions-panel";
@@ -14,6 +14,23 @@ import { PlayHeader } from "./play-header";
 import { QueryLogPanel } from "./query-log-panel";
 import { ResultPanel } from "./result-panel";
 import { SidePanel } from "./side-panel";
+
+// Finding 5: a bottom-tab click sets state only in Workspace, but every
+// child under it would still re-render on that state change unless it is
+// memoised — the thousand-row result table, the log table, the whole side
+// panel and the header included, none of whose own props move when the only
+// thing that changed is which tab is showing. Each of these four takes
+// nothing but values that are already stable across a tab click (Workspace's
+// own state and its own unchanging props), so a shallow prop comparison is
+// exactly the right amount of work to skip a reconciliation that buys
+// nothing. QueryLogPanel is the one exception worth naming: its `active` prop
+// does change when the bottom tab flips to or from "log", and that is meant
+// to re-render it — memoising does not defeat that, it only stops the *other*
+// three from being dragged along for the ride.
+const MemoPlayHeader = memo(PlayHeader);
+const MemoResultPanel = memo(ResultPanel);
+const MemoQueryLogPanel = memo(QueryLogPanel);
+const MemoSidePanel = memo(SidePanel);
 
 /**
  * The full-screen olympiad workspace: the console as the editor, a panel
@@ -52,7 +69,7 @@ export function Workspace({
   storyBody: React.ReactNode;
   storyUnavailable: string | null;
   questionEntries: QuestionEntry[];
-  initialLog: { items: QueryLogEntry[]; total: number };
+  initialLog: { items: QueryLogEntry[]; total: number; failed: boolean };
   locale: Locale;
   dict: Dictionary;
 }) {
@@ -63,12 +80,6 @@ export function Workspace({
   // form and its useActionState never move; only this mirror of its result
   // does, which is what keeps a run from remounting the textarea.
   const [lastResult, setLastResult] = useState<ConsoleState>({ kind: "idle" });
-  // Bumped once per completed run (never while one is in flight — see
-  // ConsoleEditor's own doc on when onResult fires), so QueryLogPanel knows
-  // to refetch: a run that reached the database wrote a row, and one that was
-  // refused before the database saw it did not, but re-asking either way is
-  // one cheap request against a wrong guess about which happened.
-  const [logRefreshToken, setLogRefreshToken] = useState(0);
   // Which tab of the bottom panel is showing. Controlled, rather than left to
   // Tabs' own uncontrolled state, so a completed run can switch to "Result"
   // by itself — the same reason a build's own output panel opens itself in
@@ -84,8 +95,12 @@ export function Workspace({
     // far better than clipping three panels into one viewport-height column
     // — the same "collapse to one track" reasoning SPEC.md §5's mobile reset
     // already applies everywhere else.
-    <div className="flex min-h-0 flex-col narrow:h-[calc(100dvh-3rem)]">
-      <PlayHeader contestId={contestId} title={title} waitingForStart={false} dict={dict} />
+    // Finding 7: the app bar this route sits below (`AppBar`) is `h-12`
+    // (3rem) *plus* its own `border-b` — 3rem alone is one pixel short of
+    // its real height, and a "no page scroll" screen that scrolls by one
+    // pixel is still a screen that scrolls.
+    <div className="flex min-h-0 flex-col narrow:h-[calc(100dvh-3rem-1px)]">
+      <MemoPlayHeader contestId={contestId} title={title} waitingForStart={false} dict={dict} />
 
       <div className="grid min-h-0 grid-cols-1 narrow:flex-1 narrow:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
         {/* The console side: the editor on top, always visible, and the
@@ -100,8 +115,15 @@ export function Workspace({
               dict={dict}
               onResult={(state) => {
                 setLastResult(state);
+                // Finding 3: this used to also bump a token that made
+                // QueryLogPanel refetch on every completed run. AdmitRead
+                // shares its per-minute budget with Run, so that refetch
+                // spent one of the participant's own query slots — and it
+                // did so for a tab that, because of the very next line, had
+                // just been switched away from anyway. QueryLogPanel now
+                // refreshes itself off the `active` prop below, only on the
+                // transition into actually being shown.
                 if (state.kind !== "idle") {
-                  setLogRefreshToken((v) => v + 1);
                   setBottomTab("result");
                 }
               }}
@@ -117,13 +139,13 @@ export function Workspace({
               <TabsTrigger value="log">{t.tabs.log}</TabsTrigger>
             </TabsList>
             <TabsContent value="result" className="min-h-0 overflow-hidden">
-              <ResultPanel state={lastResult} dict={dict} />
+              <MemoResultPanel state={lastResult} dict={dict} />
             </TabsContent>
             <TabsContent value="log" className="min-h-0 overflow-hidden">
-              <QueryLogPanel
+              <MemoQueryLogPanel
                 contestId={contestId}
                 initial={initialLog}
-                refreshToken={logRefreshToken}
+                active={bottomTab === "log"}
                 locale={locale}
                 dict={dict}
               />
@@ -138,7 +160,7 @@ export function Workspace({
             half-typed answer survives a resize the same way it survives a
             tab switch. */}
         <div className="min-h-0 max-narrow:min-h-100 max-narrow:border-t max-narrow:border-line">
-          <SidePanel
+          <MemoSidePanel
             storyBody={storyBody}
             storyUnavailable={storyUnavailable}
             contestId={contestId}

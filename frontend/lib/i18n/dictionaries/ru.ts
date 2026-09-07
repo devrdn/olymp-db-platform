@@ -741,6 +741,7 @@ const ru = {
           loadMore: "Загрузить более ранние",
           loadingMore: "Загрузка…",
           failed: "Не удалось загрузить журнал запросов.",
+          retry: "Повторить",
           durationMs: "{n} мс",
           columns: {
             sql: "Запрос",

@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { Tabs as TabsPrimitive } from "@base-ui/react/tabs";
 
 import { cn } from "@/lib/utils";
 
@@ -11,63 +10,203 @@ import { cn } from "@/lib/utils";
  * Built for the play workspace (Task 3 of the game-ui plan): a half-typed
  * query, a scroll position, an already-rendered result table all have to
  * survive a switch between "Result" and "Query log", or between "Story" and
- * "Questions" — so `TabsContent` defaults `keepMounted` to `true`, the
- * opposite of Base UI's own default. Every panel using this stays in the
- * React tree the whole time; only the DOM's native `hidden` attribute
- * changes, which is what keeps a hidden panel out of layout and costing no
- * reflow — Base UI's own `TabsPanel` sets exactly that attribute rather than
- * `display:none` in a stylesheet or `visibility:hidden`, and marks the panel
- * `inert` while hidden so neither focus nor a screen reader ever lands on it.
+ * "Questions" — so every panel stays in the React tree the whole time; only
+ * the DOM's native `hidden` attribute changes, which is what keeps a hidden
+ * panel out of layout and costing no reflow.
  *
- * Manual activation (Base UI's own default): a tab becomes active on click or
- * on Enter/Space once it has focus, not on arrow-key focus alone. Switching
- * costs nothing here — every panel is already rendered — but the manual
- * pattern is still the one WAI-ARIA recommends for a plain tab list, and nothing
- * about this screen calls for departing from it.
+ * Hand-rolled rather than Base UI's `Tabs` (finding 6): that composite pulls
+ * its whole roving-focus engine plus floating-ui utilities — about 25 KB raw,
+ * 13.4 KB gzipped on this route — to drive four buttons and a `hidden`
+ * attribute, on the one screen hundreds of students load at the same minute.
+ * What is here is the same handful of DOM facts the WAI-ARIA tabs pattern
+ * asks for, written directly: `role="tablist"`/`"tab"`/`"tabpanel"`,
+ * `aria-selected`, `aria-controls`/`aria-labelledby` pairing a tab to its
+ * panel, and a roving `tabIndex` with arrow-key movement between tabs
+ * (Home/End included). Activation is manual — a tab becomes selected on
+ * click, or on Enter/Space once arrow keys have moved focus to it, not on
+ * arrow-key focus alone — which is the pattern WAI-ARIA recommends for a
+ * plain tab list and the one the previous Base UI usage already followed.
+ *
+ * This also fixes finding 1 by construction: `TabsContent` renders `flex
+ * flex-col` (a flex *container*, not just a flex *item*), so a child that
+ * asks for `flex-1` — `ResultPanel`'s own root, for one — actually gets a
+ * height to fill rather than sizing to its content inside a block box. Every
+ * panel is rendered unconditionally, always in the DOM, with `hidden` toggled
+ * on the ones not selected — `[hidden]` still needs `!important` here
+ * (`[&[hidden]]:hidden`) because the `flex` utility above it in the class
+ * list would otherwise win the display property.
  *
  * Styling follows this project's own flat, ruled direction (`dialog.tsx`'s own
  * doc explains the reasoning once): no glow, no shadow, `rounded-none`, an
  * underline for the active tab rather than a filled pill.
  */
-function Tabs({ className, ...props }: TabsPrimitive.Root.Props) {
-  return <TabsPrimitive.Root data-slot="tabs" className={cn("flex min-h-0 flex-col", className)} {...props} />;
+
+type TabsContextValue = {
+  value: string;
+  setValue: (value: string) => void;
+  baseId: string;
+};
+
+const TabsContext = React.createContext<TabsContextValue | null>(null);
+
+function useTabsContext(component: string): TabsContextValue {
+  const ctx = React.useContext(TabsContext);
+  if (!ctx) throw new Error(`<${component}> must be rendered inside <Tabs>`);
+  return ctx;
 }
 
-function TabsList({ className, ...props }: TabsPrimitive.List.Props) {
+function Tabs({
+  value,
+  defaultValue,
+  onValueChange,
+  className,
+  children,
+  ...props
+}: {
+  /** Controlled selection. Omit and use `defaultValue` for an uncontrolled tab group. */
+  value?: string;
+  defaultValue?: string;
+  onValueChange?: (value: string) => void;
+  className?: string;
+  children?: React.ReactNode;
+} & Omit<React.ComponentPropsWithoutRef<"div">, "onChange" | "defaultValue" | "value">) {
+  const baseId = React.useId();
+  const [internalValue, setInternalValue] = React.useState(defaultValue ?? "");
+  const isControlled = value !== undefined;
+  const current = isControlled ? value : internalValue;
+
+  const setValue = React.useCallback(
+    (next: string) => {
+      if (!isControlled) setInternalValue(next);
+      onValueChange?.(next);
+    },
+    [isControlled, onValueChange],
+  );
+
+  const ctx = React.useMemo<TabsContextValue>(() => ({ value: current, setValue, baseId }), [current, setValue, baseId]);
+
   return (
-    <TabsPrimitive.List
-      data-slot="tabs-list"
-      className={cn("flex shrink-0 items-stretch border-b border-line", className)}
-      {...props}
-    />
+    <TabsContext.Provider value={ctx}>
+      <div data-slot="tabs" className={cn("flex min-h-0 flex-col", className)} {...props}>
+        {children}
+      </div>
+    </TabsContext.Provider>
   );
 }
 
-function TabsTrigger({ className, ...props }: TabsPrimitive.Tab.Props) {
+/**
+ * The roving-tabindex owner: arrow keys move focus among this list's own
+ * `[role="tab"]` children (wrapping at the ends), Home/End jump to the first
+ * or last. Moving focus this way never selects a tab by itself — only a
+ * click, or Enter/Space on the focused tab, does (manual activation, this
+ * component's own doc).
+ */
+function TabsList({ className, children, onKeyDown, ...props }: React.ComponentPropsWithoutRef<"div">) {
+  const listRef = React.useRef<HTMLDivElement>(null);
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    onKeyDown?.(event);
+    if (event.defaultPrevented) return;
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+
+    const tabs = Array.from(listRef.current?.querySelectorAll<HTMLElement>('[role="tab"]') ?? []);
+    if (tabs.length === 0) return;
+    const currentIndex = tabs.indexOf(document.activeElement as HTMLElement);
+
+    let nextIndex = currentIndex;
+    if (event.key === "ArrowRight") nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % tabs.length;
+    else if (event.key === "ArrowLeft") nextIndex = currentIndex < 0 ? 0 : (currentIndex - 1 + tabs.length) % tabs.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = tabs.length - 1;
+
+    event.preventDefault();
+    tabs[nextIndex]?.focus();
+  };
+
   return (
-    <TabsPrimitive.Tab
+    <div
+      ref={listRef}
+      data-slot="tabs-list"
+      role="tablist"
+      onKeyDown={handleKeyDown}
+      className={cn("flex shrink-0 items-stretch border-b border-line", className)}
+      {...props}
+    >
+      {children}
+    </div>
+  );
+}
+
+function TabsTrigger({
+  value,
+  className,
+  children,
+  onClick,
+  ...props
+}: { value: string } & Omit<React.ComponentPropsWithoutRef<"button">, "value">) {
+  const { value: selected, setValue, baseId } = useTabsContext("TabsTrigger");
+  const isSelected = selected === value;
+
+  return (
+    <button
+      type="button"
       data-slot="tabs-trigger"
+      role="tab"
+      id={`${baseId}-tab-${value}`}
+      aria-controls={`${baseId}-panel-${value}`}
+      aria-selected={isSelected}
+      // Roving tabindex: only the selected tab sits in the regular tab
+      // order, matching the WAI-ARIA tabs pattern — a screen reader user
+      // tabs once into the list, then arrow-keys between tabs.
+      tabIndex={isSelected ? 0 : -1}
+      onClick={(event) => {
+        onClick?.(event);
+        setValue(value);
+      }}
       className={cn(
         "-mb-px border-b-2 border-transparent px-3 py-2 font-mono text-label text-ink-3 uppercase",
         "transition-colors duration-(--t-input) ease-standard",
         "hover:text-ink",
-        "data-[selected]:border-ink data-[selected]:text-ink",
+        isSelected && "border-ink text-ink",
         "outline-none focus-visible:ring-2 focus-visible:ring-accent-ink focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
         className,
       )}
       {...props}
-    />
+    >
+      {children}
+    </button>
   );
 }
 
-function TabsContent({ className, keepMounted = true, ...props }: TabsPrimitive.Panel.Props) {
+function TabsContent({
+  value,
+  className,
+  children,
+  ...props
+}: { value: string } & Omit<React.ComponentPropsWithoutRef<"div">, "value">) {
+  const { value: selected, baseId } = useTabsContext("TabsContent");
+  const isSelected = selected === value;
+
   return (
-    <TabsPrimitive.Panel
+    <div
       data-slot="tabs-content"
-      keepMounted={keepMounted}
-      className={cn("min-h-0 flex-1 [&[hidden]]:hidden", className)}
+      role="tabpanel"
+      id={`${baseId}-panel-${value}`}
+      aria-labelledby={`${baseId}-tab-${value}`}
+      // Present the whole time (never conditionally rendered) so state
+      // inside a hidden panel — a scroll position, an in-progress answer —
+      // survives the switch; `hidden` is what takes it out of layout and
+      // out of the accessibility tree without unmounting it. `inert` on top
+      // of that keeps focus and a screen reader's virtual cursor from ever
+      // landing inside a panel that is not showing.
+      hidden={!isSelected}
+      inert={!isSelected}
+      tabIndex={0}
+      className={cn("flex min-h-0 flex-1 flex-col [&[hidden]]:hidden", className)}
       {...props}
-    />
+    >
+      {children}
+    </div>
   );
 }
 

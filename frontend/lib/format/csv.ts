@@ -25,6 +25,21 @@ function quoteIfNeeded(value: string): string {
 }
 
 /**
+ * A field a spreadsheet reads as a formula rather than as text: Excel,
+ * LibreOffice and Sheets all treat a cell beginning `=`, `+`, `-` or `@` as
+ * one to evaluate, not to display (finding 8). Nothing about this download is
+ * an attacker's payload — it is a student's own query result, opened by that
+ * same student — but a column of negative numbers or an aggregate named
+ * `-total` costs nothing to make inert, and this is meant to be opened in
+ * Excel. A leading apostrophe is the ordinary way to say "this is text" to
+ * every one of those programs; it is not itself written into the value a
+ * plain text reader sees, only into what a spreadsheet displays.
+ */
+function neutralizeFormula(value: string): string {
+  return /^[=+\-@]/.test(value) ? `'${value}` : value;
+}
+
+/**
  * Builds one CSV document from a query's own columns and rows — exactly what
  * is already in the browser, nothing re-fetched. The result is already the
  * runner's own truncated answer (queryResultSchema's own `truncated`), so
@@ -32,11 +47,15 @@ function quoteIfNeeded(value: string): string {
  *
  * `\r\n` line endings: the format's own default (RFC 4180 §2.1), and what
  * keeps a spreadsheet that sniffs line endings from mis-reading the file.
+ *
+ * Column names go through `neutralizeFormula` the same as cells: an aliased
+ * column can begin with any of those four characters just as easily as a
+ * value can, and the header row is opened in the same spreadsheet.
  */
 export function toCsv(columns: readonly string[], rows: readonly (string | null)[][]): string {
-  const lines = [columns.map(quoteIfNeeded).join(",")];
+  const lines = [columns.map(neutralizeFormula).map(quoteIfNeeded).join(",")];
   for (const row of rows) {
-    lines.push(row.map((cell) => quoteIfNeeded(cell ?? "")).join(","));
+    lines.push(row.map((cell) => quoteIfNeeded(neutralizeFormula(cell ?? ""))).join(","));
   }
   return lines.join("\r\n") + "\r\n";
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { QUERY_LOG_PAGE_SIZE } from "@/lib/api/querylog-terms";
@@ -19,12 +19,27 @@ import { fetchQueryLogAction } from "./actions";
  *
  * `initial` is what page.tsx already fetched server-side (the same pattern
  * the story and the questions use), so the first paint needs no client round
- * trip at all. `refreshToken` changes once per completed query
- * (`ConsoleEditor`'s own `onResult`, lifted through the workspace) and is
- * what keeps the log current without the participant reloading the page —
- * on a change, this refetches exactly as many rows as are currently loaded
- * (never fewer), so an already-expanded "load more" view does not appear to
- * shrink back to one page the moment a fresh query lands.
+ * trip at all. `initial.failed` is true when that server-side read itself
+ * failed and page.tsx degraded to an empty page rather than losing the whole
+ * screen over it (finding 4): without this flag, a broken log and a
+ * genuinely empty one rendered as the identical "you have not run a query
+ * yet", and a participant trying to recall what they already tried had no
+ * way to tell a real answer from a shrug — and no retry, since `total` being
+ * zero hides "load more" too. This is what lets the panel show the
+ * dictionary's own failure string instead, with a button to try again.
+ *
+ * `active` is whether the "Query log" tab is the one currently showing
+ * (finding 3). This panel stays mounted the whole time — never unmounted by
+ * a tab switch, `TabsContent`'s own doc — so it refreshes itself on the
+ * transition into being shown rather than once per completed query, which is
+ * what an earlier version of this component did. That cost more than it
+ * looked like: `AdmitRead` (what this refetch calls) shares its per-minute
+ * budget with `Run`, so every completed query was quietly spending a second
+ * unit of the participant's own rate limit — and spending it on a tab that,
+ * because a completed run switches the workspace straight to "Result", was
+ * essentially never even the one showing when the refetch fired. Refreshing
+ * on entry instead costs one request per deliberate visit to this tab, which
+ * is also the one moment stale data would actually be seen.
  *
  * Bounded, deliberately: QUERY_LOG_PAGE_SIZE (50) is what loads at a time,
  * and the table only ever grows by that much per "load more" press — see
@@ -36,14 +51,14 @@ import { fetchQueryLogAction } from "./actions";
 export function QueryLogPanel({
   contestId,
   initial,
-  refreshToken,
+  active,
   locale,
   dict,
 }: {
   contestId: string;
-  initial: { items: QueryLogEntry[]; total: number };
-  /** Bumped once per completed query — see this component's own doc. */
-  refreshToken: number;
+  initial: { items: QueryLogEntry[]; total: number; failed: boolean };
+  /** Whether the "Query log" tab is the one currently showing — see this component's own doc. */
+  active: boolean;
   locale: Locale;
   dict: Dictionary;
 }) {
@@ -51,39 +66,45 @@ export function QueryLogPanel({
   const [items, setItems] = useState(initial.items);
   const [total, setTotal] = useState(initial.total);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState(initial.failed);
 
-  // Skips the refresh on the very first render: `initial` already is the
-  // freshest read as of when the page loaded, and refetching it again the
-  // instant this mounts would be a wasted round trip for data already in
-  // hand.
-  const mounted = useRef(false);
-  useEffect(() => {
-    if (!mounted.current) {
-      mounted.current = true;
-      return;
-    }
-    let cancelled = false;
-    void fetchQueryLogAction(contestId, Math.max(items.length, QUERY_LOG_PAGE_SIZE), 0).then((result) => {
-      if (cancelled) return;
-      if (result.kind === "ok") {
-        setItems(result.items);
-        setTotal(result.total);
-        setFailed(false);
-      }
+  // How large a page to ask for depends on how many rows are already
+  // loaded, so `refresh` closes over `items.length` directly rather than
+  // over a ref holding it: reading a ref during render to avoid this
+  // dependency is exactly what `react-hooks/refs` refuses (a render is not
+  // guaranteed to commit), and there is no render-time read to avoid here in
+  // the first place — `items.length` already is a render-time value.
+  // `refresh` getting a new identity whenever the list changes costs
+  // nothing: the effect below only ever acts on it through the
+  // active-transition guard, so a changed identity with no real transition
+  // re-runs the effect but calls nothing.
+  const refresh = useCallback(async () => {
+    const result = await fetchQueryLogAction(contestId, Math.max(items.length, QUERY_LOG_PAGE_SIZE), 0);
+    if (result.kind === "ok") {
+      setItems(result.items);
+      setTotal(result.total);
+      setFailed(false);
+    } else {
       // A refresh that fails leaves the list exactly as it was — the
       // participant's own history a moment ago is still true, just possibly
-      // one row behind, and nothing here is worth interrupting them over.
-    });
-    return () => {
-      cancelled = true;
-    };
-    // items.length is read once, at the moment refreshToken changes, to
-    // decide how large a page to ask for — not a dependency this effect
-    // should re-run for on its own, or every setItems call above would
-    // trigger it again.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshToken, contestId]);
+      // one row behind — but says so rather than pretending nothing is
+      // wrong (finding 4).
+      setFailed(true);
+    }
+  }, [contestId, items.length]);
+
+  // Fires only on the transition into this tab being shown — see this
+  // component's own doc (finding 3) for why not on every completed run.
+  // Seeded from the initial `active` value so a page that opens straight on
+  // this tab does not immediately refetch the same data page.tsx just
+  // fetched server-side.
+  const wasActive = useRef(active);
+  useEffect(() => {
+    if (active && !wasActive.current) {
+      void refresh();
+    }
+    wasActive.current = active;
+  }, [active, refresh]);
 
   const loadMore = async () => {
     setLoadingMore(true);
@@ -98,8 +119,30 @@ export function QueryLogPanel({
     }
   };
 
+  const retry = async () => {
+    setLoadingMore(true);
+    await refresh();
+    setLoadingMore(false);
+  };
+
   if (items.length === 0) {
-    return <p className="p-4 text-body text-ink-2">{t.empty}</p>;
+    return (
+      <div className="flex flex-col items-start gap-2 p-4">
+        <p role={failed ? "alert" : undefined} className={cn("text-body", failed ? "text-bad" : "text-ink-2")}>
+          {failed ? t.failed : t.empty}
+        </p>
+        {failed ? (
+          <button
+            type="button"
+            onClick={retry}
+            disabled={loadingMore}
+            className={cn(buttonVariants({ variant: "quiet", size: "sm" }))}
+          >
+            {loadingMore ? t.loadingMore : t.retry}
+          </button>
+        ) : null}
+      </div>
+    );
   }
 
   return (
@@ -139,7 +182,21 @@ export function QueryLogPanel({
         </table>
       </div>
 
-      {failed ? <p role="alert" className="text-small text-bad">{t.failed}</p> : null}
+      {failed ? (
+        <div className="flex items-center gap-3">
+          <p role="alert" className="text-small text-bad">
+            {t.failed}
+          </p>
+          <button
+            type="button"
+            onClick={retry}
+            disabled={loadingMore}
+            className={cn(buttonVariants({ variant: "quiet", size: "sm" }))}
+          >
+            {loadingMore ? t.loadingMore : t.retry}
+          </button>
+        </div>
+      ) : null}
 
       {items.length < total ? (
         <button
