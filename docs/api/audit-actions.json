@@ -30,6 +30,7 @@
     "contest.answers_change",
     "contest.manager_grant",
     "contest.manager_revoke",
+    "contest.package_export",
     "participant.add",
     "participant.remove",
     "participant.disqualify",

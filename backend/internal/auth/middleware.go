@@ -59,11 +59,27 @@ func IdentityFrom(ctx context.Context) (rbac.Identity, bool) {
 	return id, ok
 }
 
+// Authorizer decides whether an identity may exercise a permission, either
+// installation-wide (uuid.Nil) or over one contest.
+//
+// The one method of *rbac.Authorizer this package uses, declared here by the
+// consumer (Go layout rule 3) rather than the concrete type being held. It is
+// what lets a test of the assembled router assert *which* permission a route
+// demands rather than only that some check refused: contest.view and
+// contest.edit are indistinguishable by outcome today (rbac's
+// managerPermissions grants a manager both), so a 403 alone proves nothing
+// about which of the two a route was mounted behind — and the reference
+// answers in a contest package are exactly the thing that must be behind the
+// stricter one.
+type Authorizer interface {
+	Authorize(ctx context.Context, id rbac.Identity, permission string, contestID uuid.UUID) error
+}
+
 // MiddlewareConfig collects what the middleware needs.
 type MiddlewareConfig struct {
 	Sessions   *SessionStore
 	Users      UserStore
-	Authorizer *rbac.Authorizer
+	Authorizer Authorizer
 	Cookies    CookieWriter
 	Logger     *slog.Logger
 }
@@ -72,7 +88,7 @@ type MiddlewareConfig struct {
 type Middleware struct {
 	sessions *SessionStore
 	users    UserStore
-	authz    *rbac.Authorizer
+	authz    Authorizer
 	cookies  CookieWriter
 	log      *slog.Logger
 }

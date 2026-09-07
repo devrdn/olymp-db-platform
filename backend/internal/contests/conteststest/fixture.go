@@ -35,6 +35,7 @@ type Fixture struct {
 	Registrations *Registrations
 	Policies      *Policies
 	Languages     *Languages
+	Games         *Games
 	Submissions   *Submissions
 	Sequence      *SequentialProgress
 	Users         *userstest.Repository
@@ -53,6 +54,7 @@ func NewFixture() *Fixture {
 		Registrations: NewRegistrations(),
 		Policies:      NewPolicies(),
 		Languages:     NewLanguages(),
+		Games:         NewGames(),
 		Submissions:   NewSubmissions(),
 		Users:         userstest.New(),
 		Audit:         NewSink(),
@@ -85,6 +87,7 @@ func NewFixture() *Fixture {
 		Registrations: f.Registrations,
 		Policies:      f.Policies,
 		Languages:     f.Languages,
+		Game:          f.Games,
 		Submissions:   f.Submissions,
 		Sequence:      f.Sequence,
 		Users:         f.Users,

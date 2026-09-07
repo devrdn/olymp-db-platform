@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"io"
@@ -151,6 +152,24 @@ type fakeHistory struct {
 	gotLimit        int
 	gotOffset       int
 	called          bool
+	// exported is what ExportHistory streams, exportErr what it fails with,
+	// and gotExportRegistration what it was asked about — the same three
+	// facts the paged read above stages, for the CSV download beside it.
+	exported              []queryrunner.HistoryEntry
+	exportErr             error
+	gotExportRegistration uuid.UUID
+	exportCalled          bool
+}
+
+func (h *fakeHistory) ExportHistory(_ context.Context, registrationID uuid.UUID, yield func(queryrunner.HistoryEntry) error) error {
+	h.exportCalled = true
+	h.gotExportRegistration = registrationID
+	for _, entry := range h.exported {
+		if err := yield(entry); err != nil {
+			return err
+		}
+	}
+	return h.exportErr
 }
 
 func (h *fakeHistory) History(_ context.Context, registrationID uuid.UUID, limit, offset int) ([]queryrunner.HistoryEntry, int, error) {
@@ -1055,5 +1074,197 @@ func TestQueryLogReadFailureIsA500(t *testing.T) {
 	rec := f.get("/contests/" + contestID.String() + "/play/log")
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// The CSV download of a participant's own query log (§9.1). What it must
+// carry is exactly what the panel beside it already shows, in a shape a
+// spreadsheet opens; what it must never carry is a row belonging to anybody
+// else, which is decided by which registration it is asked about rather than
+// by anything in the request.
+func TestTheQueryLogCSVIsThisParticipantsOwnSessionAsAFile(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	registration := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: registration}
+
+	duration, rows := 12, 3
+	f.history.exported = []queryrunner.HistoryEntry{
+		{
+			SQL: "SELECT * FROM guests", Status: queryrunner.StatusOK,
+			DurationMs: &duration, RowCount: &rows,
+			ExecutedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
+		},
+		{
+			// A statement carrying a comma and a quotation mark: CSV is only
+			// a format if the quoting is real.
+			SQL: `SELECT "name", 1 FROM guests`, Status: queryrunner.StatusRejected,
+			Error:      "function_not_supported: pg_sleep",
+			ExecutedAt: time.Date(2026, 3, 1, 10, 1, 0, 0, time.UTC),
+		},
+	}
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log.csv")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/csv") {
+		t.Errorf("Content-Type = %q, want text/csv", got)
+	}
+	if got := rec.Header().Get("Content-Disposition"); !strings.Contains(got, "attachment") {
+		t.Errorf("Content-Disposition = %q, want an attachment", got)
+	}
+	if f.history.gotExportRegistration != registration {
+		t.Fatalf("the log was read for registration %s, want the one Access resolved (%s)",
+			f.history.gotExportRegistration, registration)
+	}
+
+	records, err := csv.NewReader(rec.Body).ReadAll()
+	if err != nil {
+		t.Fatalf("the body is not CSV: %v (%s)", err, rec.Body.String())
+	}
+	if len(records) != 3 {
+		t.Fatalf("the file has %d lines, want a header and two rows: %v", len(records), records)
+	}
+	if got := strings.Join(records[0], ","); got != "executed_at,status,duration_ms,row_count,error,sql" {
+		t.Fatalf("header = %q", got)
+	}
+	if records[1][0] != "2026-03-01T10:00:00Z" || records[1][1] != "ok" ||
+		records[1][2] != "12" || records[1][3] != "3" || records[1][5] != "SELECT * FROM guests" {
+		t.Errorf("first row = %v", records[1])
+	}
+	// A row still running has no duration and no row count, and an empty cell
+	// is how CSV says "not recorded" — the same distinction the JSON page
+	// keeps by omitting the field.
+	if records[2][2] != "" || records[2][3] != "" {
+		t.Errorf("a rejected row reported a duration or a row count: %v", records[2])
+	}
+	if records[2][4] != "function_not_supported: pg_sleep" || records[2][5] != `SELECT "name", 1 FROM guests` {
+		t.Errorf("second row = %v", records[2])
+	}
+}
+
+// An empty log is still a file: a header row and nothing else. A zero-byte
+// download is indistinguishable from a failed one.
+func TestTheQueryLogCSVOfAParticipantWhoRanNothingIsAHeaderRow(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log.csv")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	records, err := csv.NewReader(rec.Body).ReadAll()
+	if err != nil {
+		t.Fatalf("the body is not CSV: %v", err)
+	}
+	if len(records) != 1 || records[0][0] != "executed_at" {
+		t.Fatalf("the file is %v, want exactly the header row", records)
+	}
+}
+
+// The same admission every other participant endpoint goes through: somebody
+// who is not in this contest is refused, and the log is never read on their
+// behalf. Staff have no route to this one at all — it answers about the
+// caller's own registration and about nothing else, so there is no
+// participant to name in it.
+func TestTheQueryLogCSVIsRefusedToSomebodyNotInTheContest(t *testing.T) {
+	f := newParticipantFixture(t)
+	f.access.setErr(queryproxy.ErrNotAParticipant)
+
+	rec := f.get("/contests/" + uuid.New().String() + "/play/log.csv")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if got := errorCode(t, rec); got != "not_a_participant" {
+		t.Fatalf("code = %q", got)
+	}
+	if f.history.exportCalled {
+		t.Fatal("the query log was read for a caller who is not in the contest")
+	}
+}
+
+// CLAUDE.md rule 13, and the reason AdmitRead exists: a read that costs
+// database round trips is charged the same budget a query is, before any of
+// them are spent. Downloading the whole log is the most expensive read this
+// handler offers, so it is the last one that should be free.
+func TestTheQueryLogCSVSpendsTheSameRateBudgetAQueryDoes(t *testing.T) {
+	f := newParticipantFixture(t)
+	f.access.admitReadErr = queryrunner.ErrTooManyQueries
+
+	rec := f.get("/contests/" + uuid.New().String() + "/play/log.csv")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", rec.Code)
+	}
+	if f.access.accessCalled {
+		t.Error("the contest was looked up for a caller the rate limit had already refused")
+	}
+	if f.history.exportCalled {
+		t.Error("the query log was read for a caller the rate limit had already refused")
+	}
+}
+
+// A failure before the first row still has a status line to spend, so it is
+// spent on saying so rather than on a 200 carrying half a file.
+func TestAQueryLogCSVThatFailsBeforeItStartsIsAnErrorNotAnEmptyFile(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.history.exportErr = errors.New("the database is away")
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log.csv")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body = %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); strings.HasPrefix(got, "text/csv") {
+		t.Errorf("a failure was served as a CSV file: Content-Type = %q", got)
+	}
+}
+
+// The CSV reads the same column the paged log does, so it goes through the
+// same guard. `query_log.error_text` is written straight from the error a run
+// produced, before anything above it sanitises anything — the file would
+// otherwise be a second way round both of the console's own guards, and the
+// more convenient one, because it arrives as a document somebody keeps.
+func TestTheQueryLogCSVNeverHandsBackAFailureOfOurs(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.history.exported = []queryrunner.HistoryEntry{
+		{
+			SQL:    "select * from guests;",
+			Status: queryrunner.StatusError,
+			Error: "connecting to the game database: failed to connect to `user=game_reader " +
+				"database=game_pool_ce678159661a1_57c5ba38100c`: 127.0.0.1:5433 (localhost): " +
+				`failed SASL auth: FATAL: password authentication failed for user "game_reader"`,
+			ExecutedAt: time.Now().UTC(),
+		},
+		{
+			// The validator refusing the participant's own text is a fact
+			// about what they typed, and the most useful thing the file can
+			// tell them. It stays.
+			SQL:        "select pg_sleep(9);",
+			Status:     queryrunner.StatusRejected,
+			Error:      "function_not_supported: pg_sleep",
+			ExecutedAt: time.Now().UTC(),
+		},
+	}
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log.csv")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	for _, secret := range []string{"game_reader", "game_pool_ce678159661a1", "5433", "password authentication"} {
+		if strings.Contains(rec.Body.String(), secret) {
+			t.Fatalf("the file carries %q: %s", secret, rec.Body.String())
+		}
+	}
+	if !strings.Contains(rec.Body.String(), "function_not_supported: pg_sleep") {
+		t.Fatalf("the validator's own words about the participant's query were dropped: %s", rec.Body.String())
 	}
 }

@@ -4,6 +4,8 @@ import {
   NEXT_STATUSES,
   publishCheckSchema,
 } from "@/lib/api/contests";
+import { ExportMenu } from "@/components/product/export-menu";
+import { API_PREFIX } from "@/lib/api/client";
 import { summarisePublishCheck } from "@/lib/api/publish-gate";
 import { formatMoment } from "@/lib/format/datetime";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
@@ -61,6 +63,29 @@ export default async function ContestOverviewPage(props: PageProps<"/contests/[c
           next={NEXT_STATUSES[contest.status]}
           blocked={check ? !check.ready : true}
           dict={dict}
+        />
+      </section>
+
+      {/* The contest as a file (docs/ARCHITECTURE.md §15, item 12). On this
+          page rather than in settings because it is about the contest as a
+          whole rather than about one of its fields — and it is the only
+          control here that reaches the reference answers, which is why the
+          endpoint behind it is the contest.edit one. */}
+      <section aria-labelledby="export-heading" className="flex flex-col gap-4">
+        <h2 id="export-heading" className="text-h3 text-ink">
+          {t.export.heading}
+        </h2>
+        <p className="max-w-prose text-body text-ink-2">{t.export.lede}</p>
+        <ExportMenu
+          heading={t.export.heading}
+          formats={[
+            {
+              format: "JSON",
+              href: `${API_PREFIX}/contests/${contest.id}/export`,
+              label: t.export.label,
+            },
+          ]}
+          className="self-start"
         />
       </section>
 

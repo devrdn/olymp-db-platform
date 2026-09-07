@@ -140,6 +140,62 @@ func (l *QueryLog) History(ctx context.Context, registrationID uuid.UUID, limit,
 	return found, total, nil
 }
 
+// ExportHistory streams every one of registrationID's own rows to yield,
+// oldest first — the read behind the participant's CSV download of their own
+// query log (§9.1: CSV streams row by row with no volume ceiling).
+//
+// Streamed rather than paged, and that is the difference from History. A page
+// exists because a screen shows one; a file is the whole record, and a
+// participant who ran nine hundred queries over a two-hour olympiad would
+// otherwise get a file quietly missing eight hundred of them. Nothing here is
+// held in memory beyond the row being written: pgx hands rows over one at a
+// time and yield writes each straight to the socket, so the memory this costs
+// is one row rather than one contest's worth of them.
+//
+// Oldest first, unlike History's newest-first page. The file is a record of a
+// session and is read top to bottom, the way the session happened; the panel
+// is a lookup and answers "what did I just run". Both orderings are served by
+// query_log_registration_executed_idx (migration 000004) — an index scan runs
+// either direction — so this needs no migration of its own (CLAUDE.md rule 7).
+//
+// The same WHERE clause History has, and the same guarantee: exactly this
+// registration_id, nothing a caller otherwise controls.
+//
+// A yield that returns an error stops the stream and is returned as it is.
+// The caller is writing to a socket, and a client that hung up must not have
+// the rest of the log read out of the database on its behalf.
+func (l *QueryLog) ExportHistory(ctx context.Context, registrationID uuid.UUID, yield func(queryrunner.HistoryEntry) error) error {
+	rows, err := l.querier(ctx).Query(ctx, `
+		SELECT sql_text, status, COALESCE(error_text, ''), duration_ms, row_count, executed_at
+		FROM query_log
+		WHERE registration_id = $1
+		ORDER BY executed_at ASC, id ASC`,
+		registrationID)
+	if err != nil {
+		return fmt.Errorf("read the query log of registration %s: %w", registrationID, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			entry  queryrunner.HistoryEntry
+			status string
+		)
+		if err := rows.Scan(&entry.SQL, &status, &entry.Error, &entry.DurationMs, &entry.RowCount,
+			&entry.ExecutedAt); err != nil {
+			return fmt.Errorf("scan a query log row: %w", err)
+		}
+		entry.Status = queryrunner.Status(status)
+		if err := yield(entry); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read the query log of registration %s: %w", registrationID, err)
+	}
+	return nil
+}
+
 // clamped fits a count into the column's int, without wrapping.
 //
 // Both values are bounded in practice — the runner's deadline is seconds and

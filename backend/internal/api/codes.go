@@ -168,6 +168,8 @@ var (
 
 	// --- Contest content ----------------------------------------------------
 
+	codePackageTooLarge = httpx.NewCode("package_too_large",
+		"The contest carries more questions than one exported package holds. Refused rather than cut short: a package missing questions is not a smaller contest but one whose answer key no longer matches, and nothing in the file would say so. The message names the limit.")
 	codeStoryNotFound = httpx.NewCode("story_not_found",
 		"The contest has no story yet.")
 	codeQuestionNotFound = httpx.NewCode("question_not_found",

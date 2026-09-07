@@ -198,6 +198,16 @@ const ro = {
         archived: "Arhivați",
       },
     },
+    /**
+     * Olimpiada într-un singur fișier (docs/ARCHITECTURE.md §15, punctul 12).
+     * Textul spune și ce conține, și de ce butonul stă pe o pagină la care
+     * ajung doar editorii: înăuntru sunt răspunsurile de referință.
+     */
+    export: {
+      heading: "Export",
+      lede: "Toată olimpiada într-un singur fișier: limbile și titlurile, povestea în fiecare dintre ele, fiecare întrebare cu variantele și răspunsurile de referință, politica SQL și scriptul jocului. Este cheia completă a răspunsurilor, de aceea fișierul este oferit doar celor care pot edita olimpiada.",
+      label: "Descarcă pachetul olimpiadei în JSON",
+    },
     gate: {
       heading: "Gata de publicare",
       ready: "Tot ce cere verificarea este la locul lui.",
@@ -830,6 +840,11 @@ const ro = {
           failed: "Nu s-a putut încărca jurnalul de interogări.",
           retry: "Încercați din nou",
           durationMs: "{n} ms",
+          /** Toată sesiunea ca fișier, lângă pagina ei de pe ecran. */
+          export: {
+            heading: "Export",
+            label: "Descarcă întregul jurnal de interogări în CSV",
+          },
           columns: {
             sql: "Interogare",
             status: "Stare",
@@ -955,6 +970,7 @@ const ro = {
       "contest.question_delete": "A șters o întrebare",
       "contest.question_reorder": "A reordonat întrebările",
       "contest.answers_change": "A schimbat răspunsurile de referință",
+      "contest.package_export": "A exportat pachetul olimpiadei",
       "contest.manager_grant": "A numit un manager",
       "contest.manager_revoke": "A retras un manager",
       "participant.add": "A adăugat un participant",
@@ -1012,6 +1028,7 @@ const ro = {
     status_changed: "Altcineva a mutat olimpiada cât timp decideați. Reîncărcați pagina — nimic din ce ați făcut nu a fost salvat.",
     not_editable: "O olimpiadă în această stare nu poate fi modificată.",
     not_publishable: "Olimpiada încă nu este gata de publicare.",
+    package_too_large: "Olimpiada are mai multe întrebări decât încape într-un pachet de export.",
     enrollment_closed: "Înscrierea la această olimpiadă este închisă.",
     already_enrolled: "Sunteți deja înscris la această olimpiadă.",
     participant_started: "Participantul a început deja și poate fi doar descalificat.",

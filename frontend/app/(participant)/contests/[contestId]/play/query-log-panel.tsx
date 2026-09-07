@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { ExportMenu } from "@/components/product/export-menu";
 import { buttonVariants } from "@/components/ui/button";
+import { API_PREFIX } from "@/lib/api/client";
 import { QUERY_LOG_PAGE_SIZE, QUERY_LOG_REFRESH_MIN_INTERVAL_MS } from "@/lib/api/querylog-terms";
 import type { QueryLogEntry } from "@/lib/api/querylog";
 import { formatMoment } from "@/lib/format/datetime";
@@ -171,6 +173,23 @@ export function QueryLogPanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 p-4">
+      {/* The whole session as a file, beside the page of it on screen. A link
+          to the endpoint rather than a button that serialises `items`: what is
+          loaded here is one page of fifty, and a "download" that quietly gave
+          the participant fifty of their nine hundred rows would be the wrong
+          answer in the format that looks most authoritative. Offered only
+          when there is something to take — see the empty branch above. */}
+      <ExportMenu
+        heading={t.export.heading}
+        formats={[
+          {
+            format: "CSV",
+            href: `${API_PREFIX}/contests/${contestId}/play/log.csv`,
+            label: t.export.label,
+          },
+        ]}
+        className="self-end"
+      />
       <div className="min-h-0 flex-1 overflow-auto">
         <table className="w-full border-collapse text-body">
           {/* Opaque, and in a colour this design system actually has: a sticky
