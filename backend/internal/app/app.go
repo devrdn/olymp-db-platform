@@ -282,9 +282,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		modules = append(modules, api.NewConsoleHandler(console, authMiddleware, log))
 	}
 
-	// The participant's own read of a running contest — the story and the
-	// visible questions — needs queryproxy.Service.Access and .AdmitRead, and
-	// neither ever reaches a game lookup, provisioning or the Query Runner:
+	// The participant's own read of a running contest — the story, the
+	// visible questions, and their own query log — needs
+	// queryproxy.Service.Access and .AdmitRead, and neither ever reaches a
+	// game lookup, provisioning or the Query Runner:
 	// those are Run's alone. So this is mounted unconditionally rather than
 	// under "is there a game circuit at all" — a deployment with no game
 	// cluster still runs an olympiad's registration and its participants
@@ -316,10 +317,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// that would have to cross that boundary.
 	reader := contests.NewReader(
 		postgres.NewStories(pool), postgres.NewQuestions(pool), postgres.NewAttempts(pool), postgres.NewSequence(pool))
+	// The same postgres.QueryLog the background sweep and (when there is a
+	// console) the journal already use — one type serving both directions of
+	// one table, not a second repository over it.
+	history := postgres.NewQueryLog(pool)
 	// Submit is the same contestService every staff endpoint above already
 	// uses — not a second implementation of the answering rules, and not a
 	// second Submissions repository either.
-	modules = append(modules, api.NewParticipantHandler(participantAccess, reader, contestService, authMiddleware, log, cfg.DefaultLocale))
+	modules = append(modules, api.NewParticipantHandler(participantAccess, reader, history, contestService, authMiddleware, log, cfg.DefaultLocale))
 	// The SSE channel (§8) shares participantAccess with the endpoints above
 	// for the same reason: one Access, one AdmitRead budget, not a second
 	// admission decision that could drift from the first. ctx.Done() is the

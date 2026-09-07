@@ -5,6 +5,8 @@ import { StoryText } from "@/components/product/story-text";
 import { ApiError } from "@/lib/api/client";
 import { contestListSchema, type ContestSummary } from "@/lib/api/contests";
 import { playQuestionListSchema, playStorySchema } from "@/lib/api/play";
+import { queryLogResponseSchema, type QueryLogEntry } from "@/lib/api/querylog";
+import { QUERY_LOG_PAGE_SIZE } from "@/lib/api/querylog-terms";
 import { serverRequest } from "@/lib/api/server";
 import { authRecoveryRedirect } from "@/lib/auth/guard";
 import { formatMoment } from "@/lib/format/datetime";
@@ -12,9 +14,9 @@ import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import type { Locale } from "@/lib/i18n/config";
 
-import { Console } from "./console";
 import { PlayHeader } from "./play-header";
-import { QuestionsPanel, type QuestionEntry } from "./questions-panel";
+import type { QuestionEntry } from "./questions-panel";
+import { Workspace } from "./workspace";
 
 export async function generateMetadata() {
   const dict = await activeDictionary();
@@ -23,24 +25,25 @@ export async function generateMetadata() {
 
 /**
  * Error codes that mean this participant may not use this screen at all
- * right now, regardless of which of the two requests below surfaces one
+ * right now, regardless of which of the three requests below surfaces one
  * first (finding 2). Every one of them comes out of the same admission gate
- * both `/play/story` and `/play/questions` share (`ParticipantHandler.admit`
+ * `/play/story`, `/play/questions` and `/play/log` all share (`ParticipantHandler.admit`
  * on the Go side: `AdmitRead`, then `Access`) — a contest this participant's
  * own deadline has passed for, an address that stopped being allowed, an
  * account removed from the roster, or simply asking faster than this
- * installation allows. None of those is about the story or the questions in
- * particular: whichever request answers with one, the console beside them
- * would be refused for the exact same reason, so there is nothing left on
- * this screen worth keeping — it is shown the "not available" page below,
- * the same way `contest_finished` and `contest_not_running` (the two this
- * screen originally handled) already were.
+ * installation allows. None of those is about the story, the questions or the
+ * log in particular: whichever request answers with one, the workspace
+ * around them would be refused for the exact same reason, so there is
+ * nothing left on this screen worth keeping — it is shown the "not
+ * available" page below, the same way `contest_finished` and
+ * `contest_not_running` (the two this screen originally handled) already
+ * were.
  *
  * `story_not_found` is deliberately not in this set: it is a fact about the
  * story alone (`Reader.Story` refuses this way the instant a contest's story
- * has no translation for the negotiated language), and the questions and the
- * console are unaffected by it — see where it is handled below for why it
- * gets its own, narrower treatment instead.
+ * has no translation for the negotiated language), and the questions, the
+ * log and the console are unaffected by it — see where it is handled below
+ * for why it gets its own, narrower treatment instead.
  */
 const SCREEN_UNAVAILABLE_CODES = new Set([
   "contest_finished",
@@ -52,8 +55,9 @@ const SCREEN_UNAVAILABLE_CODES = new Set([
 ]);
 
 /**
- * Where a participant works: the story, the questions, and the console that
- * used to be alone on this route, now beside them rather than a screen away.
+ * Where a participant works: the full-screen olympiad workspace (Task 3) —
+ * the SQL console, the last result and the query log below it, and the story
+ * and questions beside it.
  *
  * The contest is read from the participant's own enrolled listing rather than
  * from the contest endpoint, which is behind a staff permission — the same
@@ -77,7 +81,7 @@ const SCREEN_UNAVAILABLE_CODES = new Set([
  * same dictionary, rather than treated as a page that failed to load
  * (SCREEN_UNAVAILABLE_CODES's own doc, finding 2). The one exception is the
  * story missing a translation: that is a fact about the story alone, and
- * losing it must not lose the questions or the console beside it.
+ * losing it must not lose the questions, the log or the console beside it.
  */
 export default async function PlayPage({ params }: PageProps<"/contests/[contestId]/play">) {
   const { contestId } = await params;
@@ -109,18 +113,19 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
     return <UnavailablePage title={contest.title} body={dict.participant.play.unavailable.body} />;
   }
 
-  // Fetched together, and answered independently (finding 2): the two
-  // requests share the same admission gate, so a refusal that is really
-  // about this participant's own access to the contest (see
+  // Fetched together, and answered mostly independently (finding 2): the
+  // three requests share the same admission gate, so a refusal that is
+  // really about this participant's own access to the contest (see
   // SCREEN_UNAVAILABLE_CODES) means the same thing regardless of which
   // settles first. But a refusal that is only about the story itself — it
   // has no translation for this language — has nothing to do with whether
-  // the questions list or the console still work, so `Promise.all` (which
-  // would fail the whole page on either rejecting) is deliberately not used
-  // here; `allSettled` lets each answer be read on its own.
-  const [storyResult, questionsResult] = await Promise.allSettled([
+  // the questions list, the log or the console still work, so `Promise.all`
+  // (which would fail the whole page on either rejecting) is deliberately
+  // not used here; `allSettled` lets each answer be read on its own.
+  const [storyResult, questionsResult, logResult] = await Promise.allSettled([
     serverRequest(`/contests/${contestId}/play/story?lang=${locale}`),
     serverRequest(`/contests/${contestId}/play/questions?lang=${locale}`),
+    serverRequest(`/contests/${contestId}/play/log?limit=${QUERY_LOG_PAGE_SIZE}&offset=0`),
   ]);
 
   if (questionsResult.status === "rejected") {
@@ -134,8 +139,8 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
 
   // The story: read on success, or reduced to a shown reason on the one
   // refusal that is about the story alone. Anything else — including a
-  // SCREEN_UNAVAILABLE_CODES refusal reaching this request instead of the
-  // other one — is answered the same way the questions list's own refusal
+  // SCREEN_UNAVAILABLE_CODES refusal reaching this request instead of one of
+  // the others — is answered the same way the questions list's own refusal
   // above is, since it means the same thing no matter which request it
   // arrived on.
   let storyBody: string | null = null;
@@ -154,7 +159,26 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
     }
   }
 
-  const t = dict.participant.play;
+  // The query log's own first page: read on success, or — unless the
+  // refusal is one of SCREEN_UNAVAILABLE_CODES, in which case the whole
+  // screen is unavailable exactly as it would be for the other two — quietly
+  // reduced to an empty page rather than failing this whole screen. The log
+  // is a record of what already happened, not something the console needs to
+  // function: a participant should still be able to read the story and run
+  // queries even if this one read failed (a transient database error, say),
+  // and QueryLogPanel's own client-side refresh (on the console's next run)
+  // gets another chance at it.
+  let initialLog: { items: QueryLogEntry[]; total: number } = { items: [], total: 0 };
+  if (logResult.status === "fulfilled") {
+    initialLog = queryLogResponseSchema.parse(logResult.value);
+  } else {
+    const error = logResult.reason;
+    if (error instanceof ApiError && SCREEN_UNAVAILABLE_CODES.has(error.code)) {
+      return <UnavailablePage title={contest.title} body={errors[error.code]} />;
+    }
+    // Any other failure (a transient 500, an unreachable API): degrade
+    // rather than crash. The log stays empty until the client refreshes it.
+  }
 
   // Rendered here, once, on the server: `StoryText` runs `react-markdown`, a
   // real parser that costs nothing on this side of the wire and tens of
@@ -175,30 +199,16 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   }));
 
   return (
-    <Band fill>
-      <div className="flex flex-col gap-6">
-        <PlayHeader contestId={contestId} title={contest.title} waitingForStart={false} dict={dict} />
-
-        <div className="grid gap-8 narrow:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] narrow:items-start">
-          <div className="flex min-w-0 flex-col gap-10">
-            <section className="flex flex-col gap-3">
-              <h2 className="font-mono text-label text-ink-3 uppercase">{t.story.heading}</h2>
-              {storyBody !== null ? <StoryText markdown={storyBody} /> : <p className="text-body text-ink-2">{storyUnavailable}</p>}
-            </section>
-
-            <section className="flex flex-col gap-4 border-t border-line pt-6">
-              <h2 className="font-mono text-label text-ink-3 uppercase">{t.questions.heading}</h2>
-              <QuestionsPanel contestId={contestId} items={questionEntries} dict={dict} />
-            </section>
-          </div>
-
-          <section className="flex min-w-0 flex-col gap-3 narrow:border-l narrow:border-line narrow:pl-8">
-            <h2 className="font-mono text-label text-ink-3 uppercase">{dict.participant.console.heading}</h2>
-            <Console contestId={contestId} dict={dict} />
-          </section>
-        </div>
-      </div>
-    </Band>
+    <Workspace
+      contestId={contestId}
+      title={contest.title}
+      storyBody={storyBody !== null ? <StoryText markdown={storyBody} /> : null}
+      storyUnavailable={storyUnavailable}
+      questionEntries={questionEntries}
+      initialLog={initialLog}
+      locale={locale}
+      dict={dict}
+    />
   );
 }
 
@@ -218,9 +228,13 @@ function UnavailablePage({ title, body }: { title: string; body: string }) {
  * The room a participant who arrived early sits in.
  *
  * It holds the one events connection this screen has for a contest that has
- * not started, and asks the server for the real page — story, questions,
- * console — the instant `contest_started` arrives (`PlayHeader`'s own doc):
+ * not started, and asks the server for the real page — the workspace itself
+ * — the instant `contest_started` arrives (`PlayHeader`'s own doc):
  * nothing here polls, and nothing here guesses.
+ *
+ * This is an ordinary content page rather than the workspace — nobody is
+ * typing SQL yet — so it keeps `Band`'s hatched fields rather than the
+ * full-bleed exception `Workspace`'s own doc records.
  */
 function WaitingRoom({
   contest,

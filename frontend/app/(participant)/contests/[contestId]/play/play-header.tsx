@@ -10,18 +10,16 @@ import { cn } from "@/lib/utils";
 import { useContestEvents } from "./use-contest-events";
 
 /**
- * The title and the clock, together, the one thing on this screen that never
- * scrolls out of view.
+ * The thin bar above the workspace: the contest's title and the clock,
+ * together — the one thing on this screen every panel sits below.
  *
- * Everything else here reads at the participant's own pace — the story once,
- * the console however long a query takes to write — but the clock is the one
- * fact that changes on its own and is worth seeing without scrolling back up
- * for it, which is why it is `sticky` rather than sitting in the page flow
- * with the rest of the heading.
- *
- * `top-12` clears the product shell's own bar (`h-12`, `AppBar`'s own doc),
- * and `z-10` keeps this one under it rather than over it where the two ever
- * overlap during a scroll.
+ * It used to be `sticky`, compensating for `Band`'s own padding with a
+ * negative margin so its border ran edge to edge within the content column
+ * (a page that scrolled, with this bar pinned to the top of it). The
+ * workspace it sits in now (Task 3) does not scroll as a whole — it is
+ * itself exactly one screen tall below the product shell's own bar, with
+ * every panel scrolling on its own — so this is simply the fixed first row
+ * of that layout, full width already, needing neither.
  *
  * This is also the only place on the page that opens the events channel: the
  * one hook call lives here, and the countdown it drives is a leaf of this
@@ -65,7 +63,7 @@ export function PlayHeader({
   }, [waitingForStart, phase, router]);
 
   return (
-    <div className="sticky top-12 z-10 -mx-10 flex flex-wrap items-center justify-between gap-3 border-b border-line bg-bg px-10 py-3 max-narrow:-mx-4.5 max-narrow:px-4.5">
+    <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line bg-bg px-4 py-2.5">
       <div className="flex min-w-0 items-center gap-3">
         <h1 className="truncate text-row text-ink">{title}</h1>
         {phase === "finished" ? <Tag tone="mute">{t.finishedTag}</Tag> : null}

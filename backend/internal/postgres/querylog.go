@@ -8,6 +8,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -89,6 +90,54 @@ func (l *QueryLog) Complete(ctx context.Context, id int64, outcome queryrunner.O
 		return fmt.Errorf("close query log row %d: no such row", id)
 	}
 	return nil
+}
+
+// History returns one page of registrationID's own rows, newest first, and
+// how many rows match in total — the participant's own query log, and only
+// that participant's: the WHERE clause below is exactly this registration_id
+// and nothing a caller otherwise controls, the same guarantee Access itself
+// gives the story and the questions endpoints.
+//
+// Backed by query_log_registration_executed_idx (migration 000004), already
+// built for exactly this — its own comment names both this and the admin
+// journal panel that will one day share it — so this endpoint needs no
+// migration of its own (CLAUDE.md rule 7).
+func (l *QueryLog) History(ctx context.Context, registrationID uuid.UUID, limit, offset int) ([]queryrunner.HistoryEntry, int, error) {
+	limit, offset = queryrunner.NormalizeHistoryPage(limit, offset)
+
+	rows, err := l.querier(ctx).Query(ctx, `
+		SELECT sql_text, status, COALESCE(error_text, ''), duration_ms, row_count, executed_at,
+		       COUNT(*) OVER() AS total
+		FROM query_log
+		WHERE registration_id = $1
+		ORDER BY executed_at DESC, id DESC
+		LIMIT $2 OFFSET $3`,
+		registrationID, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read query history for registration %s: %w", registrationID, err)
+	}
+	defer rows.Close()
+
+	var (
+		found []queryrunner.HistoryEntry
+		total int
+	)
+	for rows.Next() {
+		var (
+			entry  queryrunner.HistoryEntry
+			status string
+		)
+		if err := rows.Scan(&entry.SQL, &status, &entry.Error, &entry.DurationMs, &entry.RowCount,
+			&entry.ExecutedAt, &total); err != nil {
+			return nil, 0, fmt.Errorf("scan query history row: %w", err)
+		}
+		entry.Status = queryrunner.Status(status)
+		found = append(found, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("read query history for registration %s: %w", registrationID, err)
+	}
+	return found, total, nil
 }
 
 // clamped fits a count into the column's int, without wrapping.

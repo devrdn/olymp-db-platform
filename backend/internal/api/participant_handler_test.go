@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -118,6 +119,31 @@ func (a *fakeAccess) setContest(c contests.Contest) {
 	a.contest = c
 }
 
+// fakeHistory answers History with whatever a test staged, so the query log
+// endpoint's own wiring and error mapping can be exercised without a real
+// postgres.QueryLog behind it — that scoping is proven where it lives
+// (internal/postgres/querylog_test.go).
+type fakeHistory struct {
+	items []queryrunner.HistoryEntry
+	total int
+	err   error
+	// gotRegistration, gotLimit and gotOffset record what History was asked,
+	// so a test can prove the registration came from Access rather than the
+	// request, and that limit/offset came straight from the query string.
+	gotRegistration uuid.UUID
+	gotLimit        int
+	gotOffset       int
+	called          bool
+}
+
+func (h *fakeHistory) History(_ context.Context, registrationID uuid.UUID, limit, offset int) ([]queryrunner.HistoryEntry, int, error) {
+	h.called = true
+	h.gotRegistration = registrationID
+	h.gotLimit = limit
+	h.gotOffset = offset
+	return h.items, h.total, h.err
+}
+
 // fakeSubmitter answers Submit with whatever a test staged, so the answer
 // endpoint's own request wiring and error mapping can be exercised without a
 // real contests.Service behind it — that behaviour is proven where
@@ -146,6 +172,7 @@ func (s *fakeSubmitter) Submit(_ context.Context, cmd contests.SubmitCommand) (c
 type participantFixture struct {
 	router    http.Handler
 	access    *fakeAccess
+	history   *fakeHistory
 	submitter *fakeSubmitter
 	stories   *conteststest.Stories
 	questions *conteststest.Questions
@@ -181,13 +208,14 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 	attempts := conteststest.NewAttempts()
 	reader := contests.NewReader(stories, questions, attempts, nil)
 	access := &fakeAccess{}
+	history := &fakeHistory{}
 	submitter := &fakeSubmitter{}
 
 	router := chi.NewRouter()
-	api.NewParticipantHandler(access, reader, submitter, mw, log, "en").Mount(router)
+	api.NewParticipantHandler(access, reader, history, submitter, mw, log, "en").Mount(router)
 
 	return &participantFixture{
-		router: router, access: access, submitter: submitter,
+		router: router, access: access, history: history, submitter: submitter,
 		stories: stories, questions: questions, attempts: attempts,
 		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: token},
 	}
@@ -364,6 +392,7 @@ func TestAccessRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 			for _, path := range []string{
 				"/contests/" + contestID.String() + "/play/story",
 				"/contests/" + contestID.String() + "/play/questions",
+				"/contests/" + contestID.String() + "/play/log",
 			} {
 				rec := f.get(path)
 				if rec.Code != tc.wantStatus {
@@ -398,7 +427,7 @@ func TestAParticipantOfAnotherContestLearnsNothingAboutThisOne(t *testing.T) {
 // sentinel the console maps to 429 (queryrunner.ErrTooManyQueries,
 // codeQueryTooOften).
 func TestARateLimitRefusalIsA429AndNeverReachesAccess(t *testing.T) {
-	for _, path := range []string{"story", "questions"} {
+	for _, path := range []string{"story", "questions", "log"} {
 		t.Run(path, func(t *testing.T) {
 			f := newParticipantFixture(t)
 			f.access.admitReadErr = queryrunner.ErrTooManyQueries
@@ -650,7 +679,7 @@ func TestParticipantRoutesDoNotShadowTheStaffContentEndpoints(t *testing.T) {
 	api.NewContestsHandler(stores.Service, mw, log, "en").Mount(router)
 	reader := contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts(), stores.Sequence)
 	access := &fakeAccess{err: queryproxy.ErrNotAParticipant}
-	api.NewParticipantHandler(access, reader, stores.Service, mw, log, "en").Mount(router)
+	api.NewParticipantHandler(access, reader, &fakeHistory{}, stores.Service, mw, log, "en").Mount(router)
 
 	do := func(path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -890,7 +919,7 @@ func TestSevenConcurrentAnswersEndUpAsARefusalNotAnInternalError(t *testing.T) {
 	router := chi.NewRouter()
 	// stores.Service, not a fakeSubmitter: what answers here is the real
 	// retry loop.
-	api.NewParticipantHandler(access, reader, stores.Service, mw, log, "en").Mount(router)
+	api.NewParticipantHandler(access, reader, &fakeHistory{}, stores.Service, mw, log, "en").Mount(router)
 
 	req := httptest.NewRequest(http.MethodPost,
 		"/contests/"+c.ID.String()+"/questions/"+q.ID.String()+"/answer",
@@ -923,5 +952,91 @@ func TestAnswerRateLimitRefusalIsA429AndNeverReachesSubmit(t *testing.T) {
 	}
 	if f.access.accessCalled || f.submitter.called {
 		t.Fatal("Access or Submit was reached after AdmitRead refused")
+	}
+}
+
+// The query log endpoint asks History for exactly the registration Access
+// resolved — never a value the request itself carries — and hands the query
+// string's limit and offset straight through, unmodified: clamping them is
+// History's own job (queryrunner.NormalizeHistoryPage), not this handler's.
+func TestQueryLogAsksHistoryForTheResolvedRegistrationAndThePagingParams(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	registrationID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: registrationID}
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log?limit=10&offset=20")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if !f.history.called {
+		t.Fatal("History was never called")
+	}
+	if f.history.gotRegistration != registrationID {
+		t.Fatalf("registration = %s, want %s (from Access, never the request)", f.history.gotRegistration, registrationID)
+	}
+	if f.history.gotLimit != 10 || f.history.gotOffset != 20 {
+		t.Fatalf("limit=%d offset=%d, want 10 and 20 straight from the query string", f.history.gotLimit, f.history.gotOffset)
+	}
+}
+
+// The response carries exactly what History returned, in its own vocabulary
+// — never a reference to another registration, and a row still `running`
+// carries no duration or row count rather than a false zero.
+func TestQueryLogResponseCarriesTheHistoryEntries(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+
+	duration, rows := 42, 7
+	f.history.items = []queryrunner.HistoryEntry{
+		{SQL: "SELECT * FROM suspects", Status: queryrunner.StatusOK, DurationMs: &duration, RowCount: &rows, ExecutedAt: time.Now()},
+		{SQL: "SELECT pg_sleep(5)", Status: queryrunner.StatusRunning},
+	}
+	f.history.total = 2
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Items []struct {
+			SQL        string `json:"sql"`
+			Status     string `json:"status"`
+			DurationMs *int   `json:"duration_ms"`
+			RowCount   *int   `json:"row_count"`
+		} `json:"items"`
+		Total int `json:"total"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if payload.Total != 2 || len(payload.Items) != 2 {
+		t.Fatalf("payload = %+v, want the two staged entries", payload)
+	}
+	if got := payload.Items[0]; got.SQL != "SELECT * FROM suspects" || got.Status != "ok" ||
+		got.DurationMs == nil || *got.DurationMs != 42 || got.RowCount == nil || *got.RowCount != 7 {
+		t.Fatalf("items[0] = %+v, want the completed entry's own outcome", got)
+	}
+	if got := payload.Items[1]; got.Status != "running" || got.DurationMs != nil || got.RowCount != nil {
+		t.Fatalf("items[1] = %+v, want a running row with no duration or row count", got)
+	}
+}
+
+// A failure to read the log is ours, not the participant's — the same
+// treatment every other infrastructure failure on this handler gets
+// (queryproxy.ErrUnavailable's own case in fail()).
+func TestQueryLogReadFailureIsA500(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.history.err = errors.New("connection reset")
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (body: %s)", rec.Code, rec.Body.String())
 	}
 }
