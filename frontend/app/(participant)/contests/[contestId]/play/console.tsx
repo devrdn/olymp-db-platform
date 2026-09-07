@@ -126,6 +126,12 @@ export function ConsoleEditor({
             if (mirrorRef.current) mirrorRef.current.value = text;
           }}
           errorPosition={state.kind === "refused" ? state.position : undefined}
+          // A fresh `state` object every settled run, even a refusal at the
+          // exact same character as the one before — see CodeEditor's own
+          // doc comment on `errorToken` for why that identity, not just the
+          // position number, is what the underline has to key on
+          // (finding 4).
+          errorToken={state}
         />
       </div>
       <div className="flex shrink-0 items-center gap-3">
