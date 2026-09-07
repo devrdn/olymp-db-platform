@@ -804,6 +804,13 @@ const en = {
         heading: "Questions",
         empty: "There are no questions to answer yet.",
         points: "{n} pts",
+        status: {
+          accepted: "accepted",
+          spent: "attempts spent",
+          current: "current",
+          open: "unanswered",
+          after: "after {n}",
+        },
         attemptsLeft: "{n} attempts left",
         noAttempts: "No attempts left",
         closed: "Closed.",
