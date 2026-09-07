@@ -756,6 +756,21 @@ const en = {
         // 7) for why five minutes and not some other threshold.
         fiveMinutesLeft: "Five minutes remaining.",
       },
+      schema: {
+        heading: "Schema",
+        language: "english",
+        search: "search the schema",
+        searchLabel: "Search the database schema",
+        nothingFound: "Nothing matches.",
+        unavailable: "This olympiad does not show the schema.",
+        empty: "This database has no tables.",
+        truncated: "Not the whole schema is shown.",
+        nullable: "may be NULL",
+        foreignKey: "references {table}",
+        foreignKeyCount: "foreign keys: {n}",
+        expand: "Expand table {table}",
+        collapse: "Collapse table {table}",
+      },
       story: {
         heading: "The story",
       },

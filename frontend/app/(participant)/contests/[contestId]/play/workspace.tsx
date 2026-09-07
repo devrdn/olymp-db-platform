@@ -3,9 +3,11 @@
 import { memo, useState } from "react";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
 import type { QuestionEntry } from "./questions-panel";
 import type { QueryLogEntry } from "@/lib/api/querylog";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import type { GameSchema } from "@/lib/api/schema";
 import type { Locale } from "@/lib/i18n/config";
 
 import type { ConsoleState } from "./actions";
@@ -13,6 +15,7 @@ import { ConsoleEditor } from "./console";
 import { PlayHeader } from "./play-header";
 import { QueryLogPanel } from "./query-log-panel";
 import { ResultPanel } from "./result-panel";
+import { SchemaPanel } from "./schema-panel";
 import { SidePanel } from "./side-panel";
 
 // Finding 5: a bottom-tab click sets state only in Workspace, but every
@@ -31,6 +34,9 @@ const MemoPlayHeader = memo(PlayHeader);
 const MemoResultPanel = memo(ResultPanel);
 const MemoQueryLogPanel = memo(QueryLogPanel);
 const MemoSidePanel = memo(SidePanel);
+// The schema never changes for the length of a contest, so nothing about a
+// tab click or a completed run has any business re-rendering its tree.
+const MemoSchemaPanel = memo(SchemaPanel);
 
 /**
  * The full-screen olympiad workspace: the console as the editor, a panel
@@ -60,6 +66,7 @@ export function Workspace({
   storyBody,
   storyUnavailable,
   questionEntries,
+  schema,
   initialLog,
   locale,
   dict,
@@ -69,6 +76,8 @@ export function Workspace({
   storyBody: React.ReactNode;
   storyUnavailable: string | null;
   questionEntries: QuestionEntry[];
+  /** The game's shape, or null in a contest that hides it — see SchemaPanel. */
+  schema: GameSchema | null;
   initialLog: { items: QueryLogEntry[]; total: number; failed: boolean };
   locale: Locale;
   dict: Dictionary;
@@ -112,13 +121,47 @@ export function Workspace({
     <div className="flex min-h-0 flex-col narrow:h-[calc(100dvh-3rem-1px)]">
       <MemoPlayHeader contestId={contestId} title={title} waitingForStart={false} dict={dict} />
 
-      <div className="grid min-h-0 grid-cols-1 narrow:flex-1 narrow:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+      {/* The design's three panes: the schema down the left, the editor and
+          its result in the middle, the story and the questions on the right
+          (docs/design/preview.html, "SQL-консоль"). The two side columns are
+          fixed widths and the middle one takes what is left, because the
+          middle is the only one whose content has no natural width — a
+          result table is as wide as the query made it.
+
+          Two columns, not three, in a contest that closed its catalogues:
+          the panel is absent rather than empty there, and leaving its column
+          in place would spend a fifth of the screen saying nothing. */}
+      <div
+        className={cn(
+          "grid min-h-0 grid-cols-1 narrow:flex-1",
+          schema !== null
+            ? "narrow:grid-cols-[13.25rem_minmax(0,1fr)_15.75rem]"
+            : "narrow:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]",
+        )}
+      >
+        {schema !== null ? (
+          // Source order is the wide layout's own order, so the tab order a
+          // participant walks matches what they see. Below the breakpoint
+          // that would put a reference panel above the thing they came to
+          // type in, so there — and only there — it is moved after the
+          // console.
+          //
+          // A flex column, not a block. The panel claims the cell with
+          // `flex-1`, and `flex-1` is inert inside a block parent — the exact
+          // defect that left the editor with no height at all (see the
+          // console cell below). With `max-h-80` on the narrow fallback the
+          // column has a bounded height rather than a definite one, which is
+          // why the panel's own scroller sits inside it and not here.
+          <div className="flex min-h-0 flex-col border-line narrow:border-r max-narrow:order-2 max-narrow:max-h-80 max-narrow:border-t">
+            <MemoSchemaPanel schema={schema} dict={dict} />
+          </div>
+        ) : null}
         {/* The console side: the editor on top, always visible, and the
             result/log tabs below it, sized 55/45 of this column's height —
             fixed on a workspace-height screen; on the narrow fallback each
             gets a comfortable minimum instead of a share of a height that no
             longer applies. */}
-        <div className="grid min-h-0 grid-rows-[minmax(0,11fr)_minmax(0,9fr)] border-line narrow:border-r max-narrow:grid-rows-none max-narrow:border-b">
+        <div className="grid min-h-0 grid-rows-[minmax(0,11fr)_minmax(0,9fr)] border-line narrow:border-r max-narrow:order-1 max-narrow:grid-rows-none max-narrow:border-b">
           {/* A flex column, not a block: the console's form claims the cell
               with flex-1, and flex-1 is inert inside a block parent — which
               left the editor with no height at all. */}
@@ -172,7 +215,7 @@ export function Workspace({
             (SPEC.md §5's own mobile reset) — one instance, one state, so a
             half-typed answer survives a resize the same way it survives a
             tab switch. */}
-        <div className="min-h-0 max-narrow:min-h-100 max-narrow:border-t max-narrow:border-line">
+        <div className="min-h-0 max-narrow:order-3 max-narrow:min-h-100 max-narrow:border-t max-narrow:border-line">
           <MemoSidePanel
             storyBody={storyBody}
             storyUnavailable={storyUnavailable}
