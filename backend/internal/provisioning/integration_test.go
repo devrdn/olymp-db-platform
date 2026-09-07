@@ -162,6 +162,44 @@ func TestAParticipantOnAnOldTemplateIsMovedOnFirstAsking(t *testing.T) {
 	}
 }
 
+// A row the reclaim sweep already dropped must never be handed back as a
+// live database. The version comparison alone cannot catch this: the row can
+// still carry the current template version even though the database behind
+// it is gone from the cluster — latent today because only a finished
+// contest's instances ever get dropped this way, one status transition away
+// from a returning participant meeting a raw "database does not exist".
+func TestEnsureRebuildsAnInstanceTheSweepAlreadyDropped(t *testing.T) {
+	service, fake, contest, people := serviceFor(t, 1)
+
+	first, err := service.Ensure(t.Context(), contest, people[0])
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+
+	if err := postgres.NewGameInstances(testPool).MarkDropped(t.Context(), first); err != nil {
+		t.Fatalf("marking dropped: %v", err)
+	}
+
+	second, err := service.Ensure(t.Context(), contest, people[0])
+	if err != nil {
+		t.Fatalf("ensure after the sweep dropped it: %v", err)
+	}
+	if second != first {
+		t.Fatalf("a new name was chosen: %q then %q; the row should have been rebuilt under its own name", first, second)
+	}
+	if made, _ := fake.counts(); made != 2 {
+		t.Fatalf("the cluster made %d databases; the second Ensure should have rebuilt it rather than handing back the dropped row", made)
+	}
+
+	instance, err := postgres.NewGameInstances(testPool).Of(t.Context(), people[0])
+	if err != nil {
+		t.Fatalf("reading the instance back: %v", err)
+	}
+	if instance.Status == provisioning.InstanceStatusDropped {
+		t.Fatal("the row is still marked dropped after Ensure rebuilt it")
+	}
+}
+
 // A database the record does not know about is a database nobody will ever
 // clean up. If recording fails, the cluster is put back as it was.
 func TestADatabaseIsNotLeftBehindWhenItCannotBeRecorded(t *testing.T) {

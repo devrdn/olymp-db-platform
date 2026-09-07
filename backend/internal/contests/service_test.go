@@ -160,6 +160,122 @@ func TestUpdateRefusesToChangeTheQuestionModeWhileRunning(t *testing.T) {
 	}
 }
 
+// The organizer's recourse when they discover, after the contest already
+// finished, that the reports are not done or a dispute is open — the whole
+// point of the exception.
+func TestExtendGraceLengthensAFinishedContestsGracePeriod(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusFinished)
+
+	updated, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, 120)
+	if err != nil {
+		t.Fatalf("ExtendGrace() = %v", err)
+	}
+	if updated.Settings.GracePeriodMin != 120 {
+		t.Fatalf("GracePeriodMin = %d, want 120", updated.Settings.GracePeriodMin)
+	}
+}
+
+// Archived is the other status Reclaim now honours (§2.4), so the same
+// recourse has to still reach a contest an organizer already archived.
+func TestExtendGraceAlsoReachesAnArchivedContest(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusArchived)
+
+	if _, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, 60); err != nil {
+		t.Fatalf("ExtendGrace() = %v", err)
+	}
+}
+
+// Every other status already has its own ordinary settings door; this one
+// must not become a second, wider way through it.
+func TestExtendGraceRefusesAnyStatusOtherThanFinishedOrArchived(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+
+	_, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, 120)
+	if !errors.Is(err, contests.ErrNotEditable) {
+		t.Errorf("ExtendGrace() = %v, want ErrNotEditable", err)
+	}
+}
+
+// "Extend" means grow: the one exception a finished contest's settings carry
+// must not become a way to shorten a grace an organizer already relied on.
+func TestExtendGraceRefusesToShortenAnExplicitlyConfiguredGrace(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusFinished)
+
+	if _, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, 500); err != nil {
+		t.Fatalf("setup ExtendGrace() = %v", err)
+	}
+
+	_, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, 100)
+	if !errors.Is(err, contests.ErrInvalidContest) {
+		t.Errorf("ExtendGrace() = %v, want ErrInvalidContest", err)
+	}
+}
+
+// A contest that never configured an explicit grace reads as 0 — "defer to
+// the installation default" — and this package has no view of that default
+// to compare against, so the first explicit value is accepted outright.
+func TestExtendGraceAcceptsTheFirstExplicitValueWhenNoneWasConfigured(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusFinished)
+	if c.Settings.GracePeriodMin != 0 {
+		t.Fatalf("setup: GracePeriodMin = %d, want 0", c.Settings.GracePeriodMin)
+	}
+
+	updated, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, 30)
+	if err != nil {
+		t.Fatalf("ExtendGrace() = %v", err)
+	}
+	if updated.Settings.GracePeriodMin != 30 {
+		t.Fatalf("GracePeriodMin = %d, want 30", updated.Settings.GracePeriodMin)
+	}
+}
+
+// A bound reaches this exception the same as everything else CLAUDE.md rule
+// 2 asks a stored field to carry.
+func TestExtendGraceRefusesAnUnboundedValue(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusFinished)
+
+	_, err := f.Service.ExtendGrace(context.Background(), uuid.New(), c.ID, 1_000_000_000)
+	if !errors.Is(err, contests.ErrInvalidContest) {
+		t.Errorf("ExtendGrace() = %v, want ErrInvalidContest", err)
+	}
+}
+
+// Nothing else about a finished contest is reachable through this door: it
+// is the grace period or nothing.
+func TestExtendGraceRecordsOnlyTheGraceField(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusFinished)
+	actor := uuid.New()
+
+	if _, err := f.Service.ExtendGrace(context.Background(), actor, c.ID, 180); err != nil {
+		t.Fatalf("ExtendGrace() = %v", err)
+	}
+
+	if len(f.Audit.Entries) != 1 {
+		t.Fatalf("%d audit entries were written, want 1", len(f.Audit.Entries))
+	}
+	entry := f.Audit.Entries[0]
+	if entry.Action != audit.ActionContestUpdate || entry.EntityID != c.ID.String() {
+		t.Fatalf("entry = %+v; wrong action or entity", entry)
+	}
+	changed, ok := entry.Payload["changes"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload = %+v, no changes map", entry.Payload)
+	}
+	if _, ok := changed["grace_period_min"]; !ok {
+		t.Fatalf("changes = %+v, missing grace_period_min", changed)
+	}
+	if len(changed) != 1 {
+		t.Fatalf("changes = %+v, want only grace_period_min recorded", changed)
+	}
+}
+
 func TestUpdateExtendsTheWindowOfARunningContest(t *testing.T) {
 	// The operator response to a power cut. Refusing it would be a policy that
 	// only ever hurts participants.

@@ -843,6 +843,7 @@ const ro = {
       "participant.enroll": "S-a înscris la o olimpiadă",
       "contest.access_denied": "A fost refuzat de restricția de rețea",
       "contest.instance_reclaimed": "A eliminat baza de date a unui participant după expirarea perioadei de grație a olimpiadei",
+      "contest.template_reclaimed": "A eliminat baza de date șablon a olimpiadei după ce fiecare copie a participanților dispăruse deja",
       "settings.change": "A schimbat setările instalării",
     },
     failureReasons: {

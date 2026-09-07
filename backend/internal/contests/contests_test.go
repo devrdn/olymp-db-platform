@@ -290,6 +290,29 @@ func TestValidateAcceptsAnIndividualDurationAtTheBound(t *testing.T) {
 	}
 }
 
+// CLAUDE.md rule 2: every field that reaches storage needs an explicit
+// bound. settings.grace_period_min governs how long a finished contest's
+// game databases outlive it (§2.4) and had only a floor before this — a
+// value entered without a ceiling would still reach make_interval.
+func TestValidateRejectsAGracePeriodPastTheBound(t *testing.T) {
+	c := validContest()
+	c.Settings.GracePeriodMin = 90*24*60 + 1
+
+	if err := c.Validate(); !errors.Is(err, contests.ErrInvalidContest) {
+		t.Errorf("Validate() = %v, want contests.ErrInvalidContest", err)
+	}
+}
+
+// The bound is inclusive: exactly 90 days is still accepted.
+func TestValidateAcceptsAGracePeriodAtTheBound(t *testing.T) {
+	c := validContest()
+	c.Settings.GracePeriodMin = 90 * 24 * 60
+
+	if err := c.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil", err)
+	}
+}
+
 func TestValidateRejectsFixedTimingCarryingADuration(t *testing.T) {
 	// A stray duration nothing reads is a setting an organizer would trust.
 	c := validContest()

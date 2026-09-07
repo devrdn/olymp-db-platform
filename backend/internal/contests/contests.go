@@ -100,6 +100,16 @@ const (
 // than merely under it is what makes this a bound and not a near miss.
 const maxDurationMin = 7 * 24 * 60
 
+// maxGracePeriodMin bounds settings.grace_period_min — CLAUDE.md rule 2: a
+// field that reaches storage needs an explicit bound, and this one governs
+// how long a finished contest's game databases outlive it (§2.4), read by
+// provisioning.Service.Reclaim through make_interval. 90 days is far beyond
+// any dispute or report an organizer would extend it for, and staying well
+// under the point make_interval's own arithmetic could misbehave at is the
+// same reasoning maxDurationMin above already applies to a duration in
+// minutes.
+const maxGracePeriodMin = 90 * 24 * 60
+
 // Errors the domain reports. They are the vocabulary the HTTP layer maps to
 // status codes, so each names a distinct situation a client can act on.
 var (
@@ -166,6 +176,12 @@ type Settings struct {
 	QueryRateLimitPerMin int `json:"query_rate_limit_per_min,omitempty"`
 	// GracePeriodMin keeps game databases alive after the finish, so somebody
 	// who lost their connection at the buzzer is not wiped out immediately.
+	// Read by provisioning.Service.Reclaim (§2.4); zero defers to the
+	// installation's own default rather than meaning "no grace at all" — a
+	// grace of zero would reclaim a just-finished contest's databases on the
+	// very next tick. The one field of a finished (or archived) contest that
+	// stays writable past SettingsEditable's own line — see Service.
+	// ExtendGrace, and its own doc for why.
 	GracePeriodMin int `json:"grace_period_min,omitempty"`
 }
 
@@ -337,6 +353,10 @@ func (c Contest) Validate() error {
 	}
 	if c.Settings.QueryRateLimitPerMin < 0 || c.Settings.GracePeriodMin < 0 {
 		return fmt.Errorf("%w: limits must not be negative", ErrInvalidContest)
+	}
+	if c.Settings.GracePeriodMin > maxGracePeriodMin {
+		return fmt.Errorf("%w: grace_period_min of %d exceeds the %d-minute bound",
+			ErrInvalidContest, c.Settings.GracePeriodMin, maxGracePeriodMin)
 	}
 
 	return validateLanguages(c.Languages)

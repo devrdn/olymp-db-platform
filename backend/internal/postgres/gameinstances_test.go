@@ -343,7 +343,7 @@ func TestReclaimableFindsAFinishedContestPastItsGrace(t *testing.T) {
 		t.Fatalf("adding an instance: %v", err)
 	}
 
-	candidates, err := repo.Reclaimable(t.Context(), 60)
+	candidates, err := repo.Reclaimable(t.Context(), 60, provisioning.ReclaimBatchLimit)
 	if err != nil {
 		t.Fatalf("reclaimable: %v", err)
 	}
@@ -361,12 +361,57 @@ func TestReclaimableSkipsAContestStillWithinGrace(t *testing.T) {
 		t.Fatalf("adding an instance: %v", err)
 	}
 
-	candidates, err := repo.Reclaimable(t.Context(), 60)
+	candidates, err := repo.Reclaimable(t.Context(), 60, provisioning.ReclaimBatchLimit)
 	if err != nil {
 		t.Fatalf("reclaimable: %v", err)
 	}
 	if reclaimableContestIDs(candidates)[contest] {
 		t.Fatal("a contest still inside its grace was offered for reclaim")
+	}
+}
+
+// Archiving is the ordinary "put this away" action an organizer reaches for
+// once a contest is done — contests.allowedTransitions lets a finished
+// contest move straight to archived — and it must not exempt the contest's
+// instances from the sweep forever. That was the unbounded leak this widened
+// status filter exists to close.
+func TestReclaimableIncludesAnArchivedContestPastItsGrace(t *testing.T) {
+	contest := reclaimContest(t, "archived", 2*time.Hour, nil)
+	repo := NewGameInstances(testPool)
+	if err := repo.AddSpare(t.Context(), contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+		t.Fatalf("adding an instance: %v", err)
+	}
+
+	candidates, err := repo.Reclaimable(t.Context(), 60, provisioning.ReclaimBatchLimit)
+	if err != nil {
+		t.Fatalf("reclaimable: %v", err)
+	}
+	if !reclaimableContestIDs(candidates)[contest] {
+		t.Fatal("an archived contest past its grace was not offered for reclaim")
+	}
+}
+
+// limit is what stops a fresh deployment's first tick from asking the
+// cluster to drop every historical instance in one call — the deploy-day
+// hazard provisioning.ReclaimBatchLimit's own doc explains. Two candidates of
+// its own guarantee at least two rows exist regardless of anything a
+// concurrently running test package happens to have left behind, so a limit
+// of one must return exactly one either way.
+func TestReclaimableLimitCapsHowManyInstancesOneCallReturns(t *testing.T) {
+	repo := NewGameInstances(testPool)
+	for range 2 {
+		contest := reclaimContest(t, "finished", 2*time.Hour, nil)
+		if err := repo.AddSpare(t.Context(), contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+			t.Fatalf("adding an instance: %v", err)
+		}
+	}
+
+	candidates, err := repo.Reclaimable(t.Context(), 60, 1)
+	if err != nil {
+		t.Fatalf("reclaimable: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("got %d candidates with limit 1, want exactly 1", len(candidates))
 	}
 }
 
@@ -383,7 +428,7 @@ func TestReclaimableNeverTouchesARunningOrPublishedContest(t *testing.T) {
 			t.Fatalf("adding an instance to a %s contest: %v", status, err)
 		}
 
-		candidates, err := repo.Reclaimable(t.Context(), 1)
+		candidates, err := repo.Reclaimable(t.Context(), 1, provisioning.ReclaimBatchLimit)
 		if err != nil {
 			t.Fatalf("reclaimable: %v", err)
 		}
@@ -414,7 +459,7 @@ func TestReclaimableHonoursTheContestsOwnGracePeriod(t *testing.T) {
 		t.Fatalf("adding an instance: %v", err)
 	}
 
-	candidates, err := repo.Reclaimable(t.Context(), 60)
+	candidates, err := repo.Reclaimable(t.Context(), 60, provisioning.ReclaimBatchLimit)
 	if err != nil {
 		t.Fatalf("reclaimable: %v", err)
 	}
@@ -440,7 +485,7 @@ func TestReclaimableExcludesInstancesAlreadyDropped(t *testing.T) {
 		t.Fatalf("marking dropped: %v", err)
 	}
 
-	candidates, err := repo.Reclaimable(t.Context(), 60)
+	candidates, err := repo.Reclaimable(t.Context(), 60, provisioning.ReclaimBatchLimit)
 	if err != nil {
 		t.Fatalf("reclaimable: %v", err)
 	}
@@ -469,6 +514,128 @@ func TestMarkDroppedLeavesTheRowBehindAsHistory(t *testing.T) {
 	var status string
 	if err := testPool.QueryRow(t.Context(),
 		`SELECT status FROM game_instances WHERE db_name = $1`, database).Scan(&status); err != nil {
+		t.Fatalf("the row was removed rather than marked: %v", err)
+	}
+	if status != "dropped" {
+		t.Fatalf("status = %q, want %q", status, "dropped")
+	}
+}
+
+// CLAUDE.md rule 7: the index lands with the query. Reclaimable and
+// ReclaimableTemplates both filter game_instances on `status <> 'dropped'`,
+// which the plain status index (migration 3) serves poorly once 'dropped'
+// becomes the majority of the table — this proves the partial index
+// migration 000021 added is actually on the schema the sweep runs against,
+// not merely described in a migration file nobody applied yet.
+func TestTheActiveInstancesIndexExists(t *testing.T) {
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
+	}
+	var name string
+	err := testPool.QueryRow(t.Context(),
+		`SELECT indexname FROM pg_indexes WHERE tablename = 'game_instances' AND indexname = 'game_instances_active_idx'`).
+		Scan(&name)
+	if err != nil {
+		t.Fatalf("game_instances_active_idx is missing (run make migrate-up): %v", err)
+	}
+}
+
+// reclaimTemplate stores a template database for contest in the given
+// status, so a ReclaimableTemplates test has something to offer or exclude.
+func reclaimTemplate(t *testing.T, contest uuid.UUID, status string) string {
+	t.Helper()
+	database := "reclaim_tpl_" + uuid.NewString()[:12]
+	if _, err := testPool.Exec(t.Context(),
+		`INSERT INTO game_templates (contest_id, template_db, init_script, status, version)
+		 VALUES ($1, $2, 'SELECT 1', $3, 1)`, contest, database, status); err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+	return database
+}
+
+// The largest single database a contest owns is offered once the contest is
+// finished past its grace and nothing is left that still needs it.
+func TestReclaimableTemplatesOffersATemplateWithNoInstancesLeft(t *testing.T) {
+	contest := reclaimContest(t, "finished", 2*time.Hour, nil)
+	database := reclaimTemplate(t, contest, "ready")
+	repo := NewGameInstances(testPool)
+
+	templates, err := repo.ReclaimableTemplates(t.Context(), 60, provisioning.ReclaimBatchLimit)
+	if err != nil {
+		t.Fatalf("reclaimable templates: %v", err)
+	}
+	found := false
+	for _, tpl := range templates {
+		if tpl.ContestID == contest {
+			found = true
+			if tpl.Database != database {
+				t.Fatalf("template database = %q, want %q", tpl.Database, database)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("a template with no instances left was not offered for reclaim")
+	}
+}
+
+// A template must never be offered while one of its own instances could
+// still be recreated from it — dropping the source ahead of what depends on
+// it would be exactly the ordering Reclaim's own doc says is backwards.
+func TestReclaimableTemplatesExcludesATemplateWithALiveInstanceStillThere(t *testing.T) {
+	contest := reclaimContest(t, "finished", 2*time.Hour, nil)
+	reclaimTemplate(t, contest, "ready")
+	repo := NewGameInstances(testPool)
+	if err := repo.AddSpare(t.Context(), contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+		t.Fatalf("adding an instance: %v", err)
+	}
+
+	templates, err := repo.ReclaimableTemplates(t.Context(), 60, provisioning.ReclaimBatchLimit)
+	if err != nil {
+		t.Fatalf("reclaimable templates: %v", err)
+	}
+	for _, tpl := range templates {
+		if tpl.ContestID == contest {
+			t.Fatal("a template was offered while a live instance still needed it")
+		}
+	}
+}
+
+// Only a built template ('ready') has a database on disk to remove; an
+// unbuilt or already-reclaimed one is nothing the cluster can be asked to
+// drop twice.
+func TestReclaimableTemplatesExcludesAnUnbuiltOrAlreadyDroppedTemplate(t *testing.T) {
+	repo := NewGameInstances(testPool)
+	for _, status := range []string{"pending", "building", "failed", "dropped"} {
+		contest := reclaimContest(t, "finished", 2*time.Hour, nil)
+		reclaimTemplate(t, contest, status)
+
+		templates, err := repo.ReclaimableTemplates(t.Context(), 60, provisioning.ReclaimBatchLimit)
+		if err != nil {
+			t.Fatalf("reclaimable templates (%s): %v", status, err)
+		}
+		for _, tpl := range templates {
+			if tpl.ContestID == contest {
+				t.Fatalf("a %s template was offered for reclaim", status)
+			}
+		}
+	}
+}
+
+// The row survives as history, the same convention MarkDropped keeps for an
+// instance — an organizer's audit search has to have something to find even
+// once the database itself is gone.
+func TestMarkTemplateDroppedLeavesTheRowBehindAsHistory(t *testing.T) {
+	contest := reclaimContest(t, "finished", 2*time.Hour, nil)
+	reclaimTemplate(t, contest, "ready")
+	repo := NewGameInstances(testPool)
+
+	if err := repo.MarkTemplateDropped(t.Context(), contest); err != nil {
+		t.Fatalf("mark template dropped: %v", err)
+	}
+
+	var status string
+	if err := testPool.QueryRow(t.Context(),
+		`SELECT status FROM game_templates WHERE contest_id = $1`, contest).Scan(&status); err != nil {
 		t.Fatalf("the row was removed rather than marked: %v", err)
 	}
 	if status != "dropped" {

@@ -76,6 +76,13 @@ const (
 	// database learns from the trail what removed it, and when, rather than
 	// filing a support ticket about a missing instance.
 	ActionGameInstanceReclaim = "contest.instance_reclaimed"
+	// ActionGameTemplateReclaim records a contest's template database dropped
+	// by the same sweep, once every instance copied from it is already gone
+	// (§2.4). The template is the largest single database a contest owns;
+	// its own action code rather than reusing ActionGameInstanceReclaim is
+	// what lets an organizer searching the trail tell "one participant's
+	// copy is gone" from "the whole game is gone" without reading payloads.
+	ActionGameTemplateReclaim = "contest.template_reclaimed"
 
 	// ActionSettingsChange records a change to what the installation calls
 	// itself and how it looks. It is entity "settings" with no identifier:
@@ -104,7 +111,7 @@ var actions = []string{
 
 	ActionParticipantAdd, ActionParticipantRemove, ActionParticipantDisqualify,
 	ActionParticipantEnroll, ActionContestAccessDenied, ActionContestStartBlocked,
-	ActionGameInstanceReclaim,
+	ActionGameInstanceReclaim, ActionGameTemplateReclaim,
 
 	ActionSettingsChange,
 }
