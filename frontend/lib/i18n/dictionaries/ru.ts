@@ -841,6 +841,7 @@ const ru = {
       "participant.disqualify": "Дисквалифицировал участника",
       "participant.enroll": "Записался на олимпиаду",
       "contest.access_denied": "Отклонён сетевым ограничением",
+      "contest.instance_reclaimed": "Удалил базу участника после истечения грейс-периода олимпиады",
       "settings.change": "Изменил настройки установки",
     },
     failureReasons: {

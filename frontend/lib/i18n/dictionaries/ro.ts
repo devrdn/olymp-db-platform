@@ -842,6 +842,7 @@ const ro = {
       "participant.disqualify": "A descalificat un participant",
       "participant.enroll": "S-a înscris la o olimpiadă",
       "contest.access_denied": "A fost refuzat de restricția de rețea",
+      "contest.instance_reclaimed": "A eliminat baza de date a unui participant după expirarea perioadei de grație a olimpiadei",
       "settings.change": "A schimbat setările instalării",
     },
     failureReasons: {

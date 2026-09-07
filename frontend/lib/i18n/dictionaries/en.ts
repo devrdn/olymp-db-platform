@@ -898,6 +898,7 @@ const en = {
       "participant.disqualify": "Disqualified a participant",
       "participant.enroll": "Signed up for a contest",
       "contest.access_denied": "Was refused by the network restriction",
+      "contest.instance_reclaimed": "Removed a participant's database once the contest's grace period passed",
       "settings.change": "Changed the installation's settings",
     },
     // Why an auth.login_failed entry happened — the closed vocabulary

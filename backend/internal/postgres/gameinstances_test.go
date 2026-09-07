@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -283,5 +284,194 @@ func TestLiveListsOnlyContestsWorthProvisioningFor(t *testing.T) {
 		if found[id] != want {
 			t.Fatalf("contest %s/%s: listed = %v, want %v", s.contest, s.template, found[id], want)
 		}
+	}
+}
+
+// reclaimContest creates a contest already at status, with its updated_at
+// backdated by age. Reclaimable judges a contest's finish moment by that
+// column — SetStatus and AdvanceFinished (contests.go) both set it in the
+// same statement that moves status to finished — never by a moment computed
+// in this process, so backdating it here is what stands in for "finished
+// this long ago" without waiting for real time to pass. graceMin, when not
+// nil, becomes the contest's own settings.grace_period_min.
+func reclaimContest(t *testing.T, status string, age time.Duration, graceMin *int) uuid.UUID {
+	t.Helper()
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
+	}
+	ctx := t.Context()
+	author := makeUser(t, ctx, "reclaim-"+uuid.NewString()[:8])
+
+	settings := "{}"
+	if graceMin != nil {
+		settings = fmt.Sprintf(`{"grace_period_min": %d}`, *graceMin)
+	}
+
+	var id uuid.UUID
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO contests (created_by, status, settings, updated_at)
+		 VALUES ($1, $2, $3::jsonb, now() - make_interval(mins => $4::int))
+		 RETURNING id`, author.ID, status, settings, int(age.Minutes())).Scan(&id); err != nil {
+		t.Fatalf("create contest: %v", err)
+	}
+	t.Cleanup(func() {
+		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = testPool.Exec(clean, `DELETE FROM contests WHERE id = $1`, id)
+	})
+	return id
+}
+
+// reclaimableContestIDs is the set of contest ids Reclaimable actually
+// offered, so a test can ask "was mine in there" without being upset by
+// leftovers from a test running concurrently against the same database.
+func reclaimableContestIDs(candidates []provisioning.ReclaimCandidate) map[uuid.UUID]bool {
+	found := make(map[uuid.UUID]bool, len(candidates))
+	for _, c := range candidates {
+		found[c.ContestID] = true
+	}
+	return found
+}
+
+// A contest finished well past the installation's own default grace, with no
+// grace of its own configured, is exactly the ordinary case the sweep exists
+// for.
+func TestReclaimableFindsAFinishedContestPastItsGrace(t *testing.T) {
+	contest := reclaimContest(t, "finished", 2*time.Hour, nil)
+	repo := NewGameInstances(testPool)
+	if err := repo.AddSpare(t.Context(), contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+		t.Fatalf("adding an instance: %v", err)
+	}
+
+	candidates, err := repo.Reclaimable(t.Context(), 60)
+	if err != nil {
+		t.Fatalf("reclaimable: %v", err)
+	}
+	if !reclaimableContestIDs(candidates)[contest] {
+		t.Fatal("a finished contest past its grace was not offered for reclaim")
+	}
+}
+
+// The grace exists precisely to protect this: a contest finished a moment ago
+// must not be touched yet.
+func TestReclaimableSkipsAContestStillWithinGrace(t *testing.T) {
+	contest := reclaimContest(t, "finished", 5*time.Minute, nil)
+	repo := NewGameInstances(testPool)
+	if err := repo.AddSpare(t.Context(), contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+		t.Fatalf("adding an instance: %v", err)
+	}
+
+	candidates, err := repo.Reclaimable(t.Context(), 60)
+	if err != nil {
+		t.Fatalf("reclaimable: %v", err)
+	}
+	if reclaimableContestIDs(candidates)[contest] {
+		t.Fatal("a contest still inside its grace was offered for reclaim")
+	}
+}
+
+// A running or published contest is never a candidate, however old its
+// updated_at happens to be — that column moves for reasons other than
+// finishing (an organizer editing settings, §4.1), and none of them say the
+// contest is over.
+func TestReclaimableNeverTouchesARunningOrPublishedContest(t *testing.T) {
+	repo := NewGameInstances(testPool)
+
+	for _, status := range []string{"running", "published", "draft"} {
+		contest := reclaimContest(t, status, 30*24*time.Hour, nil)
+		if err := repo.AddSpare(t.Context(), contest, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+			t.Fatalf("adding an instance to a %s contest: %v", status, err)
+		}
+
+		candidates, err := repo.Reclaimable(t.Context(), 1)
+		if err != nil {
+			t.Fatalf("reclaimable: %v", err)
+		}
+		if reclaimableContestIDs(candidates)[contest] {
+			t.Fatalf("a %s contest was offered for reclaim", status)
+		}
+	}
+}
+
+// A contest's own grace_period_min is what actually governs it — the
+// installation's own figure is only what an unconfigured contest defers to.
+func TestReclaimableHonoursTheContestsOwnGracePeriod(t *testing.T) {
+	repo := NewGameInstances(testPool)
+
+	short := 5
+	// Finished 10 minutes ago; its own 5-minute grace has passed although the
+	// installation default below would not have let it through on its own.
+	tighter := reclaimContest(t, "finished", 10*time.Minute, &short)
+	if err := repo.AddSpare(t.Context(), tighter, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+		t.Fatalf("adding an instance: %v", err)
+	}
+
+	long := 1000
+	// Finished 10 minutes ago too, but its own grace is nowhere near over,
+	// although the installation default alone would have let it through.
+	looser := reclaimContest(t, "finished", 10*time.Minute, &long)
+	if err := repo.AddSpare(t.Context(), looser, "reclaim_"+uuid.NewString()[:12], 1); err != nil {
+		t.Fatalf("adding an instance: %v", err)
+	}
+
+	candidates, err := repo.Reclaimable(t.Context(), 60)
+	if err != nil {
+		t.Fatalf("reclaimable: %v", err)
+	}
+	found := reclaimableContestIDs(candidates)
+	if !found[tighter] {
+		t.Fatal("a contest whose own tighter grace had passed was not offered")
+	}
+	if found[looser] {
+		t.Fatal("a contest whose own longer grace had not passed was offered anyway")
+	}
+}
+
+// An instance already marked dropped is history, not work: offering it again
+// would have the sweep asking the cluster to drop something twice.
+func TestReclaimableExcludesInstancesAlreadyDropped(t *testing.T) {
+	contest := reclaimContest(t, "finished", 2*time.Hour, nil)
+	repo := NewGameInstances(testPool)
+	database := "reclaim_" + uuid.NewString()[:12]
+	if err := repo.AddSpare(t.Context(), contest, database, 1); err != nil {
+		t.Fatalf("adding an instance: %v", err)
+	}
+	if err := repo.MarkDropped(t.Context(), database); err != nil {
+		t.Fatalf("marking dropped: %v", err)
+	}
+
+	candidates, err := repo.Reclaimable(t.Context(), 60)
+	if err != nil {
+		t.Fatalf("reclaimable: %v", err)
+	}
+	if reclaimableContestIDs(candidates)[contest] {
+		t.Fatal("an already-dropped instance was offered for reclaim again")
+	}
+}
+
+// The row survives, in the terminal status the schema has carried since
+// migration 3 for exactly this — an organizer's audit search has to have
+// something to find even once the database itself is gone.
+func TestMarkDroppedLeavesTheRowBehindAsHistory(t *testing.T) {
+	contest, _ := contestWithSpares(t, 1, 0)
+	repo := NewGameInstances(testPool)
+
+	spares, err := repo.Stale(t.Context(), contest, 2) // version 2 > 1 catches every copy
+	if err != nil || len(spares) != 1 {
+		t.Fatalf("setup: listing the spare: %v (%d found)", err, len(spares))
+	}
+	database := spares[0].Database
+
+	if err := repo.MarkDropped(t.Context(), database); err != nil {
+		t.Fatalf("mark dropped: %v", err)
+	}
+
+	var status string
+	if err := testPool.QueryRow(t.Context(),
+		`SELECT status FROM game_instances WHERE db_name = $1`, database).Scan(&status); err != nil {
+		t.Fatalf("the row was removed rather than marked: %v", err)
+	}
+	if status != "dropped" {
+		t.Fatalf("status = %q, want %q", status, "dropped")
 	}
 }

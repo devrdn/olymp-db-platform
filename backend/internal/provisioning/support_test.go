@@ -60,6 +60,15 @@ type cluster struct {
 	// high-water mark, "at most three at once" is a claim nothing checks.
 	creating, peak int
 	slow           time.Duration
+
+	// busy and failIdleDrop are what the reclaim tests use to control
+	// DropIdle per database: a name in busy comes back "not dropped, no
+	// error" — PostgreSQL refusing a plain DROP DATABASE against a live
+	// connection — and a name in failIdleDrop comes back a real error, the
+	// two outcomes Service.Reclaim has to tell apart.
+	busy         map[string]bool
+	failIdleDrop map[string]error
+	idleDropped  []string
 }
 
 func (c *cluster) CreateInstance(_ context.Context, _, instance string, _ sqlpolicy.Policy) error {
@@ -110,6 +119,48 @@ func (c *cluster) counts() (made, dropped int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.made), len(c.dropped)
+}
+
+// DropIdle reports the outcome a test set up for name: busy (not dropped, no
+// error), a configured failure, or an ordinary successful drop — recorded in
+// idleDropped, kept apart from dropped above so a test can tell Reclaim's own
+// drops from whatever Invalidate or TopUp did in the same run.
+func (c *cluster) DropIdle(_ context.Context, name string) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err, ok := c.failIdleDrop[name]; ok {
+		return false, err
+	}
+	if c.busy[name] {
+		return false, nil
+	}
+	c.idleDropped = append(c.idleDropped, name)
+	return true, nil
+}
+
+func (c *cluster) idleDrops() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.idleDropped...)
+}
+
+func (c *cluster) markBusy(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.busy == nil {
+		c.busy = map[string]bool{}
+	}
+	c.busy[name] = true
+}
+
+func (c *cluster) failIdleDropOf(name string, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.failIdleDrop == nil {
+		c.failIdleDrop = map[string]error{}
+	}
+	c.failIdleDrop[name] = err
 }
 
 // contestFor sets up a contest and the given number of registrations, removed

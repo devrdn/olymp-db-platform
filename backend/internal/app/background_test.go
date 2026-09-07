@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
 )
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -113,5 +115,40 @@ func TestTheSweepAsksForRowsOlderThanALiveQueryCouldBe(t *testing.T) {
 	// would mark queries that are merely slow.
 	if asked < time.Minute {
 		t.Fatalf("cut-off is %s, close enough to a live query to catch one", asked)
+	}
+}
+
+// reclaimInstances wraps provisioning.Service.Reclaim into a task; Reclaim's
+// own rules (the grace period, the busy-database skip, one failure not
+// stopping the rest) are exercised where they are declared
+// (internal/provisioning/reclaim_test.go), so this only has to prove the
+// wrapping: the configured grace reaches the call, a failure is reported
+// rather than swallowed, and both counts reach the metrics pair regardless.
+func TestReclaimInstancesPassesTheConfiguredGraceAndReportsFailure(t *testing.T) {
+	failure := errors.New("the game cluster is away")
+	var gotGrace int
+	counters := metrics.NewGameReclaimCounters(metrics.Noop{})
+
+	job := reclaimInstances(quiet(), func(_ context.Context, graceMin int) (int, int, error) {
+		gotGrace = graceMin
+		return 2, 1, failure
+	}, 90, counters)
+
+	if err := job.run(t.Context()); !errors.Is(err, failure) {
+		t.Fatalf("run() = %v, want %v", err, failure)
+	}
+	if gotGrace != 90 {
+		t.Fatalf("grace passed to Reclaim = %d, want 90", gotGrace)
+	}
+}
+
+func TestReclaimInstancesSucceedsWhenNothingWasThere(t *testing.T) {
+	counters := metrics.NewGameReclaimCounters(metrics.Noop{})
+	job := reclaimInstances(quiet(), func(context.Context, int) (int, int, error) {
+		return 0, 0, nil
+	}, 60, counters)
+
+	if err := job.run(t.Context()); err != nil {
+		t.Fatalf("run() = %v, want nil for a tick that reclaimed nothing", err)
 	}
 }

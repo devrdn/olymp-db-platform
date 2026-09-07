@@ -127,6 +127,17 @@ type Config struct {
 	// belongs to the package that enforces it (queryproxy.Service.WithGrace)
 	// rather than to a constant duplicated wherever a deadline is checked.
 	DeadlineGrace time.Duration
+	// GameInstanceGraceMin is what a contest's own settings.grace_period_min
+	// defers to when it is left at zero (docs/ARCHITECTURE.md §2.4, §4.2):
+	// the installation's own answer to "how long after a contest finishes
+	// does a participant's database survive", for every contest an organizer
+	// never configured one for. The same convention QueryPerMinute documents
+	// above, applied by provisioning.effectiveGrace instead of
+	// queryproxy.effectiveRateLimit. Unlike that one, zero here does not mean
+	// "no limit" — a grace of zero would reclaim a just-finished contest's
+	// databases on the very next tick, which is a deliberate, aggressive
+	// choice an operator makes on purpose, not a default nobody asked for.
+	GameInstanceGraceMin int
 }
 
 // Load reads configuration from the environment, applying defaults for
@@ -193,6 +204,15 @@ func Load() (Config, error) {
 	}
 	cfg.CopyStrategy = os.Getenv("GAME_COPY_STRATEGY")
 	cfg.QueryRunnerAddr = os.Getenv("QUERY_RUNNER_ADDR")
+	// A day unset: long enough for an organizer to pull reports and for a
+	// participant's last-second answer to land safely, short enough that a
+	// forgotten contest does not sit on a database indefinitely.
+	if cfg.GameInstanceGraceMin, err = intEnv("GAME_INSTANCE_GRACE_MIN", 24*60); err != nil {
+		return Config{}, err
+	}
+	if cfg.GameInstanceGraceMin < 0 {
+		return Config{}, fmt.Errorf("GAME_INSTANCE_GRACE_MIN cannot be negative, got %d", cfg.GameInstanceGraceMin)
+	}
 
 	cfg.DefaultLocale = envOrDefault("DEFAULT_LOCALE", "en")
 	if !languageTag.MatchString(cfg.DefaultLocale) {
