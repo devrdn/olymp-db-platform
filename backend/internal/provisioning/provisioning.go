@@ -46,6 +46,14 @@ type Instance struct {
 	Status          string
 }
 
+// InstanceStatusDropped is the terminal status the schema has carried since
+// migration 3 (docs/ARCHITECTURE.md §2.4): Reclaim leaves the row behind in
+// this status once the database itself is gone from the cluster. Ensure is
+// the one other place besides gameinstances.go that has to know the literal
+// — a dropped row is history, not a database it may hand back, whatever
+// template version it still carries from the moment it was last live.
+const InstanceStatusDropped = "dropped"
+
 // Stale is a database left over from an older template.
 type Stale struct {
 	Database string
@@ -69,15 +77,30 @@ type Repository interface {
 	// Game returns one contest's game, or ErrNoGame. Named apart from Of
 	// above, which answers about a registration rather than a contest.
 	Game(ctx context.Context, contestID uuid.UUID) (Contest, error)
-	// Reclaimable lists every not-yet-dropped instance of a contest that
-	// reached the finished status longer ago than its own grace period — or,
-	// for a contest that never configured one, longer ago than
-	// installationGraceMin. See ReclaimCandidate and Service.Reclaim.
-	Reclaimable(ctx context.Context, installationGraceMin int) ([]ReclaimCandidate, error)
+	// Reclaimable lists up to limit not-yet-dropped instances of a contest
+	// that reached the finished or archived status longer ago than its own
+	// grace period — or, for a contest that never configured one, longer ago
+	// than installationGraceMin. limit is what keeps one tick from issuing an
+	// unbounded run of DROP DATABASE against the cluster (Service.Reclaim's
+	// own doc explains the figure it passes). See ReclaimCandidate and
+	// Service.Reclaim.
+	Reclaimable(ctx context.Context, installationGraceMin, limit int) ([]ReclaimCandidate, error)
 	// MarkDropped moves one instance to the terminal 'dropped' status. The row
 	// stays — deleting it would leave an organizer's audit search with
 	// nothing to point to once the database itself is gone.
 	MarkDropped(ctx context.Context, database string) error
+	// ReclaimableTemplates lists up to limit contest templates that may be
+	// dropped: the contest is finished or archived past its grace, its
+	// template is a built database ('ready'), and every one of its instances
+	// is already gone ('dropped' or never provisioned at all). That last
+	// condition is the ordering Service.Reclaim's own doc talks about — a
+	// template is what instances are copied from, so it is never offered
+	// ahead of them.
+	ReclaimableTemplates(ctx context.Context, installationGraceMin, limit int) ([]TemplateCandidate, error)
+	// MarkTemplateDropped moves one contest's template to the terminal
+	// 'dropped' status, the same convention MarkDropped keeps for an
+	// instance's row.
+	MarkTemplateDropped(ctx context.Context, contestID uuid.UUID) error
 }
 
 // Cluster is the part of the game cluster this service drives.
@@ -123,6 +146,25 @@ type Service struct {
 // it is never what the cluster is busy doing.
 const DefaultWorkers = 3
 
+// ReclaimBatchLimit bounds how many instances (and, separately, how many
+// templates) one Reclaim pass drops.
+//
+// Without it, the first tick after this sweep is deployed pays for every
+// contest that finished before it existed in one go: the grace is measured
+// from a contest's own updated_at, already months old for anything already
+// finished, so nothing about the grace slows that first tick down — it is
+// entirely history by the time the sweep can see it. A cluster asked for
+// thousands of sequential DROP DATABASE statements in the minutes after boot
+// is the deploy-day outage this number exists to prevent.
+//
+// 200 is chosen to drain a real backlog in a handful of ticks — Reclaim runs
+// every ten minutes (internal/app/background.go), so even a few thousand
+// long-finished instances clear within a day — while keeping one tick's own
+// work small enough that it is done well before the next tick starts, on a
+// cluster this platform's own numbers (section 4.2: a pool of a few spares
+// per contest) never come close to needing all of at once.
+const ReclaimBatchLimit = 200
+
 // New assembles the service.
 func New(repo Repository, cluster Cluster) *Service {
 	return &Service{repo: repo, cluster: cluster, workers: DefaultWorkers}
@@ -158,19 +200,28 @@ func (s *Service) WithAudit(rec *audit.Recorder, uow storage.UnitOfWork) *Servic
 // waits, which is the case the pool exists to make rare.
 func (s *Service) Ensure(ctx context.Context, contest Contest, registration uuid.UUID) (string, error) {
 	switch existing, err := s.repo.Of(ctx, registration); {
-	case err == nil && existing.TemplateVersion >= contest.Version:
+	case err == nil && existing.Status != InstanceStatusDropped && existing.TemplateVersion >= contest.Version:
+		// Theirs, current, and actually there.
 		return existing.Database, nil
-	case err == nil:
+	case err == nil && existing.Status != InstanceStatusDropped:
 		// Theirs, but from a template that has since been rebuilt. Replacing
 		// it here rather than waiting for the sweep means a participant who
 		// arrives first is not the one who plays on old data.
-		if err := s.replace(ctx, contest, existing.Database); err != nil {
-			return "", err
-		}
-		if err := s.repo.Assign(ctx, contest.ID, registration, existing.Database, contest.Version); err != nil {
-			return "", err
-		}
-		return existing.Database, nil
+		return s.rebuildExisting(ctx, contest, registration, existing.Database)
+	case err == nil:
+		// existing.Status == InstanceStatusDropped: the row survives every
+		// reclaim as history (gameinstances.MarkDropped's own doc), but the
+		// database it names is gone from the cluster. The version comparison
+		// above cannot catch this — status, not how current the template was
+		// when the row was last written, is the fact that says whether the
+		// database still exists — so a dropped row must never be handed back
+		// as though it still had a live database behind it, whatever version
+		// it happens to carry. Today this only reaches a finished contest's
+		// own reclaimed instance; it also covers the one edit away — a
+		// transition back out of 'finished' — that would otherwise hand a
+		// returning participant a raw "database does not exist" instead of a
+		// rebuilt copy.
+		return s.rebuildExisting(ctx, contest, registration, existing.Database)
 	case !errors.Is(err, ErrNoInstance):
 		return "", err
 	}
@@ -376,6 +427,21 @@ func (s *Service) Ready(ctx context.Context, contest Contest) (bool, error) {
 // replace makes a database new again, keeping its name.
 func (s *Service) replace(ctx context.Context, contest Contest, database string) error {
 	return s.cluster.CreateInstance(ctx, contest.Template, database, contest.Policy)
+}
+
+// rebuildExisting makes database new again under its existing name and
+// reassigns it to registration, current and 'ready'. Ensure's own two
+// "this row cannot be handed back as-is" branches — a stale template version
+// and a dropped instance — repair themselves identically once each has
+// decided a rebuild is warranted; only the reason differs.
+func (s *Service) rebuildExisting(ctx context.Context, contest Contest, registration uuid.UUID, database string) (string, error) {
+	if err := s.replace(ctx, contest, database); err != nil {
+		return "", err
+	}
+	if err := s.repo.Assign(ctx, contest.ID, registration, database, contest.Version); err != nil {
+		return "", err
+	}
+	return database, nil
 }
 
 // The names. Short halves of two identifiers, which is enough to be unique

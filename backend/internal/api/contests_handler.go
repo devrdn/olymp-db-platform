@@ -82,6 +82,12 @@ func (h *ContestsHandler) Mount(r chi.Router) {
 			r.Group(func(r chi.Router) {
 				r.Use(h.mw.RequireContestPermission(rbac.PermissionContestEdit))
 				r.Patch("/", h.update)
+				// Reachable on a finished or archived contest, unlike
+				// everything else in this group — ExtendGrace is the one
+				// exception SettingsEditable itself carves out, and this
+				// route exists so an organizer has more recourse than
+				// hand-written SQL to use it (§2.4).
+				r.Patch("/grace", h.extendGrace)
 				r.Delete("/", h.delete)
 				r.Put("/languages", h.setLanguages)
 				r.Put("/translations", h.setTranslations)
@@ -493,6 +499,38 @@ func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {
 	cmd.ActorID = identity.UserID
 
 	updated, err := h.service.Update(r.Context(), cmd)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, toContestResponse(updated))
+}
+
+// graceRequest carries the one field extendGrace may change — a narrow body
+// for a narrow endpoint, rather than routing it through contestRequest's
+// full settings object, which would read as though the rest of settings were
+// negotiable here too.
+type graceRequest struct {
+	GracePeriodMin int `json:"grace_period_min"`
+}
+
+// extendGrace lengthens a finished (or archived) contest's game-database
+// grace period (§2.4, contests.Service.ExtendGrace) — the one exception to a
+// finished contest's otherwise-frozen settings.
+func (h *ContestsHandler) extendGrace(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+
+	var req graceRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+		return
+	}
+
+	identity, _ := auth.IdentityFrom(r.Context())
+	updated, err := h.service.ExtendGrace(r.Context(), identity.UserID, id, req.GracePeriodMin)
 	if err != nil {
 		h.fail(w, r, err)
 		return

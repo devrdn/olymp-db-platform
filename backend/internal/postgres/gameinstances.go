@@ -265,36 +265,62 @@ func (r *GameInstances) Live(ctx context.Context) ([]provisioning.Contest, error
 	return out, nil
 }
 
-// Reclaimable lists every not-yet-dropped instance of a contest that reached
-// 'finished' longer ago than its grace period allows.
-//
-// The finish moment is the contest's own updated_at, never a value computed
-// in this process: SetStatus and AdvanceFinished (contests.go) both set it in
-// the same statement that moves status to finished, whether the move was an
-// organizer's or the scheduler's, so this is the same clock DueToStart and
-// AdvanceFinished already trust for "has enough time passed" (their own
-// reasoning about replica clock skew applies here too — now() is this
-// database's own).
+// reclaimDeadline is the SQL fragment both Reclaimable and ReclaimableTemplates
+// share: the moment a contest's own grace period runs out, computed from its
+// finish (or archiving) moment rather than from a value this process
+// computes. SetStatus and AdvanceFinished (contests.go) both set updated_at
+// in the same statement that moves status to finished, and archiving a
+// contest is itself an update of the same row, so updated_at is later still
+// — the same clock DueToStart and AdvanceFinished already trust for "has
+// enough time passed" (their own reasoning about replica clock skew applies
+// here too — now() is this database's own).
 //
 // A contest's settings.grace_period_min governs it when set; a contest that
 // never configured one (the JSON key absent, coalesce's 0) defers to
 // installationGraceMin — provisioning.Service.Reclaim's own caller supplies
 // the installation's configured default, the same "contest overrides,
 // installation is the fallback" convention queryproxy.effectiveRateLimit
-// documents for QueryRateLimitPerMin.
-func (r *GameInstances) Reclaimable(ctx context.Context, installationGraceMin int) ([]provisioning.ReclaimCandidate, error) {
+// documents for QueryRateLimitPerMin. $1 is installationGraceMin in both
+// callers below.
+const reclaimDeadline = `c.updated_at + make_interval(mins => CASE
+	        WHEN coalesce((c.settings->>'grace_period_min')::int, 0) > 0
+	          THEN (c.settings->>'grace_period_min')::int
+	        ELSE $1
+	      END)`
+
+// Reclaimable lists up to limit not-yet-dropped instances of a contest that
+// reached 'finished' or 'archived' longer ago than its grace period allows.
+//
+// Both statuses, not only 'finished': contests.allowedTransitions lets an
+// organizer move a finished contest straight to 'archived', and archiving is
+// the ordinary "put this away" action, not a reason to exempt a contest's
+// instances from the sweep forever — the leak this whole pass exists to
+// close. updated_at at the moment of archiving is later than the finish
+// moment reclaimDeadline is built from either way, so the same grace still
+// protects a contest that was archived the instant it finished exactly as it
+// would have unarchived.
+//
+// limit is what keeps a fresh deployment's first tick from issuing one DROP
+// DATABASE per contest that finished before this sweep existed — see
+// provisioning.ReclaimBatchLimit's own doc for the number and why. The
+// ordering (by contest, then by when an instance was created) is what makes
+// a limited pass deterministic about which candidates it takes first rather
+// than an arbitrary subset changing tick to tick.
+func (r *GameInstances) Reclaimable(ctx context.Context, installationGraceMin, limit int) ([]provisioning.ReclaimCandidate, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
-		SELECT i.db_name, i.contest_id, i.registration_id
-		FROM game_instances i
-		JOIN contests c ON c.id = i.contest_id
-		WHERE c.status = 'finished'
-		  AND i.status <> 'dropped'
-		  AND c.updated_at + make_interval(mins => CASE
-		        WHEN coalesce((c.settings->>'grace_period_min')::int, 0) > 0
-		          THEN (c.settings->>'grace_period_min')::int
-		        ELSE $1
-		      END) <= now()
-		ORDER BY c.id, i.created_at`, installationGraceMin)
+		WITH candidates AS (
+			SELECT i.db_name, i.contest_id, i.registration_id, i.created_at,
+			       `+reclaimDeadline+` AS deadline
+			FROM game_instances i
+			JOIN contests c ON c.id = i.contest_id
+			WHERE c.status IN ('finished', 'archived')
+			  AND i.status <> 'dropped'
+		)
+		SELECT db_name, contest_id, registration_id, deadline
+		FROM candidates
+		WHERE deadline <= now()
+		ORDER BY contest_id, created_at
+		LIMIT $2`, installationGraceMin, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list reclaimable instances: %w", err)
 	}
@@ -303,7 +329,7 @@ func (r *GameInstances) Reclaimable(ctx context.Context, installationGraceMin in
 	var out []provisioning.ReclaimCandidate
 	for rows.Next() {
 		var c provisioning.ReclaimCandidate
-		if err := rows.Scan(&c.Database, &c.ContestID, &c.Registration); err != nil {
+		if err := rows.Scan(&c.Database, &c.ContestID, &c.Registration, &c.Deadline); err != nil {
 			return nil, fmt.Errorf("scan a reclaimable instance: %w", err)
 		}
 		out = append(out, c)
@@ -321,6 +347,70 @@ func (r *GameInstances) MarkDropped(ctx context.Context, database string) error 
 	if _, err := r.querier(ctx).Exec(ctx,
 		`UPDATE game_instances SET status = 'dropped', updated_at = now() WHERE db_name = $1`, database); err != nil {
 		return fmt.Errorf("mark %s dropped: %w", database, err)
+	}
+	return nil
+}
+
+// ReclaimableTemplates lists up to limit contest templates that may be
+// dropped: the contest reached 'finished' or 'archived' longer ago than its
+// grace period, its template is a built database ('ready' — a template still
+// 'pending', 'building' or already 'failed' has nothing on disk this could
+// remove), and every instance ever copied from it is already gone.
+//
+// That last condition — the NOT EXISTS below — is what makes the ordering
+// against Reclaimable safe: a template is never offered while a live
+// instance could still need the copy it was made from, so
+// provisioning.Service.Reclaim calling this after it has finished dropping
+// instances is what lets a contest whose very last instance was just
+// dropped this same tick have its template reclaimed in the same tick too,
+// rather than waiting for a tick where the NOT EXISTS has already gone stale
+// in this query's favour.
+func (r *GameInstances) ReclaimableTemplates(ctx context.Context, installationGraceMin, limit int) ([]provisioning.TemplateCandidate, error) {
+	rows, err := r.querier(ctx).Query(ctx, `
+		WITH candidates AS (
+			SELECT t.contest_id, t.template_db,
+			       `+reclaimDeadline+` AS deadline
+			FROM game_templates t
+			JOIN contests c ON c.id = t.contest_id
+			WHERE c.status IN ('finished', 'archived')
+			  AND t.status = 'ready'
+			  AND NOT EXISTS (
+			        SELECT 1 FROM game_instances i
+			        WHERE i.contest_id = t.contest_id AND i.status <> 'dropped'
+			      )
+		)
+		SELECT contest_id, template_db
+		FROM candidates
+		WHERE deadline <= now()
+		ORDER BY contest_id
+		LIMIT $2`, installationGraceMin, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list reclaimable templates: %w", err)
+	}
+	defer rows.Close()
+
+	var out []provisioning.TemplateCandidate
+	for rows.Next() {
+		var t provisioning.TemplateCandidate
+		if err := rows.Scan(&t.ContestID, &t.Database); err != nil {
+			return nil, fmt.Errorf("scan a reclaimable template: %w", err)
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list reclaimable templates: %w", err)
+	}
+	return out, nil
+}
+
+// MarkTemplateDropped moves one contest's template to the terminal 'dropped'
+// status — MarkDropped's own convention, kept for the same reason: the row
+// is what an organizer's audit search still has to point to once the
+// database itself is gone.
+func (r *GameInstances) MarkTemplateDropped(ctx context.Context, contestID uuid.UUID) error {
+	if _, err := r.querier(ctx).Exec(ctx,
+		`UPDATE game_templates SET status = 'dropped', updated_at = now() WHERE contest_id = $1`, contestID); err != nil {
+		return fmt.Errorf("mark the template of contest %s dropped: %w", contestID, err)
 	}
 	return nil
 }

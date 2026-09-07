@@ -68,6 +68,7 @@ export const AUDIT_ACTIONS = [
   "participant.enroll",
   "contest.access_denied",
   "contest.instance_reclaimed",
+  "contest.template_reclaimed",
 
   "settings.change",
 ] as const;

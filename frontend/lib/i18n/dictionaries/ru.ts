@@ -842,6 +842,7 @@ const ru = {
       "participant.enroll": "Записался на олимпиаду",
       "contest.access_denied": "Отклонён сетевым ограничением",
       "contest.instance_reclaimed": "Удалил базу участника после истечения грейс-периода олимпиады",
+      "contest.template_reclaimed": "Удалил шаблонную базу олимпиады после того, как все копии участников уже исчезли",
       "settings.change": "Изменил настройки установки",
     },
     failureReasons: {

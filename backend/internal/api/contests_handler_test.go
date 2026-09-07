@@ -311,6 +311,57 @@ func TestEditingAFinishedContestIsAConflict(t *testing.T) {
 	}
 }
 
+// The one exception a finished contest's otherwise-frozen settings carry
+// (§2.4, contests.Service.ExtendGrace): an organizer who discovers late that
+// they need more time still has an endpoint to reach for.
+func TestExtendingTheGracePeriodOfAFinishedContestSucceeds(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusFinished)
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String()+"/grace", `{"grace_period_min": 120}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	body := decode(t, rec)
+	settings, ok := body["settings"].(map[string]any)
+	if !ok {
+		t.Fatalf("response carries no settings object: %s", rec.Body.String())
+	}
+	if settings["grace_period_min"] != float64(120) {
+		t.Errorf("settings.grace_period_min = %v, want 120", settings["grace_period_min"])
+	}
+}
+
+// Every status but finished and archived already has its own ordinary
+// settings door open; this one must not become a second, wider way in.
+func TestExtendingTheGracePeriodOfARunningContestIsAConflict(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusRunning)
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String()+"/grace", `{"grace_period_min": 120}`)
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// "Extend" means grow — shortening a grace an organizer already relied on
+// must be refused, not silently accepted as an ordinary edit.
+func TestShorteningAnAlreadyExtendedGracePeriodIsRejected(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusFinished)
+	if _, err := f.service.ExtendGrace(t.Context(), f.actor.ID, c.ID, 500); err != nil {
+		t.Fatalf("setup ExtendGrace() = %v", err)
+	}
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String()+"/grace", `{"grace_period_min": 100}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAnUnsafeWritableTableIsRejected(t *testing.T) {
 	// These names end up in GRANT statements, so the refusal has to reach the
 	// organizer as a bad request rather than a 500 from the database.
