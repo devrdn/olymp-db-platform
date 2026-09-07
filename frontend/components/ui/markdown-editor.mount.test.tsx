@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 
 import { MarkdownEditor } from "./markdown-editor";
@@ -25,12 +25,16 @@ describe("the real editor", () => {
         labels={{ expand: "expand", collapse: "collapse", unavailable: "нет" }}
       />,
     );
-    await new Promise((resolve) => setTimeout(resolve, 800));
-
-    const surface = document.querySelector(".ProseMirror");
-    expect(surface).not.toBeNull();
+    // Waited for, not slept through. The editor arrives on a dynamic import,
+    // and how long that takes is a property of the machine running the suite
+    // rather than of the editor: a fixed 800ms passed alone and failed under a
+    // full-suite run, which is a flaky test rather than a caught bug.
+    const surface = await waitFor(() => {
+      const found = document.querySelector(".ProseMirror");
+      expect(found?.textContent).toContain("A heading");
+      return found;
+    });
     expect(surface).toHaveAttribute("contenteditable", "true");
-    expect(surface?.textContent).toContain("A heading");
 
     // The form field carries the Markdown, not the rendered text: the field is
     // what a save actually sends.
@@ -50,9 +54,9 @@ describe("the real editor", () => {
         labels={{ expand: "e", collapse: "c", unavailable: "plain" }}
       />,
     );
-    await new Promise((resolve) => setTimeout(resolve, 800));
-
-    expect(document.querySelector(".ProseMirror")?.textContent).toContain("SELECT 1;");
+    await waitFor(() =>
+      expect(document.querySelector(".ProseMirror")?.textContent).toContain("SELECT 1;"),
+    );
 
     const field = document.querySelector('input[name="story"]') as HTMLInputElement;
     expect(field.value).toContain("```");
@@ -84,9 +88,7 @@ describe("when the editor cannot be loaded", () => {
         labels={{ expand: "e", collapse: "c", unavailable: "plain Markdown here" }}
       />,
     );
-    await new Promise((resolve) => setTimeout(resolve, 300));
-
-    const field = screen.getByRole("textbox") as HTMLTextAreaElement;
+    const field = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
     expect(field).toHaveAttribute("name", "story");
     expect(field.value).toBe("# A heading");
     expect(screen.getByRole("status")).toHaveTextContent("plain Markdown here");

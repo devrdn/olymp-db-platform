@@ -1,6 +1,5 @@
-import { Band } from "@/components/layout/band";
 import { FocusShell } from "@/components/layout/focus-shell";
-import { StateView } from "@/components/product/state-view";
+import { NotFoundView } from "@/components/product/not-found-view";
 import { branding } from "@/lib/api/branding";
 import { imageHref } from "@/lib/api/settings";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
@@ -12,12 +11,12 @@ export async function generateMetadata() {
 }
 
 /**
- * The address that leads nowhere.
+ * An address matching no route group at all.
  *
- * A Server Component, so it is translated like every other screen rather than
- * falling back to the framework's English default. It is a terminal error and
- * not a recoverable one: a wrong address does not become right
- * on a second attempt, so it offers a way out instead of a retry.
+ * The one not-found that carries a shell, because there is no group layout
+ * above it to supply one. Every group has its own `not-found.tsx` rendering
+ * `NotFoundView` bare — see that component for why a second shell here was a
+ * second header on screen.
  */
 export default async function NotFound() {
   const [brand, dict, locale, theme] = await Promise.all([
@@ -26,22 +25,16 @@ export default async function NotFound() {
     activeLocale(),
     activeTheme(),
   ]);
-  const t = dict.screens.notFound;
 
   return (
     <FocusShell
       name={brand.name}
-      logo={brand.images.logo ? imageHref("logo", brand.images.logo) : undefined} locale={locale} theme={theme} dict={dict}>
-      <Band fill>
-        <StateView
-          state={{
-            kind: "error-terminal",
-            title: t.title,
-            body: t.body,
-            exit: { label: t.home, href: "/contests" },
-          }}
-        />
-      </Band>
+      logo={brand.images.logo ? imageHref("logo", brand.images.logo) : undefined}
+      locale={locale}
+      theme={theme}
+      dict={dict}
+    >
+      <NotFoundView />
     </FocusShell>
   );
 }

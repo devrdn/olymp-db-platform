@@ -78,16 +78,14 @@ describe("the game editor", () => {
 
   // The server refuses it too; saying so before the request is made is the
   // difference between a limit and a rejection.
-  test("refuses to submit a script past the size limit", async () => {
-    const user = userEvent.setup();
-    show(game(), { script: "" });
+  test("refuses to submit a script past the size limit", () => {
+    // Measured from the script the screen opens on, rather than typed in.
+    // Pasting half a mebibyte through userEvent took a second of the suite's
+    // time to prove a rule that is true the moment the page renders — and
+    // that second was enough to push another suite's own timing over.
+    show(game(), { script: "x".repeat(512 * 1024 + 1) });
 
-    // The editor's own field, whatever CodeMirror has or has not loaded yet.
-    const field = screen.getByRole("textbox", { name: t.label });
-    await user.click(field);
-    await user.paste("x".repeat(512 * 1024 + 1));
-
-    await waitFor(() => expect(screen.getByRole("button", { name: t.save })).toBeDisabled());
+    expect(screen.getByRole("button", { name: t.save })).toBeDisabled();
     expect(screen.getByText(t.tooLong)).toBeInTheDocument();
   });
 

@@ -133,6 +133,7 @@ const ro = {
       database: "bază",
       buildError: "Construirea a eșuat",
       buildErrorLede: "Acestea sunt cuvintele PostgreSQL. Corectați scriptul și salvați din nou.",
+      unavailable: "Această instalare nu are un cluster de joc configurat, deci nu există unde să se construiască baza de joc. Setați GAME_PROVISIONER_DSN și reporniți API-ul.",
       status: {
         absent: "fără joc",
         pending: "în așteptare",

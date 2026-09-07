@@ -133,6 +133,7 @@ const ru = {
       database: "база",
       buildError: "Сборка не удалась",
       buildErrorLede: "Это ответ самого PostgreSQL. Исправьте скрипт и сохраните снова.",
+      unavailable: "В этой установке не настроен игровой кластер, поэтому игровую базу негде собрать. Задайте GAME_PROVISIONER_DSN и перезапустите API.",
       status: {
         absent: "нет игры",
         pending: "в очереди на сборку",
