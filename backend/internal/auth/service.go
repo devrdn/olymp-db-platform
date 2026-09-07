@@ -75,7 +75,14 @@ var (
 // account — see checkThrottle) collapse into ReasonTooManyAttempts for the
 // same reason: the caller is told "too many attempts" either way, never which
 // counter tripped.
+//
+// These are vocabulary, not secrets: each is a code the audit trail stores and
+// the interface renders in the reader's own language. A scanner reads
+// "Credentials" in the name and asks whether a password was pasted into the
+// source; the answer is that this names the *kind of refusal*, and nothing here
+// is ever compared against anything a caller sends.
 const (
+	// #nosec G101 -- an audit reason code, not a credential.
 	ReasonInvalidCredentials = "invalid_credentials"
 	ReasonAccountBlocked     = "account_blocked"
 	ReasonTooManyAttempts    = "too_many_attempts"

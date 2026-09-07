@@ -99,8 +99,17 @@ const attemptBackoffBase = 4 * time.Millisecond
 // race for the (attempt+1)-th time: an exponentially growing base, jittered
 // by up to half so that several submitters who lost the same round do not
 // all wake up and collide again at the same instant.
+//
+// The jitter is scheduling, not secrecy. It decides no access, mints no token
+// and protects nothing a caller could gain by predicting it: somebody who knew
+// the delay exactly could at best arrange to collide on purpose, which they can
+// already do by submitting at the same moment, and which the unique constraint
+// on (registration_id, question_id, attempt_no) settles either way. A
+// cryptographic source here would buy nothing and can fail, which a retry delay
+// must not.
 func attemptBackoff(attempt int) time.Duration {
 	base := attemptBackoffBase << uint(attempt) // #nosec G115 -- attempt is bounded by maxAttemptRetries
+	// #nosec G404 -- jitter for a retry delay, not a security decision; see above.
 	return base/2 + time.Duration(rand.Int64N(int64(base/2)+1))
 }
 
