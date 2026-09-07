@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { ApiError } from "@/lib/api/client";
+import { cleanEditorMarkdown } from "@/lib/format/markdown";
 import { isId } from "@/lib/api/ids";
 import { serverRequest } from "@/lib/api/server";
 
@@ -29,7 +30,10 @@ export async function saveStoryAction(_previous: StoryState, form: FormData): Pr
   const translations: Record<string, string> = {};
   for (const [key, value] of form.entries()) {
     if (!key.startsWith("body.")) continue;
-    const body = String(value).trim();
+    // Cleaned before it is stored, not only before it is shown: the editor
+    // serialises an empty paragraph as a literal `<br />`, and this text is
+    // also what an export will carry (see cleanEditorMarkdown).
+    const body = cleanEditorMarkdown(String(value)).trim();
     if (body) translations[key.slice("body.".length)] = body;
   }
 
