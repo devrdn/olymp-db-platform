@@ -108,6 +108,15 @@ test-db: require-env ## Run the repository tests against the development databas
 test-game: require-env ## Run the game cluster tests against the development cluster
 	cd $(BACKEND) && GAME_DB_DSN="$(GAME_DB_DSN)" go test -count=1 ./internal/gamedb/... ./internal/queryrunner/...
 
+# The one test that crosses both clusters: a script saved in the core database
+# has to become a real database on the game cluster. Every other test of that
+# feature stops at a boundary, which is how BuildTemplate went months with no
+# caller at all.
+.PHONY: test-game-build
+test-game-build:
+	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" GAME_DB_DSN="$(GAME_DB_DSN)" \
+		go test -count=1 -run TestAScriptSavedInTheCoreDatabase ./internal/provisioning/
+
 # The contract between the Core API and the Query Runner. Generated code is
 # committed, so a checkout builds without protoc and CI needs no toolchain for
 # it. `make proto` regenerates; `make proto-check` is what actually notices a
