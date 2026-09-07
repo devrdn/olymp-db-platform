@@ -553,6 +553,47 @@ func TestQuestionsCarryAttemptsRemainingAndClosed(t *testing.T) {
 	}
 }
 
+// Finding 5: a reloaded question list must say whether a closed question was
+// won, and for how much — the only way a participant can tell "closed
+// because solved" from "closed because every attempt is spent" without
+// re-submitting to find out.
+func TestQuestionsCarryCorrectAndPointsAwarded(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	registrationID := uuid.New()
+	f.access.contest = contests.Contest{
+		ID: contestID, Status: contests.StatusRunning,
+		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
+	}
+	f.access.participant = contests.Participant{ID: registrationID}
+
+	q := f.questions.Put(contests.Question{
+		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
+		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}},
+	})
+	f.attempts.Put(registrationID, q.ID, contests.AttemptStats{Attempts: 1, Correct: true, PointsAwarded: 10})
+
+	rec := f.get("/contests/" + contestID.String() + "/play/questions")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Items []struct {
+			Correct       bool `json:"correct"`
+			PointsAwarded int  `json:"points_awarded"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(payload.Items) != 1 {
+		t.Fatalf("items = %+v, want 1", payload.Items)
+	}
+	if got := payload.Items[0]; !got.Correct || got.PointsAwarded != 10 {
+		t.Fatalf("item = %+v, want {Correct: true, PointsAwarded: 10}", got)
+	}
+}
+
 // A contest identifier that is not a UUID is a 400, not a 500 and not a call
 // to Access with garbage.
 func TestAnInvalidContestIDInTheURLIsA400(t *testing.T) {

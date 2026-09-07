@@ -46,7 +46,7 @@ export function PlayHeader({
 }) {
   const t = dict.participant.play;
   const router = useRouter();
-  const { offsetRef, deadlineRef, phase } = useContestEvents(
+  const { offsetRef, deadlineRef, phase, channelError } = useContestEvents(
     contestId,
     waitingForStart ? "waiting" : "running",
   );
@@ -71,6 +71,18 @@ export function PlayHeader({
         {phase === "finished" ? <Tag tone="mute">{t.finishedTag}</Tag> : null}
       </div>
       <PlayClock offsetRef={offsetRef} deadlineRef={deadlineRef} phase={phase} dict={dict} />
+      {/* Finding 1: the channel this clock runs on can fail outright (a
+          connection limit, a rate limit, this account losing access) and, per
+          the SSE spec, the browser then never retries on its own — see
+          use-contest-events.ts's own doc. Without this, that failure was
+          invisible: the clock simply stopped moving, with nothing on screen
+          to say why. `w-full` forces it onto its own line in this flex-wrap
+          row rather than squeezing the title or the clock. */}
+      {channelError ? (
+        <p role="status" aria-live="polite" className="w-full basis-full text-small text-warn">
+          {(dict.errors as Record<string, string>)[channelError] ?? dict.errors.fallback}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -110,6 +122,13 @@ function PlayClock({
   const [snapshot, setSnapshot] = useState<ClockSnapshot>({ now: 0, offset: 0, deadline: null });
 
   useEffect(() => {
+    // Nothing reads `snapshot` outside the running branch below — "waiting"
+    // and "finished" are fixed text — so a tick while either of those is
+    // showing would cost a render for a `<span>` that never changes (finding
+    // 6). The countdown itself catches up in one `tick()` the instant `phase`
+    // becomes "running", so nothing is lost by not ticking before then.
+    if (phase !== "running") return;
+
     const tick = () => setSnapshot({ now: Date.now(), offset: offsetRef.current, deadline: deadlineRef.current });
     tick();
     const id = setInterval(tick, 1000);
@@ -118,10 +137,53 @@ function PlayClock({
     // life, and read through `.current` inside `tick` rather than captured
     // here, so they need no place in this list to stay current.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [phase]);
+
+  // What a screen reader is told without being asked, and when (finding 7).
+  // `role="timer"` below is `aria-live="off"`: reading the whole countdown
+  // out loud every second would turn a two-hour contest into two hours of
+  // chatter, so nothing is announced by default. But a participant who
+  // cannot glance at a sticky corner of the screen still needs to know the
+  // deadline is close, the same way the sighted tone changes below already
+  // say it in color — bad at five minutes, warn at fifteen. Five minutes is
+  // the threshold chosen to interrupt for: the earlier, fifteen-minute color
+  // change is a nudge a glance already covers, but five minutes is close
+  // enough that missing it matters, and late enough that only one
+  // interruption is ever owed for it. "Time is up" is the other: the
+  // countdown reaching zero, once, the same milestone the visible clock
+  // marks by turning "bad" for the second time. Computed once per render
+  // from `phase` and `snapshot` rather than duplicated across the branches
+  // below, so every path — including a deadline that resolves to already
+  // expired — shares the one place that decides whether this render just
+  // crossed a threshold.
+  const milestone = clockMilestone(phase, snapshot);
+  // State, not a ref: the comparison below runs during render (the same
+  // "adjust state when something changes" pattern questions-panel.tsx's own
+  // formKey logic uses), and a ref's `.current` may not be read there — only
+  // state may.
+  const [seenMilestone, setSeenMilestone] = useState<Milestone>("none");
+  const [announcement, setAnnouncement] = useState("");
+  if (milestone !== seenMilestone) {
+    setSeenMilestone(milestone);
+    setAnnouncement(milestone === "five" ? t.fiveMinutesLeft : milestone === "timeup" ? t.timeUp : "");
+  }
+  // sr-only: present for assistive technology, invisible otherwise — the
+  // sighted clock beside it already shows every one of these facts in color
+  // and text, continuously, so this exists only for the reader that cannot
+  // see it.
+  const live = (
+    <span aria-live="polite" className="sr-only">
+      {announcement}
+    </span>
+  );
 
   if (phase === "waiting") {
-    return <ClockText tone="ink-2">{t.waiting}</ClockText>;
+    return (
+      <>
+        {live}
+        <ClockText tone="ink-2">{t.waiting}</ClockText>
+      </>
+    );
   }
 
   // The channel itself said the contest is over — a fact, not a guess this
@@ -130,7 +192,12 @@ function PlayClock({
   // deadline math so a participant who never started still reads "time is
   // up" rather than "starts with your first action" once it is finished.
   if (phase === "finished") {
-    return <ClockText tone="bad">{t.timeUp}</ClockText>;
+    return (
+      <>
+        {live}
+        <ClockText tone="bad">{t.timeUp}</ClockText>
+      </>
+    );
   }
 
   const { deadline } = snapshot;
@@ -139,7 +206,12 @@ function PlayClock({
     // individual-timing case where the deadline arrives with their first
     // action, not with the contest's own start (Deadline's own doc on the Go
     // side). Showing a blank clock here would read as a bug; this says why.
-    return <ClockText tone="ink-2">{t.notStarted}</ClockText>;
+    return (
+      <>
+        {live}
+        <ClockText tone="ink-2">{t.notStarted}</ClockText>
+      </>
+    );
   }
 
   const remainingMs = deadline - (snapshot.now + snapshot.offset);
@@ -151,14 +223,34 @@ function PlayClock({
     // this reads zero can still be accepted. Nothing here disables anything —
     // the API's own refusal, if there is one, is what the console and the
     // answer forms already show.
-    return <ClockText tone="bad">{t.timeUp}</ClockText>;
+    return (
+      <>
+        {live}
+        <ClockText tone="bad">{t.timeUp}</ClockText>
+      </>
+    );
   }
 
   return (
-    <ClockText tone={remainingMs <= 5 * 60_000 ? "bad" : remainingMs <= 15 * 60_000 ? "warn" : "ink"}>
-      {formatRemaining(remainingMs)}
-    </ClockText>
+    <>
+      {live}
+      <ClockText tone={remainingMs <= 5 * 60_000 ? "bad" : remainingMs <= 15 * 60_000 ? "warn" : "ink"}>
+        {formatRemaining(remainingMs)}
+      </ClockText>
+    </>
   );
+}
+
+/** The two moments PlayClock's live region ever interrupts a screen reader for, and "none" the rest of the time. */
+type Milestone = "none" | "five" | "timeup";
+
+/** What PlayClock's own countdown math would show, reduced to just the milestone the live region cares about (see PlayClock's own doc, finding 7). */
+function clockMilestone(phase: "waiting" | "running" | "finished", snapshot: ClockSnapshot): Milestone {
+  if (phase !== "running" || snapshot.deadline === null) return "none";
+  const remainingMs = snapshot.deadline - (snapshot.now + snapshot.offset);
+  if (remainingMs <= 0) return "timeup";
+  if (remainingMs <= 5 * 60_000) return "five";
+  return "none";
 }
 
 function ClockText({ tone, children }: { tone: "ink" | "ink-2" | "warn" | "bad"; children: React.ReactNode }) {

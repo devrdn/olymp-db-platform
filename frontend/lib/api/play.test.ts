@@ -21,6 +21,8 @@ describe("playQuestionSchema", () => {
     choices: { a: "The butler", b: "The gardener" },
     closed: false,
     can_answer: true,
+    correct: false,
+    points_awarded: 0,
   };
 
   test("reads an omitted attempt count as no limit, not as zero", () => {
@@ -53,6 +55,27 @@ describe("playQuestionSchema", () => {
 
   test("refuses a kind the API contract does not declare", () => {
     expect(() => playQuestionSchema.parse({ ...base, kind: "essay" })).toThrow();
+  });
+
+  // Finding 5: a closed question must say whether it was won, and for how
+  // much — the only way a reloaded screen can tell "closed because solved"
+  // from "closed because every attempt is spent".
+  test("carries correct and points_awarded as the server sent them", () => {
+    const parsed = playQuestionSchema.parse({
+      ...base,
+      closed: true,
+      can_answer: false,
+      correct: true,
+      points_awarded: 8,
+    });
+    expect(parsed.correct).toBe(true);
+    expect(parsed.pointsAwarded).toBe(8);
+  });
+
+  test("a question never answered correctly carries no points", () => {
+    const parsed = playQuestionSchema.parse(base);
+    expect(parsed.correct).toBe(false);
+    expect(parsed.pointsAwarded).toBe(0);
   });
 });
 

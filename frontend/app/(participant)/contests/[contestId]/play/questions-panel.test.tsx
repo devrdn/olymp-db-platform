@@ -36,6 +36,8 @@ function question(overrides: Partial<PlayQuestion> = {}): PlayQuestion {
     attemptsRemaining: undefined,
     closed: false,
     canAnswer: true,
+    correct: false,
+    pointsAwarded: 0,
     ...overrides,
   };
 }
@@ -46,9 +48,9 @@ function question(overrides: Partial<PlayQuestion> = {}): PlayQuestion {
  * This fake stands in for that render — a plain span carrying the question's
  * own wording — so a test can still find it by text.
  */
-function entry(overrides: Partial<PlayQuestion> = {}): QuestionEntry {
+function entry(overrides: Partial<PlayQuestion> = {}, index = 1): QuestionEntry {
   const q = question(overrides);
-  return { question: q, body: <span>{q.bodyMd}</span> };
+  return { question: q, index, body: <span>{q.bodyMd}</span> };
 }
 
 async function submit(value = "the gardener") {
@@ -221,5 +223,79 @@ describe("the questions panel", () => {
     // it must still hold what was typed before the first one was submitted.
     expect(screen.getAllByRole("textbox")).toHaveLength(1);
     expect(screen.getByRole("textbox")).toHaveValue("midnight");
+  });
+
+  // Finding 6: the display number is a sibling of the question's own
+  // rendered wording, never text spliced in front of the Markdown that
+  // produced it — spliced text would break a question whose wording opens
+  // with a heading, a list or a fenced block.
+  test("shows the question's own display number as an element separate from its wording", () => {
+    render(
+      <QuestionsPanel
+        contestId="c1"
+        items={[entry({}, 1), entry({ id: "q2", bodyMd: "Name the hour." }, 2)]}
+        dict={en}
+      />,
+    );
+
+    expect(screen.getByText("1.")).toBeInTheDocument();
+    expect(screen.getByText("2.")).toBeInTheDocument();
+    expect(screen.getByText(/Who was in the greenhouse/)).toBeInTheDocument();
+    expect(screen.getByText(/Name the hour/)).toBeInTheDocument();
+  });
+
+  // Finding 3: `attempt_conflict` and `query_too_often` both tell the student
+  // to try again — remounting the form on those had already deleted what
+  // they typed by the time they read the instruction.
+  test("a refusal that says try again leaves what the student typed in the field", async () => {
+    answer.current = { kind: "refused", code: "attempt_conflict" };
+    render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
+
+    await submit("the gardener");
+
+    expect(screen.getByRole("textbox")).toHaveValue("the gardener");
+  });
+
+  // Finding 5: a closed question loaded fresh from the server — no live
+  // submission behind it — must still say whether it was won, and for how
+  // much, the same way one just answered in this session does.
+  test("a closed question loaded from the server shows what it was won for", () => {
+    render(
+      <QuestionsPanel
+        contestId="c1"
+        items={[entry({ closed: true, canAnswer: false, correct: true, pointsAwarded: 7 })]}
+        dict={en}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("Correct! +7 points.");
+  });
+
+  test("a closed question loaded from the server that was never solved says so rather than staying silent", () => {
+    render(
+      <QuestionsPanel
+        contestId="c1"
+        items={[entry({ closed: true, canAnswer: false, correct: false, pointsAwarded: 0 })]}
+        dict={en}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(en.participant.play.questions.incorrect);
+  });
+
+  // Finding 6: a sequential contest's next question depends on this re-read
+  // to unlock; swallowing its own refusal left that question locked with
+  // nothing on screen saying a reload would fix it.
+  test("a refused re-read after a question closes says a reload would help, rather than staying silent", async () => {
+    answer.current = {
+      kind: "answer",
+      result: { correct: true, pointsAwarded: 10, attemptsRemaining: undefined, closed: true },
+    };
+    refresh.current = { kind: "refused", code: "unreachable" };
+    render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
+
+    await submit();
+
+    expect(await screen.findByText(en.participant.play.questions.refreshFailed)).toBeInTheDocument();
   });
 });
