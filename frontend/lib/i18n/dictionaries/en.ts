@@ -153,6 +153,32 @@ const en = {
         failed: "build failed",
         dropped: "removed",
       },
+      databases: {
+        heading: "The databases that exist",
+        hint: "The spare pool and the copy each participant works in. Dropping one takes the database and nothing else: their answers, their score and their clock are kept elsewhere, and their next query rebuilds the database under the same name.",
+        empty: "This contest has no databases yet. They are made once the game is built.",
+        spare: "spare",
+        formerParticipant: "the account was deleted",
+        drop: "Drop",
+        confirm:
+          "Drop the database of {who}? Any query they are running right now is lost, and a fresh copy is made the next time they act. Their answers, their score and their clock are not touched.",
+        sizeUnknown: "unknown",
+        truncated: "There are more databases than this list shows.",
+        columns: {
+          database: "Database",
+          holder: "Held by",
+          version: "Version",
+          status: "State",
+          size: "Size",
+          created: "Made",
+        },
+        status: {
+          provisioning: "being made",
+          ready: "ready",
+          failed: "failed",
+          dropped: "removed",
+        },
+      },
     },
     groups: {
       content: "Content",
@@ -851,6 +877,10 @@ const en = {
           questions: "Questions",
         },
         download: "Download CSV",
+        panes: {
+          schema: "Width of the schema panel",
+          side: "Width of the questions panel",
+        },
         resultEmpty: "Run a query to see its result here.",
         log: {
           empty: "You have not run a query yet.",
@@ -994,6 +1024,7 @@ const en = {
       "contest.access_denied": "Was refused by the network restriction",
       "contest.instance_reclaimed": "Removed a participant's database once the contest's grace period passed",
       "contest.template_reclaimed": "Removed a contest's template database once every participant's copy was already gone",
+      "contest.instance_dropped": "Removed a participant's database at an organiser's request",
       "settings.change": "Changed the installation's settings",
     },
     // Why an auth.login_failed entry happened — the closed vocabulary
@@ -1072,6 +1103,10 @@ const en = {
       "The game's SQL is empty. An empty template builds an empty database, and every question would answer with a missing table.",
     game_script_too_long:
       "The game's SQL is longer than allowed. If it needs many rows, generate them with INSERT ... SELECT generate_series — shorter, and easier to review.",
+    game_instance_not_found:
+      "This contest has no database by that name. Reload the list: it has probably already been removed.",
+    game_instance_already_dropped:
+      "That database has already been removed — by the sweep after the contest ended, or by somebody else while this page was open. Nothing was changed.",
     game_not_editable:
       "This contest's game can no longer be replaced. Replacing it raises the template's version, which makes every participant's copy stale — they would be dropped and made again.",
     query_parse_error:

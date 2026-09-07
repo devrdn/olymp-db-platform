@@ -142,6 +142,32 @@ const ro = {
         failed: "construire eșuată",
         dropped: "ștearsă",
       },
+      databases: {
+        heading: "Bazele care există",
+        hint: "Rezerva de copii și cea în care lucrează fiecare participant. Ștergerea ia doar baza: răspunsurile, punctajul și ceasul lor sunt păstrate în altă parte, iar următoarea lor interogare reconstruiește baza sub același nume.",
+        empty: "Această olimpiadă nu are încă baze. Ele apar după ce jocul este construit.",
+        spare: "de rezervă",
+        formerParticipant: "contul a fost șters",
+        drop: "Șterge",
+        confirm:
+          "Ștergeți baza participantului {who}? Interogarea care rulează chiar acum se pierde, iar o copie nouă apare la următoarea lor acțiune. Răspunsurile, punctajul și ceasul nu sunt atinse.",
+        sizeUnknown: "necunoscut",
+        truncated: "Există mai multe baze decât arată această listă.",
+        columns: {
+          database: "Bază",
+          holder: "La cine",
+          version: "Versiune",
+          status: "Stare",
+          size: "Mărime",
+          created: "Creată",
+        },
+        status: {
+          provisioning: "se creează",
+          ready: "gata",
+          failed: "eșuată",
+          dropped: "ștearsă",
+        },
+      },
     },
     groups: {
       content: "Conținut",
@@ -791,6 +817,10 @@ const ro = {
           questions: "Întrebări",
         },
         download: "Descărcați CSV",
+        panes: {
+          schema: "Lățimea panoului schemei",
+          side: "Lățimea panoului întrebărilor",
+        },
         resultEmpty: "Executați o interogare pentru a vedea rezultatul aici.",
         log: {
           empty: "Nu ați executat încă nicio interogare.",
@@ -933,6 +963,7 @@ const ro = {
       "contest.access_denied": "A fost refuzat de restricția de rețea",
       "contest.instance_reclaimed": "A eliminat baza de date a unui participant după expirarea perioadei de grație a olimpiadei",
       "contest.template_reclaimed": "A eliminat baza de date șablon a olimpiadei după ce fiecare copie a participanților dispăruse deja",
+      "contest.instance_dropped": "A șters baza unui participant la cererea unui organizator",
       "settings.change": "A schimbat setările instalării",
     },
     failureReasons: {
@@ -1007,6 +1038,10 @@ const ro = {
       "SQL-ul jocului este gol. Un șablon gol construiește o bază goală, iar fiecare întrebare ar răspunde că tabelul nu există.",
     game_script_too_long:
       "SQL-ul jocului depășește limita. Dacă are nevoie de multe rânduri, generați-le cu INSERT ... SELECT generate_series — mai scurt și mai ușor de verificat.",
+    game_instance_not_found:
+      "Această olimpiadă nu are o bază cu acest nume. Reîncărcați lista: probabil a fost deja ștearsă.",
+    game_instance_already_dropped:
+      "Această bază a fost deja ștearsă — de curățenia de după olimpiadă sau de altcineva cât timp pagina era deschisă. Nimic nu s-a schimbat.",
     game_not_editable:
       "Jocul acestei olimpiade nu mai poate fi înlocuit. Înlocuirea ridică versiunea șablonului, ceea ce face copiile tuturor participanților învechite — ar fi șterse și create din nou.",
     query_parse_error:
