@@ -159,15 +159,16 @@ type VisibleQuestionRepository interface {
 // hidden question (is_visible = false) and never a reference answer, because
 // VisibleQuestionRepository never reads one into memory in the first place.
 //
-// progression is the contest's own contests.Progression (ProgressionFree or
-// ProgressionSequential), the same value Service.Submit already keys its own
-// order check on — Reader takes it as given rather than loading the contest
+// sequential is the contest's own Contest.SequentialActive() — the same
+// method Service.Submit calls to key its own order check on, so the two can
+// no longer read this rule differently (finding 4, contests.go's own doc on
+// the method). Reader takes it as given rather than loading the contest
 // itself, since the caller (the participant handler) already has it from the
 // same Access call that admitted the request. It costs one extra round trip,
-// to r.sequence, and only when progression is actually sequential: free
-// progression and single-question mode have nothing this could add, since
-// every unclosed question is already answerable there (finding 3).
-func (r *Reader) Questions(ctx context.Context, contestID, registrationID uuid.UUID, lang, progression string) ([]ParticipantQuestion, error) {
+// to r.sequence, and only when sequential is true: free progression and
+// single-question mode have nothing this could add, since every unclosed
+// question is already answerable there (finding 3).
+func (r *Reader) Questions(ctx context.Context, contestID, registrationID uuid.UUID, lang string, sequential bool) ([]ParticipantQuestion, error) {
 	visible, err := r.questions.ForContest(ctx, contestID, lang)
 	if err != nil {
 		return nil, err
@@ -185,7 +186,7 @@ func (r *Reader) Questions(ctx context.Context, contestID, registrationID uuid.U
 	// round trips as this list has entries, for a fact that is the same
 	// answer every time it is asked in the same request.
 	var frontier uuid.UUID
-	if progression == ProgressionSequential {
+	if sequential {
 		frontier, err = r.sequence.Frontier(ctx, contestID, registrationID)
 		if err != nil {
 			return nil, err
@@ -197,7 +198,7 @@ func (r *Reader) Questions(ctx context.Context, contestID, registrationID uuid.U
 		used := stats[q.ID]
 		closed := isClosed(q.MaxAttempts, used)
 		canAnswer := !closed
-		if progression == ProgressionSequential {
+		if sequential {
 			canAnswer = !closed && q.ID == frontier
 		}
 		out = append(out, ParticipantQuestion{

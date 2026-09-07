@@ -17,6 +17,11 @@ export type QuestionBody = {
   kind: string;
   points: number;
   max_attempts: number | null;
+  // A pointer on the wire (finding 1): omitting the key — sent here as
+  // `null`, which encodes the same way — leaves the stored penalty alone,
+  // rather than resetting it to zero. Zero is a meaningful setting of its
+  // own (no penalty), so absence has to read differently from it.
+  penalty_pct: number | null;
   is_visible: boolean;
   choice_ids: string[];
   texts: Record<string, { body_md: string; choices?: Record<string, string> }>;
@@ -36,6 +41,21 @@ export function questionFrom(form: FormData): Parsed {
   // attempts is one nobody can answer, which is never what an empty box meant.
   const attempts = Number(form.get("maxAttempts"));
   const max_attempts = Number.isFinite(attempts) && attempts > 0 ? Math.floor(attempts) : null;
+
+  // Blank is not the same absence as maxAttempts's own: here it leaves the
+  // stored penalty alone (QuestionBody's own doc) rather than standing for a
+  // real value, because zero is itself a meaningful setting — "no penalty" —
+  // and an editor that always sent it for an untouched field would silently
+  // clear whatever an organizer had configured through the API.
+  const rawPenalty = String(form.get("penaltyPct") ?? "").trim();
+  let penalty_pct: number | null = null;
+  if (rawPenalty !== "") {
+    const parsedPenalty = Number(rawPenalty);
+    if (!Number.isFinite(parsedPenalty) || parsedPenalty < 0 || parsedPenalty > 100) {
+      return { ok: false, code: "invalid_request" };
+    }
+    penalty_pct = Math.floor(parsedPenalty);
+  }
 
   // Only a choice question has options, and the API refuses them on any other
   // kind — so switching back to typed text has to let go of them here. The
@@ -97,6 +117,7 @@ export function questionFrom(form: FormData): Parsed {
       kind,
       points: Math.floor(points),
       max_attempts,
+      penalty_pct,
       is_visible: form.get("isVisible") === "on",
       choice_ids,
       texts,

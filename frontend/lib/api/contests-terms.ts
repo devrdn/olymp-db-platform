@@ -12,3 +12,9 @@ export const ENROLLMENTS = ["open", "invite_only"] as const;
 export const QUESTION_MODES = ["multi", "single"] as const;
 
 export const TIMINGS = ["fixed", "individual"] as const;
+
+/** §6.1.1: the order questions may be answered in. Meaningful only under `question_mode = multi`. */
+export const PROGRESSIONS = ["free", "sequential"] as const;
+
+/** §6.1.1: how a result is derived from submissions — points summed, or a single winner. */
+export const SCORINGS = ["points", "winner"] as const;

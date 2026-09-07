@@ -141,11 +141,21 @@ export function useContestEvents(contestId: string, initialPhase: ContestPhase =
             // The probe itself was admitted: the server would take a fresh
             // connection right now, so whatever failed the first one was a
             // one-off (a proxy hiccup, say) rather than a standing refusal.
-            // Reconnect immediately, with no banner and no backoff spent —
-            // this was never the kind of failure the backoff exists for.
+            // No banner and no backoff growth — this was never the kind of
+            // failure the backoff exists for — but still a floor, not an
+            // immediate reconnect: if EventSource keeps failing on this URL
+            // while a plain fetch of it keeps succeeding (a proxy that
+            // handles the two differently, say), reconnecting with no delay
+            // at all would spin as fast as the network allows, and every
+            // turn spends the query-rate budget this channel shares with the
+            // SQL console (config.QueryPerMinute's own doc, AdmitRead).
             setChannelError(null);
             retryDelay = RECONNECT_MIN_DELAY_MS;
-            connect();
+            clearRetryTimer();
+            retryTimer = setTimeout(() => {
+              if (cancelled) return;
+              connect();
+            }, RECONNECT_MIN_DELAY_MS);
             return;
           }
           const code = result.code ?? "unreachable";

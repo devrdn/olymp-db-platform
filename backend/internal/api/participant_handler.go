@@ -240,7 +240,7 @@ func (h *ParticipantHandler) questions(w http.ResponseWriter, r *http.Request) {
 	}
 	lang := h.languageFor(r, contest)
 
-	found, err := h.reader.Questions(r.Context(), contest.ID, participant.ID, lang, contest.Progression)
+	found, err := h.reader.Questions(r.Context(), contest.ID, participant.ID, lang, contest.SequentialActive())
 	if err != nil {
 		h.fail(w, r, err)
 		return

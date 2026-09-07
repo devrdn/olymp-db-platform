@@ -224,6 +224,22 @@ func (c Contest) SettingsEditable() bool {
 	return c.Status != StatusFinished && c.Status != StatusArchived
 }
 
+// SequentialActive reports whether sequential progression (§6.1.1) actually
+// governs answering this contest.
+//
+// Progression alone is not enough to ask: ProgressionSequential is
+// meaningless at QuestionModeSingle, where the one question has nothing
+// before it to wait on. Submit (submission.go) and Reader.Questions
+// (participant_view.go) both key their own sequential gating off this one
+// method rather than each repeating the two-field comparison — they agreed
+// with each other only because the publish gate happens to force a
+// single-mode contest down to exactly one question, and a rule that two
+// places restate is a rule that can drift the moment either one is edited
+// without the other.
+func (c Contest) SequentialActive() bool {
+	return c.Progression == ProgressionSequential && c.QuestionMode == QuestionModeMulti
+}
+
 // AllowsAddress reports whether a participant at addr may take part.
 //
 // An empty list means no restriction. Staff are never checked against it —
