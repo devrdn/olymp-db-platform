@@ -631,6 +631,40 @@ const ro = {
       reference: "Dacă raportați acest lucru, menționați {id}.",
       null: "null",
     },
+    play: {
+      waiting: {
+        body: "Acest ecran se actualizează singur în clipa în care olimpiada începe. Lăsați această filă deschisă.",
+        startsAt: "Programată să înceapă la {time}.",
+      },
+      unavailable: {
+        body: "Această olimpiadă nu este deschisă pentru joc acum.",
+      },
+      finishedTag: "încheiată",
+      clock: {
+        waiting: "Nu a început încă",
+        notStarted: "Începe odată cu prima dumneavoastră acțiune",
+        timeUp: "Timpul a expirat",
+      },
+      story: {
+        heading: "Povestea",
+      },
+      questions: {
+        heading: "Întrebări",
+        empty: "Nu există încă întrebări de răspuns.",
+        points: "{n} pct",
+        attemptsLeft: "{n} încercări rămase",
+        noAttempts: "Nicio încercare rămasă",
+        closed: "Încheiată.",
+        locked: "Răspundeți mai întâi la întrebarea anterioară.",
+        answerLabel: "Răspunsul dumneavoastră",
+        placeholder: "Scrieți răspunsul",
+        submit: "Trimiteți",
+        submitting: "Se trimite…",
+        correct: "Corect! +{n} puncte.",
+        incorrect: "Incorect.",
+        reference: "Dacă raportați acest lucru, menționați {id}.",
+      },
+    },
     mine: {
       heading: "Olimpiadele mele",
       countLabel: "cu participarea dumneavoastră",
@@ -843,6 +877,18 @@ const ro = {
       "Răspunsul este prea mare pentru a fi returnat. Restrângeți-l cu WHERE sau cu mai puține coloane.",
     contest_finished:
       "Ați terminat această olimpiadă. Consola este închisă pentru dumneavoastră.",
+    answer_too_long:
+      "Acest răspuns este mai lung decât acceptă această instalare.",
+    question_closed:
+      "Această întrebare este deja răspunsă corect sau toate încercările au fost folosite.",
+    deadline_passed:
+      "Termenul dumneavoastră pentru această olimpiadă a expirat.",
+    attempt_conflict:
+      "Prea multe încercări la această întrebare au sosit deodată. Încercați din nou.",
+    question_not_open:
+      "Această olimpiadă răspunde la întrebări în ordine. Răspundeți mai întâi la cea anterioară.",
+    too_many_connections:
+      "Aveți deja atâtea conexiuni active la această olimpiadă câte permite această instalare. Închideți altă filă și încercați din nou.",
     query_declined:
       "Baza de date a refuzat interogarea. Această olimpiadă își ascunde schema, așa că motivul nu este afișat — descoperirea tabelelor face parte din sarcină.",
     query_service_down:
