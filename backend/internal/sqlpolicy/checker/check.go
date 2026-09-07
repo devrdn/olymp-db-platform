@@ -1,12 +1,14 @@
 package checker
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 
 	pg "github.com/pganalyze/pg_query_go/v6"
+	pgparser "github.com/pganalyze/pg_query_go/v6/parser"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -83,7 +85,17 @@ func (c *Checker) Analyse(sql string, p sqlpolicy.Policy) (sqlpolicy.Statement, 
 
 	tree, err := pg.Parse(sql)
 	if err != nil {
-		return sqlpolicy.Statement{}, &sqlpolicy.Refusal{Code: sqlpolicy.CodeParseError, Subject: err.Error()}
+		return sqlpolicy.Statement{}, &sqlpolicy.Refusal{
+			Code:    sqlpolicy.CodeParseError,
+			Subject: err.Error(),
+			// The parser is PostgreSQL's own, so its Cursorpos is exactly the
+			// position a real connection would report for the same text — a
+			// 1-based character offset into sql as sent, not into any statement
+			// pg.Parse split it into (parsing fails before splitting). Left at
+			// zero when the error carries none, which pg_query's own convention
+			// (mirroring errposition()) also treats as "no position".
+			Position: parsePosition(err),
+		}
 	}
 	if len(tree.Stmts) != 1 {
 		return sqlpolicy.Statement{}, &sqlpolicy.Refusal{Code: sqlpolicy.CodeNotOneStatement, Subject: fmt.Sprintf("%d statements", len(tree.Stmts))}
@@ -115,6 +127,24 @@ func (c *Checker) Analyse(sql string, p sqlpolicy.Policy) (sqlpolicy.Statement, 
 		Explain: plan.explain,
 		Writes:  plan.writes,
 	}, nil
+}
+
+// parsePosition reads the character offset a parse error carries, or zero
+// when it carries none.
+//
+// pg.Parse always fails with *pgparser.Error (it wraps the C parser's own
+// PgQueryError one-for-one), so the type assertion is not defensive
+// programming against a shape that cannot occur — errors.As is used anyway
+// because that is how this codebase reads a concrete error out of the error
+// interface, and because a future pg_query release that started wrapping the
+// error would otherwise turn this into a silent zero rather than a compile
+// error.
+func parsePosition(err error) int {
+	var perr *pgparser.Error
+	if errors.As(err, &perr) {
+		return perr.Cursorpos
+	}
+	return 0
 }
 
 // statementText cuts the one statement out of the text it was parsed from,

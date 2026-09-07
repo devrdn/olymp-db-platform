@@ -152,8 +152,16 @@ func (h *ConsoleHandler) fail(w http.ResponseWriter, r *http.Request, err error)
 				"refusal", refusal.Code, "subject", refusal.Subject)
 			code = codeQueryStatementNotSupported
 		}
-		httpx.ErrorWithDetails(w, r, http.StatusBadRequest, code, refusal.Error(),
-			map[string]any{"subject": refusal.Subject})
+		details := map[string]any{"subject": refusal.Subject}
+		// Only a parse error names a place in the text — carried so the
+		// console can point at it instead of a participant counting
+		// characters. Omitted rather than sent as zero: zero is a valid
+		// character offset too, and dropping the key is how the client tells
+		// "no position" from "the very first character".
+		if refusal.Position > 0 {
+			details["position"] = refusal.Position
+		}
+		httpx.ErrorWithDetails(w, r, http.StatusBadRequest, code, refusal.Error(), details)
 		return
 	}
 
