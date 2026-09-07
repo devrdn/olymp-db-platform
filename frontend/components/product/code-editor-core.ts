@@ -78,6 +78,19 @@ const editorTheme = EditorView.theme({
   ".cm-gutters": { display: "none" },
   ".cm-scroller": { overflow: "auto" },
   ".cm-placeholder": { color: "var(--ink-3)" },
+  // `bracketMatching()` below brings its own `EditorView.baseTheme` for
+  // these two classes — `#328c8252` / `#bb555544`, CodeMirror's own palette,
+  // identical in both themes — which section 3.3 forbids ("no arbitrary
+  // colours"). A base theme always loses to a regular one for the same
+  // selector regardless of extension order, so repeating the exact
+  // selectors here (from `@codemirror/language`'s source) overrides them
+  // with tokens this product already has: `--accent-wash` is the same wash
+  // `cm-selectionBackground` above already uses for "something is
+  // highlighted here", and `--bad-wash` is the one `errorField` uses for
+  // "something is wrong" — reused rather than inventing a new pair for what
+  // is, structurally, the same two ideas.
+  "&.cm-focused .cm-matchingBracket": { backgroundColor: "var(--accent-wash)" },
+  "&.cm-focused .cm-nonmatchingBracket": { backgroundColor: "var(--bad-wash)" },
   // The one thing PostgreSQL's own position points at. Not colour alone
   // (WCAG 1.4.1): the wavy underline is a second, shape-based channel, on top
   // of the translated sentence ResultPanel already shows above the editor.

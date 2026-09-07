@@ -80,13 +80,27 @@ function show() {
  * node* — not about typing, which works through either — waits for the real
  * one first, so the fallback→CodeMirror swap is not mistaken for whatever
  * the test is actually checking.
+ *
+ * Every test that types a query through the visible editor waits for it too
+ * (finding 6): typing straight into `getByRole("textbox")` without waiting
+ * only ever hit the fallback, because `userEvent.type` reliably outran the
+ * dynamic import in a test environment — a false green that would not
+ * survive the import taking one microtask longer. Defaults to `document.
+ * body` so call sites that never captured a `container` still have
+ * something to search.
  */
-async function waitForRealEditor(container: HTMLElement) {
+async function waitForRealEditor(container: HTMLElement = document.body) {
   await waitFor(() => expect(container.querySelector(".cm-editor")).toBeInTheDocument());
 }
 
 async function runQuery() {
-  await userEvent.type(screen.getByRole("textbox"), "SELECT 1");
+  await waitForRealEditor();
+  // `userEvent.type` does not reliably drive CodeMirror's contentEditable
+  // div (it is not a text input and has no `selectionStart`/`selectionEnd`)
+  // — click-then-keyboard is the pattern already proven against the real
+  // editor elsewhere (code-editor.test.tsx, console.test.tsx).
+  await userEvent.click(screen.getByRole("textbox"));
+  await userEvent.keyboard("SELECT 1");
   await userEvent.click(screen.getByRole("button", { name: en.participant.console.run }));
 }
 
@@ -104,9 +118,11 @@ describe("the play workspace", () => {
   // The plan's central requirement: switching a tab must not remount or
   // refetch anything, and a half-typed query has to survive it.
   test("a half-typed query survives switching every tab and back", async () => {
-    show();
+    const { container } = show();
+    await waitForRealEditor(container);
     const editor = screen.getByRole("textbox");
-    await userEvent.type(editor, "SELECT * FROM suspects");
+    await userEvent.click(editor);
+    await userEvent.keyboard("SELECT * FROM suspects");
 
     await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.log }));
     await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.story }));
