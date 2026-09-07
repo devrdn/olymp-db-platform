@@ -754,6 +754,13 @@ const ru = {
         heading: "Вопросы",
         empty: "Пока нет вопросов для ответа.",
         points: "{n} б.",
+        status: {
+          accepted: "принято",
+          spent: "попытки кончились",
+          current: "текущий",
+          open: "не отвечен",
+          after: "после {n}",
+        },
         attemptsLeft: "Осталось попыток: {n}",
         noAttempts: "Попытки закончились",
         closed: "Закрыт.",

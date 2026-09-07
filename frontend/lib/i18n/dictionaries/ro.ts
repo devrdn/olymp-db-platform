@@ -755,6 +755,13 @@ const ro = {
         heading: "Întrebări",
         empty: "Nu există încă întrebări de răspuns.",
         points: "{n} pct",
+        status: {
+          accepted: "acceptat",
+          spent: "încercări epuizate",
+          current: "curent",
+          open: "fără răspuns",
+          after: "după {n}",
+        },
         attemptsLeft: "{n} încercări rămase",
         noAttempts: "Nicio încercare rămasă",
         closed: "Încheiată.",
