@@ -210,6 +210,18 @@ require-env:
 	@test -n "$(CORE_DB_PASSWORD)" || { \
 		echo "CORE_DB_PASSWORD is not set in $(ENV_FILE)."; exit 1; }
 
+# GAME_PROVISIONER_DSN is what turns the whole game circuit on: without it the
+# composition root skips provisioning entirely, so a contest's game cannot be
+# written or built and /contests/{id}/game is never even mounted — a 404 that
+# no amount of restarting fixes. In development the provisioning role is the
+# same superuser the game-cluster tests use; a deployment keeps it apart from
+# the participant roles (see config.GameProvisionerDSN).
+#
+# QUERY_RUNNER_ADDR is deliberately still absent: the dev stack has no Query
+# Runner, so the console endpoint stays unmounted and a participant cannot run
+# SQL here. That is a separate gap and it is honest about itself — the API
+# logs that the console is off rather than pretending.
+#
 # Loopback is trusted so the interface running on the host (`make front`) may
 # hand a forwarded address on, the way the web container does behind Caddy in
 # production. In plain dev there is no proxy and no chain, so requests still
@@ -217,6 +229,7 @@ require-env:
 # same way production does the moment something does send one.
 run: require-env ## Run the API against the dev infrastructure
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" REDIS_ADDR="$(REDIS_ADDR)" \
+		GAME_PROVISIONER_DSN="$(GAME_DB_DSN)" \
 		TRUSTED_PROXIES="127.0.0.1,::1" \
 		ENV=development LOG_LEVEL=debug go run ./cmd/api
 

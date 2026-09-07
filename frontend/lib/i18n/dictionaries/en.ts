@@ -144,6 +144,7 @@ const en = {
       database: "database",
       buildError: "The build failed",
       buildErrorLede: "These are PostgreSQL's own words. Fix the script and save again.",
+      unavailable: "This installation has no game cluster configured, so there is nowhere to build a game database. Set GAME_PROVISIONER_DSN and restart the API.",
       status: {
         absent: "no game",
         pending: "waiting to build",
