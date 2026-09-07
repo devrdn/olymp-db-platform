@@ -987,6 +987,8 @@ const ro = {
       "Baza de date a acestei olimpiade nu este încă pregătită. Nu este greșeala dumneavoastră — încercați peste puțin timp.",
     schema_hidden:
       "Această olimpiadă nu arată structura bazei de date. Descoperirea ei face parte din problemă.",
+    nothing_left_to_answer:
+      "Fiecare întrebare de aici este fie rezolvată, fie fără încercări rămase, așa că nu mai aveți la ce lucra și consola s-a închis. Povestea, răspunsurile și rezultatele rămân la locul lor.",
     game_script_empty:
       "SQL-ul jocului este gol. Un șablon gol construiește o bază goală, iar fiecare întrebare ar răspunde că tabelul nu există.",
     game_script_too_long:

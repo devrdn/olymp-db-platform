@@ -260,3 +260,74 @@ func TestAccessAgainstTheRealSchemaAnswersTheOwnersOwnStandingCheck(t *testing.T
 		t.Fatalf("a contest past its own deadline: error = %v, want ErrContestNotRunning", err)
 	}
 }
+
+// TestTheConsoleClosesOnceNothingIsAnswerableAgainstTheRealSchema is the
+// same guarantee CLAUDE.md rule 11 asks for: the fact that closes the console
+// is decided in SQL (postgres.Answerable) and applied in Go
+// (queryproxy.Service.Run), so it is proven across that boundary rather than
+// on either side of it. The fakes elsewhere in this package cannot see a
+// disagreement between the query and the schema; this can.
+func TestTheConsoleClosesOnceNothingIsAnswerableAgainstTheRealSchema(t *testing.T) {
+	pool := integrationPool(t)
+	ctx := context.Background()
+
+	author := makeIntegrationUser(t, ctx, pool, "author-"+uuid.NewString()[:8])
+	student := makeIntegrationUser(t, ctx, pool, "student-"+uuid.NewString()[:8])
+	contestID := makeRunningFixedContest(t, ctx, pool, author, time.Now().Add(24*time.Hour))
+	t.Cleanup(func() {
+		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = pool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contestID)
+	})
+
+	// Direct SQL for the same reason the contest fixtures above use it:
+	// postgres.Questions.Create insists on the authoring transaction, which
+	// is the contest module's own concern and only noise here.
+	max := 1
+	var questionID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO questions (contest_id, ord, kind, points, max_attempts, is_visible)
+		VALUES ($1, 1, 'text', 5, $2, true)
+		RETURNING id`, contestID, max).Scan(&questionID); err != nil {
+		t.Fatalf("create question: %v", err)
+	}
+
+	registrations := postgres.NewRegistrations(pool)
+	registration, err := registrations.Add(ctx, contestID, student)
+	if err != nil {
+		t.Fatalf("Add() = %v", err)
+	}
+
+	service := queryproxy.New(
+		registrations,
+		postgres.NewContests(pool),
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"},
+		&runner{result: &queryrunner.Result{Columns: []string{"a"}}},
+	).WithAnswerable(postgres.NewAnswerable(pool))
+
+	cmd := queryproxy.Command{ContestID: contestID, UserID: student, SQL: `SELECT 1`, RequestID: uuid.New()}
+
+	// One question, one attempt, nothing spent: the console is open.
+	if _, err := service.Run(ctx, cmd); err != nil {
+		t.Fatalf("a query while the contest's only question is still open: %v", err)
+	}
+
+	// Spending that one attempt closes the question, and with it the console.
+	if _, err := postgres.NewSubmissions(pool).Insert(ctx, contests.SubmissionRequest{
+		RegistrationID: registration.ID, QuestionID: questionID, Value: "wrong", IsCorrect: false,
+		Points: 5, MaxAttempts: &max, Deadline: time.Now().Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("Insert() = %v", err)
+	}
+
+	if _, err := service.Run(ctx, cmd); !errors.Is(err, queryproxy.ErrNothingLeftToAnswer) {
+		t.Fatalf("a query with every question closed: error = %v, want ErrNothingLeftToAnswer", err)
+	}
+
+	// And nothing else closed with it: the play screen's own admission still
+	// admits them, which is the whole reason this is not ErrFinished.
+	if _, _, err := service.Access(ctx, contestID, student, netip.Addr{}); err != nil {
+		t.Fatalf("Access() = %v, want nil — only the console closes", err)
+	}
+}

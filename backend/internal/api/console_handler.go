@@ -173,6 +173,11 @@ func (h *ConsoleHandler) fail(w http.ResponseWriter, r *http.Request, err error)
 		{queryproxy.ErrNotAParticipant, http.StatusForbidden, codeNotAParticipant},
 		{queryproxy.ErrContestNotRunning, http.StatusConflict, codeContestNotRunning},
 		{queryproxy.ErrFinished, http.StatusConflict, codeContestFinished},
+		// 409 rather than 403, for the same reason codeQuestionClosed is one:
+		// this is a fact about where the contest currently stands for this
+		// participant, not a permission they lack, and it stops being true
+		// the moment the contest gives them something to answer again.
+		{queryproxy.ErrNothingLeftToAnswer, http.StatusConflict, codeNothingLeftToAnswer},
 		{queryproxy.ErrAddressNotAllowed, http.StatusForbidden, codeAddressNotAllowed},
 		{queryproxy.ErrNoGameYet, http.StatusConflict, codeNoGameYet},
 		{queryproxy.ErrDatabaseDeclined, http.StatusBadRequest, codeQueryDeclined},

@@ -203,7 +203,17 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 				// `cluster` is the game cluster itself. One catalogue read
 				// per template between every participant of a contest; see
 				// provisioning.SchemaReader.
-				WithSchemas(provisioning.NewSchemaReader(games, cluster))
+				WithSchemas(provisioning.NewSchemaReader(games, cluster)).
+				// The console's own closing rule: once no question of the
+				// contest is still answerable to a participant — every one
+				// answered correctly or out of attempts — running a query
+				// cannot lead to an answer, so Run stops taking them
+				// (queryproxy.ErrNothingLeftToAnswer). Wired only here,
+				// because only Run consults it: the read endpoints below
+				// share this Service and are deliberately left open, so a
+				// participant with nothing left to answer still has their
+				// story, their results and their timer.
+				WithAnswerable(postgres.NewAnswerable(pool))
 		}
 	}
 
