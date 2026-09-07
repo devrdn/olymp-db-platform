@@ -138,10 +138,15 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 	}
 
 	answer := &pb.Result{
-		Columns:      result.Columns,
-		Truncated:    ptr(result.Truncated),
-		RowsAffected: ptr(result.RowsAffected),
-		Rows:         make([]*pb.Row, 0, len(result.Rows)),
+		Columns:     result.Columns,
+		ColumnTypes: result.ColumnTypes,
+		Truncated:   ptr(result.Truncated),
+		// Microseconds, which is the contract's unit: the console rounds to
+		// milliseconds and a sub-millisecond query rounded here would cross as
+		// a zero.
+		DurationMicros: ptr(result.Duration.Microseconds()),
+		RowsAffected:   ptr(result.RowsAffected),
+		Rows:           make([]*pb.Row, 0, len(result.Rows)),
 	}
 	var spent int
 	for _, values := range result.Rows {
