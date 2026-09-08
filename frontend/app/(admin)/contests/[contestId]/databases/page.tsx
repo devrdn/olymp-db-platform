@@ -38,12 +38,20 @@ export default async function DatabasesPage(props: PageProps<"/contests/[contest
       notFoundIsEmpty: true,
     }),
     // Caught rather than thrown: a game cluster that is configured but
-    // unreachable for a moment must not take the whole page down with it —
-    // it falls back to the empty list below, the same sentence a contest
-    // whose game was never built gets.
+    // unreachable for a moment must not take the whole page down with it.
+    // What it must not do either is pass for an answer. This is the one
+    // screen an organiser opens while something is going wrong in the middle
+    // of an olympiad, and "this contest has no databases yet" — the sentence
+    // it used to fall back to — states as a fact about every contest exactly
+    // the thing nobody could find out. So the failure keeps its own shape
+    // (null, distinct from an empty list) and is written to the server log,
+    // which is otherwise the only place it existed at all.
     loadContestResource(contestId, "/game/instances", (payload) =>
       gameInstancesSchema.parse(payload),
-    ).catch(() => null),
+    ).catch((error: unknown) => {
+      console.error("reading the game databases of contest %s failed", contestId, error);
+      return null;
+    }),
   ]);
 
   const t = dict.workspace.databases;
@@ -57,13 +65,12 @@ export default async function DatabasesPage(props: PageProps<"/contests/[contest
 
       {game === null ? (
         <p className="max-w-body text-body text-ink-2">{dict.workspace.game.unavailable}</p>
+      ) : databases === null ? (
+        <p role="alert" className="max-w-body text-body text-bad">
+          {t.unreachable}
+        </p>
       ) : (
-        <GameDatabases
-          contestId={contest.id}
-          databases={databases ?? { instances: [], truncated: false }}
-          locale={locale}
-          dict={dict}
-        />
+        <GameDatabases contestId={contest.id} databases={databases} locale={locale} dict={dict} />
       )}
     </div>
   );

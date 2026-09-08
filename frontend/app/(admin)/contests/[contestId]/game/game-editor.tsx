@@ -1,16 +1,17 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useActionState, useRef, useState } from "react";
 
 import { CodeEditor } from "@/components/product/code-editor";
 import { Tag } from "@/components/ui/tag";
 import { buttonVariants } from "@/components/ui/button";
-import { GAME_POLL_MS, MAX_GAME_SCRIPT_BYTES } from "@/lib/api/game-terms";
+import { MAX_GAME_SCRIPT_BYTES } from "@/lib/api/game-terms";
 import type { Game } from "@/lib/api/game";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
-import { gameStatusAction, saveGameScriptAction, type GameState } from "./actions";
+import { saveGameScriptAction, type GameState } from "./actions";
+import { useGamePoll } from "./game-poll";
 
 /**
  * The screen an organiser writes their game on.
@@ -60,23 +61,11 @@ export function GameEditor({
   const mirrorRef = useRef<HTMLTextAreaElement>(null);
   const [bytes, setBytes] = useState(() => new TextEncoder().encode(initialScript).length);
 
-  useEffect(() => {
-    if (!game.building) return;
-
-    let live = true;
-    const timer = setInterval(async () => {
-      const fresh = await gameStatusAction(contestId);
-      // A failed poll is left alone rather than shown: the build is still
-      // running as far as anybody knows, and one unreachable request is not
-      // news. The next tick asks again.
-      if (live && fresh) setPolled(fresh);
-    }, GAME_POLL_MS);
-
-    return () => {
-      live = false;
-      clearInterval(timer);
-    };
-  }, [contestId, game.building]);
+  // Shared with GameUpload below it on the page rather than a timer of this
+  // component's own: one request per tick for one answer, and both panels
+  // handed the same snapshot so they cannot disagree about a build that has
+  // just finished (useGamePoll's own doc).
+  useGamePoll(contestId, game.building, setPolled);
 
   const tooLong = bytes > MAX_GAME_SCRIPT_BYTES;
 

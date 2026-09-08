@@ -496,6 +496,13 @@ func TestDefaultLocaleRejectsSomethingThatIsNotALanguageTag(t *testing.T) {
 func TestAProvisionerWithoutTheGameAuthorPasswordIsRejected(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 	t.Setenv("GAME_PROVISIONER_DSN", "postgres://provisioner:pass@pg-game:5432/game")
+	// "Without" has to be stated, not assumed. Load reads the real
+	// environment, and GAME_AUTHOR_PASSWORD is set in any shell that can run
+	// the game-cluster tests — `make test-game` exports it, and so does the
+	// CI job now that it starts a game cluster of its own. Inherited, it made
+	// this test fail for the one reason that is not a defect: the variable it
+	// is asserting the absence of was present.
+	t.Setenv("GAME_AUTHOR_PASSWORD", "")
 
 	_, err := Load()
 	if err == nil {

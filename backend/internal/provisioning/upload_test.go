@@ -395,7 +395,7 @@ func TestSweepUploadsAbandonsAStaleUploadAndRemovesAFileWithNoRow(t *testing.T) 
 	// directly, bypassing Games so no game_uploads row is ever written for
 	// it — exactly what a crash between the two would leave behind.
 	orphanID := uuid.New()
-	if err := storeOn(t, dir).Begin(orphanID.String()); err != nil {
+	if err := storeOn(t, dir).Begin(orphanID.String(), 1<<16); err != nil {
 		t.Fatalf("reserve an orphan file: %v", err)
 	}
 	// Aged past orphanFileGrace, for the same reason the row above is aged
@@ -650,7 +650,7 @@ func TestSweepUploadsRemovesAFileNoGameNamesAnyMore(t *testing.T) {
 	// Put the file back exactly as a crash between the commit and the unlink
 	// would have left it: the row says the upload completed, nothing names it
 	// any more, and the bytes are still on the volume.
-	if err := storeOn(t, dir).Begin(upload.ID.String()); err != nil {
+	if err := storeOn(t, dir).Begin(upload.ID.String(), 1<<16); err != nil {
 		t.Fatalf("plant the file a crash would have left: %v", err)
 	}
 	age(t, dir, upload.ID, time.Hour)
@@ -679,7 +679,7 @@ func TestSweepUploadsLeavesAFileTooYoungToBeAnOrphan(t *testing.T) {
 	games, dir := gamesWithUploads(t, true)
 
 	fresh := uuid.New()
-	if err := storeOn(t, dir).Begin(fresh.String()); err != nil {
+	if err := storeOn(t, dir).Begin(fresh.String(), 1<<16); err != nil {
 		t.Fatalf("reserve a file the way BeginUpload does: %v", err)
 	}
 
