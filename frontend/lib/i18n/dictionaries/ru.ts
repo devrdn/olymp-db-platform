@@ -975,6 +975,8 @@ const ru = {
       "contest.policy_change": "Изменил политику SQL",
       "contest.game_script_set": "Записал SQL игровой базы",
       "contest.game_built": "Игровая база собрана",
+      "contest.upload_complete": "Загрузил дамп игровой базы",
+      "contest.upload_abort": "Отменил загрузку игровой базы",
       "contest.story_change": "Изменил историю",
       "contest.question_create": "Добавил вопрос",
       "contest.question_update": "Изменил вопрос",

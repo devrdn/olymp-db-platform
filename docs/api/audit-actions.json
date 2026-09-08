@@ -40,6 +40,8 @@
     "contest.instance_reclaimed",
     "contest.template_reclaimed",
     "contest.instance_dropped",
+    "contest.upload_complete",
+    "contest.upload_abort",
     "settings.change"
   ]
 }
