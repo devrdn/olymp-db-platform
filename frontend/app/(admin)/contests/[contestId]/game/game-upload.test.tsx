@@ -328,6 +328,34 @@ describe("the game upload panel", () => {
     expect(await screen.findByText("CREATE TABLE guests (id uuid);")).toBeInTheDocument();
   });
 
+  // An organiser picks the wrong dump at least once. Before this, the only
+  // file picker lived in the idle and resumable states, so a game already
+  // built from a file had no way back to one: the panel showed the viewer
+  // and nothing else. Replacing is the server's decision to refuse or allow
+  // (game_not_editable, exactly as for the editor) — the interface's job is
+  // to make the attempt reachable.
+  test("offers a way back to the picker so a different file can replace this one", async () => {
+    gameUploadWindowAction.mockResolvedValueOnce({
+      value: { fromLine: 1, lines: ["CREATE TABLE guests (id uuid);"], totalLines: 1, truncated: false },
+    });
+
+    show({
+      initialGame: game({
+        status: "ready",
+        version: 3,
+        source: "file",
+        upload: { id: uploadId, filename: "dump.sql", bytes: 4096, lines: 7 },
+      }),
+    });
+
+    expect(screen.queryByLabelText(tu.pick)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: tu.replace }));
+
+    expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
+    expect(screen.queryByText("dump.sql")).not.toBeInTheDocument();
+  });
+
   // The same reload, but for a build that had already failed before it —
   // `completedGame.buildError` is seeded from `game.upload`'s own sibling
   // field `game.buildError` (`game()`'s default `initialGame` here), and

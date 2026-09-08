@@ -398,6 +398,31 @@ export function GameUpload({
     if (id) await abortGameUploadAction(contestId, id);
   }
 
+  /**
+   * Back to the picker, so a different file can replace this one.
+   *
+   * Not cancel(): nothing is in flight, and the upload on the server is
+   * complete rather than abandoned — it stays until a new one replaces it,
+   * which is what makes this safe to offer beside a game that is already
+   * built. The refusal when the contest has started is the server's to give
+   * (game_not_editable), the same one the editor gets.
+   */
+  function chooseAnother() {
+    fileRef.current = null;
+    setHasFile(false);
+    setPhase("idle");
+    setUploadId(null);
+    setFilename("");
+    setTotalBytes(0);
+    setSentBytes(0);
+    setMismatch(false);
+    setErrorCode(null);
+    setWindowFrom(1);
+    setWindowLines([]);
+    setWindowTotal(0);
+    setWindowTruncated(false);
+  }
+
   async function retry() {
     const file = fileRef.current;
     const id = uploadId;
@@ -586,6 +611,13 @@ export function GameUpload({
             ) : (
               <span className="text-small text-ink-2">{tu.sourceNote}</span>
             )}
+            <button
+              type="button"
+              onClick={chooseAnother}
+              className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}
+            >
+              {tu.replace}
+            </button>
           </div>
 
           <div className="flex flex-col gap-2.5">
