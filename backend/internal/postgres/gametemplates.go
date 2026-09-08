@@ -20,14 +20,48 @@ import (
 // templateColumns is the row every read below returns, in one place so the
 // three of them cannot drift.
 const templateColumns = `contest_id, template_db, version, status,
-	init_script, coalesce(build_error, ''), updated_at`
+	init_script, coalesce(build_error, ''), updated_at, source, upload_id`
 
 func scanTemplate(row pgx.Row) (provisioning.Template, error) {
 	var t provisioning.Template
-	var status string
-	err := row.Scan(&t.ContestID, &t.Database, &t.Version, &status, &t.Script, &t.BuildError, &t.UpdatedAt)
+	var status, source string
+	err := row.Scan(&t.ContestID, &t.Database, &t.Version, &status, &t.Script, &t.BuildError, &t.UpdatedAt,
+		&source, &t.UploadID)
 	t.Status = provisioning.TemplateStatus(status)
+	t.Source = provisioning.TemplateSource(source)
 	return t, err
+}
+
+// upsertGame is the one statement a contest's game is replaced through,
+// whichever produced it — an organiser's own script (SaveScript) or a
+// completed upload (CompleteUpload, gameuploads.go). Both bump the version,
+// clear the cached schema and put the game back to pending, because both are
+// "the game changed" to everything downstream: the pool tender, the build
+// queue, a participant's stale copy. Extracting this is the storage half of
+// what provisioning.Games.replaceGame does for the service layer — see its
+// own doc for why the two must not become two paths that drift.
+func (r *GameInstances) upsertGame(
+	ctx context.Context, contestID uuid.UUID, database, script, source string, uploadID *uuid.UUID,
+) (provisioning.Template, error) {
+	template, err := scanTemplate(r.querier(ctx).QueryRow(ctx, `
+		INSERT INTO game_templates (contest_id, template_db, init_script, source, upload_id, status, version)
+		VALUES ($1, $2, $3, $4, $5, 'pending', 1)
+		ON CONFLICT (contest_id) DO UPDATE
+		SET init_script    = EXCLUDED.init_script,
+		    template_db    = EXCLUDED.template_db,
+		    source         = EXCLUDED.source,
+		    upload_id      = EXCLUDED.upload_id,
+		    status         = 'pending',
+		    build_error    = NULL,
+		    version        = game_templates.version + 1,
+		    schema_json    = NULL,
+		    schema_version = NULL,
+		    updated_at     = now()
+		RETURNING `+templateColumns, contestID, database, script, source, uploadID))
+	if err != nil {
+		return provisioning.Template{}, fmt.Errorf("store the game: %w", err)
+	}
+	return template, nil
 }
 
 // SaveScript stores one contest's game script and puts the game back to
@@ -43,23 +77,7 @@ func scanTemplate(row pgx.Row) (provisioning.Template, error) {
 // being replaced, and the two columns are constrained to be null together
 // (migration 22).
 func (r *GameInstances) SaveScript(ctx context.Context, contestID uuid.UUID, database, script string) (provisioning.Template, error) {
-	template, err := scanTemplate(r.querier(ctx).QueryRow(ctx, `
-		INSERT INTO game_templates (contest_id, template_db, init_script, status, version)
-		VALUES ($1, $2, $3, 'pending', 1)
-		ON CONFLICT (contest_id) DO UPDATE
-		SET init_script    = EXCLUDED.init_script,
-		    template_db    = EXCLUDED.template_db,
-		    status         = 'pending',
-		    build_error    = NULL,
-		    version        = game_templates.version + 1,
-		    schema_json    = NULL,
-		    schema_version = NULL,
-		    updated_at     = now()
-		RETURNING `+templateColumns, contestID, database, script))
-	if err != nil {
-		return provisioning.Template{}, fmt.Errorf("store the game script: %w", err)
-	}
-	return template, nil
+	return r.upsertGame(ctx, contestID, database, script, string(provisioning.SourceEditor), nil)
 }
 
 // Template reads one contest's game, or ErrNoGame when it has none yet.

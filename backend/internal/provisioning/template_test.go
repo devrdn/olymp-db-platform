@@ -30,6 +30,10 @@ type templateStore struct {
 	// the read the build makes before it touches the cluster.
 	policyErr error
 	finished  []finish
+	// uploads is every upload this fake has ever been told about, by id —
+	// enough to back the TemplateRepository methods migration 24 added
+	// without this file growing a second kind of fake for them.
+	uploads map[uuid.UUID]provisioning.Upload
 }
 
 // directly is the unit of work for a test that wants the audit trail wired up
@@ -97,6 +101,122 @@ func (s *templateStore) Policy(context.Context, uuid.UUID) (sqlpolicy.Policy, er
 		return sqlpolicy.Policy{}, s.policyErr
 	}
 	return s.policy, nil
+}
+
+func (s *templateStore) BeginUpload(_ context.Context, id, contestID uuid.UUID, filename string, declaredBytes int64) (provisioning.Upload, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, u := range s.uploads {
+		if u.ContestID == contestID && u.Status == provisioning.UploadReceiving {
+			return provisioning.Upload{}, provisioning.ErrUploadInProgress
+		}
+	}
+	if s.uploads == nil {
+		s.uploads = map[uuid.UUID]provisioning.Upload{}
+	}
+	u := provisioning.Upload{
+		ID: id, ContestID: contestID, Filename: filename, DeclaredBytes: declaredBytes,
+		Status: provisioning.UploadReceiving,
+	}
+	s.uploads[id] = u
+	return u, nil
+}
+
+func (s *templateStore) Upload(_ context.Context, id uuid.UUID) (provisioning.Upload, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.uploads[id]
+	if !ok {
+		return provisioning.Upload{}, provisioning.ErrUploadNotFound
+	}
+	return u, nil
+}
+
+func (s *templateStore) CurrentUpload(_ context.Context, contestID uuid.UUID) (provisioning.Upload, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, u := range s.uploads {
+		if u.ContestID == contestID && u.Status == provisioning.UploadReceiving {
+			return u, nil
+		}
+	}
+	return provisioning.Upload{}, provisioning.ErrUploadNotFound
+}
+
+func (s *templateStore) UpdateReceived(_ context.Context, id uuid.UUID, receivedBytes int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.uploads[id]
+	if !ok {
+		return provisioning.ErrUploadNotFound
+	}
+	u.ReceivedBytes = receivedBytes
+	s.uploads[id] = u
+	return nil
+}
+
+func (s *templateStore) CompleteUpload(
+	_ context.Context, contestID, id uuid.UUID, database string, summary provisioning.UploadSummary, previous *uuid.UUID,
+) (provisioning.Template, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.uploads[id]
+	if !ok {
+		return provisioning.Template{}, provisioning.ErrUploadNotFound
+	}
+	u.Status, u.SHA256, u.Lines, u.ReceivedBytes = provisioning.UploadComplete, summary.SHA256, summary.Lines, summary.Bytes
+	s.uploads[id] = u
+	if previous != nil {
+		if p, ok := s.uploads[*previous]; ok {
+			p.Status = provisioning.UploadAborted
+			s.uploads[*previous] = p
+		}
+	}
+
+	version := 1
+	if s.present {
+		version = s.template.Version + 1
+	}
+	s.template = provisioning.Template{
+		ContestID: contestID, Database: database, Version: version,
+		Status: provisioning.TemplatePending, Source: provisioning.SourceFile, UploadID: &id,
+	}
+	s.present = true
+	return s.template, nil
+}
+
+func (s *templateStore) AbortUpload(_ context.Context, id uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.uploads[id]
+	if !ok {
+		return provisioning.ErrUploadNotFound
+	}
+	u.Status = provisioning.UploadAborted
+	s.uploads[id] = u
+	return nil
+}
+
+func (s *templateStore) AbandonedUploads(_ context.Context, cutoff time.Time, limit int) ([]provisioning.Upload, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []provisioning.Upload
+	for _, u := range s.uploads {
+		if u.Status == provisioning.UploadReceiving && u.UpdatedAt.Before(cutoff) {
+			out = append(out, u)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (s *templateStore) UploadExists(_ context.Context, id uuid.UUID) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.uploads[id]
+	return ok, nil
 }
 
 // buildCluster records what it was asked to build and can be told to refuse.
@@ -414,6 +534,38 @@ func TestBuildingWithNothingWaitingSaysSoRatherThanFailing(t *testing.T) {
 	}
 	if len(cluster.names) != 0 {
 		t.Fatal("built something with nothing claimed")
+	}
+}
+
+// Streaming an uploaded dump into the game cluster is a later task's own
+// work. A build that tried anyway would run claimed.Script — empty for
+// SourceFile — and mark a database with none of the organiser's tables in it
+// 'ready'; refusing honestly is what this checks instead.
+func TestBuildingAFileSourcedGameRefusesHonestlyWithoutTouchingTheCluster(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := games(true)
+	contest := uuid.New()
+	store.template = provisioning.Template{
+		ContestID: contest, Database: "game_tpl_cabc", Version: 3,
+		Status: provisioning.TemplatePending, Source: provisioning.SourceFile,
+	}
+	store.present = true
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("building a file-sourced game returned an error for the log: %v", err)
+	}
+	if built.Status != provisioning.TemplateFailed {
+		t.Fatalf("finished as %q, want failed", built.Status)
+	}
+	if built.BuildError != provisioning.UploadBuildUnavailable {
+		t.Fatalf("build error = %q, want the fixed sentence", built.BuildError)
+	}
+	if len(cluster.names) != 0 {
+		t.Fatal("a file-sourced game reached BuildTemplate, which nothing has taught to run one yet")
+	}
+	if len(store.finished) != 1 || store.finished[0].err != provisioning.UploadBuildUnavailable {
+		t.Fatalf("recorded %+v, want the fixed sentence", store.finished)
 	}
 }
 

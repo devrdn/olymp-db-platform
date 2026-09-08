@@ -20,6 +20,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
+	"github.com/devrdn/db-contest/backend/internal/gamefile"
 	"github.com/devrdn/db-contest/backend/internal/health"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
@@ -175,6 +176,26 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		gameAuthoring = provisioning.NewGames(games, cluster, games).
 			WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
 		a.tasks = append(a.tasks, buildGames(log, gameAuthoring))
+
+		// The second way to build a contest's game: upload a finished dump
+		// instead of writing one in the editor. Optional in exactly the way
+		// the console below is — GAME_UPLOAD_DIR empty means no volume was
+		// mounted for it, and gameAuthoring simply never gets WithUploads,
+		// which is what every upload method's ErrUploadsDisabled answers.
+		if cfg.GameUploadDir != "" {
+			limits := gamefile.Limits{
+				MaxFileBytes:  cfg.GameUploadMaxFileBytes,
+				MaxDirBytes:   cfg.GameUploadMaxDirBytes,
+				MaxChunkBytes: cfg.GameUploadChunkBytes,
+			}
+			uploads, err := gamefile.NewStore(cfg.GameUploadDir, limits)
+			if err != nil {
+				a.close()
+				return nil, fmt.Errorf("open the upload directory: %w", err)
+			}
+			gameAuthoring = gameAuthoring.WithUploads(uploads, cfg.GameUploadDir, limits)
+			a.tasks = append(a.tasks, abandonedUploads(log, gameAuthoring, cfg.GameUploadAbandonedAfter))
+		}
 		// The background half of §2.4: a contest's participant databases
 		// outlive it by exactly its configured grace, never longer, and
 		// never a moment less. GameReclaimCounters degrades to a no-op on

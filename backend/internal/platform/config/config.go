@@ -178,6 +178,32 @@ type Config struct {
 	// databases on the very next tick, which is a deliberate, aggressive
 	// choice an operator makes on purpose, not a default nobody asked for.
 	GameInstanceGraceMin int
+	// GameUploadDir is where an organiser's uploaded SQL dump lands while it
+	// is being received, and stays once it is complete — one directory on
+	// the API host's own disk (internal/gamefile). Empty turns file uploads
+	// off, the same convention QueryRunnerAddr uses for the SQL console: an
+	// installation with no volume mounted for this must not fail to start
+	// over a feature it never turned on.
+	GameUploadDir string
+	// GameUploadMaxFileBytes bounds one upload's total size. The pilot's own
+	// numbers describe "1 GB-3 GB max"; the ceiling here is deliberately
+	// above the number a person named, not equal to it — a script that grew
+	// past what somebody guessed at design time should be a slow upload, not
+	// a refusal an organiser has no way to raise themselves.
+	GameUploadMaxFileBytes int64
+	// GameUploadMaxDirBytes bounds every upload the volume holds together —
+	// in progress, and complete ones waiting to be superseded or reclaimed.
+	GameUploadMaxDirBytes int64
+	// GameUploadChunkBytes bounds one Append call, independent of the
+	// upload's own size (internal/gamefile's own rule 12 reasoning).
+	GameUploadChunkBytes int64
+	// GameUploadAbandonedAfter is how long an upload may sit 'receiving'
+	// with nothing appended to it before the janitor (internal/app/
+	// background.go) aborts it and frees the disk. A day: long enough that
+	// an organiser stepping away mid-upload for lunch does not lose their
+	// place, short enough that a browser tab closed mid-upload does not hold
+	// gigabytes indefinitely.
+	GameUploadAbandonedAfter time.Duration
 }
 
 // Load reads configuration from the environment, applying defaults for
@@ -270,6 +296,31 @@ func Load() (Config, error) {
 	}
 	if cfg.GameInstanceGraceMin < 0 {
 		return Config{}, fmt.Errorf("GAME_INSTANCE_GRACE_MIN cannot be negative, got %d", cfg.GameInstanceGraceMin)
+	}
+
+	cfg.GameUploadDir = os.Getenv("GAME_UPLOAD_DIR")
+	// 4 GiB unset: above the 1-3 GB the pilot itself named, on purpose (the
+	// field's own doc).
+	if cfg.GameUploadMaxFileBytes, err = int64Env("GAME_UPLOAD_MAX_FILE_BYTES", 4<<30); err != nil {
+		return Config{}, err
+	}
+	if cfg.GameUploadMaxDirBytes, err = int64Env("GAME_UPLOAD_MAX_DIR_BYTES", 16<<30); err != nil {
+		return Config{}, err
+	}
+	if cfg.GameUploadChunkBytes, err = int64Env("GAME_UPLOAD_CHUNK_BYTES", 8<<20); err != nil {
+		return Config{}, err
+	}
+	if cfg.GameUploadAbandonedAfter, err = durationEnv("GAME_UPLOAD_ABANDONED_AFTER", 24*time.Hour); err != nil {
+		return Config{}, err
+	}
+	if cfg.GameUploadAbandonedAfter < 0 {
+		return Config{}, fmt.Errorf("GAME_UPLOAD_ABANDONED_AFTER cannot be negative, got %s", cfg.GameUploadAbandonedAfter)
+	}
+	if cfg.GameUploadDir != "" {
+		if cfg.GameUploadMaxFileBytes <= 0 || cfg.GameUploadMaxDirBytes <= 0 || cfg.GameUploadChunkBytes <= 0 {
+			return Config{}, fmt.Errorf(
+				"GAME_UPLOAD_MAX_FILE_BYTES, GAME_UPLOAD_MAX_DIR_BYTES and GAME_UPLOAD_CHUNK_BYTES must all be positive when GAME_UPLOAD_DIR is set")
+		}
 	}
 
 	cfg.DefaultLocale = envOrDefault("DEFAULT_LOCALE", "en")
