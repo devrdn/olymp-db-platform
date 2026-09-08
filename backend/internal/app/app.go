@@ -179,7 +179,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		// `cluster` the same provisioner.
 		gameAuthoring = provisioning.NewGames(games, cluster, games).
 			WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
-		a.tasks = append(a.tasks, buildGames(log, gameAuthoring))
+		// The same GAME_BUILD_TIMEOUT the provisioner above was given: it is
+		// what bounds a build, so it is also what decides when a build that has
+		// not finished can only be a dead one (staleBuildAfter).
+		a.tasks = append(a.tasks, buildGames(log, gameAuthoring.Build, cfg.GameBuildTimeout))
 
 		// The second way to build a contest's game: upload a finished dump
 		// instead of writing one in the editor. Optional in exactly the way

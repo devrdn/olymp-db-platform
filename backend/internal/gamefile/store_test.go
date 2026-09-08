@@ -830,6 +830,11 @@ func TestAppendAfterCompleteIsRefused(t *testing.T) {
 	}
 }
 
+// anyAge is a cut-off no file a test has just written can be younger than —
+// UploadIDs' own "list everything" case, spelled once here so the tests that
+// are not about the age floor do not each invent a time of their own.
+func anyAge() time.Time { return time.Now().Add(time.Hour) }
+
 // idSet turns a slice into a set for order-independent comparison — UploadIDs
 // promises no particular order, only which ids are present and how many
 // times.
@@ -846,7 +851,7 @@ func idSet(ids []string) map[string]int {
 // rather than erroring on an empty directory.
 func TestUploadIDsEmptyStore(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
-	ids, err := s.UploadIDs()
+	ids, err := s.UploadIDs(anyAge())
 	if err != nil {
 		t.Fatalf("UploadIDs: %v", err)
 	}
@@ -870,7 +875,7 @@ func TestUploadIDsIncludesAnInProgressUpload(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	ids, err := s.UploadIDs()
+	ids, err := s.UploadIDs(anyAge())
 	if err != nil {
 		t.Fatalf("UploadIDs: %v", err)
 	}
@@ -898,7 +903,7 @@ func TestUploadIDsCountsACompletedUploadOnce(t *testing.T) {
 		t.Fatalf("index file missing after Complete: %v", err)
 	}
 
-	ids, err := s.UploadIDs()
+	ids, err := s.UploadIDs(anyAge())
 	if err != nil {
 		t.Fatalf("UploadIDs: %v", err)
 	}
@@ -928,7 +933,7 @@ func TestUploadIDsForgetsAnAbortedUpload(t *testing.T) {
 		t.Fatalf("Abort(sealed): %v", err)
 	}
 
-	ids, err := s.UploadIDs()
+	ids, err := s.UploadIDs(anyAge())
 	if err != nil {
 		t.Fatalf("UploadIDs: %v", err)
 	}
@@ -965,11 +970,43 @@ func TestUploadIDsIgnoresSideFilesAndAnythingElseOnTheVolume(t *testing.T) {
 		t.Fatalf("write stray file: %v", err)
 	}
 
-	ids, err := s.UploadIDs()
+	ids, err := s.UploadIDs(anyAge())
 	if err != nil {
 		t.Fatalf("UploadIDs: %v", err)
 	}
 	if got := idSet(ids); len(got) != 1 || got[real] != 1 {
 		t.Fatalf("UploadIDs = %v, want exactly the one real upload %s (no side file, no stray file)", ids, real)
+	}
+}
+
+// The floor the janitor's orphan sweep stands on. Reconciling a volume
+// against bookkeeping kept somewhere else is a race whichever order the two
+// are written in — provisioning.Games.BeginUpload reserves the file first, on
+// purpose — so a listing that reports a file the instant it appears hands the
+// sweep a reservation whose row is still being inserted, and the sweep deletes
+// it. See provisioning.orphanFileGrace for what the caller does with this.
+func TestUploadIDsLeavesOutAFileYoungerThanTheCutOff(t *testing.T) {
+	s := newTestStore(t, permissiveLimits())
+	fresh, old := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "11111111-2222-3333-4444-555555555555"
+	for _, id := range []string{fresh, old} {
+		if err := s.Begin(id); err != nil {
+			t.Fatalf("Begin(%s): %v", id, err)
+		}
+	}
+
+	// One of the two is made older than the cut-off; both were written in the
+	// same instant otherwise, which is exactly the case the floor decides.
+	cutOff := time.Now().Add(-time.Minute)
+	when := cutOff.Add(-time.Minute)
+	if err := os.Chtimes(filepath.Join(s.dir, old+dataSuffix), when, when); err != nil {
+		t.Fatalf("age the older upload: %v", err)
+	}
+
+	ids, err := s.UploadIDs(cutOff)
+	if err != nil {
+		t.Fatalf("UploadIDs: %v", err)
+	}
+	if got := idSet(ids); len(got) != 1 || got[old] != 1 {
+		t.Fatalf("UploadIDs = %v, want only %s — the file written moments ago is not the caller's to act on yet", ids, old)
 	}
 }

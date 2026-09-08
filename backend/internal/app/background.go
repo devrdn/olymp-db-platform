@@ -317,15 +317,52 @@ func reclaimInstances(log *slog.Logger, reclaim func(context.Context, int) (prov
 // it runs.
 const buildGamesEvery = 5 * time.Second
 
-// staleBuildAfter is how long a game may sit in `building` before another
-// tick takes it back.
+// staleBuildMargin is the room the stale cut-off leaves beyond the budget the
+// script itself is given.
 //
-// This is not "how long a build may take" — a build that is still running
-// holds nothing that stops a second one starting beside it, so the figure has
-// to be comfortably longer than any real build rather than a timeout on one.
-// Fifteen minutes is far past the seconds an olympiad's game actually takes
-// and far short of leaving somebody watching a dead spinner for an afternoon.
-const staleBuildAfter = 15 * time.Minute
+// GAME_BUILD_TIMEOUT bounds one call to gamedb.Provisioner.runScript, not the
+// whole of BuildTemplate: the DROP and CREATE DATABASE that bracket it, the
+// two connections it opens, the grants and the hardening afterwards are all
+// outside that budget and bounded instead by the provisioning pool's own
+// statement timeout. Dropping and recreating a template holding a
+// multi-gigabyte dump is disk work of the same order as one of those
+// statements, so the margin is one of them rather than a round number picked
+// beside it.
+const staleBuildMargin = provisionStatementTimeout
+
+// staleBuildAfter is how long a game may sit in `building` before another tick
+// takes it back.
+//
+// It is derived from the build's own budget rather than declared beside it,
+// because the two have to be consistent and a constant cannot stay consistent
+// with a value a deployment sets (CLAUDE.md rule 11): GAME_BUILD_TIMEOUT
+// defaults to thirty minutes, and the fifteen-minute constant this replaces
+// meant a build of a three-gigabyte dump was reclaimed while it was still
+// streaming. What that costs is not a wasted tick — the second BuildTemplate
+// begins by dropping the half-filled template out from under the first, so the
+// first fails with PostgreSQL's "terminating connection due to administrator
+// command" shown to the organiser as though their SQL had been refused, its
+// own failure path drops the database the second one is now filling, and the
+// next tick fifteen minutes later starts the same again. A game that does not
+// build inside the cut-off never reaches `ready` at all.
+//
+// This is not "how long a build may take": a build that is still running holds
+// nothing that stops a second one starting beside it, so the figure has to
+// outlast any build that can still be alive. That it now does costs a slower
+// recovery of a build a crash really did abandon — the whole budget plus the
+// margin rather than a flat fifteen minutes — which is the right way round:
+// waiting is recoverable, and racing two builds over one template is not.
+//
+// The alternative considered was a heartbeat, the running build touching
+// `updated_at` so a dead build could be told from a long one directly. It buys
+// the faster recovery back, and costs a goroutine per build, a repository
+// write every tick of it, and a new way for a build to be declared dead (the
+// heartbeat failing) that has nothing to do with the build. Deriving the
+// cut-off needs none of that and is provable in one assertion, which is what
+// background_test.go makes.
+func staleBuildAfter(buildTimeout time.Duration) time.Duration {
+	return buildTimeout + staleBuildMargin
+}
 
 // buildGames builds one waiting game per tick.
 //
@@ -333,7 +370,20 @@ const staleBuildAfter = 15 * time.Minute
 // whole script inside it, which is not something to hold an HTTP request open
 // for — and because an API that dies mid-build has to leave the work
 // recoverable rather than a row stuck in `building` for ever.
-func buildGames(log *slog.Logger, games *provisioning.Games) task {
+//
+// build is provisioning.Games.Build, taken as a function for the same reason
+// reclaimInstances and sweepQueryLog take theirs: what this file owns is the
+// wrapping — the cut-off it asks for, the log lines — and that has to be
+// provable without a game cluster behind it. buildTimeout is the deployment's
+// GAME_BUILD_TIMEOUT, the same value internal/app hands the provisioner, so
+// that the one number decides both how long a build may run and how long
+// before another tick assumes it is dead.
+func buildGames(
+	log *slog.Logger,
+	build func(context.Context, time.Duration) (provisioning.Template, error),
+	buildTimeout time.Duration,
+) task {
+	stale := staleBuildAfter(buildTimeout)
 	return task{
 		name: "game-build",
 		// At startup as well. A game left in `building` by the process that
@@ -344,7 +394,7 @@ func buildGames(log *slog.Logger, games *provisioning.Games) task {
 		atStart: true,
 		every:   buildGamesEvery,
 		run: func(ctx context.Context) error {
-			built, err := games.Build(ctx, staleBuildAfter)
+			built, err := build(ctx, stale)
 			if errors.Is(err, provisioning.ErrNoGame) {
 				// Nothing waiting, which is what almost every tick finds.
 				return nil

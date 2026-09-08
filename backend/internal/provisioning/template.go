@@ -211,11 +211,18 @@ type TemplateRepository interface {
 	// updated_at is older than cutoff — the janitor's own candidates
 	// (internal/app/background.go).
 	AbandonedUploads(ctx context.Context, cutoff time.Time, limit int) ([]Upload, error)
-	// UploadExists reports whether id names any upload row at all, whatever
-	// its status. The janitor's other sweep uses this to tell a file that
-	// belongs to a row it has not yet been told to remove apart from one no
-	// row has ever named — see Games.sweepOrphanFiles.
-	UploadExists(ctx context.Context, id uuid.UUID) (bool, error)
+	// UploadInUse reports whether anything still needs id's bytes on the
+	// volume: an upload still 'receiving' chunks, or one a contest's game is
+	// actually built from.
+	//
+	// The question the janitor's other sweep has to ask, and not the same as
+	// "does a row exist" — which is what it used to ask, and which answers
+	// "keep it" for every upload a later game displaced. A completed upload
+	// stops being needed the moment the game stops naming it, whether that was
+	// a second upload or a script written in the editor, and its row stays
+	// behind as history either way (the same convention MarkDropped keeps for
+	// an instance). See Games.sweepOrphanFiles.
+	UploadInUse(ctx context.Context, id uuid.UUID) (bool, error)
 }
 
 // Authoring answers whether a contest's game may still be replaced.
@@ -362,7 +369,17 @@ func (g *Games) SetScript(ctx context.Context, actorID, contestID uuid.UUID, scr
 		return Template{}, fmt.Errorf("%w: %d bytes, the limit is %d", ErrScriptTooLong, len(script), MaxScriptBytes)
 	}
 
-	return g.replaceGame(ctx, contestID,
+	// Storing a script over a file-sourced game displaces that game's upload
+	// exactly the way completing a second upload does — SaveScript clears
+	// upload_id, and nothing else in this service is ever told about the file
+	// again. Read before the save, because after it the row no longer says
+	// which upload it was.
+	displaced, err := g.displacedUpload(ctx, contestID, nil)
+	if err != nil {
+		return Template{}, err
+	}
+
+	return g.replaceGame(ctx, contestID, displaced,
 		func(ctx context.Context) (Template, error) {
 			return g.repo.SaveScript(ctx, contestID, templateName(contestID), script)
 		},
@@ -392,8 +409,13 @@ func (g *Games) SetScript(ctx context.Context, actorID, contestID uuid.UUID, scr
 // markDropped and markReclaimed use elsewhere in this package, so a write
 // that lands with no trail of it — or a trail entry for a write that was
 // rolled back — cannot happen.
+//
+// displaced, when not nil, is the upload the game being written leaves behind
+// (displacedUpload names it). Its file is removed after the transaction has
+// committed, never before — see the removal below for why this one place is
+// the exception to Instances.DropInstance's "the real object goes first".
 func (g *Games) replaceGame(
-	ctx context.Context, contestID uuid.UUID,
+	ctx context.Context, contestID uuid.UUID, displaced *uuid.UUID,
 	save func(context.Context) (Template, error),
 	entry func(Template) audit.Entry,
 ) (Template, error) {
@@ -425,6 +447,30 @@ func (g *Games) replaceGame(
 	}
 	if err != nil {
 		return Template{}, err
+	}
+
+	// Only now, with the replacement committed, do the displaced upload's
+	// bytes go.
+	//
+	// DropInstance's ordering — the real object first, the row after — is
+	// right there because the removal *is* the operation being recorded.
+	// Here it is conditional on a transaction that has not run yet: this
+	// method checks GameEditable a second time inside it precisely because
+	// the contest may have started while the upload was being hashed and
+	// indexed, and an unconditional os.Remove before that check deletes the
+	// file of the game that is about to be kept. That leaves a game still
+	// naming an upload whose bytes are gone, and every rebuild of it stops
+	// at BuildFailedInternally for good.
+	//
+	// Failing here is deliberately not the caller's failure. The game *has*
+	// been replaced; reporting an error would tell an organiser their upload
+	// did not go through when it did, and have them do it again. What is
+	// left behind is a file no game names, which is exactly what the
+	// janitor's orphan sweep now looks for (sweepOrphanFiles, and
+	// TemplateRepository.UploadInUse for the question it asks) — the same
+	// backstop that covers a crash between the commit above and this line.
+	if displaced != nil {
+		_ = g.retireUploadFile(*displaced)
 	}
 	return saved, nil
 }
