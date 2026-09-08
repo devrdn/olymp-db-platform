@@ -61,6 +61,11 @@ export function readableSize(bytes: number): string {
  * replaces it on its own, so a control duplicating a background job is how a
  * screen teaches somebody to distrust it. A row already dropped offers nothing
  * either, for the plainest of reasons.
+ *
+ * No heading of its own. This is the sole panel of the `databases` route —
+ * the same reason `StoryEditor` and `QuestionList` carry none either — and
+ * the route's own page supplies it, the way every other single-panel section
+ * does.
  */
 export function GameDatabases({
   contestId,
@@ -73,15 +78,10 @@ export function GameDatabases({
   locale: Locale;
   dict: Dictionary;
 }) {
-  const t = dict.workspace.game.databases;
+  const t = dict.workspace.databases;
 
   return (
     <section className="flex flex-col gap-5">
-      <div className="flex flex-col gap-1.5">
-        <h3 className="text-h3 text-ink">{t.heading}</h3>
-        <p className="max-w-body text-small text-ink-2">{t.hint}</p>
-      </div>
-
       {databases.instances.length === 0 ? (
         <p className="max-w-body text-body text-ink-2">{t.empty}</p>
       ) : (
@@ -162,7 +162,7 @@ function Holder({
   t,
 }: {
   instance: GameInstance;
-  t: Dictionary["workspace"]["game"]["databases"];
+  t: Dictionary["workspace"]["databases"];
 }) {
   if (instance.spare) return <Tag tone="mute">{t.spare}</Tag>;
   if (instance.participant === "") {
@@ -192,7 +192,7 @@ function DropDatabase({
   instance: GameInstance;
   dict: Dictionary;
 }) {
-  const t = dict.workspace.game.databases;
+  const t = dict.workspace.databases;
   const [state, formAction, pending] = useActionState<GameState, FormData>(
     dropGameInstanceAction,
     {},
