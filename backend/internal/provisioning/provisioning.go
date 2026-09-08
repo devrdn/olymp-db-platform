@@ -128,6 +128,11 @@ type Cluster interface {
 	CreateInstance(ctx context.Context, template, instance string, policy sqlpolicy.Policy) error
 	Drop(ctx context.Context, name string) error
 	DatabaseSize(ctx context.Context, name string) (int64, error)
+	// ClusterBytes is how much disk every database on the cluster occupies
+	// together. The pool's own size is decided from it: a count of copies
+	// says nothing about a disk without the size of one copy and the room
+	// left beside it (see RosterDepth).
+	ClusterBytes(ctx context.Context) (int64, error)
 	// DatabaseSizes is DatabaseSize for a whole list, in one round trip.
 	// Apart from it rather than a loop over it, because the organizer's
 	// database list asks about every copy a contest owns at once and a
@@ -507,26 +512,170 @@ func (s *Service) Databases(ctx context.Context, contest Contest) (spare int, er
 	return spare, nil
 }
 
-// RosterDepth is the depth a contest's own roster asks for: everybody without
-// a current copy, plus headroom for the people who enrol next, capped so that
-// one enormous contest cannot ask the cluster for more than a deployment is
-// willing to hold.
+// PoolLimits is everything that bounds one contest's pool of spare copies.
 //
-// The headroom is what makes a late self-enrolment free rather than a wait,
-// and the cap is what keeps a mistyped roster from filling a disk. Both come
-// from the deployment (GAME_POOL_DEPTH and GAME_POOL_MAX); neither is a
-// guess this package is entitled to make.
-func (s *Service) RosterDepth(headroom, max int) Depth {
+// A struct rather than three parameters because they are one decision — how
+// much of a shared cluster one contest may take — and because the third one
+// arrived after the first two and would otherwise have been a fourth argument
+// nobody reading a call site could name.
+type PoolLimits struct {
+	// Headroom is how many copies to keep beyond the participants who hold
+	// none: what makes a late self-enrolment free rather than a wait.
+	Headroom int
+	// MaxCopies caps how many copies one contest may ask for whatever its
+	// roster says. Zero means no count cap. It is the cheap bound — one
+	// number, no measurement — and on its own it is not a bound on anything
+	// that matters: five hundred copies of a twenty-mebibyte template is ten
+	// gibibytes, and five hundred copies of a two-gibibyte template is a
+	// terabyte, from the same number.
+	MaxCopies int
+	// MaxClusterBytes is how much disk every database on the game cluster may
+	// occupy together, this platform's and anything else sharing it. Zero
+	// means no byte budget.
+	//
+	// A budget for the *cluster* and not per contest, because the cluster is
+	// what runs out: a per-contest allowance multiplied by however many
+	// olympiads are live is not a bound on a disk. It is a figure a
+	// deployment sets (GAME_CLUSTER_MAX_BYTES) from the volume the cluster
+	// actually sits on, since nothing PostgreSQL exposes portably says how
+	// much free space is under its data directory.
+	MaxClusterBytes int64
+}
+
+// PoolBound names what stopped a pool being as deep as its roster asked.
+type PoolBound string
+
+const (
+	// BoundNone is a pool that got what it asked for.
+	BoundNone PoolBound = ""
+	// BoundCopies is PoolLimits.MaxCopies.
+	BoundCopies PoolBound = "copies"
+	// BoundDisk is PoolLimits.MaxClusterBytes.
+	BoundDisk PoolBound = "disk"
+)
+
+// Sizing is one contest's pool depth and how it was arrived at.
+//
+// It carries the measurements as well as the answer because the refusal has to
+// be explainable: "the pool stopped growing" is a support ticket, and "the
+// cluster holds 480 GiB of a 500 GiB budget and one more copy of this contest
+// is 2 GiB" is an answer. A pool that stops growing silently is worse than one
+// that says why.
+type Sizing struct {
+	// Depth is what the pool is allowed to be.
+	Depth int
+	// Wanted is what the roster asked for, before any bound applied.
+	Wanted int
+	// Bound is what cut it, BoundNone when nothing did.
+	Bound PoolBound
+	// TemplateBytes is what one copy of this contest costs, and ClusterBytes
+	// what the cluster already holds. Both zero when the byte budget was not
+	// consulted.
+	TemplateBytes int64
+	ClusterBytes  int64
+	// Budget is the MaxClusterBytes the two above were measured against.
+	Budget int64
+}
+
+// Constrained is told whenever a pool was granted less than its roster asked
+// for.
+//
+// A callback rather than a log line from in here, for two reasons. This
+// package has no logger and should not grow one — it is a domain package, and
+// the operator's channel belongs to the composition root that owns it
+// (internal/app.tendPools). And a test can assert on what it was told, where a
+// log line is the kind of evidence that quietly stops being produced.
+type Constrained func(ctx context.Context, contest Contest, sizing Sizing)
+
+// RosterDepth is the depth a contest's own roster asks for: everybody without
+// a current copy, plus headroom for the people who enrol next, cut back to
+// what the deployment is willing to hold and to what is actually left on the
+// cluster.
+//
+// The headroom is what makes a late self-enrolment free rather than a wait.
+// The two bounds after it answer different questions and neither replaces the
+// other: MaxCopies is what one contest may ask for, and MaxClusterBytes is
+// what there is. Only the second is a bound on a disk — a count means nothing
+// without the size of a copy, which is why this asks the cluster how large the
+// template is and how much room is left rather than trusting a number somebody
+// typed into a configuration file against a template they had not seen.
+//
+// Self-enrolment is open on an open contest, so the roster is something the
+// outside world writes; without the byte budget it is a lever on the disk
+// every olympiad on this cluster shares.
+//
+// constrained, when supplied, is told whenever a bound bound — see Constrained
+// for why the report leaves this package rather than being logged inside it.
+// It may be nil, which is what the tests that are not about the report use.
+func (s *Service) RosterDepth(limits PoolLimits, constrained Constrained) Depth {
 	return func(ctx context.Context, contest Contest) (int, error) {
 		waiting, err := s.repo.WaitingParticipants(ctx, contest.ID, contest.Version)
 		if err != nil {
 			return 0, fmt.Errorf("size the pool for contest %s: %w", contest.ID, err)
 		}
 
-		want := waiting + headroom
-		if max > 0 && want > max {
-			return max, nil
+		sizing := Sizing{Wanted: waiting + limits.Headroom}
+		sizing.Depth = sizing.Wanted
+		if limits.MaxCopies > 0 && sizing.Depth > limits.MaxCopies {
+			sizing.Depth, sizing.Bound = limits.MaxCopies, BoundCopies
 		}
-		return want, nil
+
+		// The byte budget after the count, so that a deployment which set only
+		// the cheap bound pays for no measurement at all — and so that a
+		// contest already under its count cap is still measured, because the
+		// count is not what fills a disk.
+		if limits.MaxClusterBytes > 0 {
+			fits, err := s.copiesThatFit(ctx, contest, limits.MaxClusterBytes, &sizing)
+			if err != nil {
+				return 0, err
+			}
+			if sizing.Depth > fits {
+				sizing.Depth, sizing.Bound = fits, BoundDisk
+			}
+		}
+
+		if sizing.Bound != BoundNone && constrained != nil {
+			constrained(ctx, contest, sizing)
+		}
+		return sizing.Depth, nil
 	}
+}
+
+// copiesThatFit is how deep this contest's pool may be without the cluster
+// going past budget, and fills in the measurements it decided that on.
+//
+// The arithmetic is about the copies TopUp would *make*, not about the pool's
+// whole depth: the spares that already exist are already counted in what the
+// cluster holds, so a depth of `have + room/size` asks for exactly the copies
+// there is room for. Rounded down, because a copy that half fits does not.
+func (s *Service) copiesThatFit(ctx context.Context, contest Contest, budget int64, sizing *Sizing) (int, error) {
+	size, err := s.cluster.DatabaseSize(ctx, contest.Template)
+	if err != nil {
+		return 0, fmt.Errorf("size the pool for contest %s: %w", contest.ID, err)
+	}
+	if size <= 0 {
+		// Never true of a database that exists — an empty one is megabytes —
+		// so this is a template that has gone, and dividing by it would grant
+		// an unbounded pool from a missing measurement.
+		return 0, fmt.Errorf("size the pool for contest %s: the template %s measures %d bytes",
+			contest.ID, contest.Template, size)
+	}
+	used, err := s.cluster.ClusterBytes(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("size the pool for contest %s: %w", contest.ID, err)
+	}
+	have, err := s.repo.SpareCount(ctx, contest.ID, contest.Version)
+	if err != nil {
+		return 0, fmt.Errorf("size the pool for contest %s: %w", contest.ID, err)
+	}
+
+	sizing.TemplateBytes, sizing.ClusterBytes, sizing.Budget = size, used, budget
+
+	room := budget - used
+	if room < 0 {
+		room = 0
+	}
+	// A cluster already over budget grants nothing new; it does not take the
+	// existing spares away, which is Reclaim's job and not this one's.
+	return have + int(room/size), nil
 }

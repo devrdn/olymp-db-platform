@@ -108,8 +108,16 @@ type gameResponse struct {
 	// to staff so a name in a cluster listing can be traced back to a
 	// contest; it is never sent to a participant.
 	Database string `json:"database"`
-	// BuildError is PostgreSQL's own words when the build failed, empty
-	// otherwise. Whoever wrote the script is the person who has to fix it.
+	// BuildError is PostgreSQL's own words about the *script* when the build
+	// failed, empty otherwise. Whoever wrote the script is the person who has
+	// to fix it.
+	//
+	// Never anything else: a build that failed for a reason of ours carries
+	// provisioning.BuildFailedInternally instead, decided where the error is
+	// produced rather than here. This field is served to anybody holding
+	// contest.view, and the same string is kept for good in the
+	// contest.game_built audit payload, so a connect string reaching it is a
+	// connect string published twice.
 	BuildError string `json:"build_error"`
 	// ScriptBytes lets the status say whether there is a script at all
 	// without carrying it.

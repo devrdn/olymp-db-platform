@@ -72,6 +72,38 @@ func TestARefusalKeepsItsCodeAndSubject(t *testing.T) {
 	}
 }
 
+// The position is the other half of what makes a refusal actionable, and it
+// was the half with no field on the contract: the checker set it, the console
+// read it, and in every deployed arrangement it was zero between the two.
+//
+// Both directions and both values, because "no position" is a real answer —
+// every refusal but a parse error has one, and a wire that invented an offset
+// for them would have the console underline the first character of a query
+// whose whole statement was refused.
+func TestARefusalKeepsThePositionItWasRefusedAt(t *testing.T) {
+	for name, given := range map[string]struct {
+		refusal *sqlpolicy.Refusal
+		want    int
+	}{
+		"a parse error, at the character the parser stopped on": {
+			&sqlpolicy.Refusal{Code: sqlpolicy.CodeParseError, Subject: "syntax error", Position: 15}, 15,
+		},
+		"a refusal about a whole statement, with nowhere to point": {
+			&sqlpolicy.Refusal{Code: sqlpolicy.CodeFunctionNotSupported, Subject: "pg_sleep"}, 0,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var back *sqlpolicy.Refusal
+			if !errors.As(errorFor(failureFor(given.refusal)), &back) {
+				t.Fatal("a refusal came back as something else")
+			}
+			if back.Position != given.want {
+				t.Fatalf("position came back as %d, want %d", back.Position, given.want)
+			}
+		})
+	}
+}
+
 func TestSuccessCarriesNoFailure(t *testing.T) {
 	if failureFor(nil) != nil {
 		t.Fatal("success produced a failure")

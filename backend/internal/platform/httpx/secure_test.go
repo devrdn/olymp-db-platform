@@ -61,3 +61,20 @@ func TestSecureHeadersSendsHSTSForForwardedHTTPS(t *testing.T) {
 		t.Error("Strict-Transport-Security missing for a request forwarded over TLS")
 	}
 }
+
+// Nothing this API serves is cacheable, and one of the things it serves is
+// every reference answer of a contest in a single file (GET
+// /contests/{id}/export). With no directive a plain 200 GET is heuristically
+// cacheable, which puts an answer key in a browser's disk cache on whatever
+// machine an organizer downloaded it from.
+func TestSecureHeadersForbidsStoringTheResponse(t *testing.T) {
+	rec := httptest.NewRecorder()
+
+	SecureHeaders(okHandler).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	// no-store and not no-cache: no-cache permits storing the response and
+	// only asks for it to be revalidated, which still leaves it on the disk.
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+}

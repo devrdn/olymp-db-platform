@@ -1,6 +1,7 @@
 package provisioning_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -392,7 +393,7 @@ func TestARowIsNotMarkedDroppedWhenTheClusterRefused(t *testing.T) {
 func TestThePoolIsSizedFromTheRosterAndNotFromAFlatNumber(t *testing.T) {
 	service, _, contest, _ := serviceFor(t, 10)
 
-	want, err := service.RosterDepth(3, 0)(t.Context(), contest)
+	want, err := service.RosterDepth(provisioning.PoolLimits{Headroom: 3}, nil)(t.Context(), contest)
 	if err != nil {
 		t.Fatalf("sizing: %v", err)
 	}
@@ -408,7 +409,7 @@ func TestThePoolIsSizedFromTheRosterAndNotFromAFlatNumber(t *testing.T) {
 func TestTheRosterCannotAskForMoreThanTheDeploymentAllows(t *testing.T) {
 	service, _, contest, _ := serviceFor(t, 10)
 
-	want, err := service.RosterDepth(3, 5)(t.Context(), contest)
+	want, err := service.RosterDepth(provisioning.PoolLimits{Headroom: 3, MaxCopies: 5}, nil)(t.Context(), contest)
 	if err != nil {
 		t.Fatalf("sizing: %v", err)
 	}
@@ -425,11 +426,157 @@ func TestAParticipantWhoAlreadyHasACopyIsNotCountedAsWaiting(t *testing.T) {
 		t.Fatalf("provide a copy: %v", err)
 	}
 
-	want, err := service.RosterDepth(0, 0)(t.Context(), contest)
+	want, err := service.RosterDepth(provisioning.PoolLimits{}, nil)(t.Context(), contest)
 	if err != nil {
 		t.Fatalf("sizing: %v", err)
 	}
 	if want != 0 {
 		t.Fatalf("counted %d waiting when the only participant already has a copy", want)
+	}
+}
+
+// A count is not a bound on a disk. GAME_POOL_MAX's five hundred copies is ten
+// gibibytes of a small template and a terabyte of a large one, and nothing
+// asked which — while self-enrolment lets the outside world write the roster
+// that count is derived from, on a cluster every olympiad shares.
+func TestThePoolIsBoundedByTheRoomOnTheClusterAndNotOnlyByACount(t *testing.T) {
+	service, fake, contest, _ := serviceFor(t, 10)
+	// A copy costs a gibibyte, the cluster already holds 97 GiB of a 100 GiB
+	// budget: three more copies fit and thirteen do not.
+	fake.templateBytes = 1 << 30
+	fake.clusterBytes = 97 << 30
+
+	var told []provisioning.Sizing
+	limits := provisioning.PoolLimits{Headroom: 3, MaxCopies: 500, MaxClusterBytes: 100 << 30}
+	want, err := service.RosterDepth(limits, func(_ context.Context, _ provisioning.Contest, s provisioning.Sizing) {
+		told = append(told, s)
+	})(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("sizing: %v", err)
+	}
+	if want != 3 {
+		t.Fatalf("asked for %d copies with room for three; the count cap of 500 was never the bound", want)
+	}
+
+	// And the refusal is visible, with the numbers that explain it. A pool
+	// that stops growing silently is a support ticket nobody can answer.
+	if len(told) != 1 {
+		t.Fatalf("the refusal was reported %d times, want once", len(told))
+	}
+	if told[0].Bound != provisioning.BoundDisk {
+		t.Fatalf("reported bound %q, want %q", told[0].Bound, provisioning.BoundDisk)
+	}
+	if told[0].Wanted != 13 || told[0].Depth != 3 {
+		t.Fatalf("reported %+v, want thirteen asked for and three granted", told[0])
+	}
+	if told[0].TemplateBytes != 1<<30 || told[0].ClusterBytes != 97<<30 || told[0].Budget != 100<<30 {
+		t.Fatalf("reported %+v without the measurements the refusal was decided on", told[0])
+	}
+}
+
+// The spares that already exist are already counted in what the cluster holds,
+// so the budget has to bound the copies TopUp would *make* rather than the
+// pool's whole depth — otherwise a contest with a deep pool is refused a top-up
+// it has already paid for, and the pool shrinks a little every tick.
+func TestTheDiskBoundCountsTheCopiesStillToBeMadeAndNotTheOnesAlreadyThere(t *testing.T) {
+	service, fake, contest, _ := serviceFor(t, 10)
+	if made, err := service.TopUp(t.Context(), contest, 4); err != nil || made != 4 {
+		t.Fatalf("staging four spares made %d (%v)", made, err)
+	}
+	fake.templateBytes = 1 << 30
+	fake.clusterBytes = 98 << 30 // two more copies fit
+
+	want, err := service.RosterDepth(
+		provisioning.PoolLimits{Headroom: 3, MaxClusterBytes: 100 << 30}, nil)(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("sizing: %v", err)
+	}
+	if want != 6 {
+		t.Fatalf("granted a depth of %d; four spares exist and two more fit, so six is the answer", want)
+	}
+}
+
+// A cluster already past its budget grants nothing new. It does not go
+// negative, and it does not take the existing spares away — that is Reclaim's
+// job, and a depth below what exists would have TopUp do nothing anyway.
+func TestAClusterAlreadyOverItsBudgetIsAskedForNothingMore(t *testing.T) {
+	service, fake, contest, _ := serviceFor(t, 10)
+	fake.templateBytes = 1 << 30
+	fake.clusterBytes = 200 << 30
+
+	want, err := service.RosterDepth(
+		provisioning.PoolLimits{Headroom: 3, MaxClusterBytes: 100 << 30}, nil)(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("sizing: %v", err)
+	}
+	if want != 0 {
+		t.Fatalf("granted a depth of %d on a cluster already over budget", want)
+	}
+}
+
+// A deployment that set no byte budget pays for no measurement: the two
+// catalogue reads are per live contest per tick, and a feature nobody turned
+// on should not cost them.
+func TestNoByteBudgetMeansTheClusterIsNeverMeasured(t *testing.T) {
+	service, fake, contest, _ := serviceFor(t, 10)
+
+	if _, err := service.RosterDepth(
+		provisioning.PoolLimits{Headroom: 3, MaxCopies: 500}, nil)(t.Context(), contest); err != nil {
+		t.Fatalf("sizing: %v", err)
+	}
+	if fake.clusterReads != 0 {
+		t.Fatalf("measured the cluster %d times with no byte budget set", fake.clusterReads)
+	}
+}
+
+// A measurement that cannot be taken is not a licence to fill the disk. The
+// tick logs it and this contest's pool is left where it is, which is the
+// direction a failure to measure has to fail in.
+func TestAClusterThatCannotBeMeasuredRefusesToSizeThePool(t *testing.T) {
+	service, fake, contest, _ := serviceFor(t, 10)
+	fake.clusterBytesFail = errors.New("the game cluster is away")
+
+	if _, err := service.RosterDepth(
+		provisioning.PoolLimits{Headroom: 3, MaxClusterBytes: 100 << 30}, nil)(t.Context(), contest); err == nil {
+		t.Fatal("a cluster that could not be measured was sized as though it were empty")
+	}
+}
+
+// The count cap still exists, still binds, and now says so.
+func TestTheCountCapReportsItselfWhenItIsWhatBound(t *testing.T) {
+	service, _, contest, _ := serviceFor(t, 10)
+
+	var told []provisioning.Sizing
+	want, err := service.RosterDepth(provisioning.PoolLimits{Headroom: 3, MaxCopies: 5},
+		func(_ context.Context, _ provisioning.Contest, s provisioning.Sizing) {
+			told = append(told, s)
+		})(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("sizing: %v", err)
+	}
+	if want != 5 {
+		t.Fatalf("asked for %d spares against a cap of 5", want)
+	}
+	if len(told) != 1 || told[0].Bound != provisioning.BoundCopies || told[0].Wanted != 13 {
+		t.Fatalf("reported %+v, want one report naming the count cap", told)
+	}
+}
+
+// And a pool that got what it asked for reports nothing: a warning on every
+// tick of every healthy contest is a warning nobody reads.
+func TestAPoolThatGotWhatItAskedForReportsNothing(t *testing.T) {
+	service, fake, contest, _ := serviceFor(t, 10)
+	fake.templateBytes = 1 << 20
+	fake.clusterBytes = 1 << 20
+
+	reported := 0
+	want, err := service.RosterDepth(
+		provisioning.PoolLimits{Headroom: 3, MaxCopies: 500, MaxClusterBytes: 100 << 30},
+		func(context.Context, provisioning.Contest, provisioning.Sizing) { reported++ })(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("sizing: %v", err)
+	}
+	if want != 13 || reported != 0 {
+		t.Fatalf("granted %d and reported %d times; nothing bound", want, reported)
 	}
 }

@@ -173,4 +173,20 @@ message Failure {
   // For the journal and the technical log. Not for the participant: what they
   // are shown is chosen from `kind` and `code`.
   string message = 4;
+  // Where in the query the refusal is about, as a 1-based **character**
+  // offset — PostgreSQL's own errposition() convention, which the checker
+  // gets verbatim from PostgreSQL's own parser. Zero means "no position", and
+  // is true of every refusal but a parse error.
+  //
+  // Characters and not bytes, which is the whole reason this is worth a
+  // sentence: a Cyrillic query is two bytes to the character in UTF-8, so a
+  // consumer treating this as a byte offset underlines the wrong half of the
+  // statement for every participant not writing in ASCII.
+  //
+  // It is on this contract because the checker runs inside the Query Runner
+  // and the console only exists when QUERY_RUNNER_ADDR is set: without a
+  // field here the value is produced on one side of the wire, read on the
+  // other, and is zero in every deployed arrangement — the console's
+  // underline built and dead (CLAUDE.md rule 11).
+  int32 position = 5;
 }
