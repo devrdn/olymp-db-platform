@@ -13,7 +13,16 @@ const fetchQueryLogAction = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promi
 vi.mock("./actions", () => ({ fetchQueryLogAction }));
 
 function entry(sql: string, overrides: Partial<QueryLogEntry> = {}): QueryLogEntry {
-  return { sql, status: "ok", error: "", durationMs: 12, rowCount: 3, executedAt: "2026-09-05T10:00:00Z", ...overrides };
+  return {
+    sql,
+    sqlTruncated: false,
+    status: "ok",
+    error: "",
+    durationMs: 12,
+    rowCount: 3,
+    executedAt: "2026-09-05T10:00:00Z",
+    ...overrides,
+  };
 }
 
 function show(props: Partial<React.ComponentProps<typeof QueryLogPanel>> = {}) {
@@ -76,6 +85,19 @@ describe("the query log panel", () => {
 
     const row = screen.getByText("SELECT pg_sleep(5)").closest("tr")!;
     expect(row).toHaveTextContent(en.participant.play.workspace.log.status.running);
+  });
+
+  // One page of the log is bounded in bytes as well as in rows, so a very
+  // long statement arrives as its beginning. Drawing that prefix as if it
+  // were the whole query hands a student a shortened copy of their own text
+  // — including in the tooltip, which is where the full statement otherwise
+  // is. The ellipsis is what says there was more; the whole of it is in the
+  // CSV export this panel already offers.
+  test("says when a statement arrived cut short", () => {
+    show({ initial: { items: [entry("SELECT 'xxxx", { sqlTruncated: true })], total: 1, failed: false } });
+
+    expect(screen.getByText("SELECT 'xxxx…")).toBeInTheDocument();
+    expect(screen.getByTitle("SELECT 'xxxx…")).toBeInTheDocument();
   });
 
   // The plan's own requirement: a student who refreshes mid-olympiad must

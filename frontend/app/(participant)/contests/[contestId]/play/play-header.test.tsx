@@ -36,6 +36,20 @@ describe("PlayHeader", () => {
     expect(screen.getByRole("heading", { name: "The Greenhouse Case" })).toBeInTheDocument();
   });
 
+  // The title is one line with an ellipsis where it shares the bar with the
+  // clock, and wraps where it does not. Measured at 375px, where the clock
+  // has already wrapped onto its own line: the title lost its last 75px with
+  // an empty second line underneath it. jsdom cannot measure that; what it
+  // can hold is that both rules are still declared, and for which range.
+  test("the title truncates on a shared row and wraps on the narrow fallback", () => {
+    events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting" };
+    render(<PlayHeader contestId="c1" title="The Greenhouse Case" waitingForStart dict={en} />);
+
+    const title = screen.getByRole("heading", { level: 1 });
+    expect(title.className).toMatch(/(^|\s)truncate(\s|$)/);
+    expect(title.className).toMatch(/(^|\s)max-narrow:whitespace-normal(\s|$)/);
+  });
+
   test("shows a waiting clock before the contest has started", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting" };
     render(<PlayHeader contestId="c1" title="X" waitingForStart dict={en} />);

@@ -106,15 +106,16 @@ export function Workspace({
     // — the same "collapse to one track" reasoning SPEC.md §5's mobile reset
     // already applies everywhere else.
     //
-    // The bounded scroll box this layout gives the result table (finding 1
-    // of the earlier review) is therefore a `narrow:`-and-up property too:
-    // below the breakpoint the result panel is not height-constrained at
-    // all, so a full thousand-row table lays out at its natural height in
-    // the document flow — measured at over 33,000px tall — and the whole
-    // page scrolls instead of a fixed-height box scrolling inside it. That
-    // is this fallback working as designed, not the scroll fix failing
-    // below 760px; do not read a very tall narrow-mode page as the bug
-    // returning.
+    // What that fallback deliberately gives up is the *screen* being exactly
+    // one viewport tall: below 760px the page scrolls, section after
+    // section. What it does not give up is each panel's own scroll box. An
+    // earlier version left the result panel height-unconstrained here, on
+    // the reasoning that a scrolling page is the narrow answer to
+    // everything; measured, that put ten thousand pixels of result rows
+    // between the console and the questions on a 375px screen. The bottom
+    // panel therefore keeps a bound of its own below the breakpoint — see
+    // its own comment further down — so what scrolls the page is the list of
+    // sections, never the length of one query's answer.
     // Finding 7: the app bar this route sits below (`AppBar`) is `h-12`
     // (3rem) *plus* its own `border-b` — 3rem alone is one pixel short of
     // its real height, and a "no page scroll" screen that scrolls by one
@@ -167,7 +168,24 @@ export function Workspace({
           // console cell below). With `max-h-80` on the narrow fallback the
           // column has a bounded height rather than a definite one, which is
           // why the panel's own scroller sits inside it and not here.
-          <div className="flex min-h-0 flex-col border-line max-wide:order-2 max-wide:col-span-full max-wide:max-h-80 max-wide:border-t">
+          // Order is declared per range, and every pane in the row declares
+          // one — including the hairlines. `order` decides the sequence grid
+          // auto-placement walks the children in, so one child left at the
+          // default `order: 0` is placed *before* everything that carries a
+          // number: the questions' own handle used to be that child, which
+          // put it in the first column, pushed the console into the 1px
+          // divider column, and left the editor 1px wide from 760px to
+          // 1024px. Measured at a 768px viewport: console column 1x310,
+          // editor 702x124 spilling 701px past it, document scrolling 448px
+          // sideways.
+          //
+          // Below `narrow` the row is one track and the schema sits between
+          // the console and the questions (order 2). From `narrow` to `wide`
+          // the row is console | handle | questions and the schema spans a
+          // second row underneath, so it has to be placed *last* (order 4) —
+          // a full-width span placed earlier would break the row it was
+          // meant to sit under.
+          <div className="flex min-h-0 flex-col border-line max-wide:col-span-full max-wide:max-h-80 max-wide:border-t max-narrow:order-2 narrow:max-wide:order-4">
             <MemoSchemaPanel schema={schema} dict={dict} />
           </div>
         ) : null}
@@ -187,7 +205,18 @@ export function Workspace({
             fixed on a workspace-height screen; on the narrow fallback each
             gets a comfortable minimum instead of a share of a height that no
             longer applies. */}
-        <div className="grid min-h-0 grid-rows-[minmax(0,11fr)_minmax(0,9fr)] border-line max-wide:order-1 max-narrow:grid-rows-none max-narrow:border-b">
+        {/* `grid-cols-1` is load-bearing, not decoration. Without an explicit
+            column this grid gets one implicit `auto` track, and an auto track
+            is floored at its content's *max-content* width — which here is
+            the result table's own natural width, whatever the last query
+            made it. Measured before: the track came out 701.703px wide at
+            every viewport, so at 375px the document scrolled 326px sideways,
+            and at 1024px the editor and the result painted 144px over the
+            questions beside them. `grid-cols-1` is
+            `repeat(1, minmax(0, 1fr))` — a track that may not exceed its
+            container, which is what puts the sideways scrolling back inside
+            the result table's own scroll box where it belongs. */}
+        <div className="grid min-h-0 grid-cols-1 grid-rows-[minmax(0,11fr)_minmax(0,9fr)] border-line max-wide:order-1 max-narrow:grid-rows-none max-narrow:border-b">
           {/* A flex column, not a block: the console's form claims the cell
               with flex-1, and flex-1 is inert inside a block parent — which
               left the editor with no height at all. */}
@@ -235,8 +264,22 @@ export function Workspace({
               the result that is on screen, nor the log's own scroll position.
               Hidden with a class rather than the `hidden` attribute, because
               these panes are flex containers and `display:flex` would win
-              over the attribute's own `display:none`. */}
-          <div className="flex min-h-0 flex-col">
+              over the attribute's own `display:none`.
+
+              `max-narrow:max-h-[60svh]` is what keeps the result a scroll box
+              on the narrow fallback too. Without a bound there the panel is
+              in ordinary document flow and lays a result out at its natural
+              height: measured at 375px, a forty-row result made the page
+              11,487px tall, and the participant had to scroll roughly ten
+              thousand pixels of rows — around forty flicks at the thousand
+              rows the runner actually allows — to reach the questions
+              underneath, which are the thing they have to answer. Bounding
+              the panel rather than the page keeps SPEC.md §5's own reset
+              ("collapse to one track, keep every panel"): every panel is
+              still there, in one track, in the same order. `svh` rather than
+              `dvh` so a phone's disappearing URL bar does not resize the
+              box under a finger that is scrolling it. */}
+          <div className="flex min-h-0 flex-col max-narrow:max-h-[60svh]">
             <div
               className={cn(
                 "min-h-0 flex-1 overflow-hidden",
@@ -269,7 +312,11 @@ export function Workspace({
           direction={-1}
           containerRef={containerRef}
           onResize={(rem) => commit({ ...widths, side: rem })}
-          className="max-narrow:hidden"
+          // `order-2`, not the default: this handle is a child of the pane
+          // grid like any other, and a child with no order is placed ahead of
+          // every child that has one. See the schema pane's own comment for
+          // what that cost between 760px and 1024px.
+          className="max-narrow:hidden max-wide:order-2"
         />
 
         {/* The story/questions side: below the console column on a narrow
