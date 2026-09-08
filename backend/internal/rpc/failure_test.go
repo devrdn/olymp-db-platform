@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"strings"
 	"testing"
@@ -297,4 +298,32 @@ func refusedLogin(t *testing.T) error {
 		t.Fatal("the listener accepted a login it was written to refuse")
 	}
 	return err
+}
+
+// A position that could not fit the wire must not arrive as a negative one.
+//
+// `Refusal.Position` is an `int`, the field is an `int32`, and a bare
+// conversion wraps: on a 64-bit build a value past 2^31 becomes a negative
+// offset, which the console would hand to CodeMirror as a document position.
+// The comment that used to stand here argued the value cannot get that large
+// because a statement is bounded — true today, and an argument about a
+// different package's constant rather than about this line. gosec was right
+// to keep flagging it.
+func TestAPositionTooLargeForTheWireArrivesAsNoPositionAtAll(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   int
+		want int32
+	}{
+		{"an ordinary offset", 31, 31},
+		{"no position at all", 0, 0},
+		{"a negative offset nothing should have produced", -5, 0},
+		{"one past what the field can hold", math.MaxInt32 + 1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := wirePosition(tc.in); got != tc.want {
+				t.Fatalf("wirePosition(%d) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
 }
