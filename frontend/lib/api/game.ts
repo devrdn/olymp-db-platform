@@ -61,12 +61,18 @@ const DISABLED_UPLOAD_LIMITS = { enabled: false, chunkBytes: 0, maxFileBytes: 0 
 
 /**
  * Which of the two ways this game was built — `game_handler.go`'s
- * `gameResponse.Source`, itself `provisioning.Template.Source`. `"editor"` is
- * also the default a game with no source at all (the synthetic `absent`
- * answer, or a response from an API build that predates this field) reads
- * as: an editor-sourced game with no script is exactly what a contest with
- * no game yet already looks like on this screen, so nothing has to special-
- * case an empty string here the way `status` already special-cases `absent`.
+ * `gameResponse.Source`, itself `provisioning.Template.Source`.
+ *
+ * A game with no source at all reads as `"editor"`: an editor-sourced game
+ * with no script is exactly what a contest with no game yet looks like on
+ * this screen. That has to cover two different absences, which is why the
+ * field is coerced rather than merely defaulted. `undefined` is a response
+ * from an API older than this field. The empty string is what this API sends
+ * *today* for the synthetic `absent` answer — `gameResponse.Source` is a
+ * plain string with no `omitempty`, so a contest with no game carries
+ * `"source": ""` — and a bare `.default()` fires only on `undefined`, so it
+ * let that through to the enum and rejected the server's own reply. Every
+ * newly created contest's game screen was an error boundary.
  */
 export const GAME_SOURCES = ["editor", "file"] as const;
 
@@ -97,7 +103,10 @@ export const gameSchema = z
     status: z.enum(GAME_STATUSES),
     version: z.number().default(0),
     database: z.string().default(""),
-    source: z.enum(GAME_SOURCES).default("editor"),
+    source: z.preprocess(
+      (value) => (value === "" || value === undefined ? "editor" : value),
+      z.enum(GAME_SOURCES),
+    ),
     // Absent (not merely empty) for an editor-sourced game — `.optional()`
     // rather than a default so a client can tell "no file" from "a file
     // whose fields happen to be empty", the same distinction `upload_limits`
