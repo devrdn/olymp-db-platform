@@ -828,6 +828,13 @@ const ro = {
           questions: "Întrebări",
         },
         download: "Descărcați CSV",
+        story: {
+          export: {
+            heading: "Export",
+            label: "Descărcați povestea în format Markdown",
+          },
+          print: "Tipăriți sau salvați ca PDF",
+        },
         panes: {
           schema: "Lățimea panoului schemei",
           side: "Lățimea panoului întrebărilor",
@@ -860,6 +867,11 @@ const ro = {
             timeout: "Timp expirat",
           },
         },
+      },
+      print: {
+        by: "Tipărit de {name} la {date}",
+        byUnknown: "Tipărit la {date}",
+        button: "Tipărire",
       },
     },
     mine: {

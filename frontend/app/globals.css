@@ -364,3 +364,17 @@
     scroll-behavior: auto !important;
   }
 }
+
+/**
+ * The one paper rule this product owns: a sane margin, on any page that gets
+ * printed. Everything else about how a *specific* screen prints — hiding the
+ * bar every screen wears is `print:hidden` on `AppBar` itself, and the
+ * print-ready story view's own page-break rules live beside the prose that
+ * needs them (`components/product/story-text.tsx`) — stays with what draws
+ * that screen, not collected here where it would be hard to find.
+ */
+@media print {
+  @page {
+    margin: 18mm;
+  }
+}

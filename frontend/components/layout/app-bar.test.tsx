@@ -169,4 +169,20 @@ describe("the app bar", () => {
     // Standing on `system`, the press moves to `light`.
     expect(screen.getByRole("button", { name: en.chrome.theme.light })).toBeInTheDocument();
   });
+
+  // The bar every screen wears (this file's own doc) is not one any screen
+  // wants printed — nobody asked for the logo, the theme toggle or the
+  // language switcher on a printed page, on any screen, including the one the
+  // print/page.tsx route is built around. One rule here rather than a
+  // per-route stylesheet is what keeps a future screen from needing to
+  // remember it.
+  test("hides itself when the page it sits on is printed", () => {
+    const { container } = render(
+      <ProductShell locale="en" theme="system" dict={en} home="/contests" section={en.contests.heading}>
+        <p>rows</p>
+      </ProductShell>,
+    );
+
+    expect(container.querySelector("header")?.className).toMatch(/(^|\s)print:hidden(\s|$)/);
+  });
 });

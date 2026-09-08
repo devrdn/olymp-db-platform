@@ -66,13 +66,23 @@ const components: Components = {
  * Serif at the narrative step, the same face and size the source box is typed
  * in, so what an author writes and what a reader gets are the same words at
  * the same weight.
+ *
+ * Three rules apply only under `@media print`, harmless everywhere else the
+ * `print:` variant has no effect: a heading is kept with the text that
+ * follows it (`break-after-avoid`, so a page never ends on a lone heading
+ * with its own paragraph pushed to the next one), a paragraph is not printed
+ * as a single orphaned or widowed line, and a fenced code block — a whole
+ * unit of content, the same reasoning `cleanEditorMarkdown`'s own doc gives
+ * it — never splits across a page break.
  */
 const PROSE = [
   "font-serif text-narrative text-ink",
   "[&>*+*]:mt-4",
-  "[&_h1]:font-sans [&_h1]:text-h2 [&_h1]:text-ink [&_h1]:mt-8",
-  "[&_h2]:font-sans [&_h2]:text-h3 [&_h2]:text-ink [&_h2]:mt-7",
-  "[&_h3]:font-sans [&_h3]:text-row [&_h3]:text-ink [&_h3]:mt-6",
+  "[&_h1]:font-sans [&_h1]:text-h2 [&_h1]:text-ink [&_h1]:mt-8 print:[&_h1]:break-after-avoid",
+  "[&_h2]:font-sans [&_h2]:text-h3 [&_h2]:text-ink [&_h2]:mt-7 print:[&_h2]:break-after-avoid",
+  "[&_h3]:font-sans [&_h3]:text-row [&_h3]:text-ink [&_h3]:mt-6 print:[&_h3]:break-after-avoid",
+  "print:[&_p]:[orphans:3] print:[&_p]:[widows:3]",
+  "print:[&_pre]:break-inside-avoid",
   "[&_strong]:font-semibold [&_em]:italic",
   "[&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-5 [&_ol]:pl-5 [&_li]:mt-1.5",
   "[&_a]:text-accent [&_a]:underline [&_a]:underline-offset-4",
