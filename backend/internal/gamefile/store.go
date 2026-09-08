@@ -34,6 +34,10 @@ const (
 type Store struct {
 	dir    string
 	limits Limits
+	// locks serialises Append, Complete and Abort per upload id. See
+	// idLocks in lock.go for why this exists and why it is per-id rather
+	// than one mutex for the whole Store.
+	locks *idLocks
 }
 
 // NewStore opens (creating if necessary) dir as an upload directory governed
@@ -51,7 +55,7 @@ func NewStore(dir string, limits Limits) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("gamefile: create upload directory: %w", err)
 	}
-	return &Store{dir: dir, limits: limits}, nil
+	return &Store{dir: dir, limits: limits, locks: newIDLocks()}, nil
 }
 
 // validateUploadID is the one gate every exported method sends id through
@@ -150,11 +154,22 @@ func (s *Store) usedBytes() (int64, error) {
 // Every call opens and closes its own file handle rather than keeping one in
 // a map on Store: a chunked upload is expected to span more than one
 // process lifetime (a redeploy between chunks must not lose progress), so
-// there is nothing for an in-memory handle to usefully outlive.
+// there is nothing for an in-memory handle to usefully outlive. The per-id
+// lock taken below is a different thing — held only for this one call, not
+// kept across calls — so it does not reopen that question.
 func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 	if err := validateUploadID(id); err != nil {
 		return 0, err
 	}
+
+	// Two goroutines can legitimately be in this method for the same id at
+	// once — a retried chunk racing the attempt that is still in flight —
+	// and without this, both would Stat the same length, Seek to the same
+	// offset, and overwrite each other's bytes. This is what makes "Append
+	// writes exactly at the end" a Store invariant instead of a hope about
+	// callers (see idLocks in lock.go).
+	unlock := s.locks.lock(id)
+	defer unlock()
 
 	f, err := os.OpenFile(s.dataPath(id), os.O_RDWR, 0o644)
 	if err != nil {
@@ -170,6 +185,19 @@ func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 		return 0, fmt.Errorf("gamefile: stat upload: %w", err)
 	}
 	received := info.Size()
+
+	// Complete seals the upload by writing its index; an Append that lands
+	// after that would silently make the checksum and line count Complete
+	// already handed back describe bytes that no longer exist. Complete
+	// takes the same per-id lock as this method, so there is no window
+	// where Complete is mid-write and this check could pass just before the
+	// index appears — either Complete has already finished, or it has not
+	// started.
+	if _, err := os.Stat(s.indexPath(id)); err == nil {
+		return received, ErrUploadSealed
+	} else if !os.IsNotExist(err) {
+		return received, fmt.Errorf("gamefile: check upload seal: %w", err)
+	}
 
 	switch {
 	case offset < received:
@@ -187,35 +215,69 @@ func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 		return received, fmt.Errorf("gamefile: seek upload: %w", err)
 	}
 
+	// Bound the reader by whichever budget is tightest, decided before a
+	// single byte of this chunk reaches the file: the per-call chunk cap,
+	// what remains of this upload's own MaxFileBytes, and what remains of
+	// the whole directory's MaxDirBytes. This is rule 12's point applied to
+	// three limits instead of one — a limit checked after the bytes already
+	// landed on disk (write, then compare, then Truncate) is a limit
+	// applied after the allocation it exists to prevent, not before it.
+	//
+	// fileRemaining cannot be negative: every prior Append on this id kept
+	// received within MaxFileBytes, or refused before writing.
+	fileRemaining := s.limits.MaxFileBytes - received
+
+	// The directory holds a handful of files, not gigabytes of them, so
+	// walking it once per Append call (not per copy-buffer, and not more
+	// often than the file-size check next to it) is cheap — see usedBytes.
+	used, err := s.usedBytes()
+	if err != nil {
+		return received, fmt.Errorf("gamefile: measure directory usage: %w", err)
+	}
+	dirRemaining := s.limits.MaxDirBytes - used
+
+	writeCap := s.limits.MaxChunkBytes
+	reason := ErrChunkTooLarge
+	if fileRemaining <= writeCap {
+		writeCap = fileRemaining
+		reason = ErrFileTooLarge
+	}
+	if dirRemaining <= writeCap {
+		writeCap = dirRemaining
+		reason = ErrStoreFull
+	}
+	if writeCap < 0 {
+		// Only possible if the directory (or this file) was already over
+		// budget before this call — e.g. a smaller Limits was applied to an
+		// existing directory. Accept nothing rather than turn that into a
+		// negative LimitReader.
+		writeCap = 0
+	}
+
 	buf := make([]byte, copyBufferSize)
-	limited := io.LimitReader(r, s.limits.MaxChunkBytes)
+	limited := io.LimitReader(r, writeCap)
 	written, err := io.CopyBuffer(f, limited, buf)
 	if err != nil {
 		_ = f.Truncate(offset)
 		return offset, fmt.Errorf("gamefile: write chunk: %w", err)
 	}
 
-	if written == s.limits.MaxChunkBytes {
-		// The limited reader stopped at exactly the cap; find out whether
-		// the caller's reader had more to give without reading any of it
-		// into memory beyond this one byte. This is the check that lets
-		// ErrChunkTooLarge be reported without ever holding an oversized
-		// chunk anywhere.
+	if written == writeCap {
+		// The limited reader stopped at exactly the tightest cap; find out
+		// whether the caller's reader had more to give, without reading any
+		// of it into memory — let alone onto disk — beyond this one byte.
+		// This is what lets the right sentinel be reported (chunk, file, or
+		// directory, whichever was tightest) without ever holding, or
+		// writing, an over-budget chunk anywhere.
 		var probe [1]byte
 		n, _ := r.Read(probe[:])
 		if n > 0 {
 			_ = f.Truncate(offset)
-			return offset, ErrChunkTooLarge
+			return offset, reason
 		}
 	}
 
-	newLength := offset + written
-	if newLength > s.limits.MaxFileBytes {
-		_ = f.Truncate(offset)
-		return offset, ErrFileTooLarge
-	}
-
-	return newLength, nil
+	return offset + written, nil
 }
 
 // Complete seals the upload: verifies the length, returns the checksum, and
@@ -236,6 +298,13 @@ func (s *Store) Complete(id string, declaredBytes int64) (Summary, error) {
 	if err := validateUploadID(id); err != nil {
 		return Summary{}, err
 	}
+
+	// Same lock Append takes: holding it for the whole scan means an Append
+	// racing this call either finished before Complete started, or has not
+	// started yet by the time the index (Complete's seal, checked by
+	// Append) appears on disk.
+	unlock := s.locks.lock(id)
+	defer unlock()
 
 	f, err := os.Open(s.dataPath(id))
 	if err != nil {
@@ -282,6 +351,11 @@ func (s *Store) Abort(id string) error {
 	if err := validateUploadID(id); err != nil {
 		return err
 	}
+
+	// Same lock Append and Complete take, so an Abort cannot remove the
+	// data file out from under either while they are mid-call.
+	unlock := s.locks.lock(id)
+	defer unlock()
 
 	if _, err := os.Stat(s.dataPath(id)); err != nil {
 		if os.IsNotExist(err) {
