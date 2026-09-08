@@ -871,7 +871,6 @@ const ro = {
       print: {
         by: "Tipărit de {name} la {date}",
         byUnknown: "Tipărit la {date}",
-        button: "Tipărire",
       },
     },
     mine: {

@@ -870,7 +870,6 @@ const ru = {
       print: {
         by: "Напечатано: {name}, {date}",
         byUnknown: "Напечатано {date}",
-        button: "Печать",
       },
     },
     mine: {
