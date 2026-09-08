@@ -129,6 +129,18 @@ var (
 	// layer that made that reader can still recognise its own error.
 	ErrChunkIncomplete = errors.New("the chunk body was not received in full")
 
+	// ErrCorruptIndex is a line index whose header or marks fail a basic
+	// sanity check: a value that does not fit the signed 64-bit offsets and
+	// counts this package works in, or a mark that points past the data
+	// length the index itself declares. The index is a file on local disk
+	// next to the upload, not something this package controls end to end —
+	// disk corruption or a substituted file are both real ways for it to
+	// stop matching what writeIndex actually wrote, and this is what keeps
+	// Window from treating any of its numbers as a trustworthy byte offset
+	// (CLAUDE.md rule 1 — a declared sentinel, not a Seek to wherever
+	// garbage bytes happen to point).
+	ErrCorruptIndex = errors.New("upload index file is corrupt")
+
 	// ErrUploadSealed is an Append against an id that Complete has already
 	// sealed. Complete's checksum and line index describe the bytes on disk
 	// at the moment it ran; a write after that would make both describe a
