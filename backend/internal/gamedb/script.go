@@ -144,6 +144,11 @@ func NewScriptReader(r io.Reader) *ScriptReader {
 // *ScriptSyntaxError, so a caller that wants to show it to the script's
 // author can (see that type's own doc). The reader must not be used again
 // after any error, non-EOF or otherwise.
+//
+// The one meta-command pair Next does not refuse is \restrict and
+// \unrestrict — pg_dump's own unconditional wrapper on recent versions (see
+// the atLineStart case in the loop below for why letting just this pair
+// through is not a weaker check than refusing everything).
 func (s *ScriptReader) Next() (Statement, error) {
 	if s.copyOpen {
 		return Statement{}, fmt.Errorf("gamedb: the previous COPY block's data was not read before Next")
@@ -201,6 +206,28 @@ func (s *ScriptReader) Next() (Statement, error) {
 				word, rerr := s.readPsqlCommandWord()
 				if rerr != nil {
 					return Statement{}, fmt.Errorf("gamedb: read script: %w", rerr)
+				}
+				if word == "restrict" || word == "unrestrict" {
+					// pg_dump 16.10/17.6/18 and newer wrap every plain-text
+					// dump in \restrict <token> right after the header and
+					// \unrestrict <token> at the very end, unconditionally
+					// and with no flag to turn it off — it is pg_dump's own
+					// fix for CVE-2025-1094-adjacent risk, guarding against
+					// *psql* running meta-commands it finds inside a dump
+					// it did not write. That risk does not exist here: this
+					// reader is not psql, has no meta-command interpreter,
+					// and executes nothing it did not itself parse as SQL.
+					// So this is not a hole opened in the refusal below —
+					// every *other* backslash command a dump could contain
+					// (\connect, \i, \copy, anything) is still refused by
+					// name, unread, exactly as before. This pair alone is a
+					// no-op wrapper pg_dump now always writes and that
+					// carries no SQL of its own, so it is dropped with its
+					// line rather than rejected as if it were content.
+					s.skipToLineEnd()
+					buf = buf[:0]
+					haveContent = false
+					continue
 				}
 				return Statement{}, &ScriptSyntaxError{
 					Line: s.line,
