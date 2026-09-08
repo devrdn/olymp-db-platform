@@ -577,16 +577,14 @@ func (h *GameHandler) beginUpload(w http.ResponseWriter, r *http.Request) {
 // reader does not conclude the limit was simply forgotten: it is here, it is
 // large on purpose.
 //
-// The ceiling is deliberately generous rather than tied to the operator's
-// configured GAME_UPLOAD_CHUNK_BYTES: that number is provisioning.Games' own
-// to enforce, through AppendChunk → ErrUploadChunkTooLarge
-// (gamefile.Store.Append streams through a fixed buffer with no allocation
-// proportional to the chunk — its own doc). This constant exists only to
-// stop a body wildly larger than any chunk a real deployment would ever
-// configure from being read at all. When it trips mid-stream, appendChunk
-// reports it as the exact same refusal as ErrUploadChunkTooLarge — telling
-// the two ceilings apart would mean explaining both to whoever is uploading,
-// the same call settings_handler.go's uploadImage makes about its own two.
+// It is only a default. A deployment that configures GAME_UPLOAD_CHUNK_BYTES
+// gets that number here too (app.go's WithMaxChunkBody call), because two
+// independent ceilings on the same thing means the smaller one decides and
+// the configured one is a lie: set the chunk size above this constant and
+// every chunk of that size would be refused by a limit the operator never
+// chose. One number, named once, enforced twice — here on the socket, and
+// again in provisioning.Games.AppendChunk, which is what turns it into
+// ErrUploadChunkTooLarge for the client either way.
 const defaultMaxGameChunkBodyBytes = 64 << 20 // 64 MiB
 
 // chunkResponse answers one appendChunk call: how much of the upload the
