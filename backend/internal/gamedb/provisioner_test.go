@@ -1,6 +1,7 @@
 package gamedb_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // The detective's own database: a small schema and some data, the way an
@@ -25,7 +27,8 @@ func provisioner(t *testing.T) *gamedb.Provisioner {
 	requireCluster(t)
 
 	user, password := gamedbtest.AdminCredentials(t)
-	p, err := gamedb.NewProvisioner(admin(t), gamedbtest.DSN(t, user, password, "postgres"))
+	p, err := gamedb.NewProvisioner(admin(t), gamedbtest.DSN(t, user, password, "postgres"),
+		gamedbtest.AuthorPassword(t))
 	if err != nil {
 		t.Fatalf("building the provisioner: %v", err)
 	}
@@ -530,5 +533,258 @@ func TestDatabaseSizesOfNothingAsksNothing(t *testing.T) {
 	}
 	if len(sizes) != 0 {
 		t.Fatalf("measured %d databases from an empty list", len(sizes))
+	}
+}
+
+// A game script is staff-trusted, not platform-trusted.
+//
+// The route that accepts one is gated by a contest-scoped permission, so the
+// author of a script is any manager of any single contest — while the cluster
+// it runs on holds every other contest's template and every participant's
+// database. Running it with the provisioning role's own privileges therefore
+// made "manager of one draft contest" the same thing as "superuser on the
+// game cluster". It runs as game_author instead, and what follows is the list
+// of things that role cannot do.
+//
+// Each case asserts on the *refusal*, not merely on failure: SQLSTATE 42501
+// (insufficient_privilege) plus the phrase PostgreSQL uses. A test that only
+// checked "the build failed" would pass just as happily for a script with a
+// typo in it, which proves nothing about who ran it.
+func TestAHostileGameScriptIsRefusedTheThingsOnlyASuperuserCanDo(t *testing.T) {
+	// A second template on the same cluster, standing in for another
+	// olympiad's game. Its own suffix, not buildTemplate's "tpl": `named`
+	// trims a long test name to fit PostgreSQL's 63 characters *before*
+	// appending the suffix, and every subtest below shares this test's name,
+	// so a second "tpl" here would be the very same database the subtests
+	// build — and "cannot drop the currently open database" would look like
+	// a refusal without being one.
+	sibling := named(t, "sib")
+	if err := provisioner(t).BuildTemplate(
+		t.Context(), sibling, detectiveScript, sqlpolicy.ReadOnly()); err != nil {
+		t.Fatalf("building the other olympiad's template: %v", err)
+	}
+
+	for _, hostile := range []struct {
+		name   string
+		script string
+		phrase string
+	}{
+		{
+			// A shell in the container.
+			name:   "a program run on the server",
+			script: `CREATE TABLE loot (line text); COPY loot FROM PROGRAM 'id';`,
+			phrase: "pg_execute_server_program",
+		},
+		{
+			name:   "a program fed the server's data",
+			script: `CREATE TABLE loot (line text); COPY loot TO PROGRAM 'cat > /tmp/loot';`,
+			phrase: "pg_execute_server_program",
+		},
+		{
+			name:   "a file read off the server",
+			script: `CREATE TABLE loot (line text); COPY loot FROM '/etc/passwd';`,
+			phrase: "pg_read_server_files",
+		},
+		{
+			name:   "a file read by function",
+			script: `CREATE TABLE loot AS SELECT pg_read_file('/etc/passwd');`,
+			phrase: "permission denied for function pg_read_file",
+		},
+		{
+			// The whole boundary in one statement: a participant role that is
+			// a superuser is a cluster with no boundary at all.
+			name:   "a participant role promoted to superuser",
+			script: `ALTER ROLE ` + gamedb.RoleReader + ` SUPERUSER;`,
+			phrase: "SUPERUSER attribute",
+		},
+		{
+			name:   "a superuser of the author's own",
+			script: `CREATE ROLE mine SUPERUSER LOGIN PASSWORD 'mine';`,
+			phrase: "permission denied to create role",
+		},
+		{
+			// Granting itself the role that would undo the first three cases.
+			name:   "the file-reading role granted to itself",
+			script: `GRANT pg_read_server_files TO ` + gamedb.RoleAuthor + `;`,
+			phrase: "permission denied to grant role",
+		},
+		{
+			// Reading the installation rather than the game.
+			name:   "the cluster's password hashes",
+			script: `CREATE TABLE loot AS SELECT * FROM pg_authid;`,
+			phrase: "permission denied for table pg_authid",
+		},
+		{
+			name:   "the list of every contest's databases",
+			script: `CREATE TABLE loot AS SELECT * FROM pg_database;`,
+			phrase: "permission denied for table pg_database",
+		},
+		{
+			// Reaching out of this database. dblink and postgres_fdw are the
+			// two ways SQL can open a connection of its own, and both are
+			// untrusted extensions.
+			name:   "an extension that can open a connection",
+			script: `CREATE EXTENSION dblink;`,
+			phrase: `permission denied to create extension "dblink"`,
+		},
+		{
+			// One statement on purpose: a multi-statement simple query runs
+			// in an implicit transaction, and DROP DATABASE refuses inside
+			// one — which would make this pass without proving anything about
+			// privileges.
+			name:   "another olympiad's template dropped",
+			script: `DROP DATABASE ` + gamedb.QuoteIdentifier(sibling),
+			phrase: "must be owner of database",
+		},
+	} {
+		t.Run(hostile.name, func(t *testing.T) {
+			p := provisioner(t)
+			template := named(t, "tpl")
+
+			err := p.BuildTemplate(t.Context(), template, hostile.script, sqlpolicy.ReadOnly())
+			if err == nil {
+				t.Fatalf("the cluster ran it: %s", hostile.script)
+			}
+			assertRefusedForPrivilege(t, err, hostile.phrase)
+
+			if instanceExists(t, template) {
+				t.Fatal("a refused script left a template behind")
+			}
+		})
+	}
+
+	// The sibling is still there: the point of the last case is that it was
+	// not dropped, which the error alone does not show.
+	if !instanceExists(t, sibling) {
+		t.Fatal("another contest's template was removed by a script in a different database")
+	}
+}
+
+// assertRefusedForPrivilege insists the build failed because PostgreSQL said
+// no, and said no for the stated reason.
+func assertRefusedForPrivilege(t *testing.T, err error, phrase string) {
+	t.Helper()
+
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		t.Fatalf("the build failed, but not with an error from the database: %v", err)
+	}
+	// 42501 is insufficient_privilege. A syntax error (42601) or an unknown
+	// table (42P01) would mean the script was merely malformed, which says
+	// nothing about the role that ran it.
+	if pgErr.Code != "42501" {
+		t.Fatalf("refused with SQLSTATE %s (%s), want 42501 insufficient_privilege",
+			pgErr.Code, pgErr.Message)
+	}
+	whole := pgErr.Message + " " + pgErr.Detail + " " + pgErr.Hint
+	if !strings.Contains(whole, phrase) {
+		t.Fatalf("refused with %q, which does not mention %q", strings.TrimSpace(whole), phrase)
+	}
+}
+
+// The other half of the same boundary: an ordinary game still builds, and a
+// participant can still read it. A containment that broke real scripts would
+// be a contest nobody can run.
+func TestAnOrdinaryGameStillBuildsUnderTheAuthorRole(t *testing.T) {
+	const script = `
+		-- A schema of the author's own: CREATE on the database, which is the
+		-- other half of what the build is lent, and not the same privilege as
+		-- CREATE on public.
+		CREATE SCHEMA staging;
+		CREATE TABLE staging.raw_swipes (line text);
+		CREATE TABLE guests (id serial PRIMARY KEY, full_name text NOT NULL);
+		CREATE TABLE keycard_events (
+			id serial PRIMARY KEY,
+			guest_id int NOT NULL REFERENCES guests (id),
+			door text NOT NULL
+		);
+		CREATE INDEX keycard_events_door ON keycard_events (door);
+		CREATE TYPE clearance AS ENUM ('none', 'staff');
+		CREATE FUNCTION doors_used(int) RETURNS bigint LANGUAGE sql AS
+			$$SELECT count(DISTINCT door) FROM keycard_events WHERE guest_id = $1$$;
+		INSERT INTO guests (full_name) VALUES ('Margot Feilhaber'), ('Anton Rusu');
+		INSERT INTO keycard_events (guest_id, door) VALUES (1, 'vault'), (1, 'lobby'), (2, 'lobby');
+		CREATE VIEW busy_doors AS SELECT door, count(*) AS uses FROM keycard_events GROUP BY door;
+	`
+
+	p := provisioner(t)
+	template := named(t, "tpl")
+	policy := sqlpolicy.ReadOnly()
+	if err := p.BuildTemplate(t.Context(), template, script, policy); err != nil {
+		t.Fatalf("an ordinary game script no longer builds: %v", err)
+	}
+
+	instance := named(t, "inst")
+	if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
+		t.Fatalf("creating the instance: %v", err)
+	}
+
+	reader := connectAs(t, roleReader, testReaderPassword(t), instance)
+	var doors int64
+	if err := reader.QueryRow(t.Context(), `SELECT doors_used(1)`).Scan(&doors); err != nil {
+		t.Fatalf("a participant cannot call the author's function: %v", err)
+	}
+	if doors != 2 {
+		t.Fatalf("doors_used(1) = %d, want 2", doors)
+	}
+	var uses int64
+	if err := reader.QueryRow(t.Context(),
+		`SELECT uses FROM busy_doors WHERE door = 'lobby'`).Scan(&uses); err != nil {
+		t.Fatalf("a participant cannot read the author's view: %v", err)
+	}
+	if uses != 2 {
+		t.Fatalf("the lobby shows %d uses, want 2", uses)
+	}
+
+	// The foreign key came across, which is what the schema panel draws.
+	var constraints int
+	if err := reader.QueryRow(t.Context(),
+		`SELECT count(*) FROM pg_constraint WHERE contype = 'f'`).Scan(&constraints); err != nil {
+		t.Fatalf("counting foreign keys: %v", err)
+	}
+	if constraints != 1 {
+		t.Fatalf("the instance carries %d foreign keys, want 1", constraints)
+	}
+}
+
+// What the author role was lent for the build is taken back before the
+// template ships, so a participant's copy does not carry a role that may
+// create objects in the game's own schema.
+func TestAnInstanceLendsTheAuthorRoleNothing(t *testing.T) {
+	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
+
+	instance := named(t, "inst")
+	if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
+		t.Fatalf("creating the instance: %v", err)
+	}
+
+	author := connectAs(t, gamedb.RoleAuthor, gamedbtest.AuthorPassword(t), instance)
+	refused(t, author, `CREATE TABLE public.planted (x int)`)
+	refused(t, author, `CREATE SCHEMA planted`)
+}
+
+// A provisioner with no game_author credential refuses to build rather than
+// falling back to the provisioning role.
+//
+// The distinction is the whole fix: an unset GAME_AUTHOR_PASSWORD must not be
+// a way to have every game script run as a superuser again. A deployment is
+// stopped earlier still, when config.Load reads the environment, so this is
+// the last of two gates rather than the only one.
+func TestBuildingWithoutTheAuthorCredentialIsRefusedRatherThanRunAsTheProvisioner(t *testing.T) {
+	requireCluster(t)
+
+	user, password := gamedbtest.AdminCredentials(t)
+	p, err := gamedb.NewProvisioner(admin(t), gamedbtest.DSN(t, user, password, "postgres"), "")
+	if err != nil {
+		t.Fatalf("building the provisioner: %v", err)
+	}
+
+	template := named(t, "tpl")
+	err = p.BuildTemplate(t.Context(), template, `CREATE TABLE fine (x int)`, sqlpolicy.ReadOnly())
+	if !errors.Is(err, gamedb.ErrNoAuthorCredential) {
+		t.Fatalf("BuildTemplate without a credential returned %v, want ErrNoAuthorCredential", err)
+	}
+	if instanceExists(t, template) {
+		t.Fatal("a refused build created a database anyway")
 	}
 }

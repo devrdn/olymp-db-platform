@@ -271,3 +271,127 @@ func TestReclaimInstancesWarnsAgainAfterRecoveringAndGettingStuckAgain(t *testin
 		t.Fatalf("after recovering and getting stuck again, warnings = %d, want 2", got)
 	}
 }
+
+// A pool tender that waits out its own ten-minute interval before it does
+// anything is a pool nobody tended for ten minutes — and an API restarted
+// five minutes before a contest opens leaves every participant waiting for
+// CREATE DATABASE inside their own page load.
+//
+// The interval here is an hour, so nothing but the run at startup can make
+// this pass.
+func TestAJobMarkedAtStartRunsBeforeItsFirstTick(t *testing.T) {
+	ran := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go runPeriodically(ctx, quiet(), task{
+		name:    "tender",
+		every:   time.Hour,
+		atStart: true,
+		run:     func(context.Context) error { ran <- struct{}{}; return nil },
+	})
+
+	select {
+	case <-ran:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the job did not run at startup; it is waiting out its whole interval first")
+	}
+}
+
+// The opposite claim, and the one that makes atStart a per-job decision
+// rather than a global change: a job that did not ask for it stays on its
+// tick. game-reclaim is the job this protects — its tick drops databases.
+func TestAJobNotMarkedAtStartWaitsForItsFirstTick(t *testing.T) {
+	var runs atomic.Int64
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go runPeriodically(ctx, quiet(), task{
+		name:  "reclaimer",
+		every: time.Hour,
+		run:   func(context.Context) error { runs.Add(1); return nil },
+	})
+
+	time.Sleep(200 * time.Millisecond)
+	if got := runs.Load(); got != 0 {
+		t.Fatalf("a job with no atStart ran %d times before its first tick", got)
+	}
+}
+
+// A run at startup that failed must not stop the schedule, for the same
+// reason a failed tick does not: the database being briefly away is not a
+// reason to leave the pool untended for the rest of the process's life.
+func TestAJobThatFailsAtStartupKeepsItsSchedule(t *testing.T) {
+	var runs atomic.Int64
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go runPeriodically(ctx, quiet(), task{
+		name:    "always fails",
+		every:   10 * time.Millisecond,
+		atStart: true,
+		run:     func(context.Context) error { runs.Add(1); return errors.New("nope") },
+	})
+
+	deadline := time.After(2 * time.Second)
+	for runs.Load() < 3 {
+		select {
+		case <-deadline:
+			t.Fatalf("ran %d times; a failure at startup stopped the schedule", runs.Load())
+		default:
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+}
+
+// Which jobs run at startup is the decision finding 3 is about, and it is a
+// decision per job — so it is asserted per job, here, rather than left to
+// whoever next reads the constructors. The reasoning for each is in its own
+// constructor in background.go.
+func TestWhichBackgroundJobsRunAtStartup(t *testing.T) {
+	counters := metrics.NewGameReclaimCounters(metrics.Noop{})
+
+	for _, tc := range []struct {
+		job     task
+		atStart bool
+		why     string
+	}{
+		{
+			job:     tendPools(quiet(), nil, 5, 100),
+			atStart: true,
+			why:     "a pool left untended for ten minutes is every participant waiting for CREATE DATABASE",
+		},
+		{
+			job: sweepQueryLog(quiet(), func(context.Context, time.Duration) (int64, error) {
+				return 0, nil
+			}),
+			atStart: true,
+			why:     "the rows it closes were left open by the process this one replaced",
+		},
+		{
+			job: advanceContestSchedule(quiet(), func(context.Context) (int, int, error) {
+				return 0, 0, nil
+			}),
+			atStart: true,
+			why:     "a participant's own screen waits on this the moment a contest's window opens",
+		},
+		{
+			job:     buildGames(quiet(), nil),
+			atStart: true,
+			why:     "a game left in `building` by a dead process is recovered only by a tick of this",
+		},
+		{
+			job: reclaimInstances(quiet(), func(context.Context, int) (provisioning.ReclaimResult, error) {
+				return provisioning.ReclaimResult{}, nil
+			}, 60, counters),
+			atStart: false,
+			why:     "it drops databases, nothing waits on it, and a grace period bounds what it can find",
+		},
+	} {
+		t.Run(tc.job.name, func(t *testing.T) {
+			if tc.job.atStart != tc.atStart {
+				t.Fatalf("%s: atStart = %v, want %v — %s", tc.job.name, tc.job.atStart, tc.atStart, tc.why)
+			}
+		})
+	}
+}

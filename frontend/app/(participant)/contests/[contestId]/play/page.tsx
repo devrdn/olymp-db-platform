@@ -17,6 +17,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import type { Locale } from "@/lib/i18n/config";
 
 import { PlayHeader } from "./play-header";
+import { PrintView } from "./print-view";
 import type { QuestionEntry } from "./questions-panel";
 import { ReloadLink } from "./reload-link";
 import { Workspace } from "./workspace";
@@ -236,15 +237,43 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   const participantName = identity ? identity.fullName || identity.login : "";
   const printedOn = formatDay(new Date().toISOString(), { locale });
 
+  // Rendered here, on the server, and handed to `Workspace` as finished
+  // markup rather than as Markdown for the browser to parse — the same
+  // decision the questions above and the story below already make, applied to
+  // the one copy that was still getting it wrong.
+  //
+  // `Workspace` is a client component, so importing `PrintView` from it put
+  // `react-markdown` and `remark-gfm` in the client graph of the one route
+  // whose time-to-interactive matters most: measured, 31.9 KiB gzipped of
+  // parser, on the screen a participant sits in front of for two hours. And
+  // because the print copy is mounted the whole time (hidden until
+  // `@media print`, see `Workspace`'s own doc), the browser parsed the story
+  // a second time on every mount to build a subtree nobody would look at
+  // unless they printed. Both are gone by moving the render to this side of
+  // the wire; what crosses it now is the same elements the on-screen story
+  // already crosses as.
+  //
+  // Null exactly when there is no story, which is what the print container in
+  // `Workspace` mirrors — and what `side-panel.tsx` already mirrors in not
+  // offering the print control at all in that state.
+  const printView =
+    storyBody !== null ? (
+      <PrintView
+        contestTitle={contest.title}
+        participantName={participantName}
+        date={printedOn}
+        storyMarkdown={storyBody}
+        dict={dict}
+      />
+    ) : null;
+
   return (
     <Workspace
       contestId={contestId}
       title={contest.title}
       storyBody={storyBody !== null ? <StoryText markdown={storyBody} /> : null}
-      storyMarkdown={storyBody}
+      printView={printView}
       storyUnavailable={storyUnavailable}
-      participantName={participantName}
-      printedOn={printedOn}
       questionEntries={questionEntries}
       schema={schema}
       initialLog={initialLog}
