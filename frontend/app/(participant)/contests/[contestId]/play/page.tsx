@@ -10,7 +10,8 @@ import { QUERY_LOG_PAGE_SIZE } from "@/lib/api/querylog-terms";
 import { gameSchemaSchema, type GameSchema } from "@/lib/api/schema";
 import { serverRequest } from "@/lib/api/server";
 import { authRecoveryRedirect } from "@/lib/auth/guard";
-import { formatMoment } from "@/lib/format/datetime";
+import { fetchIdentity } from "@/lib/auth/session";
+import { formatDay, formatMoment } from "@/lib/format/datetime";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import type { Locale } from "@/lib/i18n/config";
@@ -223,12 +224,27 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
     body: <StoryText key={question.id} markdown={question.bodyMd} className="max-w-none font-sans text-body" />,
   }));
 
+  // The print-only copy of the story (workspace.tsx renders it, hidden until
+  // `@media print`) carries a byline the same way the old `.../play/print`
+  // route did — who is printing, and when. `fetchIdentity` is wrapped in
+  // React's own `cache()`, so asking again here costs nothing beyond
+  // `ParticipantLayout`'s own call for the account chip: same request, same
+  // memoised promise. Tolerated the same way that route tolerated it: this
+  // only decorates a byline, it never gates on one, and `PrintView` already
+  // reads an empty name as "say only the date" rather than a broken sentence.
+  const identity = await fetchIdentity().catch(() => null);
+  const participantName = identity ? identity.fullName || identity.login : "";
+  const printedOn = formatDay(new Date().toISOString(), { locale });
+
   return (
     <Workspace
       contestId={contestId}
       title={contest.title}
       storyBody={storyBody !== null ? <StoryText markdown={storyBody} /> : null}
+      storyMarkdown={storyBody}
       storyUnavailable={storyUnavailable}
+      participantName={participantName}
+      printedOn={printedOn}
       questionEntries={questionEntries}
       schema={schema}
       initialLog={initialLog}

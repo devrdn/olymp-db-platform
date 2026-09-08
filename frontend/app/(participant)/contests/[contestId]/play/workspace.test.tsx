@@ -63,19 +63,40 @@ const A_SCHEMA = {
   tables: [{ name: "guests", columns: [{ name: "id", type: "uuid", nullable: false, references: "" }] }],
 };
 
-function show(schema: typeof A_SCHEMA | null = null) {
+// Deliberately different text from `storyBody` below: the print-only copy
+// and the on-screen story tab render from two different props
+// (`storyMarkdown` vs `storyBody`), and sharing one sentence between them
+// would make `getByText` ambiguous the moment both are in the tree at once
+// (workspace.tsx's own doc: the print copy stays mounted, only hidden by a
+// class jsdom does not apply) — a false green either way a mismatch went.
+function show(
+  schema: typeof A_SCHEMA | null = null,
+  overrides: { storyMarkdown?: string | null; storyUnavailable?: string | null } = {},
+) {
   return render(
     <Workspace
       contestId="c1"
       title="The Greenhouse Case"
       storyBody={<p>A body in the stacks.</p>}
-      storyUnavailable={null}
+      storyMarkdown={"storyMarkdown" in overrides ? (overrides.storyMarkdown ?? null) : "The printed case notes."}
+      storyUnavailable={overrides.storyUnavailable ?? null}
+      participantName="Ada Lovelace"
+      printedOn="8 Sep 2026"
       questionEntries={[]}
       schema={schema}
       initialLog={freshInitialLog()}
       locale="en"
       dict={en}
     />,
+  );
+}
+
+/** The wrapper `workspace.tsx` renders the print-only story into — see that file's own doc for why it is a class, not the `hidden` attribute. */
+function printOnlyContainer(container: HTMLElement): HTMLElement | null {
+  return (
+    [...container.querySelectorAll("div")].find(
+      (div) => div.classList.contains("hidden") && div.classList.contains("print:block"),
+    ) ?? null
   );
 }
 
@@ -210,6 +231,49 @@ describe("the play workspace", () => {
 
     expect(renderCounts.result).toBe(resultRendersBefore);
     expect(renderCounts.side).toBe(sideRendersBefore);
+  });
+});
+
+// Task: printing happens on this screen now, not on a separate route — see
+// this file's own doc and print-view.tsx's. jsdom cannot evaluate
+// `@media print` (it lays nothing out), so these prove the two things a DOM
+// assertion actually can: the print-only copy is in the tree with the right
+// content, and the interactive workspace carries the class that removes it
+// from a printed page. What a real browser does with those classes is
+// checked separately, against the built CSS.
+describe("the print-only copy of the story", () => {
+  test("is in the tree, holding the contest title, the byline and the story", () => {
+    const { container } = show();
+
+    const printOnly = printOnlyContainer(container);
+    expect(printOnly).not.toBeNull();
+    expect(printOnly!.textContent).toContain("The Greenhouse Case");
+    expect(printOnly!.textContent).toContain("Ada Lovelace");
+    expect(printOnly!.textContent).toContain("8 Sep 2026");
+    expect(printOnly!.textContent).toContain("The printed case notes.");
+  });
+
+  test("carries nothing when there is no story to print", () => {
+    const { container } = show(null, { storyMarkdown: null, storyUnavailable: "This contest has no story yet" });
+
+    const printOnly = printOnlyContainer(container);
+    expect(printOnly).not.toBeNull();
+    expect(printOnly!.textContent).toBe("");
+  });
+
+  test("the interactive workspace is marked to disappear under print", () => {
+    const { container } = show();
+
+    // Workspace renders exactly two top-level siblings: the print-only copy,
+    // and the interactive workspace beside it (workspace.tsx's own doc) — so
+    // "whichever top-level child is not the print copy" identifies the
+    // second without depending on the console markup nested many levels
+    // inside it, which also carries `flex min-h-0 flex-col` classes of its
+    // own and would make a class-based `closest()` match the wrong ancestor.
+    const printOnly = printOnlyContainer(container);
+    const workspaceRoot = [...container.children].find((el) => el !== printOnly) as HTMLElement | undefined;
+    expect(workspaceRoot).not.toBeUndefined();
+    expect(workspaceRoot!.className).toMatch(/(^|\s)print:hidden(\s|$)/);
   });
 });
 

@@ -63,9 +63,9 @@ function sourceFiles(dir: string, found: string[] = []): string[] {
  * Paper has no dark mode. `data-theme="dark"` and a dark `prefers-color-scheme`
  * both exist to make a screen easier on the eyes at night, and neither is a
  * reason a printed page should arrive with a near-black background and white
- * text on it — the print-ready view (`play/print/page.tsx`) is read on paper,
- * not a screen, regardless of which theme the browser that requested it was
- * showing a moment before `window.print()` ran.
+ * text on it — the print-only copy of the story (`play/print-view.tsx`) is
+ * read on paper, not a screen, regardless of which theme the browser that
+ * requested it was showing a moment before `window.print()` ran.
  *
  * Checked at the source rather than by asking jsdom to compute a cascade:
  * jsdom has no layout and cannot be trusted to evaluate `@media print`
