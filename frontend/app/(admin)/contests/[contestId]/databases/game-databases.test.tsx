@@ -21,7 +21,7 @@ const dropGameInstanceAction = vi.hoisted(() =>
 vi.mock("./actions", () => ({ dropGameInstanceAction }));
 
 const contestId = "11111111-1111-1111-1111-111111111111";
-const t = en.workspace.game.databases;
+const t = en.workspace.databases;
 
 function instance(overrides: Partial<GameInstance> = {}): GameInstance {
   return {
