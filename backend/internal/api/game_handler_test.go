@@ -53,6 +53,13 @@ type fakeGames struct {
 	currentErr    error
 	currentResult provisioning.Upload
 
+	// uploadResult and uploadErr back Upload — the lookup gameView makes for
+	// a file-sourced Template, to resolve the row its UploadID names.
+	uploadErr        error
+	uploadResult     provisioning.Upload
+	gotUploadContest uuid.UUID
+	gotUploadID      uuid.UUID
+
 	windowErr        error
 	windowResult     gamefile.Window
 	gotWindowFrom    int
@@ -124,6 +131,14 @@ func (g *fakeGames) AppendChunk(_ context.Context, contestID, uploadID uuid.UUID
 
 func (g *fakeGames) CurrentUpload(context.Context, uuid.UUID) (provisioning.Upload, error) {
 	return g.currentResult, g.currentErr
+}
+
+func (g *fakeGames) Upload(_ context.Context, contestID, uploadID uuid.UUID) (provisioning.Upload, error) {
+	g.gotUploadContest, g.gotUploadID = contestID, uploadID
+	if g.uploadErr != nil {
+		return provisioning.Upload{}, g.uploadErr
+	}
+	return g.uploadResult, nil
 }
 
 func (g *fakeGames) UploadWindow(_ context.Context, contestID, uploadID uuid.UUID, fromLine, maxLines int, maxBytes int64) (gamefile.Window, error) {
@@ -297,6 +312,71 @@ func TestTheStatusDoesNotCarryTheScriptAndTheScriptEndpointDoes(t *testing.T) {
 	script := decode(t, f.do(http.MethodGet, "/contests/"+id+"/game/script", ""))
 	if script["script"] != "CREATE TABLE guests (id int);" {
 		t.Fatalf("the script endpoint answered %v", script["script"])
+	}
+}
+
+// This is the fix for the defect this file's own doc names: before it, the
+// status carried neither the source a game was built from nor which upload a
+// file-sourced one came from, so a reloaded page could not tell a file-
+// sourced game from an editor-sourced one, let alone reopen the viewer on the
+// file it was built from. Source and Upload are what closes that — read from
+// provisioning.Template.Source and .UploadID, resolved to the upload's own
+// row through fakeGames.Upload, never invented here.
+func TestAFileSourcedGamesStatusNamesItsSourceAndItsUpload(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contestID, uploadID := uuid.New(), uuid.New()
+	f.games.template = provisioning.Template{
+		ContestID: contestID, Status: provisioning.TemplateReady, Version: 1, Source: provisioning.SourceFile,
+		UploadID: &uploadID, Database: "game_tpl_cabc",
+	}
+	f.games.uploadResult = provisioning.Upload{
+		ID: uploadID, Filename: "dump.sql", ReceivedBytes: 4096, Lines: 7,
+		Status: provisioning.UploadComplete,
+	}
+
+	rec := f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	body := decode(t, rec)
+	if body["source"] != "file" {
+		t.Fatalf("source = %v, want file", body["source"])
+	}
+	upload, ok := body["upload"].(map[string]any)
+	if !ok {
+		t.Fatalf("the response carries no upload object: %v", body)
+	}
+	if upload["id"] != uploadID.String() || upload["filename"] != "dump.sql" {
+		t.Fatalf("upload = %v, want id %s and filename dump.sql", upload, uploadID)
+	}
+	if upload["bytes"] != float64(4096) || upload["lines"] != float64(7) {
+		t.Fatalf("upload = %v, want bytes 4096 and lines 7", upload)
+	}
+	if f.games.gotUploadContest != contestID || f.games.gotUploadID != uploadID {
+		t.Fatalf("the upload lookup was scoped to %v/%v, want %v/%v",
+			f.games.gotUploadContest, f.games.gotUploadID, contestID, uploadID)
+	}
+}
+
+// An editor-sourced game — every game that predates the upload feature, and
+// every one written directly since — carries no upload object at all, not
+// one whose fields are merely empty: a client tells the two apart by
+// whether Upload is present (uploadLimitsResponse's own Enabled field makes
+// the identical choice for a different pair of numbers).
+func TestAnEditorSourcedGamesStatusNamesItsSourceAndCarriesNoUpload(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.template = provisioning.Template{
+		Status: provisioning.TemplateReady, Version: 1, Source: provisioning.SourceEditor,
+		Database: "game_tpl_cabc", Script: "CREATE TABLE guests (id int);",
+	}
+
+	rec := f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game", "")
+	body := decode(t, rec)
+	if body["source"] != "editor" {
+		t.Fatalf("source = %v, want editor", body["source"])
+	}
+	if _, carried := body["upload"]; carried {
+		t.Fatalf("an editor-sourced game carries an upload object: %v", body)
 	}
 }
 

@@ -59,11 +59,50 @@ export type UploadLimits = z.infer<typeof uploadLimitsSchema>;
  */
 const DISABLED_UPLOAD_LIMITS = { enabled: false, chunkBytes: 0, maxFileBytes: 0 };
 
+/**
+ * Which of the two ways this game was built — `game_handler.go`'s
+ * `gameResponse.Source`, itself `provisioning.Template.Source`. `"editor"` is
+ * also the default a game with no source at all (the synthetic `absent`
+ * answer, or a response from an API build that predates this field) reads
+ * as: an editor-sourced game with no script is exactly what a contest with
+ * no game yet already looks like on this screen, so nothing has to special-
+ * case an empty string here the way `status` already special-cases `absent`.
+ */
+export const GAME_SOURCES = ["editor", "file"] as const;
+
+export type GameSource = (typeof GAME_SOURCES)[number];
+
+/**
+ * The file a file-sourced game (`source === "file"`) was built from — enough
+ * to reopen the console's own viewer on it after a reload, which is the
+ * whole reason this travels here rather than only inside `uploadResponse`
+ * while the upload was still in progress: the page that ran the upload is
+ * gone by the time somebody reloads, and `GET .../uploads/current` no longer
+ * names a *completed* upload (`provisioning.Games.CurrentUpload` answers only
+ * for one still `'receiving'`) — this is the one place left that still can.
+ */
+export const gameUploadSourceSchema = z
+  .object({
+    id: z.string(),
+    filename: z.string(),
+    bytes: z.number(),
+    lines: z.number(),
+  })
+  .transform((raw) => ({ id: raw.id, filename: raw.filename, bytes: raw.bytes, lines: raw.lines }));
+
+export type GameUploadSource = z.infer<typeof gameUploadSourceSchema>;
+
 export const gameSchema = z
   .object({
     status: z.enum(GAME_STATUSES),
     version: z.number().default(0),
     database: z.string().default(""),
+    source: z.enum(GAME_SOURCES).default("editor"),
+    // Absent (not merely empty) for an editor-sourced game — `.optional()`
+    // rather than a default so a client can tell "no file" from "a file
+    // whose fields happen to be empty", the same distinction `upload_limits`
+    // itself draws with its own `enabled` flag.
+    upload: gameUploadSourceSchema.optional(),
     build_error: z.string().default(""),
     script_bytes: z.number().default(0),
     building: z.boolean().default(false),
@@ -78,6 +117,8 @@ export const gameSchema = z
     status: raw.status,
     version: raw.version,
     database: raw.database,
+    source: raw.source,
+    upload: raw.upload,
     buildError: raw.build_error,
     scriptBytes: raw.script_bytes,
     building: raw.building,

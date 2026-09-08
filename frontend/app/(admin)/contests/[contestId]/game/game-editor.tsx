@@ -104,6 +104,10 @@ export function GameEditor({
         ) : null}
       </div>
 
+      {game.source === "file" ? (
+        <p className="max-w-body text-small text-ink-2">{t.sourceFile}</p>
+      ) : null}
+
       {game.status === "failed" && game.buildError !== "" ? (
         <div className="flex flex-col gap-2 border-l-2 border-bad pl-4">
           <p className="text-control text-ink">{t.buildError}</p>
