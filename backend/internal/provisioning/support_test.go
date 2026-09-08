@@ -2,12 +2,15 @@ package provisioning_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
@@ -44,9 +47,105 @@ func TestMain(m *testing.M) {
 	}
 	testPool = pool
 
+	// The standing net under every test in this package, not only the reclaim
+	// ones: whatever a test does, no game database row that was already in the
+	// developer's installation may have a different status when the package is
+	// done. See gameRowStatuses below.
+	before := gameRowStatuses(ctx)
+
 	code := m.Run()
+
+	if damaged := statusesChangedSince(before); len(damaged) > 0 {
+		fmt.Fprintf(os.Stderr,
+			"these tests changed the status of %d database row(s) they did not create:\n", len(damaged))
+		for _, line := range damaged {
+			fmt.Fprintf(os.Stderr, "  %s\n", line)
+		}
+		fmt.Fprintln(os.Stderr,
+			"a row marked 'dropped' over a database that is still on the game cluster is never "+
+				"reclaimed again (Reclaimable skips it), so this is real damage to the installation — "+
+				"see withRollback below")
+		code = 1
+	}
+
 	pool.Close()
 	os.Exit(code)
+}
+
+// settleFor is how recently a row may have been created and still be treated
+// as somebody else's work in progress rather than as part of the
+// installation.
+//
+// `make test-db` runs this package beside internal/postgres and
+// internal/queryproxy against one database, and those packages do commit game
+// rows of their own and then change them — legitimately, because they created
+// them. A row that appeared in the same instant this snapshot was taken could
+// be one of theirs, and calling that damage would be a false alarm on a run
+// that did nothing wrong. Ten seconds is far longer than that overlap and far
+// shorter than the age of anything a developer would recognise as their own
+// data.
+const settleFor = 10 * time.Second
+
+// gameRowStatuses is the status of every game database row that was already
+// settled in the installation when this package started: instances by
+// db_name, templates by template_db.
+//
+// It is deliberately a whole-installation read. The damage this guards
+// against was invisible precisely because each test only ever asked about its
+// own rows (outcomeOf, entriesFor, stuckEntryFor) — an honest habit that says
+// nothing about the eleven rows the same pass marked 'dropped' on the way
+// past.
+func gameRowStatuses(ctx context.Context) map[string]string {
+	rows, err := testPool.Query(ctx, `
+		SELECT db_name, status FROM game_instances WHERE created_at < $1
+		UNION ALL
+		SELECT template_db, status FROM game_templates WHERE updated_at < $1`,
+		time.Now().Add(-settleFor))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cannot read the installation's game rows: %v\n", err)
+		os.Exit(1)
+	}
+	defer rows.Close()
+
+	found := map[string]string{}
+	for rows.Next() {
+		var name, status string
+		if err := rows.Scan(&name, &status); err != nil {
+			fmt.Fprintf(os.Stderr, "cannot read the installation's game rows: %v\n", err)
+			os.Exit(1)
+		}
+		found[name] = status
+	}
+	if err := rows.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "cannot read the installation's game rows: %v\n", err)
+		os.Exit(1)
+	}
+	return found
+}
+
+// statusesChangedSince names every row of before whose status has moved.
+//
+// A row that has since disappeared is not reported: another package's fixture
+// deleting its own contest is ordinary cleanup, and the failure this exists to
+// catch is a status rewritten in place — the one that strands a database on
+// the cluster with nothing left to reclaim it.
+func statusesChangedSince(before map[string]string) []string {
+	if len(before) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	after := gameRowStatuses(ctx)
+
+	var damaged []string
+	for name, was := range before {
+		if now, still := after[name]; still && now != was {
+			damaged = append(damaged, fmt.Sprintf("%s: %s -> %s", name, was, now))
+		}
+	}
+	sort.Strings(damaged)
+	return damaged
 }
 
 // cluster records what it was asked to do, and can be told to refuse.
@@ -85,12 +184,13 @@ type cluster struct {
 	// idleCalls records every DropIdle call and what it returned, busy and
 	// failed ones included — unlike idleDropped, which only ever grows on a
 	// success. Reclaim is installation-wide (its own doc), so one test's
-	// Reclaim call can also process another package's real reclaimable rows
-	// sharing the same database (internal/postgres's own Reclaimable tests
-	// commit theirs outside a transaction on purpose); an aggregate count off
-	// ReclaimResult would then be a claim about that install, not about this
-	// test's own row. outcomeOf below is how a test asks what happened to
-	// its own database specifically, regardless of what else this pass swept.
+	// Reclaim call also processes whatever real reclaimable rows the
+	// development database already holds — withRollback keeps the writes off
+	// them, not the pass away from them — and an aggregate count off
+	// ReclaimResult would then be a claim about that installation rather than
+	// about this test's own row. outcomeOf below is how a test asks what
+	// happened to its own database specifically, regardless of what else this
+	// pass swept.
 	idleCalls []idleCall
 }
 
@@ -258,18 +358,79 @@ func (c *cluster) failIdleDropOf(name string, err error) {
 	c.failIdleDrop[name] = err
 }
 
+// errRollback ends a test transaction — withRollback's own signal, borrowed
+// from internal/postgres/support_test.go, which ends every one of its own
+// database tests the same way.
+var errRollback = errors.New("rolling back the test transaction")
+
+// withRollback runs body inside a core-database transaction that is always
+// rolled back, and hands body that transaction's context.
+//
+// This is the reclaim tests' isolation, and it is not a tidiness measure.
+// Service.Reclaim is installation-wide by design (its own doc): one call
+// sweeps every reclaimable row the database holds, not only the rows the
+// calling test made. Against a developer's own development database — which
+// is what `make test-db` points these tests at — that swept their contests
+// too: the fake cluster only pretended to drop the databases, but the rows
+// were really marked 'dropped', and Reclaimable skips a dropped row for ever
+// after, so the real databases behind them could never be reclaimed again.
+// Eleven of them are on the development game cluster right now for exactly
+// that reason.
+//
+// Every repository call the service makes picks this transaction up from the
+// context through storage.QuerierFrom, which is the path a real request takes
+// too, and markReclaimed's own uow.Do joins it rather than opening a second
+// one (storage.PgxUnitOfWork.Do). So the sweep still sees, and still
+// processes, exactly what it would in production — CLAUDE.md rule 10's point,
+// that the guarantee is proved on the path the deployment uses — while
+// nothing it writes outlives the test, whether the row belonged to the test
+// or to the developer.
+//
+// The two alternatives, and why not:
+//
+//   - A contest id passed to Reclaim, so a test could scope the sweep. An
+//     argument only tests pass is a code path only tests exercise: the
+//     installation-wide pass, the one production actually runs, would become
+//     the untested one — rule 10 again, from the other side.
+//   - Asserting only about rows the test created, which is what outcomeOf
+//     (above) already does. That keeps the assertions honest and does nothing
+//     at all about the damage, because the damage is to the database rather
+//     than to the assertion.
+//
+// TestReclaimLeavesTheInstallationsOwnRowsUntouched (reclaim_test.go) is what
+// holds this to its word.
+func withRollback(t *testing.T, body func(ctx context.Context)) {
+	t.Helper()
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
+	}
+
+	err := storage.NewUnitOfWork(testPool).Do(context.Background(), func(ctx context.Context) error {
+		body(ctx)
+		return errRollback
+	})
+	if err != nil && !errors.Is(err, errRollback) {
+		t.Fatalf("test transaction failed: %v", err)
+	}
+}
+
 // contestFor sets up a contest and the given number of registrations, removed
 // again when the test ends.
-func contestFor(t *testing.T, registrations int) (provisioning.Contest, []uuid.UUID) {
+//
+// Everything it writes goes through storage.QuerierFrom(ctx, testPool) rather
+// than straight to the pool, so a caller inside withRollback gets its fixture
+// on the same transaction as the code under test — and a caller outside one
+// gets the pool, exactly as before.
+func contestFor(t *testing.T, ctx context.Context, registrations int) (provisioning.Contest, []uuid.UUID) {
 	t.Helper()
 
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
 	}
-	ctx := t.Context()
+	q := storage.QuerierFrom(ctx, testPool)
 
 	var author uuid.UUID
-	err := testPool.QueryRow(ctx,
+	err := q.QueryRow(ctx,
 		`INSERT INTO users (login, full_name, password_hash) VALUES ($1, 'Author', 'x')
 		 RETURNING id`, "prov-author-"+uuid.NewString()[:8]).Scan(&author)
 	if err != nil {
@@ -277,10 +438,13 @@ func contestFor(t *testing.T, registrations int) (provisioning.Contest, []uuid.U
 	}
 
 	var id uuid.UUID
-	if err := testPool.QueryRow(ctx,
+	if err := q.QueryRow(ctx,
 		`INSERT INTO contests (created_by) VALUES ($1) RETURNING id`, author).Scan(&id); err != nil {
 		t.Fatalf("create contest: %v", err)
 	}
+	// Only ever needed by a caller outside a transaction: inside withRollback
+	// the rollback has already removed both by the time this runs, and the
+	// deletes find nothing.
 	t.Cleanup(func() {
 		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -291,12 +455,12 @@ func contestFor(t *testing.T, registrations int) (provisioning.Contest, []uuid.U
 	var people []uuid.UUID
 	for range registrations {
 		var user, registration uuid.UUID
-		if err := testPool.QueryRow(ctx,
+		if err := q.QueryRow(ctx,
 			`INSERT INTO users (login, full_name, password_hash) VALUES ($1, 'Player', 'x')
 			 RETURNING id`, "prov-player-"+uuid.NewString()[:8]).Scan(&user); err != nil {
 			t.Fatalf("create player: %v", err)
 		}
-		if err := testPool.QueryRow(ctx,
+		if err := q.QueryRow(ctx,
 			`INSERT INTO registrations (contest_id, user_id) VALUES ($1, $2) RETURNING id`,
 			id, user).Scan(&registration); err != nil {
 			t.Fatalf("create registration: %v", err)
@@ -315,12 +479,12 @@ func contestFor(t *testing.T, registrations int) (provisioning.Contest, []uuid.U
 // test to reuse (BuildTemplate itself belongs to internal/gamedb, one layer
 // below this package). Cleanup is contestFor's own: game_templates.contest_id
 // cascades on the contest's own delete (migration 3).
-func markTemplateReady(t *testing.T, contest uuid.UUID, database string) {
+func markTemplateReady(t *testing.T, ctx context.Context, contest uuid.UUID, database string) {
 	t.Helper()
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
 	}
-	if _, err := testPool.Exec(t.Context(),
+	if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
 		`INSERT INTO game_templates (contest_id, template_db, init_script, status, version)
 		 VALUES ($1, $2, 'SELECT 1', 'ready', 1)`, contest, database); err != nil {
 		t.Fatalf("create template: %v", err)

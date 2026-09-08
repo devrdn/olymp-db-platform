@@ -759,6 +759,59 @@ func TestMarkTemplateDroppedLeavesTheRowBehindAsHistory(t *testing.T) {
 	})
 }
 
+// What the operator's orphan sweep reads (provisioning.OrphanSweeper): every
+// database the installation has a row for, instances and templates alike,
+// with the status each carries.
+//
+// Both tables in one answer is the whole point. The sweep decides a database
+// may be destroyed by checking that nothing still calls it live, and a
+// per-table answer would let a name be gone in one and live in the other. A
+// dropped row has to come back too — those are the very rows an orphan is
+// found by.
+func TestRecordedDatabasesCarriesInstancesAndTemplatesWithTheirStatus(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := reclaimContest(t, ctx, "finished", 2*time.Hour, nil)
+		repo := NewGameInstances(testPool)
+
+		live := "recorded_live_" + uuid.NewString()[:12]
+		gone := "recorded_gone_" + uuid.NewString()[:12]
+		for _, database := range []string{live, gone} {
+			if err := repo.AddSpare(ctx, contest, database, 1); err != nil {
+				t.Fatalf("adding %s: %v", database, err)
+			}
+		}
+		if err := repo.MarkDropped(ctx, gone); err != nil {
+			t.Fatalf("marking %s dropped: %v", gone, err)
+		}
+		template := reclaimTemplate(t, ctx, contest, "ready")
+
+		recorded, err := repo.RecordedDatabases(ctx)
+		if err != nil {
+			t.Fatalf("RecordedDatabases: %v", err)
+		}
+
+		// The read is installation-wide, so this asks about its own three rows
+		// by name rather than about the length of the answer.
+		found := map[string]provisioning.DatabaseRecord{}
+		for _, row := range recorded {
+			found[row.Database] = row
+		}
+		for _, want := range []provisioning.DatabaseRecord{
+			{Database: live, Status: "ready", ContestID: contest},
+			{Database: gone, Status: "dropped", ContestID: contest},
+			{Database: template, Status: "ready", ContestID: contest, Template: true},
+		} {
+			got, there := found[want.Database]
+			if !there {
+				t.Fatalf("%s is missing from the recorded databases", want.Database)
+			}
+			if got != want {
+				t.Fatalf("%s came back as %+v, want %+v", want.Database, got, want)
+			}
+		}
+	})
+}
+
 // The organizer's list of a contest's databases. It has to carry both kinds
 // of row — a spare nobody holds and a participant's own copy — and it has to
 // name the holder, because "which of these is Ivan's" is the question the

@@ -99,7 +99,7 @@ func TestInstancesNeverAsksTheClusterAboutADroppedDatabase(t *testing.T) {
 	if _, err := service.TopUp(t.Context(), contest, 2); err != nil {
 		t.Fatalf("top-up: %v", err)
 	}
-	rows := instancesOf(t, contest.ID)
+	rows := instancesOf(t, t.Context(), contest.ID)
 	gone := rows[0].Database
 	if err := postgres.NewGameInstances(testPool).MarkDropped(t.Context(), gone); err != nil {
 		t.Fatalf("mark dropped: %v", err)
@@ -178,8 +178,8 @@ func TestDroppingForcesConnectionsClosedRatherThanWaitingForAnIdleMoment(t *test
 	if !droppedByForce(fake, database) {
 		t.Fatalf("%s was never dropped from the cluster", database)
 	}
-	if statusOf(t, database) != "dropped" {
-		t.Fatalf("the row is %q after the drop, want dropped", statusOf(t, database))
+	if statusOf(t, t.Context(), database) != "dropped" {
+		t.Fatalf("the row is %q after the drop, want dropped", statusOf(t, t.Context(), database))
 	}
 }
 
@@ -211,7 +211,7 @@ func TestAParticipantsNextActionRebuildsTheDatabaseThatWasDropped(t *testing.T) 
 	if remade, _ := fake.counts(); remade != made+1 {
 		t.Fatalf("the cluster made %d databases in all, want %d; the dropped row was handed back rather than rebuilt", remade, made+1)
 	}
-	if status := statusOf(t, after); status == "dropped" {
+	if status := statusOf(t, t.Context(), after); status == "dropped" {
 		t.Fatal("the row is still marked dropped after the participant came back")
 	}
 }
@@ -296,7 +296,7 @@ func TestDroppingADatabaseOfAnotherContestIsRefused(t *testing.T) {
 	if _, err := mine.TopUp(t.Context(), contestB, 1); err != nil {
 		t.Fatalf("top-up: %v", err)
 	}
-	theirs := instancesOf(t, contestB.ID)[0].Database
+	theirs := instancesOf(t, t.Context(), contestB.ID)[0].Database
 
 	_, err := mine.DropInstance(t.Context(), uuid.New(), contestA.ID, theirs)
 	if !errors.Is(err, provisioning.ErrInstanceNotFound) {
@@ -305,7 +305,7 @@ func TestDroppingADatabaseOfAnotherContestIsRefused(t *testing.T) {
 	if droppedByForce(fake, theirs) {
 		t.Fatalf("%s was dropped by an organizer of another contest", theirs)
 	}
-	if statusOf(t, theirs) == "dropped" {
+	if statusOf(t, t.Context(), theirs) == "dropped" {
 		t.Fatalf("%s was marked dropped by an organizer of another contest", theirs)
 	}
 }
@@ -319,7 +319,7 @@ func TestDroppingSomethingAlreadyDroppedSaysSoRatherThanPretendingToWork(t *test
 	if _, err := service.TopUp(t.Context(), contest, 1); err != nil {
 		t.Fatalf("top-up: %v", err)
 	}
-	database := instancesOf(t, contest.ID)[0].Database
+	database := instancesOf(t, t.Context(), contest.ID)[0].Database
 
 	if _, err := service.DropInstance(t.Context(), uuid.New(), contest.ID, database); err != nil {
 		t.Fatalf("the first drop: %v", err)
@@ -334,7 +334,7 @@ func TestDroppingSomethingAlreadyDroppedSaysSoRatherThanPretendingToWork(t *test
 // entry has to name the person who did it — the sweep's own entry has no
 // actor, so a shared action code could not answer "who took this away".
 func TestDroppingRecordsWhoDidItAgainstTheContest(t *testing.T) {
-	service, _, s, contest, people := serviceWithAudit(t, 1)
+	service, _, s, contest, people := serviceWithAudit(t, t.Context(), 1)
 	actor := uuid.New()
 
 	database, err := service.Ensure(t.Context(), contest, people[0])
@@ -372,13 +372,13 @@ func TestARowIsNotMarkedDroppedWhenTheClusterRefused(t *testing.T) {
 	if _, err := service.TopUp(t.Context(), contest, 1); err != nil {
 		t.Fatalf("top-up: %v", err)
 	}
-	database := instancesOf(t, contest.ID)[0].Database
+	database := instancesOf(t, t.Context(), contest.ID)[0].Database
 	fake.dropFail = errors.New("the game cluster is unreachable")
 
 	if _, err := service.DropInstance(t.Context(), uuid.New(), contest.ID, database); err == nil {
 		t.Fatal("a cluster that refused the drop was reported as a success")
 	}
-	if status := statusOf(t, database); status == "dropped" {
+	if status := statusOf(t, t.Context(), database); status == "dropped" {
 		t.Fatal("the row was marked dropped although the database is still there")
 	}
 }

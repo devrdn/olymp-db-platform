@@ -524,6 +524,48 @@ func (r *GameInstances) InstanceNamed(ctx context.Context, contest uuid.UUID, da
 	return record, nil
 }
 
+// RecordedDatabases is everything the core database believes about the game
+// cluster: every instance row and every template row, with the status each
+// one carries.
+//
+// Deliberately unbounded, unlike every other list in this file. The one
+// caller is the operator's orphan sweep (provisioning.OrphanSweeper, run from
+// cmd/gameorphans), which decides whether a database may be destroyed by
+// checking that *no* row still calls it live — and a truncated answer would
+// answer that question wrongly in the dangerous direction: the row saying
+// 'dropped' inside the limit, the row saying 'ready' outside it, and a live
+// database offered for removal. A LIMIT here would be a bound bought with the
+// guarantee it exists to protect. The table holds one row per database the
+// installation has ever provisioned, and this runs by hand, off the request
+// path.
+//
+// Instances and templates in one result, in that order and by name within
+// each, so an operator reading the plan twice reads the same plan.
+func (r *GameInstances) RecordedDatabases(ctx context.Context) ([]provisioning.DatabaseRecord, error) {
+	rows, err := r.querier(ctx).Query(ctx, `
+		SELECT db_name, status, contest_id, false AS is_template FROM game_instances
+		UNION ALL
+		SELECT template_db, status, contest_id, true FROM game_templates
+		ORDER BY is_template, 1`)
+	if err != nil {
+		return nil, fmt.Errorf("list the recorded databases: %w", err)
+	}
+	defer rows.Close()
+
+	var out []provisioning.DatabaseRecord
+	for rows.Next() {
+		var record provisioning.DatabaseRecord
+		if err := rows.Scan(&record.Database, &record.Status, &record.ContestID, &record.Template); err != nil {
+			return nil, fmt.Errorf("scan a recorded database: %w", err)
+		}
+		out = append(out, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list the recorded databases: %w", err)
+	}
+	return out, nil
+}
+
 // MarkTemplateDropped moves one contest's template to the terminal 'dropped'
 // status — MarkDropped's own convention, kept for the same reason: the row
 // is what an organizer's audit search still has to point to once the
