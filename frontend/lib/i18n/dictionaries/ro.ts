@@ -164,6 +164,7 @@ const ro = {
         completing: "Se finalizează…",
         done: "Fișierul a fost primit. Construirea a început.",
         sourceNote: "Acesta este fișierul din care a fost construit jocul activ.",
+        replace: "Încărcați alt fișier",
         viewHeading: "Conținutul fișierului",
         gotoLabel: "Linia",
         gotoButton: "Mergi",
