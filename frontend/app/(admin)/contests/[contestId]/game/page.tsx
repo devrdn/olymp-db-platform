@@ -81,7 +81,7 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
           />
           <GameUpload
             contestId={contestId}
-            uploadLimits={game.uploadLimits}
+            game={game}
             initialUpload={initialUpload}
             editable={contentEditable(contest.status)}
             dict={dict}

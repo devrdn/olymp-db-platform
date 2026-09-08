@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { buttonVariants } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { ApiError, request } from "@/lib/api/client";
-import type { Game, Upload, UploadLimits } from "@/lib/api/game";
+import type { Game, Upload } from "@/lib/api/game";
 import { GAME_POLL_MS } from "@/lib/api/game-terms";
 import { readableBytes, readableDuration } from "@/lib/format/bytes";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -92,16 +92,28 @@ async function putChunk(
  * itself finishes, through `router.refresh()` re-reading `/game` the normal
  * way (`page.tsx`'s own `Promise.all`), which is the same mechanism a plain
  * reload uses and needs no wiring between two otherwise independent forms.
+ *
+ * The one exception is the viewer for a file this contest's game was already
+ * built from: that has to survive a reload, because the tab that ran the
+ * upload is gone by then and nothing else on this page still names the file.
+ * `game.upload` (`gameResponse.Upload`, present exactly when `game.source`
+ * is `"file"`) is what carries that fact across the reload — it is what
+ * seeds this component's state back into the "done" phase below, the same
+ * phase a live completion (`runLoop`) reaches on its own.
  */
 export function GameUpload({
   contestId,
-  uploadLimits,
+  game,
   initialUpload,
   editable,
   dict,
 }: {
   contestId: string;
-  uploadLimits: UploadLimits;
+  /** The game as `page.tsx` read it — `game.uploadLimits` is this panel's
+   * own ceilings, and `game.source` / `game.upload` are what let it restore
+   * the "done" viewer after a reload (this component's own doc explains
+   * why nothing else can). */
+  game: Game;
   /** The upload a reloaded page found still receiving, or null. */
   initialUpload: Upload | null;
   editable: boolean;
@@ -111,18 +123,30 @@ export function GameUpload({
   const tu = t.upload;
   const errors = dict.errors;
   const router = useRouter();
+  const uploadLimits = game.uploadLimits;
 
   const resumable = initialUpload && initialUpload.status === "receiving" ? initialUpload : null;
+  // A file-sourced game whose own upload this reload can still describe —
+  // never true at the same time as `resumable`, an in-progress replacement
+  // takes priority for the picker below over a stale "here is what built
+  // the current game" note.
+  const restored = !resumable && game.source === "file" ? (game.upload ?? null) : null;
 
-  const [phase, setPhase] = useState<Phase>(resumable ? "resumable" : "idle");
-  const [uploadId, setUploadId] = useState<string | null>(resumable?.id ?? null);
-  const [filename, setFilename] = useState(resumable?.filename ?? "");
-  const [totalBytes, setTotalBytes] = useState(resumable?.declaredBytes ?? 0);
-  const [sentBytes, setSentBytes] = useState(resumable?.receivedBytes ?? 0);
+  const [phase, setPhase] = useState<Phase>(resumable ? "resumable" : restored ? "done" : "idle");
+  const [uploadId, setUploadId] = useState<string | null>(resumable?.id ?? restored?.id ?? null);
+  const [filename, setFilename] = useState(resumable?.filename ?? restored?.filename ?? "");
+  const [totalBytes, setTotalBytes] = useState(resumable?.declaredBytes ?? restored?.bytes ?? 0);
+  const [sentBytes, setSentBytes] = useState(resumable?.receivedBytes ?? restored?.bytes ?? 0);
   const [rateBps, setRateBps] = useState(0);
   const [mismatch, setMismatch] = useState(false);
   const [errorCode, setErrorCode] = useState<string | null>(null);
-  const [completedGame, setCompletedGame] = useState<Game | null>(null);
+  const [completedGame, setCompletedGame] = useState<Game | null>(restored ? game : null);
+  // True only once this tab's own `runLoop` has actually finished an upload
+  // — never for the "done" phase `restored` seeds above. It is what tells
+  // the green "file received, build started" line (a fact about *this*
+  // upload, just now) apart from `tu.sourceNote` (a fact about the file the
+  // *current* game happens to have been built from, possibly long ago).
+  const [liveCompletion, setLiveCompletion] = useState(false);
   // Mirrors whether `fileRef.current` is set, for render: a ref itself must
   // never be read while rendering (React warns, correctly — it is not a
   // value the render phase can depend on and still update as expected), so
@@ -160,6 +184,26 @@ export function GameUpload({
       clearInterval(timer);
     };
   }, [contestId, phase, completedGame?.building]);
+
+  // Loads the viewer's first window the moment there is an upload id to read
+  // it for — a live completion (`runLoop`, below) and a reload that restored
+  // one from `game.upload` both reach `phase === "done"` this way, and
+  // either one needs the same first page of lines before `tu.viewHeading`
+  // means anything. `loadedForRef` is keyed on the upload id rather than
+  // firing once per mount, so a second file uploaded later in the same tab
+  // (a new id) still gets its own window loaded without this effect trying
+  // on every re-render in between.
+  const loadedForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (phase !== "done" || !uploadId || loadedForRef.current === uploadId) return;
+    loadedForRef.current = uploadId;
+    void fetchWindow(uploadId, 1);
+    // fetchWindow is stable across renders (it closes over nothing but
+    // setState calls and contestId), so it is deliberately left out of the
+    // dependency array rather than redeclared with useCallback for a
+    // function this effect is the only caller of.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, uploadId]);
 
   function markProgress(newSent: number) {
     const elapsed = (Date.now() - rateOriginRef.current.time) / 1000;
@@ -257,8 +301,11 @@ export function GameUpload({
     }
 
     setCompletedGame(result.value ?? null);
+    setLiveCompletion(true);
     setPhase("done");
-    void fetchWindow(id, 1);
+    // The viewer's first window is loaded by the `loadedForRef` effect
+    // above, keyed on `uploadId` (already `id` by the time that effect
+    // reruns) — not fetched again here, which would only race it.
     // GameEditor's own status tag reads `initial`, a prop from the server
     // component above (page.tsx) — this is what brings it (and this
     // component's own `initialUpload`, now absent) current. Local state set
@@ -534,7 +581,11 @@ export function GameUpload({
                 {t.status[completedGame.status]}
               </Tag>
             ) : null}
-            <span className="text-small text-good">{tu.done}</span>
+            {liveCompletion ? (
+              <span className="text-small text-good">{tu.done}</span>
+            ) : (
+              <span className="text-small text-ink-2">{tu.sourceNote}</span>
+            )}
           </div>
 
           <div className="flex flex-col gap-2.5">
