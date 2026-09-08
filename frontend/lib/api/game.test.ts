@@ -34,6 +34,37 @@ describe("gameSchema", () => {
     upload_limits: limits,
   };
 
+  /**
+   * The payload a contest with no game actually receives, field for field as
+   * `game_handler.go`'s `status` writes it: `gameResponse{Status: "absent",
+   * UploadLimits: ...}`, every other field left at Go's zero value and none of
+   * them `omitempty`. Written out rather than spread from the fixture above,
+   * because the fixture omitting `source` is exactly how this shipped broken —
+   * a schema that rejected the server's own reply, with 830 green tests, and
+   * an error boundary on every newly created contest's game screen.
+   */
+  test("parses the reply a contest with no game actually sends", () => {
+    const parsed = gameSchema.parse({
+      status: "absent",
+      version: 0,
+      database: "",
+      source: "",
+      build_error: "",
+      script_bytes: 0,
+      building: false,
+      updated_at: "0001-01-01T00:00:00Z",
+      upload_limits: limits,
+    });
+
+    expect(parsed.status).toBe("absent");
+    expect(parsed.source).toBe("editor");
+  });
+
+  /** An API older than the source field at all: absent, not empty. */
+  test("reads a reply with no source field as an editor-written game", () => {
+    expect(gameSchema.parse(game).source).toBe("editor");
+  });
+
   test("carries the upload ceilings alongside the build's own status", () => {
     const parsed = gameSchema.parse(game);
 
