@@ -976,6 +976,8 @@ const ro = {
       "contest.policy_change": "A schimbat politica SQL",
       "contest.game_script_set": "A scris SQL-ul bazei de joc",
       "contest.game_built": "Baza de joc a fost construită",
+      "contest.upload_complete": "A încărcat o copie a bazei de joc",
+      "contest.upload_abort": "A anulat încărcarea bazei de joc",
       "contest.story_change": "A modificat povestea",
       "contest.question_create": "A adăugat o întrebare",
       "contest.question_update": "A modificat o întrebare",
