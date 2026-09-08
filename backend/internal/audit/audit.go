@@ -108,6 +108,21 @@ const (
 	// what lets an organizer searching the trail tell "one participant's
 	// copy is gone" from "the whole game is gone" without reading payloads.
 	ActionGameTemplateReclaim = "contest.template_reclaimed"
+	// ActionGameUploadComplete records an uploaded SQL dump (migration 24)
+	// becoming a contest's game: the file an organiser sent in, sealed and
+	// checked against what they declared. Its own action code rather than
+	// ActionGameScriptSet — that one names the script an organiser wrote in
+	// the editor, and the payload the two carry does not overlap (a
+	// filename and a line count here; a byte count there), so folding them
+	// together would leave the trail unable to say which path produced a
+	// game without opening the payload.
+	ActionGameUploadComplete = "contest.upload_complete"
+	// ActionGameUploadAbort records an upload cancelled before it became
+	// anybody's game — by the organiser who started it, or by the
+	// abandoned-upload janitor (nil actor, the same convention
+	// ActionGameInstanceReclaim uses for the sweep that took a database
+	// nobody asked it to).
+	ActionGameUploadAbort = "contest.upload_abort"
 
 	// ActionSettingsChange records a change to what the installation calls
 	// itself and how it looks. It is entity "settings" with no identifier:
@@ -139,6 +154,7 @@ var actions = []string{
 	ActionParticipantAdd, ActionParticipantRemove, ActionParticipantDisqualify,
 	ActionParticipantEnroll, ActionContestAccessDenied, ActionContestStartBlocked,
 	ActionGameInstanceReclaim, ActionGameTemplateReclaim, ActionGameInstanceDrop,
+	ActionGameUploadComplete, ActionGameUploadAbort,
 
 	ActionSettingsChange,
 }

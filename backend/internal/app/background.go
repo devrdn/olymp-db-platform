@@ -372,3 +372,38 @@ func buildGames(log *slog.Logger, games *provisioning.Games) task {
 		},
 	}
 }
+
+// abandonedUploadsEvery is how often the janitor looks for an upload nobody
+// is coming back to, and for a file on the volume no row names at all. Ten
+// minutes, the same cadence tendPools and reclaimInstances already tick on:
+// nothing here is urgent — an abandoned upload is measured in
+// GAME_UPLOAD_ABANDONED_AFTER, hours at the shortest sensible setting — and a
+// faster tick would only mean walking the upload directory more often for no
+// participant or organiser waiting on the answer.
+const abandonedUploadsEvery = 10 * time.Minute
+
+// abandonedUploads frees the disk an incomplete or forgotten upload is
+// holding: a 'receiving' row nobody has appended to in a while is aborted,
+// and a file the volume holds that no row names at all — the more dangerous
+// half, invisible to every other query this package makes — is removed too.
+// See provisioning.Games.SweepUploads for why both sweeps live together.
+func abandonedUploads(log *slog.Logger, games *provisioning.Games, olderThan time.Duration) task {
+	return task{
+		name: "game-upload-sweep",
+		// Not at startup: nothing here is urgent, the same reasoning
+		// reclaimInstances gives for skipping its own atStart — an
+		// abandoned upload found ten minutes into the process's life is
+		// found exactly as correctly as one found at the instant it comes
+		// up, and a boot-time sweep of a whole directory competes with
+		// whatever else a restart is already doing.
+		every: abandonedUploadsEvery,
+		run: func(ctx context.Context) error {
+			result, err := games.SweepUploads(ctx, olderThan)
+			if result.Abandoned > 0 || result.OrphanFiles > 0 {
+				log.InfoContext(ctx, "swept abandoned uploads",
+					"abandoned", result.Abandoned, "orphan_files", result.OrphanFiles)
+			}
+			return err
+		},
+	}
+}
