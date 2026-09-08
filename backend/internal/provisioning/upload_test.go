@@ -245,6 +245,43 @@ func TestUploadResolvesTheRowAFileSourcedTemplatesUploadIDNames(t *testing.T) {
 	}
 }
 
+// gamefile's declaration block says why every one of its sentinels is
+// named: "so a handler's fail switch can map it … instead of collapsing every
+// reason into 'internal error'". ErrCorruptIndex was the one with no branch
+// in wrapGamefileErr, so it collapsed into exactly that — and the organiser
+// whose index file no longer matches its data was told nothing, when the
+// thing they can do about it is upload the file again (CLAUDE.md rule 1).
+//
+// This is the one test in this file that reaches for gamefile's own layout
+// on disk rather than asking the package (as onDisk above does): damaging an
+// index is not something Store offers a way to do, and a fake store would
+// prove nothing about the mapping the real one's error goes through.
+func TestACorruptLineIndexIsNamedRatherThanCollapsedIntoAnInternalError(t *testing.T) {
+	games, dir := gamesWithUploads(t, true)
+	contest, _ := contestFor(t, t.Context(), 0)
+
+	upload := beginWithContent(t, games, contest.ID, "dump.sql", "CREATE X;\nCREATE Y;\n")
+	if _, err := games.CompleteUpload(t.Context(), uuid.New(), contest.ID, upload.ID); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	// One byte short of what its own header declares — a truncated write, a
+	// bad sector, a file put there by something else.
+	index := filepath.Join(dir, upload.ID.String()+".idx")
+	info, err := os.Stat(index)
+	if err != nil {
+		t.Fatalf("stat the line index: %v", err)
+	}
+	if err := os.Truncate(index, info.Size()-1); err != nil {
+		t.Fatalf("damage the line index: %v", err)
+	}
+
+	_, err = games.UploadWindow(t.Context(), contest.ID, upload.ID, 1, 10, 4096)
+	if !errors.Is(err, provisioning.ErrUploadIndexCorrupt) {
+		t.Fatalf("a damaged line index answered %v, want ErrUploadIndexCorrupt", err)
+	}
+}
+
 // The order Instances.DropInstance already uses: the real object goes first.
 // A newly completed upload displaces the previous one, and its file is gone
 // from disk once completion succeeds.

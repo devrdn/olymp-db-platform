@@ -1133,6 +1133,8 @@ const ro = {
       "Această încărcare este deja finalizată sau anulată, nu i se mai poate trimite nimic.",
     game_upload_incomplete:
       "Această încărcare nu s-a terminat încă, deci nu este nimic de privit înăuntru. Așteptați finalizarea.",
+    game_upload_index_corrupt:
+      "Copia stocată a acestei încărcări nu mai corespunde propriului index, deci nu poate fi citită. Încărcați fișierul din nou.",
     game_upload_too_often:
       "Încărcările au fost pornite prea des. Așteptați puțin înainte de a începe alta.",
     query_parse_error:

@@ -318,3 +318,40 @@ func TestUploadInUseSeparatesAFileSomethingNeedsFromOneNothingDoes(t *testing.T)
 		}
 	})
 }
+
+// Migration 24 gave game_templates.upload_id `ON DELETE SET NULL` and, a few
+// lines above, a CHECK that a 'file' game names an upload. The two contradict
+// each other: SET NULL clears the reference and leaves source = 'file', which
+// is exactly what the CHECK forbids, so the deletion is refused —
+// `new row for relation "game_templates" violates check constraint
+// "game_templates_source_pairing"`.
+//
+// It has not broken deleting a contest only because PostgreSQL fires that
+// table's own RI trigger first, by creation order. Correctness resting on OID
+// order is not correctness, and nothing about it is visible to whoever adds
+// the next foreign key here. Migration 25 makes the reference say what the
+// CHECK already says: a file-sourced game cannot outlive its upload.
+func TestDeletingAnUploadAFileSourcedGameNamesTakesTheGameWithIt(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aContest(t, ctx)
+		repo := NewGameInstances(testPool)
+
+		id := uuid.New()
+		if _, err := repo.BeginUpload(ctx, id, contest, "dump.sql", 10); err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		summary := provisioning.UploadSummary{Bytes: 10, SHA256: "d0", Lines: 1}
+		if _, err := repo.CompleteUpload(ctx, contest, id, "game_tpl_cabc", summary, nil); err != nil {
+			t.Fatalf("complete: %v", err)
+		}
+
+		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+			`DELETE FROM game_uploads WHERE id = $1`, id); err != nil {
+			t.Fatalf("deleting the upload a file-sourced game names: %v", err)
+		}
+
+		if _, err := repo.Template(ctx, contest); !errors.Is(err, provisioning.ErrNoGame) {
+			t.Fatalf("the game outlived the upload it is built from: %v", err)
+		}
+	})
+}

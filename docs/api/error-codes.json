@@ -106,6 +106,10 @@
       "meaning": "This upload has not been completed yet, so there is no line index to read a window from."
     },
     {
+      "code": "game_upload_index_corrupt",
+      "meaning": "The line index stored beside the upload no longer describes the file it belongs to, so no part of it can be paged through safely. Nothing the organiser did causes this — a damaged disk or an interrupted write does — and uploading the file again is what fixes it."
+    },
+    {
       "code": "game_upload_length_mismatch",
       "meaning": "What actually landed on disk does not match the length declared when the upload began. The upload cannot be completed; begin again."
     },

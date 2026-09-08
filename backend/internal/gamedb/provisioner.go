@@ -51,18 +51,38 @@ var ErrNoAuthorCredential = errors.New("no " + RoleAuthor + " credential to run 
 // the script it stopped. None of that says how this service reached the
 // cluster, which is the whole of what must not travel.
 type ScriptError struct {
+	// Line is the 1-based line of the *source file* the refused statement
+	// started on, and zero when it is not known.
+	//
+	// Not something PostgreSQL says, and the reason it has to be added here:
+	// the server is handed one statement at a time, cut out of a file that
+	// can be gigabytes long, so Position below locates the error inside that
+	// statement and says nothing at all about where the statement was. That
+	// leaves an organiser with "POSITION: 42" and a dump they cannot search.
+	// ScriptReader already records it (Statement.Line), the reader's own
+	// refusals already report it the same way (ScriptSyntaxError.Line), and
+	// the console's viewer jumps to the `line N:` prefix Error writes below —
+	// so the whole mechanism existed and only the most common failure was
+	// missing from it (CLAUDE.md rule 11).
+	Line int
 	// SQLState is PostgreSQL's five-character code, e.g. 42704.
 	SQLState string
 	Message  string
 	Detail   string
 	Hint     string
-	// Position is a 1-based character offset into the script, and zero for an
-	// error PostgreSQL did not locate — its own errposition() convention.
+	// Position is a 1-based character offset into the statement, and zero for
+	// an error PostgreSQL did not locate — its own errposition() convention.
 	Position int32
 }
 
 func (e *ScriptError) Error() string {
 	var b strings.Builder
+	if e.Line > 0 {
+		// The same prefix ScriptSyntaxError.Error writes, and deliberately
+		// identical: one shape for "where in the file", whichever of the two
+		// refused, so whatever reads it has one thing to read.
+		fmt.Fprintf(&b, "line %d: ", e.Line)
+	}
 	b.WriteString("the game script was refused: ")
 	b.WriteString(e.Message)
 	if e.SQLState != "" {
@@ -326,8 +346,10 @@ func (p *Provisioner) runScript(ctx context.Context, database string, script io.
 	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
 
 	timeoutMS := p.buildTimeout.Milliseconds()
+	// Line 0: this statement is ours, not the author's, so there is no line of
+	// their file to name for it.
 	if _, err := conn.Exec(ctx, fmt.Sprintf(`SET statement_timeout = %d`, timeoutMS)); err != nil {
-		return scriptFailure(err)
+		return scriptFailure(err, 0)
 	}
 
 	reader := NewScriptReader(script)
@@ -346,8 +368,12 @@ func (p *Provisioner) runScript(ctx context.Context, database string, script io.
 		}
 
 		if stmt.CopyHeader != "" {
+			// The header's own line, even for a row PostgreSQL refused far
+			// inside the block: it is where the block starts, which is the
+			// place in the file somebody has to open to see what is wrong
+			// with it.
 			if _, err := conn.PgConn().CopyFrom(ctx, reader.CopyData(), stmt.CopyHeader); err != nil {
-				return scriptFailure(err)
+				return scriptFailure(err, stmt.Line)
 			}
 			continue
 		}
@@ -357,13 +383,18 @@ func (p *Provisioner) runScript(ctx context.Context, database string, script io.
 		// it is safe: each now commits on its own rather than sharing one
 		// implicit transaction with every other statement in the script.
 		if _, err := conn.Exec(ctx, stmt.Text); err != nil {
-			return scriptFailure(err)
+			return scriptFailure(err, stmt.Line)
 		}
 	}
 }
 
 // scriptFailure decides whether a failure of the uploaded SQL is PostgreSQL's
 // verdict on a statement — the author's to see — or something of ours.
+//
+// line is the source line the statement started on, taken from the Statement
+// the reader handed out; it travels no further than the ScriptError below,
+// because everything on the other branch is a failure of ours and a line of
+// somebody's file would not describe it.
 //
 // The connection is already open by the time this runs, so the second check is
 // the one that does the work; the first is here because the ordering is the
@@ -372,7 +403,7 @@ func (p *Provisioner) runScript(ctx context.Context, database string, script io.
 // moves the call. A connection that died mid-script also lands in the first
 // branch by falling through to it: the database's answer to a statement is the
 // only thing that becomes a ScriptError.
-func scriptFailure(err error) error {
+func scriptFailure(err error, line int) error {
 	var connect *pgconn.ConnectError
 	if errors.As(err, &connect) {
 		return fmt.Errorf("run the game script: %w", err)
@@ -383,7 +414,7 @@ func scriptFailure(err error) error {
 		return fmt.Errorf("run the game script: %w", err)
 	}
 	return &ScriptError{
-		SQLState: pgErr.Code, Message: pgErr.Message,
+		Line: line, SQLState: pgErr.Code, Message: pgErr.Message,
 		Detail: pgErr.Detail, Hint: pgErr.Hint, Position: pgErr.Position,
 	}
 }

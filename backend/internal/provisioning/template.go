@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/gamefile"
@@ -70,6 +71,54 @@ type ScriptFailure interface {
 // returned to the caller instead, for the service log, where an operator can
 // have it and a manager cannot.
 const BuildFailedInternally = "The game could not be built. The failure was not in the script — ask an administrator to check the service log."
+
+// MaxBuildErrorBytes bounds what a failed build may leave behind about
+// itself (CLAUDE.md rule 2).
+//
+// The one build failure whose text is not ours is a script refusal, and a
+// script refusal quotes the organiser's own file back at them — a file this
+// service accepts up to GAME_UPLOAD_MAX_FILE_BYTES of and validates nothing
+// about. That string has two sinks that keep it: game_templates.build_error,
+// an unbounded `text` column, and the contest.game_built audit payload, which
+// is append-only. The 1 MiB body limit bounds the request that started the
+// build, not this field, and the reader's own bounds stop a *statement* from
+// growing, not a message assembled out of one.
+//
+// Sixteen kibibytes is far more than PostgreSQL's own longest verdict
+// (message, detail and hint together are hundreds of bytes) and more than any
+// refusal this codebase writes, while staying a size a person can read on a
+// screen — which is the whole purpose of keeping the text at all.
+const MaxBuildErrorBytes = 16 << 10
+
+// boundBuildError is what every build outcome passes through before it is
+// stored, served or recorded.
+//
+// Two different failures, both fatal in the same slow way. A refusal past
+// MaxBuildErrorBytes is the rule above. A refusal that is not valid UTF-8 is
+// worse: build_error is a `text` column, PostgreSQL refuses an invalid byte
+// sequence with SQLSTATE 22021, and that refusal comes from FinishBuild — so
+// the row is never moved out of 'building', the stale-build sweep claims it
+// again, and the game spends every staleBuildAfter interval doing a DROP
+// DATABASE and a CREATE DATABASE on the cluster an olympiad is running on,
+// for ever, without ever becoming ready. A dump is raw bytes; the reader
+// quotes them; this is the boundary where they become text.
+//
+// Replaced rather than dropped, and cut on a rune boundary rather than at a
+// byte count, so what an organiser reads is still their own message with a
+// visible mark where it stopped.
+func boundBuildError(text string) string {
+	text = strings.ToValidUTF8(text, "�")
+	if len(text) <= MaxBuildErrorBytes {
+		return text
+	}
+
+	const ellipsis = "\n[…]"
+	cut := MaxBuildErrorBytes - len(ellipsis)
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + ellipsis
+}
 
 // MaxScriptBytes bounds the SQL one game may carry (CLAUDE.md rule 2).
 //
@@ -330,8 +379,9 @@ func (g *Games) Of(ctx context.Context, contestID uuid.UUID) (Template, error) {
 	return g.repo.Template(ctx, contestID)
 }
 
-// Script returns the SQL one contest's game is built from, and whether the
-// contest has a game at all.
+// Script returns the SQL one contest's game is built from, whether the
+// contest has a game at all, and whether that game's SQL is not something a
+// package can carry.
 //
 // It satisfies contests.GameSource — the one method the contest package's
 // export asks of a game, declared over there by the consumer (Go layout rule
@@ -344,15 +394,26 @@ func (g *Games) Of(ctx context.Context, contestID uuid.UUID) (Template, error) {
 // because "no game" makes the export succeed with a package that carries
 // none, and a storage failure quietly wearing that answer would ship an
 // incomplete package as a complete one.
-func (g *Games) Script(ctx context.Context, contestID uuid.UUID) (string, bool, error) {
+//
+// The third value is the one a SourceFile game needs. Template.Script is
+// empty for those by construction — the SQL is the uploaded bytes, on the API
+// host's own volume, up to GAME_UPLOAD_MAX_FILE_BYTES of them — and returning
+// that empty string as "the game" told the export a contest had a game and
+// then gave it nothing, which re-imports as ErrScriptEmpty. This package is
+// the only one that knows the difference, so this is where it has to be said
+// (CLAUDE.md rule 11).
+func (g *Games) Script(ctx context.Context, contestID uuid.UUID) (script string, ok, omitted bool, err error) {
 	template, err := g.repo.Template(ctx, contestID)
 	switch {
 	case errors.Is(err, ErrNoGame):
-		return "", false, nil
+		return "", false, false, nil
 	case err != nil:
-		return "", false, fmt.Errorf("read the contest's game: %w", err)
+		return "", false, false, fmt.Errorf("read the contest's game: %w", err)
 	}
-	return template.Script, true, nil
+	if template.Source == SourceFile {
+		return "", true, true, nil
+	}
+	return template.Script, true, false, nil
 }
 
 // SetScript stores the SQL one contest's game is built from.
@@ -605,6 +666,12 @@ func (g *Games) finishUploadBuild(ctx context.Context, claimed Template) (Templa
 // the script (or refused to, for one of finishUploadBuild's own reasons),
 // what happens to the claim afterward is identical.
 func (g *Games) recordBuildOutcome(ctx context.Context, claimed Template, buildErr string, cause error) (Template, error) {
+	// Once, here, because this is the one funnel every outcome passes
+	// through — the row, the audit payload and what is handed back to the
+	// caller all take their text from this variable, so bounding it anywhere
+	// else would be bounding one of the three.
+	buildErr = boundBuildError(buildErr)
+
 	if err := g.repo.FinishBuild(ctx, claimed.ContestID, claimed.Version, buildErr); err != nil {
 		return claimed, errors.Join(cause, fmt.Errorf("record the build's outcome: %w", err))
 	}

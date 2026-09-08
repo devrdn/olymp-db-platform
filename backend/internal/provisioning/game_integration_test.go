@@ -171,6 +171,77 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesTellsTheOrganiserWhat
 	}
 }
 
+// The same chain again, for the thing an organiser uploading a dump actually
+// hits: a statement PostgreSQL refuses, hundreds of lines into a file.
+//
+// What used to arrive on their screen was `POSITION: 15` — an offset into a
+// statement that was cut out of the file before the server ever saw it, so
+// there was no way back to the place in the file. The line has to cross the
+// whole path: ScriptReader records it on the Statement, runScript hands it to
+// the failure, and it has to survive into game_templates.build_error, which
+// is what the console reads and what its viewer parses to jump (CLAUDE.md
+// rule 11 — the value that drives a check crosses every boundary it has to).
+//
+// Named to share the prefix `make test-game-build` selects on, for the
+// reason the test above it gives.
+func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesNamesTheLineOfTheFile(t *testing.T) {
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
+	}
+	if os.Getenv("GAME_DB_DSN") == "" {
+		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
+	}
+
+	contest, _ := contestFor(t, t.Context(), 0)
+	repo := postgres.NewGameInstances(testPool)
+
+	user, password := gamedbtest.AdminCredentials(t)
+	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
+		gamedbtest.AuthorPassword(t))
+	if err != nil {
+		t.Fatalf("open the game cluster: %v", err)
+	}
+
+	games := provisioning.NewGames(repo, cluster, editableContest{})
+
+	// The refusal is on line 5 of the script as saved: line 1 is the newline
+	// after the backtick, so the CREATE TABLE is line 2 and the INSERT
+	// naming a table nobody made is line 5.
+	saved, err := games.SetScript(t.Context(), uuid.New(), contest.ID, `
+		CREATE TABLE guests (id int);
+		INSERT INTO guests VALUES (1);
+
+		INSERT INTO suspects VALUES (1);
+	`)
+	if err != nil {
+		t.Fatalf("save the script: %v", err)
+	}
+	t.Cleanup(func() { gamedbtest.Drop(saved.Database) })
+
+	built, err := games.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("a script PostgreSQL refused was reported as a fault of ours: %v", err)
+	}
+	if built.Status != provisioning.TemplateFailed {
+		t.Fatalf("the build finished as %q, want failed", built.Status)
+	}
+
+	// The row as GET /contests/{id}/game reads it — the string the console's
+	// viewer parses, not the value Build happened to return.
+	stored, err := repo.Template(t.Context(), contest.ID)
+	if err != nil {
+		t.Fatalf("read the game back: %v", err)
+	}
+	if !strings.HasPrefix(stored.BuildError, "line 5: ") {
+		t.Fatalf("the stored build error is %q; the organiser has no way to find line 5 of their file",
+			stored.BuildError)
+	}
+	if !strings.Contains(stored.BuildError, "suspects") {
+		t.Fatalf("the stored build error is %q; PostgreSQL's own words are still the useful ones",
+			stored.BuildError)
+	}
+}
+
 // A real streaming build: the reason gamedb.Provisioner.BuildTemplate now
 // takes an io.Reader is to run a script one statement (or COPY block) at a
 // time instead of holding it all in memory, and the one part of that a fake

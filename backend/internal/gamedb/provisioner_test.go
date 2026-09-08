@@ -274,6 +274,38 @@ func TestABrokenScriptLeavesNoTemplateBehind(t *testing.T) {
 	}
 }
 
+// PostgreSQL locates an error inside the statement it was given, and by the
+// time a statement reaches it this reader has already cut it out of a file
+// that may be gigabytes long. `POSITION: 42` then means "42 characters into
+// some statement", which is not a place anybody can go and look.
+//
+// The file line is what the rest of this feature is built on: ScriptReader
+// records Statement.Line for exactly this, ScriptSyntaxError already reports
+// `line N:` in front of its own message, the console's viewer parses that
+// prefix to jump to it, and the upload window exists so there is somewhere to
+// jump to. Until this, all of it worked only for refusals the reader made
+// itself — never for `relation does not exist`, which is the one an organiser
+// actually meets.
+func TestAScriptErrorNamesTheLineInTheFileTheStatementCameFrom(t *testing.T) {
+	t.Parallel()
+
+	refused := &gamedb.ScriptError{
+		Line: 41982, SQLState: "42P01", Message: `relation "suspects" does not exist`, Position: 15,
+	}
+	if !strings.HasPrefix(refused.ScriptRejection(), "line 41982: ") {
+		t.Fatalf("the rejection reads %q; the console's viewer looks for the line prefix",
+			refused.ScriptRejection())
+	}
+
+	// Zero is PostgreSQL's own "I could not locate this", and the same
+	// convention Position already uses: nothing is claimed rather than line
+	// nought being named.
+	unlocated := &gamedb.ScriptError{SQLState: "42P01", Message: `relation "suspects" does not exist`}
+	if strings.HasPrefix(unlocated.ScriptRejection(), "line ") {
+		t.Fatalf("a rejection with no line reads %q", unlocated.ScriptRejection())
+	}
+}
+
 // A failed build has two possible causes and one column to report them in, so
 // the two have to be told apart where they happen. PostgreSQL's verdict on a
 // statement the organiser wrote is theirs to read; it is also the only thing a

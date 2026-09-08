@@ -1012,7 +1012,7 @@ func (h *GameHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusConflict, codeGameInstanceAlreadyDropped,
 			"That database has already been removed")
 
-	// --- The uploaded dump (provisioning/upload.go's own twelve sentinels) --
+	// --- The uploaded dump (provisioning/upload.go's own thirteen sentinels) --
 
 	case errors.Is(err, provisioning.ErrUploadsDisabled):
 		httpx.Error(w, r, http.StatusNotFound, codeGameUploadsDisabled,
@@ -1054,6 +1054,11 @@ func (h *GameHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, provisioning.ErrUploadIncomplete):
 		httpx.Error(w, r, http.StatusConflict, codeGameUploadIncomplete,
 			"This upload has not been completed yet")
+	case errors.Is(err, provisioning.ErrUploadIndexCorrupt):
+		// 409 and not 500: the request was right, the state on the volume is
+		// not, and the organiser has a move — upload the file again.
+		httpx.Error(w, r, http.StatusConflict, codeGameUploadIndexCorrupt,
+			"The upload's line index is damaged and it can no longer be read; upload the file again")
 
 	default:
 		h.log.ErrorContext(r.Context(), "a game request failed", "error", err)
