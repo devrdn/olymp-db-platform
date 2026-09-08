@@ -206,8 +206,20 @@ export function QueryLogPanel({
           <tbody>
             {items.map((entry, i) => (
               <tr key={i} className="border-b border-edge last:border-b-0">
-                <td className="max-w-80 truncate p-2 font-mono text-ink" title={entry.sql}>
-                  {entry.sql}
+                {/* One page of the log is bounded in bytes as well as in
+                    rows, so a very long statement arrives as its beginning
+                    (`sqlTruncated`). The ellipsis says so — in the tooltip
+                    too, which is otherwise where the whole statement is, and
+                    a shortened copy of a student's own query presented as the
+                    whole of it is the one thing this table must not do. The
+                    rest is in the CSV export offered above. Language-neutral
+                    on purpose: no dictionary string, since the character says
+                    it in every language this interface speaks. */}
+                <td
+                  className="max-w-80 truncate p-2 font-mono text-ink"
+                  title={entry.sqlTruncated ? `${entry.sql}…` : entry.sql}
+                >
+                  {entry.sqlTruncated ? `${entry.sql}…` : entry.sql}
                 </td>
                 <td className="p-2">
                   <StatusBadge status={entry.status} labels={t.status} />

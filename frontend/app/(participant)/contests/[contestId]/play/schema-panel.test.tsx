@@ -51,6 +51,42 @@ describe("the schema panel", () => {
     expect(within(screen.getByRole("button", { name: /guests/ })).getByText("fk 1")).toBeInTheDocument();
   });
 
+  // A column's type shares the row with its name and, at the design's own
+  // 212px pane, does not always fit. `shrink-0` on the type meant the *name*
+  // absorbed the whole shortfall: measured, `badge_number` was left 11px of
+  // room while `character varying` beside it printed in full. The name is
+  // what has to be typed into a query, so it now gives way last — and
+  // whichever of the two is cut, the full text stays reachable in the title.
+  test("a column's type gives way before its name, and stays readable in full", () => {
+    panel({
+      truncated: false,
+      tables: [
+        {
+          name: "statements",
+          columns: [{ name: "recorded_at", type: "timestamp with time zone", nullable: false, references: "" }],
+        },
+      ],
+    });
+
+    const type = screen.getByText("timestamp with time zone");
+    expect(type.className).toMatch(/(^|\s)truncate(\s|$)/);
+    expect(type.className).toMatch(/(^|\s)shrink-3(\s|$)/);
+    expect(type).toHaveAttribute("title", expect.stringContaining("timestamp with time zone"));
+    expect(screen.getByText("recorded_at")).toHaveAttribute("title", "recorded_at");
+  });
+
+  // The same rule SidePanel's own panels keep: `sr-only` is
+  // `position: absolute`, and a static scroll box does not clip one, so a
+  // scroller holding visually-hidden text has to be the containing block for
+  // it or the label keeps the page's coordinates instead of the panel's.
+  test("the scrolling tree is the containing block for the hidden search label", () => {
+    const { container } = panel();
+    const scroller = container.querySelector("section > div.overflow-y-auto");
+
+    expect(scroller).not.toBeNull();
+    expect(scroller!.className).toMatch(/(^|\s)relative(\s|$)/);
+  });
+
   test("a table can be collapsed and opened again", async () => {
     const user = userEvent.setup();
     panel();

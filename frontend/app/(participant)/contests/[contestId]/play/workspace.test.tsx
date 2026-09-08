@@ -233,3 +233,99 @@ describe("the schema column", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+/**
+ * jsdom lays nothing out, so nothing here can assert a width. What it can
+ * assert is the property the widths came out of: which pane is placed where,
+ * and whether each track is allowed to exceed its container. Both defects
+ * these cover were invisible in the source and only turned up in a browser
+ * (the numbers are in the commit message); what is left behind here is the
+ * *rule* each fix established, so the next edit that breaks it is caught
+ * where it is cheap.
+ */
+describe("the pane grid's own shape", () => {
+  function paneGrid(container: HTMLElement): HTMLElement {
+    const grid = container.querySelector<HTMLElement>('[style*="--pane-schema"]');
+    if (!grid) throw new Error("the pane grid was not found");
+    return grid;
+  }
+
+  /**
+   * The `order` a pane declares for one breakpoint range, most specific
+   * prefix first — or null where it declares none and would therefore be
+   * placed at the CSS default of 0, ahead of every pane that declares one.
+   */
+  function declaredOrder(el: Element, prefixes: readonly string[]): number | null {
+    for (const prefix of prefixes) {
+      for (const cls of el.classList) {
+        const match = new RegExp(`^${prefix}order-(\\d+)$`).exec(cls);
+        if (match) return Number(match[1]);
+      }
+    }
+    return null;
+  }
+
+  /** The panes actually laid out in one range: the ones not hidden there. */
+  function placedPanes(grid: HTMLElement, hiddenClass: string): Element[] {
+    return [...grid.children].filter((child) => !child.classList.contains(hiddenClass));
+  }
+
+  // The defect: the questions' own divider carried no order at all, so grid
+  // auto-placement walked it first, put it in the 1fr column and pushed the
+  // console into the 1px divider column beside it. Every pane that is laid
+  // out in a range has to name its place in that range — a single silent
+  // `order: 0` is enough to reorder the whole row.
+  test("every pane placed between the two breakpoints declares its own order, and no two share one", () => {
+    const { container } = show(A_SCHEMA);
+    const grid = paneGrid(container);
+
+    // 47.5rem to 64rem: the schema handle is hidden, the other four are laid out.
+    const orders = placedPanes(grid, "max-wide:hidden").map((pane) =>
+      declaredOrder(pane, ["narrow:max-wide:", "max-wide:"]),
+    );
+
+    expect(orders).not.toContain(null);
+    expect(new Set(orders).size).toBe(orders.length);
+  });
+
+  test("every pane placed below the narrow breakpoint declares its own order, and no two share one", () => {
+    const { container } = show(A_SCHEMA);
+    const grid = paneGrid(container);
+
+    // Below 47.5rem both handles are hidden and the three panels stack.
+    const orders = placedPanes(grid, "max-narrow:hidden")
+      .filter((pane) => !pane.classList.contains("max-wide:hidden"))
+      .map((pane) => declaredOrder(pane, ["max-narrow:", "max-wide:"]));
+
+    expect(orders).not.toContain(null);
+    expect(new Set(orders).size).toBe(orders.length);
+  });
+
+  // The defect: with no `grid-template-columns` at all, this grid's one
+  // implicit track is `auto`, and an `auto` track is floored at its
+  // content's max-content width — here the result table's own natural
+  // width, whatever the last query made it. The editor was sized by the
+  // table underneath it and the page scrolled sideways.
+  test("the console column declares a track that cannot exceed its container", () => {
+    const { container } = show(A_SCHEMA);
+    const column = container.querySelector("form")?.closest("div.grid");
+
+    expect(column).not.toBeNull();
+    expect(column!.className).toMatch(/(^|\s)grid-cols-1(\s|$)/);
+  });
+
+  // The defect: below the narrow breakpoint nothing bounded the result
+  // panel's height, so a result laid out at its full natural height inside
+  // the page and buried the questions thousands of pixels below the fold.
+  test("the bottom panel keeps a height bound of its own on the narrow fallback", () => {
+    const { container } = show(A_SCHEMA);
+    const panes = [...container.querySelectorAll("div")].filter(
+      (div) => div.classList.contains("overflow-hidden") && div.classList.contains("flex-1"),
+    );
+
+    // The result pane and the log pane, both mounted, side by side.
+    expect(panes).toHaveLength(2);
+    expect(panes[0].parentElement).toBe(panes[1].parentElement);
+    expect(panes[0].parentElement!.className).toMatch(/max-narrow:max-h-\[/);
+  });
+});

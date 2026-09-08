@@ -190,7 +190,18 @@ export function PaneHandle({
         // A hairline that widens to a grab area without taking layout space:
         // the column it separates is the thing, not the handle.
         "relative w-px shrink-0 cursor-col-resize bg-line",
+        // Nine pixels for a mouse, twenty-five for a finger. Measured, the
+        // handle is 1px wide and its grab area was 9px at every size — fine
+        // for a pointer that lands where it is aimed, and not a target a
+        // thumb can find on the tablets these two dividers are visible on
+        // from 760px up. The wider area is behind `pointer-coarse` rather
+        // than applied to both, because it is not free: it is twelve pixels
+        // of the pane on either side that stop taking a click of their own,
+        // which is a real cost next to a result table's first column and the
+        // questions' own text. A finger already loses that much to its own
+        // contact patch; a mouse should not have to.
         "after:absolute after:inset-y-0 after:-left-1 after:-right-1 after:content-['']",
+        "pointer-coarse:after:-left-3 pointer-coarse:after:-right-3",
         "hover:bg-line-2 focus-visible:bg-accent focus-visible:outline-none",
         className,
       )}

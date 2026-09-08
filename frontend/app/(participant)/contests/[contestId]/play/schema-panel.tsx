@@ -58,7 +58,14 @@ export function SchemaPanel({ schema, dict }: { schema: GameSchema; dict: Dictio
         <span>{schema.tables.length}</span>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto py-2.5">
+      {/* `relative` for the same reason SidePanel's own panels carry it: the
+          search field's `sr-only` label is `position: absolute`, and a static
+          scroll box does not clip one. It is near the top here rather than at
+          the end of a long list, so it never grew the page the way the
+          questions' hidden labels did — but a scroll box that holds
+          visually-hidden text has to be the containing block for it either
+          way. */}
+      <div className="relative min-h-0 flex-1 overflow-y-auto py-2.5">
         <div className="px-3 pb-2">
           <label className="sr-only" htmlFor="schema-search">
             {t.searchLabel}
@@ -159,16 +166,42 @@ function TableRow({
         <ul>
           {table.columns.map((column) => (
             <li key={column.name} className="flex items-baseline gap-2 py-px pr-3 pl-7 text-ink-2">
-              <span className="truncate">{column.name}</span>
+              <span className="truncate" title={column.name}>
+                {column.name}
+              </span>
+              {/* Shrinkable, not fixed. `shrink-0` here meant the type took
+                  whatever it wanted and the *name* absorbed the whole
+                  shortfall: at the design's own 212px pane a column called
+                  `badge_number` was left 11px of room and rendered as an
+                  ellipsis, while `character varying` beside it was printed
+                  in full. The name is what a participant has to type into
+                  the query; the type is what they can read from the title
+                  attribute either way. `shrink-3` weights the giving-way
+                  three to one in the name's favour rather than splitting it
+                  evenly — measured at the same 212px pane, `badge_number`
+                  goes from 79px of it missing to 9px, and `occupation_id`
+                  from 59px to 5px — and `truncate` is what keeps a long type
+                  from pushing a horizontal scrollbar onto the panel
+                  (`timestamp with time zone` overflowed its own row by
+                  34px). */}
               <span
-                className="ml-auto shrink-0 font-mono text-label text-ink-3 normal-case"
-                title={
+                className="ml-auto min-w-0 shrink-3 truncate font-mono text-label text-ink-3 normal-case"
+                // The visible text comes first, because it is now the text
+                // that can be cut off: a truncated `timestamp with time zone`
+                // has to be readable somewhere, and the note that used to be
+                // the whole title ("nullable", "foreign key to …") is still
+                // there after it. Joined with the same interpunct this panel's
+                // own heading uses, so nothing new has to be translated.
+                title={[
+                  column.references !== "" ? `fk ${column.references}` : column.type,
                   column.references !== ""
                     ? t.foreignKey.replace("{table}", column.references)
                     : column.nullable
                       ? t.nullable
-                      : undefined
-                }
+                      : "",
+                ]
+                  .filter((part) => part !== "")
+                  .join(" · ")}
               >
                 {column.references !== "" ? `fk ${column.references}` : column.type}
               </span>

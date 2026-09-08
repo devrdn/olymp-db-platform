@@ -261,7 +261,16 @@ function QuestionCard({
             <fieldset className="flex flex-col gap-1.5" disabled={pending || locked}>
               <legend className="sr-only">{t.answerLabel}</legend>
               {question.choiceIds.map((choiceId) => (
-                <label key={choiceId} className="flex cursor-pointer items-baseline gap-2.5 text-control text-ink">
+                // `min-h-6`: the label *is* the target — clicking anywhere on
+                // it selects the choice — and the row measured 22px tall, so
+                // the whole answer to a multiple-choice question was a
+                // sub-24px strip on every screen size. The radio itself stays
+                // 16px because that is what the design draws; what has to be
+                // hittable is this box around it.
+                <label
+                  key={choiceId}
+                  className="flex min-h-6 cursor-pointer items-baseline gap-2.5 text-control text-ink"
+                >
                   <input
                     type="radio"
                     name="value"
