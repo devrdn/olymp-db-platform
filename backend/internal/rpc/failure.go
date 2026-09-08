@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	pb "github.com/devrdn/db-contest/backend/internal/rpc/queryrunnerv1"
@@ -48,10 +49,7 @@ func failureFor(err error) *pb.Failure {
 			// underlines it is on the other, which made a field the console
 			// already reads permanently zero (CLAUDE.md rule 11).
 			//
-			// int32 to match the field; a position is an offset into a
-			// statement bounded by sqlpolicy.MaxQueryBytes, so there is
-			// nothing here to overflow.
-			Position: ptr(int32(refusal.Position)),
+			Position: ptr(wirePosition(refusal.Position)),
 		}
 	case errors.Is(err, queryrunner.ErrAlreadyRunning):
 		return &pb.Failure{Kind: pb.Failure_KIND_ALREADY_RUNNING.Enum(), Message: ptr(err.Error())}
@@ -104,6 +102,25 @@ func classify(err error) *pb.Failure {
 		return &pb.Failure{Kind: pb.Failure_KIND_DATABASE_ERROR.Enum(), Message: ptr(err.Error())}
 	}
 	return internal
+}
+
+// wirePosition narrows a parser's offset to the field that carries it.
+//
+// A bare conversion wraps: `Refusal.Position` is an `int` and the field is an
+// `int32`, so a value past 2^31 arrives negative and the console hands a
+// negative document position to the editor. Arguing it cannot get that large
+// — a statement is bounded by sqlpolicy.MaxQueryBytes — is an argument about
+// another package's constant, not about this line, and it stops being true
+// the day that constant moves.
+//
+// Anything outside what the field can carry becomes "no position", which is
+// what the console already renders for every refusal that names no place in
+// the text. Better no underline than one under the wrong character.
+func wirePosition(position int) int32 {
+	if position <= 0 || position > math.MaxInt32 {
+		return 0
+	}
+	return int32(position)
 }
 
 // errorFor turns the wire's answer back into the error the caller expects.
