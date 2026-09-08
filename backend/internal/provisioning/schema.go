@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 )
 
 // ErrNoSchema is a template whose shape has not been worked out yet, or was
@@ -95,7 +97,22 @@ type SchemaSource interface {
 type SchemaReader struct {
 	store  SchemaStore
 	source SchemaSource
+	// reads collapses the concurrent misses of one contest into one catalogue
+	// read. See Schema's own doc for why a cache alone is not enough.
+	reads singleflight.Group
 }
+
+// schemaReadTimeout bounds a catalogue read that no longer belongs to any one
+// caller.
+//
+// The shared read is detached from the request that happened to start it (see
+// Schema), which also detaches it from that request's deadline — so it needs
+// one of its own or a wedged cluster parks a flight, and every later caller
+// behind it, forever. Comfortably above the ten seconds
+// gamedb.Provisioner.ReadSchema sets as the statement timeout on the
+// connection it opens, so what this bounds is the part that timeout cannot:
+// dialling a cluster that never answers.
+const schemaReadTimeout = 30 * time.Second
 
 // NewSchemaReader assembles the reader.
 func NewSchemaReader(store SchemaStore, source SchemaSource) *SchemaReader {
@@ -121,22 +138,87 @@ func NewSchemaReader(store SchemaStore, source SchemaSource) *SchemaReader {
 // real failure, because then there is genuinely nothing to show — and an
 // empty panel would read as "this game has no tables", which is a lie rather
 // than an outage.
+//
+// # The miss is what needs collapsing, not the hit
+//
+// The cache above answers "one catalogue read per template for the whole
+// contest" in steady state and not at all at the moment that matters. At a
+// contest's start every participant opens their console inside the same
+// minute and every one of them misses, because nothing has been written back
+// yet: three hundred fresh connections to three hundred instance databases on
+// the game cluster, each borrowing one of that instance's two allowed
+// connections, and then three hundred UPDATEs queueing on one game_templates
+// row — all to compute the same document, of which two hundred and
+// ninety-nine are thrown away.
+//
+// So the misses of one contest are collapsed into one read. singleflight
+// rather than a keyed mutex map because golang.org/x/sync is already a direct
+// dependency of this module (internal/users uses errgroup), so it costs no
+// new supply chain — and because the map wants writing carefully: entries
+// have to be reference-counted or deleted under the same lock that hands them
+// out, or it either leaks one mutex per contest ever run or drops a mutex
+// somebody is still holding.
+//
+// Keyed by contest *and* version, so a rebuild mid-contest is a different
+// flight rather than one that could hand back the shape the old build had.
+// Any instance of one contest is a byte-for-byte copy of the same template,
+// which is what makes it sound for one participant's read of their own
+// database to answer everybody else's.
+//
+// The cache is looked at twice, once before the flight and once inside it.
+// The outer look is the steady-state path and keeps a warm read off the
+// group's lock entirely; the inner one catches the caller who missed, was
+// descheduled, and arrived after the winner had already saved — without it
+// that caller opens a second connection to ask a question that is now
+// answered.
+//
+// The read inside the flight is the contest's work, not the work of whichever
+// request happened to arrive first, so it does not carry that request's
+// cancellation: a student navigating away mid-read must not fail the console
+// of everyone waiting behind them. It keeps the caller's values and takes a
+// deadline of its own (schemaReadTimeout). The cost is that a read started by
+// a caller who has already gone still finishes — which is the right way
+// round, since finishing is what warms the cache for the next three hundred.
 func (r *SchemaReader) Schema(ctx context.Context, contest Contest, database string) (Schema, error) {
-	if cached, version, err := r.store.CachedSchema(ctx, contest.ID); err == nil && version == contest.Version {
+	if cached, ok := r.cached(ctx, contest); ok {
 		return cached, nil
 	}
 
-	schema, err := r.source.ReadSchema(ctx, database)
-	if err != nil {
-		return Schema{}, fmt.Errorf("read the game's schema: %w", err)
-	}
-	schema = boundSchema(schema)
+	answer, err, _ := r.reads.Do(fmt.Sprintf("%s@%d", contest.ID, contest.Version), func() (any, error) {
+		if cached, ok := r.cached(ctx, contest); ok {
+			return cached, nil
+		}
 
-	// Best effort on purpose: see the doc above. The caller gets its answer
-	// either way, and the next one pays for this read again rather than
-	// nobody getting one.
-	_ = r.store.SaveSchema(ctx, contest.ID, contest.Version, schema)
-	return schema, nil
+		shared, cancel := context.WithTimeout(context.WithoutCancel(ctx), schemaReadTimeout)
+		defer cancel()
+
+		schema, err := r.source.ReadSchema(shared, database)
+		if err != nil {
+			return nil, fmt.Errorf("read the game's schema: %w", err)
+		}
+		schema = boundSchema(schema)
+
+		// Best effort on purpose: see the doc above. The caller gets its
+		// answer either way, and the next one pays for this read again rather
+		// than nobody getting one.
+		_ = r.store.SaveSchema(shared, contest.ID, contest.Version, schema)
+		return schema, nil
+	})
+	if err != nil {
+		return Schema{}, err
+	}
+	return answer.(Schema), nil
+}
+
+// cached is the cache read both halves of Schema make: the document is only
+// an answer when it was read without error *and* describes the build this
+// contest is actually running.
+func (r *SchemaReader) cached(ctx context.Context, contest Contest) (Schema, bool) {
+	cached, version, err := r.store.CachedSchema(ctx, contest.ID)
+	if err != nil || version != contest.Version {
+		return Schema{}, false
+	}
+	return cached, true
 }
 
 // boundSchema cuts the document down to what MaxSchemaTables and
