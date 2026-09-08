@@ -443,3 +443,49 @@ func TestDefaultLocaleRejectsSomethingThatIsNotALanguageTag(t *testing.T) {
 		t.Error("Load() accepted a malformed DEFAULT_LOCALE")
 	}
 }
+
+// A deployment that provisions game databases must also say what the
+// game-script role authenticates with.
+//
+// The two travel together because the second is what stops an organiser's
+// uploaded SQL running with the first one's privileges (gamedb.RoleAuthor).
+// Caught at boot rather than at the first build, which would be an organiser
+// pressing "build" during preparation and being told the deployment is
+// misconfigured.
+func TestAProvisionerWithoutTheGameAuthorPasswordIsRejected(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("GAME_PROVISIONER_DSN", "postgres://provisioner:pass@pg-game:5432/game")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() accepted a provisioner with no GAME_AUTHOR_PASSWORD, want error")
+	}
+	if !strings.Contains(err.Error(), "GAME_AUTHOR_PASSWORD") {
+		t.Fatalf("Load() failed with %v, which does not name the missing variable", err)
+	}
+}
+
+// And with it, both reach the composition root.
+func TestTheGameAuthorPasswordIsRead(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("GAME_PROVISIONER_DSN", "postgres://provisioner:pass@pg-game:5432/game")
+	t.Setenv("GAME_AUTHOR_PASSWORD", "an-author-password")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.GameAuthorPassword != "an-author-password" {
+		t.Errorf("GameAuthorPassword = %q, want the value from the environment", cfg.GameAuthorPassword)
+	}
+}
+
+// A deployment with no game cluster needs neither, and must still start: the
+// game circuit is optional and registration does not depend on it.
+func TestNeitherGameCredentialIsRequiredWithoutAProvisioner(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load() refused a deployment with no game cluster: %v", err)
+	}
+}

@@ -14,6 +14,17 @@ import (
 // ErrBadName is a database name that cannot be spelled safely.
 var ErrBadName = errors.New("not a plain database name")
 
+// ErrNoAuthorCredential is a provisioner asked to build a template without the
+// game-script role's password.
+//
+// A refusal and never a fallback: the thing this credential buys is that an
+// organiser's script does not run as the provisioning role, and a provisioner
+// that quietly carried on without it would run every script as a superuser
+// again — the defect, restored by an unset variable. Deployments are stopped
+// earlier still, at boot: config.Load requires GAME_AUTHOR_PASSWORD wherever
+// GAME_PROVISIONER_DSN is set.
+var ErrNoAuthorCredential = errors.New("no " + RoleAuthor + " credential to run the game script with")
+
 // CopyStrategy is how PostgreSQL makes a copy of a template.
 //
 // A real choice with a measurable answer, which is why it is configuration and
@@ -41,9 +52,13 @@ func (s CopyStrategy) Valid() bool {
 // which cannot run inside a transaction, and connecting to the database it has
 // just made in order to fill it.
 type Provisioner struct {
-	admin    Cluster
-	base     *url.URL
-	strategy CopyStrategy
+	admin Cluster
+	base  *url.URL
+	// authorPassword authenticates the separate connection an organiser's
+	// script runs over. Empty in the commands that only drop and measure
+	// databases; BuildTemplate refuses rather than falling back.
+	authorPassword string
+	strategy       CopyStrategy
 }
 
 // WithCopyStrategy chooses how copies are made. An unknown one is refused
@@ -61,7 +76,14 @@ func (p *Provisioner) WithCopyStrategy(strategy CopyStrategy) (*Provisioner, err
 //
 // adminDSN carries the provisioning role's credentials; the database in it is
 // a placeholder, replaced for every connection this makes.
-func NewProvisioner(admin Cluster, adminDSN string) (*Provisioner, error) {
+//
+// authorPassword is what game_author authenticates with — a second credential
+// because an organiser's script must not run with the first one's privileges
+// (see RoleAuthor). It is a parameter rather than an option so that no caller
+// can forget it by omission; the maintenance commands, which only drop and
+// measure databases, pass "" and get ErrNoAuthorCredential if they ever try to
+// build a template.
+func NewProvisioner(admin Cluster, adminDSN, authorPassword string) (*Provisioner, error) {
 	base, err := url.Parse(adminDSN)
 	if err != nil {
 		return nil, fmt.Errorf("the provisioning DSN is not a URL: %w", err)
@@ -69,7 +91,7 @@ func NewProvisioner(admin Cluster, adminDSN string) (*Provisioner, error) {
 	if base.User == nil {
 		return nil, errors.New("the provisioning DSN carries no credentials")
 	}
-	return &Provisioner{admin: admin, base: base}, nil
+	return &Provisioner{admin: admin, base: base, authorPassword: authorPassword}, nil
 }
 
 // BuildTemplate makes the database every participant's copy comes from.
@@ -79,18 +101,26 @@ func NewProvisioner(admin Cluster, adminDSN string) (*Provisioner, error) {
 // with no connection left on the template, because CREATE DATABASE refuses
 // while its source has one — the template discipline of section 4.2, kept here
 // rather than left for the caller to remember.
-// script is the SQL an author uploaded: the game's schema and its data. It
-// runs with the provisioning role's privileges, so it is staff-trusted input,
-// not participant input. Running it as a non-superuser would be a real
-// boundary and is deliberately not claimed here: `SET ROLE` would be undone
-// by a `RESET ROLE` in the script itself, and a separate non-superuser
-// connection needs a credential that does not exist yet.
+// script is the SQL an organiser uploaded: the game's schema and its data. It
+// does not run with the provisioning role's privileges. The route that accepts
+// it is gated by a contest-scoped permission, so its author is any manager of
+// any one contest, while the cluster it runs on holds every other contest's
+// template and every participant's database — which made "manager of a draft
+// contest" and "superuser on the game cluster" the same thing. It runs as
+// game_author instead, over a connection of its own: `SET ROLE` would be undone
+// by a `RESET ROLE` in the script, and authentication is not something SQL can
+// undo.
 func (p *Provisioner) BuildTemplate(ctx context.Context, name, script string, policy sqlpolicy.Policy) error {
 	if !sqlpolicy.PlainIdentifier(name) {
 		return fmt.Errorf("%w: %q", ErrBadName, name)
 	}
 	if err := policy.Validate(); err != nil {
 		return err
+	}
+	// Before anything is created: a build that cannot run the script as
+	// game_author must not run it at all.
+	if p.authorPassword == "" {
+		return ErrNoAuthorCredential
 	}
 
 	if err := p.Drop(ctx, name); err != nil {
@@ -110,10 +140,46 @@ func (p *Provisioner) BuildTemplate(ctx context.Context, name, script string, po
 	return nil
 }
 
-// fill runs the author's script and applies the contest's privileges, over a
-// connection that is closed again before it returns.
+// fill runs the organiser's script and applies the contest's privileges, over
+// connections that are all closed again before it returns.
+//
+// Two connections, because they are two different roles. The provisioning one
+// lends the template to game_author, takes it back, and then does the work
+// only a superuser can — revoking SELECT on the catalogues, which are owned by
+// the cluster's bootstrap role. The script's own connection is authenticated
+// as game_author and is the only place the uploaded SQL ever runs.
 func (p *Provisioner) fill(ctx context.Context, name, script string, policy sqlpolicy.Policy) error {
-	conn, err := p.connect(ctx, name)
+	admin, err := p.connect(ctx, p.base.User, name)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = admin.Close(context.WithoutCancel(ctx)) }()
+
+	if err := lendTemplateToTheAuthor(ctx, admin, name); err != nil {
+		return err
+	}
+	if err := p.runScript(ctx, name, script); err != nil {
+		return err
+	}
+	// Withdrawn before the grants below, so that what a participant's copy
+	// inherits is the contest's privileges and nothing the build needed.
+	if err := takeTheTemplateBackFromTheAuthor(ctx, admin, name); err != nil {
+		return err
+	}
+	if err := grantPolicy(ctx, admin, policy); err != nil {
+		return err
+	}
+	return HardenDatabase(ctx, admin)
+}
+
+// runScript executes the uploaded SQL over its own connection, authenticated
+// as game_author, and closes it again.
+//
+// Closed here rather than by the caller for the reason BuildTemplate states:
+// a template with a connection on it cannot be copied, and the script's
+// connection is the one most likely to be forgotten.
+func (p *Provisioner) runScript(ctx context.Context, database, script string) error {
+	conn, err := p.connect(ctx, url.UserPassword(RoleAuthor, p.authorPassword), database)
 	if err != nil {
 		return err
 	}
@@ -124,10 +190,7 @@ func (p *Provisioner) fill(ctx context.Context, name, script string, policy sqlp
 	if _, err := conn.Exec(ctx, script); err != nil {
 		return fmt.Errorf("run the game script: %w", err)
 	}
-	if err := grantPolicy(ctx, conn, policy); err != nil {
-		return err
-	}
-	return HardenDatabase(ctx, conn)
+	return nil
 }
 
 // CreateInstance copies the template into one participant's own database.
@@ -224,13 +287,18 @@ func (p *Provisioner) DropIdle(ctx context.Context, name string) (dropped bool, 
 	return false, fmt.Errorf("drop %s: %w", name, err)
 }
 
-func (p *Provisioner) connect(ctx context.Context, database string) (*pgx.Conn, error) {
+// connect opens one connection to a database on this cluster, as the role the
+// caller names. Everything but the credentials and the database comes from the
+// provisioning DSN — the host, the port and the TLS settings are the
+// cluster's, not the role's.
+func (p *Provisioner) connect(ctx context.Context, as *url.Userinfo, database string) (*pgx.Conn, error) {
 	target := *p.base
+	target.User = as
 	target.Path = "/" + database
 
 	conn, err := pgx.Connect(ctx, target.String())
 	if err != nil {
-		return nil, fmt.Errorf("connect to %s: %w", database, err)
+		return nil, fmt.Errorf("connect to %s as %s: %w", database, as.Username(), err)
 	}
 	return conn, nil
 }

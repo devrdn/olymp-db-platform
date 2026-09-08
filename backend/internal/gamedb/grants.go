@@ -67,6 +67,64 @@ func grantPolicy(ctx context.Context, conn Conn, policy sqlpolicy.Policy) error 
 	return nil
 }
 
+// lendTemplateToTheAuthor gives the game-script role exactly what building a
+// game needs, inside one template database and nowhere else.
+//
+// Grants rather than ownership, deliberately. Making game_author the owner of
+// the template would be the obvious way to say "this is yours", and it hands
+// back most of what this boundary is for: a database owner may DROP DATABASE,
+// the check is ownership alone, and one role owning every contest's template
+// means a script in one olympiad's template can drop another olympiad's — with
+// no connection to it, from the session it is already in. (Only as a single
+// statement: a multi-statement simple query runs inside an implicit
+// transaction and DROP DATABASE refuses in one. A script is whatever text an
+// organiser uploaded, so that is not a constraint on the attacker.) With
+// grants, the provisioning role stays the owner and there is no database
+// anywhere on the cluster that game_author may drop, rename or reassign.
+//
+// It must run connected to the database being lent.
+func lendTemplateToTheAuthor(ctx context.Context, conn Conn, database string) error {
+	return runAll(ctx, conn, []string{
+		// CREATE on the database is what lets a script say CREATE SCHEMA, and
+		// is also the privilege a trusted extension (citext, pgcrypto) is
+		// checked against — both things a real game script does. It is not
+		// ownership: it cannot drop or rename the database.
+		`GRANT CREATE, CONNECT, TEMPORARY ON DATABASE ` + QuoteIdentifier(database) + ` TO ` + RoleAuthor,
+		// The game's tables live in public and the author has to own them: a
+		// view or a SECURITY DEFINER function executes as its owner, so a game
+		// whose objects belonged to somebody else would either not work or
+		// would work with somebody else's privileges.
+		`GRANT USAGE, CREATE ON SCHEMA public TO ` + RoleAuthor,
+	})
+}
+
+// takeTheTemplateBackFromTheAuthor withdraws all of it again, before the
+// template is copied.
+//
+// The two REVOKEs travel differently, which is the whole reason both are here.
+// The schema ACL lives in the template's own catalogue and is copied by CREATE
+// DATABASE … TEMPLATE, so without the first one every participant's database
+// would ship with a role that may create objects in the game's own schema. The
+// database ACL lives on the pg_database row and is *not* copied, so the second
+// one closes this template rather than the copies — a rebuild is a fresh
+// CREATE DATABASE and lends the privileges again.
+func takeTheTemplateBackFromTheAuthor(ctx context.Context, conn Conn, database string) error {
+	return runAll(ctx, conn, []string{
+		`REVOKE ALL ON SCHEMA public FROM ` + RoleAuthor,
+		`REVOKE ALL ON DATABASE ` + QuoteIdentifier(database) + ` FROM ` + RoleAuthor,
+	})
+}
+
+// runAll executes statements in order, naming the one that failed.
+func runAll(ctx context.Context, conn Conn, statements []string) error {
+	for _, statement := range statements {
+		if _, err := conn.Exec(ctx, statement); err != nil {
+			return fmt.Errorf("%s: %w", statement, err)
+		}
+	}
+	return nil
+}
+
 // instanceConnectionLimit is the last line under the Query Runner's semaphore.
 //
 // Two rather than one: a query is running while the connection that will

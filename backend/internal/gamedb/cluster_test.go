@@ -1,6 +1,7 @@
 package gamedb_test
 
 import (
+	"context"
 	"os"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ func TestPreparingTheClusterIsIdempotent(t *testing.T) {
 	if err := gamedb.PrepareCluster(t.Context(), admin(t), gamedb.Roles{
 		ReaderPassword: gamedbtest.ReaderPassword(t),
 		WriterPassword: gamedbtest.WriterPassword(t),
+		AuthorPassword: gamedbtest.AuthorPassword(t),
 	}); err != nil {
 		t.Fatalf("a second run failed: %v", err)
 	}
@@ -132,6 +134,7 @@ func TestPreparingTheClusterSurvivesConcurrentRuns(t *testing.T) {
 			failures <- gamedb.PrepareCluster(t.Context(), pool, gamedb.Roles{
 				ReaderPassword: gamedbtest.ReaderPassword(t),
 				WriterPassword: gamedbtest.WriterPassword(t),
+				AuthorPassword: gamedbtest.AuthorPassword(t),
 			})
 		}()
 	}
@@ -162,6 +165,11 @@ func TestPreparingTheClusterForTestsLeavesTheDeploymentsCredentialsWorking(t *te
 	for _, role := range []struct{ name, variable string }{
 		{gamedb.RoleReader, "GAME_READER_PASSWORD"},
 		{gamedb.RoleWriter, "GAME_WRITER_PASSWORD"},
+		// The Core API's own credential on this cluster, and the same
+		// argument: a test run that changed it would leave a running `make
+		// run` unable to build a game, and nothing would say so until an
+		// organiser pressed the button.
+		{gamedb.RoleAuthor, "GAME_AUTHOR_PASSWORD"},
 	} {
 		t.Run(role.name, func(t *testing.T) {
 			password := os.Getenv(role.variable)
@@ -170,6 +178,133 @@ func TestPreparingTheClusterForTestsLeavesTheDeploymentsCredentialsWorking(t *te
 			}
 			if err := tryConnectAs(t, role.name, password, database); err != nil {
 				t.Fatalf("a test run took %s away from the running stack: %v", role.name, err)
+			}
+		})
+	}
+}
+
+// The role an organiser's game script runs as, checked the same way the
+// participants' are: by reading what the cluster says it is rather than what
+// the deploy meant.
+//
+// Every attribute here is one the script would otherwise be able to use to get
+// out. SUPERUSER is the whole boundary; CREATEROLE is a superuser one ALTER
+// ROLE later; CREATEDB makes it the owner of databases it creates, and an
+// owner may DROP DATABASE. The role memberships are the other half: three
+// predefined roles hand out exactly the powers the COPY tests provoke, so a
+// membership in any of them would make those refusals lapse silently.
+func TestTheAuthorRoleCannotBecomeMoreThanAnAuthor(t *testing.T) {
+	requireCluster(t)
+
+	var superuser, createdb, createrole, replication, bypassRLS, canLogin bool
+	err := admin(t).QueryRow(t.Context(),
+		`SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls, rolcanlogin
+		 FROM pg_roles WHERE rolname = $1`, gamedb.RoleAuthor).
+		Scan(&superuser, &createdb, &createrole, &replication, &bypassRLS, &canLogin)
+	if err != nil {
+		t.Fatalf("reading the author role: %v", err)
+	}
+
+	if !canLogin {
+		t.Fatal("the author role cannot log in; the Core API connects as it to run a game script")
+	}
+	for name, granted := range map[string]bool{
+		"superuser": superuser, "createdb": createdb, "createrole": createrole,
+		"replication": replication, "bypassrls": bypassRLS,
+	} {
+		if granted {
+			t.Errorf("the author role holds %s", name)
+		}
+	}
+
+	for _, predefined := range []string{
+		"pg_read_server_files",
+		"pg_write_server_files",
+		"pg_execute_server_program",
+		"pg_read_all_data",
+		"pg_write_all_data",
+	} {
+		t.Run(predefined, func(t *testing.T) {
+			var member bool
+			if err := admin(t).QueryRow(t.Context(),
+				`SELECT pg_has_role($1, $2, 'USAGE')`, gamedb.RoleAuthor, predefined).Scan(&member); err != nil {
+				t.Fatalf("asking about %s: %v", predefined, err)
+			}
+			if member {
+				t.Fatalf("the author role has the privileges of %s", predefined)
+			}
+		})
+	}
+}
+
+// The author role's sessions are deliberately not bounded the way a
+// participant's are.
+//
+// A game script is one long run of DDL and INSERTs against a database nobody
+// is looking at; the five-second statement_timeout that is right for a
+// stranger's SELECT would fail every olympiad whose data takes longer than
+// that to load. What bounds a build instead is the deadline its caller puts on
+// the context, which is on the connection and cannot be `SET` away.
+//
+// Asserted rather than left implicit, because "0" here is a decision and an
+// inherited 5s would look exactly like one until an author's build started
+// timing out for no reason anybody could see.
+func TestTheAuthorStartsWithNoStatementTimeoutOfItsOwn(t *testing.T) {
+	conn := connectAs(t, gamedb.RoleAuthor, gamedbtest.AuthorPassword(t), scratchDatabase(t))
+
+	var timeout string
+	if err := conn.QueryRow(t.Context(), `SHOW statement_timeout`).Scan(&timeout); err != nil {
+		t.Fatalf("reading statement_timeout: %v", err)
+	}
+	if timeout != "0" {
+		t.Fatalf("statement_timeout = %q for the author role, want 0: a build is bounded by "+
+			"the caller's deadline, not by a figure sized for a participant's query", timeout)
+	}
+}
+
+// A role membership somebody granted is taken back by the next deploy, the
+// same way an attribute somebody granted is.
+//
+// prepareRole's ALTER names every attribute a role must *not* have precisely
+// so a cluster edited by hand during a contest is put back. A membership is
+// the same kind of edit and is invisible to that statement: the five
+// predefined roles PostgreSQL ships hand out exactly the powers a game script
+// must not have, and one GRANT makes every refusal in
+// TestAHostileGameScriptIsRefusedTheThingsOnlyASuperuserCanDo lapse while the
+// role still reads as NOSUPERUSER NOCREATEDB NOCREATEROLE.
+//
+// It is not hypothetical. A cluster that ran a game script before this
+// boundary existed ran it as a superuser, so `GRANT pg_read_server_files TO
+// game_author` inside one is a leftover an upgrade has to remove — and until
+// it does, the new role is the old hole under a new name.
+func TestPreparingTheClusterTakesBackARoleMembershipSomebodyGranted(t *testing.T) {
+	pool := admin(t)
+
+	for _, role := range []string{gamedb.RoleAuthor, gamedb.RoleReader, gamedb.RoleWriter} {
+		t.Run(role, func(t *testing.T) {
+			if _, err := pool.Exec(t.Context(),
+				`GRANT pg_read_server_files TO `+role); err != nil {
+				t.Fatalf("granting the membership to provoke the case: %v", err)
+			}
+			t.Cleanup(func() {
+				_, _ = pool.Exec(context.Background(), `REVOKE pg_read_server_files FROM `+role)
+			})
+
+			if err := gamedb.PrepareCluster(t.Context(), pool, gamedb.Roles{
+				ReaderPassword: gamedbtest.ReaderPassword(t),
+				WriterPassword: gamedbtest.WriterPassword(t),
+				AuthorPassword: gamedbtest.AuthorPassword(t),
+			}); err != nil {
+				t.Fatalf("preparing the cluster: %v", err)
+			}
+
+			var member bool
+			if err := pool.QueryRow(t.Context(),
+				`SELECT pg_has_role($1, 'pg_read_server_files', 'USAGE')`, role).Scan(&member); err != nil {
+				t.Fatalf("asking about the membership: %v", err)
+			}
+			if member {
+				t.Fatalf("%s still has the privileges of pg_read_server_files after a deploy", role)
 			}
 		})
 	}

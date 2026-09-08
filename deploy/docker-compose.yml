@@ -97,7 +97,8 @@ services:
       start_period: 30s
     networks: [internal]
 
-  # One-shot job: creates the game cluster's two participant roles, their
+  # One-shot job: creates the game cluster's three roles — the two the Query
+  # Runner connects as and the one an organiser's game script runs as — their
   # session defaults and the revocations, then exits. Idempotent, and run on
   # every deploy so a restriction added in a later release reaches a cluster
   # that already exists — which an image init script, running only when the
@@ -110,6 +111,11 @@ services:
       GAME_DB_ADMIN_DSN: postgres://${GAME_DB_USER}:${GAME_DB_PASSWORD}@pg-game:5432/${GAME_DB_NAME:-dbcontest_game}?sslmode=disable
       GAME_READER_PASSWORD: ${GAME_READER_PASSWORD:?set GAME_READER_PASSWORD in .env}
       GAME_WRITER_PASSWORD: ${GAME_WRITER_PASSWORD:?set GAME_WRITER_PASSWORD in .env}
+      # The third role, the one an organiser's game script runs as. This job
+      # is the only place any of the three is created, so leaving it out here
+      # is a cluster with no game_author on it at all — and `gamedb` refuses
+      # to run without it rather than silently preparing two roles of three.
+      GAME_AUTHOR_PASSWORD: ${GAME_AUTHOR_PASSWORD:?set GAME_AUTHOR_PASSWORD in .env}
     depends_on:
       pg-game:
         condition: service_healthy
@@ -244,6 +250,10 @@ services:
       # profile) as soon as more than one replica runs.
       REDIS_ADDR: ${REDIS_ADDR:-redis://:${REDIS_PASSWORD}@redis:6379/0}
       METRICS_BACKEND: ${METRICS_BACKEND:-prometheus}
+      # The language a request that expresses no usable preference falls back
+      # to. It must name a row in the `languages` table (en, ro, ru are
+      # seeded), which is why it is an operator's choice and not a constant.
+      DEFAULT_LOCALE: ${DEFAULT_LOCALE:-en}
       SESSION_TTL: ${SESSION_TTL:-12h}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       # The compose network: Caddy's X-Forwarded-For is believed, a direct
@@ -265,9 +275,28 @@ services:
       # databases and never runs anybody's SQL. The Query Runner holds the
       # participant credentials and this process does not.
       GAME_PROVISIONER_DSN: postgres://${GAME_DB_USER}:${GAME_DB_PASSWORD}@pg-game:5432/${GAME_DB_NAME:-dbcontest_game}?sslmode=disable
+      # The role an organiser's uploaded game script is run as — never the
+      # provisioning one above, which is the whole point of a separate role.
+      # config.Load refuses to start when GAME_PROVISIONER_DSN is set and this
+      # is not, and the DSN above is always set here, so without this line a
+      # compose deployment does not come up at all.
+      GAME_AUTHOR_PASSWORD: ${GAME_AUTHOR_PASSWORD:?set GAME_AUTHOR_PASSWORD in .env}
       GAME_POOL_DEPTH: ${GAME_POOL_DEPTH:-10}
+      # The ceiling on what one contest may ask the game cluster to hold. The
+      # depth above is headroom on top of the roster, so a mistyped roster is
+      # a request for a database per name in it; this is what stops that
+      # filling a disk. It is a cap an operator sizes against their own
+      # cluster, so it has to reach the container — a compiled default is a
+      # cap nobody chose.
+      GAME_POOL_MAX: ${GAME_POOL_MAX:-500}
       GAME_PROVISION_WORKERS: ${GAME_PROVISION_WORKERS:-3}
       GAME_COPY_STRATEGY: ${GAME_COPY_STRATEGY:-}
+      # How long a finished contest's participant databases survive, for every
+      # contest whose organizer left settings.grace_period_min at zero
+      # (docs/ARCHITECTURE.md §2.4). Decided here and applied by the reclaim
+      # sweep, so it crosses this boundary or the sweep runs on a default
+      # nobody chose (CLAUDE.md rule 11).
+      GAME_INSTANCE_GRACE_MIN: ${GAME_INSTANCE_GRACE_MIN:-1440}
       # The console reaches the Query Runner over the private network; the
       # runner's own port is published nowhere.
       QUERY_RUNNER_ADDR: ${QUERY_RUNNER_ADDR:-queryrunner:9100}

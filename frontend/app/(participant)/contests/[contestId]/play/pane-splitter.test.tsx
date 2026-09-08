@@ -32,10 +32,10 @@ function show(contestId = "c1") {
       contestId={contestId}
       title="The Greenhouse Case"
       storyBody={<p>A body in the stacks.</p>}
-      storyMarkdown="A body in the stacks."
+      // This file is about the widths of the interactive panes; the print
+      // copy is rendered on the server now (page.tsx) and has none.
+      printView={null}
       storyUnavailable={null}
-      participantName="Ada Lovelace"
-      printedOn="8 Sep 2026"
       questionEntries={[]}
       schema={A_SCHEMA}
       initialLog={{ items: [], total: 0, failed: false }}

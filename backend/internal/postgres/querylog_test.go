@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -542,4 +543,86 @@ func TestExportHistoryStopsWhenTheCallerCannotTakeAnotherRow(t *testing.T) {
 			t.Fatalf("kept going for %d rows after the caller refused one", seen)
 		}
 	})
+}
+
+// committedRegistration enrols somebody for real — outside any transaction —
+// and removes them again when the test ends.
+//
+// Every other test in this file hangs its fixtures off withTx and lets the
+// rollback clean up, which is right for them and useless for a test whose
+// whole subject is what happens when there is no ambient transaction. The
+// deletes cascade: dropping the contest takes the registration, and the
+// registration takes its query_log rows.
+func committedRegistration(t *testing.T) (context.Context, uuid.UUID) {
+	t.Helper()
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	ctx := context.Background()
+
+	user := makeUser(t, ctx, "querylog-"+uuid.NewString()[:8])
+	contest := makeContest(t, ctx, user.ID)
+	registration := makeRegistration(t, ctx, contest, user.ID)
+
+	t.Cleanup(func() {
+		clean := context.Background()
+		if _, err := testPool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contest); err != nil {
+			t.Errorf("clean up the contest: %v", err)
+		}
+		if _, err := testPool.Exec(clean, `DELETE FROM users WHERE id = $1`, user.ID); err != nil {
+			t.Errorf("clean up the user: %v", err)
+		}
+	})
+	return ctx, registration
+}
+
+// The export on the path the deployment actually uses: no transaction around
+// it (CLAUDE.md rule 10).
+//
+// queryLogCSV calls ExportHistory straight off the request context, and the
+// cursor it reads through can only be declared inside a transaction — so the
+// method opens one when the caller has none. Every other test here runs
+// inside withTx, which hands it a transaction for free and would hide a
+// missing BEGIN completely.
+//
+// The log is deliberately longer than one FETCH (exportFetch rows), and not a
+// whole number of them, so the loop that walks the cursor is walked more than
+// once and the last batch is a short one — the condition that ends it.
+func TestExportHistoryStreamsTheWholeLogWithNoTransactionAroundIt(t *testing.T) {
+	ctx, registration := committedRegistration(t)
+	log := NewQueryLog(testPool)
+
+	const rows = 2*exportFetch + 1
+	want := make([]string, 0, rows)
+	for i := range rows {
+		sql := fmt.Sprintf("SELECT %d", i)
+		want = append(want, sql)
+		completeRow(t, ctx, log, registration, sql, queryrunner.StatusOK, 1, 1)
+	}
+	// One distinct executed_at per row, ascending in insertion order, so the
+	// order asserted below is a real ordering rather than a tie the rows
+	// happened to come back in.
+	if _, err := testPool.Exec(ctx, `
+		UPDATE query_log
+		SET executed_at = now() - make_interval(secs => (SELECT max(id) FROM query_log WHERE registration_id = $1) - id)
+		WHERE registration_id = $1`, registration); err != nil {
+		t.Fatalf("space out the rows: %v", err)
+	}
+
+	var seen []string
+	if err := log.ExportHistory(ctx, registration, func(entry queryrunner.HistoryEntry) error {
+		seen = append(seen, entry.SQL)
+		return nil
+	}); err != nil {
+		t.Fatalf("ExportHistory with no ambient transaction: %v", err)
+	}
+
+	if len(seen) != rows {
+		t.Fatalf("streamed %d rows, want all %d — a log cut at a FETCH boundary is a record missing most of itself", len(seen), rows)
+	}
+	for i, sql := range want {
+		if seen[i] != sql {
+			t.Fatalf("row %d is %q, want %q: the batches did not come back oldest first", i, seen[i], sql)
+		}
+	}
 }

@@ -1,9 +1,13 @@
+import { existsSync, readFileSync, statSync } from "node:fs";
+import path from "node:path";
+
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
 
+import { PrintView } from "./print-view";
 import { Workspace } from "./workspace";
 import type { AnswerState, ConsoleState, QuestionsRefreshResult, QueryLogRefreshResult } from "./actions";
 
@@ -78,16 +82,35 @@ function show(
       contestId="c1"
       title="The Greenhouse Case"
       storyBody={<p>A body in the stacks.</p>}
-      storyMarkdown={"storyMarkdown" in overrides ? (overrides.storyMarkdown ?? null) : "The printed case notes."}
+      printView={printCopy("storyMarkdown" in overrides ? (overrides.storyMarkdown ?? null) : "The printed case notes.")}
       storyUnavailable={overrides.storyUnavailable ?? null}
-      participantName="Ada Lovelace"
-      printedOn="8 Sep 2026"
       questionEntries={[]}
       schema={schema}
       initialLog={freshInitialLog()}
       locale="en"
       dict={en}
     />,
+  );
+}
+
+/**
+ * What `page.tsx` hands `Workspace` as `printView`: the print copy, already
+ * rendered, because `Workspace` is a client component and importing
+ * `PrintView` from it shipped `react-markdown` to the browser (that file's own
+ * doc, and the client-graph test at the bottom of this one). Built here so
+ * every assertion below still reads the real printed output rather than a
+ * stand-in.
+ */
+function printCopy(storyMarkdown: string | null) {
+  if (storyMarkdown === null) return null;
+  return (
+    <PrintView
+      contestTitle="The Greenhouse Case"
+      participantName="Ada Lovelace"
+      date="8 Sep 2026"
+      storyMarkdown={storyMarkdown}
+      dict={en}
+    />
   );
 }
 
@@ -391,5 +414,80 @@ describe("the pane grid's own shape", () => {
     expect(panes).toHaveLength(2);
     expect(panes[0].parentElement).toBe(panes[1].parentElement);
     expect(panes[0].parentElement!.className).toMatch(/max-narrow:max-h-\[/);
+  });
+});
+
+// The one thing about this file that a rendering assertion cannot reach: what
+// it drags into the browser.
+//
+// `Workspace` is a client component, so every module it imports — and every
+// module those import, transitively — is compiled into this route's client
+// bundle. `PrintView` reaches `StoryText`, which is `react-markdown` and
+// `remark-gfm`: a real Markdown parser, measured at 31.9 KiB gzipped in this
+// route's own chunks, on the screen a participant spends two hours in. It is
+// rendered on the server instead (page.tsx), and nothing about the rendered
+// output says so — which is exactly why this is asserted here rather than
+// left to whoever next reaches for a component that happens to be convenient.
+describe("what Workspace pulls into the client bundle", () => {
+  /** Bare package specifiers reachable from `entry`, following this app's own files (relative and `@/`) and stopping at package boundaries. */
+  function packagesReachableFrom(entry: string): Set<string> {
+    const root = path.resolve(__dirname, "../../../../..");
+    const packages = new Set<string>();
+    const seen = new Set<string>();
+
+    const resolve = (specifier: string, from: string): string | null => {
+      const base = specifier.startsWith("@/")
+        ? path.join(root, specifier.slice(2))
+        : path.resolve(path.dirname(from), specifier);
+      for (const candidate of [
+        base,
+        `${base}.ts`,
+        `${base}.tsx`,
+        path.join(base, "index.ts"),
+        path.join(base, "index.tsx"),
+      ]) {
+        if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+      }
+      return null;
+    };
+
+    const walk = (file: string) => {
+      if (seen.has(file)) return;
+      seen.add(file);
+      const source = readFileSync(file, "utf8");
+      // `import type` and `export type` are erased by the compiler and reach
+      // no bundle, so following them would fail this for a name only the
+      // type-checker ever sees.
+      const imports = source.matchAll(/(?:^|\n)\s*(?:import|export)\s+(?!type\s)(?:[^'"\n]*?\sfrom\s+)?["']([^"']+)["']/g);
+      for (const [, specifier] of imports) {
+        if (specifier.startsWith(".") || specifier.startsWith("@/")) {
+          const resolved = resolve(specifier, file);
+          if (resolved) walk(resolved);
+          continue;
+        }
+        packages.add(specifier);
+      }
+    };
+
+    walk(path.resolve(__dirname, entry));
+    return packages;
+  }
+
+  test("not the Markdown parser: the story and its print copy are rendered on the server", () => {
+    const packages = packagesReachableFrom("workspace.tsx");
+
+    // A guard against the guard: if the walk resolved nothing, an empty set
+    // would pass the real assertion below for the wrong reason.
+    expect(packages.has("react")).toBe(true);
+
+    expect([...packages].filter((name) => name === "react-markdown" || name === "remark-gfm")).toEqual([]);
+  });
+
+  // The counterpart: `page.tsx` is a Server Component, and there the parser is
+  // exactly where it belongs. Without this, the test above would still pass if
+  // somebody deleted the print copy outright instead of moving it.
+  test("page.tsx still renders the print copy, on the server, where the parser is free", () => {
+    expect(packagesReachableFrom("page.tsx").has("react-markdown")).toBe(true);
+    expect(readFileSync(path.resolve(__dirname, "page.tsx"), "utf8")).toContain("<PrintView");
   });
 });

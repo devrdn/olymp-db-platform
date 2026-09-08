@@ -112,14 +112,14 @@ test-db: require-env ## Run the repository tests against the development databas
 # under test is a refusal by PostgreSQL, not by our code. `make dev-up` first —
 # it starts pg-game along with the core database.
 #
-# The two role passwords travel with the DSN because these tests prepare the
-# cluster, and preparing it states what game_reader and game_writer
-# authenticate with. They are the same roles `make runner` connects as, so a
+# The three role passwords travel with the DSN because these tests prepare the
+# cluster, and preparing it states what game_reader, game_writer and
+# game_author authenticate with. They are the same roles `make runner` connects as, so a
 # harness with passwords of its own would take a running Query Runner's
 # credentials away mid-session; given the deployment's own, a test run writes
 # back what is already there and both keep working. Missing, the tests stop
 # and say so rather than inventing a password (internal/gamedb/gamedbtest).
-GAME_ROLE_PASSWORDS := GAME_READER_PASSWORD="$(GAME_READER_PASSWORD)" GAME_WRITER_PASSWORD="$(GAME_WRITER_PASSWORD)"
+GAME_ROLE_PASSWORDS := GAME_READER_PASSWORD="$(GAME_READER_PASSWORD)" GAME_WRITER_PASSWORD="$(GAME_WRITER_PASSWORD)" GAME_AUTHOR_PASSWORD="$(GAME_AUTHOR_PASSWORD)"
 
 test-game: require-env ## Run the game cluster tests against the development cluster
 	cd $(BACKEND) && GAME_DB_DSN="$(GAME_DB_DSN)" $(GAME_ROLE_PASSWORDS) \
@@ -247,6 +247,7 @@ require-env:
 run: require-env ## Run the API against the dev infrastructure
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" REDIS_ADDR="$(REDIS_ADDR)" \
 		GAME_PROVISIONER_DSN="$(GAME_DB_DSN)" \
+		GAME_AUTHOR_PASSWORD="$(GAME_AUTHOR_PASSWORD)" \
 		QUERY_RUNNER_ADDR="$(QUERY_RUNNER_ADDR)" \
 		TRUSTED_PROXIES="127.0.0.1,::1" \
 		ENV=development LOG_LEVEL=debug go run ./cmd/api
@@ -376,8 +377,9 @@ restore: require-env ## Replace the core database from a dump (FILE=path CONFIRM
 # The two halves of the game circuit that are not the API.
 #
 # `game-roles` is the same one-shot job the deploy runs (cmd/gamedb): it
-# creates the participant roles the Query Runner connects as, and the
-# restrictions they work under. Idempotent, so running it again is how a
+# creates the participant roles the Query Runner connects as, the game_author
+# role an organiser's game script runs as, and the restrictions all three work
+# under. Idempotent, so running it again is how a
 # restriction added in a later release reaches a cluster that already exists.
 #
 # `runner` is the Query Runner itself. A separate process on purpose — it
@@ -391,6 +393,7 @@ game-roles: require-env ## Create the game cluster's participant roles
 	cd $(BACKEND) && GAME_DB_ADMIN_DSN="$(GAME_DB_DSN)" \
 		GAME_READER_PASSWORD="$(GAME_READER_PASSWORD)" \
 		GAME_WRITER_PASSWORD="$(GAME_WRITER_PASSWORD)" \
+		GAME_AUTHOR_PASSWORD="$(GAME_AUTHOR_PASSWORD)" \
 		go run ./cmd/gamedb
 
 # The repair for a database the core database has already written off while

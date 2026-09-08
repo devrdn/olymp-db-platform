@@ -117,6 +117,10 @@ func TestTheCoreConfigurationNeverReadsTheParticipantsCredentials(t *testing.T) 
 	// And its own provisioning credentials are a separate variable, so the two
 	// cannot be set to the same thing by a deployment that shortens a step.
 	t.Setenv("GAME_PROVISIONER_DSN", "postgres://provisioner:other@pg-game:5432/postgres")
+	// A provisioner now also has to name what the game-script role
+	// authenticates with; that is a third credential again, and the subject
+	// of this test is only that none of them is a participant's.
+	t.Setenv("GAME_AUTHOR_PASSWORD", "an-author-password")
 	again, err := Load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
