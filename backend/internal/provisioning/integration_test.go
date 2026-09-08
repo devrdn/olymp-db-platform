@@ -13,7 +13,7 @@ import (
 func serviceFor(t *testing.T, registrations int) (*provisioning.Service, *cluster, provisioning.Contest, []uuid.UUID) {
 	t.Helper()
 
-	contest, people := contestFor(t, registrations)
+	contest, people := contestFor(t, t.Context(), registrations)
 	fake := &cluster{}
 	return provisioning.New(postgres.NewGameInstances(testPool), fake), fake, contest, people
 }
@@ -203,7 +203,7 @@ func TestEnsureRebuildsAnInstanceTheSweepAlreadyDropped(t *testing.T) {
 // A database the record does not know about is a database nobody will ever
 // clean up. If recording fails, the cluster is put back as it was.
 func TestADatabaseIsNotLeftBehindWhenItCannotBeRecorded(t *testing.T) {
-	contest, people := contestFor(t, 1)
+	contest, people := contestFor(t, t.Context(), 1)
 	fake := &cluster{}
 	// A repository that refuses to record, over a contest that no longer
 	// exists: the composite reference makes the insert fail for real rather
@@ -292,7 +292,7 @@ func TestTheQuotaFollowsTheTemplateAndHasAFloor(t *testing.T) {
 // however many are missing. Without a high-water mark this is a claim nothing
 // checks.
 func TestThePoolIsFilledByABoundedNumberOfWorkers(t *testing.T) {
-	contest, _ := contestFor(t, 0)
+	contest, _ := contestFor(t, t.Context(), 0)
 	fake := &cluster{slow: 40 * time.Millisecond}
 	service := provisioning.New(postgres.NewGameInstances(testPool), fake).WithWorkers(2)
 
@@ -314,7 +314,7 @@ func TestThePoolIsFilledByABoundedNumberOfWorkers(t *testing.T) {
 // A cluster that refuses must not leave the workers spinning through the rest
 // of the list, and what was made before the failure still counts.
 func TestAFailureStopsTheFillingRatherThanGrindingOn(t *testing.T) {
-	contest, _ := contestFor(t, 0)
+	contest, _ := contestFor(t, t.Context(), 0)
 	fake := &cluster{fail: errors.New("the cluster is out of disk")}
 	service := provisioning.New(postgres.NewGameInstances(testPool), fake).WithWorkers(2)
 
