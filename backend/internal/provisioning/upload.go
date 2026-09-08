@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
@@ -419,12 +417,6 @@ type UploadCleanupResult struct {
 	OrphanFiles int
 }
 
-// dataSuffix is internal/gamefile's own naming convention for an upload's
-// data file — package-private there, so this is the one place this package
-// has to know it rather than ask gamefile for a directory listing, which it
-// does not offer (see this task's own report for the gap).
-const dataSuffix = ".data"
-
 // SweepUploads is the abandoned-upload janitor: every 'receiving' row older
 // than olderThan is aborted, and every file on the volume that no row names
 // at all is removed.
@@ -476,25 +468,25 @@ func (g *Games) SweepUploads(ctx context.Context, olderThan time.Duration) (Uplo
 // platform's own numbers describe.
 const abandonedUploadBatchLimit = 100
 
-// sweepOrphanFiles removes every *.data file the upload volume holds that no
-// row in game_uploads names at all, whatever that row's status. A file whose
+// sweepOrphanFiles removes every upload the volume holds that no row in
+// game_uploads names at all, whatever that row's status. An upload whose
 // row exists but says 'complete' or 'aborted' is not touched here — that is
 // ordinary history, or something retireUploadFile has already handled — only
-// a file with no row at all, which nothing else in this package will ever
+// an upload with no row at all, which nothing else in this package will ever
 // notice on its own.
+//
+// The list of ids on the volume comes from gamefile.Store.UploadIDs rather
+// than this package reading the directory itself: which files make up one
+// upload, and how many of them there are, is gamefile's own layout to know.
 func (g *Games) sweepOrphanFiles(ctx context.Context) (int, error) {
-	entries, err := os.ReadDir(g.dir)
+	ids, err := g.files.UploadIDs()
 	if err != nil {
 		return 0, fmt.Errorf("list the upload volume: %w", err)
 	}
 
 	var removed int
 	var failures []error
-	for _, entry := range entries {
-		idStr, ok := strings.CutSuffix(entry.Name(), dataSuffix)
-		if !ok {
-			continue
-		}
+	for _, idStr := range ids {
 		id, err := uuid.Parse(idStr)
 		if err != nil {
 			continue

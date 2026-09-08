@@ -725,3 +725,147 @@ func TestAppendAfterCompleteIsRefused(t *testing.T) {
 		t.Fatalf("Window after refused Append returned %d lines, want 3: %v", len(w.Lines), w.Lines)
 	}
 }
+
+// idSet turns a slice into a set for order-independent comparison — UploadIDs
+// promises no particular order, only which ids are present and how many
+// times.
+func idSet(ids []string) map[string]int {
+	set := make(map[string]int, len(ids))
+	for _, id := range ids {
+		set[id]++
+	}
+	return set
+}
+
+// TestUploadIDsEmptyStore is the janitor's ordinary case: a fresh volume, or
+// one that currently has nothing in flight, must report no ids at all
+// rather than erroring on an empty directory.
+func TestUploadIDsEmptyStore(t *testing.T) {
+	s := newTestStore(t, permissiveLimits())
+	ids, err := s.UploadIDs()
+	if err != nil {
+		t.Fatalf("UploadIDs: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("UploadIDs on an empty store = %v, want none", ids)
+	}
+}
+
+// TestUploadIDsIncludesAnInProgressUpload is what makes the orphan sweep
+// work at all: an upload that has only been Begin'd (or partially Append'd,
+// never Complete'd) is exactly the shape a crash between Store.Begin
+// succeeding and the caller's own database row leaves behind, and it has to
+// show up here for the janitor to ever find it.
+func TestUploadIDsIncludesAnInProgressUpload(t *testing.T) {
+	s := newTestStore(t, permissiveLimits())
+	const id = "f0000001-0000-0000-0000-000000000000"
+	if err := s.Begin(id); err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	if _, err := s.Append(id, 0, strings.NewReader("partial")); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	ids, err := s.UploadIDs()
+	if err != nil {
+		t.Fatalf("UploadIDs: %v", err)
+	}
+	if got := idSet(ids); len(got) != 1 || got[id] != 1 {
+		t.Fatalf("UploadIDs = %v, want exactly one entry for %s", ids, id)
+	}
+}
+
+// TestUploadIDsCountsACompletedUploadOnce is the guarantee the task's own
+// brief singles out: Complete leaves two files behind — the data file and
+// its side index — and both belong to the same upload. A caller reconciling
+// the volume against its own bookkeeping must see one id, not two, or a
+// sweep built on this would double-count (or, worse, treat the index as a
+// second orphan upload with no data of its own).
+func TestUploadIDsCountsACompletedUploadOnce(t *testing.T) {
+	s := newTestStore(t, permissiveLimits())
+	const id = "f0000002-0000-0000-0000-000000000000"
+	completeUpload(t, s, id, "one\ntwo\n")
+
+	// Both files really are on disk — this test is pointless otherwise.
+	if _, err := os.Stat(s.dataPath(id)); err != nil {
+		t.Fatalf("data file missing after Complete: %v", err)
+	}
+	if _, err := os.Stat(s.indexPath(id)); err != nil {
+		t.Fatalf("index file missing after Complete: %v", err)
+	}
+
+	ids, err := s.UploadIDs()
+	if err != nil {
+		t.Fatalf("UploadIDs: %v", err)
+	}
+	if got := idSet(ids); len(got) != 1 || got[id] != 1 {
+		t.Fatalf("UploadIDs = %v, want exactly one entry for %s (data and index are one upload)", ids, id)
+	}
+}
+
+// TestUploadIDsForgetsAnAbortedUpload is Abort's own promise (it "removes an
+// upload's data and any index it had, and forgets it") checked from
+// UploadIDs' side: nothing on disk should still answer to the id once Abort
+// has run, whether it was aborted mid-upload or after Complete sealed it.
+func TestUploadIDsForgetsAnAbortedUpload(t *testing.T) {
+	s := newTestStore(t, permissiveLimits())
+	const midUpload = "f0000003-0000-0000-0000-000000000000"
+	const sealed = "f0000004-0000-0000-0000-000000000000"
+
+	if err := s.Begin(midUpload); err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	completeUpload(t, s, sealed, "a\nb\n")
+
+	if err := s.Abort(midUpload); err != nil {
+		t.Fatalf("Abort(midUpload): %v", err)
+	}
+	if err := s.Abort(sealed); err != nil {
+		t.Fatalf("Abort(sealed): %v", err)
+	}
+
+	ids, err := s.UploadIDs()
+	if err != nil {
+		t.Fatalf("UploadIDs: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("UploadIDs after aborting everything = %v, want none", ids)
+	}
+}
+
+// TestUploadIDsIgnoresSideFilesAndAnythingElseOnTheVolume plants exactly the
+// kind of file the orphan sweep must not misread as an upload: a lone index
+// file with no data behind it (the tail of a crash between the two Complete
+// writes, or simply a stray leftover), and a file whose name has nothing to
+// do with this package's own naming convention at all. Neither must be
+// reported as an upload id — an id that is not [0-9a-fA-F-] cannot even
+// have been produced by validateUploadID, and a bare index file is a side
+// file, not the thing UploadIDs promises to list one-per-upload.
+func TestUploadIDsIgnoresSideFilesAndAnythingElseOnTheVolume(t *testing.T) {
+	s := newTestStore(t, permissiveLimits())
+	const real = "f0000005-0000-0000-0000-000000000000"
+	completeUpload(t, s, real, "x\n")
+
+	// A lone index file: remove the data half by hand, leaving only the
+	// side file behind, exactly what "an id nothing about is confused with
+	// data" is testing for.
+	const orphanIndexOnly = "f0000006-0000-0000-0000-000000000000"
+	completeUpload(t, s, orphanIndexOnly, "y\n")
+	if err := os.Remove(s.dataPath(orphanIndexOnly)); err != nil {
+		t.Fatalf("remove data file to leave a lone index: %v", err)
+	}
+
+	// Something that is not this package's naming convention at all —
+	// unrelated to any upload id.
+	if err := os.WriteFile(filepath.Join(s.dir, "README.txt"), []byte("not an upload"), 0o644); err != nil {
+		t.Fatalf("write stray file: %v", err)
+	}
+
+	ids, err := s.UploadIDs()
+	if err != nil {
+		t.Fatalf("UploadIDs: %v", err)
+	}
+	if got := idSet(ids); len(got) != 1 || got[real] != 1 {
+		t.Fatalf("UploadIDs = %v, want exactly the one real upload %s (no side file, no stray file)", ids, real)
+	}
+}

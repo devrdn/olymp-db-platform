@@ -244,18 +244,15 @@ type Games struct {
 	audit   *audit.Recorder
 	uow     unitOfWork
 	now     func() time.Time
-	// files, dir and limits are set by WithUploads. files is nil on an
+	// files and limits are set by WithUploads. files is nil on an
 	// installation with no upload volume configured — GAME_UPLOAD_DIR empty,
 	// the same convention QueryRunnerAddr uses to turn the console off — and
 	// every upload method refuses with ErrUploadsDisabled rather than
-	// dereferencing it.
-	files *gamefile.Store
-	// dir is the same directory files was opened on. gamefile.Store keeps it
-	// private — it exposes an upload's own data by id, not a directory
-	// listing — so the janitor's orphan-file sweep (sweepOrphanFiles) is
-	// given it separately to read with os.ReadDir rather than through the
-	// store. See this task's own report for the gap.
-	dir    string
+	// dereferencing it. The janitor's orphan-file sweep (sweepOrphanFiles)
+	// asks files.UploadIDs for what the volume holds rather than this
+	// package keeping its own directory path to read with os.ReadDir —
+	// gamefile owns its own on-disk layout, this package does not.
+	files  *gamefile.Store
 	limits gamefile.Limits
 }
 
@@ -282,17 +279,23 @@ func (g *Games) WithAudit(recorder *audit.Recorder, uow unitOfWork) *Games {
 }
 
 // WithUploads turns on the file-upload half of a contest's game. files is
-// the disk store an organiser's chunks land in, opened on dir; limits is the
-// same Limits files was constructed with, kept here too because Games has to
-// refuse an oversized upload before it ever reaches Store.Begin (CLAUDE.md
-// rule 12 — bounded where the bytes arrive, not after a reservation was
-// already made).
+// the disk store an organiser's chunks land in; limits is the same Limits
+// files was constructed with, kept here too because Games has to refuse an
+// oversized upload before it ever reaches Store.Begin (CLAUDE.md rule 12 —
+// bounded where the bytes arrive, not after a reservation was already made).
+//
+// dir is accepted, not stored: this package used to keep its own copy to
+// os.ReadDir for the orphan-file sweep, but that read the directory's own
+// layout by guesswork (see sweepOrphanFiles's doc). Now that the sweep asks
+// files.UploadIDs instead, nothing here needs a path — the parameter stays
+// so callers (main's own composition root) do not have to change for an
+// implementation detail on this side.
 //
 // Left uncalled, every upload method answers ErrUploadsDisabled — the state
 // of an installation with no GAME_UPLOAD_DIR configured, the same convention
 // QueryRunnerAddr uses to turn the SQL console off.
 func (g *Games) WithUploads(files *gamefile.Store, dir string, limits gamefile.Limits) *Games {
-	g.files, g.dir, g.limits = files, dir, limits
+	g.files, g.limits = files, limits
 	return g
 }
 
