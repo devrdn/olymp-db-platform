@@ -67,6 +67,37 @@ var (
 	codeSchemaHidden = httpx.NewCode("schema_hidden",
 		"This contest does not show the game's schema. A rule of this olympiad rather than a missing thing: the organiser closed the catalogues so the shape has to be found by playing, and serving it from the console's panel would hand over exactly what that withholds.")
 
+	// --- The game's uploaded dump --------------------------------------------
+	//
+	// One code per provisioning.Games upload sentinel (CLAUDE.md rule 1) —
+	// eleven of them, none collapsed into invalid_request, because each names
+	// a different thing an organiser or their browser did and most of them
+	// say what to do next: retry the chunk, wait, or pick a different file.
+	codeGameUploadsDisabled = httpx.NewCode("game_uploads_disabled",
+		"This installation has no upload directory configured, so a game can only be written in the editor. The message names nothing about the deployment beyond that fact.")
+	codeGameUploadFilenameInvalid = httpx.NewCode("game_upload_filename_invalid",
+		"The filename the browser reported is empty or longer than this installation accepts.")
+	codeGameUploadTooLarge = httpx.NewCode("game_upload_too_large",
+		"The upload's declared size is past the maximum file size this installation accepts.")
+	codeGameUploadStoreFull = httpx.NewCode("game_upload_store_full",
+		"The upload directory already holds as much as this installation allows. Try again once other uploads have finished or been removed.")
+	codeGameUploadChunkOutOfOrder = httpx.NewCode("game_upload_chunk_out_of_order",
+		"This chunk does not continue where the upload actually left off. Ask the server what it has received and resume from there rather than resending from the browser's own idea of the offset.")
+	codeGameUploadChunkTooLarge = httpx.NewCode("game_upload_chunk_too_large",
+		"One chunk is past the maximum chunk size this installation accepts. Split it into smaller pieces.")
+	codeGameUploadLengthMismatch = httpx.NewCode("game_upload_length_mismatch",
+		"What actually landed on disk does not match the length declared when the upload began. The upload cannot be completed; begin again.")
+	codeGameUploadNotFound = httpx.NewCode("game_upload_not_found",
+		"This contest has no upload by that identifier. Also the answer when the upload belongs to another contest: that it exists elsewhere is not the caller's business.")
+	codeGameUploadInProgress = httpx.NewCode("game_upload_in_progress",
+		"This contest already has an upload still receiving chunks. Finish or cancel it before starting another.")
+	codeGameUploadAlreadyComplete = httpx.NewCode("game_upload_already_complete",
+		"This upload has already been completed or cancelled, so it can no longer take chunks, be completed again, or be cancelled.")
+	codeGameUploadIncomplete = httpx.NewCode("game_upload_incomplete",
+		"This upload has not been completed yet, so there is no line index to read a window from.")
+	codeGameUploadTooOften = httpx.NewCode("game_upload_too_often",
+		"Too many uploads have been started from this address or for this contest in a short time. Wait before starting another.")
+
 	codeQueryServiceDown = httpx.NewCode("query_service_down",
 		"The Query Runner could not be reached. Nothing to do with the query, and a retry is the right response rather than an edit.")
 	codeQueryDeclined = httpx.NewCode("query_declined",

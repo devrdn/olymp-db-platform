@@ -259,11 +259,17 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	sessions := auth.NewSessionStore(cacheBackend, cfg.SessionTTL)
 	cookies := auth.NewCookieWriter(cfg.CookieSecure)
 
+	// One instance, shared with GameHandler's own BeginUpload throttle
+	// below: a subject string is namespaced by whoever builds it
+	// ("game_upload_begin:" there, "ip:"/accountSubject here), so one cache
+	// and one counter type serve every fixed-window rate limit this service
+	// keeps rather than each feature growing its own.
+	limiter := auth.NewLimiter(cacheBackend)
 	authService := auth.NewService(auth.ServiceConfig{
 		Users:                 userRepo,
 		Sessions:              sessions,
 		Audit:                 auditRecorder,
-		Limiter:               auth.NewLimiter(cacheBackend),
+		Limiter:               limiter,
 		Logger:                log,
 		MaxAttemptsPerAddress: cfg.MaxLoginAttemptsPerAddress,
 	})
@@ -368,7 +374,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// nothing to build a template on, and an endpoint that took a script it
 	// could never build would be a worse answer than no endpoint.
 	if gameAuthoring != nil {
-		modules = append(modules, api.NewGameHandler(gameAuthoring, gameDatabases, authMiddleware, log))
+		modules = append(modules, api.NewGameHandler(gameAuthoring, gameDatabases, authMiddleware, log, limiter))
 	}
 
 	// The participant's own read of a running contest — the story, the
