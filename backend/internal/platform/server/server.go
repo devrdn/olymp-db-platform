@@ -20,6 +20,15 @@ import (
 // legitimate JSON body — the largest thing the API accepts is a roster import
 // — and far below "indefinitely".
 //
+// "Legitimate JSON body" is the premise, and one route now carries something
+// else: a chunk of an uploaded game dump, megabytes of it, sent from wherever
+// an organiser happens to be with nothing in front buffering the request. It
+// does not weaken this value — it replaces the deadline for its own request
+// with one sized to its own body, through http.ResponseController (see
+// internal/api's minChunkUploadBytesPerSecond). Anything added here that
+// takes a large body has to do the same; raising the number below instead
+// would hand every other route the same slack for no reason.
+//
 // WriteTimeout is deliberately absent, not forgotten. It is measured from the
 // end of the request headers rather than from the start of the response, so
 // any value at all would cut off the streaming endpoints (SSE) that keep a

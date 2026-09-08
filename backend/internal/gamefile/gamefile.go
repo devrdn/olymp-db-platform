@@ -113,6 +113,22 @@ var (
 	// called before Complete has built one.
 	ErrIncomplete = errors.New("upload has not been completed")
 
+	// ErrChunkIncomplete is a chunk whose body stopped arriving before the
+	// store had all of it — a dropped connection, a read deadline that
+	// expired mid-body, or a transport ceiling that cut the request off at
+	// the same byte this Store's own cap stopped at. Nothing is kept: Append
+	// truncates back to the offset it started from, so the client resumes by
+	// sending the same chunk again.
+	//
+	// A declared sentinel rather than the bare I/O error it wraps (CLAUDE.md
+	// rule 1) because this is an ordinary event on a route whose body is
+	// megabytes over somebody's home uplink, and "internal error" would tell
+	// a browser that its own retry is pointless. The cause travels inside it
+	// for whoever has to diagnose the deployment — and, for a transport that
+	// has its own name for what happened (http.MaxBytesError), so the HTTP
+	// layer that made that reader can still recognise its own error.
+	ErrChunkIncomplete = errors.New("the chunk body was not received in full")
+
 	// ErrUploadSealed is an Append against an id that Complete has already
 	// sealed. Complete's checksum and line index describe the bytes on disk
 	// at the moment it ran; a write after that would make both describe a

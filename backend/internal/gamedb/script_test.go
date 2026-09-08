@@ -237,6 +237,54 @@ func TestRestrictAndUnrestrictAreSkippedRatherThanRefused(t *testing.T) {
 	}
 }
 
+// Skipping the directive is only safe where pg_dump writes it: between two
+// statements, with nothing of a statement buffered yet. A file assembled by
+// hand, or two dumps concatenated, can put it in the middle of one — and
+// dropping the line there would drop everything read before it, executing a
+// lone ';' instead of the INSERT. A build that "succeeded" without part of
+// its data is the one outcome worse than a refusal.
+func TestARestrictInsideAStatementIsRefusedRatherThanDroppingIt(t *testing.T) {
+	t.Parallel()
+	const script = "INSERT INTO answers VALUES (1, 'secret')\n" +
+		"\\restrict abc123\n" +
+		";\n"
+	r := gamedb.NewScriptReader(strings.NewReader(script))
+
+	_, err := r.Next()
+	if err == nil {
+		t.Fatal("a \\restrict in the middle of a statement was skipped, taking the statement with it")
+	}
+	var syn *gamedb.ScriptSyntaxError
+	if !errors.As(err, &syn) {
+		t.Fatalf("error is %T, want *ScriptSyntaxError: %v", err, err)
+	}
+	if syn.Line != 2 {
+		t.Fatalf("line = %d, want 2", syn.Line)
+	}
+	if !strings.Contains(syn.Message, "restrict") {
+		t.Fatalf("message = %q, does not name the directive", syn.Message)
+	}
+}
+
+// The other side of the same boundary, and the layout every real dump has:
+// pg_dump writes its header comment block *before* the \restrict line, so
+// "nothing accumulated" has to mean "nothing but whitespace and comments" —
+// counting a comment as content would refuse every dump the tool produces
+// (TestARealPgDumpFileIsReadInFull is the same claim against the real file).
+func TestARestrictAfterOnlyCommentsIsStillSkipped(t *testing.T) {
+	t.Parallel()
+	const script = "--\n-- PostgreSQL database dump\n--\n\n" +
+		"\\restrict abc123\n" +
+		"SELECT 1;\n"
+	got := readAllStatements(t, script)
+	if len(got) != 1 {
+		t.Fatalf("got %d statements, want 1: %+v", len(got), got)
+	}
+	if got[0].Text != "SELECT 1;" {
+		t.Fatalf("statement text = %q", got[0].Text)
+	}
+}
+
 // A backslash that is not the very first byte of its line is not a psql
 // command, even when the text right after it reads like one — only column
 // zero, outside every quote and comment, means that.
@@ -376,6 +424,76 @@ func TestACopyBlockWithNoTerminatorIsRefused(t *testing.T) {
 	var syn *gamedb.ScriptSyntaxError
 	if !errors.As(err, &syn) {
 		t.Fatalf("error is %T, want *ScriptSyntaxError: %v", err, err)
+	}
+}
+
+// endlessBytes yields the same byte for ever. It stands in for COPY data
+// that never reaches a newline without putting a multi-megabyte string
+// literal in the test binary — and, wrapped in an io.LimitReader, it is also
+// how the test below stays deterministic instead of running until something
+// runs out of memory.
+type endlessBytes byte
+
+func (b endlessBytes) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = byte(b)
+	}
+	return len(p), nil
+}
+
+// The bound COPY data is read under (CLAUDE.md rule 12). A dump whose data
+// line never ends is untrusted input like any other, and the reader must
+// refuse it with a line number rather than grow one buffer until the API
+// process — the same one serving the olympiad, since the build runs as a
+// background task inside it — is killed for the memory.
+func TestALineOfCopyDataPastTheBoundIsRefused(t *testing.T) {
+	t.Parallel()
+	src := io.MultiReader(
+		strings.NewReader("COPY public.t (a) FROM stdin;\n"),
+		io.LimitReader(endlessBytes('x'), 17<<20), // one line, no '\n' in sight
+		strings.NewReader("\n\\.\n"),
+	)
+	r := gamedb.NewScriptReader(src)
+
+	if _, err := r.Next(); err != nil {
+		t.Fatalf("Next(): %v", err)
+	}
+	_, err := io.Copy(io.Discard, r.CopyData())
+	if err == nil {
+		t.Fatal("a COPY data line past the bound was read in full instead of refused")
+	}
+	var syn *gamedb.ScriptSyntaxError
+	if !errors.As(err, &syn) {
+		t.Fatalf("error is %T, want *ScriptSyntaxError: %v", err, err)
+	}
+	if syn.Line != 2 {
+		t.Fatalf("line = %d, want 2 (the first data line)", syn.Line)
+	}
+}
+
+// The other side of that bound: a long row is ordinary in a real dump — one
+// text or bytea column is enough — so the limit must be well clear of what a
+// dump legitimately contains, and a line under it must stream through
+// untouched.
+func TestALongLineOfCopyDataUnderTheBoundIsStreamedWhole(t *testing.T) {
+	t.Parallel()
+	const wide = 1 << 20 // 1 MiB in one column
+	src := io.MultiReader(
+		strings.NewReader("COPY public.t (a) FROM stdin;\n"),
+		io.LimitReader(endlessBytes('x'), wide),
+		strings.NewReader("\n\\.\n"),
+	)
+	r := gamedb.NewScriptReader(src)
+
+	if _, err := r.Next(); err != nil {
+		t.Fatalf("Next(): %v", err)
+	}
+	n, err := io.Copy(io.Discard, r.CopyData())
+	if err != nil {
+		t.Fatalf("reading COPY data: %v", err)
+	}
+	if n != wide+1 { // the row's own bytes plus its newline
+		t.Fatalf("streamed %d bytes, want %d", n, wide+1)
 	}
 }
 

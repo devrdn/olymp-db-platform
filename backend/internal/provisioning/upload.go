@@ -79,6 +79,15 @@ var (
 	ErrUploadChunkOutOfOrder = errors.New("the chunk does not continue where the upload left off")
 	// ErrUploadChunkTooLarge is one chunk past the configured MaxChunkBytes.
 	ErrUploadChunkTooLarge = errors.New("the chunk exceeds the maximum chunk size")
+	// ErrUploadChunkIncomplete is a chunk whose body stopped arriving before
+	// the store had all of it: a dropped connection, or a read deadline that
+	// expired mid-body. Nothing of the chunk was kept (gamefile.
+	// ErrChunkIncomplete's own doc), so the answer to it is to send the same
+	// chunk again — which is the whole reason it is a sentinel and not the
+	// internal error a wrapped I/O failure would have become. On a route
+	// whose body is megabytes over whatever uplink an organiser has, an
+	// interrupted transfer is an ordinary event, not a fault of ours.
+	ErrUploadChunkIncomplete = errors.New("the chunk body was not received in full")
 	// ErrUploadLengthMismatch is Complete finding that what actually landed
 	// on disk does not match what the browser declared at Begin.
 	ErrUploadLengthMismatch = errors.New("the received bytes do not match the declared length")
@@ -119,6 +128,15 @@ func wrapGamefileErr(err error) error {
 		return ErrUploadChunkOutOfOrder
 	case errors.Is(err, gamefile.ErrChunkTooLarge):
 		return ErrUploadChunkTooLarge
+	case errors.Is(err, gamefile.ErrChunkIncomplete):
+		// The one case that wraps rather than replaces. What interrupted the
+		// body is usually the transport's own doing, and the HTTP layer that
+		// created that reader has its own name for it (http.MaxBytesError,
+		// which internal/api's appendChunk answers as "chunk too large"
+		// rather than "send it again"). Replacing the error with a bare
+		// sentinel here would throw that away and leave a client being told
+		// to retry, for ever, a chunk that is simply too big.
+		return fmt.Errorf("%w: %w", ErrUploadChunkIncomplete, err)
 	case errors.Is(err, gamefile.ErrLengthMismatch):
 		return ErrUploadLengthMismatch
 	default:
