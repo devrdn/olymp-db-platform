@@ -55,7 +55,15 @@ func NewStore(dir string, limits Limits) (*Store, error) {
 	if limits.MaxFileBytes <= 0 || limits.MaxDirBytes <= 0 || limits.MaxChunkBytes <= 0 {
 		return nil, fmt.Errorf("gamefile: limits must all be positive, got %+v", limits)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// 0o750, not the 0o755 os.MkdirAll's own default-shaped call would
+	// suggest: this directory holds an organiser's raw contest dump before
+	// anyone has had a chance to look at it, on the same host that serves
+	// the API to every contestant. "Other" gets nothing; "group" keeps read
+	// and traversal so an operator in the deployment's own service group can
+	// inspect the volume without needing to become the API's own user
+	// (gosec G301 wants 0o750 or stricter, which is also the bound this
+	// deployment's other MkdirAll calls already use — see cmd/apicontract).
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("gamefile: create upload directory: %w", err)
 	}
 	return &Store{dir: dir, limits: limits, locks: newIDLocks()}, nil
@@ -120,7 +128,19 @@ func (s *Store) Begin(id string) error {
 		return ErrStoreFull
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	// path is dataPath(id): id has already passed validateUploadID's
+	// charset gate above ([0-9a-fA-F-], neither '/' nor '.'), so this join
+	// can never escape s.dir or name anything but one file directly inside
+	// it — there is no path segment here for a caller to control (gosec
+	// G304 flags any variable reaching OpenFile; this one cannot vary
+	// outside the id's own validated charset).
+	//
+	// 0o600, not 0o644: the same contest dump this file will hold is what
+	// store.go's NewStore doc already treats as unpublished until the
+	// contest starts, so "other" (and here, "group" too — nothing about the
+	// deployment needs a second reader of an in-progress upload) get
+	// nothing (gosec G302).
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- see comment above
 	if err != nil {
 		if os.IsExist(err) {
 			return nil // lost a race with another Begin for the same id
@@ -174,7 +194,12 @@ func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 	unlock := s.locks.lock(id)
 	defer unlock()
 
-	f, err := os.OpenFile(s.dataPath(id), os.O_RDWR, 0o644)
+	// 0o600 for the same reason Begin creates the file that way: this is the
+	// same not-yet-public contest dump, opened again to append the next
+	// chunk (gosec G302). id is validated above, same as Begin's own
+	// OpenFile — no #nosec needed here, gosec only flagged the permission
+	// bits on this call, not the path.
+	f, err := os.OpenFile(s.dataPath(id), os.O_RDWR, 0o600)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 0, ErrNotFound
