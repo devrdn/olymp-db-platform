@@ -193,7 +193,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 				a.close()
 				return nil, fmt.Errorf("open the upload directory: %w", err)
 			}
-			gameAuthoring = gameAuthoring.WithUploads(uploads, cfg.GameUploadDir, limits)
+			gameAuthoring = gameAuthoring.WithUploads(uploads, limits)
 			a.tasks = append(a.tasks, abandonedUploads(log, gameAuthoring, cfg.GameUploadAbandonedAfter))
 		}
 		// The background half of §2.4: a contest's participant databases
