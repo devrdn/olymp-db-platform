@@ -59,6 +59,34 @@ function sourceFiles(dir: string, found: string[] = []): string[] {
   return found;
 }
 
+/**
+ * Paper has no dark mode. `data-theme="dark"` and a dark `prefers-color-scheme`
+ * both exist to make a screen easier on the eyes at night, and neither is a
+ * reason a printed page should arrive with a near-black background and white
+ * text on it — the print-ready view (`play/print/page.tsx`) is read on paper,
+ * not a screen, regardless of which theme the browser that requested it was
+ * showing a moment before `window.print()` ran.
+ *
+ * Checked at the source rather than by asking jsdom to compute a cascade:
+ * jsdom has no layout and cannot be trusted to evaluate `@media print`
+ * correctly (a lesson this branch already paid for elsewhere) — a false
+ * green here would be exactly the kind of test that passes for the wrong
+ * reason. What is checkable without a real browser is intent: that both
+ * rules which apply the dark palette are gated to `screen`, so print falls
+ * through to `:root`'s own — undecorated, and already light — declaration.
+ */
+describe("printing forces the light palette", () => {
+  const css = readFileSync(join(ROOT, "styles", "tokens.css"), "utf8");
+
+  it("gates the explicit dark theme to screen", () => {
+    expect(css).toMatch(/@media screen\s*{\s*:root\[data-theme="dark"\]/);
+  });
+
+  it("gates the system dark preference to screen", () => {
+    expect(css).toMatch(/@media screen and \(prefers-color-scheme: dark\)/);
+  });
+});
+
 describe("the colours the interface names", () => {
   it("all exist in the design system", () => {
     const known = defined("color");
