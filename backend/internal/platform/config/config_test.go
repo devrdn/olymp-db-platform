@@ -315,6 +315,47 @@ func TestNegativeGameInstanceGraceIsRejected(t *testing.T) {
 	}
 }
 
+// GameBuildTimeout bounds one run of an organiser's game script — see the
+// field's own doc for why thirty minutes and not the provisioning pool's own
+// ten.
+func TestGameBuildTimeoutDefaultsToThirtyMinutes(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.GameBuildTimeout != 30*time.Minute {
+		t.Errorf("GameBuildTimeout = %s, want 30m", cfg.GameBuildTimeout)
+	}
+}
+
+func TestGameBuildTimeoutIsConfigurable(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("GAME_BUILD_TIMEOUT", "2h")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.GameBuildTimeout != 2*time.Hour {
+		t.Errorf("GameBuildTimeout = %s, want 2h", cfg.GameBuildTimeout)
+	}
+}
+
+func TestANonPositiveGameBuildTimeoutIsRejected(t *testing.T) {
+	for _, value := range []string{"0", "-1h"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+			t.Setenv("GAME_BUILD_TIMEOUT", value)
+
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() accepted GAME_BUILD_TIMEOUT=%s, want error", value)
+			}
+		})
+	}
+}
+
 func TestCookieIsSecureOutsideDevelopment(t *testing.T) {
 	// The dangerous default is the insecure one, so production must not have
 	// to remember a flag to get it right.
