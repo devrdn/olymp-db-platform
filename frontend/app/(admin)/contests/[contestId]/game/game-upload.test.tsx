@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
-import type { Upload, UploadLimits } from "@/lib/api/game";
+import type { Game, Upload, UploadLimits } from "@/lib/api/game";
 
 import { GameUpload } from "./game-upload";
 
@@ -61,15 +61,42 @@ function upload(overrides: Partial<Upload> = {}): Upload {
   };
 }
 
+/** An editor-sourced `Game`, the shape most of these tests exercise this
+ * panel alongside — `page.tsx` always renders `GameUpload` next to
+ * `GameEditor`, whichever of the two actually built the current game. */
+function game(overrides: Partial<Game> = {}): Game {
+  return {
+    status: "absent",
+    version: 0,
+    database: "",
+    source: "editor",
+    upload: undefined,
+    buildError: "",
+    scriptBytes: 0,
+    building: false,
+    updatedAt: "",
+    uploadLimits: limits,
+    ...overrides,
+  };
+}
+
 function show({
-  uploadLimits = limits,
+  uploadLimits,
+  initialGame,
   initialUpload = null,
   editable = true,
-}: { uploadLimits?: UploadLimits; initialUpload?: Upload | null; editable?: boolean } = {}) {
+}: {
+  uploadLimits?: UploadLimits;
+  /** Overrides the whole `game` prop — for the file-sourced-reload tests,
+   * which need `source`/`upload` alongside a custom `uploadLimits`. */
+  initialGame?: Game;
+  initialUpload?: Upload | null;
+  editable?: boolean;
+} = {}) {
   return render(
     <GameUpload
       contestId={contestId}
-      uploadLimits={uploadLimits}
+      game={initialGame ?? game({ uploadLimits: uploadLimits ?? limits })}
       initialUpload={initialUpload}
       editable={editable}
       dict={en}
@@ -154,7 +181,7 @@ describe("the game upload panel", () => {
       return { received_bytes: received };
     });
     completeGameUploadAction.mockResolvedValueOnce({
-      value: { status: "pending", version: 2, database: "", buildError: "", scriptBytes: 0, building: true, updatedAt: "", uploadLimits: limits },
+      value: game({ status: "pending", version: 2, building: true }),
     });
     gameUploadWindowAction.mockResolvedValueOnce({
       value: { fromLine: 1, lines: ["CREATE TABLE guests (id uuid);"], totalLines: 1, truncated: false },
@@ -229,16 +256,7 @@ describe("the game upload panel", () => {
     beginGameUploadAction.mockResolvedValueOnce({ value: upload({ receivedBytes: 0, declaredBytes: 5 }) });
     request.mockResolvedValueOnce({ received_bytes: 5 });
     completeGameUploadAction.mockResolvedValueOnce({
-      value: {
-        status: "failed",
-        version: 2,
-        database: "",
-        buildError: 'line 3: syntax error at or near "FRO"',
-        scriptBytes: 0,
-        building: false,
-        updatedAt: "",
-        uploadLimits: limits,
-      },
+      value: game({ status: "failed", version: 2, buildError: 'line 3: syntax error at or near "FRO"' }),
     });
     gameUploadWindowAction
       .mockResolvedValueOnce({
@@ -275,5 +293,68 @@ describe("the game upload panel", () => {
     expect(window.confirm).toHaveBeenCalledWith(tu.cancelConfirm);
     await waitFor(() => expect(abortGameUploadAction).toHaveBeenCalledWith(contestId, uploadId));
     expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
+  });
+
+  // This is the reload this whole panel exists to survive: the tab that ran
+  // the upload is gone, and `game.upload` (from `GET .../game`, carried in
+  // by `page.tsx`) is the only thing left that still names the file. Before
+  // this, a reload of a file-sourced game showed the "Choose file" picker as
+  // if nothing had ever been uploaded — this proves it instead restores the
+  // viewer, not the transient "just finished" message a live completion
+  // shows (`sourceNote`, not `done`), and loads the file's own first window
+  // on its own, without a click.
+  test("restores the file viewer for a file-sourced game after a reload, rather than an empty picker", async () => {
+    gameUploadWindowAction.mockResolvedValueOnce({
+      value: { fromLine: 1, lines: ["CREATE TABLE guests (id uuid);"], totalLines: 1, truncated: false },
+    });
+
+    show({
+      initialGame: game({
+        status: "ready",
+        version: 3,
+        source: "file",
+        upload: { id: uploadId, filename: "dump.sql", bytes: 4096, lines: 7 },
+      }),
+    });
+
+    expect(screen.queryByLabelText(tu.pick)).not.toBeInTheDocument();
+    expect(screen.getByText("dump.sql")).toBeInTheDocument();
+    expect(screen.getByText(tu.sourceNote)).toBeInTheDocument();
+    expect(screen.queryByText(tu.done)).not.toBeInTheDocument();
+
+    await waitFor(() =>
+      expect(gameUploadWindowAction).toHaveBeenCalledWith(contestId, uploadId, 1),
+    );
+    expect(await screen.findByText("CREATE TABLE guests (id uuid);")).toBeInTheDocument();
+  });
+
+  // The same reload, but for a build that had already failed before it —
+  // `completedGame.buildError` is seeded from `game.upload`'s own sibling
+  // field `game.buildError` (`game()`'s default `initialGame` here), and
+  // "jump to the failing line" reads it exactly the way it reads a live
+  // completion's.
+  test("offers to jump to the failing line for a file-sourced game restored after a reload", async () => {
+    gameUploadWindowAction
+      .mockResolvedValueOnce({
+        value: { fromLine: 1, lines: ["SELEC"], totalLines: 5, truncated: false },
+      })
+      .mockResolvedValueOnce({
+        value: { fromLine: 3, lines: ['FRO "guests"'], totalLines: 5, truncated: false },
+      });
+
+    show({
+      initialGame: game({
+        status: "failed",
+        version: 3,
+        source: "file",
+        buildError: 'line 3: syntax error at or near "FRO"',
+        upload: { id: uploadId, filename: "dump.sql", bytes: 4096, lines: 7 },
+      }),
+    });
+
+    const jump = await screen.findByRole("button", { name: tu.jumpToError });
+    await userEvent.click(jump);
+
+    expect(gameUploadWindowAction).toHaveBeenLastCalledWith(contestId, uploadId, 3);
   });
 });

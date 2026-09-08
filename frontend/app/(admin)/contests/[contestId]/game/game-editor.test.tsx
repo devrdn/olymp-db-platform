@@ -19,6 +19,8 @@ function game(overrides: Partial<Game> = {}): Game {
     status: "absent",
     version: 0,
     database: "",
+    source: "editor",
+    upload: undefined,
     buildError: "",
     scriptBytes: 0,
     building: false,
@@ -66,6 +68,23 @@ describe("the game editor", () => {
 
     expect(screen.getByText(t.buildError)).toBeInTheDocument();
     expect(screen.getByText(/nosuchtype/)).toBeInTheDocument();
+  });
+
+  // Without this note, a reloaded page has no way to tell a file-sourced
+  // game apart from one authored right here — the editor below is empty
+  // either way (`provisioning.Template.Script` is empty for a file-sourced
+  // game), so nothing else on this screen says the active game did not come
+  // from what is typed into it.
+  test("says the active game was built from an uploaded file, not this editor", () => {
+    show(game({ status: "ready", version: 1, source: "file" }));
+
+    expect(screen.getByText(t.sourceFile)).toBeInTheDocument();
+  });
+
+  test("says nothing about a file for a game authored right here", () => {
+    show(game({ status: "ready", version: 1, source: "editor" }));
+
+    expect(screen.queryByText(t.sourceFile)).not.toBeInTheDocument();
   });
 
   // Replacing a game raises the template's version, which makes every

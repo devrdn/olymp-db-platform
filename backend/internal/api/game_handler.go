@@ -33,6 +33,9 @@ type Games interface {
 	BeginUpload(ctx context.Context, contestID uuid.UUID, filename string, declaredBytes int64) (provisioning.Upload, error)
 	AppendChunk(ctx context.Context, contestID, uploadID uuid.UUID, offset int64, r io.Reader) (int64, error)
 	CurrentUpload(ctx context.Context, contestID uuid.UUID) (provisioning.Upload, error)
+	// Upload resolves the row a file-sourced Template.UploadID names —
+	// gameView's own doc says why the status response needs it.
+	Upload(ctx context.Context, contestID, uploadID uuid.UUID) (provisioning.Upload, error)
 	UploadWindow(ctx context.Context, contestID, uploadID uuid.UUID, fromLine, maxLines int, maxBytes int64) (gamefile.Window, error)
 	CompleteUpload(ctx context.Context, actorID, contestID, uploadID uuid.UUID) (provisioning.Template, error)
 	AbortUpload(ctx context.Context, actorID, contestID, uploadID uuid.UUID) (provisioning.Upload, error)
@@ -247,6 +250,23 @@ type gameResponse struct {
 	// to staff so a name in a cluster listing can be traced back to a
 	// contest; it is never sent to a participant.
 	Database string `json:"database"`
+	// Source says which of the two ways this game was built:
+	// provisioning.SourceEditor or provisioning.SourceFile — empty only for
+	// the synthetic "absent" answer below, a contest with no game at all.
+	//
+	// Without this the interface has no way to tell the two apart once the
+	// page that did the upload is gone: a reload has only this response to
+	// go on, and before this field existed it read every game as if it had
+	// come from the script editor (the defect this field, and Upload below,
+	// exist to close — CLAUDE.md rule 11: the domain already tells the two
+	// sources apart, provisioning.Template.Source, and that fact was not
+	// crossing the boundary to whoever has to render it).
+	Source string `json:"source"`
+	// Upload names the file a file-sourced game (Source == "file") was built
+	// from — nil for provisioning.SourceEditor, where there is no file to
+	// name. See gameUploadSourceResponse's own doc for why this is nested
+	// rather than flattened onto this struct.
+	Upload *gameUploadSourceResponse `json:"upload,omitempty"`
 	// BuildError is PostgreSQL's own words about the *script* when the build
 	// failed, empty otherwise. Whoever wrote the script is the person who has
 	// to fix it.
@@ -267,6 +287,70 @@ type gameResponse struct {
 	// uploadLimitsResponse's own doc says why they travel here and how a
 	// client tells "uploads are off" from "the limit is genuinely zero".
 	UploadLimits uploadLimitsResponse `json:"upload_limits"`
+}
+
+// gameUploadSourceResponse is enough about a file-sourced game's own upload
+// for the console to reopen its viewer after a reload — the same window
+// uploadWindow already serves, addressed by ID, plus the name and the two
+// counts a person needs to recognise which file this was without opening it.
+//
+// Nested under gameResponse.Upload rather than flattened: these four fields
+// are meaningless for an editor-sourced game, and nesting is what lets a
+// client tell "this game has no upload" (Upload == nil) from "the upload's
+// fields happen to be zero" without a parallel boolean, the same choice
+// uploadLimitsResponse's own Enabled field makes for a different pair of
+// numbers.
+//
+// A subset of provisioning.Upload, deliberately: SHA256, DeclaredBytes,
+// CreatedAt and the rest belong to uploadResponse, which already serves them
+// while an upload is in flight. Once it has become a contest's game, what
+// matters here is only what the viewer and "jump to error" need — the row's
+// own id, name, final length and line count.
+type gameUploadSourceResponse struct {
+	ID       string `json:"id"`
+	Filename string `json:"filename"`
+	// Bytes is Upload.ReceivedBytes, not DeclaredBytes: by the time a game is
+	// file-sourced its upload is sealed, and ReceivedBytes is Store.Complete's
+	// own measured length — the number that is actually true of the file on
+	// disk, not the browser's claim before a byte of it had arrived.
+	Bytes int64 `json:"bytes"`
+	Lines int64 `json:"lines"`
+}
+
+// gameView assembles gameResponse from a domain Template — the one place
+// that shape is built, so status, setScript and completeUpload cannot drift
+// from one another the way three separate literals eventually would (they
+// did, before this existed: setScript and completeUpload never carried
+// Source or Upload at all, which was half of this defect by itself).
+//
+// Resolving Upload costs a second read when the game is file-sourced. That
+// read is never allowed to fail the whole response: an organiser asking
+// "what is my game's status" must still get an answer when only the file
+// detail could not be read, the same reasoning gameInstanceView gives for a
+// size the cluster could not report. The failure is logged, not swallowed
+// silently — an Upload that is unexpectedly missing for a file-sourced
+// Template is a data inconsistency worth an operator seeing.
+func (h *GameHandler) gameView(ctx context.Context, template provisioning.Template) gameResponse {
+	resp := gameResponse{
+		Status: string(template.Status), Version: template.Version,
+		Source:   string(template.Source),
+		Database: template.Database, BuildError: template.BuildError,
+		ScriptBytes: len(template.Script), Building: template.Building(),
+		UpdatedAt: template.UpdatedAt, UploadLimits: h.uploadLimitsView(),
+	}
+	if template.Source == provisioning.SourceFile && template.UploadID != nil {
+		upload, err := h.games.Upload(ctx, template.ContestID, *template.UploadID)
+		if err != nil {
+			h.log.ErrorContext(ctx, "could not read a file-sourced game's own upload",
+				"contest_id", template.ContestID, "upload_id", *template.UploadID, "error", err)
+		} else {
+			resp.Upload = &gameUploadSourceResponse{
+				ID: upload.ID.String(), Filename: upload.Filename,
+				Bytes: upload.ReceivedBytes, Lines: upload.Lines,
+			}
+		}
+	}
+	return resp
 }
 
 type gameScriptResponse struct {
@@ -295,12 +379,7 @@ func (h *GameHandler) status(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	httpx.JSON(w, r, http.StatusOK, gameResponse{
-		Status: string(template.Status), Version: template.Version,
-		Database: template.Database, BuildError: template.BuildError,
-		ScriptBytes: len(template.Script), Building: template.Building(),
-		UpdatedAt: template.UpdatedAt, UploadLimits: h.uploadLimitsView(),
-	})
+	httpx.JSON(w, r, http.StatusOK, h.gameView(r.Context(), template))
 }
 
 func (h *GameHandler) script(w http.ResponseWriter, r *http.Request) {
@@ -342,12 +421,7 @@ func (h *GameHandler) setScript(w http.ResponseWriter, r *http.Request) {
 
 	// 202, not 204: the script is stored and the build has not happened. The
 	// status this returns is `pending`, and the interface watches it.
-	httpx.JSON(w, r, http.StatusAccepted, gameResponse{
-		Status: string(template.Status), Version: template.Version,
-		Database: template.Database, ScriptBytes: len(template.Script),
-		Building: template.Building(), UpdatedAt: template.UpdatedAt,
-		UploadLimits: h.uploadLimitsView(),
-	})
+	httpx.JSON(w, r, http.StatusAccepted, h.gameView(r.Context(), template))
 }
 
 // gameInstanceResponse is one database as staff see it.
@@ -733,12 +807,7 @@ func (h *GameHandler) completeUpload(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	httpx.JSON(w, r, http.StatusAccepted, gameResponse{
-		Status: string(template.Status), Version: template.Version,
-		Database: template.Database, ScriptBytes: len(template.Script),
-		Building: template.Building(), UpdatedAt: template.UpdatedAt,
-		UploadLimits: h.uploadLimitsView(),
-	})
+	httpx.JSON(w, r, http.StatusAccepted, h.gameView(r.Context(), template))
 }
 
 // abortUpload cancels an organiser's own upload before it became anybody's

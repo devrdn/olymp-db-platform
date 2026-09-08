@@ -146,6 +146,7 @@ const en = {
       buildError: "The build failed",
       buildErrorLede: "These are PostgreSQL's own words. Fix the script and save again.",
       unavailable: "This installation has no game cluster configured, so there is nowhere to build a game database. Set GAME_PROVISIONER_DSN and restart the API.",
+      sourceFile: "The active game was built from an uploaded file, not from the script below. Saving this script replaces it.",
       status: {
         absent: "no game",
         pending: "waiting to build",
@@ -178,6 +179,7 @@ const en = {
         retry: "Retry",
         completing: "Finishing…",
         done: "File received. The build has started.",
+        sourceNote: "This is the file the active game was built from.",
         viewHeading: "The file's contents",
         gotoLabel: "Line",
         gotoButton: "Go",

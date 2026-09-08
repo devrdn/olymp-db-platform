@@ -195,6 +195,53 @@ func TestCompletingAnUploadBumpsTheVersionAndQueuesTheBuild(t *testing.T) {
 	}
 }
 
+// Games.Upload is what internal/api's gameView resolves a file-sourced
+// Template.UploadID through — this is the fact CLAUDE.md rule 11 asks to
+// cross the boundary to the API layer, and this proves the domain side of
+// that crossing actually has it: the completed upload's filename, its final
+// measured length and its line count, read back by the very id the template
+// now carries.
+func TestUploadResolvesTheRowAFileSourcedTemplatesUploadIDNames(t *testing.T) {
+	games, _ := gamesWithUploads(t, true)
+	contest, _ := contestFor(t, t.Context(), 0)
+	actor := uuid.New()
+
+	begun := beginWithContent(t, games, contest.ID, "dump.sql", "CREATE X;\nCREATE Y;\n")
+	template, err := games.CompleteUpload(t.Context(), actor, contest.ID, begun.ID)
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if template.UploadID == nil {
+		t.Fatal("a file-sourced template carries no upload id")
+	}
+
+	resolved, err := games.Upload(t.Context(), contest.ID, *template.UploadID)
+	if err != nil {
+		t.Fatalf("Upload(): %v", err)
+	}
+	if resolved.ID != begun.ID || resolved.Filename != "dump.sql" {
+		t.Fatalf("resolved = %+v, want id %s and filename dump.sql", resolved, begun.ID)
+	}
+	if resolved.ReceivedBytes != int64(len("CREATE X;\nCREATE Y;\n")) {
+		t.Fatalf("received_bytes = %d, want %d", resolved.ReceivedBytes, len("CREATE X;\nCREATE Y;\n"))
+	}
+	if resolved.Lines != 2 {
+		t.Fatalf("lines = %d, want 2", resolved.Lines)
+	}
+	if resolved.Status != provisioning.UploadComplete {
+		t.Fatalf("status = %q, want complete", resolved.Status)
+	}
+
+	// The same contest-scoping currentContestUpload already enforces
+	// everywhere else: an id that names a real upload of a *different*
+	// contest must answer exactly as "no such upload", not leak that the row
+	// exists.
+	other, _ := contestFor(t, t.Context(), 0)
+	if _, err := games.Upload(t.Context(), other.ID, *template.UploadID); !errors.Is(err, provisioning.ErrUploadNotFound) {
+		t.Fatalf("cross-contest Upload() = %v, want ErrUploadNotFound", err)
+	}
+}
+
 // The order Instances.DropInstance already uses: the real object goes first.
 // A newly completed upload displaces the previous one, and its file is gone
 // from disk once completion succeeds.

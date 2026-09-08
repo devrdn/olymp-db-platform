@@ -135,6 +135,7 @@ const ro = {
       buildError: "Construirea a eșuat",
       buildErrorLede: "Acestea sunt cuvintele PostgreSQL. Corectați scriptul și salvați din nou.",
       unavailable: "Această instalare nu are un cluster de joc configurat, deci nu există unde să se construiască baza de joc. Setați GAME_PROVISIONER_DSN și reporniți API-ul.",
+      sourceFile: "Jocul activ a fost construit dintr-un fișier încărcat, nu din scriptul de mai jos. Salvarea acestui script îl înlocuiește.",
       status: {
         absent: "fără joc",
         pending: "în așteptare",
@@ -162,6 +163,7 @@ const ro = {
         retry: "Reîncearcă",
         completing: "Se finalizează…",
         done: "Fișierul a fost primit. Construirea a început.",
+        sourceNote: "Acesta este fișierul din care a fost construit jocul activ.",
         viewHeading: "Conținutul fișierului",
         gotoLabel: "Linia",
         gotoButton: "Mergi",

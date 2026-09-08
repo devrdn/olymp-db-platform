@@ -232,6 +232,25 @@ func (g *Games) CurrentUpload(ctx context.Context, contestID uuid.UUID) (Upload,
 	return g.repo.CurrentUpload(ctx, contestID)
 }
 
+// Upload reads one upload of this contest by id, whatever its status —
+// currentContestUpload already does exactly this internally, exposed here so
+// a caller can resolve the row a file-sourced Template.UploadID names.
+//
+// This is what lets GET /contests/{id}/game describe the file a file-sourced
+// game came from (internal/api's gameResponse.Upload) without a second copy
+// of the upload's own bookkeeping: the filename, the length, the line count
+// all already live on this row, and CLAUDE.md rule 11 is the value that
+// decided this — Template only ever kept UploadID, the row it points at is
+// where the rest of the fact already lived, so the API layer reads it from
+// here rather than this package growing a duplicate field to carry it.
+//
+// Unlike CurrentUpload, not limited to 'receiving': a file-sourced game's own
+// upload is 'complete' by the time anything asks for it this way, and
+// currentContestUpload never filtered on status to begin with.
+func (g *Games) Upload(ctx context.Context, contestID, uploadID uuid.UUID) (Upload, error) {
+	return g.currentContestUpload(ctx, contestID, uploadID)
+}
+
 // UploadWindow reads a slice of a completed upload's lines — the console's
 // own preview of a script it will not run yet (Build's own doc, above).
 func (g *Games) UploadWindow(ctx context.Context, contestID, uploadID uuid.UUID, fromLine, maxLines int, maxBytes int64) (gamefile.Window, error) {
