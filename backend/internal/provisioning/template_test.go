@@ -3,12 +3,15 @@ package provisioning_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/gamefile"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
@@ -228,10 +231,21 @@ type buildCluster struct {
 	fail    error
 }
 
-func (c *buildCluster) BuildTemplate(_ context.Context, name, script string, policy sqlpolicy.Policy) error {
+func (c *buildCluster) BuildTemplate(_ context.Context, name string, script io.Reader, policy sqlpolicy.Policy) error {
+	// Read in full before recording: TemplateCluster's real implementation
+	// (gamedb.Provisioner.BuildTemplate) streams script rather than holding
+	// it all in memory, but what this fake asserts on is the bytes that
+	// reached it — an editor's script wrapped in strings.NewReader, or an
+	// uploaded file's own contents — so it has to consume the reader the
+	// same way a real build would.
+	data, err := io.ReadAll(script)
+	if err != nil {
+		return fmt.Errorf("buildCluster: read script: %w", err)
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.names, c.scripts, c.policy = append(c.names, name), append(c.scripts, script), policy
+	c.names, c.scripts, c.policy = append(c.names, name), append(c.scripts, string(data)), policy
 	return c.fail
 }
 
@@ -537,35 +551,154 @@ func TestBuildingWithNothingWaitingSaysSoRatherThanFailing(t *testing.T) {
 	}
 }
 
-// Streaming an uploaded dump into the game cluster is a later task's own
-// work. A build that tried anyway would run claimed.Script — empty for
-// SourceFile — and mark a database with none of the organiser's tables in it
-// 'ready'; refusing honestly is what this checks instead.
-func TestBuildingAFileSourcedGameRefusesHonestlyWithoutTouchingTheCluster(t *testing.T) {
+// uploadsGames is games(editable), plus a real gamefile.Store backing a
+// file-sourced game's build — the one thing games() itself never wires up
+// (WithUploads is left uncalled there on purpose, for the tests about an
+// installation with no upload volume configured at all).
+func uploadsGames(t *testing.T, editable bool) (*provisioning.Games, *templateStore, *buildCluster, *gamefile.Store) {
+	t.Helper()
+	service, store, cluster := games(editable)
+	limits := gamefile.Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 1 << 20, MaxChunkBytes: 1 << 20}
+	files, err := gamefile.NewStore(t.TempDir(), limits)
+	if err != nil {
+		t.Fatalf("opening the upload store: %v", err)
+	}
+	service.WithUploads(files, limits)
+	return service, store, cluster, files
+}
+
+// sealedUpload writes dump to files under id, exactly as a completed browser
+// upload would have left it (internal/gamefile.Store's own three-call
+// lifecycle), so a build has real bytes on disk to open.
+func sealedUpload(t *testing.T, files *gamefile.Store, id uuid.UUID, dump string) {
+	t.Helper()
+	if err := files.Begin(id.String()); err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	if _, err := files.Append(id.String(), 0, strings.NewReader(dump)); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if _, err := files.Complete(id.String(), int64(len(dump))); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+}
+
+// The point of BuildTemplate taking an io.Reader (its own doc explains why):
+// a file-sourced game's build opens the uploaded bytes straight off disk and
+// runs them through the identical path an editor's script uses, rather than
+// a second one that could drift from it.
+func TestBuildingAFileSourcedGameStreamsTheUploadedFileThroughTheSameClusterPathAScriptUses(t *testing.T) {
 	t.Parallel()
-	service, store, cluster := games(true)
+	service, store, cluster, files := uploadsGames(t, true)
+
+	const dump = "CREATE TABLE guests (id int);\nINSERT INTO guests VALUES (1);\n"
+	id := uuid.New()
+	sealedUpload(t, files, id, dump)
+
 	contest := uuid.New()
 	store.template = provisioning.Template{
-		ContestID: contest, Database: "game_tpl_cabc", Version: 3,
-		Status: provisioning.TemplatePending, Source: provisioning.SourceFile,
+		ContestID: contest, Database: "game_tpl_cabc", Version: 1,
+		Status: provisioning.TemplatePending, Source: provisioning.SourceFile, UploadID: &id,
 	}
 	store.present = true
 
 	built, err := service.Build(t.Context(), time.Minute)
 	if err != nil {
-		t.Fatalf("building a file-sourced game returned an error for the log: %v", err)
+		t.Fatalf("building: %v", err)
+	}
+	if built.Status != provisioning.TemplateReady {
+		t.Fatalf("finished as %q, want ready: %s", built.Status, built.BuildError)
+	}
+	if len(cluster.scripts) != 1 || cluster.scripts[0] != dump {
+		t.Fatalf("built with %v, want the uploaded file's own bytes %q", cluster.scripts, dump)
+	}
+	if len(store.finished) != 1 || store.finished[0].err != "" {
+		t.Fatalf("recorded %+v", store.finished)
+	}
+}
+
+// The other branch finishUploadBuild has in common with Build: PostgreSQL's
+// verdict on the uploaded SQL is the organiser's to read, exactly as it is
+// for a script written in the editor.
+func TestAFileSourcedBuildThatFailsKeepsThePostgresErrorForTheOrganiser(t *testing.T) {
+	t.Parallel()
+	service, store, cluster, files := uploadsGames(t, true)
+	cluster.fail = scriptRefusal{says: `the game script was refused: type "nosuchtype" does not exist (SQLSTATE 42704)`}
+
+	id := uuid.New()
+	sealedUpload(t, files, id, `CREATE TABLE oops (x nosuchtype);`)
+	contest := uuid.New()
+	store.template = provisioning.Template{
+		ContestID: contest, Database: "game_tpl_cabc", Version: 1,
+		Status: provisioning.TemplatePending, Source: provisioning.SourceFile, UploadID: &id,
+	}
+	store.present = true
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("a script PostgreSQL refused was reported as the tick's own failure: %v", err)
 	}
 	if built.Status != provisioning.TemplateFailed {
 		t.Fatalf("finished as %q, want failed", built.Status)
 	}
-	if built.BuildError != provisioning.UploadBuildUnavailable {
+	if !strings.Contains(built.BuildError, "nosuchtype") {
+		t.Fatalf("build error = %q — PostgreSQL's own words are the useful ones", built.BuildError)
+	}
+}
+
+// A redeploy that drops GAME_UPLOAD_DIR out from under a game still waiting
+// to build is an installation fault, not the organiser's — games() itself
+// never calls WithUploads, standing in for exactly that installation.
+func TestBuildingAFileSourcedGameWithNoUploadVolumeConfiguredIsAnInternalFault(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := games(true)
+	id := uuid.New()
+	contest := uuid.New()
+	store.template = provisioning.Template{
+		ContestID: contest, Database: "game_tpl_cabc", Version: 3,
+		Status: provisioning.TemplatePending, Source: provisioning.SourceFile, UploadID: &id,
+	}
+	store.present = true
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err == nil {
+		t.Fatal("a build with no upload volume configured was reported as a clean tick")
+	}
+	if built.Status != provisioning.TemplateFailed {
+		t.Fatalf("finished as %q, want failed", built.Status)
+	}
+	if built.BuildError != provisioning.BuildFailedInternally {
 		t.Fatalf("build error = %q, want the fixed sentence", built.BuildError)
 	}
 	if len(cluster.names) != 0 {
-		t.Fatal("a file-sourced game reached BuildTemplate, which nothing has taught to run one yet")
+		t.Fatal("a file-sourced game with no upload volume reached BuildTemplate")
 	}
-	if len(store.finished) != 1 || store.finished[0].err != provisioning.UploadBuildUnavailable {
+	if len(store.finished) != 1 || store.finished[0].err != provisioning.BuildFailedInternally {
 		t.Fatalf("recorded %+v, want the fixed sentence", store.finished)
+	}
+}
+
+// migration 24's own CHECK ties SourceFile to a non-nil UploadID; a row that
+// somehow lacks one is corrupt, never something an organiser's upload did.
+func TestBuildingAFileSourcedGameWithNoUploadIDIsAnInternalFault(t *testing.T) {
+	t.Parallel()
+	service, store, cluster, _ := uploadsGames(t, true)
+	contest := uuid.New()
+	store.template = provisioning.Template{
+		ContestID: contest, Database: "game_tpl_cabc", Version: 3,
+		Status: provisioning.TemplatePending, Source: provisioning.SourceFile, // UploadID left nil
+	}
+	store.present = true
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err == nil {
+		t.Fatal("a corrupt file-sourced row (no upload id) was reported as a clean tick")
+	}
+	if built.BuildError != provisioning.BuildFailedInternally {
+		t.Fatalf("build error = %q, want the fixed sentence", built.BuildError)
+	}
+	if len(cluster.names) != 0 {
+		t.Fatal("a row with no upload id reached BuildTemplate")
 	}
 }
 
