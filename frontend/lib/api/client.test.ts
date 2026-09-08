@@ -75,6 +75,42 @@ describe("request", () => {
     expect(seen?.init?.headers).toMatchObject({ "content-type": "application/json" });
     expect(seen?.init?.body).toBe('{"status":"published"}');
   });
+
+  // A game upload's chunk is a Blob straight off `File.slice`, sent exactly
+  // as raw bytes go — no content type, no wrapping JSON — the same as the
+  // ArrayBuffer the settings-image upload already sends this way.
+  test("sends a Blob body as-is, with no content type declared for it", async () => {
+    let seen: RequestInit | undefined;
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      seen = init;
+      return new Response(null, { status: 204 });
+    };
+    const chunk = new Blob([new Uint8Array([1, 2, 3])]);
+
+    await request("/contests/1/game/uploads/u1/chunk?offset=0", {
+      method: "PUT",
+      rawBody: chunk,
+      fetchImpl,
+    });
+
+    expect(seen?.body).toBe(chunk);
+    expect(seen?.headers).not.toMatchObject({ "content-type": expect.anything() });
+  });
+
+  // The one thing a browser-side upload loop needs that a Server Action
+  // never does: a way to cancel a request already in flight.
+  test("carries an abort signal through to fetch", async () => {
+    let seen: RequestInit | undefined;
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      seen = init;
+      return new Response(null, { status: 204 });
+    };
+    const controller = new AbortController();
+
+    await request("/x", { fetchImpl, signal: controller.signal });
+
+    expect(seen?.signal).toBe(controller.signal);
+  });
 });
 
 describe("what an error is about", () => {

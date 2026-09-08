@@ -1,9 +1,10 @@
-import { gameSchema, gameScriptSchema } from "@/lib/api/game";
+import { gameSchema, gameScriptSchema, uploadSchema } from "@/lib/api/game";
 import { contentEditable } from "@/lib/api/contests";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { loadContest, loadContestResource } from "../contest";
 import { GameEditor } from "./game-editor";
+import { GameUpload } from "./game-upload";
 
 /**
  * The SQL an olympiad's game is built from.
@@ -43,6 +44,21 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
     }),
   ]);
 
+  // A separate, best-effort read rather than a third branch of the
+  // `Promise.all` above: `GET .../uploads/current` answers `game_uploads_
+  // disabled` (404) on an installation with no upload volume configured,
+  // which is not a reason to fail this whole page — `game.uploadLimits.
+  // enabled` already says the same thing in a shape `GameUpload` renders
+  // instead of crashing on. Skipped entirely once the game itself could not
+  // be read, the same reason `databases/page.tsx` skips its own instances
+  // read: there is nothing for either half of the screen to show.
+  const initialUpload =
+    game === null
+      ? null
+      : await loadContestResource(contestId, "/game/uploads/current", (payload) =>
+          uploadSchema.parse(payload),
+        ).catch(() => null);
+
   const t = dict.workspace.game;
 
   return (
@@ -55,13 +71,22 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
       {game === null ? (
         <p className="max-w-body text-body text-ink-2">{t.unavailable}</p>
       ) : (
-        <GameEditor
-          contestId={contestId}
-          initial={game}
-          initialScript={script?.script ?? ""}
-          editable={contentEditable(contest.status)}
-          dict={dict}
-        />
+        <>
+          <GameEditor
+            contestId={contestId}
+            initial={game}
+            initialScript={script?.script ?? ""}
+            editable={contentEditable(contest.status)}
+            dict={dict}
+          />
+          <GameUpload
+            contestId={contestId}
+            uploadLimits={game.uploadLimits}
+            initialUpload={initialUpload}
+            editable={contentEditable(contest.status)}
+            dict={dict}
+          />
+        </>
       )}
     </div>
   );

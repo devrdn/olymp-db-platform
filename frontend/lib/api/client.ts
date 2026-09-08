@@ -15,12 +15,25 @@ export type RequestOptions = {
    * API reads the bytes to decide what they are, so no content type is
    * declared: one sent from here would be this side's guess about a file it
    * never opened.
+   *
+   * `Blob` as well as `ArrayBuffer`, and deliberately so: a game upload's
+   * chunk is `File.slice(...)`, a `Blob` the browser streams from disk on its
+   * own. Forcing it through `.arrayBuffer()` first would materialise the
+   * whole piece in the JS heap a copy earlier than it has to be — small for
+   * one chunk, but this same call is made a few hundred times for one file.
    */
-  rawBody?: ArrayBuffer;
+  rawBody?: ArrayBuffer | Blob;
   /** Absolute prefix; the server wrapper supplies one, the browser needs none. */
   origin?: string;
   /** Forwarded verbatim; the server wrapper uses this to pass the session on. */
   headers?: Record<string, string>;
+  /**
+   * Lets a caller cancel a request already under way — a browser-side upload
+   * loop's "Cancel" button, which a Server Action has no equivalent of
+   * (there is nothing to abort a POST already dispatched to one). Unused by
+   * every server-side caller, which never has anyone to cancel on behalf of.
+   */
+  signal?: AbortSignal;
   fetchImpl?: typeof fetch;
 };
 
@@ -100,9 +113,9 @@ type ErrorEnvelope = {
 };
 
 export async function request(path: string, options: RequestOptions = {}): Promise<unknown> {
-  const { method, body, rawBody, origin = "", headers = {}, fetchImpl = fetch } = options;
+  const { method, body, rawBody, origin = "", headers = {}, signal, fetchImpl = fetch } = options;
 
-  const init: RequestInit = { method, headers };
+  const init: RequestInit = { method, headers, signal };
   if (body !== undefined) {
     init.headers = { ...headers, "content-type": "application/json" };
     init.body = JSON.stringify(body);
