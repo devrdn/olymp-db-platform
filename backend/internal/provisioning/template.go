@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
@@ -116,13 +118,6 @@ const (
 	SourceFile TemplateSource = "file"
 )
 
-// UploadBuildUnavailable is what a file-sourced game's build_error reads
-// until streaming an uploaded dump into the game cluster exists. Not a
-// failure of the organiser's file or of this installation's cluster — Build
-// says so honestly rather than running an empty init_script, which is what a
-// 'file' row carries in that column (see finishUploadBuild).
-const UploadBuildUnavailable = "This game was uploaded as a file. Building it is not available on this installation yet."
-
 // Template is one contest's game, as an organiser sees it.
 type Template struct {
 	ContestID uuid.UUID
@@ -133,12 +128,14 @@ type Template struct {
 	// UploadID names the game_uploads row a file-sourced game came from. Nil
 	// for SourceEditor — the pairing migration 24's own CHECK enforces.
 	UploadID *uuid.UUID
-	// Script is the SQL an author uploaded. Staff-trusted input: it runs with
-	// the provisioning role's privileges (gamedb.Provisioner.BuildTemplate's
-	// own doc), which is why writing it sits behind PermissionContestEdit and
-	// is written to the audit trail. Empty for SourceFile — nothing here
-	// executes a file-sourced game's SQL yet, and inventing a Script for one
-	// would be lying about where it came from.
+	// Script is the SQL an author wrote in the editor. Staff-trusted input:
+	// it runs as gamedb.RoleAuthor, never as the provisioning role
+	// (gamedb.Provisioner.BuildTemplate's own doc), which is why writing it
+	// sits behind PermissionContestEdit and is written to the audit trail.
+	// Empty for SourceFile — a file-sourced game's SQL is the uploaded
+	// bytes themselves (internal/gamefile.Store.Open, via UploadID), and
+	// inventing a Script for one here would be lying about where it came
+	// from.
 	Script     string
 	BuildError string
 	UpdatedAt  time.Time
@@ -257,8 +254,16 @@ type Games struct {
 }
 
 // TemplateCluster is the one thing building a game asks of the cluster.
+//
+// script is an io.Reader rather than a string: gamedb.Provisioner.
+// BuildTemplate streams it statement by statement instead of holding it all
+// in memory, which is what makes an uploaded dump's own gigabytes buildable
+// at all. Build below wraps an editor-sourced game's script in
+// strings.NewReader; finishUploadBuild hands the uploaded file straight
+// through — the same interface either way, so both sources run the identical
+// path on the cluster.
 type TemplateCluster interface {
-	BuildTemplate(ctx context.Context, name, script string, policy sqlpolicy.Policy) error
+	BuildTemplate(ctx context.Context, name string, script io.Reader, policy sqlpolicy.Policy) error
 }
 
 // unitOfWork is the transaction boundary a save and its audit entry share.
@@ -442,7 +447,7 @@ func (g *Games) Build(ctx context.Context, stale time.Duration) (Template, error
 	}
 
 	if buildErr == "" {
-		if err := g.cluster.BuildTemplate(ctx, claimed.Database, claimed.Script, policy); err != nil {
+		if err := g.cluster.BuildTemplate(ctx, claimed.Database, strings.NewReader(claimed.Script), policy); err != nil {
 			var refused ScriptFailure
 			if errors.As(err, &refused) {
 				// PostgreSQL's own words about their SQL, kept: whoever wrote
@@ -456,6 +461,83 @@ func (g *Games) Build(ctx context.Context, stale time.Duration) (Template, error
 		}
 	}
 
+	return g.recordBuildOutcome(ctx, claimed, buildErr, cause)
+}
+
+// finishUploadBuild is what a claimed build does for a file-sourced game:
+// it opens the upload's own bytes off disk (internal/gamefile.Store.Open)
+// and runs them through the exact same gamedb.Provisioner.BuildTemplate an
+// editor-sourced script uses — the whole point of that method taking an
+// io.Reader now rather than a string (its own doc explains why).
+//
+// Every way that can fail before the script itself runs — no upload volume
+// configured, a row with no upload id, the core database's own policy read,
+// the file failing to open — is an installation- or row-level fault rather
+// than anything an organiser did, and is reported the same way any other
+// cause not the script's own is: BuildFailedInternally on the organiser's
+// screen, the real reason kept for recordBuildOutcome's caller to log.
+func (g *Games) finishUploadBuild(ctx context.Context, claimed Template) (Template, error) {
+	var (
+		buildErr string
+		cause    error
+	)
+
+	switch {
+	case g.files == nil:
+		// GAME_UPLOAD_DIR was set when this game was built (or last
+		// replaced) and is not set on this run of the process — a redeploy
+		// that dropped the upload volume out from under a game still
+		// waiting to build. Nothing an organiser can fix from their own
+		// screen.
+		cause = errors.New("a file-sourced game waited to build, but this installation has no upload volume configured")
+		buildErr = BuildFailedInternally
+	case claimed.UploadID == nil:
+		// Migration 24's own CHECK ties SourceFile to a non-nil UploadID;
+		// reaching this means that constraint was bypassed or the row is
+		// otherwise corrupt, never anything the organiser's upload did.
+		cause = fmt.Errorf("a file-sourced game has no upload id (contest %s)", claimed.ContestID)
+		buildErr = BuildFailedInternally
+	}
+
+	// The privileges the build grants inside the template are the contest's
+	// own SQL policy, read the same way Build reads it above: at the moment
+	// the build actually runs, never carried on the claim.
+	var policy sqlpolicy.Policy
+	if buildErr == "" {
+		var err error
+		if policy, err = g.repo.Policy(ctx, claimed.ContestID); err != nil {
+			cause = fmt.Errorf("read the contest's SQL policy: %w", err)
+			buildErr = BuildFailedInternally
+		}
+	}
+
+	if buildErr == "" {
+		file, err := g.files.Open(claimed.UploadID.String())
+		if err != nil {
+			cause = fmt.Errorf("open the uploaded file: %w", err)
+			buildErr = BuildFailedInternally
+		} else {
+			defer file.Close()
+			if err := g.cluster.BuildTemplate(ctx, claimed.Database, file, policy); err != nil {
+				var refused ScriptFailure
+				if errors.As(err, &refused) {
+					buildErr = refused.ScriptRejection()
+				} else {
+					cause = fmt.Errorf("build the game template from the uploaded file: %w", err)
+					buildErr = BuildFailedInternally
+				}
+			}
+		}
+	}
+
+	return g.recordBuildOutcome(ctx, claimed, buildErr, cause)
+}
+
+// recordBuildOutcome finishes a claimed build's row and audit trail, the
+// last step of both Build and finishUploadBuild's own paths: whichever ran
+// the script (or refused to, for one of finishUploadBuild's own reasons),
+// what happens to the claim afterward is identical.
+func (g *Games) recordBuildOutcome(ctx context.Context, claimed Template, buildErr string, cause error) (Template, error) {
 	if err := g.repo.FinishBuild(ctx, claimed.ContestID, claimed.Version, buildErr); err != nil {
 		return claimed, errors.Join(cause, fmt.Errorf("record the build's outcome: %w", err))
 	}
@@ -492,43 +574,6 @@ func (g *Games) Build(ctx context.Context, stale time.Duration) (Template, error
 	// typo. It is non-nil only where buildErr is BuildFailedInternally, which
 	// is the case where the log is the only place the detail survives.
 	return claimed, cause
-}
-
-// finishUploadBuild is what a claimed build does for a file-sourced game:
-// nothing on the cluster, honestly. Streaming an uploaded dump into a
-// database is a later task's own work — this task only gives the upload a
-// place in the schema, the domain and the deployment (its own brief says so
-// in as many words) — so running claimed.Script (empty for SourceFile, per
-// Template's own doc) would build nothing, silently, and mark it 'ready'
-// over a database with none of the organiser's tables in it. Refusing with a
-// named reason instead is CLAUDE.md rule 1 applied to a gap in functionality
-// rather than to an error: the organiser reads UploadBuildUnavailable on
-// their own screen, exactly where a script's own SQLSTATE would otherwise
-// appear, and nothing about it is mistaken for their fault or for a broken
-// cluster.
-func (g *Games) finishUploadBuild(ctx context.Context, claimed Template) (Template, error) {
-	if err := g.repo.FinishBuild(ctx, claimed.ContestID, claimed.Version, UploadBuildUnavailable); err != nil {
-		return claimed, fmt.Errorf("record the build's outcome: %w", err)
-	}
-	if g.audit != nil {
-		if err := g.audit.Record(ctx, audit.Entry{
-			Action: audit.ActionGameBuilt, Entity: "contest",
-			EntityID: claimed.ContestID.String(),
-			Payload: map[string]any{
-				"version": claimed.Version, "database": claimed.Database,
-				"ok": false, "error": UploadBuildUnavailable,
-			},
-		}); err != nil {
-			return claimed, fmt.Errorf("record the build in the audit trail: %w", err)
-		}
-	}
-	claimed.Status = TemplateFailed
-	claimed.BuildError = UploadBuildUnavailable
-	// Not returned as the tick's own error: this is not a fault the log has
-	// to keep a cause for, the same reasoning Build's own doc gives for a
-	// script PostgreSQL refused. An operator reads UploadBuildUnavailable off
-	// the same trail row a real build failure would have left.
-	return claimed, nil
 }
 
 // templateName is the database every participant's copy of one contest is

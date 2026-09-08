@@ -160,6 +160,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			a.close()
 			return nil, err
 		}
+		if cluster, err = cluster.WithBuildTimeout(cfg.GameBuildTimeout); err != nil {
+			a.close()
+			return nil, err
+		}
 		games := postgres.NewGameInstances(pool)
 		databases := provisioning.New(games, cluster).
 			WithWorkers(cfg.ProvisionWorkers).

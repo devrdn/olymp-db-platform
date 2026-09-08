@@ -87,6 +87,14 @@ type Config struct {
 	// still its own, because what it buys is exactly that the two are not
 	// interchangeable.
 	GameAuthorPassword string
+	// GameBuildTimeout bounds one call to run an organiser's game script —
+	// gamedb.Provisioner.runScript's own context deadline and the
+	// statement_timeout it sets on the build's connection, deliberately kept
+	// equal (CLAUDE.md rule 15). The role's own session default is
+	// unbounded (authorDefaults, gamedb/cluster.go) precisely so this figure
+	// is the one that governs, and a deployment building larger games than
+	// the default expects raises it rather than editing a role.
+	GameBuildTimeout time.Duration
 	// PoolDepth is the headroom each live contest keeps ready *beyond* the
 	// participants who already hold no copy — what makes a late enrolment
 	// free rather than a wait. It is no longer the whole depth: sizing the
@@ -264,6 +272,16 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf(
 			"GAME_AUTHOR_PASSWORD is required when GAME_PROVISIONER_DSN is set: " +
 				"a game script runs as the game_author role and not as the provisioner")
+	}
+	// Thirty minutes unset — see the field's own doc for why that figure and
+	// not the ten minutes the provisioning pool's own statement_timeout uses
+	// (provisionStatementTimeout, internal/app/background.go): that one
+	// bounds CREATE DATABASE and DROP DATABASE, not an organiser's own SQL.
+	if cfg.GameBuildTimeout, err = durationEnv("GAME_BUILD_TIMEOUT", 30*time.Minute); err != nil {
+		return Config{}, err
+	}
+	if cfg.GameBuildTimeout <= 0 {
+		return Config{}, fmt.Errorf("GAME_BUILD_TIMEOUT must be positive, got %s", cfg.GameBuildTimeout)
 	}
 	if cfg.PoolMax, err = intEnv("GAME_POOL_MAX", 500); err != nil {
 		return Config{}, err

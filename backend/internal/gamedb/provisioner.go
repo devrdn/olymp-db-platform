@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/jackc/pgx/v5"
@@ -122,7 +124,22 @@ type Provisioner struct {
 	// databases; BuildTemplate refuses rather than falling back.
 	authorPassword string
 	strategy       CopyStrategy
+	// buildTimeout bounds one call to runScript — see WithBuildTimeout.
+	buildTimeout time.Duration
 }
+
+// DefaultBuildTimeout is what a build gets when nothing configures
+// otherwise.
+//
+// The role's own statement_timeout is 0 — unlimited — for exactly this
+// reason (authorDefaults, cluster.go): a build's real bound has to be a
+// figure a deployment can raise for a large dump, not a constant baked into
+// the role. Thirty minutes is well past what the design's own example game
+// (a handful of tables, a few hundred rows) ever needs, and well past a
+// three-gigabyte pg_dump's COPY blocks on ordinary disk — while still short
+// enough that a build truly wedged against a stuck cluster is noticed inside
+// a working session rather than found the next morning.
+const DefaultBuildTimeout = 30 * time.Minute
 
 // WithCopyStrategy chooses how copies are made. An unknown one is refused
 // here rather than at the first CREATE DATABASE, which would be during a
@@ -132,6 +149,18 @@ func (p *Provisioner) WithCopyStrategy(strategy CopyStrategy) (*Provisioner, err
 		return nil, fmt.Errorf("unknown copy strategy %q", strategy)
 	}
 	p.strategy = strategy
+	return p, nil
+}
+
+// WithBuildTimeout overrides how long one call to BuildTemplate may spend
+// running the organiser's script (see runScript). Refused up front, the same
+// way WithCopyStrategy is, rather than left to surface as a confusing
+// context error the first time a build actually runs.
+func (p *Provisioner) WithBuildTimeout(d time.Duration) (*Provisioner, error) {
+	if d <= 0 {
+		return nil, fmt.Errorf("build timeout must be positive, got %s", d)
+	}
+	p.buildTimeout = d
 	return p, nil
 }
 
@@ -154,7 +183,9 @@ func NewProvisioner(admin Cluster, adminDSN, authorPassword string) (*Provisione
 	if base.User == nil {
 		return nil, errors.New("the provisioning DSN carries no credentials")
 	}
-	return &Provisioner{admin: admin, base: base, authorPassword: authorPassword}, nil
+	return &Provisioner{
+		admin: admin, base: base, authorPassword: authorPassword, buildTimeout: DefaultBuildTimeout,
+	}, nil
 }
 
 // BuildTemplate makes the database every participant's copy comes from.
@@ -164,16 +195,35 @@ func NewProvisioner(admin Cluster, adminDSN, authorPassword string) (*Provisione
 // with no connection left on the template, because CREATE DATABASE refuses
 // while its source has one — the template discipline of section 4.2, kept here
 // rather than left for the caller to remember.
-// script is the SQL an organiser uploaded: the game's schema and its data. It
-// does not run with the provisioning role's privileges. The route that accepts
-// it is gated by a contest-scoped permission, so its author is any manager of
-// any one contest, while the cluster it runs on holds every other contest's
-// template and every participant's database — which made "manager of a draft
-// contest" and "superuser on the game cluster" the same thing. It runs as
-// game_author instead, over a connection of its own: `SET ROLE` would be undone
-// by a `RESET ROLE` in the script, and authentication is not something SQL can
-// undo.
-func (p *Provisioner) BuildTemplate(ctx context.Context, name, script string, policy sqlpolicy.Policy) error {
+//
+// script is the SQL an organiser uploaded — the game's schema and its data —
+// read from an io.Reader rather than held in memory as one string, because a
+// finished dump can be gigabytes: runScript below streams it statement by
+// statement through gamedb.ScriptReader instead. This is the one path both an
+// editor's pasted-in script and an uploaded file's own bytes go through — see
+// BuildTemplateString for the shape the editor supplies, which is now a thin
+// wrapper over this.
+//
+// It does not run with the provisioning role's privileges. The route that
+// accepts it is gated by a contest-scoped permission, so its author is any
+// manager of any one contest, while the cluster it runs on holds every other
+// contest's template and every participant's database — which made "manager
+// of a draft contest" and "superuser on the game cluster" the same thing. It
+// runs as game_author instead, over a connection of its own: `SET ROLE` would
+// be undone by a `RESET ROLE` in the script, and authentication is not
+// something SQL can undo.
+//
+// A semantic change from before this file existed, worth stating once rather
+// than rediscovering: the whole script used to run as a single Exec over the
+// simple protocol, which is one implicit transaction — the last statement
+// failing rolled every earlier one back too. Split into one Exec per
+// statement (and one CopyFrom per COPY block), each now commits on its own.
+// Observably this changes nothing, because BuildTemplate already tears down
+// the whole database on any failure (the comment on the call to fill below is
+// the reason that has always been true) — but that reasoning belongs here in
+// writing, not rediscovered by the next person who reads runScript and
+// wonders why a partial script's earlier statements are not rolled back.
+func (p *Provisioner) BuildTemplate(ctx context.Context, name string, script io.Reader, policy sqlpolicy.Policy) error {
 	if !sqlpolicy.PlainIdentifier(name) {
 		return fmt.Errorf("%w: %q", ErrBadName, name)
 	}
@@ -203,6 +253,17 @@ func (p *Provisioner) BuildTemplate(ctx context.Context, name, script string, po
 	return nil
 }
 
+// BuildTemplateString is BuildTemplate for a script that already lives in
+// memory as a Go string — the shape an organiser's editor submits, and the
+// only shape this package had before an uploaded file needed the same path.
+// A thin wrapper: strings.NewReader costs nothing next to CREATE DATABASE,
+// and it is what keeps the editor and a file on the exact same execution
+// path BuildTemplate's own doc describes, rather than a second one that could
+// drift from it.
+func (p *Provisioner) BuildTemplateString(ctx context.Context, name, script string, policy sqlpolicy.Policy) error {
+	return p.BuildTemplate(ctx, name, strings.NewReader(script), policy)
+}
+
 // fill runs the organiser's script and applies the contest's privileges, over
 // connections that are all closed again before it returns.
 //
@@ -211,7 +272,7 @@ func (p *Provisioner) BuildTemplate(ctx context.Context, name, script string, po
 // only a superuser can — revoking SELECT on the catalogues, which are owned by
 // the cluster's bootstrap role. The script's own connection is authenticated
 // as game_author and is the only place the uploaded SQL ever runs.
-func (p *Provisioner) fill(ctx context.Context, name, script string, policy sqlpolicy.Policy) error {
+func (p *Provisioner) fill(ctx context.Context, name string, script io.Reader, policy sqlpolicy.Policy) error {
 	admin, err := p.connect(ctx, p.base.User, name)
 	if err != nil {
 		return err
@@ -235,25 +296,70 @@ func (p *Provisioner) fill(ctx context.Context, name, script string, policy sqlp
 	return HardenDatabase(ctx, admin)
 }
 
-// runScript executes the uploaded SQL over its own connection, authenticated
-// as game_author, and closes it again.
+// runScript streams the uploaded SQL, one statement (or COPY block) at a
+// time, over its own connection authenticated as game_author, and closes it
+// again.
 //
 // Closed here rather than by the caller for the reason BuildTemplate states:
 // a template with a connection on it cannot be copied, and the script's
 // connection is the one most likely to be forgotten.
-func (p *Provisioner) runScript(ctx context.Context, database, script string) error {
+//
+// Two bounds on this call's own time, deliberately set to agree (CLAUDE.md
+// rule 15): the context deadline below, which stops the whole call however
+// many statements are left when it fires, and the explicit statement_timeout
+// set on the connection, which stops any *one* statement — a single COPY of a
+// large table can plausibly be most of a build's own time, so a per-statement
+// cap has to be at least as generous as the whole-call one, and there is no
+// principled smaller number to give it instead. Left at the role's own
+// default of 0 (see authorDefaults, cluster.go) the two would say different
+// things: an unbounded statement racing a context that can still cancel it,
+// which works today only because pgx honours ctx cancellation — a detail
+// nobody should have to know to trust the bound.
+func (p *Provisioner) runScript(ctx context.Context, database string, script io.Reader) error {
+	ctx, cancel := context.WithTimeout(ctx, p.buildTimeout)
+	defer cancel()
+
 	conn, err := p.connect(ctx, url.UserPassword(RoleAuthor, p.authorPassword), database)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
 
-	// One Exec with no arguments goes over the simple protocol, which is what
-	// lets an uploaded script be many statements — the shape a person writes.
-	if _, err := conn.Exec(ctx, script); err != nil {
+	timeoutMS := p.buildTimeout.Milliseconds()
+	if _, err := conn.Exec(ctx, fmt.Sprintf(`SET statement_timeout = %d`, timeoutMS)); err != nil {
 		return scriptFailure(err)
 	}
-	return nil
+
+	reader := NewScriptReader(script)
+	for {
+		stmt, err := reader.Next()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			// The reader's own verdict on the script text — never
+			// PostgreSQL's, so this skips scriptFailure's classification
+			// entirely and returns it as-is. *ScriptSyntaxError already
+			// satisfies provisioning.ScriptFailure (see its own doc), exactly
+			// as *ScriptError does for the database's verdicts below.
+			return err
+		}
+
+		if stmt.CopyHeader != "" {
+			if _, err := conn.PgConn().CopyFrom(ctx, reader.CopyData(), stmt.CopyHeader); err != nil {
+				return scriptFailure(err)
+			}
+			continue
+		}
+
+		// One statement per Exec — see BuildTemplate's own doc for the
+		// semantic change this is from a single multi-statement Exec, and why
+		// it is safe: each now commits on its own rather than sharing one
+		// implicit transaction with every other statement in the script.
+		if _, err := conn.Exec(ctx, stmt.Text); err != nil {
+			return scriptFailure(err)
+		}
+	}
 }
 
 // scriptFailure decides whether a failure of the uploaded SQL is PostgreSQL's

@@ -171,6 +171,97 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesTellsTheOrganiserWhat
 	}
 }
 
+// A real streaming build: the reason gamedb.Provisioner.BuildTemplate now
+// takes an io.Reader is to run a script one statement (or COPY block) at a
+// time instead of holding it all in memory, and the one part of that a fake
+// connection cannot prove is that pgconn.PgConn.CopyFrom really accepts what
+// gamedb.ScriptReader hands it. Shaped like a small pg_dump on purpose: the
+// leading "-- Data for Name: ..." comment block pg_dump always writes before
+// a table's COPY, and a \N among the rows — the two things a naive
+// strings.Split(";") or a copy-data reader that touched the bytes would get
+// wrong first.
+func TestAScriptSavedInTheCoreDatabaseWithACOPYBlockBuildsARealTable(t *testing.T) {
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
+	}
+	if os.Getenv("GAME_DB_DSN") == "" {
+		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
+	}
+
+	contest, _ := contestFor(t, t.Context(), 0)
+	repo := postgres.NewGameInstances(testPool)
+
+	user, password := gamedbtest.AdminCredentials(t)
+	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
+		gamedbtest.AuthorPassword(t))
+	if err != nil {
+		t.Fatalf("open the game cluster: %v", err)
+	}
+
+	games := provisioning.NewGames(repo, cluster, editableContest{})
+
+	const dump = "CREATE TABLE guests (id int, full_name text);\n" +
+		"\n" +
+		"--\n" +
+		"-- Data for Name: guests; Type: TABLE DATA; Schema: public; Owner: -\n" +
+		"--\n" +
+		"\n" +
+		"COPY public.guests (id, full_name) FROM stdin;\n" +
+		"1\tMargot Feilhaber\n" +
+		"2\t\\N\n" +
+		"\\.\n" +
+		"\n"
+
+	saved, err := games.SetScript(t.Context(), uuid.New(), contest.ID, dump)
+	if err != nil {
+		t.Fatalf("save the script: %v", err)
+	}
+	t.Cleanup(func() { gamedbtest.Drop(saved.Database) })
+
+	built, err := games.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if built.Status != provisioning.TemplateReady {
+		t.Fatalf("the build finished as %q: %s", built.Status, built.BuildError)
+	}
+
+	conn := gamedbtest.Connect(t, user, password, built.Database)
+	defer func() { _ = conn.Close(context.Background()) }()
+
+	rows, err := conn.Query(t.Context(), `SELECT id, full_name FROM guests ORDER BY id`)
+	if err != nil {
+		t.Fatalf("read the built table: %v", err)
+	}
+	defer rows.Close()
+
+	type guestRow struct {
+		id   int
+		name *string
+	}
+	var got []guestRow
+	for rows.Next() {
+		var r guestRow
+		if err := rows.Scan(&r.id, &r.name); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got = append(got, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("the COPY block loaded %d rows, want 2: %+v", len(got), got)
+	}
+	if got[0].name == nil || *got[0].name != "Margot Feilhaber" {
+		t.Fatalf("row 1 = %+v, want Margot Feilhaber", got[0])
+	}
+	if got[1].name != nil {
+		t.Fatalf(`row 2 = %+v, want NULL (COPY's own \N)`, got[1])
+	}
+}
+
 // editableContest stands for a draft contest: the gate this test is not about.
 type editableContest struct{}
 
