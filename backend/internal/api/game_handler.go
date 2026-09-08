@@ -36,6 +36,13 @@ type Games interface {
 	UploadWindow(ctx context.Context, contestID, uploadID uuid.UUID, fromLine, maxLines int, maxBytes int64) (gamefile.Window, error)
 	CompleteUpload(ctx context.Context, actorID, contestID, uploadID uuid.UUID) (provisioning.Template, error)
 	AbortUpload(ctx context.Context, actorID, contestID, uploadID uuid.UUID) (provisioning.Upload, error)
+
+	// UploadLimits reports the ceilings a chunked upload must respect —
+	// provisioning.Games' own doc explains why this handler reads them here
+	// rather than keeping a second copy of GAME_UPLOAD_CHUNK_BYTES /
+	// GAME_UPLOAD_MAX_FILE_BYTES. No context and no error: this is an
+	// in-process config read, never a call to storage.
+	UploadLimits() (gamefile.Limits, bool)
 }
 
 // UploadLimiter is the slice of auth.Limiter this handler needs (CLAUDE.md
@@ -193,6 +200,46 @@ const uploadIDParam = "uploadID"
 // which is the whole reason the screen shows it.
 const databaseParam = "database"
 
+// uploadLimitsResponse is the pair of ceilings a browser needs before it can
+// slice a file into chunks and start sending them: the largest single PUT
+// .../uploads/{id}/chunk this installation accepts, and the largest total
+// file BeginUpload will reserve for. Both come from provisioning.Games.
+// UploadLimits — the domain's own gamefile.Limits, never a second copy of
+// GAME_UPLOAD_CHUNK_BYTES / GAME_UPLOAD_MAX_FILE_BYTES kept in this package
+// (Games.UploadLimits' own doc, CLAUDE.md rule 11).
+//
+// Enabled travels apart from the two numbers on purpose. An installation
+// with no upload volume configured (GAME_UPLOAD_DIR empty) reports both as
+// zero, and zero is also a number an operator could genuinely configure —
+// without this field the two would be indistinguishable, and a client would
+// have no way to tell "uploads are off, do not offer the button" from "the
+// operator set a ceiling of zero, which refuses everything anyway". A client
+// checks Enabled first; ChunkBytes and MaxFileBytes are only real ceilings
+// when it is true.
+type uploadLimitsResponse struct {
+	Enabled      bool  `json:"enabled"`
+	ChunkBytes   int64 `json:"chunk_bytes"`
+	MaxFileBytes int64 `json:"max_file_bytes"`
+}
+
+// uploadLimitsView reads the configured ceilings once per request. Carried on
+// two different responses — gameResponse and uploadResponse, each field's own
+// doc says why — because a page needs them at two different moments: opening
+// the console, before it has decided to start an upload at all (gameResponse,
+// from status/setScript/completeUpload), and reopening after a reload to
+// resume one already in progress (uploadResponse, from GET .../uploads/
+// current) — CurrentUpload coming back absent still leaves the page needing
+// to know how to slice a *new* file correctly.
+func (h *GameHandler) uploadLimitsView() uploadLimitsResponse {
+	limits, enabled := h.games.UploadLimits()
+	if !enabled {
+		return uploadLimitsResponse{}
+	}
+	return uploadLimitsResponse{
+		Enabled: true, ChunkBytes: limits.MaxChunkBytes, MaxFileBytes: limits.MaxFileBytes,
+	}
+}
+
 type gameResponse struct {
 	Status  string `json:"status"`
 	Version int    `json:"version"`
@@ -216,6 +263,10 @@ type gameResponse struct {
 	ScriptBytes int       `json:"script_bytes"`
 	Building    bool      `json:"building"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	// UploadLimits are the ceilings a chunked upload must respect —
+	// uploadLimitsResponse's own doc says why they travel here and how a
+	// client tells "uploads are off" from "the limit is genuinely zero".
+	UploadLimits uploadLimitsResponse `json:"upload_limits"`
 }
 
 type gameScriptResponse struct {
@@ -237,7 +288,7 @@ func (h *GameHandler) status(w http.ResponseWriter, r *http.Request) {
 		// Not an error: every contest is in this state until somebody writes
 		// its game. Answered as a game with no script rather than a 404, so
 		// the interface has one shape to render instead of two.
-		httpx.JSON(w, r, http.StatusOK, gameResponse{Status: "absent"})
+		httpx.JSON(w, r, http.StatusOK, gameResponse{Status: "absent", UploadLimits: h.uploadLimitsView()})
 		return
 	}
 	if err != nil {
@@ -248,7 +299,7 @@ func (h *GameHandler) status(w http.ResponseWriter, r *http.Request) {
 		Status: string(template.Status), Version: template.Version,
 		Database: template.Database, BuildError: template.BuildError,
 		ScriptBytes: len(template.Script), Building: template.Building(),
-		UpdatedAt: template.UpdatedAt,
+		UpdatedAt: template.UpdatedAt, UploadLimits: h.uploadLimitsView(),
 	})
 }
 
@@ -295,6 +346,7 @@ func (h *GameHandler) setScript(w http.ResponseWriter, r *http.Request) {
 		Status: string(template.Status), Version: template.Version,
 		Database: template.Database, ScriptBytes: len(template.Script),
 		Building: template.Building(), UpdatedAt: template.UpdatedAt,
+		UploadLimits: h.uploadLimitsView(),
 	})
 }
 
@@ -430,14 +482,24 @@ type uploadResponse struct {
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// UploadLimits repeats gameResponse's own field of the same name — see its
+	// doc. Carried here too because GET .../uploads/current is the other
+	// moment a page needs these numbers: reopening after a reload, before it
+	// even knows whether an upload is in progress, and (when CurrentUpload
+	// comes back absent) still needing to know how to slice a *new* file.
+	UploadLimits uploadLimitsResponse `json:"upload_limits"`
 }
 
-func uploadView(u provisioning.Upload) uploadResponse {
+// uploadView is a method, not a plain function, only so it can reach
+// h.uploadLimitsView() — everything else about one upload's shape comes from
+// u alone.
+func (h *GameHandler) uploadView(u provisioning.Upload) uploadResponse {
 	return uploadResponse{
 		ID: u.ID.String(), Filename: u.Filename,
 		DeclaredBytes: u.DeclaredBytes, ReceivedBytes: u.ReceivedBytes,
 		SHA256: u.SHA256, Lines: u.Lines, Status: string(u.Status),
 		CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
+		UploadLimits: h.uploadLimitsView(),
 	}
 }
 
@@ -456,14 +518,14 @@ func (h *GameHandler) currentUpload(w http.ResponseWriter, r *http.Request) {
 
 	upload, err := h.games.CurrentUpload(r.Context(), contestID)
 	if errors.Is(err, provisioning.ErrUploadNotFound) {
-		httpx.JSON(w, r, http.StatusOK, uploadResponse{Status: "absent"})
+		httpx.JSON(w, r, http.StatusOK, uploadResponse{Status: "absent", UploadLimits: h.uploadLimitsView()})
 		return
 	}
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	httpx.JSON(w, r, http.StatusOK, uploadView(upload))
+	httpx.JSON(w, r, http.StatusOK, h.uploadView(upload))
 }
 
 type beginUploadRequest struct {
@@ -561,7 +623,7 @@ func (h *GameHandler) beginUpload(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	httpx.JSON(w, r, http.StatusCreated, uploadView(upload))
+	httpx.JSON(w, r, http.StatusCreated, h.uploadView(upload))
 }
 
 // defaultMaxGameChunkBodyBytes is NewGameHandler's default for maxChunkBody,
@@ -675,6 +737,7 @@ func (h *GameHandler) completeUpload(w http.ResponseWriter, r *http.Request) {
 		Status: string(template.Status), Version: template.Version,
 		Database: template.Database, ScriptBytes: len(template.Script),
 		Building: template.Building(), UpdatedAt: template.UpdatedAt,
+		UploadLimits: h.uploadLimitsView(),
 	})
 }
 
@@ -697,7 +760,7 @@ func (h *GameHandler) abortUpload(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	httpx.JSON(w, r, http.StatusOK, uploadView(upload))
+	httpx.JSON(w, r, http.StatusOK, h.uploadView(upload))
 }
 
 // defaultUploadWindowLines, maxUploadWindowLines, defaultUploadWindowBytes
