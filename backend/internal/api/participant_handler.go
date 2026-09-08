@@ -295,8 +295,15 @@ func (h *ParticipantHandler) questions(w http.ResponseWriter, r *http.Request) {
 // what query_log already carries for exactly this: the statement, how it
 // ended, and when.
 type queryLogEntryResponse struct {
-	SQL    string `json:"sql"`
-	Status string `json:"status"`
+	SQL string `json:"sql"`
+	// SQLTruncated says sql is the beginning of the statement and not the
+	// whole of it — the page is bounded in bytes as well as in rows
+	// (queryrunner.MaxHistorySQLChars), and a participant handed a shortened
+	// copy of their own query has to be told that is what it is. Omitted when
+	// there is nothing to report, like every other optional field here; the
+	// whole statement is in the CSV download beside the panel.
+	SQLTruncated bool   `json:"sql_truncated,omitempty"`
+	Status       string `json:"status"`
 	// Error is omitted for a query that did not fail.
 	Error string `json:"error,omitempty"`
 	// DurationMs and RowCount are omitted rather than zero for a row still
@@ -336,12 +343,13 @@ func (h *ParticipantHandler) queryLog(w http.ResponseWriter, r *http.Request) {
 	items := make([]queryLogEntryResponse, 0, len(found))
 	for _, entry := range found {
 		items = append(items, queryLogEntryResponse{
-			SQL:        entry.SQL,
-			Status:     string(entry.Status),
-			Error:      participantSafeError(entry.Status, entry.Error),
-			DurationMs: entry.DurationMs,
-			RowCount:   entry.RowCount,
-			ExecutedAt: entry.ExecutedAt.UTC().Format(timeLayout),
+			SQL:          entry.SQL,
+			SQLTruncated: entry.SQLTruncated,
+			Status:       string(entry.Status),
+			Error:        participantSafeError(entry.Status, entry.Error),
+			DurationMs:   entry.DurationMs,
+			RowCount:     entry.RowCount,
+			ExecutedAt:   entry.ExecutedAt.UTC().Format(timeLayout),
 		})
 	}
 	httpx.JSON(w, r, http.StatusOK, queryLogResponse{Items: items, Total: total})

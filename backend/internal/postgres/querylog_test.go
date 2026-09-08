@@ -3,8 +3,10 @@ package postgres
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
@@ -283,6 +285,128 @@ func TestHistoryPagesWithLimitAndOffset(t *testing.T) {
 		}
 		if len(second) != 1 || second[0].SQL != "SELECT 1" {
 			t.Fatalf("page 2 = %+v, want exactly the oldest row", second)
+		}
+	})
+}
+
+// One page is bounded in rows and has to be bounded in bytes too: two
+// hundred rows of a 64 KiB statement each is a twelve-megabyte answer to a
+// request a participant can repeat as often as their rate budget allows. The
+// cut is made by the SELECT, so those bytes never leave the server, and the
+// row says it was cut rather than handing somebody a silently shortened copy
+// of their own query.
+func TestHistoryCutsAStatementTooLongForOnePageAndSaysSo(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+
+		long := "SELECT '" + strings.Repeat("x", queryrunner.MaxHistorySQLChars) + "'"
+		completeRow(t, ctx, log, registration, long, queryrunner.StatusOK, 1, 1)
+
+		found, _, err := log.History(ctx, registration, 0, 0)
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+		if len(found) != 1 {
+			t.Fatalf("read %d rows, want 1", len(found))
+		}
+		if got := utf8.RuneCountInString(found[0].SQL); got != queryrunner.MaxHistorySQLChars {
+			t.Fatalf("the page carried %d characters of the statement, want the bound of %d",
+				got, queryrunner.MaxHistorySQLChars)
+		}
+		if !found[0].SQLTruncated {
+			t.Fatal("cut the participant's own statement down without saying so")
+		}
+		if !strings.HasPrefix(long, found[0].SQL) {
+			t.Fatal("what came back is not the beginning of what was run")
+		}
+	})
+}
+
+// A statement that fits comes back whole and unflagged. Without this the
+// truncation could be unconditional — every row shortened by a character and
+// every row claiming it was cut — and the test above would not notice.
+func TestHistoryLeavesAStatementThatFitsAlone(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+
+		// Exactly the bound: the last statement that is not too long.
+		exact := strings.Repeat("y", queryrunner.MaxHistorySQLChars)
+		completeRow(t, ctx, log, registration, exact, queryrunner.StatusOK, 1, 1)
+
+		found, _, err := log.History(ctx, registration, 0, 0)
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+		if len(found) != 1 {
+			t.Fatalf("read %d rows, want 1", len(found))
+		}
+		if found[0].SQL != exact {
+			t.Fatalf("a statement of exactly the bound came back as %d characters",
+				utf8.RuneCountInString(found[0].SQL))
+		}
+		if found[0].SQLTruncated {
+			t.Fatal("a statement that fits was reported as truncated")
+		}
+	})
+}
+
+// The export is the record, and a record with the statements cut out of it is
+// not one. It streams row by row, so a long statement costs one row's memory
+// rather than a page of them — which is why the bound the page needs is not a
+// bound this needs.
+func TestExportHistoryCarriesEveryStatementWhole(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+
+		long := "SELECT '" + strings.Repeat("z", queryrunner.MaxHistorySQLChars) + "'"
+		completeRow(t, ctx, log, registration, long, queryrunner.StatusOK, 1, 1)
+
+		var found []queryrunner.HistoryEntry
+		if err := log.ExportHistory(ctx, registration, func(entry queryrunner.HistoryEntry) error {
+			found = append(found, entry)
+			return nil
+		}); err != nil {
+			t.Fatalf("ExportHistory: %v", err)
+		}
+		if len(found) != 1 {
+			t.Fatalf("streamed %d rows, want 1", len(found))
+		}
+		if found[0].SQL != long {
+			t.Fatalf("the export carried %d characters of a %d-character statement",
+				utf8.RuneCountInString(found[0].SQL), utf8.RuneCountInString(long))
+		}
+		if found[0].SQLTruncated {
+			t.Fatal("the export flagged a statement it carried whole")
+		}
+	})
+}
+
+// The count is a fact about the log, not a by-product of the page. Computed
+// under the LIMIT it is whatever the returned rows happened to carry, so a
+// page that lands past the last row reports a total of nothing — and the
+// panel, which decides whether to offer "load more" by comparing what it
+// holds against that number, is told the participant has never run a query.
+func TestHistoryCountsEveryRowEvenOnAPageThatLandsPastTheEnd(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+
+		for _, sql := range []string{"SELECT 1", "SELECT 2", "SELECT 3"} {
+			completeRow(t, ctx, log, registration, sql, queryrunner.StatusOK, 1, 1)
+		}
+
+		found, total, err := log.History(ctx, registration, 2, 10)
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+		if len(found) != 0 {
+			t.Fatalf("a page past the end returned %d rows, want none", len(found))
+		}
+		if total != 3 {
+			t.Fatalf("total = %d, want 3 — the count came from the page rather than the log", total)
 		}
 	})
 }

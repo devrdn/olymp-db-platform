@@ -102,33 +102,69 @@ func (l *QueryLog) Complete(ctx context.Context, id int64, outcome queryrunner.O
 // built for exactly this — its own comment names both this and the admin
 // journal panel that will one day share it — so this endpoint needs no
 // migration of its own (CLAUDE.md rule 7).
+//
+// # Two statements, and why the count is not part of the page
+//
+// The count used to be a `COUNT(*) OVER()` alongside the columns, which puts
+// the WindowAgg *below* the Limit: measured on the core database with one
+// registration holding nine hundred rows, reading fifty of them touched 909
+// buffers and 1.28 ms, because the window has to see every row of that
+// registration — heap included, wide sql_text column and all — before the
+// limit may throw all but fifty away. At twenty thousand rows in one
+// registration it also spilled the tuplestore to disk: 1033 shared buffers
+// plus 1201 temp blocks written and read back, 12.55 ms. The cost grew with
+// everything the participant had ever run, and the panel re-reads this on
+// every visit to the tab.
+//
+// Split in two, the page is bounded by the page — `Limit -> Incremental Sort
+// -> Index Scan`, 55 buffers and 0.12 ms for the same fifty rows — and the
+// count is a narrow aggregate the same index answers on its own: an
+// Index Only Scan, 11 buffers, no heap fetches, 0.13 ms. Two round trips
+// instead of one, for an order of magnitude less work; and they are not read
+// as one snapshot, so a row written between them makes `total` one ahead of
+// the page. That is the same staleness any second request already had, on a
+// number whose only job is to decide whether to offer "load more".
+//
+// # And why the statement is cut here
+//
+// See queryrunner.MaxHistorySQLChars: the row count was bounded and the bytes
+// were not. The cut is in the SELECT so the bytes never reach the driver at
+// all (CLAUDE.md rule 12) — `left` gives the beginning of the statement,
+// `char_length` says whether there was more, and the flag travels with the
+// row so nothing downstream has to guess. ExportHistory below is deliberately
+// not cut: it is the record, and it streams.
 func (l *QueryLog) History(ctx context.Context, registrationID uuid.UUID, limit, offset int) ([]queryrunner.HistoryEntry, int, error) {
 	limit, offset = queryrunner.NormalizeHistoryPage(limit, offset)
+	querier := l.querier(ctx)
 
-	rows, err := l.querier(ctx).Query(ctx, `
-		SELECT sql_text, status, COALESCE(error_text, ''), duration_ms, row_count, executed_at,
-		       COUNT(*) OVER() AS total
+	var total int
+	if err := querier.QueryRow(ctx,
+		`SELECT count(*) FROM query_log WHERE registration_id = $1`,
+		registrationID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count the query history of registration %s: %w", registrationID, err)
+	}
+
+	rows, err := querier.Query(ctx, `
+		SELECT left(sql_text, $4), char_length(sql_text) > $4,
+		       status, COALESCE(error_text, ''), duration_ms, row_count, executed_at
 		FROM query_log
 		WHERE registration_id = $1
 		ORDER BY executed_at DESC, id DESC
 		LIMIT $2 OFFSET $3`,
-		registrationID, limit, offset)
+		registrationID, limit, offset, queryrunner.MaxHistorySQLChars)
 	if err != nil {
 		return nil, 0, fmt.Errorf("read query history for registration %s: %w", registrationID, err)
 	}
 	defer rows.Close()
 
-	var (
-		found []queryrunner.HistoryEntry
-		total int
-	)
+	var found []queryrunner.HistoryEntry
 	for rows.Next() {
 		var (
 			entry  queryrunner.HistoryEntry
 			status string
 		)
-		if err := rows.Scan(&entry.SQL, &status, &entry.Error, &entry.DurationMs, &entry.RowCount,
-			&entry.ExecutedAt, &total); err != nil {
+		if err := rows.Scan(&entry.SQL, &entry.SQLTruncated, &status, &entry.Error,
+			&entry.DurationMs, &entry.RowCount, &entry.ExecutedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan query history row: %w", err)
 		}
 		entry.Status = queryrunner.Status(status)

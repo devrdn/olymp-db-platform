@@ -1061,6 +1061,48 @@ func TestQueryLogResponseCarriesTheHistoryEntries(t *testing.T) {
 	}
 }
 
+// A page bounded in bytes has to say which rows it bounded. Shortening
+// somebody's own query and presenting the result as what they wrote is the
+// one thing a log must not do — so the row carries the flag, and a row that
+// was not cut carries nothing (omitted, not `false`, the way every other
+// "nothing to report" field on this response is).
+func TestQueryLogSaysWhichRowsHadTheirStatementCut(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+
+	f.history.items = []queryrunner.HistoryEntry{
+		{SQL: "SELECT 1", Status: queryrunner.StatusOK, ExecutedAt: time.Now()},
+		{SQL: "SELECT 'xxxx", Status: queryrunner.StatusOK, SQLTruncated: true, ExecutedAt: time.Now()},
+	}
+	f.history.total = 2
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Items []struct {
+			SQL       string `json:"sql"`
+			Truncated *bool  `json:"sql_truncated"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(payload.Items) != 2 {
+		t.Fatalf("payload carried %d rows, want 2", len(payload.Items))
+	}
+	if payload.Items[0].Truncated != nil {
+		t.Errorf("a whole statement was reported as cut: %+v", payload.Items[0])
+	}
+	if payload.Items[1].Truncated == nil || !*payload.Items[1].Truncated {
+		t.Errorf("a cut statement was handed over as if it were whole: %+v", payload.Items[1])
+	}
+}
+
 // A failure to read the log is ours, not the participant's — the same
 // treatment every other infrastructure failure on this handler gets
 // (queryproxy.ErrUnavailable's own case in fail()).
