@@ -180,6 +180,7 @@ const en = {
         completing: "Finishing…",
         done: "File received. The build has started.",
         sourceNote: "This is the file the active game was built from.",
+        replace: "Upload a different file",
         viewHeading: "The file's contents",
         gotoLabel: "Line",
         gotoButton: "Go",
