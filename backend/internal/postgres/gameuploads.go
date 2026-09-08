@@ -103,10 +103,10 @@ func (r *GameInstances) UpdateReceived(ctx context.Context, id uuid.UUID, receiv
 // retires previous when a different upload is being displaced, and replaces
 // the contest's game through the same upsertGame statement SaveScript uses.
 //
-// previous, when not nil, is marked 'aborted' here — its file was already
-// removed from disk by the caller (provisioning.Games.CompleteUpload's own
-// doc explains the order, and why it happens before this method is even
-// called: the real object goes first). No RowsAffected check on either
+// previous, when not nil, is marked 'aborted' here; its file is removed by the
+// caller once this transaction has committed, never before it
+// (provisioning.Games.replaceGame explains why that way round). No
+// RowsAffected check on either
 // UPDATE, the same choice FinishBuild makes for the same reason: the caller
 // already read the row this call acts on and decided it was still valid to
 // act on, and a race that invalidated that between the read and this write
@@ -174,15 +174,31 @@ func (r *GameInstances) AbandonedUploads(ctx context.Context, cutoff time.Time, 
 	return out, nil
 }
 
-// UploadExists reports whether id names any upload row at all, whatever its
-// status. The janitor's other sweep (provisioning.Games.sweepOrphanFiles)
-// uses this to tell a file whose row simply has not been asked about yet
-// apart from one no row has ever named — only the second is an orphan.
-func (r *GameInstances) UploadExists(ctx context.Context, id uuid.UUID) (bool, error) {
-	var exists bool
-	if err := r.querier(ctx).QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM game_uploads WHERE id = $1)`, id).Scan(&exists); err != nil {
-		return false, fmt.Errorf("check whether upload %s exists: %w", id, err)
+// UploadInUse reports whether anything still needs id's bytes on the volume:
+// an upload still taking chunks, or one a contest's game is actually built
+// from.
+//
+// What the janitor's orphan sweep (provisioning.Games.sweepOrphanFiles) has to
+// ask. "Does a row exist" — the question this replaces — answered "keep it"
+// for every upload a later game displaced, whether by a second upload or by a
+// script written in the editor, so those files were unreachable and permanent.
+//
+// The game_templates side is a lookup by upload_id and not by contest, on
+// purpose: the sweep starts from a file and has no contest to scope by. The
+// table holds one row per contest, so this is a hundreds-of-rows read once per
+// candidate file every ten minutes rather than anything an index is needed to
+// make survivable (CLAUDE.md rule 7 is about a filter over the largest tables;
+// this is not one).
+func (r *GameInstances) UploadInUse(ctx context.Context, id uuid.UUID) (bool, error) {
+	var inUse bool
+	if err := r.querier(ctx).QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM game_uploads u
+			WHERE u.id = $1
+			  AND (u.status = 'receiving'
+			       OR EXISTS(SELECT 1 FROM game_templates t WHERE t.upload_id = u.id))
+		)`, id).Scan(&inUse); err != nil {
+		return false, fmt.Errorf("check whether upload %s is still in use: %w", id, err)
 	}
-	return exists, nil
+	return inUse, nil
 }

@@ -288,19 +288,53 @@ func (g *Games) UploadWindow(ctx context.Context, contestID, uploadID uuid.UUID,
 // retireUploadFile removes one upload's file from disk, tolerating one that
 // is already gone.
 //
-// Idempotent on purpose: this runs both for an organiser's own cancel and
-// for the upload a completed one displaces, and either can be asked to
-// retire the same id twice — a retried request, or the janitor catching what
-// a crash left half done between the file being removed and the row being
-// marked (CompleteUpload's own doc explains why that ordering, and this gap,
-// exist). A second call finding gamefile.ErrNotFound must read as "already
-// retired", the same idempotency Store.Append documents for a repeated
-// chunk, not as a failure.
+// Idempotent on purpose: this runs for an organiser's own cancel, for the
+// upload a replacement game displaces, and for the janitor's own sweep, and
+// any of them can be asked to retire the same id twice — a retried request, or
+// the janitor catching what a crash left half done on either side of the row
+// being marked. A second call finding gamefile.ErrNotFound must read as
+// "already retired", the same idempotency Store.Append documents for a
+// repeated chunk, not as a failure.
 func (g *Games) retireUploadFile(id uuid.UUID) error {
 	if err := g.files.Abort(id.String()); err != nil && !errors.Is(err, gamefile.ErrNotFound) {
 		return wrapGamefileErr(err)
 	}
 	return nil
+}
+
+// displacedUpload names the upload whose file this contest's next game will
+// leave behind: the current game's own, when that game is file-sourced.
+//
+// nil when there is nothing to retire — the contest has no game yet, its game
+// was written in the editor, the game already names the very upload that is
+// replacing it (keeping, non-nil only for CompleteUpload), or this
+// installation has no upload volume at all, in which case there is no file to
+// speak of and nothing this service could remove. ErrNoGame is one of those
+// answers rather than a failure.
+//
+// Read before the game is written, because afterwards the row no longer says
+// which upload it came from — SaveScript and CompleteUpload both overwrite
+// upload_id in the same statement.
+func (g *Games) displacedUpload(ctx context.Context, contestID uuid.UUID, keeping *uuid.UUID) (*uuid.UUID, error) {
+	if g.files == nil {
+		return nil, nil
+	}
+
+	existing, err := g.repo.Template(ctx, contestID)
+	switch {
+	case errors.Is(err, ErrNoGame):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("read the contest's current game: %w", err)
+	}
+
+	if existing.Source != SourceFile || existing.UploadID == nil {
+		return nil, nil
+	}
+	if keeping != nil && *existing.UploadID == *keeping {
+		return nil, nil
+	}
+	return existing.UploadID, nil
 }
 
 // CompleteUpload finishes an upload begun with BeginUpload: seals it on
@@ -317,12 +351,13 @@ func (g *Games) retireUploadFile(id uuid.UUID) error {
 // GameEditable check, one audit write, not a second parallel one that could
 // drift from it.
 //
-// Displacing the previous upload follows Instances.DropInstance's own
-// ordering: the real object goes first. If this contest's current game is
-// already file-sourced, its upload's file is removed from disk here, before
-// anything is written to the database — marking without removing would
-// leave gigabytes nobody is looking for, and this is what stops that rather
-// than a promise in a comment.
+// Displacing the previous upload happens the other way round from
+// Instances.DropInstance's "the real object goes first": the row is written
+// first and the file removed after the transaction commits. See replaceGame,
+// which does the removal, for why this one is the exception — the removal
+// here is conditional on a commit that has not happened yet, and this method
+// deliberately leaves a window (the hashing and indexing of an organiser's
+// whole file) in which the contest can start and the replacement be refused.
 func (g *Games) CompleteUpload(ctx context.Context, actorID, contestID, uploadID uuid.UUID) (Template, error) {
 	if g.files == nil {
 		return Template{}, ErrUploadsDisabled
@@ -349,27 +384,19 @@ func (g *Games) CompleteUpload(ctx context.Context, actorID, contestID, uploadID
 		return Template{}, wrapGamefileErr(err)
 	}
 
-	// Whichever upload this one displaces — this contest's current game,
-	// only if it is itself file-sourced and is a different upload — is
-	// retired now, on disk, before anything is marked. A contest with no
-	// game yet, or one whose current game is SourceEditor, has nothing to
-	// retire, and ErrNoGame reads as exactly that rather than as a failure.
-	var previous *uuid.UUID
-	existing, err := g.repo.Template(ctx, contestID)
-	switch {
-	case err == nil && existing.Source == SourceFile && existing.UploadID != nil && *existing.UploadID != uploadID:
-		if err := g.retireUploadFile(*existing.UploadID); err != nil {
-			return Template{}, fmt.Errorf("remove the displaced upload's file: %w", err)
-		}
-		previous = existing.UploadID
-	case err != nil && !errors.Is(err, ErrNoGame):
-		return Template{}, fmt.Errorf("read the contest's current game: %w", err)
+	// Whichever upload this one displaces — this contest's current game, only
+	// if it is itself file-sourced and is a different upload. Its row is
+	// retired inside the transaction below and its file after that one
+	// commits; nothing about it is touched if the transaction is refused.
+	previous, err := g.displacedUpload(ctx, contestID, &uploadID)
+	if err != nil {
+		return Template{}, err
 	}
 
 	database := templateName(contestID)
 	storedSummary := UploadSummary{Bytes: summary.Bytes, SHA256: summary.SHA256, Lines: summary.Lines}
 
-	return g.replaceGame(ctx, contestID,
+	return g.replaceGame(ctx, contestID, previous,
 		func(ctx context.Context) (Template, error) {
 			return g.repo.CompleteUpload(ctx, contestID, uploadID, database, storedSummary, previous)
 		},
@@ -448,26 +475,28 @@ type UploadCleanupResult struct {
 	// Abandoned counts uploads left 'receiving' past their grace period —
 	// nobody appended to them, and nobody is coming back to.
 	Abandoned int
-	// OrphanFiles counts files the volume holds that no row in game_uploads
-	// names at all — the sweep's own doc (SweepUploads below) explains why
-	// these are the more dangerous half.
+	// OrphanFiles counts files on the volume nothing needs any more — no row
+	// names them, or the row is there but no contest's game is built from it
+	// — the sweep's own doc (SweepUploads below) explains why these are the
+	// more dangerous half.
 	OrphanFiles int
 }
 
 // SweepUploads is the abandoned-upload janitor: every 'receiving' row older
-// than olderThan is aborted, and every file on the volume that no row names
-// at all is removed.
+// than olderThan is aborted, and every file on the volume nothing needs any
+// more is removed.
 //
 // Two different leaks, and the second is the more dangerous one. An
 // abandoned row at least says so — a contest an organiser can find, an
-// updated_at anybody can read. A file with no row is invisible to every
+// updated_at anybody can read. A file nothing points at is invisible to every
 // other query this package makes: Instances, Reclaim, the orphan-database
 // sweep (orphans.go) all start from a database row and ask whether the
 // object behind it still exists; nothing here ever asks the volume what it
 // holds and works backwards. Without this second half, a crash between
-// Store.Begin succeeding and BeginUpload's own INSERT — or any other gap
-// this package's own comments already call out — leaves bytes nobody will
-// ever find again.
+// Store.Begin succeeding and BeginUpload's own INSERT, a crash between
+// replaceGame's commit and the removal that follows it, or any other gap this
+// package's own comments already call out, leaves bytes nobody will ever find
+// again — and on this platform one of them is a multi-gigabyte dump.
 func (g *Games) SweepUploads(ctx context.Context, olderThan time.Duration) (UploadCleanupResult, error) {
 	if g.files == nil {
 		return UploadCleanupResult{}, nil
@@ -505,18 +534,44 @@ func (g *Games) SweepUploads(ctx context.Context, olderThan time.Duration) (Uplo
 // platform's own numbers describe.
 const abandonedUploadBatchLimit = 100
 
-// sweepOrphanFiles removes every upload the volume holds that no row in
-// game_uploads names at all, whatever that row's status. An upload whose
-// row exists but says 'complete' or 'aborted' is not touched here — that is
-// ordinary history, or something retireUploadFile has already handled — only
-// an upload with no row at all, which nothing else in this package will ever
-// notice on its own.
+// orphanFileGrace is how young a file on the volume may be and still be left
+// alone by the sweep below.
 //
-// The list of ids on the volume comes from gamefile.Store.UploadIDs rather
-// than this package reading the directory itself: which files make up one
-// upload, and how many of them there are, is gamefile's own layout to know.
+// BeginUpload reserves the file before it writes the row, deliberately — its
+// own doc says why — which means there is always an instant in which the
+// volume holds a file no row names yet. Without a floor on the file's age the
+// sweep does not merely fail to clean that up, it *causes* the damage: a
+// ReadDir that catches the reservation and a UploadInUse that lands before the
+// INSERT commits delete the bytes of an upload whose id is at that moment
+// being handed back to the organiser, and the first chunk then answers "no
+// such upload" against a 'receiving' row that blocks every retry.
+//
+// Fifteen minutes is many orders of magnitude past the one INSERT that window
+// is, and short enough that a file genuinely left behind is not held for long
+// — the sweep runs every ten minutes (internal/app.abandonedUploads), so
+// nothing waits more than a tick or two past the grace.
+const orphanFileGrace = 15 * time.Minute
+
+// sweepOrphanFiles removes every upload on the volume that nothing needs any
+// more: no row in game_uploads names it at all, or the row is there but the
+// upload is neither still receiving chunks nor the one a contest's game is
+// built from (TemplateRepository.UploadInUse asks exactly that).
+//
+// The second half is what makes this a backstop rather than a formality. A
+// completed upload stops being needed the moment its game stops naming it —
+// a second upload displaced it, or an organiser went back to writing a script
+// in the editor — and both of those are followed by a removal that can be
+// interrupted: replaceGame removes the file after its transaction commits, so
+// a process that dies in between leaves a row and gigabytes of bytes nothing
+// will ever ask for again. Asking only whether a row existed answered "keep"
+// for every one of those.
+//
+// Only files older than orphanFileGrace are considered, and the list of ids
+// comes from gamefile.Store.UploadIDs rather than this package reading the
+// directory itself: which files make up one upload, and how many of them there
+// are, is gamefile's own layout to know.
 func (g *Games) sweepOrphanFiles(ctx context.Context) (int, error) {
-	ids, err := g.files.UploadIDs()
+	ids, err := g.files.UploadIDs(g.now().Add(-orphanFileGrace))
 	if err != nil {
 		return 0, fmt.Errorf("list the upload volume: %w", err)
 	}
@@ -528,12 +583,12 @@ func (g *Games) sweepOrphanFiles(ctx context.Context) (int, error) {
 		if err != nil {
 			continue
 		}
-		exists, err := g.repo.UploadExists(ctx, id)
+		inUse, err := g.repo.UploadInUse(ctx, id)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("check upload %s: %w", id, err))
 			continue
 		}
-		if exists {
+		if inUse {
 			continue
 		}
 		if err := g.retireUploadFile(id); err != nil {

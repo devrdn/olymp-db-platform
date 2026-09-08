@@ -215,11 +215,17 @@ func (s *templateStore) AbandonedUploads(_ context.Context, cutoff time.Time, li
 	return out, nil
 }
 
-func (s *templateStore) UploadExists(_ context.Context, id uuid.UUID) (bool, error) {
+func (s *templateStore) UploadInUse(_ context.Context, id uuid.UUID) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.uploads[id]
-	return ok, nil
+	u, ok := s.uploads[id]
+	if !ok {
+		return false, nil
+	}
+	if u.Status == provisioning.UploadReceiving {
+		return true, nil
+	}
+	return s.present && s.template.UploadID != nil && *s.template.UploadID == id, nil
 }
 
 // buildCluster records what it was asked to build and can be told to refuse.

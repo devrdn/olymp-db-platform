@@ -273,21 +273,48 @@ func TestAbandonedUploadsListsOnlyReceivingRowsOlderThanTheCutoff(t *testing.T) 
 	})
 }
 
-func TestUploadExistsTellsARowApartFromNoRowAtAll(t *testing.T) {
+// The question the janitor's orphan sweep asks of a file it found on the
+// volume. "Does a row exist at all" — what this replaced — answered "keep it"
+// for every upload a later game displaced, and the bytes behind those were
+// then unreachable and permanent.
+func TestUploadInUseSeparatesAFileSomethingNeedsFromOneNothingDoes(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
 		repo := NewGameInstances(testPool)
+		name := "game_tpl_c" + uuid.NewString()[:12]
 
-		if exists, err := repo.UploadExists(ctx, uuid.New()); err != nil || exists {
-			t.Fatalf("exists = %v, err = %v, want false for an id nothing named", exists, err)
+		if inUse, err := repo.UploadInUse(ctx, uuid.New()); err != nil || inUse {
+			t.Fatalf("in use = %v, err = %v, want false for an id no row ever named", inUse, err)
 		}
 
 		id := uuid.New()
 		if _, err := repo.BeginUpload(ctx, id, contest, "dump.sql", 10); err != nil {
 			t.Fatalf("begin: %v", err)
 		}
-		if exists, err := repo.UploadExists(ctx, id); err != nil || !exists {
-			t.Fatalf("exists = %v, err = %v, want true", exists, err)
+		// Still taking chunks: the bytes are the upload's own, and the row
+		// alone is what says so.
+		if inUse, err := repo.UploadInUse(ctx, id); err != nil || !inUse {
+			t.Fatalf("in use = %v, err = %v, want true while the upload is still receiving", inUse, err)
+		}
+
+		// Completed, and now the contest's game: the bytes are what a build
+		// streams.
+		summary := provisioning.UploadSummary{Bytes: 10, SHA256: "d0", Lines: 1}
+		if _, err := repo.CompleteUpload(ctx, contest, id, name, summary, nil); err != nil {
+			t.Fatalf("complete: %v", err)
+		}
+		if inUse, err := repo.UploadInUse(ctx, id); err != nil || !inUse {
+			t.Fatalf("in use = %v, err = %v, want true for the upload the game is built from", inUse, err)
+		}
+
+		// The organiser goes back to writing a script in the editor. The row
+		// is still there and still says 'complete'; nothing names the file any
+		// more, and this is the case the sweep exists to notice.
+		if _, err := repo.SaveScript(ctx, contest, name, `SELECT 1`); err != nil {
+			t.Fatalf("save script: %v", err)
+		}
+		if inUse, err := repo.UploadInUse(ctx, id); err != nil || inUse {
+			t.Fatalf("in use = %v, err = %v, want false once no game names the upload", inUse, err)
 		}
 	})
 }

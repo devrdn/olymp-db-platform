@@ -1,9 +1,12 @@
 package provisioning_test
 
 import (
+	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -355,13 +358,14 @@ func TestSweepUploadsAbandonsAStaleUploadAndRemovesAFileWithNoRow(t *testing.T) 
 	// directly, bypassing Games so no game_uploads row is ever written for
 	// it — exactly what a crash between the two would leave behind.
 	orphanID := uuid.New()
-	orphanStore, err := gamefile.NewStore(dir, uploadLimits)
-	if err != nil {
-		t.Fatalf("open a second handle on the same directory: %v", err)
-	}
-	if err := orphanStore.Begin(orphanID.String()); err != nil {
+	if err := storeOn(t, dir).Begin(orphanID.String()); err != nil {
 		t.Fatalf("reserve an orphan file: %v", err)
 	}
+	// Aged past orphanFileGrace, for the same reason the row above is aged
+	// rather than waited for. A file this sweep sees the instant it appears is
+	// deliberately left alone — see
+	// TestSweepUploadsLeavesAFileTooYoungToBeAnOrphan for the race that costs.
+	age(t, dir, orphanID, time.Hour)
 
 	result, err := games.SweepUploads(t.Context(), 24*time.Hour)
 	if err != nil {
@@ -463,5 +467,193 @@ func TestAbortLeavesTheRowReceivingWhenTheFileCannotBeRemoved(t *testing.T) {
 	}
 	if onDisk(t, dir, upload.ID) {
 		t.Fatal("the retried abort left the file behind")
+	}
+}
+
+// editableUntil answers GameEditable true for its first calls and false
+// afterwards.
+//
+// What it stands in for is one contest becoming un-editable in the window
+// CompleteUpload leaves open between its own editability check and the one
+// replaceGame makes inside the transaction: the background scheduler moving a
+// published contest to 'running' the moment its window opens. left is the
+// number of "yes" answers before the refusal, so a service built with
+// left: 1 says yes to CompleteUpload's own check and no to replaceGame's.
+type editableUntil struct {
+	mu   sync.Mutex
+	left int
+}
+
+func (e *editableUntil) GameEditable(context.Context, uuid.UUID) (bool, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.left <= 0 {
+		return false, nil
+	}
+	e.left--
+	return true, nil
+}
+
+// storeOn opens a second handle on a directory a *provisioning.Games is
+// already using — what a test needs to plant, or look for, a file behind the
+// service's back.
+func storeOn(t *testing.T, dir string) *gamefile.Store {
+	t.Helper()
+	store, err := gamefile.NewStore(dir, uploadLimits)
+	if err != nil {
+		t.Fatalf("open a second handle on the upload directory: %v", err)
+	}
+	return store
+}
+
+// age moves an upload's file back in time so a sweep whose cut-off is a
+// minimum file age can see it, the same convention the abandoned-row half of
+// this test file uses to age a row rather than wait for one.
+func age(t *testing.T, dir string, id uuid.UUID, by time.Duration) {
+	t.Helper()
+	when := time.Now().Add(-by)
+	if err := os.Chtimes(filepath.Join(dir, id.String()+".data"), when, when); err != nil {
+		t.Fatalf("age the upload's file: %v", err)
+	}
+}
+
+// Switching a contest's game back to a script written in the editor displaces
+// the uploaded file exactly the way a second upload does — and before this,
+// nothing removed it, ever. SaveScript clears upload_id and leaves the row
+// 'complete', so the janitor's orphan sweep (which skipped every id that had
+// a row at all) walked straight past it. Four such switches exhaust
+// GAME_UPLOAD_MAX_DIR_BYTES, after which every BeginUpload on the whole
+// installation answers game_upload_store_full and no organiser has any way to
+// free anything.
+func TestSwitchingToTheEditorRetiresTheUploadedFileItReplaces(t *testing.T) {
+	games, dir := gamesWithUploads(t, true)
+	contest, _ := contestFor(t, t.Context(), 0)
+	actor := uuid.New()
+
+	upload := beginWithContent(t, games, contest.ID, "dump.sql", "A;\n")
+	if _, err := games.CompleteUpload(t.Context(), actor, contest.ID, upload.ID); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	template, err := games.SetScript(t.Context(), actor, contest.ID, "CREATE TABLE t (id int);\n")
+	if err != nil {
+		t.Fatalf("set script: %v", err)
+	}
+	if template.Source != provisioning.SourceEditor {
+		t.Fatalf("source = %q, want editor", template.Source)
+	}
+	if onDisk(t, dir, upload.ID) {
+		t.Fatal("the file the editor's script displaced is still on disk, and nothing else will ever remove it")
+	}
+}
+
+// The displaced file goes only once the transaction that puts its replacement
+// in place has committed.
+//
+// DropInstance's "the real object goes first" is right there because the
+// removal *is* the operation; here it is conditional on a commit that has not
+// happened yet. CompleteUpload checks GameEditable, then hashes and indexes
+// the file — seconds at the configured ceiling — and only then opens the
+// transaction, which checks editability again. A contest that started in that
+// window leaves the game exactly as it was, still file-sourced, still naming
+// the upload whose bytes an unconditional removal had already deleted: every
+// later rebuild opens a file that is not there and stops for good at
+// BuildFailedInternally.
+func TestAReplacementRefusedInsideItsTransactionLeavesTheDisplacedFileAlone(t *testing.T) {
+	games, dir := gamesWithUploads(t, true)
+	contest, _ := contestFor(t, t.Context(), 0)
+	actor := uuid.New()
+
+	first := beginWithContent(t, games, contest.ID, "first.sql", "A;\n")
+	if _, err := games.CompleteUpload(t.Context(), actor, contest.ID, first.ID); err != nil {
+		t.Fatalf("complete first: %v", err)
+	}
+	second := beginWithContent(t, games, contest.ID, "second.sql", "B;\n")
+
+	// The same database and the same directory, but a contest that stops
+	// being editable after CompleteUpload's own check has already passed.
+	racing := provisioning.NewGames(postgres.NewGameInstances(testPool), &buildCluster{}, &editableUntil{left: 1}).
+		WithUploads(storeOn(t, dir), uploadLimits)
+
+	if _, err := racing.CompleteUpload(t.Context(), actor, contest.ID, second.ID); !errors.Is(err, provisioning.ErrGameNotEditable) {
+		t.Fatalf("complete second = %v, want ErrGameNotEditable", err)
+	}
+
+	template, err := games.Of(t.Context(), contest.ID)
+	if err != nil {
+		t.Fatalf("read the game back: %v", err)
+	}
+	if template.UploadID == nil || *template.UploadID != first.ID {
+		t.Fatalf("the game names upload %v, want the undisplaced %s", template.UploadID, first.ID)
+	}
+	if !onDisk(t, dir, first.ID) {
+		t.Fatal("the displaced file was removed although the transaction that would have replaced it was refused — " +
+			"the game still names it, and every rebuild from here fails")
+	}
+}
+
+// The janitor's own backstop for the ordering above: a file whose upload row
+// is still there, but which no contest's game names any more, is nobody's —
+// exactly what a crash between the commit and the unlink leaves behind. The
+// sweep used to ask only whether a row existed, which answered "keep" for
+// every one of these.
+func TestSweepUploadsRemovesAFileNoGameNamesAnyMore(t *testing.T) {
+	games, dir := gamesWithUploads(t, true)
+	contest, _ := contestFor(t, t.Context(), 0)
+	actor := uuid.New()
+
+	upload := beginWithContent(t, games, contest.ID, "dump.sql", "A;\n")
+	if _, err := games.CompleteUpload(t.Context(), actor, contest.ID, upload.ID); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if _, err := games.SetScript(t.Context(), actor, contest.ID, "CREATE TABLE t (id int);\n"); err != nil {
+		t.Fatalf("set script: %v", err)
+	}
+
+	// Put the file back exactly as a crash between the commit and the unlink
+	// would have left it: the row says the upload completed, nothing names it
+	// any more, and the bytes are still on the volume.
+	if err := storeOn(t, dir).Begin(upload.ID.String()); err != nil {
+		t.Fatalf("plant the file a crash would have left: %v", err)
+	}
+	age(t, dir, upload.ID, time.Hour)
+
+	result, err := games.SweepUploads(t.Context(), 24*time.Hour)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.OrphanFiles != 1 {
+		t.Fatalf("orphan files = %d, want 1", result.OrphanFiles)
+	}
+	if onDisk(t, dir, upload.ID) {
+		t.Fatal("a file no contest's game names any more survived the sweep because its row still exists")
+	}
+}
+
+// BeginUpload reserves the file before it writes the row — deliberately, so a
+// database refusal leaves an empty file rather than a row with nothing behind
+// it. A sweep with no minimum file age turns that ordering against itself: a
+// ReadDir that sees the reservation and a UploadExists that lands before the
+// INSERT commits delete the file of an upload whose id the organiser is at
+// that moment being told to append to. The first chunk then answers
+// game_upload_not_found, and the 'receiving' row left behind blocks every
+// retry with game_upload_in_progress until somebody cancels it by hand.
+func TestSweepUploadsLeavesAFileTooYoungToBeAnOrphan(t *testing.T) {
+	games, dir := gamesWithUploads(t, true)
+
+	fresh := uuid.New()
+	if err := storeOn(t, dir).Begin(fresh.String()); err != nil {
+		t.Fatalf("reserve a file the way BeginUpload does: %v", err)
+	}
+
+	result, err := games.SweepUploads(t.Context(), 24*time.Hour)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.OrphanFiles != 0 {
+		t.Fatalf("orphan files = %d, want 0 — a reservation made moments ago is not an orphan", result.OrphanFiles)
+	}
+	if !onDisk(t, dir, fresh) {
+		t.Fatal("a file reserved moments ago was swept away; BeginUpload's own INSERT had not even committed yet")
 	}
 }
