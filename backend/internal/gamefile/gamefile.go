@@ -24,13 +24,21 @@
 // so the caller (which knows the deployment's disk and the contest's dump
 // sizes) always supplies them.
 //
-// Concurrency: Store does not serialise calls that share an upload id. A
-// chunked upload is inherently sequential — the browser holds one chunk in
-// flight per upload and waits for the response before sending the next — so
-// the natural caller (one HTTP request at a time per id) already provides
-// that ordering. Two goroutines racing Append calls for the same id, or an
-// Append racing an Abort for the same id, is a caller bug, not a case this
-// package guards against.
+// Concurrency: Append, Complete and Abort serialise per upload id (see
+// idLocks in lock.go). A chunked upload is meant to be sequential — the
+// browser holds one chunk in flight and waits for the response before
+// sending the next — but a dropped connection makes the browser retry a
+// chunk it never got a response for while, from the server's side, the
+// first attempt may still be running. Two goroutines calling Append for the
+// same id at once is therefore a real case this package's own caller (the
+// HTTP handler, one goroutine per request) will produce, not a caller bug to
+// document away: "Append writes exactly at the end" and "Complete's
+// checksum describes what Append actually wrote" are invariants Store keeps
+// itself. Calls for different ids never wait on each other. Begin and the
+// read-only calls (Received, Window, Open) are not part of this — Begin's
+// own create-if-absent already resolves concurrent Begins at the file
+// system, and nothing this package promises depends on a read being
+// serialised against an Append the caller chose to run alongside it.
 package gamefile
 
 import "errors"
@@ -104,4 +112,12 @@ var (
 	// ErrIncomplete is Window (or anything else that needs the line index)
 	// called before Complete has built one.
 	ErrIncomplete = errors.New("upload has not been completed")
+
+	// ErrUploadSealed is an Append against an id that Complete has already
+	// sealed. Complete's checksum and line index describe the bytes on disk
+	// at the moment it ran; a write after that would make both describe a
+	// file that no longer exists, and nothing about the stored Summary would
+	// know it. This is what keeps that from happening silently (CLAUDE.md
+	// rule 1: a declared sentinel, not a write nobody objects to).
+	ErrUploadSealed = errors.New("upload has already been completed")
 )
