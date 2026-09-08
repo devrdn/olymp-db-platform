@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/google/uuid"
@@ -376,7 +377,9 @@ func TestWhichBackgroundJobsRunAtStartup(t *testing.T) {
 			why:     "a participant's own screen waits on this the moment a contest's window opens",
 		},
 		{
-			job:     buildGames(quiet(), nil),
+			job: buildGames(quiet(), func(context.Context, time.Duration) (provisioning.Template, error) {
+				return provisioning.Template{}, provisioning.ErrNoGame
+			}, gamedb.DefaultBuildTimeout),
 			atStart: true,
 			why:     "a game left in `building` by a dead process is recovered only by a tick of this",
 		},
@@ -393,5 +396,30 @@ func TestWhichBackgroundJobsRunAtStartup(t *testing.T) {
 				t.Fatalf("%s: atStart = %v, want %v — %s", tc.job.name, tc.job.atStart, tc.atStart, tc.why)
 			}
 		})
+	}
+}
+
+// The cut-off after which a game still at `building` is taken to belong to a
+// process that died has to outlast the budget the build itself was given.
+// Fifteen minutes was a constant beside a thirty-minute, deployment-settable
+// GAME_BUILD_TIMEOUT, so a build of a multi-gigabyte dump was claimed a second
+// time while the first was still streaming — and the second BuildTemplate
+// begins by dropping the template the first is filling. See staleBuildAfter
+// for what that costs and for why the number is derived rather than declared.
+func TestTheStaleBuildCutOffOutlastsWhateverBudgetABuildWasGiven(t *testing.T) {
+	for _, budget := range []time.Duration{time.Minute, gamedb.DefaultBuildTimeout, 4 * time.Hour} {
+		var asked time.Duration
+		job := buildGames(quiet(), func(_ context.Context, stale time.Duration) (provisioning.Template, error) {
+			asked = stale
+			return provisioning.Template{}, provisioning.ErrNoGame
+		}, budget)
+
+		if err := job.run(t.Context()); err != nil {
+			t.Fatalf("GAME_BUILD_TIMEOUT=%s: run() = %v", budget, err)
+		}
+		if asked <= budget {
+			t.Errorf("GAME_BUILD_TIMEOUT=%s: a build is reclaimed after %s, "+
+				"so one still inside its own budget is claimed a second time", budget, asked)
+		}
 	}
 }

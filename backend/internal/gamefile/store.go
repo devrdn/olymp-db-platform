@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // copyBufferSize is the fixed window Append copies a chunk through. Its size
@@ -446,7 +447,16 @@ func (s *Store) Received(id string) (int64, error) {
 // (the one file that exists for every upload, in progress or sealed) is
 // counted, so a completed upload's index file is never mistaken for a
 // second upload.
-func (s *Store) UploadIDs() ([]string, error) {
+//
+// modifiedBefore is a floor on the age of what is listed: an upload whose
+// data file was written at or after it is left out. Reconciling a volume
+// against somebody else's bookkeeping is inherently a race — the caller
+// creates the file and records it in two steps, whichever order it picks —
+// and a listing with no age at all hands the janitor the reservation of an
+// upload whose row is at that instant still being inserted. The cut-off is
+// what makes that window a matter of time rather than of luck; a caller that
+// genuinely wants everything passes a zero Time.
+func (s *Store) UploadIDs(modifiedBefore time.Time) ([]string, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return nil, fmt.Errorf("gamefile: list uploads: %w", err)
@@ -463,6 +473,17 @@ func (s *Store) UploadIDs() ([]string, error) {
 		}
 		if validateUploadID(id) != nil {
 			continue // not a name this Store could have produced itself
+		}
+		info, err := entry.Info()
+		if err != nil {
+			// Gone between ReadDir and Info. Not this call's problem, and the
+			// same answer usedBytes gives: nothing to list and nothing to
+			// report — a caller told about an id whose file has already
+			// disappeared would only be sent to remove it again.
+			continue
+		}
+		if !info.ModTime().Before(modifiedBefore) {
+			continue // younger than the caller's cut-off
 		}
 		ids = append(ids, id)
 	}
