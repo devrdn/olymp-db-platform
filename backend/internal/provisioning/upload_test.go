@@ -3,7 +3,6 @@ package provisioning_test
 import (
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -54,18 +53,26 @@ func gamesWithUploadsAndAudit(t *testing.T) (*provisioning.Games, *sink) {
 	return games, s
 }
 
-// onDisk reports whether id's data file still exists in dir — the ground
-// truth these tests check the database's own bookkeeping against.
+// onDisk reports whether id's upload still exists in dir — the ground truth
+// these tests check the database's own bookkeeping against. It asks a fresh
+// gamefile.Store opened on the same directory rather than knowing anything
+// about how that package lays files out on disk: Received answering
+// ErrNotFound is "gone", any other answer is "still there", exactly the
+// distinction gamefile.Store itself draws.
 func onDisk(t *testing.T, dir string, id uuid.UUID) bool {
 	t.Helper()
-	_, err := os.Stat(filepath.Join(dir, id.String()+".data"))
+	store, err := gamefile.NewStore(dir, uploadLimits)
+	if err != nil {
+		t.Fatalf("open the upload store: %v", err)
+	}
+	_, err = store.Received(id.String())
 	if err == nil {
 		return true
 	}
-	if os.IsNotExist(err) {
+	if errors.Is(err, gamefile.ErrNotFound) {
 		return false
 	}
-	t.Fatalf("stat the upload's file: %v", err)
+	t.Fatalf("check the upload's status: %v", err)
 	return false
 }
 

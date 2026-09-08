@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // copyBufferSize is the fixed window Append copies a chunk through. Its size
@@ -387,6 +388,45 @@ func (s *Store) Received(id string) (int64, error) {
 		return 0, fmt.Errorf("gamefile: stat upload: %w", err)
 	}
 	return info.Size(), nil
+}
+
+// UploadIDs lists the id of every upload this Store currently holds —
+// in-progress or completed, in no particular order. It exists so a caller
+// that needs to reconcile the volume against its own bookkeeping (the
+// provisioning package's orphan-file janitor is the one today) asks the
+// Store rather than walking the directory itself: the on-disk layout — one
+// data file plus, once sealed, one side index — is this package's own
+// convention, not something a caller should reverse-engineer by pattern
+// matching file names (see dataSuffix/indexSuffix above).
+//
+// The result names uploads, never paths or filenames — a caller gets the
+// same id it would pass to Received, Open or Abort, nothing that leaks how
+// this Store lays out its directory. Each upload appears exactly once
+// regardless of how many files on disk belong to it: only the data file
+// (the one file that exists for every upload, in progress or sealed) is
+// counted, so a completed upload's index file is never mistaken for a
+// second upload.
+func (s *Store) UploadIDs() ([]string, error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, fmt.Errorf("gamefile: list uploads: %w", err)
+	}
+
+	var ids []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		id, ok := strings.CutSuffix(entry.Name(), dataSuffix)
+		if !ok {
+			continue // the index file, or anything else that is not one upload's data
+		}
+		if validateUploadID(id) != nil {
+			continue // not a name this Store could have produced itself
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 // Open returns the upload's data file for the build step to stream from —
