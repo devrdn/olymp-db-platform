@@ -2,6 +2,7 @@ package gamefile
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -256,10 +257,15 @@ func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 	}
 
 	buf := make([]byte, copyBufferSize)
-	limited := io.LimitReader(r, writeCap)
-	written, err := io.CopyBuffer(f, limited, buf)
+	source := &chunkSource{r: io.LimitReader(r, writeCap)}
+	written, err := io.CopyBuffer(f, source, buf)
 	if err != nil {
 		_ = f.Truncate(offset)
+		if source.err != nil {
+			// The caller's own body stopped arriving. Named, because the
+			// client can act on it — see ErrChunkIncomplete.
+			return offset, fmt.Errorf("%w: %w", ErrChunkIncomplete, source.err)
+		}
 		return offset, fmt.Errorf("gamefile: write chunk: %w", err)
 	}
 
@@ -271,14 +277,48 @@ func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 		// directory, whichever was tightest) without ever holding, or
 		// writing, an over-budget chunk anywhere.
 		var probe [1]byte
-		n, _ := r.Read(probe[:])
-		if n > 0 {
+		n, probeErr := r.Read(probe[:])
+		switch {
+		case n > 0:
 			_ = f.Truncate(offset)
 			return offset, reason
+
+		case probeErr != nil && !errors.Is(probeErr, io.EOF):
+			// The reader could not answer the question, which is not the
+			// same answer as "there was nothing more" — and discarding this
+			// error is how a refused chunk became a success. The deployment
+			// makes it the ordinary case rather than an exotic one: the
+			// transport's ceiling and MaxChunkBytes are deliberately the
+			// same number, so a caller sending one byte too many is stopped
+			// by the socket at exactly the byte this cap stopped at, the
+			// probe reads (0, "request body too large"), and reading that as
+			// EOF answered 200 OK to a request that had been refused —
+			// keeping what fitted and silently dropping the rest.
+			_ = f.Truncate(offset)
+			return offset, fmt.Errorf("%w: %w", ErrChunkIncomplete, probeErr)
 		}
 	}
 
 	return offset + written, nil
+}
+
+// chunkSource remembers whether the failure that ended a copy came from the
+// caller's reader or from this process's own disk. io.Copy reports the two
+// identically, and they are not the same fact (CLAUDE.md rule 8): an
+// interrupted body is the client's to retry and is named as such, while a
+// write that failed is an outage of ours and must not be dressed up as
+// something the browser can fix by sending the chunk again.
+type chunkSource struct {
+	r   io.Reader
+	err error
+}
+
+func (s *chunkSource) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		s.err = err
+	}
+	return n, err
 }
 
 // Complete seals the upload: verifies the length, returns the checksum, and

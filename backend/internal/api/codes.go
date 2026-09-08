@@ -70,7 +70,7 @@ var (
 	// --- The game's uploaded dump --------------------------------------------
 	//
 	// One code per provisioning.Games upload sentinel (CLAUDE.md rule 1) —
-	// eleven of them, none collapsed into invalid_request, because each names
+	// twelve of them, none collapsed into invalid_request, because each names
 	// a different thing an organiser or their browser did and most of them
 	// say what to do next: retry the chunk, wait, or pick a different file.
 	codeGameUploadsDisabled = httpx.NewCode("game_uploads_disabled",
@@ -85,6 +85,8 @@ var (
 		"This chunk does not continue where the upload actually left off. Ask the server what it has received and resume from there rather than resending from the browser's own idea of the offset.")
 	codeGameUploadChunkTooLarge = httpx.NewCode("game_upload_chunk_too_large",
 		"One chunk is past the maximum chunk size this installation accepts. Split it into smaller pieces.")
+	codeGameUploadChunkIncomplete = httpx.NewCode("game_upload_chunk_incomplete",
+		"The chunk's body stopped arriving before the server had all of it — a dropped connection, or a transfer slower than the route waits for. Nothing of it was kept, so the same chunk can simply be sent again from the offset the server reports.")
 	codeGameUploadLengthMismatch = httpx.NewCode("game_upload_length_mismatch",
 		"What actually landed on disk does not match the length declared when the upload began. The upload cannot be completed; begin again.")
 	codeGameUploadNotFound = httpx.NewCode("game_upload_not_found",

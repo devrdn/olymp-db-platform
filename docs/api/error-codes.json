@@ -82,6 +82,10 @@
       "meaning": "This upload has already been completed or cancelled, so it can no longer take chunks, be completed again, or be cancelled."
     },
     {
+      "code": "game_upload_chunk_incomplete",
+      "meaning": "The chunk's body stopped arriving before the server had all of it — a dropped connection, or a transfer slower than the route waits for. Nothing of it was kept, so the same chunk can simply be sent again from the offset the server reports."
+    },
+    {
       "code": "game_upload_chunk_out_of_order",
       "meaning": "This chunk does not continue where the upload actually left off. Ask the server what it has received and resume from there rather than resending from the browser's own idea of the offset."
     },

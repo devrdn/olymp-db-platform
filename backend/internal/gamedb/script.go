@@ -3,6 +3,7 @@ package gamedb
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -21,6 +22,22 @@ import (
 // refusing outright, with a line number, before a script whose "statement"
 // never finds its closing quote is read in its entirety.
 const maxStatementBytes = 16 << 20
+
+// maxCopyDataLineBytes bounds one line of a COPY block's data — one row, in
+// COPY's text format — while copyDataReader looks for the newline that ends
+// it.
+//
+// This is the one place a multi-gigabyte dump's own bulk passes through, so
+// it is the one place CLAUDE.md rule 12 is really about: the build runs as a
+// background task inside the API process that is serving hundreds of
+// participants, and a "line" the file never terminates would otherwise be
+// allocated whole before anything looked at it. Not hypothetical in the
+// benign direction either — a dump with one wide text or bytea column has
+// genuinely long rows — so the bound is generous rather than tight: 16 MiB
+// is the same figure maxStatementBytes uses, and for the same reason, a row
+// past it is a fact about the file rather than a size anybody meets by
+// accident.
+const maxCopyDataLineBytes = 16 << 20
 
 // scanBufferSize is the bufio.Reader's own lookahead window. Small multiples
 // of it are all this file ever peeks (a dollar-quote tag, at most
@@ -101,7 +118,8 @@ const (
 // script, or a pg_dump text-format dump — into one Statement at a time,
 // never holding more of the source in memory than the statement currently
 // being read (bounded by maxStatementBytes) plus, inside a COPY block, the
-// one data line copyDataReader is currently passing through.
+// one data line copyDataReader is currently passing through (bounded, in
+// turn, by maxCopyDataLineBytes).
 //
 // It is not a SQL parser: it does not know what a valid statement is, only
 // where one ends. That is exactly the amount of PostgreSQL's own lexical
@@ -162,6 +180,13 @@ func (s *ScriptReader) Next() (Statement, error) {
 		escapeNext  bool // singleExtended only: the previous byte was '\', so this one is data
 		startLine   int
 		haveContent bool
+		// haveSQL is haveContent minus the comments: true once a byte of the
+		// statement *itself* has been buffered, false while the buffer holds
+		// only whitespace and the comment blocks pg_dump writes between
+		// statements. Only the \restrict case below needs the distinction,
+		// and it needs it precisely: that case drops the buffer, which is
+		// harmless for a comment and is losing a statement for anything else.
+		haveSQL bool
 	)
 
 	for {
@@ -199,6 +224,17 @@ func (s *ScriptReader) Next() (Statement, error) {
 			}
 		}
 
+		// sqlBefore is haveSQL as it stood before this byte — what the two
+		// comment-opening cases below restore it to once the byte turns out
+		// to have opened a comment rather than a statement, and what the
+		// \restrict case asks about the buffer it is on the point of
+		// dropping. Every byte a comment's own body contributes is handled
+		// under scanLineComment/scanBlockComment, so it never reaches here.
+		sqlBefore := haveSQL
+		if state == scanTop && b != ' ' && b != '\t' && b != '\r' && b != '\n' {
+			haveSQL = true
+		}
+
 		switch state {
 		case scanTop:
 			switch {
@@ -224,9 +260,29 @@ func (s *ScriptReader) Next() (Statement, error) {
 					// no-op wrapper pg_dump now always writes and that
 					// carries no SQL of its own, so it is dropped with its
 					// line rather than rejected as if it were content.
+					//
+					// Dropped only where pg_dump puts it, though: between two
+					// statements. Dropping the buffer is what makes this a
+					// skip, and the buffer holds everything read since the
+					// last ';' — so in a file assembled by hand or joined
+					// from two dumps, where the directive can land in the
+					// middle of a statement, the same line would silently
+					// take that statement with it and leave a lone ';' to
+					// execute. A game that "built successfully" without part
+					// of its data is worse than one that refused, so anything
+					// but whitespace and comments in front of it (haveSQL,
+					// declared above) is a refusal naming the line.
+					if sqlBefore {
+						return Statement{}, &ScriptSyntaxError{
+							Line: s.line,
+							Message: fmt.Sprintf(
+								`\%s appears in the middle of a statement, where it cannot be skipped — `+
+									`end the statement before it, or remove the line`, word),
+						}
+					}
 					s.skipToLineEnd()
 					buf = buf[:0]
-					haveContent = false
+					haveContent, haveSQL = false, false
 					continue
 				}
 				return Statement{}, &ScriptSyntaxError{
@@ -250,12 +306,14 @@ func (s *ScriptReader) Next() (Statement, error) {
 				if next, _ := s.r.Peek(1); len(next) == 1 && next[0] == '-' {
 					s.consumeInto(&buf, 1)
 					state = scanLineComment
+					haveSQL = sqlBefore // this '-' opened a comment, not a statement
 				}
 			case b == '/':
 				if next, _ := s.r.Peek(1); len(next) == 1 && next[0] == '*' {
 					s.consumeInto(&buf, 1)
 					blockDepth = 1
 					state = scanBlockComment
+					haveSQL = sqlBefore
 				}
 			case b == ';':
 				stmt := s.finish(buf, startLine)
@@ -577,7 +635,9 @@ func copyFromStdinHeader(stmt string) (string, bool) {
 //
 // One line of lookahead at a time, never the whole block: a table's COPY
 // data is exactly the part of a multi-gigabyte dump this reader exists so
-// that nothing else has to hold in memory.
+// that nothing else has to hold in memory. "One line" is itself bounded by
+// maxCopyDataLineBytes — a file with no newline where one belongs is
+// untrusted input, not a promise (see readDataLine).
 type copyDataReader struct {
 	parent  *ScriptReader
 	pending []byte
@@ -594,8 +654,16 @@ func (c *copyDataReader) Read(p []byte) (int, error) {
 			return 0, c.err
 		}
 
-		line, readErr := c.parent.r.ReadBytes('\n')
+		line, readErr := c.readDataLine()
+		var tooLong *ScriptSyntaxError
 		switch {
+		case errors.As(readErr, &tooLong):
+			// Already the reader's own verdict on the script, with its own
+			// line number (ScriptSyntaxError's doc): handed on as it is
+			// rather than wrapped in "read COPY data", which would read as
+			// an I/O failure of ours instead of a fact about their file.
+			c.err = readErr
+
 		case readErr != nil && readErr != io.EOF:
 			c.err = fmt.Errorf("gamedb: read COPY data: %w", readErr)
 
@@ -625,4 +693,46 @@ func (c *copyDataReader) Read(p []byte) (int, error) {
 	n := copy(p, c.pending)
 	c.pending = c.pending[n:]
 	return n, nil
+}
+
+// readDataLine reads one line of COPY data — up to and including its '\n',
+// or to EOF for a truncated final line — and never allocates more than
+// maxCopyDataLineBytes doing it.
+//
+// bufio.Reader.ReadBytes, which this replaced, grows a single buffer until it
+// finds the delimiter, with no ceiling at all: a header followed by three
+// gigabytes containing no '\n' would be allocated whole, inside the API
+// process, on the very first Read pgconn.PgConn.CopyFrom makes. ReadSlice
+// hands back at most the reader's own window and says so with
+// bufio.ErrBufferFull, which is what turns "grow until it fits" into "grow
+// while there is budget, then refuse" (CLAUDE.md rule 12: the bound belongs
+// where the bytes arrive, not on what is done with them afterwards).
+//
+// A line that fits in the window is returned as a slice of that window, not
+// a copy — the common case for a dump's rows, and the reason streaming a
+// gigabyte of them costs no allocation per row. The slice stays valid until
+// the next read from c.parent.r, which is exactly as long as it is held:
+// Read only refills c.pending once it has drained, and nothing else reads
+// from the underlying reader while a COPY block is open (Next refuses to run
+// at all until it closes).
+func (c *copyDataReader) readDataLine() ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := c.parent.r.ReadSlice('\n')
+		if len(line)+len(chunk) > maxCopyDataLineBytes {
+			return nil, &ScriptSyntaxError{
+				Line: c.parent.line,
+				Message: fmt.Sprintf(
+					"a line of COPY data exceeds %d bytes", maxCopyDataLineBytes),
+			}
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			line = append(line, chunk...)
+			continue
+		}
+		if len(line) == 0 {
+			return chunk, err // the whole line fit in the window: no copy
+		}
+		return append(line, chunk...), err
+	}
 }
