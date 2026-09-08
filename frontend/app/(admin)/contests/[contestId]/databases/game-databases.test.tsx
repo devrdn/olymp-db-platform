@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import en from "@/lib/i18n/dictionaries/en";
 import type { GameInstance, GameInstances } from "@/lib/api/game";
 
-import { GameDatabases, readableSize } from "./game-databases";
+import { GameDatabases } from "./game-databases";
 
 type State = { saved?: boolean; code?: string };
 
@@ -148,15 +148,5 @@ describe("the contest's databases", () => {
 
     expect(screen.getByText(t.empty)).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
-  });
-});
-
-describe("readableSize", () => {
-  test("scales to the unit a person reads", () => {
-    expect(readableSize(0)).toBe("0 B");
-    expect(readableSize(900)).toBe("900 B");
-    expect(readableSize(4 * 1024 * 1024)).toBe("4.0 MiB");
-    expect(readableSize(1536)).toBe("1.5 KiB");
-    expect(readableSize(64 * 1024 * 1024)).toBe("64 MiB");
   });
 });

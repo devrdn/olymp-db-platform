@@ -194,7 +194,12 @@ func (g *Games) BeginUpload(ctx context.Context, contestID uuid.UUID, filename s
 	}
 
 	id := uuid.New()
-	if err := g.files.Begin(id.String()); err != nil {
+	// declaredBytes travels on into the store, which is the only thing that
+	// knows what the directory has left: the check above is about one file's
+	// ceiling, and Store.Begin's is about whether the volume can hold this
+	// upload at all — a promise refused now instead of a transfer cut off at
+	// its 129th chunk (Store.Begin's own doc, CLAUDE.md rule 11).
+	if err := g.files.Begin(id.String(), declaredBytes); err != nil {
 		return Upload{}, wrapGamefileErr(err)
 	}
 

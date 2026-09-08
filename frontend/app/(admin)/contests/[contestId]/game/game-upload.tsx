@@ -7,7 +7,6 @@ import { buttonVariants } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { ApiError, request } from "@/lib/api/client";
 import type { Game, Upload } from "@/lib/api/game";
-import { GAME_POLL_MS } from "@/lib/api/game-terms";
 import { readableBytes, readableDuration } from "@/lib/format/bytes";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
@@ -17,9 +16,9 @@ import {
   beginGameUploadAction,
   completeGameUploadAction,
   currentGameUploadAction,
-  gameStatusAction,
   gameUploadWindowAction,
 } from "./actions";
+import { useGamePoll } from "./game-poll";
 
 /** How many consecutive out-of-order refusals the loop resyncs from on its
  * own before giving up and asking a person to press Retry. Covers the one
@@ -30,9 +29,24 @@ const MAX_AUTO_RESYNCS = 3;
 
 type Phase = "idle" | "resumable" | "uploading" | "completing" | "done" | "error";
 
-/** True for the DOMException `fetch` rejects an aborted request with. */
+/**
+ * True for the DOMException `fetch` rejects an aborted request with.
+ *
+ * The name is the whole test, and `instanceof Error` deliberately is not part
+ * of it. `DOMException` only became a subclass of `Error` in the 2021 WebIDL
+ * change; browsers have followed it, jsdom has not, and there is no reason for
+ * "the organiser pressed Cancel" to depend on which of the two an environment
+ * implements. Getting it wrong is not cosmetic either: a cancelled upload
+ * whose abort is not recognised falls through to the error branch and tells
+ * the organiser the server is unreachable, about a request they stopped
+ * themselves.
+ */
 function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: unknown }).name === "AbortError"
+  );
 }
 
 function failureCode(error: unknown): string {
@@ -166,24 +180,15 @@ export function GameUpload({
   const [gotoValue, setGotoValue] = useState("1");
 
   // Keeps this panel's own idea of the build current once its upload has
-  // finished — GameEditor's own status tag above polls the same way, for
-  // the same reason: nobody is holding a form open waiting on this one, a
-  // build is minutes at the worst case, and "jump to the failing line"
-  // below has nothing to jump to until a poll actually reports `failed`.
-  useEffect(() => {
-    if (phase !== "done" || !completedGame?.building) return;
-
-    let live = true;
-    const timer = setInterval(async () => {
-      const fresh = await gameStatusAction(contestId);
-      if (live && fresh) setCompletedGame(fresh);
-    }, GAME_POLL_MS);
-
-    return () => {
-      live = false;
-      clearInterval(timer);
-    };
-  }, [contestId, phase, completedGame?.building]);
+  // finished: nobody is holding a form open waiting on this one, a build is
+  // minutes at the worst case, and "jump to the failing line" below has
+  // nothing to jump to until a poll actually reports `failed`.
+  //
+  // The same timer GameEditor above uses, not a second one over the same
+  // endpoint — see useGamePoll for why two of them were both a wasted request
+  // every two seconds and a way for the two panels to show different states
+  // on the tick a build finishes.
+  useGamePoll(contestId, phase === "done" && Boolean(completedGame?.building), setCompletedGame);
 
   // Loads the viewer's first window the moment there is an upload id to read
   // it for — a live completion (`runLoop`, below) and a reload that restored
@@ -680,7 +685,13 @@ export function GameUpload({
 
               {windowError ? (
                 <p role="alert" className="text-small text-bad">
-                  {message(windowError)}
+                  {/* `message()` falls back to the dictionary's generic
+                      "something went wrong" for a code it does not know, and
+                      that is the wrong fallback here: what failed is one page
+                      of one file, which `tu.windowError` says in the three
+                      languages it is already translated into. The generic one
+                      was what this rendered while that key sat unused. */}
+                  {(errors as Record<string, string>)[windowError] ?? tu.windowError}
                 </p>
               ) : windowLoading ? (
                 <p className="text-small text-ink-3">{tu.loading}</p>

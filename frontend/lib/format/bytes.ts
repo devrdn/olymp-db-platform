@@ -2,11 +2,16 @@
  * A byte count and a duration, rounded to something a person reads while an
  * upload is moving.
  *
- * Neither is localised — the same choice `game-databases.tsx`'s own
- * `readableSize` already made for the sizes on that screen: "MiB" and "GiB"
- * are unit abbreviations, not prose, and read the same in every declared
- * language. What a screen wraps around them (the "{rate}/s" template, the
- * dictionary's own `/с` for Russian) is where translation belongs instead.
+ * The one place either is written. `game-databases.tsx` used to carry a
+ * byte-for-byte copy of `readableBytes` under its own name, with its own tests
+ * over the same five values — two columns of sizes on the two halves of one
+ * feature, which would have disagreed the first time anybody changed the
+ * rounding, with both sets of tests staying green.
+ *
+ * Neither is localised: "MiB" and "GiB" are unit abbreviations, not prose, and
+ * read the same in every declared language. What a screen wraps around them
+ * (the "{rate}/s" template, the dictionary's own `/с` for Russian) is where
+ * translation belongs instead.
  */
 
 const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"];

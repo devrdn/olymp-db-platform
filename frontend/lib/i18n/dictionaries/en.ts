@@ -201,6 +201,8 @@ const en = {
       heading: "The databases that exist",
       lede: "The spare pool and the copy each participant works in. Dropping one takes the database and nothing else: their answers, their score and their clock are kept elsewhere, and their next query rebuilds the database under the same name.",
       empty: "This contest has no databases yet. They are made once the game is built.",
+      unreachable:
+        "The list of databases could not be read just now. This does not mean the contest has none — the game cluster did not answer. Reload in a moment; if it keeps happening, check that pg-game is running.",
       spare: "spare",
       formerParticipant: "the account was deleted",
       drop: "Drop",

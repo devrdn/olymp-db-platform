@@ -14,7 +14,7 @@ import (
 
 func completeUpload(t *testing.T, s *Store, id, content string) Summary {
 	t.Helper()
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	if _, err := s.Append(id, 0, strings.NewReader(content)); err != nil {
@@ -49,7 +49,7 @@ func TestCompleteReportsChecksumAndLines(t *testing.T) {
 func TestCompleteEmptyFile(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "20000000-0000-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 
@@ -81,7 +81,7 @@ func TestCompleteLengthMismatch(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "40000000-0000-0000-0000-000000000000"
 	const content = "abcdefghij" // 10 bytes
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	if _, err := s.Append(id, 0, strings.NewReader(content)); err != nil {

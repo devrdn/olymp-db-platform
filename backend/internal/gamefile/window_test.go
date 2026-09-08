@@ -169,7 +169,7 @@ func TestWindowFileWithoutTrailingNewline(t *testing.T) {
 func TestWindowEmptyFile(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "c0000000-0000-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	if _, err := s.Complete(id, 0); err != nil {
@@ -191,7 +191,7 @@ func TestWindowEmptyFile(t *testing.T) {
 func TestWindowBeforeCompleteIsIncomplete(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "d0000000-0000-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	if _, err := s.Append(id, 0, strings.NewReader("a\nb\n")); err != nil {
