@@ -87,6 +87,8 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
             questions: t.tabs.questions,
             people: t.tabs.people,
             settings: t.tabs.settings,
+            game: t.tabs.game,
+            databases: t.tabs.databases,
           }}
         />
 
@@ -192,6 +194,22 @@ async function navigation(
       items: [
         { href: `${base}/people`, label: t.tabs.people },
         { href: `${base}/settings`, label: t.tabs.settings },
+        // Setup, not content: writing the game's SQL is authoring, which is
+        // why `game` sits above with the story and the questions — but the
+        // databases it produces are what running the contest does with it,
+        // read by an organiser once people are already playing. That is the
+        // same moment `people` and `settings` matter, not the moment the
+        // game is being written, so this follows them rather than `game`.
+        //
+        // No note. Every note above is sourced from the publish gate's own
+        // problem list — work that holds the contest back from publishing.
+        // Nothing about a database instance can appear there: an empty pool,
+        // a failed copy or a pile of stale ones blocks nobody's publish, the
+        // pool tender mends what it can on its own, and a count here would
+        // be the one note in this column that does not mean "fix this before
+        // you may publish" — which is exactly the meaning `note` carries
+        // everywhere else it appears.
+        { href: `${base}/databases`, label: t.tabs.databases },
       ],
     },
   ];

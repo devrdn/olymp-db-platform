@@ -128,6 +128,7 @@ const en = {
       people: "People",
       settings: "Settings",
       game: "Database",
+      databases: "Databases",
     },
     game: {
       heading: "Game database",
@@ -153,31 +154,35 @@ const en = {
         failed: "build failed",
         dropped: "removed",
       },
-      databases: {
-        heading: "The databases that exist",
-        hint: "The spare pool and the copy each participant works in. Dropping one takes the database and nothing else: their answers, their score and their clock are kept elsewhere, and their next query rebuilds the database under the same name.",
-        empty: "This contest has no databases yet. They are made once the game is built.",
-        spare: "spare",
-        formerParticipant: "the account was deleted",
-        drop: "Drop",
-        confirm:
-          "Drop the database of {who}? Any query they are running right now is lost, and a fresh copy is made the next time they act. Their answers, their score and their clock are not touched.",
-        sizeUnknown: "unknown",
-        truncated: "There are more databases than this list shows.",
-        columns: {
-          database: "Database",
-          holder: "Held by",
-          version: "Version",
-          status: "State",
-          size: "Size",
-          created: "Made",
-        },
-        status: {
-          provisioning: "being made",
-          ready: "ready",
-          failed: "failed",
-          dropped: "removed",
-        },
+    },
+    // The databases the game has produced, split from `game` into a section
+    // of its own — see the `databases` route. `game` is what an author
+    // writes; this is what running the contest does with it, which is why it
+    // reads as a sibling of `game` rather than a field on it.
+    databases: {
+      heading: "The databases that exist",
+      lede: "The spare pool and the copy each participant works in. Dropping one takes the database and nothing else: their answers, their score and their clock are kept elsewhere, and their next query rebuilds the database under the same name.",
+      empty: "This contest has no databases yet. They are made once the game is built.",
+      spare: "spare",
+      formerParticipant: "the account was deleted",
+      drop: "Drop",
+      confirm:
+        "Drop the database of {who}? Any query they are running right now is lost, and a fresh copy is made the next time they act. Their answers, their score and their clock are not touched.",
+      sizeUnknown: "unknown",
+      truncated: "There are more databases than this list shows.",
+      columns: {
+        database: "Database",
+        holder: "Held by",
+        version: "Version",
+        status: "State",
+        size: "Size",
+        created: "Made",
+      },
+      status: {
+        provisioning: "being made",
+        ready: "ready",
+        failed: "failed",
+        dropped: "removed",
       },
     },
     groups: {

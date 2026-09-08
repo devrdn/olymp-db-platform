@@ -1,13 +1,12 @@
-import { gameInstancesSchema, gameSchema, gameScriptSchema } from "@/lib/api/game";
+import { gameSchema, gameScriptSchema } from "@/lib/api/game";
 import { contentEditable } from "@/lib/api/contests";
-import { activeDictionary, activeLocale } from "@/lib/i18n/server";
+import { activeDictionary } from "@/lib/i18n/server";
 
 import { loadContest, loadContestResource } from "../contest";
-import { GameDatabases } from "./game-databases";
 import { GameEditor } from "./game-editor";
 
 /**
- * The contest's game database.
+ * The SQL an olympiad's game is built from.
  *
  * The status and the script are two reads because they are two different
  * things to ask for: the status is polled while a build runs, and the script
@@ -18,19 +17,18 @@ import { GameEditor } from "./game-editor";
  * address — the API answers `absent` rather than 404 for exactly that reason,
  * so there is one shape here instead of two.
  *
- * The databases that already exist are a third read, below the editor. The
- * editor is about the game everybody gets; the list is about the copies
- * individual people already have, which is what an organiser comes here for
- * once the contest is running rather than while it is being written.
+ * The databases this game has produced — the spare pool, and each
+ * participant's own copy — used to be a third read below the editor. They
+ * moved to their own `databases` section: writing this script is authoring,
+ * done while the contest is still being put together, and the databases are
+ * what running it produces, read by an organiser once the contest is live.
+ * Splitting the two sections is what let each keep to its own job instead of
+ * one page doing both.
  */
 export default async function GamePage(props: PageProps<"/contests/[contestId]/game">) {
-  const [{ contestId }, locale, dict] = await Promise.all([
-    props.params,
-    activeLocale(),
-    activeDictionary(),
-  ]);
+  const [{ contestId }, dict] = await Promise.all([props.params, activeDictionary()]);
 
-  const [contest, game, script, databases] = await Promise.all([
+  const [contest, game, script] = await Promise.all([
     loadContest(contestId),
     // `notFoundIsEmpty` because a 404 here is not a wrong address: the game
     // endpoints are mounted only where a game cluster is configured, so an
@@ -43,13 +41,6 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
     loadContestResource(contestId, "/game/script", (payload) => gameScriptSchema.parse(payload), {
       notFoundIsEmpty: true,
     }),
-    // Caught rather than thrown, the same way the people screen treats each of
-    // its two lists: this list reaches the game cluster for its sizes, and the
-    // editor above is what an author came for while a contest is being
-    // written. One read being unavailable must not take the other away.
-    loadContestResource(contestId, "/game/instances", (payload) =>
-      gameInstancesSchema.parse(payload),
-    ).catch(() => null),
   ]);
 
   const t = dict.workspace.game;
@@ -72,10 +63,6 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
           dict={dict}
         />
       )}
-
-      {game !== null && databases !== null ? (
-        <GameDatabases contestId={contestId} databases={databases} locale={locale} dict={dict} />
-      ) : null}
     </div>
   );
 }
