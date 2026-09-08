@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/gamefile"
@@ -493,6 +494,64 @@ func TestABuildThatFailedForOurOwnReasonsDescribesNoneOfOurInfrastructure(t *tes
 	}
 }
 
+// A script refusal is the one build failure whose text is the author's own,
+// and it is also the only one whose *size* and *bytes* the author chooses:
+// the reader quotes their file back at them, and their file is untrusted
+// input up to GAME_UPLOAD_MAX_FILE_BYTES.
+//
+// Two bounds, one place. The length, because build_error is an unbounded
+// `text` column and the same string is copied into the append-only
+// contest.game_built payload as well (CLAUDE.md rule 2: the bound belongs in
+// the domain, at the field, not only in the request that carried it). And
+// validity, because a `text` column is UTF-8 and a dump is raw bytes: an
+// invalid sequence makes FinishBuild fail with 22021, which leaves the row in
+// 'building' for staleBuildAfter to claim again — a DROP DATABASE and a
+// CREATE DATABASE on the game cluster every forty minutes, for a game that
+// can never become ready.
+func TestAScriptRefusalIsBoundedAndValidUTF8BeforeItIsStored(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := games(true)
+	trail := &sink{}
+	service = service.WithAudit(audit.New(trail), directly{})
+	// What the reader hands back for a line of a dump it refused: the file's
+	// own bytes, in the file's own quantity.
+	cluster.fail = scriptRefusal{says: "line 1: \xff\xfe\x00 " + strings.Repeat("q", 4<<20)}
+
+	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE fine (x int);`); err != nil {
+		t.Fatalf("setting the script: %v", err)
+	}
+	built, err := service.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("building: %v", err)
+	}
+
+	recordedEntry := "" // the audit payload's copy of the same string
+	for _, entry := range trail.entries {
+		if entry.Action == audit.ActionGameBuilt {
+			recordedEntry, _ = entry.Payload["error"].(string)
+		}
+	}
+
+	for label, text := range map[string]string{
+		"the stored build error": store.finished[0].err,
+		"the served build error": built.BuildError,
+		"the audit payload":      recordedEntry,
+	} {
+		if len(text) > provisioning.MaxBuildErrorBytes {
+			t.Fatalf("%s is %d bytes, past the %d the domain allows",
+				label, len(text), provisioning.MaxBuildErrorBytes)
+		}
+		if !utf8.ValidString(text) {
+			t.Fatalf("%s is not valid UTF-8, so the column it goes to refuses it: %q", label, text)
+		}
+		// Bounded, but still the author's own verdict: the useful part is the
+		// front of it.
+		if !strings.HasPrefix(text, "line 1: ") {
+			t.Fatalf("%s = %q, and no longer starts with what the reader said", label, text)
+		}
+	}
+}
+
 // The same rule for the *core* database's own failure, which reached the same
 // column by a different line: the policy read happens before the cluster is
 // touched at all, and its error text is a connection string of ours.
@@ -714,12 +773,12 @@ func TestTheScriptIsReadableForTheExportAndAContestWithoutOneIsNotAnError(t *tes
 	// rather than failing, so "no game" must not surface here as an error.
 	service, _, _ := games(true)
 
-	script, ok, err := service.Script(t.Context(), uuid.New())
+	script, ok, omitted, err := service.Script(t.Context(), uuid.New())
 	if err != nil {
 		t.Fatalf("Script() on a contest with no game returned error: %v", err)
 	}
-	if ok || script != "" {
-		t.Fatalf("Script() answered %q (present: %v), want an absent game", script, ok)
+	if ok || omitted || script != "" {
+		t.Fatalf("Script() answered %q (present: %v, omitted: %v), want an absent game", script, ok, omitted)
 	}
 
 	contest := uuid.New()
@@ -727,12 +786,52 @@ func TestTheScriptIsReadableForTheExportAndAContestWithoutOneIsNotAnError(t *tes
 		t.Fatalf("SetScript() returned error: %v", err)
 	}
 
-	script, ok, err = service.Script(t.Context(), contest)
+	script, ok, omitted, err = service.Script(t.Context(), contest)
 	if err != nil {
 		t.Fatalf("Script() returned error: %v", err)
 	}
-	if !ok || script != `CREATE TABLE suspects (id int);` {
-		t.Fatalf("Script() answered %q (present: %v)", script, ok)
+	if !ok || omitted || script != `CREATE TABLE suspects (id int);` {
+		t.Fatalf("Script() answered %q (present: %v, omitted: %v)", script, ok, omitted)
+	}
+}
+
+// The other half of the same method, and the one the export was getting
+// wrong: a game built from an uploaded dump has no script column to hand over
+// — its SQL is the file on the API host's own volume — and "" was
+// indistinguishable from a script an organiser had actually written. The
+// contest package cannot tell the two apart itself (it does not know
+// SourceFile exists), so this is where the fact has to be produced.
+func TestAFileSourcedGameIsReportedAsPresentButOmittedRatherThanAsAnEmptyScript(t *testing.T) {
+	t.Parallel()
+	service, store, _, files := uploadsGames(t, true)
+	contest := uuid.New()
+
+	upload := uuid.New()
+	if err := files.Begin(upload.String()); err != nil {
+		t.Fatalf("begin the upload on disk: %v", err)
+	}
+	if _, err := store.BeginUpload(t.Context(), upload, contest, "dump.sql", 10); err != nil {
+		t.Fatalf("begin the upload: %v", err)
+	}
+	if _, err := files.Append(upload.String(), 0, strings.NewReader("CREATE X;\n")); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if _, err := service.CompleteUpload(t.Context(), uuid.New(), contest, upload); err != nil {
+		t.Fatalf("complete the upload: %v", err)
+	}
+
+	script, ok, omitted, err := service.Script(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("Script() returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("a contest whose game is an uploaded dump answered that it has no game")
+	}
+	if !omitted {
+		t.Fatal("a file-sourced game answered as if its script were in the row")
+	}
+	if script != "" {
+		t.Fatalf("Script() answered %q for a game whose SQL is a file", script)
 	}
 }
 
@@ -743,7 +842,7 @@ func TestAFailingGameStoreIsReportedRatherThanReadAsNoGame(t *testing.T) {
 	store := &templateStore{templateErr: errors.New("the database is away")}
 	service := provisioning.NewGames(store, &buildCluster{}, authoring{editable: true})
 
-	if _, _, err := service.Script(t.Context(), uuid.New()); err == nil {
+	if _, _, _, err := service.Script(t.Context(), uuid.New()); err == nil {
 		t.Fatal("Script() swallowed a storage failure")
 	}
 }

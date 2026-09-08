@@ -45,6 +45,33 @@ const maxCopyDataLineBytes = 16 << 20
 // nothing about correctness depends on it.
 const scanBufferSize = 64 * 1024
 
+// maxPsqlCommandWordBytes bounds the command name readPsqlCommandWord will
+// accumulate after a backslash at the start of a line.
+//
+// The third reader in this file that touches untrusted-sized input, and the
+// one that had no ceiling at all: the word ends at a space, a tab or a
+// newline, and a file whose line begins `\` and reaches none of them put the
+// rest of itself — up to the whole of GAME_UPLOAD_MAX_FILE_BYTES — into one
+// []byte, inside the API process serving hundreds of participants, and then
+// copied it a second time into the refusal's own message. CLAUDE.md rule 12:
+// bounded where the bytes arrive. The longest name this reader actually
+// compares against is "unrestrict", so 64 is two orders of magnitude of
+// headroom over every psql meta-command there is, and a "word" past it is a
+// fact about the file rather than a name anybody typed.
+const maxPsqlCommandWordBytes = 64
+
+// maxCopyHeaderBytes bounds the parallel code-only buffer copyProbe keeps for
+// the one question it answers: is this statement a `COPY ... FROM STDIN`?
+//
+// The probe stops accumulating the moment the statement's first token turns
+// out not to be COPY, so in a dump this holds a COPY command's own header and
+// nothing else. This is the ceiling for the case where it *is* one: PostgreSQL
+// allows 1600 columns of at most 63 characters each, so a genuine header
+// cannot reach 128 KiB, and a mebibyte is headroom over that rather than a
+// figure any real script meets. Past it the probe gives up rather than grow
+// alongside a 16 MiB statement buffer that already has its own bound.
+const maxCopyHeaderBytes = 1 << 20
+
 // maxDollarTagLookahead bounds how far tryDollarTag looks for a closing '$'
 // before giving up and treating the '$' it saw as an ordinary character.
 // PostgreSQL does not bound a dollar-quote tag's length, but a real one is a
@@ -173,8 +200,11 @@ func (s *ScriptReader) Next() (Statement, error) {
 	}
 
 	var (
-		buf         []byte
-		state       = scanTop
+		buf   []byte
+		probe copyProbe
+		state = scanTop
+		// blockDepth, tag and escapeNext are the lexer's own working state
+		// for the three constructs a semicolon can hide inside.
 		blockDepth  int
 		tag         string
 		escapeNext  bool // singleExtended only: the previous byte was '\', so this one is data
@@ -201,9 +231,10 @@ func (s *ScriptReader) Next() (Statement, error) {
 			if !haveContent || len(bytes.TrimSpace(buf)) == 0 {
 				return Statement{}, io.EOF
 			}
-			return s.finish(buf, startLine), nil
+			return s.finish(buf, &probe, startLine), nil
 		}
 
+		prevState := state
 		atLineStart := s.atLineStart
 		if b == '\n' {
 			s.line++
@@ -239,9 +270,21 @@ func (s *ScriptReader) Next() (Statement, error) {
 		case scanTop:
 			switch {
 			case atLineStart && b == '\\':
-				word, rerr := s.readPsqlCommandWord()
+				word, whole, rerr := s.readPsqlCommandWord()
 				if rerr != nil {
 					return Statement{}, fmt.Errorf("gamedb: read script: %w", rerr)
+				}
+				if !whole {
+					// Not a command name anybody wrote, so it is not named
+					// back: what follows the backslash is unread bytes of a
+					// file this reader will not go on buffering.
+					return Statement{}, &ScriptSyntaxError{
+						Line: s.line,
+						Message: fmt.Sprintf(
+							"a line begins with a backslash and no psql command name follows it "+
+								"within %d bytes — psql commands are not SQL, so export the dump without them",
+							maxPsqlCommandWordBytes),
+					}
 				}
 				if word == "restrict" || word == "unrestrict" {
 					// pg_dump 16.10/17.6/18 and newer wrap every plain-text
@@ -281,7 +324,7 @@ func (s *ScriptReader) Next() (Statement, error) {
 						}
 					}
 					s.skipToLineEnd()
-					buf = buf[:0]
+					buf, probe = buf[:0], copyProbe{}
 					haveContent, haveSQL = false, false
 					continue
 				}
@@ -316,7 +359,7 @@ func (s *ScriptReader) Next() (Statement, error) {
 					haveSQL = sqlBefore
 				}
 			case b == ';':
-				stmt := s.finish(buf, startLine)
+				stmt := s.finish(buf, &probe, startLine)
 				if stmt.CopyHeader != "" {
 					// pg_dump's own layout: the data rows start on the line
 					// right after the COPY command's, never on the same one.
@@ -327,7 +370,9 @@ func (s *ScriptReader) Next() (Statement, error) {
 					// the dump. Consumed here, once, as part of recognising a
 					// COPY statement rather than as part of any statement's
 					// own text.
-					s.skipToLineEnd()
+					if err := s.endCopyHeaderLine(); err != nil {
+						return Statement{}, err
+					}
 				}
 				return stmt, nil
 			}
@@ -391,23 +436,107 @@ func (s *ScriptReader) Next() (Statement, error) {
 				}
 			}
 		}
+
+		// Last, with the byte's own role finally settled: the lexer is the
+		// only thing that knows whether it was code, the body of a comment or
+		// the inside of a literal, and copyFromStdinHeader needs exactly that
+		// distinction (see copyProbe).
+		probe.observe(prevState, state, b)
 	}
 }
 
 // finish decides whether the statement just closed is a `COPY ... FROM
 // STDIN` and marks the reader accordingly.
-func (s *ScriptReader) finish(buf []byte, startLine int) Statement {
+func (s *ScriptReader) finish(buf []byte, probe *copyProbe, startLine int) Statement {
 	// Only the run of whitespace between the previous statement's ';' and
-	// this one's own first byte is dropped — a leading comment stays, since
-	// it is what makes copyFromStdinHeader recognise a COPY that pg_dump
-	// preceded with one, and dropping it here would just make that pattern
-	// unrecognisable again.
+	// this one's own first byte is dropped. A leading comment stays: what
+	// runs is what the author wrote (Statement.Text's own doc), and
+	// PostgreSQL reads a comment in front of a statement exactly as if it
+	// were not there — including in the sql pgconn.PgConn.CopyFrom is given.
 	text := string(bytes.TrimLeft(buf, " \t\r\n"))
-	if header, ok := copyFromStdinHeader(text); ok {
+	if header, ok := copyFromStdinHeader(text, probe); ok {
 		s.copyOpen = true
 		return Statement{Text: text, Line: startLine, CopyHeader: header}
 	}
 	return Statement{Text: text, Line: startLine}
+}
+
+// copyProbe is the statement's own SQL with every comment body and every
+// literal body taken out — the only text copyFromStdinHeader may ask its
+// question of.
+//
+// The question is "is this statement a `COPY ... FROM STDIN`?", and the
+// version of it that ran against the statement's *raw* text got it wrong in
+// the one direction that hurts. A pattern skipping leading comments with an
+// alternative like `--[^\n]*` can be backtracked into: RE2 is free to stop
+// halfway through a comment, find `copy` inside the comment itself, and then
+// reach across the newline into the following statement for `from stdin`.
+// The result is not a COPY block missed but an ordinary `CREATE TABLE` handed
+// to pgconn.PgConn.CopyFrom because the organiser wrote an English sentence
+// above it — and the error that comes back is not a *pgconn.PgError, so
+// scriptFailure cannot make it a ScriptError and the author is told
+// "internal error, ask an administrator" about SQL that works (CLAUDE.md
+// rule 1). No pattern fixes that, because the pattern is not what knows where
+// a comment ends. The lexer above is; this is how its knowledge reaches the
+// decision.
+//
+// Every comment and every quoted body contributes exactly one space, so
+// tokens on either side of one stay separate without any of their bytes
+// taking part in the match. What is left is code, and only code.
+type copyProbe struct {
+	// code is the statement's code bytes, with leading whitespace dropped so
+	// that code[0] is the statement's first real character.
+	code []byte
+	// ruledOut is set once the answer can no longer change: the first token is
+	// not COPY, or the header has outgrown maxCopyHeaderBytes. Nothing is
+	// accumulated afterwards, which is what keeps this from being a second
+	// full-size copy of every statement in a multi-gigabyte dump.
+	ruledOut bool
+}
+
+// copyWord is the only first token that can make a statement a COPY block.
+var copyWord = []byte("copy")
+
+// observe is called once per byte the lexer read, with the state it was in
+// before that byte and the state it is in after — which together say whether
+// the byte was code, opened or closed a comment or literal, or was part of
+// one's body.
+func (p *copyProbe) observe(prev, next scanState, b byte) {
+	switch {
+	case p.ruledOut:
+	case prev == scanTop && next == scanTop:
+		p.push(b)
+	case prev != next:
+		// A comment or a quoted body just opened or closed. It separates the
+		// tokens around it, so it is worth exactly one space and none of its
+		// own bytes.
+		p.push(' ')
+	}
+}
+
+func (p *copyProbe) push(b byte) {
+	if len(p.code) == 0 && (b == ' ' || b == '\t' || b == '\r' || b == '\n') {
+		// Dropped rather than buffered, so that code[0] is the statement's
+		// first real character and the first-token check below is a look at
+		// four fixed bytes rather than a scan past however many blank lines
+		// and comments pg_dump wrote in front of this statement.
+		return
+	}
+	p.code = append(p.code, b)
+	if len(p.code) > maxCopyHeaderBytes {
+		p.ruledOut, p.code = true, nil
+		return
+	}
+	// The first token decides everything, so as soon as it is known not to be
+	// COPY there is nothing left to accumulate. One byte past the word is
+	// needed for the boundary: "copyright" is not "copy".
+	switch {
+	case len(p.code) < len(copyWord):
+	case !bytes.EqualFold(p.code[:len(copyWord)], copyWord):
+		p.ruledOut, p.code = true, nil
+	case len(p.code) > len(copyWord) && isIdentByte(p.code[len(copyWord)]):
+		p.ruledOut, p.code = true, nil
+	}
 }
 
 // CopyData returns the data for the COPY block Next just returned — call it
@@ -418,10 +547,45 @@ func (s *ScriptReader) CopyData() io.Reader {
 	return &copyDataReader{parent: s}
 }
 
+// endCopyHeaderLine consumes what is left of the line a COPY header's ';'
+// ended on — the newline itself, and the trailing spaces pg_dump or an editor
+// may have left in front of it — so that copyDataReader's first read starts
+// on the first data row instead of returning that newline as an empty row
+// that was never in the dump.
+//
+// Anything else on that line is refused rather than discarded, which is the
+// whole difference from the plain skip this replaced. COPY's data begins on
+// the next line by the format's own definition, so a second statement written
+// after the header — `COPY t FROM stdin; SELECT setval('t_id_seq', 100);` —
+// cannot be run: there is nowhere to put it. It used to be thrown away in
+// silence, and the reasoning against that is already written a few dozen
+// lines above, for \restrict: a game that "built successfully" without part
+// of its data is worse than one that refused.
+func (s *ScriptReader) endCopyHeaderLine() error {
+	for {
+		b, err := s.r.ReadByte()
+		if err != nil {
+			return nil // EOF right after the header: an empty, unterminated block
+		}
+		if b == '\n' {
+			s.line++
+			s.atLineStart = true
+			return nil
+		}
+		if b != ' ' && b != '\t' && b != '\r' {
+			return &ScriptSyntaxError{
+				Line: s.line,
+				Message: "a COPY ... FROM stdin is followed by more text on the same line, where " +
+					"the data block begins — put whatever follows it on its own line after the " +
+					`block's "\." terminator`,
+			}
+		}
+	}
+}
+
 // skipToLineEnd discards bytes up to and including the next '\n', or to EOF
-// if there is none — the COPY command's own trailing newline, consumed as
-// part of recognising the statement rather than left for CopyData to
-// mistake for an empty data row (see the case b == ';' branch above).
+// if there is none — the rest of a \restrict line, dropped with the directive
+// itself (see the atLineStart case above).
 func (s *ScriptReader) skipToLineEnd() {
 	for {
 		b, err := s.r.ReadByte()
@@ -560,19 +724,26 @@ func (s *ScriptReader) matchDollarTag(buf *[]byte, tag string) bool {
 // consumed by the caller — up to the first whitespace or end of line — so
 // the refusal can name it: "\connect" and "\connect mydb" read the same to
 // whoever has to remove it from the dump.
-func (s *ScriptReader) readPsqlCommandWord() (string, error) {
+//
+// It stops at maxPsqlCommandWordBytes and says so, rather than reading on:
+// see that constant for why a reader with no ceiling here is a way to spend
+// the API process's memory twice over on a file nobody validated.
+func (s *ScriptReader) readPsqlCommandWord() (string, bool, error) {
 	var word []byte
 	for {
 		next, _ := s.r.Peek(1)
 		if len(next) == 0 {
-			return string(word), nil
+			return string(word), true, nil
 		}
 		c := next[0]
 		if c == '\n' || c == ' ' || c == '\t' || c == '\r' {
-			return string(word), nil
+			return string(word), true, nil
+		}
+		if len(word) == maxPsqlCommandWordBytes {
+			return string(word), false, nil
 		}
 		if _, err := s.r.Discard(1); err != nil {
-			return "", err
+			return "", false, err
 		}
 		word = append(word, c)
 	}
@@ -594,28 +765,28 @@ func unterminatedMessage(state scanState) string {
 	}
 }
 
-// copyFromStdinPattern recognises a `COPY ... FROM STDIN` command inside a
-// statement's full text, allowing the whitespace and comments pg_dump always
-// writes just before one (a "-- Data for Name: ..." block).
+// copyFromStdinPattern recognises a `COPY ... FROM STDIN` command.
 //
-// Anchored at the very start (after only that whitespace/comments) so a
-// statement whose *content* happens to mention "FROM STDIN" — inside a
-// string literal, say — can never match: the pattern only ever looks at
-// what the statement's first real token is, never at what appears later
-// inside it while that first token was something else.
-var copyFromStdinPattern = regexp.MustCompile(
-	`(?is)^(?:\s+|--[^\n]*|/\*.*?\*/)*copy\b.*?\bfrom\s+stdin\b`)
+// Matched against copyProbe.code and never against a statement's raw text:
+// the probe has already removed every comment and every literal body, so this
+// pattern sees only SQL. It therefore needs no alternative for skipping
+// comments — that alternative is precisely what could be backtracked into,
+// and what made a comment above a `CREATE TABLE` turn it into a COPY block
+// (copyProbe's own doc). The anchor is the whole guard on the left: what the
+// statement's first token is, decided by the lexer rather than by the
+// regexp engine.
+var copyFromStdinPattern = regexp.MustCompile(`(?is)^copy\b.*\bfrom\s+stdin\b`)
 
-// copyFromStdinHeader reports whether stmt is a `COPY ... FROM STDIN`
-// command and, if so, returns it trimmed and without its trailing ';' — the
-// sql pgconn.PgConn.CopyFrom wants. The whole original text is returned
-// rather than only the matched portion, so a WITH (...) clause after STDIN
-// (a format PostgreSQL accepts and a hand-written script might use) reaches
-// the server exactly as written instead of being silently dropped, which
-// would make the server assume the wrong wire format for the data that
-// follows.
-func copyFromStdinHeader(stmt string) (string, bool) {
-	if !copyFromStdinPattern.MatchString(stmt) {
+// copyFromStdinHeader reports whether the statement the probe watched is
+// a `COPY ... FROM STDIN` command and, if so, returns stmt trimmed and
+// without its trailing ';' — the sql pgconn.PgConn.CopyFrom wants. The whole
+// original text is returned rather than only the matched portion, so a
+// WITH (...) clause after STDIN (a format PostgreSQL accepts and a
+// hand-written script might use) reaches the server exactly as written
+// instead of being silently dropped, which would make the server assume the
+// wrong wire format for the data that follows.
+func copyFromStdinHeader(stmt string, probe *copyProbe) (string, bool) {
+	if probe.ruledOut || !copyFromStdinPattern.Match(probe.code) {
 		return "", false
 	}
 	trimmed := bytes.TrimSpace([]byte(stmt))

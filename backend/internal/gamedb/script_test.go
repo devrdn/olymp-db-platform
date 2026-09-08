@@ -297,6 +297,29 @@ func TestABackslashNotAtLineStartIsNotMistakenForACommand(t *testing.T) {
 	}
 }
 
+// The other unbounded reader in this file, and the one with no ceiling at
+// all until this test: readPsqlCommandWord accumulated bytes until it met a
+// space, a tab or a newline, so a line that opens with a backslash and never
+// meets one took the rest of the file — up to GAME_UPLOAD_MAX_FILE_BYTES of
+// it — into a single []byte inside the API process serving participants, and
+// then copied it a second time into the refusal's own message (CLAUDE.md rule
+// 12: the bound belongs where the bytes arrive).
+func TestABackslashCommandWordWithNoTerminatorIsRefusedRatherThanBuffered(t *testing.T) {
+	t.Parallel()
+	r := gamedb.NewScriptReader(strings.NewReader(`\` + strings.Repeat("x", 8<<20)))
+
+	_, err := r.Next()
+	var syn *gamedb.ScriptSyntaxError
+	if !errors.As(err, &syn) {
+		t.Fatalf("error is %T, want *ScriptSyntaxError: %v", err, err)
+	}
+	// The refusal is the only place the word survives to, so its size is what
+	// says whether the word itself was ever allowed to grow.
+	if len(syn.Message) > 512 {
+		t.Fatalf("the refusal carries %d bytes of the script back", len(syn.Message))
+	}
+}
+
 func TestAStatementLongerThanTheBufferIsRefused(t *testing.T) {
 	t.Parallel()
 	huge := "SELECT '" + strings.Repeat("x", 17<<20) + "';"
@@ -395,6 +418,121 @@ func TestACopyFromStdinIsRecognisedAfterALeadingComment(t *testing.T) {
 	}
 	if string(data) != "1\tIonescu\n" {
 		t.Fatalf("COPY data = %q", data)
+	}
+}
+
+// What decides a COPY block is the statement's first *token*, and a comment
+// is not one.
+//
+// The pattern that used to answer this looked at the statement's raw text,
+// where an alternative matching a line comment can be backtracked into: RE2
+// stopped it halfway through the comment, found `copy` inside the comment
+// itself, and then reached across the newline into the statement's own body
+// for `from stdin`. The price is not a missed COPY but the opposite — an
+// organiser's perfectly good CREATE TABLE handed to pgconn.PgConn.CopyFrom,
+// which answers with an error that is not a *pgconn.PgError at all, so the
+// author is told "internal error, ask an administrator" about SQL that works
+// (CLAUDE.md rule 1).
+func TestOnlyTheFirstRealTokenDecidesWhetherAStatementIsACopyBlock(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		script  string
+		areCopy bool
+	}{
+		{
+			name:   "a line comment saying what the script does not do",
+			script: "-- We copy the seed rows below rather than reading them from stdin.\nCREATE TABLE t (id int);",
+		},
+		{
+			name:   "a line comment about a later step",
+			script: "-- copy these from stdin later\nINSERT INTO guests VALUES (1);",
+		},
+		{
+			name:   "a block comment saying the same thing",
+			script: "/* copy rows from stdin */\nCREATE TABLE t (id int);",
+		},
+		{
+			name:   "a string literal that reads like a header",
+			script: "CREATE TABLE t (note text DEFAULT 'copy from stdin');",
+		},
+		{
+			name:   "a comment inside a COPY that does not read from stdin",
+			script: "COPY t (a) /* was: from stdin */ TO PROGRAM 'cat';",
+		},
+		{
+			name:    "the real thing",
+			script:  "COPY public.t (a) FROM stdin;\n\\.\n",
+			areCopy: true,
+		},
+		{
+			name:    "the real thing behind pg_dump's own comment block",
+			script:  "--\n-- Data for Name: t; Type: TABLE DATA\n--\n\nCOPY public.t (a) FROM stdin;\n\\.\n",
+			areCopy: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := gamedb.NewScriptReader(strings.NewReader(tc.script))
+			stmt, err := r.Next()
+			if err != nil {
+				t.Fatalf("Next(): %v", err)
+			}
+			if isCopy := stmt.CopyHeader != ""; isCopy != tc.areCopy {
+				t.Fatalf("CopyHeader = %q (a COPY block: %v), want a COPY block: %v",
+					stmt.CopyHeader, isCopy, tc.areCopy)
+			}
+		})
+	}
+}
+
+// The same reasoning the \restrict case in this file already applies, at the
+// one other place the reader throws bytes away: after a COPY header the rest
+// of its line was discarded outright, so a file writing
+// `COPY t FROM stdin; SELECT setval(...);` lost the second statement without
+// a word. "A game that built successfully without part of its data is worse
+// than one that refused" — script.go's own sentence, for the identical case.
+func TestAStatementAfterACopyHeaderOnTheSameLineIsRefusedRatherThanDropped(t *testing.T) {
+	t.Parallel()
+	const script = "COPY t (a) FROM stdin; SELECT setval('t_id_seq', 100);\n" +
+		"1\n" +
+		"\\.\n"
+	r := gamedb.NewScriptReader(strings.NewReader(script))
+
+	stmt, err := r.Next()
+	if err == nil {
+		t.Fatalf("the trailing statement was dropped silently; Next() returned %+v", stmt)
+	}
+	var syn *gamedb.ScriptSyntaxError
+	if !errors.As(err, &syn) {
+		t.Fatalf("error is %T, want *ScriptSyntaxError: %v", err, err)
+	}
+	if syn.Line != 1 {
+		t.Fatalf("line = %d, want 1", syn.Line)
+	}
+}
+
+// The whitespace pg_dump itself can leave after the header's semicolon is
+// not a statement, and must not be refused as one.
+func TestTrailingWhitespaceAfterACopyHeaderIsNotAStatement(t *testing.T) {
+	t.Parallel()
+	r := gamedb.NewScriptReader(strings.NewReader("COPY t (a) FROM stdin;  \t\r\n1\n\\.\n"))
+
+	stmt, err := r.Next()
+	if err != nil {
+		t.Fatalf("Next(): %v", err)
+	}
+	if stmt.CopyHeader == "" {
+		t.Fatalf("CopyHeader is empty for %q", stmt.Text)
+	}
+	data, err := io.ReadAll(r.CopyData())
+	if err != nil {
+		t.Fatalf("reading COPY data: %v", err)
+	}
+	if string(data) != "1\n" {
+		t.Fatalf("COPY data = %q, want the one row", data)
 	}
 }
 

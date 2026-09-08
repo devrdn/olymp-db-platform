@@ -230,6 +230,44 @@ func TestADraftWithNoStoryAndNoGameStillExports(t *testing.T) {
 	}
 }
 
+// A game an organizer uploaded as a finished dump has no script column at all
+// — its SQL is gigabytes on the API host's own volume (provisioning.
+// SourceFile) — so the export cannot carry it, and the package must say so
+// rather than describe the contest as having a game and then hand over an
+// empty string.
+//
+// The two ways of being wrong are both real. A package claiming a game and
+// carrying none re-imports as ErrScriptEmpty, at which point last year's game
+// has quietly disappeared from an olympiad somebody is rebuilding. A package
+// claiming no game at all would be a lie in the other direction, and the
+// audit entry — which is what an organizer checks afterwards to see what left
+// the installation — would say the same thing. So the fact crosses the
+// boundary rather than being flattened at it (CLAUDE.md rule 11).
+func TestAGameUploadedAsAFileIsReportedAsOmittedRatherThanAsAnEmptyScript(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	f.Games.PutFile(c.ID)
+
+	pkg, err := f.Service.ExportPackage(t.Context(), uuid.New(), c.ID)
+	if err != nil {
+		t.Fatalf("ExportPackage() returned error: %v", err)
+	}
+	if !pkg.HasGame {
+		t.Error("a contest whose game is an uploaded dump exported as having no game at all")
+	}
+	if !pkg.GameOmitted {
+		t.Error("the package does not say the game was left out of it")
+	}
+	if pkg.Game != "" {
+		t.Errorf("the package carries %q as the game's script", pkg.Game)
+	}
+
+	entry := f.Audit.Entries[len(f.Audit.Entries)-1]
+	if omitted, _ := entry.Payload["game_omitted"].(bool); !omitted {
+		t.Errorf("the trail records %v, and does not say the game did not travel", entry.Payload)
+	}
+}
+
 func TestExportingAContestThatDoesNotExistIsNotFound(t *testing.T) {
 	f := conteststest.NewFixture()
 

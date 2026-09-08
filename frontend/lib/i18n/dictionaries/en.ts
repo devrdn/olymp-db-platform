@@ -1219,6 +1219,8 @@ const en = {
       "This upload is already finished or cancelled, so nothing more can be sent to it.",
     game_upload_incomplete:
       "This upload has not finished yet, so there is nothing to look inside. Wait until it completes.",
+    game_upload_index_corrupt:
+      "The stored copy of this upload no longer matches its own index, so it cannot be read. Upload the file again.",
     game_upload_too_often:
       "Uploads have been started too often. Wait a moment before starting another.",
     query_parse_error:

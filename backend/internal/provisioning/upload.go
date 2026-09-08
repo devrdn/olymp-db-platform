@@ -104,6 +104,18 @@ var (
 	// ErrUploadIncomplete is a Window asked of an upload Complete has not
 	// sealed yet — there is no line index to read.
 	ErrUploadIncomplete = errors.New("the upload has not been completed yet")
+	// ErrUploadIndexCorrupt is a completed upload whose line index no longer
+	// describes the file next to it: a truncated write, a damaged disk, or a
+	// file substituted underneath the volume (gamefile.ErrCorruptIndex's own
+	// doc).
+	//
+	// A sentinel of its own rather than the internal error it used to become,
+	// because it is one of the few failures on this route the organiser can
+	// actually act on: the bytes on the API host cannot be trusted to page
+	// through any more, so the file has to be uploaded again. Nothing about
+	// it is a fault of theirs, and nothing about it is fixed by retrying the
+	// same read.
+	ErrUploadIndexCorrupt = errors.New("the upload's line index is damaged")
 )
 
 // wrapGamefileErr turns one of internal/gamefile's own sentinels into the
@@ -120,6 +132,8 @@ func wrapGamefileErr(err error) error {
 		return ErrUploadAlreadyComplete
 	case errors.Is(err, gamefile.ErrIncomplete):
 		return ErrUploadIncomplete
+	case errors.Is(err, gamefile.ErrCorruptIndex):
+		return ErrUploadIndexCorrupt
 	case errors.Is(err, gamefile.ErrFileTooLarge):
 		return ErrUploadTooLarge
 	case errors.Is(err, gamefile.ErrStoreFull):
