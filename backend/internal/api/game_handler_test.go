@@ -52,6 +52,18 @@ type fakeGames struct {
 	gotAppendOffset    int64
 	gotAppendBodyBytes []byte // read via io.ReadAll here — a test double, not the production streaming path
 
+	// bodyMeter, when set, is the request body the caller sent, wrapped so
+	// that it counts what has been taken from it. AppendChunk records its
+	// reading at the moment it is entered, which is the one moment that
+	// tells a streamed body from a buffered one — see
+	// gotAppendBodyReadOnEntry.
+	bodyMeter *readMeter
+	// gotAppendBodyReadOnEntry is how many bytes of the request body had
+	// already been consumed by the time the handler called AppendChunk. Zero
+	// on the streaming path this route promises; the whole body on a handler
+	// that read it into memory first.
+	gotAppendBodyReadOnEntry int64
+
 	// store, when set, replaces that io.ReadAll with the real thing: the
 	// body is streamed into a real gamefile.Store on a real directory, and
 	// its errors are translated exactly as provisioning.Games.AppendChunk
@@ -126,6 +138,9 @@ func (g *fakeGames) BeginUpload(_ context.Context, contestID uuid.UUID, filename
 
 func (g *fakeGames) AppendChunk(_ context.Context, contestID, uploadID uuid.UUID, offset int64, r io.Reader) (int64, error) {
 	g.gotAppendContest, g.gotAppendUpload, g.gotAppendOffset = contestID, uploadID, offset
+	if g.bodyMeter != nil {
+		g.gotAppendBodyReadOnEntry = g.bodyMeter.read
+	}
 	if g.store != nil {
 		return appendToRealStore(g.store, uploadID, offset, r)
 	}
@@ -176,7 +191,7 @@ func realUploadStore(t *testing.T, uploadID uuid.UUID, limits gamefile.Limits) *
 	if err != nil {
 		t.Fatalf("open the upload store: %v", err)
 	}
-	if err := store.Begin(uploadID.String()); err != nil {
+	if err := store.Begin(uploadID.String(), 1<<16); err != nil {
 		t.Fatalf("begin the upload: %v", err)
 	}
 	return store
@@ -294,6 +309,62 @@ func newGameFixture(t *testing.T, permissions ...string) *gameFixture {
 		router: router, games: games, databases: databases, handler: handler, stores: stores, actor: actor,
 		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: token},
 	}
+}
+
+// The two budgets allowUploadBegin enforces, restated here because this is an
+// external test package and they are unexported. A change to either constant
+// without a change here shows up as a test that stops asserting the boundary
+// it names — which is why the loops below run right up to the limit and then
+// one past it, rather than "enough" times.
+const (
+	maxUploadBeginsPerAddressInTest = 20
+	maxUploadBeginsPerContestInTest = 8
+)
+
+// oneOffice is the address several organisers share — httptest's own default
+// RemoteAddr, spelled out because these tests are about which key a refusal
+// came from.
+const oneOffice = "192.0.2.1:1234"
+
+// beginUploadFrom starts an upload for one contest as seen from one address:
+// the two keys allowUploadBegin bounds, varied independently, which is the
+// only way a test can tell which of them refused a request.
+func (f *gameFixture) beginUploadFrom(remoteAddr, contestID string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/contests/"+contestID+"/game/uploads",
+		strings.NewReader(`{"filename":"dump.sql","declared_bytes":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = remoteAddr
+	req.AddCookie(f.cookie)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	return rec
+}
+
+// readMeter counts what has been drawn from a request body, so a test can ask
+// *when* the bytes were read rather than only what they were. The handler
+// under test is on one side of it and the service double on the other, and
+// the whole difference between streaming and buffering is which of the two
+// had read them by the time the service was called.
+type readMeter struct {
+	r    io.Reader
+	read int64
+}
+
+func (m *readMeter) Read(p []byte) (int, error) {
+	n, err := m.r.Read(p)
+	m.read += int64(n)
+	return n, err
+}
+
+// doBody is do with a body the caller owns — an io.Reader rather than a
+// string, so the test can watch it being consumed.
+func (f *gameFixture) doBody(method, path string, body io.Reader) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, body)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(f.cookie)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	return rec
 }
 
 func (f *gameFixture) do(method, path, body string) *httptest.ResponseRecorder {
@@ -782,23 +853,93 @@ func TestBeginningAnUploadReservesOneAndReturnsIt(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 5: the address-scoped budget is spent before the
-// contest-scoped one, and here that means the address limit trips first when
-// every request in the loop shares one contest and one httptest RemoteAddr.
-func TestBeginningAnUploadIsRateLimitedPerAddress(t *testing.T) {
+// The address budget, proven where only it can answer: every request goes to
+// a *different* contest, so the contest-scoped counter never reaches its own
+// eight and the twenty-first refusal can only have come from the address.
+//
+// Twenty-one requests into one contest — what this asserted before — proved
+// neither. maxUploadBeginsPerContest is 8 against maxUploadBeginsPerAddress's
+// 20, so the ninth request was already refused by the contest key, and both
+// keys answer with the same status and the same code: deleting the address
+// block from allowUploadBegin outright left the test green.
+func TestBeginningAnUploadIsRateLimitedPerAddressAcrossContests(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
-	contest := uuid.NewString()
 
-	var last *httptest.ResponseRecorder
-	for i := 0; i < 21; i++ { // maxUploadBeginsPerAddress is 20
-		last = f.do(http.MethodPost, "/contests/"+contest+"/game/uploads",
-			`{"filename":"dump.sql","declared_bytes":1}`)
+	for i := range maxUploadBeginsPerAddressInTest {
+		rec := f.beginUploadFrom(oneOffice, uuid.NewString())
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("request %d of the address's own budget answered %d: %s", i+1, rec.Code, rec.Body)
+		}
 	}
+
+	last := f.beginUploadFrom(oneOffice, uuid.NewString())
 	if last.Code != http.StatusTooManyRequests {
 		t.Fatalf("status %d, want 429: %s", last.Code, last.Body)
 	}
 	if code := errorCode(t, last); code != "game_upload_too_often" {
 		t.Fatalf("code %q, want game_upload_too_often", code)
+	}
+	if !strings.Contains(last.Body.String(), "from this address") {
+		t.Fatalf("the refusal does not name the address budget: %s", last.Body)
+	}
+}
+
+// And the contest budget, proven the same way round: every request comes from
+// a different address, so the address counter never reaches twenty and the
+// ninth refusal can only be the contest's own.
+func TestBeginningAnUploadIsRateLimitedPerContestAcrossAddresses(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contest := uuid.NewString()
+
+	for i := range maxUploadBeginsPerContestInTest {
+		rec := f.beginUploadFrom(fmt.Sprintf("198.51.100.%d:5000", i+1), contest)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("request %d of the contest's own budget answered %d: %s", i+1, rec.Code, rec.Body)
+		}
+	}
+
+	last := f.beginUploadFrom("198.51.100.200:5000", contest)
+	if last.Code != http.StatusTooManyRequests {
+		t.Fatalf("status %d, want 429: %s", last.Code, last.Body)
+	}
+	if !strings.Contains(last.Body.String(), "for this contest") {
+		t.Fatalf("the refusal does not name the contest budget: %s", last.Body)
+	}
+}
+
+// CLAUDE.md rule 5, as a fact somebody can observe rather than a comment: the
+// address key is spent *before* the contest key, so a caller the address
+// budget refuses never spends a counter in the contest's own budget.
+//
+// The two keys answer with the same status and code, so order cannot be read
+// off the refusal itself. What can be read off it is the contest budget
+// afterwards: a fresh contest whose eight begins are all still there was
+// never charged for the request the address refused.
+func TestTheAddressBudgetIsSpentBeforeTheContestsOwn(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+
+	for range maxUploadBeginsPerAddressInTest {
+		if rec := f.beginUploadFrom(oneOffice, uuid.NewString()); rec.Code != http.StatusCreated {
+			t.Fatalf("filling the address budget answered %d: %s", rec.Code, rec.Body)
+		}
+	}
+
+	// Refused by the address. If the contest key were checked first, this
+	// request would have spent one of the eight below on its way to the same
+	// 429.
+	victim := uuid.NewString()
+	if rec := f.beginUploadFrom(oneOffice, victim); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status %d, want 429: %s", rec.Code, rec.Body)
+	}
+
+	// From an address with a budget of its own, the victim contest must
+	// still have all eight of its begins.
+	for i := range maxUploadBeginsPerContestInTest {
+		rec := f.beginUploadFrom(fmt.Sprintf("203.0.113.%d:5000", i+1), victim)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("begin %d of 8 for the contest answered %d — the refused request spent one: %s",
+				i+1, rec.Code, rec.Body)
+		}
 	}
 }
 
@@ -823,20 +964,39 @@ func TestBeginningAnUploadIsRefusedToAnAccountThatIsNotStaffOnTheContest(t *test
 	}
 }
 
-// The chunk is streamed straight into AppendChunk: fakeGames.AppendChunk
-// reads the io.Reader it is given with io.ReadAll on its own side, which only
-// returns the real bytes if the handler handed over something still readable
-// — not a buffer it had already drained into memory itself.
+// The chunk is streamed straight into AppendChunk, never read into memory by
+// the handler first (CLAUDE.md rule 12; appendChunk's own doc).
+//
+// What proves that is *when* the body was read, not what came back from it.
+// Asserting only that the fake's own io.ReadAll returned the right bytes —
+// what this test did before — is satisfied just as well by a handler that
+// drains r.Body itself and hands over a bytes.Reader of what it kept: the
+// fake reads the same bytes either way, and rule 12's whole point (an
+// eight-mebibyte chunk of a three-gigabyte upload must not become an
+// eight-mebibyte allocation per request in the API process) went unchecked.
+// So the body counts what is taken from it, and the fake records that count
+// at the instant it is entered: zero on the streaming path, the whole chunk
+// on a buffering one.
 func TestAppendingAChunkStreamsTheBodyToTheService(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	contest, upload := uuid.NewString(), uuid.NewString()
 	f.games.appendResult = 19
 
-	rec := f.do(http.MethodPut,
-		"/contests/"+contest+"/game/uploads/"+upload+"/chunk?offset=7",
-		"CREATE TABLE t (id int);")
+	const payload = "CREATE TABLE t (id int);"
+	meter := &readMeter{r: strings.NewReader(payload)}
+	f.games.bodyMeter = meter
+
+	rec := f.doBody(http.MethodPut,
+		"/contests/"+contest+"/game/uploads/"+upload+"/chunk?offset=7", meter)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotAppendBodyReadOnEntry != 0 {
+		t.Fatalf("%d of the chunk's %d bytes were already in memory before AppendChunk was called",
+			f.games.gotAppendBodyReadOnEntry, len(payload))
+	}
+	if meter.read != int64(len(payload)) {
+		t.Fatalf("the service drew %d bytes from the body, want %d", meter.read, len(payload))
 	}
 	if f.games.gotAppendOffset != 7 {
 		t.Fatalf("offset reached the service as %d, want 7", f.games.gotAppendOffset)

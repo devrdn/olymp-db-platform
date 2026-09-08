@@ -637,7 +637,7 @@ func uploadsGames(t *testing.T, editable bool) (*provisioning.Games, *templateSt
 // lifecycle), so a build has real bytes on disk to open.
 func sealedUpload(t *testing.T, files *gamefile.Store, id uuid.UUID, dump string) {
 	t.Helper()
-	if err := files.Begin(id.String()); err != nil {
+	if err := files.Begin(id.String(), 1<<16); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	if _, err := files.Append(id.String(), 0, strings.NewReader(dump)); err != nil {
@@ -807,7 +807,7 @@ func TestAFileSourcedGameIsReportedAsPresentButOmittedRatherThanAsAnEmptyScript(
 	contest := uuid.New()
 
 	upload := uuid.New()
-	if err := files.Begin(upload.String()); err != nil {
+	if err := files.Begin(upload.String(), 1<<16); err != nil {
 		t.Fatalf("begin the upload on disk: %v", err)
 	}
 	if _, err := store.BeginUpload(t.Context(), upload, contest, "dump.sql", 10); err != nil {

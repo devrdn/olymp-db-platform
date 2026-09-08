@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -635,6 +636,65 @@ func TestALongLineOfCopyDataUnderTheBoundIsStreamedWhole(t *testing.T) {
 	}
 }
 
+// One Read is one CopyData message on the wire and one write(2) into the
+// socket: pgconn.PgConn.CopyFrom offers this exact buffer and hands whatever
+// comes back straight to pgproto3, which flushes and writes it unbuffered.
+// So a Read that returns one hundred-byte row because that is the first row
+// it read is a dump sent to PostgreSQL one syscall at a time — thirty million
+// of them for a three-gigabyte dump, in the process that is also serving the
+// olympiad.
+//
+// Asserted as "the buffer comes back nearly full" rather than as a count of
+// syscalls, because the buffer is the only thing this side controls; the row
+// size below is deliberately a divisor of nothing in particular, so passing
+// requires actually packing rows rather than getting lucky.
+func TestOneReadOfCopyDataFillsTheCallersBuffer(t *testing.T) {
+	t.Parallel()
+	// The buffer pgconn.PgConn.CopyFrom actually offers, and a row length no
+	// wider than a dump's ordinary ones.
+	const copyFromBuffer = 65531
+	row := strings.Repeat("x", 99) + "\n"
+	rows := (copyFromBuffer / len(row)) * 4
+
+	var script strings.Builder
+	script.WriteString("COPY public.t (a) FROM stdin;\n")
+	for range rows {
+		script.WriteString(row)
+	}
+	script.WriteString("\\.\n")
+
+	r := gamedb.NewScriptReader(strings.NewReader(script.String()))
+	if _, err := r.Next(); err != nil {
+		t.Fatalf("Next(): %v", err)
+	}
+
+	data := r.CopyData()
+	buf := make([]byte, copyFromBuffer)
+	n, err := data.Read(buf)
+	if err != nil {
+		t.Fatalf("first Read: %v", err)
+	}
+	// A whole row may not fit at the end, so the last partial one is split
+	// rather than left out: what must never happen is coming back after one
+	// row of a block that has thousands left.
+	if n <= copyFromBuffer-len(row) {
+		t.Fatalf("one Read returned %d of %d bytes — about %d rows, not a full buffer",
+			n, copyFromBuffer, n/len(row))
+	}
+
+	// And the block still streams through byte for byte.
+	rest, err := io.ReadAll(data)
+	if err != nil {
+		t.Fatalf("reading the rest: %v", err)
+	}
+	if total := n + len(rest); total != rows*len(row) {
+		t.Fatalf("streamed %d bytes, want %d", total, rows*len(row))
+	}
+	if got := string(buf[:n]) + string(rest); got != strings.Repeat(row, rows) {
+		t.Fatal("the data that came back is not the data that went in")
+	}
+}
+
 // TestARealPgDumpFileIsReadInFull is the regression this package was
 // missing: every earlier test constructs its own script by hand, so all of
 // them agreed with what the reader expects a dump to look like. This one
@@ -654,10 +714,24 @@ func TestARealPgDumpFileIsReadInFull(t *testing.T) {
 
 	r := gamedb.NewScriptReader(f)
 
+	// Every statement the file contains, by the source line it starts on —
+	// which is both the count and the identity of each one, so a statement
+	// dropped, split or invented shows up as a line rather than as a number
+	// nobody can place. Reading down testdata/pg_dump_16_languages.sql:
+	// eleven SET, one SELECT pg_catalog.set_config, CREATE TABLE, the COPY
+	// header, and ALTER TABLE ... ADD CONSTRAINT — fifteen. The first starts
+	// at 7 rather than 10 because pg_dump's "Dumped from database version"
+	// comment block belongs to the statement that follows it (Statement.Text
+	// keeps a leading comment). The \restrict on line 4 and the \unrestrict
+	// on line 62 must add none of their own, which is what this file is
+	// here to prove; blank lines between SETs must not add any either.
+	wantLines := []int{7, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 23, 25, 38, 49}
+	const wantCopyAt = 38
+
 	var (
-		statements int
-		copyRows   []byte
-		sawCopy    bool
+		gotLines []int
+		copyRows []byte
+		sawCopy  bool
 	)
 	for {
 		stmt, err := r.Next()
@@ -667,9 +741,12 @@ func TestARealPgDumpFileIsReadInFull(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Next(): %v", err)
 		}
-		statements++
+		gotLines = append(gotLines, stmt.Line)
 		if stmt.CopyHeader == "" {
 			continue
+		}
+		if stmt.Line != wantCopyAt {
+			t.Fatalf("the COPY block was recognised at line %d, want %d", stmt.Line, wantCopyAt)
 		}
 		if !strings.Contains(stmt.CopyHeader, "COPY public.languages") {
 			t.Fatalf("CopyHeader = %q", stmt.CopyHeader)
@@ -681,11 +758,8 @@ func TestARealPgDumpFileIsReadInFull(t *testing.T) {
 		copyRows, sawCopy = data, true
 	}
 
-	// SET * 9, two blank SET-adjacent lines are not statements, CREATE
-	// TABLE, the COPY header itself, and ALTER TABLE ... ADD CONSTRAINT —
-	// the \restrict/\unrestrict lines must not have added two more.
-	if statements == 0 {
-		t.Fatal("got 0 statements from a real pg_dump file")
+	if !slices.Equal(gotLines, wantLines) {
+		t.Fatalf("statements start on lines %v, want %v", gotLines, wantLines)
 	}
 	if !sawCopy {
 		t.Fatal("the COPY public.languages block was never seen")

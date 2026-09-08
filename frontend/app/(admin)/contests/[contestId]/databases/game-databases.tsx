@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import type { GameInstance, GameInstances } from "@/lib/api/game";
+import { readableBytes } from "@/lib/format/bytes";
 import { formatMoment } from "@/lib/format/datetime";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -26,24 +27,6 @@ const STATUS_TONE: Record<GameInstance["status"], "good" | "warn" | "bad" | "mut
 /** A failure this panel is reporting, in the interface's own words. */
 function message(code: string | undefined, dict: Dictionary): string | null {
   return code ? ((dict.errors as Record<string, string>)[code] ?? dict.errors.fallback) : null;
-}
-
-/**
- * A size, rounded to something a person reads.
- *
- * Deliberately not exact. This column answers "which of these has run away
- * with the disk", and a figure to the byte would be precision nobody acts on —
- * the number has moved again between the read and the render.
- */
-export function readableSize(bytes: number): string {
-  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value < 10 && unit > 0 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }
 
 /**
@@ -126,7 +109,7 @@ export function GameDatabases({
                     <Tag tone={STATUS_TONE[instance.status]}>{t.status[instance.status]}</Tag>
                   </td>
                   <td className={cn(CELL, "font-mono text-data text-ink-2")}>
-                    {instance.sizeKnown ? readableSize(instance.sizeBytes) : t.sizeUnknown}
+                    {instance.sizeKnown ? readableBytes(instance.sizeBytes) : t.sizeUnknown}
                   </td>
                   <td className={cn(CELL, "text-small text-ink-2")}>
                     {instance.createdAt === "" ? "" : formatMoment(instance.createdAt, { locale })}

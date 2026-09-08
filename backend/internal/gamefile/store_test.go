@@ -16,6 +16,14 @@ import (
 // permissiveLimits are large enough that no test relying on them is
 // exercising a bound — tests that care about a specific bound set it
 // themselves.
+// declaredForTest is the size an upload announces where the announcement is
+// not what the test is about. Deliberately tiny: several tests below run a
+// Store whose MaxDirBytes is a handful of bytes, and Begin now measures the
+// promise against that budget rather than only asking whether any space is
+// left at all. What a test then actually writes is Append's business — Append
+// bounds a chunk by what is on disk, never by what Begin was told.
+const declaredForTest = 5
+
 func permissiveLimits() Limits {
 	return Limits{
 		MaxFileBytes:  1 << 20, // 1 MiB
@@ -93,7 +101,7 @@ func TestBeginThenReceivedIsZero(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "aaaaaaaa-0000-0000-0000-000000000000"
 
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	n, err := s.Received(id)
@@ -109,7 +117,7 @@ func TestBeginIsIdempotentAndDoesNotTruncate(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "bbbbbbbb-0000-0000-0000-000000000000"
 
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	if _, err := s.Append(id, 0, strings.NewReader("hello")); err != nil {
@@ -117,7 +125,7 @@ func TestBeginIsIdempotentAndDoesNotTruncate(t *testing.T) {
 	}
 	// Calling Begin again — as a client re-announcing a resumed upload —
 	// must not wipe out what was already received.
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("second Begin: %v", err)
 	}
 	n, err := s.Received(id)
@@ -131,7 +139,7 @@ func TestBeginIsIdempotentAndDoesNotTruncate(t *testing.T) {
 
 func TestBeginRejectsBadID(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
-	if err := s.Begin("../escape"); !errors.Is(err, ErrBadUploadID) {
+	if err := s.Begin("../escape", declaredForTest); !errors.Is(err, ErrBadUploadID) {
 		t.Fatalf("Begin(\"../escape\") = %v, want ErrBadUploadID", err)
 	}
 }
@@ -141,7 +149,7 @@ func TestBeginRefusesWhenStoreFull(t *testing.T) {
 	s := newTestStore(t, limits)
 
 	const id1 = "11111111-0000-0000-0000-000000000000"
-	if err := s.Begin(id1); err != nil {
+	if err := s.Begin(id1, declaredForTest); err != nil {
 		t.Fatalf("Begin(id1): %v", err)
 	}
 	if _, err := s.Append(id1, 0, strings.NewReader("hello")); err != nil { // 5 bytes == MaxDirBytes
@@ -149,8 +157,82 @@ func TestBeginRefusesWhenStoreFull(t *testing.T) {
 	}
 
 	const id2 = "22222222-0000-0000-0000-000000000000"
-	if err := s.Begin(id2); !errors.Is(err, ErrStoreFull) {
+	if err := s.Begin(id2, declaredForTest); !errors.Is(err, ErrStoreFull) {
 		t.Fatalf("Begin(id2) = %v, want ErrStoreFull", err)
+	}
+}
+
+// The refusal that used to arrive on the 129th chunk. "Is there any space
+// left" is a different question from "is there space for this upload", and
+// only the second one can be answered before the organiser spends a quarter
+// of an hour of their uplink sending bytes the volume was never going to
+// keep.
+func TestBeginRefusesAnUploadLargerThanWhatIsLeftBeforeAnythingIsSent(t *testing.T) {
+	limits := Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 100, MaxChunkBytes: 1 << 20}
+	s := newTestStore(t, limits)
+
+	const occupant = "c0000001-0000-0000-0000-000000000000"
+	if err := s.Begin(occupant, 90); err != nil {
+		t.Fatalf("Begin(occupant): %v", err)
+	}
+	if _, err := s.Append(occupant, 0, bytes.NewReader(bytes.Repeat([]byte("x"), 90))); err != nil {
+		t.Fatalf("Append(occupant): %v", err)
+	}
+
+	// Ten bytes of budget left, and the old check ("used >= MaxDirBytes")
+	// would have admitted this happily — there is *some* space.
+	const tooBig = "c0000002-0000-0000-0000-000000000000"
+	if err := s.Begin(tooBig, 50); !errors.Is(err, ErrStoreFull) {
+		t.Fatalf("Begin(50 bytes with 10 left) = %v, want ErrStoreFull", err)
+	}
+	if _, err := s.Received(tooBig); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the refused upload left a file behind: Received = %v", err)
+	}
+
+	// What does fit is still admitted, so the check is a bound and not a
+	// second, stricter budget.
+	const fits = "c0000003-0000-0000-0000-000000000000"
+	if err := s.Begin(fits, 10); err != nil {
+		t.Fatalf("Begin(10 bytes with 10 left) = %v, want nil", err)
+	}
+}
+
+// A declared size past what one file may ever reach is refused where it is
+// declared, not at whichever chunk crosses the line.
+func TestBeginRefusesADeclaredSizePastTheFileCeiling(t *testing.T) {
+	s := newTestStore(t, Limits{MaxFileBytes: 10, MaxDirBytes: 1 << 20, MaxChunkBytes: 1 << 20})
+	const id = "c0000004-0000-0000-0000-000000000000"
+	if err := s.Begin(id, 11); !errors.Is(err, ErrFileTooLarge) {
+		t.Fatalf("Begin(11 bytes, MaxFileBytes 10) = %v, want ErrFileTooLarge", err)
+	}
+}
+
+// Two uploads announced onto a volume that can hold one. Without the
+// reservation both pass Begin — the first has written nothing yet, so the
+// directory still looks empty — and both then fail somewhere in the middle,
+// which is the same outcome the check above exists to prevent, arrived at by
+// two callers instead of one.
+func TestBeginCountsWhatAnotherUploadHasPromisedButNotYetSent(t *testing.T) {
+	limits := Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 100, MaxChunkBytes: 1 << 20}
+	s := newTestStore(t, limits)
+
+	const first = "c0000005-0000-0000-0000-000000000000"
+	if err := s.Begin(first, 80); err != nil {
+		t.Fatalf("Begin(first): %v", err)
+	}
+
+	const second = "c0000006-0000-0000-0000-000000000000"
+	if err := s.Begin(second, 80); !errors.Is(err, ErrStoreFull) {
+		t.Fatalf("Begin(second) = %v, want ErrStoreFull — the first upload's 80 bytes are spoken for", err)
+	}
+
+	// Abandoning the first hands its share back, which is what keeps the
+	// janitor's Abort from leaving the budget spent for ever.
+	if err := s.Abort(first); err != nil {
+		t.Fatalf("Abort(first): %v", err)
+	}
+	if err := s.Begin(second, 80); err != nil {
+		t.Fatalf("Begin(second) after the first was aborted = %v, want nil", err)
 	}
 }
 
@@ -159,7 +241,7 @@ func TestBeginForExistingUploadIgnoresStoreFull(t *testing.T) {
 	s := newTestStore(t, limits)
 
 	const id = "33333333-0000-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	if _, err := s.Append(id, 0, strings.NewReader("hello")); err != nil {
@@ -167,7 +249,7 @@ func TestBeginForExistingUploadIgnoresStoreFull(t *testing.T) {
 	}
 	// The directory is now at MaxDirBytes; resuming the same id must still
 	// work because it reserves nothing new.
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin (resume) = %v, want nil", err)
 	}
 }
@@ -175,7 +257,7 @@ func TestBeginForExistingUploadIgnoresStoreFull(t *testing.T) {
 func TestAppendWritesAtOffset(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "44444444-0000-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 
@@ -212,7 +294,7 @@ func TestAppendWritesAtOffset(t *testing.T) {
 func TestAppendRepeatOfLastChunkIsANoOp(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "55555555-0000-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	if _, err := s.Append(id, 0, strings.NewReader("abc")); err != nil {
@@ -247,7 +329,7 @@ func TestAppendRepeatOfLastChunkIsANoOp(t *testing.T) {
 func TestAppendGapInOffsetIsRejected(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "66666666-0000-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	if _, err := s.Append(id, 0, strings.NewReader("abc")); err != nil {
@@ -274,7 +356,7 @@ func TestAppendChunkTooLarge(t *testing.T) {
 	limits := Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 1 << 20, MaxChunkBytes: 8}
 	s := newTestStore(t, limits)
 	const id = "88888888-0000-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 
@@ -310,7 +392,7 @@ func TestAppendChunkTooLargeStopsAtTheLimit(t *testing.T) {
 	limits := Limits{MaxFileBytes: 1 << 30, MaxDirBytes: 1 << 30, MaxChunkBytes: 1024}
 	s := newTestStore(t, limits)
 	const id = "99999999-0000-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 
@@ -346,7 +428,7 @@ func TestAppendRefusesAChunkWhoseReaderFailsAtExactlyTheCap(t *testing.T) {
 	limits := Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 1 << 20, MaxChunkBytes: 8}
 	s := newTestStore(t, limits)
 	const id = "aaaaaaaa-3333-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 
@@ -406,7 +488,7 @@ func (r *failingReader) Read(p []byte) (int, error) {
 func TestAppendNamesAChunkThatStoppedArrivingMidBody(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "aaaaaaaa-4444-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	if _, err := s.Append(id, 0, strings.NewReader("already here")); err != nil {
@@ -437,7 +519,7 @@ func TestAppendFileExactlyAtLimitSucceeds(t *testing.T) {
 	limits := Limits{MaxFileBytes: 10, MaxDirBytes: 1 << 20, MaxChunkBytes: 1 << 20}
 	s := newTestStore(t, limits)
 	const id = "aaaaaaaa-1111-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 
@@ -454,7 +536,7 @@ func TestAppendFileOneByteOverLimitFails(t *testing.T) {
 	limits := Limits{MaxFileBytes: 10, MaxDirBytes: 1 << 20, MaxChunkBytes: 1 << 20}
 	s := newTestStore(t, limits)
 	const id = "aaaaaaaa-2222-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 
@@ -484,7 +566,7 @@ func TestReceivedUnknownID(t *testing.T) {
 func TestAbortMidUpload(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "cccccccc-0000-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	if _, err := s.Append(id, 0, strings.NewReader("partial")); err != nil {
@@ -508,7 +590,7 @@ func TestAbortMidUpload(t *testing.T) {
 func TestAbortRemovesIndexToo(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "dddddddd-0000-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	if _, err := s.Append(id, 0, strings.NewReader("a\nb\n")); err != nil {
@@ -570,7 +652,7 @@ func TestAppendConcurrentChunksForSameUploadDoNotCorrupt(t *testing.T) {
 	limits := Limits{MaxFileBytes: 8 << 20, MaxDirBytes: 8 << 20, MaxChunkBytes: 8 << 20}
 	s := newTestStore(t, limits)
 	const id = "a0000000-0000-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 
@@ -658,10 +740,10 @@ func TestAppendRefusesWhenSecondUploadWouldExceedDirBudget(t *testing.T) {
 	const id2 = "b0000002-0000-0000-0000-000000000000"
 	// Both begin on an empty directory: MaxFileBytes alone would let either
 	// one grow all the way to MaxDirBytes on its own.
-	if err := s.Begin(id1); err != nil {
+	if err := s.Begin(id1, declaredForTest); err != nil {
 		t.Fatalf("Begin(id1): %v", err)
 	}
-	if err := s.Begin(id2); err != nil {
+	if err := s.Begin(id2, declaredForTest); err != nil {
 		t.Fatalf("Begin(id2): %v", err)
 	}
 
@@ -742,7 +824,7 @@ func TestAppendNeverWritesPastMaxFileBytesBeforeEnforcingIt(t *testing.T) {
 	limits := Limits{MaxFileBytes: 100, MaxDirBytes: 1 << 20, MaxChunkBytes: 1 << 20}
 	s := newTestStore(t, limits)
 	const id = "d0000000-0000-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 
@@ -868,7 +950,7 @@ func TestUploadIDsEmptyStore(t *testing.T) {
 func TestUploadIDsIncludesAnInProgressUpload(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	const id = "f0000001-0000-0000-0000-000000000000"
-	if err := s.Begin(id); err != nil {
+	if err := s.Begin(id, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	if _, err := s.Append(id, 0, strings.NewReader("partial")); err != nil {
@@ -921,7 +1003,7 @@ func TestUploadIDsForgetsAnAbortedUpload(t *testing.T) {
 	const midUpload = "f0000003-0000-0000-0000-000000000000"
 	const sealed = "f0000004-0000-0000-0000-000000000000"
 
-	if err := s.Begin(midUpload); err != nil {
+	if err := s.Begin(midUpload, declaredForTest); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	completeUpload(t, s, sealed, "a\nb\n")
@@ -989,7 +1071,7 @@ func TestUploadIDsLeavesOutAFileYoungerThanTheCutOff(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	fresh, old := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "11111111-2222-3333-4444-555555555555"
 	for _, id := range []string{fresh, old} {
-		if err := s.Begin(id); err != nil {
+		if err := s.Begin(id, declaredForTest); err != nil {
 			t.Fatalf("Begin(%s): %v", id, err)
 		}
 	}

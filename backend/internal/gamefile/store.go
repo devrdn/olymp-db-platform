@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -41,6 +42,12 @@ type Store struct {
 	// idLocks in lock.go for why this exists and why it is per-id rather
 	// than one mutex for the whole Store.
 	locks *idLocks
+
+	// mu guards reserved, which maps an upload id to the total size Begin
+	// was told it would reach. See committedBytes for what it buys and
+	// what it deliberately does not.
+	mu       sync.Mutex
+	reserved map[string]int64
 }
 
 // NewStore opens (creating if necessary) dir as an upload directory governed
@@ -66,7 +73,7 @@ func NewStore(dir string, limits Limits) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("gamefile: create upload directory: %w", err)
 	}
-	return &Store{dir: dir, limits: limits, locks: newIDLocks()}, nil
+	return &Store{dir: dir, limits: limits, locks: newIDLocks(), reserved: map[string]int64{}}, nil
 }
 
 // validateUploadID is the one gate every exported method sends id through
@@ -100,31 +107,53 @@ func (s *Store) indexPath(id string) string {
 	return filepath.Join(s.dir, id+indexSuffix)
 }
 
-// Begin reserves an upload. id is the caller's (a UUID string); the store
-// never invents one, and never uses the human's filename as a path.
+// Begin reserves an upload of declaredBytes. id is the caller's (a UUID
+// string); the store never invents one, and never uses the human's filename
+// as a path.
+//
+// declaredBytes is what the whole upload will come to, and it is checked
+// against the space actually left rather than only against "is there any
+// space at all". The difference is what the organiser finds out and when: at
+// 15 GiB used of 16, the old check let a three-gigabyte upload start
+// happily, cut it off at whatever byte the directory budget ran out on, and
+// answered ErrStoreFull somewhere around the 129th chunk — after however
+// many minutes an office uplink takes to send the gigabyte that did fit, and
+// with those bytes already on disk waiting for the janitor. Refusing the
+// promise costs one comparison and is the same answer, given before anything
+// was sent.
 //
 // Calling Begin again for an id that already has data on disk is not an
 // error: it is how a resumed upload re-announces itself after a dropped
-// connection, and it must not truncate what was already received. Only a
-// genuinely new id is checked against MaxDirBytes — a resume adds no new
-// reservation, so it is not what that limit is protecting against.
-func (s *Store) Begin(id string) error {
+// connection, and it must not truncate what was already received. A resume
+// re-states the reservation (the process may have restarted since the first
+// Begin) but is never refused for space — the bytes it is coming back for
+// were already admitted once, and refusing them now would only strand what
+// is on disk.
+func (s *Store) Begin(id string, declaredBytes int64) error {
 	if err := validateUploadID(id); err != nil {
 		return err
+	}
+	// The same bound Append applies per chunk, applied to the promise: a
+	// declared size past MaxFileBytes cannot be honoured, so it is refused
+	// where it is made rather than at whichever chunk crosses the line
+	// (CLAUDE.md rule 12).
+	if declaredBytes < 0 || declaredBytes > s.limits.MaxFileBytes {
+		return ErrFileTooLarge
 	}
 
 	path := s.dataPath(id)
 	if _, err := os.Stat(path); err == nil {
+		s.reserve(id, declaredBytes)
 		return nil // resuming an upload already begun
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("gamefile: check existing upload: %w", err)
 	}
 
-	used, err := s.usedBytes()
+	used, err := s.committedBytes()
 	if err != nil {
 		return fmt.Errorf("gamefile: measure directory usage: %w", err)
 	}
-	if used >= s.limits.MaxDirBytes {
+	if used+declaredBytes > s.limits.MaxDirBytes {
 		return ErrStoreFull
 	}
 
@@ -143,11 +172,65 @@ func (s *Store) Begin(id string) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- see comment above
 	if err != nil {
 		if os.IsExist(err) {
-			return nil // lost a race with another Begin for the same id
+			// Lost a race with another Begin for the same id — which already
+			// reserved it, with the same declared size, so there is nothing
+			// to add.
+			return nil
 		}
 		return fmt.Errorf("gamefile: reserve upload: %w", err)
 	}
+	s.reserve(id, declaredBytes)
 	return f.Close()
+}
+
+// reserve and release record what an upload still owes the directory.
+func (s *Store) reserve(id string, declaredBytes int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reserved[id] = declaredBytes
+}
+
+func (s *Store) release(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.reserved, id)
+}
+
+// committedBytes is what the directory holds plus what the uploads begun in
+// this process have promised and not yet sent — the number Begin admits a new
+// upload against.
+//
+// Without it the directory budget is only ever spent by bytes that already
+// arrived, so three organisers each announcing four gibibytes onto a volume
+// with ten free all pass Begin and all three fail somewhere in the middle:
+// the check is real for one caller at a time and empty for several. Counting
+// the promise is what makes the refusal arrive before the upload does.
+//
+// Two things it deliberately is not. It is not durable: the map lives in this
+// process, so a restart forgets what was outstanding and the guarantee falls
+// back to what it was before — the actual bytes on disk, which are still
+// counted, plus a reservation restored by the first resume of each upload
+// (Begin's own doc). Making it durable means a third file per upload, or the
+// core database — and the core database is on the other side of this
+// package's boundary by design. And it is not applied to Append: a chunk is
+// admitted against what the disk holds now, exactly as before, because an
+// upload must never be refused its own reservation.
+func (s *Store) committedBytes() (int64, error) {
+	sizes, total, err := s.usage()
+	if err != nil {
+		return 0, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, declared := range s.reserved {
+		// Only what has not arrived yet: the rest is already in total, and
+		// counting it twice would refuse an upload the volume can hold.
+		if outstanding := declared - sizes[id]; outstanding > 0 {
+			total += outstanding
+		}
+	}
+	return total, nil
 }
 
 // usedBytes sums the size of every file this Store's directory currently
@@ -155,21 +238,34 @@ func (s *Store) Begin(id string) error {
 // proportional to the number of uploads in flight, never to their size, so
 // it does not reopen the rule 12 question Append and Complete answer.
 func (s *Store) usedBytes() (int64, error) {
+	_, total, err := s.usage()
+	return total, err
+}
+
+// usage is the same walk, also reporting how large each upload's data file
+// is by id — what committedBytes needs to tell an outstanding reservation
+// from bytes that have already landed.
+func (s *Store) usage() (map[string]int64, int64, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
-		return 0, err
+		return nil, 0, err
 	}
 	var total int64
+	sizes := make(map[string]int64, len(entries))
 	for _, entry := range entries {
 		info, err := entry.Info()
 		if err != nil {
 			continue // gone between ReadDir and Info; not this call's problem
 		}
-		if info.Mode().IsRegular() {
-			total += info.Size()
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		total += info.Size()
+		if id, ok := strings.CutSuffix(entry.Name(), dataSuffix); ok {
+			sizes[id] = info.Size()
 		}
 	}
-	return total, nil
+	return sizes, total, nil
 }
 
 // Append writes at exactly offset. Returns the new length.
@@ -406,6 +502,10 @@ func (s *Store) Complete(id string, declaredBytes int64) (Summary, error) {
 		return Summary{}, fmt.Errorf("gamefile: save index: %w", err)
 	}
 
+	// Everything this upload promised is now on disk and counted there, so
+	// the reservation has nothing left to hold (committedBytes' own doc).
+	s.release(id)
+
 	return Summary{
 		Bytes:  built.totalBytes,
 		SHA256: hex.EncodeToString(sum[:]),
@@ -437,6 +537,10 @@ func (s *Store) Abort(id string) error {
 	if err := os.Remove(s.dataPath(id)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("gamefile: remove upload: %w", err)
 	}
+	// The bytes are gone and so is the promise of the ones that never came —
+	// this is what keeps an abandoned upload the janitor cleared from holding
+	// its share of the directory budget until the process restarts.
+	s.release(id)
 	return nil
 }
 

@@ -251,24 +251,51 @@ func TestAbandonedUploadsListsOnlyReceivingRowsOlderThanTheCutoff(t *testing.T) 
 			t.Fatalf("begin fresh: %v", err)
 		}
 
+		// Old enough for the cut-off, and no longer 'receiving' — the half of
+		// this query's name that was not being checked at all. Both rows above
+		// are 'receiving', so breaking the status predicate left the test
+		// green while the janitor started aborting completed uploads: the file
+		// a live game is built from is deleted, and every rebuild of that
+		// contest afterwards ends at BuildFailedInternally, permanently.
+		//
+		// One row per status the table can hold besides 'receiving', because
+		// "not receiving" is not one condition — a mistyped predicate that
+		// catches only 'complete' is as wrong as one that catches everything.
+		settled := map[string]uuid.UUID{"complete": uuid.New(), "aborted": uuid.New()}
+		for status, id := range settled {
+			contest := aContest(t, ctx)
+			if _, err := repo.BeginUpload(ctx, id, contest, status+".sql", 10); err != nil {
+				t.Fatalf("begin the %s upload: %v", status, err)
+			}
+			if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+				`UPDATE game_uploads SET status = $2, updated_at = now() - interval '2 days' WHERE id = $1`,
+				id, status); err != nil {
+				t.Fatalf("settle and age the %s upload: %v", status, err)
+			}
+		}
+
 		abandoned, err := repo.AbandonedUploads(ctx, time.Now().Add(-24*time.Hour), 100)
 		if err != nil {
 			t.Fatalf("list abandoned: %v", err)
 		}
-		var sawStale, sawFresh bool
+		listed := make(map[uuid.UUID]bool, len(abandoned))
 		for _, u := range abandoned {
-			if u.ID == stale {
-				sawStale = true
-			}
-			if u.ID == fresh {
-				sawFresh = true
+			listed[u.ID] = true
+			if u.Status != provisioning.UploadReceiving {
+				t.Fatalf("upload %s came back as abandoned with status %q", u.ID, u.Status)
 			}
 		}
-		if !sawStale {
+		if !listed[stale] {
 			t.Fatal("the stale upload was not listed as abandoned")
 		}
-		if sawFresh {
+		if listed[fresh] {
 			t.Fatal("an upload updated moments ago was listed as abandoned")
+		}
+		for status, id := range settled {
+			if listed[id] {
+				t.Fatalf("a %s upload two days old was listed as abandoned — the janitor would delete "+
+					"the file a built game still needs", status)
+			}
 		}
 	})
 }

@@ -44,6 +44,16 @@ jobs:
     # The repository tests run their SQL against a real PostgreSQL. Without a
     # database they skip, which is right for a developer with none to hand and
     # wrong for CI: a query is the one thing a fake cannot verify.
+    #
+    # Two clusters, because the product has two. The core database holds the
+    # platform's own tables; the game cluster is where an organiser's script
+    # is executed and a participant's copy lives, and every guarantee
+    # internal/gamedb makes is a guarantee about what PostgreSQL refuses to a
+    # particular role — which cannot be faked and cannot be checked from the
+    # core database either (CLAUDE.md rule 10). Until this second service
+    # existed, GAME_DB_DSN was unset here, gamedbtest skipped on it, and the
+    # whole of internal/gamedb plus both end-to-end build tests were silently
+    # not run on any pull request: the CI output said "ok".
     services:
       postgres:
         image: postgres:16-alpine
@@ -59,6 +69,26 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      # The game cluster, as deploy/docker-compose.yml starts it: the
+      # provisioning role owns it, and the three roles the tests prepare
+      # (game_reader, game_writer, game_author) are created by the tests
+      # themselves through gamedb.PrepareCluster. Published on 5433, the port
+      # the development overlay uses, so nothing about a DSN differs between
+      # a developer's stack and this one.
+      postgres-game:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: dbcontest_game
+          POSTGRES_PASSWORD: dbcontest
+          POSTGRES_DB: dbcontest_game
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U dbcontest_game"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     # A literal, not a secret, and deliberately so. It has to match the
     # password three lines above, in this same file; hiding one half of a pair
     # in GitHub Secrets would conceal nothing and would suggest something here
@@ -68,8 +98,22 @@ jobs:
     #
     # The credentials that do matter — deploy/.env — are on the installation's
     # own host and never come near this file.
+    #
+    # The same reasoning covers the game cluster's four values below.
+    # GAME_DB_DSN connects as the provisioning role; the three role passwords
+    # are what gamedbtest writes onto game_reader, game_writer and
+    # game_author while preparing the cluster. On a developer's machine those
+    # three are shared with a running Query Runner, which is why `make
+    # test-game` insists on taking them from deploy/.env rather than inventing
+    # any (gamedbtest's own package doc). Here there is no Query Runner and no
+    # cluster older than this job, so a literal is the honest form: it names
+    # what the tests will set, on a container destroyed with the runner.
     env:
       CORE_DB_DSN: postgres://dbcontest:dbcontest@localhost:5432/dbcontest_core?sslmode=disable
+      GAME_DB_DSN: postgres://dbcontest_game:dbcontest@localhost:5433/dbcontest_game?sslmode=disable
+      GAME_READER_PASSWORD: dbcontest
+      GAME_WRITER_PASSWORD: dbcontest
+      GAME_AUTHOR_PASSWORD: dbcontest
 
     steps:
       - uses: actions/checkout@v4
@@ -104,6 +148,13 @@ jobs:
       - name: Apply the migrations
         run: go run ./cmd/migrate up
 
+      # One command for both clusters. `./...` is what makes this the check
+      # that cannot drift: a package added later is covered by it, and with
+      # GAME_DB_DSN set above the game-cluster tests and the two cross-cluster
+      # build tests in internal/provisioning run here rather than skipping.
+      # There is no separate `make test-game` step because there is nothing
+      # for it to add — the Makefile target exists to pass a developer's own
+      # deploy/.env into the same packages.
       - name: Test with the race detector
         run: go test -race -coverprofile=coverage.out ./...
 

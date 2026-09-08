@@ -816,54 +816,96 @@ type copyDataReader struct {
 	err     error
 }
 
+// Read fills p with as many whole data lines as fit, and only then returns.
+//
+// The line-at-a-time version this replaced returned the first row it read,
+// however small — and the caller is pgconn.PgConn.CopyFrom, which offers a
+// 65531-byte buffer and turns *every* Read into one CopyData protocol message
+// written straight to the socket (pgproto3's SendUnbufferedEncodedCopyData
+// flushes and writes with no buffering of its own). One write(2) and one
+// protocol message per row of the dump: a three-gigabyte dump of hundred-byte
+// rows is thirty million of each, about a minute and a half of a fully
+// occupied core spent in syscalls alone, inside the API process that is at
+// the same time serving the olympiad — plus 150 MB of message headers the
+// server has to parse. Filling the buffer instead makes that one message per
+// ~650 rows.
+//
+// What is *not* changed is where the bytes arrive: lines are still read one
+// at a time under maxCopyDataLineBytes (readDataLine), and this holds no more
+// than the caller's own buffer plus at most one line beyond it. Filling p is
+// packing what has already been bounded, not relaxing the bound (CLAUDE.md
+// rule 12).
 func (c *copyDataReader) Read(p []byte) (int, error) {
-	for len(c.pending) == 0 {
-		if c.done {
-			return 0, io.EOF
+	var n int
+	for n < len(p) {
+		if len(c.pending) > 0 {
+			copied := copy(p[n:], c.pending)
+			// A line longer than the room left in p is split here: what fits
+			// goes now, the rest stays in pending and is the first thing the
+			// next call hands over. pending may alias the bufio window
+			// (readDataLine's own doc), and nothing reads from the underlying
+			// reader while it is non-empty — the loop below only advances once
+			// pending has drained — so the slice stays valid for exactly as
+			// long as it is held.
+			c.pending = c.pending[copied:]
+			n += copied
+			continue
 		}
-		if c.err != nil {
-			return 0, c.err
+		if c.done || c.err != nil {
+			// Reported on the next call rather than alongside these bytes:
+			// the terminator and any refusal belong to what comes after what
+			// is already in p.
+			break
 		}
-
-		line, readErr := c.readDataLine()
-		var tooLong *ScriptSyntaxError
-		switch {
-		case errors.As(readErr, &tooLong):
-			// Already the reader's own verdict on the script, with its own
-			// line number (ScriptSyntaxError's doc): handed on as it is
-			// rather than wrapped in "read COPY data", which would read as
-			// an I/O failure of ours instead of a fact about their file.
-			c.err = readErr
-
-		case readErr != nil && readErr != io.EOF:
-			c.err = fmt.Errorf("gamedb: read COPY data: %w", readErr)
-
-		case readErr == io.EOF && len(line) == 0:
-			c.err = &ScriptSyntaxError{
-				Line: c.parent.line, Message: `COPY data ends with no terminating "\." line`,
-			}
-
-		case readErr == io.EOF:
-			// A final line with no trailing newline — a truncated file, since
-			// pg_dump always terminates every line including the last one.
-			// Handed out as data rather than dropped; the missing terminator
-			// is caught on the next call once this drains and ReadBytes finds
-			// nothing left to give.
-			c.pending = line
-
-		default:
-			c.parent.line++
-			if string(bytes.TrimRight(line, "\r\n")) == `\.` {
-				c.done, c.parent.copyOpen, c.parent.atLineStart = true, false, true
-				continue
-			}
-			c.pending = line
-		}
+		c.advance()
 	}
 
-	n := copy(p, c.pending)
-	c.pending = c.pending[n:]
-	return n, nil
+	if n > 0 {
+		return n, nil
+	}
+	if c.done {
+		return 0, io.EOF
+	}
+	return 0, c.err
+}
+
+// advance reads one more data line and settles it into exactly one of
+// pending, done or err — so Read's loop always makes progress.
+func (c *copyDataReader) advance() {
+	line, readErr := c.readDataLine()
+	var tooLong *ScriptSyntaxError
+	switch {
+	case errors.As(readErr, &tooLong):
+		// Already the reader's own verdict on the script, with its own
+		// line number (ScriptSyntaxError's doc): handed on as it is
+		// rather than wrapped in "read COPY data", which would read as
+		// an I/O failure of ours instead of a fact about their file.
+		c.err = readErr
+
+	case readErr != nil && readErr != io.EOF:
+		c.err = fmt.Errorf("gamedb: read COPY data: %w", readErr)
+
+	case readErr == io.EOF && len(line) == 0:
+		c.err = &ScriptSyntaxError{
+			Line: c.parent.line, Message: `COPY data ends with no terminating "\." line`,
+		}
+
+	case readErr == io.EOF:
+		// A final line with no trailing newline — a truncated file, since
+		// pg_dump always terminates every line including the last one.
+		// Handed out as data rather than dropped; the missing terminator
+		// is caught on the next call once this drains and ReadSlice finds
+		// nothing left to give.
+		c.pending = line
+
+	default:
+		c.parent.line++
+		if string(bytes.TrimRight(line, "\r\n")) == `\.` {
+			c.done, c.parent.copyOpen, c.parent.atLineStart = true, false, true
+			return
+		}
+		c.pending = line
+	}
 }
 
 // readDataLine reads one line of COPY data — up to and including its '\n',

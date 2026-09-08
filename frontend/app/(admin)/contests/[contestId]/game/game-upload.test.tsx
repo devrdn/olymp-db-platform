@@ -276,11 +276,27 @@ describe("the game upload panel", () => {
     expect(gameUploadWindowAction).toHaveBeenLastCalledWith(contestId, uploadId, 3);
   });
 
+  // Cancel has two halves and they fail separately: the server is told to
+  // forget the upload, and the request already on the wire is actually
+  // stopped. Only the first was checked here before — the stub ignored the
+  // `signal` it was handed, so deleting `controllerRef.current?.abort()` left
+  // the test green while a cancelled multi-gigabyte upload went on sending
+  // chunks to a contest the organiser had just abandoned. `signal` is in
+  // `lib/api/client.ts` for this line alone.
   test("cancels an upload in progress and lets the server know", async () => {
     beginGameUploadAction.mockResolvedValueOnce({ value: upload({ receivedBytes: 0 }) });
-    // Never resolves: the loop is left waiting on its first chunk, exactly
-    // where "Cancel" has to be able to reach it.
-    request.mockReturnValueOnce(new Promise(() => {}));
+    // The chunk stays in flight until its signal says otherwise — the state
+    // the loop is in when "Cancel" is pressed, and the only state in which
+    // aborting is observable at all.
+    let chunkSignal: AbortSignal | undefined;
+    request.mockImplementationOnce((_path: string, init: { signal: AbortSignal }) => {
+      chunkSignal = init.signal;
+      return new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () =>
+          reject(new DOMException("The operation was aborted.", "AbortError")),
+        );
+      });
+    });
     abortGameUploadAction.mockResolvedValueOnce({});
 
     show();
@@ -288,9 +304,11 @@ describe("the game upload panel", () => {
     await userEvent.upload(screen.getByLabelText(tu.pick), file);
 
     const cancelButton = await screen.findByRole("button", { name: tu.cancel });
+    await waitFor(() => expect(chunkSignal).toBeDefined());
     await userEvent.click(cancelButton);
 
     expect(window.confirm).toHaveBeenCalledWith(tu.cancelConfirm);
+    expect(chunkSignal?.aborted).toBe(true);
     await waitFor(() => expect(abortGameUploadAction).toHaveBeenCalledWith(contestId, uploadId));
     expect(screen.getByLabelText(tu.pick)).toBeInTheDocument();
   });
