@@ -138,7 +138,18 @@ type PackagedSQLPolicy struct {
 // for a contest that has none — a draft whose game has not been written, or
 // an installation with no game cluster at all.
 type PackagedGame struct {
+	// Script is the SQL, and is empty exactly when Omitted is true.
 	Script string `json:"script"`
+	// Omitted says this contest's game was built from an uploaded dump — up
+	// to gigabytes of SQL living on the API host's own volume — which a
+	// package assembled whole in memory cannot carry.
+	//
+	// Present, with an empty script, rather than the whole game object being
+	// absent: "this contest has a game you have to move separately" and "this
+	// contest has no game" are different facts, and an importer that read the
+	// first as the second would rebuild a contest whose every question
+	// answers "no such table" with nothing in the file to say so.
+	Omitted bool `json:"omitted,omitempty"`
 }
 
 // exportPackage serves GET /contests/{id}/export.
@@ -267,7 +278,7 @@ func toContestPackage(pkg contests.Package) ContestPackage {
 	}
 
 	if pkg.HasGame {
-		out.Game = &PackagedGame{Script: pkg.Game}
+		out.Game = &PackagedGame{Script: pkg.Game, Omitted: pkg.GameOmitted}
 	}
 	return out
 }

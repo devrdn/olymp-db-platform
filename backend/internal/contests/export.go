@@ -69,6 +69,19 @@ type Package struct {
 	// the package even though it lives in another package's storage.
 	Game    string
 	HasGame bool
+	// GameOmitted says the contest has a game this package could not carry:
+	// one built from an uploaded dump rather than from a script, whose SQL is
+	// up to gigabytes on the API host's own volume and is never in this
+	// service's storage at all (provisioning.SourceFile).
+	//
+	// It exists because "no game" and "a game that did not travel" are
+	// different facts and this used to report them as the same one — Game was
+	// the empty string either way, HasGame said true, and an organizer
+	// exporting last year's olympiad got a package announcing a game and
+	// carrying none. Re-importing that answers ErrScriptEmpty; the audit
+	// entry meanwhile recorded "game: true". Set exactly when HasGame is
+	// true and Game is empty by this reason rather than by absence.
+	GameOmitted bool
 }
 
 // AnswerCount is how many reference answers the package carries, across every
@@ -90,10 +103,17 @@ func (p Package) AnswerCount() int {
 // must not import, and the export has no business with build status, versions
 // or the cluster.
 type GameSource interface {
-	// Script returns the SQL one contest's game is built from, and whether
-	// the contest has a game at all. A contest without one is not an error:
-	// exporting a draft whose game has not been written yet is ordinary.
-	Script(ctx context.Context, contestID uuid.UUID) (script string, ok bool, err error)
+	// Script returns the SQL one contest's game is built from, whether the
+	// contest has a game at all, and whether that game's SQL is somewhere a
+	// package cannot reach — an uploaded dump on the API host's disk, for
+	// which script is empty and omitted is true.
+	//
+	// A contest without a game is not an error: exporting a draft whose game
+	// has not been written yet is ordinary. The third value is here because
+	// the empty script is not: the two used to be indistinguishable at this
+	// boundary, so a game that could not travel arrived as a game that did
+	// (Package.GameOmitted).
+	Script(ctx context.Context, contestID uuid.UUID) (script string, ok, omitted bool, err error)
 }
 
 // ExportPackage assembles the contest as a package (docs/ARCHITECTURE.md §15,
@@ -150,11 +170,11 @@ func (s *Service) ExportPackage(ctx context.Context, actorID, contestID uuid.UUI
 	// rather than the export failing over a circuit this contest may never
 	// have had.
 	if s.game != nil {
-		script, ok, err := s.game.Script(ctx, contestID)
+		script, ok, omitted, err := s.game.Script(ctx, contestID)
 		if err != nil {
 			return Package{}, fmt.Errorf("read the game script: %w", err)
 		}
-		pkg.Game, pkg.HasGame = script, ok
+		pkg.Game, pkg.HasGame, pkg.GameOmitted = script, ok, omitted
 	}
 
 	// Recorded before the caller is handed the package, and a failure to
@@ -173,6 +193,11 @@ func (s *Service) ExportPackage(ctx context.Context, actorID, contestID uuid.UUI
 		"answers":   pkg.AnswerCount(),
 		"languages": c.LanguageCodes(),
 		"game":      pkg.HasGame,
+		// Recorded beside it rather than folded into "game": what an
+		// organizer checks the trail for afterwards is whether the file they
+		// downloaded is the whole contest, and "game: true" on its own
+		// answered yes for a package the game never entered.
+		"game_omitted": pkg.GameOmitted,
 	}
 	if err := s.uow.Do(ctx, func(ctx context.Context) error {
 		return s.record(ctx, actorID, audit.ActionContestPackageExport, contestID, payload)

@@ -1087,7 +1087,7 @@ func TestUploadWindowClampsCallerSuppliedBudgets(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 1: every one of provisioning/upload.go's twelve sentinels
+// CLAUDE.md rule 1: every one of provisioning/upload.go's thirteen sentinels
 // gets its own code and its own status, proven through one endpoint the same
 // way TestEveryGameRefusalHasItsOwnCode and TestEveryInstanceRefusalHasItsOwn
 // Code already prove it for the script and instance sentinels — fail is one
@@ -1112,6 +1112,7 @@ func TestEveryUploadRefusalHasItsOwnCode(t *testing.T) {
 		{"a second upload while one is already receiving", provisioning.ErrUploadInProgress, http.StatusConflict, "game_upload_in_progress"},
 		{"an upload already sealed or cancelled", provisioning.ErrUploadAlreadyComplete, http.StatusConflict, "game_upload_already_complete"},
 		{"a window read before the upload was completed", provisioning.ErrUploadIncomplete, http.StatusConflict, "game_upload_incomplete"},
+		{"a line index that no longer matches its data", provisioning.ErrUploadIndexCorrupt, http.StatusConflict, "game_upload_index_corrupt"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newGameFixture(t, rbac.PermissionContestAdminAll)

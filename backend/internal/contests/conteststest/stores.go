@@ -937,6 +937,12 @@ func (s *Sink) Actions() []string {
 // internal/provisioning.
 type Games struct {
 	byContest map[uuid.UUID]string
+	// files holds the contests whose game came from an uploaded dump — a
+	// game that exists and whose SQL a package cannot carry
+	// (provisioning.SourceFile). Kept apart from byContest rather than as an
+	// empty string in it, because an empty string in byContest is precisely
+	// the confusion this fake has to be able to reproduce.
+	files map[uuid.UUID]bool
 	// Err, when set, is what Script returns instead of a script — a test's
 	// way of standing for the game's own storage being away.
 	Err error
@@ -945,19 +951,30 @@ type Games struct {
 var _ contests.GameSource = (*Games)(nil)
 
 // NewGames returns an empty game store.
-func NewGames() *Games { return &Games{byContest: map[uuid.UUID]string{}} }
+func NewGames() *Games {
+	return &Games{byContest: map[uuid.UUID]string{}, files: map[uuid.UUID]bool{}}
+}
 
 // Put stores the script one contest's game is built from.
 func (r *Games) Put(contestID uuid.UUID, script string) {
 	r.byContest[contestID] = script
 }
 
-func (r *Games) Script(_ context.Context, contestID uuid.UUID) (string, bool, error) {
+// PutFile gives the contest a game built from an uploaded dump: one that
+// exists and whose SQL no package can carry.
+func (r *Games) PutFile(contestID uuid.UUID) {
+	r.files[contestID] = true
+}
+
+func (r *Games) Script(_ context.Context, contestID uuid.UUID) (string, bool, bool, error) {
 	if r.Err != nil {
-		return "", false, r.Err
+		return "", false, false, r.Err
+	}
+	if r.files[contestID] {
+		return "", true, true, nil
 	}
 	script, ok := r.byContest[contestID]
-	return script, ok, nil
+	return script, ok, false, nil
 }
 
 // maps copies a map so a stored value cannot be mutated through the caller's

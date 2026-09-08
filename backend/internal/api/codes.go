@@ -70,7 +70,7 @@ var (
 	// --- The game's uploaded dump --------------------------------------------
 	//
 	// One code per provisioning.Games upload sentinel (CLAUDE.md rule 1) —
-	// twelve of them, none collapsed into invalid_request, because each names
+	// thirteen of them, none collapsed into invalid_request, because each names
 	// a different thing an organiser or their browser did and most of them
 	// say what to do next: retry the chunk, wait, or pick a different file.
 	codeGameUploadsDisabled = httpx.NewCode("game_uploads_disabled",
@@ -97,6 +97,8 @@ var (
 		"This upload has already been completed or cancelled, so it can no longer take chunks, be completed again, or be cancelled.")
 	codeGameUploadIncomplete = httpx.NewCode("game_upload_incomplete",
 		"This upload has not been completed yet, so there is no line index to read a window from.")
+	codeGameUploadIndexCorrupt = httpx.NewCode("game_upload_index_corrupt",
+		"The line index stored beside the upload no longer describes the file it belongs to, so no part of it can be paged through safely. Nothing the organiser did causes this — a damaged disk or an interrupted write does — and uploading the file again is what fixes it.")
 	codeGameUploadTooOften = httpx.NewCode("game_upload_too_often",
 		"Too many uploads have been started from this address or for this contest in a short time. Wait before starting another.")
 
