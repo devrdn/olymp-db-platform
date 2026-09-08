@@ -150,7 +150,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		}
 		a.closers = append(a.closers, gamePool.Close)
 
-		cluster, err := gamedb.NewProvisioner(gamePool, cfg.GameProvisionerDSN)
+		cluster, err := gamedb.NewProvisioner(gamePool, cfg.GameProvisionerDSN, cfg.GameAuthorPassword)
 		if err != nil {
 			a.close()
 			return nil, err

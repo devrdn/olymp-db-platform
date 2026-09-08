@@ -74,6 +74,19 @@ type Config struct {
 	// the core application, the provisioner and the participant roles, and
 	// this is where two of the three stay apart.
 	GameProvisionerDSN string
+	// GameAuthorPassword authenticates the game cluster's game_author role,
+	// which an organiser's uploaded game script runs as. Required wherever
+	// GameProvisionerDSN is set, because without it a template cannot be
+	// built at all — and the alternative to that refusal is running staff SQL
+	// with the provisioning role's own privileges, which is the whole thing
+	// the separate role exists to stop (gamedb.RoleAuthor).
+	//
+	// The third of the three passwords section 11 asks to be kept apart: the
+	// core application's, the provisioner's, and the participants'. This one
+	// belongs to the same process as the provisioner's and is deliberately
+	// still its own, because what it buys is exactly that the two are not
+	// interchangeable.
+	GameAuthorPassword string
 	// PoolDepth is the headroom each live contest keeps ready *beyond* the
 	// participants who already hold no copy — what makes a late enrolment
 	// free rather than a wait. It is no longer the whole depth: sizing the
@@ -197,6 +210,15 @@ func Load() (Config, error) {
 	}
 
 	cfg.GameProvisionerDSN = os.Getenv("GAME_PROVISIONER_DSN")
+	cfg.GameAuthorPassword = os.Getenv("GAME_AUTHOR_PASSWORD")
+	// Checked at boot rather than at the first build, which would be an
+	// organiser pressing "build" during preparation and being told the
+	// deployment is misconfigured.
+	if cfg.GameProvisionerDSN != "" && cfg.GameAuthorPassword == "" {
+		return Config{}, fmt.Errorf(
+			"GAME_AUTHOR_PASSWORD is required when GAME_PROVISIONER_DSN is set: " +
+				"a game script runs as the game_author role and not as the provisioner")
+	}
 	if cfg.PoolMax, err = intEnv("GAME_POOL_MAX", 500); err != nil {
 		return Config{}, err
 	}

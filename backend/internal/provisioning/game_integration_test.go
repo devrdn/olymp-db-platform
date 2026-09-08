@@ -35,7 +35,8 @@ func TestAScriptSavedInTheCoreDatabaseBecomesARealDatabaseOnTheGameCluster(t *te
 	repo := postgres.NewGameInstances(testPool)
 
 	user, password := gamedbtest.AdminCredentials(t)
-	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"))
+	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
+		gamedbtest.AuthorPassword(t))
 	if err != nil {
 		t.Fatalf("open the game cluster: %v", err)
 	}

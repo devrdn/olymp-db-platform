@@ -12,7 +12,6 @@ import type { Locale } from "@/lib/i18n/config";
 import type { ConsoleState } from "./actions";
 import { ConsoleEditor } from "./console";
 import { PlayHeader } from "./play-header";
-import { PrintView } from "./print-view";
 import { QueryLogPanel } from "./query-log-panel";
 import { ResultPanel } from "./result-panel";
 import { PaneHandle, usePaneWidths } from "./pane-splitter";
@@ -68,21 +67,30 @@ const MemoSchemaPanel = memo(SchemaPanel);
  * this component's own fixed `100dvh` shape under `@media print` so the
  * story could flow instead of clip — is exactly the fragility that route was
  * created to avoid, on a tree that also holds the console, the schema panel,
- * the result table and the query log. So instead: `PrintView` sits beside
+ * the result table and the query log. So instead: the print copy sits beside
  * the interactive workspace the whole time, hidden on screen and shown only
  * to print (`hidden print:block`), and the workspace itself carries the
  * mirror image of that (`print:hidden`) — two classes rather than a
  * stylesheet that has to keep re-deriving "nothing here" for every panel
  * this screen grows next.
+ *
+ * That copy arrives as `printView`, already rendered by `page.tsx`, and this
+ * file deliberately does not import `PrintView` itself. It used to, and this
+ * is a client component: the import reached `StoryText`, which is
+ * `react-markdown` and `remark-gfm` — 31.9 KiB gzipped of Markdown parser
+ * measured in this route's own chunks, on the screen whose time-to-
+ * interactive matters more than any other in the product. Worse, it was paid
+ * twice: mounted the whole contest to build a subtree that is `display:none`
+ * until somebody prints, the browser parsed the same story a second time on
+ * every mount. `storyBody` beside it is a server-rendered node for exactly
+ * the same reason (page.tsx's own comment); the print copy is now one too.
  */
 export function Workspace({
   contestId,
   title,
   storyBody,
-  storyMarkdown,
+  printView,
   storyUnavailable,
-  participantName,
-  printedOn,
   questionEntries,
   schema,
   initialLog,
@@ -92,13 +100,9 @@ export function Workspace({
   contestId: string;
   title: string;
   storyBody: React.ReactNode;
-  /** The raw Markdown `PrintView` parses for itself — `storyBody` above is already-rendered JSX, no use to a component that needs the source text. Null exactly when there is no story to print (mirrors `storyUnavailable`). */
-  storyMarkdown: string | null;
+  /** The print-only copy of the story, rendered on the server by `page.tsx` — see this component's own doc for why it is a node and not the Markdown behind it. Null exactly when there is no story to print (mirrors `storyUnavailable`). */
+  printView: React.ReactNode;
   storyUnavailable: string | null;
-  /** Empty when the identity behind this request could not be read — PrintView reads that as "say only the date". */
-  participantName: string;
-  /** Already formatted for display (lib/format/datetime.ts), not an ISO instant. */
-  printedOn: string;
   questionEntries: QuestionEntry[];
   /** The game's shape, or null in a contest that hides it — see SchemaPanel. */
   schema: GameSchema | null;
@@ -130,17 +134,7 @@ export function Workspace({
           which mirrors `storyUnavailable`: the one control that opens a
           print (side-panel.tsx) does not render either in that state, so
           this is reachable only when there is a story. */}
-      <div className="hidden print:block">
-        {storyMarkdown !== null ? (
-          <PrintView
-            contestTitle={title}
-            participantName={participantName}
-            date={printedOn}
-            storyMarkdown={storyMarkdown}
-            dict={dict}
-          />
-        ) : null}
-      </div>
+      <div className="hidden print:block">{printView}</div>
       {/* The fixed, no-page-scroll VS Code shape is a `narrow:` (>=760px)
           decision: below that, a phone-sized screen doing a two-hour SQL
           olympiad is the edge case, and a tall, ordinarily-scrolling stack of

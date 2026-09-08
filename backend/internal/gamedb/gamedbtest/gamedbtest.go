@@ -44,12 +44,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// The environment the deployment's own credentials arrive in — the two
-// variables deploy/.env sets, docker-compose passes to the Query Runner, and
-// `make test-game` passes to the tests.
+// The environment the deployment's own credentials arrive in — the three
+// variables deploy/.env sets, docker-compose passes to the Query Runner and
+// the Core API, and `make test-game` passes to the tests.
 const (
 	readerPasswordVar = "GAME_READER_PASSWORD" // #nosec G101 -- a variable's name.
 	writerPasswordVar = "GAME_WRITER_PASSWORD" // #nosec G101 -- a variable's name.
+	authorPasswordVar = "GAME_AUTHOR_PASSWORD" // #nosec G101 -- a variable's name.
 )
 
 var (
@@ -93,6 +94,11 @@ func connect() {
 func ReaderPassword(t *testing.T) string { t.Helper(); return credential(t, readerPasswordVar) }
 
 func WriterPassword(t *testing.T) string { t.Helper(); return credential(t, writerPasswordVar) }
+
+// AuthorPassword is what the game-script role authenticates with — the Core
+// API's own credential for this cluster, read from the deployment's
+// environment for the same reason the other two are.
+func AuthorPassword(t *testing.T) string { t.Helper(); return credential(t, authorPasswordVar) }
 
 func credential(t *testing.T, variable string) string {
 	t.Helper()
@@ -139,6 +145,7 @@ func Admin(t *testing.T) *pgxpool.Pool {
 	if err := gamedb.PrepareCluster(t.Context(), pool, gamedb.Roles{
 		ReaderPassword: ReaderPassword(t),
 		WriterPassword: WriterPassword(t),
+		AuthorPassword: AuthorPassword(t),
 	}); err != nil {
 		t.Fatalf("preparing the cluster: %v", err)
 	}

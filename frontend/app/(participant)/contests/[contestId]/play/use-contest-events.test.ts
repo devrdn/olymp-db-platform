@@ -74,10 +74,17 @@ beforeEach(() => {
   FakeEventSource.instances = [];
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.useFakeTimers();
+  // A reconnect waits its delay plus a random share of it again
+  // (RECONNECT_JITTER), which is exactly what makes a test that advances the
+  // clock by a fixed amount flaky. Pinned to zero here, so every test below
+  // measures the floor itself; the one test whose subject *is* the jitter
+  // pins it to the other end instead.
+  vi.spyOn(Math, "random").mockReturnValue(0);
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -275,6 +282,78 @@ describe("useContestEvents", () => {
         await vi.advanceTimersByTimeAsync(5_000);
       });
 
+      expect(FakeEventSource.instances).toHaveLength(2);
+    });
+
+    /** A probe the server admits, over and over: the branch finding 4 is about. */
+    function admittedProbe() {
+      return vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => "",
+        body: { cancel: async () => {} },
+      });
+    }
+
+    // Finding 4: the doubling backoff was only ever reachable on the branch
+    // where the probe was *refused*. On this one — the probe succeeds but
+    // EventSource still failed, which is the case this hook's own comment
+    // anticipates (a proxy that treats text/event-stream differently) —
+    // `retryDelay` was put back to the minimum on every turn, so a student on
+    // a hostile network reconnected every five seconds for the length of the
+    // contest. Each turn costs two rate-limit charges (the probe and the
+    // reconnect) out of the thirty a minute they also run queries with.
+    test("an admitted probe that keeps failing backs off like every other reconnect", async () => {
+      vi.stubGlobal("fetch", admittedProbe());
+      renderHook(() => useContestEvents("c1"));
+
+      await act(async () => {
+        FakeEventSource.instances[0].failPermanently();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(FakeEventSource.instances).toHaveLength(2);
+
+      // The second failure on the same branch. Five seconds is now too soon:
+      // the wait doubled.
+      await act(async () => {
+        FakeEventSource.instances[1].failPermanently();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(FakeEventSource.instances).toHaveLength(2);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(FakeEventSource.instances).toHaveLength(3);
+    });
+
+    // The server's own `retry:` is a flat thirty seconds, so every client cut
+    // by a deploy comes back in the same instant unless the delay is spread.
+    // Math.random pinned to its top value here: the wait is the floor plus
+    // half of it again, so five seconds is no longer enough.
+    test("the reconnect delay carries jitter, so a deploy does not bring every client back at once", async () => {
+      vi.spyOn(Math, "random").mockReturnValue(1);
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse(429, "too_many_connections")));
+      renderHook(() => useContestEvents("c1"));
+
+      await act(async () => {
+        FakeEventSource.instances[0].failPermanently();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(FakeEventSource.instances).toHaveLength(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_500);
+      });
       expect(FakeEventSource.instances).toHaveLength(2);
     });
 

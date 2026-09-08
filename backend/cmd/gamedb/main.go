@@ -1,5 +1,6 @@
-// Command gamedb prepares the game cluster: the two participant roles, their
-// session defaults, and the databases they may not reach.
+// Command gamedb prepares the game cluster: the two participant roles, the
+// role an organiser's game script runs as, their session defaults, and the
+// databases they may not reach.
 //
 // A one-shot job, run before the Query Runner starts, the way `migrate` runs
 // before the API. It is a program rather than an init script in the PostgreSQL
@@ -44,6 +45,13 @@ func run() error {
 		return err
 	}
 	if roles.WriterPassword, err = required("GAME_WRITER_PASSWORD"); err != nil {
+		return err
+	}
+	// The third role: the one an organiser's game script runs as. Created
+	// here with the other two because this is the only place any of them is
+	// defined, so a cluster that already exists picks it up on the next
+	// deploy rather than needing a hand-written CREATE ROLE.
+	if roles.AuthorPassword, err = required("GAME_AUTHOR_PASSWORD"); err != nil {
 		return err
 	}
 

@@ -31,6 +31,23 @@ const RECONNECT_MIN_DELAY_MS = 5_000;
 const RECONNECT_MAX_DELAY_MS = 60_000;
 
 /**
+ * How much of a reconnect delay is spread out at random, as a fraction of the
+ * delay itself: a wait is somewhere in `[delay, delay * 1.5)`.
+ *
+ * Added rather than subtracted, so the floor stays a floor — the reason a
+ * reconnect is never immediate is that every attempt spends the query-rate
+ * budget this channel shares with the SQL console, and jitter must not be a
+ * way under that.
+ *
+ * It exists because the failures this hook reconnects from are usually not
+ * one client's own: the server sends a flat thirty-second `retry:`, so a
+ * deploy cuts every open channel at once and, without this, brings every one
+ * of them back in the same instant — against an installation whose per-
+ * participant connection cap is exactly what a synchronised herd runs into.
+ */
+const RECONNECT_JITTER = 0.5;
+
+/**
  * The one Server-Sent Events connection this screen ever opens, and the one
  * place a participant's browser clock is corrected against the server's.
  *
@@ -79,11 +96,17 @@ const RECONNECT_MAX_DELAY_MS = 60_000;
  * retrying — nothing to do) and, only for a `CLOSED` connection, asks a plain
  * `fetch` of the same URL why: a code this installation expects to clear on
  * its own (too many connections, a rate limit, a transient server error)
- * gets a capped, doubling-backoff reconnect and a translated reason exposed
- * as `channelError` for the screen to show meanwhile; a code that will never
- * clear on its own (this account was removed from the contest, or the
- * address it is on stopped being allowed) gets the same message with no
- * retry, since nothing this tab does will change either fact.
+ * gets a reconnect and a translated reason exposed as `channelError` for the
+ * screen to show meanwhile; a code that will never clear on its own (this
+ * account was removed from the contest, or the address it is on stopped
+ * being allowed) gets the same message with no retry, since nothing this tab
+ * does will change either fact. A probe the server *admits* — the proxy case
+ * above — is the third answer: no message, because there is nothing to tell
+ * anybody, and a reconnect on exactly the same terms as the second.
+ *
+ * "The same terms" is one function, `scheduleReconnect`: a capped doubling
+ * wait with jitter on it, reset by a `sync`. It is one function because it
+ * was two, and only one of them doubled — see finding 4 there.
  */
 export function useContestEvents(contestId: string, initialPhase: ContestPhase = "waiting") {
   const offsetRef = useRef(0);
@@ -109,6 +132,35 @@ export function useContestEvents(contestId: string, initialPhase: ContestPhase =
         clearTimeout(retryTimer);
         retryTimer = null;
       }
+    };
+
+    /**
+     * Waits, then opens a fresh connection — the one path back onto this
+     * channel, whatever the reason the last attempt failed.
+     *
+     * One function rather than a branch each, because it used to be a branch
+     * each and only one of them grew the delay. The other — a probe the
+     * server admits while `EventSource` keeps failing, the proxy case this
+     * hook's own doc anticipates — put the wait back to the floor every turn,
+     * so a participant on a network that behaves that way reconnected every
+     * five seconds for the length of the contest. That is not free: the
+     * probe and the reconnect are two charges against the thirty-a-minute
+     * budget this channel shares with the SQL console (AdmitRead), spent
+     * while their own clock runs.
+     *
+     * The delay is read before it is doubled, so the first wait is the floor
+     * and each following one is twice the last up to the ceiling. A `sync`
+     * puts it back to the floor, because a sync only ever arrives on a
+     * connection the server has just accepted.
+     */
+    const scheduleReconnect = () => {
+      const delay = retryDelay * (1 + Math.random() * RECONNECT_JITTER);
+      retryDelay = Math.min(retryDelay * 2, RECONNECT_MAX_DELAY_MS);
+      clearRetryTimer();
+      retryTimer = setTimeout(() => {
+        if (cancelled) return;
+        connect();
+      }, delay);
     };
 
     const connect = () => {
@@ -147,21 +199,18 @@ export function useContestEvents(contestId: string, initialPhase: ContestPhase =
             // The probe itself was admitted: the server would take a fresh
             // connection right now, so whatever failed the first one was a
             // one-off (a proxy hiccup, say) rather than a standing refusal.
-            // No banner and no backoff growth — this was never the kind of
-            // failure the backoff exists for — but still a floor, not an
-            // immediate reconnect: if EventSource keeps failing on this URL
+            // No banner — nothing here is worth telling a participant under
+            // a timer about — but the same backoff every other reconnect
+            // gets (finding 4). This branch used to reset the wait to the
+            // floor on every turn, which made it the one branch the doubling
+            // could never reach: if EventSource keeps failing on this URL
             // while a plain fetch of it keeps succeeding (a proxy that
-            // handles the two differently, say), reconnecting with no delay
-            // at all would spin as fast as the network allows, and every
-            // turn spends the query-rate budget this channel shares with the
+            // handles the two differently, say), that is a reconnect every
+            // five seconds for the whole contest, and every turn spends two
+            // charges of the query-rate budget this channel shares with the
             // SQL console (config.QueryPerMinute's own doc, AdmitRead).
             setChannelError(null);
-            retryDelay = RECONNECT_MIN_DELAY_MS;
-            clearRetryTimer();
-            retryTimer = setTimeout(() => {
-              if (cancelled) return;
-              connect();
-            }, RECONNECT_MIN_DELAY_MS);
+            scheduleReconnect();
             return;
           }
           const code = result.code ?? "unreachable";
@@ -179,12 +228,7 @@ export function useContestEvents(contestId: string, initialPhase: ContestPhase =
             // connecting from; retrying would only repeat the same refusal.
             return;
           }
-          clearRetryTimer();
-          retryTimer = setTimeout(() => {
-            if (cancelled) return;
-            retryDelay = Math.min(retryDelay * 2, RECONNECT_MAX_DELAY_MS);
-            connect();
-          }, retryDelay);
+          scheduleReconnect();
         });
       };
 

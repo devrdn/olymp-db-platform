@@ -176,6 +176,26 @@ func (l *QueryLog) History(ctx context.Context, registrationID uuid.UUID, limit,
 	return found, total, nil
 }
 
+// exportCursor is the cursor ExportHistory reads its rows off, and
+// exportFetch is how many rows one FETCH takes from it.
+//
+// The name is a constant rather than anything a caller supplies: it is
+// interpolated into SQL below, which is only safe because nothing outside
+// this file can choose it. The cursor is closed before ExportHistory returns,
+// so two exports in the same transaction do not collide over the name.
+//
+// Fifty is a compromise between two costs neither of which should dominate: a
+// FETCH is a round trip, so one row at a time would be a round trip per row
+// (3,600 of them for a participant who spent a whole olympiad at the rate
+// limit), and a large batch is that many rows PostgreSQL materialises before
+// the first one moves. Fifty rows is 550 KiB even at sqlpolicy.MaxQueryBytes,
+// the ceiling no real statement is anywhere near, and one round trip per
+// fifty rows.
+const (
+	exportCursor = "query_log_export"
+	exportFetch  = 50
+)
+
 // ExportHistory streams every one of registrationID's own rows to yield,
 // oldest first — the read behind the participant's CSV download of their own
 // query log (§9.1: CSV streams row by row with no volume ceiling).
@@ -183,16 +203,60 @@ func (l *QueryLog) History(ctx context.Context, registrationID uuid.UUID, limit,
 // Streamed rather than paged, and that is the difference from History. A page
 // exists because a screen shows one; a file is the whole record, and a
 // participant who ran nine hundred queries over a two-hour olympiad would
-// otherwise get a file quietly missing eight hundred of them. Nothing here is
-// held in memory beyond the row being written: pgx hands rows over one at a
-// time and yield writes each straight to the socket, so the memory this costs
-// is one row rather than one contest's worth of them.
+// otherwise get a file quietly missing eight hundred of them.
 //
-// Oldest first, unlike History's newest-first page. The file is a record of a
-// session and is read top to bottom, the way the session happened; the panel
-// is a lookup and answers "what did I just run". Both orderings are served by
-// query_log_registration_executed_idx (migration 000004) — an index scan runs
-// either direction — so this needs no migration of its own (CLAUDE.md rule 7).
+// # Why a cursor, and why the ordering has no id in it
+//
+// "Streams" has to be true of PostgreSQL as well as of this process, and it
+// was true of neither the ordering nor the read this used to use.
+//
+// The ordering was `executed_at ASC, id ASC`, and the comment here claimed
+// query_log_registration_executed_idx served it because "an index scan runs
+// either direction". That index is (registration_id, executed_at DESC): it
+// has no id in it, so the tiebreak is a sort the planner has to add on top —
+// measured on the core database with 915 rows for one registration in a
+// 61k-row journal, `Incremental Sort -> Index Scan Backward`, and at 3,615
+// rows in a 120k-row journal a full `Sort` over a `Bitmap Heap Scan`, 1.8 MB
+// of quicksort memory holding the participant's whole log — sql_text and all,
+// a column bounded only by sqlpolicy.MaxQueryBytes at 64 KiB a row — before
+// the first row could reach the socket.
+//
+// The id is gone rather than added to the index. Adding it was measured too
+// and changes nothing: with (registration_id, executed_at, id) in place the
+// planner still chose `Sort -> Bitmap Heap Scan` at the same 3,615 rows,
+// because what it is avoiding there is 3,615 random heap fetches, not a
+// missing ordering. So that index would have cost every participant's query
+// a third index write — this table takes two writes per query, Begin and
+// Complete — and bought nothing. What the tiebreak decided was the relative
+// order of rows sharing an executed_at to the microsecond; executed_at
+// defaults to now(), which is transaction start, and a participant's
+// statements are serial requests in separate transactions, so that is a tie
+// that does not arise. If it ever did, the two statements happened in the
+// same microsecond and a record of a session has nothing to say about which
+// came first.
+//
+// Dropping the tiebreak is necessary and not sufficient: with it gone the
+// planner still preferred `Sort -> Bitmap Heap Scan` for a plain SELECT at
+// 3,615 rows, because a plain SELECT is priced on the cost of the *last* row.
+// A cursor is priced on the first (cursor_tuple_fraction, 0.1), which is the
+// truth about this read — yield writes each row to a socket as it arrives.
+// Measured on the same data, `EXPLAIN DECLARE ... CURSOR FOR` the query
+// below is a bare `Index Scan Backward using
+// query_log_registration_executed_idx`, no sort node at all; with the id
+// tiebreak still in it, the same cursor plans `Incremental Sort` on top. So:
+// no id, and a cursor. Still no migration of its own (CLAUDE.md rule 7) —
+// the index that serves it is migration 000004's, unchanged.
+//
+// Memory is bounded on both sides. PostgreSQL holds one FETCH, this process
+// holds one row: pgx hands the rows of a batch over one at a time and yield
+// writes each straight to the socket.
+//
+// The transaction is this method's own when the caller has none, which is the
+// arrangement the deployment uses — queryLogCSV calls this straight off the
+// request context. A cursor needs a transaction, and the read this replaces
+// already pinned a pool connection and held a snapshot for the whole download
+// (an unfinished portal is inside an implicit transaction), so what is new
+// here is the BEGIN, not the duration.
 //
 // The same WHERE clause History has, and the same guarantee: exactly this
 // registration_id, nothing a caller otherwise controls.
@@ -201,17 +265,56 @@ func (l *QueryLog) History(ctx context.Context, registrationID uuid.UUID, limit,
 // The caller is writing to a socket, and a client that hung up must not have
 // the rest of the log read out of the database on its behalf.
 func (l *QueryLog) ExportHistory(ctx context.Context, registrationID uuid.UUID, yield func(queryrunner.HistoryEntry) error) error {
-	rows, err := l.querier(ctx).Query(ctx, `
+	querier := l.querier(ctx)
+	if !storage.InTx(ctx) {
+		tx, err := l.pool.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("read the query log of registration %s: %w", registrationID, err)
+		}
+		// Nothing here writes, so rolling back is how this ends either way.
+		defer func() { _ = tx.Rollback(ctx) }()
+		querier = tx
+	}
+
+	if _, err := querier.Exec(ctx, `
+		DECLARE `+exportCursor+` NO SCROLL CURSOR FOR
 		SELECT sql_text, status, COALESCE(error_text, ''), duration_ms, row_count, executed_at
 		FROM query_log
 		WHERE registration_id = $1
-		ORDER BY executed_at ASC, id ASC`,
-		registrationID)
-	if err != nil {
+		ORDER BY executed_at ASC`,
+		registrationID); err != nil {
 		return fmt.Errorf("read the query log of registration %s: %w", registrationID, err)
+	}
+	// Named so a second export in the same transaction — which only the tests
+	// do — finds the name free rather than already taken.
+	defer func() { _, _ = querier.Exec(ctx, `CLOSE `+exportCursor) }()
+
+	fetch := fmt.Sprintf(`FETCH FORWARD %d FROM %s`, exportFetch, exportCursor)
+	for {
+		read, err := streamExportBatch(ctx, querier, fetch, yield)
+		if err != nil {
+			return err
+		}
+		// A short batch is the end of the cursor: only the last FETCH of a
+		// log returns fewer rows than it asked for.
+		if read < exportFetch {
+			return nil
+		}
+	}
+}
+
+// streamExportBatch hands one FETCH's worth of rows to yield and says how many it
+// read. Split out so the rows of a batch are closed on every path out of the
+// loop, including a yield that refuses one.
+func streamExportBatch(ctx context.Context, querier storage.Querier, fetch string,
+	yield func(queryrunner.HistoryEntry) error) (int, error) {
+	rows, err := querier.Query(ctx, fetch)
+	if err != nil {
+		return 0, fmt.Errorf("read a page of the query log: %w", err)
 	}
 	defer rows.Close()
 
+	read := 0
 	for rows.Next() {
 		var (
 			entry  queryrunner.HistoryEntry
@@ -219,17 +322,19 @@ func (l *QueryLog) ExportHistory(ctx context.Context, registrationID uuid.UUID, 
 		)
 		if err := rows.Scan(&entry.SQL, &status, &entry.Error, &entry.DurationMs, &entry.RowCount,
 			&entry.ExecutedAt); err != nil {
-			return fmt.Errorf("scan a query log row: %w", err)
+			return read, fmt.Errorf("scan a query log row: %w", err)
 		}
+		read++
 		entry.Status = queryrunner.Status(status)
 		if err := yield(entry); err != nil {
-			return err
+			// The caller's own error, unwrapped: it is theirs to recognise.
+			return read, err
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read the query log of registration %s: %w", registrationID, err)
+		return read, fmt.Errorf("read a page of the query log: %w", err)
 	}
-	return nil
+	return read, nil
 }
 
 // clamped fits a count into the column's int, without wrapping.

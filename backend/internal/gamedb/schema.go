@@ -70,7 +70,9 @@ func (p *Provisioner) ReadSchema(ctx context.Context, database string) (provisio
 		return provisioning.Schema{}, fmt.Errorf("%w: %q", ErrBadName, database)
 	}
 
-	conn, err := p.connect(ctx, database)
+	// As the provisioning role: this reads an instance's catalogue, which is
+	// nobody's uploaded SQL and needs no containment.
+	conn, err := p.connect(ctx, p.base.User, database)
 	if err != nil {
 		return provisioning.Schema{}, err
 	}

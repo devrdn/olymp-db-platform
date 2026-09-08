@@ -17,27 +17,59 @@ import (
 type task struct {
 	name  string
 	every time.Duration
-	run   func(context.Context) error
+	// atStart runs the job once as the process comes up, before waiting out
+	// the first interval.
+	//
+	// Per job rather than for all of them, because "what has this process
+	// missed while it was not running" has a different answer for each. A job
+	// whose work somebody is waiting on wants it: an API restarted five
+	// minutes before a contest opens must not leave the pool untended until
+	// five minutes *after* it opens, because what is on the other end of that
+	// is every participant waiting for CREATE DATABASE inside their own page
+	// load. A job whose work is bounded by a grace period measured in
+	// minutes-to-days does not: nothing is waiting on it, and the same
+	// decisions are taken correctly one interval later. See each job below
+	// for its own answer.
+	atStart bool
+	run     func(context.Context) error
 }
 
 // runPeriodically runs the task until the context is cancelled.
 //
 // A failure is logged and the next tick still happens. These jobs are
 // housekeeping: one that cannot run because the database is briefly away
-// should try again in a minute, not take the service down with it.
+// should try again in a minute, not take the service down with it — including
+// the run at startup, which is one more run of the same job and not a
+// condition for coming up.
 func runPeriodically(ctx context.Context, log *slog.Logger, t task) {
 	ticker := time.NewTicker(t.every)
 	defer ticker.Stop()
+
+	// The ticker is started first so a slow first run does not push the
+	// second one a whole interval further out than it was configured for.
+	if t.atStart {
+		// Still asked, because a process cancelled while it was starting
+		// should stop rather than do one last piece of housekeeping.
+		if ctx.Err() == nil {
+			runOnce(ctx, log, t)
+		}
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := t.run(ctx); err != nil {
-				log.ErrorContext(ctx, "a background job failed", "job", t.name, "error", err)
-			}
+			runOnce(ctx, log, t)
 		}
+	}
+}
+
+// runOnce is one run of a job, with its failure logged rather than returned:
+// there is nobody above this to hand it to.
+func runOnce(ctx context.Context, log *slog.Logger, t task) {
+	if err := t.run(ctx); err != nil {
+		log.ErrorContext(ctx, "a background job failed", "job", t.name, "error", err)
 	}
 }
 
@@ -63,8 +95,14 @@ const abandonedAfter = 2 * time.Minute
 // only half-built, which is worse than not claiming it.
 func sweepQueryLog(log *slog.Logger, sweep func(context.Context, time.Duration) (int64, error)) task {
 	return task{
-		name:  "query-log-sweep",
-		every: time.Minute,
+		name: "query-log-sweep",
+		// At startup as well: the rows this closes were left open by a
+		// process that died, and the process that just died is very often the
+		// one this replaced. Cheap enough to be uninteresting either way —
+		// one UPDATE against query_log_running_idx, a partial index over the
+		// rows still at `running`.
+		atStart: true,
+		every:   time.Minute,
 		run: func(ctx context.Context) error {
 			swept, err := sweep(ctx, abandonedAfter)
 			if err != nil {
@@ -95,8 +133,15 @@ const scheduleTickInterval = 15 * time.Second
 // closed, or do nothing this tick because another replica already has it.
 func advanceContestSchedule(log *slog.Logger, advance func(context.Context) (int, int, error)) task {
 	return task{
-		name:  "contest-schedule",
-		every: scheduleTickInterval,
+		name: "contest-schedule",
+		// At startup as well. Fifteen seconds is already short, but this is
+		// what a participant's own screen and events channel wait on for a
+		// contest whose window has just opened, and a restart should not be
+		// fifteen seconds of "not started yet" on top of it. One tick is two
+		// indexed UPDATEs and one pg_try_advisory_xact_lock whether or not it
+		// moves anything.
+		atStart: true,
+		every:   scheduleTickInterval,
 		run: func(ctx context.Context) error {
 			started, finished, err := advance(ctx)
 			if err != nil {
@@ -121,8 +166,17 @@ func advanceContestSchedule(log *slog.Logger, advance func(context.Context) (int
 // for — see provisioning.Service.RosterDepth, and the flat depth it replaces.
 func tendPools(log *slog.Logger, service *provisioning.Service, headroom, max int) task {
 	return task{
-		name:  "game-pool",
-		every: 10 * time.Minute,
+		name: "game-pool",
+		// The job this was added for. Ten minutes is a long time to be idle
+		// about a pool: an API restarted five minutes before a contest opens
+		// used to do nothing until five minutes after it opened, and what
+		// waits on that is every participant, for CREATE DATABASE, inside
+		// their own page load — on a ten-connection pool whose statement
+		// timeout is ten minutes. A tick that finds every pool already deep
+		// enough costs one query per live contest, which is what makes this
+		// safe to do at boot rather than something to be careful about.
+		atStart: true,
+		every:   10 * time.Minute,
 		run: func(ctx context.Context) error {
 			made, dropped, err := service.Tend(ctx, service.RosterDepth(headroom, max))
 			if made > 0 || dropped > 0 {
@@ -170,7 +224,23 @@ func reclaimInstances(log *slog.Logger, reclaim func(context.Context, int) (prov
 	stuckLogged := make(map[string]int)
 
 	return task{
-		name:  "game-reclaim",
+		name: "game-reclaim",
+		// The one job in this file that deliberately does *not* run at
+		// startup, and the only one whose tick drops databases.
+		//
+		// Nothing waits on it. Its input is bounded by a grace period an
+		// organizer configures in minutes and this installation defaults to a
+		// day (GAME_INSTANCE_GRACE_MIN), so every decision it takes at boot
+		// it takes identically ten minutes later — there is no participant,
+		// and no organiser, on the other end of the difference. Against that
+		// nothing, running it at boot buys a DROP DATABASE storm competing
+		// with tendPools' CREATE DATABASE above for the same provisioning
+		// pool at the one moment the process has the least idea what is going
+		// on: a restart during a contest, or a replica rolling. A crash loop
+		// would repeat that on every boot.
+		//
+		// So it keeps its tick. See tendPools above for the shape of a job
+		// where the opposite is true.
 		every: 10 * time.Minute,
 		run: func(ctx context.Context) error {
 			result, err := reclaim(ctx, graceMin)
@@ -246,8 +316,14 @@ const staleBuildAfter = 15 * time.Minute
 // recoverable rather than a row stuck in `building` for ever.
 func buildGames(log *slog.Logger, games *provisioning.Games) task {
 	return task{
-		name:  "game-build",
-		every: buildGamesEvery,
+		name: "game-build",
+		// At startup as well. A game left in `building` by the process that
+		// died is only picked up again by a tick of this job, and on the
+		// other end of it is an organiser watching a status: five seconds
+		// sooner is five seconds, but a boot that finds a stale build is
+		// exactly the case this recovery exists for.
+		atStart: true,
+		every:   buildGamesEvery,
 		run: func(ctx context.Context) error {
 			built, err := games.Build(ctx, staleBuildAfter)
 			if errors.Is(err, provisioning.ErrNoGame) {

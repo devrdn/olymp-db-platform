@@ -94,7 +94,11 @@ func run(args []string) error {
 	}
 	defer gamePool.Close()
 
-	cluster, err := gamedb.NewProvisioner(gamePool, gameDSN)
+	// No game_author credential: this command drops databases and never
+	// builds a template, so it has no use for one. BuildTemplate refuses
+	// without it rather than falling back to the provisioning role, which is
+	// what makes passing "" here safe to read.
+	cluster, err := gamedb.NewProvisioner(gamePool, gameDSN, "")
 	if err != nil {
 		return err
 	}
