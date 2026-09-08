@@ -625,7 +625,23 @@ type Failure struct {
 	Subject *string                `protobuf:"bytes,3,opt,name=subject" json:"subject,omitempty"`
 	// For the journal and the technical log. Not for the participant: what they
 	// are shown is chosen from `kind` and `code`.
-	Message       *string `protobuf:"bytes,4,opt,name=message" json:"message,omitempty"`
+	Message *string `protobuf:"bytes,4,opt,name=message" json:"message,omitempty"`
+	// Where in the query the refusal is about, as a 1-based **character**
+	// offset — PostgreSQL's own errposition() convention, which the checker
+	// gets verbatim from PostgreSQL's own parser. Zero means "no position", and
+	// is true of every refusal but a parse error.
+	//
+	// Characters and not bytes, which is the whole reason this is worth a
+	// sentence: a Cyrillic query is two bytes to the character in UTF-8, so a
+	// consumer treating this as a byte offset underlines the wrong half of the
+	// statement for every participant not writing in ASCII.
+	//
+	// It is on this contract because the checker runs inside the Query Runner
+	// and the console only exists when QUERY_RUNNER_ADDR is set: without a
+	// field here the value is produced on one side of the wire, read on the
+	// other, and is zero in every deployed arrangement — the console's
+	// underline built and dead (CLAUDE.md rule 11).
+	Position      *int32 `protobuf:"varint,5,opt,name=position" json:"position,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -688,6 +704,13 @@ func (x *Failure) GetMessage() string {
 	return ""
 }
 
+func (x *Failure) GetPosition() int32 {
+	if x != nil && x.Position != nil {
+		return *x.Position
+	}
+	return 0
+}
+
 var File_queryrunner_v1_queryrunner_proto protoreflect.FileDescriptor
 
 const file_queryrunner_v1_queryrunner_proto_rawDesc = "" +
@@ -722,12 +745,13 @@ const file_queryrunner_v1_queryrunner_proto_rawDesc = "" +
 	"\x05cells\x18\x01 \x03(\v2\x1e.dbcontest.queryrunner.v1.CellR\x05cells\"3\n" +
 	"\x04Cell\x12\x17\n" +
 	"\ais_null\x18\x01 \x01(\bR\x06isNull\x12\x12\n" +
-	"\x04text\x18\x02 \x01(\tR\x04text\"\xff\x02\n" +
+	"\x04text\x18\x02 \x01(\tR\x04text\"\x9b\x03\n" +
 	"\aFailure\x12:\n" +
 	"\x04kind\x18\x01 \x01(\x0e2&.dbcontest.queryrunner.v1.Failure.KindR\x04kind\x12\x12\n" +
 	"\x04code\x18\x02 \x01(\tR\x04code\x12\x18\n" +
 	"\asubject\x18\x03 \x01(\tR\asubject\x12\x18\n" +
-	"\amessage\x18\x04 \x01(\tR\amessage\"\xef\x01\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\x12\x1a\n" +
+	"\bposition\x18\x05 \x01(\x05R\bposition\"\xef\x01\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fKIND_REFUSED\x10\x01\x12\r\n" +

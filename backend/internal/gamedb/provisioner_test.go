@@ -274,6 +274,77 @@ func TestABrokenScriptLeavesNoTemplateBehind(t *testing.T) {
 	}
 }
 
+// A failed build has two possible causes and one column to report them in, so
+// the two have to be told apart where they happen. PostgreSQL's verdict on a
+// statement the organiser wrote is theirs to read; it is also the only thing a
+// failed build is allowed to say, because the alternatives all print how this
+// service reaches the cluster.
+//
+// Run against the real cluster (CLAUDE.md rule 10): the shape of the error is
+// pgx's, not ours, and a fixture of it would only prove we can spell it.
+func TestAScriptPostgreSQLRefusedComesBackAsTheAuthorsOwnToRead(t *testing.T) {
+	p := provisioner(t)
+	template := named(t, "tpl")
+
+	err := p.BuildTemplate(t.Context(), template,
+		`CREATE TABLE fine (x int); CREATE TABLE oops (x nosuchtype);`, sqlpolicy.ReadOnly())
+
+	var refused *gamedb.ScriptError
+	if !errors.As(err, &refused) {
+		t.Fatalf("a script PostgreSQL refused came back as %T: %v", err, err)
+	}
+	if refused.SQLState != "42704" {
+		t.Fatalf("SQLSTATE %q, want 42704 (undefined_object)", refused.SQLState)
+	}
+	if !strings.Contains(refused.ScriptRejection(), "nosuchtype") {
+		t.Fatalf("the rejection reads %q; the type they misspelled is the whole point", refused.ScriptRejection())
+	}
+	// The offset PostgreSQL located it at, which is what an editor underlines.
+	if refused.Position <= 0 {
+		t.Fatalf("the rejection carries position %d, want the offset PostgreSQL reported", refused.Position)
+	}
+	// And nothing of ours. `connect`/`host`/`port` would come from
+	// Provisioner.connect's wrapper, the role name from pgx's own config dump.
+	for _, ours := range []string{gamedb.RoleAuthor, "failed to connect", "SASL", template} {
+		if strings.Contains(refused.ScriptRejection(), ours) {
+			t.Fatalf("the rejection names %q: %q", ours, refused.ScriptRejection())
+		}
+	}
+}
+
+// The trap this separation exists for: pgx reports a refused login as a
+// *pgconn.ConnectError that carries a *pgconn.PgError inside it, so anything
+// deciding "was this the database's verdict?" by looking for a PgError says
+// yes — and hands over the role, the addresses and the database name with it.
+// internal/rpc.classify had to be rewritten around exactly this.
+func TestAnAuthorLoginTheClusterRefusedIsNeverTheScriptsFault(t *testing.T) {
+	requireCluster(t)
+
+	user, password := gamedbtest.AdminCredentials(t)
+	p, err := gamedb.NewProvisioner(admin(t), gamedbtest.DSN(t, user, password, "postgres"),
+		"not-the-author-password")
+	if err != nil {
+		t.Fatalf("building the provisioner: %v", err)
+	}
+
+	template := named(t, "tpl")
+	err = p.BuildTemplate(t.Context(), template, `CREATE TABLE fine (x int)`, sqlpolicy.ReadOnly())
+	if err == nil {
+		t.Fatal("a build ran the script over a connection that could not be made")
+	}
+
+	// The premise: there really is a PgError in here, which is what makes a
+	// type test at the far end the wrong instrument.
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		t.Fatalf("a refused login came back without PostgreSQL's own error inside it: %v", err)
+	}
+	var refused *gamedb.ScriptError
+	if errors.As(err, &refused) {
+		t.Fatalf("a refused login was reported as the script's fault: %q", refused.ScriptRejection())
+	}
+}
+
 // The name is interpolated into DDL, where SQL has no parameter binding. The
 // policy already refuses a table name that is not a plain identifier; a
 // database name has to be refused the same way and for the same reason.
@@ -665,18 +736,21 @@ func TestAHostileGameScriptIsRefusedTheThingsOnlyASuperuserCanDo(t *testing.T) {
 func assertRefusedForPrivilege(t *testing.T, err error, phrase string) {
 	t.Helper()
 
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) {
+	// A *ScriptError and not a bare *pgconn.PgError: the hostile script is the
+	// author's own SQL, so the refusal is one of the few a build may repeat
+	// back to them, and this is where that classification is made.
+	var refused *gamedb.ScriptError
+	if !errors.As(err, &refused) {
 		t.Fatalf("the build failed, but not with an error from the database: %v", err)
 	}
 	// 42501 is insufficient_privilege. A syntax error (42601) or an unknown
 	// table (42P01) would mean the script was merely malformed, which says
 	// nothing about the role that ran it.
-	if pgErr.Code != "42501" {
+	if refused.SQLState != "42501" {
 		t.Fatalf("refused with SQLSTATE %s (%s), want 42501 insufficient_privilege",
-			pgErr.Code, pgErr.Message)
+			refused.SQLState, refused.Message)
 	}
-	whole := pgErr.Message + " " + pgErr.Detail + " " + pgErr.Hint
+	whole := refused.Message + " " + refused.Detail + " " + refused.Hint
 	if !strings.Contains(whole, phrase) {
 		t.Fatalf("refused with %q, which does not mention %q", strings.TrimSpace(whole), phrase)
 	}
@@ -786,5 +860,44 @@ func TestBuildingWithoutTheAuthorCredentialIsRefusedRatherThanRunAsTheProvisione
 	}
 	if instanceExists(t, template) {
 		t.Fatal("a refused build created a database anyway")
+	}
+}
+
+// The measurement the pool's byte budget is decided on. Against the real
+// cluster because that is the only place the number means anything: a fake
+// would only prove the SQL was spelled the way the fake expects.
+func TestClusterBytesCountsEveryDatabaseOnTheCluster(t *testing.T) {
+	p := provisioner(t)
+
+	before, err := p.ClusterBytes(t.Context())
+	if err != nil {
+		t.Fatalf("ClusterBytes: %v", err)
+	}
+	if before <= 0 {
+		t.Fatalf("a cluster with databases on it measured %d bytes", before)
+	}
+
+	// A database this test makes has to move the number, or the total is not
+	// a total.
+	template := named(t, "tpl")
+	if err := p.BuildTemplate(t.Context(), template,
+		`CREATE TABLE bulk AS SELECT g, repeat('x', 400) AS pad FROM generate_series(1, 20000) g`,
+		sqlpolicy.ReadOnly()); err != nil {
+		t.Fatalf("building a database to measure: %v", err)
+	}
+
+	after, err := p.ClusterBytes(t.Context())
+	if err != nil {
+		t.Fatalf("ClusterBytes: %v", err)
+	}
+	own, err := p.DatabaseSize(t.Context(), template)
+	if err != nil {
+		t.Fatalf("DatabaseSize: %v", err)
+	}
+	// The cluster is shared with whatever else is running, so the assertion
+	// is the direction and the floor rather than an equality: the new
+	// database is in the total.
+	if after-before < own/2 {
+		t.Fatalf("the total went from %d to %d after adding a database of %d bytes", before, after, own)
 	}
 }

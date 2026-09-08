@@ -192,6 +192,16 @@ type cluster struct {
 	// happened to its own database specifically, regardless of what else this
 	// pass swept.
 	idleCalls []idleCall
+
+	// templateBytes, clusterBytes and clusterBytesFail stage the two
+	// measurements the pool's byte budget is decided on: how large one copy
+	// is, and how much the cluster already holds. clusterReads counts the
+	// calls, because "the budget was consulted at all" is a separate claim
+	// from "it produced the right number".
+	templateBytes    int64
+	clusterBytes     int64
+	clusterBytesFail error
+	clusterReads     int
 }
 
 // idleCall is one DropIdle invocation and what the fake told the caller.
@@ -233,8 +243,26 @@ func (c *cluster) highWater() int {
 }
 
 func (c *cluster) DatabaseSize(context.Context, string) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.templateBytes > 0 {
+		return c.templateBytes, nil
+	}
 	// A megabyte, so the quota arithmetic has something to multiply.
 	return 1 << 20, nil
+}
+
+// ClusterBytes is how full the fake cluster is. Zero unless a test says
+// otherwise, which is an empty cluster and the case where no byte budget can
+// bind.
+func (c *cluster) ClusterBytes(context.Context) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.clusterReads++
+	if c.clusterBytesFail != nil {
+		return 0, c.clusterBytesFail
+	}
+	return c.clusterBytes, nil
 }
 
 // DatabaseSizes answers a megabyte for every name it is asked about, unless a

@@ -264,50 +264,115 @@ const (
 // A yield that returns an error stops the stream and is returned as it is.
 // The caller is writing to a socket, and a client that hung up must not have
 // the rest of the log read out of the database on its behalf.
-func (l *QueryLog) ExportHistory(ctx context.Context, registrationID uuid.UUID, yield func(queryrunner.HistoryEntry) error) error {
+//
+// # What bounds it
+//
+// Streaming is not the same as unbounded, and this read used to be both
+// (CLAUDE.md rule 2). Two bounds, because the row count and the bytes are two
+// different quantities and either one alone leaves the other free:
+// queryrunner.MaxExportRows is a LIMIT inside the cursor's own SELECT, so the
+// rows past it are never read at all, and queryrunner.MaxExportBytes is
+// counted off as the statements arrive.
+//
+// The byte budget is counted here rather than pushed into SQL because it is a
+// budget for the whole download and not for one allocation: a single row is
+// already bounded where its bytes arrive (CLAUDE.md rule 12) by the only thing
+// that ever writes this column, sqlpolicy.MaxQueryBytes, so what is left to
+// bound is the total — and a total is only known once the rows are counted.
+//
+// truncated says a bound bound. Returned rather than silently obeyed: the file
+// this feeds is a record, and a record that quietly stops is worse than a
+// short one that says where it stopped.
+//
+// The third bound is not here at all: how long this may hold the connection is
+// the caller's deadline on ctx, because only the caller knows what it is
+// waiting for (see api.exportDeadline).
+func (l *QueryLog) ExportHistory(ctx context.Context, registrationID uuid.UUID, yield func(queryrunner.HistoryEntry) error) (truncated bool, err error) {
 	querier := l.querier(ctx)
 	if !storage.InTx(ctx) {
 		tx, err := l.pool.Begin(ctx)
 		if err != nil {
-			return fmt.Errorf("read the query log of registration %s: %w", registrationID, err)
+			return false, fmt.Errorf("read the query log of registration %s: %w", registrationID, err)
 		}
 		// Nothing here writes, so rolling back is how this ends either way.
 		defer func() { _ = tx.Rollback(ctx) }()
 		querier = tx
 	}
 
+	// One row past the bound, so that a log of exactly MaxExportRows is
+	// reported whole rather than as a truncated one — the same "ask for one
+	// more than you will show" the instance list uses to answer the same
+	// question honestly.
+	//
+	// The LIMIT is a second lock on the door exportBudget already holds, and
+	// it is deliberate that no test can tell them apart: a cursor is lazy, so
+	// the rows past the last FETCH are never produced whether or not the
+	// planner was told about the bound. It stays because the read this
+	// replaced was a plain SELECT and could be again, and a plain SELECT with
+	// no LIMIT is the unbounded read this whole comment is about. The
+	// operative bound today is the budget below.
 	if _, err := querier.Exec(ctx, `
 		DECLARE `+exportCursor+` NO SCROLL CURSOR FOR
 		SELECT sql_text, status, COALESCE(error_text, ''), duration_ms, row_count, executed_at
 		FROM query_log
 		WHERE registration_id = $1
-		ORDER BY executed_at ASC`,
-		registrationID); err != nil {
-		return fmt.Errorf("read the query log of registration %s: %w", registrationID, err)
+		ORDER BY executed_at ASC
+		LIMIT $2`,
+		registrationID, queryrunner.MaxExportRows+1); err != nil {
+		return false, fmt.Errorf("read the query log of registration %s: %w", registrationID, err)
 	}
 	// Named so a second export in the same transaction — which only the tests
 	// do — finds the name free rather than already taken.
 	defer func() { _, _ = querier.Exec(ctx, `CLOSE `+exportCursor) }()
 
+	budget := exportBudget{rows: queryrunner.MaxExportRows, bytes: queryrunner.MaxExportBytes}
 	fetch := fmt.Sprintf(`FETCH FORWARD %d FROM %s`, exportFetch, exportCursor)
 	for {
-		read, err := streamExportBatch(ctx, querier, fetch, yield)
+		read, err := streamExportBatch(ctx, querier, fetch, &budget, yield)
 		if err != nil {
-			return err
+			return budget.spent, err
+		}
+		if budget.spent {
+			return true, nil
 		}
 		// A short batch is the end of the cursor: only the last FETCH of a
 		// log returns fewer rows than it asked for.
 		if read < exportFetch {
-			return nil
+			return false, nil
 		}
 	}
+}
+
+// exportBudget is what one download may still take, in rows and in bytes of
+// SQL. It is drawn down as rows arrive and reports the moment either runs out,
+// so that the stream stops on the first bound to bind rather than on whichever
+// one somebody thought of first.
+type exportBudget struct {
+	rows  int
+	bytes int
+	// spent says a bound bound, and is what the caller reports to the reader
+	// of the file.
+	spent bool
+}
+
+// take draws one statement down against both bounds and reports whether it may
+// still be handed over. The row is refused rather than trimmed: a half a
+// statement in a record of what somebody wrote is worse than an honest stop.
+func (b *exportBudget) take(sql string) bool {
+	if b.rows <= 0 || len(sql) > b.bytes {
+		b.spent = true
+		return false
+	}
+	b.rows--
+	b.bytes -= len(sql)
+	return true
 }
 
 // streamExportBatch hands one FETCH's worth of rows to yield and says how many it
 // read. Split out so the rows of a batch are closed on every path out of the
 // loop, including a yield that refuses one.
 func streamExportBatch(ctx context.Context, querier storage.Querier, fetch string,
-	yield func(queryrunner.HistoryEntry) error) (int, error) {
+	budget *exportBudget, yield func(queryrunner.HistoryEntry) error) (int, error) {
 	rows, err := querier.Query(ctx, fetch)
 	if err != nil {
 		return 0, fmt.Errorf("read a page of the query log: %w", err)
@@ -325,6 +390,9 @@ func streamExportBatch(ctx context.Context, querier storage.Querier, fetch strin
 			return read, fmt.Errorf("scan a query log row: %w", err)
 		}
 		read++
+		if !budget.take(entry.SQL) {
+			return read, nil
+		}
 		entry.Status = queryrunner.Status(status)
 		if err := yield(entry); err != nil {
 			// The caller's own error, unwrapped: it is theirs to recognise.

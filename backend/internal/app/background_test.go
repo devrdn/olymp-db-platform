@@ -357,7 +357,7 @@ func TestWhichBackgroundJobsRunAtStartup(t *testing.T) {
 		why     string
 	}{
 		{
-			job:     tendPools(quiet(), nil, 5, 100),
+			job:     tendPools(quiet(), nil, provisioning.PoolLimits{Headroom: 5, MaxCopies: 100}),
 			atStart: true,
 			why:     "a pool left untended for ten minutes is every participant waiting for CREATE DATABASE",
 		},

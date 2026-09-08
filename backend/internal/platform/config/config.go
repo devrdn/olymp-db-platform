@@ -96,7 +96,27 @@ type Config struct {
 	PoolDepth int
 	// PoolMax caps what one contest may ask the game cluster to hold, so a
 	// mistyped roster cannot fill a disk. Zero means no cap.
+	//
+	// The cheap half of that bound and not the real one: five hundred copies
+	// is ten gibibytes of a twenty-mebibyte template and a terabyte of a
+	// two-gibibyte one, from the same number. ClusterMaxBytes below is what
+	// actually bounds the disk.
 	PoolMax int
+	// ClusterMaxBytes is how much disk every database on the game cluster may
+	// occupy together, this platform's and anything else sharing it. Zero
+	// means no byte budget, which is the state that made an open contest's
+	// roster — written by whoever self-enrols — a lever on the disk every
+	// olympiad shares.
+	//
+	// A figure a deployment sets from the volume the cluster sits on, because
+	// nothing PostgreSQL exposes portably says how much free space is under
+	// its data directory. The default is sized for what this platform
+	// describes — a few hundred participants and a template measured in tens
+	// of megabytes — with room to spare, and is deliberately not "unlimited":
+	// an installation whose games are larger than that should find out from a
+	// log line saying the pool stopped growing and why, rather than from a
+	// full volume during an olympiad.
+	ClusterMaxBytes int64
 	// QueryRunnerAddr is where the Query Runner service answers. Empty turns
 	// the SQL console off, which is what a deployment without a game cluster
 	// wants — and what one has before the runner is deployed.
@@ -225,6 +245,9 @@ func Load() (Config, error) {
 	if cfg.PoolMax < 0 {
 		return Config{}, fmt.Errorf("GAME_POOL_MAX cannot be negative, got %d", cfg.PoolMax)
 	}
+	if cfg.ClusterMaxBytes, err = int64Env("GAME_CLUSTER_MAX_BYTES", 64<<30); err != nil {
+		return Config{}, err
+	}
 	if cfg.PoolDepth, err = intEnv("GAME_POOL_DEPTH", 10); err != nil {
 		return Config{}, err
 	}
@@ -328,6 +351,24 @@ func intEnv(key string, fallback int) (int, error) {
 	value, err := strconv.Atoi(raw)
 	if err != nil {
 		return 0, fmt.Errorf("%s: %q is not a whole number", key, raw)
+	}
+	if value < 0 {
+		return 0, fmt.Errorf("%s: %d is negative", key, value)
+	}
+	return value, nil
+}
+
+// int64Env is intEnv for a quantity that is not a count of things but a
+// number of bytes, where a deployment's own figure can be larger than a
+// setting anybody would type as a count.
+func int64Env(key string, fallback int64) (int64, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %q is not a whole number of bytes", key, raw)
 	}
 	if value < 0 {
 		return 0, fmt.Errorf("%s: %d is negative", key, value)

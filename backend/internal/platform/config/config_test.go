@@ -489,3 +489,44 @@ func TestNeitherGameCredentialIsRequiredWithoutAProvisioner(t *testing.T) {
 		t.Fatalf("Load() refused a deployment with no game cluster: %v", err)
 	}
 }
+
+// The byte budget the game pool is sized against. A default rather than
+// "unlimited", because unlimited is the state where an open contest's roster —
+// written by whoever self-enrols — is a lever on the disk every olympiad on
+// the cluster shares.
+func TestTheGameClusterHasAByteBudgetByDefault(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.ClusterMaxBytes != 64<<30 {
+		t.Errorf("ClusterMaxBytes = %d, want 64 GiB", cfg.ClusterMaxBytes)
+	}
+}
+
+// And it is sized by the operator, in bytes, because only they know the volume
+// underneath the cluster. Past a 32-bit integer, which is the whole reason it
+// is not read as an ordinary count.
+func TestTheGameClusterByteBudgetIsConfigurableBeyondFourGibibytes(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("GAME_CLUSTER_MAX_BYTES", "1099511627776")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.ClusterMaxBytes != 1<<40 {
+		t.Errorf("ClusterMaxBytes = %d, want 1 TiB", cfg.ClusterMaxBytes)
+	}
+}
+
+func TestANegativeGameClusterByteBudgetIsRejected(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("GAME_CLUSTER_MAX_BYTES", "-1")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted a negative GAME_CLUSTER_MAX_BYTES, want error")
+	}
+}

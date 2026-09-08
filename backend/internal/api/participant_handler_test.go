@@ -159,17 +159,71 @@ type fakeHistory struct {
 	exportErr             error
 	gotExportRegistration uuid.UUID
 	exportCalled          bool
+	// exportTruncated is what the read reports about a log longer than one
+	// download may carry.
+	exportTruncated bool
+	// exportGate, when set, holds the read inside ExportHistory until it is
+	// closed — the only way a test can have two downloads genuinely
+	// overlapping rather than merely issued one after the other.
+	exportGate chan struct{}
+	// gotExportDeadline is the deadline the handler put on the read. Kept so
+	// a test can assert the connection is held for a bounded time rather than
+	// for as long as a client cares to read.
+	gotExportDeadline time.Time
+	// inside counts the reads currently held at exportGate, so a test can
+	// wait for the first request to be demonstrably in the middle of one.
+	// The mutex guards every field above that two goroutines touch.
+	mu     sync.Mutex
+	inside int
 }
 
-func (h *fakeHistory) ExportHistory(_ context.Context, registrationID uuid.UUID, yield func(queryrunner.HistoryEntry) error) error {
+func (h *fakeHistory) ExportHistory(ctx context.Context, registrationID uuid.UUID, yield func(queryrunner.HistoryEntry) error) (bool, error) {
+	h.mu.Lock()
 	h.exportCalled = true
 	h.gotExportRegistration = registrationID
-	for _, entry := range h.exported {
-		if err := yield(entry); err != nil {
-			return err
+	h.gotExportDeadline, _ = ctx.Deadline()
+	gate, truncated, failure, rows := h.exportGate, h.exportTruncated, h.exportErr, h.exported
+	h.inside++
+	h.mu.Unlock()
+	defer func() {
+		h.mu.Lock()
+		h.inside--
+		h.mu.Unlock()
+	}()
+
+	if gate != nil {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-gate:
 		}
 	}
-	return h.exportErr
+	for _, entry := range rows {
+		if err := yield(entry); err != nil {
+			return false, err
+		}
+	}
+	return truncated, failure
+}
+
+// awaitInsideExport blocks until a read is actually inside ExportHistory.
+//
+// Without it the concurrency test is the kind that passes for the wrong
+// reason: the second request would be refused, or admitted, depending on
+// whether the first goroutine had been scheduled yet.
+func (h *fakeHistory) awaitInsideExport(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		in := h.inside
+		h.mu.Unlock()
+		if in > 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("no export ever started")
 }
 
 func (h *fakeHistory) History(_ context.Context, registrationID uuid.UUID, limit, offset int) ([]queryrunner.HistoryEntry, int, error) {
@@ -1308,5 +1362,121 @@ func TestTheQueryLogCSVNeverHandsBackAFailureOfOurs(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "function_not_supported: pg_sleep") {
 		t.Fatalf("the validator's own words about the participant's query were dropped: %s", rec.Body.String())
+	}
+}
+
+// The download used to be unbounded in three separate ways, and each one is
+// its own test because each one is refused by a different mechanism.
+
+// A file cut short by a bound has to say so inside itself. The alternative is
+// a participant holding what they believe is the record of their session and
+// is not — the same reason a truncated query result carries a flag.
+func TestAQueryLogDownloadCutShortSaysSoInTheFileItself(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.history.exported = []queryrunner.HistoryEntry{
+		{SQL: "SELECT 1", Status: queryrunner.StatusOK, ExecutedAt: time.Now().UTC()},
+	}
+	f.history.exportTruncated = true
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log.csv")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	records, err := csv.NewReader(rec.Body).ReadAll()
+	if err != nil {
+		t.Fatalf("the body is not CSV: %v", err)
+	}
+	if len(records) != 3 {
+		t.Fatalf("the file has %d lines, want a header, one row and the notice: %v", len(records), records)
+	}
+	last := records[len(records)-1]
+	if last[1] != "truncated" || last[4] == "" {
+		t.Fatalf("the last line is %v; a bound that bound has to be visible to whoever opens the file", last)
+	}
+	// And a complete file carries no such line, or every download would look
+	// like a partial one.
+	f.history.exportTruncated = false
+	whole, err := csv.NewReader(f.get("/contests/" + contestID.String() + "/play/log.csv").Body).ReadAll()
+	if err != nil {
+		t.Fatalf("the body is not CSV: %v", err)
+	}
+	if len(whole) != 2 {
+		t.Fatalf("a complete file has %d lines, want a header and one row: %v", len(whole), whole)
+	}
+}
+
+// The read runs inside a transaction on the core pool, so the time it takes
+// is a connection nobody else can have. Nothing about the size of the file
+// bounds that — the slow party is the client — so the handler puts a deadline
+// on it, and this is the assertion that the deadline is really there rather
+// than the request context's own (which, for an HTTP server with no
+// WriteTimeout, has none at all).
+func TestAQueryLogDownloadHoldsItsConnectionForABoundedTime(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+
+	before := time.Now()
+	if rec := f.get("/contests/" + contestID.String() + "/play/log.csv"); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if f.history.gotExportDeadline.IsZero() {
+		t.Fatal("the read was given no deadline; a client reading a byte a second holds a pool connection for as long as it likes")
+	}
+	// The figure the handler chose is its own; what this pins is that it is a
+	// figure at all and not one an operator would call unbounded. Two minutes
+	// is the ceiling this test is willing to call bounded — ten of these held
+	// that long is a stall a contest recovers from by itself.
+	const tolerable = 2 * time.Minute
+	if held := f.history.gotExportDeadline.Sub(before); held > tolerable {
+		t.Fatalf("the read may hold its connection for %s, want at most %s", held, tolerable)
+	}
+}
+
+// A bound per request is not a bound in aggregate. The rate budget allows
+// thirty starts a minute and the core pool has ten connections, so an account
+// that starts downloads and reads them slowly can hold every one of them
+// while refusing nothing — which is sign-in, submission and the timer stopped
+// for everybody else. One at a time per account is what closes that.
+func TestASecondQueryLogDownloadWhileOneIsStillRunningIsRefused(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	// The first request is inside the read for as long as this takes, which
+	// is what "still running" has to mean for the gate to be under test at
+	// all. Released by the channel below rather than by a sleep.
+	held := make(chan struct{})
+	f.history.exportGate = held
+
+	started := make(chan struct{})
+	first := make(chan int, 1)
+	go func() {
+		close(started)
+		first <- f.get("/contests/" + contestID.String() + "/play/log.csv").Code
+	}()
+	<-started
+	// Wait until the first request is demonstrably inside ExportHistory, so
+	// the second one cannot pass merely because the first had not started.
+	f.history.awaitInsideExport(t)
+
+	second := f.get("/contests/" + contestID.String() + "/play/log.csv")
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("a second concurrent download answered %d, want 429: %s", second.Code, second.Body.String())
+	}
+
+	close(held)
+	if code := <-first; code != http.StatusOK {
+		t.Fatalf("the first download answered %d, want 200", code)
+	}
+	// And the slot is given back, or one download would be all an account
+	// ever gets.
+	f.history.exportGate = nil
+	if again := f.get("/contests/" + contestID.String() + "/play/log.csv"); again.Code != http.StatusOK {
+		t.Fatalf("a download after the first finished answered %d, want 200: %s", again.Code, again.Body.String())
 	}
 }

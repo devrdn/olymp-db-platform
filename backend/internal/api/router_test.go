@@ -102,6 +102,27 @@ func TestPublicRouterSetsNoSniffHeader(t *testing.T) {
 	}
 }
 
+// The header the answer key needs, asserted on the assembled router rather
+// than on the middleware alone: a directive set by middleware is only worth
+// anything if it survives to the response, and this is the one route shape a
+// browser is free to cache heuristically — a plain 200 GET with no directive.
+//
+// GET /contests/{id}/export carries every reference answer of a contest, and
+// GET /contests/{id}/play/log.csv is a participant's own session as a file.
+// Neither is exercised here — they need a session and a database — which is
+// exactly why the guarantee is a property of the router and not of a handler
+// that could forget it.
+func TestPublicRouterForbidsCachingEveryAnswerItGives(t *testing.T) {
+	router := NewRouter(testDeps())
+	router.Get("/plain", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
+
+	for _, path := range []string{"/api/v1/version", "/plain", "/api/v1/nothing-here"} {
+		if got := do(t, router, http.MethodGet, path).Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("%s answered with Cache-Control %q, want no-store", path, got)
+		}
+	}
+}
+
 func TestPublicRouterRecoversFromHandlerPanic(t *testing.T) {
 	deps := testDeps()
 	router := NewRouter(deps)

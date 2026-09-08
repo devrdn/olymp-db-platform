@@ -289,6 +289,12 @@ services:
       # cluster, so it has to reach the container — a compiled default is a
       # cap nobody chose.
       GAME_POOL_MAX: ${GAME_POOL_MAX:-500}
+      # And the bound that is actually about the disk. GAME_POOL_MAX counts
+      # copies; this counts bytes, which is what a volume runs out of — a
+      # count means nothing without the size of a copy. Sized against the
+      # volume this cluster sits on, so it reaches the container for the same
+      # reason the cap above does.
+      GAME_CLUSTER_MAX_BYTES: ${GAME_CLUSTER_MAX_BYTES:-68719476736}
       GAME_PROVISION_WORKERS: ${GAME_PROVISION_WORKERS:-3}
       GAME_COPY_STRATEGY: ${GAME_COPY_STRATEGY:-}
       # How long a finished contest's participant databases survive, for every
