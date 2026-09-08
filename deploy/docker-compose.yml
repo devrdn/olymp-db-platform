@@ -317,8 +317,41 @@ services:
       # execution timeout. This one is consumed here, by queryproxy.Service,
       # never by the Query Runner.
       DEADLINE_GRACE: ${DEADLINE_GRACE:-5s}
+      # An organiser's second way to build a contest's game: upload a
+      # finished SQL dump instead of writing one in the editor. Empty turns
+      # it off, the same convention QUERY_RUNNER_ADDR uses above — an
+      # installation that never mounts game-uploads-data still starts
+      # cleanly, with this feature simply unavailable. Set together with the
+      # volume below: a directory this process cannot write to is a
+      # misconfiguration this variable alone cannot catch.
+      GAME_UPLOAD_DIR: ${GAME_UPLOAD_DIR:-/var/lib/dbcontest/uploads}
+      # Above the 1-3 GB the pilot itself named as its own ceiling, on
+      # purpose: the first organiser to approach a number somebody guessed
+      # at design time should get a slow upload, not a refusal they have no
+      # way to raise themselves.
+      GAME_UPLOAD_MAX_FILE_BYTES: ${GAME_UPLOAD_MAX_FILE_BYTES:-4294967296}
+      # Every upload the volume holds together — in progress, and complete
+      # ones still waiting to be superseded or reclaimed. Sized against the
+      # volume below, the same way GAME_CLUSTER_MAX_BYTES is sized against
+      # the game cluster's own.
+      GAME_UPLOAD_MAX_DIR_BYTES: ${GAME_UPLOAD_MAX_DIR_BYTES:-17179869184}
+      GAME_UPLOAD_CHUNK_BYTES: ${GAME_UPLOAD_CHUNK_BYTES:-8388608}
+      # How long an upload may sit untouched before the janitor
+      # (internal/app/background.go) aborts it and frees the disk. A day: an
+      # organiser stepping away mid-upload does not lose their place, and a
+      # browser tab closed mid-upload does not hold gigabytes indefinitely.
+      GAME_UPLOAD_ABANDONED_AFTER: ${GAME_UPLOAD_ABANDONED_AFTER:-24h}
     # No host port: Caddy is the only way in. The development overlay exposes
     # the API directly for debugging.
+    # game-uploads-data is local to this container's own host. It works
+    # exactly as long as the api service has one replica: a chunk of one
+    # upload can land on whichever replica received that request, and two
+    # replicas would each hold half a file neither can complete. This is
+    # fine for the pilot and wrong the day a second replica is added — fix
+    # it (a shared filesystem, or routing an upload's chunks back to the
+    # replica that began it) before that happens, not after.
+    volumes:
+      - game-uploads-data:${GAME_UPLOAD_DIR:-/var/lib/dbcontest/uploads}
     depends_on:
       pg-core:
         condition: service_healthy
@@ -458,6 +491,11 @@ volumes:
   pg-core-data:
   pg-game-data:
   redis-data:
+  # An organiser's uploaded SQL dumps, in progress and complete
+  # (internal/gamefile). Local to the one host this volume lives on — see
+  # the api service's own comment above for what that costs the day a
+  # second replica is added.
+  game-uploads-data:
   caddy-data:
   caddy-config:
   prometheus-data:

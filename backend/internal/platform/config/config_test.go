@@ -530,3 +530,101 @@ func TestANegativeGameClusterByteBudgetIsRejected(t *testing.T) {
 		t.Fatal("Load() accepted a negative GAME_CLUSTER_MAX_BYTES, want error")
 	}
 }
+
+// File uploads are off by default — GameUploadDir empty is exactly what an
+// installation with no upload volume mounted needs, the same convention
+// QueryRunnerAddr uses to turn the console off — and the size limits still
+// come back with real defaults so a deployment that only sets GAME_UPLOAD_DIR
+// is not left with a zero-byte ceiling.
+func TestGameUploadsAreOffByDefault(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.GameUploadDir != "" {
+		t.Errorf("GameUploadDir = %q, want empty (uploads off) by default", cfg.GameUploadDir)
+	}
+	if cfg.GameUploadMaxFileBytes != 4<<30 {
+		t.Errorf("GameUploadMaxFileBytes = %d, want 4 GiB", cfg.GameUploadMaxFileBytes)
+	}
+	if cfg.GameUploadMaxDirBytes != 16<<30 {
+		t.Errorf("GameUploadMaxDirBytes = %d, want 16 GiB", cfg.GameUploadMaxDirBytes)
+	}
+	if cfg.GameUploadChunkBytes != 8<<20 {
+		t.Errorf("GameUploadChunkBytes = %d, want 8 MiB", cfg.GameUploadChunkBytes)
+	}
+	if cfg.GameUploadAbandonedAfter != 24*time.Hour {
+		t.Errorf("GameUploadAbandonedAfter = %v, want 24h", cfg.GameUploadAbandonedAfter)
+	}
+}
+
+// The pilot itself named "1 GB-3 GB max" for one upload; the compiled
+// default has to sit above that named ceiling, not equal to it, or the
+// first organiser to approach what somebody guessed at design time is
+// refused for a reason they have no way to raise themselves.
+func TestGameUploadMaxFileBytesDefaultsAboveThePilotsOwnCeiling(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	const threeGB = 3 * 1_000_000_000
+	if cfg.GameUploadMaxFileBytes <= threeGB {
+		t.Errorf("GameUploadMaxFileBytes = %d, want more than the named 3 GB ceiling", cfg.GameUploadMaxFileBytes)
+	}
+}
+
+func TestGameUploadsAreConfigurable(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("GAME_UPLOAD_DIR", "/var/lib/dbcontest/uploads")
+	t.Setenv("GAME_UPLOAD_MAX_FILE_BYTES", "1073741824")
+	t.Setenv("GAME_UPLOAD_MAX_DIR_BYTES", "2147483648")
+	t.Setenv("GAME_UPLOAD_CHUNK_BYTES", "1048576")
+	t.Setenv("GAME_UPLOAD_ABANDONED_AFTER", "1h")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.GameUploadDir != "/var/lib/dbcontest/uploads" {
+		t.Errorf("GameUploadDir = %q", cfg.GameUploadDir)
+	}
+	if cfg.GameUploadMaxFileBytes != 1<<30 {
+		t.Errorf("GameUploadMaxFileBytes = %d, want 1 GiB", cfg.GameUploadMaxFileBytes)
+	}
+	if cfg.GameUploadMaxDirBytes != 2<<30 {
+		t.Errorf("GameUploadMaxDirBytes = %d, want 2 GiB", cfg.GameUploadMaxDirBytes)
+	}
+	if cfg.GameUploadChunkBytes != 1<<20 {
+		t.Errorf("GameUploadChunkBytes = %d, want 1 MiB", cfg.GameUploadChunkBytes)
+	}
+	if cfg.GameUploadAbandonedAfter != time.Hour {
+		t.Errorf("GameUploadAbandonedAfter = %v, want 1h", cfg.GameUploadAbandonedAfter)
+	}
+}
+
+func TestNegativeGameUploadAbandonedAfterIsRejected(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("GAME_UPLOAD_ABANDONED_AFTER", "-1h")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted a negative GAME_UPLOAD_ABANDONED_AFTER, want error")
+	}
+}
+
+// A zero size limit configured alongside a real upload directory would let
+// Games.WithUploads construct a gamefile.Store that refuses every upload
+// outright (its own NewStore requires positive limits) — refused here, at
+// boot, rather than surfacing later as every organiser's upload failing.
+func TestGameUploadDirWithAZeroLimitIsRejectedAtStartup(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("GAME_UPLOAD_DIR", "/var/lib/dbcontest/uploads")
+	t.Setenv("GAME_UPLOAD_CHUNK_BYTES", "0")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted GAME_UPLOAD_DIR with a zero chunk size, want error")
+	}
+}
