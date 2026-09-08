@@ -154,6 +154,41 @@ const en = {
         failed: "build failed",
         dropped: "removed",
       },
+      // The second way to build this contest's game: a finished dump
+      // instead of a script typed into the editor above. The twelve
+      // refusals this feature can hand back (game_upload_* and
+      // game_uploads_disabled) already have their own sentences in
+      // `errors` — this is only the interface's own words around them.
+      upload: {
+        heading: "Load a finished dump",
+        lede: "A finished dump instead of a script typed above — the schema, the data, everything already prepared. It is sent in pieces, so even a file of several gigabytes never has to fit in the browser's memory at once, and an interrupted upload can continue where it left off.",
+        limitHint: "Up to {max}.",
+        pick: "Choose file",
+        resumeHeading: "An unfinished upload",
+        resumeBody: "{filename}: {received} of {total} received. Choose the same file again to continue — this browser does not keep files between visits.",
+        resumePick: "Choose the file again",
+        resumeMismatch: "That is not the file the unfinished upload is waiting for: {filename}. Choose it again, or cancel it and start over.",
+        resumeCancel: "Cancel it and start over",
+        uploading: "Uploading…",
+        progress: "{sent} of {total} ({percent}%)",
+        rate: "{rate}/s",
+        eta: "~{time} left",
+        cancel: "Cancel",
+        cancelConfirm: "Cancel this upload? What has been received so far is discarded.",
+        retry: "Retry",
+        completing: "Finishing…",
+        done: "File received. The build has started.",
+        viewHeading: "The file's contents",
+        gotoLabel: "Line",
+        gotoButton: "Go",
+        prev: "Previous",
+        next: "Next",
+        jumpToError: "Jump to the failing line",
+        totalLines: "{n} lines",
+        windowTruncated: "This window hit its byte limit; the last line shown may be cut off.",
+        windowError: "Could not load this part of the file.",
+        loading: "Loading…",
+      },
     },
     // The databases the game has produced, split from `game` into a section
     // of its own — see the `databases` route. `game` is what an author

@@ -24,6 +24,41 @@ export const GAME_STATUSES = [
 
 export type GameStatus = (typeof GAME_STATUSES)[number];
 
+/**
+ * The ceilings a chunked upload must respect on this installation —
+ * `game_handler.go`'s `uploadLimitsResponse`.
+ *
+ * `enabled` travels apart from the two numbers on purpose, and is checked
+ * first: an installation with no upload volume configured
+ * (`GAME_UPLOAD_DIR` unset) reports both as zero, and zero is also a ceiling
+ * an operator could genuinely set. Without this field the two would be
+ * indistinguishable — a client would have no way to tell "uploads are off,
+ * do not offer the button" from "the operator set a ceiling of zero, which
+ * refuses everything anyway".
+ */
+export const uploadLimitsSchema = z
+  .object({
+    enabled: z.boolean(),
+    chunk_bytes: z.number(),
+    max_file_bytes: z.number(),
+  })
+  .transform((raw) => ({
+    enabled: raw.enabled,
+    chunkBytes: raw.chunk_bytes,
+    maxFileBytes: raw.max_file_bytes,
+  }));
+
+export type UploadLimits = z.infer<typeof uploadLimitsSchema>;
+
+/**
+ * A ceiling of "uploads are off" — the shape `enabled: false` always takes.
+ *
+ * Already camelCased, not the wire shape: zod applies a `.default()` value
+ * as-is, without re-running the schema's own `.transform()` over it, so a
+ * default has to be written in whatever shape the field is read in.
+ */
+const DISABLED_UPLOAD_LIMITS = { enabled: false, chunkBytes: 0, maxFileBytes: 0 };
+
 export const gameSchema = z
   .object({
     status: z.enum(GAME_STATUSES),
@@ -33,6 +68,11 @@ export const gameSchema = z
     script_bytes: z.number().default(0),
     building: z.boolean().default(false),
     updated_at: z.string().optional(),
+    // Defaulted rather than required: every current build of the API sends
+    // it (game_handler.go's uploadLimitsResponse), but a page that has no
+    // use for the file-upload half of this screen must not fail to render
+    // over a field it does not read.
+    upload_limits: uploadLimitsSchema.default(DISABLED_UPLOAD_LIMITS),
   })
   .transform((raw) => ({
     status: raw.status,
@@ -42,11 +82,85 @@ export const gameSchema = z
     scriptBytes: raw.script_bytes,
     building: raw.building,
     updatedAt: raw.updated_at ?? "",
+    uploadLimits: raw.upload_limits,
   }));
 
 export type Game = z.infer<typeof gameSchema>;
 
 export const gameScriptSchema = z.object({ script: z.string() });
+
+/**
+ * A game database built from a finished dump rather than a script typed in
+ * the editor — the second way `POST .../game/uploads` through
+ * `.../complete` lets an organiser produce the same thing `SetScript` does.
+ *
+ * A chunked upload, not a single request: the file is sent in pieces
+ * (`PUT .../uploads/{id}/chunk?offset=N`) so a multi-gigabyte dump never has
+ * to fit in the browser's memory, or this server's, all at once. `status`
+ * carries a fourth value beyond `provisioning.UploadStatus`'s own three —
+ * `"absent"` — that only `GET .../uploads/current` ever sends, for a contest
+ * with no upload in progress; it is a handler-only sentinel, not a state a
+ * real upload passes through.
+ */
+export const UPLOAD_STATUSES = ["absent", "receiving", "complete", "aborted"] as const;
+
+export type UploadStatus = (typeof UPLOAD_STATUSES)[number];
+
+export const uploadSchema = z
+  .object({
+    id: z.string(),
+    filename: z.string(),
+    declared_bytes: z.number(),
+    received_bytes: z.number(),
+    // Empty until the upload is complete — the checksum is computed in
+    // Store.Complete's own one sequential pass over the finished file.
+    sha256: z.string(),
+    lines: z.number(),
+    status: z.enum(UPLOAD_STATUSES),
+    created_at: z.string(),
+    updated_at: z.string(),
+    upload_limits: uploadLimitsSchema,
+  })
+  .transform((raw) => ({
+    id: raw.id,
+    filename: raw.filename,
+    declaredBytes: raw.declared_bytes,
+    receivedBytes: raw.received_bytes,
+    sha256: raw.sha256,
+    lines: raw.lines,
+    status: raw.status,
+    createdAt: raw.created_at,
+    updatedAt: raw.updated_at,
+    uploadLimits: raw.upload_limits,
+  }));
+
+export type Upload = z.infer<typeof uploadSchema>;
+
+/**
+ * One slice of a completed upload's lines — the console's own preview of a
+ * dump it has not run yet, the same role the script editor's own textarea
+ * plays for one typed in directly. Never the whole file: a line of a real
+ * dump can run to megabytes, and the file itself to gigabytes.
+ */
+export const uploadWindowSchema = z
+  .object({
+    from_line: z.number(),
+    lines: z.array(z.string()),
+    total_lines: z.number(),
+    // The byte budget ran out before max_lines lines were collected, which
+    // can happen mid-line — the last string in `lines` may not be a whole
+    // one. Never means the window ran past the end of the file; that is an
+    // ordinary short window, not a truncated one.
+    truncated: z.boolean(),
+  })
+  .transform((raw) => ({
+    fromLine: raw.from_line,
+    lines: raw.lines,
+    totalLines: raw.total_lines,
+    truncated: raw.truncated,
+  }));
+
+export type UploadWindow = z.infer<typeof uploadWindowSchema>;
 
 /**
  * The databases a contest already owns: its spare pool and the participants'

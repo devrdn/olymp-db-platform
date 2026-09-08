@@ -23,6 +23,7 @@ function game(overrides: Partial<Game> = {}): Game {
     scriptBytes: 0,
     building: false,
     updatedAt: "",
+    uploadLimits: { enabled: false, chunkBytes: 0, maxFileBytes: 0 },
     ...overrides,
   };
 }
