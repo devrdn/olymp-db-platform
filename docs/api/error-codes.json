@@ -78,6 +78,54 @@
       "meaning": "The game script is past the size one game may carry. A game that needs more rows than this writes them with INSERT ... SELECT generate_series, which is shorter and easier to review."
     },
     {
+      "code": "game_upload_already_complete",
+      "meaning": "This upload has already been completed or cancelled, so it can no longer take chunks, be completed again, or be cancelled."
+    },
+    {
+      "code": "game_upload_chunk_out_of_order",
+      "meaning": "This chunk does not continue where the upload actually left off. Ask the server what it has received and resume from there rather than resending from the browser's own idea of the offset."
+    },
+    {
+      "code": "game_upload_chunk_too_large",
+      "meaning": "One chunk is past the maximum chunk size this installation accepts. Split it into smaller pieces."
+    },
+    {
+      "code": "game_upload_filename_invalid",
+      "meaning": "The filename the browser reported is empty or longer than this installation accepts."
+    },
+    {
+      "code": "game_upload_in_progress",
+      "meaning": "This contest already has an upload still receiving chunks. Finish or cancel it before starting another."
+    },
+    {
+      "code": "game_upload_incomplete",
+      "meaning": "This upload has not been completed yet, so there is no line index to read a window from."
+    },
+    {
+      "code": "game_upload_length_mismatch",
+      "meaning": "What actually landed on disk does not match the length declared when the upload began. The upload cannot be completed; begin again."
+    },
+    {
+      "code": "game_upload_not_found",
+      "meaning": "This contest has no upload by that identifier. Also the answer when the upload belongs to another contest: that it exists elsewhere is not the caller's business."
+    },
+    {
+      "code": "game_upload_store_full",
+      "meaning": "The upload directory already holds as much as this installation allows. Try again once other uploads have finished or been removed."
+    },
+    {
+      "code": "game_upload_too_large",
+      "meaning": "The upload's declared size is past the maximum file size this installation accepts."
+    },
+    {
+      "code": "game_upload_too_often",
+      "meaning": "Too many uploads have been started from this address or for this contest in a short time. Wait before starting another."
+    },
+    {
+      "code": "game_uploads_disabled",
+      "meaning": "This installation has no upload directory configured, so a game can only be written in the editor. The message names nothing about the deployment beyond that fact."
+    },
+    {
       "code": "image_not_accepted",
       "meaning": "The file is not one of the picture formats this installation stores. The format is read from the bytes, not from the name."
     },

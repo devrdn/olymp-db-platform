@@ -3,11 +3,14 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/gamefile"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
@@ -16,9 +19,32 @@ import (
 )
 
 // Games is the slice of provisioning.Games this handler needs.
+//
+// The upload half (BeginUpload through AbortUpload) is the second way to
+// build a contest's game: an organiser's finished dump instead of a script
+// typed into the editor. Every method on it answers provisioning.
+// ErrUploadsDisabled on a deployment with no GAME_UPLOAD_DIR configured
+// (WithUploads never called) — this handler does not check that itself, it
+// only maps the sentinel once it comes back (fail, below).
 type Games interface {
 	Of(ctx context.Context, contestID uuid.UUID) (provisioning.Template, error)
 	SetScript(ctx context.Context, actorID, contestID uuid.UUID, script string) (provisioning.Template, error)
+
+	BeginUpload(ctx context.Context, contestID uuid.UUID, filename string, declaredBytes int64) (provisioning.Upload, error)
+	AppendChunk(ctx context.Context, contestID, uploadID uuid.UUID, offset int64, r io.Reader) (int64, error)
+	CurrentUpload(ctx context.Context, contestID uuid.UUID) (provisioning.Upload, error)
+	UploadWindow(ctx context.Context, contestID, uploadID uuid.UUID, fromLine, maxLines int, maxBytes int64) (gamefile.Window, error)
+	CompleteUpload(ctx context.Context, actorID, contestID, uploadID uuid.UUID) (provisioning.Template, error)
+	AbortUpload(ctx context.Context, actorID, contestID, uploadID uuid.UUID) (provisioning.Upload, error)
+}
+
+// UploadLimiter is the slice of auth.Limiter this handler needs (CLAUDE.md
+// rule 3): counting an attempt against a subject and refusing once a window
+// has taken too many. Never Reset — starting an upload has no "correct
+// password" moment that should forgive the attempts before it, the way a
+// successful sign-in does for auth.Service.
+type UploadLimiter interface {
+	Allow(ctx context.Context, subject string, limit int, window time.Duration) (bool, error)
 }
 
 // GameDatabases is the slice of provisioning.Service this handler needs: the
@@ -45,11 +71,35 @@ type GameHandler struct {
 	databases GameDatabases
 	mw        *auth.Middleware
 	log       *slog.Logger
+	// limiter paces BeginUpload (Mount's own routing comment explains why
+	// only Begin, never a chunk). Backed by the shared cache rather than an
+	// in-process map like events_handler.go's connLimiter: a chunked upload
+	// spans many requests that a load balancer may spread across replicas,
+	// and what this bounds — a reservation on disk and a row in
+	// game_uploads — is a cluster-wide resource, not a socket this one
+	// process holds, so the count has to be shared the same way the login
+	// throttle's is.
+	limiter UploadLimiter
+	// maxChunkBody bounds one chunk's HTTP body (appendChunk's own doc). A
+	// field defaulted by NewGameHandler rather than only a constant, so a
+	// test can shrink it instead of allocating tens of megabytes to prove it
+	// trips — the same reason events_handler.go's writeTimeout is a field.
+	maxChunkBody int64
 }
 
 // NewGameHandler assembles the endpoints.
-func NewGameHandler(games Games, databases GameDatabases, mw *auth.Middleware, log *slog.Logger) *GameHandler {
-	return &GameHandler{games: games, databases: databases, mw: mw, log: log}
+func NewGameHandler(games Games, databases GameDatabases, mw *auth.Middleware, log *slog.Logger, limiter UploadLimiter) *GameHandler {
+	return &GameHandler{
+		games: games, databases: databases, mw: mw, log: log,
+		limiter: limiter, maxChunkBody: defaultMaxGameChunkBodyBytes,
+	}
+}
+
+// WithMaxChunkBody overrides the transport-level chunk-body ceiling
+// NewGameHandler defaults to. See maxChunkBody's own doc.
+func (h *GameHandler) WithMaxChunkBody(n int64) *GameHandler {
+	h.maxChunkBody = n
+	return h
 }
 
 // Mount registers the routes.
@@ -93,8 +143,50 @@ func (h *GameHandler) Mount(r chi.Router) {
 			Get("/instances", h.instances)
 		r.With(h.mw.RequireContestPermission(rbac.PermissionContestEdit)).
 			Delete("/instances/{"+databaseParam+"}", h.dropInstance)
+
+		// The second way to build a contest's game (Games' own doc, above):
+		// an organiser uploads a finished dump instead of writing a script
+		// in the editor. The view/edit split is the one this whole handler
+		// already uses — looking at an upload's progress needs what reading
+		// the contest needs, starting, feeding, finishing or cancelling one
+		// needs what editing it needs, because completing an upload replaces
+		// the game exactly the way SetScript does (CompleteUpload's own
+		// doc: "the same path as SetScript").
+		//
+		// Chunks are not rate-limited, only BeginUpload is. A chunked
+		// upload is meant to send many requests — three gigabytes at eight
+		// mebibytes each is close to four hundred of them — and a limiter
+		// on every one of those would refuse a caller in the middle of an
+		// honest transfer, the exact failure mode connLimiter's own doc
+		// warns against for a different endpoint. What actually needs
+		// pacing is the one call that reserves a file on disk and a row in
+		// game_uploads before a single byte has proven the upload is real
+		// (allowUploadBegin's own doc).
+		r.Route("/uploads", func(r chi.Router) {
+			r.With(h.mw.RequireContestPermission(rbac.PermissionContestView)).
+				Get("/current", h.currentUpload)
+			r.With(h.mw.RequireContestPermission(rbac.PermissionContestEdit)).
+				Post("/", h.beginUpload)
+
+			r.Route("/{"+uploadIDParam+"}", func(r chi.Router) {
+				r.With(h.mw.RequireContestPermission(rbac.PermissionContestEdit)).
+					Put("/chunk", h.appendChunk)
+				r.With(h.mw.RequireContestPermission(rbac.PermissionContestEdit)).
+					Post("/complete", h.completeUpload)
+				r.With(h.mw.RequireContestPermission(rbac.PermissionContestEdit)).
+					Post("/abort", h.abortUpload)
+				r.With(h.mw.RequireContestPermission(rbac.PermissionContestView)).
+					Get("/window", h.uploadWindow)
+			})
+		})
 	})
 }
+
+// uploadIDParam names an upload in a path — provisioning.Upload's own id,
+// scoped to the contest it belongs to the same way databaseParam is
+// (currentContestUpload's own doc: a mismatch reads as ErrUploadNotFound,
+// identically to an id that names no upload at all).
+const uploadIDParam = "uploadID"
 
 // databaseParam names the database in a path. Not a UUID: this identifier is
 // PostgreSQL's, and it is the string an organizer sees in a cluster listing —
@@ -311,6 +403,415 @@ func (h *GameHandler) contestID(w http.ResponseWriter, r *http.Request) (uuid.UU
 	return id, true
 }
 
+func (h *GameHandler) uploadID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(chi.URLParam(r, uploadIDParam))
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, "The upload identifier is not a UUID")
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// --- Uploading a finished dump ---------------------------------------------
+
+// uploadResponse is one upload as staff see it — never the path it lives at
+// on disk, which internal/gamefile alone knows and which is exactly the kind
+// of filesystem detail participantSafeError (participant_handler.go) already
+// argues must not reach a client verbatim.
+type uploadResponse struct {
+	ID            string `json:"id"`
+	Filename      string `json:"filename"`
+	DeclaredBytes int64  `json:"declared_bytes"`
+	ReceivedBytes int64  `json:"received_bytes"`
+	// SHA256 is empty until the upload is complete — Store.Complete's own
+	// one sequential pass is what computes it.
+	SHA256    string    `json:"sha256"`
+	Lines     int64     `json:"lines"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func uploadView(u provisioning.Upload) uploadResponse {
+	return uploadResponse{
+		ID: u.ID.String(), Filename: u.Filename,
+		DeclaredBytes: u.DeclaredBytes, ReceivedBytes: u.ReceivedBytes,
+		SHA256: u.SHA256, Lines: u.Lines, Status: string(u.Status),
+		CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
+	}
+}
+
+// currentUpload lets a reloaded page find an upload already in progress and
+// offer to resume it, rather than a second BeginUpload refusing with no way
+// to explain why (CurrentUpload's own doc).
+//
+// 200 with Status "absent" for "there is none" rather than 404 — the same
+// call status() makes above for a contest with no game at all, and for the
+// same reason: one shape for the interface to render instead of two.
+func (h *GameHandler) currentUpload(w http.ResponseWriter, r *http.Request) {
+	contestID, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+
+	upload, err := h.games.CurrentUpload(r.Context(), contestID)
+	if errors.Is(err, provisioning.ErrUploadNotFound) {
+		httpx.JSON(w, r, http.StatusOK, uploadResponse{Status: "absent"})
+		return
+	}
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, uploadView(upload))
+}
+
+type beginUploadRequest struct {
+	// Filename is the name the browser's file picker reported — kept only
+	// for this screen and never used as a path (provisioning.
+	// MaxUploadFilenameBytes's own doc).
+	Filename string `json:"filename"`
+	// DeclaredBytes is what the browser's File object reports before a byte
+	// is sent. Checked again by Store.Complete against what actually landed
+	// (ErrUploadLengthMismatch), so a lie here is caught, never trusted.
+	DeclaredBytes int64 `json:"declared_bytes"`
+}
+
+// uploadBeginWindow, maxUploadBeginsPerAddress and maxUploadBeginsPerContest
+// bound allowUploadBegin. Deliberately tight: an honest browser calls
+// BeginUpload once per file it means to send — CurrentUpload, not a second
+// Begin, is how a reloaded page resumes one already in progress — so a
+// handful of attempts in ten minutes already covers picking the wrong file
+// and starting over a few times.
+const (
+	uploadBeginWindow         = 10 * time.Minute
+	maxUploadBeginsPerAddress = 20
+	maxUploadBeginsPerContest = 8
+)
+
+// allowUploadBegin applies CLAUDE.md rule 5's ordering to the one call an
+// upload spends that is worth pacing: BeginUpload itself, which reserves a
+// file on disk and a row in game_uploads before a single byte has proven the
+// upload is real (Games.BeginUpload's own doc). A chunk is never checked
+// here — see Mount's own routing comment for why.
+//
+// The address key is checked first, and second here means something
+// different than it does in auth.Service.checkThrottle. This route sits
+// behind authentication and RequireContestPermission already, so — unlike a
+// login string — neither key below is a space an unauthorised caller can
+// mint counters in for free; both name something that already had to be real
+// (a session, a contest this actor may edit) before this method runs. The
+// address is still checked first anyway, because it is the tighter, shared
+// budget: several organisers on one office network share it, and spending it
+// before the contest-scoped key means one contest's misbehaving client
+// cannot burn through a budget that address's other, unrelated contests also
+// depend on.
+func (h *GameHandler) allowUploadBegin(w http.ResponseWriter, r *http.Request, contestID uuid.UUID) bool {
+	ctx := r.Context()
+
+	if addr := httpx.ClientIP(r); addr != "" {
+		allowed, err := h.limiter.Allow(ctx, "game_upload_begin:ip:"+addr, maxUploadBeginsPerAddress, uploadBeginWindow)
+		if err != nil {
+			h.log.ErrorContext(ctx, "could not check the upload rate limit", "error", err)
+			httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+			return false
+		}
+		if !allowed {
+			httpx.Error(w, r, http.StatusTooManyRequests, codeGameUploadTooOften,
+				"Too many uploads have been started from this address; wait before trying again")
+			return false
+		}
+	}
+
+	allowed, err := h.limiter.Allow(ctx, "game_upload_begin:contest:"+contestID.String(), maxUploadBeginsPerContest, uploadBeginWindow)
+	if err != nil {
+		h.log.ErrorContext(ctx, "could not check the upload rate limit", "error", err)
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+		return false
+	}
+	if !allowed {
+		httpx.Error(w, r, http.StatusTooManyRequests, codeGameUploadTooOften,
+			"Too many uploads have been started for this contest; wait before trying again")
+		return false
+	}
+	return true
+}
+
+// beginUpload reserves a new upload for this contest's game.
+//
+// 201, not 202: nothing has been built yet, not even accepted for building —
+// a row now exists that chunks may be appended to, which is what 201 says.
+func (h *GameHandler) beginUpload(w http.ResponseWriter, r *http.Request) {
+	contestID, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+	if !h.allowUploadBegin(w, r, contestID) {
+		return
+	}
+
+	var req beginUploadRequest
+	if err := httpx.DecodeJSON(w, r, &req); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+		return
+	}
+
+	upload, err := h.games.BeginUpload(r.Context(), contestID, req.Filename, req.DeclaredBytes)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusCreated, uploadView(upload))
+}
+
+// defaultMaxGameChunkBodyBytes is NewGameHandler's default for maxChunkBody,
+// which appendChunk uses in place of httpx.DecodeJSON's own maxBodyBytes.
+// This route never calls DecodeJSON: its body is one chunk's raw bytes, not
+// JSON, and a one-mebibyte cap sized for a request document would refuse an
+// ordinary chunk of a multi-gigabyte dump before its first byte reached
+// AppendChunk.
+//
+// This is not a gap in CLAUDE.md rule 12, it is rule 12 — the socket still
+// gets an explicit ceiling, http.MaxBytesReader, exactly where the bytes
+// arrive, just sized to a chunk instead of a JSON document. So the next
+// reader does not conclude the limit was simply forgotten: it is here, it is
+// large on purpose.
+//
+// The ceiling is deliberately generous rather than tied to the operator's
+// configured GAME_UPLOAD_CHUNK_BYTES: that number is provisioning.Games' own
+// to enforce, through AppendChunk → ErrUploadChunkTooLarge
+// (gamefile.Store.Append streams through a fixed buffer with no allocation
+// proportional to the chunk — its own doc). This constant exists only to
+// stop a body wildly larger than any chunk a real deployment would ever
+// configure from being read at all. When it trips mid-stream, appendChunk
+// reports it as the exact same refusal as ErrUploadChunkTooLarge — telling
+// the two ceilings apart would mean explaining both to whoever is uploading,
+// the same call settings_handler.go's uploadImage makes about its own two.
+const defaultMaxGameChunkBodyBytes = 64 << 20 // 64 MiB
+
+// chunkResponse answers one appendChunk call: how much of the upload the
+// server now holds, which is what a resuming browser needs to pick its next
+// offset — nothing else about the upload is worth a round trip on every one
+// of what may be several hundred chunks.
+type chunkResponse struct {
+	ReceivedBytes int64 `json:"received_bytes"`
+}
+
+// appendChunk writes one chunk of an upload already begun.
+//
+// The chunk is streamed straight through: r.Body, wrapped only in
+// http.MaxBytesReader, reaches Games.AppendChunk as an io.Reader and is never
+// read into a []byte or passed through io.ReadAll here. A three-gigabyte
+// upload sent one eight-mebibyte chunk at a time must not cost this process
+// a memory spike proportional to the chunk, let alone the whole file
+// (CLAUDE.md rule 12; gamefile.Store.Append's own doc explains the copy on
+// the other end of this same reader).
+func (h *GameHandler) appendChunk(w http.ResponseWriter, r *http.Request) {
+	contestID, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+	uploadID, ok := h.uploadID(w, r)
+	if !ok {
+		return
+	}
+	offset, ok := h.chunkOffset(w, r)
+	if !ok {
+		return
+	}
+
+	body := http.MaxBytesReader(w, r.Body, h.maxChunkBody)
+	received, err := h.games.AppendChunk(r.Context(), contestID, uploadID, offset, body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			// The transport's own ceiling tripped, not the domain's — see
+			// defaultMaxGameChunkBodyBytes's own doc for why this answers
+			// exactly as ErrUploadChunkTooLarge rather than a second code.
+			h.fail(w, r, provisioning.ErrUploadChunkTooLarge)
+			return
+		}
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, chunkResponse{ReceivedBytes: received})
+}
+
+// chunkOffset reads the byte offset a chunk continues from. Not decoded by
+// httpx.DecodeJSON alongside the chunk's bytes — the two are different kinds
+// of thing on the wire (one small integer, one up to h.maxChunkBody of raw
+// data) — so it travels as a query parameter instead, the same way
+// contest_people_handler.go's search terms and users_handler.go's paging do.
+func (h *GameHandler) chunkOffset(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	offset, err := strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
+	if err != nil || offset < 0 {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, "The chunk offset must be a non-negative integer")
+		return 0, false
+	}
+	return offset, true
+}
+
+// completeUpload seals an upload and replaces the contest's game with it.
+//
+// 202, like setScript: CompleteUpload's own doc calls this "the same path as
+// SetScript", one GameEditable check and one audit write rather than a
+// second parallel one, and the answer follows suit — the status comes back
+// pending and the interface watches it the same way.
+func (h *GameHandler) completeUpload(w http.ResponseWriter, r *http.Request) {
+	contestID, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+	uploadID, ok := h.uploadID(w, r)
+	if !ok {
+		return
+	}
+
+	identity, _ := auth.IdentityFrom(r.Context())
+	template, err := h.games.CompleteUpload(r.Context(), identity.UserID, contestID, uploadID)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusAccepted, gameResponse{
+		Status: string(template.Status), Version: template.Version,
+		Database: template.Database, ScriptBytes: len(template.Script),
+		Building: template.Building(), UpdatedAt: template.UpdatedAt,
+	})
+}
+
+// abortUpload cancels an organiser's own upload before it became anybody's
+// game. 200 with the row, not 204, the same reasoning dropInstance's own doc
+// gives: the answer is what the screen replaces its own row with.
+func (h *GameHandler) abortUpload(w http.ResponseWriter, r *http.Request) {
+	contestID, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+	uploadID, ok := h.uploadID(w, r)
+	if !ok {
+		return
+	}
+
+	identity, _ := auth.IdentityFrom(r.Context())
+	upload, err := h.games.AbortUpload(r.Context(), identity.UserID, contestID, uploadID)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, uploadView(upload))
+}
+
+// defaultUploadWindowLines, maxUploadWindowLines, defaultUploadWindowBytes
+// and maxUploadWindowBytes bound uploadWindow's two caller-supplied budgets.
+//
+// gamefile.Window's own doc calls maxBytes "the caller's own budget for this
+// call" and readWindowLines' own doc says what it costs: memory bounded by
+// maxBytes, held as a []string. Here the caller is whoever can reach this
+// HTTP endpoint, so CLAUDE.md rule 2 puts a ceiling on what an organiser's
+// own query parameters may ask for — max_bytes=999999999 must not become a
+// gigabyte read into this process's memory just because it fits in an int64.
+const (
+	defaultUploadWindowLines = 200
+	maxUploadWindowLines     = 1000
+	defaultUploadWindowBytes = 256 << 10 // 256 KiB
+	maxUploadWindowBytes     = 1 << 20   // 1 MiB
+)
+
+type uploadWindowResponse struct {
+	FromLine   int      `json:"from_line"`
+	Lines      []string `json:"lines"`
+	TotalLines int64    `json:"total_lines"`
+	// Truncated says the byte budget stopped the window before maxLines was
+	// reached, possibly mid-line (gamefile.Window's own doc).
+	Truncated bool `json:"truncated"`
+}
+
+// uploadWindow serves a slice of a completed upload's lines — the console's
+// own preview of a script it will not run yet, the same role script() plays
+// for one written directly in the editor.
+//
+// A window past the end of the file is an empty one, not an error: paging
+// past the last page is a normal outcome, and UploadWindow (gamefile.Window's
+// own doc) already treats it as such — this handler adds nothing on top, it
+// only clamps the two budgets before either reaches the service.
+func (h *GameHandler) uploadWindow(w http.ResponseWriter, r *http.Request) {
+	contestID, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+	uploadID, ok := h.uploadID(w, r)
+	if !ok {
+		return
+	}
+
+	fromLine := intQueryParam(r, "from", 1)
+	maxLines := clampedIntQueryParam(r, "max_lines", defaultUploadWindowLines, maxUploadWindowLines)
+	maxBytes := clampedInt64QueryParam(r, "max_bytes", defaultUploadWindowBytes, maxUploadWindowBytes)
+
+	window, err := h.games.UploadWindow(r.Context(), contestID, uploadID, fromLine, maxLines, maxBytes)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	// A non-nil slice, so a window past the end of the file (or one asked for
+	// zero lines) serialises as [] rather than null and the interface has one
+	// shape to render — the same reasoning instances gives above for an empty
+	// pool.
+	lines := window.Lines
+	if lines == nil {
+		lines = []string{}
+	}
+	httpx.JSON(w, r, http.StatusOK, uploadWindowResponse{
+		FromLine: window.FromLine, Lines: lines,
+		TotalLines: window.TotalLines, Truncated: window.Truncated,
+	})
+}
+
+// intQueryParam reads name as a non-negative int, or def when it is absent or
+// cannot be parsed. Malformed input reading as the default rather than a 400
+// is deliberate: this backs a preview window, not a write, so the honest
+// answer to "I could not make sense of that" is the same page an omitted
+// parameter gets, not a refusal.
+func intQueryParam(r *http.Request, name string, def int) int {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
+}
+
+// clampedIntQueryParam is intQueryParam with an upper bound applied after —
+// see defaultUploadWindowLines's own doc for why one is needed at all.
+func clampedIntQueryParam(r *http.Request, name string, def, max int) int {
+	n := intQueryParam(r, name, def)
+	if n > max {
+		return max
+	}
+	return n
+}
+
+// clampedInt64QueryParam is clampedIntQueryParam for the one budget large
+// enough to need 64 bits: max_bytes.
+func clampedInt64QueryParam(r *http.Request, name string, def, max int64) int64 {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 0 {
+		return def
+	}
+	if n > max {
+		return max
+	}
+	return n
+}
+
 // fail names every refusal, so the interface can say which one happened
 // rather than "internal error" (CLAUDE.md rule 1).
 func (h *GameHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
@@ -328,6 +829,43 @@ func (h *GameHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, provisioning.ErrInstanceAlreadyDropped):
 		httpx.Error(w, r, http.StatusConflict, codeGameInstanceAlreadyDropped,
 			"That database has already been removed")
+
+	// --- The uploaded dump (provisioning/upload.go's own eleven sentinels) --
+
+	case errors.Is(err, provisioning.ErrUploadsDisabled):
+		httpx.Error(w, r, http.StatusNotFound, codeGameUploadsDisabled,
+			"File uploads are not enabled on this installation")
+	case errors.Is(err, provisioning.ErrUploadFilenameInvalid):
+		httpx.Error(w, r, http.StatusBadRequest, codeGameUploadFilenameInvalid,
+			"The upload's filename is missing or too long")
+	case errors.Is(err, provisioning.ErrUploadTooLarge):
+		httpx.Error(w, r, http.StatusBadRequest, codeGameUploadTooLarge,
+			"The upload exceeds the maximum file size this installation accepts")
+	case errors.Is(err, provisioning.ErrUploadStoreFull):
+		httpx.Error(w, r, http.StatusConflict, codeGameUploadStoreFull,
+			"The upload directory is full; try again once other uploads have finished or been removed")
+	case errors.Is(err, provisioning.ErrUploadChunkOutOfOrder):
+		httpx.Error(w, r, http.StatusConflict, codeGameUploadChunkOutOfOrder,
+			"This chunk does not continue where the upload left off")
+	case errors.Is(err, provisioning.ErrUploadChunkTooLarge):
+		httpx.Error(w, r, http.StatusBadRequest, codeGameUploadChunkTooLarge,
+			"The chunk exceeds the maximum chunk size this installation accepts")
+	case errors.Is(err, provisioning.ErrUploadLengthMismatch):
+		httpx.Error(w, r, http.StatusConflict, codeGameUploadLengthMismatch,
+			"The bytes received do not match the length declared when the upload began")
+	case errors.Is(err, provisioning.ErrUploadNotFound):
+		httpx.Error(w, r, http.StatusNotFound, codeGameUploadNotFound,
+			"This contest has no upload by that identifier")
+	case errors.Is(err, provisioning.ErrUploadInProgress):
+		httpx.Error(w, r, http.StatusConflict, codeGameUploadInProgress,
+			"This contest already has an upload in progress")
+	case errors.Is(err, provisioning.ErrUploadAlreadyComplete):
+		httpx.Error(w, r, http.StatusConflict, codeGameUploadAlreadyComplete,
+			"This upload has already been completed or cancelled")
+	case errors.Is(err, provisioning.ErrUploadIncomplete):
+		httpx.Error(w, r, http.StatusConflict, codeGameUploadIncomplete,
+			"This upload has not been completed yet")
+
 	default:
 		h.log.ErrorContext(r.Context(), "a game request failed", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
