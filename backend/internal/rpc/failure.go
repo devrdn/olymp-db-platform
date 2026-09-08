@@ -43,6 +43,15 @@ func failureFor(err error) *pb.Failure {
 			Code:    ptr(string(refusal.Code)),
 			Subject: ptr(refusal.Subject),
 			Message: ptr(err.Error()),
+			// The character the parser objected to. It travels because the
+			// checker runs on this side of the wire and the console that
+			// underlines it is on the other, which made a field the console
+			// already reads permanently zero (CLAUDE.md rule 11).
+			//
+			// int32 to match the field; a position is an offset into a
+			// statement bounded by sqlpolicy.MaxQueryBytes, so there is
+			// nothing here to overflow.
+			Position: ptr(int32(refusal.Position)),
 		}
 	case errors.Is(err, queryrunner.ErrAlreadyRunning):
 		return &pb.Failure{Kind: pb.Failure_KIND_ALREADY_RUNNING.Enum(), Message: ptr(err.Error())}
@@ -113,6 +122,11 @@ func errorFor(failure *pb.Failure) error {
 		return &sqlpolicy.Refusal{
 			Code:    sqlpolicy.Code(failure.GetCode()),
 			Subject: failure.GetSubject(),
+			// A 1-based character offset, carried through as it is. The
+			// handler above (api.ConsoleHandler.fail) omits the key entirely
+			// when it is zero, which is how a client tells "no position" from
+			// "the very first character" — so nothing here has to invent one.
+			Position: int(failure.GetPosition()),
 		}
 	case pb.Failure_KIND_ALREADY_RUNNING:
 		return queryrunner.ErrAlreadyRunning

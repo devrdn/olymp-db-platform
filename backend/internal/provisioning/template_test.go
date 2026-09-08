@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
@@ -25,8 +26,18 @@ type templateStore struct {
 	// templateErr, when set, is what Template returns instead of a row — a
 	// storage failure rather than a contest that simply has no game.
 	templateErr error
-	finished    []finish
+	// policyErr, when set, is what Policy returns: the core database refusing
+	// the read the build makes before it touches the cluster.
+	policyErr error
+	finished  []finish
 }
+
+// directly is the unit of work for a test that wants the audit trail wired up
+// without a transaction behind it. Build records outside any transaction
+// anyway (its own doc says why), so this only satisfies the constructor.
+type directly struct{}
+
+func (directly) Do(ctx context.Context, fn func(context.Context) error) error { return fn(ctx) }
 
 type finish struct {
 	version int
@@ -82,6 +93,9 @@ func (s *templateStore) FinishBuild(_ context.Context, _ uuid.UUID, version int,
 func (s *templateStore) Policy(context.Context, uuid.UUID) (sqlpolicy.Policy, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.policyErr != nil {
+		return sqlpolicy.Policy{}, s.policyErr
+	}
 	return s.policy, nil
 }
 
@@ -223,12 +237,38 @@ func TestBuildingRunsTheScriptAndRecordsTheOutcome(t *testing.T) {
 	}
 }
 
+// scriptRefusal stands for gamedb.ScriptError: PostgreSQL's verdict on a
+// statement the organiser wrote, which is the one build failure whose words
+// are theirs to read. A bare errors.New here would be a test of the *other*
+// branch wearing this one's name — the mistake internal/rpc's own table of
+// failures records under "a database error".
+type scriptRefusal struct{ says string }
+
+func (s scriptRefusal) Error() string           { return s.says }
+func (s scriptRefusal) ScriptRejection() string { return s.says }
+
+// connectFailure is the shape the game cluster really produces when a build
+// cannot reach it: gamedb.Provisioner.connect's own wrapper around pgx's
+// *pgconn.ConnectError, which prints the role it authenticated as, every
+// address it dialled and the database it asked for. Written out as a literal
+// rather than constructed, because what this file has to pin is the text —
+// these are the substrings that must not survive into a response body or an
+// audit payload.
+const connectFailureText = "connect to game_tpl_cabc123 as game_author: " +
+	"failed to connect to `user=game_author database=game_tpl_cabc123`: " +
+	`[::1]:5433 (pg-game): failed SASL auth: FATAL: password authentication ` +
+	`failed for user "game_author" (SQLSTATE 28P01)`
+
+// leaked names the pieces of connectFailureText that describe this
+// installation rather than anybody's SQL.
+var leaked = []string{"game_author", "5433", "pg-game", "28P01", "SASL"}
+
 // The organiser is the person who has to fix the script, and "the build
 // failed" tells them nothing they can act on.
 func TestAFailedBuildKeepsThePostgresErrorForWhoeverWroteTheScript(t *testing.T) {
 	t.Parallel()
 	service, store, cluster := games(true)
-	cluster.fail = errors.New(`run the game script: ERROR: type "nosuchtype" does not exist`)
+	cluster.fail = scriptRefusal{says: `the game script was refused: type "nosuchtype" does not exist (SQLSTATE 42704)`}
 	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE oops (x nosuchtype);`); err != nil {
 		t.Fatalf("setting the script: %v", err)
 	}
@@ -242,6 +282,100 @@ func TestAFailedBuildKeepsThePostgresErrorForWhoeverWroteTheScript(t *testing.T)
 	}
 	if !strings.Contains(store.finished[0].err, "nosuchtype") {
 		t.Fatalf("recorded %q — PostgreSQL's own words are the useful ones", store.finished[0].err)
+	}
+	if built.BuildError != store.finished[0].err {
+		t.Fatalf("served %q and recorded %q; the organiser reads both", built.BuildError, store.finished[0].err)
+	}
+}
+
+// The other half of the same rule, and the one the review found open: a build
+// that failed for a reason of ours must not describe our cluster to a contest
+// manager, nor leave that description in a trail nobody can edit.
+//
+// Asserted on the two sinks and not on a log line: GameHandler.status serves
+// Template.BuildError verbatim behind contest.view, and the contest.game_built
+// payload is append-only.
+func TestABuildThatFailedForOurOwnReasonsDescribesNoneOfOurInfrastructure(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := games(true)
+	trail := &sink{}
+	service = service.WithAudit(audit.New(trail), directly{})
+	cluster.fail = errors.New(connectFailureText)
+	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE fine (x int);`); err != nil {
+		t.Fatalf("setting the script: %v", err)
+	}
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err == nil {
+		t.Fatal("a build the cluster refused was reported as a clean tick; the log is the only place the cause survives now")
+	}
+	if !strings.Contains(err.Error(), "pg-game") {
+		t.Fatalf("the cause returned for the log was %v; it has to keep what the organiser no longer gets", err)
+	}
+	if built.Status != provisioning.TemplateFailed {
+		t.Fatalf("finished as %q, want failed", built.Status)
+	}
+
+	// What the row says — which is what GET /contests/{id}/game serves.
+	if store.finished[0].err != provisioning.BuildFailedInternally {
+		t.Fatalf("recorded %q, want the fixed sentence", store.finished[0].err)
+	}
+	if built.BuildError != provisioning.BuildFailedInternally {
+		t.Fatalf("served %q, want the fixed sentence", built.BuildError)
+	}
+
+	// What the trail keeps. Saving the script recorded an entry of its own, so
+	// the build's is picked out by its action rather than by its position.
+	var built0 *audit.Entry
+	for i, entry := range trail.entries {
+		if entry.Action == audit.ActionGameBuilt {
+			built0 = &trail.entries[i]
+		}
+	}
+	if built0 == nil {
+		t.Fatalf("recorded %+v, with no contest.game_built entry among them", trail.entries)
+	}
+	recorded, _ := built0.Payload["error"].(string)
+	if recorded != provisioning.BuildFailedInternally {
+		t.Fatalf("the audit payload says %q, want the fixed sentence", recorded)
+	}
+
+	for _, secret := range leaked {
+		for label, text := range map[string]string{
+			"the stored build error": store.finished[0].err,
+			"the served build error": built.BuildError,
+			"the audit payload":      recorded,
+		} {
+			if strings.Contains(text, secret) {
+				t.Fatalf("%s names %q: %q", label, secret, text)
+			}
+		}
+	}
+}
+
+// The same rule for the *core* database's own failure, which reached the same
+// column by a different line: the policy read happens before the cluster is
+// touched at all, and its error text is a connection string of ours.
+func TestAPolicyThatCouldNotBeReadIsNotDescribedToTheOrganiserEither(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := games(true)
+	store.policyErr = errors.New(
+		`read the contest's SQL policy: failed to connect to ` +
+			"`user=dbcontest database=dbcontest_core`: [::1]:5432: server closed the connection")
+	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `SELECT 1`); err != nil {
+		t.Fatalf("setting the script: %v", err)
+	}
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err == nil {
+		t.Fatal("a core-database failure was reported as a clean tick")
+	}
+	if built.BuildError != provisioning.BuildFailedInternally ||
+		store.finished[0].err != provisioning.BuildFailedInternally {
+		t.Fatalf("served %q and recorded %q, want the fixed sentence", built.BuildError, store.finished[0].err)
+	}
+	if len(cluster.names) != 0 {
+		t.Fatal("built a template with no policy to grant")
 	}
 }
 

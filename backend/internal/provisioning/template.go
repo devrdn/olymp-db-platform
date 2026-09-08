@@ -32,6 +32,42 @@ var (
 	ErrBuildInProgress = errors.New("the game is already being built")
 )
 
+// ScriptFailure is the one build failure whose words belong to the organiser:
+// PostgreSQL's verdict on a statement in their own script.
+//
+// Declared here, by the consumer that needs the distinction (Go layout rule
+// 3), so that this package — which decides what an organiser is told — keeps
+// knowing nothing about the cluster or the driver that produced the error.
+// gamedb.ScriptError satisfies it, and is produced at the one place an
+// organiser's SQL is executed.
+//
+// The distinction cannot be made here by inspecting the error, which is why it
+// is an interface a producer opts into rather than a type switch: pgx nests a
+// *pgconn.PgError inside the *pgconn.ConnectError it returns for a refused
+// login, so "does this contain a database error?" answers yes for a connection
+// that never opened, and the answer names the role, the host and the port
+// (internal/rpc.classify, which had to be rewritten around exactly that).
+type ScriptFailure interface {
+	error
+	// ScriptRejection is the text that may be served to whoever wrote the
+	// script and kept in the audit trail.
+	ScriptRejection() string
+}
+
+// BuildFailedInternally is what a failed build tells an organiser when the
+// failure was not their script.
+//
+// A fixed sentence, never the error's own text. Everything on that side of the
+// line — a cluster that would not take a connection, a CREATE DATABASE that
+// was refused, the grants applied after the script — names the provisioning
+// role, the cluster's host and port, or the internal database; and this string
+// has two sinks that make it permanent: GET /contests/{id}/game serves it to
+// anybody holding contest.view, and Build below writes it into the
+// contest.game_built audit payload, which is append-only. The real error is
+// returned to the caller instead, for the service log, where an operator can
+// have it and a manager cannot.
+const BuildFailedInternally = "The game could not be built. The failure was not in the script — ask an administrator to check the service log."
+
 // MaxScriptBytes bounds the SQL one game may carry (CLAUDE.md rule 2).
 //
 // The column is an unbounded `text`, and the request body limit bounds the
@@ -255,27 +291,45 @@ func (g *Games) Build(ctx context.Context, stale time.Duration) (Template, error
 		return Template{}, err
 	}
 
+	// Two variables and not one, because a failed build has two audiences that
+	// must not be given the same string. buildErr is what the organiser reads
+	// and what the trail keeps for good; cause is the whole truth, returned to
+	// the caller for the service log (internal/app.buildGames) and written
+	// nowhere a manager can read it.
+	var (
+		buildErr string
+		cause    error
+	)
+
 	// The privileges the build grants inside the template are the contest's
 	// own SQL policy, read now rather than carried on the claim: it is a
 	// different table with a different editor, and the build has to grant
 	// what it says at the moment it runs.
-	buildErr := ""
 	policy, err := g.repo.Policy(ctx, claimed.ContestID)
 	if err != nil {
-		buildErr = fmt.Sprintf("read the contest's SQL policy: %v", err)
+		// A failure of the *core* database, not of the game cluster and not of
+		// the script. Its text is a connection string of ours either way.
+		cause = fmt.Errorf("read the contest's SQL policy: %w", err)
+		buildErr = BuildFailedInternally
 	}
 
 	if buildErr == "" {
 		if err := g.cluster.BuildTemplate(ctx, claimed.Database, claimed.Script, policy); err != nil {
-			// PostgreSQL's own words, kept: whoever wrote the script is the
-			// person who has to fix it, and "the build failed" tells them
-			// nothing they can act on.
-			buildErr = err.Error()
+			var refused ScriptFailure
+			if errors.As(err, &refused) {
+				// PostgreSQL's own words about their SQL, kept: whoever wrote
+				// the script is the person who has to fix it, and "the build
+				// failed" tells them nothing they can act on.
+				buildErr = refused.ScriptRejection()
+			} else {
+				cause = fmt.Errorf("build the game template: %w", err)
+				buildErr = BuildFailedInternally
+			}
 		}
 	}
 
 	if err := g.repo.FinishBuild(ctx, claimed.ContestID, claimed.Version, buildErr); err != nil {
-		return claimed, fmt.Errorf("record the build's outcome: %w", err)
+		return claimed, errors.Join(cause, fmt.Errorf("record the build's outcome: %w", err))
 	}
 
 	// A system event: nobody is at the keyboard when a build finishes, which
@@ -285,13 +339,17 @@ func (g *Games) Build(ctx context.Context, stale time.Duration) (Template, error
 	if g.audit != nil {
 		payload := map[string]any{"version": claimed.Version, "database": claimed.Database, "ok": buildErr == ""}
 		if buildErr != "" {
+			// The organiser's text and not the cause. audit_log is append-only
+			// and read by every manager of the contest, so a connect string
+			// written here is a connect string kept for as long as the
+			// installation exists — see BuildFailedInternally.
 			payload["error"] = buildErr
 		}
 		if err := g.audit.Record(ctx, audit.Entry{
 			Action: audit.ActionGameBuilt, Entity: "contest",
 			EntityID: claimed.ContestID.String(), Payload: payload,
 		}); err != nil {
-			return claimed, fmt.Errorf("record the build in the audit trail: %w", err)
+			return claimed, errors.Join(cause, fmt.Errorf("record the build in the audit trail: %w", err))
 		}
 	}
 
@@ -300,7 +358,12 @@ func (g *Games) Build(ctx context.Context, stale time.Duration) (Template, error
 	if buildErr != "" {
 		claimed.Status = TemplateFailed
 	}
-	return claimed, nil
+	// cause is nil for a build that worked and for one the script itself broke
+	// — the second is an answer, not a fault of this service, and a tick that
+	// reported it as a job failure would page an operator about somebody's
+	// typo. It is non-nil only where buildErr is BuildFailedInternally, which
+	// is the case where the log is the only place the detail survives.
+	return claimed, cause
 }
 
 // templateName is the database every participant's copy of one contest is

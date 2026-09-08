@@ -366,7 +366,7 @@ func TestExportHistoryCarriesEveryStatementWhole(t *testing.T) {
 		completeRow(t, ctx, log, registration, long, queryrunner.StatusOK, 1, 1)
 
 		var found []queryrunner.HistoryEntry
-		if err := log.ExportHistory(ctx, registration, func(entry queryrunner.HistoryEntry) error {
+		if _, err := log.ExportHistory(ctx, registration, func(entry queryrunner.HistoryEntry) error {
 			found = append(found, entry)
 			return nil
 		}); err != nil {
@@ -476,7 +476,7 @@ func TestExportHistoryStreamsOnlyThisRegistrationsOwnRows(t *testing.T) {
 		completeRow(t, ctx, log, someoneElses, "SELECT * FROM secrets", queryrunner.StatusOK, 1, 10)
 
 		var seen []string
-		if err := log.ExportHistory(ctx, mine, func(entry queryrunner.HistoryEntry) error {
+		if _, err := log.ExportHistory(ctx, mine, func(entry queryrunner.HistoryEntry) error {
 			seen = append(seen, entry.SQL)
 			return nil
 		}); err != nil {
@@ -508,7 +508,7 @@ func TestExportHistoryStreamsTheWholeLogOldestFirst(t *testing.T) {
 		}
 
 		var seen []string
-		if err := log.ExportHistory(ctx, registration, func(entry queryrunner.HistoryEntry) error {
+		if _, err := log.ExportHistory(ctx, registration, func(entry queryrunner.HistoryEntry) error {
 			seen = append(seen, entry.SQL)
 			return nil
 		}); err != nil {
@@ -532,7 +532,7 @@ func TestExportHistoryStopsWhenTheCallerCannotTakeAnotherRow(t *testing.T) {
 
 		broken := errors.New("the client hung up")
 		seen := 0
-		err := log.ExportHistory(ctx, registration, func(queryrunner.HistoryEntry) error {
+		_, err := log.ExportHistory(ctx, registration, func(queryrunner.HistoryEntry) error {
 			seen++
 			return broken
 		})
@@ -610,7 +610,7 @@ func TestExportHistoryStreamsTheWholeLogWithNoTransactionAroundIt(t *testing.T) 
 	}
 
 	var seen []string
-	if err := log.ExportHistory(ctx, registration, func(entry queryrunner.HistoryEntry) error {
+	if _, err := log.ExportHistory(ctx, registration, func(entry queryrunner.HistoryEntry) error {
 		seen = append(seen, entry.SQL)
 		return nil
 	}); err != nil {
@@ -625,4 +625,107 @@ func TestExportHistoryStreamsTheWholeLogWithNoTransactionAroundIt(t *testing.T) 
 			t.Fatalf("row %d is %q, want %q: the batches did not come back oldest first", i, seen[i], sql)
 		}
 	}
+}
+
+// bulkRows writes count rows for one registration in a single statement, each
+// carrying `bytes` characters of SQL and a distinct executed_at so the
+// export's own ordering is well defined.
+//
+// One INSERT rather than count calls to Begin: the bounds below are only
+// interesting at tens of thousands of rows, and twenty thousand round trips
+// would make the test the slowest thing in the package.
+func bulkRows(t *testing.T, ctx context.Context, registration uuid.UUID, count, bytes int) {
+	t.Helper()
+
+	if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx, `
+		INSERT INTO query_log (registration_id, request_id, sql_text, status, executed_at)
+		SELECT $1, gen_random_uuid(), repeat('x', $3), 'ok', now() + (g * interval '1 millisecond')
+		FROM generate_series(1, $2) AS g`,
+		registration, count, bytes); err != nil {
+		t.Fatalf("writing %d rows: %v", count, err)
+	}
+}
+
+// The export streams, which was taken to mean it needed no bound; those are
+// different things (CLAUDE.md rule 2). The rows past the bound are never read
+// at all — the LIMIT is inside the cursor's own SELECT — and the caller is
+// told, so the file can say where it stopped.
+func TestExportHistoryStopsAtTheRowBoundAndSaysSo(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+		bulkRows(t, ctx, registration, queryrunner.MaxExportRows+10, 8)
+
+		streamed := 0
+		truncated, err := log.ExportHistory(ctx, registration, func(queryrunner.HistoryEntry) error {
+			streamed++
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("ExportHistory: %v", err)
+		}
+		if streamed != queryrunner.MaxExportRows {
+			t.Fatalf("streamed %d rows, want the bound of %d", streamed, queryrunner.MaxExportRows)
+		}
+		if !truncated {
+			t.Fatal("a log longer than one download may carry was reported as complete")
+		}
+	})
+}
+
+// And a log of exactly the bound is complete, not truncated. The cursor asks
+// for one row more than it will hand over precisely so this case is answered
+// honestly rather than by whichever way the comparison happened to fall.
+func TestExportHistoryOfExactlyTheRowBoundIsNotTruncated(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+		bulkRows(t, ctx, registration, queryrunner.MaxExportRows, 8)
+
+		streamed := 0
+		truncated, err := log.ExportHistory(ctx, registration, func(queryrunner.HistoryEntry) error {
+			streamed++
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("ExportHistory: %v", err)
+		}
+		if streamed != queryrunner.MaxExportRows || truncated {
+			t.Fatalf("streamed %d rows, truncated=%v; a log of exactly the bound is whole", streamed, truncated)
+		}
+	})
+}
+
+// The row count alone is half a bound: sqlpolicy.MaxQueryBytes lets one
+// statement be 64 KiB, so twenty thousand rows is more than a gigabyte down
+// one connection. The byte budget is what makes the row count mean something,
+// and it binds first when the statements are large.
+func TestExportHistoryStopsAtTheByteBoundBeforeTheRowBound(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+
+		const each = 1 << 20
+		rows := queryrunner.MaxExportBytes/each + 1
+		bulkRows(t, ctx, registration, rows, each)
+
+		streamed, carried := 0, 0
+		truncated, err := log.ExportHistory(ctx, registration, func(entry queryrunner.HistoryEntry) error {
+			streamed++
+			carried += len(entry.SQL)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("ExportHistory: %v", err)
+		}
+		if !truncated {
+			t.Fatal("a log past the byte budget was reported as complete")
+		}
+		if streamed >= rows {
+			t.Fatalf("streamed all %d rows; the byte budget never bound", streamed)
+		}
+		if carried > queryrunner.MaxExportBytes {
+			t.Fatalf("carried %d bytes of SQL, over the budget of %d", carried, queryrunner.MaxExportBytes)
+		}
+	})
 }

@@ -8,6 +8,7 @@ import (
 	"net"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
@@ -436,5 +437,61 @@ func TestAConnectionTheRunnerCouldNotOpenArrivesAsOursNotTheDatabases(t *testing
 	var database *queryrunner.DatabaseError
 	if errors.As(err, &database) {
 		t.Fatalf("a connection the runner never opened arrived as the database's own words: %v", database)
+	}
+}
+
+// The console underlines the character PostgreSQL objected to, and that
+// character is decided inside the Query Runner — the checker runs there,
+// because it links PostgreSQL's parser through cgo. Without a field on the
+// contract the number is produced on one side of the wire and read on the
+// other, so it is zero in every arrangement a deployment actually uses: the
+// console only exists when QUERY_RUNNER_ADDR is set (CLAUDE.md rule 11).
+//
+// Cyrillic on purpose. The offset is a 1-based *character* count, and in UTF-8
+// these are two bytes each — so a byte offset and a character offset differ by
+// a factor of two here, and a wire that quietly carried the wrong one would
+// still look right in every ASCII test.
+func TestAParseErrorsPositionSurvivesTheWireForACyrillicQuery(t *testing.T) {
+	local := checker.NewChecker()
+	client, database := serving(t, queryrunner.DefaultLimits(), local)
+
+	// A comment in Cyrillic, then a statement the parser cannot finish. The
+	// text before the mistake is all multi-byte, so any byte/character
+	// confusion shows up as a position roughly twice what it should be.
+	const sql = "-- отчёт по гостям\nSELECT FROM"
+
+	// What the checker itself says, asked here rather than hard-coded: the
+	// claim is that the wire carries *the checker's own* number, not that
+	// somebody counted the characters correctly in a test.
+	direct := local.Check(sql, sqlpolicy.ReadOnly())
+	var expected *sqlpolicy.Refusal
+	if !errors.As(direct, &expected) || expected.Code != sqlpolicy.CodeParseError {
+		t.Fatalf("the checker answered %v, want a parse error to carry a position", direct)
+	}
+	if expected.Position <= 0 {
+		t.Fatalf("the checker located the error at %d; there is nothing to carry", expected.Position)
+	}
+	// And it really is a character offset into a string whose bytes outnumber
+	// its characters, or this test proves nothing about the distinction. The
+	// ceiling is one past the last character, which is where PostgreSQL points
+	// at a statement that ended too early; a byte offset into this query would
+	// be half as far again.
+	characters := utf8.RuneCountInString(sql)
+	if len(sql) <= characters+1 {
+		t.Fatal("the query has too little Cyrillic in it; a byte offset and a character offset would be indistinguishable")
+	}
+	if expected.Position > characters+1 {
+		t.Fatalf("position %d is past the %d characters of the query — that is a byte offset",
+			expected.Position, characters)
+	}
+
+	_, err := client.Run(t.Context(), ask(database, sql))
+
+	var refusal *sqlpolicy.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("error = %v, want a refusal", err)
+	}
+	if refusal.Position != expected.Position {
+		t.Fatalf("the position arrived as %d, want the checker's own %d", refusal.Position, expected.Position)
 	}
 }

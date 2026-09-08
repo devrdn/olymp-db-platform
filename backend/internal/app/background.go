@@ -162,9 +162,17 @@ func advanceContestSchedule(log *slog.Logger, advance func(context.Context) (int
 // nothing depends on it. Every ten minutes rather than every minute — a pool
 // drains at the speed people register, which is not a per-minute event, and
 // each tick may create databases.
-// tendPools keeps every live contest's pool as deep as its own roster asks
-// for — see provisioning.Service.RosterDepth, and the flat depth it replaces.
-func tendPools(log *slog.Logger, service *provisioning.Service, headroom, max int) task {
+//
+// How deep is its own roster's answer rather than a flat number — see
+// provisioning.Service.RosterDepth, and the two bounds it is cut back to.
+//
+// It is also where a pool that was refused the depth it asked for becomes
+// something an operator can read. The domain decides the refusal and hands it
+// back (provisioning.Constrained); this is the half that owns the logger, and
+// the line carries the measurements rather than only the outcome — "the pool
+// stopped growing" is a support ticket, and the numbers beside it are the
+// answer to it.
+func tendPools(log *slog.Logger, service *provisioning.Service, limits provisioning.PoolLimits) task {
 	return task{
 		name: "game-pool",
 		// The job this was added for. Ten minutes is a long time to be idle
@@ -178,7 +186,18 @@ func tendPools(log *slog.Logger, service *provisioning.Service, headroom, max in
 		atStart: true,
 		every:   10 * time.Minute,
 		run: func(ctx context.Context) error {
-			made, dropped, err := service.Tend(ctx, service.RosterDepth(headroom, max))
+			depth := service.RosterDepth(limits, func(ctx context.Context, contest provisioning.Contest, sizing provisioning.Sizing) {
+				// Warning and not info: a pool short of its roster means
+				// participants waiting for CREATE DATABASE inside their own
+				// page load, and for the disk bound it means the cluster is
+				// nearly full — neither is routine.
+				log.WarnContext(ctx, "a game pool was not allowed the depth its roster asked for",
+					"contest", contest.ID, "bound", string(sizing.Bound),
+					"granted", sizing.Depth, "wanted", sizing.Wanted,
+					"template_bytes", sizing.TemplateBytes,
+					"cluster_bytes", sizing.ClusterBytes, "budget_bytes", sizing.Budget)
+			})
+			made, dropped, err := service.Tend(ctx, depth)
 			if made > 0 || dropped > 0 {
 				log.InfoContext(ctx, "tended the game pools", "created", made, "dropped", dropped)
 			}
@@ -330,15 +349,21 @@ func buildGames(log *slog.Logger, games *provisioning.Games) task {
 				// Nothing waiting, which is what almost every tick finds.
 				return nil
 			}
+			if built.Status == provisioning.TemplateFailed {
+				// The organiser sees this on their own screen; the line is
+				// here so an operator reading the log knows why a contest
+				// cannot be published. `error` is the text the organiser was
+				// given, which for a failure that was not their script is
+				// only provisioning.BuildFailedInternally — the untouched
+				// cause comes back as err just below, and the log is now the
+				// one place it exists.
+				log.WarnContext(ctx, "a game failed to build",
+					"contest", built.ContestID, "version", built.Version, "error", built.BuildError)
+			}
 			if err != nil {
 				return err
 			}
 			if built.Status == provisioning.TemplateFailed {
-				// The organiser sees this on their own screen; the line is
-				// here so an operator reading the log knows why a contest
-				// cannot be published.
-				log.WarnContext(ctx, "a game failed to build",
-					"contest", built.ContestID, "version", built.Version, "error", built.BuildError)
 				return nil
 			}
 			log.InfoContext(ctx, "built a game",

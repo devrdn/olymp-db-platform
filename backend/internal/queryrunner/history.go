@@ -65,6 +65,35 @@ const (
 // something they wrote (see postgres.QueryLog.ExportHistory).
 const MaxHistorySQLChars = 1000
 
+// MaxExportRows and MaxExportBytes bound one CSV download of a participant's
+// own log — the read that is not paged, because a file is the whole record.
+//
+// "Not paged" was taken to mean "not bounded", and those are different things
+// (CLAUDE.md rule 2). The export streams every row of a column that
+// sqlpolicy.MaxQueryBytes lets reach 64 KiB, inside a transaction holding one
+// of the core pool's ten connections for as long as the client chooses to
+// read — the same core database every other participant's sign-in, submission
+// and timer depends on. Unbounded, one participant's log is the size of one
+// participant's patience.
+//
+// Both numbers are safety nets rather than budgets anybody spends. The
+// installation's default rate is 30 queries a minute (QUERY_PER_MINUTE), so
+// MaxExportRows is over eleven hours of asking without pause, against
+// olympiads measured in hours; and MaxExportBytes is what makes that row count
+// mean something, since a bound on rows with none on bytes is the same half a
+// bound MaxHistorySQLChars was written for — at 64 KiB a statement, 20,000
+// rows is 1.2 GiB. A real statement is a few hundred bytes, which puts a
+// full-rate three-hour log around a megabyte and both bounds out of reach of
+// anything a contest can produce.
+//
+// What a participant loses when one does bind: the file carries the oldest
+// rows up to the bound and says so in a final line, rather than stopping
+// silently. The newest rows are the ones the panel beside it shows.
+const (
+	MaxExportRows  = 20_000
+	MaxExportBytes = 32 << 20
+)
+
 // NormalizeHistoryPage clamps a requested page to what History implementations
 // actually honour, mirroring audit.Filter.Normalize — the existing pattern for
 // a paged, append-mostly journal a caller pages through newest-first.

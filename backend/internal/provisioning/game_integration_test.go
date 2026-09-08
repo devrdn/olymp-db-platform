@@ -3,6 +3,7 @@ package provisioning_test
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,6 +101,73 @@ func TestAScriptSavedInTheCoreDatabaseBecomesARealDatabaseOnTheGameCluster(t *te
 	}
 	if len(schema.Tables) != 2 || !sawForeignKey {
 		t.Fatalf("the schema of the built game came back as %+v", schema.Tables)
+	}
+}
+
+// The same chain, for the script that does not build — the path the review
+// found leaking, and the only arrangement where the leak is real: the error
+// has to be produced by a real pgx connection to a real cluster before there
+// is anything to leak.
+//
+// Named to share the prefix above so `make test-game-build` runs it: that
+// target selects by -run TestAScriptSavedInTheCoreDatabase, and a test of this
+// chain that no target runs is the state BuildTemplate was in for months.
+func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesTellsTheOrganiserWhatItSaidAndNothingElse(t *testing.T) {
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
+	}
+	if os.Getenv("GAME_DB_DSN") == "" {
+		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
+	}
+
+	contest, _ := contestFor(t, t.Context(), 0)
+	repo := postgres.NewGameInstances(testPool)
+
+	user, password := gamedbtest.AdminCredentials(t)
+	// The author credential is wrong on purpose. This is the failure that used
+	// to reach GET /contests/{id}/game verbatim: pgx answers a refused login
+	// with a *pgconn.ConnectError naming the role, every address it dialled
+	// and the database it asked for — with PostgreSQL's own 28P01 nested
+	// inside it, which is what defeats a type test at the far end.
+	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
+		"not-the-author-password")
+	if err != nil {
+		t.Fatalf("open the game cluster: %v", err)
+	}
+
+	games := provisioning.NewGames(repo, cluster, editableContest{})
+	saved, err := games.SetScript(t.Context(), uuid.New(), contest.ID, `CREATE TABLE guests (id int);`)
+	if err != nil {
+		t.Fatalf("save the script: %v", err)
+	}
+	t.Cleanup(func() { gamedbtest.Drop(saved.Database) })
+
+	built, buildErr := games.Build(t.Context(), time.Minute)
+	if buildErr == nil {
+		t.Fatal("a cluster that refused the author's login was reported as a clean tick")
+	}
+	if built.Status != provisioning.TemplateFailed {
+		t.Fatalf("the build finished as %q, want failed", built.Status)
+	}
+
+	// The row as GET /contests/{id}/game reads it, straight out of the core
+	// database rather than off the value Build happened to return.
+	stored, err := repo.Template(t.Context(), contest.ID)
+	if err != nil {
+		t.Fatalf("read the game back: %v", err)
+	}
+	if stored.BuildError != provisioning.BuildFailedInternally {
+		t.Fatalf("the stored build error is %q, want the fixed sentence", stored.BuildError)
+	}
+	for _, ours := range []string{gamedb.RoleAuthor, "28P01", "failed to connect", "password"} {
+		if strings.Contains(stored.BuildError, ours) {
+			t.Fatalf("the stored build error names %q: %q", ours, stored.BuildError)
+		}
+	}
+	// And the cause really did survive for the log, or this would be a leak
+	// traded for an outage nobody can diagnose.
+	if !strings.Contains(buildErr.Error(), gamedb.RoleAuthor) {
+		t.Fatalf("the error returned for the log is %v; it has to keep what the organiser no longer gets", buildErr)
 	}
 }
 
