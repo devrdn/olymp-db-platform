@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -433,5 +434,294 @@ func TestOpenUnknownID(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	if _, err := s.Open("ffffffff-0000-0000-0000-000000000000"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Open on unknown id = %v, want ErrNotFound", err)
+	}
+}
+
+// TestAppendConcurrentChunksForSameUploadDoNotCorrupt is defect 1: without a
+// per-id lock, Append's Stat-then-Seek-then-Write is not atomic, so two
+// goroutines racing Append for the same upload can both read the same
+// "received so far" length, seek to the same offset, and write over each
+// other. Run with -race — that verifies the fix's own synchronisation (the
+// idLocks map in lock.go) is race-free; the corruption this test looks for
+// is a race on file content, which the Go race detector has no visibility
+// into on its own (nothing here is shared Go memory), which is why the
+// assertions below inspect the actual bytes on disk.
+//
+// Two goroutines both call Append(id, 0, ...) — the same offset — each with
+// its own several-megabyte chunk (well above copyBufferSize, so a single
+// Append call makes many separate Read/Write round trips: the window a
+// concurrent, unsynchronised Append for the same id can land writes inside
+// of). Both chunks are the same size but a different repeated byte, so any
+// interleaving between the two calls' writes is visible as a file that is
+// not uniformly one byte value throughout.
+//
+// This models the real trigger honestly rather than assuming which chunk
+// "should" win: two goroutines legitimately reach Append for the same id at
+// the same offset when a browser retries a chunk that is still in flight,
+// and Store cannot tell that case apart from two different chunks that
+// simply arrived out of order. Either way, the outcome must match some
+// valid sequential execution — one call's bytes fully on disk — never a mix
+// of both.
+func TestAppendConcurrentChunksForSameUploadDoNotCorrupt(t *testing.T) {
+	limits := Limits{MaxFileBytes: 8 << 20, MaxDirBytes: 8 << 20, MaxChunkBytes: 8 << 20}
+	s := newTestStore(t, limits)
+	const id = "a0000000-0000-0000-0000-000000000000"
+	if err := s.Begin(id); err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+
+	const chunkSize = 2 << 20 // several multiples of copyBufferSize (64 KiB)
+	chunkA := bytes.Repeat([]byte{'A'}, chunkSize)
+	chunkB := bytes.Repeat([]byte{'B'}, chunkSize)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var nA, nB int64
+	var errA, errB error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		nA, errA = s.Append(id, 0, bytes.NewReader(chunkA))
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		nB, errB = s.Append(id, 0, bytes.NewReader(chunkB))
+	}()
+	close(start) // release both at once to maximise the chance they overlap
+	wg.Wait()
+
+	// Both calls describe the same offset, so a correct Store treats this
+	// exactly like a retried chunk racing the attempt still in flight:
+	// whichever it serialises first writes, and the other sees offset 0
+	// already received and returns the current length as a no-op — neither
+	// is an error.
+	if errA != nil {
+		t.Fatalf("Append A: %v", errA)
+	}
+	if errB != nil {
+		t.Fatalf("Append B: %v", errB)
+	}
+	if nA != nB {
+		t.Fatalf("the two calls disagree about the resulting length: A=%d B=%d", nA, nB)
+	}
+
+	got, err := s.Received(id)
+	if err != nil {
+		t.Fatalf("Received: %v", err)
+	}
+	if got != int64(chunkSize) {
+		t.Fatalf("Received = %d, want %d (exactly one chunk landed, not a mix or a partial overwrite)", got, chunkSize)
+	}
+	if nA != got {
+		t.Fatalf("Append reported length %d but the file actually holds %d bytes", nA, got)
+	}
+
+	f, err := s.Open(id)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f.Close()
+	content, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(content) != chunkSize {
+		t.Fatalf("file size = %d, want %d", len(content), chunkSize)
+	}
+	first := content[0]
+	if first != 'A' && first != 'B' {
+		t.Fatalf("file's first byte is %q, want 'A' or 'B'", first)
+	}
+	for i, b := range content {
+		if b != first {
+			t.Fatalf("byte %d is %q, want %q — the two goroutines' writes were interleaved instead of one cleanly winning", i, b, first)
+		}
+	}
+}
+
+// TestAppendRefusesWhenSecondUploadWouldExceedDirBudget is defect 2:
+// ErrStoreFull was checked only in Begin, so two uploads that both began on
+// an empty directory could each grow all the way to MaxFileBytes
+// independently — together well past MaxDirBytes. The budget has to be
+// checked in Append, where the bytes actually arrive.
+func TestAppendRefusesWhenSecondUploadWouldExceedDirBudget(t *testing.T) {
+	limits := Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 20, MaxChunkBytes: 1 << 20}
+	s := newTestStore(t, limits)
+
+	const id1 = "b0000001-0000-0000-0000-000000000000"
+	const id2 = "b0000002-0000-0000-0000-000000000000"
+	// Both begin on an empty directory: MaxFileBytes alone would let either
+	// one grow all the way to MaxDirBytes on its own.
+	if err := s.Begin(id1); err != nil {
+		t.Fatalf("Begin(id1): %v", err)
+	}
+	if err := s.Begin(id2); err != nil {
+		t.Fatalf("Begin(id2): %v", err)
+	}
+
+	if _, err := s.Append(id1, 0, bytes.NewReader(bytes.Repeat([]byte("a"), 15))); err != nil {
+		t.Fatalf("Append(id1): %v", err)
+	}
+
+	// The directory now holds 15 of its 20-byte MaxDirBytes. id2 growing by
+	// 10 more bytes would push the directory to 25 — over budget — even
+	// though id2's own MaxFileBytes has plenty of headroom left.
+	n, err := s.Append(id2, 0, bytes.NewReader(bytes.Repeat([]byte("b"), 10)))
+	if !errors.Is(err, ErrStoreFull) {
+		t.Fatalf("Append(id2) = %v, want ErrStoreFull", err)
+	}
+	if n != 0 {
+		t.Fatalf("Append(id2) returned length %d, want 0 (rolled back, nothing written)", n)
+	}
+
+	got, err := s.Received(id2)
+	if err != nil {
+		t.Fatalf("Received(id2): %v", err)
+	}
+	if got != 0 {
+		t.Fatalf("Received(id2) = %d, want 0 — the over-budget chunk must not have grown the file", got)
+	}
+}
+
+// pausingReader hands out data a few bytes at a time and, once it has handed
+// out pauseAt bytes across previous calls, blocks on a channel before
+// producing any more — letting a test inspect the data file's on-disk size
+// from another goroutine while an Append call that is reading far more than
+// MaxFileBytes is still in progress. It is only ever driven by the single
+// goroutine running Append; paused/resume are the only fields the test
+// goroutine touches, and channels are what make that safe.
+type pausingReader struct {
+	data       []byte
+	step       int
+	pauseAt    int
+	handedOut  int
+	firedPause bool
+	paused     chan struct{}
+	resume     chan struct{}
+}
+
+func (r *pausingReader) Read(p []byte) (int, error) {
+	if r.handedOut >= r.pauseAt && !r.firedPause {
+		r.firedPause = true
+		close(r.paused)
+		<-r.resume
+	}
+	if len(r.data) == 0 {
+		return 0, io.EOF
+	}
+	n := r.step
+	if n > len(r.data) {
+		n = len(r.data)
+	}
+	if n > len(p) {
+		n = len(p)
+	}
+	copy(p, r.data[:n])
+	r.data = r.data[n:]
+	r.handedOut += n
+	return n, nil
+}
+
+// TestAppendNeverWritesPastMaxFileBytesBeforeEnforcingIt is defect 3: Append
+// used to write a chunk in full and only afterwards compare the new length
+// against MaxFileBytes, Truncating back if it was over. The excess bytes
+// reached disk before the limit was applied — the write rule 12 says must
+// not happen. This test drives a chunk that is much larger than
+// MaxFileBytes through Append a few dozen bytes at a time and, if the file
+// is ever observed to have grown past MaxFileBytes while Append is still
+// running, fails with that observation. The fixed Append bounds the reader
+// itself, so it never asks pausingReader for more than the remaining file
+// budget and the pause point is never reached at all.
+func TestAppendNeverWritesPastMaxFileBytesBeforeEnforcingIt(t *testing.T) {
+	limits := Limits{MaxFileBytes: 100, MaxDirBytes: 1 << 20, MaxChunkBytes: 1 << 20}
+	s := newTestStore(t, limits)
+	const id = "d0000000-0000-0000-0000-000000000000"
+	if err := s.Begin(id); err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+
+	reader := &pausingReader{
+		data:    bytes.Repeat([]byte("x"), 600),
+		step:    32,
+		pauseAt: 200, // well past MaxFileBytes(100); only reachable if excess bytes were already written
+		paused:  make(chan struct{}),
+		resume:  make(chan struct{}),
+	}
+
+	appendDone := make(chan struct{})
+	var gotN int64
+	var gotErr error
+	go func() {
+		gotN, gotErr = s.Append(id, 0, reader)
+		close(appendDone)
+	}()
+
+	select {
+	case <-reader.paused:
+		info, statErr := os.Stat(s.dataPath(id))
+		if statErr != nil {
+			t.Fatalf("stat mid-append: %v", statErr)
+		}
+		grewTo := info.Size()
+		close(reader.resume)
+		<-appendDone
+		t.Fatalf("data file grew to %d bytes while Append was still reading a chunk — MaxFileBytes is %d, so those bytes reached disk before the limit was enforced (rule 12: bound the reader, do not write then Truncate)", grewTo, limits.MaxFileBytes)
+	case <-appendDone:
+		// The reader was never asked for more than the remaining file
+		// budget, so it never reached the pause point at all.
+	}
+
+	if !errors.Is(gotErr, ErrFileTooLarge) {
+		t.Fatalf("Append = %v, want ErrFileTooLarge", gotErr)
+	}
+	if gotN != 0 {
+		t.Fatalf("Append length = %d, want 0", gotN)
+	}
+	got, err := s.Received(id)
+	if err != nil {
+		t.Fatalf("Received: %v", err)
+	}
+	if got != 0 {
+		t.Fatalf("Received = %d, want 0", got)
+	}
+}
+
+// TestAppendAfterCompleteIsRefused is defect 4: Begin treats an id that
+// already has data on disk — including a completed one — as a resumed
+// upload, so Append would happily write into an upload Complete had already
+// sealed. The checksum and line index Complete already returned would then
+// describe bytes that no longer match the file, with nothing recording
+// that. Append must refuse by a named sentinel once Complete has run, and
+// Received/Window must keep answering for what Complete computed.
+func TestAppendAfterCompleteIsRefused(t *testing.T) {
+	s := newTestStore(t, permissiveLimits())
+	const id = "e0000000-0000-0000-0000-000000000000"
+	const content = "one\ntwo\nthree\n"
+	sum := completeUpload(t, s, id, content)
+
+	n, err := s.Append(id, sum.Bytes, strings.NewReader("more"))
+	if !errors.Is(err, ErrUploadSealed) {
+		t.Fatalf("Append after Complete = %v, want ErrUploadSealed", err)
+	}
+	if n != sum.Bytes {
+		t.Fatalf("Append after Complete returned length %d, want %d (unchanged)", n, sum.Bytes)
+	}
+
+	got, err := s.Received(id)
+	if err != nil {
+		t.Fatalf("Received: %v", err)
+	}
+	if got != sum.Bytes {
+		t.Fatalf("Received after refused Append = %d, want %d", got, sum.Bytes)
+	}
+
+	w, err := s.Window(id, 1, 10, 1<<20)
+	if err != nil {
+		t.Fatalf("Window: %v", err)
+	}
+	if len(w.Lines) != 3 {
+		t.Fatalf("Window after refused Append returned %d lines, want 3: %v", len(w.Lines), w.Lines)
 	}
 }
