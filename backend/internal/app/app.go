@@ -374,7 +374,13 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// nothing to build a template on, and an endpoint that took a script it
 	// could never build would be a worse answer than no endpoint.
 	if gameAuthoring != nil {
-		modules = append(modules, api.NewGameHandler(gameAuthoring, gameDatabases, authMiddleware, log, limiter))
+		gameHandler := api.NewGameHandler(gameAuthoring, gameDatabases, authMiddleware, log, limiter)
+		if cfg.GameUploadChunkBytes > 0 {
+			// The socket's ceiling and the domain's are the same number, so
+			// the configured chunk size is the only one that ever decides.
+			gameHandler = gameHandler.WithMaxChunkBody(cfg.GameUploadChunkBytes)
+		}
+		modules = append(modules, gameHandler)
 	}
 
 	// The participant's own read of a running contest — the story, the
