@@ -1076,6 +1076,30 @@ const ro = {
       "Această bază a fost deja ștearsă — de curățenia de după olimpiadă sau de altcineva cât timp pagina era deschisă. Nimic nu s-a schimbat.",
     game_not_editable:
       "Jocul acestei olimpiade nu mai poate fi înlocuit. Înlocuirea ridică versiunea șablonului, ceea ce face copiile tuturor participanților învechite — ar fi șterse și create din nou.",
+    game_uploads_disabled:
+      "Această instalare nu are un director pentru fișiere, așa că jocul poate fi scris doar în editor. Configurarea lui ține de cine administrează serverul.",
+    game_upload_filename_invalid:
+      "Numele fișierului este gol sau mai lung decât se acceptă. Redenumiți fișierul și încercați din nou.",
+    game_upload_too_large:
+      "Fișierul este mai mare decât acceptă această instalare. Baza de joc se copiază câte o dată pentru fiecare participant, deci limita ține de spațiul pe disc, nu de încărcare.",
+    game_upload_store_full:
+      "Directorul de încărcări este plin. Se eliberează pe măsură ce alte încărcări se termină sau sunt șterse.",
+    game_upload_chunk_out_of_order:
+      "Această bucată nu continuă de unde a rămas serverul în realitate. Întrebați cât a primit și reluați de acolo, nu de unde crede browserul.",
+    game_upload_chunk_too_large:
+      "O bucată a fișierului este mai mare decât acceptă această instalare. Trimiteți fișierul în bucăți mai mici.",
+    game_upload_length_mismatch:
+      "Au sosit mai mulți sau mai puțini octeți decât s-a declarat la începutul încărcării, deci nu poate fi finalizată. Începeți încărcarea din nou.",
+    game_upload_not_found:
+      "Acest concurs nu are nicio încărcare cu acest identificator. Reîncărcați pagina: cel mai probabil a fost deja finalizată sau anulată.",
+    game_upload_in_progress:
+      "Acest concurs are deja o încărcare nefinalizată. Finalizați-o sau anulați-o înainte de a începe alta.",
+    game_upload_already_complete:
+      "Această încărcare este deja finalizată sau anulată, nu i se mai poate trimite nimic.",
+    game_upload_incomplete:
+      "Această încărcare nu s-a terminat încă, deci nu este nimic de privit înăuntru. Așteptați finalizarea.",
+    game_upload_too_often:
+      "Încărcările au fost pornite prea des. Așteptați puțin înainte de a începe alta.",
     query_parse_error:
       "PostgreSQL nu a putut citi interogarea. Cuvintele lui sunt mai jos.",
     query_not_one_statement:
