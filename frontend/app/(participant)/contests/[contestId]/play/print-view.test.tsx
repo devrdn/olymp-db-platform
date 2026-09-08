@@ -51,7 +51,10 @@ describe("PrintView", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: en.participant.play.print.button })).toBeInTheDocument();
+    // No control of its own: printing is started from the story tab, and a
+    // button hidden on screen and `print:hidden` in print is one nobody can
+    // ever press.
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
     // No console furniture exists to query for here — this component never
     // imports ConsoleEditor, SchemaPanel, ResultPanel or QueryLogPanel — but
     // the one piece of chrome every screen behind a session wears (AppBar) is

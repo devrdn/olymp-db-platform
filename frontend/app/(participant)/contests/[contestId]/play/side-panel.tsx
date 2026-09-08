@@ -7,6 +7,44 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { QuestionsPanel, type QuestionEntry } from "./questions-panel";
 
 /**
+ * Prints the story in place, and names the file the save dialog offers.
+ *
+ * Chrome, Edge and Safari all suggest `document.title` as the filename for
+ * "Save as PDF" — there is no other web API for naming what a print
+ * produces — so the title is swapped to `story-{contestId}` immediately
+ * before `window.print()` and put back once the print is done.
+ *
+ * `afterprint` is the ordinary way to know a print finished (Chrome,
+ * Firefox), but it does not fire on every browser (older Safari, some
+ * in-app webviews) — a plain timer is the defensive backstop that restores
+ * the title even there. `restored` guards both paths against firing twice:
+ * without it, a late timer that ran after `afterprint` already restored the
+ * title could stomp a title change made in between (a navigation, another
+ * print). The one browser this cannot help — one that fires neither
+ * `afterprint` nor gives the timer long enough to matter, because the
+ * dialog stayed open past it — is why the timeout is generous rather than
+ * tight: it exists to catch a browser that never restores it at all, not to
+ * race the dialog closing.
+ */
+function printStory(contestId: string) {
+  const previousTitle = document.title;
+
+  let restored = false;
+  const restore = () => {
+    if (restored) return;
+    restored = true;
+    document.title = previousTitle;
+    window.removeEventListener("afterprint", restore);
+  };
+
+  window.addEventListener("afterprint", restore);
+  window.setTimeout(restore, 2000);
+
+  document.title = `story-${contestId}`;
+  window.print();
+}
+
+/**
  * The panel beside the console: the story, and the questions with their
  * answer fields, behind two tabs rather than stacked one above the other.
  *
@@ -26,14 +64,16 @@ import { QuestionsPanel, type QuestionEntry } from "./questions-panel";
  *   editor's literal `<br />` (lib/format/markdown.ts), and cleaning it needs
  *   the one TypeScript implementation of that rule, not a second one ported
  *   into Go for this one file.
- * - Print, a plain navigation link to `.../play/print` — a separate route
- *   (see that route's own doc) rather than a print stylesheet laid over this
- *   very screen, and rather than a member of `ExportMenu`'s own list: what it
- *   offers is a page to look at and print, not a file this control fetches,
- *   so the `download` attribute every `ExportMenu` link carries would be the
- *   wrong instruction here. `target="_blank"` for the same reason StoryText's
- *   own citation links use it — a participant working under a timer must not
- *   lose this screen to a tab that only exists to be printed.
+ * - Print, a button rather than a link: nothing here is a URL to navigate
+ *   to or a file to fetch, so neither `download` (every other `ExportMenu`
+ *   link carries it) nor a plain `href` says the right thing. It opens the
+ *   browser's own print dialog on this same screen — `workspace.tsx` keeps a
+ *   copy of the story hidden until `@media print` for exactly this button to
+ *   reveal — rather than sending the participant to a separate route the
+ *   way this used to work; see workspace.tsx's own doc for why that was
+ *   fragile. `printStory` below is also what makes the file the dialog
+ *   offers to save come out named `story-{contestId}`, since that is read
+ *   from `document.title` and nothing else names it.
  */
 export function SidePanel({
   storyBody,
@@ -91,14 +131,13 @@ export function SidePanel({
                   },
                 ]}
               />
-              <a
-                href={`/contests/${contestId}/play/print`}
-                target="_blank"
-                rel="noopener noreferrer"
+              <button
+                type="button"
+                onClick={() => printStory(contestId)}
                 className="text-small text-accent underline underline-offset-4"
               >
                 {storyT.print}
-              </a>
+              </button>
             </div>
             {storyBody}
           </>
