@@ -3,6 +3,8 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -49,6 +51,16 @@ type fakeGames struct {
 	gotAppendUpload    uuid.UUID
 	gotAppendOffset    int64
 	gotAppendBodyBytes []byte // read via io.ReadAll here — a test double, not the production streaming path
+
+	// store, when set, replaces that io.ReadAll with the real thing: the
+	// body is streamed into a real gamefile.Store on a real directory, and
+	// its errors are translated exactly as provisioning.Games.AppendChunk
+	// translates them (appendToRealStore below). It is what the tests about
+	// the *byte path* use — a ceiling the body runs into, a body that stops
+	// arriving — because io.ReadAll is the one thing the production path
+	// never does, and reading the body whole is what hid a refusal that
+	// never happened (CLAUDE.md rule 10).
+	store *gamefile.Store
 
 	currentErr    error
 	currentResult provisioning.Upload
@@ -114,6 +126,9 @@ func (g *fakeGames) BeginUpload(_ context.Context, contestID uuid.UUID, filename
 
 func (g *fakeGames) AppendChunk(_ context.Context, contestID, uploadID uuid.UUID, offset int64, r io.Reader) (int64, error) {
 	g.gotAppendContest, g.gotAppendUpload, g.gotAppendOffset = contestID, uploadID, offset
+	if g.store != nil {
+		return appendToRealStore(g.store, uploadID, offset, r)
+	}
 	// io.ReadAll here is what proves the handler handed AppendChunk a real
 	// io.Reader rather than something it had already drained: reading it a
 	// second time, from the fake, is only possible if the handler never read
@@ -127,6 +142,44 @@ func (g *fakeGames) AppendChunk(_ context.Context, contestID, uploadID uuid.UUID
 		return g.appendResult, g.appendErr
 	}
 	return g.appendResult, nil
+}
+
+// appendToRealStore is what provisioning.Games.AppendChunk does with the
+// reader the handler hands it: one Store.Append, and its sentinels
+// translated into the domain's (provisioning's own wrapGamefileErr). The
+// translation is repeated here rather than skipped because a fake that
+// answered with gamefile's sentinels would be testing a service that does
+// not exist — and because *how* it translates is part of what these tests
+// check: the cause travels on inside the domain error, so the HTTP layer can
+// still recognise the http.MaxBytesError it created itself.
+func appendToRealStore(store *gamefile.Store, uploadID uuid.UUID, offset int64, r io.Reader) (int64, error) {
+	received, err := store.Append(uploadID.String(), offset, r)
+	switch {
+	case err == nil:
+		return received, nil
+	case errors.Is(err, gamefile.ErrChunkIncomplete):
+		return received, fmt.Errorf("%w: %w", provisioning.ErrUploadChunkIncomplete, err)
+	case errors.Is(err, gamefile.ErrChunkTooLarge):
+		return received, provisioning.ErrUploadChunkTooLarge
+	case errors.Is(err, gamefile.ErrChunkOutOfOrder):
+		return received, provisioning.ErrUploadChunkOutOfOrder
+	default:
+		return received, fmt.Errorf("gamefile: %w", err)
+	}
+}
+
+// realUploadStore is a gamefile.Store on a fresh directory with one upload
+// already begun — the state a chunk arrives into.
+func realUploadStore(t *testing.T, uploadID uuid.UUID, limits gamefile.Limits) *gamefile.Store {
+	t.Helper()
+	store, err := gamefile.NewStore(t.TempDir(), limits)
+	if err != nil {
+		t.Fatalf("open the upload store: %v", err)
+	}
+	if err := store.Begin(uploadID.String()); err != nil {
+		t.Fatalf("begin the upload: %v", err)
+	}
+	return store
 }
 
 func (g *fakeGames) CurrentUpload(context.Context, uuid.UUID) (provisioning.Upload, error) {
@@ -814,21 +867,89 @@ func TestAppendingAChunkWithoutANumericOffsetIsRefused(t *testing.T) {
 }
 
 // The transport-level ceiling (appendChunk's own doc on maxChunkBody): a body
-// larger than it is refused before AppendChunk ever sees it, and reported as
-// the same refusal ErrUploadChunkTooLarge would produce — not a second code
-// to explain.
+// larger than it is refused, and reported as the same refusal
+// ErrUploadChunkTooLarge would produce — not a second code to explain.
+//
+// Proven on the path the deployment uses, not against a double that reads
+// the body with io.ReadAll (CLAUDE.md rule 10). The two numbers below are
+// deliberately equal, because app.go makes them equal — the socket's ceiling
+// *is* GAME_UPLOAD_CHUNK_BYTES — and that is the arrangement in which the
+// refusal used to disappear: io.LimitReader took exactly the cap without an
+// error, the probe read came back (0, "request body too large"), and a
+// refused 9-byte chunk was answered 200 OK with 8 bytes quietly kept. A
+// double that drains the body with io.ReadAll never meets the probe at all,
+// which is why this one streams into a real gamefile.Store.
 func TestAppendingAChunkOverTheTransportCeilingIsRefused(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	upload := uuid.New()
+	f.games.store = realUploadStore(t, upload, gamefile.Limits{
+		MaxFileBytes: 1 << 20, MaxDirBytes: 1 << 20, MaxChunkBytes: 8,
+	})
 	f.handler.WithMaxChunkBody(8)
 
 	rec := f.do(http.MethodPut,
-		"/contests/"+uuid.NewString()+"/game/uploads/"+uuid.NewString()+"/chunk?offset=0",
+		"/contests/"+uuid.NewString()+"/game/uploads/"+upload.String()+"/chunk?offset=0",
 		"123456789") // 9 bytes, one past the 8-byte ceiling
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body)
 	}
 	if code := errorCode(t, rec); code != "game_upload_chunk_too_large" {
 		t.Fatalf("code %q, want game_upload_chunk_too_large", code)
+	}
+	received, err := f.games.store.Received(upload.String())
+	if err != nil {
+		t.Fatalf("Received: %v", err)
+	}
+	if received != 0 {
+		t.Fatalf("the store kept %d bytes of a chunk it refused, want 0", received)
+	}
+}
+
+// The listener's ReadTimeout bounds the whole request, body included, and it
+// is sized for a JSON document (internal/platform/server's own doc). A chunk
+// is not one: it is megabytes, sent over whatever uplink an organiser has,
+// and a Caddy in front does not buffer request bodies. So this route takes
+// its own read deadline, sized to the body it accepts.
+//
+// Proven across a real listener with a real ReadTimeout, because that is
+// where the guarantee lives — a recorder never has a deadline to miss
+// (CLAUDE.md rule 10). The numbers are scaled down by three orders of
+// magnitude; the shape is the deployment's: a body that pauses for longer
+// than the listener's own timeout while it is still being sent.
+func TestASlowChunkBodyIsNotCutOffByTheListenersReadTimeout(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.appendResult = 4
+
+	srv := httptest.NewUnstartedServer(f.router)
+	srv.Config.ReadTimeout = 100 * time.Millisecond // stands in for the listener's 30 s
+	srv.Start()
+	defer srv.Close()
+
+	body, writes := io.Pipe()
+	go func() {
+		_, _ = writes.Write([]byte("ab"))
+		time.Sleep(400 * time.Millisecond) // a stall the listener's own timeout would cut
+		_, _ = writes.Write([]byte("cd"))
+		_ = writes.Close()
+	}()
+
+	url := srv.URL + "/contests/" + uuid.NewString() + "/game/uploads/" + uuid.NewString() + "/chunk?offset=0"
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, url, body)
+	if err != nil {
+		t.Fatalf("build the request: %v", err)
+	}
+	req.AddCookie(f.cookie)
+
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("the chunk request failed outright: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200 — the listener's own read timeout cut the body off", resp.StatusCode)
+	}
+	if string(f.games.gotAppendBodyBytes) != "abcd" {
+		t.Fatalf("the service received %q, want the whole slow body", f.games.gotAppendBodyBytes)
 	}
 }
 
@@ -966,7 +1087,7 @@ func TestUploadWindowClampsCallerSuppliedBudgets(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 1: every one of provisioning/upload.go's eleven sentinels
+// CLAUDE.md rule 1: every one of provisioning/upload.go's twelve sentinels
 // gets its own code and its own status, proven through one endpoint the same
 // way TestEveryGameRefusalHasItsOwnCode and TestEveryInstanceRefusalHasItsOwn
 // Code already prove it for the script and instance sentinels — fail is one
@@ -985,6 +1106,7 @@ func TestEveryUploadRefusalHasItsOwnCode(t *testing.T) {
 		{"the upload directory is full", provisioning.ErrUploadStoreFull, http.StatusConflict, "game_upload_store_full"},
 		{"a chunk sent out of order", provisioning.ErrUploadChunkOutOfOrder, http.StatusConflict, "game_upload_chunk_out_of_order"},
 		{"a chunk over the domain's own limit", provisioning.ErrUploadChunkTooLarge, http.StatusBadRequest, "game_upload_chunk_too_large"},
+		{"a chunk body that stopped arriving", provisioning.ErrUploadChunkIncomplete, http.StatusRequestTimeout, "game_upload_chunk_incomplete"},
 		{"received bytes short of the declared length", provisioning.ErrUploadLengthMismatch, http.StatusConflict, "game_upload_length_mismatch"},
 		{"another contest's upload", provisioning.ErrUploadNotFound, http.StatusNotFound, "game_upload_not_found"},
 		{"a second upload while one is already receiving", provisioning.ErrUploadInProgress, http.StatusConflict, "game_upload_in_progress"},

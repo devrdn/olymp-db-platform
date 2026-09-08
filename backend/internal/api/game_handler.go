@@ -723,6 +723,41 @@ func (h *GameHandler) beginUpload(w http.ResponseWriter, r *http.Request) {
 // ErrUploadChunkTooLarge for the client either way.
 const defaultMaxGameChunkBodyBytes = 64 << 20 // 64 MiB
 
+// minChunkUploadBytesPerSecond, minChunkReadTimeout and maxChunkReadTimeout
+// size the read deadline appendChunk gives itself.
+//
+// internal/platform/server's ReadTimeout bounds a whole request, body
+// included, and its own doc names the premise it was chosen under: "far
+// beyond any legitimate JSON body". A chunk of an uploaded dump is not a
+// JSON body. At GAME_UPLOAD_CHUNK_BYTES's default of 8 MiB, that thirty
+// seconds is a demand for ~2.2 Mbit/s sustained on every one of the four
+// hundred-odd chunks a three-gigabyte dump takes — from an organiser at home
+// or on a loaded university network, with no buffering proxy in front (Caddy
+// streams request bodies), one stall is a deadline that fires in the middle
+// of a body.
+//
+// So the rate is stated rather than implied: the route waits for a transfer
+// as slow as 32 KiB/s (about 256 kbit/s), derived from the ceiling this
+// installation actually configured rather than fixed at one number, because
+// an operator who raises the chunk size is not thereby demanding a faster
+// uplink from the same people. The floor keeps a tiny ceiling (a test's, or
+// a deliberately small deployment's) from producing a deadline measured in
+// milliseconds; the cap keeps a very large one from turning this route into
+// a place to park a connection all afternoon — a slow-loris client still
+// meets a bound, just one sized to the body instead of to a JSON document.
+const (
+	minChunkUploadBytesPerSecond = 32 << 10
+	minChunkReadTimeout          = 30 * time.Second
+	maxChunkReadTimeout          = 10 * time.Minute
+)
+
+// chunkReadTimeout is how long this route will wait for one chunk's body,
+// from the moment the handler starts reading it.
+func (h *GameHandler) chunkReadTimeout() time.Duration {
+	d := time.Duration(h.maxChunkBody/minChunkUploadBytesPerSecond) * time.Second
+	return min(max(d, minChunkReadTimeout), maxChunkReadTimeout)
+}
+
 // chunkResponse answers one appendChunk call: how much of the upload the
 // server now holds, which is what a resuming browser needs to pick its next
 // offset — nothing else about the upload is worth a round trip on every one
@@ -752,6 +787,23 @@ func (h *GameHandler) appendChunk(w http.ResponseWriter, r *http.Request) {
 	offset, ok := h.chunkOffset(w, r)
 	if !ok {
 		return
+	}
+
+	// This route's own read deadline, in place of the listener's — see
+	// minChunkUploadBytesPerSecond for the arithmetic that makes the shared
+	// one wrong here. It replaces the deadline for this request alone and
+	// leaves the strict listener-wide ReadTimeout exactly as it is for every
+	// other route; net/http sets the next request's deadline itself when
+	// this one is done.
+	//
+	// A server that cannot do it (a test's recorder) says so with
+	// http.ErrNotSupported, and that is not a reason to refuse a chunk: a
+	// deadline is a bound on this handler, not a permission it needs.
+	// Anything else is worth an operator's attention, because it means
+	// bodies on this route are running under a timeout meant for JSON.
+	if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(h.chunkReadTimeout())); err != nil &&
+		!errors.Is(err, http.ErrNotSupported) {
+		h.log.WarnContext(r.Context(), "could not extend the read deadline for an upload chunk", "error", err)
 	}
 
 	body := http.MaxBytesReader(w, r.Body, h.maxChunkBody)
@@ -960,7 +1012,7 @@ func (h *GameHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusConflict, codeGameInstanceAlreadyDropped,
 			"That database has already been removed")
 
-	// --- The uploaded dump (provisioning/upload.go's own eleven sentinels) --
+	// --- The uploaded dump (provisioning/upload.go's own twelve sentinels) --
 
 	case errors.Is(err, provisioning.ErrUploadsDisabled):
 		httpx.Error(w, r, http.StatusNotFound, codeGameUploadsDisabled,
@@ -980,6 +1032,13 @@ func (h *GameHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, provisioning.ErrUploadChunkTooLarge):
 		httpx.Error(w, r, http.StatusBadRequest, codeGameUploadChunkTooLarge,
 			"The chunk exceeds the maximum chunk size this installation accepts")
+	case errors.Is(err, provisioning.ErrUploadChunkIncomplete):
+		// 408, not 500 and not 400: nothing about the request was wrong, it
+		// simply did not finish arriving, and the client's own retry is the
+		// right next move (CLAUDE.md rule 1 — a named refusal rather than
+		// "internal error" for something the caller can act on).
+		httpx.Error(w, r, http.StatusRequestTimeout, codeGameUploadChunkIncomplete,
+			"The chunk did not arrive in full; nothing was kept, so send it again from the offset the server reports")
 	case errors.Is(err, provisioning.ErrUploadLengthMismatch):
 		httpx.Error(w, r, http.StatusConflict, codeGameUploadLengthMismatch,
 			"The bytes received do not match the length declared when the upload began")

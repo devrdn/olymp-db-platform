@@ -1207,6 +1207,8 @@ const en = {
       "This piece does not continue where the server actually left off. Ask it how much it has received and resume from there, rather than from where the browser thought it was.",
     game_upload_chunk_too_large:
       "One piece of the file is larger than this installation accepts. Send the file in smaller pieces.",
+    game_upload_chunk_incomplete:
+      "That piece did not arrive in full — the connection dropped, or the transfer was too slow. Nothing of it was kept, so sending it again is safe.",
     game_upload_length_mismatch:
       "Fewer or more bytes arrived than the upload declared, so it cannot be completed. Start the upload again.",
     game_upload_not_found:

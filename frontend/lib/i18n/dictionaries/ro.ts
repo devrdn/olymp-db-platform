@@ -1121,6 +1121,8 @@ const ro = {
       "Această bucată nu continuă de unde a rămas serverul în realitate. Întrebați cât a primit și reluați de acolo, nu de unde crede browserul.",
     game_upload_chunk_too_large:
       "O bucată a fișierului este mai mare decât acceptă această instalare. Trimiteți fișierul în bucăți mai mici.",
+    game_upload_chunk_incomplete:
+      "Această bucată nu a ajuns în întregime — conexiunea s-a întrerupt sau transferul a fost prea lent. Nimic din ea nu a fost păstrat, deci poate fi trimisă din nou fără riscuri.",
     game_upload_length_mismatch:
       "Au sosit mai mulți sau mai puțini octeți decât s-a declarat la începutul încărcării, deci nu poate fi finalizată. Începeți încărcarea din nou.",
     game_upload_not_found:

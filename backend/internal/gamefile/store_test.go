@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -326,6 +327,109 @@ func TestAppendChunkTooLargeStopsAtTheLimit(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Append did not return promptly against an infinite reader — it read past the chunk limit")
+	}
+}
+
+// The arrangement the deployment actually runs: the transport's ceiling and
+// this Store's MaxChunkBytes are the same number (app.go's WithMaxChunkBody
+// call says why), so an over-sized chunk is stopped by the socket at exactly
+// the byte the write cap stops at. The reader is the real
+// http.MaxBytesReader for that reason — a hand-written stand-in would be
+// free to answer the probe read the convenient way, and answering it the
+// inconvenient way (0, error) is the whole case: read as "the caller had
+// nothing more", it made a refused 9 MiB chunk a 200 OK that quietly kept 8.
+//
+// A nil ResponseWriter is what net/http itself allows here: the writer is
+// only used for the server's own "request too large" bookkeeping, behind an
+// interface assertion that a nil interface simply fails.
+func TestAppendRefusesAChunkWhoseReaderFailsAtExactlyTheCap(t *testing.T) {
+	limits := Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 1 << 20, MaxChunkBytes: 8}
+	s := newTestStore(t, limits)
+	const id = "aaaaaaaa-3333-0000-0000-000000000000"
+	if err := s.Begin(id); err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+
+	body := http.MaxBytesReader(nil, io.NopCloser(strings.NewReader("123456789")), 8)
+	n, err := s.Append(id, 0, body)
+	if err == nil {
+		t.Fatalf("Append(9 bytes past an 8-byte transport cap) = (%d, nil), want a refusal", n)
+	}
+	if n != 0 {
+		t.Fatalf("Append returned length %d, want 0 (rolled back)", n)
+	}
+	// The transport's own error travels out intact, so the HTTP layer that
+	// created the MaxBytesReader can name it (CLAUDE.md rule 1: the handler's
+	// switch has to be able to tell what happened), and the domain sentinel
+	// says what happened to the bytes.
+	var tooLarge *http.MaxBytesError
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("Append error = %v, does not carry *http.MaxBytesError", err)
+	}
+	if !errors.Is(err, ErrChunkIncomplete) {
+		t.Fatalf("Append error = %v, want ErrChunkIncomplete", err)
+	}
+
+	got, err := s.Received(id)
+	if err != nil {
+		t.Fatalf("Received: %v", err)
+	}
+	if got != 0 {
+		t.Fatalf("Received after a refused chunk = %d, want 0 — bytes were kept from a chunk that was refused", got)
+	}
+}
+
+// failingReader gives up part-way through, the way a request body does when
+// the connection drops or a read deadline expires mid-chunk.
+type failingReader struct {
+	remaining int
+	err       error
+}
+
+func (r *failingReader) Read(p []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, r.err
+	}
+	n := min(len(p), r.remaining)
+	for i := range p[:n] {
+		p[i] = 'z'
+	}
+	r.remaining -= n
+	return n, nil
+}
+
+// A chunk body that stops arriving is a named refusal, not an internal
+// error: the rollback is right, but the error it comes back with has to be
+// one the HTTP layer can map to "your upload was interrupted, send that
+// chunk again" (CLAUDE.md rule 1). It reaches the client on a route whose
+// body is megabytes, so it is a normal event, not a bug of ours.
+func TestAppendNamesAChunkThatStoppedArrivingMidBody(t *testing.T) {
+	s := newTestStore(t, permissiveLimits())
+	const id = "aaaaaaaa-4444-0000-0000-000000000000"
+	if err := s.Begin(id); err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	if _, err := s.Append(id, 0, strings.NewReader("already here")); err != nil {
+		t.Fatalf("first Append: %v", err)
+	}
+
+	broken := &failingReader{remaining: 4096, err: os.ErrDeadlineExceeded}
+	n, err := s.Append(id, 12, broken)
+	if !errors.Is(err, ErrChunkIncomplete) {
+		t.Fatalf("Append(interrupted body) = %v, want ErrChunkIncomplete", err)
+	}
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("Append error = %v, dropped the cause the deployment has to diagnose from", err)
+	}
+	if n != 12 {
+		t.Fatalf("Append returned length %d, want 12 (rolled back to the offset it started at)", n)
+	}
+	got, err := s.Received(id)
+	if err != nil {
+		t.Fatalf("Received: %v", err)
+	}
+	if got != 12 {
+		t.Fatalf("Received after an interrupted chunk = %d, want 12", got)
 	}
 }
 
