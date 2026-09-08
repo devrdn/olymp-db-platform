@@ -297,6 +297,27 @@ func (g *Games) WithUploads(files *gamefile.Store, limits gamefile.Limits) *Game
 	return g
 }
 
+// UploadLimits reports the ceilings this installation applies to a chunked
+// upload — the very gamefile.Limits WithUploads was given, not a second copy
+// of it. internal/api's GameHandler asks for this rather than reading
+// GAME_UPLOAD_CHUNK_BYTES / GAME_UPLOAD_MAX_FILE_BYTES from configuration a
+// second time and publishing that instead: the value that decides whether a
+// chunk is accepted (AppendChunk, wrapping gamefile.ErrChunkTooLarge) and the
+// value a client is told to expect must be the one this package actually
+// enforces, or a deployment where the two drifted would refuse every chunk a
+// browser sends while telling that same browser its chunks are the right
+// size (CLAUDE.md rule 11).
+//
+// Enabled is false, and Limits is the zero value, exactly when WithUploads
+// was never called — no GAME_UPLOAD_DIR configured, the same state every
+// upload method already answers with ErrUploadsDisabled. A caller must check
+// Enabled before reading either number: an installation with uploads off is
+// not the same fact as one whose operator configured a limit of zero, and
+// this is what lets the two be told apart.
+func (g *Games) UploadLimits() (gamefile.Limits, bool) {
+	return g.limits, g.files != nil
+}
+
 // Of reads one contest's game, or ErrNoGame when it has none yet.
 func (g *Games) Of(ctx context.Context, contestID uuid.UUID) (Template, error) {
 	return g.repo.Template(ctx, contestID)

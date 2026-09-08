@@ -72,6 +72,13 @@ type fakeGames struct {
 	gotAbortActor   uuid.UUID
 	gotAbortContest uuid.UUID
 	gotAbortUpload  uuid.UUID
+
+	// limits and limitsEnabled back UploadLimits. Left at their zero values —
+	// an empty gamefile.Limits and enabled=false — a fixture behaves like an
+	// installation with no GAME_UPLOAD_DIR configured, exactly the state
+	// TestUploadLimitsAreZeroAndDisabledWhenUploadsAreOff exercises.
+	limits        gamefile.Limits
+	limitsEnabled bool
 }
 
 func (g *fakeGames) Of(context.Context, uuid.UUID) (provisioning.Template, error) {
@@ -142,6 +149,10 @@ func (g *fakeGames) AbortUpload(_ context.Context, actorID, contestID, uploadID 
 		return provisioning.Upload{}, g.abortErr
 	}
 	return g.abortResult, nil
+}
+
+func (g *fakeGames) UploadLimits() (gamefile.Limits, bool) {
+	return g.limits, g.limitsEnabled
 }
 
 // fakeDatabases stands in for provisioning.Service's own half: the rows an
@@ -286,6 +297,84 @@ func TestTheStatusDoesNotCarryTheScriptAndTheScriptEndpointDoes(t *testing.T) {
 	script := decode(t, f.do(http.MethodGet, "/contests/"+id+"/game/script", ""))
 	if script["script"] != "CREATE TABLE guests (id int);" {
 		t.Fatalf("the script endpoint answered %v", script["script"])
+	}
+}
+
+// The status carries the chunk and file ceilings a browser needs before it
+// can slice a file and start a chunked upload — CLAUDE.md rule 11: the value
+// that decides whether AppendChunk accepts a chunk must reach the client that
+// has to obey it. The values chosen here are neither the package's own
+// defaults (defaultMaxGameChunkBodyBytes, 64 MiB) nor the configuration
+// defaults (8 MiB / 4 GiB, config.go's own int64Env calls) — if the handler
+// answered a constant instead of what provisioning.Games.UploadLimits
+// actually reports, this test would still pass with the wrong numbers, which
+// is exactly the failure mode CLAUDE.md rule 11 names.
+func TestGameStatusCarriesTheConfiguredUploadLimitsNotAConstant(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.limitsEnabled = true
+	f.games.limits = gamefile.Limits{MaxChunkBytes: 1234567, MaxFileBytes: 9876543210, MaxDirBytes: 1 << 40}
+
+	status := decode(t, f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game", ""))
+	limits, ok := status["upload_limits"].(map[string]any)
+	if !ok {
+		t.Fatalf("the status carries no upload_limits object: %v", status)
+	}
+	if limits["enabled"] != true {
+		t.Fatalf("enabled = %v, want true", limits["enabled"])
+	}
+	if limits["chunk_bytes"] != float64(1234567) {
+		t.Fatalf("chunk_bytes = %v, want 1234567", limits["chunk_bytes"])
+	}
+	if limits["max_file_bytes"] != float64(9876543210) {
+		t.Fatalf("max_file_bytes = %v, want 9876543210", limits["max_file_bytes"])
+	}
+}
+
+// A deployment with no GAME_UPLOAD_DIR configured never calls WithUploads, so
+// fakeGames.limitsEnabled stays at its zero value here — the same state
+// provisioning.Games.UploadLimits reports for that installation. The
+// interface must be able to tell "uploads are off" from "the operator
+// configured a limit of zero" (uploadLimitsResponse's own doc), so this
+// checks both halves: enabled is false, and the numbers are not silently
+// reported as some other ceiling.
+func TestUploadLimitsAreZeroAndDisabledWhenUploadsAreOff(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+
+	status := decode(t, f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game", ""))
+	limits, ok := status["upload_limits"].(map[string]any)
+	if !ok {
+		t.Fatalf("the status carries no upload_limits object: %v", status)
+	}
+	if limits["enabled"] != false {
+		t.Fatalf("enabled = %v, want false", limits["enabled"])
+	}
+	if limits["chunk_bytes"] != float64(0) || limits["max_file_bytes"] != float64(0) {
+		t.Fatalf("limits = %v, want both zero while disabled", limits)
+	}
+}
+
+// GET .../uploads/current is the other moment a reloading page needs the
+// ceilings — before it even knows whether an upload is in progress (Games'
+// own doc on the two situations this covers). Both branches of currentUpload
+// (an upload found, and "absent") must carry them; this checks the one
+// actually returned when there is nothing to resume, since a fresh page load
+// with no prior upload is the common case.
+func TestCurrentUploadCarriesTheConfiguredUploadLimits(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.currentErr = provisioning.ErrUploadNotFound
+	f.games.limitsEnabled = true
+	f.games.limits = gamefile.Limits{MaxChunkBytes: 555555, MaxFileBytes: 777777777}
+
+	body := decode(t, f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game/uploads/current", ""))
+	if body["status"] != "absent" {
+		t.Fatalf("status = %v, want absent", body["status"])
+	}
+	limits, ok := body["upload_limits"].(map[string]any)
+	if !ok {
+		t.Fatalf("the response carries no upload_limits object: %v", body)
+	}
+	if limits["enabled"] != true || limits["chunk_bytes"] != float64(555555) || limits["max_file_bytes"] != float64(777777777) {
+		t.Fatalf("upload_limits = %v, want the configured limits", limits)
 	}
 }
 
