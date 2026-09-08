@@ -3,6 +3,7 @@ package gamedb_test
 import (
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -179,14 +180,15 @@ func TestEachStatementRemembersTheLineItStartedOn(t *testing.T) {
 	}
 }
 
-// pg_dump (recent versions) writes \connect, \restrict and \unrestrict into
-// its plain-text output — psql's own commands, never SQL, and PostgreSQL's
-// "syntax error at or near \" explains nothing about what actually went
-// wrong. The reader has to refuse these itself, by line, before Exec ever
-// sees them.
+// pg_dump can write \connect into its plain-text output — psql's own
+// command, never SQL, and PostgreSQL's "syntax error at or near \" explains
+// nothing about what actually went wrong. The reader has to refuse it
+// itself, by line, before Exec ever sees it. (\restrict and \unrestrict are
+// the one pair of backslash commands this does *not* apply to — see
+// TestRestrictAndUnrestrictAreSkippedRatherThanRefused.)
 func TestABackslashCommandAtLineStartIsRefusedByLineAndName(t *testing.T) {
 	t.Parallel()
-	r := gamedb.NewScriptReader(strings.NewReader("SELECT 1;\n\\restrict abc123\nSELECT 2;\n"))
+	r := gamedb.NewScriptReader(strings.NewReader("SELECT 1;\n\\connect otherdb\nSELECT 2;\n"))
 
 	if _, err := r.Next(); err != nil {
 		t.Fatalf("the first statement: %v", err)
@@ -203,8 +205,35 @@ func TestABackslashCommandAtLineStartIsRefusedByLineAndName(t *testing.T) {
 	if syn.Line != 2 {
 		t.Fatalf("line = %d, want 2", syn.Line)
 	}
-	if !strings.Contains(syn.Message, "restrict") {
+	if !strings.Contains(syn.Message, "connect") {
 		t.Fatalf("message = %q, does not name the command", syn.Message)
+	}
+}
+
+// \restrict and \unrestrict are the exception: pg_dump 16.10/17.6/18 and
+// newer write \restrict <token> right after the dump header and
+// \unrestrict <token> as the very last line, unconditionally and with no
+// flag to suppress it (see script.go's own comment on this case for why
+// letting just this pair through is not a weaker check than refusing every
+// other backslash command). The reader must skip the line silently rather
+// than refuse the script — an organiser exporting a dump with a stock
+// pg_dump has no way to remove it.
+func TestRestrictAndUnrestrictAreSkippedRatherThanRefused(t *testing.T) {
+	t.Parallel()
+	const script = "\\restrict abc123\n" +
+		"SELECT 1;\n" +
+		"\\unrestrict abc123\n"
+	got := readAllStatements(t, script)
+	if len(got) != 1 {
+		t.Fatalf("got %d statements, want 1: %+v", len(got), got)
+	}
+	if got[0].Text != "SELECT 1;" {
+		t.Fatalf("statement text = %q", got[0].Text)
+	}
+	// The skipped \restrict line must not be counted: the statement starts
+	// on line 2, not line 1.
+	if got[0].Line != 2 {
+		t.Fatalf("statement line = %d, want 2", got[0].Line)
 	}
 }
 
@@ -347,5 +376,68 @@ func TestACopyBlockWithNoTerminatorIsRefused(t *testing.T) {
 	var syn *gamedb.ScriptSyntaxError
 	if !errors.As(err, &syn) {
 		t.Fatalf("error is %T, want *ScriptSyntaxError: %v", err, err)
+	}
+}
+
+// TestARealPgDumpFileIsReadInFull is the regression this package was
+// missing: every earlier test constructs its own script by hand, so all of
+// them agreed with what the reader expects a dump to look like. This one
+// instead reads an actual `pg_dump --no-owner --no-privileges` text-format
+// dump (PostgreSQL 16.15, one table) byte for byte off disk — the
+// \restrict / \unrestrict pair included, since that is what the real tool
+// writes and organisers cannot turn off. If the reader ever refuses this
+// file again, this test is the one that will say so.
+func TestARealPgDumpFileIsReadInFull(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.Open("testdata/pg_dump_16_languages.sql")
+	if err != nil {
+		t.Fatalf("open testdata: %v", err)
+	}
+	defer f.Close()
+
+	r := gamedb.NewScriptReader(f)
+
+	var (
+		statements int
+		copyRows   []byte
+		sawCopy    bool
+	)
+	for {
+		stmt, err := r.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next(): %v", err)
+		}
+		statements++
+		if stmt.CopyHeader == "" {
+			continue
+		}
+		if !strings.Contains(stmt.CopyHeader, "COPY public.languages") {
+			t.Fatalf("CopyHeader = %q", stmt.CopyHeader)
+		}
+		data, err := io.ReadAll(r.CopyData())
+		if err != nil {
+			t.Fatalf("reading COPY data: %v", err)
+		}
+		copyRows, sawCopy = data, true
+	}
+
+	// SET * 9, two blank SET-adjacent lines are not statements, CREATE
+	// TABLE, the COPY header itself, and ALTER TABLE ... ADD CONSTRAINT —
+	// the \restrict/\unrestrict lines must not have added two more.
+	if statements == 0 {
+		t.Fatal("got 0 statements from a real pg_dump file")
+	}
+	if !sawCopy {
+		t.Fatal("the COPY public.languages block was never seen")
+	}
+	const wantRows = "en\tEnglish\tEnglish\tt\t10\n" +
+		"ro\tRomanian\tRomână\tt\t20\n" +
+		"ru\tRussian\tРусский\tt\t30\n"
+	if string(copyRows) != wantRows {
+		t.Fatalf("COPY data = %q, want %q", copyRows, wantRows)
 	}
 }
