@@ -1157,6 +1157,30 @@ const en = {
       "That database has already been removed — by the sweep after the contest ended, or by somebody else while this page was open. Nothing was changed.",
     game_not_editable:
       "This contest's game can no longer be replaced. Replacing it raises the template's version, which makes every participant's copy stale — they would be dropped and made again.",
+    game_uploads_disabled:
+      "This installation has no upload directory, so a game can only be written in the editor. Configuring one is a job for whoever runs the server.",
+    game_upload_filename_invalid:
+      "That filename is empty or longer than allowed. Rename the file and try again.",
+    game_upload_too_large:
+      "That file is larger than this installation accepts. A game database is copied once per participant, so the ceiling is about disk space rather than about the upload.",
+    game_upload_store_full:
+      "The upload directory is full. It frees up as other uploads finish or are removed.",
+    game_upload_chunk_out_of_order:
+      "This piece does not continue where the server actually left off. Ask it how much it has received and resume from there, rather than from where the browser thought it was.",
+    game_upload_chunk_too_large:
+      "One piece of the file is larger than this installation accepts. Send the file in smaller pieces.",
+    game_upload_length_mismatch:
+      "Fewer or more bytes arrived than the upload declared, so it cannot be completed. Start the upload again.",
+    game_upload_not_found:
+      "This contest has no upload by that identifier. Reload the page: it has most likely been completed or cancelled already.",
+    game_upload_in_progress:
+      "This contest already has an upload still receiving. Finish or cancel it before starting another.",
+    game_upload_already_complete:
+      "This upload is already finished or cancelled, so nothing more can be sent to it.",
+    game_upload_incomplete:
+      "This upload has not finished yet, so there is nothing to look inside. Wait until it completes.",
+    game_upload_too_often:
+      "Uploads have been started too often. Wait a moment before starting another.",
     query_parse_error:
       "PostgreSQL could not read that query. Its own words are below.",
     query_not_one_statement:
