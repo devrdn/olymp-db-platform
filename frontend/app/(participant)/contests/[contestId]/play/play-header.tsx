@@ -65,7 +65,17 @@ export function PlayHeader({
   return (
     <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line bg-bg px-4 py-2.5">
       <div className="flex min-w-0 items-center gap-3">
-        <h1 className="truncate text-row text-ink">{title}</h1>
+        {/* One line with an ellipsis where there is a row to share, wrapping
+            where there is not. On a phone the title already has the bar to
+            itself — the clock has wrapped onto its own line below it — and
+            truncating there buys nothing while costing the name of the
+            contest: measured at 375px, "Fire at the Kogalniceanu warehouse —
+            regional round" lost its last 75px with 343px of empty second line
+            underneath it. `whitespace-normal` is all that has to be undone;
+            with the text wrapping there is nothing for `text-ellipsis` to
+            apply to and nothing for `overflow-hidden` to cut, since the box
+            has no fixed height. */}
+        <h1 className="truncate text-row text-ink max-narrow:whitespace-normal">{title}</h1>
         {phase === "finished" ? <Tag tone="mute">{t.finishedTag}</Tag> : null}
       </div>
       <PlayClock offsetRef={offsetRef} deadlineRef={deadlineRef} phase={phase} dict={dict} />

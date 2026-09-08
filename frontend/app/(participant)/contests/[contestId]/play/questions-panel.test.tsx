@@ -183,6 +183,25 @@ describe("the questions panel", () => {
     expect(screen.getByRole("radio", { name: "The gardener" })).toBeInTheDocument();
   });
 
+  // The radio itself is 16px, which is what the design draws; what has to be
+  // hittable is the label around it, because clicking anywhere on the label
+  // is what selects the choice. Measured, that row was 22px tall on every
+  // screen size — under the 24px a thumb needs — so the whole answer to a
+  // multiple-choice question was a strip too thin to press reliably.
+  test("a choice's own label is the hit area, and is kept at least 24px tall", () => {
+    render(
+      <QuestionsPanel
+        contestId="c1"
+        items={[entry({ kind: "choice", choiceIds: ["a"], choices: { a: "The butler" } })]}
+        dict={en}
+      />,
+    );
+
+    const label = screen.getByRole("radio", { name: "The butler" }).closest("label");
+    expect(label).not.toBeNull();
+    expect(label!.className).toMatch(/(^|\s)min-h-6(\s|$)/);
+  });
+
   test("a refusal names what it was about, from the caller's own words", async () => {
     answer.current = { kind: "refused", code: "question_not_open" };
     render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);

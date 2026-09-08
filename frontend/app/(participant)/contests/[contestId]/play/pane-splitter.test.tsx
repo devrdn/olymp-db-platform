@@ -74,6 +74,24 @@ describe("the console's panes", () => {
     );
   });
 
+  // The divider is a 1px hairline on purpose — the pane is the thing, not
+  // the handle — so what has to be big enough to press is the invisible area
+  // around it. Measured, that area was 9px wide at every screen size, on a
+  // control that first appears at 760px, which is a tablet somebody may well
+  // be using with a finger. jsdom cannot measure a pseudo-element, so what is
+  // held here is that the coarse-pointer widening is still declared.
+  test("widens its grab area for a finger without stealing a mouse's clicks", () => {
+    show();
+    const handle = screen.getByRole("separator", { name: t.side });
+
+    // The mouse-sized area: one pixel of hairline plus four either side.
+    expect(handle.className).toMatch(/(^|\s)after:-left-1(\s|$)/);
+    expect(handle.className).toMatch(/(^|\s)after:-right-1(\s|$)/);
+    // The finger-sized one, and only where the pointer is coarse.
+    expect(handle.className).toMatch(/(^|\s)pointer-coarse:after:-left-3(\s|$)/);
+    expect(handle.className).toMatch(/(^|\s)pointer-coarse:after:-right-3(\s|$)/);
+  });
+
   test("remembers a width across a visit, per contest", async () => {
     const user = userEvent.setup();
     const first = show("c1");

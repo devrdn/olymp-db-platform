@@ -41,14 +41,26 @@ export function SidePanel({
           `TabsContent` a plain block box rather than a flex container
           (finding 3: forcing `flex-col` here bought nothing and turned
           every direct child into a flex item). */}
-      <TabsContent value="story" fill={false} className="overflow-y-auto p-4">
+      {/* `relative` is not styling: `sr-only` is `position: absolute`, and an
+          absolutely-positioned descendant of a *static* scroll box is not
+          clipped by it — its containing block is whatever positioned ancestor
+          comes next, which here was the page itself. Every question in the
+          list carries two of them (its number, and a choice question's
+          legend), so the last question's hidden label sat at the page's own
+          coordinates however far down the panel it had scrolled to, and
+          dragged the document's scroll area with it. Measured at 1920x1080
+          with five questions: a screen that is supposed to be exactly one
+          viewport tall scrolled 263px, all of it empty, and the figure grows
+          with the number of questions. Making the scroll box a containing
+          block is what puts those labels back inside it. */}
+      <TabsContent value="story" fill={false} className="relative overflow-y-auto p-4">
         {storyUnavailable !== null ? (
           <p className="text-body text-ink-2">{storyUnavailable}</p>
         ) : (
           storyBody
         )}
       </TabsContent>
-      <TabsContent value="questions" fill={false} className="overflow-y-auto p-4">
+      <TabsContent value="questions" fill={false} className="relative overflow-y-auto p-4">
         <QuestionsPanel contestId={contestId} items={questionEntries} dict={dict} />
       </TabsContent>
     </Tabs>

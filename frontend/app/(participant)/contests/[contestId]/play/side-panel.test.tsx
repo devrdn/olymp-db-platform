@@ -59,3 +59,29 @@ describe("the side panel", () => {
     expect(screen.getByText("This contest has no story yet")).toBeInTheDocument();
   });
 });
+
+/**
+ * jsdom lays nothing out, so this cannot measure the 263px of empty page
+ * scroll the defect produced (the numbers are in the commit message). What it
+ * can hold is the rule the fix established: a scroll box that contains
+ * `sr-only` text has to be a containing block, because `sr-only` is
+ * `position: absolute` and a *static* scroll box does not clip one — the
+ * hidden label then keeps the page's own coordinates and grows the document
+ * with it.
+ */
+test("each scrolling panel is the containing block for the hidden labels inside it", () => {
+  render(
+    <SidePanel
+      storyBody={<p>A body in the stacks.</p>}
+      storyUnavailable={null}
+      contestId="c1"
+      questionEntries={[]}
+      dict={en}
+    />,
+  );
+
+  for (const panel of screen.getAllByRole("tabpanel", { hidden: true })) {
+    expect(panel.className).toMatch(/(^|\s)overflow-y-auto(\s|$)/);
+    expect(panel.className).toMatch(/(^|\s)relative(\s|$)/);
+  }
+});
