@@ -83,7 +83,7 @@ export function AppBar({
   const markClass = "flex shrink-0 items-center gap-2 text-control font-semibold text-ink";
 
   return (
-    <header className="sticky top-0 z-20 grid grid-cols-[minmax(var(--gutter-min),1fr)_minmax(0,var(--container-column))_minmax(var(--gutter-min),1fr)] border-b border-line bg-bg max-narrow:grid-cols-[0_minmax(0,1fr)_0]">
+    <header className="sticky top-0 z-20 grid grid-cols-[minmax(var(--gutter-min),1fr)_minmax(0,var(--container-column))_minmax(var(--gutter-min),1fr)] border-b border-line bg-bg max-narrow:grid-cols-[0_minmax(0,1fr)_0] print:hidden">
       <div />
       <div className="flex h-12 min-w-0 items-center gap-3.5 px-10 max-narrow:px-4.5">
         {home ? (

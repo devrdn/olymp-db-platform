@@ -58,6 +58,58 @@ describe("the side panel", () => {
 
     expect(screen.getByText("This contest has no story yet")).toBeInTheDocument();
   });
+
+  // The last piece of export the plan asks for: the story as a file, beside
+  // the story itself — the same placement query-log-panel.tsx already uses
+  // for its own CSV link.
+  test("offers the story as a Markdown download, as a link and not a button", () => {
+    show();
+
+    // `hidden: true`, the same as the "tabpanel" query above: the story tab
+    // is not the one showing by default, and `Tabs` keeps it in the DOM
+    // rather than unmounting it (this file's own doc), which is exactly what
+    // makes it findable at all.
+    const link = screen.getByRole("link", {
+      name: en.participant.play.workspace.story.export.label,
+      hidden: true,
+    });
+    expect(link).toHaveAttribute("href", "/contests/c1/play/story.md");
+    expect(link).toHaveAttribute("download");
+    expect(link).toHaveTextContent("Markdown");
+  });
+
+  // The print-ready view is a separate route (this file's own doc explains
+  // why), so this is a plain navigation link rather than a member of
+  // ExportMenu's own list — and it opens in a new tab so a participant
+  // working under a timer never loses this screen to it, the same reasoning
+  // StoryText's own citation links already follow.
+  test("offers a way to the print-ready view, opened in a new tab", () => {
+    show();
+
+    const link = screen.getByRole("link", { name: en.participant.play.workspace.story.print, hidden: true });
+    expect(link).toHaveAttribute("href", "/contests/c1/play/print");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));
+  });
+
+  test("offers neither the download nor the print link when there is no story to take away", () => {
+    render(
+      <SidePanel
+        storyBody={null}
+        storyUnavailable="This contest has no story yet"
+        contestId="c1"
+        questionEntries={[]}
+        dict={en}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("link", { name: en.participant.play.workspace.story.export.label, hidden: true }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: en.participant.play.workspace.story.print, hidden: true }),
+    ).not.toBeInTheDocument();
+  });
 });
 
 /**

@@ -827,6 +827,13 @@ const ru = {
           questions: "Вопросы",
         },
         download: "Скачать CSV",
+        story: {
+          export: {
+            heading: "Экспорт",
+            label: "Скачать историю в формате Markdown",
+          },
+          print: "Печать или сохранить как PDF",
+        },
         panes: {
           schema: "Ширина панели схемы",
           side: "Ширина панели вопросов",
@@ -859,6 +866,11 @@ const ru = {
             timeout: "Истекло время",
           },
         },
+      },
+      print: {
+        by: "Напечатано: {name}, {date}",
+        byUnknown: "Напечатано {date}",
+        button: "Печать",
       },
     },
     mine: {

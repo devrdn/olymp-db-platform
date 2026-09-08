@@ -888,6 +888,19 @@ const en = {
           questions: "Questions",
         },
         download: "Download CSV",
+        // The story tab's own two ways to take it away — the last export the
+        // plan asks for. `export` names the Markdown file the same way
+        // `log.export` names the query log's own; `print` is a plain link to
+        // the print-ready view (a separate route, not a member of
+        // `ExportMenu`'s list — see side-panel.tsx's own doc), which is why
+        // it reads as an instruction rather than a file format.
+        story: {
+          export: {
+            heading: "Export",
+            label: "Download the story as Markdown",
+          },
+          print: "Print or save as PDF",
+        },
         panes: {
           schema: "Width of the schema panel",
           side: "Width of the questions panel",
@@ -920,6 +933,17 @@ const en = {
             timeout: "Timed out",
           },
         },
+      },
+      // The print-ready view (a separate route — see print/page.tsx's own
+      // doc): the contest, the story, and who printed it and when. Two
+      // sentences for the byline rather than one with an empty `{name}`,
+      // because the fallback is a rare edge (an identity this server could
+      // not read) and a sentence built to hide that gap is a worse one than a
+      // sentence that simply does not mention a name.
+      print: {
+        by: "Printed by {name} on {date}",
+        byUnknown: "Printed on {date}",
+        button: "Print",
       },
     },
     mine: {
