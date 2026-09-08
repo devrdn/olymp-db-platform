@@ -14,6 +14,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
+	"github.com/devrdn/db-contest/backend/internal/gamefile"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
@@ -32,6 +33,45 @@ type fakeGames struct {
 	setErr   error
 	gotSet   string
 	gotActor uuid.UUID
+
+	// Upload half. Every gotX field is set the moment the corresponding
+	// method is called — even on the error path — the same way gotSet and
+	// gotActor above prove a request actually reached the service.
+	beginErr        error
+	beginResult     provisioning.Upload
+	gotBeginContest uuid.UUID
+	gotBeginName    string
+	gotBeginBytes   int64
+
+	appendErr          error
+	appendResult       int64
+	gotAppendContest   uuid.UUID
+	gotAppendUpload    uuid.UUID
+	gotAppendOffset    int64
+	gotAppendBodyBytes []byte // read via io.ReadAll here — a test double, not the production streaming path
+
+	currentErr    error
+	currentResult provisioning.Upload
+
+	windowErr        error
+	windowResult     gamefile.Window
+	gotWindowFrom    int
+	gotWindowLines   int
+	gotWindowBytes   int64
+	gotWindowUpload  uuid.UUID
+	gotWindowContest uuid.UUID
+
+	completeErr        error
+	completeResult     provisioning.Template
+	gotCompleteActor   uuid.UUID
+	gotCompleteContest uuid.UUID
+	gotCompleteUpload  uuid.UUID
+
+	abortErr        error
+	abortResult     provisioning.Upload
+	gotAbortActor   uuid.UUID
+	gotAbortContest uuid.UUID
+	gotAbortUpload  uuid.UUID
 }
 
 func (g *fakeGames) Of(context.Context, uuid.UUID) (provisioning.Template, error) {
@@ -48,6 +88,60 @@ func (g *fakeGames) SetScript(_ context.Context, actorID, _ uuid.UUID, script st
 		Status: provisioning.TemplatePending, Script: script,
 	}
 	return g.template, nil
+}
+
+func (g *fakeGames) BeginUpload(_ context.Context, contestID uuid.UUID, filename string, declaredBytes int64) (provisioning.Upload, error) {
+	g.gotBeginContest, g.gotBeginName, g.gotBeginBytes = contestID, filename, declaredBytes
+	if g.beginErr != nil {
+		return provisioning.Upload{}, g.beginErr
+	}
+	return g.beginResult, nil
+}
+
+func (g *fakeGames) AppendChunk(_ context.Context, contestID, uploadID uuid.UUID, offset int64, r io.Reader) (int64, error) {
+	g.gotAppendContest, g.gotAppendUpload, g.gotAppendOffset = contestID, uploadID, offset
+	// io.ReadAll here is what proves the handler handed AppendChunk a real
+	// io.Reader rather than something it had already drained: reading it a
+	// second time, from the fake, is only possible if the handler never read
+	// it at all.
+	body, err := io.ReadAll(r)
+	if err != nil {
+		return 0, err
+	}
+	g.gotAppendBodyBytes = body
+	if g.appendErr != nil {
+		return g.appendResult, g.appendErr
+	}
+	return g.appendResult, nil
+}
+
+func (g *fakeGames) CurrentUpload(context.Context, uuid.UUID) (provisioning.Upload, error) {
+	return g.currentResult, g.currentErr
+}
+
+func (g *fakeGames) UploadWindow(_ context.Context, contestID, uploadID uuid.UUID, fromLine, maxLines int, maxBytes int64) (gamefile.Window, error) {
+	g.gotWindowContest, g.gotWindowUpload = contestID, uploadID
+	g.gotWindowFrom, g.gotWindowLines, g.gotWindowBytes = fromLine, maxLines, maxBytes
+	if g.windowErr != nil {
+		return gamefile.Window{}, g.windowErr
+	}
+	return g.windowResult, nil
+}
+
+func (g *fakeGames) CompleteUpload(_ context.Context, actorID, contestID, uploadID uuid.UUID) (provisioning.Template, error) {
+	g.gotCompleteActor, g.gotCompleteContest, g.gotCompleteUpload = actorID, contestID, uploadID
+	if g.completeErr != nil {
+		return provisioning.Template{}, g.completeErr
+	}
+	return g.completeResult, nil
+}
+
+func (g *fakeGames) AbortUpload(_ context.Context, actorID, contestID, uploadID uuid.UUID) (provisioning.Upload, error) {
+	g.gotAbortActor, g.gotAbortContest, g.gotAbortUpload = actorID, contestID, uploadID
+	if g.abortErr != nil {
+		return provisioning.Upload{}, g.abortErr
+	}
+	return g.abortResult, nil
 }
 
 // fakeDatabases stands in for provisioning.Service's own half: the rows an
@@ -79,6 +173,7 @@ type gameFixture struct {
 	router    http.Handler
 	games     *fakeGames
 	databases *fakeDatabases
+	handler   *api.GameHandler
 	stores    *conteststest.Fixture
 	actor     users.User
 	cookie    *http.Cookie
@@ -111,11 +206,13 @@ func newGameFixture(t *testing.T, permissions ...string) *gameFixture {
 
 	games := &fakeGames{}
 	databases := &fakeDatabases{}
+	limiter := auth.NewLimiter(c)
 	router := chi.NewRouter()
-	api.NewGameHandler(games, databases, mw, log).Mount(router)
+	handler := api.NewGameHandler(games, databases, mw, log, limiter)
+	handler.Mount(router)
 
 	return &gameFixture{
-		router: router, games: games, databases: databases, stores: stores, actor: actor,
+		router: router, games: games, databases: databases, handler: handler, stores: stores, actor: actor,
 		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: token},
 	}
 }
@@ -433,5 +530,383 @@ func TestTheInstanceListIsRefusedToAnAccountThatIsNotStaffOnTheContest(t *testin
 	rec := f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game/instances", "")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status %d, want 403: %s", rec.Code, rec.Body)
+	}
+}
+
+// --- Uploading a finished dump ----------------------------------------------
+
+func TestBeginningAnUploadReservesOneAndReturnsIt(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contest := uuid.NewString()
+	f.games.beginResult = provisioning.Upload{
+		ID: uuid.New(), Filename: "dump.sql", DeclaredBytes: 12345,
+		Status: provisioning.UploadReceiving,
+	}
+
+	rec := f.do(http.MethodPost, "/contests/"+contest+"/game/uploads",
+		`{"filename":"dump.sql","declared_bytes":12345}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status %d, want 201: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotBeginName != "dump.sql" || f.games.gotBeginBytes != 12345 {
+		t.Fatalf("the service was asked to begin %q / %d", f.games.gotBeginName, f.games.gotBeginBytes)
+	}
+	if f.games.gotBeginContest.String() != contest {
+		t.Fatalf("the contest reached the service as %v, want %v", f.games.gotBeginContest, contest)
+	}
+	body := decode(t, rec)
+	if body["status"] != "receiving" || body["filename"] != "dump.sql" {
+		t.Fatalf("answered %v", body)
+	}
+}
+
+// CLAUDE.md rule 5: the address-scoped budget is spent before the
+// contest-scoped one, and here that means the address limit trips first when
+// every request in the loop shares one contest and one httptest RemoteAddr.
+func TestBeginningAnUploadIsRateLimitedPerAddress(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contest := uuid.NewString()
+
+	var last *httptest.ResponseRecorder
+	for i := 0; i < 21; i++ { // maxUploadBeginsPerAddress is 20
+		last = f.do(http.MethodPost, "/contests/"+contest+"/game/uploads",
+			`{"filename":"dump.sql","declared_bytes":1}`)
+	}
+	if last.Code != http.StatusTooManyRequests {
+		t.Fatalf("status %d, want 429: %s", last.Code, last.Body)
+	}
+	if code := errorCode(t, last); code != "game_upload_too_often" {
+		t.Fatalf("code %q, want game_upload_too_often", code)
+	}
+}
+
+// A refused attempt must still count against the budget (CLAUDE.md rule 13):
+// a caller who cannot pass RequireContestPermission must not be able to probe
+// the limiter for free either. Asserted by the same threshold as the address
+// test above holding even though the middleware never lets these requests
+// reach beginUpload — the limiter check sits inside the handler, not before
+// authentication, so RequireContestPermission's own 403 is what is actually
+// being proven never to reach the limiter at all in this case; the
+// permission test below covers that half on its own.
+func TestBeginningAnUploadIsRefusedToAnAccountThatIsNotStaffOnTheContest(t *testing.T) {
+	f := newGameFixture(t)
+
+	rec := f.do(http.MethodPost, "/contests/"+uuid.NewString()+"/game/uploads",
+		`{"filename":"dump.sql","declared_bytes":1}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d, want 403: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotBeginName != "" {
+		t.Fatal("the request reached the service despite the refusal")
+	}
+}
+
+// The chunk is streamed straight into AppendChunk: fakeGames.AppendChunk
+// reads the io.Reader it is given with io.ReadAll on its own side, which only
+// returns the real bytes if the handler handed over something still readable
+// — not a buffer it had already drained into memory itself.
+func TestAppendingAChunkStreamsTheBodyToTheService(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contest, upload := uuid.NewString(), uuid.NewString()
+	f.games.appendResult = 19
+
+	rec := f.do(http.MethodPut,
+		"/contests/"+contest+"/game/uploads/"+upload+"/chunk?offset=7",
+		"CREATE TABLE t (id int);")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotAppendOffset != 7 {
+		t.Fatalf("offset reached the service as %d, want 7", f.games.gotAppendOffset)
+	}
+	if string(f.games.gotAppendBodyBytes) != "CREATE TABLE t (id int);" {
+		t.Fatalf("the service received %q", f.games.gotAppendBodyBytes)
+	}
+	if f.games.gotAppendContest.String() != contest || f.games.gotAppendUpload.String() != upload {
+		t.Fatalf("scoped to %v/%v, want %v/%v", f.games.gotAppendContest, f.games.gotAppendUpload, contest, upload)
+	}
+	if decode(t, rec)["received_bytes"] != float64(19) {
+		t.Fatalf("received_bytes came back %v", decode(t, rec)["received_bytes"])
+	}
+}
+
+func TestAppendingAChunkWithoutANumericOffsetIsRefused(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+
+	rec := f.do(http.MethodPut,
+		"/contests/"+uuid.NewString()+"/game/uploads/"+uuid.NewString()+"/chunk?offset=not-a-number",
+		"x")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotAppendBodyBytes != nil {
+		t.Fatal("the body reached the service despite the malformed offset")
+	}
+}
+
+// The transport-level ceiling (appendChunk's own doc on maxChunkBody): a body
+// larger than it is refused before AppendChunk ever sees it, and reported as
+// the same refusal ErrUploadChunkTooLarge would produce — not a second code
+// to explain.
+func TestAppendingAChunkOverTheTransportCeilingIsRefused(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.handler.WithMaxChunkBody(8)
+
+	rec := f.do(http.MethodPut,
+		"/contests/"+uuid.NewString()+"/game/uploads/"+uuid.NewString()+"/chunk?offset=0",
+		"123456789") // 9 bytes, one past the 8-byte ceiling
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body)
+	}
+	if code := errorCode(t, rec); code != "game_upload_chunk_too_large" {
+		t.Fatalf("code %q, want game_upload_chunk_too_large", code)
+	}
+}
+
+// A chunk out of order is CLAUDE.md rule 1's own example in this task's
+// brief: its own sentinel, its own code, never a 500.
+func TestAppendingAChunkOutOfOrderNamesItsOwnCode(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.appendErr = provisioning.ErrUploadChunkOutOfOrder
+
+	rec := f.do(http.MethodPut,
+		"/contests/"+uuid.NewString()+"/game/uploads/"+uuid.NewString()+"/chunk?offset=5",
+		"x")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d, want 409: %s", rec.Code, rec.Body)
+	}
+	if code := errorCode(t, rec); code != "game_upload_chunk_out_of_order" {
+		t.Fatalf("code %q, want game_upload_chunk_out_of_order", code)
+	}
+}
+
+// A page reload finds nothing to resume as an empty, successful answer, not a
+// 404 — the same "absent" shape status() uses for a contest with no game.
+func TestCurrentUploadReportsAbsentWhenThereIsNone(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.currentErr = provisioning.ErrUploadNotFound
+
+	rec := f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game/uploads/current", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body)
+	}
+	if decode(t, rec)["status"] != "absent" {
+		t.Fatalf("answered %v, want absent", decode(t, rec))
+	}
+}
+
+func TestCurrentUploadReturnsTheInProgressOne(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.currentResult = provisioning.Upload{
+		ID: uuid.New(), Filename: "dump.sql", ReceivedBytes: 40, Status: provisioning.UploadReceiving,
+	}
+
+	rec := f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game/uploads/current", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	body := decode(t, rec)
+	if body["status"] != "receiving" || body["received_bytes"] != float64(40) {
+		t.Fatalf("answered %v", body)
+	}
+}
+
+// CompleteUpload's own doc calls this "the same path as SetScript" — the
+// answer follows the exact shape and status setScript's own test asserts.
+func TestCompletingAnUploadReplacesTheGame(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contest, upload := uuid.NewString(), uuid.NewString()
+	f.games.completeResult = provisioning.Template{
+		Database: "game_tpl_cabc", Version: 3, Status: provisioning.TemplatePending,
+	}
+
+	rec := f.do(http.MethodPost, "/contests/"+contest+"/game/uploads/"+upload+"/complete", "")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status %d, want 202: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotCompleteActor != f.actor.ID {
+		t.Fatal("the actor did not reach the service, so nothing could be recorded against them")
+	}
+	if f.games.gotCompleteContest.String() != contest || f.games.gotCompleteUpload.String() != upload {
+		t.Fatalf("scoped to %v/%v, want %v/%v", f.games.gotCompleteContest, f.games.gotCompleteUpload, contest, upload)
+	}
+	if decode(t, rec)["status"] != "pending" {
+		t.Fatalf("answered %v, want pending", decode(t, rec))
+	}
+}
+
+func TestAbortingAnUploadCancelsIt(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contest, upload := uuid.NewString(), uuid.NewString()
+	f.games.abortResult = provisioning.Upload{ID: uuid.MustParse(upload), Status: provisioning.UploadAborted}
+
+	rec := f.do(http.MethodPost, "/contests/"+contest+"/game/uploads/"+upload+"/abort", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotAbortActor != f.actor.ID {
+		t.Fatal("the actor did not reach the service, so nothing could be recorded against them")
+	}
+	if f.games.gotAbortContest.String() != contest || f.games.gotAbortUpload.String() != upload {
+		t.Fatalf("scoped to %v/%v, want %v/%v", f.games.gotAbortContest, f.games.gotAbortUpload, contest, upload)
+	}
+	if decode(t, rec)["status"] != "aborted" {
+		t.Fatalf("answered %v, want aborted", decode(t, rec))
+	}
+}
+
+// Paging past the last line is a normal outcome, not a failure: gamefile.
+// Window's own doc treats it as an empty window, and this handler adds
+// nothing on top of that.
+func TestUploadWindowPastTheEndIsAnEmptyWindowNotAnError(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.windowResult = gamefile.Window{FromLine: 10_000, TotalLines: 40}
+
+	rec := f.do(http.MethodGet,
+		"/contests/"+uuid.NewString()+"/game/uploads/"+uuid.NewString()+"/window?from=10000", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body)
+	}
+	body := decode(t, rec)
+	if lines, ok := body["lines"].([]any); !ok || len(lines) != 0 {
+		t.Fatalf("lines came back %v, want an empty list", body["lines"])
+	}
+	if body["total_lines"] != float64(40) {
+		t.Fatalf("total_lines came back %v, want 40", body["total_lines"])
+	}
+}
+
+// CLAUDE.md rule 2: max_lines and max_bytes are the caller's own budget for
+// one gamefile.Window call, and an organiser's query string is not a trusted
+// source for how much of this process's memory one request may hold
+// (readWindowLines' own doc). A value past the ceiling is clamped, not
+// honoured verbatim.
+func TestUploadWindowClampsCallerSuppliedBudgets(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+
+	rec := f.do(http.MethodGet,
+		"/contests/"+uuid.NewString()+"/game/uploads/"+uuid.NewString()+"/window?max_lines=999999999&max_bytes=999999999999", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotWindowLines != 1000 {
+		t.Fatalf("max_lines reached the service as %d, want the 1000-line ceiling", f.games.gotWindowLines)
+	}
+	if f.games.gotWindowBytes != 1<<20 {
+		t.Fatalf("max_bytes reached the service as %d, want the 1 MiB ceiling", f.games.gotWindowBytes)
+	}
+}
+
+// CLAUDE.md rule 1: every one of provisioning/upload.go's eleven sentinels
+// gets its own code and its own status, proven through one endpoint the same
+// way TestEveryGameRefusalHasItsOwnCode and TestEveryInstanceRefusalHasItsOwn
+// Code already prove it for the script and instance sentinels — fail is one
+// switch shared by every route on this handler, so which endpoint raises the
+// sentinel does not change what it maps to.
+func TestEveryUploadRefusalHasItsOwnCode(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"uploads not configured on this installation", provisioning.ErrUploadsDisabled, http.StatusNotFound, "game_uploads_disabled"},
+		{"an invalid filename", provisioning.ErrUploadFilenameInvalid, http.StatusBadRequest, "game_upload_filename_invalid"},
+		{"a declared size over the limit", provisioning.ErrUploadTooLarge, http.StatusBadRequest, "game_upload_too_large"},
+		{"the upload directory is full", provisioning.ErrUploadStoreFull, http.StatusConflict, "game_upload_store_full"},
+		{"a chunk sent out of order", provisioning.ErrUploadChunkOutOfOrder, http.StatusConflict, "game_upload_chunk_out_of_order"},
+		{"a chunk over the domain's own limit", provisioning.ErrUploadChunkTooLarge, http.StatusBadRequest, "game_upload_chunk_too_large"},
+		{"received bytes short of the declared length", provisioning.ErrUploadLengthMismatch, http.StatusConflict, "game_upload_length_mismatch"},
+		{"another contest's upload", provisioning.ErrUploadNotFound, http.StatusNotFound, "game_upload_not_found"},
+		{"a second upload while one is already receiving", provisioning.ErrUploadInProgress, http.StatusConflict, "game_upload_in_progress"},
+		{"an upload already sealed or cancelled", provisioning.ErrUploadAlreadyComplete, http.StatusConflict, "game_upload_already_complete"},
+		{"a window read before the upload was completed", provisioning.ErrUploadIncomplete, http.StatusConflict, "game_upload_incomplete"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newGameFixture(t, rbac.PermissionContestAdminAll)
+			f.games.appendErr = tc.err
+
+			rec := f.do(http.MethodPut,
+				"/contests/"+uuid.NewString()+"/game/uploads/"+uuid.NewString()+"/chunk?offset=0", "x")
+			if rec.Code != tc.status {
+				t.Fatalf("status %d, want %d: %s", rec.Code, tc.status, rec.Body)
+			}
+			if code := errorCode(t, rec); code != tc.code {
+				t.Fatalf("code %q, want %q", code, tc.code)
+			}
+		})
+	}
+}
+
+// Starting, feeding, finishing and cancelling an upload all sit behind
+// contest.edit, exactly where writing the script does — replacing the game
+// through an upload is no less destructive than SetScript (Mount's own
+// comment). Only beginUpload is exercised directly above
+// (TestBeginningAnUploadIsRefusedToAnAccountThatIsNotStaffOnTheContest); this
+// covers the other three write endpoints and the two read ones with the same
+// gate.
+func TestUploadEndpointsAreRefusedToAnAccountThatIsNotStaffOnTheContest(t *testing.T) {
+	upload := uuid.NewString()
+	for _, tc := range []struct {
+		name       string
+		method     string
+		pathSuffix string
+	}{
+		{"feeding a chunk", http.MethodPut, "/game/uploads/" + upload + "/chunk?offset=0"},
+		{"completing", http.MethodPost, "/game/uploads/" + upload + "/complete"},
+		{"cancelling", http.MethodPost, "/game/uploads/" + upload + "/abort"},
+		{"reading the window", http.MethodGet, "/game/uploads/" + upload + "/window"},
+		{"reading the current upload", http.MethodGet, "/game/uploads/current"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newGameFixture(t)
+			contest := uuid.NewString()
+
+			rec := f.do(tc.method, "/contests/"+contest+tc.pathSuffix, "x")
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status %d, want 403: %s", rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
+// The 401 every unauthenticated request on this handler gets is not proof a
+// route exists — chi answers a genuinely unmounted path with the router's own
+// 404 before this handler is ever reached, but this whole fixture's router
+// has nothing else mounted for a 401 to come from either. Only a real,
+// permitted session reaching each handler's own success shape (not chi's
+// codeNotFound) proves the routing table in Mount actually holds all six
+// upload routes.
+func TestGameUploadRoutesAreMounted(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contest, upload := uuid.NewString(), uuid.New()
+	f.games.abortResult = provisioning.Upload{ID: upload}
+
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		want   int
+	}{
+		{"current", http.MethodGet, "/game/uploads/current", http.StatusOK},
+		{"begin", http.MethodPost, "/game/uploads", http.StatusCreated},
+		{"chunk", http.MethodPut, "/game/uploads/" + upload.String() + "/chunk?offset=0", http.StatusOK},
+		{"complete", http.MethodPost, "/game/uploads/" + upload.String() + "/complete", http.StatusAccepted},
+		{"abort", http.MethodPost, "/game/uploads/" + upload.String() + "/abort", http.StatusOK},
+		{"window", http.MethodGet, "/game/uploads/" + upload.String() + "/window", http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := ""
+			if tc.method == http.MethodPost && tc.name == "begin" {
+				body = `{"filename":"dump.sql","declared_bytes":1}`
+			}
+			if tc.method == http.MethodPut {
+				body = "x"
+			}
+			rec := f.do(tc.method, "/contests/"+contest+tc.path, body)
+			if rec.Code != tc.want {
+				t.Fatalf("status %d, want %d: %s", rec.Code, tc.want, rec.Body)
+			}
+		})
 	}
 }
