@@ -39,7 +39,7 @@ func gamesWithUploads(t *testing.T, editable bool) (*provisioning.Games, string)
 		t.Fatalf("open the upload store: %v", err)
 	}
 	games := provisioning.NewGames(postgres.NewGameInstances(testPool), &buildCluster{}, authoring{editable: editable}).
-		WithUploads(store, dir, uploadLimits)
+		WithUploads(store, uploadLimits)
 	return games, dir
 }
 

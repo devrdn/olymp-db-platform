@@ -284,17 +284,10 @@ func (g *Games) WithAudit(recorder *audit.Recorder, uow unitOfWork) *Games {
 // oversized upload before it ever reaches Store.Begin (CLAUDE.md rule 12 —
 // bounded where the bytes arrive, not after a reservation was already made).
 //
-// dir is accepted, not stored: this package used to keep its own copy to
-// os.ReadDir for the orphan-file sweep, but that read the directory's own
-// layout by guesswork (see sweepOrphanFiles's doc). Now that the sweep asks
-// files.UploadIDs instead, nothing here needs a path — the parameter stays
-// so callers (main's own composition root) do not have to change for an
-// implementation detail on this side.
-//
 // Left uncalled, every upload method answers ErrUploadsDisabled — the state
 // of an installation with no GAME_UPLOAD_DIR configured, the same convention
 // QueryRunnerAddr uses to turn the SQL console off.
-func (g *Games) WithUploads(files *gamefile.Store, dir string, limits gamefile.Limits) *Games {
+func (g *Games) WithUploads(files *gamefile.Store, limits gamefile.Limits) *Games {
 	g.files, g.limits = files, limits
 	return g
 }
