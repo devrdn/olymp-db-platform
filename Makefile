@@ -75,7 +75,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env require-version build test test-race test-db test-game api-contract audit-contract proto proto-check static-check backup restore restore-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
+.PHONY: help require-env require-version build test test-race test-db test-game game-orphans api-contract audit-contract proto proto-check static-check backup restore restore-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -88,6 +88,7 @@ build: ## Compile the binaries into backend/bin
 	cd $(BACKEND) && go build -trimpath -o bin/bootstrap ./cmd/bootstrap
 	cd $(BACKEND) && go build -trimpath -ldflags="-X main.version=$(VERSION)" -o bin/queryrunner ./cmd/queryrunner
 	cd $(BACKEND) && go build -trimpath -o bin/gamedb ./cmd/gamedb
+	cd $(BACKEND) && go build -trimpath -o bin/gameorphans ./cmd/gameorphans
 
 test: ## Run the unit tests
 	cd $(BACKEND) && go test ./...
@@ -186,8 +187,8 @@ audit-contract: ## Regenerate docs/api/audit-actions.json from audit.Actions()
 # parser in, and nothing else notices until the image build fails — or worse,
 # until an image is published that cannot start.
 static-check: ## Fail if the API's binaries have picked up a cgo dependency
-	@cd $(BACKEND) && CGO_ENABLED=0 go build -o /dev/null ./cmd/api ./cmd/migrate ./cmd/bootstrap \
-		&& echo "api, migrate and bootstrap build without cgo"
+	@cd $(BACKEND) && CGO_ENABLED=0 go build -o /dev/null ./cmd/api ./cmd/migrate ./cmd/bootstrap ./cmd/gameorphans \
+		&& echo "api, migrate, bootstrap and gameorphans build without cgo"
 
 check: fmt vet static-check test ## Format, vet and test — run before pushing
 
@@ -391,6 +392,16 @@ game-roles: require-env ## Create the game cluster's participant roles
 		GAME_READER_PASSWORD="$(GAME_READER_PASSWORD)" \
 		GAME_WRITER_PASSWORD="$(GAME_WRITER_PASSWORD)" \
 		go run ./cmd/gamedb
+
+# The repair for a database the core database has already written off while
+# the database itself is still on the cluster. Nothing in the product ever
+# reclaims one — the sweep skips a row that already says 'dropped' — so this
+# is the only thing that can. It prints what it would remove and stops;
+# `make ARGS=-apply game-orphans` is what actually drops them.
+.PHONY: game-orphans
+game-orphans: require-env ## List (ARGS=-apply to remove) databases the core database calls dropped that are still on the cluster
+	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" GAME_DB_ADMIN_DSN="$(GAME_DB_DSN)" \
+		go run ./cmd/gameorphans $(ARGS)
 
 .PHONY: runner
 runner: require-env ## Run the Query Runner against the dev game cluster

@@ -31,7 +31,7 @@ func TestAScriptSavedInTheCoreDatabaseBecomesARealDatabaseOnTheGameCluster(t *te
 		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
 	}
 
-	contest, _ := contestFor(t, 0)
+	contest, _ := contestFor(t, t.Context(), 0)
 	repo := postgres.NewGameInstances(testPool)
 
 	user, password := gamedbtest.AdminCredentials(t)
