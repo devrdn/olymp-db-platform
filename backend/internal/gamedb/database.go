@@ -64,21 +64,3 @@ func hideSensitiveCatalogs(ctx context.Context, conn Conn) error {
 	}
 	return nil
 }
-
-// QuoteIdentifier spells a name the way PostgreSQL does in its own dumps.
-//
-// Needed where a name cannot be a bound parameter and cannot be built by the
-// server either — CREATE DATABASE and DROP DATABASE run outside a transaction
-// and before there is a connection to the database in question. Every name
-// this is given is one the platform generated, never a participant's, but it
-// is quoted regardless: the day that stops being true, this is what decides
-// whether it matters.
-//
-// Delegates to sqlpolicy.QuoteIdentifier, which carries the implementation
-// now (see its own doc for why: the table builder's generated SQL needs the
-// same quoting and cannot reach it here without an import cycle). Kept as a
-// function of this package too, unchanged, because every existing call site
-// in this package and in gamedbtest already spells it gamedb.QuoteIdentifier.
-func QuoteIdentifier(name string) string {
-	return sqlpolicy.QuoteIdentifier(name)
-}

@@ -29,9 +29,9 @@ const workSchema = "work"
 // one — which is why temporary tables are settled per instance instead.
 func grantPolicy(ctx context.Context, conn Conn, policy sqlpolicy.Policy) error {
 	statements := []string{
-		`CREATE SCHEMA IF NOT EXISTS ` + QuoteIdentifier(workSchema),
+		`CREATE SCHEMA IF NOT EXISTS ` + sqlpolicy.QuoteIdentifier(workSchema),
 		`GRANT USAGE ON SCHEMA public TO ` + RoleReader + `, ` + RoleWriter,
-		`GRANT USAGE ON SCHEMA ` + QuoteIdentifier(workSchema) + ` TO ` + RoleReader + `, ` + RoleWriter,
+		`GRANT USAGE ON SCHEMA ` + sqlpolicy.QuoteIdentifier(workSchema) + ` TO ` + RoleReader + `, ` + RoleWriter,
 		// Reading the game is what every contest permits; the modes differ in
 		// what else they allow.
 		`GRANT SELECT ON ALL TABLES IN SCHEMA public TO ` + RoleReader + `, ` + RoleWriter,
@@ -40,7 +40,7 @@ func grantPolicy(ctx context.Context, conn Conn, policy sqlpolicy.Policy) error 
 	if policy.Mode == sqlpolicy.ModeReadWrite {
 		if policy.AllowOwnTables || policy.AllowCreateView {
 			statements = append(statements,
-				`GRANT CREATE ON SCHEMA `+QuoteIdentifier(workSchema)+` TO `+RoleWriter)
+				`GRANT CREATE ON SCHEMA `+sqlpolicy.QuoteIdentifier(workSchema)+` TO `+RoleWriter)
 		}
 		for _, table := range policy.WritableTables {
 			// The policy has already refused any name that is not a plain
@@ -89,7 +89,7 @@ func lendTemplateToTheAuthor(ctx context.Context, conn Conn, database string) er
 		// is also the privilege a trusted extension (citext, pgcrypto) is
 		// checked against — both things a real game script does. It is not
 		// ownership: it cannot drop or rename the database.
-		`GRANT CREATE, CONNECT, TEMPORARY ON DATABASE ` + QuoteIdentifier(database) + ` TO ` + RoleAuthor,
+		`GRANT CREATE, CONNECT, TEMPORARY ON DATABASE ` + sqlpolicy.QuoteIdentifier(database) + ` TO ` + RoleAuthor,
 		// The game's tables live in public and the author has to own them: a
 		// view or a SECURITY DEFINER function executes as its owner, so a game
 		// whose objects belonged to somebody else would either not work or
@@ -111,7 +111,7 @@ func lendTemplateToTheAuthor(ctx context.Context, conn Conn, database string) er
 func takeTheTemplateBackFromTheAuthor(ctx context.Context, conn Conn, database string) error {
 	return runAll(ctx, conn, []string{
 		`REVOKE ALL ON SCHEMA public FROM ` + RoleAuthor,
-		`REVOKE ALL ON DATABASE ` + QuoteIdentifier(database) + ` FROM ` + RoleAuthor,
+		`REVOKE ALL ON DATABASE ` + sqlpolicy.QuoteIdentifier(database) + ` FROM ` + RoleAuthor,
 	})
 }
 
@@ -144,7 +144,7 @@ const instanceConnectionLimit = 2
 // policy's `allow_temp_tables: false` would be a setting that quietly did
 // nothing.
 func settleInstance(ctx context.Context, conn Conn, instance string, policy sqlpolicy.Policy) error {
-	name := QuoteIdentifier(instance)
+	name := sqlpolicy.QuoteIdentifier(instance)
 
 	// Nothing should ever open a third connection to one participant's
 	// database. This is not what enforces that — the runner's own semaphore
@@ -175,7 +175,7 @@ func settleInstance(ctx context.Context, conn Conn, instance string, policy sqlp
 func qualify(table string) string {
 	schema, name, ok := strings.Cut(table, ".")
 	if !ok {
-		return "public." + QuoteIdentifier(table)
+		return "public." + sqlpolicy.QuoteIdentifier(table)
 	}
-	return QuoteIdentifier(schema) + "." + QuoteIdentifier(name)
+	return sqlpolicy.QuoteIdentifier(schema) + "." + sqlpolicy.QuoteIdentifier(name)
 }

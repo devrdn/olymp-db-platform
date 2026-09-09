@@ -736,7 +736,7 @@ func TestAHostileGameScriptIsRefusedTheThingsOnlyASuperuserCanDo(t *testing.T) {
 			// one — which would make this pass without proving anything about
 			// privileges.
 			name:   "another olympiad's template dropped",
-			script: `DROP DATABASE ` + gamedb.QuoteIdentifier(sibling),
+			script: `DROP DATABASE ` + sqlpolicy.QuoteIdentifier(sibling),
 			phrase: "must be owner of database",
 		},
 	} {

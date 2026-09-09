@@ -153,7 +153,7 @@ func TestTheHardeningIsInheritedByACopyOfTheTemplate(t *testing.T) {
 
 	copyName := template + "_copy"
 	if _, err := admin(t).Exec(t.Context(),
-		`CREATE DATABASE `+gamedb.QuoteIdentifier(copyName)+` TEMPLATE `+gamedb.QuoteIdentifier(template)); err != nil {
+		`CREATE DATABASE `+sqlpolicy.QuoteIdentifier(copyName)+` TEMPLATE `+sqlpolicy.QuoteIdentifier(template)); err != nil {
 		t.Fatalf("copying the template: %v", err)
 	}
 	// gamedbtest.Drop rather than a pool call: cleanup runs after the test's
@@ -223,7 +223,7 @@ func TestEverySensitiveCatalogTheValidatorNamesIsAlsoRevoked(t *testing.T) {
 			if !present {
 				t.Skipf("pg_catalog.%s does not exist on this server", name)
 			}
-			refused(t, reader, `SELECT 1 FROM pg_catalog.`+gamedb.QuoteIdentifier(name)+` LIMIT 1`)
+			refused(t, reader, `SELECT 1 FROM pg_catalog.`+sqlpolicy.QuoteIdentifier(name)+` LIMIT 1`)
 		})
 	}
 }
@@ -250,11 +250,11 @@ func TestADatabaseCreatedWithNoTemplateIsHardenedAnyway(t *testing.T) {
 
 	name := "gamedb_default_" + strings.ReplaceAll(t.Name(), "/", "_")
 	if _, err := admin(t).Exec(t.Context(),
-		`DROP DATABASE IF EXISTS `+gamedb.QuoteIdentifier(name)+` WITH (FORCE)`); err != nil {
+		`DROP DATABASE IF EXISTS `+sqlpolicy.QuoteIdentifier(name)+` WITH (FORCE)`); err != nil {
 		t.Fatalf("clearing a previous run: %v", err)
 	}
 	// No TEMPLATE clause at all: this is the shape a person types.
-	if _, err := admin(t).Exec(t.Context(), `CREATE DATABASE `+gamedb.QuoteIdentifier(name)); err != nil {
+	if _, err := admin(t).Exec(t.Context(), `CREATE DATABASE `+sqlpolicy.QuoteIdentifier(name)); err != nil {
 		t.Fatalf("creating %s: %v", name, err)
 	}
 	t.Cleanup(func() { gamedbtest.Drop(name) })

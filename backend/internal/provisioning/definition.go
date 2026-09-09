@@ -278,7 +278,10 @@ func (t ColumnType) postgresType() (string, error) {
 	case ColumnDate:
 		return "date", nil
 	case ColumnTimestamp:
-		return "timestamp", nil
+		// Spelled out, the way pg_dump spells it: an organiser comparing a
+		// generated schema against a dumped one should not have to know that
+		// the bare word means the same thing.
+		return "timestamp without time zone", nil
 	case ColumnNumeric:
 		return "numeric", nil
 	case ColumnBoolean:

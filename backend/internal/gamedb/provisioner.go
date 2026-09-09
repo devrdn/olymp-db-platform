@@ -259,7 +259,7 @@ func (p *Provisioner) BuildTemplate(ctx context.Context, name string, script io.
 	if err := p.Drop(ctx, name); err != nil {
 		return err
 	}
-	if _, err := p.admin.Exec(ctx, `CREATE DATABASE `+QuoteIdentifier(name)); err != nil {
+	if _, err := p.admin.Exec(ctx, `CREATE DATABASE `+sqlpolicy.QuoteIdentifier(name)); err != nil {
 		return fmt.Errorf("create the template: %w", err)
 	}
 
@@ -428,7 +428,7 @@ func (p *Provisioner) CreateInstance(ctx context.Context, template, instance str
 		return err
 	}
 
-	create := `CREATE DATABASE ` + QuoteIdentifier(instance) + ` TEMPLATE ` + QuoteIdentifier(template)
+	create := `CREATE DATABASE ` + sqlpolicy.QuoteIdentifier(instance) + ` TEMPLATE ` + sqlpolicy.QuoteIdentifier(template)
 	if p.strategy != "" {
 		// The value is one of this package's own constants, checked when it
 		// was set; there is nothing here a caller could have written.
@@ -477,7 +477,7 @@ func (p *Provisioner) Drop(ctx context.Context, name string) error {
 	if !sqlpolicy.PlainIdentifier(name) {
 		return fmt.Errorf("%w: %q", ErrBadName, name)
 	}
-	if _, err := p.admin.Exec(ctx, `DROP DATABASE IF EXISTS `+QuoteIdentifier(name)+` WITH (FORCE)`); err != nil {
+	if _, err := p.admin.Exec(ctx, `DROP DATABASE IF EXISTS `+sqlpolicy.QuoteIdentifier(name)+` WITH (FORCE)`); err != nil {
 		return fmt.Errorf("drop %s: %w", name, err)
 	}
 	return nil
@@ -501,7 +501,7 @@ func (p *Provisioner) DropIdle(ctx context.Context, name string) (dropped bool, 
 	if !sqlpolicy.PlainIdentifier(name) {
 		return false, fmt.Errorf("%w: %q", ErrBadName, name)
 	}
-	_, err = p.admin.Exec(ctx, `DROP DATABASE IF EXISTS `+QuoteIdentifier(name))
+	_, err = p.admin.Exec(ctx, `DROP DATABASE IF EXISTS `+sqlpolicy.QuoteIdentifier(name))
 	if err == nil {
 		return true, nil
 	}
