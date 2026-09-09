@@ -242,6 +242,19 @@ func (g *Games) BeginTableUpload(ctx context.Context, contestID uuid.UUID, table
 
 // AppendTableChunk writes one chunk of a table-data upload already begun —
 // AppendChunk's own doc, for a table's file instead of a whole dump.
+//
+// The chunk that lands at offset 0 gets one extra check once it is written:
+// whether the file's first line, if it has arrived in full, names the
+// table's own columns. This is the brief's own requirement read for what it
+// actually asks: a header that does not match is refused before the whole
+// file is accepted, not before any byte of it is — the header is itself
+// data, so "before the first byte" can only ever mean "after the first
+// chunk", never literally before any bytes exist. An organiser who uploaded
+// the wrong file this way finds out having spent one chunk's own transfer
+// and wait, not the whole file's. CompleteTableUpload's own full pass
+// (validateTableFile) still checks the header again when the upload
+// finishes — this early check only ever adds an earlier chance to refuse,
+// it never replaces that one.
 func (g *Games) AppendTableChunk(ctx context.Context, contestID, id uuid.UUID, offset int64, r io.Reader) (int64, error) {
 	if g.tableFiles == nil {
 		return 0, ErrTableDataDisabled
@@ -264,7 +277,54 @@ func (g *Games) AppendTableChunk(ctx context.Context, contestID, id uuid.UUID, o
 	if err := g.repo.UpdateTableDataReceived(ctx, id, received); err != nil {
 		return received, fmt.Errorf("record the upload's progress: %w", err)
 	}
+
+	// offset == 0 names exactly the chunk that just wrote the start of the
+	// file. It is the only offset this branch can ever see for a given
+	// upload: every later chunk's own offset is wherever the file's length
+	// stood before it, which is never 0 again once a byte has landed — and
+	// a resend of this same first chunk took the idempotent-skip return
+	// above instead of reaching here, since gamefile.Store.Append reports
+	// the file's unchanged length for a chunk it already has. So this runs
+	// at most once per upload: never on a retry, never on any chunk after
+	// the first.
+	if offset == 0 {
+		if err := g.checkTableHeaderOnFirstChunk(ctx, contestID, id, data.Table); err != nil {
+			return received, err
+		}
+	}
 	return received, nil
+}
+
+// checkTableHeaderOnFirstChunk is AppendTableChunk's own early half of the
+// header check validateTableFile runs in full at CompleteTableUpload: it
+// reads only as far as it takes to find the first line's own newline
+// (firstLineIfComplete, tablecsv.go), never the whole chunk, and says
+// nothing when that newline has not arrived yet — a header that does not
+// fit inside the first chunk is not this call's business, only
+// CompleteTableUpload's own full pass is.
+func (g *Games) checkTableHeaderOnFirstChunk(ctx context.Context, contestID, id uuid.UUID, tableName string) error {
+	table, err := g.currentDefinitionTable(ctx, contestID, tableName)
+	if err != nil {
+		return err
+	}
+	f, err := g.tableFiles.Open(id.String())
+	if err != nil {
+		return wrapTableFileErr(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	line, complete, err := firstLineIfComplete(f)
+	if err != nil {
+		return err
+	}
+	if !complete {
+		return nil // the header has not fully arrived in this chunk; nothing to check yet
+	}
+	fields, err := splitCSVLine(line)
+	if err != nil {
+		return err
+	}
+	return validateHeader(fields, table)
 }
 
 func (g *Games) tableDataByIDForContest(ctx context.Context, contestID, id uuid.UUID) (TableData, error) {
@@ -287,12 +347,16 @@ func (g *Games) tableDataByIDForContest(ctx context.Context, contestID, id uuid.
 // checks the header before it reads a single data row, and every data row's
 // field count and column types after that.
 //
-// The header is checked first, and the pass stops the instant it disagrees,
-// rather than only being noticed after every row has already been parsed —
-// this is the "before ... the first byte of data" the brief asks for: a file
-// whose header is wrong never has its rows walked at all, so a mistaken
-// upload does not spend the CPU (or the organiser's own wait) validating
-// rows against columns the file was never really describing.
+// The header is checked again here even though AppendTableChunk's own early
+// check (its own doc) already looked at it once the first chunk landed —
+// that early check is best-effort, not exhaustive: a header that did not fit
+// inside the first chunk, or a file whose bytes reached the store some other
+// way than AppendTableChunk (a test writing to it directly, say), reaches
+// this pass having never been checked at all. This full pass is the one a
+// build actually depends on; within it, the header is still checked before a
+// single data row is read, so a mistaken upload does not spend the CPU (or
+// the organiser's own wait) validating rows against columns the file was
+// never really describing.
 func (g *Games) CompleteTableUpload(ctx context.Context, actorID, contestID, id uuid.UUID) (TableData, error) {
 	if g.tableFiles == nil {
 		return TableData{}, ErrTableDataDisabled

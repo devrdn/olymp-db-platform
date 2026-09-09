@@ -76,26 +76,143 @@ func beginTableUploadWithContent(t *testing.T, service *provisioning.Games, cont
 }
 
 // TestCompleteTableUploadRefusesAMismatchedHeaderBeforeValidatingAnyRow is
-// the brief's own requirement: a header that does not name the table's own
-// columns is refused, and refused for that reason alone — the row after it,
-// itself invalid for an unrelated reason (a non-numeric id), is never even
-// reached, which is what "before ... the first byte of data" means for a
-// file whose bytes already all arrived (CompleteTableUpload's own doc).
+// the brief's own requirement for the full, end-of-upload pass: a header
+// that does not name the table's own columns is refused, and refused for
+// that reason alone — the row after it, itself invalid for an unrelated
+// reason (a non-numeric id), is never even reached.
+//
+// The content is written straight to the store rather than through
+// service.AppendTableChunk (beginTableUploadWithContent's own helper), the
+// same way TestCompleteTableUploadRefusesTheDeclaredLengthNotMatchingWhatArrived
+// does: AppendTableChunk now catches most mismatched headers itself, on the
+// very first chunk (TestAppendTableChunkRefusesAMismatchedHeaderOnTheFirstChunk
+// below) — this test is about the fallback for a file that reached the
+// store some other way, so it must not go through the same early check it
+// is not testing.
 func TestCompleteTableUploadRefusesAMismatchedHeaderBeforeValidatingAnyRow(t *testing.T) {
 	t.Parallel()
-	service, _, _, _ := tableDataGames(t, true)
+	service, store, _, files := tableDataGames(t, true)
 	contest := uuid.New()
 	withSuspects(t, service, contest)
 
 	content := "id,name,extra\nnot-a-number,A,x\n" // wrong header AND a row that would also fail
-	data := beginTableUploadWithContent(t, service, contest, "suspects", content)
+	data, err := service.BeginTableUpload(t.Context(), contest, "suspects", int64(len(content)))
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if _, err := files.Append(data.ID.String(), 0, strings.NewReader(content)); err != nil {
+		t.Fatalf("append directly: %v", err)
+	}
+	// Written straight to the store rather than through AppendTableChunk, so
+	// the fake repository's own bookkeeping of how many bytes have arrived
+	// is brought up to date by hand — otherwise CompleteTableUpload would
+	// stop at its length check, never reaching the header check this test
+	// is actually about.
+	store.mu.Lock()
+	seeded := store.tableData[data.ID]
+	seeded.ReceivedBytes = int64(len(content))
+	store.tableData[data.ID] = seeded
+	store.mu.Unlock()
 
-	_, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID)
+	_, err = service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID)
 	if !errors.Is(err, provisioning.ErrTableHeaderMismatch) {
 		t.Fatalf("error = %v, want ErrTableHeaderMismatch", err)
 	}
 	if errors.Is(err, provisioning.ErrTableValueInvalid) {
 		t.Fatal("the row's own mistake was reported — the header should have stopped this first")
+	}
+}
+
+// TestAppendTableChunkRefusesAMismatchedHeaderOnTheFirstChunk is the brief's
+// own requirement read literally: "a header that does not match the
+// description's own columns is refused before the first byte of data is
+// accepted. Accepting a gigabyte and only then saying 'wrong columns' is
+// seven minutes of somebody else's time." The one chunk sent here is the
+// file's entirety, so if the check ran only at CompleteTableUpload (as it
+// did before this test existed), this call would succeed and only the
+// explicit CompleteTableUpload below would see the mismatch — this asserts
+// the rejection happens right here, on AppendTableChunk, one chunk in.
+func TestAppendTableChunkRefusesAMismatchedHeaderOnTheFirstChunk(t *testing.T) {
+	t.Parallel()
+	service, _, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	content := "id,name,extra\n1,A,x\n" // wrong header; the row itself would be fine
+	data, err := service.BeginTableUpload(t.Context(), contest, "suspects", int64(len(content)))
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	_, err = service.AppendTableChunk(t.Context(), contest, data.ID, 0, strings.NewReader(content))
+	if !errors.Is(err, provisioning.ErrTableHeaderMismatch) {
+		t.Fatalf("AppendTableChunk error = %v, want ErrTableHeaderMismatch on the first chunk itself", err)
+	}
+}
+
+// TestAppendTableChunkAcceptsAHeaderSplitAcrossChunksWithoutRefusing is the
+// edge case the brief's own timing requirement runs into and must not
+// mishandle: a header line too long to fit inside one chunk. The first
+// chunk here ends mid-column-name, with no newline anywhere in it at all —
+// there is nothing yet for the early check to compare, and that must not be
+// mistaken for a mismatch (or for the chunk's own last line). The second
+// chunk completes the (correct) header and the one data row; the whole
+// upload must complete cleanly.
+func TestAppendTableChunkAcceptsAHeaderSplitAcrossChunksWithoutRefusing(t *testing.T) {
+	t.Parallel()
+	service, _, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	first := "id,na" // no newline at all: the header has not arrived yet
+	second := "me,nickname\n1,Margot,\n"
+	content := first + second
+
+	data, err := service.BeginTableUpload(t.Context(), contest, "suspects", int64(len(content)))
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if _, err := service.AppendTableChunk(t.Context(), contest, data.ID, 0, strings.NewReader(first)); err != nil {
+		t.Fatalf("first chunk (no newline yet) was refused: %v", err)
+	}
+	if _, err := service.AppendTableChunk(t.Context(), contest, data.ID, int64(len(first)), strings.NewReader(second)); err != nil {
+		t.Fatalf("second chunk: %v", err)
+	}
+
+	if _, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+}
+
+// TestAppendTableChunkDoesNotRecheckAResentFirstChunk is the third edge
+// case: a chunk upload resumed after a dropped connection resends its first
+// chunk verbatim. gamefile.Store.Append's own idempotent-retry rule treats
+// that as a no-op (its own doc), and the early header check must ride along
+// with that rule rather than run a second time — a bad header must still be
+// caught, but exactly once, and a resend of a good one must not somehow
+// start failing on its second delivery.
+func TestAppendTableChunkDoesNotRecheckAResentFirstChunk(t *testing.T) {
+	t.Parallel()
+	service, _, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	content := "id,name,nickname\n1,Margot,\n"
+	data, err := service.BeginTableUpload(t.Context(), contest, "suspects", int64(len(content)))
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if _, err := service.AppendTableChunk(t.Context(), contest, data.ID, 0, strings.NewReader(content)); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+	// The same chunk, resent at the same offset — exactly what a client that
+	// never saw the first response would do.
+	if _, err := service.AppendTableChunk(t.Context(), contest, data.ID, 0, strings.NewReader(content)); err != nil {
+		t.Fatalf("resend of the same first chunk was refused: %v", err)
+	}
+
+	if _, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID); err != nil {
+		t.Fatalf("complete: %v", err)
 	}
 }
 
@@ -223,6 +340,59 @@ func TestAppendTableRowRefusesAValueThatDoesNotMatchItsColumn(t *testing.T) {
 	}
 	if len(ids) != 0 {
 		t.Fatalf("a refused row still left %d file(s) on disk", len(ids))
+	}
+}
+
+// TestAppendTableRowValidatesNumericAsDecimalSyntaxNotAsAFloat is the other
+// defect this package's numeric column check had: a PostgreSQL numeric is an
+// exact decimal of arbitrary precision, and strconv.ParseFloat is not a
+// stand-in for it in either direction.
+//
+//   - "0x1p-2" is a hexadecimal float literal ParseFloat happily parses to
+//     0.25 — and numeric_in has never accepted one (checked against a live
+//     PostgreSQL 16 instance, this platform's own target). A value that
+//     clears this check and only fails inside PostgreSQL's own COPY,
+//     minutes into a build, is exactly the failure this whole pre-check
+//     exists to prevent.
+//   - "1e400" is a value numeric holds exactly, arbitrary precision being
+//     the type's entire point, but ParseFloat reports a range error for it
+//     because it does not fit a 64-bit float — refusing an organiser's
+//     perfectly good row for a limit that belongs to Go's float type, not
+//     to the column's own.
+//   - "NaN", numeric's own special value (and, since PostgreSQL 14,
+//     signed Infinity/Inf, also checked against that live instance), must
+//     keep working now that the check is decimal syntax rather than a
+//     float parse.
+func TestAppendTableRowValidatesNumericAsDecimalSyntaxNotAsAFloat(t *testing.T) {
+	t.Parallel()
+	service, _, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, provisioning.Definition{
+		Tables: []provisioning.TableDefinition{{
+			Name: "prices",
+			Columns: []provisioning.ColumnDefinition{
+				{Name: "id", Type: provisioning.ColumnInteger},
+				{Name: "amount", Type: provisioning.ColumnNumeric},
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("save the definition: %v", err)
+	}
+
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "prices", []string{"1", "0x1p-2"}); !errors.Is(err, provisioning.ErrTableValueInvalid) {
+		t.Fatalf("hex float literal: error = %v, want ErrTableValueInvalid", err)
+	}
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "prices", []string{"2", "1e400"}); err != nil {
+		t.Fatalf("a value numeric holds exactly was refused as if it had to fit a 64-bit float: %v", err)
+	}
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "prices", []string{"3", "NaN"}); err != nil {
+		t.Fatalf("NaN, numeric's own special value, was refused: %v", err)
+	}
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "prices", []string{"4", "-Infinity"}); err != nil {
+		t.Fatalf("-Infinity, numeric's own special value since PostgreSQL 14, was refused: %v", err)
+	}
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "prices", []string{"5", "1_000.5"}); err != nil {
+		t.Fatalf("an underscore digit separator, valid decimal syntax, was refused: %v", err)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -263,6 +264,56 @@ func (s *tableLineScanner) next() ([]byte, error) {
 	}
 }
 
+// firstLineIfComplete looks for the newline that ends r's first line,
+// never reading more than MaxTableLineBytes+1 bytes to find it — the bound
+// tableLineScanner also enforces, applied here to a file that may still be
+// mid-upload (AppendTableChunk's own early header check, tabledata.go). Its
+// three-valued answer:
+//   - the line has fully arrived: its bytes without the trailing newline,
+//     and true;
+//   - not enough of the file has arrived yet to contain a newline at all:
+//     nil, false, nil — not an error, because a header genuinely may not
+//     fit inside one chunk (AppendTableChunk's own doc explains why that is
+//     not a reason to refuse);
+//   - the bytes read so far already exceed the line bound with still no
+//     newline in sight: ErrTableLineTooLong, since no chunk still to come
+//     could make an already-too-long line short again.
+//
+// This cannot reuse tableLineScanner.next(): its io.EOF from the underlying
+// reader means "the file is finished, this was its last line", which is
+// true once CompleteTableUpload has all of it and false for a file a chunk
+// upload is still writing to, where that same io.EOF only means "no more
+// bytes have landed yet". Treating the second case as the first is exactly
+// the bug this separate, smaller reader exists to avoid: it would read a
+// header cut off mid-column-name as if that fragment were the whole thing,
+// and refuse a perfectly good file for a header the upload had not finished
+// sending.
+func firstLineIfComplete(r io.Reader) ([]byte, bool, error) {
+	br := bufio.NewReaderSize(r, 64<<10)
+	var line []byte
+	for {
+		chunk, err := br.ReadSlice('\n')
+		if len(line)+len(chunk) > MaxTableLineBytes {
+			return nil, false, ErrTableLineTooLong
+		}
+		switch {
+		case err == nil:
+			return append(line, chunk[:len(chunk)-1]...), true, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			line = append(line, chunk...)
+			continue
+		case errors.Is(err, io.EOF):
+			// Whatever bytes the file currently holds have all been read,
+			// with no newline among them: this is not "the file's last
+			// line", it is "the file's own writer has not gotten this far
+			// yet". Nothing to report either way.
+			return nil, false, nil
+		default:
+			return nil, false, err
+		}
+	}
+}
+
 // headerFields is the header line a completed CSV must start with —
 // table.Columns' own names, in order, exactly as Definition.Tables[].Name
 // carries them, before folding or quoting: it is the file's own promise that
@@ -336,8 +387,8 @@ func validateScalar(text string, t ColumnType) error {
 			return fmt.Errorf("%q is not a whole number that fits a 32-bit integer", text)
 		}
 	case ColumnNumeric:
-		if _, err := strconv.ParseFloat(text, 64); err != nil {
-			return fmt.Errorf("%q is not a number", text)
+		if !validNumericLiteral(text) {
+			return fmt.Errorf("%q is not a valid numeric literal", text)
 		}
 	case ColumnBoolean:
 		if !validBoolean(text) {
@@ -355,6 +406,61 @@ func validateScalar(text string, t ColumnType) error {
 		return fmt.Errorf("column type %q is not one this platform supports", t)
 	}
 	return nil
+}
+
+// numericDigits matches one or more decimal digits, optionally grouped with
+// a single underscore between any two digits — PostgreSQL 16's own digit
+// separator. Verified against a live PostgreSQL 16 instance rather than
+// assumed: '1_000'::numeric is 1000, but '1__000', '_1000' and '1000_' are
+// all refused, because an underscore must sit strictly between two digits —
+// never lead, trail, or double.
+const numericDigits = `[0-9](?:_?[0-9])*`
+
+// numericLiteralRE matches the decimal syntax PostgreSQL's own numeric_in
+// accepts for an ordinary (non-special) value: an optional sign, then either
+// digits with an optional fractional part (5, 5., 5.5) or a fractional part
+// on its own (.5), then an optional exponent. It does not match a
+// hexadecimal float literal such as Go's strconv.ParseFloat accepts
+// (0x1p-2) — numeric_in has never accepted one.
+var numericLiteralRE = regexp.MustCompile(
+	`^[+-]?(` + numericDigits + `(\.(?:` + numericDigits + `)?)?|\.` + numericDigits + `)([eE][+-]?` + numericDigits + `)?$`,
+)
+
+// validNumericLiteral reports whether text is a value PostgreSQL's own
+// numeric_in would accept for a numeric column — checked as syntax, not
+// evaluated as a 64-bit float. strconv.ParseFloat is the wrong tool for this
+// column type for three separate reasons: it rounds to 64 bits of mantissa
+// where numeric keeps arbitrary precision exactly; it reports an
+// out-of-range exponent (e.g. "1e400") as an error where numeric simply
+// holds the value; and it accepts a hexadecimal float literal ("0x1p-2")
+// that numeric_in has never accepted. A value ParseFloat waved through for
+// any of those three reasons is exactly the failure this whole pre-check
+// exists to avoid: an upload accepted here and refused later, minutes into a
+// COPY, as a build failure rather than an upload one.
+//
+// Whitespace is trimmed the same way numeric_in itself trims it. NaN
+// (unsigned only — '+NaN' and '-NaN' are both refused) and, since
+// PostgreSQL 14, signed Infinity/Inf are accepted case-insensitively as the
+// type's own special values. This was verified against a live PostgreSQL 16
+// instance (this platform's own target, deploy/docker-compose.yml) rather
+// than assumed from the type's older behaviour: 'NaN', 'Infinity', 'Inf',
+// '-Infinity' and '+Inf' all cast to numeric on it.
+func validNumericLiteral(text string) bool {
+	s := strings.TrimSpace(text)
+	if s == "" {
+		return false
+	}
+	if strings.EqualFold(s, "nan") {
+		return true
+	}
+	body := s
+	if body != "" && (body[0] == '+' || body[0] == '-') {
+		body = body[1:]
+	}
+	if strings.EqualFold(body, "inf") || strings.EqualFold(body, "infinity") {
+		return true
+	}
+	return numericLiteralRE.MatchString(s)
 }
 
 // validBoolean matches PostgreSQL's own accepted spellings for a boolean
