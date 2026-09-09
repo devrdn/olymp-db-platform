@@ -290,3 +290,184 @@ func TestACompositePrimaryKeyIsAccepted(t *testing.T) {
 		t.Fatalf("a composite primary key was refused: %v", err)
 	}
 }
+
+// A definition with no tables cannot be saved (TestADefinitionWithNoTablesIsRefused,
+// above) — but SQL is the generator finishDefinitionBuild calls on whatever
+// a row actually holds, and a row that somehow got there empty must refuse
+// there too, plainly, rather than hand back an empty script that would build
+// a database with none of the organiser's tables in it silently.
+func TestSQLOfAnEmptyDefinitionIsRefused(t *testing.T) {
+	t.Parallel()
+	_, err := (provisioning.Definition{}).SQL()
+	if !errors.Is(err, provisioning.ErrDefinitionEmpty) {
+		t.Fatalf("answered %v, want ErrDefinitionEmpty", err)
+	}
+}
+
+// Every declared type maps to the literal PostgreSQL keyword this platform
+// chose for it — never the organiser's own string interpolated back in
+// (CLAUDE.md rule 14), which this proves by using a ColumnType whose Go
+// constant and PostgreSQL keyword actually differ (ColumnNumeric ->
+// "numeric" is the only one that doesn't just restate itself, so it is not
+// the only case worth having, but it is the one a copy-the-string bug would
+// not be caught by).
+func TestSQLMapsEveryDeclaredTypeToItsPostgreSQLKeyword(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		typ  provisioning.ColumnType
+		want string
+	}{
+		{provisioning.ColumnInteger, "integer"},
+		{provisioning.ColumnText, "text"},
+		{provisioning.ColumnDate, "date"},
+		{provisioning.ColumnTimestamp, "timestamp"},
+		{provisioning.ColumnNumeric, "numeric"},
+		{provisioning.ColumnBoolean, "boolean"},
+	} {
+		t.Run(string(tc.typ), func(t *testing.T) {
+			t.Parallel()
+			d := provisioning.Definition{Tables: []provisioning.TableDefinition{
+				{Name: "t", Columns: []provisioning.ColumnDefinition{aColumn("c", tc.typ)}},
+			}}
+			sql, err := d.SQL()
+			if err != nil {
+				t.Fatalf("generate SQL: %v", err)
+			}
+			if !strings.Contains(sql, `"c" `+tc.want) {
+				t.Fatalf("declared type %q produced:\n%s\nwant a column typed %q", tc.typ, sql, tc.want)
+			}
+		})
+	}
+}
+
+// A column not marked nullable gets NOT NULL; one that is marked nullable
+// does not — Nullable's own doc says false is the stricter default, and this
+// is where that default actually reaches the database.
+func TestSQLAddsNotNullExactlyWhereTheColumnIsNotNullable(t *testing.T) {
+	t.Parallel()
+	d := provisioning.Definition{Tables: []provisioning.TableDefinition{
+		{
+			Name: "suspects",
+			Columns: []provisioning.ColumnDefinition{
+				{Name: "id", Type: provisioning.ColumnInteger, Nullable: false},
+				{Name: "nickname", Type: provisioning.ColumnText, Nullable: true},
+			},
+		},
+	}}
+	sql, err := d.SQL()
+	if err != nil {
+		t.Fatalf("generate SQL: %v", err)
+	}
+	if !strings.Contains(sql, `"id" integer NOT NULL`) {
+		t.Fatalf("a non-nullable column did not get NOT NULL:\n%s", sql)
+	}
+	if strings.Contains(sql, `"nickname" text NOT NULL`) {
+		t.Fatalf("a nullable column got NOT NULL anyway:\n%s", sql)
+	}
+}
+
+// A composite primary key generates one PRIMARY KEY clause naming every
+// column, in the order the definition gave them — the order a participant's
+// own query plan and an organiser's own reading of the table both depend on.
+func TestSQLGeneratesTheCompositePrimaryKeyInDeclaredOrder(t *testing.T) {
+	t.Parallel()
+	d := provisioning.Definition{Tables: []provisioning.TableDefinition{
+		{
+			Name: "evidence",
+			Columns: []provisioning.ColumnDefinition{
+				aColumn("case_id", provisioning.ColumnInteger),
+				aColumn("item_no", provisioning.ColumnInteger),
+			},
+			PrimaryKey: []string{"case_id", "item_no"},
+		},
+	}}
+	sql, err := d.SQL()
+	if err != nil {
+		t.Fatalf("generate SQL: %v", err)
+	}
+	if !strings.Contains(sql, `PRIMARY KEY ("case_id", "item_no")`) {
+		t.Fatalf("SQL did not name the composite key in declared order:\n%s", sql)
+	}
+}
+
+// A table declaring no primary key at all gets no PRIMARY KEY clause — the
+// field is optional (TableDefinition's own doc), and a clause naming nothing
+// is not valid PostgreSQL.
+func TestSQLOmitsThePrimaryKeyClauseWhenNoneWasDeclared(t *testing.T) {
+	t.Parallel()
+	d := provisioning.Definition{Tables: []provisioning.TableDefinition{
+		{Name: "notes", Columns: []provisioning.ColumnDefinition{aColumn("body", provisioning.ColumnText)}},
+	}}
+	sql, err := d.SQL()
+	if err != nil {
+		t.Fatalf("generate SQL: %v", err)
+	}
+	if strings.Contains(sql, "PRIMARY KEY") {
+		t.Fatalf("a table with no declared key got a PRIMARY KEY clause:\n%s", sql)
+	}
+}
+
+// Twice from the same definition must be byte for byte identical — the whole
+// point of walking ordered slices rather than anything keyed by a map
+// (SQL's own doc). A rebuild that could disagree with an earlier build of
+// the identical definition would make "why did the schema change" a
+// question with no real answer.
+func TestSQLIsDeterministicAcrossCalls(t *testing.T) {
+	t.Parallel()
+	d := provisioning.Definition{Tables: []provisioning.TableDefinition{
+		{
+			Name: "suspects",
+			Columns: []provisioning.ColumnDefinition{
+				aColumn("id", provisioning.ColumnInteger),
+				aColumn("name", provisioning.ColumnText),
+			},
+			PrimaryKey: []string{"id"},
+		},
+		{
+			Name:    "witnesses",
+			Columns: []provisioning.ColumnDefinition{aColumn("statement", provisioning.ColumnText)},
+		},
+	}}
+
+	first, err := d.SQL()
+	if err != nil {
+		t.Fatalf("generate SQL (first): %v", err)
+	}
+	second, err := d.SQL()
+	if err != nil {
+		t.Fatalf("generate SQL (second): %v", err)
+	}
+	if first != second {
+		t.Fatalf("two calls on the same definition disagreed:\n--- first ---\n%s\n--- second ---\n%s", first, second)
+	}
+}
+
+// A name that is a valid plain identifier (sqlpolicy.PlainIdentifier allows
+// both cases and does not know PostgreSQL's own reserved words) can still
+// need quoting to mean what the organiser wrote — mixed case, which an
+// unquoted identifier would fold to lowercase, and a bare reserved word,
+// which an unquoted CREATE TABLE would fail to parse as a table name at
+// all. Both are exactly what CLAUDE.md rule 14 and QuoteIdentifier's own doc
+// are for: quoted unconditionally, so neither case is special-cased here.
+func TestSQLQuotesANameThatWouldOtherwiseNeedIt(t *testing.T) {
+	t.Parallel()
+	d := provisioning.Definition{Tables: []provisioning.TableDefinition{
+		{
+			Name: "Suspects",
+			Columns: []provisioning.ColumnDefinition{
+				aColumn("id", provisioning.ColumnInteger),
+				aColumn("order", provisioning.ColumnText),
+			},
+		},
+	}}
+	sql, err := d.SQL()
+	if err != nil {
+		t.Fatalf("generate SQL: %v", err)
+	}
+	if !strings.Contains(sql, `CREATE TABLE public."Suspects"`) {
+		t.Fatalf("a mixed-case table name was not kept quoted:\n%s", sql)
+	}
+	if !strings.Contains(sql, `"order" text`) {
+		t.Fatalf("a column named after a reserved word was not kept quoted:\n%s", sql)
+	}
+}

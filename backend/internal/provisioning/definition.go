@@ -255,3 +255,131 @@ func (d Definition) Validate() error {
 	}
 	return nil
 }
+
+// postgresType names the PostgreSQL type ColumnType generates.
+//
+// A closed switch, never the value round-tripped as a string: CLAUDE.md rule
+// 14 is about cutting SQL where the parser says a statement ends, and the
+// same reasoning applies one level up — an organiser's JSON says "text", and
+// what reaches CREATE TABLE is the literal keyword this switch chose for it,
+// not their string spliced in. ErrDefinitionInvalidType guards a value
+// outside the six Validate already accepts; SQL's own caller
+// (Games.finishDefinitionBuild) only ever hands this a definition that
+// passed Validate, so reaching the default case would mean a row was stored
+// before this switch knew about a type Validate had already let through —
+// worth refusing loudly rather than emitting a column of some type nobody
+// declared.
+func (t ColumnType) postgresType() (string, error) {
+	switch t {
+	case ColumnInteger:
+		return "integer", nil
+	case ColumnText:
+		return "text", nil
+	case ColumnDate:
+		return "date", nil
+	case ColumnTimestamp:
+		return "timestamp", nil
+	case ColumnNumeric:
+		return "numeric", nil
+	case ColumnBoolean:
+		return "boolean", nil
+	}
+	return "", fmt.Errorf("%w: %q", ErrDefinitionInvalidType, t)
+}
+
+// SQL turns the definition into the CREATE TABLE statements that build it —
+// the table builder's own answer to the SQL an editor's game already has, or
+// an uploaded dump's own bytes: gamedb.Provisioner.BuildTemplate cannot tell
+// the three apart, and does not need to (Games.finishDefinitionBuild feeds
+// this straight into the same BuildTemplate an editor-sourced script runs
+// through, wrapped in strings.NewReader exactly as claimed.Script already
+// is).
+//
+// Deterministic, byte for byte, for the same Definition. There is nothing
+// here for two calls to disagree about: Tables and TableDefinition.Columns
+// are ordered slices an organiser arranged, never a map, and this walks them
+// in that order and nothing else varies the output — no timestamp, no
+// generated id, no map iteration.
+//
+// Schema-qualified as `public.<name>`, the schema an uploaded dump's own
+// COPY blocks already name (see the dump examples in
+// game_integration_test.go) — so a table built this way sits exactly where
+// one written by hand or restored from a file would.
+//
+// Every name — table or column — goes through sqlpolicy.QuoteIdentifier
+// unconditionally (CLAUDE.md rule 14: SQL is not assembled by splicing
+// user-chosen text into it as-is). Validate already refused anything that is
+// not a plain identifier before a definition could be saved, but quoting
+// does not become conditional on that: an organiser's "Suspects" or
+// "order" — both valid identifiers, both needing quotes to keep their case
+// or to be usable as a table name at all — is exactly the case this
+// protects, and quoting an identifier that never needed it costs nothing.
+//
+// ErrDefinitionEmpty guards a definition with no tables reaching here at
+// all. Validate refuses that before a save takes hold (its own doc explains
+// why), so this is a build-time backstop for a row that should not exist
+// rather than a path an organiser can hit through the ordinary form — but
+// finishDefinitionBuild must still refuse with this sentinel rather than
+// silently building an empty database that answers every question "no such
+// table" (CLAUDE.md rule 1): the mistake is the definition's, not this
+// installation's, so it belongs on the organiser's own screen, worded
+// plainly, and not behind BuildFailedInternally.
+//
+// What this does not do: load a single row. Every table it creates is
+// empty. A table builder's own data lands as CSV files on a volume — a
+// following task's own work, not this one's — and the seam for it is named
+// in finishDefinitionBuild's own doc, at the one point after these
+// statements have run where the tables exist and nothing has been marked
+// ready yet.
+func (d Definition) SQL() (string, error) {
+	if len(d.Tables) == 0 {
+		return "", ErrDefinitionEmpty
+	}
+
+	statements := make([]string, len(d.Tables))
+	for i, table := range d.Tables {
+		statement, err := table.createTableStatement()
+		if err != nil {
+			return "", err
+		}
+		statements[i] = statement
+	}
+	return strings.Join(statements, "\n"), nil
+}
+
+// createTableStatement is one table's own CREATE TABLE — the helper SQL
+// above calls once per table, kept on TableDefinition rather than inlined
+// into that loop because a single table's statement is what a future
+// foreign-key or data-loading change would need to touch (Definition's own
+// doc explains why neither is this task's scope), and a method with a name
+// of its own is where that change would look first.
+func (t TableDefinition) createTableStatement() (string, error) {
+	lines := make([]string, 0, len(t.Columns)+1)
+	for _, column := range t.Columns {
+		pgType, err := column.Type.postgresType()
+		if err != nil {
+			return "", fmt.Errorf("table %q: %w", t.Name, err)
+		}
+		line := "    " + sqlpolicy.QuoteIdentifier(column.Name) + " " + pgType
+		if !column.Nullable {
+			line += " NOT NULL"
+		}
+		lines = append(lines, line)
+	}
+
+	if len(t.PrimaryKey) > 0 {
+		keys := make([]string, len(t.PrimaryKey))
+		for i, key := range t.PrimaryKey {
+			keys[i] = sqlpolicy.QuoteIdentifier(key)
+		}
+		lines = append(lines, "    PRIMARY KEY ("+strings.Join(keys, ", ")+")")
+	}
+
+	var b strings.Builder
+	b.WriteString("CREATE TABLE public.")
+	b.WriteString(sqlpolicy.QuoteIdentifier(t.Name))
+	b.WriteString(" (\n")
+	b.WriteString(strings.Join(lines, ",\n"))
+	b.WriteString("\n);\n")
+	return b.String(), nil
+}

@@ -879,40 +879,74 @@ func TestBuildingAFileSourcedGameWithNoUploadIDIsAnInternalFault(t *testing.T) {
 	}
 }
 
-// A builder-sourced game has nothing to run yet — turning a saved
-// Definition into SQL is a later task's own work — so Build must refuse
-// honestly with DefinitionBuildUnavailable rather than run the empty
-// init_script a 'builder' row carries and mark it 'ready' over a database
-// with none of the organiser's tables in it. The same shape
-// TestBuildingAFileSourcedGameWithNoUploadVolumeConfiguredIsAnInternalFault
-// proves for SourceFile, except this refusal is not a fault: it is the
-// state of the feature, so err must come back nil and the trail's own "ok"
-// still records what actually happened.
-func TestBuildingABuilderSourcedGameRefusesHonestlyUntilSQLGenerationExists(t *testing.T) {
+// A builder-sourced game is built the same way an editor-sourced one is:
+// Definition.SQL generates the CREATE TABLE statements and they reach
+// BuildTemplate exactly like claimed.Script already does — the fake cluster
+// cannot tell the two apart, which is the point (finishDefinitionBuild's own
+// doc: there is no third path).
+func TestBuildingABuilderSourcedGameGeneratesSQLAndRunsItThroughTheSamePathAsAScript(t *testing.T) {
 	t.Parallel()
 	service, store, cluster := games(true)
 	contest := uuid.New()
+	definition := aDefinition()
 	store.template = provisioning.Template{
 		ContestID: contest, Database: "game_tpl_cabc", Version: 1,
-		Status: provisioning.TemplatePending, Source: provisioning.SourceBuilder, Definition: aDefinition(),
+		Status: provisioning.TemplatePending, Source: provisioning.SourceBuilder, Definition: definition,
 	}
 	store.present = true
 
 	built, err := service.Build(t.Context(), time.Minute)
 	if err != nil {
-		t.Fatalf("a builder-sourced game waiting on a later task was reported as the tick's own failure: %v", err)
+		t.Fatalf("build: %v", err)
+	}
+	if built.Status != provisioning.TemplateReady {
+		t.Fatalf("finished as %q: %s", built.Status, built.BuildError)
+	}
+	if len(cluster.names) != 1 || cluster.names[0] != "game_tpl_cabc" {
+		t.Fatalf("built database(s) %v, want exactly one, game_tpl_cabc", cluster.names)
+	}
+
+	want, err := definition.SQL()
+	if err != nil {
+		t.Fatalf("generate the same SQL directly: %v", err)
+	}
+	if len(cluster.scripts) != 1 || cluster.scripts[0] != want {
+		t.Fatalf("the cluster received:\n%s\nwant Definition.SQL's own output:\n%s", cluster.scripts, want)
+	}
+}
+
+// A definition with no tables cannot be saved — Validate refuses it before a
+// build could ever be claimed for it (Definition.Validate's own doc) — but a
+// row that somehow reaches Build with one anyway must still refuse plainly,
+// as the organiser's own mistake, rather than run an empty script and mark a
+// tableless database 'ready'. Never BuildFailedInternally: this is not a
+// fault of this installation's cluster, so err must come back nil, the same
+// way finishDefinitionBuild treats a script PostgreSQL itself refused.
+func TestBuildingABuilderSourcedGameWithNoTablesRefusesAsTheOrganisersOwnMistake(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := games(true)
+	contest := uuid.New()
+	store.template = provisioning.Template{
+		ContestID: contest, Database: "game_tpl_cabc", Version: 1,
+		Status: provisioning.TemplatePending, Source: provisioning.SourceBuilder, Definition: provisioning.Definition{},
+	}
+	store.present = true
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("an empty definition was reported as the tick's own failure: %v", err)
 	}
 	if built.Status != provisioning.TemplateFailed {
 		t.Fatalf("finished as %q, want failed", built.Status)
 	}
-	if built.BuildError != provisioning.DefinitionBuildUnavailable {
-		t.Fatalf("build error = %q, want the fixed sentence", built.BuildError)
+	if built.BuildError != provisioning.ErrDefinitionEmpty.Error() {
+		t.Fatalf("build error = %q, want the organiser's own %q", built.BuildError, provisioning.ErrDefinitionEmpty)
 	}
 	if len(cluster.names) != 0 {
-		t.Fatal("a builder-sourced game with no SQL generation reached BuildTemplate")
+		t.Fatal("an empty definition reached BuildTemplate")
 	}
-	if len(store.finished) != 1 || store.finished[0].err != provisioning.DefinitionBuildUnavailable {
-		t.Fatalf("recorded %+v, want the fixed sentence", store.finished)
+	if len(store.finished) != 1 || store.finished[0].err != provisioning.ErrDefinitionEmpty.Error() {
+		t.Fatalf("recorded %+v, want the organiser's own message", store.finished)
 	}
 }
 

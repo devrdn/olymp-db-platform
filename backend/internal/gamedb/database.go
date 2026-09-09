@@ -3,7 +3,6 @@ package gamedb
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 )
@@ -74,6 +73,12 @@ func hideSensitiveCatalogs(ctx context.Context, conn Conn) error {
 // this is given is one the platform generated, never a participant's, but it
 // is quoted regardless: the day that stops being true, this is what decides
 // whether it matters.
+//
+// Delegates to sqlpolicy.QuoteIdentifier, which carries the implementation
+// now (see its own doc for why: the table builder's generated SQL needs the
+// same quoting and cannot reach it here without an import cycle). Kept as a
+// function of this package too, unchanged, because every existing call site
+// in this package and in gamedbtest already spells it gamedb.QuoteIdentifier.
 func QuoteIdentifier(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+	return sqlpolicy.QuoteIdentifier(name)
 }

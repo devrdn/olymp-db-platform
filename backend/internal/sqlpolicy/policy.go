@@ -215,6 +215,22 @@ func PlainIdentifier(name string) bool {
 	return true
 }
 
+// QuoteIdentifier spells a name the way PostgreSQL does in its own dumps —
+// double-quoted, with an embedded quote doubled.
+//
+// Lives beside PlainIdentifier rather than only in internal/gamedb, which
+// carried the original and still exports it (delegating here): the table
+// builder's generated SQL (internal/provisioning) needs the identical
+// quoting and cannot import gamedb to get it — gamedb already imports
+// provisioning, to satisfy SchemaSource with provisioning's own Schema type
+// (internal/gamedb/schema.go), and Go refuses the cycle the other direction
+// would make. This package has no such dependency either way, which is what
+// makes it the shared home rather than either domain package reaching into
+// the other's.
+func QuoteIdentifier(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
 // WorkSchema is where a participant's own objects live. The template grants
 // CREATE on it and on nothing else, so this and internal/gamedb are naming the
 // same schema — the validator refuses what the privileges would refuse anyway,

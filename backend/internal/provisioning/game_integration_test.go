@@ -333,6 +333,133 @@ func TestAScriptSavedInTheCoreDatabaseWithACOPYBlockBuildsARealTable(t *testing.
 	}
 }
 
+// The same chain again, for the table builder's own way in: a Definition
+// saved instead of a script, generated into SQL by Definition.SQL, and run
+// through the identical BuildTemplate an editor's script and an uploaded
+// dump already go through (finishDefinitionBuild's own doc — there is no
+// third path). Two tables and a primary key, so what this proves is not just
+// "a CREATE TABLE ran" but that a participant can SELECT the columns and
+// types the organiser actually described, with the right ones NOT NULL.
+//
+// Named to share the prefix `make test-game-build` selects on, the same
+// reason the tests above it are.
+func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionBuildsARealDatabaseOnTheGameCluster(t *testing.T) {
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
+	}
+	if os.Getenv("GAME_DB_DSN") == "" {
+		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
+	}
+
+	contest, _ := contestFor(t, t.Context(), 0)
+	repo := postgres.NewGameInstances(testPool)
+
+	user, password := gamedbtest.AdminCredentials(t)
+	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
+		gamedbtest.AuthorPassword(t))
+	if err != nil {
+		t.Fatalf("open the game cluster: %v", err)
+	}
+
+	games := provisioning.NewGames(repo, cluster, editableContest{})
+
+	definition := provisioning.Definition{Tables: []provisioning.TableDefinition{
+		{
+			Name: "suspects",
+			Columns: []provisioning.ColumnDefinition{
+				{Name: "id", Type: provisioning.ColumnInteger},
+				{Name: "name", Type: provisioning.ColumnText},
+				{Name: "nickname", Type: provisioning.ColumnText, Nullable: true},
+			},
+			PrimaryKey: []string{"id"},
+		},
+		{
+			Name: "sightings",
+			Columns: []provisioning.ColumnDefinition{
+				{Name: "suspect_id", Type: provisioning.ColumnInteger},
+				{Name: "seen_at", Type: provisioning.ColumnTimestamp},
+			},
+		},
+	}}
+
+	saved, err := games.SetDefinition(t.Context(), uuid.New(), contest.ID, definition)
+	if err != nil {
+		t.Fatalf("save the definition: %v", err)
+	}
+	t.Cleanup(func() { gamedbtest.Drop(saved.Database) })
+
+	built, err := games.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if built.Status != provisioning.TemplateReady {
+		t.Fatalf("the build finished as %q: %s", built.Status, built.BuildError)
+	}
+
+	stored, err := repo.Template(t.Context(), contest.ID)
+	if err != nil {
+		t.Fatalf("read the game back: %v", err)
+	}
+	if stored.Status != provisioning.TemplateReady {
+		t.Fatalf("the stored game is %q, want ready", stored.Status)
+	}
+
+	// Both tables exist, empty, and a participant can SELECT them — this task
+	// creates tables and leaves them empty on purpose (Definition.SQL's own
+	// doc); loading the organiser's own rows is a following task's work.
+	conn := gamedbtest.Connect(t, user, password, built.Database)
+	defer func() { _ = conn.Close(context.Background()) }()
+
+	for _, table := range []string{"suspects", "sightings"} {
+		var count int
+		if err := conn.QueryRow(t.Context(), `SELECT count(*) FROM `+table).Scan(&count); err != nil {
+			t.Fatalf("select from %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s has %d rows, want 0 (this task builds no data)", table, count)
+		}
+	}
+
+	// The schema panel describes exactly what the organiser declared: both
+	// tables, the right columns, the right nullability, and the primary key
+	// enforced (a duplicate id is refused).
+	schema, err := provisioning.NewSchemaReader(repo, cluster).
+		Schema(t.Context(), provisioning.Contest{ID: contest.ID, Version: stored.Version}, built.Database)
+	if err != nil {
+		t.Fatalf("read the schema of the built game: %v", err)
+	}
+	if len(schema.Tables) != 2 {
+		t.Fatalf("the schema has %d tables, want 2: %+v", len(schema.Tables), schema.Tables)
+	}
+	var sawSuspects bool
+	for _, table := range schema.Tables {
+		if table.Name != "suspects" {
+			continue
+		}
+		sawSuspects = true
+		byName := make(map[string]provisioning.Column, len(table.Columns))
+		for _, column := range table.Columns {
+			byName[column.Name] = column
+		}
+		if id, ok := byName["id"]; !ok || id.Nullable {
+			t.Fatalf("suspects.id = %+v (ok=%v), want a NOT NULL column", id, ok)
+		}
+		if nickname, ok := byName["nickname"]; !ok || !nickname.Nullable {
+			t.Fatalf("suspects.nickname = %+v (ok=%v), want a nullable column", nickname, ok)
+		}
+	}
+	if !sawSuspects {
+		t.Fatalf("the schema did not describe suspects: %+v", schema.Tables)
+	}
+
+	if _, err := conn.Exec(t.Context(), `INSERT INTO suspects (id, name) VALUES (1, 'Margot Feilhaber')`); err != nil {
+		t.Fatalf("insert a row the definition's own NOT NULL columns allow: %v", err)
+	}
+	if _, err := conn.Exec(t.Context(), `INSERT INTO suspects (id, name) VALUES (1, 'Duplicate')`); err == nil {
+		t.Fatal("the primary key the definition declared did not stop a duplicate id")
+	}
+}
+
 // editableContest stands for a draft contest: the gate this test is not about.
 type editableContest struct{}
 

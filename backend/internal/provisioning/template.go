@@ -72,16 +72,6 @@ type ScriptFailure interface {
 // have it and a manager cannot.
 const BuildFailedInternally = "The game could not be built. The failure was not in the script — ask an administrator to check the service log."
 
-// DefinitionBuildUnavailable is what a builder-sourced game's build_error
-// reads until a later task turns a saved Definition into the SQL that
-// actually builds it. Not a failure of the organiser's definition or of this
-// installation's cluster — Build says so honestly rather than running an
-// empty init_script, which is what a 'builder' row carries in that column
-// (see finishDefinitionBuild) — the identical shape SourceFile's own build
-// once had before streaming execution existed for it (see that task's own
-// git history on finishUploadBuild).
-const DefinitionBuildUnavailable = "This game was described with the table builder. Building it is not available on this installation yet."
-
 // MaxBuildErrorBytes bounds what a failed build may leave behind about
 // itself (CLAUDE.md rule 2).
 //
@@ -749,26 +739,83 @@ func (g *Games) finishUploadBuild(ctx context.Context, claimed Template) (Templa
 }
 
 // finishDefinitionBuild is what a claimed build does for a builder-sourced
-// game: nothing on the cluster, honestly. Turning a saved Definition into
-// SQL and running it is a later task's own work — this one only gives the
-// definition a place in the schema and the domain — so running
-// claimed.Script (empty for SourceBuilder, per Template's own doc) would
-// build nothing, silently, and mark the game 'ready' over a database with
-// none of the organiser's tables in it.
+// game: turn the saved Definition into the CREATE TABLE statements that
+// describe it (Definition.SQL) and run them through the exact path Build and
+// finishUploadBuild already use — the same separate connection authenticated
+// as game_author, the same contest policy grants, the same teardown of a
+// half-built template on failure (gamedb.Provisioner.BuildTemplate's own
+// doc). There is no third path here on purpose (see Definition.SQL's own
+// doc): BuildTemplate cannot tell an organiser's own script from SQL this
+// package generated, and it must not be asked to — generating it is this
+// method's whole job, executing it is BuildTemplate's, exactly as for the
+// other two sources.
 //
-// Refusing with a named reason instead is CLAUDE.md rule 1 applied to a gap
-// in functionality rather than to an error, the same shape finishUploadBuild
-// itself had before streaming execution existed for a file-sourced game.
-// Unlike that earlier version, this one reuses recordBuildOutcome rather
-// than duplicating its row update and audit write, because that helper did
-// not exist yet at the point in this codebase's history finishUploadBuild
-// was written this way — nothing about the reasoning changed, only what
-// there already was to reuse. cause is nil: this is not a fault for the
-// tick's own caller to log at every pass over a definition waiting on a
-// feature that has not shipped yet, the same choice finishUploadBuild's
-// predecessor made for the identical reason.
+// Definition.SQL can itself refuse — ErrDefinitionEmpty, for a row that
+// reached here with no tables even though Validate refuses that before a
+// save takes hold. That refusal is the organiser's own definition, worded
+// plainly, never BuildFailedInternally: cause stays nil, the same way it
+// does below for a script PostgreSQL itself refused, because in both cases
+// the log has nothing to add that build_error does not already say.
+//
+// # The seam for the task after this one
+//
+// Every table this leaves behind is empty — Definition.SQL only ever emits
+// CREATE TABLE. The organiser's own rows, wherever the table builder ends up
+// keeping them (CSV files on a volume, per this task's own brief), would
+// load right here: after BuildTemplate has returned with no error and
+// before recordBuildOutcome marks the game 'ready', because that is the one
+// moment the database is known to exist, hold the tables just created, and
+// not yet be promised to anybody as complete. BuildTemplate has already
+// closed the connection it opened as game_author by the time it returns
+// (runScript's own doc: a template with a connection on it cannot be
+// copied), so a loader landing here would open a connection of its own the
+// same way runScript does, rather than reuse one that is already gone.
+// Nothing about that step exists yet; this comment is only the place for it.
 func (g *Games) finishDefinitionBuild(ctx context.Context, claimed Template) (Template, error) {
-	return g.recordBuildOutcome(ctx, claimed, DefinitionBuildUnavailable, nil)
+	var (
+		buildErr string
+		cause    error
+	)
+
+	script, err := claimed.Definition.SQL()
+	if err != nil {
+		// Never BuildFailedInternally: an empty definition is a mistake in
+		// what the organiser saved (or, in the ordinary path, could not
+		// have saved at all — Validate's own doc), not a fault of this
+		// installation's cluster.
+		buildErr = err.Error()
+	}
+
+	// The privileges the build grants inside the template are the contest's
+	// own SQL policy, read the same way Build and finishUploadBuild read it
+	// above: at the moment the build actually runs, never carried on the
+	// claim.
+	var policy sqlpolicy.Policy
+	if buildErr == "" {
+		if policy, err = g.repo.Policy(ctx, claimed.ContestID); err != nil {
+			cause = fmt.Errorf("read the contest's SQL policy: %w", err)
+			buildErr = BuildFailedInternally
+		}
+	}
+
+	if buildErr == "" {
+		if err := g.cluster.BuildTemplate(ctx, claimed.Database, strings.NewReader(script), policy); err != nil {
+			var refused ScriptFailure
+			if errors.As(err, &refused) {
+				// Generated SQL PostgreSQL still refused — a type this
+				// package's own switch mapped correctly but a value the
+				// server itself would not accept, or a name collision
+				// Validate's per-table folding did not catch. PostgreSQL's
+				// own words, the same as for an organiser's own script.
+				buildErr = refused.ScriptRejection()
+			} else {
+				cause = fmt.Errorf("build the game template from its table-builder definition: %w", err)
+				buildErr = BuildFailedInternally
+			}
+		}
+	}
+
+	return g.recordBuildOutcome(ctx, claimed, buildErr, cause)
 }
 
 // recordBuildOutcome finishes a claimed build's row and audit trail, the
