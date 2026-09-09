@@ -1,3 +1,5 @@
+import { Suspense } from "react";
+
 import { redirect } from "next/navigation";
 
 import { Band } from "@/components/layout/band";
@@ -13,13 +15,14 @@ import { authRecoveryRedirect } from "@/lib/auth/guard";
 import { fetchIdentity } from "@/lib/auth/session";
 import { formatDay, formatMoment } from "@/lib/format/datetime";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
-import type { Dictionary } from "@/lib/i18n/dictionary";
 import type { Locale } from "@/lib/i18n/config";
 
+import { playDictionary, type PlayDictionary } from "./dictionary";
 import { PlayHeader } from "./play-header";
 import { PrintView } from "./print-view";
 import type { QuestionEntry } from "./questions-panel";
 import { ReloadLink } from "./reload-link";
+import { WorkspaceSkeleton } from "./skeleton";
 import { Workspace } from "./workspace";
 
 export async function generateMetadata() {
@@ -89,8 +92,12 @@ const SCREEN_UNAVAILABLE_CODES = new Set([
  */
 export default async function PlayPage({ params }: PageProps<"/contests/[contestId]/play">) {
   const { contestId } = await params;
-  const [locale, dict] = await Promise.all([activeLocale(), activeDictionary()]);
-  const errors = dict.errors as Record<string, string>;
+  const [locale, whole] = await Promise.all([activeLocale(), activeDictionary()]);
+  // Narrowed once, here, and never widened downstream: everything this screen
+  // hands a Client Component is serialised into the route's payload, and the
+  // sections nobody on it can read were more than half of what crossed
+  // (finding 5, and `./dictionary.ts`'s own doc).
+  const dict = playDictionary(whole);
 
   const search = new URLSearchParams({ scope: "participant", enrolled: "true", lang: locale });
   const payload = await serverRequest(`/contests?${search}`).catch((error: unknown) => {
@@ -117,6 +124,74 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
     return <UnavailablePage title={contest.title} body={dict.participant.play.unavailable.body} dict={dict} />;
   }
 
+  // The shell, and the boundary the slow half of this screen sits behind
+  // (finding 2).
+  //
+  // Everything below this point needs four API requests; the bar above the
+  // workspace needs none of them. Rendering `PlayHeader` here, outside the
+  // `<Suspense>`, is what puts the contest's name and a running countdown in
+  // the first wave of the response — measured at 100–200ms of API time on an
+  // idle installation, and seconds at the one minute this screen actually
+  // matters, when three hundred participants enter the same tour at once and
+  // the story, the question list, the query log and the schema are asked for
+  // three hundred times over. Before this the whole page waited on all four:
+  // Next holds the previous screen until a server render finishes, so a
+  // participant pressing "Enter" watched the register they had just left,
+  // and a hard reload showed a white page for the same interval.
+  //
+  // The height arithmetic lives here rather than in `Workspace` now, because
+  // this is the element that holds the bar and the panes together: `h-12`
+  // for the product's own app bar plus the pixel of its bottom border, and
+  // only from `narrow` up — below the breakpoint this screen is an ordinary
+  // scrolling stack of sections (see `Workspace`'s own doc).
+  //
+  // `print:contents` because that arithmetic is this box's whole job, and a
+  // sheet of paper has no viewport height to hold to: without it the print
+  // copy of the story `Workspace` carries would be clipped at one screen.
+  return (
+    <div className="flex min-h-0 flex-col print:contents narrow:h-[calc(100dvh-3rem-1px)]">
+      <PlayHeader contestId={contestId} title={contest.title} waitingForStart={false} dict={dict} />
+      <Suspense fallback={<WorkspaceSkeleton dict={dict} />}>
+        <PlayPanels
+          contestId={contestId}
+          contestTitle={contest.title}
+          locale={locale}
+          dict={dict}
+        />
+      </Suspense>
+    </div>
+  );
+}
+
+/**
+ * The four requests the workspace is built from, and the workspace itself.
+ *
+ * A component of its own purely so there is something for `<Suspense>` to
+ * suspend on: a boundary only defers what is *inside* it, and until this was
+ * split out the whole page — the header included — was one async function
+ * and therefore one wait.
+ *
+ * A refusal that takes this whole screen away (SCREEN_UNAVAILABLE_CODES) is
+ * answered here rather than by the page, and so is shown beneath the bar
+ * instead of replacing the page with a heading of its own. That is the one
+ * visible consequence of the split, and it is the better screen: the
+ * contest's name is above it already, and repeating it under itself was
+ * never the point of that heading.
+ */
+async function PlayPanels({
+  contestId,
+  contestTitle,
+  locale,
+  dict,
+}: {
+  contestId: string;
+  /** Carried only for the print copy's byline — the bar above already shows it. */
+  contestTitle: string;
+  locale: Locale;
+  dict: PlayDictionary;
+}) {
+  const errors = dict.errors as Record<string, string>;
+
   // Fetched together, and answered mostly independently (finding 2): the
   // three requests share the same admission gate, so a refusal that is
   // really about this participant's own access to the contest (see
@@ -136,7 +211,7 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   if (questionsResult.status === "rejected") {
     const error = questionsResult.reason;
     if (error instanceof ApiError && SCREEN_UNAVAILABLE_CODES.has(error.code)) {
-      return <UnavailablePage title={contest.title} body={errors[error.code]} code={error.code} dict={dict} />;
+      return <ScreenUnavailable body={errors[error.code]} code={error.code} dict={dict} />;
     }
     throw error;
   }
@@ -155,7 +230,7 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   } else {
     const error = storyResult.reason;
     if (error instanceof ApiError && SCREEN_UNAVAILABLE_CODES.has(error.code)) {
-      return <UnavailablePage title={contest.title} body={errors[error.code]} code={error.code} dict={dict} />;
+      return <ScreenUnavailable body={errors[error.code]} code={error.code} dict={dict} />;
     }
     if (error instanceof ApiError && error.code === "story_not_found") {
       storyUnavailable = errors.story_not_found;
@@ -189,7 +264,7 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   } else {
     const error = logResult.reason;
     if (error instanceof ApiError && SCREEN_UNAVAILABLE_CODES.has(error.code)) {
-      return <UnavailablePage title={contest.title} body={errors[error.code]} code={error.code} dict={dict} />;
+      return <ScreenUnavailable body={errors[error.code]} code={error.code} dict={dict} />;
     }
     // Any other failure (a transient 500, an unreachable API): degrade
     // rather than crash, but say so — see `failed`'s own doc just above.
@@ -259,7 +334,7 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   const printView =
     storyBody !== null ? (
       <PrintView
-        contestTitle={contest.title}
+        contestTitle={contestTitle}
         participantName={participantName}
         date={printedOn}
         storyMarkdown={storyBody}
@@ -270,7 +345,6 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   return (
     <Workspace
       contestId={contestId}
-      title={contest.title}
       storyBody={storyBody !== null ? <StoryText markdown={storyBody} /> : null}
       printView={printView}
       storyUnavailable={storyUnavailable}
@@ -280,6 +354,26 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
       locale={locale}
       dict={dict}
     />
+  );
+}
+
+/**
+ * A refusal that takes the workspace away, shown under the bar that is
+ * already on screen.
+ *
+ * The same three dictionary sentences `UnavailablePage` below shows, minus
+ * the heading: this renders inside the shell `PlayPage` has already streamed,
+ * where the contest's title is the first thing above it (finding 2). The
+ * rate-limit case keeps its way back for exactly the reason recorded on
+ * `UnavailablePage` — that one lifts by itself within the minute, and the
+ * others do not lift at all.
+ */
+function ScreenUnavailable({ body, code, dict }: { body: string; code?: string; dict: PlayDictionary }) {
+  return (
+    <div className="flex min-h-0 flex-col items-start gap-4 p-10 max-narrow:p-4.5 narrow:flex-1">
+      <p className="max-w-body text-body text-ink">{body}</p>
+      {code === "query_too_often" ? <ReloadLink dict={dict} /> : null}
+    </div>
   );
 }
 
@@ -304,7 +398,7 @@ function UnavailablePage({
   title: string;
   body: string;
   code?: string;
-  dict: Dictionary;
+  dict: PlayDictionary;
 }) {
   return (
     <Band fill>
@@ -336,7 +430,7 @@ function WaitingRoom({
 }: {
   contest: ContestSummary;
   locale: Locale;
-  dict: Dictionary;
+  dict: PlayDictionary;
 }) {
   const t = dict.participant.play.waiting;
   // formatMoment (finding 4) resolves the installation's own timezone rather

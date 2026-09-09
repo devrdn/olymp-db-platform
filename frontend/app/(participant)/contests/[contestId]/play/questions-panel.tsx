@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tag } from "@/components/ui/tag";
-import type { Dictionary } from "@/lib/i18n/dictionary";
+import type { PlayDictionary } from "./dictionary";
 import type { PlayQuestion } from "@/lib/api/play";
 import { cn } from "@/lib/utils";
 
@@ -52,7 +52,7 @@ export function QuestionsPanel({
 }: {
   contestId: string;
   items: QuestionEntry[];
-  dict: Dictionary;
+  dict: PlayDictionary;
 }) {
   const t = dict.participant.play.questions;
   const [entries, setEntries] = useState(items);
@@ -157,7 +157,7 @@ function QuestionCard({
   current: boolean;
   /** The question that has to close before this one opens, if any. */
   blockedBy?: number;
-  dict: Dictionary;
+  dict: PlayDictionary;
   onClosed: () => void;
 }) {
   const t = dict.participant.play.questions;
@@ -320,7 +320,7 @@ function QuestionCard({
   );
 }
 
-function Verdict({ correct, points, dict }: { correct: boolean; points: number; dict: Dictionary }) {
+function Verdict({ correct, points, dict }: { correct: boolean; points: number; dict: PlayDictionary }) {
   const t = dict.participant.play.questions;
   return (
     <p role="status" className={cn("text-small", correct ? "text-good" : "text-ink-2")}>
@@ -330,7 +330,7 @@ function Verdict({ correct, points, dict }: { correct: boolean; points: number; 
 }
 
 /** Why an answer did not go through — the same shape and the same reasoning as the console's own refusal. */
-function Refusal({ state, dict }: { state: Extract<AnswerState, { kind: "refused" }>; dict: Dictionary }) {
+function Refusal({ state, dict }: { state: Extract<AnswerState, { kind: "refused" }>; dict: PlayDictionary }) {
   const t = dict.participant.play.questions;
   const errors = dict.errors as Record<string, string>;
   const message = errors[state.code] ?? errors.fallback;
@@ -387,7 +387,7 @@ function QuestionStatus({
   current: boolean;
   locked: boolean;
   blockedBy?: number;
-  t: Dictionary["participant"]["play"]["questions"];
+  t: PlayDictionary["participant"]["play"]["questions"];
 }) {
   if (closed) {
     return correct ? <Tag tone="good">{t.status.accepted}</Tag> : <Tag tone="mute">{t.status.spent}</Tag>;

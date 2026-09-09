@@ -175,3 +175,70 @@ describe("wallClockFromInstant", () => {
     expect(wallClockFromInstant("not a date")).toBe("");
   });
 });
+
+/**
+ * Finding 3: every one of these built its `Intl.DateTimeFormat` inside the
+ * call, so the cost of compiling locale data was paid per value formatted
+ * rather than per shape. Measured at 83µs a call, on screens that format
+ * hundreds of values — and, in a Client Component, format them twice.
+ *
+ * A locale and a zone no other test in this file touches, because the cache
+ * lives for the length of the process: warmed by an earlier test, this would
+ * pass without the fix.
+ */
+describe("how often a formatter is built", () => {
+  const elsewhere = { locale: "ro-RO", timeZone: "Europe/Bucharest" };
+
+  /**
+   * Counts constructions by standing a proxy in front of the constructor —
+   * a spy would answer `new` with something that is not an
+   * `Intl.DateTimeFormat`, and the cache would then keep that instead.
+   */
+  function countingConstructions(work: () => void): number {
+    const real = Intl.DateTimeFormat;
+    let built = 0;
+    Intl.DateTimeFormat = new Proxy(real, {
+      construct(target, args) {
+        built += 1;
+        return Reflect.construct(target, args);
+      },
+    });
+    try {
+      work();
+    } finally {
+      Intl.DateTimeFormat = real;
+    }
+    return built;
+  }
+
+  test("once per shape, however many values go through it", () => {
+    const built = countingConstructions(() => {
+      for (let i = 0; i < 100; i += 1) {
+        formatMoment(`2026-05-${String((i % 28) + 1).padStart(2, "0")}T10:00:00Z`, elsewhere);
+      }
+    });
+
+    // The date and the time, which is what `formatMoment` composes — not two
+    // hundred.
+    expect(built).toBe(2);
+  });
+
+  test("and the kept formatter still answers with the same string as a fresh one", () => {
+    const iso = "2026-05-14T07:00:00Z";
+    const kept = formatMoment(iso, elsewhere);
+
+    expect(kept).toBe(
+      `${new Intl.DateTimeFormat("ro-RO", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+        timeZone: "Europe/Bucharest",
+      }).format(new Date(iso))}, ${new Intl.DateTimeFormat("ro-RO", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+        timeZone: "Europe/Bucharest",
+      }).format(new Date(iso))}`,
+    );
+  });
+});

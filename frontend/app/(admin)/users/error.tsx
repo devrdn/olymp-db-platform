@@ -4,7 +4,7 @@ import { useEffect } from "react";
 
 import { Band } from "@/components/layout/band";
 import { StateView } from "@/components/product/state-view";
-import { useDictionary } from "@/lib/i18n/client";
+import { AdminDictionary } from "@/lib/i18n/client";
 
 /**
  * The recoverable-error state: a cause and a way forward.
@@ -23,7 +23,7 @@ export default function ContestsError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  const { dict } = useDictionary();
+  const { dict } = AdminDictionary.use();
   const t = dict.accounts.failed;
 
   useEffect(() => {

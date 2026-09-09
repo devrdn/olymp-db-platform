@@ -885,6 +885,8 @@ const ro = {
       null: "null",
     },
     play: {
+      /** Citit cu voce tare cât timp spațiul de lucru este încă construit — scheletul de alături este mut pentru un cititor de ecran. */
+      loading: "Se încarcă spațiul de lucru",
       waiting: {
         body: "Acest ecran se actualizează singur în clipa în care olimpiada începe. Lăsați această filă deschisă.",
         startsAt: "Programată să înceapă la {time}.",

@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 
 import { buttonVariants } from "@/components/ui/button";
-import type { Dictionary } from "@/lib/i18n/dictionary";
+import type { PlayDictionary } from "./dictionary";
 import { cn } from "@/lib/utils";
 
 /**
@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
  * Nothing polls: this screen belongs to somebody who is waiting, and a page
  * that reloads itself under them is the thing SPEC.md §6 rules out.
  */
-export function ReloadLink({ dict }: { dict: Dictionary }) {
+export function ReloadLink({ dict }: { dict: PlayDictionary }) {
   const router = useRouter();
 
   return (

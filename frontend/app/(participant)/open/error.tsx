@@ -4,7 +4,7 @@ import { useEffect } from "react";
 
 import { Band } from "@/components/layout/band";
 import { StateView } from "@/components/product/state-view";
-import { useDictionary } from "@/lib/i18n/client";
+import { ParticipantDictionary } from "@/lib/i18n/client";
 
 /**
  * The recoverable-error state: a cause and a way forward.
@@ -25,7 +25,7 @@ export default function OpenContestsError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  const { dict } = useDictionary();
+  const { dict } = ParticipantDictionary.use();
   // The shared retry and reference wording; only the two sentences that
   // name what failed belong to this screen.
   const t = dict.participant.failed;

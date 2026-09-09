@@ -5,6 +5,7 @@ import { homeFor } from "@/lib/auth/destination";
 import { fetchIdentity } from "@/lib/auth/session";
 import { branding } from "@/lib/api/branding";
 import { imageHref } from "@/lib/api/settings";
+import { SessionDictionary } from "@/lib/i18n/client";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -43,7 +44,13 @@ export default async function SessionLayout({ children }: { children: React.Reac
       home={homeFor(identity.permissions)}
       account={{ fullName: identity.fullName, login: identity.login }}
     >
-      {children}
+      {/* This group's own dictionary scope, on top of the root's: the profile's boundary reads from `profile` and borrows the retry wording from `participant`,
+          and none of that is a section the root scope carries. The sections
+          are chosen here, on the server, so what crosses the wire is what
+          this subtree can actually read (finding 5). */}
+      <SessionDictionary.Provider dict={SessionDictionary.select(dict)} locale={locale}>
+        {children}
+      </SessionDictionary.Provider>
     </ProductShell>
   );
 }

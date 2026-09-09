@@ -404,3 +404,71 @@ describe("the game upload panel", () => {
     expect(gameUploadWindowAction).toHaveBeenLastCalledWith(contestId, uploadId, 3);
   });
 });
+
+/**
+ * Finding 4: the bar animated `width`, a layout property, over a fixed 120ms
+ * — longer than a chunk takes on a fast link, so it trailed the upload the
+ * whole way and only reached the truth 120ms after the last chunk landed.
+ *
+ * jsdom runs no transitions and lays nothing out, so what is checked here is
+ * the two decisions that were wrong: which property carries the movement,
+ * and where its duration comes from.
+ */
+describe("the upload's progress bar", () => {
+  /** Holds the first chunk open, so the uploading phase — the only one that draws the bar — stays on screen. */
+  function stall() {
+    beginGameUploadAction.mockResolvedValueOnce({ value: upload({ receivedBytes: 0, declaredBytes: 12 }) });
+    request.mockImplementation(() => new Promise(() => {}));
+  }
+
+  test("moves with a transform rather than by re-laying itself out", async () => {
+    stall();
+    show();
+
+    await userEvent.upload(screen.getByLabelText(tu.pick), new File([new Uint8Array(12)], "dump.sql"));
+
+    const bar = await screen.findByRole("progressbar");
+    const fill = bar.firstElementChild as HTMLElement;
+
+    expect(fill.style.transform).toMatch(/^scaleX\(/);
+    expect(fill.style.width).toBe("");
+    expect(fill.className).toContain("transition-transform");
+    expect(fill.className).not.toContain("transition-[width]");
+  });
+
+  // The token is the ceiling, not the value: a bar that takes longer to
+  // travel than the upload takes to move on is a bar showing yesterday's
+  // figure. Before the first chunk lands there is no cadence to measure yet,
+  // so the token is all there is.
+  test("takes its duration from the token until there is a cadence to measure", async () => {
+    stall();
+    show();
+
+    await userEvent.upload(screen.getByLabelText(tu.pick), new File([new Uint8Array(12)], "dump.sql"));
+
+    const fill = (await screen.findByRole("progressbar")).firstElementChild as HTMLElement;
+
+    expect(fill.style.transitionDuration).toBe("var(--t-input)");
+  });
+
+  test("and never travels for longer than the gap between two chunks", async () => {
+    beginGameUploadAction.mockResolvedValueOnce({ value: upload({ receivedBytes: 0, declaredBytes: 12 }) });
+    let received = 0;
+    let chunks = 0;
+    request.mockImplementation(async (_path: string, options: { rawBody?: Blob }) => {
+      chunks += 1;
+      received += options.rawBody?.size ?? 0;
+      // Two chunks land, then the upload hangs with the bar still on screen.
+      if (chunks > 2) await new Promise(() => {});
+      return { received_bytes: received };
+    });
+
+    show();
+    await userEvent.upload(screen.getByLabelText(tu.pick), new File([new Uint8Array(12)], "dump.sql"));
+
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+
+    const fill = (await screen.findByRole("progressbar")).firstElementChild as HTMLElement;
+    expect(fill.style.transitionDuration).toMatch(/^min\(var\(--t-input\), \d+ms\)$/);
+  });
+});

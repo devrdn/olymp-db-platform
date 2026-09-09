@@ -4,7 +4,7 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 import type { GameSchema, GameTable } from "@/lib/api/schema";
-import type { Dictionary } from "@/lib/i18n/dictionary";
+import type { PlayDictionary } from "./dictionary";
 
 /**
  * The console's schema panel: the tables of the game, their columns, each
@@ -19,7 +19,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
  * catalogues: `page.tsx` never passes a schema in that case, because
  * discovering the shape is the puzzle there (queryproxy.ErrSchemaHidden).
  */
-export function SchemaPanel({ schema, dict }: { schema: GameSchema; dict: Dictionary }) {
+export function SchemaPanel({ schema, dict }: { schema: GameSchema; dict: PlayDictionary }) {
   const t = dict.participant.play.schema;
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -135,7 +135,7 @@ function TableRow({
   table: MatchedTable;
   open: boolean;
   onToggle: () => void;
-  t: Dictionary["participant"]["play"]["schema"];
+  t: PlayDictionary["participant"]["play"]["schema"];
 }) {
   const foreignKeys = table.columns.filter((column) => column.references !== "").length;
 
