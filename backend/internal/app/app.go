@@ -204,19 +204,37 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			gameAuthoring = gameAuthoring.WithUploads(uploads, limits)
 
 			// The table builder's own per-table CSV data (feat/game-table-builder's
-			// third task): a second, independent gamefile.Store in a sibling
-			// directory on the same volume — never the one uploads above uses
-			// (Games.WithTableData's own doc explains why one store per directory
-			// matters here). Limits are shared with the dump upload's own for now:
-			// nothing about a table's CSV needs a ceiling GAME_UPLOAD_MAX_* does
-			// not already give a sensible answer for.
+			// third task): a second, independent gamefile.Store — never the one
+			// uploads above uses (Games.WithTableData's own doc explains why one
+			// store per directory matters here). Its own subdirectory, not a
+			// sibling one: deploy/docker-compose.yml mounts the volume at exactly
+			// GAME_UPLOAD_DIR, so anywhere outside it is the container's own
+			// ephemeral disk, not the persistent volume both stores are meant to
+			// share.
+			//
+			// MaxFileBytes and MaxChunkBytes are still the dump's own — one CSV
+			// file's size and one chunk's size are each bounded per upload, and
+			// nothing about a table's CSV needs a different ceiling for either.
+			// MaxDirBytes is not shared: usage() (gamefile.Store's own accounting)
+			// walks one directory with os.ReadDir, so it already can't see what
+			// the other store keeps, but two Stores each independently allowed
+			// the same GAME_UPLOAD_MAX_DIR_BYTES would together fit twice what an
+			// operator who sized that variable against the volume itself meant to
+			// allow — the defect this table's own tableLimits fixes, with its own
+			// ceiling (GAME_UPLOAD_TABLE_MAX_DIR_BYTES, config.go's own doc) an
+			// operator sizes separately, against the same volume, alongside it.
 			tableDir := filepath.Join(cfg.GameUploadDir, "tables")
-			tableFiles, err := gamefile.NewStore(tableDir, limits)
+			tableLimits := gamefile.Limits{
+				MaxFileBytes:  cfg.GameUploadMaxFileBytes,
+				MaxDirBytes:   cfg.GameUploadTableMaxDirBytes,
+				MaxChunkBytes: cfg.GameUploadChunkBytes,
+			}
+			tableFiles, err := gamefile.NewStore(tableDir, tableLimits)
 			if err != nil {
 				a.close()
 				return nil, fmt.Errorf("open the table data directory: %w", err)
 			}
-			gameAuthoring = gameAuthoring.WithTableData(tableFiles, limits)
+			gameAuthoring = gameAuthoring.WithTableData(tableFiles, tableLimits)
 
 			a.tasks = append(a.tasks, abandonedUploads(log, gameAuthoring, cfg.GameUploadAbandonedAfter))
 		}

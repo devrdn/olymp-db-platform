@@ -247,6 +247,20 @@ func newTableLineScanner(r io.Reader) *tableLineScanner {
 	return &tableLineScanner{r: bufio.NewReaderSize(r, 64<<10)}
 }
 
+// trimLineEnding strips the newline a line was read up to, and — since a
+// file whose lines end "\r\n" is what a spreadsheet on Windows writes by
+// default (Excel, Numbers) — a trailing "\r" immediately in front of it as
+// well. This only ever removes the byte that terminates the line: a "\r"
+// that is data rather than punctuation is never the last byte before the
+// line's own newline, because a quoted field's own bytes (splitCSVLine's
+// own doc: a field never sees a raw newline) end with the closing quote,
+// not with whatever character happened to precede it, so a literal CR
+// inside a quoted field is untouched by this.
+func trimLineEnding(b []byte) []byte {
+	b = bytes.TrimSuffix(b, []byte("\n"))
+	return bytes.TrimSuffix(b, []byte("\r"))
+}
+
 // next returns the next line's bytes, without its trailing newline, or
 // io.EOF once the reader is exhausted. A final line with no trailing newline
 // is still returned as data, exactly once, before the next call answers EOF.
@@ -261,9 +275,9 @@ func (s *tableLineScanner) next() ([]byte, error) {
 		case err == nil:
 			s.line++
 			if len(line) == 0 {
-				return bytes.TrimSuffix(chunk, []byte("\n")), nil
+				return trimLineEnding(chunk), nil
 			}
-			return bytes.TrimSuffix(append(line, chunk...), []byte("\n")), nil
+			return trimLineEnding(append(line, chunk...)), nil
 		case errors.Is(err, bufio.ErrBufferFull):
 			line = append(line, chunk...)
 			continue
@@ -313,7 +327,7 @@ func firstLineIfComplete(r io.Reader) ([]byte, bool, error) {
 		}
 		switch {
 		case err == nil:
-			return append(line, chunk[:len(chunk)-1]...), true, nil
+			return trimLineEnding(append(line, chunk...)), true, nil
 		case errors.Is(err, bufio.ErrBufferFull):
 			line = append(line, chunk...)
 			continue
@@ -429,7 +443,7 @@ func validateScalar(text string, t ColumnType) error {
 		}
 	case ColumnTimestamp:
 		if !validTimestamp(text) {
-			return fmt.Errorf("%q is not a timestamp in YYYY-MM-DD HH:MM:SS form", text)
+			return fmt.Errorf("%q is not a timestamp in YYYY-MM-DD HH:MM:SS form (the seconds may be left off)", text)
 		}
 	default:
 		return fmt.Errorf("column type %q is not one this platform supports", t)
@@ -512,11 +526,23 @@ func validBoolean(text string) bool {
 // generated or organiser-curated CSV is expected to use one of these, and a
 // narrower accepted set is a friendlier refusal than a silently-misparsed
 // date under a looser one.
+//
+// The two without a seconds field exist for one caller, not CSV files:
+// <input type="datetime-local"> (game-builder-table.tsx) hands its own value
+// straight to appendTableRowAction, and a browser's own serialisation of
+// that value omits ":ss" whenever the organiser never touched the seconds
+// sub-field, regardless of the input's own step attribute — verified
+// against a live browser rather than assumed, since MDN's own wording on
+// this is easy to misread as "step=1 always keeps it". Refusing a value the
+// widget itself cannot be made to send would leave setting a nonzero second
+// as the only way around a 400 an organiser has no reason to expect.
 var timestampLayouts = []string{
 	"2006-01-02 15:04:05",
 	"2006-01-02T15:04:05",
 	"2006-01-02 15:04:05.999999",
 	"2006-01-02T15:04:05.999999",
+	"2006-01-02 15:04",
+	"2006-01-02T15:04",
 }
 
 func validTimestamp(text string) bool {

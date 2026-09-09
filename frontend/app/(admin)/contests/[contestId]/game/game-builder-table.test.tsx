@@ -87,15 +87,22 @@ function show({
   active = true,
   editable = true,
   enabled = true,
-  rowCount = 0,
   onRowCountChange = vi.fn(),
+  activeRowCount = 0,
+  onActiveRowCountChange = vi.fn(),
   initialTableData = null,
 }: {
   active?: boolean;
   editable?: boolean;
   enabled?: boolean;
-  rowCount?: number;
   onRowCountChange?: (n: number) => void;
+  /** The table's current active (deletion-adjusted) row count — the
+   * counterpart of the count `onRowCountChange` reports (`Lines`, never
+   * reduced by a delete: `GameBuilder`'s own lock keys off it exactly
+   * because a tombstoned row still leaves the file's old header behind),
+   * while this is `ActiveRows`, the number this screen shows. */
+  activeRowCount?: number;
+  onActiveRowCountChange?: (n: number) => void;
   /** The chunked upload a reloaded page found still receiving, or null —
    * `initialUpload` in `game-upload.tsx`, for a table's own CSV instead of
    * a dump. */
@@ -108,8 +115,9 @@ function show({
       active={active}
       limits={{ ...limits, enabled }}
       editable={editable}
-      rowCount={rowCount}
       onRowCountChange={onRowCountChange}
+      activeRowCount={activeRowCount}
+      onActiveRowCountChange={onActiveRowCountChange}
       initialTableData={initialTableData}
       dict={en}
     />,
@@ -399,6 +407,43 @@ describe("the table builder's own data panel", () => {
     expect(await screen.findByText("Ada")).toBeInTheDocument();
   });
 
+  // `TableData.Lines` and `TableData.ActiveRows()` answer two different
+  // questions (`tabledata.go`'s own doc: a tombstoned row leaves the file's
+  // old header behind, so `GameBuilder`'s own structure lock has to key off
+  // `Lines`, never off the deletion-adjusted count) — a write that changes
+  // both has to report both, to the two separate callbacks that carry them,
+  // rather than one shared count a later window fetch and an earlier write
+  // overwrite each other's meaning in.
+  test("reports a row's own total and its active count separately, not as one shared number", async () => {
+    gameTableDataWindowAction.mockResolvedValueOnce({
+      value: { fromRow: 1, rows: [], totalRows: 10, truncated: false },
+    });
+    // 11 total (the file's own line count, never reduced by a tombstone) and
+    // 8 active — the brief's own numbers: ten rows, three already deleted,
+    // one just added.
+    appendTableRowAction.mockResolvedValueOnce({ value: tableData({ status: "complete", lines: 11, activeRows: 8 }) });
+    gameTableDataWindowAction.mockResolvedValueOnce({
+      value: { fromRow: 1, rows: [{ row: 11, fields: ["Ada", "37"] }], totalRows: 11, truncated: false },
+    });
+
+    const onRowCountChange = vi.fn();
+    const onActiveRowCountChange = vi.fn();
+    show({ onRowCountChange, onActiveRowCountChange });
+    await screen.findByText(td.emptyRows);
+
+    await userEvent.type(screen.getByLabelText("full_name"), "Ada");
+    await userEvent.type(screen.getByLabelText("age (empty = NULL)"), "37");
+    await userEvent.click(screen.getByRole("button", { name: td.addRowButton }));
+
+    await waitFor(() => expect(onActiveRowCountChange).toHaveBeenCalledWith(8));
+    // The structural-lock count must reach 11 (Lines), from this write
+    // itself — not only once the follow-up window fetch happens to agree
+    // (that fetch's own 11 would mask a write that reported the wrong
+    // number here).
+    expect(onRowCountChange).toHaveBeenCalledWith(11);
+    expect(onRowCountChange).not.toHaveBeenCalledWith(8);
+  });
+
   // The one client-side rule this screen checks before the request rather
   // than after it: a NOT NULL column left empty. Checked entirely offline —
   // the assertion below is that nothing was sent, not just that a message
@@ -426,7 +471,7 @@ describe("the table builder's own data panel", () => {
       value: { fromRow: 1, rows: [], totalRows: 0, truncated: false },
     });
 
-    show({ rowCount: 1 });
+    show({ activeRowCount: 1 });
     await screen.findByText("Ada");
 
     await userEvent.click(screen.getByRole("button", { name: td.deleteRow }));
@@ -434,5 +479,35 @@ describe("the table builder's own data panel", () => {
     expect(window.confirm).toHaveBeenCalledWith(td.deleteRowConfirm.replace("{row}", "4"));
     await waitFor(() => expect(deleteTableRowAction).toHaveBeenCalledWith(contestId, "suspects", 4));
     expect(await screen.findByText(td.emptyRows)).toBeInTheDocument();
+  });
+
+  // A tombstone never rewrites Lines (`tabledata.go`'s own `DeleteTableRow`
+  // doc: "not a rewrite of the file") — so a delete must only ever move the
+  // active count down, and must never touch the structural-lock one, or a
+  // deleted row would look like it unlocked a table the server still
+  // refuses to let this screen rename or restructure.
+  test("deleting a row lowers only the active count, never the total the structure lock reads", async () => {
+    gameTableDataWindowAction.mockResolvedValueOnce({
+      value: { fromRow: 1, rows: [{ row: 4, fields: ["Ada", "37"] }], totalRows: 5, truncated: false },
+    });
+    deleteTableRowAction.mockResolvedValueOnce({});
+    gameTableDataWindowAction.mockResolvedValueOnce({
+      value: { fromRow: 1, rows: [], totalRows: 5, truncated: false },
+    });
+
+    const onRowCountChange = vi.fn();
+    const onActiveRowCountChange = vi.fn();
+    show({ activeRowCount: 3, onRowCountChange, onActiveRowCountChange });
+    await screen.findByText("Ada");
+
+    await userEvent.click(screen.getByRole("button", { name: td.deleteRow }));
+
+    await waitFor(() => expect(onActiveRowCountChange).toHaveBeenCalledWith(2));
+    // The reload this delete triggers reports the file's own total again
+    // (5, unchanged — harmless), but nothing about the delete itself may
+    // ever report 4: the old, single-variable decrement this replaces did
+    // exactly that, unlocking a table the server still refuses to let this
+    // screen restructure.
+    expect(onRowCountChange).not.toHaveBeenCalledWith(4);
   });
 });

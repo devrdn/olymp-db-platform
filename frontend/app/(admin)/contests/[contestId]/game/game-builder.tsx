@@ -102,6 +102,15 @@ function toWireDefinition(tables: DraftTable[]) {
  * primary key disabled, with `lockedTable`'s own sentence saying why, and
  * only removing that data first lifts the lock. Adding an all-new table, or
  * editing one that still has none, is never affected.
+ *
+ * `rowCounts` is deliberately `Lines`, not the deletion-adjusted count: the
+ * server's own check above locks on a table's rows existing at all, ever
+ * — a tombstoned row still leaves its file's old header behind — so a
+ * delete that emptied every active row must not, on its own, read as
+ * "unlocked" here. `activeRowCounts` (below) is the other number,
+ * `ActiveRows()`, kept apart for exactly that reason: it is what
+ * `lockedTable`'s own sentence shows, and it is the one a delete actually
+ * moves.
  */
 export function GameBuilder({
   contestId,
@@ -139,7 +148,20 @@ export function GameBuilder({
   const limits = definition.builderLimits;
 
   const [tables, setTables] = useState<DraftTable[]>(() => initialiseTables(definition.tables));
+  // `rowCounts` is `TableData.Lines` per table — never reduced by a delete
+  // (a tombstoned row leaves the file's own header exactly as it was), and
+  // the one `locked` below reads, since that is what the server's own
+  // structure lock actually checks (`checkTableDataCompatibility`,
+  // `tabledata.go`). `activeRowCounts` is `TableData.ActiveRows()`, the
+  // deletion-adjusted count `TableCard` shows next to a locked table's own
+  // name — seeded from the same initial read (the best guess available
+  // before any write has reported the true split) and kept current
+  // separately from then on, exactly the two `GameBuilderTable` callbacks
+  // below report separately. One shared variable for both used to mean a
+  // delete's own report (lower) and the very next window fetch's report
+  // (unchanged) fought over what a single number meant.
   const [rowCounts, setRowCounts] = useState<Record<string, number>>(initialRowCounts);
+  const [activeRowCounts, setActiveRowCounts] = useState<Record<string, number>>(initialRowCounts);
   const [activeTable, setActiveTable] = useState(definition.tables[0]?.name ?? "");
 
   const [state, save, saving] = useActionState<GameState, FormData>(saveGameDefinitionAction, {});
@@ -224,7 +246,7 @@ export function GameBuilder({
               table={table}
               editable={editable}
               locked={locked(table)}
-              rowCount={table.originalName ? rowCounts[table.originalName] ?? 0 : 0}
+              rowCount={table.originalName ? activeRowCounts[table.originalName] ?? 0 : 0}
               limits={limits}
               dict={dict}
               onNameChange={(name) => updateTable(table.key, (t) => ({ ...t, name }))}
@@ -305,8 +327,11 @@ export function GameBuilder({
                   active={activeTable === table.name}
                   limits={limits}
                   editable={editable}
-                  rowCount={rowCounts[table.name] ?? 0}
                   onRowCountChange={(count) => setRowCounts((prev) => ({ ...prev, [table.name]: count }))}
+                  activeRowCount={activeRowCounts[table.name] ?? 0}
+                  onActiveRowCountChange={(count) =>
+                    setActiveRowCounts((prev) => ({ ...prev, [table.name]: count }))
+                  }
                   initialTableData={currentTableUploads[table.name] ?? null}
                   dict={dict}
                 />
@@ -343,6 +368,10 @@ function TableCard({
   table: DraftTable;
   editable: boolean;
   locked: boolean;
+  /** The active (deletion-adjusted) row count shown in `lockedTable`'s own
+   * sentence — `GameBuilder`'s own `activeRowCounts`, never the `rowCounts`
+   * that decides `locked` itself: the two answer different questions (this
+   * component's own doc on why). */
   rowCount: number;
   limits: GameDefinition["builderLimits"];
   dict: Dictionary;

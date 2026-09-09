@@ -112,8 +112,9 @@ export function GameBuilderTable({
   active,
   limits,
   editable,
-  rowCount,
   onRowCountChange,
+  activeRowCount,
+  onActiveRowCountChange,
   initialTableData,
   dict,
 }: {
@@ -125,10 +126,27 @@ export function GameBuilderTable({
   active: boolean;
   limits: BuilderLimits;
   editable: boolean;
-  /** This table's current row count, lifted into `GameBuilder`'s own state
-   * so every tab agrees on it without a second read. */
-  rowCount: number;
+  /** Reports this table's current row count — `TableData.Lines`, lifted
+   * into `GameBuilder`'s own state so every tab agrees on it without a
+   * second read. Write-only from here: this component never has a reason
+   * to read the count back, only to report what a window fetch or a write
+   * just found it to be. Deliberately not the number this screen shows —
+   * a tombstoned row never rewrites the file's own header, so `Lines` is
+   * what stays true to what `GameBuilder`'s own structure lock actually
+   * checks (`checkTableDataCompatibility`, `tabledata.go`), and it must
+   * never move on a delete — see `activeRowCount` for the number that
+   * does. */
   onRowCountChange: (rowCount: number) => void;
+  /** This table's current *active* row count — `TableData.ActiveRows()`,
+   * `Lines` minus how many rows are tombstoned — the number this screen
+   * actually shows next to a locked table's own name, and the one value
+   * this component does read back (removeRow's own decrement). Kept apart
+   * from the count `onRowCountChange` reports on purpose: the two move
+   * independently (a delete lowers this without lowering the other at
+   * all), and a single shared variable for both is exactly what let one
+   * write's own report clobber the other's meaning a moment later. */
+  activeRowCount: number;
+  onActiveRowCountChange: (activeRowCount: number) => void;
   /** The chunked upload a reloaded page found still receiving for this
    * table, or null — `page.tsx`'s own `tableCurrentUpload`, the identical
    * shape `game-upload.tsx`'s own `initialUpload` prop takes for a dump.
@@ -309,7 +327,10 @@ export function GameBuilderTable({
     setHasFile(false);
     fileRef.current = null;
     setUploadId(null);
-    if (result.value) onRowCountChange(result.value.activeRows);
+    if (result.value) {
+      onRowCountChange(result.value.lines);
+      onActiveRowCountChange(result.value.activeRows);
+    }
     await fetchWindow(1);
   }
 
@@ -447,7 +468,10 @@ export function GameBuilderTable({
       return;
     }
     setRowValues(table.columns.map(() => ""));
-    if (result.value) onRowCountChange(result.value.activeRows);
+    if (result.value) {
+      onRowCountChange(result.value.lines);
+      onActiveRowCountChange(result.value.activeRows);
+    }
     await fetchWindow(windowFrom);
   }
 
@@ -460,7 +484,13 @@ export function GameBuilderTable({
       setWindowError(result.code);
       return;
     }
-    onRowCountChange(Math.max(0, rowCount - 1));
+    // A tombstone never rewrites Lines (DeleteTableRow's own doc: "not a
+    // rewrite of the file"), so only the active count moves — rowCount
+    // (Lines) is left exactly as it was, on purpose: it is what GameBuilder's
+    // own structure lock reads, and a delete must never look like it
+    // unlocked a table the server still refuses to let this screen
+    // restructure.
+    onActiveRowCountChange(Math.max(0, activeRowCount - 1));
     await fetchWindow(windowFrom);
   }
 

@@ -1097,7 +1097,24 @@ func (g *Games) TableDataWindow(ctx context.Context, contestID uuid.UUID, table 
 		if _, isDeleted := deleted[row]; isDeleted {
 			continue
 		}
-		if int64(len(line)) > remaining {
+		// A row over budget stops the window here — except when it is the
+		// page's own first row, which is let through anyway. Without this,
+		// a table whose rows sit near MaxTableFieldBytes (columns wide
+		// enough that one row alone can reach megabytes) answers every
+		// window smaller than that with an empty page and truncated=true —
+		// indistinguishable from "no more rows", and the "next" offset
+		// (fromRow + rows shown) then computes right back to fromRow, since
+		// zero rows were shown. gamefile.Store.Window (readWindowLines) never
+		// does this to a dump's own line window: asked for more than its
+		// budget allows, it still returns the one line it has, cut to the
+		// budget, with Truncated set — a caller told the truth about a page
+		// that cost more than it asked for, rather than one told nothing was
+		// there. A CSV row can't be cut the same way (a sliced row would
+		// parse as fields belonging to no real data), so instead of
+		// shortening it, this lets the whole row through once, then stops:
+		// a page can therefore go over its own byte budget, but it can never
+		// show fewer than one row of data that exists.
+		if int64(len(line)) > remaining && len(window.Rows) > 0 {
 			window.Truncated = true
 			return window, nil
 		}

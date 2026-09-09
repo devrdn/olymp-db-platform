@@ -1006,3 +1006,52 @@ func TestABuildToreDownTheTemplateWhenLoadingTableDataFailed(t *testing.T) {
 		t.Fatalf("dropped = %v, want exactly %q torn down", cluster.dropped, built.Database)
 	}
 }
+
+// TestTableDataWindowReturnsATruncatedRowRatherThanNoneAtAll is the fix for
+// a window whose byte budget is smaller than one legitimate row: a table
+// of wide text columns can have a single row past what a caller's own
+// maxBytes allows (MaxTableFieldBytes alone lets one row reach megabytes),
+// and returning an empty page for that — rows: [], truncated: true — reads
+// identically to "there is nothing left to see" even though total_rows
+// says otherwise, and the "next" button (windowFrom + len(rows)) computes
+// the very page it is already on. gamefile.Store.Window never does this to
+// a dump's own line window (TestWindowTruncatedByByteBudgetOnALongLine):
+// asked for more than its budget allows, it still returns one line, cut to
+// the budget, with Truncated set. This can't cut the line itself the same
+// way — a sliced CSV row would parse as fields nothing about the table's
+// real data, which is worse than a page with one row over budget — so a
+// row already collected is never discarded to fit; the first row of a page
+// is let through whole even when it alone is larger than maxBytes, exactly
+// so a table's own window can never show fewer than one row of data that
+// exists.
+func TestTableDataWindowReturnsATruncatedRowRatherThanNoneAtAll(t *testing.T) {
+	t.Parallel()
+	service, _, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	longName := strings.Repeat("x", 200)
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", longName, ""}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"2", "Someone", "Sparrow"}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	// Comfortably below the first row's own line length (id + a 200-byte
+	// name + the empty nickname field, plus separators), the way the brief's
+	// own scenario has max_field_bytes-sized columns exceed maxTableWindowBytes.
+	window, err := service.TableDataWindow(t.Context(), contest, "suspects", 1, 10, 50)
+	if err != nil {
+		t.Fatalf("TableDataWindow: %v", err)
+	}
+	if len(window.Rows) != 1 {
+		t.Fatalf("got %d rows, want 1 (the over-budget row itself, not an empty page)", len(window.Rows))
+	}
+	if !window.Truncated {
+		t.Error("Truncated = false, want true (the budget stopped the window after one row)")
+	}
+	if window.Rows[0].Row != 1 || window.Rows[0].Fields[1] != longName {
+		t.Fatalf("row = %+v, want row 1 with its name kept whole, not cut to the byte budget", window.Rows[0])
+	}
+}

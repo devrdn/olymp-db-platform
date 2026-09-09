@@ -216,6 +216,19 @@ type Config struct {
 	// GameUploadMaxDirBytes bounds every upload the volume holds together —
 	// in progress, and complete ones waiting to be superseded or reclaimed.
 	GameUploadMaxDirBytes int64
+	// GameUploadTableMaxDirBytes is GameUploadMaxDirBytes's own counterpart
+	// for the table builder's own per-table CSV data (internal/app's
+	// tableDir): a second, independent gamefile.Store, on the same volume
+	// as the dump's but never sharing its directory
+	// (provisioning.Games.WithTableData's own doc explains why one Store
+	// per directory matters). Two independent Stores each enforcing the
+	// same MaxDirBytes would let the volume hold twice what an operator who
+	// set GAME_UPLOAD_MAX_DIR_BYTES to the volume's own size meant to
+	// allow — this field exists so the two ceilings are sized separately,
+	// on purpose, rather than one silently doubling the other. 4 GiB unset:
+	// a quarter of the dump's own 16 GiB default, since a table builder's
+	// own CSV data is expected to run far smaller than a whole dump.
+	GameUploadTableMaxDirBytes int64
 	// GameUploadChunkBytes bounds one Append call, independent of the
 	// upload's own size (internal/gamefile's own rule 12 reasoning).
 	GameUploadChunkBytes int64
@@ -339,6 +352,11 @@ func Load() (Config, error) {
 	if cfg.GameUploadMaxDirBytes, err = int64Env("GAME_UPLOAD_MAX_DIR_BYTES", 16<<30); err != nil {
 		return Config{}, err
 	}
+	// 4 GiB unset — the field's own doc on why this does not fall back to
+	// GameUploadMaxDirBytes's value.
+	if cfg.GameUploadTableMaxDirBytes, err = int64Env("GAME_UPLOAD_TABLE_MAX_DIR_BYTES", 4<<30); err != nil {
+		return Config{}, err
+	}
 	if cfg.GameUploadChunkBytes, err = int64Env("GAME_UPLOAD_CHUNK_BYTES", 8<<20); err != nil {
 		return Config{}, err
 	}
@@ -349,9 +367,11 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("GAME_UPLOAD_ABANDONED_AFTER cannot be negative, got %s", cfg.GameUploadAbandonedAfter)
 	}
 	if cfg.GameUploadDir != "" {
-		if cfg.GameUploadMaxFileBytes <= 0 || cfg.GameUploadMaxDirBytes <= 0 || cfg.GameUploadChunkBytes <= 0 {
+		if cfg.GameUploadMaxFileBytes <= 0 || cfg.GameUploadMaxDirBytes <= 0 || cfg.GameUploadChunkBytes <= 0 ||
+			cfg.GameUploadTableMaxDirBytes <= 0 {
 			return Config{}, fmt.Errorf(
-				"GAME_UPLOAD_MAX_FILE_BYTES, GAME_UPLOAD_MAX_DIR_BYTES and GAME_UPLOAD_CHUNK_BYTES must all be positive when GAME_UPLOAD_DIR is set")
+				"GAME_UPLOAD_MAX_FILE_BYTES, GAME_UPLOAD_MAX_DIR_BYTES, GAME_UPLOAD_TABLE_MAX_DIR_BYTES and " +
+					"GAME_UPLOAD_CHUNK_BYTES must all be positive when GAME_UPLOAD_DIR is set")
 		}
 	}
 
