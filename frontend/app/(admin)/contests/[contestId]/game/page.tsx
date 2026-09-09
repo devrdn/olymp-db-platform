@@ -1,10 +1,40 @@
-import { gameSchema, gameScriptSchema, uploadSchema } from "@/lib/api/game";
+import { definitionSchema, gameSchema, gameScriptSchema, tableRowWindowSchema, uploadSchema } from "@/lib/api/game";
 import { contentEditable } from "@/lib/api/contests";
+import { serverRequest } from "@/lib/api/server";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { loadContest, loadContestResource } from "../contest";
+import { GameBuilder } from "./game-builder";
 import { GameEditor } from "./game-editor";
 import { GameUpload } from "./game-upload";
+
+/**
+ * Whether a table already holds data, before the builder's own definition
+ * editor renders — the fact that gates changing a table's name, columns or
+ * primary key (`GameBuilder`'s own doc explains why: `SetDefinition` replaces
+ * the whole description with no check of its own that a changed table's
+ * already-loaded CSV still matches it, so a structural edit made after data
+ * exists does not fail, it orphans that data silently, which is worse than a
+ * refusal).
+ *
+ * A best-effort read, not `loadContestResource`: this is a page load reading
+ * up to `MaxDefinitionTables` (fifty) small, indexed windows in parallel to
+ * explain a lock *before* anyone clicks anything, not a resource this page
+ * depends on to render at all — the same reasoning `initialUpload`'s own
+ * `.catch(() => null)` gives below for a read that must not turn a minor
+ * hiccup into a 404 for the whole page. `max_rows=1` is every byte this call
+ * needs: only whether the table is empty, never its contents.
+ */
+async function tableRowCount(contestId: string, table: string): Promise<number> {
+  try {
+    const payload = await serverRequest(
+      `/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/window?max_rows=1`,
+    );
+    return tableRowWindowSchema.parse(payload).totalRows;
+  } catch {
+    return 0;
+  }
+}
 
 /**
  * The SQL an olympiad's game is built from.
@@ -59,6 +89,33 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
           uploadSchema.parse(payload),
         ).catch(() => null);
 
+  // The third way to build this contest's game: `/game/definition` always
+  // answers 200 (an empty definition for a contest with no game, or one
+  // built the other two ways — `definition`'s own doc on the API side), the
+  // same "one shape either way" convention `game` and `script` already
+  // follow above. `notFoundIsEmpty` only guards the one case where this
+  // whole handler is unmounted (no game cluster configured), which `game
+  // === null` already answered for.
+  const definition =
+    game === null
+      ? null
+      : await loadContestResource(contestId, "/game/definition", (payload) =>
+          definitionSchema.parse(payload),
+        ).catch(() => null);
+
+  // See tableRowCount's own doc. Skipped entirely when the table-data volume
+  // is not configured (there is nothing to be empty of) or the definition
+  // has no tables yet (nothing to check) — the same "read only what the
+  // screen needs" reasoning `initialUpload` above already follows.
+  const tableRowCounts =
+    definition && definition.builderLimits.enabled && definition.tables.length > 0
+      ? Object.fromEntries(
+          await Promise.all(
+            definition.tables.map(async (table) => [table.name, await tableRowCount(contestId, table.name)] as const),
+          ),
+        )
+      : {};
+
   const t = dict.workspace.game;
 
   return (
@@ -86,6 +143,15 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
             editable={contentEditable(contest.status)}
             dict={dict}
           />
+          {definition ? (
+            <GameBuilder
+              contestId={contestId}
+              definition={definition}
+              rowCounts={tableRowCounts}
+              editable={contentEditable(contest.status)}
+              dict={dict}
+            />
+          ) : null}
         </>
       )}
     </div>
