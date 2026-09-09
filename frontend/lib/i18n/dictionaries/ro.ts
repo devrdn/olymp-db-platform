@@ -1118,6 +1118,60 @@ const ro = {
       "Jocul acestei olimpiade nu mai poate fi înlocuit. Înlocuirea ridică versiunea șablonului, ceea ce face copiile tuturor participanților învechite — ar fi șterse și create din nou.",
     game_uploads_disabled:
       "Această instalare nu are un director pentru fișiere, așa că jocul poate fi scris doar în editor. Configurarea lui ține de cine administrează serverul.",
+    game_definition_empty:
+      "Jocul nu are încă niciun tabel. Dintr-o descriere goală s-ar construi o bază goală, iar fiecare întrebare ar răspunde „nu există acest tabel”.",
+    game_definition_too_large:
+      "Descrierea are mai multe tabele sau coloane decât acceptă această instalare. Construiți jocul din mai puține tabele sau scurtați-l.",
+    game_definition_invalid_name:
+      "Numele unui tabel sau al unei coloane nu este un identificator simplu. Folosiți litere, cifre și liniuțe de subliniere, începând cu o literă.",
+    game_definition_duplicate_name:
+      "Același tabel, sau aceeași coloană dintr-un tabel, este numit de două ori. PostgreSQL transformă numele fără ghilimele în litere mici, deci două nume care diferă doar prin majuscule sunt un singur nume.",
+    game_definition_invalid_type:
+      "Acest tip de coloană nu este oferit de platformă. Alegeți unul din listă.",
+    game_definition_table_empty:
+      "Un tabel nu are nicio coloană. Adăugați cel puțin una sau ștergeți tabelul.",
+    game_definition_invalid_primary_key:
+      "Cheia primară numește o coloană pe care tabelul nu o are, sau o numește de două ori.",
+    game_table_unknown:
+      "Acesta nu este un tabel al descrierii actuale a jocului. Reîncărcați pagina: probabil a fost redenumit sau șters.",
+    game_table_header_mismatch:
+      "Antetul fișierului nu numește, în ordine, exact coloanele declarate de tabel. Corectați antetul sau potriviți tabelul cu el.",
+    game_table_row_field_count:
+      "Un rând are alt număr de câmpuri decât are tabelul coloane. Mesajul spune care rând.",
+    game_table_value_invalid:
+      "O valoare nu se potrivește cu tipul coloanei sau este goală acolo unde nu se permite. Mesajul spune care rând și care coloană.",
+    game_table_field_too_long:
+      "Un câmp al fișierului este mai lung decât acceptă această instalare.",
+    game_table_line_too_long:
+      "O linie a fișierului este mai lungă decât acceptă această instalare. O întrerupere de linie lipsă transformă tot fișierul într-o singură linie.",
+    game_table_too_many_rows:
+      "Fișierul are mai multe rânduri decât permite această instalare pentru un tabel.",
+    game_table_row_not_found:
+      "Nu există un asemenea rând. Reîncărcați tabelul: probabil a fost deja șters.",
+    game_table_row_already_deleted:
+      "Acest rând a fost deja șters. Nimic nu s-a schimbat.",
+    game_table_too_many_deleted_rows:
+      "Din acest tabel au fost șterse prea multe rânduri pentru ca ștergerea să mai fie ieftină. Încărcați tabelul din nou dintr-un fișier curat.",
+    game_table_data_disabled:
+      "Această instalare nu are un volum configurat pentru datele tabelelor, așa că rândurile pot fi scrise doar în editorul SQL. Configurarea lui ține de cine administrează serverul.",
+    game_table_data_too_large:
+      "Fișierul este mai mare decât acceptă această instalare pentru datele unui tabel.",
+    game_table_data_store_full:
+      "Volumul cu datele tabelelor este plin. Se eliberează pe măsură ce alte încărcări se termină sau sunt șterse.",
+    game_table_data_in_progress:
+      "Acest tabel are deja o încărcare în curs. Finalizați-o sau anulați-o înainte de a începe alta sau de a adăuga un rând manual.",
+    game_table_data_already_complete:
+      "Această încărcare este deja finalizată sau anulată, nu i se mai poate trimite nimic.",
+    game_table_data_not_found:
+      "Nu există o asemenea încărcare pentru acest tabel. Reîncărcați pagina: cel mai probabil a fost deja finalizată sau anulată.",
+    game_table_data_chunk_out_of_order:
+      "Această bucată nu continuă de unde a rămas serverul în realitate. Întrebați cât a primit și reluați de acolo.",
+    game_table_data_chunk_too_large:
+      "O bucată a fișierului este mai mare decât acceptă această instalare. Trimiteți bucăți mai mici.",
+    game_table_data_chunk_incomplete:
+      "Bucata a încetat să sosească înainte ca serverul să o aibă întreagă. Nimic nu a fost păstrat, trimiteți aceeași bucată din nou.",
+    game_table_data_length_mismatch:
+      "Au sosit mai mulți sau mai puțini octeți decât s-a declarat la începutul încărcării, deci nu poate fi finalizată. Începeți din nou.",
     game_upload_filename_invalid:
       "Numele fișierului este gol sau mai lung decât se acceptă. Redenumiți fișierul și încercați din nou.",
     game_upload_too_large:

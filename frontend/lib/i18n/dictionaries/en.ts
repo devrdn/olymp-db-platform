@@ -1204,6 +1204,60 @@ const en = {
       "This contest's game can no longer be replaced. Replacing it raises the template's version, which makes every participant's copy stale — they would be dropped and made again.",
     game_uploads_disabled:
       "This installation has no upload directory, so a game can only be written in the editor. Configuring one is a job for whoever runs the server.",
+    game_definition_empty:
+      "The game has no tables yet. An empty definition would build an empty database, and every question would answer with a missing table.",
+    game_definition_too_large:
+      "The definition has more tables or columns than this installation allows. Split the game into fewer, wider tables, or shorten it.",
+    game_definition_invalid_name:
+      "A table or column name is not a plain identifier. Use letters, digits and underscores, starting with a letter.",
+    game_definition_duplicate_name:
+      "The same table, or the same column within one table, is named twice. PostgreSQL folds unquoted names to lower case, so two names differing only in case are one name.",
+    game_definition_invalid_type:
+      "That column type is not one this platform offers. Pick one from the list.",
+    game_definition_table_empty:
+      "A table has no columns. Give it at least one, or remove the table.",
+    game_definition_invalid_primary_key:
+      "The primary key names a column the table does not have, or names one twice.",
+    game_table_unknown:
+      "That is not a table of this game's current definition. Reload the page: it has probably been renamed or removed.",
+    game_table_header_mismatch:
+      "The file's header does not name, in order, exactly the columns this table declares. Fix the header, or change the table to match it.",
+    game_table_row_field_count:
+      "A row has a different number of fields than the table has columns. The message says which row.",
+    game_table_value_invalid:
+      "A value does not fit its column's type, or is empty in a column that does not allow it. The message says which row and column.",
+    game_table_field_too_long:
+      "One field of the file is longer than this installation allows.",
+    game_table_line_too_long:
+      "One line of the file is longer than this installation allows. A missing line break turns a whole file into one line.",
+    game_table_too_many_rows:
+      "The file has more rows than this installation allows for one table.",
+    game_table_row_not_found:
+      "There is no such row. Reload the table: it has probably been deleted already.",
+    game_table_row_already_deleted:
+      "That row has already been deleted. Nothing was changed.",
+    game_table_too_many_deleted_rows:
+      "Too many rows have been deleted from this table for another deletion to be cheap. Upload the table again from a clean file.",
+    game_table_data_disabled:
+      "This installation has no volume configured for table data, so rows can only be written in the SQL editor. Configuring one is a job for whoever runs the server.",
+    game_table_data_too_large:
+      "That file is larger than this installation accepts for one table's data.",
+    game_table_data_store_full:
+      "The table-data volume is full. It frees up as other uploads finish or are removed.",
+    game_table_data_in_progress:
+      "This table already has an upload in progress. Finish or cancel it before starting another, or before adding a row by hand.",
+    game_table_data_already_complete:
+      "This upload is already finished or cancelled, so nothing more can be sent to it.",
+    game_table_data_not_found:
+      "No such upload for this table. Reload the page: it has most likely been completed or cancelled already.",
+    game_table_data_chunk_out_of_order:
+      "This piece does not continue where the server actually left off. Ask it how much it has received and resume from there.",
+    game_table_data_chunk_too_large:
+      "One piece of the file is larger than this installation accepts. Send it in smaller pieces.",
+    game_table_data_chunk_incomplete:
+      "The piece stopped arriving before the server had all of it. Nothing was kept, so send the same piece again.",
+    game_table_data_length_mismatch:
+      "Fewer or more bytes arrived than the upload declared, so it cannot be completed. Start it again.",
     game_upload_filename_invalid:
       "That filename is empty or longer than allowed. Rename the file and try again.",
     game_upload_too_large:
