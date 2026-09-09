@@ -9,6 +9,7 @@ package config
 import (
 	"fmt"
 	"net/netip"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -55,6 +56,19 @@ type Config struct {
 	// peer is always the client — correct without a reverse proxy, and the
 	// safe default behind an unknown one.
 	TrustedProxies []string
+	// PublicOrigins names the front origins this deployment answers for, on
+	// top of its own host, for httpx.CheckOrigin. Empty is the strict default
+	// and what the compose deployment wants: Caddy passes the browser's Host
+	// through, so the API's own host already is the origin the page came from.
+	//
+	// Set it where that identity does not hold. A development stack is the
+	// common case — the browser is on :3000, Next's rewrite forwards /api/*
+	// to :8080 and replaces Host on the way — and so is a production split
+	// that answers the interface and the API on different names. The one
+	// request a browser makes to this API directly is a chunk of an uploaded
+	// dump; every other write goes through a server action and carries no
+	// Origin at all, which is why nothing noticed until uploads existed.
+	PublicOrigins []string
 	// DefaultLocale is the language of last resort, used when a request
 	// expresses no usable preference and no contest narrows it down. It is a
 	// BCP-47 tag matching a row in the `languages` table.
@@ -348,6 +362,20 @@ func Load() (Config, error) {
 
 	// Validation happens here so a typo fails the boot; the list is split
 	// eagerly and re-validated by the resolver that consumes it.
+	if raw := os.Getenv("PUBLIC_ORIGINS"); raw != "" {
+		for _, origin := range strings.Split(raw, ",") {
+			origin = strings.TrimSpace(origin)
+			if origin == "" {
+				continue
+			}
+			parsed, err := url.Parse(origin)
+			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+				return Config{}, fmt.Errorf("PUBLIC_ORIGINS: %q is not a scheme://host origin", origin)
+			}
+			cfg.PublicOrigins = append(cfg.PublicOrigins, parsed.Scheme+"://"+parsed.Host)
+		}
+	}
+
 	if raw := os.Getenv("TRUSTED_PROXIES"); raw != "" {
 		for _, entry := range strings.Split(raw, ",") {
 			entry = strings.TrimSpace(entry)

@@ -440,11 +440,12 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	modules = append(modules, api.NewEventsHandler(participantAccess, authMiddleware, log, ctx.Done()))
 
 	deps := api.Deps{
-		Logger:    log,
-		Metrics:   recorder,
-		Version:   version,
-		ClientIPs: resolver,
-		CacheMode: cache.Mode(cacheBackend),
+		Logger:        log,
+		Metrics:       recorder,
+		Version:       version,
+		ClientIPs:     resolver,
+		PublicOrigins: cfg.PublicOrigins,
+		CacheMode:     cache.Mode(cacheBackend),
 		Checkers: []health.Checker{
 			storage.NewChecker("core-db", pool),
 			storage.NewChecker("cache", cacheBackend),

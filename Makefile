@@ -77,6 +77,16 @@ REDIS_ADDR := $(if $(REDIS_PASSWORD),redis://:$(REDIS_PASSWORD)@localhost:$(REDI
 # still wins.
 GAME_UPLOAD_DIR := $(CURDIR)/deploy/game-uploads
 
+# Where the *browser* is when the interface runs on the host, which is not the
+# same question as where the API is. Behind Caddy the two are one origin and
+# this is unnecessary; `make run` has no Caddy, so Next's rewrite forwards
+# /api/* to :8080 and replaces Host on the way, and the one request a browser
+# sends this API directly — a chunk of an uploaded dump — arrives looking
+# cross-origin. Everything else that writes goes through a server action and
+# carries no Origin at all, which is why nothing else notices.
+FRONT_ORIGIN ?= http://localhost:$(FRONT_PORT)
+FRONT_PORT   ?= 3000
+
 # Where the interface reaches the API when both run on the host. Inside compose
 # the address is the service name; from a process on the host it is loopback,
 # which is the same translation CORE_DB_DSN above makes for the database.
@@ -263,6 +273,7 @@ run: require-env ## Run the API against the dev infrastructure
 		GAME_PROVISIONER_DSN="$(GAME_DB_DSN)" \
 		GAME_AUTHOR_PASSWORD="$(GAME_AUTHOR_PASSWORD)" \
 		GAME_UPLOAD_DIR="$(GAME_UPLOAD_DIR)" \
+		PUBLIC_ORIGINS="$(FRONT_ORIGIN)" \
 		QUERY_RUNNER_ADDR="$(QUERY_RUNNER_ADDR)" \
 		TRUSTED_PROXIES="127.0.0.1,::1" \
 		ENV=development LOG_LEVEL=debug go run ./cmd/api
