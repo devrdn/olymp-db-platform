@@ -65,6 +65,50 @@ describe("gameSchema", () => {
     expect(gameSchema.parse(game).source).toBe("editor");
   });
 
+  /**
+   * The third source `GAME_SOURCES` names — a game described with the table
+   * builder rather than typed in the editor or uploaded as a dump — parsed
+   * from a genuine reply `game_handler.go`'s `gameView` actually sends for
+   * `provisioning.SourceBuilder`: `upload` stays absent (`omitempty` on a nil
+   * pointer, the same as an editor-sourced game), and `builder_limits`
+   * travels alongside `upload_limits` the way it does for every source. This
+   * is exactly the spot the screen broke once already for `"absent"` — a
+   * fixture that never had every field the server actually sends, with 830
+   * other tests green throughout — and until now the third source had no
+   * test parsing a real reply at all (`GAME_SOURCES`'s own doc names the
+   * defect class).
+   */
+  test("parses a real reply for a game built with the table builder", () => {
+    const parsed = gameSchema.parse({
+      status: "pending",
+      version: 1,
+      database: "game_tpl_cabc",
+      source: "builder",
+      build_error: "",
+      script_bytes: 0,
+      building: true,
+      updated_at: "2026-03-01T09:00:00Z",
+      upload_limits: limits,
+      builder_limits: {
+        enabled: true,
+        chunk_bytes: 8 * 1024 * 1024,
+        max_file_bytes: 4 * 1024 * 1024 * 1024,
+        max_tables: 50,
+        max_table_columns: 50,
+        max_definition_bytes: 65536,
+        max_field_bytes: 65536,
+        max_line_bytes: 4 * 1024 * 1024,
+        max_rows: 200_000,
+        max_deleted_rows: 10_000,
+        column_types: ["integer", "text", "date", "timestamp", "numeric", "boolean"],
+      },
+    });
+
+    expect(parsed.status).toBe("pending");
+    expect(parsed.source).toBe("builder");
+    expect(parsed.upload).toBeUndefined();
+  });
+
   test("carries the upload ceilings alongside the build's own status", () => {
     const parsed = gameSchema.parse(game);
 

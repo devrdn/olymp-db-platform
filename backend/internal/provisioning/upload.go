@@ -489,7 +489,12 @@ func (g *Games) AbortUpload(ctx context.Context, actorID, contestID, uploadID uu
 	return g.abortUpload(ctx, &actorID, upload)
 }
 
-// UploadCleanupResult is one pass of the janitor's own two sweeps.
+// UploadCleanupResult is one pass of the janitor's own two sweeps, run for
+// both kinds of file this package now owns: a whole dump (upload.go) and
+// one table's own CSV (tabledata.go). Two independent gamefile.Store
+// directories, so the counts below are summed across both rather than one
+// field secretly meaning "whichever kind happened to be found" — the same
+// distinction TableData vs Upload already draws everywhere else.
 type UploadCleanupResult struct {
 	// Abandoned counts uploads left 'receiving' past their grace period —
 	// nobody appended to them, and nobody is coming back to.
@@ -517,29 +522,46 @@ type UploadCleanupResult struct {
 // package's own comments already call out, leaves bytes nobody will ever find
 // again — and on this platform one of them is a multi-gigabyte dump.
 func (g *Games) SweepUploads(ctx context.Context, olderThan time.Duration) (UploadCleanupResult, error) {
-	if g.files == nil {
-		return UploadCleanupResult{}, nil
-	}
-
 	var result UploadCleanupResult
 	var failures []error
 
-	abandoned, err := g.repo.AbandonedUploads(ctx, g.now().Add(-olderThan), abandonedUploadBatchLimit)
-	if err != nil {
-		return result, fmt.Errorf("list abandoned uploads: %w", err)
-	}
-	for _, upload := range abandoned {
-		if _, err := g.abortUpload(ctx, nil, upload); err != nil {
-			failures = append(failures, fmt.Errorf("abandon upload %s: %w", upload.ID, err))
-			continue
+	if g.files != nil {
+		abandoned, err := g.repo.AbandonedUploads(ctx, g.now().Add(-olderThan), abandonedUploadBatchLimit)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("list abandoned uploads: %w", err))
 		}
-		result.Abandoned++
+		for _, upload := range abandoned {
+			if _, err := g.abortUpload(ctx, nil, upload); err != nil {
+				failures = append(failures, fmt.Errorf("abandon upload %s: %w", upload.ID, err))
+				continue
+			}
+			result.Abandoned++
+		}
+
+		removed, err := g.sweepOrphanFiles(ctx)
+		result.OrphanFiles += removed
+		if err != nil {
+			failures = append(failures, err)
+		}
 	}
 
-	removed, err := g.sweepOrphanFiles(ctx)
-	result.OrphanFiles = removed
-	if err != nil {
-		failures = append(failures, err)
+	// The table builder's own per-table files (tabledata.go) live on a
+	// second, independent gamefile.Store — see WithTableData's own doc for
+	// why — but they leak the identical two ways a dump does, so the same
+	// janitor sweeps both rather than internal/app growing a second
+	// scheduled task nobody remembers to add when this feature was wired in.
+	if g.tableFiles != nil {
+		abandoned, err := g.sweepAbandonedTableData(ctx, olderThan)
+		result.Abandoned += abandoned
+		if err != nil {
+			failures = append(failures, err)
+		}
+
+		removed, err := g.sweepOrphanTableFiles(ctx)
+		result.OrphanFiles += removed
+		if err != nil {
+			failures = append(failures, err)
+		}
 	}
 
 	return result, errors.Join(failures...)

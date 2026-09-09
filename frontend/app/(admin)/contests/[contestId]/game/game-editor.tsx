@@ -96,6 +96,9 @@ export function GameEditor({
       {game.source === "file" ? (
         <p className="max-w-body text-small text-ink-2">{t.sourceFile}</p>
       ) : null}
+      {game.source === "builder" ? (
+        <p className="max-w-body text-small text-ink-2">{t.sourceBuilder}</p>
+      ) : null}
 
       {game.status === "failed" && game.buildError !== "" ? (
         <div className="flex flex-col gap-2 border-l-2 border-bad pl-4">

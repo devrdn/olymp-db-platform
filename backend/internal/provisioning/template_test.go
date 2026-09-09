@@ -38,6 +38,43 @@ type templateStore struct {
 	// enough to back the TemplateRepository methods migration 24 added
 	// without this file growing a second kind of fake for them.
 	uploads map[uuid.UUID]provisioning.Upload
+	// tableData is the table builder's own per-table files, migration 27's
+	// counterpart to uploads above.
+	tableData map[uuid.UUID]provisioning.TableData
+	// tableDataReads, when armed, holds every caller of ReadyTableData until
+	// as many of them have arrived as gateTableDataReads was told to expect —
+	// two browser tabs pressing "add row" on the same table at the same
+	// moment, made deterministic rather than left to the scheduler.
+	tableDataReads *arrivalGate
+}
+
+// arrivalGate releases every caller at once, as soon as the expected number
+// of them have arrived. A caller arriving after that passes straight through,
+// so a gate armed for one part of a test does not hold up the rest of it.
+type arrivalGate struct {
+	mu        sync.Mutex
+	remaining int
+	open      chan struct{}
+}
+
+func (g *arrivalGate) arrive() {
+	g.mu.Lock()
+	if g.remaining > 0 {
+		g.remaining--
+		if g.remaining == 0 {
+			close(g.open)
+		}
+	}
+	g.mu.Unlock()
+	<-g.open
+}
+
+// gateTableDataReads arms the gate above for the next n reads of a table's
+// current data.
+func (s *templateStore) gateTableDataReads(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tableDataReads = &arrivalGate{remaining: n, open: make(chan struct{})}
 }
 
 // directly is the unit of work for a test that wants the audit trail wired up
@@ -61,7 +98,24 @@ func (s *templateStore) SaveScript(_ context.Context, contestID uuid.UUID, datab
 	}
 	s.template = provisioning.Template{
 		ContestID: contestID, Database: database, Version: version,
-		Status: provisioning.TemplatePending, Script: script,
+		Status: provisioning.TemplatePending, Source: provisioning.SourceEditor, Script: script,
+	}
+	s.present = true
+	return s.template, nil
+}
+
+func (s *templateStore) SaveDefinition(
+	_ context.Context, contestID uuid.UUID, database string, definition provisioning.Definition,
+) (provisioning.Template, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	version := 1
+	if s.present {
+		version = s.template.Version + 1
+	}
+	s.template = provisioning.Template{
+		ContestID: contestID, Database: database, Version: version,
+		Status: provisioning.TemplatePending, Source: provisioning.SourceBuilder, Definition: definition,
 	}
 	s.present = true
 	return s.template, nil
@@ -229,6 +283,209 @@ func (s *templateStore) UploadInUse(_ context.Context, id uuid.UUID) (bool, erro
 	return s.present && s.template.UploadID != nil && *s.template.UploadID == id, nil
 }
 
+func (s *templateStore) BeginTableData(_ context.Context, id, contestID uuid.UUID, table string, declaredBytes int64) (provisioning.TableData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range s.tableData {
+		if d.ContestID == contestID && strings.EqualFold(d.Table, table) && d.Status == provisioning.TableDataReceiving {
+			return provisioning.TableData{}, provisioning.ErrTableDataInProgress
+		}
+	}
+	if s.tableData == nil {
+		s.tableData = map[uuid.UUID]provisioning.TableData{}
+	}
+	d := provisioning.TableData{
+		ID: id, ContestID: contestID, Table: table, DeclaredBytes: declaredBytes,
+		Status: provisioning.TableDataReceiving,
+	}
+	s.tableData[id] = d
+	return d, nil
+}
+
+func (s *templateStore) TableDataByID(_ context.Context, id uuid.UUID) (provisioning.TableData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.tableData[id]
+	if !ok {
+		return provisioning.TableData{}, provisioning.ErrTableDataNotFound
+	}
+	return d, nil
+}
+
+func (s *templateStore) CurrentTableData(_ context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range s.tableData {
+		if d.ContestID == contestID && strings.EqualFold(d.Table, table) && d.Status == provisioning.TableDataReceiving {
+			return d, nil
+		}
+	}
+	return provisioning.TableData{}, provisioning.ErrTableDataNotFound
+}
+
+func (s *templateStore) ReadyTableData(_ context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
+	s.mu.Lock()
+	gate := s.tableDataReads
+	found, err := provisioning.TableData{}, error(provisioning.ErrTableDataNotFound)
+	for _, d := range s.tableData {
+		if d.ContestID == contestID && strings.EqualFold(d.Table, table) && d.Status == provisioning.TableDataComplete {
+			found, err = d, nil
+			break
+		}
+	}
+	s.mu.Unlock()
+
+	// Released outside the lock, and after the answer has been taken, so that
+	// every held caller leaves with the same snapshot — which is what two
+	// browser tabs pressing "add row" together actually have.
+	if gate != nil {
+		gate.arrive()
+	}
+	return found, err
+}
+
+func (s *templateStore) UpdateTableDataReceived(_ context.Context, id uuid.UUID, receivedBytes int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.tableData[id]
+	if !ok {
+		return provisioning.ErrTableDataNotFound
+	}
+	d.ReceivedBytes = receivedBytes
+	s.tableData[id] = d
+	return nil
+}
+
+func (s *templateStore) CompleteTableData(
+	_ context.Context, contestID uuid.UUID, table string, id uuid.UUID, receivedBytes, lines int64, previous *uuid.UUID,
+) (provisioning.TableData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.tableData[id]
+	if !ok {
+		return provisioning.TableData{}, provisioning.ErrTableDataNotFound
+	}
+	d.Status, d.ReceivedBytes, d.Lines = provisioning.TableDataComplete, receivedBytes, lines
+	s.tableData[id] = d
+	if previous != nil {
+		if p, ok := s.tableData[*previous]; ok {
+			p.Status = provisioning.TableDataAborted
+			s.tableData[*previous] = p
+		}
+	}
+	return d, nil
+}
+
+func (s *templateStore) CreateReadyTableData(
+	_ context.Context, id, contestID uuid.UUID, table string, bytes, lines int64,
+) (provisioning.TableData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range s.tableData {
+		if d.ContestID == contestID && strings.EqualFold(d.Table, table) && d.Status == provisioning.TableDataComplete {
+			return provisioning.TableData{}, provisioning.ErrTableDataInProgress
+		}
+	}
+	if s.tableData == nil {
+		s.tableData = map[uuid.UUID]provisioning.TableData{}
+	}
+	d := provisioning.TableData{
+		ID: id, ContestID: contestID, Table: table, DeclaredBytes: bytes, ReceivedBytes: bytes, Lines: lines,
+		Status: provisioning.TableDataComplete,
+	}
+	s.tableData[id] = d
+	return d, nil
+}
+
+func (s *templateStore) AppendTableDataRow(_ context.Context, id uuid.UUID, receivedBytes, lines int64) (provisioning.TableData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.tableData[id]
+	if !ok || d.Status != provisioning.TableDataComplete {
+		return provisioning.TableData{}, provisioning.ErrTableDataChanged
+	}
+	// GREATEST, the same as the real statement's own (postgres.GameInstances.
+	// AppendTableDataRow): neither figure ever goes backwards.
+	d.ReceivedBytes, d.Lines = max(d.ReceivedBytes, receivedBytes), max(d.Lines, lines)
+	s.tableData[id] = d
+	return d, nil
+}
+
+func (s *templateStore) AbortTableData(_ context.Context, id uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.tableData[id]
+	if !ok {
+		return provisioning.ErrTableDataNotFound
+	}
+	d.Status = provisioning.TableDataAborted
+	s.tableData[id] = d
+	return nil
+}
+
+func (s *templateStore) DiscardTableData(_ context.Context, contestID uuid.UUID) ([]uuid.UUID, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var ids []uuid.UUID
+	for id, d := range s.tableData {
+		if d.ContestID != contestID {
+			continue
+		}
+		if d.Status != provisioning.TableDataReceiving && d.Status != provisioning.TableDataComplete {
+			continue
+		}
+		d.Status = provisioning.TableDataAborted
+		s.tableData[id] = d
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func (s *templateStore) DeleteTableDataRow(_ context.Context, id uuid.UUID, row int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.tableData[id]
+	if !ok {
+		return provisioning.ErrTableDataNotFound
+	}
+	for _, r := range d.DeletedRows {
+		if r == row {
+			return provisioning.ErrTableRowAlreadyDeleted
+		}
+	}
+	if len(d.DeletedRows) >= provisioning.MaxTableDeletedRows {
+		return provisioning.ErrTooManyDeletedRows
+	}
+	d.DeletedRows = append(append([]int64{}, d.DeletedRows...), row)
+	s.tableData[id] = d
+	return nil
+}
+
+func (s *templateStore) AbandonedTableData(_ context.Context, cutoff time.Time, limit int) ([]provisioning.TableData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []provisioning.TableData
+	for _, d := range s.tableData {
+		if d.Status == provisioning.TableDataReceiving && d.UpdatedAt.Before(cutoff) {
+			out = append(out, d)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (s *templateStore) TableDataInUse(_ context.Context, id uuid.UUID) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.tableData[id]
+	if !ok {
+		return false, nil
+	}
+	return d.Status == provisioning.TableDataReceiving || d.Status == provisioning.TableDataComplete, nil
+}
+
 // buildCluster records what it was asked to build and can be told to refuse.
 type buildCluster struct {
 	mu      sync.Mutex
@@ -236,6 +493,14 @@ type buildCluster struct {
 	scripts []string
 	policy  sqlpolicy.Policy
 	fail    error
+	// tableData is every LoadTableData call this fake received, keyed
+	// "database.table", and tableDataFail — when set — is what LoadTableData
+	// answers instead of loading anything, for the tests that check a
+	// data-load failure tears the template down the same way a script
+	// failure does.
+	tableData     map[string]string
+	tableDataFail error
+	dropped       []string
 }
 
 func (c *buildCluster) BuildTemplate(_ context.Context, name string, script io.Reader, policy sqlpolicy.Policy) error {
@@ -254,6 +519,34 @@ func (c *buildCluster) BuildTemplate(_ context.Context, name string, script io.R
 	defer c.mu.Unlock()
 	c.names, c.scripts, c.policy = append(c.names, name), append(c.scripts, string(data)), policy
 	return c.fail
+}
+
+// LoadTableData records what it was asked to load — the same "read in full"
+// reasoning BuildTemplate's own fake gives, since a filtered reader
+// (provisioning's own tableDataCopyReader) is exactly what this fake has to
+// consume to see what actually reached it.
+func (c *buildCluster) LoadTableData(_ context.Context, database, table string, columns []string, data io.Reader) error {
+	body, err := io.ReadAll(data)
+	if err != nil {
+		return fmt.Errorf("buildCluster: read table data: %w", err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.tableDataFail != nil {
+		return c.tableDataFail
+	}
+	if c.tableData == nil {
+		c.tableData = map[string]string{}
+	}
+	c.tableData[database+"."+table] = string(body)
+	return nil
+}
+
+func (c *buildCluster) Drop(_ context.Context, name string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.dropped = append(c.dropped, name)
+	return nil
 }
 
 type authoring struct {
@@ -352,6 +645,255 @@ func TestASecondScriptBumpsTheVersionSoEveryCopyBecomesStale(t *testing.T) {
 	}
 	if second.Version != 2 {
 		t.Fatalf("second script is version %d, want 2", second.Version)
+	}
+}
+
+// aDefinition is a small, valid game — the shape a detective game actually
+// needs (definition_test.go's own doc gives the same example): a suspects
+// table with a primary key, nothing more.
+func aDefinition() provisioning.Definition {
+	return provisioning.Definition{Tables: []provisioning.TableDefinition{
+		{
+			Name: "suspects",
+			Columns: []provisioning.ColumnDefinition{
+				{Name: "id", Type: provisioning.ColumnInteger},
+				{Name: "name", Type: provisioning.ColumnText},
+			},
+			PrimaryKey: []string{"id"},
+		},
+	}}
+}
+
+func TestSettingTheDefinitionStoresItPendingAndBuildsNothingYet(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := games(true)
+	contest := uuid.New()
+
+	saved, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition())
+	if err != nil {
+		t.Fatalf("setting the definition: %v", err)
+	}
+	if saved.Status != provisioning.TemplatePending {
+		t.Fatalf("stored as %q, want pending", saved.Status)
+	}
+	if saved.Source != provisioning.SourceBuilder {
+		t.Fatalf("stored as source %q, want builder", saved.Source)
+	}
+	// Building creates a database and runs a build inside it. Doing that
+	// inside the request that saved the definition is what the pending
+	// status exists to avoid, the same reasoning SetScript's own test gives.
+	if len(cluster.names) != 0 {
+		t.Fatal("built the game inside the request that stored the definition")
+	}
+	if len(store.template.Definition.Tables) == 0 {
+		t.Fatal("the definition was not stored")
+	}
+}
+
+// A contest whose game may no longer be replaced must refuse the table
+// builder's own way in exactly as it refuses the editor's — replacing a
+// game bumps its version and makes every participant's copy stale, whatever
+// produced the replacement.
+func TestTheGameOfARunningContestCannotHaveItsDefinitionReplaced(t *testing.T) {
+	t.Parallel()
+	service, store, _ := games(false)
+
+	_, err := service.SetDefinition(t.Context(), uuid.New(), uuid.New(), aDefinition())
+	if !errors.Is(err, provisioning.ErrGameNotEditable) {
+		t.Fatalf("answered %v, want ErrGameNotEditable", err)
+	}
+	if store.present {
+		t.Fatal("stored the definition anyway")
+	}
+}
+
+// SetDefinition's own validation runs before anything is asked of storage —
+// the same ordering TestAnEmptyOrOversizedScriptIsRefusedBeforeAnythingIsAsked
+// proves for SetScript. Definition.Validate's own tests (definition_test.go)
+// cover every refusal in depth; this is only the wiring between the two.
+func TestAnInvalidDefinitionIsRefusedBeforeAnythingIsAsked(t *testing.T) {
+	t.Parallel()
+	service, store, _ := games(true)
+
+	_, err := service.SetDefinition(t.Context(), uuid.New(), uuid.New(), provisioning.Definition{})
+	if !errors.Is(err, provisioning.ErrDefinitionEmpty) {
+		t.Fatalf("answered %v, want ErrDefinitionEmpty", err)
+	}
+	if store.present {
+		t.Fatal("stored a definition that was refused")
+	}
+}
+
+func TestASecondDefinitionBumpsTheVersionSoEveryCopyBecomesStale(t *testing.T) {
+	t.Parallel()
+	service, _, _ := games(true)
+	contest := uuid.New()
+
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	second := aDefinition()
+	second.Tables[0].Name = "witnesses"
+	saved, err := service.SetDefinition(t.Context(), uuid.New(), contest, second)
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if saved.Version != 2 {
+		t.Fatalf("second definition is version %d, want 2", saved.Version)
+	}
+}
+
+// A table's own data is a CSV file whose first line names the table's
+// columns, in order (tabledata.go's own header check) — SetDefinition used
+// to replace the whole description with no check against that file at all,
+// so a rename, a type change or a column's removal saved cleanly and left
+// the file silently disagreeing with the new definition. This is the
+// boundary ErrDefinitionTableLocked now enforces: any of the three, once a
+// table holds a single row, is refused before anything is written — the
+// same freeze the table builder's own screen already enforces client-side
+// (game-builder.tsx's own doc, "Why a table with data locks its own
+// structure").
+func TestADefinitionChangeThatWouldOrphanATablesOwnDataIsRefused(t *testing.T) {
+	t.Parallel()
+	service, store, _ := games(true)
+	contest := uuid.New()
+
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+		t.Fatalf("save the first definition: %v", err)
+	}
+	// "suspects" now holds three rows, the way CompleteTableUpload leaves it
+	// — this test needs only the row saying so, never a real file on disk,
+	// to prove the refusal at the SetDefinition boundary.
+	dataID := uuid.New()
+	store.tableData = map[uuid.UUID]provisioning.TableData{
+		dataID: {ID: dataID, ContestID: contest, Table: "suspects", Status: provisioning.TableDataComplete, Lines: 3},
+	}
+
+	for _, tc := range []struct {
+		name string
+		next provisioning.Definition
+	}{
+		{
+			"column renamed",
+			provisioning.Definition{Tables: []provisioning.TableDefinition{{
+				Name: "suspects",
+				Columns: []provisioning.ColumnDefinition{
+					{Name: "id", Type: provisioning.ColumnInteger},
+					{Name: "full_name", Type: provisioning.ColumnText},
+				},
+				PrimaryKey: []string{"id"},
+			}}},
+		},
+		{
+			"column type changed",
+			provisioning.Definition{Tables: []provisioning.TableDefinition{{
+				Name: "suspects",
+				Columns: []provisioning.ColumnDefinition{
+					{Name: "id", Type: provisioning.ColumnInteger},
+					{Name: "name", Type: provisioning.ColumnInteger},
+				},
+				PrimaryKey: []string{"id"},
+			}}},
+		},
+		{
+			"column removed",
+			provisioning.Definition{Tables: []provisioning.TableDefinition{{
+				Name:       "suspects",
+				Columns:    []provisioning.ColumnDefinition{{Name: "id", Type: provisioning.ColumnInteger}},
+				PrimaryKey: []string{"id"},
+			}}},
+		},
+		{
+			"table removed outright",
+			provisioning.Definition{Tables: []provisioning.TableDefinition{{
+				Name:    "witnesses",
+				Columns: []provisioning.ColumnDefinition{{Name: "id", Type: provisioning.ColumnInteger}},
+			}}},
+		},
+		{
+			"primary key changed",
+			provisioning.Definition{Tables: []provisioning.TableDefinition{{
+				Name: "suspects",
+				Columns: []provisioning.ColumnDefinition{
+					{Name: "id", Type: provisioning.ColumnInteger},
+					{Name: "name", Type: provisioning.ColumnText},
+				},
+				// No primary key at all now, where there was one.
+			}}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := service.SetDefinition(t.Context(), uuid.New(), contest, tc.next)
+			if !errors.Is(err, provisioning.ErrDefinitionTableLocked) {
+				t.Fatalf("answered %v, want ErrDefinitionTableLocked", err)
+			}
+			// The version must not have moved: a refused save changed
+			// nothing about the game that was already there.
+			if store.template.Version != 1 {
+				t.Fatalf("version is %d after a refused save, want 1", store.template.Version)
+			}
+		})
+	}
+}
+
+// The freeze is per table, not per definition: a table that already holds
+// data locks its own structure, but an organiser may still add an entirely
+// new table beside it, or resave the locked table completely unchanged.
+func TestATableWithDataMayStillGainANewSiblingTable(t *testing.T) {
+	t.Parallel()
+	service, store, _ := games(true)
+	contest := uuid.New()
+
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+		t.Fatalf("save the first definition: %v", err)
+	}
+	dataID := uuid.New()
+	store.tableData = map[uuid.UUID]provisioning.TableData{
+		dataID: {ID: dataID, ContestID: contest, Table: "suspects", Status: provisioning.TableDataComplete, Lines: 3},
+	}
+
+	next := aDefinition()
+	next.Tables = append(next.Tables, provisioning.TableDefinition{
+		Name:    "witnesses",
+		Columns: []provisioning.ColumnDefinition{{Name: "id", Type: provisioning.ColumnInteger}},
+	})
+
+	saved, err := service.SetDefinition(t.Context(), uuid.New(), contest, next)
+	if err != nil {
+		t.Fatalf("adding a sibling table beside a locked one: %v", err)
+	}
+	if saved.Version != 2 {
+		t.Fatalf("version is %d, want 2", saved.Version)
+	}
+}
+
+// A completed file with no data rows — a header with nothing under it — is
+// not locked: loadTableData's own copy reader always skips the header line
+// unconditionally (tableDataCopyReader.advance), so nothing a build would
+// ever read disagrees with a new structure while the table is still empty.
+func TestATableWithACompletedButEmptyFileIsNotLocked(t *testing.T) {
+	t.Parallel()
+	service, store, _ := games(true)
+	contest := uuid.New()
+
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+		t.Fatalf("save the first definition: %v", err)
+	}
+	dataID := uuid.New()
+	store.tableData = map[uuid.UUID]provisioning.TableData{
+		dataID: {ID: dataID, ContestID: contest, Table: "suspects", Status: provisioning.TableDataComplete, Lines: 0},
+	}
+
+	renamed := provisioning.Definition{Tables: []provisioning.TableDefinition{{
+		Name: "suspects",
+		Columns: []provisioning.ColumnDefinition{
+			{Name: "id", Type: provisioning.ColumnInteger},
+			{Name: "full_name", Type: provisioning.ColumnText},
+		},
+		PrimaryKey: []string{"id"},
+	}}}
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, renamed); err != nil {
+		t.Fatalf("renaming a column of an empty table: %v", err)
 	}
 }
 
@@ -767,6 +1309,77 @@ func TestBuildingAFileSourcedGameWithNoUploadIDIsAnInternalFault(t *testing.T) {
 	}
 }
 
+// A builder-sourced game is built the same way an editor-sourced one is:
+// Definition.SQL generates the CREATE TABLE statements and they reach
+// BuildTemplate exactly like claimed.Script already does — the fake cluster
+// cannot tell the two apart, which is the point (finishDefinitionBuild's own
+// doc: there is no third path).
+func TestBuildingABuilderSourcedGameGeneratesSQLAndRunsItThroughTheSamePathAsAScript(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := games(true)
+	contest := uuid.New()
+	definition := aDefinition()
+	store.template = provisioning.Template{
+		ContestID: contest, Database: "game_tpl_cabc", Version: 1,
+		Status: provisioning.TemplatePending, Source: provisioning.SourceBuilder, Definition: definition,
+	}
+	store.present = true
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if built.Status != provisioning.TemplateReady {
+		t.Fatalf("finished as %q: %s", built.Status, built.BuildError)
+	}
+	if len(cluster.names) != 1 || cluster.names[0] != "game_tpl_cabc" {
+		t.Fatalf("built database(s) %v, want exactly one, game_tpl_cabc", cluster.names)
+	}
+
+	want, err := definition.SQL()
+	if err != nil {
+		t.Fatalf("generate the same SQL directly: %v", err)
+	}
+	if len(cluster.scripts) != 1 || cluster.scripts[0] != want {
+		t.Fatalf("the cluster received:\n%s\nwant Definition.SQL's own output:\n%s", cluster.scripts, want)
+	}
+}
+
+// A definition with no tables cannot be saved — Validate refuses it before a
+// build could ever be claimed for it (Definition.Validate's own doc) — but a
+// row that somehow reaches Build with one anyway must still refuse plainly,
+// as the organiser's own mistake, rather than run an empty script and mark a
+// tableless database 'ready'. Never BuildFailedInternally: this is not a
+// fault of this installation's cluster, so err must come back nil, the same
+// way finishDefinitionBuild treats a script PostgreSQL itself refused.
+func TestBuildingABuilderSourcedGameWithNoTablesRefusesAsTheOrganisersOwnMistake(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := games(true)
+	contest := uuid.New()
+	store.template = provisioning.Template{
+		ContestID: contest, Database: "game_tpl_cabc", Version: 1,
+		Status: provisioning.TemplatePending, Source: provisioning.SourceBuilder, Definition: provisioning.Definition{},
+	}
+	store.present = true
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("an empty definition was reported as the tick's own failure: %v", err)
+	}
+	if built.Status != provisioning.TemplateFailed {
+		t.Fatalf("finished as %q, want failed", built.Status)
+	}
+	if built.BuildError != provisioning.ErrDefinitionEmpty.Error() {
+		t.Fatalf("build error = %q, want the organiser's own %q", built.BuildError, provisioning.ErrDefinitionEmpty)
+	}
+	if len(cluster.names) != 0 {
+		t.Fatal("an empty definition reached BuildTemplate")
+	}
+	if len(store.finished) != 1 || store.finished[0].err != provisioning.ErrDefinitionEmpty.Error() {
+		t.Fatalf("recorded %+v, want the organiser's own message", store.finished)
+	}
+}
+
 func TestTheScriptIsReadableForTheExportAndAContestWithoutOneIsNotAnError(t *testing.T) {
 	// contests.GameSource, the narrow view the contest package's export asks
 	// for. A contest whose game has not been written yet exports without one
@@ -832,6 +1445,33 @@ func TestAFileSourcedGameIsReportedAsPresentButOmittedRatherThanAsAnEmptyScript(
 	}
 	if script != "" {
 		t.Fatalf("Script() answered %q for a game whose SQL is a file", script)
+	}
+}
+
+// The same fact, for the third source: a builder-sourced game has no SQL at
+// all yet (Definition's own doc), so Script() must report it as present but
+// omitted rather than as an empty script an organiser supposedly wrote.
+func TestABuilderSourcedGameIsReportedAsPresentButOmittedRatherThanAsAnEmptyScript(t *testing.T) {
+	t.Parallel()
+	service, _, _ := games(true)
+	contest := uuid.New()
+
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+		t.Fatalf("setting the definition: %v", err)
+	}
+
+	script, ok, omitted, err := service.Script(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("Script() returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("a contest whose game is a table-builder definition answered that it has no game")
+	}
+	if !omitted {
+		t.Fatal("a builder-sourced game answered as if its script were in the row")
+	}
+	if script != "" {
+		t.Fatalf("Script() answered %q for a game whose SQL does not exist yet", script)
 	}
 }
 
