@@ -63,6 +63,20 @@ GAME_DB_DSN ?= postgres://$(GAME_DB_USER):$(GAME_DB_PASSWORD)@localhost:$(GAME_D
 # where in the file it appears.
 REDIS_ADDR := $(if $(REDIS_PASSWORD),redis://:$(REDIS_PASSWORD)@localhost:$(REDIS_PORT)/0,)
 
+# Where an uploaded dump lands when the API runs on the host.
+#
+# deploy/.env sets GAME_UPLOAD_DIR to the container's own path, because that is
+# the mount point compose gives the api service. A process on the host cannot
+# write there — /var/lib is root's — and gamefile.NewStore does not fall back:
+# it MkdirAlls the directory and app.go refuses to start when that fails. So
+# forwarding the compose value would turn "uploads are off" into "the API does
+# not come up", which is worse.
+#
+# Assigned unconditionally for the same reason REDIS_ADDR above is: once
+# -include has read the line, `?=` will not fire. A command-line assignment
+# still wins.
+GAME_UPLOAD_DIR := $(CURDIR)/deploy/game-uploads
+
 # Where the interface reaches the API when both run on the host. Inside compose
 # the address is the service name; from a process on the host it is loopback,
 # which is the same translation CORE_DB_DSN above makes for the database.
@@ -248,6 +262,7 @@ run: require-env ## Run the API against the dev infrastructure
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" REDIS_ADDR="$(REDIS_ADDR)" \
 		GAME_PROVISIONER_DSN="$(GAME_DB_DSN)" \
 		GAME_AUTHOR_PASSWORD="$(GAME_AUTHOR_PASSWORD)" \
+		GAME_UPLOAD_DIR="$(GAME_UPLOAD_DIR)" \
 		QUERY_RUNNER_ADDR="$(QUERY_RUNNER_ADDR)" \
 		TRUSTED_PROXIES="127.0.0.1,::1" \
 		ENV=development LOG_LEVEL=debug go run ./cmd/api

@@ -16,3 +16,5 @@ coverage.out
 
 # Database dumps are data, never source: they hold real participant answers.
 deploy/backups/
+# Dumps uploaded to an API running on the host (make run).
+deploy/game-uploads/
