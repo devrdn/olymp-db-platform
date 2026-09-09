@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"time"
+	"unicode"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/gamefile"
@@ -17,6 +18,34 @@ import (
 // for an organiser's own screen and never used as a path — migration 24's
 // own CHECK enforces the same bound in the schema.
 const MaxUploadFilenameBytes = 255
+
+// validUploadFilename reports whether a name may be stored and shown.
+//
+// Length is not the only bound this field needs. The column is `text`, and
+// PostgreSQL refuses a NUL byte in one with SQLSTATE 22021 — so a name
+// carrying one turns BeginUpload's INSERT into an internal error *after*
+// Store.Begin has already created the file, which is a 500 for the organiser
+// and an orphan for the janitor, where a named refusal was available for free
+// (CLAUDE.md rule 1). NUL is not special-cased: no control character belongs
+// in a name a person typed into a file picker, and one that reaches a log
+// line or a console can forge either. Everything else — every alphabet, every
+// space, every punctuation mark — is left alone: this name is never a path
+// (MaxUploadFilenameBytes' own doc), so there is nothing else to sanitise it
+// against.
+func validUploadFilename(name string) bool {
+	if name == "" || len(name) > MaxUploadFilenameBytes {
+		return false
+	}
+	for _, r := range name {
+		// unicode.IsControl over the decoded rune, so this also rejects
+		// U+0085 and the C1 block, and never mistakes a byte inside a
+		// multi-byte rune for one.
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
 
 // UploadStatus is where one upload has got to.
 type UploadStatus string
@@ -64,8 +93,8 @@ var (
 	// ErrUploadsDisabled is every upload method's answer on an installation
 	// with no GAME_UPLOAD_DIR configured — Games was never given WithUploads.
 	ErrUploadsDisabled = errors.New("file uploads are not configured on this installation")
-	// ErrUploadFilenameInvalid is an empty filename or one past
-	// MaxUploadFilenameBytes.
+	// ErrUploadFilenameInvalid is an empty filename, one past
+	// MaxUploadFilenameBytes, or one carrying a control character.
 	ErrUploadFilenameInvalid = errors.New("the upload's filename is invalid")
 	// ErrUploadTooLarge is a declared length past the configured
 	// MaxFileBytes, or one Store.Append refused for the same reason once
@@ -116,6 +145,15 @@ var (
 	// it is a fault of theirs, and nothing about it is fixed by retrying the
 	// same read.
 	ErrUploadIndexCorrupt = errors.New("the upload's line index is damaged")
+	// ErrUploadWindowUnreachable is a preview page whose first line is
+	// further past the file's nearest index mark than one read may walk
+	// (gamefile.ErrWindowUnreachable's own doc).
+	//
+	// Named rather than left as an internal error because the request was
+	// right and the organiser has moves: page from a line nearer a mark, or
+	// look at the file some other way. It is a fact about a dump whose lines
+	// are megabytes long, not a fault of theirs and not a failure of ours.
+	ErrUploadWindowUnreachable = errors.New("that line is too far into a file with lines this long to preview")
 )
 
 // wrapGamefileErr turns one of internal/gamefile's own sentinels into the
@@ -134,6 +172,8 @@ func wrapGamefileErr(err error) error {
 		return ErrUploadIncomplete
 	case errors.Is(err, gamefile.ErrCorruptIndex):
 		return ErrUploadIndexCorrupt
+	case errors.Is(err, gamefile.ErrWindowUnreachable):
+		return ErrUploadWindowUnreachable
 	case errors.Is(err, gamefile.ErrFileTooLarge):
 		return ErrUploadTooLarge
 	case errors.Is(err, gamefile.ErrStoreFull):
@@ -178,7 +218,7 @@ func (g *Games) BeginUpload(ctx context.Context, contestID uuid.UUID, filename s
 	if g.files == nil {
 		return Upload{}, ErrUploadsDisabled
 	}
-	if filename == "" || len(filename) > MaxUploadFilenameBytes {
+	if !validUploadFilename(filename) {
 		return Upload{}, ErrUploadFilenameInvalid
 	}
 	if declaredBytes <= 0 || declaredBytes > g.limits.MaxFileBytes {
@@ -205,6 +245,17 @@ func (g *Games) BeginUpload(ctx context.Context, contestID uuid.UUID, filename s
 
 	upload, err := g.repo.BeginUpload(ctx, id, contestID, filename, declaredBytes)
 	if err != nil {
+		// The reservation this call made is nobody's now, and it is not the
+		// file alone: Store.Begin also counts declaredBytes against the
+		// directory until the upload completes or is aborted
+		// (committedBytes' own doc). Left behind, four refused begins of a
+		// gibibyte each spend the whole volume's budget — for every contest
+		// on the installation, not only this one — until the janitor's own
+		// sweep, which is fifteen minutes of grace plus a tick away. The
+		// removal is the same one bootstrapTableRow makes on the identical
+		// refusal, and best effort for the same reason: the janitor is still
+		// behind it, this only stops the wait.
+		_ = g.retireUploadFile(id)
 		if errors.Is(err, ErrUploadInProgress) {
 			return Upload{}, ErrUploadInProgress
 		}
@@ -297,7 +348,10 @@ func (g *Games) UploadWindow(ctx context.Context, contestID, uploadID uuid.UUID,
 	if _, err := g.currentContestUpload(ctx, contestID, uploadID); err != nil {
 		return gamefile.Window{}, err
 	}
-	window, err := g.files.Window(uploadID.String(), fromLine, maxLines, maxBytes)
+	// ctx travels into the store, which is what lets a console page the
+	// organiser navigated away from stop the read it started rather than
+	// leaving a goroutine walking a multi-gigabyte file for nobody.
+	window, err := g.files.Window(ctx, uploadID.String(), fromLine, maxLines, maxBytes)
 	if err != nil {
 		return gamefile.Window{}, wrapGamefileErr(err)
 	}

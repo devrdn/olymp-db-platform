@@ -141,6 +141,19 @@ var (
 	// garbage bytes happen to point).
 	ErrCorruptIndex = errors.New("upload index file is corrupt")
 
+	// ErrWindowUnreachable is a Window whose first line lies further past the
+	// nearest index mark than one call is allowed to read to get there.
+	//
+	// The line index records an offset every indexInterval lines, so reaching
+	// a line means walking forward from the mark before it — up to 999 lines
+	// this package puts no length limit on, because a dump's COPY rows are
+	// whatever the organiser's data is. maxWindowSkipBytes bounds that walk,
+	// and this is what the bound says when it binds: the request was
+	// well-formed and the index is sound, but showing that particular line
+	// would cost a read nobody asked the price of (CLAUDE.md rule 12, and
+	// rule 1 for saying so by name rather than as "internal error").
+	ErrWindowUnreachable = errors.New("the requested line is too far past the nearest index mark to reach")
+
 	// ErrUploadSealed is an Append against an id that Complete has already
 	// sealed. Complete's checksum and line index describe the bytes on disk
 	// at the moment it ran; a write after that would make both describe a

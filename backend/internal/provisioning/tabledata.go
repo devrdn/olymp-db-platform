@@ -345,6 +345,13 @@ func (g *Games) BeginTableUpload(ctx context.Context, contestID uuid.UUID, table
 	}
 	data, err := g.repo.BeginTableData(ctx, id, contestID, table, declaredBytes)
 	if err != nil {
+		// The same removal BeginUpload makes on the same refusal, and for the
+		// same reason: Store.Begin counted declaredBytes against the
+		// directory as well as creating the file, and a promise nobody will
+		// keep must not hold the volume's budget until the janitor sweeps.
+		// This store's ceiling is the smaller of the two, so one stranded
+		// reservation is enough to matter here.
+		_ = g.retireTableDataFile(id)
 		if errors.Is(err, ErrTableDataInProgress) {
 			return TableData{}, ErrTableDataInProgress
 		}
@@ -1083,6 +1090,15 @@ func (g *Games) TableDataWindow(ctx context.Context, contestID uuid.UUID, table 
 	window := TableRowWindow{FromRow: fromRow, TotalRows: data.Lines}
 	var row int64
 	for {
+		// The same reason gamefile.Store.Window checks it: this walk starts
+		// at row 1 whatever fromRow is, so a page deep into a table reads
+		// every row before it, and fromRow is a query parameter with no
+		// ceiling of its own. A caller that has hung up must not leave this
+		// loop running on the process serving the olympiad — accepting a
+		// context and never looking at it is the same as not having one.
+		if err := ctx.Err(); err != nil {
+			return TableRowWindow{}, err
+		}
 		line, err := scanner.next()
 		if errors.Is(err, io.EOF) {
 			return window, nil

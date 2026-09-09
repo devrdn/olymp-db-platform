@@ -1045,12 +1045,19 @@ func TestABuildThatFailedForOurOwnReasonsDescribesNoneOfOurInfrastructure(t *tes
 // `text` column and the same string is copied into the append-only
 // contest.game_built payload as well (CLAUDE.md rule 2: the bound belongs in
 // the domain, at the field, not only in the request that carried it). And
-// validity, because a `text` column is UTF-8 and a dump is raw bytes: an
-// invalid sequence makes FinishBuild fail with 22021, which leaves the row in
-// 'building' for staleBuildAfter to claim again — a DROP DATABASE and a
-// CREATE DATABASE on the game cluster every forty minutes, for a game that
-// can never become ready.
-func TestAScriptRefusalIsBoundedAndValidUTF8BeforeItIsStored(t *testing.T) {
+// storability, because a `text` column is UTF-8 *and* NUL-free while a dump
+// is raw bytes: PostgreSQL refuses either with SQLSTATE 22021, and that
+// refusal comes from FinishBuild — so the row is never moved out of
+// 'building', staleBuildAfter claims it again, and the game spends every
+// sweep doing a DROP DATABASE and a CREATE DATABASE on the cluster an
+// olympiad is running on, for ever, without ever becoming ready.
+//
+// The assertion is storability and not `utf8.ValidString`, which is the shape
+// this test had while the defect was open: \x00 is *valid* UTF-8 in Go and
+// forbidden in a `text` column, so the encoding check was green on the exact
+// byte that wedges the build. A `pg_dump -Fc` uploaded by mistake — the
+// commonest export error there is — is full of them.
+func TestAScriptRefusalIsBoundedAndFitToStoreBeforeItIsStored(t *testing.T) {
 	t.Parallel()
 	service, store, cluster := games(true)
 	trail := &sink{}
@@ -1085,6 +1092,10 @@ func TestAScriptRefusalIsBoundedAndValidUTF8BeforeItIsStored(t *testing.T) {
 		}
 		if !utf8.ValidString(text) {
 			t.Fatalf("%s is not valid UTF-8, so the column it goes to refuses it: %q", label, text)
+		}
+		if strings.ContainsRune(text, 0) {
+			t.Fatalf("%s still carries a NUL byte, which `text` and `jsonb` both refuse "+
+				"with 22021 — the build can never be finished: %q", label, text)
 		}
 		// Bounded, but still the author's own verdict: the useful part is the
 		// front of it.

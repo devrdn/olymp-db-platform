@@ -1746,6 +1746,12 @@ func (h *GameHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		// not, and the organiser has a move — upload the file again.
 		httpx.Error(w, r, http.StatusConflict, codeGameUploadIndexCorrupt,
 			"The upload's line index is damaged and it can no longer be read; upload the file again")
+	case errors.Is(err, provisioning.ErrUploadWindowUnreachable):
+		// 422 and not 500: the request is well-formed and the file is sound,
+		// but this particular line cannot be shown at a price a preview may
+		// pay. The organiser's move is a line nearer a mark.
+		httpx.Error(w, r, http.StatusUnprocessableEntity, codeGameUploadWindowUnreachable,
+			"That line is too far past the file's nearest index mark to preview; start the window nearer the beginning of its thousand-line block")
 
 	// --- The table builder's structural description (provisioning/definition.go) --
 

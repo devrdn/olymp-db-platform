@@ -94,30 +94,57 @@ const MaxBuildErrorBytes = 16 << 10
 // stored, served or recorded.
 //
 // Two different failures, both fatal in the same slow way. A refusal past
-// MaxBuildErrorBytes is the rule above. A refusal that is not valid UTF-8 is
-// worse: build_error is a `text` column, PostgreSQL refuses an invalid byte
-// sequence with SQLSTATE 22021, and that refusal comes from FinishBuild — so
-// the row is never moved out of 'building', the stale-build sweep claims it
-// again, and the game spends every staleBuildAfter interval doing a DROP
-// DATABASE and a CREATE DATABASE on the cluster an olympiad is running on,
-// for ever, without ever becoming ready. A dump is raw bytes; the reader
-// quotes them; this is the boundary where they become text.
+// MaxBuildErrorBytes is the rule above. A refusal PostgreSQL cannot store at
+// all is worse: build_error is a `text` column and the audit payload is
+// `jsonb`, both of which refuse an invalid byte sequence with SQLSTATE 22021,
+// and that refusal comes from FinishBuild — so the row is never moved out of
+// 'building', the stale-build sweep claims it again, and the game spends
+// every staleBuildAfter interval doing a DROP DATABASE and a CREATE DATABASE
+// on the cluster an olympiad is running on, for ever, without ever becoming
+// ready. A dump is raw bytes; the reader quotes them; this is the boundary
+// where they become text.
+//
+// "Cannot store" is two conditions and not one, which is the trap this
+// function was written into. Invalid UTF-8 is the obvious half. The other is
+// U+0000: it is *valid* UTF-8 — Go encodes it as the single byte \x00 and
+// utf8.ValidString says yes — and PostgreSQL still refuses it in `text` and
+// `jsonb` with the same 22021, because a NUL cannot exist in either. It is
+// also the likeliest byte to arrive here: an organiser who exports with
+// `pg_dump -Fc` uploads a binary file, and the reader quotes those bytes back
+// at them in its refusal. So both are replaced with U+FFFD.
 //
 // Replaced rather than dropped, and cut on a rune boundary rather than at a
 // byte count, so what an organiser reads is still their own message with a
-// visible mark where it stopped.
+// visible mark where it stopped. The rewrite is a single bounded pass rather
+// than a whole-string ReplaceAll before the cut: the input is an organiser's
+// own file quoted back, up to GAME_UPLOAD_MAX_FILE_BYTES of it, and each
+// substituted byte grows to three — a sanitising pass over the whole of it
+// would allocate three times a file this service already refuses to hold in
+// memory (CLAUDE.md rule 12).
 func boundBuildError(text string) string {
-	text = strings.ToValidUTF8(text, "�")
-	if len(text) <= MaxBuildErrorBytes {
-		return text
+	if len(text) <= MaxBuildErrorBytes && utf8.ValidString(text) && !strings.ContainsRune(text, 0) {
+		return text // the ordinary case: our own sentence, or PostgreSQL's
 	}
 
 	const ellipsis = "\n[…]"
-	cut := MaxBuildErrorBytes - len(ellipsis)
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
+	const replacement = '�'
+	limit := MaxBuildErrorBytes - len(ellipsis)
+
+	var out strings.Builder
+	out.Grow(MaxBuildErrorBytes)
+	// Ranging a string decodes it: an invalid byte comes back as
+	// utf8.RuneError with a width of one, which is exactly the substitution
+	// strings.ToValidUTF8 made, and U+0000 comes back as itself.
+	for _, r := range text {
+		if r == utf8.RuneError || r == 0 {
+			r = replacement
+		}
+		if out.Len()+utf8.RuneLen(r) > limit {
+			return out.String() + ellipsis
+		}
+		out.WriteRune(r)
 	}
-	return text[:cut] + ellipsis
+	return out.String()
 }
 
 // MaxScriptBytes bounds the SQL one game may carry (CLAUDE.md rule 2).

@@ -1469,6 +1469,7 @@ func TestEveryUploadRefusalHasItsOwnCode(t *testing.T) {
 		{"an upload already sealed or cancelled", provisioning.ErrUploadAlreadyComplete, http.StatusConflict, "game_upload_already_complete"},
 		{"a window read before the upload was completed", provisioning.ErrUploadIncomplete, http.StatusConflict, "game_upload_incomplete"},
 		{"a line index that no longer matches its data", provisioning.ErrUploadIndexCorrupt, http.StatusConflict, "game_upload_index_corrupt"},
+		{"a line too far past its index mark to walk to", provisioning.ErrUploadWindowUnreachable, http.StatusUnprocessableEntity, "game_upload_window_unreachable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newGameFixture(t, rbac.PermissionContestAdminAll)

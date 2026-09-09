@@ -609,6 +609,37 @@ func TestAbortRemovesIndexToo(t *testing.T) {
 	}
 }
 
+// The other half of clearIndexTemps' own doc. An upload whose Complete was
+// killed between CreateTemp and Rename is retired by the janitor or by an
+// organiser's own cancel, and Abort is the last code path that will ever name
+// this id: the orphan sweep reaches it through Store.UploadIDs, and that only
+// ever lists data files. A temporary index left here is bytes on the volume
+// that nothing can name again and that usage() still charges to MaxDirBytes.
+func TestAbortRemovesATemporaryIndexAnInterruptedCompleteLeftBehind(t *testing.T) {
+	s := newTestStore(t, permissiveLimits())
+	const id = "dddddddd-0000-0000-0000-000000000001"
+	if err := s.Begin(id, declaredForTest); err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	if _, err := s.Append(id, 0, strings.NewReader("a\nb\n")); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	// Exactly what os.CreateTemp leaves when the process dies before Rename.
+	if err := os.WriteFile(s.indexPath(id)+".tmp-1174093", []byte("half an index"), 0o600); err != nil {
+		t.Fatalf("plant the leftover: %v", err)
+	}
+
+	if err := s.Abort(id); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+
+	if entries, err := os.ReadDir(s.dir); err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	} else if len(entries) != 0 {
+		t.Fatalf("directory not empty after Abort — the leftover is unreachable for good now: %v", entries)
+	}
+}
+
 func TestAbortUnknownID(t *testing.T) {
 	s := newTestStore(t, permissiveLimits())
 	if err := s.Abort("eeeeeeee-0000-0000-0000-000000000000"); !errors.Is(err, ErrNotFound) {
@@ -903,7 +934,7 @@ func TestAppendAfterCompleteIsRefused(t *testing.T) {
 		t.Fatalf("Received after refused Append = %d, want %d", got, sum.Bytes)
 	}
 
-	w, err := s.Window(id, 1, 10, 1<<20)
+	w, err := s.Window(t.Context(), id, 1, 10, 1<<20)
 	if err != nil {
 		t.Fatalf("Window: %v", err)
 	}

@@ -107,6 +107,41 @@ func TestCurrentTableDataFindsAnUploadStillReceiving(t *testing.T) {
 	}
 }
 
+// BeginTableUpload reserves the file before it writes the row, so a refused
+// row leaves both the file and the reservation Store.Begin counted for it
+// against the directory (gamefile committedBytes' own doc). Left behind,
+// they are the whole volume's budget spent by uploads nobody will ever send
+// a byte of — and this store's ceiling is the smaller of the two, so a
+// couple of refusals are enough. BeginUpload has the same defect and
+// bootstrapTableRow, a few dozen lines below the code under test, already
+// had the fix.
+func TestATableUploadRowTheDatabaseRefusesGivesBackTheSpaceItReserved(t *testing.T) {
+	t.Parallel()
+	service, _, _, files := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	if _, err := service.BeginTableUpload(t.Context(), contest, "suspects", 1024); err != nil {
+		t.Fatalf("first begin: %v", err)
+	}
+	// Every begin after the first is refused while that one is still
+	// receiving — migration 27's own partial index, and the fake repository
+	// answers exactly as it does.
+	for i := 0; i < 3; i++ {
+		if _, err := service.BeginTableUpload(t.Context(), contest, "suspects", 1024); !errors.Is(err, provisioning.ErrTableDataInProgress) {
+			t.Fatalf("begin %d answered %v, want ErrTableDataInProgress", i+2, err)
+		}
+	}
+
+	ids, err := files.UploadIDs(anyAge())
+	if err != nil {
+		t.Fatalf("list the table data volume: %v", err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("the volume holds %d file(s) (%v), want only the one upload that has a row", len(ids), ids)
+	}
+}
+
 // A table with nothing receiving answers ErrTableDataNotFound — the same
 // sentinel CurrentUpload itself answers with, which is what lets the
 // handler serve the shared "absent" shape either way.

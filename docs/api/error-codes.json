@@ -246,6 +246,10 @@
       "meaning": "Too many uploads have been started from this address or for this contest in a short time. Wait before starting another."
     },
     {
+      "code": "game_upload_window_unreachable",
+      "meaning": "The line asked for lies too far past the file's nearest index mark to reach: the lines in between are long enough that walking to it would read far more of the file than a preview may. Page from a line nearer the start of that thousand-line block."
+    },
+    {
       "code": "game_uploads_disabled",
       "meaning": "This installation has no upload directory configured, so a game can only be written in the editor. The message names nothing about the deployment beyond that fact."
     },

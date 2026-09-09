@@ -534,6 +534,12 @@ func (s *Store) Abort(id string) error {
 	if err := os.Remove(s.indexPath(id)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("gamefile: remove index: %w", err)
 	}
+	// And whatever a Complete killed mid-write left beside it: nothing else
+	// on this volume can ever name those again (clearIndexTemps' own doc), so
+	// retiring the upload is the last chance to reclaim their bytes.
+	if err := clearIndexTemps(s.indexPath(id)); err != nil {
+		return err
+	}
 	if err := os.Remove(s.dataPath(id)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("gamefile: remove upload: %w", err)
 	}
