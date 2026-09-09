@@ -61,7 +61,24 @@ func (s *templateStore) SaveScript(_ context.Context, contestID uuid.UUID, datab
 	}
 	s.template = provisioning.Template{
 		ContestID: contestID, Database: database, Version: version,
-		Status: provisioning.TemplatePending, Script: script,
+		Status: provisioning.TemplatePending, Source: provisioning.SourceEditor, Script: script,
+	}
+	s.present = true
+	return s.template, nil
+}
+
+func (s *templateStore) SaveDefinition(
+	_ context.Context, contestID uuid.UUID, database string, definition provisioning.Definition,
+) (provisioning.Template, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	version := 1
+	if s.present {
+		version = s.template.Version + 1
+	}
+	s.template = provisioning.Template{
+		ContestID: contestID, Database: database, Version: version,
+		Status: provisioning.TemplatePending, Source: provisioning.SourceBuilder, Definition: definition,
 	}
 	s.present = true
 	return s.template, nil
@@ -352,6 +369,101 @@ func TestASecondScriptBumpsTheVersionSoEveryCopyBecomesStale(t *testing.T) {
 	}
 	if second.Version != 2 {
 		t.Fatalf("second script is version %d, want 2", second.Version)
+	}
+}
+
+// aDefinition is a small, valid game — the shape a detective game actually
+// needs (definition_test.go's own doc gives the same example): a suspects
+// table with a primary key, nothing more.
+func aDefinition() provisioning.Definition {
+	return provisioning.Definition{Tables: []provisioning.TableDefinition{
+		{
+			Name: "suspects",
+			Columns: []provisioning.ColumnDefinition{
+				{Name: "id", Type: provisioning.ColumnInteger},
+				{Name: "name", Type: provisioning.ColumnText},
+			},
+			PrimaryKey: []string{"id"},
+		},
+	}}
+}
+
+func TestSettingTheDefinitionStoresItPendingAndBuildsNothingYet(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := games(true)
+	contest := uuid.New()
+
+	saved, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition())
+	if err != nil {
+		t.Fatalf("setting the definition: %v", err)
+	}
+	if saved.Status != provisioning.TemplatePending {
+		t.Fatalf("stored as %q, want pending", saved.Status)
+	}
+	if saved.Source != provisioning.SourceBuilder {
+		t.Fatalf("stored as source %q, want builder", saved.Source)
+	}
+	// Building creates a database and runs a build inside it. Doing that
+	// inside the request that saved the definition is what the pending
+	// status exists to avoid, the same reasoning SetScript's own test gives.
+	if len(cluster.names) != 0 {
+		t.Fatal("built the game inside the request that stored the definition")
+	}
+	if len(store.template.Definition.Tables) == 0 {
+		t.Fatal("the definition was not stored")
+	}
+}
+
+// A contest whose game may no longer be replaced must refuse the table
+// builder's own way in exactly as it refuses the editor's — replacing a
+// game bumps its version and makes every participant's copy stale, whatever
+// produced the replacement.
+func TestTheGameOfARunningContestCannotHaveItsDefinitionReplaced(t *testing.T) {
+	t.Parallel()
+	service, store, _ := games(false)
+
+	_, err := service.SetDefinition(t.Context(), uuid.New(), uuid.New(), aDefinition())
+	if !errors.Is(err, provisioning.ErrGameNotEditable) {
+		t.Fatalf("answered %v, want ErrGameNotEditable", err)
+	}
+	if store.present {
+		t.Fatal("stored the definition anyway")
+	}
+}
+
+// SetDefinition's own validation runs before anything is asked of storage —
+// the same ordering TestAnEmptyOrOversizedScriptIsRefusedBeforeAnythingIsAsked
+// proves for SetScript. Definition.Validate's own tests (definition_test.go)
+// cover every refusal in depth; this is only the wiring between the two.
+func TestAnInvalidDefinitionIsRefusedBeforeAnythingIsAsked(t *testing.T) {
+	t.Parallel()
+	service, store, _ := games(true)
+
+	_, err := service.SetDefinition(t.Context(), uuid.New(), uuid.New(), provisioning.Definition{})
+	if !errors.Is(err, provisioning.ErrDefinitionEmpty) {
+		t.Fatalf("answered %v, want ErrDefinitionEmpty", err)
+	}
+	if store.present {
+		t.Fatal("stored a definition that was refused")
+	}
+}
+
+func TestASecondDefinitionBumpsTheVersionSoEveryCopyBecomesStale(t *testing.T) {
+	t.Parallel()
+	service, _, _ := games(true)
+	contest := uuid.New()
+
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	second := aDefinition()
+	second.Tables[0].Name = "witnesses"
+	saved, err := service.SetDefinition(t.Context(), uuid.New(), contest, second)
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if saved.Version != 2 {
+		t.Fatalf("second definition is version %d, want 2", saved.Version)
 	}
 }
 
@@ -767,6 +879,43 @@ func TestBuildingAFileSourcedGameWithNoUploadIDIsAnInternalFault(t *testing.T) {
 	}
 }
 
+// A builder-sourced game has nothing to run yet — turning a saved
+// Definition into SQL is a later task's own work — so Build must refuse
+// honestly with DefinitionBuildUnavailable rather than run the empty
+// init_script a 'builder' row carries and mark it 'ready' over a database
+// with none of the organiser's tables in it. The same shape
+// TestBuildingAFileSourcedGameWithNoUploadVolumeConfiguredIsAnInternalFault
+// proves for SourceFile, except this refusal is not a fault: it is the
+// state of the feature, so err must come back nil and the trail's own "ok"
+// still records what actually happened.
+func TestBuildingABuilderSourcedGameRefusesHonestlyUntilSQLGenerationExists(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := games(true)
+	contest := uuid.New()
+	store.template = provisioning.Template{
+		ContestID: contest, Database: "game_tpl_cabc", Version: 1,
+		Status: provisioning.TemplatePending, Source: provisioning.SourceBuilder, Definition: aDefinition(),
+	}
+	store.present = true
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("a builder-sourced game waiting on a later task was reported as the tick's own failure: %v", err)
+	}
+	if built.Status != provisioning.TemplateFailed {
+		t.Fatalf("finished as %q, want failed", built.Status)
+	}
+	if built.BuildError != provisioning.DefinitionBuildUnavailable {
+		t.Fatalf("build error = %q, want the fixed sentence", built.BuildError)
+	}
+	if len(cluster.names) != 0 {
+		t.Fatal("a builder-sourced game with no SQL generation reached BuildTemplate")
+	}
+	if len(store.finished) != 1 || store.finished[0].err != provisioning.DefinitionBuildUnavailable {
+		t.Fatalf("recorded %+v, want the fixed sentence", store.finished)
+	}
+}
+
 func TestTheScriptIsReadableForTheExportAndAContestWithoutOneIsNotAnError(t *testing.T) {
 	// contests.GameSource, the narrow view the contest package's export asks
 	// for. A contest whose game has not been written yet exports without one
@@ -832,6 +981,33 @@ func TestAFileSourcedGameIsReportedAsPresentButOmittedRatherThanAsAnEmptyScript(
 	}
 	if script != "" {
 		t.Fatalf("Script() answered %q for a game whose SQL is a file", script)
+	}
+}
+
+// The same fact, for the third source: a builder-sourced game has no SQL at
+// all yet (Definition's own doc), so Script() must report it as present but
+// omitted rather than as an empty script an organiser supposedly wrote.
+func TestABuilderSourcedGameIsReportedAsPresentButOmittedRatherThanAsAnEmptyScript(t *testing.T) {
+	t.Parallel()
+	service, _, _ := games(true)
+	contest := uuid.New()
+
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+		t.Fatalf("setting the definition: %v", err)
+	}
+
+	script, ok, omitted, err := service.Script(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("Script() returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("a contest whose game is a table-builder definition answered that it has no game")
+	}
+	if !omitted {
+		t.Fatal("a builder-sourced game answered as if its script were in the row")
+	}
+	if script != "" {
+		t.Fatalf("Script() answered %q for a game whose SQL does not exist yet", script)
 	}
 }
 

@@ -78,6 +78,163 @@ func TestSavingAScriptClearsTheCachedSchema(t *testing.T) {
 	})
 }
 
+// aDefinition mirrors provisioning_test's own helper of the same name: a
+// small, valid game a detective olympiad might actually use.
+func aDefinition() provisioning.Definition {
+	return provisioning.Definition{Tables: []provisioning.TableDefinition{
+		{
+			Name: "suspects",
+			Columns: []provisioning.ColumnDefinition{
+				{Name: "id", Type: provisioning.ColumnInteger},
+				{Name: "name", Type: provisioning.ColumnText},
+			},
+			PrimaryKey: []string{"id"},
+		},
+	}}
+}
+
+// The third source (migration 26) round-trips through the same upsert
+// SaveScript and CompleteUpload use: the definition comes back exactly as
+// it was saved, source reads 'builder', and the columns the other two
+// sources own — the script, the upload id — stay empty and nil.
+func TestSavingADefinitionCreatesTheGameWithSourceBuilder(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aContest(t, ctx)
+		repo := NewGameInstances(testPool)
+
+		definition := aDefinition()
+		template, err := repo.SaveDefinition(ctx, contest, "game_tpl_cabc", definition)
+		if err != nil {
+			t.Fatalf("save: %v", err)
+		}
+		if template.Version != 1 || template.Status != provisioning.TemplatePending {
+			t.Fatalf("template = %+v, want version 1, pending", template)
+		}
+		if template.Source != provisioning.SourceBuilder {
+			t.Fatalf("source = %q, want builder", template.Source)
+		}
+		if template.UploadID != nil {
+			t.Fatalf("upload_id = %v, want nil for a builder-sourced game", template.UploadID)
+		}
+		if template.Script != "" {
+			t.Fatalf("script = %q, want empty for a builder-sourced game", template.Script)
+		}
+		if len(template.Definition.Tables) != 1 || template.Definition.Tables[0].Name != "suspects" {
+			t.Fatalf("definition round-tripped as %+v, want %+v", template.Definition, definition)
+		}
+	})
+}
+
+// Saving a script over a builder-sourced game must clear its definition —
+// otherwise the row would carry both a script and a definition that
+// migration 26's own CHECK says may not coexist with 'editor' — and the
+// other direction has to hold too: saving a definition over a script-sourced
+// game must leave nothing of the old script behind for the wrong source to
+// read.
+func TestReplacingAGameClearsWhicheverOfScriptOrDefinitionTheNewSourceDoesNotOwn(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aContest(t, ctx)
+		repo := NewGameInstances(testPool)
+
+		if _, err := repo.SaveDefinition(ctx, contest, "game_tpl_cabc", aDefinition()); err != nil {
+			t.Fatalf("save definition: %v", err)
+		}
+		afterScript, err := repo.SaveScript(ctx, contest, "game_tpl_cabc", `SELECT 1`)
+		if err != nil {
+			t.Fatalf("save script: %v", err)
+		}
+		if afterScript.Source != provisioning.SourceEditor || len(afterScript.Definition.Tables) != 0 {
+			t.Fatalf("after saving a script: source=%q definition=%+v, want editor with no definition",
+				afterScript.Source, afterScript.Definition)
+		}
+
+		afterDefinition, err := repo.SaveDefinition(ctx, contest, "game_tpl_cabc", aDefinition())
+		if err != nil {
+			t.Fatalf("save definition again: %v", err)
+		}
+		if afterDefinition.Source != provisioning.SourceBuilder || afterDefinition.Script != "" {
+			t.Fatalf("after saving a definition: source=%q script=%q, want builder with no script",
+				afterDefinition.Source, afterDefinition.Script)
+		}
+	})
+}
+
+// The schema's own defence, beside Definition.Validate's (CLAUDE.md rule 2's
+// point that a bound the domain enforces is still worth a second, structural
+// guarantee at the boundary storage owns). `source` is a closed list; migration
+// 26 widened it to three values and this is the widened list, checked against
+// the database rather than assumed from the Go side.
+func TestTheSourceCheckConstraintAcceptsExactlyTheThreeKnownSources(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aContest(t, ctx)
+		q := storage.QuerierFrom(ctx, testPool)
+
+		for _, source := range []string{"editor", "file", "builder"} {
+			_, err := q.Exec(ctx, `DELETE FROM game_templates WHERE contest_id = $1`, contest)
+			if err != nil {
+				t.Fatalf("clear the row for %q: %v", source, err)
+			}
+			var uploadID, definitionJSON any
+			if source == "file" {
+				uploadID = uploadRowFor(t, ctx, contest)
+			}
+			if source == "builder" {
+				definitionJSON = []byte(`{"tables":[{"name":"t","columns":[{"name":"c","type":"integer"}]}]}`)
+			}
+			if _, err := q.Exec(ctx, `
+				INSERT INTO game_templates (contest_id, template_db, init_script, source, upload_id, definition_json)
+				VALUES ($1, 'game_tpl_cabc', '', $2, $3, $4)`,
+				contest, source, uploadID, definitionJSON); err != nil {
+				t.Fatalf("source %q was refused by the widened CHECK: %v", source, err)
+			}
+		}
+
+		if _, err := q.Exec(ctx, `
+			INSERT INTO game_templates (contest_id, template_db, init_script, source)
+			VALUES (gen_random_uuid(), 'game_tpl_cxyz', '', 'bogus')`); err == nil {
+			t.Fatal("an unknown source was accepted by the CHECK")
+		}
+	})
+}
+
+// uploadRowFor creates a game_uploads row so a 'file'-sourced game_templates
+// row under test satisfies its own foreign key, and returns its id.
+func uploadRowFor(t *testing.T, ctx context.Context, contest uuid.UUID) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `
+		INSERT INTO game_uploads (contest_id, filename, declared_bytes, status)
+		VALUES ($1, 'dump.sql', 10, 'complete') RETURNING id`, contest).Scan(&id); err != nil {
+		t.Fatalf("create an upload row: %v", err)
+	}
+	return id
+}
+
+// The pairing CHECK migration 26 adds beside the one migration 24 already
+// had: a 'builder' row must carry a definition, and nothing else may. Tested
+// directly against the schema, not through the repository, because
+// SaveDefinition and SaveScript never produce the contradictory row
+// themselves — this is what stops a future change to either from being able
+// to.
+func TestTheSourcePairingConstraintTiesBuilderToDefinitionJSON(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aContest(t, ctx)
+		q := storage.QuerierFrom(ctx, testPool)
+
+		if _, err := q.Exec(ctx, `
+			INSERT INTO game_templates (contest_id, template_db, init_script, source, definition_json)
+			VALUES ($1, 'game_tpl_cabc', '', 'builder', NULL)`, contest); err == nil {
+			t.Fatal("a 'builder' row with no definition was accepted")
+		}
+
+		if _, err := q.Exec(ctx, `
+			INSERT INTO game_templates (contest_id, template_db, init_script, source, definition_json)
+			VALUES ($1, 'game_tpl_cabc', '', 'editor', '{"tables":[]}')`, contest); err == nil {
+			t.Fatal("an 'editor' row carrying a definition was accepted")
+		}
+	})
+}
+
 // Two workers ticking at the same moment must not both run CREATE DATABASE
 // against one name.
 func TestOnlyOneClaimOfAGameSucceedsAndTheRestFindNothing(t *testing.T) {

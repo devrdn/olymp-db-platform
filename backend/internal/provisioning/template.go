@@ -72,6 +72,16 @@ type ScriptFailure interface {
 // have it and a manager cannot.
 const BuildFailedInternally = "The game could not be built. The failure was not in the script — ask an administrator to check the service log."
 
+// DefinitionBuildUnavailable is what a builder-sourced game's build_error
+// reads until a later task turns a saved Definition into the SQL that
+// actually builds it. Not a failure of the organiser's definition or of this
+// installation's cluster — Build says so honestly rather than running an
+// empty init_script, which is what a 'builder' row carries in that column
+// (see finishDefinitionBuild) — the identical shape SourceFile's own build
+// once had before streaming execution existed for it (see that task's own
+// git history on finishUploadBuild).
+const DefinitionBuildUnavailable = "This game was described with the table builder. Building it is not available on this installation yet."
+
 // MaxBuildErrorBytes bounds what a failed build may leave behind about
 // itself (CLAUDE.md rule 2).
 //
@@ -149,11 +159,12 @@ const (
 	TemplateDropped TemplateStatus = "dropped"
 )
 
-// TemplateSource says which of the two ways an organiser built this game:
-// wrote (or pasted) it in the editor, or uploaded a finished dump
-// (migration 24). The two share every other column — version, status, the
-// build queue — because replacing a game is one event whichever path
-// produced it (see Games.replaceGame).
+// TemplateSource says which of the three ways an organiser built this game:
+// wrote (or pasted) it in the editor, uploaded a finished dump (migration
+// 24), or described it structurally with the table builder (migration 26).
+// The three share every other column — version, status, the build queue —
+// because replacing a game is one event whichever path produced it (see
+// Games.replaceGame).
 type TemplateSource string
 
 const (
@@ -165,6 +176,13 @@ const (
 	// stays NOT NULL rather than growing a second branch — and UploadID names
 	// which row of game_uploads it came from.
 	SourceFile TemplateSource = "file"
+	// SourceBuilder is a game described structurally — tables, columns, a
+	// primary key — rather than written as SQL. Script is empty for these
+	// rows too, the same reason it is empty for SourceFile: inventing one
+	// here would claim a script the organiser never wrote. Definition
+	// carries what they actually saved, and the SQL it is built from is
+	// generated from it by a later task, not stored on this row.
+	SourceBuilder TemplateSource = "builder"
 )
 
 // Template is one contest's game, as an organiser sees it.
@@ -175,16 +193,25 @@ type Template struct {
 	Status    TemplateStatus
 	Source    TemplateSource
 	// UploadID names the game_uploads row a file-sourced game came from. Nil
-	// for SourceEditor — the pairing migration 24's own CHECK enforces.
+	// for SourceEditor and SourceBuilder — the pairing migration 24's own
+	// CHECK enforces.
 	UploadID *uuid.UUID
+	// Definition is the structural description a builder-sourced game was
+	// saved from — tables, columns, a primary key. The zero value (no
+	// tables) for SourceEditor and SourceFile, the same way UploadID is nil
+	// for anything that is not SourceFile: migration 26's own CHECK pairs
+	// Definition's presence with SourceBuilder specifically, symmetrically
+	// with how migration 24's pairs UploadID's with SourceFile.
+	Definition Definition
 	// Script is the SQL an author wrote in the editor. Staff-trusted input:
 	// it runs as gamedb.RoleAuthor, never as the provisioning role
 	// (gamedb.Provisioner.BuildTemplate's own doc), which is why writing it
 	// sits behind PermissionContestEdit and is written to the audit trail.
 	// Empty for SourceFile — a file-sourced game's SQL is the uploaded
-	// bytes themselves (internal/gamefile.Store.Open, via UploadID), and
-	// inventing a Script for one here would be lying about where it came
-	// from.
+	// bytes themselves (internal/gamefile.Store.Open, via UploadID) — and
+	// for SourceBuilder, whose SQL does not exist yet at all (Definition's
+	// own doc). Inventing a Script for either would be lying about where the
+	// game came from.
 	Script     string
 	BuildError string
 	UpdatedAt  time.Time
@@ -201,6 +228,12 @@ type TemplateRepository interface {
 	// pending, bumping the version when one was already there. The version it
 	// returns is the one a build will be recorded against.
 	SaveScript(ctx context.Context, contestID uuid.UUID, database, script string) (Template, error)
+	// SaveDefinition stores definition as contest's game and puts it back to
+	// pending, the same way SaveScript does for an editor's script — the
+	// table builder (migration 26) runs through the identical upsert as the
+	// other two sources, which is what keeps a rebuild, a version bump and a
+	// cleared schema cache one mechanism rather than three that could drift.
+	SaveDefinition(ctx context.Context, contestID uuid.UUID, database string, definition Definition) (Template, error)
 	// Template reads one contest's game, or ErrNoGame.
 	Template(ctx context.Context, contestID uuid.UUID) (Template, error)
 	// ClaimBuild moves one game from pending to building and returns it.
@@ -395,12 +428,14 @@ func (g *Games) Of(ctx context.Context, contestID uuid.UUID) (Template, error) {
 // none, and a storage failure quietly wearing that answer would ship an
 // incomplete package as a complete one.
 //
-// The third value is the one a SourceFile game needs. Template.Script is
-// empty for those by construction — the SQL is the uploaded bytes, on the API
-// host's own volume, up to GAME_UPLOAD_MAX_FILE_BYTES of them — and returning
-// that empty string as "the game" told the export a contest had a game and
-// then gave it nothing, which re-imports as ErrScriptEmpty. This package is
-// the only one that knows the difference, so this is where it has to be said
+// The third value is the one a SourceFile or SourceBuilder game needs.
+// Template.Script is empty for those by construction — a file-sourced
+// game's SQL is the uploaded bytes, on the API host's own volume, up to
+// GAME_UPLOAD_MAX_FILE_BYTES of them, and a builder-sourced game's SQL does
+// not exist at all yet (Definition's own doc) — and returning that empty
+// string as "the game" told the export a contest had a game and then gave
+// it nothing, which re-imports as ErrScriptEmpty. This package is the only
+// one that knows the difference, so this is where it has to be said
 // (CLAUDE.md rule 11).
 func (g *Games) Script(ctx context.Context, contestID uuid.UUID) (script string, ok, omitted bool, err error) {
 	template, err := g.repo.Template(ctx, contestID)
@@ -410,7 +445,7 @@ func (g *Games) Script(ctx context.Context, contestID uuid.UUID) (script string,
 	case err != nil:
 		return "", false, false, fmt.Errorf("read the contest's game: %w", err)
 	}
-	if template.Source == SourceFile {
+	if template.Source != SourceEditor {
 		return "", true, true, nil
 	}
 	return template.Script, true, false, nil
@@ -458,11 +493,60 @@ func (g *Games) SetScript(ctx context.Context, actorID, contestID uuid.UUID, scr
 	)
 }
 
+// SetDefinition stores the structural description one contest's game is
+// built from — the table builder's own way in, alongside SetScript (the
+// editor) and CompleteUpload (a finished dump).
+//
+// Validated the moment an organiser saves it, not when a background build
+// eventually turns it into SQL (a later task's own work): Definition.
+// Validate's own doc gives the same reasoning SetScript's empty/oversized
+// checks above do — a mistake belongs to whoever made it at the moment they
+// made it.
+//
+// It does not build, for the same reason SetScript does not: storing puts
+// the game back to pending and a worker picks it up (Build), which for a
+// builder-sourced game currently means finishDefinitionBuild's own honest
+// refusal (DefinitionBuildUnavailable) until the SQL-generation task exists.
+func (g *Games) SetDefinition(ctx context.Context, actorID, contestID uuid.UUID, definition Definition) (Template, error) {
+	if err := definition.Validate(); err != nil {
+		return Template{}, err
+	}
+
+	// Storing a definition over a file-sourced game displaces that game's
+	// upload exactly the way SetScript's own displacedUpload call does —
+	// SaveDefinition clears upload_id, and nothing else in this service is
+	// ever told about the file again. Read before the save, because
+	// afterwards the row no longer says which upload it was.
+	displaced, err := g.displacedUpload(ctx, contestID, nil)
+	if err != nil {
+		return Template{}, err
+	}
+
+	return g.replaceGame(ctx, contestID, displaced,
+		func(ctx context.Context) (Template, error) {
+			return g.repo.SaveDefinition(ctx, contestID, templateName(contestID), definition)
+		},
+		func(saved Template) audit.Entry {
+			// Table and column names only, in the count — not the whole
+			// definition. It is small enough to fit in the payload, but the
+			// trail is a list of who did what and not a second copy of the
+			// row's own content, the same choice SetScript's own entry makes
+			// for the script itself.
+			return audit.Entry{
+				ActorID: &actorID, Action: audit.ActionGameDefinitionSet,
+				Entity: "contest", EntityID: contestID.String(),
+				Payload: map[string]any{"version": saved.Version, "tables": len(definition.Tables)},
+			}
+		},
+	)
+}
+
 // replaceGame is the one path a contest's game is replaced through, whichever
-// produced the new one: an organiser's own script (SetScript) or a completed
-// upload (CompleteUpload). Extracted so the two cannot become a second
-// parallel path — same GameEditable gate, same transaction shape, same audit
-// write — which is exactly what CompleteUpload's own doc asks for.
+// produced the new one: an organiser's own script (SetScript), a completed
+// upload (CompleteUpload) or a saved table-builder definition (SetDefinition).
+// Extracted so the three cannot become parallel paths — same GameEditable
+// gate, same transaction shape, same audit write — which is exactly what
+// CompleteUpload's own doc asks for.
 //
 // save does the storage write and returns the row that resulted; entry turns
 // that row into the trail's own record of it. Both run inside one
@@ -550,6 +634,9 @@ func (g *Games) Build(ctx context.Context, stale time.Duration) (Template, error
 
 	if claimed.Source == SourceFile {
 		return g.finishUploadBuild(ctx, claimed)
+	}
+	if claimed.Source == SourceBuilder {
+		return g.finishDefinitionBuild(ctx, claimed)
 	}
 
 	// Two variables and not one, because a failed build has two audiences that
@@ -661,10 +748,33 @@ func (g *Games) finishUploadBuild(ctx context.Context, claimed Template) (Templa
 	return g.recordBuildOutcome(ctx, claimed, buildErr, cause)
 }
 
+// finishDefinitionBuild is what a claimed build does for a builder-sourced
+// game: nothing on the cluster, honestly. Turning a saved Definition into
+// SQL and running it is a later task's own work — this one only gives the
+// definition a place in the schema and the domain — so running
+// claimed.Script (empty for SourceBuilder, per Template's own doc) would
+// build nothing, silently, and mark the game 'ready' over a database with
+// none of the organiser's tables in it.
+//
+// Refusing with a named reason instead is CLAUDE.md rule 1 applied to a gap
+// in functionality rather than to an error, the same shape finishUploadBuild
+// itself had before streaming execution existed for a file-sourced game.
+// Unlike that earlier version, this one reuses recordBuildOutcome rather
+// than duplicating its row update and audit write, because that helper did
+// not exist yet at the point in this codebase's history finishUploadBuild
+// was written this way — nothing about the reasoning changed, only what
+// there already was to reuse. cause is nil: this is not a fault for the
+// tick's own caller to log at every pass over a definition waiting on a
+// feature that has not shipped yet, the same choice finishUploadBuild's
+// predecessor made for the identical reason.
+func (g *Games) finishDefinitionBuild(ctx context.Context, claimed Template) (Template, error) {
+	return g.recordBuildOutcome(ctx, claimed, DefinitionBuildUnavailable, nil)
+}
+
 // recordBuildOutcome finishes a claimed build's row and audit trail, the
-// last step of both Build and finishUploadBuild's own paths: whichever ran
-// the script (or refused to, for one of finishUploadBuild's own reasons),
-// what happens to the claim afterward is identical.
+// last step of Build, finishUploadBuild and finishDefinitionBuild's own
+// paths: whichever ran the script (or refused to, for one of the other two's
+// own reasons), what happens to the claim afterward is identical.
 func (g *Games) recordBuildOutcome(ctx context.Context, claimed Template, buildErr string, cause error) (Template, error) {
 	// Once, here, because this is the one funnel every outcome passes
 	// through — the row, the audit payload and what is handed back to the

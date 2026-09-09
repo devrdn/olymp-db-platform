@@ -21,6 +21,7 @@
     "contest.translations_change",
     "contest.policy_change",
     "contest.game_script_set",
+    "contest.game_definition_set",
     "contest.game_built",
     "contest.story_change",
     "contest.question_create",
