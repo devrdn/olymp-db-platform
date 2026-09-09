@@ -506,7 +506,7 @@ func (g *Games) CompleteTableUpload(ctx context.Context, actorID, contestID, id 
 		return TableData{}, ErrTableDataLengthMismatch
 	}
 
-	lines, err := g.validateTableFile(id.String(), table)
+	lines, err := g.validateTableFile(ctx, id.String(), table)
 	if err != nil {
 		return TableData{}, err
 	}
@@ -582,7 +582,14 @@ func (g *Games) tableDataToDisplace(ctx context.Context, contestID uuid.UUID, ta
 // bootstrap half of AppendTableRow both run: header first, then every data
 // row's field count and column types, never holding more of the file than
 // tableLineScanner's own bound. It returns the number of data rows found.
-func (g *Games) validateTableFile(id string, table TableDefinition) (int64, error) {
+//
+// It runs synchronously inside the HTTP request that completes an upload, on
+// the process serving the olympiad, and there is no timeout middleware in
+// front of the router — so it watches the request's own context, the same
+// reasoning TableDataWindow gives for its own walk: a caller who has hung up
+// must not leave this loop running, and a context nothing looks at is a
+// context nobody has.
+func (g *Games) validateTableFile(ctx context.Context, id string, table TableDefinition) (int64, error) {
 	f, err := g.tableFiles.Open(id)
 	if err != nil {
 		return 0, wrapTableFileErr(err)
@@ -607,6 +614,14 @@ func (g *Games) validateTableFile(id string, table TableDefinition) (int64, erro
 
 	var lines int64
 	for {
+		// Not every row: the check itself is cheap but a row is cheaper still,
+		// and a batch of a thousand bounds how long a hung-up caller's file
+		// goes on being read to a few milliseconds.
+		if lines%1000 == 0 {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+		}
 		line, err := scanner.next()
 		if errors.Is(err, io.EOF) {
 			return lines, nil
@@ -1046,13 +1061,24 @@ type TableRowWindow struct {
 // TableDataWindow reads up to maxRows surviving (not tombstoned) rows of a
 // table's current data, starting at fromRow, never reading more than
 // maxBytes of the file and never reading past what it returns — the
-// console's own paginated look at a table's rows, the reason this does not
-// reuse gamefile.Store.Window's own persisted index (this package's own
-// doc on why: that index is sealed the moment it is built, and a table's
-// file is written to again by every AppendTableRow after the first). A
-// linear scan from the start of the file costs O(fromRow), not O(1); at the
-// scale one table of an olympiad's own game is expected to hold, that is not
-// a cost worth a second on-disk index to avoid.
+// console's own paginated look at a table's rows.
+//
+// It does not reuse gamefile.Store.Window's own persisted index, for the
+// reason that index cannot serve this file: it is sealed the moment it is
+// built, and a table's file is written to again by every AppendTableRow after
+// the first. What replaced the linear scan from the top of the file is
+// tableRowIndex — marks kept in this process, added as pages are read, never
+// persisted and never sealed. See that type for why an append-only file makes
+// that sound.
+//
+// The scan it replaced was not merely O(fromRow); paging through a whole file
+// with it was quadratic. A file of N bytes read in P pages read about N×P/2
+// bytes altogether: two hundred thousand rows at a hundred a page is two
+// thousand pages, so a twenty-one megabyte file cost about twenty-one
+// gigabytes of reading to page through, and the last page alone cost a scan of
+// the whole file — off the same volume that is at that moment accepting
+// chunks. At this platform's own four-gibibyte file ceiling the figure is
+// terabytes.
 func (g *Games) TableDataWindow(ctx context.Context, contestID uuid.UUID, table string, fromRow int64, maxRows int, maxBytes int64) (TableRowWindow, error) {
 	if g.tableFiles == nil {
 		return TableRowWindow{}, ErrTableDataDisabled
@@ -1080,31 +1106,45 @@ func (g *Games) TableDataWindow(ctx context.Context, contestID uuid.UUID, table 
 	}
 	defer func() { _ = f.Close() }()
 
-	scanner := newTableLineScanner(f)
-	if _, err := scanner.next(); err != nil { // the header; already validated, only skipped here
+	info, err := f.Stat()
+	if err != nil {
 		return TableRowWindow{}, fmt.Errorf("read the table's data: %w", err)
+	}
+	marks := g.rowMarks.of(data.ID.String())
+	scanner, row, err := openTableRowScan(f, info.Size(), marks, fromRow)
+	if err != nil {
+		return TableRowWindow{}, err
 	}
 
 	deleted := data.deletedSet()
 	var remaining = maxBytes
 	window := TableRowWindow{FromRow: fromRow, TotalRows: data.Lines}
-	var row int64
 	for {
-		// The same reason gamefile.Store.Window checks it: this walk starts
-		// at row 1 whatever fromRow is, so a page deep into a table reads
-		// every row before it, and fromRow is a query parameter with no
-		// ceiling of its own. A caller that has hung up must not leave this
-		// loop running on the process serving the olympiad — accepting a
-		// context and never looking at it is the same as not having one.
+		// The same reason gamefile.Store.Window checks it: this walk still has
+		// to read every row between the nearest mark and fromRow, and fromRow
+		// is a query parameter with no ceiling of its own — the very first read
+		// of a large file has no marks to start from at all. A caller that has
+		// hung up must not leave this loop running on the process serving the
+		// olympiad — accepting a context and never looking at it is the same as
+		// not having one.
 		if err := ctx.Err(); err != nil {
 			return TableRowWindow{}, err
 		}
+		// Where the line about to be read begins, taken before reading it: this
+		// is the offset a later page would want to seek to for that row.
+		lineAt := scanner.offset
 		line, err := scanner.next()
 		if errors.Is(err, io.EOF) {
 			return window, nil
 		}
 		if err != nil {
 			return TableRowWindow{}, fmt.Errorf("read the table's data: %w", err)
+		}
+		// The line just read is data row row+1, so it begins a mark exactly
+		// when row is a multiple of the interval — mark number row/interval.
+		// Anything already held, or out of order, record drops.
+		if row%tableRowMarkInterval == 0 {
+			marks.record(row/tableRowMarkInterval, lineAt, scanner.offset)
 		}
 		row++
 		if row < fromRow {
@@ -1149,6 +1189,30 @@ func (g *Games) TableDataWindow(ctx context.Context, contestID uuid.UUID, table 
 			return window, nil
 		}
 	}
+}
+
+// openTableRowScan positions f for a walk towards fromRow and reports how many
+// data rows lie behind the position it chose.
+//
+// With a usable mark, that is a seek: the returned scanner starts at the mark's
+// own byte offset and rowsBefore is the row count it stands for. With none —
+// the first time a file is paged through, or a file the marks no longer
+// describe — it is the top of the file with the header read past, which is
+// where the walk always used to start. Either way the caller's loop is
+// unchanged; only where it begins differs.
+func openTableRowScan(f io.ReadSeeker, size int64, marks *tableRowMarks, fromRow int64) (*tableLineScanner, int64, error) {
+	if offset, rowsBefore, ok := marks.nearest(fromRow, size); ok {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			return nil, 0, fmt.Errorf("read the table's data: %w", err)
+		}
+		return newTableLineScannerAt(f, offset), rowsBefore, nil
+	}
+
+	scanner := newTableLineScanner(f)
+	if _, err := scanner.next(); err != nil { // the header; already validated, only skipped here
+		return nil, 0, fmt.Errorf("read the table's data: %w", err)
+	}
+	return scanner, 0, nil
 }
 
 // DeleteTableRow tombstones one row of a table's current data.

@@ -168,6 +168,13 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		games := postgres.NewGameInstances(pool)
 		databases := provisioning.New(games, cluster).
 			WithWorkers(cfg.ProvisionWorkers).
+			// The same GAME_CLUSTER_MAX_BYTES the pool's own limits carry
+			// below, and deliberately the same variable read once: the budget
+			// bounds the background tender and the participant's own late
+			// registration, and two numbers here would mean a cluster the pool
+			// stopped filling at while participants carried on filling it
+			// (provisioning.Service.roomForOneCopy).
+			WithClusterBudget(cfg.ClusterMaxBytes).
 			WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
 		a.tasks = append(a.tasks, tendPools(log, databases, provisioning.PoolLimits{
 			Headroom: cfg.PoolDepth, MaxCopies: cfg.PoolMax, MaxClusterBytes: cfg.ClusterMaxBytes,

@@ -89,6 +89,7 @@ func TestSchemaEndpointNamesEveryRefusal(t *testing.T) {
 	}{
 		{"the contest hides its schema", queryproxy.ErrSchemaHidden, http.StatusForbidden, "schema_hidden"},
 		{"the game was never built", queryproxy.ErrNoGameYet, http.StatusConflict, "no_game_yet"},
+		{"the game cluster is full", queryproxy.ErrNoRoomForDatabase, http.StatusServiceUnavailable, "game_cluster_full"},
 		{"not a participant", queryproxy.ErrNotAParticipant, http.StatusForbidden, "not_a_participant"},
 		{"the contest is not running", queryproxy.ErrContestNotRunning, http.StatusConflict, "contest_not_running"},
 		{"the participant has finished", queryproxy.ErrFinished, http.StatusConflict, "contest_finished"},

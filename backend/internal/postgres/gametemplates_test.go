@@ -398,3 +398,84 @@ func TestGameEditableAgreesWithContentEditableForEveryStatus(t *testing.T) {
 		}
 	})
 }
+
+// The status read is what a console polls twice a second while a build runs,
+// and the only thing it wants from the script is how long it is. It must
+// therefore answer with the length and never with the bytes — a twenty-minute
+// build with two organisers watching is 1200 polls, and a half-mebibyte script
+// read on each of them is six hundred megabytes pulled out of this database,
+// turned into Go strings and thrown away.
+func TestTheStatusReadCarriesTheScriptsLengthAndNotItsBytes(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aContest(t, ctx)
+		repo := NewGameInstances(testPool)
+
+		if _, err := repo.TemplateStatus(ctx, contest); !errors.Is(err, provisioning.ErrNoGame) {
+			t.Fatalf("a contest with no game answered %v, want ErrNoGame", err)
+		}
+
+		script := `CREATE TABLE a (x int); -- ăîș, so the length is bytes and not runes`
+		saved, err := repo.SaveScript(ctx, contest, "game_tpl_cabc", script)
+		if err != nil {
+			t.Fatalf("save: %v", err)
+		}
+
+		status, err := repo.TemplateStatus(ctx, contest)
+		if err != nil {
+			t.Fatalf("TemplateStatus: %v", err)
+		}
+		if status.Script != "" {
+			t.Fatalf("the status read returned %d bytes of script", len(status.Script))
+		}
+		if status.ScriptBytes != len(script) {
+			t.Fatalf("ScriptBytes = %d, want %d", status.ScriptBytes, len(script))
+		}
+		// And the full read agrees about the length, so a caller never has to
+		// know which of the two produced the row it is holding.
+		if saved.ScriptBytes != len(script) {
+			t.Fatalf("the full read reports ScriptBytes = %d, want %d", saved.ScriptBytes, len(script))
+		}
+		if status.Version != saved.Version || status.Status != saved.Status ||
+			status.Database != saved.Database || status.Source != saved.Source {
+			t.Fatalf("the status read disagrees with the full one: %+v vs %+v", status, saved)
+		}
+	})
+}
+
+// A builder-sourced game's definition is the other column the status read
+// leaves behind — and the one that also cost a json.Unmarshal on every poll.
+func TestTheStatusReadDoesNotDecodeTheBuilderDefinition(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aContest(t, ctx)
+		repo := NewGameInstances(testPool)
+
+		definition := provisioning.Definition{Tables: []provisioning.TableDefinition{{
+			Name:       "suspects",
+			Columns:    []provisioning.ColumnDefinition{{Name: "id", Type: provisioning.ColumnInteger}},
+			PrimaryKey: []string{"id"},
+		}}}
+		if _, err := repo.SaveDefinition(ctx, contest, "game_tpl_cabc", definition); err != nil {
+			t.Fatalf("save the definition: %v", err)
+		}
+
+		status, err := repo.TemplateStatus(ctx, contest)
+		if err != nil {
+			t.Fatalf("TemplateStatus: %v", err)
+		}
+		if len(status.Definition.Tables) != 0 {
+			t.Fatalf("the status read decoded %d tables of definition", len(status.Definition.Tables))
+		}
+		if status.Source != provisioning.SourceBuilder {
+			t.Fatalf("source = %q, want builder", status.Source)
+		}
+		// The full read still has it, which is what makes the status read a
+		// narrower query rather than a lost column.
+		full, err := repo.Template(ctx, contest)
+		if err != nil {
+			t.Fatalf("Template: %v", err)
+		}
+		if len(full.Definition.Tables) != 1 {
+			t.Fatalf("the full read returned %d tables, want 1", len(full.Definition.Tables))
+		}
+	})
+}

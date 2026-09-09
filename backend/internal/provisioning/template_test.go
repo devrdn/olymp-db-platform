@@ -133,6 +133,20 @@ func (s *templateStore) Template(context.Context, uuid.UUID) (provisioning.Templ
 	return s.template, nil
 }
 
+// TemplateStatus answers what the real repository's status query does: the
+// same row with the script's length in place of the script, and no
+// definition — so a test asserting that the status endpoint never reads the
+// content is asserting against the same shape production produces.
+func (s *templateStore) TemplateStatus(ctx context.Context, contestID uuid.UUID) (provisioning.Template, error) {
+	template, err := s.Template(ctx, contestID)
+	if err != nil {
+		return provisioning.Template{}, err
+	}
+	template.ScriptBytes = len(template.Script)
+	template.Script, template.Definition = "", provisioning.Definition{}
+	return template, nil
+}
+
 func (s *templateStore) ClaimBuild(context.Context, time.Duration) (provisioning.Template, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

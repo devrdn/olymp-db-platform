@@ -219,6 +219,14 @@ func (h *ConsoleHandler) fail(w http.ResponseWriter, r *http.Request, err error)
 		{queryproxy.ErrNothingLeftToAnswer, http.StatusConflict, codeNothingLeftToAnswer},
 		{queryproxy.ErrAddressNotAllowed, http.StatusForbidden, codeAddressNotAllowed},
 		{queryproxy.ErrNoGameYet, http.StatusConflict, codeNoGameYet},
+		// 503 rather than 409: unlike every other refusal in this list, this
+		// one is not a fact about the contest or the caller but about the
+		// installation, and 503 is what says "this service cannot serve you
+		// right now, and it is not your request's fault". Not 500, because it
+		// is not a fault — nothing is broken, the disk budget the operator set
+		// is simply full, and a 500 would send them looking for a stack trace
+		// that does not exist.
+		{queryproxy.ErrNoRoomForDatabase, http.StatusServiceUnavailable, codeGameClusterFull},
 		{queryproxy.ErrDatabaseDeclined, http.StatusBadRequest, codeQueryDeclined},
 		{queryrunner.ErrTimeout, http.StatusGatewayTimeout, codeQueryTimedOut},
 		{queryrunner.ErrCanceled, http.StatusRequestTimeout, codeQueryCancelled},

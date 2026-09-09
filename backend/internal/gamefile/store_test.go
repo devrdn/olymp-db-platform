@@ -3,6 +3,7 @@ package gamefile
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -32,7 +33,7 @@ func permissiveLimits() Limits {
 	}
 }
 
-func newTestStore(t *testing.T, limits Limits) *Store {
+func newTestStore(t testing.TB, limits Limits) *Store {
 	t.Helper()
 	s, err := NewStore(t.TempDir(), limits)
 	if err != nil {
@@ -1121,5 +1122,136 @@ func TestUploadIDsLeavesOutAFileYoungerThanTheCutOff(t *testing.T) {
 	}
 	if got := idSet(ids); len(got) != 1 || got[old] != 1 {
 		t.Fatalf("UploadIDs = %v, want only %s — the file written moments ago is not the caller's to act on yet", ids, old)
+	}
+}
+
+// dirWalks reports when the directory was last actually walked. A test asserting
+// that a chunk did not pay for a walk asserts on this rather than on a clock.
+func (s *Store) lastDirWalk() time.Time {
+	s.dirMu.Lock()
+	defer s.dirMu.Unlock()
+	return s.dirMeasuredAt
+}
+
+// Receiving a chunk used to walk the whole upload directory — ReadDir plus an
+// Info per entry — every single time: 3.3 ms at five hundred files against
+// 2.7 ms for an entire 8 MiB Append, so on a volume with a couple of hundred
+// uploads on it the walk was more than the chunk. It stands measured between
+// chunks instead, with what each Append writes added to it.
+func TestAppendDoesNotWalkTheDirectoryForEveryChunk(t *testing.T) {
+	limits := Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 8 << 20, MaxChunkBytes: 1 << 20}
+	s := newTestStore(t, limits)
+
+	const id = "c0000001-0000-0000-0000-000000000000"
+	if err := s.Begin(id, 300); err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	// Begin's own measurement seeds the figure; nothing after it should walk
+	// again while the directory is nowhere near its budget.
+	walkedAt := s.lastDirWalk()
+	if walkedAt.IsZero() {
+		t.Fatal("Begin did not measure the directory at all")
+	}
+
+	var offset int64
+	for chunk := range 5 {
+		n, err := s.Append(id, offset, bytes.NewReader(bytes.Repeat([]byte("x"), 60)))
+		if err != nil {
+			t.Fatalf("Append %d: %v", chunk, err)
+		}
+		offset = n
+	}
+	if s.lastDirWalk() != walkedAt {
+		t.Fatal("a chunk walked the directory again although the budget was nowhere near binding")
+	}
+	if offset != 300 {
+		t.Fatalf("wrote %d bytes in all, want 300", offset)
+	}
+}
+
+// The remembered figure is never what a refusal rests on: the moment what is
+// left of the directory budget is small enough to bound a chunk, Append
+// measures for real. This is what keeps the cheap read from turning "the
+// directory is full" into a guess — here the bytes go away behind the Store's
+// back, and the chunk that would have been refused against a stale figure is
+// accepted against the true one.
+func TestAppendMeasuresForRealOnceTheDirectoryBudgetCouldBind(t *testing.T) {
+	limits := Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 200, MaxChunkBytes: 1 << 20}
+	s := newTestStore(t, limits)
+
+	const filler = "c0000002-0000-0000-0000-000000000000"
+	const id = "c0000003-0000-0000-0000-000000000000"
+	if err := s.Begin(filler, 100); err != nil {
+		t.Fatalf("Begin(filler): %v", err)
+	}
+	if _, err := s.Append(filler, 0, bytes.NewReader(bytes.Repeat([]byte("f"), 100))); err != nil {
+		t.Fatalf("Append(filler): %v", err)
+	}
+	if err := s.Begin(id, 100); err != nil {
+		t.Fatalf("Begin(id): %v", err)
+	}
+
+	// The filler's bytes disappear without this Store being told: an operator
+	// clearing the volume, or anything else it cannot see. The remembered
+	// figure now says the directory holds 100 bytes it does not.
+	if err := os.Remove(s.dataPath(filler)); err != nil {
+		t.Fatalf("removing the filler: %v", err)
+	}
+
+	// 150 bytes fits the real directory (200 free) and does not fit the
+	// remembered one (100 free), so a figure nobody re-measured would refuse it.
+	if _, err := s.Append(id, 0, bytes.NewReader(bytes.Repeat([]byte("x"), 150))); err != nil {
+		t.Fatalf("Append: %v — the refusal was decided on a remembered figure", err)
+	}
+	got, err := s.Received(id)
+	if err != nil {
+		t.Fatalf("Received: %v", err)
+	}
+	if got != 150 {
+		t.Fatalf("Received = %d, want 150", got)
+	}
+}
+
+// What a chunk costs, against a directory holding as many uploads as a busy
+// volume does. Run with `go test -bench AppendChunk -benchmem ./internal/gamefile/`.
+func BenchmarkAppendChunkEmptyDirectory(b *testing.B)   { benchmarkAppendChunk(b, 0) }
+func BenchmarkAppendChunkBusyDirectory(b *testing.B)    { benchmarkAppendChunk(b, 500) }
+func BenchmarkAppendChunkCrowdedDirectory(b *testing.B) { benchmarkAppendChunk(b, 5000) }
+
+func benchmarkAppendChunk(b *testing.B, neighbours int) {
+	const chunk = 8 << 20
+	limits := Limits{MaxFileBytes: 1 << 30, MaxDirBytes: 1 << 45, MaxChunkBytes: chunk}
+	s := newTestStore(b, limits)
+
+	for i := range neighbours {
+		name := filepath.Join(s.dir, fmt.Sprintf("%08x-0000-0000-0000-000000000000%s", i, dataSuffix))
+		if err := os.WriteFile(name, []byte("x"), 0o600); err != nil {
+			b.Fatalf("writing a neighbour: %v", err)
+		}
+	}
+
+	const id = "d0000001-0000-0000-0000-000000000000"
+	if err := s.Begin(id, 1<<30); err != nil {
+		b.Fatalf("Begin: %v", err)
+	}
+	payload := bytes.Repeat([]byte("x"), chunk)
+
+	b.SetBytes(chunk)
+	b.ReportAllocs()
+	for b.Loop() {
+		// Every iteration is the first chunk of the upload again, so the file
+		// on disk never outgrows one chunk however long the benchmark runs.
+		// Truncating outside the timer is exactly the kind of change behind
+		// this Store's back the remembered figure tolerates: the budget here is
+		// terabytes, so it never binds and never triggers a real walk.
+		b.StopTimer()
+		if err := os.Truncate(s.dataPath(id), 0); err != nil {
+			b.Fatalf("truncate: %v", err)
+		}
+		b.StartTimer()
+
+		if _, err := s.Append(id, 0, bytes.NewReader(payload)); err != nil {
+			b.Fatalf("Append: %v", err)
+		}
 	}
 }

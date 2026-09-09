@@ -202,6 +202,11 @@ type cluster struct {
 	clusterBytes     int64
 	clusterBytesFail error
 	clusterReads     int
+	// templateReads counts DatabaseSize calls. `pg_database_size` walks the
+	// database's own directory, so how often it is asked is the whole of
+	// finding 2 — a test that only checked the number it returned would pass
+	// just as happily against a version asking once per participant request.
+	templateReads int
 }
 
 // idleCall is one DropIdle invocation and what the fake told the caller.
@@ -245,11 +250,43 @@ func (c *cluster) highWater() int {
 func (c *cluster) DatabaseSize(context.Context, string) (int64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.templateReads++
 	if c.templateBytes > 0 {
 		return c.templateBytes, nil
 	}
 	// A megabyte, so the quota arithmetic has something to multiply.
 	return 1 << 20, nil
+}
+
+// templateSizeReads is how many times the cluster was asked how large the
+// template is.
+func (c *cluster) templateSizeReads() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.templateReads
+}
+
+// clusterByteReads is how many times the cluster was asked how full it is —
+// zero being the claim a test makes about a deployment with no byte budget,
+// which must pay for no measurement at all.
+func (c *cluster) clusterByteReads() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.clusterReads
+}
+
+// setTemplateBytes is a rebuild changing how large one copy costs.
+func (c *cluster) setTemplateBytes(size int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.templateBytes = size
+}
+
+// fillTo is the cluster filling up between two calls.
+func (c *cluster) fillTo(used int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.clusterBytes = used
 }
 
 // ClusterBytes is how full the fake cluster is. Zero unless a test says

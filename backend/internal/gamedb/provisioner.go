@@ -233,16 +233,18 @@ func NewProvisioner(admin Cluster, adminDSN, authorPassword string) (*Provisione
 // be undone by a `RESET ROLE` in the script, and authentication is not
 // something SQL can undo.
 //
-// A semantic change from before this file existed, worth stating once rather
-// than rediscovering: the whole script used to run as a single Exec over the
-// simple protocol, which is one implicit transaction — the last statement
-// failing rolled every earlier one back too. Split into one Exec per
-// statement (and one CopyFrom per COPY block), each now commits on its own.
-// Observably this changes nothing, because BuildTemplate already tears down
-// the whole database on any failure (the comment on the call to fill below is
-// the reason that has always been true) — but that reasoning belongs here in
-// writing, not rediscovered by the next person who reads runScript and
-// wonders why a partial script's earlier statements are not rolled back.
+// A note on transactionality, worth stating once rather than rediscovering.
+// The whole script used to run as a single Exec over the simple protocol,
+// which is one implicit transaction; that was split into one Exec per
+// statement, which made each commit on its own and cost one network round trip
+// per statement — the thing a dump made of INSERTs never finishes paying (see
+// maxBatchedStatements). Statements now travel in bounded batches, so a batch
+// is again one implicit transaction. None of the three is observable from
+// outside this package, because BuildTemplate tears down the whole database on
+// any failure (the comment on the call to fill below is why that has always
+// been true), and runBatch's own doc explains what is done to keep the two
+// things that *would* be observable — which statement a failure is blamed on,
+// and which scripts are accepted at all — exactly as they were.
 func (p *Provisioner) BuildTemplate(ctx context.Context, name string, script io.Reader, policy sqlpolicy.Policy) error {
 	if !sqlpolicy.PlainIdentifier(name) {
 		return fmt.Errorf("%w: %q", ErrBadName, name)
@@ -365,11 +367,16 @@ func (p *Provisioner) runScript(ctx context.Context, database string, script io.
 	}
 
 	reader := NewScriptReader(script)
+	var batch statementBatch
 	for {
 		stmt, err := reader.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil
+				// Whatever the last batch still holds. A script whose final
+				// statement is not followed by another one, or by a COPY block,
+				// reaches EOF with work still buffered — losing it here would be
+				// a template built without its last table.
+				return p.runBatch(ctx, conn, &batch)
 			}
 			// The reader's own verdict on the script text — never
 			// PostgreSQL's, so this skips scriptFailure's classification
@@ -380,6 +387,12 @@ func (p *Provisioner) runScript(ctx context.Context, database string, script io.
 		}
 
 		if stmt.CopyHeader != "" {
+			// Everything buffered goes first: a COPY block loads rows into
+			// tables the statements before it created, so running it ahead of
+			// them would fail on a table that does not exist yet.
+			if err := p.runBatch(ctx, conn, &batch); err != nil {
+				return err
+			}
 			// The header's own line, even for a row PostgreSQL refused far
 			// inside the block: it is where the block starts, which is the
 			// place in the file somebody has to open to see what is wrong
@@ -390,14 +403,151 @@ func (p *Provisioner) runScript(ctx context.Context, database string, script io.
 			continue
 		}
 
-		// One statement per Exec — see BuildTemplate's own doc for the
-		// semantic change this is from a single multi-statement Exec, and why
-		// it is safe: each now commits on its own rather than sharing one
-		// implicit transaction with every other statement in the script.
-		if _, err := conn.Exec(ctx, stmt.Text); err != nil {
-			return scriptFailure(err, stmt.Line)
+		// Buffered rather than executed here — see statementBatch for why one
+		// Exec per statement is a network cost a dump made of INSERTs never
+		// finishes paying, and runBatch for how a failure inside a batch is
+		// still reported against the statement that caused it.
+		batch.add(stmt)
+		if batch.full() {
+			if err := p.runBatch(ctx, conn, &batch); err != nil {
+				return err
+			}
 		}
 	}
+}
+
+// maxBatchedStatements and maxBatchedBytes bound one round trip's worth of
+// script.
+//
+// The cost this exists to remove is a round trip *per statement*. pgx's Exec
+// with no arguments uses the simple protocol, so every statement was its own
+// request and its own wait, strictly serial with no pipelining: a
+// three-gigabyte dump exported with --inserts (what a conversion from MySQL or
+// SQLite always produces) is about 29 million statements at roughly 110 bytes
+// each, and at 40 µs a round trip that is nineteen minutes — through a docker
+// bridge at 100 µs, forty-eight, against a GAME_BUILD_TIMEOUT of thirty. The
+// build is killed, the template dropped, and staleBuildAfter lets the next tick
+// start the same forty-eight minutes again: a loop that never converges.
+//
+// Both bounds are here rather than one, and they answer different questions.
+// The count is what makes the round trips few (a thousand statements per trip
+// turns 29 million trips into 29 thousand, seconds rather than tens of
+// minutes). The byte ceiling is what keeps this from being a way to hold an
+// unbounded amount of an untrusted file in memory (CLAUDE.md rule 12): a single
+// statement may be up to maxStatementBytes on its own, so without it a thousand
+// of them would be sixteen gibibytes inside the API process that is serving the
+// olympiad. Four mebibytes is comfortably more than a thousand ordinary INSERT
+// rows and small enough to be irrelevant beside the file being read.
+const (
+	maxBatchedStatements = 1000
+	maxBatchedBytes      = 4 << 20
+)
+
+// statementBatch is the run of plain statements waiting to be sent together.
+//
+// It holds the statements themselves and not only their joined text, because a
+// failure has to be reported against the one statement that caused it and that
+// means being able to run them again one at a time (runBatch).
+type statementBatch struct {
+	statements []Statement
+	bytes      int
+}
+
+func (b *statementBatch) add(stmt Statement) {
+	b.statements = append(b.statements, stmt)
+	b.bytes += len(stmt.Text)
+}
+
+func (b *statementBatch) full() bool {
+	return len(b.statements) >= maxBatchedStatements || b.bytes >= maxBatchedBytes
+}
+
+func (b *statementBatch) reset() {
+	b.statements, b.bytes = b.statements[:0], 0
+}
+
+// runBatch executes everything buffered so far and empties the batch.
+//
+// The happy path is one simple-protocol Query carrying every statement, which
+// is one round trip for the lot. That makes the batch a single implicit
+// transaction, which is the one thing worth stating plainly, because it is a
+// change from one Exec per statement:
+//
+//   - It is not observable on a failed build. BuildTemplate tears the whole
+//     template down on any failure (see the call to fill), so "the statements
+//     before the bad one were rolled back" and "they were dropped along with
+//     the database" are the same outcome to everybody outside this package.
+//   - It is not allowed to change which statement a failure is *blamed* on, and
+//     it does not: a batch that fails is replayed one statement at a time from
+//     the state the rollback restored, so the error and the line number are
+//     exactly the ones a per-statement loop would have produced.
+//   - And it must not refuse a script that a per-statement loop would have run.
+//     A handful of statements cannot run inside a transaction block at all
+//     (VACUUM is the one an organiser might plausibly write); in a batch they
+//     fail with SQLSTATE 25001, and the same replay is what runs them
+//     successfully on their own. That is why the replay is unconditional rather
+//     than keyed to a list of error codes — the codes are the part that would
+//     go stale.
+//
+// A replay in which every statement succeeds means the batch's own
+// transaction was the only thing that ever objected, and there is nothing to
+// report.
+//
+// The one case the replay reasons about imprecisely is a script that does its
+// own transaction control — an explicit BEGIN and COMMIT around part of a
+// batch that then fails. What the rollback restores is no longer the state the
+// batch started in, so the replay can meet a second, consequential error
+// ("relation already exists") and report that instead of the real one. It is a
+// worse sentence on a build that was failing either way, never a failure
+// reported as a success, and buying the difference would mean this package
+// tracking transaction control through the script — a parser it deliberately
+// is not (ScriptReader's own doc).
+func (p *Provisioner) runBatch(ctx context.Context, conn *pgx.Conn, batch *statementBatch) error {
+	defer batch.reset()
+
+	switch len(batch.statements) {
+	case 0:
+		return nil
+	case 1:
+		// Nothing to join and nothing to gain: one statement is one round trip
+		// either way, and this keeps the single-statement path byte-for-byte
+		// what it was.
+		return execStatement(ctx, conn, batch.statements[0])
+	}
+
+	var joined strings.Builder
+	joined.Grow(batch.bytes + len(batch.statements))
+	for i, stmt := range batch.statements {
+		if i > 0 {
+			// A newline and nothing else. Every statement but the last one a
+			// file can hold already carries its own terminating ';' (the reader
+			// only omits it at EOF), so nothing here adds or trims punctuation
+			// — CLAUDE.md rule 14: what runs is the parser's own statement
+			// text, byte for byte.
+			joined.WriteByte('\n')
+		}
+		joined.WriteString(stmt.Text)
+	}
+
+	if _, err := conn.PgConn().Exec(ctx, joined.String()).ReadAll(); err == nil {
+		return nil
+	}
+
+	for _, stmt := range batch.statements {
+		if err := execStatement(ctx, conn, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// execStatement runs one statement and names the line it started on if the
+// database refuses it.
+func execStatement(ctx context.Context, conn *pgx.Conn, stmt Statement) error {
+	if _, err := conn.Exec(ctx, stmt.Text); err != nil {
+		return scriptFailure(err, stmt.Line)
+	}
+	return nil
 }
 
 // scriptFailure decides whether a failure of the uploaded SQL is PostgreSQL's

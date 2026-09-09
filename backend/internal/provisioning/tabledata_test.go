@@ -2,6 +2,7 @@ package provisioning_test
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,7 +40,7 @@ func suspectsTable() provisioning.TableDefinition {
 // and cluster (games(), template_test.go) plus a real gamefile.Store on a
 // fresh temp directory for the table builder's own per-table files —
 // uploadsGames' own shape, for WithTableData instead of WithUploads.
-func tableDataGames(t *testing.T, editable bool) (*provisioning.Games, *templateStore, *buildCluster, *gamefile.Store) {
+func tableDataGames(t testing.TB, editable bool) (*provisioning.Games, *templateStore, *buildCluster, *gamefile.Store) {
 	t.Helper()
 	service, store, cluster := games(editable)
 	limits := gamefile.Limits{MaxFileBytes: 8 << 20, MaxDirBytes: 32 << 20, MaxChunkBytes: 4 << 20}
@@ -60,7 +61,7 @@ func anyAge() time.Time { return time.Now().Add(time.Hour) }
 // withSuspects saves a builder definition holding only suspectsTable, so a
 // call to BeginTableUpload or AppendTableRow finds a table to check its
 // upload against.
-func withSuspects(t *testing.T, service *provisioning.Games, contest uuid.UUID) {
+func withSuspects(t testing.TB, service *provisioning.Games, contest uuid.UUID) {
 	t.Helper()
 	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest,
 		provisioning.Definition{Tables: []provisioning.TableDefinition{suspectsTable()}}); err != nil {
@@ -71,7 +72,7 @@ func withSuspects(t *testing.T, service *provisioning.Games, contest uuid.UUID) 
 // beginTableUploadWithContent begins a table upload sized exactly to
 // content and appends all of it in one chunk — beginWithContent's own shape
 // (upload_test.go) for a table's file instead of a whole dump.
-func beginTableUploadWithContent(t *testing.T, service *provisioning.Games, contest uuid.UUID, table, content string) provisioning.TableData {
+func beginTableUploadWithContent(t testing.TB, service *provisioning.Games, contest uuid.UUID, table, content string) provisioning.TableData {
 	t.Helper()
 	data, err := service.BeginTableUpload(t.Context(), contest, table, int64(len(content)))
 	if err != nil {
@@ -1088,5 +1089,98 @@ func TestTableDataWindowReturnsATruncatedRowRatherThanNoneAtAll(t *testing.T) {
 	}
 	if window.Rows[0].Row != 1 || window.Rows[0].Fields[1] != longName {
 		t.Fatalf("row = %+v, want row 1 with its name kept whole, not cut to the byte budget", window.Rows[0])
+	}
+}
+
+// benchmarkTable is ten columns of mixed type — the shape the review measured
+// the validation pass against, and wider than any of the tests' own tables.
+func benchmarkTable() provisioning.TableDefinition {
+	return provisioning.TableDefinition{
+		Name: "records",
+		Columns: []provisioning.ColumnDefinition{
+			{Name: "id", Type: provisioning.ColumnInteger},
+			{Name: "amount", Type: provisioning.ColumnNumeric},
+			{Name: "ratio", Type: provisioning.ColumnNumeric},
+			{Name: "name", Type: provisioning.ColumnText},
+			{Name: "city", Type: provisioning.ColumnText},
+			{Name: "note", Type: provisioning.ColumnText},
+			{Name: "active", Type: provisioning.ColumnBoolean},
+			{Name: "seen_on", Type: provisioning.ColumnDate},
+			{Name: "seen_at", Type: provisioning.ColumnTimestamp},
+			{Name: "rank", Type: provisioning.ColumnInteger},
+		},
+		PrimaryKey: []string{"id"},
+	}
+}
+
+// benchmarkCSV is rows of benchmarkTable, header included.
+func benchmarkCSV(rows int) string {
+	var b strings.Builder
+	b.WriteString("id,amount,ratio,name,city,note,active,seen_on,seen_at,rank\n")
+	for i := range rows {
+		fmt.Fprintf(&b, "%d,12345.6789,-0.5e3,Ionescu Vasile,Chisinau,an ordinary note,true,2024-01-02,2024-01-02 10:11:12,%d\n", i, i%97)
+	}
+	return b.String()
+}
+
+// The pass CompleteTableUpload runs inside the HTTP request that finishes an
+// upload: the header, then every data row's field count and every field's
+// type. It is the whole of finding 5 — measured by the review at 178 ms and
+// 166 MB of garbage for two hundred thousand rows of ten columns, with 42% of
+// the time inside one regular expression.
+//
+// Run with `go test -bench CompleteTableUpload -benchmem ./internal/provisioning/`.
+func BenchmarkCompleteTableUpload(b *testing.B) {
+	const rows = 30_000
+	content := benchmarkCSV(rows)
+
+	b.SetBytes(int64(len(content)))
+	b.ReportAllocs()
+	for b.Loop() {
+		b.StopTimer()
+		service, _, _, _ := tableDataGames(b, true)
+		contest := uuid.New()
+		if _, err := service.SetDefinition(b.Context(), uuid.New(), contest,
+			provisioning.Definition{Tables: []provisioning.TableDefinition{benchmarkTable()}}); err != nil {
+			b.Fatalf("save the definition: %v", err)
+		}
+		data := beginTableUploadWithContent(b, service, contest, "records", content)
+		b.StartTimer()
+
+		if _, err := service.CompleteTableUpload(b.Context(), uuid.New(), contest, data.ID); err != nil {
+			b.Fatalf("CompleteTableUpload: %v", err)
+		}
+	}
+}
+
+// Paging through a table's rows: the last page of a file is what finding 6 is
+// about, since a scan that always starts at row 1 makes it cost the whole
+// file.
+//
+// Run with `go test -bench TableDataWindow -benchmem ./internal/provisioning/`.
+func BenchmarkTableDataWindowLastPage(b *testing.B) {
+	const rows = 30_000
+	content := benchmarkCSV(rows)
+
+	service, _, _, _ := tableDataGames(b, true)
+	contest := uuid.New()
+	if _, err := service.SetDefinition(b.Context(), uuid.New(), contest,
+		provisioning.Definition{Tables: []provisioning.TableDefinition{benchmarkTable()}}); err != nil {
+		b.Fatalf("save the definition: %v", err)
+	}
+	data := beginTableUploadWithContent(b, service, contest, "records", content)
+	if _, err := service.CompleteTableUpload(b.Context(), uuid.New(), contest, data.ID); err != nil {
+		b.Fatalf("CompleteTableUpload: %v", err)
+	}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		window, err := service.TableDataWindow(b.Context(), contest, "records", rows-99, 100, 1<<20)
+		if err != nil {
+			b.Fatalf("TableDataWindow: %v", err)
+		}
+		if len(window.Rows) != 100 {
+			b.Fatalf("got %d rows, want 100", len(window.Rows))
+		}
 	}
 }

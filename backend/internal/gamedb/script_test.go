@@ -2,6 +2,7 @@ package gamedb_test
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"slices"
@@ -840,4 +841,78 @@ func TestSettingStandardConformingStringsOnIsLeftAlone(t *testing.T) {
 	if _, err := r.Next(); err == nil {
 		t.Fatal("RESET standard_conforming_strings was accepted")
 	}
+}
+
+// The three shapes a game's own bytes reach this reader in, measured against
+// each other rather than in the abstract: the point of the third case is that
+// it holds the same bytes as the second in a hundredth of the statements, so a
+// gap between them says the cost is the per-statement work and a gap between
+// both and the first says the cost is the scanning loop itself.
+//
+// Run with `go test -bench Reader -benchmem ./internal/gamedb/`.
+func BenchmarkScriptReaderCopyDump(b *testing.B) {
+	benchmarkScriptReader(b, copyDumpBytes(1<<24))
+}
+
+func BenchmarkScriptReaderInsertDump(b *testing.B) {
+	benchmarkScriptReader(b, insertDumpBytes(1<<24, 1))
+}
+
+func BenchmarkScriptReaderWideInserts(b *testing.B) {
+	benchmarkScriptReader(b, insertDumpBytes(1<<24, 1000))
+}
+
+func benchmarkScriptReader(b *testing.B, script string) {
+	b.SetBytes(int64(len(script)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		r := gamedb.NewScriptReader(strings.NewReader(script))
+		for {
+			stmt, err := r.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				b.Fatalf("reading the script: %v", err)
+			}
+			if stmt.CopyHeader == "" {
+				continue
+			}
+			if _, err := io.Copy(io.Discard, r.CopyData()); err != nil {
+				b.Fatalf("draining the COPY block: %v", err)
+			}
+		}
+	}
+}
+
+// copyDumpBytes is roughly bytes of a pg_dump COPY block — the shape whose
+// rows never touch the statement loop at all.
+func copyDumpBytes(size int) string {
+	var b strings.Builder
+	b.WriteString("COPY public.guests (id, full_name, city) FROM stdin;\n")
+	for i := 0; b.Len() < size; i++ {
+		fmt.Fprintf(&b, "%d\tIonescu Vasile %d\tChisinau\n", i, i)
+	}
+	b.WriteString("\\.\n")
+	return b.String()
+}
+
+// insertDumpBytes is roughly bytes of the same data written as INSERTs, with
+// rowsPerStatement rows in each — one row each is what pg_dump --inserts and
+// every MySQL or SQLite conversion produces.
+func insertDumpBytes(size, rowsPerStatement int) string {
+	var b strings.Builder
+	for i := 0; b.Len() < size; {
+		b.WriteString("INSERT INTO public.guests (id, full_name, city) VALUES")
+		for row := 0; row < rowsPerStatement; row++ {
+			if row > 0 {
+				b.WriteByte(',')
+			}
+			fmt.Fprintf(&b, "\n\t(%d, 'Ionescu Vasile %d', 'Chisinau')", i, i)
+			i++
+		}
+		b.WriteString(";\n")
+	}
+	return b.String()
 }

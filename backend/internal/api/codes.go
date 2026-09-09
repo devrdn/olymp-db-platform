@@ -54,6 +54,8 @@ var (
 		"No question of this contest can still be answered by this participant: every one is either answered correctly or out of attempts, so running a query cannot lead to an answer any more and the console stops taking them. A fact about the contest's current state and not a permission the caller lacks — nothing else closes: the story, the questions, the results and the timer stay open, and the console reopens if the contest gives them something to answer again.")
 	codeNoGameYet = httpx.NewCode("no_game_yet",
 		"The contest's game database has not been built. Nobody's mistake and nothing to do with the query.")
+	codeGameClusterFull = httpx.NewCode("game_cluster_full",
+		"The game cluster has no room left within its configured disk budget for another copy of this contest, so this participant cannot be given their own database. Nobody's mistake and nothing to do with the query: an operator raising the budget, reclaiming a finished olympiad, or adding disk is what clears it. Retrying does not.")
 	codeGameScriptEmpty = httpx.NewCode("game_script_empty",
 		"The game script is empty. An empty template builds an empty database, and every question in the contest would answer \"no such table\".")
 	codeGameScriptTooLong = httpx.NewCode("game_script_too_long",
