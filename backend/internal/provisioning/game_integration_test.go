@@ -9,6 +9,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
+	"github.com/devrdn/db-contest/backend/internal/gamefile"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/google/uuid"
@@ -330,6 +331,300 @@ func TestAScriptSavedInTheCoreDatabaseWithACOPYBlockBuildsARealTable(t *testing.
 	}
 	if got[1].name != nil {
 		t.Fatalf(`row 2 = %+v, want NULL (COPY's own \N)`, got[1])
+	}
+}
+
+// The same chain again, for the table builder's own way in: a Definition
+// saved instead of a script, generated into SQL by Definition.SQL, and run
+// through the identical BuildTemplate an editor's script and an uploaded
+// dump already go through (finishDefinitionBuild's own doc — there is no
+// third path). Two tables and a primary key, so what this proves is not just
+// "a CREATE TABLE ran" but that a participant can SELECT the columns and
+// types the organiser actually described, with the right ones NOT NULL.
+//
+// Named to share the prefix `make test-game-build` selects on, the same
+// reason the tests above it are.
+func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionBuildsARealDatabaseOnTheGameCluster(t *testing.T) {
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
+	}
+	if os.Getenv("GAME_DB_DSN") == "" {
+		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
+	}
+
+	contest, _ := contestFor(t, t.Context(), 0)
+	repo := postgres.NewGameInstances(testPool)
+
+	user, password := gamedbtest.AdminCredentials(t)
+	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
+		gamedbtest.AuthorPassword(t))
+	if err != nil {
+		t.Fatalf("open the game cluster: %v", err)
+	}
+
+	games := provisioning.NewGames(repo, cluster, editableContest{})
+
+	definition := provisioning.Definition{Tables: []provisioning.TableDefinition{
+		{
+			Name: "suspects",
+			Columns: []provisioning.ColumnDefinition{
+				{Name: "id", Type: provisioning.ColumnInteger},
+				{Name: "name", Type: provisioning.ColumnText},
+				{Name: "nickname", Type: provisioning.ColumnText, Nullable: true},
+			},
+			PrimaryKey: []string{"id"},
+		},
+		{
+			Name: "sightings",
+			Columns: []provisioning.ColumnDefinition{
+				{Name: "suspect_id", Type: provisioning.ColumnInteger},
+				{Name: "seen_at", Type: provisioning.ColumnTimestamp},
+			},
+		},
+	}}
+
+	saved, err := games.SetDefinition(t.Context(), uuid.New(), contest.ID, definition)
+	if err != nil {
+		t.Fatalf("save the definition: %v", err)
+	}
+	t.Cleanup(func() { gamedbtest.Drop(saved.Database) })
+
+	built, err := games.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if built.Status != provisioning.TemplateReady {
+		t.Fatalf("the build finished as %q: %s", built.Status, built.BuildError)
+	}
+
+	stored, err := repo.Template(t.Context(), contest.ID)
+	if err != nil {
+		t.Fatalf("read the game back: %v", err)
+	}
+	if stored.Status != provisioning.TemplateReady {
+		t.Fatalf("the stored game is %q, want ready", stored.Status)
+	}
+
+	// Both tables exist, empty, and a participant can SELECT them — this task
+	// creates tables and leaves them empty on purpose (Definition.SQL's own
+	// doc); loading the organiser's own rows is a following task's work.
+	conn := gamedbtest.Connect(t, user, password, built.Database)
+	defer func() { _ = conn.Close(context.Background()) }()
+
+	for _, table := range []string{"suspects", "sightings"} {
+		var count int
+		if err := conn.QueryRow(t.Context(), `SELECT count(*) FROM `+table).Scan(&count); err != nil {
+			t.Fatalf("select from %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s has %d rows, want 0 (this task builds no data)", table, count)
+		}
+	}
+
+	// The schema panel describes exactly what the organiser declared: both
+	// tables, the right columns, the right nullability, and the primary key
+	// enforced (a duplicate id is refused).
+	schema, err := provisioning.NewSchemaReader(repo, cluster).
+		Schema(t.Context(), provisioning.Contest{ID: contest.ID, Version: stored.Version}, built.Database)
+	if err != nil {
+		t.Fatalf("read the schema of the built game: %v", err)
+	}
+	if len(schema.Tables) != 2 {
+		t.Fatalf("the schema has %d tables, want 2: %+v", len(schema.Tables), schema.Tables)
+	}
+	var sawSuspects bool
+	for _, table := range schema.Tables {
+		if table.Name != "suspects" {
+			continue
+		}
+		sawSuspects = true
+		byName := make(map[string]provisioning.Column, len(table.Columns))
+		for _, column := range table.Columns {
+			byName[column.Name] = column
+		}
+		if id, ok := byName["id"]; !ok || id.Nullable {
+			t.Fatalf("suspects.id = %+v (ok=%v), want a NOT NULL column", id, ok)
+		}
+		if nickname, ok := byName["nickname"]; !ok || !nickname.Nullable {
+			t.Fatalf("suspects.nickname = %+v (ok=%v), want a nullable column", nickname, ok)
+		}
+	}
+	if !sawSuspects {
+		t.Fatalf("the schema did not describe suspects: %+v", schema.Tables)
+	}
+
+	if _, err := conn.Exec(t.Context(), `INSERT INTO suspects (id, name) VALUES (1, 'Margot Feilhaber')`); err != nil {
+		t.Fatalf("insert a row the definition's own NOT NULL columns allow: %v", err)
+	}
+	if _, err := conn.Exec(t.Context(), `INSERT INTO suspects (id, name) VALUES (1, 'Duplicate')`); err == nil {
+		t.Fatal("the primary key the definition declared did not stop a duplicate id")
+	}
+}
+
+// The same chain again, for this task's own work: a table's own CSV rows,
+// loaded through gamedb.Provisioner.LoadTableData's real COPY ... FROM
+// STDIN, the way an uploaded dump's own rows already go through runScript
+// (CLAUDE.md rule 10 — the path this task's brief names as already proven at
+// 1.2 million rows, not a second one written for row-at-a-time INSERTs).
+//
+// Two tables and every one of the four capabilities the brief lists: a
+// chunked CSV upload for suspects, two rows typed in one at a time for
+// sightings, one of them then deleted. What this proves is not merely "COPY
+// ran" — the fake-cluster tests in tabledata_test.go already show that
+// without a database — but that a participant's own SELECT sees exactly the
+// rows survived through all three paths and no others: the deleted
+// sighting's own suspect has nothing joined to it once this runs for real.
+//
+// Named to share the prefix `make test-game-build` selects on, the same
+// reason the tests above it are.
+func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuildsRowsOnTheGameCluster(t *testing.T) {
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
+	}
+	if os.Getenv("GAME_DB_DSN") == "" {
+		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
+	}
+
+	contest, _ := contestFor(t, t.Context(), 0)
+	repo := postgres.NewGameInstances(testPool)
+
+	user, password := gamedbtest.AdminCredentials(t)
+	cluster, err := gamedb.NewProvisioner(gamedbtest.Admin(t), gamedbtest.DSN(t, user, password, "postgres"),
+		gamedbtest.AuthorPassword(t))
+	if err != nil {
+		t.Fatalf("open the game cluster: %v", err)
+	}
+
+	limits := gamefile.Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 4 << 20, MaxChunkBytes: 256 << 10}
+	files, err := gamefile.NewStore(t.TempDir(), limits)
+	if err != nil {
+		t.Fatalf("open the table data store: %v", err)
+	}
+	games := provisioning.NewGames(repo, cluster, editableContest{}).WithTableData(files, limits)
+
+	definition := provisioning.Definition{Tables: []provisioning.TableDefinition{
+		{
+			Name: "suspects",
+			Columns: []provisioning.ColumnDefinition{
+				{Name: "id", Type: provisioning.ColumnInteger},
+				{Name: "name", Type: provisioning.ColumnText},
+				{Name: "nickname", Type: provisioning.ColumnText, Nullable: true},
+			},
+			PrimaryKey: []string{"id"},
+		},
+		{
+			Name: "sightings",
+			Columns: []provisioning.ColumnDefinition{
+				{Name: "suspect_id", Type: provisioning.ColumnInteger},
+				{Name: "seen_at", Type: provisioning.ColumnTimestamp},
+			},
+		},
+	}}
+	saved, err := games.SetDefinition(t.Context(), uuid.New(), contest.ID, definition)
+	if err != nil {
+		t.Fatalf("save the definition: %v", err)
+	}
+	t.Cleanup(func() { gamedbtest.Drop(saved.Database) })
+
+	// suspects: a whole CSV, uploaded in chunks — the same way a dump is.
+	// Deliberately with no trailing newline, which is what a good many
+	// exporters write and what validateTableFile accepts: the row added from
+	// the form below has to become a row of its own on the end of it, not two
+	// rows glued into one line of six fields (which is `extra data after last
+	// expected column` from COPY, and a failed build for the whole game).
+	const suspectsCSV = "id,name,nickname\n1,Margot Feilhaber,\n2,Duplicate Suspect,Sparrow"
+	upload, err := games.BeginTableUpload(t.Context(), contest.ID, "suspects", int64(len(suspectsCSV)))
+	if err != nil {
+		t.Fatalf("begin table upload: %v", err)
+	}
+	if _, err := games.AppendTableChunk(t.Context(), contest.ID, upload.ID, 0, strings.NewReader(suspectsCSV)); err != nil {
+		t.Fatalf("append table chunk: %v", err)
+	}
+	if _, err := games.CompleteTableUpload(t.Context(), uuid.New(), contest.ID, upload.ID); err != nil {
+		t.Fatalf("complete table upload: %v", err)
+	}
+
+	// One more suspect, typed into the form rather than uploaded, with the
+	// nullable nickname left empty. An empty value is a NULL on this path
+	// (AppendTableRow validates it as one and refuses it in a NOT NULL
+	// column), so it has to reach PostgreSQL as one: written as `""` it is the
+	// empty string instead, and the IS NULL a task asks about finds nothing.
+	if _, err := games.AppendTableRow(t.Context(), uuid.New(), contest.ID, "suspects", []string{"3", "Typed In", ""}); err != nil {
+		t.Fatalf("append a suspect from the form: %v", err)
+	}
+
+	// sightings: two rows typed in one at a time, the first of which is then
+	// deleted — the row from a form and the tombstone, on the identical file.
+	if _, err := games.AppendTableRow(t.Context(), uuid.New(), contest.ID, "sightings", []string{"1", "2024-01-01 10:00:00"}); err != nil {
+		t.Fatalf("append sighting 1: %v", err)
+	}
+	if _, err := games.AppendTableRow(t.Context(), uuid.New(), contest.ID, "sightings", []string{"2", "2024-01-02 11:00:00"}); err != nil {
+		t.Fatalf("append sighting 2: %v", err)
+	}
+	if err := games.DeleteTableRow(t.Context(), uuid.New(), contest.ID, "sightings", 1); err != nil {
+		t.Fatalf("delete sighting 1: %v", err)
+	}
+
+	built, err := games.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if built.Status != provisioning.TemplateReady {
+		t.Fatalf("the build finished as %q: %s", built.Status, built.BuildError)
+	}
+
+	conn := gamedbtest.Connect(t, user, password, built.Database)
+	defer func() { _ = conn.Close(context.Background()) }()
+
+	var suspectCount int
+	if err := conn.QueryRow(t.Context(), `SELECT count(*) FROM suspects`).Scan(&suspectCount); err != nil {
+		t.Fatalf("count suspects: %v", err)
+	}
+	if suspectCount != 3 {
+		t.Fatalf("suspects has %d rows, want 3 (the whole uploaded CSV, plus the row from the form)", suspectCount)
+	}
+
+	// Both empty nicknames are NULL in the database: the one that arrived as a
+	// bare empty field in the uploaded CSV, and the one the form left empty.
+	var nullNicknames int
+	if err := conn.QueryRow(t.Context(), `SELECT count(*) FROM suspects WHERE nickname IS NULL`).Scan(&nullNicknames); err != nil {
+		t.Fatalf("count null nicknames: %v", err)
+	}
+	if nullNicknames != 2 {
+		t.Fatalf("%d suspect(s) have a NULL nickname, want 2 — an empty value must not be stored as an empty string", nullNicknames)
+	}
+
+	// Only the surviving sighting is there to join: the tombstoned row 1
+	// (suspect 1, 2024-01-01) never reached the database at all.
+	rows, err := conn.Query(t.Context(),
+		`SELECT s.id, s.name, si.seen_at FROM sightings si JOIN suspects s ON s.id = si.suspect_id ORDER BY si.seen_at`)
+	if err != nil {
+		t.Fatalf("join suspects and sightings: %v", err)
+	}
+	defer rows.Close()
+
+	type joined struct {
+		id   int
+		name string
+	}
+	var got []joined
+	for rows.Next() {
+		var j joined
+		var seenAt time.Time
+		if err := rows.Scan(&j.id, &j.name, &seenAt); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got = append(got, j)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("the join returned %d row(s), want exactly 1: %+v", len(got), got)
+	}
+	if got[0].id != 2 || got[0].name != "Duplicate Suspect" {
+		t.Fatalf("the surviving sighting joined to %+v, want suspect 2", got[0])
 	}
 }
 

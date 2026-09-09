@@ -110,6 +110,202 @@ type fakeGames struct {
 	// TestUploadLimitsAreZeroAndDisabledWhenUploadsAreOff exercises.
 	limits        gamefile.Limits
 	limitsEnabled bool
+
+	// The table builder's own third way: a structural description
+	// (SetDefinition) and one table's own chunked CSV data. Every gotX field
+	// below follows beginResult's own convention: set the moment the call is
+	// made, even on the error path, so a test can prove a request actually
+	// reached the service.
+	setDefinitionErr    error
+	gotSetDefinition    provisioning.Definition
+	gotSetDefinitionFor uuid.UUID
+
+	beginTableErr        error
+	beginTableResult     provisioning.TableData
+	gotBeginTableContest uuid.UUID
+	gotBeginTableTable   string
+	gotBeginTableBytes   int64
+
+	appendTableErr          error
+	appendTableResult       int64
+	gotAppendTableContest   uuid.UUID
+	gotAppendTableDataID    uuid.UUID
+	gotAppendTableOffset    int64
+	gotAppendTableBodyBytes []byte
+	// tableBodyMeter and tableStore are bodyMeter and store above, for
+	// AppendTableChunk instead of AppendChunk — the same reason each exists:
+	// proving the byte path streams rather than buffers, and running a chunk
+	// into a real gamefile.Store so a transport-ceiling test meets the same
+	// probe read the production path does (CLAUDE.md rule 10).
+	tableBodyMeter                *readMeter
+	gotAppendTableBodyReadOnEntry int64
+	tableStore                    *gamefile.Store
+
+	completeTableErr        error
+	completeTableResult     provisioning.TableData
+	gotCompleteTableActor   uuid.UUID
+	gotCompleteTableContest uuid.UUID
+	gotCompleteTableDataID  uuid.UUID
+
+	abortTableErr        error
+	abortTableResult     provisioning.TableData
+	gotAbortTableActor   uuid.UUID
+	gotAbortTableContest uuid.UUID
+	gotAbortTableDataID  uuid.UUID
+
+	windowTableErr         error
+	windowTableResult      provisioning.TableRowWindow
+	gotWindowTableContest  uuid.UUID
+	gotWindowTableTable    string
+	gotWindowTableFrom     int64
+	gotWindowTableMaxRows  int
+	gotWindowTableMaxBytes int64
+
+	appendRowErr        error
+	appendRowResult     provisioning.TableData
+	gotAppendRowActor   uuid.UUID
+	gotAppendRowContest uuid.UUID
+	gotAppendRowTable   string
+	gotAppendRowValues  []string
+
+	deleteRowErr        error
+	gotDeleteRowActor   uuid.UUID
+	gotDeleteRowContest uuid.UUID
+	gotDeleteRowTable   string
+	gotDeleteRowRow     int64
+
+	// tableLimits and tableLimitsEnabled back TableDataLimits — limits' own
+	// doc, for the table builder's independently configured store.
+	tableLimits        gamefile.Limits
+	tableLimitsEnabled bool
+
+	// currentTableErr and currentTableResult back CurrentTableData —
+	// currentErr and currentResult's own convention, for a table's own
+	// chunked CSV upload instead of a dump.
+	currentTableErr        error
+	currentTableResult     provisioning.TableData
+	gotCurrentTableContest uuid.UUID
+	gotCurrentTableTable   string
+}
+
+func (g *fakeGames) CurrentTableData(_ context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
+	g.gotCurrentTableContest, g.gotCurrentTableTable = contestID, table
+	if g.currentTableErr != nil {
+		return provisioning.TableData{}, g.currentTableErr
+	}
+	return g.currentTableResult, nil
+}
+
+func (g *fakeGames) SetDefinition(_ context.Context, actorID, _ uuid.UUID, definition provisioning.Definition) (provisioning.Template, error) {
+	g.gotSetDefinition, g.gotSetDefinitionFor = definition, actorID
+	if g.setDefinitionErr != nil {
+		return provisioning.Template{}, g.setDefinitionErr
+	}
+	g.template = provisioning.Template{
+		Database: "game_tpl_cabc", Version: g.template.Version + 1,
+		Status: provisioning.TemplatePending, Source: provisioning.SourceBuilder, Definition: definition,
+	}
+	return g.template, nil
+}
+
+func (g *fakeGames) BeginTableUpload(_ context.Context, contestID uuid.UUID, table string, declaredBytes int64) (provisioning.TableData, error) {
+	g.gotBeginTableContest, g.gotBeginTableTable, g.gotBeginTableBytes = contestID, table, declaredBytes
+	if g.beginTableErr != nil {
+		return provisioning.TableData{}, g.beginTableErr
+	}
+	return g.beginTableResult, nil
+}
+
+// appendToRealTableStore is appendToRealStore's own translation, for the
+// table builder's independent gamefile.Store and its own sentinels.
+func appendToRealTableStore(store *gamefile.Store, id uuid.UUID, offset int64, r io.Reader) (int64, error) {
+	received, err := store.Append(id.String(), offset, r)
+	switch {
+	case err == nil:
+		return received, nil
+	case errors.Is(err, gamefile.ErrChunkIncomplete):
+		return received, fmt.Errorf("%w: %w", provisioning.ErrTableDataChunkIncomplete, err)
+	case errors.Is(err, gamefile.ErrChunkTooLarge):
+		return received, provisioning.ErrTableDataChunkTooLarge
+	case errors.Is(err, gamefile.ErrChunkOutOfOrder):
+		return received, provisioning.ErrTableDataChunkOutOfOrder
+	default:
+		return received, fmt.Errorf("gamefile: %w", err)
+	}
+}
+
+// realTableStore is realUploadStore's own shape for a table's chunked CSV.
+func realTableStore(t *testing.T, dataID uuid.UUID, limits gamefile.Limits) *gamefile.Store {
+	t.Helper()
+	store, err := gamefile.NewStore(t.TempDir(), limits)
+	if err != nil {
+		t.Fatalf("open the table data store: %v", err)
+	}
+	if err := store.Begin(dataID.String(), 1<<16); err != nil {
+		t.Fatalf("begin the table upload: %v", err)
+	}
+	return store
+}
+
+func (g *fakeGames) AppendTableChunk(_ context.Context, contestID, id uuid.UUID, offset int64, r io.Reader) (int64, error) {
+	g.gotAppendTableContest, g.gotAppendTableDataID, g.gotAppendTableOffset = contestID, id, offset
+	if g.tableBodyMeter != nil {
+		g.gotAppendTableBodyReadOnEntry = g.tableBodyMeter.read
+	}
+	if g.tableStore != nil {
+		return appendToRealTableStore(g.tableStore, id, offset, r)
+	}
+	body, err := io.ReadAll(r)
+	if err != nil {
+		return 0, err
+	}
+	g.gotAppendTableBodyBytes = body
+	if g.appendTableErr != nil {
+		return g.appendTableResult, g.appendTableErr
+	}
+	return g.appendTableResult, nil
+}
+
+func (g *fakeGames) CompleteTableUpload(_ context.Context, actorID, contestID, id uuid.UUID) (provisioning.TableData, error) {
+	g.gotCompleteTableActor, g.gotCompleteTableContest, g.gotCompleteTableDataID = actorID, contestID, id
+	if g.completeTableErr != nil {
+		return provisioning.TableData{}, g.completeTableErr
+	}
+	return g.completeTableResult, nil
+}
+
+func (g *fakeGames) AbortTableUpload(_ context.Context, actorID, contestID, id uuid.UUID) (provisioning.TableData, error) {
+	g.gotAbortTableActor, g.gotAbortTableContest, g.gotAbortTableDataID = actorID, contestID, id
+	if g.abortTableErr != nil {
+		return provisioning.TableData{}, g.abortTableErr
+	}
+	return g.abortTableResult, nil
+}
+
+func (g *fakeGames) TableDataWindow(_ context.Context, contestID uuid.UUID, table string, fromRow int64, maxRows int, maxBytes int64) (provisioning.TableRowWindow, error) {
+	g.gotWindowTableContest, g.gotWindowTableTable = contestID, table
+	g.gotWindowTableFrom, g.gotWindowTableMaxRows, g.gotWindowTableMaxBytes = fromRow, maxRows, maxBytes
+	if g.windowTableErr != nil {
+		return provisioning.TableRowWindow{}, g.windowTableErr
+	}
+	return g.windowTableResult, nil
+}
+
+func (g *fakeGames) AppendTableRow(_ context.Context, actorID, contestID uuid.UUID, table string, values []string) (provisioning.TableData, error) {
+	g.gotAppendRowActor, g.gotAppendRowContest, g.gotAppendRowTable, g.gotAppendRowValues = actorID, contestID, table, values
+	if g.appendRowErr != nil {
+		return provisioning.TableData{}, g.appendRowErr
+	}
+	return g.appendRowResult, nil
+}
+
+func (g *fakeGames) DeleteTableRow(_ context.Context, actorID, contestID uuid.UUID, table string, row int64) error {
+	g.gotDeleteRowActor, g.gotDeleteRowContest, g.gotDeleteRowTable, g.gotDeleteRowRow = actorID, contestID, table, row
+	return g.deleteRowErr
+}
+
+func (g *fakeGames) TableDataLimits() (gamefile.Limits, bool) {
+	return g.tableLimits, g.tableLimitsEnabled
 }
 
 func (g *fakeGames) Of(context.Context, uuid.UUID) (provisioning.Template, error) {
@@ -1353,6 +1549,768 @@ func TestGameUploadRoutesAreMounted(t *testing.T) {
 				body = `{"filename":"dump.sql","declared_bytes":1}`
 			}
 			if tc.method == http.MethodPut {
+				body = "x"
+			}
+			rec := f.do(tc.method, "/contests/"+contest+tc.path, body)
+			if rec.Code != tc.want {
+				t.Fatalf("status %d, want %d: %s", rec.Code, tc.want, rec.Body)
+			}
+		})
+	}
+}
+
+// --- The table builder: a structural description instead of SQL -----------
+
+// A PUT is decoded into the exact provisioning.Definition the service is
+// asked to save, and a GET answers back the shape a saved builder-sourced
+// game carries — the round trip this task's own brief asks for ("читается и
+// пишется целиком одним запросом").
+func TestDefinitionRoundTripsThroughGetAndPut(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contest := uuid.NewString()
+
+	body := `{"tables":[{"name":"suspects","columns":[
+		{"name":"id","type":"integer"},
+		{"name":"nickname","type":"text","nullable":true}
+	],"primary_key":["id"]}]}`
+
+	rec := f.do(http.MethodPut, "/contests/"+contest+"/game/definition", body)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status %d, want 202: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotSetDefinitionFor != f.actor.ID {
+		t.Fatal("the actor did not reach the service, so nothing could be recorded against them")
+	}
+	if len(f.games.gotSetDefinition.Tables) != 1 || f.games.gotSetDefinition.Tables[0].Name != "suspects" {
+		t.Fatalf("the service was given %+v", f.games.gotSetDefinition)
+	}
+	if got := f.games.gotSetDefinition.Tables[0].Columns[1]; got.Name != "nickname" || !got.Nullable {
+		t.Fatalf("the nullable column came back as %+v", got)
+	}
+
+	read := decode(t, f.do(http.MethodGet, "/contests/"+contest+"/game/definition", ""))
+	tables, ok := read["tables"].([]any)
+	if !ok || len(tables) != 1 {
+		t.Fatalf("tables came back %v", read["tables"])
+	}
+	table := tables[0].(map[string]any)
+	if table["name"] != "suspects" {
+		t.Fatalf("table name came back %v", table["name"])
+	}
+	columns := table["columns"].([]any)
+	if len(columns) != 2 || columns[0].(map[string]any)["type"] != "integer" {
+		t.Fatalf("columns came back %v", columns)
+	}
+}
+
+// A contest with no game, or one built the other two ways, must not refuse
+// this read: a console that has not yet learned which of the three ways
+// built a game can still ask for a definition and get an empty one back,
+// exactly the "absent" shape status() and script() already give.
+func TestDefinitionOfANonBuilderGameComesBackEmptyNotAnError(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.template = provisioning.Template{
+		Status: provisioning.TemplateReady, Source: provisioning.SourceEditor, Script: "SELECT 1",
+	}
+
+	read := decode(t, f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game/definition", ""))
+	tables, ok := read["tables"].([]any)
+	if !ok || len(tables) != 0 {
+		t.Fatalf("tables came back %v, want an empty list", read["tables"])
+	}
+}
+
+// CLAUDE.md rule 1: every provisioning.Definition.Validate sentinel gets its
+// own code, so an organiser is told which mistake they made rather than
+// "internal error".
+func TestEveryDefinitionRefusalHasItsOwnCode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		code string
+	}{
+		{"no tables at all", provisioning.ErrDefinitionEmpty, "game_definition_empty"},
+		{"past the size limits", provisioning.ErrDefinitionTooLarge, "game_definition_too_large"},
+		{"not a plain identifier", provisioning.ErrDefinitionInvalidName, "game_definition_invalid_name"},
+		{"a table or column named twice", provisioning.ErrDefinitionDuplicateName, "game_definition_duplicate_name"},
+		{"a table with no columns", provisioning.ErrDefinitionTableEmpty, "game_definition_table_empty"},
+		{"a type outside the closed set", provisioning.ErrDefinitionInvalidType, "game_definition_invalid_type"},
+		{"a primary key naming a missing column", provisioning.ErrDefinitionInvalidPrimaryKey, "game_definition_invalid_primary_key"},
+		{"a table with data whose structure would change", provisioning.ErrDefinitionTableLocked, "game_definition_table_locked"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newGameFixture(t, rbac.PermissionContestAdminAll)
+			f.games.setDefinitionErr = tc.err
+
+			rec := f.do(http.MethodPut, "/contests/"+uuid.NewString()+"/game/definition",
+				`{"tables":[{"name":"t","columns":[{"name":"c","type":"text"}]}]}`)
+			if rec.Code < 400 || rec.Code >= 500 {
+				t.Fatalf("status %d, want a 4xx: %s", rec.Code, rec.Body)
+			}
+			if code := errorCode(t, rec); code != tc.code {
+				t.Fatalf("code %q, want %q", code, tc.code)
+			}
+		})
+	}
+}
+
+func TestWritingTheDefinitionIsRefusedToAnAccountThatIsNotStaffOnTheContest(t *testing.T) {
+	f := newGameFixture(t)
+
+	rec := f.do(http.MethodPut, "/contests/"+uuid.NewString()+"/game/definition", `{"tables":[]}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d, want 403: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotSetDefinition.Tables != nil {
+		t.Fatal("the definition reached the service despite the refusal")
+	}
+}
+
+// The status published alongside every other game screen must carry the
+// table builder's own ceilings too — builderLimitsResponse's own doc, the
+// same rule 11 concern uploadLimitsResponse's own tests already cover for
+// the dump.
+func TestGameStatusCarriesBuilderLimits(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+
+	status := decode(t, f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game", ""))
+	limits, ok := status["builder_limits"].(map[string]any)
+	if !ok {
+		t.Fatalf("the status carries no builder_limits object: %v", status)
+	}
+	if limits["max_tables"] != float64(provisioning.MaxDefinitionTables) {
+		t.Fatalf("max_tables = %v, want %d", limits["max_tables"], provisioning.MaxDefinitionTables)
+	}
+	types, ok := limits["column_types"].([]any)
+	if !ok || len(types) != len(provisioning.ColumnTypes) {
+		t.Fatalf("column_types = %v", limits["column_types"])
+	}
+}
+
+// --- The table builder: one table's own CSV data ---------------------------
+
+func TestBeginningATableUploadReachesTheServiceAndReturnsIt(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contest := uuid.NewString()
+	f.games.beginTableResult = provisioning.TableData{
+		ID: uuid.New(), Table: "suspects", DeclaredBytes: 512, Status: provisioning.TableDataReceiving,
+	}
+
+	rec := f.do(http.MethodPost, "/contests/"+contest+"/game/tables/suspects/data", `{"declared_bytes":512}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status %d, want 201: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotBeginTableTable != "suspects" || f.games.gotBeginTableBytes != 512 {
+		t.Fatalf("the service was asked to begin %q / %d", f.games.gotBeginTableTable, f.games.gotBeginTableBytes)
+	}
+	if f.games.gotBeginTableContest.String() != contest {
+		t.Fatalf("the contest reached the service as %v, want %v", f.games.gotBeginTableContest, contest)
+	}
+	body := decode(t, rec)
+	if body["status"] != "receiving" || body["table"] != "suspects" {
+		t.Fatalf("answered %v", body)
+	}
+	if _, ok := body["builder_limits"]; !ok {
+		t.Fatalf("the response carries no builder_limits object: %v", body)
+	}
+}
+
+// The chunk is streamed straight into AppendTableChunk, never buffered by
+// the handler first — appendChunk's own test of the identical concern, for
+// the table builder's independent transport ceiling.
+func TestAppendingATableChunkStreamsTheBodyToTheService(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contest, dataID := uuid.NewString(), uuid.NewString()
+	f.games.appendTableResult = 24
+
+	const payload = "id,nickname\n1,Ann\n"
+	meter := &readMeter{r: strings.NewReader(payload)}
+	f.games.tableBodyMeter = meter
+
+	rec := f.doBody(http.MethodPut,
+		"/contests/"+contest+"/game/tables/suspects/data/"+dataID+"/chunk?offset=0", meter)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotAppendTableBodyReadOnEntry != 0 {
+		t.Fatalf("%d of the chunk's %d bytes were already in memory before AppendTableChunk was called",
+			f.games.gotAppendTableBodyReadOnEntry, len(payload))
+	}
+	if string(f.games.gotAppendTableBodyBytes) != payload {
+		t.Fatalf("the service received %q", f.games.gotAppendTableBodyBytes)
+	}
+	if f.games.gotAppendTableContest.String() != contest || f.games.gotAppendTableDataID.String() != dataID {
+		t.Fatalf("scoped to %v/%v, want %v/%v", f.games.gotAppendTableContest, f.games.gotAppendTableDataID, contest, dataID)
+	}
+	if decode(t, rec)["received_bytes"] != float64(24) {
+		t.Fatalf("received_bytes came back %v", decode(t, rec)["received_bytes"])
+	}
+}
+
+// The transport-level ceiling (appendTableChunk's own doc), proven the same
+// way TestAppendingAChunkOverTheTransportCeilingIsRefused proves it for the
+// dump: a real gamefile.Store, so the refusal comes from the same probe read
+// the production path meets rather than from a double that drains the body
+// with io.ReadAll first (CLAUDE.md rule 10). This is the mandatory "превышение
+// размера чанка" case for the table builder's own independent ceiling.
+func TestAppendingATableChunkOverTheTransportCeilingIsRefused(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	dataID := uuid.New()
+	f.games.tableStore = realTableStore(t, dataID, gamefile.Limits{
+		MaxFileBytes: 1 << 20, MaxDirBytes: 1 << 20, MaxChunkBytes: 8,
+	})
+	f.handler.WithMaxTableChunkBody(8)
+
+	rec := f.do(http.MethodPut,
+		"/contests/"+uuid.NewString()+"/game/tables/suspects/data/"+dataID.String()+"/chunk?offset=0",
+		"123456789") // 9 bytes, one past the 8-byte ceiling
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body)
+	}
+	if code := errorCode(t, rec); code != "game_table_data_chunk_too_large" {
+		t.Fatalf("code %q, want game_table_data_chunk_too_large", code)
+	}
+	received, err := f.games.tableStore.Received(dataID.String())
+	if err != nil {
+		t.Fatalf("Received: %v", err)
+	}
+	if received != 0 {
+		t.Fatalf("the store kept %d bytes of a chunk it refused, want 0", received)
+	}
+}
+
+// A reloaded page finds a table's own chunked upload still in progress and
+// can offer to resume it — CurrentUpload's own test
+// (TestCurrentUploadReturnsTheInProgressOne), mirrored here for a table's
+// CSV instead of a dump.
+func TestCurrentTableDataReturnsTheInProgressOne(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.currentTableResult = provisioning.TableData{
+		ID: uuid.New(), Table: "suspects", ReceivedBytes: 40, Status: provisioning.TableDataReceiving,
+	}
+	contest := uuid.NewString()
+
+	rec := f.do(http.MethodGet, "/contests/"+contest+"/game/tables/suspects/data/current", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotCurrentTableContest.String() != contest || f.games.gotCurrentTableTable != "suspects" {
+		t.Fatalf("scoped to %v/%q, want %v/suspects", f.games.gotCurrentTableContest, f.games.gotCurrentTableTable, contest)
+	}
+	body := decode(t, rec)
+	if body["status"] != "receiving" || body["received_bytes"] != float64(40) {
+		t.Fatalf("answered %v", body)
+	}
+}
+
+// A reloaded page finding nothing to resume gets an empty, successful
+// answer, not a 404 — TestCurrentUploadReportsAbsentWhenThereIsNone's own
+// doc, for a table's own CSV.
+func TestCurrentTableDataReportsAbsentWhenThereIsNone(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.currentTableErr = provisioning.ErrTableDataNotFound
+
+	rec := f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game/tables/suspects/data/current", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body)
+	}
+	body := decode(t, rec)
+	if body["status"] != "absent" {
+		t.Fatalf("answered %v, want absent", body)
+	}
+	if body["table"] != "suspects" {
+		t.Fatalf("answered %v, want table %q", body, "suspects")
+	}
+	if _, ok := body["builder_limits"]; !ok {
+		t.Fatalf("the response carries no builder_limits object: %v", body)
+	}
+}
+
+// A refusal that is not "nothing in progress" — the table itself is not
+// (or no longer) part of the contest's current definition — is still a
+// refusal, never folded into the "absent" answer above.
+func TestCurrentTableDataForAnUnknownTableIsRefused(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.currentTableErr = provisioning.ErrTableUnknown
+
+	rec := f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game/tables/ghosts/data/current", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status %d, want 404: %s", rec.Code, rec.Body)
+	}
+	if code := errorCode(t, rec); code != "game_table_unknown" {
+		t.Fatalf("code %q, want game_table_unknown", code)
+	}
+}
+
+// Proof that appendTableChunk's own transport ceiling (maxTableChunkBody) is
+// independent of appendChunk's (maxChunkBody): a body that would be refused
+// by the dump's default 64 MiB ceiling but fits comfortably inside it is
+// still refused here once the table builder's own, separately configured
+// ceiling is set below the body's size — the two fields must never collide
+// onto one number.
+func TestATableChunkCeilingIsIndependentOfTheDumpsOwn(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.handler.WithMaxTableChunkBody(4)
+	// The dump's own ceiling is left at its 64 MiB default throughout.
+
+	rec := f.do(http.MethodPut,
+		"/contests/"+uuid.NewString()+"/game/tables/suspects/data/"+uuid.NewString()+"/chunk?offset=0",
+		"12345") // 5 bytes, one past the table's own 4-byte ceiling
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body)
+	}
+	if code := errorCode(t, rec); code != "game_table_data_chunk_too_large" {
+		t.Fatalf("code %q, want game_table_data_chunk_too_large", code)
+	}
+}
+
+func TestCompletingATableUploadReturnsTheRow(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contest, dataID := uuid.NewString(), uuid.NewString()
+	f.games.completeTableResult = provisioning.TableData{
+		ID: uuid.MustParse(dataID), Table: "suspects", Lines: 3, Status: provisioning.TableDataComplete,
+	}
+
+	rec := f.do(http.MethodPost, "/contests/"+contest+"/game/tables/suspects/data/"+dataID+"/complete", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotCompleteTableActor != f.actor.ID {
+		t.Fatal("the actor did not reach the service")
+	}
+	if f.games.gotCompleteTableContest.String() != contest || f.games.gotCompleteTableDataID.String() != dataID {
+		t.Fatalf("scoped to %v/%v, want %v/%v", f.games.gotCompleteTableContest, f.games.gotCompleteTableDataID, contest, dataID)
+	}
+	body := decode(t, rec)
+	if body["status"] != "complete" || body["lines"] != float64(3) {
+		t.Fatalf("answered %v", body)
+	}
+}
+
+func TestAbortingATableUploadCancelsIt(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contest, dataID := uuid.NewString(), uuid.NewString()
+	f.games.abortTableResult = provisioning.TableData{ID: uuid.MustParse(dataID), Status: provisioning.TableDataAborted}
+
+	rec := f.do(http.MethodPost, "/contests/"+contest+"/game/tables/suspects/data/"+dataID+"/abort", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotAbortTableActor != f.actor.ID {
+		t.Fatal("the actor did not reach the service")
+	}
+	if decode(t, rec)["status"] != "aborted" {
+		t.Fatalf("answered %v, want aborted", decode(t, rec))
+	}
+}
+
+// The mandatory "окно на несуществующей строке" case: a window whose
+// fromRow is past the file's own end comes back as an empty page, not an
+// error — provisioning.Games.TableDataWindow's own doc, and this handler
+// adds nothing on top of it (uploadWindow's identical test for the dump).
+func TestTableDataWindowPastTheEndIsAnEmptyWindowNotAnError(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.windowTableResult = provisioning.TableRowWindow{FromRow: 10_000, TotalRows: 3}
+
+	rec := f.do(http.MethodGet,
+		"/contests/"+uuid.NewString()+"/game/tables/suspects/data/window?from=10000", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body)
+	}
+	body := decode(t, rec)
+	if rows, ok := body["rows"].([]any); !ok || len(rows) != 0 {
+		t.Fatalf("rows came back %v, want an empty list", body["rows"])
+	}
+	if body["total_rows"] != float64(3) {
+		t.Fatalf("total_rows came back %v, want 3", body["total_rows"])
+	}
+}
+
+// The same rule 2 concern uploadWindow's own test already proves for the
+// dump: an organiser's query string is not a trusted source for how much of
+// this process's memory one request may hold.
+func TestTableDataWindowClampsCallerSuppliedBudgets(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+
+	rec := f.do(http.MethodGet,
+		"/contests/"+uuid.NewString()+"/game/tables/suspects/data/window?max_rows=999999999&max_bytes=999999999999", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotWindowTableMaxRows != maxTableWindowRowsInTest {
+		t.Fatalf("max_rows reached the service as %d, want the %d-row ceiling", f.games.gotWindowTableMaxRows, maxTableWindowRowsInTest)
+	}
+	if f.games.gotWindowTableMaxBytes != maxTableWindowBytesInTest {
+		t.Fatalf("max_bytes reached the service as %d, want the %d-byte ceiling", f.games.gotWindowTableMaxBytes, maxTableWindowBytesInTest)
+	}
+}
+
+// The two ceilings tableDataWindow clamps to, restated here because this is
+// an external test package and they are unexported — chunkOffset's own
+// TestAppendingAChunkWithoutANumericOffsetIsRefused gives the identical
+// reason for restating a package-private constant in this file.
+const (
+	maxTableWindowRowsInTest  = 1000
+	maxTableWindowBytesInTest = 1 << 20
+)
+
+func TestAppendingATableRowReachesTheServiceAndReturnsIt(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contest := uuid.NewString()
+	f.games.appendRowResult = provisioning.TableData{Table: "suspects", Lines: 1, Status: provisioning.TableDataComplete}
+
+	rec := f.do(http.MethodPost, "/contests/"+contest+"/game/tables/suspects/rows", `{"values":["1","Ann"]}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status %d, want 201: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotAppendRowActor != f.actor.ID {
+		t.Fatal("the actor did not reach the service")
+	}
+	if f.games.gotAppendRowTable != "suspects" || len(f.games.gotAppendRowValues) != 2 {
+		t.Fatalf("the service received table %q, values %v", f.games.gotAppendRowTable, f.games.gotAppendRowValues)
+	}
+	if f.games.gotAppendRowContest.String() != contest {
+		t.Fatalf("the contest reached the service as %v, want %v", f.games.gotAppendRowContest, contest)
+	}
+}
+
+func TestDeletingATableRowSucceedsWithNoContent(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contest := uuid.NewString()
+
+	rec := f.do(http.MethodDelete, "/contests/"+contest+"/game/tables/suspects/rows/3", "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status %d, want 204: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotDeleteRowActor != f.actor.ID {
+		t.Fatal("the actor did not reach the service")
+	}
+	if f.games.gotDeleteRowTable != "suspects" || f.games.gotDeleteRowRow != 3 {
+		t.Fatalf("the service was asked to delete table %q row %d", f.games.gotDeleteRowTable, f.games.gotDeleteRowRow)
+	}
+}
+
+// A row number that is not a positive integer is refused before the service
+// is ever asked — the same shape TestAppendingAChunkWithoutANumericOffset
+// IsRefused proves for the dump's own offset.
+func TestDeletingATableRowWithAMalformedRowNumberIsRefused(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+
+	rec := f.do(http.MethodDelete, "/contests/"+uuid.NewString()+"/game/tables/suspects/rows/not-a-number", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotDeleteRowRow != 0 {
+		t.Fatal("a malformed row number reached the service")
+	}
+}
+
+// The mandatory "работа при выключенной возможности" case: an installation
+// with no table-data volume configured answers every one of these routes
+// with a named refusal — provisioning.ErrTableDataDisabled, mapped below —
+// never a panic from dereferencing a store that was never opened. The
+// service itself is what refuses (Games' own nil check); this proves the
+// handler passes that refusal through as a 4xx rather than assuming success.
+func TestTableDataDisabledAnswersANamedRefusalNotAPanic(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{"beginning an upload", http.MethodPost, "/game/tables/suspects/data"},
+		{"adding a row", http.MethodPost, "/game/tables/suspects/rows"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newGameFixture(t, rbac.PermissionContestAdminAll)
+			f.games.beginTableErr = provisioning.ErrTableDataDisabled
+			f.games.appendRowErr = provisioning.ErrTableDataDisabled
+
+			body := "{}"
+			if tc.name == "adding a row" {
+				body = `{"values":["1"]}`
+			}
+			rec := f.do(tc.method, "/contests/"+uuid.NewString()+tc.path, body)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status %d, want 404: %s", rec.Code, rec.Body)
+			}
+			if code := errorCode(t, rec); code != "game_table_data_disabled" {
+				t.Fatalf("code %q, want game_table_data_disabled", code)
+			}
+		})
+	}
+}
+
+// A row a delete asked for that the file does not have is refused by name —
+// mirroring TestEveryInstanceRefusalHasItsOwnCode's own reasoning: an
+// organiser is told which of several similar things happened.
+func TestDeletingANonexistentTableRowNamesItsOwnCode(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.deleteRowErr = provisioning.ErrTableRowNotFound
+
+	rec := f.do(http.MethodDelete, "/contests/"+uuid.NewString()+"/game/tables/suspects/rows/99", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status %d, want 404: %s", rec.Code, rec.Body)
+	}
+	if code := errorCode(t, rec); code != "game_table_row_not_found" {
+		t.Fatalf("code %q, want game_table_row_not_found", code)
+	}
+}
+
+// The mandatory "чужой конкурс" case: a table-data id that belongs to
+// another contest reads identically to one that does not exist at all
+// (tableDataByIDForContest's own doc) — the handler must not distinguish
+// them, so this asserts on the code the service's own answer produces
+// rather than on anything the handler could leak about the other contest.
+func TestAnotherContestsTableDataIsReportedAsNotFound(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.completeTableErr = provisioning.ErrTableDataNotFound
+
+	rec := f.do(http.MethodPost,
+		"/contests/"+uuid.NewString()+"/game/tables/suspects/data/"+uuid.NewString()+"/complete", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status %d, want 404: %s", rec.Code, rec.Body)
+	}
+	if code := errorCode(t, rec); code != "game_table_data_not_found" {
+		t.Fatalf("code %q, want game_table_data_not_found", code)
+	}
+}
+
+// CLAUDE.md rule 1, for every sentinel in provisioning/tabledata.go and the
+// CSV parsing it drives (provisioning/tablecsv.go) — this task's own brief
+// names both files by name. Proven through completeTableUpload, the one
+// route that can raise every one of them: the header check, the row check
+// and every tabledata.go sentinel besides ErrTableUnknown (its own test,
+// below) all reach CompleteTableUpload's own return in the real service, and
+// fail is one switch shared by every route on this handler.
+func TestEveryTableDataRefusalHasItsOwnCode(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"table data not configured", provisioning.ErrTableDataDisabled, http.StatusNotFound, "game_table_data_disabled"},
+		{"an upload already in progress", provisioning.ErrTableDataInProgress, http.StatusConflict, "game_table_data_in_progress"},
+		{"another contest's or a missing upload", provisioning.ErrTableDataNotFound, http.StatusNotFound, "game_table_data_not_found"},
+		{"an upload already sealed or cancelled", provisioning.ErrTableDataAlreadyComplete, http.StatusConflict, "game_table_data_already_complete"},
+		{"a chunk sent out of order", provisioning.ErrTableDataChunkOutOfOrder, http.StatusConflict, "game_table_data_chunk_out_of_order"},
+		{"a chunk over the domain's own limit", provisioning.ErrTableDataChunkTooLarge, http.StatusBadRequest, "game_table_data_chunk_too_large"},
+		{"a chunk body that stopped arriving", provisioning.ErrTableDataChunkIncomplete, http.StatusRequestTimeout, "game_table_data_chunk_incomplete"},
+		{"a declared size over the limit", provisioning.ErrTableDataTooLarge, http.StatusBadRequest, "game_table_data_too_large"},
+		{"the table data volume is full", provisioning.ErrTableDataStoreFull, http.StatusConflict, "game_table_data_store_full"},
+		{"received bytes short of the declared length", provisioning.ErrTableDataLengthMismatch, http.StatusConflict, "game_table_data_length_mismatch"},
+		{"another form's row landed first", provisioning.ErrTableDataChanged, http.StatusConflict, "game_table_data_changed"},
+		{"a header that does not match the table", provisioning.ErrTableHeaderMismatch, http.StatusBadRequest, "game_table_header_mismatch"},
+		{"a row whose field count is wrong", provisioning.ErrTableRowFieldCount, http.StatusBadRequest, "game_table_row_field_count"},
+		{"a value that does not match its column's type", provisioning.ErrTableValueInvalid, http.StatusBadRequest, "game_table_value_invalid"},
+		{"a field longer than the platform allows", provisioning.ErrTableFieldTooLong, http.StatusBadRequest, "game_table_field_too_long"},
+		{"a line longer than the platform allows", provisioning.ErrTableLineTooLong, http.StatusBadRequest, "game_table_line_too_long"},
+		{"more rows than the platform allows", provisioning.ErrTableTooManyRows, http.StatusBadRequest, "game_table_too_many_rows"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newGameFixture(t, rbac.PermissionContestAdminAll)
+			f.games.completeTableErr = tc.err
+
+			rec := f.do(http.MethodPost,
+				"/contests/"+uuid.NewString()+"/game/tables/suspects/data/"+uuid.NewString()+"/complete", "")
+			if rec.Code != tc.status {
+				t.Fatalf("status %d, want %d: %s", rec.Code, tc.status, rec.Body)
+			}
+			if code := errorCode(t, rec); code != tc.code {
+				t.Fatalf("code %q, want %q", code, tc.code)
+			}
+		})
+	}
+}
+
+// The other sentinels not reachable through completeTableUpload above:
+// ErrTableUnknown (a table not in the contest's current definition),
+// ErrTableRowNotFound and ErrTableRowAlreadyDeleted (DeleteTableRow's own),
+// and ErrTooManyDeletedRows (migration 27's own CHECK, surfaced as a
+// sentinel) — proven through the routes that can actually raise them.
+func TestTheRemainingTableRefusalsHaveTheirOwnCode(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"a table not in the current definition", provisioning.ErrTableUnknown, http.StatusNotFound, "game_table_unknown"},
+		{"a row the file does not have", provisioning.ErrTableRowNotFound, http.StatusNotFound, "game_table_row_not_found"},
+		{"a row already deleted", provisioning.ErrTableRowAlreadyDeleted, http.StatusConflict, "game_table_row_already_deleted"},
+		{"past the deleted-row limit", provisioning.ErrTooManyDeletedRows, http.StatusBadRequest, "game_table_too_many_deleted_rows"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newGameFixture(t, rbac.PermissionContestAdminAll)
+			f.games.deleteRowErr = tc.err
+
+			rec := f.do(http.MethodDelete, "/contests/"+uuid.NewString()+"/game/tables/suspects/rows/1", "")
+			if rec.Code != tc.status {
+				t.Fatalf("status %d, want %d: %s", rec.Code, tc.status, rec.Body)
+			}
+			if code := errorCode(t, rec); code != tc.code {
+				t.Fatalf("code %q, want %q", code, tc.code)
+			}
+		})
+	}
+}
+
+// The mandatory requirement this task's own brief states by name: a CSV
+// refusal must carry the row number and the column to the interface, or a
+// refusal on a file of a million rows is useless. provisioning's own
+// validateRow already writes both into the sentinel's message
+// (fmt.Errorf("%w: row %d, column %q: ...")); this proves fail() passes
+// that text through as the response's own message rather than replacing it
+// with a fixed sentence that drops the specifics.
+func TestATableValueRefusalCarriesTheRowAndColumnToTheInterface(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.completeTableErr = fmt.Errorf("%w: row 42, column \"age\": %q is not a whole number that fits a 32-bit integer",
+		provisioning.ErrTableValueInvalid, "not-a-number")
+
+	rec := f.do(http.MethodPost,
+		"/contests/"+uuid.NewString()+"/game/tables/suspects/data/"+uuid.NewString()+"/complete", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body)
+	}
+	// The column name reaches the wire JSON-escaped (\"age\"), not literally
+	// quoted — checked for the word itself rather than for Go's own %q
+	// spelling of it.
+	if !strings.Contains(rec.Body.String(), "row 42") || !strings.Contains(rec.Body.String(), "age") {
+		t.Fatalf("the refusal does not name the row and column: %s", rec.Body)
+	}
+}
+
+// CLAUDE.md rule 11, for the table builder's own independently configured
+// ceilings: the response must carry provisioning.Games.TableDataLimits' own
+// answer, never defaultMaxGameChunkBodyBytes or any other constant this
+// package keeps. The numbers chosen here are neither that default nor the
+// dump's own configured pair a sibling test uses, so a handler that
+// answered with the wrong source would still be caught.
+func TestBuilderLimitsCarryTheConfiguredTableDataLimitsNotAConstant(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.tableLimitsEnabled = true
+	f.games.tableLimits = gamefile.Limits{MaxChunkBytes: 2222222, MaxFileBytes: 333333333}
+
+	status := decode(t, f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game", ""))
+	limits, ok := status["builder_limits"].(map[string]any)
+	if !ok {
+		t.Fatalf("the status carries no builder_limits object: %v", status)
+	}
+	if limits["enabled"] != true {
+		t.Fatalf("enabled = %v, want true", limits["enabled"])
+	}
+	if limits["chunk_bytes"] != float64(2222222) || limits["max_file_bytes"] != float64(333333333) {
+		t.Fatalf("builder_limits = %v, want the configured table-data limits", limits)
+	}
+}
+
+// A deployment with no table-data volume configured never calls
+// WithTableData, so fakeGames.tableLimitsEnabled stays false — the state
+// TableDataLimits reports for that installation — while the structural
+// ceilings (max_tables and friends) are still published: a definition may
+// be described without ever uploading a byte of CSV.
+func TestBuilderLimitsAreDisabledButStructuralLimitsStillShowWhenTableDataIsOff(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+
+	status := decode(t, f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game", ""))
+	limits := status["builder_limits"].(map[string]any)
+	if limits["enabled"] != false {
+		t.Fatalf("enabled = %v, want false", limits["enabled"])
+	}
+	if limits["chunk_bytes"] != float64(0) || limits["max_file_bytes"] != float64(0) {
+		t.Fatalf("limits = %v, want both zero while disabled", limits)
+	}
+	if limits["max_tables"] != float64(provisioning.MaxDefinitionTables) {
+		t.Fatalf("max_tables = %v, want %d even while table data is disabled", limits["max_tables"], provisioning.MaxDefinitionTables)
+	}
+}
+
+// Every write endpoint of the table builder's own group sits behind
+// contest.edit, the mandatory "отсутствие права" case, mirroring
+// TestUploadEndpointsAreRefusedToAnAccountThatIsNotStaffOnTheContest.
+func TestTableEndpointsAreRefusedToAnAccountThatIsNotStaffOnTheContest(t *testing.T) {
+	dataID := uuid.NewString()
+	for _, tc := range []struct {
+		name       string
+		method     string
+		pathSuffix string
+	}{
+		{"writing the definition", http.MethodPut, "/game/definition"},
+		{"beginning a table upload", http.MethodPost, "/game/tables/suspects/data"},
+		{"feeding a table chunk", http.MethodPut, "/game/tables/suspects/data/" + dataID + "/chunk?offset=0"},
+		{"completing a table upload", http.MethodPost, "/game/tables/suspects/data/" + dataID + "/complete"},
+		{"cancelling a table upload", http.MethodPost, "/game/tables/suspects/data/" + dataID + "/abort"},
+		{"adding a row", http.MethodPost, "/game/tables/suspects/rows"},
+		{"deleting a row", http.MethodDelete, "/game/tables/suspects/rows/1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newGameFixture(t)
+			contest := uuid.NewString()
+
+			rec := f.do(tc.method, "/contests/"+contest+tc.pathSuffix, "x")
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status %d, want 403: %s", rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
+// Reading the definition and a table's window need only contest.view.
+func TestTableReadEndpointsAreRefusedToAnAccountThatIsNotStaffOnTheContest(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		method     string
+		pathSuffix string
+	}{
+		{"reading the definition", http.MethodGet, "/game/definition"},
+		{"reading a table's window", http.MethodGet, "/game/tables/suspects/data/window"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newGameFixture(t)
+
+			rec := f.do(tc.method, "/contests/"+uuid.NewString()+tc.pathSuffix, "")
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status %d, want 403: %s", rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
+// Only a real, permitted session reaching each handler's own success shape
+// proves the routing table in Mount actually holds every table-builder
+// route — TestGameUploadRoutesAreMounted's own reasoning: a 401 from an
+// unmounted path proves nothing here, since authentication runs first.
+func TestGameTableBuilderRoutesAreMounted(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contest, dataID := uuid.NewString(), uuid.New()
+	f.games.abortTableResult = provisioning.TableData{ID: dataID}
+
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		want   int
+	}{
+		{"read definition", http.MethodGet, "/game/definition", http.StatusOK},
+		{"write definition", http.MethodPut, "/game/definition", http.StatusAccepted},
+		{"begin table upload", http.MethodPost, "/game/tables/suspects/data", http.StatusCreated},
+		{"table chunk", http.MethodPut, "/game/tables/suspects/data/" + dataID.String() + "/chunk?offset=0", http.StatusOK},
+		{"complete table upload", http.MethodPost, "/game/tables/suspects/data/" + dataID.String() + "/complete", http.StatusOK},
+		{"abort table upload", http.MethodPost, "/game/tables/suspects/data/" + dataID.String() + "/abort", http.StatusOK},
+		{"table window", http.MethodGet, "/game/tables/suspects/data/window", http.StatusOK},
+		{"add row", http.MethodPost, "/game/tables/suspects/rows", http.StatusCreated},
+		{"delete row", http.MethodDelete, "/game/tables/suspects/rows/1", http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := ""
+			switch {
+			case tc.method == http.MethodPut && tc.name == "write definition":
+				body = `{"tables":[]}`
+			case tc.method == http.MethodPost && tc.name == "add row":
+				body = `{"values":["1"]}`
+			case tc.method == http.MethodPost && tc.name == "begin table upload":
+				body = `{"declared_bytes":1}`
+			case tc.method == http.MethodPut:
 				body = "x"
 			}
 			rec := f.do(tc.method, "/contests/"+contest+tc.path, body)

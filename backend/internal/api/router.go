@@ -33,6 +33,9 @@ type Deps struct {
 	// The zero value trusts nobody, which is the safe default: forwarded
 	// headers are then ignored and the TCP peer is the client.
 	ClientIPs httpx.IPResolver
+	// PublicOrigins are the front origins CheckOrigin accepts on top of this
+	// service's own host. Empty means same-origin only.
+	PublicOrigins []string
 	// CacheMode names the active cache backend, reported by readiness so a
 	// degraded install is visible to operators.
 	CacheMode        string
@@ -106,7 +109,7 @@ func NewRouter(deps Deps) *chi.Mux {
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Cookie-borne sessions mean every write needs the cross-origin guard.
-		r.Use(httpx.CheckOrigin)
+		r.Use(httpx.CheckOrigin(deps.PublicOrigins))
 
 		r.Get("/version", versionHandler(deps.Version))
 

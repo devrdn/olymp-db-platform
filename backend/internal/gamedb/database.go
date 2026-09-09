@@ -3,7 +3,6 @@ package gamedb
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 )
@@ -64,16 +63,4 @@ func hideSensitiveCatalogs(ctx context.Context, conn Conn) error {
 		}
 	}
 	return nil
-}
-
-// QuoteIdentifier spells a name the way PostgreSQL does in its own dumps.
-//
-// Needed where a name cannot be a bound parameter and cannot be built by the
-// server either — CREATE DATABASE and DROP DATABASE run outside a transaction
-// and before there is a connection to the database in question. Every name
-// this is given is one the platform generated, never a participant's, but it
-// is quoted regardless: the day that stops being true, this is what decides
-// whether it matters.
-func QuoteIdentifier(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }

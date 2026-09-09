@@ -335,6 +335,10 @@ services:
       # volume below, the same way GAME_CLUSTER_MAX_BYTES is sized against
       # the game cluster's own.
       GAME_UPLOAD_MAX_DIR_BYTES: ${GAME_UPLOAD_MAX_DIR_BYTES:-17179869184}
+      # The table builder's own per-table CSV data — a second, independent
+      # gamefile.Store on this same volume, with its own ceiling rather than
+      # silently sharing the one above (.env.example's own doc on why).
+      GAME_UPLOAD_TABLE_MAX_DIR_BYTES: ${GAME_UPLOAD_TABLE_MAX_DIR_BYTES:-4294967296}
       GAME_UPLOAD_CHUNK_BYTES: ${GAME_UPLOAD_CHUNK_BYTES:-8388608}
       # How long an upload may sit untouched before the janitor
       # (internal/app/background.go) aborts it and frees the disk. A day: an

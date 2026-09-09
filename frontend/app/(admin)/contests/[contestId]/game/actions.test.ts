@@ -15,11 +15,18 @@ import { ApiError } from "@/lib/api/client";
 
 import {
   abortGameUploadAction,
+  abortTableUploadAction,
+  appendTableRowAction,
   beginGameUploadAction,
+  beginTableUploadAction,
   completeGameUploadAction,
+  completeTableUploadAction,
   currentGameUploadAction,
+  deleteTableRowAction,
   gameStatusAction,
+  gameTableDataWindowAction,
   gameUploadWindowAction,
+  saveGameDefinitionAction,
   saveGameScriptAction,
 } from "./actions";
 
@@ -37,6 +44,36 @@ const game = {
   building: false,
   updated_at: "2026-03-01T09:00:00Z",
   upload_limits: limits,
+};
+
+const dataId = "33333333-3333-3333-3333-333333333333";
+
+const builderLimits = {
+  enabled: true,
+  chunk_bytes: 4194304,
+  max_file_bytes: 1073741824,
+  max_tables: 50,
+  max_table_columns: 50,
+  max_definition_bytes: 65536,
+  max_field_bytes: 65536,
+  max_line_bytes: 4194304,
+  max_rows: 200000,
+  max_deleted_rows: 10000,
+  column_types: ["integer", "text", "date", "timestamp", "numeric", "boolean"],
+};
+
+const tableData = {
+  id: dataId,
+  table: "suspects",
+  declared_bytes: 100,
+  received_bytes: 0,
+  lines: 0,
+  active_rows: 0,
+  deleted_rows: [],
+  status: "receiving",
+  created_at: "2026-03-01T09:00:00Z",
+  updated_at: "2026-03-01T09:00:00Z",
+  builder_limits: builderLimits,
 };
 
 const upload = {
@@ -263,5 +300,249 @@ describe("abortGameUploadAction", () => {
     const result = await abortGameUploadAction(contestId, uploadId);
 
     expect(result).toEqual({ code: "unreachable" });
+  });
+});
+
+// --- The table builder: a structural description instead of SQL -----------
+
+function definitionForm(contestId: string, definition: unknown): FormData {
+  const data = new FormData();
+  data.set("contestId", contestId);
+  data.set("definition", JSON.stringify(definition));
+  return data;
+}
+
+describe("saveGameDefinitionAction", () => {
+  test("stores the definition whole and revalidates, the same path SetScript does", async () => {
+    serverRequest.mockResolvedValueOnce(undefined);
+    const definition = { tables: [{ name: "suspects", columns: [{ name: "id", type: "integer" }] }] };
+
+    const state = await saveGameDefinitionAction({}, definitionForm(contestId, definition));
+
+    expect(state).toEqual({ saved: true });
+    expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/game/definition`, {
+      method: "PUT",
+      body: definition,
+    });
+    expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
+  });
+
+  test("never sends a request for a contest segment that is not an identifier", async () => {
+    const state = await saveGameDefinitionAction({}, definitionForm("nope", { tables: [] }));
+
+    expect(state).toEqual({ code: "invalid_contest_id" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("carries the server's own refusal code, and its own detail, back to the form", async () => {
+    serverRequest.mockRejectedValueOnce(
+      new ApiError("game_definition_duplicate_name", 400, 'table "Suspects" named twice'),
+    );
+
+    const state = await saveGameDefinitionAction({}, definitionForm(contestId, { tables: [] }));
+
+    expect(state).toEqual({
+      code: "game_definition_duplicate_name",
+      detail: 'table "Suspects" named twice',
+    });
+  });
+});
+
+describe("beginTableUploadAction", () => {
+  test("reserves a place for one table's own chunked upload", async () => {
+    serverRequest.mockResolvedValueOnce(tableData);
+
+    const result = await beginTableUploadAction(contestId, "suspects", 100);
+
+    expect(result.code).toBeUndefined();
+    expect(result.value).toMatchObject({ id: dataId, table: "suspects", declaredBytes: 100 });
+    expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/game/tables/suspects/data`, {
+      method: "POST",
+      body: { declared_bytes: 100 },
+    });
+  });
+
+  test("encodes a table name that needs it in the path", async () => {
+    serverRequest.mockResolvedValueOnce({ ...tableData, table: "a b" });
+
+    await beginTableUploadAction(contestId, "a b", 100);
+
+    expect(serverRequest).toHaveBeenCalledWith(
+      `/contests/${contestId}/game/tables/a%20b/data`,
+      expect.anything(),
+    );
+  });
+
+  test("carries the server's own refusal — the table is not part of the current definition", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("game_table_unknown", 404, "no such table"));
+
+    const result = await beginTableUploadAction(contestId, "ghosts", 100);
+
+    expect(result).toEqual({ code: "game_table_unknown" });
+  });
+
+  test("never sends a request for a contest segment that is not an identifier", async () => {
+    const result = await beginTableUploadAction("nope", "suspects", 100);
+
+    expect(result).toEqual({ code: "invalid_contest_id" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("completeTableUploadAction", () => {
+  test("finishes the table's upload — 200 on the wire, no build to watch", async () => {
+    serverRequest.mockResolvedValueOnce({ ...tableData, status: "complete", received_bytes: 100, active_rows: 3 });
+
+    const result = await completeTableUploadAction(contestId, "suspects", dataId);
+
+    expect(result.value).toMatchObject({ status: "complete", activeRows: 3 });
+    expect(serverRequest).toHaveBeenCalledWith(
+      `/contests/${contestId}/game/tables/suspects/data/${dataId}/complete`,
+      { method: "POST" },
+    );
+  });
+
+  test("carries the server's own refusal — fewer bytes arrived than declared", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("game_table_data_length_mismatch", 409, "short"));
+
+    const result = await completeTableUploadAction(contestId, "suspects", dataId);
+
+    expect(result).toEqual({ code: "game_table_data_length_mismatch", detail: "short" });
+  });
+
+  // `validateTableFile`'s own full pass is what actually finds a row whose
+  // field count is wrong, and it names the row — this is the detail the
+  // brief asks the interface to show rather than a generic "file did not
+  // fit" sentence.
+  test("carries the row the server named when a file's own data does not fit its columns", async () => {
+    serverRequest.mockRejectedValueOnce(
+      new ApiError("game_table_row_field_count", 400, "row 12 has 3 field(s), the table has 2 columns"),
+    );
+
+    const result = await completeTableUploadAction(contestId, "suspects", dataId);
+
+    expect(result).toEqual({
+      code: "game_table_row_field_count",
+      detail: "row 12 has 3 field(s), the table has 2 columns",
+    });
+  });
+
+  test("never sends a request for an upload segment that is not an identifier", async () => {
+    const result = await completeTableUploadAction(contestId, "suspects", "nope");
+
+    expect(result).toEqual({ code: "game_table_data_not_found" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("abortTableUploadAction", () => {
+  test("cancels the table's own upload", async () => {
+    serverRequest.mockResolvedValueOnce({ ...tableData, status: "aborted" });
+
+    const result = await abortTableUploadAction(contestId, "suspects", dataId);
+
+    expect(result.value).toMatchObject({ status: "aborted" });
+    expect(serverRequest).toHaveBeenCalledWith(
+      `/contests/${contestId}/game/tables/suspects/data/${dataId}/abort`,
+      { method: "POST" },
+    );
+  });
+
+  test("carries the server's own refusal — already finished or cancelled", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("game_table_data_already_complete", 409, "done"));
+
+    const result = await abortTableUploadAction(contestId, "suspects", dataId);
+
+    expect(result).toEqual({ code: "game_table_data_already_complete" });
+  });
+});
+
+describe("gameTableDataWindowAction", () => {
+  test("reads a page of the table's current rows", async () => {
+    serverRequest.mockResolvedValueOnce({
+      from_row: 1,
+      rows: [{ row: 1, fields: ["Ada", "37"] }],
+      total_rows: 12,
+      truncated: false,
+    });
+
+    const result = await gameTableDataWindowAction(contestId, "suspects", 1);
+
+    expect(result.value).toEqual({
+      fromRow: 1,
+      rows: [{ row: 1, fields: ["Ada", "37"] }],
+      totalRows: 12,
+      truncated: false,
+    });
+    expect(serverRequest).toHaveBeenCalledWith(
+      `/contests/${contestId}/game/tables/suspects/data/window?from=1`,
+    );
+  });
+
+  test("carries the server's own refusal", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("game_table_unknown", 404, "no such table"));
+
+    const result = await gameTableDataWindowAction(contestId, "ghosts", 1);
+
+    expect(result).toEqual({ code: "game_table_unknown" });
+  });
+});
+
+describe("appendTableRowAction", () => {
+  test("adds one row typed into a form", async () => {
+    serverRequest.mockResolvedValueOnce({ ...tableData, status: "complete", lines: 1, active_rows: 1 });
+
+    const result = await appendTableRowAction(contestId, "suspects", ["Ada", "37"]);
+
+    expect(result.value).toMatchObject({ activeRows: 1 });
+    expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/game/tables/suspects/rows`, {
+      method: "POST",
+      body: { values: ["Ada", "37"] },
+    });
+  });
+
+  // The message names the row and the column at fault — the brief's own
+  // requirement — and it travels back to the screen as `detail`
+  // (`UploadActionResult`'s own doc, `actions.ts`), never dropped the way a
+  // plain `{code}` would drop it.
+  test("carries the server's own refusal, naming the row and column at fault", async () => {
+    serverRequest.mockRejectedValueOnce(
+      new ApiError("game_table_value_invalid", 400, 'row 0, column "age": "old" is not a whole number'),
+    );
+
+    const result = await appendTableRowAction(contestId, "suspects", ["Ada", "old"]);
+
+    expect(result).toEqual({
+      code: "game_table_value_invalid",
+      detail: 'row 0, column "age": "old" is not a whole number',
+    });
+  });
+});
+
+describe("deleteTableRowAction", () => {
+  test("tombstones one row", async () => {
+    serverRequest.mockResolvedValueOnce(undefined);
+
+    const result = await deleteTableRowAction(contestId, "suspects", 3);
+
+    expect(result).toEqual({});
+    expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/game/tables/suspects/rows/3`, {
+      method: "DELETE",
+    });
+  });
+
+  test("carries the server's own refusal — no such row", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("game_table_row_not_found", 404, "no such row"));
+
+    const result = await deleteTableRowAction(contestId, "suspects", 99);
+
+    expect(result).toEqual({ code: "game_table_row_not_found" });
+  });
+
+  test("never sends a request for a contest segment that is not an identifier", async () => {
+    const result = await deleteTableRowAction("nope", "suspects", 3);
+
+    expect(result).toEqual({ code: "invalid_contest_id" });
+    expect(serverRequest).not.toHaveBeenCalled();
   });
 });

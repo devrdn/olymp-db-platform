@@ -87,6 +87,18 @@ describe("the game editor", () => {
     expect(screen.queryByText(t.sourceFile)).not.toBeInTheDocument();
   });
 
+  // The third source (`GAME_SOURCES` in `lib/api/game.ts` — this game's own
+  // definition editor is `game-builder.tsx`) gets the identical note
+  // `sourceFile` gives a file-sourced game, for the identical reason: this
+  // screen's own textarea is empty either way, and nothing else says the
+  // active game did not come from what is typed into it.
+  test("says the active game was described with the table builder, not this editor", () => {
+    show(game({ status: "ready", version: 1, source: "builder" }));
+
+    expect(screen.getByText(t.sourceBuilder)).toBeInTheDocument();
+    expect(screen.queryByText(t.sourceFile)).not.toBeInTheDocument();
+  });
+
   // Replacing a game raises the template's version, which makes every
   // participant's copy stale — and a stale copy is dropped and made again.
   test("cannot be saved once the contest has started", () => {

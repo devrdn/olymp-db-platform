@@ -60,8 +60,11 @@ export type UploadLimits = z.infer<typeof uploadLimitsSchema>;
 const DISABLED_UPLOAD_LIMITS = { enabled: false, chunkBytes: 0, maxFileBytes: 0 };
 
 /**
- * Which of the two ways this game was built — `game_handler.go`'s
- * `gameResponse.Source`, itself `provisioning.Template.Source`.
+ * Which of the three ways this game was built — `game_handler.go`'s
+ * `gameResponse.Source`, itself `provisioning.Template.Source`. `"builder"`
+ * is the table builder's own way in (`provisioning.SourceBuilder`), a
+ * structural description rather than SQL typed or uploaded — its own
+ * `definitionSchema`, below, is that description's wire shape.
  *
  * A game with no source at all reads as `"editor"`: an editor-sourced game
  * with no script is exactly what a contest with no game yet looks like on
@@ -74,7 +77,7 @@ const DISABLED_UPLOAD_LIMITS = { enabled: false, chunkBytes: 0, maxFileBytes: 0 
  * let that through to the enum and rejected the server's own reply. Every
  * newly created contest's game screen was an error boundary.
  */
-export const GAME_SOURCES = ["editor", "file"] as const;
+export const GAME_SOURCES = ["editor", "file", "builder"] as const;
 
 export type GameSource = (typeof GAME_SOURCES)[number];
 
@@ -274,3 +277,195 @@ export const gameInstancesSchema = z
   .transform((raw) => ({ instances: raw.instances, truncated: raw.truncated }));
 
 export type GameInstances = z.infer<typeof gameInstancesSchema>;
+
+// --- The table builder: a structural description instead of SQL -----------
+//
+// The third way to build a contest's game (`GAME_SOURCES` above): tables and
+// columns described directly, with data loaded as CSV or typed in a row at a
+// time, rather than written as SQL. `game_handler.go`'s own comment names it
+// the same way: "a structural description of its tables and columns instead
+// of SQL, with data loaded as CSV".
+
+/**
+ * The ceilings the table builder's own third way must respect —
+ * `game_handler.go`'s `builderLimitsResponse`. Every number a client uses to
+ * slice a CSV chunk, cap a table or column count, or offer a type on a
+ * column's picker comes from here — never a second copy kept on this side.
+ * This is the field CLAUDE.md rule 11 names directly: "предел чанка не
+ * доходил до браузера, два независимых потолка стояли на одном размере,
+ * источник игры не доходил до статуса" is the exact history of defects a
+ * client-side constant standing in for any one of these numbers would repeat.
+ *
+ * `enabled` is checked before `chunkBytes` or `maxFileBytes` mean anything,
+ * the same convention `uploadLimitsSchema` draws for the dump's own pair: an
+ * installation with no table-data volume configured reports both as zero,
+ * which is also a ceiling an operator could genuinely set.
+ */
+export const builderLimitsSchema = z
+  .object({
+    enabled: z.boolean(),
+    chunk_bytes: z.number(),
+    max_file_bytes: z.number(),
+    max_tables: z.number(),
+    max_table_columns: z.number(),
+    max_definition_bytes: z.number(),
+    max_field_bytes: z.number(),
+    max_line_bytes: z.number(),
+    max_rows: z.number(),
+    max_deleted_rows: z.number(),
+    // The closed set of column types this platform offers —
+    // `provisioning.ColumnTypes`, as strings, in the order the domain
+    // declares them. Read as data rather than kept as a second, hand-typed
+    // list here: the whole reason `game_handler.go` walks that slice into
+    // this response is so a client's own picker never has to.
+    column_types: z.array(z.string()).default([]),
+  })
+  .transform((raw) => ({
+    enabled: raw.enabled,
+    chunkBytes: raw.chunk_bytes,
+    maxFileBytes: raw.max_file_bytes,
+    maxTables: raw.max_tables,
+    maxTableColumns: raw.max_table_columns,
+    maxDefinitionBytes: raw.max_definition_bytes,
+    maxFieldBytes: raw.max_field_bytes,
+    maxLineBytes: raw.max_line_bytes,
+    maxRows: raw.max_rows,
+    maxDeletedRows: raw.max_deleted_rows,
+    columnTypes: raw.column_types,
+  }));
+
+export type BuilderLimits = z.infer<typeof builderLimitsSchema>;
+
+/**
+ * One column of a table the builder describes — `columnDefinitionView`'s own
+ * wire shape, the same in both directions a `GET` reads and a `PUT` sends
+ * (`definition.go`'s own doc on why `provisioning.ColumnDefinition` needs no
+ * separate request/response pair).
+ *
+ * `type` stays a plain `string`, not a `z.enum` over some literal list: the
+ * closed set of valid types is `builderLimitsSchema`'s own `columnTypes`,
+ * read from the server, and an enum written here would be the exact second
+ * copy rule 11 forbids. Whatever a picker cannot find in `columnTypes` it
+ * must refuse to offer; a value already saved that is not in that list is
+ * not this schema's problem to catch, since the server, not this parse, is
+ * what actually validates a column's type.
+ */
+export const columnDefinitionSchema = z
+  .object({
+    name: z.string(),
+    type: z.string(),
+    // Absent, not merely false, on the wire for a NOT NULL column
+    // (`nullable,omitempty`) — `.default(false)` reads that the same way an
+    // explicit `false` would, which is `ColumnDefinition`'s own stricter
+    // default (`definition.go`: "False is the stricter default").
+    nullable: z.boolean().default(false),
+  })
+  .transform((raw) => ({ name: raw.name, type: raw.type, nullable: raw.nullable }));
+
+export type ColumnDefinition = z.infer<typeof columnDefinitionSchema>;
+
+/** One table the builder describes — `tableDefinitionView`'s own wire shape. */
+export const tableDefinitionSchema = z
+  .object({
+    name: z.string(),
+    columns: z.array(columnDefinitionSchema).default([]),
+    primary_key: z.array(z.string()).default([]),
+  })
+  .transform((raw) => ({ name: raw.name, columns: raw.columns, primaryKey: raw.primary_key }));
+
+export type TableDefinition = z.infer<typeof tableDefinitionSchema>;
+
+/**
+ * What `GET` and a successful `PUT .../game/definition` both answer —
+ * `definitionResponse`'s own wire shape. Read and written whole, one request
+ * either way: the document is bounded at `builderLimits.maxDefinitionBytes`
+ * (tens of kilobytes at the very most), nothing like a dump's own gigabytes,
+ * so there is no chunked path here the way `uploadSchema`'s own family needs.
+ */
+export const definitionSchema = z
+  .object({
+    tables: z.array(tableDefinitionSchema).default([]),
+    builder_limits: builderLimitsSchema,
+  })
+  .transform((raw) => ({ tables: raw.tables, builderLimits: raw.builder_limits }));
+
+export type GameDefinition = z.infer<typeof definitionSchema>;
+
+/**
+ * Where one table's own CSV file has got to —
+ * `provisioning.TableDataStatus`'s own three, plus `"absent"`: the same
+ * handler-only sentinel `UPLOAD_STATUSES` carries for a dump, sent only by
+ * `GET .../tables/{table}/data/current` for a table with nothing 'receiving'
+ * — never a status a real upload passes through.
+ */
+export const TABLE_DATA_STATUSES = ["absent", "receiving", "complete", "aborted"] as const;
+
+export type TableDataStatus = (typeof TABLE_DATA_STATUSES)[number];
+
+/**
+ * One table's own chunked CSV upload, or the data it left behind once
+ * complete — `tableDataResponse`'s own wire shape, the exact counterpart of
+ * `uploadSchema` for a whole dump. `deletedRows` is the tombstoned row
+ * numbers themselves (bounded at `builderLimits.maxDeletedRows`), not a
+ * count — `activeRows` is `lines` minus how many of those there are, already
+ * computed server-side (`TableData.ActiveRows()`), which is the number an
+ * organiser's own screen shows as "N rows".
+ */
+export const tableDataSchema = z
+  .object({
+    id: z.string(),
+    table: z.string(),
+    declared_bytes: z.number(),
+    received_bytes: z.number(),
+    lines: z.number(),
+    active_rows: z.number(),
+    deleted_rows: z.array(z.number()).default([]),
+    status: z.enum(TABLE_DATA_STATUSES),
+    created_at: z.string(),
+    updated_at: z.string(),
+    builder_limits: builderLimitsSchema,
+  })
+  .transform((raw) => ({
+    id: raw.id,
+    table: raw.table,
+    declaredBytes: raw.declared_bytes,
+    receivedBytes: raw.received_bytes,
+    lines: raw.lines,
+    activeRows: raw.active_rows,
+    deletedRows: raw.deleted_rows,
+    status: raw.status,
+    createdAt: raw.created_at,
+    updatedAt: raw.updated_at,
+    builderLimits: raw.builder_limits,
+  }));
+
+export type TableData = z.infer<typeof tableDataSchema>;
+
+/** One row of a table's current data — `tableRowResponse`'s own wire shape. */
+export const tableRowSchema = z
+  .object({ row: z.number(), fields: z.array(z.string()).default([]) })
+  .transform((raw) => ({ row: raw.row, fields: raw.fields }));
+
+export type TableRow = z.infer<typeof tableRowSchema>;
+
+/**
+ * A page of one table's current rows — `tableRowWindowResponse`'s own wire
+ * shape, the console's own preview of a table before it is ever built, the
+ * same role `uploadWindowSchema` plays for a dump's lines. Never the whole
+ * table: `rows` is bounded server-side the same way a dump's own window is.
+ */
+export const tableRowWindowSchema = z
+  .object({
+    from_row: z.number(),
+    rows: z.array(tableRowSchema).default([]),
+    total_rows: z.number(),
+    truncated: z.boolean(),
+  })
+  .transform((raw) => ({
+    fromRow: raw.from_row,
+    rows: raw.rows,
+    totalRows: raw.total_rows,
+    truncated: raw.truncated,
+  }));
+
+export type TableRowWindow = z.infer<typeof tableRowWindowSchema>;
