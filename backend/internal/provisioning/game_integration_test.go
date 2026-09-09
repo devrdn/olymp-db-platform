@@ -527,7 +527,12 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 	t.Cleanup(func() { gamedbtest.Drop(saved.Database) })
 
 	// suspects: a whole CSV, uploaded in chunks — the same way a dump is.
-	const suspectsCSV = "id,name,nickname\n1,Margot Feilhaber,\n2,Duplicate Suspect,Sparrow\n"
+	// Deliberately with no trailing newline, which is what a good many
+	// exporters write and what validateTableFile accepts: the row added from
+	// the form below has to become a row of its own on the end of it, not two
+	// rows glued into one line of six fields (which is `extra data after last
+	// expected column` from COPY, and a failed build for the whole game).
+	const suspectsCSV = "id,name,nickname\n1,Margot Feilhaber,\n2,Duplicate Suspect,Sparrow"
 	upload, err := games.BeginTableUpload(t.Context(), contest.ID, "suspects", int64(len(suspectsCSV)))
 	if err != nil {
 		t.Fatalf("begin table upload: %v", err)
@@ -537,6 +542,15 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 	}
 	if _, err := games.CompleteTableUpload(t.Context(), uuid.New(), contest.ID, upload.ID); err != nil {
 		t.Fatalf("complete table upload: %v", err)
+	}
+
+	// One more suspect, typed into the form rather than uploaded, with the
+	// nullable nickname left empty. An empty value is a NULL on this path
+	// (AppendTableRow validates it as one and refuses it in a NOT NULL
+	// column), so it has to reach PostgreSQL as one: written as `""` it is the
+	// empty string instead, and the IS NULL a task asks about finds nothing.
+	if _, err := games.AppendTableRow(t.Context(), uuid.New(), contest.ID, "suspects", []string{"3", "Typed In", ""}); err != nil {
+		t.Fatalf("append a suspect from the form: %v", err)
 	}
 
 	// sightings: two rows typed in one at a time, the first of which is then
@@ -566,8 +580,18 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 	if err := conn.QueryRow(t.Context(), `SELECT count(*) FROM suspects`).Scan(&suspectCount); err != nil {
 		t.Fatalf("count suspects: %v", err)
 	}
-	if suspectCount != 2 {
-		t.Fatalf("suspects has %d rows, want 2 (the whole uploaded CSV)", suspectCount)
+	if suspectCount != 3 {
+		t.Fatalf("suspects has %d rows, want 3 (the whole uploaded CSV, plus the row from the form)", suspectCount)
+	}
+
+	// Both empty nicknames are NULL in the database: the one that arrived as a
+	// bare empty field in the uploaded CSV, and the one the form left empty.
+	var nullNicknames int
+	if err := conn.QueryRow(t.Context(), `SELECT count(*) FROM suspects WHERE nickname IS NULL`).Scan(&nullNicknames); err != nil {
+		t.Fatalf("count null nicknames: %v", err)
+	}
+	if nullNicknames != 2 {
+		t.Fatalf("%d suspect(s) have a NULL nickname, want 2 — an empty value must not be stored as an empty string", nullNicknames)
 	}
 
 	// Only the surviving sighting is there to join: the tombstoned row 1

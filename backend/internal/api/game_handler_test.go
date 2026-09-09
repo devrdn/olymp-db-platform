@@ -2099,6 +2099,7 @@ func TestEveryTableDataRefusalHasItsOwnCode(t *testing.T) {
 		{"a declared size over the limit", provisioning.ErrTableDataTooLarge, http.StatusBadRequest, "game_table_data_too_large"},
 		{"the table data volume is full", provisioning.ErrTableDataStoreFull, http.StatusConflict, "game_table_data_store_full"},
 		{"received bytes short of the declared length", provisioning.ErrTableDataLengthMismatch, http.StatusConflict, "game_table_data_length_mismatch"},
+		{"another form's row landed first", provisioning.ErrTableDataChanged, http.StatusConflict, "game_table_data_changed"},
 		{"a header that does not match the table", provisioning.ErrTableHeaderMismatch, http.StatusBadRequest, "game_table_header_mismatch"},
 		{"a row whose field count is wrong", provisioning.ErrTableRowFieldCount, http.StatusBadRequest, "game_table_row_field_count"},
 		{"a value that does not match its column's type", provisioning.ErrTableValueInvalid, http.StatusBadRequest, "game_table_value_invalid"},

@@ -168,14 +168,30 @@ func (r *GameInstances) CreateReadyTableData(
 // AppendTableDataRow records one more row appended to an already-'complete'
 // file: its new byte length and its new row count in the one statement, so
 // the two never read as having disagreed even for an instant.
+//
+// Both figures only ever move forward, which is what GREATEST is here for.
+// A file a row was appended to never gets shorter, so a caller whose snapshot
+// is older than another's must not be able to write its own smaller pair over
+// the newer one — two forms adding a row to the same table at once is exactly
+// that, and the last UPDATE to run is not necessarily the one that read last
+// (provisioning.Games.AppendTableRow's own doc, and rowLanded for what stops
+// the two from writing the same bytes twice). coalesce covers line_count's
+// null, which is what a row that never completed carries.
+//
+// No row matched means the row is gone, or is no longer 'complete' — a
+// concurrent replacement of the game discards a contest's table data
+// (DiscardTableData) — and the caller is told the state it decided on is not
+// there any more rather than being answered success for a row nothing counts.
 func (r *GameInstances) AppendTableDataRow(ctx context.Context, id uuid.UUID, receivedBytes, lines int64) (provisioning.TableData, error) {
 	data, err := scanTableData(r.querier(ctx).QueryRow(ctx, `
 		UPDATE game_table_data
-		SET received_bytes = $2, line_count = $3, updated_at = now()
+		SET received_bytes = GREATEST(received_bytes, $2),
+		    line_count     = GREATEST(coalesce(line_count, 0), $3),
+		    updated_at     = now()
 		WHERE id = $1 AND status = 'complete'
 		RETURNING `+tableDataColumns, id, receivedBytes, lines))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return provisioning.TableData{}, provisioning.ErrTableDataNotFound
+		return provisioning.TableData{}, provisioning.ErrTableDataChanged
 	}
 	if err != nil {
 		return provisioning.TableData{}, fmt.Errorf("record the appended row: %w", err)
@@ -220,6 +236,43 @@ func (r *GameInstances) DeleteTableDataRow(ctx context.Context, id uuid.UUID, ro
 		return provisioning.ErrTableRowAlreadyDeleted
 	}
 	return nil
+}
+
+// DiscardTableData retires every table-data row of one contest that anything
+// still needs — 'receiving' and 'complete' alike — and returns their ids so
+// the caller can remove their bytes from the volume once its transaction has
+// committed.
+//
+// 'aborted' rather than DELETE, the same convention MarkDropped keeps for an
+// instance and AbortTableData for one upload: the row is history of a file
+// that once existed, and TableDataInUse already reads 'aborted' as "nobody
+// needs these bytes". One statement for the whole contest, because this runs
+// inside the transaction that replaces the game (provisioning.Games.
+// replaceGame) and a row-at-a-time loop there would be one round trip per
+// table for no gain.
+func (r *GameInstances) DiscardTableData(ctx context.Context, contestID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := r.querier(ctx).Query(ctx, `
+		UPDATE game_table_data
+		SET status = 'aborted', updated_at = now()
+		WHERE contest_id = $1 AND status IN ('receiving', 'complete')
+		RETURNING id`, contestID)
+	if err != nil {
+		return nil, fmt.Errorf("discard the contest's table data: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan a discarded table data row: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("discard the contest's table data: %w", err)
+	}
+	return ids, nil
 }
 
 // AbandonedTableData lists up to limit table-data uploads still 'receiving'

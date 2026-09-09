@@ -114,6 +114,10 @@
       "meaning": "This table's data upload has already been completed or cancelled, so it can no longer take chunks, be completed again, or be cancelled."
     },
     {
+      "code": "game_table_data_changed",
+      "meaning": "Another row was added to this table between reading it and writing this one, so this row was not stored — two forms cannot both write at the end of the same file. Read the table's rows again and add it once more."
+    },
+    {
       "code": "game_table_data_chunk_incomplete",
       "meaning": "The chunk's body stopped arriving before the server had all of it. Nothing of it was kept, so the same chunk can simply be sent again from the offset the server reports."
     },
@@ -151,7 +155,7 @@
     },
     {
       "code": "game_table_field_too_long",
-      "meaning": "One field of the file is longer than this platform allows."
+      "meaning": "One field is longer than this platform allows — a field of the uploaded file, or a value typed into the row form. The message names the row and the column."
     },
     {
       "code": "game_table_header_mismatch",
@@ -179,7 +183,7 @@
     },
     {
       "code": "game_table_too_many_rows",
-      "meaning": "The file has more data rows than this platform allows for one table."
+      "meaning": "The table would hold more data rows than this platform allows — an uploaded file with too many of them, or one row too many added to a table already at the limit."
     },
     {
       "code": "game_table_unknown",

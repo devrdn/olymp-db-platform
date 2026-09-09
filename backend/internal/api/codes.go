@@ -153,6 +153,8 @@ var (
 		"The table-data volume already holds as much as this installation allows. Try again once other uploads have finished or been removed.")
 	codeGameTableDataLengthMismatch = httpx.NewCode("game_table_data_length_mismatch",
 		"What actually landed on disk does not match the length declared when the upload began. The upload cannot be completed; begin again.")
+	codeGameTableDataChanged = httpx.NewCode("game_table_data_changed",
+		"Another row was added to this table between reading it and writing this one, so this row was not stored — two forms cannot both write at the end of the same file. Read the table's rows again and add it once more.")
 	codeGameTableRowNotFound = httpx.NewCode("game_table_row_not_found",
 		"No such row of this table's current data.")
 	codeGameTableRowAlreadyDeleted = httpx.NewCode("game_table_row_already_deleted",
@@ -166,11 +168,11 @@ var (
 	codeGameTableValueInvalid = httpx.NewCode("game_table_value_invalid",
 		"A value does not match its column's type, or is empty in a column that does not allow it. The message names the row and the column.")
 	codeGameTableFieldTooLong = httpx.NewCode("game_table_field_too_long",
-		"One field of the file is longer than this platform allows.")
+		"One field is longer than this platform allows — a field of the uploaded file, or a value typed into the row form. The message names the row and the column.")
 	codeGameTableLineTooLong = httpx.NewCode("game_table_line_too_long",
 		"One line of the file — the header or a data row — is longer than this platform allows.")
 	codeGameTableTooManyRows = httpx.NewCode("game_table_too_many_rows",
-		"The file has more data rows than this platform allows for one table.")
+		"The table would hold more data rows than this platform allows — an uploaded file with too many of them, or one row too many added to a table already at the limit.")
 
 	codeQueryServiceDown = httpx.NewCode("query_service_down",
 		"The Query Runner could not be reached. Nothing to do with the query, and a retry is the right response rather than an edit.")

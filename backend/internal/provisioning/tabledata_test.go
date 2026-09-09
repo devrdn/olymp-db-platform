@@ -2,7 +2,9 @@ package provisioning_test
 
 import (
 	"errors"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -48,6 +50,12 @@ func tableDataGames(t *testing.T, editable bool) (*provisioning.Games, *template
 	service.WithTableData(files, limits)
 	return service, store, cluster, files
 }
+
+// anyAge is a cut-off no file a test has just written can be younger than —
+// what gamefile.Store.UploadIDs takes to list every id it holds. Its floor is
+// a floor and nothing else (its own doc): a zero Time lists nothing at all,
+// which is what "no file was left behind" used to be asserted against here.
+func anyAge() time.Time { return time.Now().Add(time.Hour) }
 
 // withSuspects saves a builder definition holding only suspectsTable, so a
 // call to BeginTableUpload or AppendTableRow finds a table to check its
@@ -390,6 +398,49 @@ func TestAppendTableRowBootstrapsAndAppendsToTheSameFile(t *testing.T) {
 	}
 }
 
+// TestAppendTableRowAfterAFileWhoseLastLineHasNoNewline is the join between
+// the two ways a table's rows arrive. Plenty of exporters end a CSV without a
+// trailing newline, and validateTableFile accepts that file — its last line
+// is a whole row, tableLineScanner's own doc says so. A row added from the
+// form afterwards must still land as its own line rather than being glued to
+// the end of that last one, which would turn two rows into a single one of
+// five fields in a three-column table: garbage in the organiser's own window,
+// and `extra data after last expected column` on the build that follows.
+func TestAppendTableRowAfterAFileWhoseLastLineHasNoNewline(t *testing.T) {
+	t.Parallel()
+	service, _, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	content := "id,name,nickname\n1,Margot," // no trailing newline, exactly as many exporters write it
+	data := beginTableUploadWithContent(t, service, contest, "suspects", content)
+	if _, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	appended, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"2", "Someone", "Sparrow"})
+	if err != nil {
+		t.Fatalf("append a row after a file with no trailing newline: %v", err)
+	}
+	if appended.Lines != 2 {
+		t.Fatalf("lines = %d, want 2", appended.Lines)
+	}
+
+	window, err := service.TableDataWindow(t.Context(), contest, "suspects", 1, 10, 1<<20)
+	if err != nil {
+		t.Fatalf("window: %v", err)
+	}
+	if len(window.Rows) != 2 {
+		t.Fatalf("window returned %d row(s), want 2: %+v", len(window.Rows), window.Rows)
+	}
+	if got := window.Rows[0].Fields; len(got) != 3 || got[1] != "Margot" {
+		t.Fatalf("row 1 = %q, want the three fields of Margot's own row", got)
+	}
+	if got := window.Rows[1].Fields; len(got) != 3 || got[1] != "Someone" {
+		t.Fatalf("row 2 = %q, want the three fields of the appended row", got)
+	}
+}
+
 // A row that does not match the table's own columns is refused before
 // anything is written — a value with the wrong number of fields, or one
 // that will not parse as its column's type, must not reach the file at all.
@@ -402,7 +453,7 @@ func TestAppendTableRowRefusesAValueThatDoesNotMatchItsColumn(t *testing.T) {
 	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"not-a-number", "A", ""}); !errors.Is(err, provisioning.ErrTableValueInvalid) {
 		t.Fatalf("error = %v, want ErrTableValueInvalid", err)
 	}
-	ids, err := files.UploadIDs(time.Time{})
+	ids, err := files.UploadIDs(anyAge())
 	if err != nil {
 		t.Fatalf("list the table data volume: %v", err)
 	}
@@ -464,6 +515,114 @@ func TestAppendTableRowValidatesNumericAsDecimalSyntaxNotAsAFloat(t *testing.T) 
 	}
 }
 
+// TestAppendTableRowWritesAnEmptyValueAsNullNotAsAnEmptyString is the other
+// half of the same promise AppendTableRow's own validation makes: an empty
+// value is checked as a NULL (it is refused outright in a NOT NULL column),
+// so it has to reach PostgreSQL as one. COPY ... WITH (FORMAT csv) reads a
+// bare empty field as NULL and a quoted one ("") as the empty string, and the
+// writer used to quote it — which for `age integer` is
+// `invalid input syntax for type integer: ""`, a build failure for a row the
+// API answered 201 to, and for a nullable text column an empty string stored
+// where the organiser meant nothing at all, so that the IS NULL a task asks
+// about finds no rows.
+func TestAppendTableRowWritesAnEmptyValueAsNullNotAsAnEmptyString(t *testing.T) {
+	t.Parallel()
+	service, _, cluster, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, provisioning.Definition{
+		Tables: []provisioning.TableDefinition{{
+			Name: "witnesses",
+			Columns: []provisioning.ColumnDefinition{
+				{Name: "id", Type: provisioning.ColumnInteger},
+				{Name: "name", Type: provisioning.ColumnText},
+				{Name: "age", Type: provisioning.ColumnInteger, Nullable: true},
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("save the definition: %v", err)
+	}
+
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "witnesses", []string{"1", "Margot", ""}); err != nil {
+		t.Fatalf("append a row with an empty nullable value: %v", err)
+	}
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if built.Status != provisioning.TemplateReady {
+		t.Fatalf("build finished as %q: %s", built.Status, built.BuildError)
+	}
+	got := cluster.tableData[built.Database+".witnesses"]
+	want := "1,Margot,\n"
+	if got != want {
+		t.Fatalf("loaded table data = %q, want %q — a quoted empty field is the empty string to COPY, not NULL", got, want)
+	}
+}
+
+// TestAppendTableRowRefusesAFieldPastTheFieldBound is CLAUDE.md rule 2 on
+// the path a form takes: the request body limit bounds the whole request,
+// not one field of it, so without a check here a single value can be sixteen
+// times the max_field_bytes this service publishes to its own clients. Once
+// such a value is in the file, every window read of that table refuses with
+// ErrTableFieldTooLong for ever — the rows cannot be looked at, and the row
+// count the screen shows drops to zero.
+func TestAppendTableRowRefusesAFieldPastTheFieldBound(t *testing.T) {
+	t.Parallel()
+	service, _, _, files := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	tooLong := strings.Repeat("x", provisioning.MaxTableFieldBytes+1)
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects",
+		[]string{"1", tooLong, ""}); !errors.Is(err, provisioning.ErrTableFieldTooLong) {
+		t.Fatalf("error = %v, want ErrTableFieldTooLong", err)
+	}
+	ids, err := files.UploadIDs(anyAge())
+	if err != nil {
+		t.Fatalf("list the table data volume: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("a refused row still left %d file(s) on disk", len(ids))
+	}
+
+	// Exactly at the bound is still accepted: the refusal is one byte past
+	// it, not near it.
+	atBound := strings.Repeat("x", provisioning.MaxTableFieldBytes)
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", atBound, ""}); err != nil {
+		t.Fatalf("a field of exactly MaxTableFieldBytes was refused: %v", err)
+	}
+}
+
+// TestAppendTableRowRefusesPastMaxTableDataRows is the same bound on the
+// other path: MaxTableDataRows is what this service publishes as max_rows and
+// what validateTableFile enforces for an uploaded file, so the form must not
+// be the way past it. Only the bookkeeping is grown to the limit — writing
+// two hundred thousand rows to prove a check that never reads them would be
+// the test's own cost and nobody else's (TestDeleteTableRowRefusesPastMax
+// TableDeletedRows makes the same choice).
+func TestAppendTableRowRefusesPastMaxTableDataRows(t *testing.T) {
+	t.Parallel()
+	service, store, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	data, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", "A", ""})
+	if err != nil {
+		t.Fatalf("row 1: %v", err)
+	}
+	store.mu.Lock()
+	seeded := store.tableData[data.ID]
+	seeded.Lines = provisioning.MaxTableDataRows
+	store.tableData[data.ID] = seeded
+	store.mu.Unlock()
+
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects",
+		[]string{"2", "B", ""}); !errors.Is(err, provisioning.ErrTableTooManyRows) {
+		t.Fatalf("error = %v, want ErrTableTooManyRows", err)
+	}
+}
+
 // TestAppendTableRowRefusesWhileAChunkedUploadIsReceiving is the race this
 // package's own doc names: the two paths must not both compute an append
 // offset from the same bookkeeping at once.
@@ -478,6 +637,185 @@ func TestAppendTableRowRefusesWhileAChunkedUploadIsReceiving(t *testing.T) {
 	}
 	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", "A", ""}); !errors.Is(err, provisioning.ErrTableDataInProgress) {
 		t.Fatalf("error = %v, want ErrTableDataInProgress", err)
+	}
+}
+
+// TestTwoFormsAppendingAtOnceLoseNoRowAndDoNotWedgeTheTable is the race
+// AppendTableRow's own doc did not cover: not the form against a chunked
+// upload (that one is refused outright), but two forms against each other.
+// Both read the same "the file is N bytes long" and both write there;
+// gamefile.Store.Append answers the second one with the idempotent-retry
+// success its own doc promises, having written nothing, and the second row is
+// gone while its author is told 201. Worse, the length written back is one no
+// file has, so every later append is ErrTableDataChunkOutOfOrder for ever.
+//
+// The gate makes that deterministic rather than hoping the scheduler
+// interleaves: both callers are held until both have read the table's current
+// data, which is exactly the state two browser tabs are in.
+func TestTwoFormsAppendingAtOnceLoseNoRowAndDoNotWedgeTheTable(t *testing.T) {
+	t.Parallel()
+	service, store, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", "A", ""}); err != nil {
+		t.Fatalf("row 1: %v", err)
+	}
+
+	store.gateTableDataReads(2)
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects",
+				[]string{strconv.Itoa(i + 2), "B", ""})
+		}()
+	}
+	wg.Wait()
+
+	var accepted int
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			accepted++
+		case errors.Is(err, provisioning.ErrTableDataChanged):
+		default:
+			t.Fatalf("a concurrent append failed with %v, want either success or ErrTableDataChanged", err)
+		}
+	}
+	if accepted == 0 {
+		t.Fatal("neither concurrent append was accepted; one of them was writing at the file's end")
+	}
+
+	window, err := service.TableDataWindow(t.Context(), contest, "suspects", 1, 10, 1<<20)
+	if err != nil {
+		t.Fatalf("window: %v", err)
+	}
+	// The invariant, whichever way the two interleaved: every append that was
+	// accepted is in the file, every one that was refused is not, and the
+	// bookkeeping counts exactly what is there.
+	if len(window.Rows) != 1+accepted {
+		t.Fatalf("the file holds %d row(s) after 1 + %d accepted appends: %+v", len(window.Rows), accepted, window.Rows)
+	}
+	if int64(len(window.Rows)) != window.TotalRows {
+		t.Fatalf("the file holds %d row(s), the bookkeeping says %d", len(window.Rows), window.TotalRows)
+	}
+
+	// And the table is not wedged: the next row still lands.
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"9", "C", ""}); err != nil {
+		t.Fatalf("the table stopped taking rows after the race: %v", err)
+	}
+}
+
+// TestAppendTableRowReconcilesBookkeepingThatLagsTheFile is the same
+// desynchronisation with no race at all: the bytes reached the file and the
+// transaction that was to record them rolled back afterwards (a failed audit
+// write is enough). The bookkeeping then names an offset the file is already
+// past, and an append taken from it is written nowhere — gamefile.Store.Append
+// reports the retry success its own doc promises. The row must not be lost,
+// and the table must not be stuck.
+func TestAppendTableRowReconcilesBookkeepingThatLagsTheFile(t *testing.T) {
+	t.Parallel()
+	service, store, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	data, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", "Margot", ""})
+	if err != nil {
+		t.Fatalf("row 1: %v", err)
+	}
+	// Back to what the row said before that append committed: the header
+	// alone, no data rows — the file itself keeps Margot.
+	store.mu.Lock()
+	rolledBack := store.tableData[data.ID]
+	rolledBack.ReceivedBytes, rolledBack.Lines = int64(len("id,name,nickname\n")), 0
+	store.tableData[data.ID] = rolledBack
+	store.mu.Unlock()
+
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"2", "Someone", "Sparrow"}); err != nil {
+		t.Fatalf("append after a rolled-back transaction: %v", err)
+	}
+
+	window, err := service.TableDataWindow(t.Context(), contest, "suspects", 1, 10, 1<<20)
+	if err != nil {
+		t.Fatalf("window: %v", err)
+	}
+	if len(window.Rows) != 2 {
+		t.Fatalf("window returned %d row(s), want both: %+v", len(window.Rows), window.Rows)
+	}
+	if window.Rows[1].Fields[1] != "Someone" {
+		t.Fatalf("the appended row is not in the file: %+v", window.Rows)
+	}
+	if int64(len(window.Rows)) != window.TotalRows {
+		t.Fatalf("the file holds %d row(s), the bookkeeping says %d", len(window.Rows), window.TotalRows)
+	}
+}
+
+// TestAGameThatStopsBeingBuilderSourcedDiscardsItsTablesData closes the way
+// round ErrDefinitionTableLocked that its own doc describes and its own check
+// did not cover. The refusal is honest while the game stays builder-sourced —
+// but saving any script at all in the editor made the check skip itself
+// ("this game names no table such a row could belong to"), and nothing
+// anywhere deleted the rows, so the same file was still there when the
+// organiser came back and saved the table with another column type. The next
+// build then loaded values validated as text into a numeric column, silently,
+// because the file's header names columns and never their types.
+//
+// A game that is not built by the table builder has no tables for that data
+// to belong to, so the data goes when the game does — the same thing
+// replaceGame already does to a dump the new game displaces.
+func TestAGameThatStopsBeingBuilderSourcedDiscardsItsTablesData(t *testing.T) {
+	t.Parallel()
+	service, _, cluster, files := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", "Margot", ""}); err != nil {
+		t.Fatalf("row 1: %v", err)
+	}
+
+	// The way round: the organiser meets the honest refusal, saves a script
+	// instead, and comes back to the builder with the table redescribed.
+	if _, err := service.SetScript(t.Context(), uuid.New(), contest, "SELECT 1;"); err != nil {
+		t.Fatalf("save a script: %v", err)
+	}
+	ids, err := files.UploadIDs(anyAge())
+	if err != nil {
+		t.Fatalf("list the table data volume: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("%d table data file(s) outlived the game they belonged to", len(ids))
+	}
+
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, provisioning.Definition{
+		Tables: []provisioning.TableDefinition{{
+			Name: "suspects",
+			Columns: []provisioning.ColumnDefinition{
+				{Name: "id", Type: provisioning.ColumnInteger},
+				{Name: "name", Type: provisioning.ColumnNumeric}, // the type the old rows were never validated against
+				{Name: "nickname", Type: provisioning.ColumnText, Nullable: true},
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("save the redescribed definition: %v", err)
+	}
+
+	window, err := service.TableDataWindow(t.Context(), contest, "suspects", 1, 10, 1<<20)
+	if err != nil {
+		t.Fatalf("window: %v", err)
+	}
+	if len(window.Rows) != 0 || window.TotalRows != 0 {
+		t.Fatalf("the redescribed table still holds %d row(s) (total %d): %+v", len(window.Rows), window.TotalRows, window.Rows)
+	}
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if loaded, was := cluster.tableData[built.Database+".suspects"]; was {
+		t.Fatalf("the build loaded %q into a table the organiser redescribed", loaded)
 	}
 }
 

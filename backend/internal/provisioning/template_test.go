@@ -41,6 +41,40 @@ type templateStore struct {
 	// tableData is the table builder's own per-table files, migration 27's
 	// counterpart to uploads above.
 	tableData map[uuid.UUID]provisioning.TableData
+	// tableDataReads, when armed, holds every caller of ReadyTableData until
+	// as many of them have arrived as gateTableDataReads was told to expect —
+	// two browser tabs pressing "add row" on the same table at the same
+	// moment, made deterministic rather than left to the scheduler.
+	tableDataReads *arrivalGate
+}
+
+// arrivalGate releases every caller at once, as soon as the expected number
+// of them have arrived. A caller arriving after that passes straight through,
+// so a gate armed for one part of a test does not hold up the rest of it.
+type arrivalGate struct {
+	mu        sync.Mutex
+	remaining int
+	open      chan struct{}
+}
+
+func (g *arrivalGate) arrive() {
+	g.mu.Lock()
+	if g.remaining > 0 {
+		g.remaining--
+		if g.remaining == 0 {
+			close(g.open)
+		}
+	}
+	g.mu.Unlock()
+	<-g.open
+}
+
+// gateTableDataReads arms the gate above for the next n reads of a table's
+// current data.
+func (s *templateStore) gateTableDataReads(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tableDataReads = &arrivalGate{remaining: n, open: make(chan struct{})}
 }
 
 // directly is the unit of work for a test that wants the audit trail wired up
@@ -291,13 +325,23 @@ func (s *templateStore) CurrentTableData(_ context.Context, contestID uuid.UUID,
 
 func (s *templateStore) ReadyTableData(_ context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	gate := s.tableDataReads
+	found, err := provisioning.TableData{}, error(provisioning.ErrTableDataNotFound)
 	for _, d := range s.tableData {
 		if d.ContestID == contestID && strings.EqualFold(d.Table, table) && d.Status == provisioning.TableDataComplete {
-			return d, nil
+			found, err = d, nil
+			break
 		}
 	}
-	return provisioning.TableData{}, provisioning.ErrTableDataNotFound
+	s.mu.Unlock()
+
+	// Released outside the lock, and after the answer has been taken, so that
+	// every held caller leaves with the same snapshot — which is what two
+	// browser tabs pressing "add row" together actually have.
+	if gate != nil {
+		gate.arrive()
+	}
+	return found, err
 }
 
 func (s *templateStore) UpdateTableDataReceived(_ context.Context, id uuid.UUID, receivedBytes int64) error {
@@ -358,9 +402,11 @@ func (s *templateStore) AppendTableDataRow(_ context.Context, id uuid.UUID, rece
 	defer s.mu.Unlock()
 	d, ok := s.tableData[id]
 	if !ok || d.Status != provisioning.TableDataComplete {
-		return provisioning.TableData{}, provisioning.ErrTableDataNotFound
+		return provisioning.TableData{}, provisioning.ErrTableDataChanged
 	}
-	d.ReceivedBytes, d.Lines = receivedBytes, lines
+	// GREATEST, the same as the real statement's own (postgres.GameInstances.
+	// AppendTableDataRow): neither figure ever goes backwards.
+	d.ReceivedBytes, d.Lines = max(d.ReceivedBytes, receivedBytes), max(d.Lines, lines)
 	s.tableData[id] = d
 	return d, nil
 }
@@ -375,6 +421,24 @@ func (s *templateStore) AbortTableData(_ context.Context, id uuid.UUID) error {
 	d.Status = provisioning.TableDataAborted
 	s.tableData[id] = d
 	return nil
+}
+
+func (s *templateStore) DiscardTableData(_ context.Context, contestID uuid.UUID) ([]uuid.UUID, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var ids []uuid.UUID
+	for id, d := range s.tableData {
+		if d.ContestID != contestID {
+			continue
+		}
+		if d.Status != provisioning.TableDataReceiving && d.Status != provisioning.TableDataComplete {
+			continue
+		}
+		d.Status = provisioning.TableDataAborted
+		s.tableData[id] = d
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 func (s *templateStore) DeleteTableDataRow(_ context.Context, id uuid.UUID, row int64) error {

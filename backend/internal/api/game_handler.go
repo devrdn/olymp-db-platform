@@ -1804,6 +1804,12 @@ func (h *GameHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusConflict, codeGameTableDataStoreFull, err.Error())
 	case errors.Is(err, provisioning.ErrTableDataLengthMismatch):
 		httpx.Error(w, r, http.StatusConflict, codeGameTableDataLengthMismatch, err.Error())
+	case errors.Is(err, provisioning.ErrTableDataChanged):
+		// 409 and not 500: nothing about the request is wrong, and nothing
+		// about it is this installation's fault either — another row simply
+		// got to the end of the file first, and this one has to be added
+		// again over the state that is there now.
+		httpx.Error(w, r, http.StatusConflict, codeGameTableDataChanged, err.Error())
 	case errors.Is(err, provisioning.ErrTableRowNotFound):
 		httpx.Error(w, r, http.StatusNotFound, codeGameTableRowNotFound, err.Error())
 	case errors.Is(err, provisioning.ErrTableRowAlreadyDeleted):

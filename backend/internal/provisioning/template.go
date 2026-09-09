@@ -327,9 +327,30 @@ type TemplateRepository interface {
 	// AppendTableDataRow records one more row appended to an already-'complete'
 	// file: its new byte length and its new row count together, so the two
 	// can never read as having disagreed even for an instant.
+	//
+	// Both are floors, not assignments: neither figure may go backwards, so a
+	// caller working from an older snapshot than another's cannot write its
+	// own smaller pair over the newer one. Two forms adding a row to the same
+	// table at once is exactly that situation, and the order they reach
+	// storage in is not the order they read in (Games.AppendTableRow's own
+	// doc). ErrTableDataChanged when there is no longer a 'complete' row to
+	// record against — the game was replaced under the call, say.
 	AppendTableDataRow(ctx context.Context, id uuid.UUID, receivedBytes, lines int64) (TableData, error)
 	// AbortTableData marks one table-data upload 'aborted'.
 	AbortTableData(ctx context.Context, id uuid.UUID) error
+	// DiscardTableData retires every table-data row a contest still has —
+	// the file a table's rows live in and any upload still receiving one —
+	// and returns the ids whose bytes are now nobody's, so the caller can
+	// remove them once its own transaction has committed.
+	//
+	// What it exists for is the moment a game stops being built by the table
+	// builder (Games.replaceGame): the rows are addressed by table name
+	// against the contest's *current* definition, and a game that is a
+	// script or a dump names no table any of them could belong to. Left
+	// behind, they are data nothing checks and nothing deletes — and the
+	// next builder definition that happens to name the same table would
+	// load them, against columns they were never validated for.
+	DiscardTableData(ctx context.Context, contestID uuid.UUID) ([]uuid.UUID, error)
 	// DeleteTableDataRow tombstones one row of a 'complete' file — a single
 	// atomic array_append, refusing (ErrTooManyDeletedRows) past migration
 	// 27's own bound rather than growing the array without limit.
@@ -638,11 +659,27 @@ func (g *Games) replaceGame(
 	}
 
 	var saved Template
+	var discardedTableFiles []uuid.UUID
 	run := func(ctx context.Context) error {
 		var err error
 		saved, err = save(ctx)
 		if err != nil {
 			return fmt.Errorf("store the game: %w", err)
+		}
+		// A game that is not the table builder's names no table the builder's
+		// own per-table data could belong to, so that data goes with the game
+		// it described — in this same transaction, so a replacement that is
+		// rolled back does not take it. Deciding this from the row that was
+		// just written, rather than at each of the three call sites, is what
+		// keeps a fourth source from quietly inheriting the leak: the rows
+		// used to survive every switch, which is how a table's structure lock
+		// could be walked round through the editor and back (see
+		// checkTableDataCompatibility, tabledata.go).
+		if saved.Source != SourceBuilder {
+			discardedTableFiles, err = g.repo.DiscardTableData(ctx, contestID)
+			if err != nil {
+				return fmt.Errorf("discard the table builder's own data: %w", err)
+			}
 		}
 		if g.audit == nil {
 			return nil
@@ -681,6 +718,14 @@ func (g *Games) replaceGame(
 	// backstop that covers a crash between the commit above and this line.
 	if displaced != nil {
 		_ = g.retireUploadFile(*displaced)
+	}
+	// The same reasoning, and the same backstop, for the table builder's own
+	// files: their rows are already retired, so sweepOrphanTableFiles collects
+	// whatever a failure here (or a crash) leaves on the volume.
+	if g.tableFiles != nil {
+		for _, id := range discardedTableFiles {
+			_ = g.retireTableDataFile(id)
+		}
 	}
 	return saved, nil
 }

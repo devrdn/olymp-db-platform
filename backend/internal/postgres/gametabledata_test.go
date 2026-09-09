@@ -146,6 +146,113 @@ func TestAppendTableDataRowUpdatesBytesAndLinesTogether(t *testing.T) {
 	})
 }
 
+// TestAppendTableDataRowNeverMovesTheFileBackwards is the statement's own
+// half of what keeps two forms adding a row to the same table at once from
+// losing one of them (provisioning.Games.AppendTableRow's own doc). The two
+// callers reach this statement in whatever order the database happens to run
+// them, which is not the order they read the row in — so the one working
+// from the older snapshot must not be able to write its own smaller length
+// and row count over the newer one, leaving the bookkeeping describing a
+// shorter file than the one on disk.
+//
+// Run against the real statement, not a stand-in for it: GREATEST is the
+// guarantee, and a fake agreeing with the service about it would prove
+// nothing about the SQL (CLAUDE.md rule 10).
+func TestAppendTableDataRowNeverMovesTheFileBackwards(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aContest(t, ctx)
+		repo := NewGameInstances(testPool)
+
+		id := uuid.New()
+		if _, err := repo.CreateReadyTableData(ctx, id, contest, "suspects", 10, 1); err != nil {
+			t.Fatalf("create ready: %v", err)
+		}
+		if _, err := repo.AppendTableDataRow(ctx, id, 40, 3); err != nil {
+			t.Fatalf("append row: %v", err)
+		}
+
+		// The caller that read before that one, arriving after it.
+		stale, err := repo.AppendTableDataRow(ctx, id, 25, 2)
+		if err != nil {
+			t.Fatalf("append row from an older snapshot: %v", err)
+		}
+		if stale.ReceivedBytes != 40 || stale.Lines != 3 {
+			t.Fatalf("data = %+v, want the file still described as 40 bytes and 3 rows", stale)
+		}
+
+		// And a row that is no longer the table's current file — the game was
+		// replaced under the call — is told so rather than answered success.
+		if err := repo.AbortTableData(ctx, id); err != nil {
+			t.Fatalf("abort: %v", err)
+		}
+		if _, err := repo.AppendTableDataRow(ctx, id, 60, 4); !errors.Is(err, provisioning.ErrTableDataChanged) {
+			t.Fatalf("error = %v, want ErrTableDataChanged", err)
+		}
+	})
+}
+
+// TestDiscardTableDataRetiresEveryFileTheContestStillHas is what a game
+// leaving the table builder does to the data it described
+// (provisioning.Games.replaceGame): both the table's current file and any
+// upload still receiving one are retired, their ids handed back so their
+// bytes can be removed, and a row already 'aborted' is not retired a second
+// time — an id returned twice would be a file removed twice.
+func TestDiscardTableDataRetiresEveryFileTheContestStillHas(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aContest(t, ctx)
+		other := aContest(t, ctx)
+		repo := NewGameInstances(testPool)
+
+		ready := uuid.New()
+		if _, err := repo.CreateReadyTableData(ctx, ready, contest, "suspects", 10, 1); err != nil {
+			t.Fatalf("create ready: %v", err)
+		}
+		receiving := uuid.New()
+		if _, err := repo.BeginTableData(ctx, receiving, contest, "witnesses", 64); err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		alreadyGone := uuid.New()
+		if _, err := repo.BeginTableData(ctx, alreadyGone, contest, "evidence", 64); err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		if err := repo.AbortTableData(ctx, alreadyGone); err != nil {
+			t.Fatalf("abort: %v", err)
+		}
+		untouched := uuid.New()
+		if _, err := repo.CreateReadyTableData(ctx, untouched, other, "suspects", 10, 1); err != nil {
+			t.Fatalf("create ready for another contest: %v", err)
+		}
+
+		ids, err := repo.DiscardTableData(ctx, contest)
+		if err != nil {
+			t.Fatalf("discard: %v", err)
+		}
+		got := map[uuid.UUID]bool{}
+		for _, id := range ids {
+			if got[id] {
+				t.Fatalf("id %s was returned twice", id)
+			}
+			got[id] = true
+		}
+		if len(got) != 2 || !got[ready] || !got[receiving] {
+			t.Fatalf("discarded %v, want exactly the ready file and the receiving upload", ids)
+		}
+
+		for _, id := range []uuid.UUID{ready, receiving} {
+			data, err := repo.TableDataByID(ctx, id)
+			if err != nil {
+				t.Fatalf("read back %s: %v", id, err)
+			}
+			if data.Status != provisioning.TableDataAborted {
+				t.Fatalf("%s is %q, want aborted", id, data.Status)
+			}
+		}
+		if _, err := repo.ReadyTableData(ctx, other, "suspects"); err != nil {
+			t.Fatalf("another contest's own data was discarded too: %v", err)
+		}
+	})
+}
+
 func TestAbortingTableDataMarksItAborted(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)

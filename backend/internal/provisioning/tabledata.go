@@ -116,6 +116,16 @@ var (
 	ErrTableDataStoreFull = errors.New("the table data directory is full")
 	// ErrTableDataLengthMismatch mirrors gamefile.ErrLengthMismatch.
 	ErrTableDataLengthMismatch = errors.New("the received bytes do not match the declared length")
+	// ErrTableDataChanged is an AppendTableRow whose row is not the one that
+	// ended up at the end of the file: another form's row landed between this
+	// call reading the table's current data and writing its own, and
+	// gamefile.Store.Append reported that as the success it reports for any
+	// retry of an offset it already has. Only one row can be written at the
+	// file's end, and the caller whose row was not has to be told so —
+	// answering it 201 would drop that row silently (AppendTableRow's own
+	// doc). Also what a row that is no longer a table's current file answers,
+	// when a game was replaced under the call.
+	ErrTableDataChanged = errors.New("the table's data changed while this row was being added")
 	// ErrTableRowNotFound is a row number DeleteTableRow or a window read was
 	// asked for that the file does not have.
 	ErrTableRowNotFound = errors.New("no such row")
@@ -248,10 +258,31 @@ func (g *Games) checkTableDataCompatibility(ctx context.Context, contestID uuid.
 		return fmt.Errorf("read the contest's current game: %w", err)
 	}
 	if current.Source != SourceBuilder {
-		// Every table-data row is addressed by (contest, table name) against
-		// the contest's *current* definition (currentDefinitionTable's own
-		// doc) — a game that is not builder-sourced right now names no table
-		// any such row could belong to.
+		// A game that is not builder-sourced holds no table data: replaceGame
+		// (template.go) discards it in the same transaction that stops the
+		// game being the builder's, and migration 28 retired what predated
+		// that rule. This used to return here on that reasoning alone — that
+		// such a game "names no table any such row could belong to" — which
+		// was true of the definition and false of the rows: nothing deleted
+		// them, so saving any script at all was a way round the lock below,
+		// and the redescribed table then loaded values validated against
+		// another type. The loop is the backstop for that invariant rather
+		// than a second copy of it: it costs one read per table of a
+		// definition being saved over a game that is not the builder's, and
+		// it refuses instead of silently loading data no check can vouch for.
+		for _, table := range next.Tables {
+			data, err := g.repo.ReadyTableData(ctx, contestID, table.Name)
+			switch {
+			case errors.Is(err, ErrTableDataNotFound):
+				continue
+			case err != nil:
+				return fmt.Errorf("read %s's own data: %w", table.Name, err)
+			}
+			if data.Lines > 0 {
+				return fmt.Errorf("%w: table %q has %d row(s) of data left over from a game that is no longer the table builder's",
+					ErrDefinitionTableLocked, table.Name, data.Lines)
+			}
+		}
 		return nil
 	}
 
@@ -660,6 +691,30 @@ func (g *Games) retireTableDataFile(id uuid.UUID) error {
 // "the row from the form and the row from the batch land in the same file"
 // (the brief's own words) true without that race.
 //
+// Two forms racing each other are a different matter, and are not refused —
+// they are decided. Both read the same "the file is N bytes long" and both
+// write there; gamefile.Store.Append answers the second one with the
+// idempotent-retry success its own doc promises, having written nothing, so
+// without a check that row is silently gone and the length recorded for it is
+// one no file has, which makes every later append out of order for ever. Two
+// things prevent that. The bytes just written are read back before anything
+// is recorded (rowLanded), so a caller whose row is not the one at that
+// offset is told ErrTableDataChanged rather than 201 for a row nobody will
+// ever see. And the length and row count are recorded as floors rather than
+// assignments (AppendTableDataRow), so the two callers reaching storage in
+// the opposite order to the one they read in cannot leave the bookkeeping
+// describing the shorter file: the second caller's own row has by then
+// already been counted by the recount below, and its smaller pair is
+// discarded rather than written.
+//
+// The bytes go first and the row that counts them second, which is the order
+// whose failure is recoverable: an interruption (or a rolled-back
+// transaction — a failed audit write is enough) leaves a file holding one
+// more validated row than the bookkeeping counts, and the next call notices
+// that and reconciles it (tableFileState). The other order would leave a row
+// counted whose bytes never arrived, and no later call could tell what was
+// meant to be there.
+//
 // The very first row for a table bootstraps its file: there is no upload to
 // begin first, because a single validated row already satisfies everything
 // CompleteTableUpload's own pass checks. Every row after that is appended to
@@ -713,15 +768,46 @@ func (g *Games) AppendTableRow(ctx context.Context, actorID, contestID uuid.UUID
 		return TableData{}, fmt.Errorf("read the table's current data: %w", err)
 	}
 
-	if _, err := g.tableFiles.Append(ready.ID.String(), ready.ReceivedBytes, strings.NewReader(rowLine+"\n")); err != nil {
+	offset, lines, err := g.tableFileState(ready)
+	if err != nil {
+		return TableData{}, err
+	}
+	if lines >= MaxTableDataRows {
+		// The same ceiling validateTableFile enforces for an uploaded file and
+		// the same number this service publishes to its clients as max_rows —
+		// a limit that holds on one of the two ways in is not a limit
+		// (CLAUDE.md rule 2).
+		return TableData{}, fmt.Errorf("%w: the table already holds %d rows, the limit is %d",
+			ErrTableTooManyRows, lines, MaxTableDataRows)
+	}
+
+	payload, err := g.rowPayload(ready.ID, offset, rowLine)
+	if err != nil {
+		return TableData{}, err
+	}
+
+	written, err := g.tableFiles.Append(ready.ID.String(), offset, strings.NewReader(payload))
+	if err != nil {
 		return TableData{}, wrapTableFileErr(err)
 	}
-	newBytes := ready.ReceivedBytes + int64(len(rowLine)) + 1
+	landed, err := g.rowLanded(ready.ID, offset, payload, written)
+	if err != nil {
+		return TableData{}, err
+	}
+	if !landed {
+		// Another form's row is at this offset: gamefile.Store.Append treats a
+		// write at an offset already covered as a retry of it and reports
+		// success without writing a byte (its own doc). Nothing of this row
+		// reached the file, so this caller is told so rather than being
+		// answered 201 for a row nobody will ever see.
+		return TableData{}, ErrTableDataChanged
+	}
+	newLines := lines + 1
 
 	var updated TableData
 	run := func(ctx context.Context) error {
 		var err error
-		updated, err = g.repo.AppendTableDataRow(ctx, ready.ID, newBytes, ready.Lines+1)
+		updated, err = g.repo.AppendTableDataRow(ctx, ready.ID, written, newLines)
 		if err != nil {
 			return fmt.Errorf("record the appended row: %w", err)
 		}
@@ -731,7 +817,7 @@ func (g *Games) AppendTableRow(ctx context.Context, actorID, contestID uuid.UUID
 		return g.audit.Record(ctx, audit.Entry{
 			ActorID: &actorID, Action: audit.ActionGameTableDataRowAdd,
 			Entity: "contest", EntityID: contestID.String(),
-			Payload: map[string]any{"table": tableName, "row": ready.Lines + 1},
+			Payload: map[string]any{"table": tableName, "row": newLines},
 		})
 	}
 	if g.uow != nil {
@@ -743,6 +829,131 @@ func (g *Games) AppendTableRow(ctx context.Context, actorID, contestID uuid.UUID
 		return TableData{}, err
 	}
 	return updated, nil
+}
+
+// rowLanded reports whether the bytes now at offset are this call's own row.
+//
+// gamefile.Store.Append answers a write at an offset it already has with the
+// file's unchanged length and no error — the idempotent retry a resumed
+// chunk upload depends on (its own doc), and exactly what a second form
+// adding a row at the same moment gets. The length alone does not settle it,
+// because two rows of the same table are often the same number of bytes, so
+// the bytes themselves are read back and compared. One row's worth of them,
+// never more: this reads what was just written and nothing else.
+//
+// Two callers writing byte-identical rows both read their own payload back
+// and both believe they wrote, and the file holds that row once. Harmless,
+// and the one case where the length alone would have been enough: the two
+// asked for the same row, and the same row is what is there. What is not
+// harmless — one caller's row overwritten by another's, or counted as if it
+// were there — is exactly what comparing the bytes rules out.
+func (g *Games) rowLanded(id uuid.UUID, offset int64, payload string, written int64) (bool, error) {
+	if written != offset+int64(len(payload)) {
+		return false, nil
+	}
+	f, err := g.tableFiles.Open(id.String())
+	if err != nil {
+		return false, wrapTableFileErr(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	got := make([]byte, len(payload))
+	if _, err := f.ReadAt(got, offset); err != nil {
+		return false, fmt.Errorf("read back the appended row: %w", err)
+	}
+	return string(got) == payload, nil
+}
+
+// tableFileState reports the offset the next row goes at and how many data
+// rows the file holds — the file's own answer to both, not the bookkeeping's
+// copy of it.
+//
+// The two normally agree, and then this costs one stat. When they do not, the
+// file is the one telling the truth: its bytes are what a build loads and
+// what a window read pages through. The bytes always go first
+// (AppendTableRow's own doc on the order), so the only way the two can
+// disagree is a file holding one more already-validated row than the
+// bookkeeping counts — a transaction that rolled back, or a process that died,
+// after that row had landed. Appending at an offset taken from the stale side
+// would write nowhere at all (gamefile.Store.Append reports the retry success
+// its own doc promises for an offset already covered), so the disagreement is
+// resolved here rather than carried into every later call as a table that
+// takes no more rows.
+//
+// Recounting means one streaming pass over the file (never more of it than
+// tableLineScanner's own bound), which is why it is done only on the path
+// where the two disagree.
+func (g *Games) tableFileState(ready TableData) (offset, lines int64, err error) {
+	offset, err = g.tableFiles.Received(ready.ID.String())
+	if err != nil {
+		return 0, 0, wrapTableFileErr(err)
+	}
+	if offset == ready.ReceivedBytes {
+		return offset, ready.Lines, nil
+	}
+	lines, err = g.countTableDataRows(ready.ID.String())
+	if err != nil {
+		return 0, 0, err
+	}
+	return offset, lines, nil
+}
+
+// countTableDataRows counts the file's data rows — every line but the header,
+// tombstoned ones included, since DeletedRows names row numbers this count
+// has to keep naming the same rows. Nothing is validated here: these rows
+// were validated when they were written, and this is a recount, not a second
+// opinion on their contents.
+func (g *Games) countTableDataRows(id string) (int64, error) {
+	f, err := g.tableFiles.Open(id)
+	if err != nil {
+		return 0, wrapTableFileErr(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := newTableLineScanner(f)
+	var lines int64
+	for i := 0; ; i++ {
+		if _, err := scanner.next(); err != nil {
+			if errors.Is(err, io.EOF) {
+				return lines, nil
+			}
+			return 0, fmt.Errorf("count the table's rows: %w", err)
+		}
+		if i > 0 { // i == 0 is the header
+			lines++
+		}
+	}
+}
+
+// rowPayload is the bytes one row is appended as: the row itself and the
+// newline that ends it, preceded by one more newline when the file does not
+// already end in one.
+//
+// A CSV whose last line has no trailing newline is what a good many
+// exporters write, and validateTableFile accepts it — that last line is a
+// whole row (tableLineScanner.next's own doc). Appending to such a file
+// without this would glue the new row onto the end of the last one: two rows
+// of three fields becoming one row of six, garbage in the organiser's own
+// window and `extra data after last expected column` on the build that
+// follows.
+func (g *Games) rowPayload(id uuid.UUID, offset int64, rowLine string) (string, error) {
+	if offset == 0 {
+		return rowLine + "\n", nil
+	}
+	f, err := g.tableFiles.Open(id.String())
+	if err != nil {
+		return "", wrapTableFileErr(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	var last [1]byte
+	if _, err := f.ReadAt(last[:], offset-1); err != nil {
+		return "", fmt.Errorf("read the end of the table's data: %w", err)
+	}
+	if last[0] == '\n' {
+		return rowLine + "\n", nil
+	}
+	return "\n" + rowLine + "\n", nil
 }
 
 // bootstrapTableRow creates a table's very first data file: the header this

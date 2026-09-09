@@ -271,6 +271,28 @@ func TestAPrimaryKeyListingTheSameColumnTwiceIsRefused(t *testing.T) {
 	}
 }
 
+// TestAPrimaryKeySpelledInAnotherCaseThanItsColumnIsRefused is the mismatch
+// between what Validate checked and what createTableStatement generates: the
+// key was compared against the column names folded to lower case, and then
+// interpolated into PRIMARY KEY (...) exactly as it was spelled, quoted. A
+// definition PostgreSQL answers `column "ID" named in key column list does
+// not exist` to must not be one this package called valid — the organiser
+// sees `id` in both places on their own screen and has no way to tell what
+// the build is complaining about.
+func TestAPrimaryKeySpelledInAnotherCaseThanItsColumnIsRefused(t *testing.T) {
+	t.Parallel()
+	d := provisioning.Definition{Tables: []provisioning.TableDefinition{
+		{
+			Name:       "suspects",
+			Columns:    []provisioning.ColumnDefinition{aColumn("id", provisioning.ColumnInteger)},
+			PrimaryKey: []string{"ID"},
+		},
+	}}
+	if err := d.Validate(); !errors.Is(err, provisioning.ErrDefinitionInvalidPrimaryKey) {
+		t.Fatalf("answered %v, want ErrDefinitionInvalidPrimaryKey", err)
+	}
+}
+
 // A composite primary key — more than one column identifying a row
 // together — is an ordinary shape (an evidence log keyed by case and item
 // number, say) and must not be refused just for having more than one name.

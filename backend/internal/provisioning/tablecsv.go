@@ -98,6 +98,11 @@ var (
 // default NULL representation, which is what LoadTableData's own COPY is run
 // with (gamedb.Provisioner.LoadTableData), so a quoted empty field ("") is
 // kept apart from a bare one as a real empty string rather than NULL.
+//
+// This is the one convention the whole feature turns on, and csvWriter is its
+// other half: a field this package writes empty is written bare, so that what
+// AppendTableRow validated as a NULL is the same thing a build loads and the
+// same thing this reader would parse back.
 type csvField struct {
 	Text string
 	Null bool
@@ -187,10 +192,20 @@ func formatCSVRow(fields []string) (string, error) {
 // per line (splitCSVLine's own doc), and csv.Writer defaults to writing "\r\n"
 // on some platforms' conventions and offers no simple way to pin "\n" without
 // also losing control of exactly when quoting happens for the empty-vs-null
-// distinction this package's reader draws (csvField.Null). Quoting the same
-// three cases RFC 4180 does — a field containing a comma, a quote or a
-// newline — plus an empty field, which must be quoted to keep it apart from
-// NULL on the read side.
+// distinction this package's reader draws (csvField.Null).
+//
+// Quoted in exactly the three cases RFC 4180 quotes — a field containing a
+// comma, a quote or a newline — and in no others. An empty field in
+// particular is written bare, which is the whole point of the hand-rolled
+// writer: a bare empty field is NULL to `COPY ... WITH (FORMAT csv)` and to
+// splitCSVLine alike, and `""` is the empty string to both. The only caller
+// that ever hands this an empty field is a row from a form
+// (Games.AppendTableRow), which validated that field as a NULL — it is
+// refused outright in a NOT NULL column — so writing it as `""` would be
+// storing the opposite of what was checked: `invalid input syntax for type
+// integer: ""` on the build for a nullable integer column, and an empty
+// string stored where the organiser meant nothing at all for a nullable text
+// one — so that the IS NULL a task asks about matches no row.
 type csvWriter struct{ w io.Writer }
 
 func newCSVWriter(w io.Writer) *csvWriter { return &csvWriter{w: w} }
@@ -202,7 +217,7 @@ func (w *csvWriter) write(fields []string) error {
 				return err
 			}
 		}
-		if f == "" || strings.ContainsAny(f, ",\"\n\r") {
+		if strings.ContainsAny(f, ",\"\n\r") {
 			quoted := `"` + strings.ReplaceAll(f, `"`, `""`) + `"`
 			if _, err := io.WriteString(w.w, quoted); err != nil {
 				return err
@@ -346,10 +361,20 @@ func validateHeader(fields []csvField, table TableDefinition) error {
 }
 
 // validateRow checks one data row's field count against the table's own
-// columns and, for every field, that its value parses as that column's type
-// (or is empty and the column allows NULL). row is the 1-based data row
-// number (the header does not count — tabledata.go's own doc on row numbers
-// explains why they are stable identifiers rather than a line count).
+// columns and, for every field, that it is within MaxTableFieldBytes and that
+// its value parses as that column's type (or is empty and the column allows
+// NULL). row is the 1-based data row number (the header does not count —
+// tabledata.go's own doc on row numbers explains why they are stable
+// identifiers rather than a line count).
+//
+// The length bound is repeated here rather than left to splitCSVLine, which
+// already enforces it while parsing a file: a row from a form never passes
+// through that parser at all (Games.AppendTableRow hands the values straight
+// over from the decoded request), and the 1 MiB body limit bounds the request
+// rather than one field of it — so without this, the form is a way to store a
+// field sixteen times the max_field_bytes this service publishes, after which
+// every window read of the table refuses to parse the file it created
+// (CLAUDE.md rule 2).
 func validateRow(fields []csvField, table TableDefinition, row int64) error {
 	if len(fields) != len(table.Columns) {
 		return fmt.Errorf("%w: row %d has %d field(s), the table has %d columns",
@@ -357,6 +382,10 @@ func validateRow(fields []csvField, table TableDefinition, row int64) error {
 	}
 	for i, f := range fields {
 		col := table.Columns[i]
+		if len(f.Text) > MaxTableFieldBytes {
+			return fmt.Errorf("%w: row %d, column %q is %d bytes, the limit is %d",
+				ErrTableFieldTooLong, row, col.Name, len(f.Text), MaxTableFieldBytes)
+		}
 		if f.Null {
 			if !col.Nullable {
 				return fmt.Errorf("%w: row %d, column %q is empty but is not nullable",

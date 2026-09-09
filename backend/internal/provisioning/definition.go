@@ -269,7 +269,16 @@ func (d Definition) Validate() error {
 				ErrDefinitionTooLarge, table.Name, len(table.Columns), MaxDefinitionTableColumns)
 		}
 
+		// Two sets, because they answer two different questions. Uniqueness is
+		// folded: PostgreSQL folds an unquoted identifier, so `Guests` and
+		// `guests` would collide in the database this definition builds.
+		// Membership, for the primary key below, is exact — createTableStatement
+		// quotes every name it interpolates, so a key spelled in another case
+		// than its own column generates PRIMARY KEY ("ID") beside a column
+		// "id", and the build stops at `column "ID" named in key column list
+		// does not exist` for a definition this method called valid.
 		seenColumns := make(map[string]struct{}, len(table.Columns))
+		columnNames := make(map[string]struct{}, len(table.Columns))
 		for _, column := range table.Columns {
 			if !sqlpolicy.PlainIdentifier(column.Name) {
 				return fmt.Errorf("%w: column %q of table %q", ErrDefinitionInvalidName, column.Name, table.Name)
@@ -279,6 +288,7 @@ func (d Definition) Validate() error {
 				return fmt.Errorf("%w: column %q of table %q", ErrDefinitionDuplicateName, column.Name, table.Name)
 			}
 			seenColumns[foldedColumn] = struct{}{}
+			columnNames[column.Name] = struct{}{}
 
 			if !column.Type.valid() {
 				return fmt.Errorf("%w: column %q of table %q has type %q",
@@ -293,7 +303,7 @@ func (d Definition) Validate() error {
 				return fmt.Errorf("%w: table %q lists %q twice", ErrDefinitionInvalidPrimaryKey, table.Name, key)
 			}
 			seenKey[foldedKey] = struct{}{}
-			if _, exists := seenColumns[foldedKey]; !exists {
+			if _, exists := columnNames[key]; !exists {
 				return fmt.Errorf("%w: table %q, column %q", ErrDefinitionInvalidPrimaryKey, table.Name, key)
 			}
 		}
@@ -428,19 +438,26 @@ func (t TableDefinition) sameStructure(other TableDefinition) bool {
 	return sameNameSet(t.PrimaryKey, other.PrimaryKey)
 }
 
-// sameNameSet reports whether a and b name the same identifiers, folded the
-// way PostgreSQL folds an unquoted one (Validate's own folding), regardless
-// of order.
+// sameNameSet reports whether a and b name the same identifiers, spelled
+// exactly the same way, regardless of order.
+//
+// Exact and not folded, unlike Validate's own uniqueness check: these names
+// are interpolated into PRIMARY KEY (...) quoted, so `("ID")` and `("id")`
+// are two different constraints on two different columns, and a structure
+// lock that called them one would let a table with data be rebuilt against a
+// key it was never validated for. Validate refuses a key that does not match
+// a column exactly, so the two sides of this comparison agree on which
+// spelling is the real one.
 func sameNameSet(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	set := make(map[string]struct{}, len(a))
 	for _, k := range a {
-		set[strings.ToLower(k)] = struct{}{}
+		set[k] = struct{}{}
 	}
 	for _, k := range b {
-		if _, ok := set[strings.ToLower(k)]; !ok {
+		if _, ok := set[k]; !ok {
 			return false
 		}
 	}
