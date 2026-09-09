@@ -1292,6 +1292,8 @@ const en = {
       "That database has already been removed — by the sweep after the contest ended, or by somebody else while this page was open. Nothing was changed.",
     game_not_editable:
       "This contest's game can no longer be replaced. Replacing it raises the template's version, which makes every participant's copy stale — they would be dropped and made again.",
+    game_cluster_full:
+      "There is no room left on the game cluster for another copy of this contest's database, so yours could not be made. This is a limit the installation sets on disk, not a mistake of yours — tell whoever is running the olympiad.",
     game_uploads_disabled:
       "This installation has no upload directory, so a game can only be written in the editor. Configuring one is a job for whoever runs the server.",
     game_definition_empty:
