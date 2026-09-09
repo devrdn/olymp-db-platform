@@ -102,6 +102,74 @@ var (
 	codeGameUploadTooOften = httpx.NewCode("game_upload_too_often",
 		"Too many uploads have been started from this address or for this contest in a short time. Wait before starting another.")
 
+	// --- The table builder: its structural description --------------------
+	//
+	// One code per provisioning.Definition.Validate sentinel (CLAUDE.md rule
+	// 1). The message on the wire is the sentinel's own err.Error(), which
+	// already names the table or column at fault — repeating that as a
+	// second, fixed sentence here would only let the two drift.
+	codeGameDefinitionEmpty = httpx.NewCode("game_definition_empty",
+		"The game definition has no tables. An empty definition builds an empty database.")
+	codeGameDefinitionTooLarge = httpx.NewCode("game_definition_too_large",
+		"The game definition has more tables, or one table has more columns, than this platform allows — or the whole document is larger once encoded. The message names which.")
+	codeGameDefinitionInvalidName = httpx.NewCode("game_definition_invalid_name",
+		"A table or column name is not a plain identifier. The message names it.")
+	codeGameDefinitionDuplicateName = httpx.NewCode("game_definition_duplicate_name",
+		"The same table, or the same column within one table, is named twice — folded the way PostgreSQL folds an unquoted identifier. The message names it.")
+	codeGameDefinitionTableEmpty = httpx.NewCode("game_definition_table_empty",
+		"A table has no columns. The message names it.")
+	codeGameDefinitionInvalidType = httpx.NewCode("game_definition_invalid_type",
+		"A column's type is not one this platform supports. The message names the column and the type it was given.")
+	codeGameDefinitionInvalidPrimaryKey = httpx.NewCode("game_definition_invalid_primary_key",
+		"The primary key names a column its own table does not have, or names the same column twice. The message names it.")
+
+	// --- The table builder: one table's own CSV data -----------------------
+	//
+	// One code per sentinel in provisioning/tabledata.go and the CSV parsing
+	// it drives (provisioning/tablecsv.go) — the third way a game is built,
+	// alongside the editor and an uploaded dump, mirrored here the same way
+	// the dump's own thirteen codes mirror provisioning/upload.go's.
+	codeGameTableDataDisabled = httpx.NewCode("game_table_data_disabled",
+		"This installation has no table-data volume configured, so a table builder's own CSV cannot be uploaded. The message names nothing about the deployment beyond that fact.")
+	codeGameTableUnknown = httpx.NewCode("game_table_unknown",
+		"This name is not a table of the contest's current definition — either the game is not built with the table builder, or no table by that name is in it now.")
+	codeGameTableDataInProgress = httpx.NewCode("game_table_data_in_progress",
+		"This table already has a chunked upload in progress, or a row cannot be added to it while one is. Finish or cancel it first.")
+	codeGameTableDataNotFound = httpx.NewCode("game_table_data_not_found",
+		"No such table-data upload. Also the answer when it belongs to another contest: that it exists elsewhere is not the caller's business.")
+	codeGameTableDataAlreadyComplete = httpx.NewCode("game_table_data_already_complete",
+		"This table's data upload has already been completed or cancelled, so it can no longer take chunks, be completed again, or be cancelled.")
+	codeGameTableDataChunkOutOfOrder = httpx.NewCode("game_table_data_chunk_out_of_order",
+		"This chunk does not continue where the upload actually left off. Ask the server what it has received and resume from there.")
+	codeGameTableDataChunkTooLarge = httpx.NewCode("game_table_data_chunk_too_large",
+		"One chunk is past the maximum chunk size this installation accepts. Split it into smaller pieces.")
+	codeGameTableDataChunkIncomplete = httpx.NewCode("game_table_data_chunk_incomplete",
+		"The chunk's body stopped arriving before the server had all of it. Nothing of it was kept, so the same chunk can simply be sent again from the offset the server reports.")
+	codeGameTableDataTooLarge = httpx.NewCode("game_table_data_too_large",
+		"The declared size is past the maximum file size this installation accepts for one table's data.")
+	codeGameTableDataStoreFull = httpx.NewCode("game_table_data_store_full",
+		"The table-data volume already holds as much as this installation allows. Try again once other uploads have finished or been removed.")
+	codeGameTableDataLengthMismatch = httpx.NewCode("game_table_data_length_mismatch",
+		"What actually landed on disk does not match the length declared when the upload began. The upload cannot be completed; begin again.")
+	codeGameTableRowNotFound = httpx.NewCode("game_table_row_not_found",
+		"No such row of this table's current data.")
+	codeGameTableRowAlreadyDeleted = httpx.NewCode("game_table_row_already_deleted",
+		"That row has already been deleted.")
+	codeGameTableTooManyDeletedRows = httpx.NewCode("game_table_too_many_deleted_rows",
+		"Too many rows have already been deleted from this table for another one to be.")
+	codeGameTableHeaderMismatch = httpx.NewCode("game_table_header_mismatch",
+		"The file's header does not name, in order, exactly the columns the table's own definition declares. The message names where it differs.")
+	codeGameTableRowFieldCount = httpx.NewCode("game_table_row_field_count",
+		"A row's field count does not match the table's columns. The message names the row.")
+	codeGameTableValueInvalid = httpx.NewCode("game_table_value_invalid",
+		"A value does not match its column's type, or is empty in a column that does not allow it. The message names the row and the column.")
+	codeGameTableFieldTooLong = httpx.NewCode("game_table_field_too_long",
+		"One field of the file is longer than this platform allows.")
+	codeGameTableLineTooLong = httpx.NewCode("game_table_line_too_long",
+		"One line of the file — the header or a data row — is longer than this platform allows.")
+	codeGameTableTooManyRows = httpx.NewCode("game_table_too_many_rows",
+		"The file has more data rows than this platform allows for one table.")
+
 	codeQueryServiceDown = httpx.NewCode("query_service_down",
 		"The Query Runner could not be reached. Nothing to do with the query, and a retry is the right response rather than an edit.")
 	codeQueryDeclined = httpx.NewCode("query_declined",

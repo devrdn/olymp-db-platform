@@ -77,6 +77,16 @@ const (
 	ColumnBoolean ColumnType = "boolean"
 )
 
+// ColumnTypes lists every value of the closed set above, in the order they
+// are declared. This is what internal/api's builder-limits response walks
+// to tell a browser which types exist (CLAUDE.md rule 11): the alternative
+// is a client keeping its own literal list of "the six types this platform
+// accepts", which is exactly the second copy of a fact rule 11 exists to
+// rule out — this is the one place that set is written down as data.
+var ColumnTypes = []ColumnType{
+	ColumnInteger, ColumnText, ColumnDate, ColumnTimestamp, ColumnNumeric, ColumnBoolean,
+}
+
 // valid reports whether t is one of the closed set above. Unexported: the
 // set itself is the public contract (Validate is where a caller learns a
 // type was rejected), not a membership test callers should be branching on.

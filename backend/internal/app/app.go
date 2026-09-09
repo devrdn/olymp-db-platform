@@ -399,6 +399,12 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			// The socket's ceiling and the domain's are the same number, so
 			// the configured chunk size is the only one that ever decides.
 			gameHandler = gameHandler.WithMaxChunkBody(cfg.GameUploadChunkBytes)
+			// The table builder's own CSV chunk shares this installation's
+			// GAME_UPLOAD_CHUNK_BYTES too — WithTableData's own call above
+			// configures provisioning.Games identically, so the socket's
+			// ceiling for this second, independent store matches its
+			// domain-side one the same way.
+			gameHandler = gameHandler.WithMaxTableChunkBody(cfg.GameUploadChunkBytes)
 		}
 		modules = append(modules, gameHandler)
 	}

@@ -171,6 +171,18 @@ func (g *Games) WithTableData(store *gamefile.Store, limits gamefile.Limits) *Ga
 	return g
 }
 
+// TableDataLimits reports the ceilings a chunked table-data upload must
+// respect — UploadLimits' own doc, for the table builder's own store rather
+// than the dump's. Two independent gamefile.Store values means two
+// independent ceilings even on a deployment that happens to configure them
+// identically today (WithTableData's own doc: "never the one WithUploads
+// was given") — so this reads g.tableLimits, never g.limits, and internal/api
+// reaches it through this method rather than a constant of its own
+// (CLAUDE.md rule 11), exactly as it already does for UploadLimits.
+func (g *Games) TableDataLimits() (gamefile.Limits, bool) {
+	return g.tableLimits, g.tableFiles != nil
+}
+
 // currentDefinitionTable reads the contest's current definition and returns
 // the TableDefinition named table, exactly as spelled — or ErrTableUnknown
 // when the game is not builder-sourced, or names no such table. Every
