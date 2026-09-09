@@ -324,6 +324,25 @@ export async function saveGameDefinitionAction(_previous: GameState, form: FormD
 }
 
 /**
+ * The chunked upload a reloaded page finds still receiving for one table,
+ * if any — `GET .../game/tables/{table}/data/current`, `currentGameUploadAction`'s
+ * own doc mirrored for a table's own CSV rather than a whole dump: resuming
+ * `game-builder-table.tsx`'s own state from the server's account of it,
+ * never from what the browser happens to remember.
+ *
+ * `null` on any failure, the identical reasoning `currentGameUploadAction`
+ * gives: an unreachable API here is not news the resume banner has
+ * anything useful to say about.
+ */
+export async function currentTableUploadAction(contestId: string, table: string): Promise<TableData | null> {
+  if (!isId(contestId)) return null;
+  return serverRequest(`/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/current`).then(
+    (payload) => tableDataSchema.parse(payload),
+    () => null,
+  );
+}
+
+/**
  * Reserving a place for one table's own chunked CSV upload —
  * `POST .../game/tables/{table}/data`. Paced by the same shared budget
  * `beginGameUploadAction`'s own doc explains (`allowUploadBegin` on the

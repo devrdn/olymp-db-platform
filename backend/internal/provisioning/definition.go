@@ -41,6 +41,52 @@ var (
 	// ErrDefinitionInvalidPrimaryKey is a primary key that names a column
 	// its own table does not have, or names the same column twice.
 	ErrDefinitionInvalidPrimaryKey = errors.New("the primary key names a column the table does not have")
+	// ErrDefinitionTableLocked is a definition that would change the name,
+	// columns or primary key of a table that already holds data.
+	//
+	// # Why this exists
+	//
+	// A table's own data lands as a CSV file whose first line names the
+	// table's columns, in order (tabledata.go's own header check,
+	// validateHeader). SetDefinition used to replace the whole description
+	// in one write with no check against that file at all. Renaming a
+	// column, or deleting one, does eventually surface — the next build's
+	// own header check refuses it (a mismatched field count or name) — but
+	// changing a column's *type* does not, because the header names
+	// columns, never their types: a value that still happens to parse under
+	// the new type (an integer column's own digits read back as numeric,
+	// say) loads silently, and a participant's database ends up with a
+	// column whose name promises one thing and whose bytes were validated
+	// against another. In the best case this is a build failure days after
+	// the fact; in the worst case it is not caught at all.
+	//
+	// # Why the whole table freezes rather than only the field that changed
+	//
+	// The narrower fix — refuse only a rename, a type change or a column's
+	// removal, and let anything else through (adding a column, say, or
+	// touching only the primary key) — does not hold up once the file
+	// itself is considered: validateHeader compares a column's name *and*
+	// its position, so adding a column shifts every later one out of place
+	// against a file that was never asked to grow to match, which is the
+	// identical silent-drift risk this sentinel exists to close, reopened
+	// through a fourth kind of edit. Freezing the whole table — its name,
+	// every column, and the primary key — once it holds a single row is
+	// what this codebase already asks an organiser to accept: the table
+	// builder's own screen already disables exactly those three controls
+	// the moment a table's row count is above zero (`game-builder.tsx`'s
+	// own doc, "Why a table with data locks its own structure") and,
+	// before this sentinel, had no rule on this side backing it — a client
+	// could be bypassed by talking to the API directly, and the screen's
+	// own explanation of "the server does not check this" was itself the
+	// defect. This is that rule, finally enforced where a client cannot
+	// route around it.
+	//
+	// A table with zero rows is not locked, even once a 'complete' file
+	// exists for it (a header with nothing under it): loadTableData's own
+	// copy reader skips the header line unconditionally, whatever it says
+	// (tableDataCopyReader.advance), so nothing a build would ever read
+	// disagrees with a new structure while the table is still empty.
+	ErrDefinitionTableLocked = errors.New("a table that already holds data may not have its structure changed")
 )
 
 // ColumnType is the closed set of column types the table builder may
@@ -358,6 +404,47 @@ func (d Definition) SQL() (string, error) {
 		statements[i] = statement
 	}
 	return strings.Join(statements, "\n"), nil
+}
+
+// sameStructure reports whether t and other describe the same table for the
+// purpose of ErrDefinitionTableLocked: the identical columns, in the
+// identical order, each with the identical name, type and nullability, and
+// the identical set of primary-key columns (order within the primary key
+// itself does not matter — PRIMARY KEY (a, b) and PRIMARY KEY (b, a) name
+// the same constraint).
+//
+// This is the one place two TableDefinitions are compared against each
+// other rather than one validated on its own — checkTableDataCompatibility
+// (tabledata.go) is its only caller.
+func (t TableDefinition) sameStructure(other TableDefinition) bool {
+	if len(t.Columns) != len(other.Columns) {
+		return false
+	}
+	for i, c := range t.Columns {
+		if c != other.Columns[i] {
+			return false
+		}
+	}
+	return sameNameSet(t.PrimaryKey, other.PrimaryKey)
+}
+
+// sameNameSet reports whether a and b name the same identifiers, folded the
+// way PostgreSQL folds an unquoted one (Validate's own folding), regardless
+// of order.
+func sameNameSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := make(map[string]struct{}, len(a))
+	for _, k := range a {
+		set[strings.ToLower(k)] = struct{}{}
+	}
+	for _, k := range b {
+		if _, ok := set[strings.ToLower(k)]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // createTableStatement is one table's own CREATE TABLE — the helper SQL

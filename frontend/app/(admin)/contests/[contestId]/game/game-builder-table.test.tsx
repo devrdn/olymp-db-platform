@@ -3,11 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
-import type { BuilderLimits, TableDefinition } from "@/lib/api/game";
+import type { BuilderLimits, TableData, TableDefinition } from "@/lib/api/game";
 
 import { GameBuilderTable } from "./game-builder-table";
 
 const beginTableUploadAction = vi.hoisted(() => vi.fn());
+const currentTableUploadAction = vi.hoisted(() => vi.fn());
 const completeTableUploadAction = vi.hoisted(() => vi.fn());
 const abortTableUploadAction = vi.hoisted(() => vi.fn());
 const gameTableDataWindowAction = vi.hoisted(() => vi.fn());
@@ -16,6 +17,7 @@ const deleteTableRowAction = vi.hoisted(() => vi.fn());
 
 vi.mock("./actions", () => ({
   beginTableUploadAction,
+  currentTableUploadAction,
   completeTableUploadAction,
   abortTableUploadAction,
   gameTableDataWindowAction,
@@ -64,7 +66,7 @@ const table: TableDefinition = {
   primaryKey: [],
 };
 
-function tableData(overrides: Record<string, unknown> = {}) {
+function tableData(overrides: Partial<TableData> = {}): TableData {
   return {
     id: dataId,
     table: "suspects",
@@ -87,12 +89,17 @@ function show({
   enabled = true,
   rowCount = 0,
   onRowCountChange = vi.fn(),
+  initialTableData = null,
 }: {
   active?: boolean;
   editable?: boolean;
   enabled?: boolean;
   rowCount?: number;
   onRowCountChange?: (n: number) => void;
+  /** The chunked upload a reloaded page found still receiving, or null —
+   * `initialUpload` in `game-upload.tsx`, for a table's own CSV instead of
+   * a dump. */
+  initialTableData?: ReturnType<typeof tableData> | null;
 } = {}) {
   return render(
     <GameBuilderTable
@@ -103,6 +110,7 @@ function show({
       editable={editable}
       rowCount={rowCount}
       onRowCountChange={onRowCountChange}
+      initialTableData={initialTableData}
       dict={en}
     />,
   );
@@ -110,6 +118,7 @@ function show({
 
 beforeEach(() => {
   beginTableUploadAction.mockReset();
+  currentTableUploadAction.mockReset();
   completeTableUploadAction.mockReset();
   abortTableUploadAction.mockReset();
   gameTableDataWindowAction.mockReset();
@@ -155,6 +164,60 @@ describe("the table builder's own data panel", () => {
     show();
 
     expect(await screen.findByText(td.emptyRows)).toBeInTheDocument();
+  });
+
+  // There is no `.../data/current` route for a table's own upload — this
+  // component's own doc used to name that gap directly. A reload mid-upload
+  // now finds it the same way `game-upload.tsx` finds a dump's own: seeded
+  // from `initialTableData`, the prop `page.tsx` reads from that route.
+  test("shows an unfinished upload and asks for a file of the same size to continue", () => {
+    show({ initialTableData: tableData({ receivedBytes: 5, declaredBytes: 12 }) });
+
+    expect(screen.getByText(td.resumeHeading)).toBeInTheDocument();
+    expect(
+      screen.getByText(td.resumeBody.replace("{received}", "5 B").replace("{total}", "12 B")),
+    ).toBeInTheDocument();
+  });
+
+  // The mistake this guards against is resuming with a file that only looks
+  // right by name — this upload carries no filename at all (unlike a dump's
+  // own), so the one thing worth checking before spending a request is size.
+  test("refuses to resume with a file whose size does not match the unfinished upload", async () => {
+    show({ initialTableData: tableData({ receivedBytes: 5, declaredBytes: 12 }) });
+    const wrongFile = new File([new Uint8Array(3)], "other.csv");
+
+    await userEvent.upload(screen.getByLabelText(td.resumePick), wrongFile);
+
+    expect(screen.getByText(td.resumeMismatch.replace("{total}", "12 B"))).toBeInTheDocument();
+    expect(beginTableUploadAction).not.toHaveBeenCalled();
+    expect(currentTableUploadAction).not.toHaveBeenCalled();
+  });
+
+  // The brief's own rule for a resumed upload, proven here the same way
+  // "resumes the next chunk from the server's own received_bytes" proves it
+  // for a fresh one below: the next chunk continues from what the server
+  // reports *now* (`currentTableUploadAction`), not from the possibly stale
+  // count the page loaded with.
+  test("resumes an unfinished upload from the server's own current offset, not the one the page loaded with", async () => {
+    currentTableUploadAction.mockResolvedValueOnce(tableData({ receivedBytes: 7, declaredBytes: 12 }));
+    request.mockResolvedValueOnce({ received_bytes: 12 });
+    completeTableUploadAction.mockResolvedValueOnce({ value: tableData({ status: "complete", activeRows: 1 }) });
+
+    // The page loaded with 5 bytes received; the server has actually taken 7
+    // by the time this tab resumes — a chunk sent from this page's own, now
+    // stale, count would land out of order.
+    show({ initialTableData: tableData({ receivedBytes: 5, declaredBytes: 12 }) });
+    const file = new File([new Uint8Array(12)], "suspects.csv");
+
+    await userEvent.upload(screen.getByLabelText(td.resumePick), file);
+
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      `/contests/${contestId}/game/tables/suspects/data/${dataId}/chunk?offset=7`,
+      expect.objectContaining({ method: "PUT" }),
+    );
+    expect(beginTableUploadAction).not.toHaveBeenCalled();
   });
 
   // The mutation this guards against: a chunk size taken from a constant

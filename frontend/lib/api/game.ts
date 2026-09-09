@@ -391,8 +391,14 @@ export const definitionSchema = z
 
 export type GameDefinition = z.infer<typeof definitionSchema>;
 
-/** Where one table's own CSV file has got to — `provisioning.TableDataStatus`. */
-export const TABLE_DATA_STATUSES = ["receiving", "complete", "aborted"] as const;
+/**
+ * Where one table's own CSV file has got to —
+ * `provisioning.TableDataStatus`'s own three, plus `"absent"`: the same
+ * handler-only sentinel `UPLOAD_STATUSES` carries for a dump, sent only by
+ * `GET .../tables/{table}/data/current` for a table with nothing 'receiving'
+ * — never a status a real upload passes through.
+ */
+export const TABLE_DATA_STATUSES = ["absent", "receiving", "complete", "aborted"] as const;
 
 export type TableDataStatus = (typeof TABLE_DATA_STATUSES)[number];
 

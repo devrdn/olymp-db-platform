@@ -75,6 +75,74 @@ func beginTableUploadWithContent(t *testing.T, service *provisioning.Games, cont
 	return data
 }
 
+// TestCurrentTableDataFindsAnUploadStillReceiving is CurrentTableData's own
+// happy path — Games.CurrentUpload's own doc, mirrored here: a reloaded
+// page's way to find a table's own chunked upload still in progress and
+// resume it.
+func TestCurrentTableDataFindsAnUploadStillReceiving(t *testing.T) {
+	t.Parallel()
+	service, _, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	begun, err := service.BeginTableUpload(t.Context(), contest, "suspects", 32)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	found, err := service.CurrentTableData(t.Context(), contest, "suspects")
+	if err != nil {
+		t.Fatalf("CurrentTableData: %v", err)
+	}
+	if found.ID != begun.ID {
+		t.Fatalf("found %v, want %v", found.ID, begun.ID)
+	}
+}
+
+// A table with nothing receiving answers ErrTableDataNotFound — the same
+// sentinel CurrentUpload itself answers with, which is what lets the
+// handler serve the shared "absent" shape either way.
+func TestCurrentTableDataAnswersNotFoundWhenNothingIsReceiving(t *testing.T) {
+	t.Parallel()
+	service, _, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	_, err := service.CurrentTableData(t.Context(), contest, "suspects")
+	if !errors.Is(err, provisioning.ErrTableDataNotFound) {
+		t.Fatalf("error = %v, want ErrTableDataNotFound", err)
+	}
+}
+
+// A table that is not part of the contest's current definition is
+// ErrTableUnknown, exactly as BeginTableUpload itself already refuses it —
+// currentDefinitionTable's own doc: every table-data method that is not a
+// pure id lookup calls it first.
+func TestCurrentTableDataRefusesATableOutsideTheDefinition(t *testing.T) {
+	t.Parallel()
+	service, _, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	_, err := service.CurrentTableData(t.Context(), contest, "ghosts")
+	if !errors.Is(err, provisioning.ErrTableUnknown) {
+		t.Fatalf("error = %v, want ErrTableUnknown", err)
+	}
+}
+
+// An installation with no table-data volume configured (WithTableData never
+// called) answers ErrTableDataDisabled for this method too, the identical
+// convention every other table-data method already follows.
+func TestCurrentTableDataIsDisabledWithoutATableDataVolume(t *testing.T) {
+	t.Parallel()
+	service, _, _ := games(true)
+
+	_, err := service.CurrentTableData(t.Context(), uuid.New(), "suspects")
+	if !errors.Is(err, provisioning.ErrTableDataDisabled) {
+		t.Fatalf("error = %v, want ErrTableDataDisabled", err)
+	}
+}
+
 // TestCompleteTableUploadRefusesAMismatchedHeaderBeforeValidatingAnyRow is
 // the brief's own requirement for the full, end-of-upload pass: a header
 // that does not name the table's own columns is refused, and refused for

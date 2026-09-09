@@ -209,6 +209,76 @@ func (g *Games) currentDefinitionTable(ctx context.Context, contestID uuid.UUID,
 	return TableDefinition{}, ErrTableUnknown
 }
 
+// CurrentTableData lets a reloaded page find a table's own chunked CSV
+// upload still 'receiving' and offer to resume it, rather than a second
+// BeginTableUpload refusing with no way to explain why —
+// Games.CurrentUpload's own doc (upload.go), for a table's own file instead
+// of a whole dump.
+//
+// Symmetric with every other table-data method that is not a pure id lookup
+// (currentDefinitionTable's own doc): the table must actually be part of
+// the contest's current definition before this answers for it, so an
+// unknown or since-removed table name is ErrTableUnknown rather than being
+// folded into "nothing in progress".
+func (g *Games) CurrentTableData(ctx context.Context, contestID uuid.UUID, table string) (TableData, error) {
+	if g.tableFiles == nil {
+		return TableData{}, ErrTableDataDisabled
+	}
+	if _, err := g.currentDefinitionTable(ctx, contestID, table); err != nil {
+		return TableData{}, err
+	}
+	return g.repo.CurrentTableData(ctx, contestID, table)
+}
+
+// checkTableDataCompatibility refuses a definition that would change the
+// structure of a table that already holds data — ErrDefinitionTableLocked's
+// own doc (definition.go) explains why the freeze covers a whole table
+// (its name, every column, and the primary key) rather than only the one
+// field an organiser happened to touch.
+//
+// Called from SetDefinition (template.go) right after Definition.Validate,
+// before anything is written — the identical "before the click" ordering
+// that check already follows for a definition whose shape alone is wrong.
+func (g *Games) checkTableDataCompatibility(ctx context.Context, contestID uuid.UUID, next Definition) error {
+	current, err := g.repo.Template(ctx, contestID)
+	switch {
+	case errors.Is(err, ErrNoGame):
+		return nil // no game yet: no table of it can hold any data
+	case err != nil:
+		return fmt.Errorf("read the contest's current game: %w", err)
+	}
+	if current.Source != SourceBuilder {
+		// Every table-data row is addressed by (contest, table name) against
+		// the contest's *current* definition (currentDefinitionTable's own
+		// doc) — a game that is not builder-sourced right now names no table
+		// any such row could belong to.
+		return nil
+	}
+
+	replacement := make(map[string]TableDefinition, len(next.Tables))
+	for _, t := range next.Tables {
+		replacement[t.Name] = t
+	}
+
+	for _, table := range current.Definition.Tables {
+		data, err := g.repo.ReadyTableData(ctx, contestID, table.Name)
+		switch {
+		case errors.Is(err, ErrTableDataNotFound):
+			continue
+		case err != nil:
+			return fmt.Errorf("read %s's own data: %w", table.Name, err)
+		}
+		if data.Lines == 0 {
+			continue // a header with nothing under it: ErrDefinitionTableLocked's own doc on why this is not locked
+		}
+		replacementTable, stillThere := replacement[table.Name]
+		if !stillThere || !table.sameStructure(replacementTable) {
+			return fmt.Errorf("%w: table %q has %d row(s) of data", ErrDefinitionTableLocked, table.Name, data.Lines)
+		}
+	}
+	return nil
+}
+
 // BeginTableUpload reserves a new chunked CSV upload for one table of the
 // contest's current definition.
 //

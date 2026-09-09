@@ -6,7 +6,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { GameDefinition } from "@/lib/api/game";
+import type { GameDefinition, TableData } from "@/lib/api/game";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
@@ -86,19 +86,17 @@ function toWireDefinition(tables: DraftTable[]) {
  *
  * # Why a table with data locks its own structure
  *
- * `SetDefinition` replaces the whole description in one write and never
- * checks it against a table's already-loaded CSV (`SetDefinition`'s own
- * doc on the API side; confirmed by reading `template.go` and
- * `tabledata.go` directly rather than assumed from this task's brief, which
- * states the rule but not the mechanism). That means changing a table's
- * columns after data has been loaded into it does not fail — it saves
- * cleanly and leaves the old CSV file sitting there, still shaped for the
- * columns it was validated against, silently disagreeing with the new
- * definition the next time anything reads it. A refusal after the fact
- * would at least be visible; this is quieter and worse, which is exactly
- * why the brief asks for the explanation before the click rather than a
- * refusal after it: there is no refusal to show. So this screen enforces
- * client-side what the server does not — a table whose row count (`rowCounts`,
+ * `SetDefinition` refuses a save that would change the name, columns or
+ * primary key of a table that already holds data
+ * (`provisioning.ErrDefinitionTableLocked`, `game_definition_table_locked`
+ * on the wire) — a rename or a column's removal disagrees with the file's
+ * own header at the next build; a type change is worse, because the header
+ * only names columns, never their types, so a value that still happens to
+ * parse under the new one loads silently. That refusal is real and this
+ * screen cannot be bypassed around it (talking to the API directly still
+ * gets the 409), but waiting for a request to come back to say "no" is a
+ * worse experience than not offering the edit at all, so this screen still
+ * disables it client-side first: a table whose row count (`rowCounts`,
  * lifted from `page.tsx`'s own best-effort read and kept current from every
  * write `GameBuilderTable` makes) is above zero has its name, columns and
  * primary key disabled, with `lockedTable`'s own sentence saying why, and
@@ -109,6 +107,7 @@ export function GameBuilder({
   contestId,
   definition,
   rowCounts: initialRowCounts,
+  currentTableUploads = {},
   editable,
   dict,
 }: {
@@ -124,6 +123,14 @@ export function GameBuilder({
    * reflected here immediately — the lock this component enforces would
    * otherwise only ever see the count the page happened to load with. */
   rowCounts: Record<string, number>;
+  /** Each table's own chunked CSV upload the page found still receiving,
+   * keyed by table name, or null — `page.tsx`'s own `tableCurrentUpload`,
+   * passed straight through to `GameBuilderTable` so a reload can resume
+   * an unfinished table upload the same way `GameUpload` already resumes an
+   * unfinished dump. Read once, unlike `rowCounts`: an upload's own state
+   * lives entirely inside `GameBuilderTable` afterward and never needs this
+   * component to keep it current. */
+  currentTableUploads?: Record<string, TableData | null>;
   editable: boolean;
   dict: Dictionary;
 }) {
@@ -300,6 +307,7 @@ export function GameBuilder({
                   editable={editable}
                   rowCount={rowCounts[table.name] ?? 0}
                   onRowCountChange={(count) => setRowCounts((prev) => ({ ...prev, [table.name]: count }))}
+                  initialTableData={currentTableUploads[table.name] ?? null}
                   dict={dict}
                 />
               </TabsContent>

@@ -178,6 +178,22 @@ type fakeGames struct {
 	// doc, for the table builder's independently configured store.
 	tableLimits        gamefile.Limits
 	tableLimitsEnabled bool
+
+	// currentTableErr and currentTableResult back CurrentTableData —
+	// currentErr and currentResult's own convention, for a table's own
+	// chunked CSV upload instead of a dump.
+	currentTableErr        error
+	currentTableResult     provisioning.TableData
+	gotCurrentTableContest uuid.UUID
+	gotCurrentTableTable   string
+}
+
+func (g *fakeGames) CurrentTableData(_ context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
+	g.gotCurrentTableContest, g.gotCurrentTableTable = contestID, table
+	if g.currentTableErr != nil {
+		return provisioning.TableData{}, g.currentTableErr
+	}
+	return g.currentTableResult, nil
 }
 
 func (g *fakeGames) SetDefinition(_ context.Context, actorID, _ uuid.UUID, definition provisioning.Definition) (provisioning.Template, error) {
@@ -1620,6 +1636,7 @@ func TestEveryDefinitionRefusalHasItsOwnCode(t *testing.T) {
 		{"a table with no columns", provisioning.ErrDefinitionTableEmpty, "game_definition_table_empty"},
 		{"a type outside the closed set", provisioning.ErrDefinitionInvalidType, "game_definition_invalid_type"},
 		{"a primary key naming a missing column", provisioning.ErrDefinitionInvalidPrimaryKey, "game_definition_invalid_primary_key"},
+		{"a table with data whose structure would change", provisioning.ErrDefinitionTableLocked, "game_definition_table_locked"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newGameFixture(t, rbac.PermissionContestAdminAll)
@@ -1759,6 +1776,69 @@ func TestAppendingATableChunkOverTheTransportCeilingIsRefused(t *testing.T) {
 	}
 	if received != 0 {
 		t.Fatalf("the store kept %d bytes of a chunk it refused, want 0", received)
+	}
+}
+
+// A reloaded page finds a table's own chunked upload still in progress and
+// can offer to resume it — CurrentUpload's own test
+// (TestCurrentUploadReturnsTheInProgressOne), mirrored here for a table's
+// CSV instead of a dump.
+func TestCurrentTableDataReturnsTheInProgressOne(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.currentTableResult = provisioning.TableData{
+		ID: uuid.New(), Table: "suspects", ReceivedBytes: 40, Status: provisioning.TableDataReceiving,
+	}
+	contest := uuid.NewString()
+
+	rec := f.do(http.MethodGet, "/contests/"+contest+"/game/tables/suspects/data/current", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if f.games.gotCurrentTableContest.String() != contest || f.games.gotCurrentTableTable != "suspects" {
+		t.Fatalf("scoped to %v/%q, want %v/suspects", f.games.gotCurrentTableContest, f.games.gotCurrentTableTable, contest)
+	}
+	body := decode(t, rec)
+	if body["status"] != "receiving" || body["received_bytes"] != float64(40) {
+		t.Fatalf("answered %v", body)
+	}
+}
+
+// A reloaded page finding nothing to resume gets an empty, successful
+// answer, not a 404 — TestCurrentUploadReportsAbsentWhenThereIsNone's own
+// doc, for a table's own CSV.
+func TestCurrentTableDataReportsAbsentWhenThereIsNone(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.currentTableErr = provisioning.ErrTableDataNotFound
+
+	rec := f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game/tables/suspects/data/current", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200: %s", rec.Code, rec.Body)
+	}
+	body := decode(t, rec)
+	if body["status"] != "absent" {
+		t.Fatalf("answered %v, want absent", body)
+	}
+	if body["table"] != "suspects" {
+		t.Fatalf("answered %v, want table %q", body, "suspects")
+	}
+	if _, ok := body["builder_limits"]; !ok {
+		t.Fatalf("the response carries no builder_limits object: %v", body)
+	}
+}
+
+// A refusal that is not "nothing in progress" — the table itself is not
+// (or no longer) part of the contest's current definition — is still a
+// refusal, never folded into the "absent" answer above.
+func TestCurrentTableDataForAnUnknownTableIsRefused(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.currentTableErr = provisioning.ErrTableUnknown
+
+	rec := f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game/tables/ghosts/data/current", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status %d, want 404: %s", rec.Code, rec.Body)
+	}
+	if code := errorCode(t, rec); code != "game_table_unknown" {
+		t.Fatalf("code %q, want game_table_unknown", code)
 	}
 }
 

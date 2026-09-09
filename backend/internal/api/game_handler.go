@@ -55,6 +55,10 @@ type Games interface {
 	SetDefinition(ctx context.Context, actorID, contestID uuid.UUID, definition provisioning.Definition) (provisioning.Template, error)
 
 	BeginTableUpload(ctx context.Context, contestID uuid.UUID, table string, declaredBytes int64) (provisioning.TableData, error)
+	// CurrentTableData lets a reloaded page find a table's own chunked
+	// upload still in progress — CurrentUpload's own doc above, for a
+	// table's CSV instead of a dump.
+	CurrentTableData(ctx context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error)
 	AppendTableChunk(ctx context.Context, contestID, id uuid.UUID, offset int64, r io.Reader) (int64, error)
 	CompleteTableUpload(ctx context.Context, actorID, contestID, id uuid.UUID) (provisioning.TableData, error)
 	AbortTableUpload(ctx context.Context, actorID, contestID, id uuid.UUID) (provisioning.TableData, error)
@@ -243,6 +247,11 @@ func (h *GameHandler) Mount(r chi.Router) {
 			r.Route("/data", func(r chi.Router) {
 				r.With(h.mw.RequireContestPermission(rbac.PermissionContestEdit)).
 					Post("/", h.beginTableUpload)
+				// A reloaded page's own way to find a table's chunked upload
+				// still in progress — .../uploads/current's own doc on Mount,
+				// mirrored here for a table's CSV instead of a dump.
+				r.With(h.mw.RequireContestPermission(rbac.PermissionContestView)).
+					Get("/current", h.currentTableData)
 				r.With(h.mw.RequireContestPermission(rbac.PermissionContestView)).
 					Get("/window", h.tableDataWindow)
 				r.Route("/{"+tableDataIDParam+"}", func(r chi.Router) {
@@ -1422,6 +1431,34 @@ func (h *GameHandler) beginTableUpload(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusCreated, h.tableDataView(data))
 }
 
+// currentTableData lets a reloaded page find one table's own chunked CSV
+// upload already in progress and offer to resume it — currentUpload's own
+// doc, for a table's file instead of a whole dump.
+//
+// 200 with Status "absent" for "there is none", the identical convention
+// currentUpload follows and for the identical reason: one shape for the
+// interface to render instead of two.
+func (h *GameHandler) currentTableData(w http.ResponseWriter, r *http.Request) {
+	contestID, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+	table := chi.URLParam(r, tableParam)
+
+	data, err := h.games.CurrentTableData(r.Context(), contestID, table)
+	if errors.Is(err, provisioning.ErrTableDataNotFound) {
+		httpx.JSON(w, r, http.StatusOK, tableDataResponse{
+			Table: table, Status: "absent", DeletedRows: []int64{}, BuilderLimits: h.builderLimitsView(),
+		})
+		return
+	}
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, h.tableDataView(data))
+}
+
 // appendTableChunk writes one chunk of a table's CSV upload already begun.
 //
 // Streamed straight through exactly the way appendChunk is (that method's
@@ -1726,6 +1763,12 @@ func (h *GameHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusBadRequest, codeGameDefinitionInvalidType, err.Error())
 	case errors.Is(err, provisioning.ErrDefinitionInvalidPrimaryKey):
 		httpx.Error(w, r, http.StatusBadRequest, codeGameDefinitionInvalidPrimaryKey, err.Error())
+	case errors.Is(err, provisioning.ErrDefinitionTableLocked):
+		// 409, not 400: the definition submitted is not malformed on its own
+		// — it disagrees with state this installation already has (the
+		// table's own data), the same reasoning ErrGameNotEditable's own
+		// case gives just above.
+		httpx.Error(w, r, http.StatusConflict, codeGameDefinitionTableLocked, err.Error())
 
 	// --- The table builder's own per-table CSV data (provisioning/tabledata.go
 	// and provisioning/tablecsv.go) ------------------------------------------

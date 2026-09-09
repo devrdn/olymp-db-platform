@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { ApiError, request } from "@/lib/api/client";
-import type { BuilderLimits, TableDefinition } from "@/lib/api/game";
+import type { BuilderLimits, TableData, TableDefinition } from "@/lib/api/game";
 import { readableBytes, readableDuration } from "@/lib/format/bytes";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
@@ -14,11 +14,19 @@ import {
   appendTableRowAction,
   beginTableUploadAction,
   completeTableUploadAction,
+  currentTableUploadAction,
   deleteTableRowAction,
   gameTableDataWindowAction,
 } from "./actions";
 
-type Phase = "idle" | "uploading" | "completing" | "error";
+type Phase = "idle" | "resumable" | "uploading" | "completing" | "error";
+
+/** `MAX_AUTO_RESYNCS` from `game-upload.tsx` — the identical bound, for a
+ * table's own upload instead of a dump: how many consecutive out-of-order
+ * refusals `runLoop` below resyncs from on its own, against
+ * `currentTableUploadAction`'s own count, before giving up and asking a
+ * person to press Retry. */
+const MAX_AUTO_RESYNCS = 3;
 
 /** `isAbortError` from `game-upload.tsx` — the identical check, for the
  * identical reason (that file's own doc: `DOMException` is not reliably an
@@ -83,21 +91,20 @@ async function putTableChunk(
  * `page.tsx`'s own `tableRowCount` gives for a page load that would
  * otherwise fan out to every table at once.
  *
- * There is no `.../data/current` route for a table's own upload the way a
- * dump has one at `.../uploads/current` (`game_handler.go`'s own routes) —
- * this task's brief lists the table builder's contract exhaustively and it
- * is simply not among them. Two things follow from that gap, both worth
- * naming rather than working around silently: a page reload mid-upload
- * cannot resume it (the browser's own memory of the offset is the only copy
- * that exists), and a chunk refused as out of order cannot resynchronise
- * against the server's own count the way `game-upload.tsx`'s own retry loop
- * does for a dump — there is nothing to ask. `sentBytes` is still never
- * advanced except from a chunk response's own `received_bytes`, so an
- * ordinary retry (the same bytes, from the same offset) is the idempotent
- * no-op `gamefile.Store.Append` already promises, and is what "Retry" below
- * sends; only two callers racing the same table's upload has any other
- * outcome, and that is answered honestly (the refusal's own translated
- * sentence) rather than guessed at.
+ * `GET .../data/current` (`game_handler.go`'s own route, mirroring
+ * `.../uploads/current` for a dump) is what lets this component do two
+ * things a table's own upload could not do before that route existed: a
+ * page reload mid-upload can resume it (`initialTableData`, below, seeded
+ * from `page.tsx`'s own best-effort read of that route, the identical
+ * shape `game-upload.tsx`'s own `initialUpload` already takes for a dump),
+ * and a chunk refused as out of order can resynchronise against the
+ * server's own count instead of only offering "Retry" — `runLoop`'s own
+ * `MAX_AUTO_RESYNCS`, `game-upload.tsx`'s own retry loop for a table
+ * instead of a dump. `sentBytes` is still never advanced except from a
+ * chunk response's own `received_bytes`, so an ordinary retry (the same
+ * bytes, from the same offset) is still the idempotent no-op
+ * `gamefile.Store.Append` already promises, and is still what "Retry"
+ * below sends when a resync could not resolve the mismatch on its own.
  */
 export function GameBuilderTable({
   contestId,
@@ -107,6 +114,7 @@ export function GameBuilderTable({
   editable,
   rowCount,
   onRowCountChange,
+  initialTableData,
   dict,
 }: {
   contestId: string;
@@ -121,18 +129,38 @@ export function GameBuilderTable({
    * so every tab agrees on it without a second read. */
   rowCount: number;
   onRowCountChange: (rowCount: number) => void;
+  /** The chunked upload a reloaded page found still receiving for this
+   * table, or null — `page.tsx`'s own `tableCurrentUpload`, the identical
+   * shape `game-upload.tsx`'s own `initialUpload` prop takes for a dump.
+   * Read once, on mount: this component's own state is what stays current
+   * afterward, the same convention `initialUpload` itself follows. */
+  initialTableData: TableData | null;
   dict: Dictionary;
 }) {
   const tb = dict.workspace.game.builder;
   const td = tb.data;
   const errors = dict.errors;
 
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [uploadId, setUploadId] = useState<string | null>(null);
+  // Only a chunked upload still `'receiving'` counts as something to
+  // resume — `game-upload.tsx`'s own `resumable`, for a table's file
+  // instead of a dump. A `'complete'` or `'aborted'` row never reaches here
+  // in practice (`CurrentTableData` on the server reads only `'receiving'`
+  // rows to begin with), but the same check costs nothing and keeps this
+  // component from trusting a status it does not itself expect.
+  const resumable = initialTableData && initialTableData.status === "receiving" ? initialTableData : null;
+
+  const [phase, setPhase] = useState<Phase>(resumable ? "resumable" : "idle");
+  const [uploadId, setUploadId] = useState<string | null>(resumable?.id ?? null);
   const [filename, setFilename] = useState("");
-  const [totalBytes, setTotalBytes] = useState(0);
-  const [sentBytes, setSentBytes] = useState(0);
+  const [totalBytes, setTotalBytes] = useState(resumable?.declaredBytes ?? 0);
+  const [sentBytes, setSentBytes] = useState(resumable?.receivedBytes ?? 0);
   const [rateBps, setRateBps] = useState(0);
+  // Set only while resuming an unfinished upload with a file whose size does
+  // not match it — `game-upload.tsx`'s own `mismatch`, for a table's file
+  // instead of a dump (which also checks the filename; a table's own upload
+  // carries none, so size is the one thing worth checking before spending a
+  // request).
+  const [mismatch, setMismatch] = useState(false);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   // The server's own words, when the refusal is one of the table builder's
   // own row/column-specific ones — `GameState.detail`'s own doc in
@@ -213,14 +241,16 @@ export function GameBuilderTable({
   }
 
   /** Sends every remaining chunk of `file`, starting at `startOffset` —
-   * `runLoop` in `game-upload.tsx`, minus the out-of-order resync this
-   * component's own doc explains there is nothing left to ask for. */
+   * `runLoop` in `game-upload.tsx`, now with the identical out-of-order
+   * resync that file's own loop runs, since `currentTableUploadAction`
+   * gives this component something to ask (`MAX_AUTO_RESYNCS`'s own doc). */
   async function runLoop(file: File, id: string, startOffset: number, chunkBytes: number) {
     const controller = new AbortController();
     controllerRef.current = controller;
     rateOriginRef.current = { time: Date.now(), bytes: startOffset };
 
     let offset = startOffset;
+    let resyncs = 0;
 
     while (offset < file.size) {
       const end = Math.min(offset + chunkBytes, file.size);
@@ -231,9 +261,29 @@ export function GameBuilderTable({
         // game-upload.tsx's own runLoop gives: a parallel PUT would race the
         // same offset and be refused as out of order regardless.
         offset = await putTableChunk(contestId, table.name, id, offset, chunk, controller.signal);
+        resyncs = 0;
         markProgress(offset);
       } catch (error) {
         if (isAbortError(error)) return;
+
+        // The server knows the true offset better than this tab's own
+        // count of what it sent — game-upload.tsx's own identical branch,
+        // for a table's upload now that there is a `.../data/current` to
+        // ask.
+        if (
+          error instanceof ApiError &&
+          error.code === "game_table_data_chunk_out_of_order" &&
+          resyncs < MAX_AUTO_RESYNCS
+        ) {
+          resyncs += 1;
+          const fresh = await currentTableUploadAction(contestId, table.name);
+          if (fresh && fresh.id === id && fresh.status === "receiving") {
+            offset = fresh.receivedBytes;
+            markProgress(offset);
+            continue;
+          }
+        }
+
         setPhase("error");
         setErrorCode(failureCode(error));
         // The chunk PUT is sent straight to the API (`putTableChunk`'s own
@@ -285,10 +335,54 @@ export function GameBuilderTable({
     await runLoop(file, begun.id, 0, begun.builderLimits.chunkBytes);
   }
 
+  /** Resumes the upload `resumable` describes after a reload — `beginResume`
+   * in `game-upload.tsx`, minus the filename check that file's own doc
+   * explains a table's upload has nothing to check (it carries no filename
+   * at all): only the reselected file's size has to agree with what the
+   * unfinished upload declared. */
+  async function beginResume(file: File) {
+    if (!resumable) return;
+    setMismatch(false);
+    setErrorCode(null);
+    setErrorDetail(null);
+    setPhase("uploading");
+
+    // The reselected file only proves its own size matches — the server's
+    // own count of what it actually received is what a resend has to start
+    // from, not the number this page loaded with, which may already be
+    // stale (`currentTableUploadAction`'s own doc).
+    const fresh = await currentTableUploadAction(contestId, table.name);
+    const offset =
+      fresh && fresh.id === resumable.id && fresh.status === "receiving"
+        ? fresh.receivedBytes
+        : resumable.receivedBytes;
+
+    fileRef.current = file;
+    setHasFile(true);
+    setUploadId(resumable.id);
+    setFilename(file.name);
+    setTotalBytes(resumable.declaredBytes);
+    setSentBytes(offset);
+    await runLoop(file, resumable.id, offset, (fresh ?? resumable).builderLimits.chunkBytes);
+  }
+
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const picked = event.target.files?.[0];
+    // Cleared immediately, not just after a successful read — game-upload.tsx's
+    // own identical doc explains why: without this, picking the very same
+    // file a second time to fix a mismatch never fires `onChange` at all.
     event.target.value = "";
     if (!picked) return;
+
+    if (phase === "resumable" && resumable) {
+      if (picked.size !== resumable.declaredBytes) {
+        setMismatch(true);
+        return;
+      }
+      void beginResume(picked);
+      return;
+    }
+
     void beginFresh(picked);
   }
 
@@ -303,6 +397,7 @@ export function GameBuilderTable({
     setFilename("");
     setTotalBytes(0);
     setSentBytes(0);
+    setMismatch(false);
     setErrorCode(null);
     setErrorDetail(null);
     if (id) await abortTableUploadAction(contestId, table.name, id);
@@ -531,6 +626,35 @@ export function GameBuilderTable({
                 <span className="text-label text-ink-3">
                   {td.limitHint.replace("{max}", readableBytes(limits.maxFileBytes))}
                 </span>
+              </div>
+            ) : null}
+
+            {phase === "resumable" && resumable ? (
+              <div className="flex flex-col gap-2 border-l-2 border-warn pl-4">
+                <p className="text-control text-ink">{td.resumeHeading}</p>
+                <p className="max-w-body text-small text-ink-2">
+                  {td.resumeBody
+                    .replace("{received}", readableBytes(resumable.receivedBytes))
+                    .replace("{total}", readableBytes(resumable.declaredBytes))}
+                </p>
+                {mismatch ? (
+                  <p role="alert" className="max-w-body text-small text-bad">
+                    {td.resumeMismatch.replace("{total}", readableBytes(resumable.declaredBytes))}
+                  </p>
+                ) : null}
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className={cn(buttonVariants({ variant: "secondary" }), "cursor-pointer")}>
+                    {td.resumePick}
+                    <input type="file" className="sr-only" onChange={handleFileChange} />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => void cancel()}
+                    className={cn(buttonVariants({ variant: "quiet" }))}
+                  >
+                    {td.resumeCancel}
+                  </button>
+                </div>
               </div>
             ) : null}
 

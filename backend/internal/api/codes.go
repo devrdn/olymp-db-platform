@@ -122,6 +122,8 @@ var (
 		"A column's type is not one this platform supports. The message names the column and the type it was given.")
 	codeGameDefinitionInvalidPrimaryKey = httpx.NewCode("game_definition_invalid_primary_key",
 		"The primary key names a column its own table does not have, or names the same column twice. The message names it.")
+	codeGameDefinitionTableLocked = httpx.NewCode("game_definition_table_locked",
+		"A table named in this definition already holds data, and the save would have changed its name, its columns or its primary key. Remove the table's data first, or leave that table's structure exactly as it was. The message names the table.")
 
 	// --- The table builder: one table's own CSV data -----------------------
 	//

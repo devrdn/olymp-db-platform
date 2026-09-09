@@ -679,6 +679,160 @@ func TestASecondDefinitionBumpsTheVersionSoEveryCopyBecomesStale(t *testing.T) {
 	}
 }
 
+// A table's own data is a CSV file whose first line names the table's
+// columns, in order (tabledata.go's own header check) — SetDefinition used
+// to replace the whole description with no check against that file at all,
+// so a rename, a type change or a column's removal saved cleanly and left
+// the file silently disagreeing with the new definition. This is the
+// boundary ErrDefinitionTableLocked now enforces: any of the three, once a
+// table holds a single row, is refused before anything is written — the
+// same freeze the table builder's own screen already enforces client-side
+// (game-builder.tsx's own doc, "Why a table with data locks its own
+// structure").
+func TestADefinitionChangeThatWouldOrphanATablesOwnDataIsRefused(t *testing.T) {
+	t.Parallel()
+	service, store, _ := games(true)
+	contest := uuid.New()
+
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+		t.Fatalf("save the first definition: %v", err)
+	}
+	// "suspects" now holds three rows, the way CompleteTableUpload leaves it
+	// — this test needs only the row saying so, never a real file on disk,
+	// to prove the refusal at the SetDefinition boundary.
+	dataID := uuid.New()
+	store.tableData = map[uuid.UUID]provisioning.TableData{
+		dataID: {ID: dataID, ContestID: contest, Table: "suspects", Status: provisioning.TableDataComplete, Lines: 3},
+	}
+
+	for _, tc := range []struct {
+		name string
+		next provisioning.Definition
+	}{
+		{
+			"column renamed",
+			provisioning.Definition{Tables: []provisioning.TableDefinition{{
+				Name: "suspects",
+				Columns: []provisioning.ColumnDefinition{
+					{Name: "id", Type: provisioning.ColumnInteger},
+					{Name: "full_name", Type: provisioning.ColumnText},
+				},
+				PrimaryKey: []string{"id"},
+			}}},
+		},
+		{
+			"column type changed",
+			provisioning.Definition{Tables: []provisioning.TableDefinition{{
+				Name: "suspects",
+				Columns: []provisioning.ColumnDefinition{
+					{Name: "id", Type: provisioning.ColumnInteger},
+					{Name: "name", Type: provisioning.ColumnInteger},
+				},
+				PrimaryKey: []string{"id"},
+			}}},
+		},
+		{
+			"column removed",
+			provisioning.Definition{Tables: []provisioning.TableDefinition{{
+				Name:       "suspects",
+				Columns:    []provisioning.ColumnDefinition{{Name: "id", Type: provisioning.ColumnInteger}},
+				PrimaryKey: []string{"id"},
+			}}},
+		},
+		{
+			"table removed outright",
+			provisioning.Definition{Tables: []provisioning.TableDefinition{{
+				Name:    "witnesses",
+				Columns: []provisioning.ColumnDefinition{{Name: "id", Type: provisioning.ColumnInteger}},
+			}}},
+		},
+		{
+			"primary key changed",
+			provisioning.Definition{Tables: []provisioning.TableDefinition{{
+				Name: "suspects",
+				Columns: []provisioning.ColumnDefinition{
+					{Name: "id", Type: provisioning.ColumnInteger},
+					{Name: "name", Type: provisioning.ColumnText},
+				},
+				// No primary key at all now, where there was one.
+			}}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := service.SetDefinition(t.Context(), uuid.New(), contest, tc.next)
+			if !errors.Is(err, provisioning.ErrDefinitionTableLocked) {
+				t.Fatalf("answered %v, want ErrDefinitionTableLocked", err)
+			}
+			// The version must not have moved: a refused save changed
+			// nothing about the game that was already there.
+			if store.template.Version != 1 {
+				t.Fatalf("version is %d after a refused save, want 1", store.template.Version)
+			}
+		})
+	}
+}
+
+// The freeze is per table, not per definition: a table that already holds
+// data locks its own structure, but an organiser may still add an entirely
+// new table beside it, or resave the locked table completely unchanged.
+func TestATableWithDataMayStillGainANewSiblingTable(t *testing.T) {
+	t.Parallel()
+	service, store, _ := games(true)
+	contest := uuid.New()
+
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+		t.Fatalf("save the first definition: %v", err)
+	}
+	dataID := uuid.New()
+	store.tableData = map[uuid.UUID]provisioning.TableData{
+		dataID: {ID: dataID, ContestID: contest, Table: "suspects", Status: provisioning.TableDataComplete, Lines: 3},
+	}
+
+	next := aDefinition()
+	next.Tables = append(next.Tables, provisioning.TableDefinition{
+		Name:    "witnesses",
+		Columns: []provisioning.ColumnDefinition{{Name: "id", Type: provisioning.ColumnInteger}},
+	})
+
+	saved, err := service.SetDefinition(t.Context(), uuid.New(), contest, next)
+	if err != nil {
+		t.Fatalf("adding a sibling table beside a locked one: %v", err)
+	}
+	if saved.Version != 2 {
+		t.Fatalf("version is %d, want 2", saved.Version)
+	}
+}
+
+// A completed file with no data rows — a header with nothing under it — is
+// not locked: loadTableData's own copy reader always skips the header line
+// unconditionally (tableDataCopyReader.advance), so nothing a build would
+// ever read disagrees with a new structure while the table is still empty.
+func TestATableWithACompletedButEmptyFileIsNotLocked(t *testing.T) {
+	t.Parallel()
+	service, store, _ := games(true)
+	contest := uuid.New()
+
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+		t.Fatalf("save the first definition: %v", err)
+	}
+	dataID := uuid.New()
+	store.tableData = map[uuid.UUID]provisioning.TableData{
+		dataID: {ID: dataID, ContestID: contest, Table: "suspects", Status: provisioning.TableDataComplete, Lines: 0},
+	}
+
+	renamed := provisioning.Definition{Tables: []provisioning.TableDefinition{{
+		Name: "suspects",
+		Columns: []provisioning.ColumnDefinition{
+			{Name: "id", Type: provisioning.ColumnInteger},
+			{Name: "full_name", Type: provisioning.ColumnText},
+		},
+		PrimaryKey: []string{"id"},
+	}}}
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, renamed); err != nil {
+		t.Fatalf("renaming a column of an empty table: %v", err)
+	}
+}
+
 func TestBuildingRunsTheScriptAndRecordsTheOutcome(t *testing.T) {
 	t.Parallel()
 	service, store, cluster := games(true)

@@ -82,6 +82,10 @@
       "meaning": "A table has no columns. The message names it."
     },
     {
+      "code": "game_definition_table_locked",
+      "meaning": "A table named in this definition already holds data, and the save would have changed its name, its columns or its primary key. Remove the table's data first, or leave that table's structure exactly as it was. The message names the table."
+    },
+    {
       "code": "game_definition_too_large",
       "meaning": "The game definition has more tables, or one table has more columns, than this platform allows — or the whole document is larger once encoded. The message names which."
     },

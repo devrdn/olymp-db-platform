@@ -563,8 +563,17 @@ func (g *Games) SetScript(ctx context.Context, actorID, contestID uuid.UUID, scr
 // the game back to pending and a worker picks it up (Build), which for a
 // builder-sourced game currently means finishDefinitionBuild's own honest
 // refusal (DefinitionBuildUnavailable) until the SQL-generation task exists.
+//
+// checkTableDataCompatibility runs immediately after Validate, for the same
+// reason Validate itself runs before anything is asked of storage: a table
+// that already holds data locks its own name, columns and primary key
+// (ErrDefinitionTableLocked's own doc explains why), and that is as much a
+// mistake in what was just submitted as an invalid identifier is.
 func (g *Games) SetDefinition(ctx context.Context, actorID, contestID uuid.UUID, definition Definition) (Template, error) {
 	if err := definition.Validate(); err != nil {
+		return Template{}, err
+	}
+	if err := g.checkTableDataCompatibility(ctx, contestID, definition); err != nil {
 		return Template{}, err
 	}
 
