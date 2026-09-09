@@ -57,6 +57,7 @@ export const AUDIT_ACTIONS = [
   "contest.game_built",
   "contest.upload_complete",
   "contest.upload_abort",
+  "contest.game_definition_set",
   "contest.story_change",
   "contest.question_create",
   "contest.question_update",

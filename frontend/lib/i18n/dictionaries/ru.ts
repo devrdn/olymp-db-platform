@@ -1012,6 +1012,7 @@ const ru = {
       "contest.game_built": "Игровая база собрана",
       "contest.upload_complete": "Загрузил дамп игровой базы",
       "contest.upload_abort": "Отменил загрузку игровой базы",
+      "contest.game_definition_set": "Описал игровую базу таблицами",
       "contest.story_change": "Изменил историю",
       "contest.question_create": "Добавил вопрос",
       "contest.question_update": "Изменил вопрос",

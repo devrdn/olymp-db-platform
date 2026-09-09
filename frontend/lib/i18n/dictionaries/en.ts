@@ -1095,6 +1095,7 @@ const en = {
       "contest.game_built": "The game database was built",
       "contest.upload_complete": "Uploaded a game database dump",
       "contest.upload_abort": "Cancelled a game database upload",
+      "contest.game_definition_set": "Described the game database as tables",
       "contest.story_change": "Changed the story",
       "contest.question_create": "Added a question",
       "contest.question_update": "Changed a question",
