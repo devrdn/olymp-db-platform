@@ -1,6 +1,9 @@
 package httpx
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
 
 // hstsValue pins the browser to TLS for a year, including subdomains.
 const hstsValue = "max-age=31536000; includeSubDomains"
@@ -48,9 +51,33 @@ func SecureHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// isTLS reports whether the request reached the edge over TLS. The forwarded
-// header is only meaningful because the reverse proxy is the sole ingress and
-// overwrites it; nothing security-critical depends on this value.
+// isTLS reports whether the request reached the edge over TLS.
+//
+// Two answers, and only the first is this process's own knowledge: a TLS
+// connection state means the request arrived here over TLS, full stop. The
+// second is somebody's claim. X-Forwarded-Proto is written by whatever spoke
+// to this socket, and the deployment's reverse proxy overwriting it protects
+// nothing unless the peer really is that proxy — so the header is believed
+// exactly where X-Forwarded-For is (CLAUDE.md rule 9: one trust boundary,
+// named once, in IPResolver).
+//
+// It matters because this value is not only cosmetic. requestScheme (csrf.go)
+// builds the scheme half of "is this Origin our own site" out of it, and a
+// header any caller can set that turns "http://host" into "https://host" is a
+// spoofed value making the check *looser* — precisely the direction rule 9
+// forbids. Ungated, a non-browser caller (or a misconfigured intermediary)
+// simply announced its way past the cross-origin guard.
+//
+// Behind the compose deployment nothing changes: TRUSTED_PROXIES names Caddy,
+// so its X-Forwarded-Proto is believed and HSTS is still sent. A deployment
+// that terminates TLS somewhere it has not named as a proxy is told the
+// request is plain HTTP, which is the strict answer in both consumers.
 func isTLS(r *http.Request) bool {
-	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	if r.TLS != nil {
+		return true
+	}
+	if !forwardedTrusted(r) {
+		return false
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }

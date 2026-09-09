@@ -771,3 +771,73 @@ func TestARealPgDumpFileIsReadInFull(t *testing.T) {
 		t.Fatalf("COPY data = %q, want %q", copyRows, wantRows)
 	}
 }
+
+// The lexer above reads a script in exactly one dialect: the one
+// standard_conforming_strings=on defines, where a backslash inside '...' is
+// an ordinary character and only E'...' processes escapes (see
+// isExtendedStringPrefix's own doc). That is an assumption about the *server*,
+// not about the file, and a dump can move the server out from under it: a
+// pg_dump taken from a database that had the setting off writes
+// `SET standard_conforming_strings = off;` at the top, and from that
+// statement onward the two disagree about where a literal ends.
+//
+// The disagreement is not cosmetic. `INSERT INTO notes VALUES ('a\'); SELECT
+// 1;` is two statements to this reader and, to a server with the setting off,
+// one unterminated literal that swallows the second — so at best the build
+// fails with a message about the wrong line, and at worst two statements are
+// executed as text neither the author nor this reader intended. Pinning the
+// setting on the build connection does not help: the script's own SET runs
+// after ours and wins.
+//
+// So the reader refuses it, by name and with the line, which is the same
+// answer it gives a psql meta-command a dump left in — a fact about the file
+// that a person can act on (re-export it), not a verdict PostgreSQL could
+// have explained.
+func TestASetThatTurnsOffStandardConformingStringsIsRefusedByLine(t *testing.T) {
+	t.Parallel()
+	r := gamedb.NewScriptReader(strings.NewReader(
+		"SET statement_timeout = 0;\nSET standard_conforming_strings = off;\nSELECT 1;\n"))
+
+	if _, err := r.Next(); err != nil {
+		t.Fatalf("the first statement: %v", err)
+	}
+
+	_, err := r.Next()
+	if err == nil {
+		t.Fatal("a script was allowed to move the server out of the dialect this reader parses in")
+	}
+	var syn *gamedb.ScriptSyntaxError
+	if !errors.As(err, &syn) {
+		t.Fatalf("error is %T, want *ScriptSyntaxError: %v", err, err)
+	}
+	if syn.Line != 2 {
+		t.Fatalf("line = %d, want 2", syn.Line)
+	}
+	if !strings.Contains(syn.Message, "standard_conforming_strings") {
+		t.Fatalf("message = %q, does not name the setting", syn.Message)
+	}
+}
+
+// The form every modern pg_dump writes says on, which is the dialect this
+// reader already assumes — nothing to refuse, and refusing it would turn away
+// every correctly exported dump there is. RESET is refused, though: it hands
+// the setting back to whatever the cluster's own configuration says, which
+// this process does not decide and cannot read from here.
+func TestSettingStandardConformingStringsOnIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	for _, statement := range []string{
+		"SET standard_conforming_strings = on;",
+		"SET standard_conforming_strings TO 'on';",
+		"set session standard_conforming_strings = true;",
+	} {
+		got := readAllStatements(t, statement)
+		if len(got) != 1 {
+			t.Fatalf("%q gave %d statements, want 1", statement, len(got))
+		}
+	}
+
+	r := gamedb.NewScriptReader(strings.NewReader("RESET standard_conforming_strings;"))
+	if _, err := r.Next(); err == nil {
+		t.Fatal("RESET standard_conforming_strings was accepted")
+	}
+}

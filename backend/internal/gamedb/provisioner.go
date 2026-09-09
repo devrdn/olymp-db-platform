@@ -351,6 +351,18 @@ func (p *Provisioner) runScript(ctx context.Context, database string, script io.
 	if _, err := conn.Exec(ctx, fmt.Sprintf(`SET statement_timeout = %d`, timeoutMS)); err != nil {
 		return scriptFailure(err, 0)
 	}
+	// The dialect ScriptReader parses in, stated rather than assumed: a
+	// backslash inside '...' is data and only E'...' escapes
+	// (isExtendedStringPrefix, script.go). PostgreSQL has defaulted this to on
+	// since 9.1, but a cluster's postgresql.conf or an ALTER ROLE can say
+	// otherwise, and then the reader and the server would disagree about where
+	// a literal ends. This closes the half of that the deployment controls;
+	// the script's own `SET standard_conforming_strings = off` would run after
+	// this one and win, which is why the reader refuses that outright
+	// (dialectRefusal) rather than leaving it to this line.
+	if _, err := conn.Exec(ctx, `SET standard_conforming_strings = on`); err != nil {
+		return scriptFailure(err, 0)
+	}
 
 	reader := NewScriptReader(script)
 	for {

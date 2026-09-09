@@ -53,12 +53,31 @@ func TestSecureHeadersOmitsHSTSOnPlainHTTP(t *testing.T) {
 func TestSecureHeadersSendsHSTSForForwardedHTTPS(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "172.28.0.10:52000"
 	req.Header.Set("X-Forwarded-Proto", "https")
 
-	SecureHeaders(okHandler).ServeHTTP(rec, req)
+	resolver(t, "172.28.0.0/16").Middleware(SecureHeaders(okHandler)).ServeHTTP(rec, req)
 
 	if got := rec.Header().Get("Strict-Transport-Security"); got == "" {
-		t.Error("Strict-Transport-Security missing for a request forwarded over TLS")
+		t.Error("Strict-Transport-Security missing for a request forwarded over TLS by a trusted proxy")
+	}
+}
+
+// The same header from a peer nobody vouched for says nothing. HSTS is the
+// harmless half of what isTLS decides — announcing it over plain HTTP is
+// ignored by browsers — but the header goes through one gate, not two, so
+// that the answer here and the answer requestScheme (csrf.go) builds a
+// same-site comparison out of cannot drift apart (CLAUDE.md rule 9).
+func TestSecureHeadersIgnoresAForwardedProtoFromAnUntrustedPeer(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "203.0.113.7:41000"
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	resolver(t, "172.28.0.0/16").Middleware(SecureHeaders(okHandler)).ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Errorf("Strict-Transport-Security = %q for a direct caller's own claim about the scheme", got)
 	}
 }
 

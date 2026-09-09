@@ -1,6 +1,7 @@
 package gamefile
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -12,14 +13,44 @@ import (
 // line inside it.
 const windowScanBufferSize = 64 * 1024
 
+// maxWindowSkipBytes bounds the one part of a Window call whose cost the
+// caller's own byte budget never described: the walk from the nearest index
+// mark forward to the requested line.
+//
+// A mark every indexInterval lines is what makes paging cheap, and it is also
+// the gap this bound exists for. Asked for line 1,999, Window seeks to the
+// mark at line 1,001 and walks 998 lines it will never show — and a line in
+// this package has no length limit at all, because a dump's COPY rows are
+// whatever the organiser's data is. So `?from=1999&max_bytes=1` could read
+// most of a four-gigabyte file to hand back one byte, on the process serving
+// the olympiad, with no rate limit on the route and (until this file took a
+// context) no way for a client that has hung up to stop it.
+//
+// Eight mebibytes is an average of about 8 KiB across the 999 lines the walk
+// can span — orders of magnitude past a SQL dump's own statements and
+// generous even for wide COPY rows — while still being a fixed, small number
+// rather than "however long the file is". Past it the answer is
+// ErrWindowUnreachable: an honest refusal the console can show, rather than a
+// read nobody asked the cost of.
+const maxWindowSkipBytes = 8 << 20
+
 // Window returns up to maxLines lines of id's completed upload, starting at
-// fromLine (1-based), and never reads more than maxBytes of the file doing
-// it. maxBytes is the caller's own budget for this call — the same role
-// MaxChunkBytes plays for Append, just decided by whoever is asking for a
-// look at the file rather than fixed at Store construction, since a console
-// page's reasonable window size has nothing to do with an upload's chunk
-// size.
-func (s *Store) Window(id string, fromLine, maxLines int, maxBytes int64) (Window, error) {
+// fromLine (1-based).
+//
+// Two bounds, and they measure two different things. maxBytes is the caller's
+// own budget for the lines it gets back — the same role MaxChunkBytes plays
+// for Append, just decided by whoever is asking for a look at the file rather
+// than fixed at Store construction, since a console page's reasonable window
+// size has nothing to do with an upload's chunk size. maxWindowSkipBytes is
+// this package's own bound on getting *to* fromLine, which costs I/O and no
+// memory and which maxBytes never described. Together they are what makes the
+// whole call's work a fixed number rather than a function of the file's size.
+//
+// ctx stops the walk between buffers. This runs inside an HTTP request on the
+// process serving the olympiad, and a console that has navigated away or a
+// browser that hung up must not leave a goroutine reading megabytes for
+// nobody.
+func (s *Store) Window(ctx context.Context, id string, fromLine, maxLines int, maxBytes int64) (Window, error) {
 	if err := validateUploadID(id); err != nil {
 		return Window{}, err
 	}
@@ -76,12 +107,12 @@ func (s *Store) Window(id string, fromLine, maxLines int, maxBytes int64) (Windo
 	}
 
 	if toSkip := int64(fromLine) - lineAtMark; toSkip > 0 {
-		if err := skipLines(dataFile, toSkip); err != nil {
+		if err := skipLines(ctx, dataFile, toSkip, maxWindowSkipBytes); err != nil {
 			return Window{}, fmt.Errorf("gamefile: skip to line %d: %w", fromLine, err)
 		}
 	}
 
-	lines, truncated, err := readWindowLines(dataFile, maxLines, maxBytes)
+	lines, truncated, err := readWindowLines(ctx, dataFile, maxLines, maxBytes)
 	if err != nil {
 		return Window{}, fmt.Errorf("gamefile: read window: %w", err)
 	}
@@ -99,7 +130,13 @@ func (s *Store) Window(id string, fromLine, maxLines int, maxBytes int64) (Windo
 // skips over — it only counts '\n' occurrences through a fixed buffer — so
 // skipping across lines that are themselves megabytes long costs no more
 // memory than skipping across short ones.
-func skipLines(f *os.File, n int64) error {
+//
+// budget is the number of bytes it may read doing so. Memory was never what
+// this walk spent; time and disk were, and nothing else bounded them (see
+// maxWindowSkipBytes). ctx is checked once per buffer, which is the finest
+// granularity that costs nothing: one read of windowScanBufferSize is the
+// longest a cancelled call can still be working.
+func skipLines(ctx context.Context, f *os.File, n, budget int64) error {
 	start, err := f.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return err
@@ -107,9 +144,18 @@ func skipLines(f *os.File, n int64) error {
 
 	buf := make([]byte, windowScanBufferSize)
 	pos := start
-	var skipped int64
+	var skipped, read int64
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if read >= budget {
+			return fmt.Errorf("%w: %d of %d line(s) walked in %d bytes",
+				ErrWindowUnreachable, skipped, n, read)
+		}
+
 		nRead, rerr := f.Read(buf)
+		read += int64(nRead)
 		for i := 0; i < nRead; i++ {
 			if buf[i] != '\n' {
 				continue
@@ -129,9 +175,13 @@ func skipLines(f *os.File, n int64) error {
 		if rerr == io.EOF {
 			// The index guaranteed fromLine <= totalLines, so this means
 			// the data file no longer matches the index it was completed
-			// with — surfaced rather than silently read from the wrong
-			// place.
-			return fmt.Errorf("reached end of file after %d of %d lines", skipped, n)
+			// with. ErrCorruptIndex and not a bare error: it is the same
+			// fact readIndexHeader's own checks report — the bytes beside
+			// the index have stopped being what it describes — and the one
+			// thing the organiser can do about it is upload the file again
+			// (CLAUDE.md rule 1).
+			return fmt.Errorf("%w: the data file ended after %d of %d line(s)",
+				ErrCorruptIndex, skipped, n)
 		}
 		if rerr != nil {
 			return rerr
@@ -148,8 +198,8 @@ func skipLines(f *os.File, n int64) error {
 // The memory this holds is bounded by maxBytes — the caller's own budget for
 // this call, the same way MaxChunkBytes bounds one Append. It is never
 // bounded by the file, because the file is never the thing being measured
-// here.
-func readWindowLines(f *os.File, maxLines int, maxBytes int64) ([]string, bool, error) {
+// here. ctx is checked once per buffer, as in skipLines.
+func readWindowLines(ctx context.Context, f *os.File, maxLines int, maxBytes int64) ([]string, bool, error) {
 	buf := make([]byte, windowScanBufferSize)
 	var (
 		lines     []string
@@ -160,6 +210,9 @@ func readWindowLines(f *os.File, maxLines int, maxBytes int64) ([]string, bool, 
 
 readLoop:
 	for len(lines) < maxLines {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		n, rerr := f.Read(buf)
 		for i := 0; i < n; i++ {
 			if remaining <= 0 {

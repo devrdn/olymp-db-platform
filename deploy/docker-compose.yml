@@ -267,6 +267,14 @@ services:
       # Addresses rather than names because the resolver reads CIDRs at
       # startup, which is why the two are pinned below.
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.28.0.10/32,172.28.0.11/32}
+      # Front origins this API answers for on top of its own host, for the
+      # cross-origin guard. Empty is right behind the bundled Caddy, which
+      # passes the browser's Host through — but it has to be *passed* even so:
+      # without this line a deployment whose interface answers on another name
+      # sets PUBLIC_ORIGINS in .env, restarts, and still gets 403 on every
+      # chunk upload, with nothing in the log to say why (.env.example has
+      # documented it since the guard was written).
+      PUBLIC_ORIGINS: ${PUBLIC_ORIGINS:-}
       # Counts successful sign-ins too, so it bounds people rather than only
       # guesses. Raise it where a whole cohort shares one NAT address; the
       # per-account limit of ten is what stops guessing.
@@ -296,6 +304,12 @@ services:
       # reason the cap above does.
       GAME_CLUSTER_MAX_BYTES: ${GAME_CLUSTER_MAX_BYTES:-68719476736}
       GAME_PROVISION_WORKERS: ${GAME_PROVISION_WORKERS:-3}
+      # How long one run of an organiser's script — editor or uploaded dump —
+      # may take. Sized against the largest dump this installation expects and
+      # the disk it lands on, so it is an operator's choice and has to reach
+      # the container; .env.example has always said so, and this line is what
+      # makes saying so true.
+      GAME_BUILD_TIMEOUT: ${GAME_BUILD_TIMEOUT:-30m}
       GAME_COPY_STRATEGY: ${GAME_COPY_STRATEGY:-}
       # How long a finished contest's participant databases survive, for every
       # contest whose organizer left settings.grace_period_min at zero

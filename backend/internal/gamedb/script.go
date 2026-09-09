@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strings"
 )
 
 // maxStatementBytes bounds one statement's text while the reader looks for
@@ -231,7 +232,7 @@ func (s *ScriptReader) Next() (Statement, error) {
 			if !haveContent || len(bytes.TrimSpace(buf)) == 0 {
 				return Statement{}, io.EOF
 			}
-			return s.finish(buf, &probe, startLine), nil
+			return s.finish(buf, &probe, startLine)
 		}
 
 		prevState := state
@@ -359,7 +360,10 @@ func (s *ScriptReader) Next() (Statement, error) {
 					haveSQL = sqlBefore
 				}
 			case b == ';':
-				stmt := s.finish(buf, &probe, startLine)
+				stmt, err := s.finish(buf, &probe, startLine)
+				if err != nil {
+					return Statement{}, err
+				}
 				if stmt.CopyHeader != "" {
 					// pg_dump's own layout: the data rows start on the line
 					// right after the COPY command's, never on the same one.
@@ -446,19 +450,24 @@ func (s *ScriptReader) Next() (Statement, error) {
 }
 
 // finish decides whether the statement just closed is a `COPY ... FROM
-// STDIN` and marks the reader accordingly.
-func (s *ScriptReader) finish(buf []byte, probe *copyProbe, startLine int) Statement {
+// STDIN` and marks the reader accordingly — or refuses it outright, for the
+// one statement that would change the dialect the lexer above reads in
+// (dialectRefusal).
+func (s *ScriptReader) finish(buf []byte, probe *copyProbe, startLine int) (Statement, error) {
 	// Only the run of whitespace between the previous statement's ';' and
 	// this one's own first byte is dropped. A leading comment stays: what
 	// runs is what the author wrote (Statement.Text's own doc), and
 	// PostgreSQL reads a comment in front of a statement exactly as if it
 	// were not there — including in the sql pgconn.PgConn.CopyFrom is given.
 	text := string(bytes.TrimLeft(buf, " \t\r\n"))
+	if refusal := dialectRefusal(probe, text, startLine); refusal != nil {
+		return Statement{}, refusal
+	}
 	if header, ok := copyFromStdinHeader(text, probe); ok {
 		s.copyOpen = true
-		return Statement{Text: text, Line: startLine, CopyHeader: header}
+		return Statement{Text: text, Line: startLine, CopyHeader: header}, nil
 	}
-	return Statement{Text: text, Line: startLine}
+	return Statement{Text: text, Line: startLine}, nil
 }
 
 // copyProbe is the statement's own SQL with every comment body and every
@@ -494,8 +503,36 @@ type copyProbe struct {
 	ruledOut bool
 }
 
-// copyWord is the only first token that can make a statement a COPY block.
+// probeWords are the first tokens that make a statement worth keeping the
+// code-only copy of: `copy`, for the COPY ... FROM STDIN question this probe
+// was built for, and `set`/`reset`, for the one setting this reader's own
+// parse depends on (see dialectRefusal). Everything else is ruled out at the
+// first byte that cannot begin one of them, which is what keeps this from
+// being a second full-size copy of every statement in a multi-gigabyte dump.
+var probeWords = [][]byte{[]byte("copy"), []byte("set"), []byte("reset")}
+
+// copyWord is the first token that makes a statement a COPY block.
 var copyWord = []byte("copy")
+
+// stillInteresting reports whether code — the statement's first bytes, with
+// comments and literals already removed — can still be the start of one of
+// probeWords followed by a token boundary. "copyright" is not "copy", which
+// is why the byte past the word is checked and not only the word itself.
+func stillInteresting(code []byte) bool {
+	for _, word := range probeWords {
+		switch {
+		case len(code) < len(word):
+			if bytes.EqualFold(code, word[:len(code)]) {
+				return true
+			}
+		case bytes.EqualFold(code[:len(word)], word):
+			if len(code) == len(word) || !isIdentByte(code[len(word)]) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // observe is called once per byte the lexer read, with the state it was in
 // before that byte and the state it is in after — which together say whether
@@ -527,14 +564,9 @@ func (p *copyProbe) push(b byte) {
 		p.ruledOut, p.code = true, nil
 		return
 	}
-	// The first token decides everything, so as soon as it is known not to be
-	// COPY there is nothing left to accumulate. One byte past the word is
-	// needed for the boundary: "copyright" is not "copy".
-	switch {
-	case len(p.code) < len(copyWord):
-	case !bytes.EqualFold(p.code[:len(copyWord)], copyWord):
-		p.ruledOut, p.code = true, nil
-	case len(p.code) > len(copyWord) && isIdentByte(p.code[len(copyWord)]):
+	// The first token decides everything, so as soon as it is known not to
+	// begin one of probeWords there is nothing left to accumulate.
+	if !stillInteresting(p.code) {
 		p.ruledOut, p.code = true, nil
 	}
 }
@@ -776,6 +808,75 @@ func unterminatedMessage(state scanState) string {
 // statement's first token is, decided by the lexer rather than by the
 // regexp engine.
 var copyFromStdinPattern = regexp.MustCompile(`(?is)^copy\b.*\bfrom\s+stdin\b`)
+
+// dialectPattern recognises a statement that changes standard_conforming_strings.
+//
+// Matched against copyProbe.code for the same reason copyFromStdinPattern is:
+// the probe's bytes are code and only code, so a table called
+// standard_conforming_strings or a comment mentioning it can never be mistaken
+// for the setting being changed, and the first token is the lexer's answer
+// rather than the regexp engine's.
+var dialectPattern = regexp.MustCompile(
+	`(?is)^(?:set|reset)\s+(?:session\s+|local\s+)?standard_conforming_strings\b`)
+
+// dialectValuePattern reads the value out of such a statement.
+//
+// This one runs against the statement's raw text, because the probe blanks
+// every literal body — `TO 'on'` and `TO 'off'` are the same two spaces to it,
+// and the difference is the whole question. Matching raw text is safe here
+// and nowhere else: it runs only after dialectPattern has already decided,
+// from code alone, that this statement is a SET or RESET of this one setting,
+// so there is no comment or literal left for it to be misled by.
+var dialectValuePattern = regexp.MustCompile(`(?is)standard_conforming_strings\s*(?:=|\bto\b)\s*([^\s;]+)`)
+
+// dialectOnValues are the values that leave the session in the dialect this
+// reader parses in. PostgreSQL accepts several spellings of a boolean GUC;
+// these are the ones that mean on.
+var dialectOnValues = map[string]bool{"on": true, "'on'": true, `"on"`: true, "true": true, "'true'": true, "1": true, "'1'": true}
+
+// dialectRefusal is the reader's verdict on a statement that would move the
+// server out of the dialect the lexer above reads in, or nil for every other
+// statement.
+//
+// The lexer parses literals under standard_conforming_strings=on: a backslash
+// inside '...' is an ordinary character, and only E'...' processes escapes
+// (isExtendedStringPrefix's own doc). That is an assumption about the server,
+// and a dump exported from a database that had the setting off carries
+// `SET standard_conforming_strings = off;` at its top — after which the two
+// disagree about where a literal *ends*. `INSERT INTO t VALUES ('a\'); SELECT
+// 1;` is two statements here and, to that server, one unterminated literal
+// that swallows the next: the good case is a build failure pointing at the
+// wrong line, and the bad one is text running as SQL that neither the author
+// nor this reader meant.
+//
+// Pinning the setting on the connection (runScript does, so a cluster whose
+// own configuration says otherwise cannot surprise us either) does not cover
+// this: the script's own SET runs afterwards and wins. The only sound answer
+// is to refuse, which is also the honest one — a dump written for a dialect
+// this service does not execute is a fact about the file, exactly like the
+// psql meta-command case above, and re-exporting it is something the person
+// holding it can do.
+//
+// Setting it *on* is left alone: that is what every modern pg_dump writes and
+// it is the dialect already assumed. RESET is refused with the rest, because
+// it hands the setting back to a cluster-level default this process does not
+// decide.
+func dialectRefusal(probe *copyProbe, text string, line int) *ScriptSyntaxError {
+	if probe.ruledOut || !dialectPattern.Match(probe.code) {
+		return nil
+	}
+	// No value at all is a RESET, or a `SET ... TO DEFAULT`: both hand the
+	// setting back to a cluster-level default this process does not decide.
+	if value := dialectValuePattern.FindStringSubmatch(text); value != nil && dialectOnValues[strings.ToLower(value[1])] {
+		return nil
+	}
+	return &ScriptSyntaxError{
+		Line: line,
+		Message: "this script sets standard_conforming_strings to something other than on, and " +
+			"the reader that splits it into statements can only read the on dialect — export the " +
+			"dump from a server with standard_conforming_strings on, or remove the statement",
+	}
+}
 
 // copyFromStdinHeader reports whether the statement the probe watched is
 // a `COPY ... FROM STDIN` command and, if so, returns stmt trimmed and
