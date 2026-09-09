@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -134,10 +135,52 @@ func buildIndex(f *os.File) (fileIndex, [sha256.Size]byte, error) {
 	return idx, sum, nil
 }
 
+// indexTempPattern is the name CreateTemp is asked for, and the glob
+// clearIndexTemps looks for. One constant, because a leftover is only ever
+// found by the same shape that made it.
+const indexTempPattern = ".tmp-*"
+
+// clearIndexTemps removes every temporary index file left next to path.
+//
+// writeIndex's create-then-rename is atomic for the *index*: a process killed
+// mid-write leaves the previous index or none, never a torn one. What it is
+// not is complete: the temporary file it was writing survives, and nothing
+// used to look for one. Abort removes an upload's data and index by name;
+// Store.UploadIDs — which is how the provisioning janitor discovers what the
+// volume holds — only ever names data files, by construction (its own doc).
+// So a killed Complete left bytes that no code path could ever name again,
+// on a volume sized for multi-gigabyte dumps, and every one of them still
+// counted against MaxDirBytes because usage() sums every regular file it
+// finds.
+//
+// Called from the two places that hold the per-id lock and know the id is
+// theirs to tidy: writeIndex, about to make a temporary file for this very
+// path, and Abort, retiring the upload altogether. Failures are reported, not
+// swallowed — a directory this process cannot clean up is the thing the
+// caller is being asked about.
+func clearIndexTemps(path string) error {
+	// path is built by Store.indexPath from an id validateUploadID has
+	// already passed, so it carries no glob metacharacter of its own.
+	leftovers, err := filepath.Glob(path + indexTempPattern)
+	if err != nil {
+		return fmt.Errorf("gamefile: list leftover index files: %w", err)
+	}
+	for _, leftover := range leftovers {
+		if err := os.Remove(leftover); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("gamefile: remove leftover index file: %w", err)
+		}
+	}
+	return nil
+}
+
 // writeIndex persists idx next to the data file it describes. It writes to
 // a temporary file in the same directory and renames it into place, so a
 // process killed mid-write leaves either the previous index or none, never
 // a truncated one that Window would misread.
+//
+// What that leaves behind is the temporary file itself, which is why this
+// starts by clearing any from an earlier interrupted attempt at the same
+// index — see clearIndexTemps.
 //
 // The marks slice is proportional to totalLines/indexInterval, not to
 // totalBytes — for a several-gigabyte dump with short lines that is still
@@ -159,7 +202,11 @@ func writeIndex(path string, idx fileIndex) error {
 		return fmt.Errorf("gamefile: index has a negative total (bytes=%d lines=%d)", idx.totalBytes, idx.totalLines)
 	}
 
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err := clearIndexTemps(path); err != nil {
+		return err
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+indexTempPattern)
 	if err != nil {
 		return err
 	}
@@ -244,10 +291,24 @@ const maxMarkCount = (math.MaxInt64 - indexHeaderSize) / 8
 func readIndexHeader(f *os.File) (indexHeader, error) {
 	var raw [indexHeaderSize]byte
 	if _, err := io.ReadFull(f, raw[:]); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			// A file too short to hold a header is a damaged index, not an
+			// I/O failure of this host's: a write killed between CreateTemp
+			// and Rename, or a truncated disk. Same sentinel as every other
+			// way the bytes can stop describing the upload — see the note on
+			// the magic below.
+			return indexHeader{}, fmt.Errorf("%w: the index is shorter than one header", ErrCorruptIndex)
+		}
 		return indexHeader{}, fmt.Errorf("read index header: %w", err)
 	}
 	if [4]byte(raw[0:4]) != indexMagic {
-		return indexHeader{}, fmt.Errorf("index file has an unrecognised header")
+		// ErrCorruptIndex and not a bare error, exactly as the three checks
+		// below it. This one is the likeliest of the four to fire — the
+		// magic is the first thing a stray or half-written file gets wrong —
+		// and it was the one that answered with something provisioning could
+		// not name, so a damaged index reached the organiser as "internal
+		// error" instead of "upload the file again" (CLAUDE.md rule 1).
+		return indexHeader{}, fmt.Errorf("%w: the file does not begin with an index header", ErrCorruptIndex)
 	}
 
 	totalBytes := binary.BigEndian.Uint64(raw[4:12])
@@ -292,11 +353,22 @@ func readIndexHeader(f *os.File) (indexHeader, error) {
 // 8-byte read.
 func markOffset(f *os.File, hdr indexHeader, markIdx int64) (int64, error) {
 	if markIdx < 0 || markIdx >= hdr.markCount {
-		return 0, fmt.Errorf("mark %d is out of range (have %d)", markIdx, hdr.markCount)
+		// Window derives markIdx from a line number it has already checked
+		// against this same header's totalLines, so the two disagreeing is
+		// the index disagreeing with itself — another shape of corruption,
+		// and named as one rather than left as a bare error the HTTP layer
+		// can only call "internal".
+		return 0, fmt.Errorf("%w: mark %d is out of range (have %d)", ErrCorruptIndex, markIdx, hdr.markCount)
 	}
 	at := int64(indexHeaderSize) + markIdx*8
 	var raw [8]byte
 	if _, err := f.ReadAt(raw[:], at); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			// readIndexHeader already checked the file is exactly as long as
+			// its markCount claims, so a short read here means it shrank
+			// underneath this call.
+			return 0, fmt.Errorf("%w: mark %d could not be read in full", ErrCorruptIndex, markIdx)
+		}
 		return 0, fmt.Errorf("read mark %d: %w", markIdx, err)
 	}
 

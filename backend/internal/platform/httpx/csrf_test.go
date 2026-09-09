@@ -78,19 +78,66 @@ func TestOriginWithADifferentSchemeIsRejected(t *testing.T) {
 	}
 }
 
-func TestOriginIsComparedAgainstTheForwardedHost(t *testing.T) {
-	// Behind the reverse proxy the request arrives over plain HTTP while the
-	// browser saw HTTPS, so the comparison has to use the forwarded scheme.
-	rec := httptest.NewRecorder()
+// forwardedRequest is a plain-HTTP write that says it was HTTPS at the edge,
+// as it arrives from remoteAddr.
+func forwardedRequest(remoteAddr string) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "http://contest.university.edu/api/v1/users", nil)
 	req.Host = "contest.university.edu"
+	req.RemoteAddr = remoteAddr
 	req.Header.Set("X-Forwarded-Proto", "https")
 	req.Header.Set("Origin", "https://contest.university.edu")
+	return req
+}
 
-	CheckOrigin(nil)(okHandler).ServeHTTP(rec, req)
+func TestOriginIsComparedAgainstTheSchemeATrustedProxyForwarded(t *testing.T) {
+	// Behind the reverse proxy the request arrives over plain HTTP while the
+	// browser saw HTTPS, so the comparison has to use the forwarded scheme —
+	// and it may, because the peer is the proxy TRUSTED_PROXIES names.
+	rec := httptest.NewRecorder()
+	req := forwardedRequest("172.28.0.10:52000")
+
+	resolver(t, "172.28.0.0/16").Middleware(CheckOrigin(nil)(okHandler)).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// The rule this file had backwards. X-Forwarded-Proto is written by whoever
+// spoke to the socket, and requestScheme turns it into the scheme half of "is
+// this Origin our own site" — so a caller that is not a trusted proxy could
+// send one header and have a cross-scheme Origin read as same-site. CLAUDE.md
+// rule 9 in as many words: a spoofed forwarded value may only ever make a
+// request stricter, never looser.
+//
+// Same request, same headers, three peers: the configured proxy is believed
+// (above), a direct caller is not, and neither is a peer that merely sits on
+// the compose network without being named.
+func TestASpoofedForwardedProtoCannotWidenTheOriginCheck(t *testing.T) {
+	for _, peer := range []string{"203.0.113.7:41000", "172.28.0.99:41000"} {
+		rec := httptest.NewRecorder()
+
+		resolver(t, "172.28.0.10/32").Middleware(CheckOrigin(nil)(okHandler)).
+			ServeHTTP(rec, forwardedRequest(peer))
+
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("peer %s: status = %d, want 403 — an untrusted peer's X-Forwarded-Proto "+
+				"turned a cross-scheme Origin into a same-site one (body: %s)",
+				peer, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// And with no resolver in front at all — the shape every other test in this
+// file uses — the header still counts for nothing. There is nobody to have
+// vouched for it.
+func TestAForwardedProtoIsIgnoredWhenNoResolverVouchedForThePeer(t *testing.T) {
+	rec := httptest.NewRecorder()
+
+	CheckOrigin(nil)(okHandler).ServeHTTP(rec, forwardedRequest("203.0.113.7:41000"))
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 (body: %s)", rec.Code, rec.Body.String())
 	}
 }
 

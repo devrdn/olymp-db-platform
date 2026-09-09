@@ -1,6 +1,9 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -724,4 +727,127 @@ func TestGameUploadDirWithAZeroTableLimitIsRejectedAtStartup(t *testing.T) {
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() accepted GAME_UPLOAD_DIR with a zero table dir size, want error")
 	}
+}
+
+// The variables this file reads are the whole of what an operator can
+// configure, and deploy/.env.example is where they are told so. Neither of
+// those facts reaches the running process on its own: the compose file has to
+// pass each one into the api container, and a variable it does not pass is a
+// variable an operator sets, restarts for, and never sees take effect — with
+// no error and no log line, because from the process's side it was simply
+// never set. That is how PUBLIC_ORIGINS came to be documented, settable, and
+// dead: an operator whose interface and API answer on different names filled
+// it in and still got 403 on every chunk upload.
+//
+// So the vocabulary this package declares is checked against the deployment
+// that has to carry it, in the same way cmd/apicontract's own test checks the
+// error codes against the file the interface reads. Only variables
+// .env.example actually documents are required: a knob nobody is told about
+// is a knob nobody sets (SHUTDOWN_TIMEOUT is the one such today), and a
+// variable compose passes that this file does not read belongs to another
+// service in the same file.
+func TestEveryDocumentedVariableReachesTheAPIContainer(t *testing.T) {
+	documented := documentedVariables(t)
+	passed := apiServiceEnvironment(t)
+
+	for _, name := range configVariables(t) {
+		if !documented[name] {
+			continue
+		}
+		if !passed[name] {
+			t.Errorf("%s is read by config.Load and documented in deploy/.env.example, but "+
+				"deploy/docker-compose.yml never passes it to the api service — an operator "+
+				"setting it gets no effect and no error", name)
+		}
+	}
+}
+
+// repoFile reads one file from the repository root, four levels above this
+// package's own directory.
+func repoFile(t *testing.T, name string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", name))
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	return string(raw)
+}
+
+// configVariables are the environment variables config.go names, read out of
+// its own source rather than listed here: a second, hand-typed copy of the
+// vocabulary is exactly the drift the test above exists to catch (the same
+// reasoning frontend/lib/i18n/dictionary.test.ts gives for reading the
+// generated contract instead of AUDIT_ACTIONS).
+func configVariables(t *testing.T) []string {
+	t.Helper()
+	source, err := os.ReadFile("config.go")
+	if err != nil {
+		t.Fatalf("read config.go: %v", err)
+	}
+	var names []string
+	for _, match := range envNamePattern.FindAllStringSubmatch(string(source), -1) {
+		names = append(names, match[1])
+	}
+	if len(names) < 10 {
+		t.Fatalf("found only %d variables in config.go (%v); the pattern has stopped matching", len(names), names)
+	}
+	return names
+}
+
+// A quoted SCREAMING_SNAKE_CASE literal in config.go is an environment
+// variable's name and nothing else — there is no other kind of constant
+// written that way in this file.
+var envNamePattern = regexp.MustCompile(`"([A-Z][A-Z0-9_]{2,})"`)
+
+// documentedVariables are the assignments deploy/.env.example carries, which
+// is what an operator reads as "this is what you may set".
+func documentedVariables(t *testing.T) map[string]bool {
+	t.Helper()
+	found := map[string]bool{}
+	for _, line := range strings.Split(repoFile(t, "deploy/.env.example"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if name, _, ok := strings.Cut(line, "="); ok {
+			found[strings.TrimSpace(name)] = true
+		}
+	}
+	if len(found) < 10 {
+		t.Fatalf("deploy/.env.example parsed as %d assignments; the format has changed", len(found))
+	}
+	return found
+}
+
+// apiServiceEnvironment are the keys the compose file's `api` service passes
+// in. Parsed by indentation rather than with a YAML library: the shape being
+// read is two known levels deep in a file this repository owns, and adding a
+// dependency to a test that guards a deployment file is a worse trade than
+// twenty lines that fail loudly when the shape changes (the guard below).
+func apiServiceEnvironment(t *testing.T) map[string]bool {
+	t.Helper()
+	keys := map[string]bool{}
+	var inAPI, inEnv bool
+	for _, line := range strings.Split(repoFile(t, "deploy/docker-compose.yml"), "\n") {
+		switch {
+		case strings.HasPrefix(line, "  api:"):
+			inAPI = true
+		case inAPI && strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") &&
+			strings.TrimSpace(line) != "":
+			inAPI, inEnv = false, false // the next service begins
+		case inAPI && strings.HasPrefix(line, "    environment:"):
+			inEnv = true
+		case inAPI && inEnv && strings.HasPrefix(line, "    ") && !strings.HasPrefix(line, "     ") &&
+			strings.TrimSpace(line) != "":
+			inEnv = false // the next key of the api service
+		case inAPI && inEnv && strings.HasPrefix(line, "      "):
+			if name, _, ok := strings.Cut(strings.TrimSpace(line), ":"); ok && !strings.HasPrefix(name, "#") {
+				keys[name] = true
+			}
+		}
+	}
+	if len(keys) < 10 {
+		t.Fatalf("the api service parsed as %d environment keys; docker-compose.yml's shape has changed", len(keys))
+	}
+	return keys
 }

@@ -108,64 +108,81 @@ type csvField struct {
 	Null bool
 }
 
-// splitCSVLine parses one line (without its trailing newline) into fields —
-// a minimal, deliberately line-oriented CSV dialect: a field is either
-// unquoted and ends at the next comma, or begins with `"` and ends at the
-// next unescaped `"` (a doubled `""` inside it is a literal quote). It does
-// not support a raw newline embedded inside a quoted field — this package's
-// own CSV is one row per line throughout, from the "row 5" a delete refers
-// to down to how a chunked upload's header is found, and a dialect that let
-// a field's own bytes decide where a line ends would break every one of
-// those. A field that opens a quote and never closes it is refused the same
-// way an over-long field is (ErrTableValueInvalid names it precisely, since
-// by then the line has already been read whole under MaxTableLineBytes).
+// splitCSVLine parses one line (without its trailing newline) into fields.
+//
+// The dialect is PostgreSQL's own, because the only thing this parser exists
+// to do is answer, minutes early and with a row number, the question
+// `COPY ... WITH (FORMAT csv)` will answer later on the build. Any disagreement
+// between the two is worse than no check at all: a row this accepted and COPY
+// refuses is reported to the organiser as a failure of their *contest*,
+// hours after the upload they could have fixed it in.
+//
+// So this mirrors `CopyReadAttributesCSV`: a two-state walk per field, not a
+// look at the field's first byte. Outside a quoted run, a comma ends the
+// field and a quote — at any position, not only the first — opens one; inside
+// one, a doubled `""` is a literal quote and a single one closes the run and
+// returns to the outside state, where more bytes may still follow. That last
+// part is what makes `1,ab"cd,2` an unterminated quoted field rather than
+// three tidy values, and `"Bo"bby` the single value Bobby rather than an
+// error. Treating the quote as special only in the first byte got both of
+// those wrong, in the direction that hurts: it accepted a row COPY would
+// refuse.
+//
+// The one deliberate departure: a raw newline inside a quoted field. This
+// package's CSV is one row per line throughout, from the "row 5" a delete
+// refers to down to how a chunked upload's header is found, and a dialect
+// that let a field's own bytes decide where a line ends would break every one
+// of those — so a quote left open at the end of the line is refused
+// (ErrTableValueInvalid names it precisely, since by then the line has
+// already been read whole under MaxTableLineBytes) rather than continued onto
+// the next.
+//
+// Null is the same convention as before and as COPY's: a field is NULL
+// exactly when it is empty and carried no quotes at all, so `""` is the empty
+// string and a bare empty field is absent (csvField's own doc).
 func splitCSVLine(line []byte) ([]csvField, error) {
 	var fields []csvField
 	i := 0
 	for {
-		var field csvField
-		if i < len(line) && line[i] == '"' {
+		var (
+			buf     []byte
+			inQuote bool
+			quoted  bool // this field carried at least one quoted run
+		)
+
+	field:
+		for i < len(line) {
+			b := line[i]
 			i++
-			var buf []byte
-			closed := false
-			for i < len(line) {
-				if line[i] == '"' {
-					if i+1 < len(line) && line[i+1] == '"' {
-						buf = append(buf, '"')
-						i += 2
-						continue
-					}
-					i++
-					closed = true
-					break
-				}
-				buf = append(buf, line[i])
-				i++
-				if len(buf) > MaxTableFieldBytes {
-					return nil, ErrTableFieldTooLong
-				}
+
+			switch {
+			case b == '"' && inQuote && i < len(line) && line[i] == '"':
+				i++     // a doubled quote is one literal quote
+				b = '"' // ...and the only one of the two that is data
+			case b == '"' && inQuote:
+				inQuote = false
+				continue // the closing quote itself is not data
+			case b == '"':
+				inQuote, quoted = true, true
+				continue // nor is the opening one
+			case b == ',' && !inQuote:
+				i-- // leave the delimiter for the caller's own step below
+				break field
 			}
-			if !closed {
-				return nil, fmt.Errorf("%w: an opening quote is never closed", ErrTableValueInvalid)
-			}
-			field = csvField{Text: string(buf)}
-		} else {
-			start := i
-			for i < len(line) && line[i] != ',' {
-				i++
-			}
-			if i-start > MaxTableFieldBytes {
+
+			buf = append(buf, b)
+			if len(buf) > MaxTableFieldBytes {
 				return nil, ErrTableFieldTooLong
 			}
-			field = csvField{Text: string(line[start:i]), Null: i == start}
 		}
-		fields = append(fields, field)
+
+		if inQuote {
+			return nil, fmt.Errorf("%w: an opening quote is never closed", ErrTableValueInvalid)
+		}
+		fields = append(fields, csvField{Text: string(buf), Null: !quoted && len(buf) == 0})
 
 		if i >= len(line) {
 			break
-		}
-		if line[i] != ',' {
-			return nil, fmt.Errorf("%w: unexpected byte %q after a quoted field", ErrTableValueInvalid, line[i])
 		}
 		i++ // the comma; a field always follows, including a trailing empty one
 	}

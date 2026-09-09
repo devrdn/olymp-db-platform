@@ -99,6 +99,8 @@ var (
 		"This upload has not been completed yet, so there is no line index to read a window from.")
 	codeGameUploadIndexCorrupt = httpx.NewCode("game_upload_index_corrupt",
 		"The line index stored beside the upload no longer describes the file it belongs to, so no part of it can be paged through safely. Nothing the organiser did causes this — a damaged disk or an interrupted write does — and uploading the file again is what fixes it.")
+	codeGameUploadWindowUnreachable = httpx.NewCode("game_upload_window_unreachable",
+		"The line asked for lies too far past the file's nearest index mark to reach: the lines in between are long enough that walking to it would read far more of the file than a preview may. Page from a line nearer the start of that thousand-line block.")
 	codeGameUploadTooOften = httpx.NewCode("game_upload_too_often",
 		"Too many uploads have been started from this address or for this contest in a short time. Wait before starting another.")
 

@@ -116,6 +116,34 @@ func TestBeginningAnUploadForAContestThatIsNotEditableIsRefusedBeforeTouchingDis
 	}
 }
 
+// The filename is the one free-text field an upload carries, it is stored in
+// a `text` column, and a browser is not the only thing that can send it. A
+// NUL byte in it is valid UTF-8 and something PostgreSQL refuses outright
+// with SQLSTATE 22021, so the INSERT fails *after* Store.Begin has already
+// created the file: a 500 for the organiser and an orphan on the volume,
+// where a named 400 was available for free (CLAUDE.md rule 1). The other
+// control characters go the same way rather than being singled out — none of
+// them belongs in a name a person typed, and a newline in one is a log line
+// somebody else's text can forge.
+func TestBeginningAnUploadRefusesAFilenameWithAControlCharacter(t *testing.T) {
+	games, dir := gamesWithUploads(t, true)
+	contest, _ := contestFor(t, t.Context(), 0)
+
+	for _, name := range []string{"dump\x00.sql", "dump\n.sql", "dump\x1b[2J.sql"} {
+		if _, err := games.BeginUpload(t.Context(), contest.ID, name, 1024); !errors.Is(err, provisioning.ErrUploadFilenameInvalid) {
+			t.Fatalf("BeginUpload(%q) = %v, want ErrUploadFilenameInvalid", name, err)
+		}
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read the upload directory: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("the refused begins left %d file(s) on disk", len(entries))
+	}
+}
+
 func TestADeclaredLengthPastTheConfiguredCeilingIsRefused(t *testing.T) {
 	games, _ := gamesWithUploads(t, true)
 	contest, _ := contestFor(t, t.Context(), 0)
@@ -144,6 +172,54 @@ func TestASecondUploadForTheSameContestIsRejectedByTheDatabaseNotByGoCode(t *tes
 	}
 	if !onDisk(t, dir, first.ID) {
 		t.Fatal("the first, still-receiving upload's file disappeared")
+	}
+}
+
+// A refused INSERT has to give back the reservation Store.Begin made for it,
+// or the directory budget is spent by uploads that will never send a byte.
+//
+// The refusal is the ordinary one — game_uploads_one_receiving_idx, the test
+// above — and it is reachable by anybody holding contest.edit on a single
+// contest, or by a browser that repeats a begin after a timeout. Each attempt
+// promises the whole file; nothing writes the promise off; and because
+// gamefile.Store counts outstanding promises against MaxDirBytes
+// (committedBytes' own doc), a handful of refused begins fill the volume's
+// budget for *every* contest on the installation until the janitor sweeps —
+// fifteen minutes of grace plus a tick. bootstrapTableRow already had the
+// shape this needs: retire the file the moment the row it was for is refused.
+func TestAnUploadRowTheDatabaseRefusesGivesBackTheSpaceItReserved(t *testing.T) {
+	games, dir := gamesWithUploads(t, true)
+	contest, _ := contestFor(t, t.Context(), 0)
+
+	// One receiving upload, so every begin after this one is refused. It
+	// promises a quarter of the directory and sends nothing.
+	quarter := uploadLimits.MaxDirBytes / 4
+	if _, err := games.BeginUpload(t.Context(), contest.ID, "first.sql", quarter); err != nil {
+		t.Fatalf("first begin: %v", err)
+	}
+
+	// Three refusals, each promising another quarter. Held, they are the
+	// whole directory.
+	for i := 0; i < 3; i++ {
+		if _, err := games.BeginUpload(t.Context(), contest.ID, "again.sql", quarter); !errors.Is(err, provisioning.ErrUploadInProgress) {
+			t.Fatalf("begin %d answered %v, want ErrUploadInProgress", i+2, err)
+		}
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read the upload directory: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("the volume holds %d file(s), want only the one upload that has a row", len(entries))
+	}
+
+	// The assertion the whole test is for: another contest can still be given
+	// what the refusals promised and never used.
+	other, _ := contestFor(t, t.Context(), 0)
+	if _, err := games.BeginUpload(t.Context(), other.ID, "elsewhere.sql", quarter); err != nil {
+		t.Fatalf("a second contest's upload was refused %v — the refused begins are still "+
+			"holding the directory budget", err)
 	}
 }
 
