@@ -658,6 +658,16 @@ func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err er
 		httpx.Error(w, r, http.StatusForbidden, codeSchemaHidden, "This contest does not show the game's schema")
 	case errors.Is(err, queryproxy.ErrNoGameYet):
 		httpx.Error(w, r, http.StatusConflict, codeNoGameYet, "The contest has no game database yet")
+	case errors.Is(err, queryproxy.ErrNoRoomForDatabase):
+		// 503 and not 500: the schema panel could not be shown because the
+		// game cluster is at the disk budget its operator set, which is a fact
+		// about this installation right now rather than anything broken. It is
+		// also worth an operator's attention — the pool's own constrained
+		// warning says the pool stopped growing, and this says participants are
+		// now being turned away — so it is logged as well as answered.
+		h.log.ErrorContext(r.Context(), "the game cluster has no room for a participant's database", "error", err)
+		httpx.Error(w, r, http.StatusServiceUnavailable, codeGameClusterFull,
+			"The game cluster has no room for another copy of this contest")
 	case errors.Is(err, queryproxy.ErrAddressNotAllowed):
 		httpx.Error(w, r, http.StatusForbidden, codeAddressNotAllowed,
 			"This contest is only available from the university network")

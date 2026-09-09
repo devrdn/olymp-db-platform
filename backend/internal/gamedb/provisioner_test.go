@@ -344,6 +344,95 @@ func TestAScriptPostgreSQLRefusedComesBackAsTheAuthorsOwnToRead(t *testing.T) {
 	}
 }
 
+// Statements travel to the server in bounded batches now, one round trip for
+// a thousand of them rather than one each (maxBatchedStatements). Two things
+// about that must not have changed, and this is the first: a failure is still
+// blamed on the exact statement that caused it, with the line of the file it
+// started on — even when it is buried in the middle of a batch, behind two
+// thousand statements that were fine.
+func TestAFailureInsideABatchStillNamesItsOwnLine(t *testing.T) {
+	p := provisioner(t)
+	template := named(t, "tpl")
+
+	var script strings.Builder
+	script.WriteString("CREATE TABLE notes (n int);\n")
+	// Comfortably more than one batch, so the bad statement is neither in the
+	// first batch nor at a batch boundary.
+	for range 2500 {
+		script.WriteString("INSERT INTO notes (n) VALUES (1);\n")
+	}
+	badLine := strings.Count(script.String(), "\n") + 1
+	script.WriteString("INSERT INTO notes (n) VALUES ('not a number'::int);\n")
+	for range 100 {
+		script.WriteString("INSERT INTO notes (n) VALUES (2);\n")
+	}
+
+	err := p.BuildTemplateString(t.Context(), template, script.String(), sqlpolicy.ReadOnly())
+
+	var refused *gamedb.ScriptError
+	if !errors.As(err, &refused) {
+		t.Fatalf("a script PostgreSQL refused came back as %T: %v", err, err)
+	}
+	if refused.Line != badLine {
+		t.Fatalf("the refusal names line %d, want %d — the batch lost track of which statement failed",
+			refused.Line, badLine)
+	}
+}
+
+// And the second: a batch is one implicit transaction, and a few statements
+// cannot run inside one at all. VACUUM is the one an organiser might
+// plausibly write at the end of a script they wrote by hand, and it must
+// still build — the replay in runBatch is what makes that true without this
+// file keeping a list of SQLSTATEs that would go stale.
+func TestAStatementThatCannotRunInATransactionStillBuilds(t *testing.T) {
+	p := provisioner(t)
+	template := named(t, "tpl")
+
+	script := "CREATE TABLE notes (n int);\n" +
+		"INSERT INTO notes (n) VALUES (1), (2), (3);\n" +
+		"VACUUM ANALYZE notes;\n"
+
+	if err := p.BuildTemplateString(t.Context(), template, script, sqlpolicy.ReadOnly()); err != nil {
+		t.Fatalf("a script with a VACUUM in it: %v", err)
+	}
+
+	conn := connectAsOwner(t, template)
+	var rows int
+	if err := conn.QueryRow(t.Context(), `SELECT count(*) FROM notes`).Scan(&rows); err != nil {
+		t.Fatalf("reading the built template: %v", err)
+	}
+	if rows != 3 {
+		t.Fatalf("the template holds %d rows, want 3", rows)
+	}
+}
+
+// A COPY block loads rows into tables the statements in front of it created,
+// so whatever is still buffered has to reach the server before the block does.
+// Batching is exactly the change that could get this wrong, and the failure
+// would be "relation does not exist" for a table the script plainly creates.
+func TestABufferedBatchIsSentBeforeTheCopyBlockThatNeedsIt(t *testing.T) {
+	p := provisioner(t)
+	template := named(t, "tpl")
+
+	script := "CREATE TABLE guests (id int, full_name text);\n" +
+		"COPY guests (id, full_name) FROM stdin;\n" +
+		"1\tIonescu\n2\tPopescu\n\\.\n" +
+		"CREATE INDEX guests_name ON guests (full_name);\n"
+
+	if err := p.BuildTemplateString(t.Context(), template, script, sqlpolicy.ReadOnly()); err != nil {
+		t.Fatalf("a script whose COPY follows a CREATE TABLE: %v", err)
+	}
+
+	conn := connectAsOwner(t, template)
+	var rows int
+	if err := conn.QueryRow(t.Context(), `SELECT count(*) FROM guests`).Scan(&rows); err != nil {
+		t.Fatalf("reading the built template: %v", err)
+	}
+	if rows != 2 {
+		t.Fatalf("the template holds %d rows, want 2", rows)
+	}
+}
+
 // The trap this separation exists for: pgx reports a refused login as a
 // *pgconn.ConnectError that carries a *pgconn.PgError inside it, so anything
 // deciding "was this the database's verdict?" by looking for a PgError says

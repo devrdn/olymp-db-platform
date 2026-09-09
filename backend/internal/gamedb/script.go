@@ -175,11 +175,139 @@ type ScriptReader struct {
 	// CopyData already does, and duplicating it would be the two disagreeing
 	// about where the block ends.
 	copyOpen bool
+	// buf is the statement buffer, kept across calls to Next rather than
+	// allocated fresh for each one.
+	//
+	// A dump exported with --inserts holds one statement per row, so "fresh
+	// buffer per statement" is one allocation cycle per row of the file —
+	// measured at 5.4 bytes allocated for every byte read. The buffer is
+	// handed to nobody: finish copies what it needs into a string, and the
+	// probe keeps its own bytes, so reusing this one aliases nothing.
+	// maxRetainedStatementBytes is what keeps one enormous statement from
+	// making that reuse a permanent reservation.
+	buf []byte
 }
+
+// maxRetainedStatementBytes is how much of the statement buffer is kept for
+// the next statement. A build holds one reader, so this is a per-build
+// reservation and a mebibyte of it is nothing beside the file being read —
+// while a script with one 16 MiB statement in it (maxStatementBytes) must not
+// leave that much held for the rest of a build that never needs it again.
+const maxRetainedStatementBytes = 1 << 20
 
 // NewScriptReader wraps r. Nothing is read until the first call to Next.
 func NewScriptReader(r io.Reader) *ScriptReader {
 	return &ScriptReader{r: bufio.NewReaderSize(r, scanBufferSize), line: 1, atLineStart: true}
+}
+
+// The bytes that mean something to the lexer, per state — everything else in
+// that state is buffered as-is and changes nothing about where the statement
+// ends. skipDull consumes a run of "everything else" in one step; see its own
+// doc for why the loop below cannot simply be a faster loop.
+//
+// '\n' is in every one of them, which is what keeps the line counter and
+// atLineStart correct without a run ever having to be re-scanned for newlines.
+// In dullTop it also covers the backslash rule twice over: '\\' is a stop byte
+// in its own right, so a psql meta-command at the start of a line is never
+// swallowed as ordinary text.
+const (
+	dullTop            = "'\"$-/;\n\\"
+	dullSingle         = "'\n"
+	dullSingleExtended = "'\\\n"
+	dullDouble         = "\"\n"
+	dullDollar         = "$\n"
+	dullLineComment    = "\n"
+	dullBlockComment   = "*/\n"
+)
+
+// skipDull consumes, in one step, the run of bytes already in the reader's own
+// window that cannot change the lexer's state — and returns them so the caller
+// can append them to the statement buffer with a single append.
+//
+// This is what the byte-at-a-time loop in Next was costing. Measured on the
+// same bytes: a COPY-format dump, which streams through copyDataReader and
+// never touches that loop, parsed at 1826 MB/s; the same content as INSERT
+// statements at 119 MB/s, and — the measurement that says where the time
+// actually went — the same bytes as statements of a thousand rows each at
+// 144 MB/s. Twelve times slower for the same work, whatever the number of
+// statements, because the cost was the loop itself: one ReadByte call, one
+// bounds-checked append and one probe callback for every byte of a
+// three-gigabyte file, which is twenty-one seconds of a fully occupied core
+// inside the API process that is serving the olympiad.
+//
+// bytes.IndexAny over the buffered window is the same instrument buildIndex
+// already uses for the same reason (its own doc measures IndexByte at 6.51
+// GiB/s against 1.26 for a byte loop): it is assembly over the machine's vector
+// registers, and the run it finds is appended once instead of a byte at a time.
+//
+// It reads nothing that Next would not have read anyway, and it never crosses
+// a byte the lexer has to look at: the returned run stops at the first byte in
+// stop, which the caller then reads and handles exactly as before. A run can
+// contain no '\n' (every stop set has one), so neither the line counter nor
+// atLineStart can drift — the caller sets atLineStart to false for a non-empty
+// run and that is the whole of the bookkeeping.
+//
+// The returned slice aliases the reader's own buffer and stays valid only
+// until the next read from it, which is why the caller appends it immediately.
+func (s *ScriptReader) skipDull(stop string) []byte {
+	window, _ := s.r.Peek(s.r.Buffered())
+	if len(window) == 0 {
+		// Nothing buffered: fill, exactly as the ReadByte after this would
+		// have. A read error is not this function's to report — the caller's
+		// own ReadByte meets it a moment later and has the branch for it.
+		if _, err := s.r.Peek(1); err != nil {
+			return nil
+		}
+		window, _ = s.r.Peek(s.r.Buffered())
+	}
+
+	end := bytes.IndexAny(window, stop)
+	if end < 0 {
+		end = len(window)
+	}
+	if end == 0 {
+		return nil
+	}
+	// Cannot fail: end is inside what Peek just reported as buffered.
+	_, _ = s.r.Discard(end)
+	return window[:end]
+}
+
+// dullStop is the stop set for the state the lexer is in, or "" for a position
+// where nothing may be skipped.
+//
+// Two states allow no skipping at all. In scanTop it is skipped only once the
+// statement has some SQL in it (haveSQL): before that, every byte still has to
+// be looked at individually to decide whether it is the whitespace in front of
+// a statement, the first character of one — which is what sets the line the
+// statement is reported against — or the start of a comment. In
+// scanSingleExtended a byte the previous '\' escaped is data whatever it is, so
+// a skip could run straight past a quote that closes nothing.
+func dullStop(state scanState, haveSQL, escapeNext bool) string {
+	switch state {
+	case scanTop:
+		if !haveSQL {
+			return ""
+		}
+		return dullTop
+	case scanSingle:
+		return dullSingle
+	case scanSingleExtended:
+		if escapeNext {
+			return ""
+		}
+		return dullSingleExtended
+	case scanDouble:
+		return dullDouble
+	case scanDollar:
+		return dullDollar
+	case scanLineComment:
+		return dullLineComment
+	case scanBlockComment:
+		return dullBlockComment
+	default:
+		return ""
+	}
 }
 
 // Next returns the next statement, or io.EOF once the script is exhausted.
@@ -200,8 +328,19 @@ func (s *ScriptReader) Next() (Statement, error) {
 		return Statement{}, fmt.Errorf("gamedb: the previous COPY block's data was not read before Next")
 	}
 
+	// Reused across calls rather than allocated per statement — see
+	// ScriptReader.buf. The deferred store is what hands it back however this
+	// returns, and dropping an oversized one is what keeps the reuse from
+	// becoming a reservation.
+	buf := s.buf[:0]
+	defer func() {
+		if cap(buf) > maxRetainedStatementBytes {
+			buf = nil
+		}
+		s.buf = buf
+	}()
+
 	var (
-		buf   []byte
 		probe copyProbe
 		state = scanTop
 		// blockDepth, tag and escapeNext are the lexer's own working state
@@ -221,6 +360,30 @@ func (s *ScriptReader) Next() (Statement, error) {
 	)
 
 	for {
+		// Everything between here and the next byte the lexer actually has to
+		// look at, taken in one step (skipDull). The byte it stops on is read
+		// and handled by exactly the code below, unchanged.
+		if stop := dullStop(state, haveSQL, escapeNext); stop != "" {
+			if run := s.skipDull(stop); len(run) > 0 {
+				buf = append(buf, run...)
+				if len(buf) > maxStatementBytes {
+					return Statement{}, &ScriptSyntaxError{
+						Line:    startLine,
+						Message: fmt.Sprintf("a statement exceeds %d bytes", maxStatementBytes),
+					}
+				}
+				if state == scanTop {
+					// prev == next == scanTop for every byte of the run, which
+					// is copyProbe.observe's own "this byte is code" case.
+					probe.pushRun(run)
+				}
+				// A run holds no '\n' (every stop set has one), so the line
+				// number is untouched and the next byte is certainly not the
+				// first on its line.
+				s.atLineStart = false
+			}
+		}
+
 		b, err := s.r.ReadByte()
 		if err != nil {
 			if err != io.EOF {
@@ -548,6 +711,19 @@ func (p *copyProbe) observe(prev, next scanState, b byte) {
 		// tokens around it, so it is worth exactly one space and none of its
 		// own bytes.
 		p.push(' ')
+	}
+}
+
+// pushRun is observe's code-byte case for a whole run at once — what
+// Next.skipDull hands it when the lexer skipped past a stretch of ordinary
+// SQL. It stops the moment the probe rules itself out, which for every
+// statement but a COPY header is within the first token.
+func (p *copyProbe) pushRun(run []byte) {
+	for _, b := range run {
+		if p.ruledOut {
+			return
+		}
+		p.push(b)
 	}
 }
 

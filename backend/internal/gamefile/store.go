@@ -48,7 +48,34 @@ type Store struct {
 	// what it deliberately does not.
 	mu       sync.Mutex
 	reserved map[string]int64
+
+	// dirMu guards what the directory last measured and when it was measured —
+	// a zero dirMeasuredAt meaning "never, or not any more". See dirBytes for
+	// what Append asks of it and dirBytesMaxAge for why it may be asked at all.
+	dirMu         sync.Mutex
+	dirTotal      int64
+	dirMeasuredAt time.Time
 }
+
+// dirBytesMaxAge is how long a measurement of the directory may stand before
+// Append pays for another one.
+//
+// The measurement it replaces ran on every single chunk: a ReadDir plus an
+// Info per entry, which is 27 µs at two files, 3.3 ms at five hundred and
+// 36 ms at five thousand — against 2.7 ms for a whole 8 MiB Append including
+// the copy. At a couple of hundred uploads on the volume, walking it more than
+// doubled the cost of receiving a chunk, and a 3 GiB dump in 8 MiB chunks is
+// 384 of them.
+//
+// Thirty seconds is chosen against what can actually make the number wrong.
+// Nothing outside this process writes to the directory, and everything inside
+// it that changes the total says so: Append adds what it wrote, Complete and
+// Abort forget the measurement outright, and Begin takes a fresh one. So the
+// interval is not what keeps the figure honest — it is a backstop for the one
+// thing this Store cannot see, an operator or a crash leaving bytes behind,
+// and thirty seconds is short enough that such a directory is noticed within a
+// single upload.
+const dirBytesMaxAge = 30 * time.Second
 
 // NewStore opens (creating if necessary) dir as an upload directory governed
 // by limits. This is a constructor-time configuration error, not a domain
@@ -234,12 +261,54 @@ func (s *Store) committedBytes() (int64, error) {
 }
 
 // usedBytes sums the size of every file this Store's directory currently
-// holds. This walks directory metadata, not file content — its cost is
-// proportional to the number of uploads in flight, never to their size, so
-// it does not reopen the rule 12 question Append and Complete answer.
+// holds, by walking it. This walks directory metadata, not file content — its
+// cost is proportional to the number of uploads in flight, never to their
+// size, so it does not reopen the rule 12 question Append and Complete answer.
+//
+// It is the exact answer and the expensive one; dirBytes below is what a hot
+// path asks instead.
 func (s *Store) usedBytes() (int64, error) {
 	_, total, err := s.usage()
 	return total, err
+}
+
+// dirBytes is what the directory holds, measured if the last measurement is
+// missing or older than dirBytesMaxAge and remembered otherwise.
+//
+// The remembered figure is kept true by the three things that change it saying
+// so — see dirBytesMaxAge — and Append never lets it decide a refusal on its
+// own: the moment the directory budget is close enough to be what bounds a
+// chunk, Append measures for real (its own comment says where).
+func (s *Store) dirBytes() (int64, error) {
+	s.dirMu.Lock()
+	if !s.dirMeasuredAt.IsZero() && time.Since(s.dirMeasuredAt) < dirBytesMaxAge {
+		total := s.dirTotal
+		s.dirMu.Unlock()
+		return total, nil
+	}
+	s.dirMu.Unlock()
+
+	return s.usedBytes()
+}
+
+// dirBytesGrew records bytes this process has just added to the directory, so
+// that the remembered figure follows the writes it already knows about instead
+// of going stale between measurements.
+func (s *Store) dirBytesGrew(delta int64) {
+	s.dirMu.Lock()
+	defer s.dirMu.Unlock()
+	if !s.dirMeasuredAt.IsZero() {
+		s.dirTotal += delta
+	}
+}
+
+// dirBytesChanged forgets the measurement — what Complete and Abort call,
+// because an index written or an upload removed changes the total by an
+// amount neither of them is in a position to state exactly.
+func (s *Store) dirBytesChanged() {
+	s.dirMu.Lock()
+	defer s.dirMu.Unlock()
+	s.dirMeasuredAt = time.Time{}
 }
 
 // usage is the same walk, also reporting how large each upload's data file
@@ -265,6 +334,14 @@ func (s *Store) usage() (map[string]int64, int64, error) {
 			sizes[id] = info.Size()
 		}
 	}
+
+	// Every walk of the directory records what it found, whoever asked for it:
+	// Begin's own committedBytes measurement seeds the figure Append will then
+	// reuse, rather than each of them paying separately for the same walk.
+	s.dirMu.Lock()
+	s.dirTotal, s.dirMeasuredAt = total, time.Now()
+	s.dirMu.Unlock()
+
 	return sizes, total, nil
 }
 
@@ -351,22 +428,29 @@ func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 	// received within MaxFileBytes, or refused before writing.
 	fileRemaining := s.limits.MaxFileBytes - received
 
-	// The directory holds a handful of files, not gigabytes of them, so
-	// walking it once per Append call (not per copy-buffer, and not more
-	// often than the file-size check next to it) is cheap — see usedBytes.
-	used, err := s.usedBytes()
-	if err != nil {
-		return received, fmt.Errorf("gamefile: measure directory usage: %w", err)
-	}
-	dirRemaining := s.limits.MaxDirBytes - used
-
 	writeCap := s.limits.MaxChunkBytes
 	reason := ErrChunkTooLarge
 	if fileRemaining <= writeCap {
 		writeCap = fileRemaining
 		reason = ErrFileTooLarge
 	}
-	if dirRemaining <= writeCap {
+
+	// The remembered figure first (dirBytes), because walking the directory
+	// once per chunk is what finding 8 measured as more than doubling the cost
+	// of receiving one. It is only ever allowed to say "there is plenty of
+	// room": the moment what is left could be what bounds this chunk, the
+	// directory is measured for real, so the refusal itself is never decided on
+	// anything but a fresh walk.
+	used, err := s.dirBytes()
+	if err != nil {
+		return received, fmt.Errorf("gamefile: measure directory usage: %w", err)
+	}
+	if s.limits.MaxDirBytes-used <= writeCap {
+		if used, err = s.usedBytes(); err != nil {
+			return received, fmt.Errorf("gamefile: measure directory usage: %w", err)
+		}
+	}
+	if dirRemaining := s.limits.MaxDirBytes - used; dirRemaining <= writeCap {
 		writeCap = dirRemaining
 		reason = ErrStoreFull
 	}
@@ -421,6 +505,10 @@ func (s *Store) Append(id string, offset int64, r io.Reader) (int64, error) {
 		}
 	}
 
+	// What this call added, so the remembered figure follows the writes this
+	// process makes rather than waiting for the next walk to notice them. A
+	// chunk rolled back above never reaches here.
+	s.dirBytesGrew(written)
 	return offset + written, nil
 }
 
@@ -501,6 +589,9 @@ func (s *Store) Complete(id string, declaredBytes int64) (Summary, error) {
 	if err := writeIndex(s.indexPath(id), built); err != nil {
 		return Summary{}, fmt.Errorf("gamefile: save index: %w", err)
 	}
+	// An index of a size this call cannot state exactly now sits beside the
+	// data, so the remembered directory total is forgotten rather than adjusted.
+	s.dirBytesChanged()
 
 	// Everything this upload promised is now on disk and counted there, so
 	// the reservation has nothing left to hold (committedBytes' own doc).
@@ -543,6 +634,10 @@ func (s *Store) Abort(id string) error {
 	if err := os.Remove(s.dataPath(id)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("gamefile: remove upload: %w", err)
 	}
+	// Two files (and any leftover temporaries) are gone; how many bytes with
+	// them is not something this call measured, so the remembered total is
+	// forgotten rather than adjusted.
+	s.dirBytesChanged()
 	// The bytes are gone and so is the promise of the ones that never came —
 	// this is what keeps an abandoned upload the janitor cleared from holding
 	// its share of the directory budget until the process restarts.

@@ -67,6 +67,17 @@ var (
 	// ErrNoGameYet is a contest whose game database was never built. Nobody's
 	// fault, and not a fact about the query.
 	ErrNoGameYet = errors.New("the contest has no game database yet")
+	// ErrNoRoomForDatabase is the game cluster having no room left within its
+	// configured budget for this participant's own copy of the contest.
+	//
+	// Marked apart from ErrUnavailable for the reason provisioning.
+	// ErrClusterFull is a sentinel at all: this is a deployment that has run
+	// out of the disk it said it had, which is a fact somebody can act on
+	// (raise GAME_CLUSTER_MAX_BYTES, reclaim a finished contest, add a
+	// volume), not this service failing. Reported as "internal error" it is
+	// indistinguishable from an outage, and the participant is told nothing
+	// true.
+	ErrNoRoomForDatabase = errors.New("the game cluster has no room for this participant's database")
 	// ErrUnavailable is this service failing, as opposed to the query being
 	// refused. Marked apart because the two need different answers: a refusal
 	// is about the query and belongs to the participant, while a database that
@@ -449,7 +460,7 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 
 	database, err := s.databases.Ensure(ctx, game, participant.ID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: provide the participant's database: %w", ErrUnavailable, err)
+		return nil, provisionFailure(err)
 	}
 	// Only where writing is permitted. A read-only contest cannot grow its
 	// database, so the quota is a number nothing will compare against — and
@@ -494,6 +505,21 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		return nil, ErrDatabaseDeclined
 	}
 	return result, err
+}
+
+// provisionFailure is what both callers of Databases.Ensure turn its error
+// into: the cluster having no room becomes this façade's own sentinel, and
+// everything else stays what it was, an outage of ours wearing ErrUnavailable.
+//
+// One function rather than the same switch written twice, because Run and
+// Schema call Ensure for the same reason and a participant must not be told two
+// different things about one cluster depending on which of the two they
+// happened to hit first.
+func provisionFailure(err error) error {
+	if errors.Is(err, provisioning.ErrClusterFull) {
+		return fmt.Errorf("%w: %w", ErrNoRoomForDatabase, err)
+	}
+	return fmt.Errorf("%w: provide the participant's database: %w", ErrUnavailable, err)
 }
 
 // lookupParticipant resolves who is asking, folding "never registered" and
