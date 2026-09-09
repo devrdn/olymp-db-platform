@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { Tag } from "@/components/ui/tag";
-import type { Dictionary } from "@/lib/i18n/dictionary";
+import type { PlayDictionary } from "./dictionary";
 import { cn } from "@/lib/utils";
 
 import { useContestEvents } from "./use-contest-events";
@@ -40,7 +40,7 @@ export function PlayHeader({
    * nothing loaded yet and has to ask the server for it.
    */
   waitingForStart: boolean;
-  dict: Dictionary;
+  dict: PlayDictionary;
 }) {
   const t = dict.participant.play;
   const router = useRouter();
@@ -63,7 +63,11 @@ export function PlayHeader({
   }, [waitingForStart, phase, router]);
 
   return (
-    <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line bg-bg px-4 py-2.5">
+    /* `print:hidden` lives on the bar itself now that `page.tsx` renders it
+       outside the workspace (finding 2): what a participant prints is the
+       story, never the chrome around it, and the tree that used to carry
+       that class no longer contains this one. */
+    <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line bg-bg px-4 py-2.5 print:hidden">
       <div className="flex min-w-0 items-center gap-3">
         {/* One line with an ellipsis where there is a row to share, wrapping
             where there is not. On a phone the title already has the bar to
@@ -124,7 +128,7 @@ function PlayClock({
   offsetRef: React.RefObject<number>;
   deadlineRef: React.RefObject<number | null | undefined>;
   phase: "waiting" | "running" | "finished";
-  dict: Dictionary;
+  dict: PlayDictionary;
 }) {
   const t = dict.participant.play.clock;
   const [snapshot, setSnapshot] = useState<ClockSnapshot>({ now: 0, offset: 0, deadline: undefined });

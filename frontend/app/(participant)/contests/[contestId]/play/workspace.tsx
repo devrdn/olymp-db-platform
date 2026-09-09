@@ -5,13 +5,12 @@ import { memo, useState } from "react";
 import { cn } from "@/lib/utils";
 import type { QuestionEntry } from "./questions-panel";
 import type { QueryLogEntry } from "@/lib/api/querylog";
-import type { Dictionary } from "@/lib/i18n/dictionary";
+import type { PlayDictionary } from "./dictionary";
 import type { GameSchema } from "@/lib/api/schema";
 import type { Locale } from "@/lib/i18n/config";
 
 import type { ConsoleState } from "./actions";
 import { ConsoleEditor } from "./console";
-import { PlayHeader } from "./play-header";
 import { QueryLogPanel } from "./query-log-panel";
 import { ResultPanel } from "./result-panel";
 import { PaneHandle, usePaneWidths } from "./pane-splitter";
@@ -21,16 +20,15 @@ import { SidePanel } from "./side-panel";
 // Finding 5: a bottom-tab click sets state only in Workspace, but every
 // child under it would still re-render on that state change unless it is
 // memoised — the thousand-row result table, the log table, the whole side
-// panel and the header included, none of whose own props move when the only
-// thing that changed is which tab is showing. Each of these four takes
+// panel included, none of whose own props move when the only thing that
+// changed is which tab is showing. Each of these takes
 // nothing but values that are already stable across a tab click (Workspace's
 // own state and its own unchanging props), so a shallow prop comparison is
 // exactly the right amount of work to skip a reconciliation that buys
 // nothing. QueryLogPanel is the one exception worth naming: its `active` prop
 // does change when the bottom tab flips to or from "log", and that is meant
-// to re-render it — memoising does not defeat that, it only stops the *other*
-// three from being dragged along for the ride.
-const MemoPlayHeader = memo(PlayHeader);
+// to re-render it — memoising does not defeat that, it only stops the others
+// from being dragged along for the ride.
 const MemoResultPanel = memo(ResultPanel);
 const MemoQueryLogPanel = memo(QueryLogPanel);
 const MemoSidePanel = memo(SidePanel);
@@ -40,9 +38,15 @@ const MemoSchemaPanel = memo(SchemaPanel);
 
 /**
  * The full-screen olympiad workspace: the console as the editor, a panel
- * below it for the last result and the query log, a panel beside it for the
- * story and the questions, and a thin bar above everything for the
- * contest's name and the clock.
+ * below it for the last result and the query log, and a panel beside it for
+ * the story and the questions.
+ *
+ * The bar above it — the contest's name and the clock — is deliberately not
+ * here. `page.tsx` renders `PlayHeader` itself, above the `<Suspense>`
+ * boundary this component sits inside, so the title and a running countdown
+ * reach the participant in the first wave of the response rather than after
+ * four API requests have settled (finding 2). Everything this component
+ * draws depends on one of those four; the header depends on none of them.
  *
  * This is the one screen in the product that goes full-bleed — no hatched
  * side fields — a deliberate exception to `docs/design/SPEC.md` §5, recorded
@@ -87,7 +91,6 @@ const MemoSchemaPanel = memo(SchemaPanel);
  */
 export function Workspace({
   contestId,
-  title,
   storyBody,
   printView,
   storyUnavailable,
@@ -98,7 +101,6 @@ export function Workspace({
   dict,
 }: {
   contestId: string;
-  title: string;
   storyBody: React.ReactNode;
   /** The print-only copy of the story, rendered on the server by `page.tsx` — see this component's own doc for why it is a node and not the Markdown behind it. Null exactly when there is no story to print (mirrors `storyUnavailable`). */
   printView: React.ReactNode;
@@ -108,7 +110,7 @@ export function Workspace({
   schema: GameSchema | null;
   initialLog: { items: QueryLogEntry[]; total: number; failed: boolean };
   locale: Locale;
-  dict: Dictionary;
+  dict: PlayDictionary;
 }) {
   const t = dict.participant.play.workspace;
 
@@ -153,21 +155,19 @@ export function Workspace({
           panel therefore keeps a bound of its own below the breakpoint — see
           its own comment further down — so what scrolls the page is the list of
           sections, never the length of one query's answer.
-          Finding 7: the app bar this route sits below (`AppBar`) is `h-12`
-          (3rem) *plus* its own `border-b` — 3rem alone is one pixel short of
-          its real height, and a "no page scroll" screen that scrolls by one
-          pixel is still a screen that scrolls.
+          The viewport-height arithmetic itself now lives on `page.tsx`'s
+          own shell, which is the element that holds the header and this
+          together — including finding 7's correction that the app bar above
+          this route is `h-12` (3rem) *plus* its own `border-b`, so 3rem
+          alone is a pixel short and a "no page scroll" screen that scrolls
+          by one pixel is still a screen that scrolls. What is left here is
+          `narrow:flex-1`: take the rest of that height, and only from the
+          breakpoint up — `flex-1` in a column whose height is its content
+          would resolve against a zero basis and collapse.
 
           `print:hidden`: the mirror image of the container above — this is
           the tree `@media print` must never draw. */}
-      <div className="flex min-h-0 flex-col print:hidden narrow:h-[calc(100dvh-3rem-1px)]">
-        <MemoPlayHeader
-          contestId={contestId}
-          title={title}
-          waitingForStart={false}
-          dict={dict}
-        />
-
+      <div className="flex min-h-0 flex-col print:hidden narrow:flex-1">
         {/* The design's three panes: the schema down the left, the editor and
           its result in the middle, the story and the questions on the right
           (docs/design/preview.html, "SQL-консоль"). The two side columns are

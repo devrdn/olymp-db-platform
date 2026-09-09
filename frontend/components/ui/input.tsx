@@ -1,10 +1,17 @@
 import * as React from "react";
-import { Input as InputPrimitive } from "@base-ui/react/input";
 
 import { cn } from "@/lib/utils";
 
 /**
  * A square field.
+ *
+ * A plain `<input>`, not Base UI's (finding 6). Base UI's `Input` is its
+ * `Field.Control` under another name — it exists to integrate with Base UI's
+ * own `Field`, and this project has its own (`components/ui/field.tsx`), so
+ * every one of the states that primitive tracks (filled, dirty, touched)
+ * was being computed for nothing while pulling the whole Field machinery
+ * into the bundle. See `button.tsx`'s own doc for what that weighed on the
+ * one route it matters most on.
  *
  * The registry ships `rounded-lg`, and the specification puts rounding on the
  * outer frame and on small controls only — a field is neither. Square is also
@@ -18,7 +25,7 @@ import { cn } from "@/lib/utils";
  */
 function Input({ className, type, ...props }: React.ComponentProps<"input">) {
   return (
-    <InputPrimitive
+    <input
       type={type}
       data-slot="input"
       className={cn(

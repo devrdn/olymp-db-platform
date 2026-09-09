@@ -3,6 +3,7 @@ import { SectionNav } from "@/components/layout/section-nav";
 import { fetchIdentity } from "@/lib/auth/session";
 import { branding } from "@/lib/api/branding";
 import { imageHref } from "@/lib/api/settings";
+import { ParticipantDictionary } from "@/lib/i18n/client";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -54,7 +55,13 @@ export default async function ParticipantLayout({ children }: { children: React.
       }
       account={identity ? { fullName: identity.fullName, login: identity.login } : undefined}
     >
-      {children}
+      {/* This group's own dictionary scope, on top of the root's: the participant's own boundaries (`/my`, `/open`) read from `participant`,
+          and none of that is a section the root scope carries. The sections
+          are chosen here, on the server, so what crosses the wire is what
+          this subtree can actually read (finding 5). */}
+      <ParticipantDictionary.Provider dict={ParticipantDictionary.select(dict)} locale={locale}>
+        {children}
+      </ParticipantDictionary.Provider>
     </ProductShell>
   );
 }

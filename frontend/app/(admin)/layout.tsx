@@ -3,6 +3,7 @@ import { ProductShell } from "@/components/layout/product-shell";
 import { fetchIdentity } from "@/lib/auth/session";
 import { branding } from "@/lib/api/branding";
 import { imageHref } from "@/lib/api/settings";
+import { AdminDictionary } from "@/lib/i18n/client";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -53,7 +54,13 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       nav={<SectionNav items={destinations} />}
       account={identity ? { fullName: identity.fullName, login: identity.login } : undefined}
     >
-      {children}
+      {/* This group's own dictionary scope, on top of the root's: the four constructor boundaries each name their own screen,
+          and none of that is a section the root scope carries. The sections
+          are chosen here, on the server, so what crosses the wire is what
+          this subtree can actually read (finding 5). */}
+      <AdminDictionary.Provider dict={AdminDictionary.select(dict)} locale={locale}>
+        {children}
+      </AdminDictionary.Provider>
     </ProductShell>
   );
 }

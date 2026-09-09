@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 
@@ -198,5 +198,93 @@ describe("what the table says about itself", () => {
     const header = screen.getByRole("columnheader");
     expect(header).toHaveTextContent("mood");
     expect(header.querySelector("span")).toBeNull();
+  });
+});
+
+/**
+ * Finding 1: the table only ever puts the rows the pane can show into the
+ * DOM, and lays itself out from declared column widths rather than from a
+ * measurement of every cell.
+ *
+ * jsdom has no layout, so nothing here asserts a size — what is asserted is
+ * which rows exist, what the table says about the ones that do not, and that
+ * clipping a value never loses it. The scroll box's height is stated rather
+ * than measured for the same reason.
+ */
+describe("a large result", () => {
+  function answer(rows: number, columns = 8): ConsoleState {
+    return {
+      kind: "answer",
+      result: {
+        columns: Array.from({ length: columns }, (_, c) => `col_${c}`),
+        rows: Array.from({ length: rows }, (_, r) =>
+          Array.from({ length: columns }, (_, c) => `cell-${r}-${c}`),
+        ),
+        truncated: false,
+        rows_affected: 0,
+      },
+    };
+  }
+
+  /** The scroll box around the table, with a stated height jsdom cannot work out for itself. */
+  function scrollerOf(table: HTMLElement, height: number): HTMLElement {
+    const scroller = table.parentElement as HTMLElement;
+    Object.defineProperty(scroller, "clientHeight", { value: height, configurable: true });
+    Object.defineProperty(scroller, "scrollTop", { value: 0, configurable: true, writable: true });
+    return scroller;
+  }
+
+  test("puts a window of rows in the DOM rather than the whole answer", () => {
+    show(answer(1000));
+
+    const table = screen.getByRole("table");
+    // The header plus what fits, not a thousand and one.
+    expect(within(table).getAllByRole("row").length).toBeLessThan(80);
+  });
+
+  // A table holding only some of its rows still has to say how many there
+  // are, or a screen reader is told the answer is forty rows long.
+  test("still says how many rows the whole answer has", () => {
+    show(answer(1000));
+
+    expect(screen.getByRole("table")).toHaveAttribute("aria-rowcount", "1001");
+  });
+
+  test("scrolling exchanges the window for the rows now under it", () => {
+    show(answer(1000));
+    const table = screen.getByRole("table");
+    const scroller = scrollerOf(table, 440);
+
+    // Ten rows of 44px per hundred pixels: row 500 is 22000px down.
+    (scroller as unknown as { scrollTop: number }).scrollTop = 500 * 44;
+    fireEvent.scroll(scroller);
+
+    expect(within(table).queryByText("cell-0-0")).not.toBeInTheDocument();
+    expect(within(table).getByText("cell-500-0")).toBeInTheDocument();
+    // And each row still knows which row of the answer it is.
+    expect(within(table).getByText("cell-500-0").closest("tr")).toHaveAttribute(
+      "aria-rowindex",
+      String(500 + 2),
+    );
+  });
+
+  test("a value clipped by its column keeps its whole text on the cell", () => {
+    const statement = "the witness said ".repeat(30);
+    show({
+      kind: "answer",
+      result: { columns: ["note"], rows: [[statement]], truncated: false, rows_affected: 0 },
+    });
+
+    expect(screen.getByRole("cell")).toHaveAttribute("title", statement);
+  });
+
+  // The half of finding 1 that costs nothing: a declared width per column is
+  // what lets the browser place the first row without measuring the rest.
+  test("declares a width for every column", () => {
+    show(answer(20, 4));
+
+    const table = screen.getByRole("table");
+    expect(table.querySelectorAll("colgroup > col")).toHaveLength(4);
+    expect(table.className).toContain("table-fixed");
   });
 });

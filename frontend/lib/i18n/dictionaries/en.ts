@@ -940,6 +940,8 @@ const en = {
       null: "null",
     },
     play: {
+      /** Read aloud while the workspace is still being built — the skeleton beside it is silent to a screen reader. */
+      loading: "Loading the workspace",
       waiting: {
         body: "This screen updates on its own the moment the contest starts. Keep this tab open.",
         startsAt: "Scheduled to start at {time}.",
