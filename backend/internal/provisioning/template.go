@@ -229,9 +229,19 @@ type Template struct {
 	// for SourceBuilder, whose SQL does not exist yet at all (Definition's
 	// own doc). Inventing a Script for either would be lying about where the
 	// game came from.
-	Script     string
-	BuildError string
-	UpdatedAt  time.Time
+	Script string
+	// ScriptBytes is how long Script is, and is filled in whether or not
+	// Script itself was read. That is the whole of its reason to exist: a
+	// console watching a build polls twice a second for as long as the build
+	// runs, and the only thing it wants from the script is its length. Reading
+	// the column to measure it meant a twenty-minute build with two organisers
+	// watching pulled about six hundred megabytes of the same script out of the
+	// core database, decoded it into Go strings and threw it away — see
+	// TemplateRepository.TemplateStatus, which is the read that fills this in
+	// without Script.
+	ScriptBytes int
+	BuildError  string
+	UpdatedAt   time.Time
 }
 
 // Building reports whether a build is under way, which is what an interface
@@ -253,6 +263,19 @@ type TemplateRepository interface {
 	SaveDefinition(ctx context.Context, contestID uuid.UUID, database string, definition Definition) (Template, error)
 	// Template reads one contest's game, or ErrNoGame.
 	Template(ctx context.Context, contestID uuid.UUID) (Template, error)
+	// TemplateStatus reads everything about one contest's game except the two
+	// columns that carry its content: the script comes back as its length in
+	// ScriptBytes rather than its bytes, and the structural definition is not
+	// read at all. Or ErrNoGame, exactly as Template.
+	//
+	// A second read rather than a parameter on the first, because the two
+	// answer different questions and only one of them is polled. An organiser
+	// watching a build asks every two seconds for as long as it runs, and wants
+	// a status, a version and a length; Template's own callers want the script
+	// itself. A script may be megabytes (MaxScriptBytes), so twenty minutes of
+	// two watchers is hundreds of megabytes read, decoded and discarded — plus
+	// a json.Unmarshal of the definition on every one of them.
+	TemplateStatus(ctx context.Context, contestID uuid.UUID) (Template, error)
 	// ClaimBuild moves one game from pending to building and returns it.
 	//
 	// The conditional update is the race arbiter, the same way ClaimSpare's
@@ -431,6 +454,10 @@ type Games struct {
 	// called, the same convention files follows for uploads.
 	tableFiles  *gamefile.Store
 	tableLimits gamefile.Limits
+	// rowMarks is where in a table's own CSV file each five-hundredth row
+	// begins, learned as pages are read — what keeps paging through a table
+	// from costing a scan of the file per page. See tableRowIndex.
+	rowMarks tableRowIndex
 }
 
 // TemplateCluster is the one thing building a game asks of the cluster.
@@ -514,6 +541,17 @@ func (g *Games) UploadLimits() (gamefile.Limits, bool) {
 // Of reads one contest's game, or ErrNoGame when it has none yet.
 func (g *Games) Of(ctx context.Context, contestID uuid.UUID) (Template, error) {
 	return g.repo.Template(ctx, contestID)
+}
+
+// StatusOf is Of without the game's own content: the script's length instead of
+// the script, and no structural definition at all. ErrNoGame when the contest
+// has no game yet, the same as Of.
+//
+// What a console polling a running build should ask for — see
+// TemplateRepository.TemplateStatus for what the difference costs when it does
+// not.
+func (g *Games) StatusOf(ctx context.Context, contestID uuid.UUID) (Template, error) {
+	return g.repo.TemplateStatus(ctx, contestID)
 }
 
 // Script returns the SQL one contest's game is built from, whether the

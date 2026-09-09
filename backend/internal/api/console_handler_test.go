@@ -15,6 +15,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
+	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
@@ -204,6 +205,28 @@ func TestAParticipantPastTheirDeadlineGetsA409(t *testing.T) {
 	}
 	if code := errorCode(t, rec); code != "contest_not_running" {
 		t.Fatalf("code = %q, want %q", code, "contest_not_running")
+	}
+}
+
+// A game cluster at its configured disk budget has to reach the participant as
+// its own sentence. It used to reach them as a 500 with "internal error": the
+// refusal had no sentinel at all, because nothing on the participant's own path
+// asked whether there was room before making them a database (CLAUDE.md rule
+// 1). A 503 rather than a 500 because nothing is broken — an operator raising
+// GAME_CLUSTER_MAX_BYTES or reclaiming a finished olympiad clears it — and
+// rather than a 409 because it is a fact about the installation and not about
+// the contest or the query.
+func TestAFullGameClusterIsA503WithItsOwnCode(t *testing.T) {
+	fixture := newConsoleFixture(t, fakeConsole{
+		err: fmt.Errorf("%w: %w", queryproxy.ErrNoRoomForDatabase, provisioning.ErrClusterFull),
+	})
+
+	rec := fixture.run("SELECT 1")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "game_cluster_full" {
+		t.Fatalf("code = %q, want %q", code, "game_cluster_full")
 	}
 }
 

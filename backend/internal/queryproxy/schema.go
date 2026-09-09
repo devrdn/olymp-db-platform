@@ -84,7 +84,7 @@ func (s *Service) Schema(ctx context.Context, contestID, userID uuid.UUID, addr 
 	// have paid for a moment later anyway.
 	database, err := s.databases.Ensure(ctx, game, participant.ID)
 	if err != nil {
-		return provisioning.Schema{}, fmt.Errorf("%w: provide the participant's database: %w", ErrUnavailable, err)
+		return provisioning.Schema{}, provisionFailure(err)
 	}
 
 	schema, err := s.schemas.Schema(ctx, game, database)

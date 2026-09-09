@@ -312,6 +312,19 @@ func (g *fakeGames) Of(context.Context, uuid.UUID) (provisioning.Template, error
 	return g.template, g.ofErr
 }
 
+// StatusOf mirrors what postgres.GameInstances.TemplateStatus returns: the
+// script's length and never the script, so a handler that went on reading
+// Template.Script would answer zero here and the test below would say so.
+func (g *fakeGames) StatusOf(context.Context, uuid.UUID) (provisioning.Template, error) {
+	if g.ofErr != nil {
+		return provisioning.Template{}, g.ofErr
+	}
+	status := g.template
+	status.ScriptBytes = len(status.Script)
+	status.Script, status.Definition = "", provisioning.Definition{}
+	return status, nil
+}
+
 func (g *fakeGames) SetScript(_ context.Context, actorID, _ uuid.UUID, script string) (provisioning.Template, error) {
 	g.gotSet, g.gotActor = script, actorID
 	if g.setErr != nil {

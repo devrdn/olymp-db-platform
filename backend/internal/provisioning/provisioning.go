@@ -37,6 +37,19 @@ var (
 	// ErrNoGame means the contest's template was never built, or is still
 	// building. Nobody's mistake, and not a fact about anybody's query.
 	ErrNoGame = errors.New("no game database")
+	// ErrClusterFull is the game cluster having no room left within
+	// GAME_CLUSTER_MAX_BYTES for another copy of this contest's template.
+	//
+	// A declared sentinel and not a bare error (CLAUDE.md rule 1) because it
+	// has to reach the participant as its own sentence: it is nobody's mistake,
+	// it is not a fact about their query, and it is not permanent — an
+	// organiser raising the budget or a finished contest being reclaimed makes
+	// it go away. Told as "internal error" instead, it is indistinguishable
+	// from an outage, and the one person who could act on it (the operator
+	// watching the pool's own constrained warnings) never learns that
+	// participants are now being turned away rather than merely queued behind
+	// a pool that stopped growing.
+	ErrClusterFull = errors.New("the game cluster has no room for another copy")
 )
 
 // Instance is the database a registration works in.
@@ -167,6 +180,16 @@ type Service struct {
 	// them unset.
 	audit *audit.Recorder
 	uow   storage.UnitOfWork
+	// maxClusterBytes is PoolLimits.MaxClusterBytes again, held here because
+	// the budget has to bind on the path a participant actually takes and not
+	// only inside the depth function the background tender calls. Zero until
+	// WithClusterBudget, which is "no byte budget" — the same meaning the
+	// PoolLimits field carries. See roomForOneCopy.
+	maxClusterBytes int64
+	// sizes is how large each template measured, per template version — read
+	// once per version rather than once per participant request. See
+	// templateSizes.
+	sizes templateSizes
 }
 
 // DefaultWorkers is how many copies are made at once. Section 4.2 says two to
@@ -219,6 +242,20 @@ func (s *Service) WithAudit(rec *audit.Recorder, uow storage.UnitOfWork) *Servic
 	return s
 }
 
+// WithClusterBudget tells the service how much disk every database on the game
+// cluster may occupy together — the same GAME_CLUSTER_MAX_BYTES a deployment
+// gives PoolLimits.MaxClusterBytes, and it must be given the same number: one
+// budget applied in two places, not two budgets.
+//
+// Left unset (or set to zero) nothing is refused for want of room, which is the
+// state a deployment with no budget configured is in. internal/app supplies it
+// beside the PoolLimits it builds for tendPools, so the pool's own bound and
+// the participant path's cannot drift.
+func (s *Service) WithClusterBudget(maxBytes int64) *Service {
+	s.maxClusterBytes = maxBytes
+	return s
+}
+
 // Ensure returns the database this registration works in, making one if there
 // is none.
 //
@@ -262,7 +299,13 @@ func (s *Service) Ensure(ctx context.Context, contest Contest, registration uuid
 	}
 
 	// The pool was empty. Section 4.2 calls this the late registration, and it
-	// is the only path where somebody waits for a copy.
+	// is the only path where somebody waits for a copy — and, until this check
+	// existed, the only path on which a copy was made without anybody asking
+	// whether the cluster had room for it (see roomForOneCopy).
+	if err := s.roomForOneCopy(ctx, contest); err != nil {
+		return "", err
+	}
+
 	database := instanceName(contest.ID, registration)
 	if err := s.cluster.CreateInstance(ctx, contest.Template, database, contest.Policy); err != nil {
 		return "", err
@@ -360,6 +403,18 @@ func (s *Service) Invalidate(ctx context.Context, contest Contest) (int, error) 
 		return 0, err
 	}
 
+	if len(stale) > 0 {
+		// Copies from an older template exist, which means the template itself
+		// has been rebuilt since they were made and whatever it measured last
+		// describes a database that is no longer there. The version alone would
+		// already keep that measurement from being reused (templateSizes' own
+		// doc); this is only the tidier half of the same fact, and it is kept
+		// behind the "something was actually stale" test so that an ordinary
+		// tick over an unchanged contest does not throw the measurement away
+		// every ten minutes for nothing.
+		s.sizes.forget(contest.Template)
+	}
+
 	dropped := 0
 	for _, old := range stale {
 		if err := s.cluster.Drop(ctx, old.Database); err != nil {
@@ -441,8 +496,14 @@ func (s *Service) Tend(ctx context.Context, depth Depth) (made, dropped int, err
 // template is the only thing that says how large a contest's data legitimately
 // is: a game with a hundred rows and one with a million should not share a
 // figure somebody typed into a configuration file once.
+//
+// This is the hot one. It is asked on every query of every read-write contest,
+// so the measurement behind it goes through templateBytes rather than straight
+// to the cluster — see templateSizes for what asking the cluster once per
+// request actually costs, and why "once per template version" is the same
+// answer rather than a staler one.
 func (s *Service) Quota(ctx context.Context, contest Contest) (int64, error) {
-	size, err := s.cluster.DatabaseSize(ctx, contest.Template)
+	size, err := s.templateBytes(ctx, contest)
 	if err != nil {
 		return 0, err
 	}
@@ -649,7 +710,7 @@ func (s *Service) RosterDepth(limits PoolLimits, constrained Constrained) Depth 
 // cluster holds, so a depth of `have + room/size` asks for exactly the copies
 // there is room for. Rounded down, because a copy that half fits does not.
 func (s *Service) copiesThatFit(ctx context.Context, contest Contest, budget int64, sizing *Sizing) (int, error) {
-	size, err := s.cluster.DatabaseSize(ctx, contest.Template)
+	size, err := s.templateBytes(ctx, contest)
 	if err != nil {
 		return 0, fmt.Errorf("size the pool for contest %s: %w", contest.ID, err)
 	}

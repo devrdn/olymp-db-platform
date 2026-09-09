@@ -34,11 +34,38 @@ func scanTemplate(row pgx.Row) (provisioning.Template, error) {
 	}
 	t.Status = provisioning.TemplateStatus(status)
 	t.Source = provisioning.TemplateSource(source)
+	// Filled in here as well as by the status read below, so that a caller
+	// reading the length never has to know which of the two produced the row
+	// (Template.ScriptBytes' own doc).
+	t.ScriptBytes = len(t.Script)
 	if len(definitionJSON) > 0 {
 		if err := json.Unmarshal(definitionJSON, &t.Definition); err != nil {
 			return t, fmt.Errorf("decode the game's definition: %w", err)
 		}
 	}
+	return t, nil
+}
+
+// templateStatusColumns is templateColumns with the game's own content left
+// behind: octet_length in place of init_script, and no definition_json at all.
+//
+// The lengths agree by construction — octet_length is the byte length of the
+// text PostgreSQL would have sent, which is what len() of the Go string would
+// have measured — so a caller reading ScriptBytes gets the same number either
+// way.
+const templateStatusColumns = `contest_id, template_db, version, status,
+	octet_length(init_script), coalesce(build_error, ''), updated_at, source, upload_id`
+
+func scanTemplateStatus(row pgx.Row) (provisioning.Template, error) {
+	var t provisioning.Template
+	var status, source string
+	err := row.Scan(&t.ContestID, &t.Database, &t.Version, &status, &t.ScriptBytes, &t.BuildError,
+		&t.UpdatedAt, &source, &t.UploadID)
+	if err != nil {
+		return t, err
+	}
+	t.Status = provisioning.TemplateStatus(status)
+	t.Source = provisioning.TemplateSource(source)
 	return t, nil
 }
 
@@ -125,6 +152,22 @@ func (r *GameInstances) SaveDefinition(
 func (r *GameInstances) Template(ctx context.Context, contestID uuid.UUID) (provisioning.Template, error) {
 	template, err := scanTemplate(r.querier(ctx).QueryRow(ctx,
 		`SELECT `+templateColumns+` FROM game_templates WHERE contest_id = $1`, contestID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return provisioning.Template{}, provisioning.ErrNoGame
+	}
+	if err != nil {
+		return provisioning.Template{}, fmt.Errorf("read the contest's game: %w", err)
+	}
+	return template, nil
+}
+
+// TemplateStatus reads one contest's game without its content — the read a
+// console polling a running build makes, twice a second, for as long as the
+// build lasts. See provisioning.TemplateRepository.TemplateStatus for why that
+// is a separate query rather than Template with a flag.
+func (r *GameInstances) TemplateStatus(ctx context.Context, contestID uuid.UUID) (provisioning.Template, error) {
+	template, err := scanTemplateStatus(r.querier(ctx).QueryRow(ctx,
+		`SELECT `+templateStatusColumns+` FROM game_templates WHERE contest_id = $1`, contestID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return provisioning.Template{}, provisioning.ErrNoGame
 	}

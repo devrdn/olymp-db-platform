@@ -28,6 +28,10 @@ import (
 // only maps the sentinel once it comes back (fail, below).
 type Games interface {
 	Of(ctx context.Context, contestID uuid.UUID) (provisioning.Template, error)
+	// StatusOf is Of without the game's own content — what the status
+	// endpoint reads, because a console watching a build polls it twice a
+	// second and wants the script's length, never the script.
+	StatusOf(ctx context.Context, contestID uuid.UUID) (provisioning.Template, error)
 	SetScript(ctx context.Context, actorID, contestID uuid.UUID, script string) (provisioning.Template, error)
 
 	BeginUpload(ctx context.Context, contestID uuid.UUID, filename string, declaredBytes int64) (provisioning.Upload, error)
@@ -497,7 +501,7 @@ func (h *GameHandler) gameView(ctx context.Context, template provisioning.Templa
 		Status: string(template.Status), Version: template.Version,
 		Source:   string(template.Source),
 		Database: template.Database, BuildError: template.BuildError,
-		ScriptBytes: len(template.Script), Building: template.Building(),
+		ScriptBytes: template.ScriptBytes, Building: template.Building(),
 		UpdatedAt: template.UpdatedAt, UploadLimits: h.uploadLimitsView(),
 		BuilderLimits: h.builderLimitsView(),
 	}
@@ -530,7 +534,10 @@ func (h *GameHandler) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	template, err := h.games.Of(r.Context(), contestID)
+	// StatusOf and not Of: this is the endpoint a console polls every two
+	// seconds while a build runs, and nothing it answers with needs the script
+	// itself or the table-builder definition — only how long the script is.
+	template, err := h.games.StatusOf(r.Context(), contestID)
 	if errors.Is(err, provisioning.ErrNoGame) {
 		// Not an error: every contest is in this state until somebody writes
 		// its game. Answered as a game with no script rather than a 404, so

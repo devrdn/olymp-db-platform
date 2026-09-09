@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -141,9 +140,34 @@ type csvField struct {
 // exactly when it is empty and carried no quotes at all, so `""` is the empty
 // string and a bare empty field is absent (csvField's own doc).
 func splitCSVLine(line []byte) ([]csvField, error) {
-	var fields []csvField
+	// One comma per field boundary, so this is the exact field count for every
+	// line that has no quoted comma in it and a floor for the rest — enough to
+	// keep the slice from being regrown four times for a ten-column row, which
+	// on a two-hundred-thousand-row file is most of a million allocations
+	// nobody needed.
+	fields := make([]csvField, 0, bytes.Count(line, commaByte)+1)
 	i := 0
 	for {
+		// The field with no quote anywhere in it, which is nearly every field
+		// of nearly every file: its bytes are already contiguous in the line,
+		// so they become one string directly instead of being appended one at
+		// a time into a buffer that is then copied into a string. The walk
+		// below is what the quoted cases still need, and this hands over to it
+		// the moment a '"' turns up before the field's own delimiter — so the
+		// two-state parsing splitCSVLine's doc describes is untouched, and
+		// `1,ab"cd,2` and `"Bo"bby` still go through it.
+		if end := plainFieldEnd(line, i); end >= 0 {
+			if end-i > MaxTableFieldBytes {
+				return nil, ErrTableFieldTooLong
+			}
+			fields = append(fields, csvField{Text: string(line[i:end]), Null: end == i})
+			if end >= len(line) {
+				break
+			}
+			i = end + 1 // the comma; a field always follows, empty or not
+			continue
+		}
+
 		var (
 			buf     []byte
 			inQuote bool
@@ -187,6 +211,31 @@ func splitCSVLine(line []byte) ([]csvField, error) {
 		i++ // the comma; a field always follows, including a trailing empty one
 	}
 	return fields, nil
+}
+
+// commaByte and plainFieldChars are the delimiter and the two bytes that can
+// end the "no quote in this field" fast path: the delimiter itself, and the
+// quote that means the field is not plain after all.
+var commaByte = []byte{','}
+
+const plainFieldChars = ",\""
+
+// plainFieldEnd reports where the field starting at i ends, or -1 when the
+// field carries a quote and has to be parsed by the walk in splitCSVLine.
+//
+// The answer is len(line) for the last field of a line and the index of the
+// comma otherwise, which is the same "leave the delimiter for the caller"
+// convention the walk uses.
+func plainFieldEnd(line []byte, i int) int {
+	next := bytes.IndexAny(line[i:], plainFieldChars)
+	switch {
+	case next < 0:
+		return len(line)
+	case line[i+next] == ',':
+		return i + next
+	default:
+		return -1 // a quote before the delimiter: not this path's field
+	}
 }
 
 // formatCSVRow encodes one row for the file — the counterpart of
@@ -258,10 +307,26 @@ func (w *csvWriter) write(fields []string) error {
 type tableLineScanner struct {
 	r    *bufio.Reader
 	line int // the 1-based number of the line next() is about to return
+	// offset is how many bytes of the file lie before the line next() is about
+	// to return — the file's own byte offset, so a scanner started at a seek
+	// has to be told where it began (newTableLineScannerAt).
+	//
+	// It exists for TableDataWindow's row marks: an offset is only useful as
+	// somewhere to seek back to, and only this loop knows how many bytes each
+	// line actually took, trailing newline and CR included.
+	offset int64
 }
 
 func newTableLineScanner(r io.Reader) *tableLineScanner {
 	return &tableLineScanner{r: bufio.NewReaderSize(r, 64<<10)}
+}
+
+// newTableLineScannerAt is newTableLineScanner for a file already seeked to
+// offset, so that the offsets it reports are the file's and not the reader's.
+func newTableLineScannerAt(r io.Reader, offset int64) *tableLineScanner {
+	s := newTableLineScanner(r)
+	s.offset = offset
+	return s
 }
 
 // trimLineEnding strips the newline a line was read up to, and — since a
@@ -291,6 +356,7 @@ func (s *tableLineScanner) next() ([]byte, error) {
 		switch {
 		case err == nil:
 			s.line++
+			s.offset += int64(len(line) + len(chunk))
 			if len(line) == 0 {
 				return trimLineEnding(chunk), nil
 			}
@@ -303,6 +369,7 @@ func (s *tableLineScanner) next() ([]byte, error) {
 				return nil, io.EOF
 			}
 			s.line++
+			s.offset += int64(len(line) + len(chunk))
 			return append(line, chunk...), nil
 		default:
 			return nil, err
@@ -468,23 +535,34 @@ func validateScalar(text string, t ColumnType) error {
 	return nil
 }
 
-// numericDigits matches one or more decimal digits, optionally grouped with
-// a single underscore between any two digits — PostgreSQL 16's own digit
-// separator. Verified against a live PostgreSQL 16 instance rather than
-// assumed: '1_000'::numeric is 1000, but '1__000', '_1000' and '1000_' are
-// all refused, because an underscore must sit strictly between two digits —
-// never lead, trail, or double.
-const numericDigits = `[0-9](?:_?[0-9])*`
-
-// numericLiteralRE matches the decimal syntax PostgreSQL's own numeric_in
-// accepts for an ordinary (non-special) value: an optional sign, then either
-// digits with an optional fractional part (5, 5., 5.5) or a fractional part
-// on its own (.5), then an optional exponent. It does not match a
-// hexadecimal float literal such as Go's strconv.ParseFloat accepts
-// (0x1p-2) — numeric_in has never accepted one.
-var numericLiteralRE = regexp.MustCompile(
-	`^[+-]?(` + numericDigits + `(\.(?:` + numericDigits + `)?)?|\.` + numericDigits + `)([eE][+-]?` + numericDigits + `)?$`,
-)
+// scanNumericDigits consumes, from *at, one or more decimal digits optionally
+// grouped with a single underscore between any two of them — PostgreSQL 16's
+// own digit separator — and reports how many digits it took.
+//
+// Verified against a live PostgreSQL 16 instance rather than assumed:
+// '1_000'::numeric is 1000, but '1__000', '_1000' and '1000_' are all
+// refused, because an underscore must sit strictly between two digits — never
+// lead, trail, or double. That is exactly what the second case below encodes:
+// an underscore is consumed only together with the digit that must follow it,
+// and only once a digit has already been seen.
+//
+// Zero means there were no digits here at all, and *at is left where it was.
+func scanNumericDigits(s string, at *int) int {
+	i, digits := *at, 0
+	for i < len(s) {
+		switch {
+		case s[i] >= '0' && s[i] <= '9':
+			i, digits = i+1, digits+1
+		case s[i] == '_' && digits > 0 && i+1 < len(s) && s[i+1] >= '0' && s[i+1] <= '9':
+			i, digits = i+2, digits+1
+		default:
+			*at = i
+			return digits
+		}
+	}
+	*at = i
+	return digits
+}
 
 // validNumericLiteral reports whether text is a value PostgreSQL's own
 // numeric_in would accept for a numeric column — checked as syntax, not
@@ -505,6 +583,15 @@ var numericLiteralRE = regexp.MustCompile(
 // instance (this platform's own target, deploy/docker-compose.yml) rather
 // than assumed from the type's older behaviour: 'NaN', 'Infinity', 'Inf',
 // '-Infinity' and '+Inf' all cast to numeric on it.
+//
+// Written out rather than expressed as a regular expression, which is what it
+// used to be. This is the hottest routine of the upload's own validation pass:
+// two hundred thousand rows of ten columns measured at 178 ms and 166 MB of
+// garbage, and 75 ms of that 178 was this one call — 188 ns a time, four
+// hundred thousand times — inside the HTTP request that completes the upload,
+// on the process serving the olympiad. The grammar is a dozen lines of
+// character tests; a regular expression bought nothing here but the cost of an
+// engine.
 func validNumericLiteral(text string) bool {
 	s := strings.TrimSpace(text)
 	if s == "" {
@@ -514,13 +601,41 @@ func validNumericLiteral(text string) bool {
 		return true
 	}
 	body := s
-	if body != "" && (body[0] == '+' || body[0] == '-') {
+	if body[0] == '+' || body[0] == '-' {
 		body = body[1:]
 	}
 	if strings.EqualFold(body, "inf") || strings.EqualFold(body, "infinity") {
 		return true
 	}
-	return numericLiteralRE.MatchString(s)
+
+	// The decimal syntax numeric_in accepts for an ordinary value: digits with
+	// an optional fractional part (5, 5., 5.5), or a fractional part on its own
+	// (.5), then an optional exponent. Deliberately not strconv.ParseFloat, for
+	// the three reasons above — and note that this refuses the hexadecimal float
+	// literal (0x1p-2) ParseFloat accepts and numeric_in never has, simply by
+	// never having a case that consumes an 'x'.
+	at := 0
+	whole := scanNumericDigits(body, &at)
+	fraction := 0
+	if at < len(body) && body[at] == '.' {
+		at++
+		fraction = scanNumericDigits(body, &at)
+	}
+	if whole == 0 && fraction == 0 {
+		return false
+	}
+	if at < len(body) && (body[at] == 'e' || body[at] == 'E') {
+		at++
+		if at < len(body) && (body[at] == '+' || body[at] == '-') {
+			at++
+		}
+		if scanNumericDigits(body, &at) == 0 {
+			return false
+		}
+	}
+	// Anything left over is a byte numeric_in would not have accepted either —
+	// including any byte above ASCII, which no case above can consume.
+	return at == len(body)
 }
 
 // validBoolean matches PostgreSQL's own accepted spellings for a boolean
