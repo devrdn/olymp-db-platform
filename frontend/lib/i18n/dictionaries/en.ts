@@ -1304,6 +1304,8 @@ const en = {
       "That column type is not one this platform offers. Pick one from the list.",
     game_definition_table_empty:
       "A table has no columns. Give it at least one, or remove the table.",
+    game_definition_table_locked:
+      "This table already has rows, so its name, columns and primary key are fixed until the rows are gone. The CSV holding them names those columns in its first line, and changing one here would leave the two describing different things. Clear the table first, or add a new one.",
     game_definition_invalid_primary_key:
       "The primary key names a column the table does not have, or names one twice.",
     game_table_unknown:

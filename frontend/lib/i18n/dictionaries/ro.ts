@@ -1218,6 +1218,8 @@ const ro = {
       "Acest tip de coloană nu este oferit de platformă. Alegeți unul din listă.",
     game_definition_table_empty:
       "Un tabel nu are nicio coloană. Adăugați cel puțin una sau ștergeți tabelul.",
+    game_definition_table_locked:
+      "Acest tabel are deja rânduri, așa că numele, coloanele și cheia primară sunt fixate până când rândurile dispar. Fișierul CSV cu datele numește acele coloane în prima linie, iar o modificare aici ar lăsa fișierul și descrierea vorbind despre lucruri diferite. Goliți tabelul sau creați altul.",
     game_definition_invalid_primary_key:
       "Cheia primară numește o coloană pe care tabelul nu o are, sau o numește de două ori.",
     game_table_unknown:
