@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -201,6 +202,22 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 				return nil, fmt.Errorf("open the upload directory: %w", err)
 			}
 			gameAuthoring = gameAuthoring.WithUploads(uploads, limits)
+
+			// The table builder's own per-table CSV data (feat/game-table-builder's
+			// third task): a second, independent gamefile.Store in a sibling
+			// directory on the same volume — never the one uploads above uses
+			// (Games.WithTableData's own doc explains why one store per directory
+			// matters here). Limits are shared with the dump upload's own for now:
+			// nothing about a table's CSV needs a ceiling GAME_UPLOAD_MAX_* does
+			// not already give a sensible answer for.
+			tableDir := filepath.Join(cfg.GameUploadDir, "tables")
+			tableFiles, err := gamefile.NewStore(tableDir, limits)
+			if err != nil {
+				a.close()
+				return nil, fmt.Errorf("open the table data directory: %w", err)
+			}
+			gameAuthoring = gameAuthoring.WithTableData(tableFiles, limits)
+
 			a.tasks = append(a.tasks, abandonedUploads(log, gameAuthoring, cfg.GameUploadAbandonedAfter))
 		}
 		// The background half of §2.4: a contest's participant databases

@@ -329,11 +329,11 @@ func (t ColumnType) postgresType() (string, error) {
 // plainly, and not behind BuildFailedInternally.
 //
 // What this does not do: load a single row. Every table it creates is
-// empty. A table builder's own data lands as CSV files on a volume — a
-// following task's own work, not this one's — and the seam for it is named
-// in finishDefinitionBuild's own doc, at the one point after these
+// empty. A table builder's own data lands as CSV files on a volume
+// (internal/gamefile, tabledata.go) and is loaded separately at the seam
+// named in finishDefinitionBuild's own doc, at the one point after these
 // statements have run where the tables exist and nothing has been marked
-// ready yet.
+// ready yet — a table nobody uploaded data for simply stays empty.
 func (d Definition) SQL() (string, error) {
 	if len(d.Tables) == 0 {
 		return "", ErrDefinitionEmpty

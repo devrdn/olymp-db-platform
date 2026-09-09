@@ -132,6 +132,21 @@ const (
 	// ActionGameInstanceReclaim uses for the sweep that took a database
 	// nobody asked it to).
 	ActionGameUploadAbort = "contest.upload_abort"
+	// ActionGameTableDataUpload records a CSV file completed for one table
+	// of a table-builder game (migration 27) — the table-data counterpart of
+	// ActionGameUploadComplete, its own action code for the same reason that
+	// one has one apart from ActionGameScriptSet: the payload names a table
+	// and a row count, not a whole game's own version.
+	ActionGameTableDataUpload = "contest.table_data_upload"
+	// ActionGameTableDataUploadAbort records a table's CSV upload cancelled
+	// before it completed — ActionGameUploadAbort's own counterpart.
+	ActionGameTableDataUploadAbort = "contest.table_data_upload_abort"
+	// ActionGameTableDataRowAdd records one row an organiser typed into a
+	// form, landing in the same file a chunked upload's own rows do.
+	ActionGameTableDataRowAdd = "contest.table_data_row_add"
+	// ActionGameTableDataRowDelete records one row tombstoned — never a
+	// rewrite of the file itself, DeleteTableRow's own doc explains why.
+	ActionGameTableDataRowDelete = "contest.table_data_row_delete"
 
 	// ActionSettingsChange records a change to what the installation calls
 	// itself and how it looks. It is entity "settings" with no identifier:
@@ -164,6 +179,8 @@ var actions = []string{
 	ActionParticipantEnroll, ActionContestAccessDenied, ActionContestStartBlocked,
 	ActionGameInstanceReclaim, ActionGameTemplateReclaim, ActionGameInstanceDrop,
 	ActionGameUploadComplete, ActionGameUploadAbort,
+	ActionGameTableDataUpload, ActionGameTableDataUploadAbort,
+	ActionGameTableDataRowAdd, ActionGameTableDataRowDelete,
 
 	ActionSettingsChange,
 }

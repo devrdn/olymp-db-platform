@@ -295,6 +295,52 @@ type TemplateRepository interface {
 	// behind as history either way (the same convention MarkDropped keeps for
 	// an instance). See Games.sweepOrphanFiles.
 	UploadInUse(ctx context.Context, id uuid.UUID) (bool, error)
+
+	// The table builder's own per-table CSV data (migration 27), declared
+	// here for the same reason the upload half above is: Games is the one
+	// consumer, and every one of these mirrors an upload method one row above
+	// it — see tabledata.go for what each does with them.
+
+	// BeginTableData records a new table-data upload in 'receiving'.
+	BeginTableData(ctx context.Context, id, contestID uuid.UUID, table string, declaredBytes int64) (TableData, error)
+	// TableDataByID reads one table-data row by id, or ErrTableDataNotFound.
+	TableDataByID(ctx context.Context, id uuid.UUID) (TableData, error)
+	// CurrentTableData reads a table's one 'receiving' upload, or
+	// ErrTableDataNotFound.
+	CurrentTableData(ctx context.Context, contestID uuid.UUID, table string) (TableData, error)
+	// ReadyTableData reads a table's one 'complete' file — the one a window
+	// read, a row append, a delete or a build actually acts on — or
+	// ErrTableDataNotFound when the table has none yet.
+	ReadyTableData(ctx context.Context, contestID uuid.UUID, table string) (TableData, error)
+	// UpdateTableDataReceived records how many bytes Store.Append actually
+	// wrote, the same job UpdateReceived does for a dump.
+	UpdateTableDataReceived(ctx context.Context, id uuid.UUID, receivedBytes int64) error
+	// CompleteTableData marks id 'complete' with what the validation pass
+	// measured, and retires previous (nil unless a different upload for the
+	// same table is being displaced).
+	CompleteTableData(ctx context.Context, contestID uuid.UUID, table string, id uuid.UUID, receivedBytes, lines int64, previous *uuid.UUID) (TableData, error)
+	// CreateReadyTableData records a table's very first row: a file that
+	// starts life already 'complete' rather than passing through
+	// 'receiving' (AppendTableRow's own bootstrap doc explains why one
+	// validated row needs no separate completion step).
+	CreateReadyTableData(ctx context.Context, id, contestID uuid.UUID, table string, bytes, lines int64) (TableData, error)
+	// AppendTableDataRow records one more row appended to an already-'complete'
+	// file: its new byte length and its new row count together, so the two
+	// can never read as having disagreed even for an instant.
+	AppendTableDataRow(ctx context.Context, id uuid.UUID, receivedBytes, lines int64) (TableData, error)
+	// AbortTableData marks one table-data upload 'aborted'.
+	AbortTableData(ctx context.Context, id uuid.UUID) error
+	// DeleteTableDataRow tombstones one row of a 'complete' file — a single
+	// atomic array_append, refusing (ErrTooManyDeletedRows) past migration
+	// 27's own bound rather than growing the array without limit.
+	DeleteTableDataRow(ctx context.Context, id uuid.UUID, row int64) error
+	// AbandonedTableData lists up to limit table-data uploads still
+	// 'receiving' whose updated_at is older than cutoff — the janitor's own
+	// candidates, mirroring AbandonedUploads.
+	AbandonedTableData(ctx context.Context, cutoff time.Time, limit int) ([]TableData, error)
+	// TableDataInUse reports whether anything still needs id's bytes on the
+	// volume, mirroring UploadInUse for a table's own file.
+	TableDataInUse(ctx context.Context, id uuid.UUID) (bool, error)
 }
 
 // Authoring answers whether a contest's game may still be replaced.
@@ -330,6 +376,13 @@ type Games struct {
 	// gamefile owns its own on-disk layout, this package does not.
 	files  *gamefile.Store
 	limits gamefile.Limits
+	// tableFiles and tableLimits are the table builder's own per-table CSV
+	// storage (tabledata.go), set by WithTableData — a second, independent
+	// gamefile.Store from files above, never the same one (WithTableData's
+	// own doc explains why). nil exactly when WithTableData was never
+	// called, the same convention files follows for uploads.
+	tableFiles  *gamefile.Store
+	tableLimits gamefile.Limits
 }
 
 // TemplateCluster is the one thing building a game asks of the cluster.
@@ -343,6 +396,19 @@ type Games struct {
 // path on the cluster.
 type TemplateCluster interface {
 	BuildTemplate(ctx context.Context, name string, script io.Reader, policy sqlpolicy.Policy) error
+	// LoadTableData copies data into one table of a database BuildTemplate
+	// already built — the table builder's own seam (finishDefinitionBuild's
+	// own doc), run through the same COPY ... FROM STDIN protocol path an
+	// uploaded dump's rows already use. columns is the column list, in the
+	// definition's own order, that the COPY statement targets; data is the
+	// CSV rows themselves, with no header line — the caller (Games.
+	// loadTableData) has already read and checked that line, and it is not
+	// data to load.
+	LoadTableData(ctx context.Context, database, table string, columns []string, data io.Reader) error
+	// Drop removes a database outright — what a data load that fails after
+	// the schema already built must do to the half-loaded template, the same
+	// teardown BuildTemplate gives its own failures.
+	Drop(ctx context.Context, name string) error
 }
 
 // unitOfWork is the transaction boundary a save and its audit entry share.
@@ -757,20 +823,23 @@ func (g *Games) finishUploadBuild(ctx context.Context, claimed Template) (Templa
 // does below for a script PostgreSQL itself refused, because in both cases
 // the log has nothing to add that build_error does not already say.
 //
-// # The seam for the task after this one
+// # The organiser's own rows
 //
-// Every table this leaves behind is empty — Definition.SQL only ever emits
-// CREATE TABLE. The organiser's own rows, wherever the table builder ends up
-// keeping them (CSV files on a volume, per this task's own brief), would
-// load right here: after BuildTemplate has returned with no error and
-// before recordBuildOutcome marks the game 'ready', because that is the one
-// moment the database is known to exist, hold the tables just created, and
-// not yet be promised to anybody as complete. BuildTemplate has already
-// closed the connection it opened as game_author by the time it returns
-// (runScript's own doc: a template with a connection on it cannot be
-// copied), so a loader landing here would open a connection of its own the
-// same way runScript does, rather than reuse one that is already gone.
-// Nothing about that step exists yet; this comment is only the place for it.
+// Definition.SQL only ever emits CREATE TABLE, so every table BuildTemplate
+// just made is empty. g.loadTableData fills them, called right here: after
+// BuildTemplate has returned with no error and before recordBuildOutcome
+// marks the game 'ready', because that is the one moment the database is
+// known to exist, hold the tables just created, and not yet be promised to
+// anybody as complete. BuildTemplate has already closed the connection it
+// opened as game_author by the time it returns (runScript's own doc: a
+// template with a connection on it cannot be copied, and that connection's
+// own grants have been withdrawn besides), so loadTableData opens a
+// connection of its own — as the provisioning role, not game_author
+// (gamedb.Provisioner.LoadTableData's own doc says why) — rather than reuse
+// one that is already gone. A data-load failure gets the identical teardown
+// a schema-build failure does: the half-loaded template is dropped, because
+// a database with some tables filled and one refused midway is worse than
+// none.
 func (g *Games) finishDefinitionBuild(ctx context.Context, claimed Template) (Template, error) {
 	var (
 		buildErr string
@@ -812,6 +881,28 @@ func (g *Games) finishDefinitionBuild(ctx context.Context, claimed Template) (Te
 				cause = fmt.Errorf("build the game template from its table-builder definition: %w", err)
 				buildErr = BuildFailedInternally
 			}
+		}
+	}
+
+	// The seam this task's own brief names: every table BuildTemplate just
+	// created is empty, and this is the one moment the database is known to
+	// exist, hold them, and not yet be promised to anybody as ready. A table
+	// with no completed CSV is left empty rather than refused — an organiser
+	// may have described it and not yet filled it (Games.loadTableData's own
+	// doc).
+	if buildErr == "" {
+		if err := g.loadTableData(ctx, claimed.ContestID, claimed.Database, claimed.Definition); err != nil {
+			var refused ScriptFailure
+			if errors.As(err, &refused) {
+				buildErr = refused.ScriptRejection()
+			} else {
+				cause = fmt.Errorf("load the table-builder definition's own data: %w", err)
+				buildErr = BuildFailedInternally
+			}
+			// A half-loaded template — some tables full, one refused midway
+			// — is worse than none, the identical reasoning BuildTemplate's
+			// own doc gives for tearing down a schema that failed to build.
+			_ = g.cluster.Drop(context.WithoutCancel(ctx), claimed.Database)
 		}
 	}
 

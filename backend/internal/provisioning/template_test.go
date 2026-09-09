@@ -38,6 +38,9 @@ type templateStore struct {
 	// enough to back the TemplateRepository methods migration 24 added
 	// without this file growing a second kind of fake for them.
 	uploads map[uuid.UUID]provisioning.Upload
+	// tableData is the table builder's own per-table files, migration 27's
+	// counterpart to uploads above.
+	tableData map[uuid.UUID]provisioning.TableData
 }
 
 // directly is the unit of work for a test that wants the audit trail wired up
@@ -246,6 +249,179 @@ func (s *templateStore) UploadInUse(_ context.Context, id uuid.UUID) (bool, erro
 	return s.present && s.template.UploadID != nil && *s.template.UploadID == id, nil
 }
 
+func (s *templateStore) BeginTableData(_ context.Context, id, contestID uuid.UUID, table string, declaredBytes int64) (provisioning.TableData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range s.tableData {
+		if d.ContestID == contestID && strings.EqualFold(d.Table, table) && d.Status == provisioning.TableDataReceiving {
+			return provisioning.TableData{}, provisioning.ErrTableDataInProgress
+		}
+	}
+	if s.tableData == nil {
+		s.tableData = map[uuid.UUID]provisioning.TableData{}
+	}
+	d := provisioning.TableData{
+		ID: id, ContestID: contestID, Table: table, DeclaredBytes: declaredBytes,
+		Status: provisioning.TableDataReceiving,
+	}
+	s.tableData[id] = d
+	return d, nil
+}
+
+func (s *templateStore) TableDataByID(_ context.Context, id uuid.UUID) (provisioning.TableData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.tableData[id]
+	if !ok {
+		return provisioning.TableData{}, provisioning.ErrTableDataNotFound
+	}
+	return d, nil
+}
+
+func (s *templateStore) CurrentTableData(_ context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range s.tableData {
+		if d.ContestID == contestID && strings.EqualFold(d.Table, table) && d.Status == provisioning.TableDataReceiving {
+			return d, nil
+		}
+	}
+	return provisioning.TableData{}, provisioning.ErrTableDataNotFound
+}
+
+func (s *templateStore) ReadyTableData(_ context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range s.tableData {
+		if d.ContestID == contestID && strings.EqualFold(d.Table, table) && d.Status == provisioning.TableDataComplete {
+			return d, nil
+		}
+	}
+	return provisioning.TableData{}, provisioning.ErrTableDataNotFound
+}
+
+func (s *templateStore) UpdateTableDataReceived(_ context.Context, id uuid.UUID, receivedBytes int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.tableData[id]
+	if !ok {
+		return provisioning.ErrTableDataNotFound
+	}
+	d.ReceivedBytes = receivedBytes
+	s.tableData[id] = d
+	return nil
+}
+
+func (s *templateStore) CompleteTableData(
+	_ context.Context, contestID uuid.UUID, table string, id uuid.UUID, receivedBytes, lines int64, previous *uuid.UUID,
+) (provisioning.TableData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.tableData[id]
+	if !ok {
+		return provisioning.TableData{}, provisioning.ErrTableDataNotFound
+	}
+	d.Status, d.ReceivedBytes, d.Lines = provisioning.TableDataComplete, receivedBytes, lines
+	s.tableData[id] = d
+	if previous != nil {
+		if p, ok := s.tableData[*previous]; ok {
+			p.Status = provisioning.TableDataAborted
+			s.tableData[*previous] = p
+		}
+	}
+	return d, nil
+}
+
+func (s *templateStore) CreateReadyTableData(
+	_ context.Context, id, contestID uuid.UUID, table string, bytes, lines int64,
+) (provisioning.TableData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range s.tableData {
+		if d.ContestID == contestID && strings.EqualFold(d.Table, table) && d.Status == provisioning.TableDataComplete {
+			return provisioning.TableData{}, provisioning.ErrTableDataInProgress
+		}
+	}
+	if s.tableData == nil {
+		s.tableData = map[uuid.UUID]provisioning.TableData{}
+	}
+	d := provisioning.TableData{
+		ID: id, ContestID: contestID, Table: table, DeclaredBytes: bytes, ReceivedBytes: bytes, Lines: lines,
+		Status: provisioning.TableDataComplete,
+	}
+	s.tableData[id] = d
+	return d, nil
+}
+
+func (s *templateStore) AppendTableDataRow(_ context.Context, id uuid.UUID, receivedBytes, lines int64) (provisioning.TableData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.tableData[id]
+	if !ok || d.Status != provisioning.TableDataComplete {
+		return provisioning.TableData{}, provisioning.ErrTableDataNotFound
+	}
+	d.ReceivedBytes, d.Lines = receivedBytes, lines
+	s.tableData[id] = d
+	return d, nil
+}
+
+func (s *templateStore) AbortTableData(_ context.Context, id uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.tableData[id]
+	if !ok {
+		return provisioning.ErrTableDataNotFound
+	}
+	d.Status = provisioning.TableDataAborted
+	s.tableData[id] = d
+	return nil
+}
+
+func (s *templateStore) DeleteTableDataRow(_ context.Context, id uuid.UUID, row int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.tableData[id]
+	if !ok {
+		return provisioning.ErrTableDataNotFound
+	}
+	for _, r := range d.DeletedRows {
+		if r == row {
+			return provisioning.ErrTableRowAlreadyDeleted
+		}
+	}
+	if len(d.DeletedRows) >= provisioning.MaxTableDeletedRows {
+		return provisioning.ErrTooManyDeletedRows
+	}
+	d.DeletedRows = append(append([]int64{}, d.DeletedRows...), row)
+	s.tableData[id] = d
+	return nil
+}
+
+func (s *templateStore) AbandonedTableData(_ context.Context, cutoff time.Time, limit int) ([]provisioning.TableData, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []provisioning.TableData
+	for _, d := range s.tableData {
+		if d.Status == provisioning.TableDataReceiving && d.UpdatedAt.Before(cutoff) {
+			out = append(out, d)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (s *templateStore) TableDataInUse(_ context.Context, id uuid.UUID) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.tableData[id]
+	if !ok {
+		return false, nil
+	}
+	return d.Status == provisioning.TableDataReceiving || d.Status == provisioning.TableDataComplete, nil
+}
+
 // buildCluster records what it was asked to build and can be told to refuse.
 type buildCluster struct {
 	mu      sync.Mutex
@@ -253,6 +429,14 @@ type buildCluster struct {
 	scripts []string
 	policy  sqlpolicy.Policy
 	fail    error
+	// tableData is every LoadTableData call this fake received, keyed
+	// "database.table", and tableDataFail — when set — is what LoadTableData
+	// answers instead of loading anything, for the tests that check a
+	// data-load failure tears the template down the same way a script
+	// failure does.
+	tableData     map[string]string
+	tableDataFail error
+	dropped       []string
 }
 
 func (c *buildCluster) BuildTemplate(_ context.Context, name string, script io.Reader, policy sqlpolicy.Policy) error {
@@ -271,6 +455,34 @@ func (c *buildCluster) BuildTemplate(_ context.Context, name string, script io.R
 	defer c.mu.Unlock()
 	c.names, c.scripts, c.policy = append(c.names, name), append(c.scripts, string(data)), policy
 	return c.fail
+}
+
+// LoadTableData records what it was asked to load — the same "read in full"
+// reasoning BuildTemplate's own fake gives, since a filtered reader
+// (provisioning's own tableDataCopyReader) is exactly what this fake has to
+// consume to see what actually reached it.
+func (c *buildCluster) LoadTableData(_ context.Context, database, table string, columns []string, data io.Reader) error {
+	body, err := io.ReadAll(data)
+	if err != nil {
+		return fmt.Errorf("buildCluster: read table data: %w", err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.tableDataFail != nil {
+		return c.tableDataFail
+	}
+	if c.tableData == nil {
+		c.tableData = map[string]string{}
+	}
+	c.tableData[database+"."+table] = string(body)
+	return nil
+}
+
+func (c *buildCluster) Drop(_ context.Context, name string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.dropped = append(c.dropped, name)
+	return nil
 }
 
 type authoring struct {
