@@ -1250,6 +1250,8 @@ const ro = {
       "Volumul cu datele tabelelor este plin. Se eliberează pe măsură ce alte încărcări se termină sau sunt șterse.",
     game_table_data_in_progress:
       "Acest tabel are deja o încărcare în curs. Finalizați-o sau anulați-o înainte de a începe alta sau de a adăuga un rând manual.",
+    game_table_data_changed:
+      "Cineva a adăugat alt rând în acest tabel cât timp completați formularul, așa că al dumneavoastră nu a fost salvat — două formulare nu pot scrie simultan la sfârșitul aceluiași fișier. Reîncărcați rândurile și adăugați-l din nou.",
     game_table_data_already_complete:
       "Această încărcare este deja finalizată sau anulată, nu i se mai poate trimite nimic.",
     game_table_data_not_found:

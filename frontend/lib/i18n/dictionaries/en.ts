@@ -1336,6 +1336,8 @@ const en = {
       "The table-data volume is full. It frees up as other uploads finish or are removed.",
     game_table_data_in_progress:
       "This table already has an upload in progress. Finish or cancel it before starting another, or before adding a row by hand.",
+    game_table_data_changed:
+      "Somebody added another row to this table while you were typing, so yours was not stored — two forms cannot both write at the end of the same file. Reload the rows and add it again.",
     game_table_data_already_complete:
       "This upload is already finished or cancelled, so nothing more can be sent to it.",
     game_table_data_not_found:
