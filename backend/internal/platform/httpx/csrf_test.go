@@ -21,7 +21,7 @@ func TestSafeMethodsPassWithoutAnOrigin(t *testing.T) {
 	// ordinary navigation and monitoring.
 	rec := httptest.NewRecorder()
 
-	CheckOrigin(okHandler).ServeHTTP(rec, csrfRequest(http.MethodGet, ""))
+	CheckOrigin(nil)(okHandler).ServeHTTP(rec, csrfRequest(http.MethodGet, ""))
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200 for a safe method", rec.Code)
@@ -31,7 +31,7 @@ func TestSafeMethodsPassWithoutAnOrigin(t *testing.T) {
 func TestMutatingRequestFromTheSameOriginIsAllowed(t *testing.T) {
 	rec := httptest.NewRecorder()
 
-	CheckOrigin(okHandler).ServeHTTP(rec, csrfRequest(http.MethodPost, "https://contest.university.edu"))
+	CheckOrigin(nil)(okHandler).ServeHTTP(rec, csrfRequest(http.MethodPost, "https://contest.university.edu"))
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
@@ -43,7 +43,7 @@ func TestMutatingRequestFromAnotherOriginIsRejected(t *testing.T) {
 	// attached; SameSite is the first line and this is the second.
 	rec := httptest.NewRecorder()
 
-	CheckOrigin(okHandler).ServeHTTP(rec, csrfRequest(http.MethodPost, "https://evil.example"))
+	CheckOrigin(nil)(okHandler).ServeHTTP(rec, csrfRequest(http.MethodPost, "https://evil.example"))
 
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403 for a cross-origin write", rec.Code)
@@ -59,7 +59,7 @@ func TestMutatingRequestWithNoOriginIsAllowedForNonBrowserClients(t *testing.T) 
 	// against; rejecting the absent header would break every scripted client.
 	rec := httptest.NewRecorder()
 
-	CheckOrigin(okHandler).ServeHTTP(rec, csrfRequest(http.MethodPost, ""))
+	CheckOrigin(nil)(okHandler).ServeHTTP(rec, csrfRequest(http.MethodPost, ""))
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200 when no Origin is present", rec.Code)
@@ -71,7 +71,7 @@ func TestOriginWithADifferentSchemeIsRejected(t *testing.T) {
 	// one would let a downgraded page write.
 	rec := httptest.NewRecorder()
 
-	CheckOrigin(okHandler).ServeHTTP(rec, csrfRequest(http.MethodPost, "http://contest.university.edu"))
+	CheckOrigin(nil)(okHandler).ServeHTTP(rec, csrfRequest(http.MethodPost, "http://contest.university.edu"))
 
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403 for a scheme mismatch", rec.Code)
@@ -87,7 +87,7 @@ func TestOriginIsComparedAgainstTheForwardedHost(t *testing.T) {
 	req.Header.Set("X-Forwarded-Proto", "https")
 	req.Header.Set("Origin", "https://contest.university.edu")
 
-	CheckOrigin(okHandler).ServeHTTP(rec, req)
+	CheckOrigin(nil)(okHandler).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
@@ -97,9 +97,50 @@ func TestOriginIsComparedAgainstTheForwardedHost(t *testing.T) {
 func TestMalformedOriginIsRejected(t *testing.T) {
 	rec := httptest.NewRecorder()
 
-	CheckOrigin(okHandler).ServeHTTP(rec, csrfRequest(http.MethodPost, "://nonsense"))
+	CheckOrigin(nil)(okHandler).ServeHTTP(rec, csrfRequest(http.MethodPost, "://nonsense"))
 
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403 for an unparseable Origin", rec.Code)
+	}
+}
+
+// The one request in this product that a *browser* makes directly to the API
+// is a chunk of an uploaded dump: everything else that changes state goes
+// through a Next server action, which is server-to-server and carries no
+// Origin at all. So this rule had never met a real browser write until the
+// upload existed, and the first one failed.
+//
+// Behind the reverse proxy the two agree — Caddy passes the browser's Host
+// through, so Origin's host is the request's host. A development stack has no
+// Caddy: the browser is on :3000, Next's rewrite forwards /api/* to :8080 and
+// replaces Host on the way, and the comparison sees localhost:3000 against
+// localhost:8080. The same split is a legitimate production shape too, where
+// the interface and the API answer on different names.
+//
+// A deployment that has that split names its own front origin. Nothing else
+// changes: an origin nobody configured is still refused.
+func TestAConfiguredFrontOriginIsAcceptedOnADifferentHost(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "http://localhost:8080/api/v1/x", nil)
+	req.Host = "localhost:8080"
+	req.Header.Set("Origin", "http://localhost:3000")
+
+	CheckOrigin([]string{"http://localhost:3000"})(okHandler).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAnUnconfiguredOriginOnADifferentHostIsStillRefused(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "http://localhost:8080/api/v1/x", nil)
+	req.Host = "localhost:8080"
+	req.Header.Set("Origin", "http://evil.example")
+
+	CheckOrigin([]string{"http://localhost:3000"})(okHandler).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for an origin nobody configured", rec.Code)
 	}
 }

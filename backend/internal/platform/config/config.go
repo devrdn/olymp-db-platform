@@ -9,6 +9,7 @@ package config
 import (
 	"fmt"
 	"net/netip"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -55,6 +56,19 @@ type Config struct {
 	// peer is always the client — correct without a reverse proxy, and the
 	// safe default behind an unknown one.
 	TrustedProxies []string
+	// PublicOrigins names the front origins this deployment answers for, on
+	// top of its own host, for httpx.CheckOrigin. Empty is the strict default
+	// and what the compose deployment wants: Caddy passes the browser's Host
+	// through, so the API's own host already is the origin the page came from.
+	//
+	// Set it where that identity does not hold. A development stack is the
+	// common case — the browser is on :3000, Next's rewrite forwards /api/*
+	// to :8080 and replaces Host on the way — and so is a production split
+	// that answers the interface and the API on different names. The one
+	// request a browser makes to this API directly is a chunk of an uploaded
+	// dump; every other write goes through a server action and carries no
+	// Origin at all, which is why nothing noticed until uploads existed.
+	PublicOrigins []string
 	// DefaultLocale is the language of last resort, used when a request
 	// expresses no usable preference and no contest narrows it down. It is a
 	// BCP-47 tag matching a row in the `languages` table.
@@ -202,6 +216,19 @@ type Config struct {
 	// GameUploadMaxDirBytes bounds every upload the volume holds together —
 	// in progress, and complete ones waiting to be superseded or reclaimed.
 	GameUploadMaxDirBytes int64
+	// GameUploadTableMaxDirBytes is GameUploadMaxDirBytes's own counterpart
+	// for the table builder's own per-table CSV data (internal/app's
+	// tableDir): a second, independent gamefile.Store, on the same volume
+	// as the dump's but never sharing its directory
+	// (provisioning.Games.WithTableData's own doc explains why one Store
+	// per directory matters). Two independent Stores each enforcing the
+	// same MaxDirBytes would let the volume hold twice what an operator who
+	// set GAME_UPLOAD_MAX_DIR_BYTES to the volume's own size meant to
+	// allow — this field exists so the two ceilings are sized separately,
+	// on purpose, rather than one silently doubling the other. 4 GiB unset:
+	// a quarter of the dump's own 16 GiB default, since a table builder's
+	// own CSV data is expected to run far smaller than a whole dump.
+	GameUploadTableMaxDirBytes int64
 	// GameUploadChunkBytes bounds one Append call, independent of the
 	// upload's own size (internal/gamefile's own rule 12 reasoning).
 	GameUploadChunkBytes int64
@@ -325,6 +352,11 @@ func Load() (Config, error) {
 	if cfg.GameUploadMaxDirBytes, err = int64Env("GAME_UPLOAD_MAX_DIR_BYTES", 16<<30); err != nil {
 		return Config{}, err
 	}
+	// 4 GiB unset — the field's own doc on why this does not fall back to
+	// GameUploadMaxDirBytes's value.
+	if cfg.GameUploadTableMaxDirBytes, err = int64Env("GAME_UPLOAD_TABLE_MAX_DIR_BYTES", 4<<30); err != nil {
+		return Config{}, err
+	}
 	if cfg.GameUploadChunkBytes, err = int64Env("GAME_UPLOAD_CHUNK_BYTES", 8<<20); err != nil {
 		return Config{}, err
 	}
@@ -335,9 +367,11 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("GAME_UPLOAD_ABANDONED_AFTER cannot be negative, got %s", cfg.GameUploadAbandonedAfter)
 	}
 	if cfg.GameUploadDir != "" {
-		if cfg.GameUploadMaxFileBytes <= 0 || cfg.GameUploadMaxDirBytes <= 0 || cfg.GameUploadChunkBytes <= 0 {
+		if cfg.GameUploadMaxFileBytes <= 0 || cfg.GameUploadMaxDirBytes <= 0 || cfg.GameUploadChunkBytes <= 0 ||
+			cfg.GameUploadTableMaxDirBytes <= 0 {
 			return Config{}, fmt.Errorf(
-				"GAME_UPLOAD_MAX_FILE_BYTES, GAME_UPLOAD_MAX_DIR_BYTES and GAME_UPLOAD_CHUNK_BYTES must all be positive when GAME_UPLOAD_DIR is set")
+				"GAME_UPLOAD_MAX_FILE_BYTES, GAME_UPLOAD_MAX_DIR_BYTES, GAME_UPLOAD_TABLE_MAX_DIR_BYTES and " +
+					"GAME_UPLOAD_CHUNK_BYTES must all be positive when GAME_UPLOAD_DIR is set")
 		}
 	}
 
@@ -348,6 +382,20 @@ func Load() (Config, error) {
 
 	// Validation happens here so a typo fails the boot; the list is split
 	// eagerly and re-validated by the resolver that consumes it.
+	if raw := os.Getenv("PUBLIC_ORIGINS"); raw != "" {
+		for _, origin := range strings.Split(raw, ",") {
+			origin = strings.TrimSpace(origin)
+			if origin == "" {
+				continue
+			}
+			parsed, err := url.Parse(origin)
+			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+				return Config{}, fmt.Errorf("PUBLIC_ORIGINS: %q is not a scheme://host origin", origin)
+			}
+			cfg.PublicOrigins = append(cfg.PublicOrigins, parsed.Scheme+"://"+parsed.Host)
+		}
+	}
+
 	if raw := os.Getenv("TRUSTED_PROXIES"); raw != "" {
 		for _, entry := range strings.Split(raw, ",") {
 			entry = strings.TrimSpace(entry)

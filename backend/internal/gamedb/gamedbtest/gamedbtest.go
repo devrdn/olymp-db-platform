@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -190,7 +191,7 @@ func Scratch(t *testing.T) string {
 
 	admin := Admin(t)
 	name := fmt.Sprintf("gamedb_test_%d", time.Now().UnixNano())
-	if _, err := admin.Exec(t.Context(), `CREATE DATABASE `+gamedb.QuoteIdentifier(name)); err != nil {
+	if _, err := admin.Exec(t.Context(), `CREATE DATABASE `+sqlpolicy.QuoteIdentifier(name)); err != nil {
 		t.Fatalf("creating %s: %v", name, err)
 	}
 	t.Cleanup(func() { Drop(name) })
@@ -219,7 +220,7 @@ func Drop(name string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_, _ = pool.Exec(ctx, `DROP DATABASE IF EXISTS `+gamedb.QuoteIdentifier(name)+` WITH (FORCE)`)
+	_, _ = pool.Exec(ctx, `DROP DATABASE IF EXISTS `+sqlpolicy.QuoteIdentifier(name)+` WITH (FORCE)`)
 }
 
 // Run executes statements in a database and closes the connection again.

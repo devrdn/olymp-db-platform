@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -201,6 +202,40 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 				return nil, fmt.Errorf("open the upload directory: %w", err)
 			}
 			gameAuthoring = gameAuthoring.WithUploads(uploads, limits)
+
+			// The table builder's own per-table CSV data (feat/game-table-builder's
+			// third task): a second, independent gamefile.Store — never the one
+			// uploads above uses (Games.WithTableData's own doc explains why one
+			// store per directory matters here). Its own subdirectory, not a
+			// sibling one: deploy/docker-compose.yml mounts the volume at exactly
+			// GAME_UPLOAD_DIR, so anywhere outside it is the container's own
+			// ephemeral disk, not the persistent volume both stores are meant to
+			// share.
+			//
+			// MaxFileBytes and MaxChunkBytes are still the dump's own — one CSV
+			// file's size and one chunk's size are each bounded per upload, and
+			// nothing about a table's CSV needs a different ceiling for either.
+			// MaxDirBytes is not shared: usage() (gamefile.Store's own accounting)
+			// walks one directory with os.ReadDir, so it already can't see what
+			// the other store keeps, but two Stores each independently allowed
+			// the same GAME_UPLOAD_MAX_DIR_BYTES would together fit twice what an
+			// operator who sized that variable against the volume itself meant to
+			// allow — the defect this table's own tableLimits fixes, with its own
+			// ceiling (GAME_UPLOAD_TABLE_MAX_DIR_BYTES, config.go's own doc) an
+			// operator sizes separately, against the same volume, alongside it.
+			tableDir := filepath.Join(cfg.GameUploadDir, "tables")
+			tableLimits := gamefile.Limits{
+				MaxFileBytes:  cfg.GameUploadMaxFileBytes,
+				MaxDirBytes:   cfg.GameUploadTableMaxDirBytes,
+				MaxChunkBytes: cfg.GameUploadChunkBytes,
+			}
+			tableFiles, err := gamefile.NewStore(tableDir, tableLimits)
+			if err != nil {
+				a.close()
+				return nil, fmt.Errorf("open the table data directory: %w", err)
+			}
+			gameAuthoring = gameAuthoring.WithTableData(tableFiles, tableLimits)
+
 			a.tasks = append(a.tasks, abandonedUploads(log, gameAuthoring, cfg.GameUploadAbandonedAfter))
 		}
 		// The background half of §2.4: a contest's participant databases
@@ -382,6 +417,12 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			// The socket's ceiling and the domain's are the same number, so
 			// the configured chunk size is the only one that ever decides.
 			gameHandler = gameHandler.WithMaxChunkBody(cfg.GameUploadChunkBytes)
+			// The table builder's own CSV chunk shares this installation's
+			// GAME_UPLOAD_CHUNK_BYTES too — WithTableData's own call above
+			// configures provisioning.Games identically, so the socket's
+			// ceiling for this second, independent store matches its
+			// domain-side one the same way.
+			gameHandler = gameHandler.WithMaxTableChunkBody(cfg.GameUploadChunkBytes)
 		}
 		modules = append(modules, gameHandler)
 	}
@@ -440,11 +481,12 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	modules = append(modules, api.NewEventsHandler(participantAccess, authMiddleware, log, ctx.Done()))
 
 	deps := api.Deps{
-		Logger:    log,
-		Metrics:   recorder,
-		Version:   version,
-		ClientIPs: resolver,
-		CacheMode: cache.Mode(cacheBackend),
+		Logger:        log,
+		Metrics:       recorder,
+		Version:       version,
+		ClientIPs:     resolver,
+		PublicOrigins: cfg.PublicOrigins,
+		CacheMode:     cache.Mode(cacheBackend),
 		Checkers: []health.Checker{
 			storage.NewChecker("core-db", pool),
 			storage.NewChecker("cache", cacheBackend),

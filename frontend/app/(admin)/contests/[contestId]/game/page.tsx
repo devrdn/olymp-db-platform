@@ -1,10 +1,72 @@
-import { gameSchema, gameScriptSchema, uploadSchema } from "@/lib/api/game";
+import {
+  definitionSchema,
+  gameSchema,
+  gameScriptSchema,
+  tableDataSchema,
+  tableRowWindowSchema,
+  uploadSchema,
+  type TableData,
+} from "@/lib/api/game";
 import { contentEditable } from "@/lib/api/contests";
+import { serverRequest } from "@/lib/api/server";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { loadContest, loadContestResource } from "../contest";
+import { GameBuilder } from "./game-builder";
 import { GameEditor } from "./game-editor";
 import { GameUpload } from "./game-upload";
+
+/**
+ * Whether a table already holds data, before the builder's own definition
+ * editor renders — the fact `GameBuilder`'s own doc explains a save that
+ * changes a locked table's name, columns or primary key is refused for
+ * (`ErrDefinitionTableLocked`, server-side). This screen still disables the
+ * edit client-side rather than only relying on that refusal — a request
+ * that comes back "no" is a worse experience than never offering the edit —
+ * which is what this count is read for.
+ *
+ * A best-effort read, not `loadContestResource`: this is a page load reading
+ * up to `MaxDefinitionTables` (fifty) small, indexed windows in parallel to
+ * explain a lock *before* anyone clicks anything, not a resource this page
+ * depends on to render at all — the same reasoning `initialUpload`'s own
+ * `.catch(() => null)` gives below for a read that must not turn a minor
+ * hiccup into a 404 for the whole page. `max_rows=1` is every byte this call
+ * needs: only whether the table is empty, never its contents.
+ */
+async function tableRowCount(contestId: string, table: string): Promise<number> {
+  try {
+    const payload = await serverRequest(
+      `/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/window?max_rows=1`,
+    );
+    return tableRowWindowSchema.parse(payload).totalRows;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * A table's own chunked CSV upload a reloaded page finds still receiving,
+ * or null — `initialUpload` below, mirrored for one table's own file
+ * instead of a whole dump (`GET .../tables/{table}/data/current`,
+ * `game_handler.go`'s own route added for exactly this: before it existed,
+ * an unfinished table upload became invisible after a reload, and a chunk
+ * refused as out of order had no server count left to resynchronise
+ * against — `game-builder-table.tsx`'s own doc used to name the gap
+ * directly).
+ *
+ * Best-effort, the identical reasoning `initialUpload`'s own `.catch(() =>
+ * null)` gives: a page load must not fail over this.
+ */
+async function tableCurrentUpload(contestId: string, table: string): Promise<TableData | null> {
+  try {
+    const payload = await serverRequest(
+      `/contests/${contestId}/game/tables/${encodeURIComponent(table)}/data/current`,
+    );
+    return tableDataSchema.parse(payload);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The SQL an olympiad's game is built from.
@@ -59,6 +121,48 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
           uploadSchema.parse(payload),
         ).catch(() => null);
 
+  // The third way to build this contest's game: `/game/definition` always
+  // answers 200 (an empty definition for a contest with no game, or one
+  // built the other two ways — `definition`'s own doc on the API side), the
+  // same "one shape either way" convention `game` and `script` already
+  // follow above. `notFoundIsEmpty` only guards the one case where this
+  // whole handler is unmounted (no game cluster configured), which `game
+  // === null` already answered for.
+  const definition =
+    game === null
+      ? null
+      : await loadContestResource(contestId, "/game/definition", (payload) =>
+          definitionSchema.parse(payload),
+        ).catch(() => null);
+
+  // See tableRowCount's own doc. Skipped entirely when the table-data volume
+  // is not configured (there is nothing to be empty of) or the definition
+  // has no tables yet (nothing to check) — the same "read only what the
+  // screen needs" reasoning `initialUpload` above already follows.
+  //
+  // Read alongside tableCurrentUpload, table by table, rather than as a
+  // second fan-out over the same list: both are the same "one table's own
+  // best-effort read" this page already makes once per table, and reading
+  // them together halves how many separate round trips the definition's own
+  // fifty tables could cost at the ceiling.
+  const tableRowCounts: Record<string, number> = {};
+  const tableCurrentUploads: Record<string, TableData | null> = {};
+  if (definition && definition.builderLimits.enabled && definition.tables.length > 0) {
+    const perTable = await Promise.all(
+      definition.tables.map(async (table) => {
+        const [rowCount, currentUpload] = await Promise.all([
+          tableRowCount(contestId, table.name),
+          tableCurrentUpload(contestId, table.name),
+        ]);
+        return { name: table.name, rowCount, currentUpload };
+      }),
+    );
+    for (const { name, rowCount, currentUpload } of perTable) {
+      tableRowCounts[name] = rowCount;
+      tableCurrentUploads[name] = currentUpload;
+    }
+  }
+
   const t = dict.workspace.game;
 
   return (
@@ -86,6 +190,16 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
             editable={contentEditable(contest.status)}
             dict={dict}
           />
+          {definition ? (
+            <GameBuilder
+              contestId={contestId}
+              definition={definition}
+              rowCounts={tableRowCounts}
+              currentTableUploads={tableCurrentUploads}
+              editable={contentEditable(contest.status)}
+              dict={dict}
+            />
+          ) : null}
         </>
       )}
     </div>

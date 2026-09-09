@@ -1,0 +1,9 @@
+-- Nothing to undo, and deliberately nothing invented.
+--
+-- The up migration changes no structure: it retires rows that no game names
+-- any more. Which of them had been 'receiving' and which 'complete' is not
+-- recorded anywhere once they read 'aborted', so a down migration could only
+-- guess — and guessing would put a file back in a state a build might load
+-- from, which is the very thing the up migration exists to stop. Rolling back
+-- to migration 27 restores its schema exactly; the rows it retired stay
+-- retired, and their bytes are the orphan sweep's to remove.

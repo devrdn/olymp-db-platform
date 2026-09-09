@@ -130,7 +130,7 @@ func (r *GameInstances) CompleteUpload(
 		}
 	}
 
-	return r.upsertGame(ctx, contestID, database, "", string(provisioning.SourceFile), &id)
+	return r.upsertGame(ctx, contestID, database, "", string(provisioning.SourceFile), &id, nil)
 }
 
 // AbortUpload marks one upload 'aborted'. It never touches game_templates —

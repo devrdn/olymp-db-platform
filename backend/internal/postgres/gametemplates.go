@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -20,44 +21,62 @@ import (
 // templateColumns is the row every read below returns, in one place so the
 // three of them cannot drift.
 const templateColumns = `contest_id, template_db, version, status,
-	init_script, coalesce(build_error, ''), updated_at, source, upload_id`
+	init_script, coalesce(build_error, ''), updated_at, source, upload_id, definition_json`
 
 func scanTemplate(row pgx.Row) (provisioning.Template, error) {
 	var t provisioning.Template
 	var status, source string
+	var definitionJSON []byte
 	err := row.Scan(&t.ContestID, &t.Database, &t.Version, &status, &t.Script, &t.BuildError, &t.UpdatedAt,
-		&source, &t.UploadID)
+		&source, &t.UploadID, &definitionJSON)
+	if err != nil {
+		return t, err
+	}
 	t.Status = provisioning.TemplateStatus(status)
 	t.Source = provisioning.TemplateSource(source)
-	return t, err
+	if len(definitionJSON) > 0 {
+		if err := json.Unmarshal(definitionJSON, &t.Definition); err != nil {
+			return t, fmt.Errorf("decode the game's definition: %w", err)
+		}
+	}
+	return t, nil
 }
 
 // upsertGame is the one statement a contest's game is replaced through,
-// whichever produced it — an organiser's own script (SaveScript) or a
-// completed upload (CompleteUpload, gameuploads.go). Both bump the version,
-// clear the cached schema and put the game back to pending, because both are
-// "the game changed" to everything downstream: the pool tender, the build
-// queue, a participant's stale copy. Extracting this is the storage half of
-// what provisioning.Games.replaceGame does for the service layer — see its
-// own doc for why the two must not become two paths that drift.
+// whichever produced it — an organiser's own script (SaveScript), a
+// completed upload (CompleteUpload, gameuploads.go) or a saved table-builder
+// definition (SaveDefinition). All three bump the version, clear the cached
+// schema and put the game back to pending, because all three are "the game
+// changed" to everything downstream: the pool tender, the build queue, a
+// participant's stale copy. Extracting this is the storage half of what
+// provisioning.Games.replaceGame does for the service layer — see its own
+// doc for why the three must not become three paths that drift.
+//
+// definitionJSON is nil for the other two sources, the same convention
+// uploadID already follows for anything that is not SourceFile: the ON
+// CONFLICT branch below overwrites definition_json unconditionally, which is
+// what clears a builder-sourced game's definition when it is replaced by a
+// script or an upload — the column pairing migration 26's own CHECK enforces
+// would otherwise be left describing a game this row no longer is.
 func (r *GameInstances) upsertGame(
-	ctx context.Context, contestID uuid.UUID, database, script, source string, uploadID *uuid.UUID,
+	ctx context.Context, contestID uuid.UUID, database, script, source string, uploadID *uuid.UUID, definitionJSON []byte,
 ) (provisioning.Template, error) {
 	template, err := scanTemplate(r.querier(ctx).QueryRow(ctx, `
-		INSERT INTO game_templates (contest_id, template_db, init_script, source, upload_id, status, version)
-		VALUES ($1, $2, $3, $4, $5, 'pending', 1)
+		INSERT INTO game_templates (contest_id, template_db, init_script, source, upload_id, definition_json, status, version)
+		VALUES ($1, $2, $3, $4, $5, $6, 'pending', 1)
 		ON CONFLICT (contest_id) DO UPDATE
-		SET init_script    = EXCLUDED.init_script,
-		    template_db    = EXCLUDED.template_db,
-		    source         = EXCLUDED.source,
-		    upload_id      = EXCLUDED.upload_id,
-		    status         = 'pending',
-		    build_error    = NULL,
-		    version        = game_templates.version + 1,
-		    schema_json    = NULL,
-		    schema_version = NULL,
-		    updated_at     = now()
-		RETURNING `+templateColumns, contestID, database, script, source, uploadID))
+		SET init_script     = EXCLUDED.init_script,
+		    template_db     = EXCLUDED.template_db,
+		    source          = EXCLUDED.source,
+		    upload_id       = EXCLUDED.upload_id,
+		    definition_json = EXCLUDED.definition_json,
+		    status          = 'pending',
+		    build_error     = NULL,
+		    version         = game_templates.version + 1,
+		    schema_json     = NULL,
+		    schema_version  = NULL,
+		    updated_at      = now()
+		RETURNING `+templateColumns, contestID, database, script, source, uploadID, definitionJSON))
 	if err != nil {
 		return provisioning.Template{}, fmt.Errorf("store the game: %w", err)
 	}
@@ -77,7 +96,29 @@ func (r *GameInstances) upsertGame(
 // being replaced, and the two columns are constrained to be null together
 // (migration 22).
 func (r *GameInstances) SaveScript(ctx context.Context, contestID uuid.UUID, database, script string) (provisioning.Template, error) {
-	return r.upsertGame(ctx, contestID, database, script, string(provisioning.SourceEditor), nil)
+	return r.upsertGame(ctx, contestID, database, script, string(provisioning.SourceEditor), nil, nil)
+}
+
+// SaveDefinition stores one contest's game as a structural description
+// (migration 26) and puts the game back to pending — the same upsertGame
+// statement SaveScript uses, with an empty script (SourceBuilder's own doc
+// explains why) and the definition encoded as jsonb in its place.
+//
+// Validation is the caller's: provisioning.Games.SetDefinition runs
+// Definition.Validate before this is ever reached, so a name that is not a
+// plain identifier or a definition past its bounds never gets this far.
+// json.Marshal here cannot itself fail on an already-validated Definition —
+// every field is a string, a bool, or a slice of those — so the error path
+// exists only for the encoder to have somewhere to report a future field
+// that broke that assumption.
+func (r *GameInstances) SaveDefinition(
+	ctx context.Context, contestID uuid.UUID, database string, definition provisioning.Definition,
+) (provisioning.Template, error) {
+	document, err := json.Marshal(definition)
+	if err != nil {
+		return provisioning.Template{}, fmt.Errorf("encode the game definition: %w", err)
+	}
+	return r.upsertGame(ctx, contestID, database, "", string(provisioning.SourceBuilder), nil, document)
 }
 
 // Template reads one contest's game, or ErrNoGame when it has none yet.

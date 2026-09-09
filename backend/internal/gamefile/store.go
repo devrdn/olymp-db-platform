@@ -583,8 +583,12 @@ func (s *Store) Received(id string) (int64, error) {
 // creates the file and records it in two steps, whichever order it picks —
 // and a listing with no age at all hands the janitor the reservation of an
 // upload whose row is at that instant still being inserted. The cut-off is
-// what makes that window a matter of time rather than of luck; a caller that
-// genuinely wants everything passes a zero Time.
+// what makes that window a matter of time rather than of luck.
+//
+// It is a floor and nothing else, so there is no "list everything" value: a
+// zero Time lists nothing at all, since no file's modification time is before
+// it. A caller (a test, in practice) that wants every id passes a cut-off in
+// the future.
 func (s *Store) UploadIDs(modifiedBefore time.Time) ([]string, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {

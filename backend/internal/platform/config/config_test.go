@@ -600,6 +600,9 @@ func TestGameUploadsAreOffByDefault(t *testing.T) {
 	if cfg.GameUploadMaxDirBytes != 16<<30 {
 		t.Errorf("GameUploadMaxDirBytes = %d, want 16 GiB", cfg.GameUploadMaxDirBytes)
 	}
+	if cfg.GameUploadTableMaxDirBytes != 4<<30 {
+		t.Errorf("GameUploadTableMaxDirBytes = %d, want 4 GiB", cfg.GameUploadTableMaxDirBytes)
+	}
 	if cfg.GameUploadChunkBytes != 8<<20 {
 		t.Errorf("GameUploadChunkBytes = %d, want 8 MiB", cfg.GameUploadChunkBytes)
 	}
@@ -630,6 +633,7 @@ func TestGameUploadsAreConfigurable(t *testing.T) {
 	t.Setenv("GAME_UPLOAD_DIR", "/var/lib/dbcontest/uploads")
 	t.Setenv("GAME_UPLOAD_MAX_FILE_BYTES", "1073741824")
 	t.Setenv("GAME_UPLOAD_MAX_DIR_BYTES", "2147483648")
+	t.Setenv("GAME_UPLOAD_TABLE_MAX_DIR_BYTES", "536870912")
 	t.Setenv("GAME_UPLOAD_CHUNK_BYTES", "1048576")
 	t.Setenv("GAME_UPLOAD_ABANDONED_AFTER", "1h")
 
@@ -646,11 +650,40 @@ func TestGameUploadsAreConfigurable(t *testing.T) {
 	if cfg.GameUploadMaxDirBytes != 2<<30 {
 		t.Errorf("GameUploadMaxDirBytes = %d, want 2 GiB", cfg.GameUploadMaxDirBytes)
 	}
+	if cfg.GameUploadTableMaxDirBytes != 512<<20 {
+		t.Errorf("GameUploadTableMaxDirBytes = %d, want 512 MiB", cfg.GameUploadTableMaxDirBytes)
+	}
 	if cfg.GameUploadChunkBytes != 1<<20 {
 		t.Errorf("GameUploadChunkBytes = %d, want 1 MiB", cfg.GameUploadChunkBytes)
 	}
 	if cfg.GameUploadAbandonedAfter != time.Hour {
 		t.Errorf("GameUploadAbandonedAfter = %v, want 1h", cfg.GameUploadAbandonedAfter)
+	}
+}
+
+// GameUploadMaxDirBytes and GameUploadTableMaxDirBytes are two independent
+// ceilings — provisioning.Games.WithTableData's own doc explains why the
+// table builder's CSV data lives in a second, independent gamefile.Store
+// rather than sharing the dump's — and an operator who only ever set the
+// first (because there used to be only one Store to size) must not find the
+// second silently defaulting to the same number: that would let the two
+// stores together claim twice the volume the first variable's own name
+// promises. This is why the field has its own default (4 GiB, a quarter of
+// the dump's 16 GiB) rather than falling back to GameUploadMaxDirBytes's
+// value: a fixed, named default an operator can see and size against the
+// volume, not a silent inherited one that changes if the dump's own limit
+// does.
+func TestGameUploadTableMaxDirBytesIsIndependentOfTheDumpsOwnLimit(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("GAME_UPLOAD_DIR", "/var/lib/dbcontest/uploads")
+	t.Setenv("GAME_UPLOAD_MAX_DIR_BYTES", "1099511627776") // 1 TiB, nothing like the table default
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.GameUploadTableMaxDirBytes != 4<<30 {
+		t.Errorf("GameUploadTableMaxDirBytes = %d, want its own 4 GiB default, unaffected by GAME_UPLOAD_MAX_DIR_BYTES", cfg.GameUploadTableMaxDirBytes)
 	}
 }
 
@@ -674,5 +707,21 @@ func TestGameUploadDirWithAZeroLimitIsRejectedAtStartup(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() accepted GAME_UPLOAD_DIR with a zero chunk size, want error")
+	}
+}
+
+// A zero GameUploadTableMaxDirBytes would let Games.WithTableData construct
+// a second gamefile.Store that refuses every table upload outright, the
+// identical reasoning TestGameUploadDirWithAZeroLimitIsRejectedAtStartup
+// gives for the dump's own directory limit — checked here separately
+// because the two are now two different fields or this refusal could not
+// tell them apart.
+func TestGameUploadDirWithAZeroTableLimitIsRejectedAtStartup(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("GAME_UPLOAD_DIR", "/var/lib/dbcontest/uploads")
+	t.Setenv("GAME_UPLOAD_TABLE_MAX_DIR_BYTES", "0")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted GAME_UPLOAD_DIR with a zero table dir size, want error")
 	}
 }
