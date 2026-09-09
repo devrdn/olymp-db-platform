@@ -1,5 +1,5 @@
 import { StoryText } from "@/components/product/story-text";
-import type { Dictionary } from "@/lib/i18n/dictionary";
+import type { PlayDictionary } from "./dictionary";
 
 
 /**
@@ -39,7 +39,7 @@ export function PrintView({
   /** Already formatted for display (lib/format/datetime.ts), not an ISO instant. */
   date: string;
   storyMarkdown: string;
-  dict: Dictionary;
+  dict: PlayDictionary;
 }) {
   const t = dict.participant.play;
 

@@ -28,9 +28,11 @@ function freshInitialLog() {
   return { items: [], total: 0, failed: false };
 }
 
-// PlayHeader opens the events channel this workspace does not otherwise
-// need for these tests; standing it in avoids a real EventSource and its
-// own async churn.
+// The events channel belongs to `PlayHeader`, which `page.tsx` now renders
+// above this component's own Suspense boundary (finding 2) — so nothing here
+// opens one. Both stand-ins stay: they cost nothing, and they are what keeps
+// a re-introduced `EventSource` from turning these tests flaky rather than
+// red.
 vi.mock("./use-contest-events", () => ({
   useContestEvents: () => ({ offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" }),
 }));
@@ -80,7 +82,6 @@ function show(
   return render(
     <Workspace
       contestId="c1"
-      title="The Greenhouse Case"
       storyBody={<p>A body in the stacks.</p>}
       printView={printCopy("storyMarkdown" in overrides ? (overrides.storyMarkdown ?? null) : "The printed case notes.")}
       storyUnavailable={overrides.storyUnavailable ?? null}

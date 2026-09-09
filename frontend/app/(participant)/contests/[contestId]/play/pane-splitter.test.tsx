@@ -30,7 +30,6 @@ function show(contestId = "c1") {
   return render(
     <Workspace
       contestId={contestId}
-      title="The Greenhouse Case"
       storyBody={<p>A body in the stacks.</p>}
       // This file is about the widths of the interactive panes; the print
       // copy is rendered on the server now (page.tsx) and has none.

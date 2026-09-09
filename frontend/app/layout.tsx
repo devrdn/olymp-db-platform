@@ -3,7 +3,7 @@ import { JetBrains_Mono, Literata, Onest } from "next/font/google";
 
 import { branding } from "@/lib/api/branding";
 import { imageHref } from "@/lib/api/settings";
-import { DictionaryProvider } from "@/lib/i18n/client";
+import { AppDictionary } from "@/lib/i18n/client";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { themeAttribute } from "@/lib/theme/config";
 import { activeTheme } from "@/lib/theme/server";
@@ -92,12 +92,14 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       className={`${onest.variable} ${jetbrainsMono.variable} ${literata.variable} antialiased`}
     >
       <body className="font-sans text-body">
-        {/* At the root rather than per section: `error.tsx` and `not-found.tsx`
-            are client boundaries that can never await a dictionary, and any
-            route can end on one. */}
-        <DictionaryProvider dict={dict} locale={locale}>
+        {/* At the root rather than per section: `error.tsx` is a client
+            boundary that can never await a dictionary, and any route can end
+            on one. What crosses is this scope's own sections and no others
+            (finding 5) — the root boundary reads one, and a group whose
+            boundaries read more adds its own scope in its own layout. */}
+        <AppDictionary.Provider dict={AppDictionary.select(dict)} locale={locale}>
           {children}
-        </DictionaryProvider>
+        </AppDictionary.Provider>
       </body>
     </html>
   );

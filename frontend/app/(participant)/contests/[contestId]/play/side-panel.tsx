@@ -2,7 +2,7 @@
 
 import { ExportMenu } from "@/components/product/export-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { Dictionary } from "@/lib/i18n/dictionary";
+import type { PlayDictionary } from "./dictionary";
 
 import { QuestionsPanel, type QuestionEntry } from "./questions-panel";
 
@@ -86,7 +86,7 @@ export function SidePanel({
   storyUnavailable: string | null;
   contestId: string;
   questionEntries: QuestionEntry[];
-  dict: Dictionary;
+  dict: PlayDictionary;
 }) {
   const t = dict.participant.play.workspace.tabs;
   const storyT = dict.participant.play.workspace.story;

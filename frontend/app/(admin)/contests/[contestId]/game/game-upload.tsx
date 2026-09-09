@@ -152,6 +152,20 @@ export function GameUpload({
   const [totalBytes, setTotalBytes] = useState(resumable?.declaredBytes ?? restored?.bytes ?? 0);
   const [sentBytes, setSentBytes] = useState(resumable?.receivedBytes ?? restored?.bytes ?? 0);
   const [rateBps, setRateBps] = useState(0);
+  /**
+   * How long the last chunk took, in milliseconds — the progress bar's own
+   * transition duration (finding 4).
+   *
+   * A bar whose transition outlives the interval between updates never
+   * displays the truth: it spends its whole life travelling towards a figure
+   * that has already moved. The fixed 120ms this used to carry is longer
+   * than a chunk takes on a fast link, so the bar trailed the upload the
+   * whole way and only arrived 120ms after the last chunk had landed. The
+   * cadence is not knowable in advance — it is the file, the chunk size and
+   * the network — so it is measured, and the token stays the ceiling rather
+   * than the value.
+   */
+  const [stepMs, setStepMs] = useState<number | null>(null);
   const [mismatch, setMismatch] = useState(false);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [completedGame, setCompletedGame] = useState<Game | null>(restored ? game : null);
@@ -170,6 +184,8 @@ export function GameUpload({
   const fileRef = useRef<File | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const rateOriginRef = useRef<{ time: number; bytes: number }>({ time: 0, bytes: 0 });
+  /** When `markProgress` last ran, for the bar's own transition (see `stepMs`). */
+  const progressStepRef = useRef(0);
 
   const [windowFrom, setWindowFrom] = useState(1);
   const [windowLines, setWindowLines] = useState<string[]>([]);
@@ -211,10 +227,18 @@ export function GameUpload({
   }, [phase, uploadId]);
 
   function markProgress(newSent: number) {
-    const elapsed = (Date.now() - rateOriginRef.current.time) / 1000;
+    const now = Date.now();
+    const elapsed = (now - rateOriginRef.current.time) / 1000;
     if (elapsed > 0.2) {
       setRateBps((newSent - rateOriginRef.current.bytes) / elapsed);
     }
+    // The gap since the previous chunk, which is how long this bar has to
+    // travel before the next one arrives (see `stepMs`). A gap measured
+    // across a restarted upload is simply a long one, and a long one is
+    // clamped back to the token — so there is nothing to reset here.
+    const previous = progressStepRef.current;
+    progressStepRef.current = now;
+    if (previous > 0) setStepMs(now - previous);
     setSentBytes(newSent);
   }
 
@@ -535,9 +559,27 @@ export function GameUpload({
             aria-valuemax={100}
             className="h-2 w-full overflow-hidden rounded-full bg-sunk"
           >
+            {/* `scaleX`, not `width` (finding 4). A width is a layout
+                property: every frame of that transition re-laid out the bar,
+                its track and the row of figures beside it, which is exactly
+                what SPEC.md §6 asks this kind of movement to avoid — a
+                transform is composited and touches no layout at all. The
+                track above is what carries the rounding (SPEC.md §5: it
+                lives on the outer frame), so the fill has none of its own to
+                be squashed by the scale.
+
+                The duration is `min(--t-input, the gap since the last
+                chunk)`: the token stays the ceiling — including the 1ms it
+                collapses to under `prefers-reduced-motion` — while a faster
+                upload gets a faster bar, which is what makes this a readout
+                of the upload rather than a chase after it. */}
             <div
-              className="h-full rounded-full bg-accent transition-[width] duration-(--t-input) ease-standard"
-              style={{ width: `${percent}%` }}
+              className="h-full origin-left bg-accent transition-transform ease-standard"
+              style={{
+                transform: `scaleX(${percent / 100})`,
+                transitionDuration:
+                  stepMs === null ? "var(--t-input)" : `min(var(--t-input), ${stepMs}ms)`,
+              }}
             />
           </div>
           <div className="flex flex-wrap items-center gap-3 text-label text-ink-3">

@@ -4,7 +4,7 @@ import { useActionState, useEffect, useLayoutEffect, useRef } from "react";
 
 import { CodeEditor } from "@/components/product/code-editor";
 import { buttonVariants } from "@/components/ui/button";
-import type { Dictionary } from "@/lib/i18n/dictionary";
+import type { PlayDictionary } from "./dictionary";
 import { cn } from "@/lib/utils";
 
 import { runQueryAction, type ConsoleState } from "./actions";
@@ -33,7 +33,7 @@ export function ConsoleEditor({
   actions,
 }: {
   contestId: string;
-  dict: Dictionary;
+  dict: PlayDictionary;
   /**
    * Controls the surrounding screen wants at the right end of the console's
    * toolbar — the query log and the CSV download. They belong to the

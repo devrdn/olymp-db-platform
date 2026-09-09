@@ -1,10 +1,25 @@
-import { Button as ButtonPrimitive } from "@base-ui/react/button";
 import { cva, type VariantProps } from "class-variance-authority";
 
 import { cn } from "@/lib/utils";
 
 /**
  * The button, drawn from this project's tokens rather than from the registry's.
+ *
+ * A plain `<button>` with a class, not a Base UI primitive (finding 6). What
+ * that primitive contributed here was `useRender`/`mergeProps` and a
+ * `render` prop this codebase never once used — measured, it cost 21.5 KiB
+ * raw of `button.tsx`-plus-Base-UI per chunk that pulled it, and the play
+ * route pulled two byte-identical copies of exactly that (one through
+ * `workspace.tsx`, one through `app/error.tsx` → `StateView`) on top of
+ * 10.1 KiB of shared Base UI runtime: about 53 KiB raw, 25 KiB gzipped, of a
+ * 159/56 KiB route, spent on a `<button>` and an `<input>`. This is the same
+ * trade `components/ui/tabs.tsx` recorded when it stopped using Base UI's
+ * `Tabs`, and it is the same screen paying for it.
+ *
+ * Nothing about the element changed: Base UI's `Button`, given
+ * `nativeButton` (its default) and no `render`, renders a native `<button>`
+ * and forwards `disabled` to it natively. Focus, the disabled state and
+ * every event handler are the browser's, exactly as they were.
  *
  * Three decisions separate it from what `shadcn add button` produces, and each
  * of them is a rule from the spec rather than a preference:
@@ -54,9 +69,9 @@ function Button({
   variant,
   size,
   ...props
-}: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
+}: React.ComponentProps<"button"> & VariantProps<typeof buttonVariants>) {
   return (
-    <ButtonPrimitive
+    <button
       data-slot="button"
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}

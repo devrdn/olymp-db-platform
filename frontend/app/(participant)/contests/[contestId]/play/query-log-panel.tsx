@@ -8,7 +8,7 @@ import { API_PREFIX } from "@/lib/api/client";
 import { QUERY_LOG_PAGE_SIZE, QUERY_LOG_REFRESH_MIN_INTERVAL_MS } from "@/lib/api/querylog-terms";
 import type { QueryLogEntry } from "@/lib/api/querylog";
 import { formatMoment } from "@/lib/format/datetime";
-import type { Dictionary } from "@/lib/i18n/dictionary";
+import type { PlayDictionary } from "./dictionary";
 import type { Locale } from "@/lib/i18n/config";
 import { cn } from "@/lib/utils";
 
@@ -62,7 +62,7 @@ export function QueryLogPanel({
   /** Whether the "Query log" tab is the one currently showing — see this component's own doc. */
   active: boolean;
   locale: Locale;
-  dict: Dictionary;
+  dict: PlayDictionary;
 }) {
   const t = dict.participant.play.workspace.log;
   const [items, setItems] = useState(initial.items);

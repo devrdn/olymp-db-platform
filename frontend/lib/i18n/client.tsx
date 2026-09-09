@@ -14,27 +14,97 @@ import type { Dictionary } from "./dictionary";
  * language and stays that way. Both error screens in this project did exactly
  * that. A layout puts the resolved dictionary in context and the boundary
  * reads it, so all nine states of section 7 speak all three languages.
+ *
+ * What changed (finding 5): the dictionary handed over is a *scope*, not the
+ * whole book. One provider at the root carrying every section made the entire
+ * dictionary a client prop on every screen in the product — measured at
+ * 50,727 bytes for `en`, about half of the 99 KB RSC payload of
+ * `/contests/[contestId]/play`, on the one route hundreds of participants
+ * load within the same minute. The sections nobody on that screen can read —
+ * the contest workspace's own vocabulary, the account register, the audit
+ * trail, the settings, the contest register — came to 31.8 KB of it, 63% of
+ * the dictionary, crossing the wire for nothing.
+ *
+ * A scope names the sections one part of the tree can reach, and it does the
+ * narrowing **on the server**, in `select`, before the value is ever a prop.
+ * That is the whole mechanism: a provider that took the whole dictionary and
+ * narrowed it in the browser would have shipped the whole dictionary to do
+ * it. The type is what keeps the two honest — a boundary that reads a section
+ * its own scope does not name does not compile, and adding the section to the
+ * scope is the same edit that puts it on the wire.
+ *
+ * Scopes nest. `/play` sits under the root's and the participant group's, and
+ * the two slices reference the same section objects, so nothing is serialised
+ * twice.
  */
-const DictionaryContext = createContext<{ dict: Dictionary; locale: Locale } | null>(null);
+export type DictionaryScope<Section extends keyof Dictionary> = {
+  /**
+   * Narrows a whole dictionary to this scope's sections.
+   *
+   * Called by a Server Component, always: this is the line where the sections
+   * nobody downstream can read stop crossing the wire.
+   */
+  select: (dict: Dictionary) => Pick<Dictionary, Section>;
+  Provider: (props: {
+    dict: Pick<Dictionary, Section>;
+    locale: Locale;
+    children: React.ReactNode;
+  }) => React.ReactNode;
+  /** The scope's own sections, and the active language, for a client boundary under it. */
+  use: () => { dict: Pick<Dictionary, Section>; locale: Locale };
+};
 
-export function DictionaryProvider({
-  dict,
-  locale,
-  children,
-}: {
-  dict: Dictionary;
-  locale: Locale;
-  children: React.ReactNode;
-}) {
-  return (
-    <DictionaryContext.Provider value={{ dict, locale }}>{children}</DictionaryContext.Provider>
-  );
+function dictionaryScope<const Sections extends readonly (keyof Dictionary)[]>(
+  name: string,
+  sections: Sections,
+): DictionaryScope<Sections[number]> {
+  type Sliced = Pick<Dictionary, Sections[number]>;
+  const Context = createContext<{ dict: Sliced; locale: Locale } | null>(null);
+
+  return {
+    select(dict) {
+      // Built through a mutable record and handed back as the slice: the
+      // dictionary is deeply readonly and `section` is a union of this
+      // scope's keys rather than one of them, neither of which a per-key
+      // assignment can be expressed against. The cast is checked by the
+      // return type, and `sections` is the only thing that can be wrong.
+      const sliced: Record<string, unknown> = {};
+      for (const section of sections) sliced[section] = dict[section];
+      return sliced as Sliced;
+    },
+    Provider({ dict, locale, children }) {
+      return <Context.Provider value={{ dict, locale }}>{children}</Context.Provider>;
+    },
+    use() {
+      const value = useContext(Context);
+      if (!value) {
+        throw new Error(`This needs the ${name} <DictionaryScope.Provider>, normally on the route layout.`);
+      }
+      return value;
+    },
+  };
 }
 
-export function useDictionary() {
-  const value = useContext(DictionaryContext);
-  if (!value) {
-    throw new Error("useDictionary() needs a <DictionaryProvider>, normally on the route layout.");
-  }
-  return value;
-}
+/**
+ * Every screen in the product, because `app/error.tsx` catches a failure on
+ * any of them. One section, and a small one.
+ */
+export const AppDictionary = dictionaryScope("app", ["screens"]);
+
+/** The participant's own group: `/my`, `/open`, and the play workspace. */
+export const ParticipantDictionary = dictionaryScope("participant", ["participant"]);
+
+/**
+ * The profile, which both audiences share. It carries `participant` as well
+ * as `profile` because its own boundary borrows the retry wording from there
+ * rather than repeating it — see `app/(session)/error.tsx`.
+ */
+export const SessionDictionary = dictionaryScope("session", ["profile", "participant"]);
+
+/** The constructor's group, whose four boundaries each name their own screen. */
+export const AdminDictionary = dictionaryScope("admin", [
+  "contests",
+  "accounts",
+  "audit",
+  "settings",
+]);

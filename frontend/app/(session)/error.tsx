@@ -4,7 +4,7 @@ import { useEffect } from "react";
 
 import { Band } from "@/components/layout/band";
 import { StateView } from "@/components/product/state-view";
-import { useDictionary } from "@/lib/i18n/client";
+import { SessionDictionary } from "@/lib/i18n/client";
 
 /**
  * When the account screen could not be built.
@@ -24,7 +24,7 @@ export default function ProfileError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  const { dict } = useDictionary();
+  const { dict } = SessionDictionary.use();
   const t = dict.profile.failed;
 
   useEffect(() => {
