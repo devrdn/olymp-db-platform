@@ -1280,6 +1280,8 @@ const ro = {
       "Această bucată nu a ajuns în întregime — conexiunea s-a întrerupt sau transferul a fost prea lent. Nimic din ea nu a fost păstrat, deci poate fi trimisă din nou fără riscuri.",
     game_upload_length_mismatch:
       "Au sosit mai mulți sau mai puțini octeți decât s-a declarat la începutul încărcării, deci nu poate fi finalizată. Începeți încărcarea din nou.",
+    game_upload_window_unreachable:
+      "Această linie este prea departe de cel mai apropiat reper al indexului: liniile dintre ele sunt atât de lungi încât parcurgerea ar citi mai mult din fișier decât permite o previzualizare. Cereți o linie mai apropiată de începutul blocului.",
     game_upload_not_found:
       "Acest concurs nu are nicio încărcare cu acest identificator. Reîncărcați pagina: cel mai probabil a fost deja finalizată sau anulată.",
     game_upload_in_progress:

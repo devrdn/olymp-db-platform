@@ -1366,6 +1366,8 @@ const en = {
       "That piece did not arrive in full — the connection dropped, or the transfer was too slow. Nothing of it was kept, so sending it again is safe.",
     game_upload_length_mismatch:
       "Fewer or more bytes arrived than the upload declared, so it cannot be completed. Start the upload again.",
+    game_upload_window_unreachable:
+      "That line is too far past the file's nearest index mark to reach: the lines between are long enough that walking to it would read more of the file than a preview should. Ask for a line nearer the start of that block.",
     game_upload_not_found:
       "This contest has no upload by that identifier. Reload the page: it has most likely been completed or cancelled already.",
     game_upload_in_progress:
