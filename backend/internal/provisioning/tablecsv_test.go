@@ -11,9 +11,9 @@ import (
 
 // These tests exercise tablecsv.go through the exported surface
 // tabledata_test.go already builds against (tableDataGames, withSuspects,
-// beginTableUploadWithContent) — no CORE_DB_DSN needed, the same "разбор и
-// границы — без базы" reasoning that file's own doc gives. tablecsv.go's
-// own line scanner, header check and scalar parser are unexported, so they
+// beginTableUploadWithContent) — no CORE_DB_DSN needed, the same "parsing
+// and boundaries — without a database" reasoning that file's own doc gives.
+// tablecsv.go's own line scanner, header check and scalar parser are unexported, so they
 // are only reachable this way from outside the package, and this package's
 // own test files are black-box throughout (never `package provisioning`).
 
