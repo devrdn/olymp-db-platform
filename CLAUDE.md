@@ -4,6 +4,23 @@
 
 1. Do not share sensitive information, including personal data, passwords, or confidential business information.
 2. Do not use "---" to separate sections in your responses. Instead, use clear headings and bullet points for organization.
+3. **Commit messages, pull request titles and pull request descriptions are
+   written in English.** So is everything in the source itself: identifiers,
+   comments, test names, log messages. These are the parts of the work that
+   outlive the conversation about them — a commit message is read years later
+   by whoever is bisecting, and a pull request is the record of why a change
+   was made. Conversation with the team can be in whatever language suits it;
+   what gets committed cannot.
+
+   Two things this rule does not cover. The prose documentation under `docs/`
+   is Russian by the project's own choice and stays that way. User-visible
+   interface text lives in the locale dictionaries and exists in every locale
+   the platform serves.
+
+   Do not quote Russian into an English comment either. A comment that
+   switches language mid-sentence to cite a brief or a conversation is
+   unreadable to exactly the person the rule is written for; translate the
+   point or drop the quotation.
 
 ## Code
 
