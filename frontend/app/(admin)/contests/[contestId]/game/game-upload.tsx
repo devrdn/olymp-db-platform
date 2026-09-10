@@ -287,8 +287,8 @@ export function GameUpload({
       const chunk = file.slice(offset, end);
 
       try {
-        // Chunks are sent one at a time on purpose (the brief's own "слать
-        // куски подряд"); a parallel Promise.all here would race PUTs
+        // Chunks are sent one at a time on purpose (the brief's own "send
+        // chunks one after another"); a parallel Promise.all here would race PUTs
         // against the same offset, which the server would just refuse as
         // out of order.
         offset = await putChunk(contestId, id, offset, chunk, controller.signal);

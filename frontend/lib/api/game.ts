@@ -303,9 +303,9 @@ export type GameInstances = z.infer<typeof gameInstancesSchema>;
  * `game_handler.go`'s `builderLimitsResponse`. Every number a client uses to
  * slice a CSV chunk, cap a table or column count, or offer a type on a
  * column's picker comes from here — never a second copy kept on this side.
- * This is the field CLAUDE.md rule 11 names directly: "предел чанка не
- * доходил до браузера, два независимых потолка стояли на одном размере,
- * источник игры не доходил до статуса" is the exact history of defects a
+ * This is the field CLAUDE.md rule 11 names directly: "the chunk limit never
+ * reached the browser, two independent ceilings stood on the same size, the
+ * game's source never reached the status" is the exact history of defects a
  * client-side constant standing in for any one of these numbers would repeat.
  *
  * `enabled` is checked before `chunkBytes` or `maxFileBytes` mean anything,

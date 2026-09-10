@@ -1625,8 +1625,8 @@ func TestGameUploadRoutesAreMounted(t *testing.T) {
 
 // A PUT is decoded into the exact provisioning.Definition the service is
 // asked to save, and a GET answers back the shape a saved builder-sourced
-// game carries — the round trip this task's own brief asks for ("читается и
-// пишется целиком одним запросом").
+// game carries — the round trip this task's own brief asks for ("read and
+// written whole in a single request").
 func TestDefinitionRoundTripsThroughGetAndPut(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	contest := uuid.NewString()
@@ -1823,8 +1823,8 @@ func TestAppendingATableChunkStreamsTheBodyToTheService(t *testing.T) {
 // way TestAppendingAChunkOverTheTransportCeilingIsRefused proves it for the
 // dump: a real gamefile.Store, so the refusal comes from the same probe read
 // the production path meets rather than from a double that drains the body
-// with io.ReadAll first (CLAUDE.md rule 10). This is the mandatory "превышение
-// размера чанка" case for the table builder's own independent ceiling.
+// with io.ReadAll first (CLAUDE.md rule 10). This is the mandatory "chunk
+// size exceeded" case for the table builder's own independent ceiling.
 func TestAppendingATableChunkOverTheTransportCeilingIsRefused(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	contest, dataID := uuid.New(), uuid.New()
@@ -1976,7 +1976,7 @@ func TestAbortingATableUploadCancelsIt(t *testing.T) {
 	}
 }
 
-// The mandatory "окно на несуществующей строке" case: a window whose
+// The mandatory "window on a nonexistent row" case: a window whose
 // fromRow is past the file's own end comes back as an empty page, not an
 // error — provisioning.Games.TableDataWindow's own doc, and this handler
 // adds nothing on top of it (uploadWindow's identical test for the dump).
@@ -2077,7 +2077,7 @@ func TestDeletingATableRowWithAMalformedRowNumberIsRefused(t *testing.T) {
 	}
 }
 
-// The mandatory "работа при выключенной возможности" case: an installation
+// The mandatory "operation with the feature disabled" case: an installation
 // with no table-data volume configured answers every one of these routes
 // with a named refusal — provisioning.ErrTableDataDisabled, mapped below —
 // never a panic from dereferencing a store that was never opened. The
@@ -2128,7 +2128,7 @@ func TestDeletingANonexistentTableRowNamesItsOwnCode(t *testing.T) {
 	}
 }
 
-// The mandatory "чужой конкурс" case: a table-data id that belongs to
+// The mandatory "someone else's contest" case: a table-data id that belongs to
 // another contest reads identically to one that does not exist at all
 // (tableDataByIDForContest's own doc) — the handler must not distinguish
 // them, so this asserts on the code the service's own answer produces
@@ -2298,7 +2298,7 @@ func TestBuilderLimitsAreDisabledButStructuralLimitsStillShowWhenTableDataIsOff(
 }
 
 // Every write endpoint of the table builder's own group sits behind
-// contest.edit, the mandatory "отсутствие права" case, mirroring
+// contest.edit, the mandatory "missing permission" case, mirroring
 // TestUploadEndpointsAreRefusedToAnAccountThatIsNotStaffOnTheContest.
 func TestTableEndpointsAreRefusedToAnAccountThatIsNotStaffOnTheContest(t *testing.T) {
 	dataID := uuid.NewString()

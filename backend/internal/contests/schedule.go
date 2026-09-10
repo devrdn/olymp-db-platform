@@ -113,7 +113,7 @@ type blockedContests interface {
 // the lock uncontested, never lets anybody in past their own window or keeps
 // anybody answering past their own deadline; it only leaves the status saying
 // "running" a little longer than the wall clock would have (§8's own words:
-// "статус и SSE-события влияют только на UI").
+// "status and SSE events affect only the UI").
 type Scheduler struct {
 	repo      ScheduleRepository
 	stories   scheduleStories
