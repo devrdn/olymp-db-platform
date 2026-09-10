@@ -647,8 +647,10 @@ func (g *Games) SetScript(ctx context.Context, actorID, contestID uuid.UUID, scr
 //
 // It does not build, for the same reason SetScript does not: storing puts
 // the game back to pending and a worker picks it up (Build), which for a
-// builder-sourced game currently means finishDefinitionBuild's own honest
-// refusal (DefinitionBuildUnavailable) until the SQL-generation task exists.
+// builder-sourced game means finishDefinitionBuild — Definition.SQL turned
+// into the CREATE TABLE statements, run through the identical BuildTemplate
+// an editor's script goes through, and each table's own completed CSV loaded
+// afterwards (loadTableData, tabledata.go).
 //
 // checkTableDataCompatibility runs immediately after Validate, for the same
 // reason Validate itself runs before anything is asked of storage: a table

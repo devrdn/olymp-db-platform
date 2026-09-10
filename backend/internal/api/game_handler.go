@@ -440,9 +440,17 @@ type gameResponse struct {
 	BuildError string `json:"build_error"`
 	// ScriptBytes lets the status say whether there is a script at all
 	// without carrying it.
-	ScriptBytes int       `json:"script_bytes"`
-	Building    bool      `json:"building"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ScriptBytes int `json:"script_bytes"`
+	// MaxScriptBytes is the ceiling SetScript refuses a script past
+	// (provisioning.MaxScriptBytes). Published for the same reason
+	// UploadLimits and BuilderLimits below are (CLAUDE.md rule 11): the
+	// editor tells an organiser their script is too long before it spends a
+	// request on it, and a client that keeps its own copy of this number goes
+	// on refusing by the old one the day this one is raised — quietly, with
+	// nothing on either side to notice.
+	MaxScriptBytes int       `json:"max_script_bytes"`
+	Building       bool      `json:"building"`
+	UpdatedAt      time.Time `json:"updated_at"`
 	// UploadLimits are the ceilings a chunked upload must respect —
 	// uploadLimitsResponse's own doc says why they travel here and how a
 	// client tells "uploads are off" from "the limit is genuinely zero".
@@ -501,7 +509,8 @@ func (h *GameHandler) gameView(ctx context.Context, template provisioning.Templa
 		Status: string(template.Status), Version: template.Version,
 		Source:   string(template.Source),
 		Database: template.Database, BuildError: template.BuildError,
-		ScriptBytes: template.ScriptBytes, Building: template.Building(),
+		ScriptBytes: template.ScriptBytes, MaxScriptBytes: provisioning.MaxScriptBytes,
+		Building:  template.Building(),
 		UpdatedAt: template.UpdatedAt, UploadLimits: h.uploadLimitsView(),
 		BuilderLimits: h.builderLimitsView(),
 	}
@@ -542,8 +551,13 @@ func (h *GameHandler) status(w http.ResponseWriter, r *http.Request) {
 		// Not an error: every contest is in this state until somebody writes
 		// its game. Answered as a game with no script rather than a 404, so
 		// the interface has one shape to render instead of two.
+		//
+		// The ceilings travel here too: this is the answer a console gets
+		// for every contest whose game has not been written yet, which is
+		// exactly when the editor needs to know what it may accept.
 		httpx.JSON(w, r, http.StatusOK, gameResponse{
-			Status: "absent", UploadLimits: h.uploadLimitsView(), BuilderLimits: h.builderLimitsView(),
+			Status: "absent", MaxScriptBytes: provisioning.MaxScriptBytes,
+			UploadLimits: h.uploadLimitsView(), BuilderLimits: h.builderLimitsView(),
 		})
 		return
 	}

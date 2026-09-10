@@ -174,10 +174,12 @@ describe("the table builder's own data panel", () => {
     expect(await screen.findByText(td.emptyRows)).toBeInTheDocument();
   });
 
-  // There is no `.../data/current` route for a table's own upload — this
-  // component's own doc used to name that gap directly. A reload mid-upload
-  // now finds it the same way `game-upload.tsx` finds a dump's own: seeded
-  // from `initialTableData`, the prop `page.tsx` reads from that route.
+  // A reload mid-upload finds the unfinished upload the same way
+  // `game-upload.tsx` finds a dump's own: seeded from `initialTableData`,
+  // the prop `page.tsx` reads from `GET .../tables/{table}/data/current`.
+  // That route is what closed the gap this component's own doc used to name
+  // — the component still never calls it itself, which is why the state
+  // arrives as a prop rather than as a fetch on mount.
   test("shows an unfinished upload and asks for a file of the same size to continue", () => {
     show({ initialTableData: tableData({ receivedBytes: 5, declaredBytes: 12 }) });
 

@@ -237,12 +237,30 @@ func TestTheSourcePairingConstraintTiesBuilderToDefinitionJSON(t *testing.T) {
 
 // Two workers ticking at the same moment must not both run CREATE DATABASE
 // against one name.
+//
+// ClaimBuild is installation-wide by design: it takes the oldest pending row
+// anywhere, with no contest to scope it. This used to skip when that row
+// belonged to somebody else — and since any pending game in a developer's
+// own database, or left by an earlier test in the same run, makes that the
+// case, the test reported PASS with a note nobody reads instead of proving
+// anything. A skip that a real installation triggers is not a skip, it is
+// silence.
+//
+// So the row is aged first, which is what makes it the one ClaimBuild
+// reaches: `ORDER BY updated_at LIMIT 1` takes the oldest, and ten years is
+// older than anything an installation holds. Nothing outlives the test — the
+// whole body runs in a transaction withTx rolls back, this UPDATE included.
 func TestOnlyOneClaimOfAGameSucceedsAndTheRestFindNothing(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
 		repo := NewGameInstances(testPool)
 		if _, err := repo.SaveScript(ctx, contest, "game_tpl_c"+uuid.NewString()[:12], `SELECT 1`); err != nil {
 			t.Fatalf("save: %v", err)
+		}
+		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+			`UPDATE game_templates SET updated_at = now() - interval '10 years' WHERE contest_id = $1`,
+			contest); err != nil {
+			t.Fatalf("age the row so it is the oldest pending one: %v", err)
 		}
 
 		claimed, err := repo.ClaimBuild(ctx, time.Hour)
@@ -253,11 +271,14 @@ func TestOnlyOneClaimOfAGameSucceedsAndTheRestFindNothing(t *testing.T) {
 			t.Fatalf("claimed as %q, want building", claimed.Status)
 		}
 		if claimed.ContestID != contest {
-			t.Skip("another test's pending game was claimed first; this run proves nothing")
+			t.Fatalf("claimed %s, want this test's own game (%s) — it is the oldest pending row",
+				claimed.ContestID, contest)
 		}
 
 		// Claimed once, it is no longer pending — and the stale window has
-		// not passed, so nothing may take it again.
+		// not passed, so nothing may take it again. The second claim may
+		// legitimately find some other installation row; what it must never
+		// find is this one.
 		again, err := repo.ClaimBuild(ctx, time.Hour)
 		if err == nil && again.ContestID == contest {
 			t.Fatal("the same game was claimed twice")

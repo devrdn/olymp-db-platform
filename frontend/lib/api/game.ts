@@ -117,6 +117,17 @@ export const gameSchema = z
     upload: gameUploadSourceSchema.optional(),
     build_error: z.string().default(""),
     script_bytes: z.number().default(0),
+    // The ceiling the API refuses a script past (provisioning.MaxScriptBytes,
+    // published by game_handler.go on both the ordinary and the "absent"
+    // answer). Read rather than kept as a constant here: a copy in this
+    // bundle would go on refusing by the old number the day the server
+    // raises it, with nothing on either side to notice (CLAUDE.md rule 11).
+    //
+    // Defaulted to zero for the same reason `upload_limits` is defaulted —
+    // an older API that does not send it must not fail the whole render —
+    // and zero is read as "the server did not say" by whoever uses it, not
+    // as a ceiling of nothing.
+    max_script_bytes: z.number().default(0),
     building: z.boolean().default(false),
     updated_at: z.string().optional(),
     // Defaulted rather than required: every current build of the API sends
@@ -133,6 +144,7 @@ export const gameSchema = z
     upload: raw.upload,
     buildError: raw.build_error,
     scriptBytes: raw.script_bytes,
+    maxScriptBytes: raw.max_script_bytes,
     building: raw.building,
     updatedAt: raw.updated_at ?? "",
     uploadLimits: raw.upload_limits,

@@ -5,7 +5,7 @@ import { useActionState, useRef, useState } from "react";
 import { CodeEditor } from "@/components/product/code-editor";
 import { Tag } from "@/components/ui/tag";
 import { buttonVariants } from "@/components/ui/button";
-import { MAX_GAME_SCRIPT_BYTES } from "@/lib/api/game-terms";
+import { FALLBACK_MAX_GAME_SCRIPT_BYTES } from "@/lib/api/game-terms";
 import type { Game } from "@/lib/api/game";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
@@ -67,7 +67,11 @@ export function GameEditor({
   // just finished (useGamePoll's own doc).
   useGamePoll(contestId, game.building, setPolled);
 
-  const tooLong = bytes > MAX_GAME_SCRIPT_BYTES;
+  // The server's own ceiling, from the status it just answered with — never
+  // a constant of this bundle's own (CLAUDE.md rule 11). The fallback is for
+  // an API old enough not to send the field; zero means "it did not say".
+  const maxBytes = game.maxScriptBytes > 0 ? game.maxScriptBytes : FALLBACK_MAX_GAME_SCRIPT_BYTES;
+  const tooLong = bytes > maxBytes;
 
   return (
     <form action={save} className="flex flex-col gap-4">
@@ -130,7 +134,7 @@ export function GameEditor({
         <span className={cn("font-mono text-label", tooLong ? "text-bad" : "text-ink-3")}>
           {t.size
             .replace("{n}", String(Math.ceil(bytes / 1024)))
-            .replace("{max}", String(MAX_GAME_SCRIPT_BYTES / 1024))}
+            .replace("{max}", String(Math.floor(maxBytes / 1024)))}
         </span>
         {tooLong ? <span className="text-small text-bad">{t.tooLong}</span> : null}
         {!editable ? <span className="text-small text-ink-2">{t.frozen}</span> : null}

@@ -98,7 +98,30 @@ type ScriptSyntaxError struct {
 }
 
 func (e *ScriptSyntaxError) Error() string {
-	return fmt.Sprintf("line %d: %s", e.Line, e.Message)
+	return scriptErrorLinePrefix(e.Line) + e.Message
+}
+
+// scriptErrorLinePrefix is how both script failures say where in the file
+// they are — ScriptSyntaxError above and ScriptError (provisioner.go), which
+// used to write the same literal each.
+//
+// One function because this string is a wire format, not prose: the upload
+// console parses it back out to offer "jump to line" over the file it just
+// sent (frontend/app/(admin)/contests/[contestId]/game/game-upload.tsx, the
+// `/^line (\d+):/i` in its errorLine). A format written in two places drifts
+// in one of them, and the console answers by quietly not offering the jump —
+// no error anywhere, on either side.
+// TestBothScriptFailuresNameTheLineInTheShapeTheConsoleParses holds the two
+// together and holds them to that regular expression.
+//
+// Empty for a line of zero, which is an error PostgreSQL did not locate:
+// there is nothing to jump to, and "line 0" would send the console to a line
+// that does not exist.
+func scriptErrorLinePrefix(line int) string {
+	if line <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("line %d: ", line)
 }
 
 // ScriptRejection satisfies provisioning.ScriptFailure — see that

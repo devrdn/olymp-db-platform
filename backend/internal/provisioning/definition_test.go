@@ -333,6 +333,15 @@ func TestSQLOfAnEmptyDefinitionIsRefused(t *testing.T) {
 // "numeric" is the only one that doesn't just restate itself, so it is not
 // the only case worth having, but it is the one a copy-the-string bug would
 // not be caught by).
+//
+// The whole column line is compared, not a substring of it. A `Contains`
+// check on the keyword alone cannot tell `timestamp`, `timestamp without
+// time zone` and `timestamptz` apart, and those are three different columns
+// to a participant's own query: values the domain validated as naive local
+// times would be reinterpreted in the server's time zone by the third. The
+// one test whose entire job is this mapping has to see the whole of what it
+// produced — which is how it was missed that the mapping already spelled the
+// timestamp out in full while this expected the bare word.
 func TestSQLMapsEveryDeclaredTypeToItsPostgreSQLKeyword(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -342,7 +351,7 @@ func TestSQLMapsEveryDeclaredTypeToItsPostgreSQLKeyword(t *testing.T) {
 		{provisioning.ColumnInteger, "integer"},
 		{provisioning.ColumnText, "text"},
 		{provisioning.ColumnDate, "date"},
-		{provisioning.ColumnTimestamp, "timestamp"},
+		{provisioning.ColumnTimestamp, "timestamp without time zone"},
 		{provisioning.ColumnNumeric, "numeric"},
 		{provisioning.ColumnBoolean, "boolean"},
 	} {
@@ -355,10 +364,17 @@ func TestSQLMapsEveryDeclaredTypeToItsPostgreSQLKeyword(t *testing.T) {
 			if err != nil {
 				t.Fatalf("generate SQL: %v", err)
 			}
-			if !strings.Contains(sql, `"c" `+tc.want) {
-				t.Fatalf("declared type %q produced:\n%s\nwant a column typed %q", tc.typ, sql, tc.want)
+			want := "CREATE TABLE public.\"t\" (\n    \"c\" " + tc.want + " NOT NULL\n);\n"
+			if sql != want {
+				t.Fatalf("declared type %q produced:\n%s\nwant:\n%s", tc.typ, sql, want)
 			}
 		})
+	}
+	// Nothing outside the six may reach the generator: a type Validate has
+	// let through that this switch does not know is refused loudly rather
+	// than emitting a column of some type nobody declared.
+	if len(provisioning.ColumnTypes) != 6 {
+		t.Fatalf("ColumnTypes lists %d types; this table has to grow with it", len(provisioning.ColumnTypes))
 	}
 }
 
@@ -429,12 +445,25 @@ func TestSQLOmitsThePrimaryKeyClauseWhenNoneWasDeclared(t *testing.T) {
 	}
 }
 
-// Twice from the same definition must be byte for byte identical — the whole
-// point of walking ordered slices rather than anything keyed by a map
-// (SQL's own doc). A rebuild that could disagree with an earlier build of
-// the identical definition would make "why did the schema change" a
-// question with no real answer.
-func TestSQLIsDeterministicAcrossCalls(t *testing.T) {
+// The output, in full, for a definition of two tables — which is what "byte
+// for byte identical from the same definition" (SQL's own doc) actually
+// requires, and what the threat to it looks like.
+//
+// Comparing two calls of the current code with each other could not fail:
+// the path walks ordered slices only, so there is nothing for two calls to
+// disagree about, and the test sat in the place where the real threat — the
+// day somebody builds the column or table order out of a map — would have
+// been caught. An exact text catches that whichever shape it takes: a bare
+// range over a map fails here as soon as Go's randomised iteration differs
+// from the organiser's order, and the tidier version of the same mistake —
+// a map ranged and then sorted by name, which is deterministic and would
+// satisfy any two-calls-agree check for ever — fails every run, because
+// none of the tables below is written in alphabetical order.
+//
+// Both calls are still made and compared, which costs nothing and keeps the
+// second half of the claim; the assertion that does the work is the exact
+// text.
+func TestSQLIsTheSameTextEveryTimeForTheSameDefinition(t *testing.T) {
 	t.Parallel()
 	d := provisioning.Definition{Tables: []provisioning.TableDefinition{
 		{
@@ -446,14 +475,61 @@ func TestSQLIsDeterministicAcrossCalls(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		},
 		{
-			Name:    "witnesses",
-			Columns: []provisioning.ColumnDefinition{aColumn("statement", provisioning.ColumnText)},
+			// Wider than the smallest example that reads well, and out of
+			// alphabetical order on purpose: the more columns there are, the
+			// less often a randomised map iteration happens to agree, and the
+			// unsorted order is what makes a sorting mistake fail outright
+			// rather than by luck.
+			Name: "witnesses",
+			Columns: []provisioning.ColumnDefinition{
+				aColumn("statement", provisioning.ColumnText),
+				aColumn("heard_at", provisioning.ColumnTimestamp),
+				aColumn("seen_on", provisioning.ColumnDate),
+				aColumn("distance_km", provisioning.ColumnNumeric),
+				aColumn("credible", provisioning.ColumnBoolean),
+			},
+		},
+		{
+			Name: "alibis",
+			Columns: []provisioning.ColumnDefinition{
+				aColumn("suspect_id", provisioning.ColumnInteger),
+				aColumn("confirmed", provisioning.ColumnBoolean),
+			},
 		},
 	}}
+
+	// The organiser's own order, table by table and column by column, and
+	// nothing else in it: no timestamp, no generated id, no reordering.
+	// The blank line between the two statements is Definition.SQL's own join:
+	// each statement already ends in a newline and they are joined with one
+	// more. Written out rather than trimmed, because this is the text that
+	// reaches BuildTemplate.
+	const want = `CREATE TABLE public."suspects" (
+    "id" integer NOT NULL,
+    "name" text NOT NULL,
+    PRIMARY KEY ("id")
+);
+
+CREATE TABLE public."witnesses" (
+    "statement" text NOT NULL,
+    "heard_at" timestamp without time zone NOT NULL,
+    "seen_on" date NOT NULL,
+    "distance_km" numeric NOT NULL,
+    "credible" boolean NOT NULL
+);
+
+CREATE TABLE public."alibis" (
+    "suspect_id" integer NOT NULL,
+    "confirmed" boolean NOT NULL
+);
+`
 
 	first, err := d.SQL()
 	if err != nil {
 		t.Fatalf("generate SQL (first): %v", err)
+	}
+	if first != want {
+		t.Fatalf("SQL() produced:\n%s\nwant:\n%s", first, want)
 	}
 	second, err := d.SQL()
 	if err != nil {

@@ -19,10 +19,20 @@
 CREATE TABLE game_table_data (
     id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     contest_id     uuid NOT NULL REFERENCES contests ON DELETE CASCADE,
-    -- The table this file's rows belong to, exactly as the organiser spelled
-    -- it in the definition (provisioning.Definition) — matched byte for byte
-    -- against Definition.Tables[].Name at every call, never re-derived or
-    -- folded here. Bounded the way PostgreSQL bounds an identifier itself
+    -- The table this file's rows belong to. Stored exactly as the organiser
+    -- spelled it in the definition (provisioning.Definition) — never
+    -- re-derived, never folded on the way in — because this is the name the
+    -- generated CREATE TABLE quotes, so its case is part of what it means.
+    --
+    -- Matched folded, though: every read and both unique indexes below key
+    -- on lower(table_name), which is what makes them agree with
+    -- Definition.Validate's own folded uniqueness check on table names. A
+    -- query written against this column with a plain `=` selects a different
+    -- set of rows from the one this feature works with; write
+    -- lower(table_name) = lower($1), the way the indexes and
+    -- postgres.GameInstances' own statements do.
+    --
+    -- Bounded the way PostgreSQL bounds an identifier itself
     -- (NAMEDATALEN - 1 = 63; see sqlpolicy.PlainIdentifier's own bound).
     table_name     text NOT NULL CHECK (length(table_name) BETWEEN 1 AND 63),
     declared_bytes bigint NOT NULL CHECK (declared_bytes > 0),

@@ -8,12 +8,22 @@
 // before a single query runs. So copies are made early and kept spare, and the
 // moment a participant needs one is a single row update.
 //
+// It also owns the three ways a contest's game is described in the first
+// place: a script an organiser writes (template.go), a dump they upload
+// (upload.go), and a structural description they fill in — tables, columns,
+// a primary key — whose rows arrive as CSV files on a volume (definition.go,
+// tabledata.go, tablecsv.go). The last of those generates its own CREATE
+// TABLE statements and parses its own CSV here, because both are decisions
+// about what an organiser is allowed to describe rather than about how a
+// database is made.
+//
 // What it deliberately does not do: execute anything a participant wrote, or
 // decide what they may run. That is internal/queryrunner and
-// internal/sqlpolicy. It also does not know how to build a database — the DDL
-// belongs to internal/gamedb, which this drives through a narrow interface so
-// that "a database per participant" can be swapped for something else if the
-// pilot says so (section 4.2, plan B).
+// internal/sqlpolicy. Nor does it run any of the SQL it produces — the
+// statements above are handed as text to internal/gamedb, which owns every
+// connection to the game cluster and every COPY into it, and which this
+// drives through a narrow interface so that "a database per participant" can
+// be swapped for something else if the pilot says so (section 4.2, plan B).
 package provisioning
 
 import (
