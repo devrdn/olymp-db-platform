@@ -332,8 +332,8 @@ func (h *GameHandler) uploadLimitsView() uploadLimitsResponse {
 // published so a browser slicing a table's CSV or laying out a column
 // picker never keeps its own copy of a number this installation decides
 // (CLAUDE.md rule 11 — this task's own brief names the exact defect class:
-// "предел чанка не доходил до браузера, два независимых потолка стояли на
-// одном размере, источник игры не доходил до статуса").
+// "the chunk limit never reached the browser, two independent ceilings stood
+// on the same size, the game's source never reached the status").
 //
 // Two different kinds of ceiling travel together here. ChunkBytes and
 // MaxFileBytes come from provisioning.Games.TableDataLimits — a per-
@@ -1273,8 +1273,8 @@ type tableDefinitionView struct {
 // definitionRequest is the whole structural description a PUT sends —
 // small enough, bounded at provisioning.MaxDefinitionBytes, to read as one
 // ordinary JSON document through httpx.DecodeJSON rather than the chunked
-// path a dump's own gigabytes need (this task's own brief: "читается и
-// пишется целиком одним запросом").
+// path a dump's own gigabytes need (this task's own brief: "read and
+// written whole in a single request").
 type definitionRequest struct {
 	Tables []tableDefinitionView `json:"tables"`
 }
@@ -1847,9 +1847,9 @@ func (h *GameHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	// The CSV content itself (tablecsv.go). These reach fail() unwrapped —
 	// validateHeader, validateRow and splitCSVLine return them directly, and
 	// their own text already names the row and column at fault (this task's
-	// own brief: a CSV refusal "должен донести до интерфейса номер строки и
-	// колонку" — without that a refusal on a file of a million rows is
-	// useless), so err.Error() is the message rather than a fixed sentence
+	// own brief: a CSV refusal "must carry the row number and column through
+	// to the interface" — without that a refusal on a file of a million rows
+	// is useless), so err.Error() is the message rather than a fixed sentence
 	// that would have to repeat it.
 	case errors.Is(err, provisioning.ErrTableHeaderMismatch):
 		httpx.Error(w, r, http.StatusBadRequest, codeGameTableHeaderMismatch, err.Error())

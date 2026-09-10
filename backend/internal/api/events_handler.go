@@ -468,8 +468,8 @@ func writeRetry(w http.ResponseWriter, d time.Duration) error {
 }
 
 // statusPayload is the whole body of a contest_started or contest_finished
-// event: the contest's status and nothing else (§8's own words: "события
-// несут статус олимпиады. И больше ничего").
+// event: the contest's status and nothing else (§8's own words: "events
+// carry the olympiad's status. And nothing else.").
 type statusPayload struct {
 	Status string `json:"status"`
 }

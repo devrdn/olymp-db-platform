@@ -159,8 +159,8 @@ function TitleForm({
  * shows it: the heading at the top of its workspace.
  *
  * It used to live in a settings panel, a per-language grid an author had to
- * open a whole configuration screen to reach — "закопано в настройках", in
- * the owner's own words, buried in settings. The name is the single most
+ * open a whole configuration screen to reach — "buried in settings," in
+ * the owner's own words. The name is the single most
  * identifying thing about a contest and the field an administrator hunts
  * longest for; it belongs beside the heading that already carries it, not
  * four fields into an unrelated screen.

@@ -66,7 +66,7 @@ const editorTheme = EditorView.theme({
     color: "var(--ink)",
     // No border. The design's editor is a `--sunk` field between the rules
     // that separate the panes, and nothing else (docs/design/preview.html,
-    // `.ed`): "внутри окна — ни одной вложенной плашки". `--edge` is a solid
+    // `.ed`): "no nested panel inside the window". `--edge` is a solid
     // mid-grey the design spends on exactly one thing, a secondary button's
     // outline, and a box drawn in it around the editor reads as a panel
     // inside a panel.

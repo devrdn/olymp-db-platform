@@ -19,8 +19,8 @@ import (
 
 // Most of these run against the fake templateStore and buildCluster (see
 // games() in template_test.go) and a real gamefile.Store on a temp
-// directory — no CORE_DB_DSN, exactly the brief's own "разбор и границы —
-// без базы". The four rules PostgreSQL alone holds are the exception, and
+// directory — no CORE_DB_DSN, exactly the brief's own "parsing and
+// boundaries — without a database". The four rules PostgreSQL alone holds are the exception, and
 // they run against the real repository instead (tableDataGamesOnRepo, near
 // the end of this file). The assembly-with-real-data path that needs a real cluster is
 // TestAScriptSavedInTheCoreDatabase... in game_integration_test.go, the one
