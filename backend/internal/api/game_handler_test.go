@@ -3,7 +3,6 @@ package api_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -64,15 +63,15 @@ type fakeGames struct {
 	// that read it into memory first.
 	gotAppendBodyReadOnEntry int64
 
-	// store, when set, replaces that io.ReadAll with the real thing: the
-	// body is streamed into a real gamefile.Store on a real directory, and
-	// its errors are translated exactly as provisioning.Games.AppendChunk
-	// translates them (appendToRealStore below). It is what the tests about
-	// the *byte path* use — a ceiling the body runs into, a body that stops
-	// arriving — because io.ReadAll is the one thing the production path
-	// never does, and reading the body whole is what hid a refusal that
-	// never happened (CLAUDE.md rule 10).
-	store *gamefile.Store
+	// uploads, when set, replaces that io.ReadAll with the real thing: the
+	// body is streamed into a real gamefile.Store on a real directory by the
+	// real provisioning.Games (realUploadService below), so the refusal that
+	// comes back is the domain's own, translated by the domain. It is what
+	// the tests about the *byte path* use — a ceiling the body runs into, a
+	// body that stops arriving — because io.ReadAll is the one thing the
+	// production path never does, and reading the body whole is what hid a
+	// refusal that never happened (CLAUDE.md rule 10).
+	uploads *provisioning.Games
 
 	currentErr    error
 	currentResult provisioning.Upload
@@ -139,7 +138,10 @@ type fakeGames struct {
 	// probe read the production path does (CLAUDE.md rule 10).
 	tableBodyMeter                *readMeter
 	gotAppendTableBodyReadOnEntry int64
-	tableStore                    *gamefile.Store
+	// tableData, when set, is the real provisioning.Games over a real
+	// gamefile.Store: AppendTableChunk is delegated to it so its refusals
+	// are the domain's own, produced by the domain (realTableDataService).
+	tableData *provisioning.Games
 
 	completeTableErr        error
 	completeTableResult     provisioning.TableData
@@ -216,44 +218,13 @@ func (g *fakeGames) BeginTableUpload(_ context.Context, contestID uuid.UUID, tab
 	return g.beginTableResult, nil
 }
 
-// appendToRealTableStore is appendToRealStore's own translation, for the
-// table builder's independent gamefile.Store and its own sentinels.
-func appendToRealTableStore(store *gamefile.Store, id uuid.UUID, offset int64, r io.Reader) (int64, error) {
-	received, err := store.Append(id.String(), offset, r)
-	switch {
-	case err == nil:
-		return received, nil
-	case errors.Is(err, gamefile.ErrChunkIncomplete):
-		return received, fmt.Errorf("%w: %w", provisioning.ErrTableDataChunkIncomplete, err)
-	case errors.Is(err, gamefile.ErrChunkTooLarge):
-		return received, provisioning.ErrTableDataChunkTooLarge
-	case errors.Is(err, gamefile.ErrChunkOutOfOrder):
-		return received, provisioning.ErrTableDataChunkOutOfOrder
-	default:
-		return received, fmt.Errorf("gamefile: %w", err)
-	}
-}
-
-// realTableStore is realUploadStore's own shape for a table's chunked CSV.
-func realTableStore(t *testing.T, dataID uuid.UUID, limits gamefile.Limits) *gamefile.Store {
-	t.Helper()
-	store, err := gamefile.NewStore(t.TempDir(), limits)
-	if err != nil {
-		t.Fatalf("open the table data store: %v", err)
-	}
-	if err := store.Begin(dataID.String(), 1<<16); err != nil {
-		t.Fatalf("begin the table upload: %v", err)
-	}
-	return store
-}
-
 func (g *fakeGames) AppendTableChunk(_ context.Context, contestID, id uuid.UUID, offset int64, r io.Reader) (int64, error) {
 	g.gotAppendTableContest, g.gotAppendTableDataID, g.gotAppendTableOffset = contestID, id, offset
 	if g.tableBodyMeter != nil {
 		g.gotAppendTableBodyReadOnEntry = g.tableBodyMeter.read
 	}
-	if g.tableStore != nil {
-		return appendToRealTableStore(g.tableStore, id, offset, r)
+	if g.tableData != nil {
+		return g.tableData.AppendTableChunk(context.Background(), contestID, id, offset, r)
 	}
 	body, err := io.ReadAll(r)
 	if err != nil {
@@ -308,8 +279,20 @@ func (g *fakeGames) TableDataLimits() (gamefile.Limits, bool) {
 	return g.tableLimits, g.tableLimitsEnabled
 }
 
+// Of mirrors what postgres.GameInstances.Template can actually answer: a row
+// with a real status, or provisioning.ErrNoGame. A zero Template — a game
+// that exists and has no status — is a shape the real repository cannot
+// produce, and several tests used to drive the "there is a game" branch on
+// exactly that, which meant they proved the handler's behaviour for a row
+// production never stores.
 func (g *fakeGames) Of(context.Context, uuid.UUID) (provisioning.Template, error) {
-	return g.template, g.ofErr
+	if g.ofErr != nil {
+		return provisioning.Template{}, g.ofErr
+	}
+	if g.template.Status == "" {
+		return provisioning.Template{}, provisioning.ErrNoGame
+	}
+	return g.template, nil
 }
 
 // StatusOf mirrors what postgres.GameInstances.TemplateStatus returns: the
@@ -318,6 +301,9 @@ func (g *fakeGames) Of(context.Context, uuid.UUID) (provisioning.Template, error
 func (g *fakeGames) StatusOf(context.Context, uuid.UUID) (provisioning.Template, error) {
 	if g.ofErr != nil {
 		return provisioning.Template{}, g.ofErr
+	}
+	if g.template.Status == "" {
+		return provisioning.Template{}, provisioning.ErrNoGame
 	}
 	status := g.template
 	status.ScriptBytes = len(status.Script)
@@ -350,8 +336,8 @@ func (g *fakeGames) AppendChunk(_ context.Context, contestID, uploadID uuid.UUID
 	if g.bodyMeter != nil {
 		g.gotAppendBodyReadOnEntry = g.bodyMeter.read
 	}
-	if g.store != nil {
-		return appendToRealStore(g.store, uploadID, offset, r)
+	if g.uploads != nil {
+		return g.uploads.AppendChunk(context.Background(), contestID, uploadID, offset, r)
 	}
 	// io.ReadAll here is what proves the handler handed AppendChunk a real
 	// io.Reader rather than something it had already drained: reading it a
@@ -368,40 +354,70 @@ func (g *fakeGames) AppendChunk(_ context.Context, contestID, uploadID uuid.UUID
 	return g.appendResult, nil
 }
 
-// appendToRealStore is what provisioning.Games.AppendChunk does with the
-// reader the handler hands it: one Store.Append, and its sentinels
-// translated into the domain's (provisioning's own wrapGamefileErr). The
-// translation is repeated here rather than skipped because a fake that
-// answered with gamefile's sentinels would be testing a service that does
-// not exist — and because *how* it translates is part of what these tests
-// check: the cause travels on inside the domain error, so the HTTP layer can
-// still recognise the http.MaxBytesError it created itself.
-func appendToRealStore(store *gamefile.Store, uploadID uuid.UUID, offset int64, r io.Reader) (int64, error) {
-	received, err := store.Append(uploadID.String(), offset, r)
-	switch {
-	case err == nil:
-		return received, nil
-	case errors.Is(err, gamefile.ErrChunkIncomplete):
-		return received, fmt.Errorf("%w: %w", provisioning.ErrUploadChunkIncomplete, err)
-	case errors.Is(err, gamefile.ErrChunkTooLarge):
-		return received, provisioning.ErrUploadChunkTooLarge
-	case errors.Is(err, gamefile.ErrChunkOutOfOrder):
-		return received, provisioning.ErrUploadChunkOutOfOrder
-	default:
-		return received, fmt.Errorf("gamefile: %w", err)
-	}
+// realUploadService is the *real* provisioning.Games over a real
+// gamefile.Store on a fresh directory, with one upload already begun — the
+// state a chunk arrives into.
+//
+// The two tests that stream a chunk into a real store used to get their
+// domain sentinels from a copy of provisioning's own wrapGamefileErr kept in
+// this file. A copy is a claim about production that production cannot
+// break: change the mapping there and these tests went on asserting the old
+// codes and passing. So the service itself does the translating now, and
+// chunkRepo below is the smallest thing that lets it run.
+// The store is handed back too, so a test can ask the volume what it kept.
+func realUploadService(t *testing.T, contestID, uploadID uuid.UUID, limits gamefile.Limits) (*provisioning.Games, *gamefile.Store) {
+	t.Helper()
+	store := beginOn(t, uploadID, limits)
+	repo := &chunkRepo{upload: provisioning.Upload{
+		ID: uploadID, ContestID: contestID, Status: provisioning.UploadReceiving, DeclaredBytes: 1 << 16,
+	}}
+	return provisioning.NewGames(repo, nil, nil).WithUploads(store, limits), store
 }
 
-// realUploadStore is a gamefile.Store on a fresh directory with one upload
-// already begun — the state a chunk arrives into.
-func realUploadStore(t *testing.T, uploadID uuid.UUID, limits gamefile.Limits) *gamefile.Store {
+// realTableDataService is realUploadService's own shape for a table's
+// chunked CSV, over the table builder's independent store.
+func realTableDataService(t *testing.T, contestID, dataID uuid.UUID, table string, limits gamefile.Limits) (*provisioning.Games, *gamefile.Store) {
+	t.Helper()
+	store := beginOn(t, dataID, limits)
+	repo := &chunkRepo{data: provisioning.TableData{
+		ID: dataID, ContestID: contestID, Table: table, Status: provisioning.TableDataReceiving, DeclaredBytes: 1 << 16,
+	}}
+	return provisioning.NewGames(repo, nil, nil).WithTableData(store, limits), store
+}
+
+// chunkRepo is provisioning.TemplateRepository cut down to the rows
+// AppendChunk and AppendTableChunk read, and the progress writes they make.
+// Every other method is left to the embedded nil interface and panics if it
+// is ever reached — deliberately: this exists so the real service can run
+// here, not so this file grows a second fake of storage.
+type chunkRepo struct {
+	provisioning.TemplateRepository
+	upload provisioning.Upload
+	data   provisioning.TableData
+}
+
+func (c *chunkRepo) Upload(context.Context, uuid.UUID) (provisioning.Upload, error) {
+	return c.upload, nil
+}
+
+func (c *chunkRepo) UpdateReceived(context.Context, uuid.UUID, int64) error { return nil }
+
+func (c *chunkRepo) TableDataByID(context.Context, uuid.UUID) (provisioning.TableData, error) {
+	return c.data, nil
+}
+
+func (c *chunkRepo) UpdateTableDataReceived(context.Context, uuid.UUID, int64) error { return nil }
+
+// beginOn is a gamefile.Store on a fresh directory with one file already
+// reserved for id.
+func beginOn(t *testing.T, id uuid.UUID, limits gamefile.Limits) *gamefile.Store {
 	t.Helper()
 	store, err := gamefile.NewStore(t.TempDir(), limits)
 	if err != nil {
 		t.Fatalf("open the upload store: %v", err)
 	}
-	if err := store.Begin(uploadID.String(), 1<<16); err != nil {
-		t.Fatalf("begin the upload: %v", err)
+	if err := store.Begin(id.String(), 1<<16); err != nil {
+		t.Fatalf("reserve the file: %v", err)
 	}
 	return store
 }
@@ -740,6 +756,38 @@ func TestGameStatusCarriesTheConfiguredUploadLimitsNotAConstant(t *testing.T) {
 	}
 	if limits["max_file_bytes"] != float64(9876543210) {
 		t.Fatalf("max_file_bytes = %v, want 9876543210", limits["max_file_bytes"])
+	}
+}
+
+// The script ceiling travels with the status too — CLAUDE.md rule 11, the
+// same reason the upload and builder ceilings do. The editor refuses a
+// script that is too long before it spends a request on it, and the number
+// it refuses by has to be the server's own: a copy in the client keeps
+// refusing by the old value the day this one changes, and neither side has
+// a test that notices.
+//
+// Both answers carry it, including the synthetic "absent" one — which is the
+// answer for every contest whose game has not been written yet, and so the
+// one the editor reads before its very first save.
+func TestGameStatusCarriesTheScriptCeilingForAGameAndForNoGame(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+
+	absent := decode(t, f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game", ""))
+	if absent["status"] != "absent" {
+		t.Fatalf("status = %v, want absent", absent["status"])
+	}
+	if absent["max_script_bytes"] != float64(provisioning.MaxScriptBytes) {
+		t.Fatalf("max_script_bytes on an absent game = %v, want %d",
+			absent["max_script_bytes"], provisioning.MaxScriptBytes)
+	}
+
+	f.games.template = provisioning.Template{
+		Status: provisioning.TemplateReady, Version: 1, Source: provisioning.SourceEditor,
+		Database: "game_tpl_cabc", Script: "SELECT 1",
+	}
+	present := decode(t, f.do(http.MethodGet, "/contests/"+uuid.NewString()+"/game", ""))
+	if present["max_script_bytes"] != float64(provisioning.MaxScriptBytes) {
+		t.Fatalf("max_script_bytes = %v, want %d", present["max_script_bytes"], provisioning.MaxScriptBytes)
 	}
 }
 
@@ -1250,14 +1298,14 @@ func TestAppendingAChunkWithoutANumericOffsetIsRefused(t *testing.T) {
 // which is why this one streams into a real gamefile.Store.
 func TestAppendingAChunkOverTheTransportCeilingIsRefused(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
-	upload := uuid.New()
-	f.games.store = realUploadStore(t, upload, gamefile.Limits{
-		MaxFileBytes: 1 << 20, MaxDirBytes: 1 << 20, MaxChunkBytes: 8,
-	})
+	contest, upload := uuid.New(), uuid.New()
+	limits := gamefile.Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 1 << 20, MaxChunkBytes: 8}
+	var store *gamefile.Store
+	f.games.uploads, store = realUploadService(t, contest, upload, limits)
 	f.handler.WithMaxChunkBody(8)
 
 	rec := f.do(http.MethodPut,
-		"/contests/"+uuid.NewString()+"/game/uploads/"+upload.String()+"/chunk?offset=0",
+		"/contests/"+contest.String()+"/game/uploads/"+upload.String()+"/chunk?offset=0",
 		"123456789") // 9 bytes, one past the 8-byte ceiling
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body)
@@ -1265,7 +1313,7 @@ func TestAppendingAChunkOverTheTransportCeilingIsRefused(t *testing.T) {
 	if code := errorCode(t, rec); code != "game_upload_chunk_too_large" {
 		t.Fatalf("code %q, want game_upload_chunk_too_large", code)
 	}
-	received, err := f.games.store.Received(upload.String())
+	received, err := store.Received(upload.String())
 	if err != nil {
 		t.Fatalf("Received: %v", err)
 	}
@@ -1637,20 +1685,30 @@ func TestDefinitionOfANonBuilderGameComesBackEmptyNotAnError(t *testing.T) {
 // CLAUDE.md rule 1: every provisioning.Definition.Validate sentinel gets its
 // own code, so an organiser is told which mistake they made rather than
 // "internal error".
+//
+// The exact status, not merely "some 4xx" — which is what this asserted
+// until it was noticed that the difference is the whole of one of these
+// cases. ErrDefinitionTableLocked is deliberately a 409 and not a 400, with
+// five lines in fail() saying why: the interface tells "the description is
+// wrong, fix the form" (400) from "the description conflicts with data you
+// already have, delete the rows first" (409), and a silent change that
+// merged the two would have left every table in this list green.
 func TestEveryDefinitionRefusalHasItsOwnCode(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		err  error
-		code string
+		name   string
+		err    error
+		status int
+		code   string
 	}{
-		{"no tables at all", provisioning.ErrDefinitionEmpty, "game_definition_empty"},
-		{"past the size limits", provisioning.ErrDefinitionTooLarge, "game_definition_too_large"},
-		{"not a plain identifier", provisioning.ErrDefinitionInvalidName, "game_definition_invalid_name"},
-		{"a table or column named twice", provisioning.ErrDefinitionDuplicateName, "game_definition_duplicate_name"},
-		{"a table with no columns", provisioning.ErrDefinitionTableEmpty, "game_definition_table_empty"},
-		{"a type outside the closed set", provisioning.ErrDefinitionInvalidType, "game_definition_invalid_type"},
-		{"a primary key naming a missing column", provisioning.ErrDefinitionInvalidPrimaryKey, "game_definition_invalid_primary_key"},
-		{"a table with data whose structure would change", provisioning.ErrDefinitionTableLocked, "game_definition_table_locked"},
+		{"no tables at all", provisioning.ErrDefinitionEmpty, http.StatusBadRequest, "game_definition_empty"},
+		{"past the size limits", provisioning.ErrDefinitionTooLarge, http.StatusBadRequest, "game_definition_too_large"},
+		{"not a plain identifier", provisioning.ErrDefinitionInvalidName, http.StatusBadRequest, "game_definition_invalid_name"},
+		{"a table or column named twice", provisioning.ErrDefinitionDuplicateName, http.StatusBadRequest, "game_definition_duplicate_name"},
+		{"a table with no columns", provisioning.ErrDefinitionTableEmpty, http.StatusBadRequest, "game_definition_table_empty"},
+		{"a type outside the closed set", provisioning.ErrDefinitionInvalidType, http.StatusBadRequest, "game_definition_invalid_type"},
+		{"a primary key naming a missing column", provisioning.ErrDefinitionInvalidPrimaryKey, http.StatusBadRequest, "game_definition_invalid_primary_key"},
+		// The one refusal here that is not "the form is wrong".
+		{"a table with data whose structure would change", provisioning.ErrDefinitionTableLocked, http.StatusConflict, "game_definition_table_locked"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newGameFixture(t, rbac.PermissionContestAdminAll)
@@ -1658,8 +1716,8 @@ func TestEveryDefinitionRefusalHasItsOwnCode(t *testing.T) {
 
 			rec := f.do(http.MethodPut, "/contests/"+uuid.NewString()+"/game/definition",
 				`{"tables":[{"name":"t","columns":[{"name":"c","type":"text"}]}]}`)
-			if rec.Code < 400 || rec.Code >= 500 {
-				t.Fatalf("status %d, want a 4xx: %s", rec.Code, rec.Body)
+			if rec.Code != tc.status {
+				t.Fatalf("status %d, want %d: %s", rec.Code, tc.status, rec.Body)
 			}
 			if code := errorCode(t, rec); code != tc.code {
 				t.Fatalf("code %q, want %q", code, tc.code)
@@ -1769,14 +1827,14 @@ func TestAppendingATableChunkStreamsTheBodyToTheService(t *testing.T) {
 // размера чанка" case for the table builder's own independent ceiling.
 func TestAppendingATableChunkOverTheTransportCeilingIsRefused(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
-	dataID := uuid.New()
-	f.games.tableStore = realTableStore(t, dataID, gamefile.Limits{
-		MaxFileBytes: 1 << 20, MaxDirBytes: 1 << 20, MaxChunkBytes: 8,
-	})
+	contest, dataID := uuid.New(), uuid.New()
+	limits := gamefile.Limits{MaxFileBytes: 1 << 20, MaxDirBytes: 1 << 20, MaxChunkBytes: 8}
+	var store *gamefile.Store
+	f.games.tableData, store = realTableDataService(t, contest, dataID, "suspects", limits)
 	f.handler.WithMaxTableChunkBody(8)
 
 	rec := f.do(http.MethodPut,
-		"/contests/"+uuid.NewString()+"/game/tables/suspects/data/"+dataID.String()+"/chunk?offset=0",
+		"/contests/"+contest.String()+"/game/tables/suspects/data/"+dataID.String()+"/chunk?offset=0",
 		"123456789") // 9 bytes, one past the 8-byte ceiling
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400: %s", rec.Code, rec.Body)
@@ -1784,7 +1842,7 @@ func TestAppendingATableChunkOverTheTransportCeilingIsRefused(t *testing.T) {
 	if code := errorCode(t, rec); code != "game_table_data_chunk_too_large" {
 		t.Fatalf("code %q, want game_table_data_chunk_too_large", code)
 	}
-	received, err := f.games.tableStore.Received(dataID.String())
+	received, err := store.Received(dataID.String())
 	if err != nil {
 		t.Fatalf("Received: %v", err)
 	}

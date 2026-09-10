@@ -1,6 +1,7 @@
 package provisioning_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -9,15 +10,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/gamefile"
+	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/google/uuid"
 )
 
-// These tests run against the fake templateStore and buildCluster (see
+// Most of these run against the fake templateStore and buildCluster (see
 // games() in template_test.go) and a real gamefile.Store on a temp
 // directory — no CORE_DB_DSN, exactly the brief's own "разбор и границы —
-// без базы". The assembly-with-real-data path that needs a real cluster is
+// без базы". The four rules PostgreSQL alone holds are the exception, and
+// they run against the real repository instead (tableDataGamesOnRepo, near
+// the end of this file). The assembly-with-real-data path that needs a real cluster is
 // TestAScriptSavedInTheCoreDatabase... in game_integration_test.go, the one
 // `make test-game-build` runs.
 
@@ -42,14 +47,70 @@ func suspectsTable() provisioning.TableDefinition {
 // uploadsGames' own shape, for WithTableData instead of WithUploads.
 func tableDataGames(t testing.TB, editable bool) (*provisioning.Games, *templateStore, *buildCluster, *gamefile.Store) {
 	t.Helper()
+	service, store, cluster, files, _ := tableDataGamesOnDisk(t, editable)
+	return service, store, cluster, files
+}
+
+// tableDataLimits are the ceilings the table builder's own store runs under
+// in these tests. Named rather than inline because the janitor's tests open a
+// second handle on the same directory (tableStoreOn) and two handles
+// disagreeing about MaxDirBytes would be a difference nothing here is about.
+var tableDataLimits = gamefile.Limits{MaxFileBytes: 8 << 20, MaxDirBytes: 32 << 20, MaxChunkBytes: 4 << 20}
+
+// tableDataGamesOnDisk is tableDataGames with the volume's own directory
+// handed back too — what the janitor's tests need and a *gamefile.Store
+// alone cannot give them: planting a file behind the service's back is
+// Store.Begin on a second handle, but ageing one is os.Chtimes on a path.
+func tableDataGamesOnDisk(t testing.TB, editable bool) (*provisioning.Games, *templateStore, *buildCluster, *gamefile.Store, string) {
+	t.Helper()
 	service, store, cluster := games(editable)
-	limits := gamefile.Limits{MaxFileBytes: 8 << 20, MaxDirBytes: 32 << 20, MaxChunkBytes: 4 << 20}
-	files, err := gamefile.NewStore(t.TempDir(), limits)
+	dir := t.TempDir()
+	files, err := gamefile.NewStore(dir, tableDataLimits)
 	if err != nil {
 		t.Fatalf("opening the table data store: %v", err)
 	}
-	service.WithTableData(files, limits)
-	return service, store, cluster, files
+	service.WithTableData(files, tableDataLimits)
+	return service, store, cluster, files, dir
+}
+
+// tableDataGamesOnRepo assembles a *provisioning.Games against the *real*
+// core database (this package's own standing pool) and a real
+// gamefile.Store — gamesWithUploads' own shape (upload_test.go), for the
+// table builder's volume instead of the dump's.
+//
+// The fake above is right for everything about parsing, bounds and file
+// mechanics, and wrong for four rules this feature has that PostgreSQL holds
+// and nothing else does: game_table_data_one_receiving_idx,
+// game_table_data_one_complete_idx, the GREATEST floors in
+// AppendTableDataRow, and migration 26's own source/definition pairing
+// CHECK. A fake can only reinvent those in Go — which is the check the index
+// exists to make unnecessary — so they are proved here, on the path a
+// deployment uses (CLAUDE.md rule 10), exactly as the dump's own
+// TestASecondUploadForTheSameContestIsRejectedByTheDatabaseNotByGoCode does.
+func tableDataGamesOnRepo(t *testing.T, editable bool) (*provisioning.Games, *gamefile.Store) {
+	t.Helper()
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
+	}
+	files, err := gamefile.NewStore(t.TempDir(), tableDataLimits)
+	if err != nil {
+		t.Fatalf("open the table data store: %v", err)
+	}
+	service := provisioning.NewGames(postgres.NewGameInstances(testPool), &buildCluster{}, authoring{editable: editable}).
+		WithTableData(files, tableDataLimits)
+	return service, files
+}
+
+// tableStoreOn opens a second handle on a table-data directory a
+// *provisioning.Games is already using — storeOn's own job (upload_test.go)
+// under this store's own ceilings rather than the dump store's.
+func tableStoreOn(t testing.TB, dir string) *gamefile.Store {
+	t.Helper()
+	store, err := gamefile.NewStore(dir, tableDataLimits)
+	if err != nil {
+		t.Fatalf("open a second handle on the table data directory: %v", err)
+	}
+	return store
 }
 
 // anyAge is a cut-off no file a test has just written can be younger than —
@@ -187,54 +248,6 @@ func TestCurrentTableDataIsDisabledWithoutATableDataVolume(t *testing.T) {
 	}
 }
 
-// TestCompleteTableUploadRefusesAMismatchedHeaderBeforeValidatingAnyRow is
-// the brief's own requirement for the full, end-of-upload pass: a header
-// that does not name the table's own columns is refused, and refused for
-// that reason alone — the row after it, itself invalid for an unrelated
-// reason (a non-numeric id), is never even reached.
-//
-// The content is written straight to the store rather than through
-// service.AppendTableChunk (beginTableUploadWithContent's own helper), the
-// same way TestCompleteTableUploadRefusesTheDeclaredLengthNotMatchingWhatArrived
-// does: AppendTableChunk now catches most mismatched headers itself, on the
-// very first chunk (TestAppendTableChunkRefusesAMismatchedHeaderOnTheFirstChunk
-// below) — this test is about the fallback for a file that reached the
-// store some other way, so it must not go through the same early check it
-// is not testing.
-func TestCompleteTableUploadRefusesAMismatchedHeaderBeforeValidatingAnyRow(t *testing.T) {
-	t.Parallel()
-	service, store, _, files := tableDataGames(t, true)
-	contest := uuid.New()
-	withSuspects(t, service, contest)
-
-	content := "id,name,extra\nnot-a-number,A,x\n" // wrong header AND a row that would also fail
-	data, err := service.BeginTableUpload(t.Context(), contest, "suspects", int64(len(content)))
-	if err != nil {
-		t.Fatalf("begin: %v", err)
-	}
-	if _, err := files.Append(data.ID.String(), 0, strings.NewReader(content)); err != nil {
-		t.Fatalf("append directly: %v", err)
-	}
-	// Written straight to the store rather than through AppendTableChunk, so
-	// the fake repository's own bookkeeping of how many bytes have arrived
-	// is brought up to date by hand — otherwise CompleteTableUpload would
-	// stop at its length check, never reaching the header check this test
-	// is actually about.
-	store.mu.Lock()
-	seeded := store.tableData[data.ID]
-	seeded.ReceivedBytes = int64(len(content))
-	store.tableData[data.ID] = seeded
-	store.mu.Unlock()
-
-	_, err = service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID)
-	if !errors.Is(err, provisioning.ErrTableHeaderMismatch) {
-		t.Fatalf("error = %v, want ErrTableHeaderMismatch", err)
-	}
-	if errors.Is(err, provisioning.ErrTableValueInvalid) {
-		t.Fatal("the row's own mistake was reported — the header should have stopped this first")
-	}
-}
-
 // TestAppendTableChunkRefusesAMismatchedHeaderOnTheFirstChunk is the brief's
 // own requirement read literally: "a header that does not match the
 // description's own columns is refused before the first byte of data is
@@ -325,48 +338,6 @@ func TestAppendTableChunkDoesNotRecheckAResentFirstChunk(t *testing.T) {
 
 	if _, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID); err != nil {
 		t.Fatalf("complete: %v", err)
-	}
-}
-
-// TestCompleteTableUploadNamesTheRowWhoseFieldCountDoesNotMatch is the
-// brief's other named requirement: a row with the wrong field count is
-// refused with its own row number, not silently skipped.
-func TestCompleteTableUploadNamesTheRowWhoseFieldCountDoesNotMatch(t *testing.T) {
-	t.Parallel()
-	service, _, _, _ := tableDataGames(t, true)
-	contest := uuid.New()
-	withSuspects(t, service, contest)
-
-	content := "id,name,nickname\n1,Margot,\n2,Duplicate\n" // row 2 has only 2 fields
-	data := beginTableUploadWithContent(t, service, contest, "suspects", content)
-
-	_, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID)
-	if !errors.Is(err, provisioning.ErrTableRowFieldCount) {
-		t.Fatalf("error = %v, want ErrTableRowFieldCount", err)
-	}
-	if !strings.Contains(err.Error(), "row 2") {
-		t.Fatalf("error = %q, does not name row 2", err)
-	}
-}
-
-// TestCompleteTableUploadNamesTheRowAndColumnOfAValueThatDoesNotParse checks
-// the second named refusal: a value that does not fit its column's type
-// names the row and the column, not just "invalid".
-func TestCompleteTableUploadNamesTheRowAndColumnOfAValueThatDoesNotParse(t *testing.T) {
-	t.Parallel()
-	service, _, _, _ := tableDataGames(t, true)
-	contest := uuid.New()
-	withSuspects(t, service, contest)
-
-	content := "id,name,nickname\n1,Margot,\nnot-a-number,Someone,\n"
-	data := beginTableUploadWithContent(t, service, contest, "suspects", content)
-
-	_, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID)
-	if !errors.Is(err, provisioning.ErrTableValueInvalid) {
-		t.Fatalf("error = %v, want ErrTableValueInvalid", err)
-	}
-	if !strings.Contains(err.Error(), "row 2") || !strings.Contains(err.Error(), `"id"`) {
-		t.Fatalf("error = %q, does not name row 2's id column", err)
 	}
 }
 
@@ -477,80 +448,6 @@ func TestAppendTableRowAfterAFileWhoseLastLineHasNoNewline(t *testing.T) {
 	}
 }
 
-// A row that does not match the table's own columns is refused before
-// anything is written — a value with the wrong number of fields, or one
-// that will not parse as its column's type, must not reach the file at all.
-func TestAppendTableRowRefusesAValueThatDoesNotMatchItsColumn(t *testing.T) {
-	t.Parallel()
-	service, _, _, files := tableDataGames(t, true)
-	contest := uuid.New()
-	withSuspects(t, service, contest)
-
-	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"not-a-number", "A", ""}); !errors.Is(err, provisioning.ErrTableValueInvalid) {
-		t.Fatalf("error = %v, want ErrTableValueInvalid", err)
-	}
-	ids, err := files.UploadIDs(anyAge())
-	if err != nil {
-		t.Fatalf("list the table data volume: %v", err)
-	}
-	if len(ids) != 0 {
-		t.Fatalf("a refused row still left %d file(s) on disk", len(ids))
-	}
-}
-
-// TestAppendTableRowValidatesNumericAsDecimalSyntaxNotAsAFloat is the other
-// defect this package's numeric column check had: a PostgreSQL numeric is an
-// exact decimal of arbitrary precision, and strconv.ParseFloat is not a
-// stand-in for it in either direction.
-//
-//   - "0x1p-2" is a hexadecimal float literal ParseFloat happily parses to
-//     0.25 — and numeric_in has never accepted one (checked against a live
-//     PostgreSQL 16 instance, this platform's own target). A value that
-//     clears this check and only fails inside PostgreSQL's own COPY,
-//     minutes into a build, is exactly the failure this whole pre-check
-//     exists to prevent.
-//   - "1e400" is a value numeric holds exactly, arbitrary precision being
-//     the type's entire point, but ParseFloat reports a range error for it
-//     because it does not fit a 64-bit float — refusing an organiser's
-//     perfectly good row for a limit that belongs to Go's float type, not
-//     to the column's own.
-//   - "NaN", numeric's own special value (and, since PostgreSQL 14,
-//     signed Infinity/Inf, also checked against that live instance), must
-//     keep working now that the check is decimal syntax rather than a
-//     float parse.
-func TestAppendTableRowValidatesNumericAsDecimalSyntaxNotAsAFloat(t *testing.T) {
-	t.Parallel()
-	service, _, _, _ := tableDataGames(t, true)
-	contest := uuid.New()
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, provisioning.Definition{
-		Tables: []provisioning.TableDefinition{{
-			Name: "prices",
-			Columns: []provisioning.ColumnDefinition{
-				{Name: "id", Type: provisioning.ColumnInteger},
-				{Name: "amount", Type: provisioning.ColumnNumeric},
-			},
-		}},
-	}); err != nil {
-		t.Fatalf("save the definition: %v", err)
-	}
-
-	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "prices", []string{"1", "0x1p-2"}); !errors.Is(err, provisioning.ErrTableValueInvalid) {
-		t.Fatalf("hex float literal: error = %v, want ErrTableValueInvalid", err)
-	}
-	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "prices", []string{"2", "1e400"}); err != nil {
-		t.Fatalf("a value numeric holds exactly was refused as if it had to fit a 64-bit float: %v", err)
-	}
-	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "prices", []string{"3", "NaN"}); err != nil {
-		t.Fatalf("NaN, numeric's own special value, was refused: %v", err)
-	}
-	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "prices", []string{"4", "-Infinity"}); err != nil {
-		t.Fatalf("-Infinity, numeric's own special value since PostgreSQL 14, was refused: %v", err)
-	}
-	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "prices", []string{"5", "1_000.5"}); err != nil {
-		t.Fatalf("an underscore digit separator, valid decimal syntax, was refused: %v", err)
-	}
-}
-
 // TestAppendTableRowWritesAnEmptyValueAsNullNotAsAnEmptyString is the other
 // half of the same promise AppendTableRow's own validation makes: an empty
 // value is checked as a NULL (it is refused outright in a NOT NULL column),
@@ -596,47 +493,15 @@ func TestAppendTableRowWritesAnEmptyValueAsNullNotAsAnEmptyString(t *testing.T) 
 	}
 }
 
-// TestAppendTableRowRefusesAFieldPastTheFieldBound is CLAUDE.md rule 2 on
-// the path a form takes: the request body limit bounds the whole request,
-// not one field of it, so without a check here a single value can be sixteen
-// times the max_field_bytes this service publishes to its own clients. Once
-// such a value is in the file, every window read of that table refuses with
-// ErrTableFieldTooLong for ever — the rows cannot be looked at, and the row
-// count the screen shows drops to zero.
-func TestAppendTableRowRefusesAFieldPastTheFieldBound(t *testing.T) {
-	t.Parallel()
-	service, _, _, files := tableDataGames(t, true)
-	contest := uuid.New()
-	withSuspects(t, service, contest)
-
-	tooLong := strings.Repeat("x", provisioning.MaxTableFieldBytes+1)
-	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects",
-		[]string{"1", tooLong, ""}); !errors.Is(err, provisioning.ErrTableFieldTooLong) {
-		t.Fatalf("error = %v, want ErrTableFieldTooLong", err)
-	}
-	ids, err := files.UploadIDs(anyAge())
-	if err != nil {
-		t.Fatalf("list the table data volume: %v", err)
-	}
-	if len(ids) != 0 {
-		t.Fatalf("a refused row still left %d file(s) on disk", len(ids))
-	}
-
-	// Exactly at the bound is still accepted: the refusal is one byte past
-	// it, not near it.
-	atBound := strings.Repeat("x", provisioning.MaxTableFieldBytes)
-	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", atBound, ""}); err != nil {
-		t.Fatalf("a field of exactly MaxTableFieldBytes was refused: %v", err)
-	}
-}
-
 // TestAppendTableRowRefusesPastMaxTableDataRows is the same bound on the
 // other path: MaxTableDataRows is what this service publishes as max_rows and
 // what validateTableFile enforces for an uploaded file, so the form must not
 // be the way past it. Only the bookkeeping is grown to the limit — writing
 // two hundred thousand rows to prove a check that never reads them would be
-// the test's own cost and nobody else's (TestDeleteTableRowRefusesPastMax
-// TableDeletedRows makes the same choice).
+// the test's own cost and nobody else's. Unlike MaxTableDeletedRows, this
+// bound really is one this package checks — the comparison is in
+// AppendTableRow — so seeding the count is staging an input, not standing in
+// for the check itself.
 func TestAppendTableRowRefusesPastMaxTableDataRows(t *testing.T) {
 	t.Parallel()
 	service, store, _, _ := tableDataGames(t, true)
@@ -855,6 +720,328 @@ func TestAGameThatStopsBeingBuilderSourcedDiscardsItsTablesData(t *testing.T) {
 	}
 }
 
+// AbortTableUpload's own path: the bytes go first, then the row, and a
+// second abort of the same upload is told the upload is no longer
+// 'receiving' rather than removing anything twice.
+func TestAbortTableUploadRemovesTheFileAndMarksTheRowAborted(t *testing.T) {
+	t.Parallel()
+	service, store, _, files := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	begun := beginTableUploadWithContent(t, service, contest, "suspects", "id,name,nickname\n1,A,\n")
+
+	aborted, err := service.AbortTableUpload(t.Context(), uuid.New(), contest, begun.ID)
+	if err != nil {
+		t.Fatalf("abort: %v", err)
+	}
+	if aborted.Status != provisioning.TableDataAborted {
+		t.Fatalf("status = %q, want aborted", aborted.Status)
+	}
+	if _, err := files.Received(begun.ID.String()); !errors.Is(err, gamefile.ErrNotFound) {
+		t.Fatalf("the aborted upload's file is still on disk: %v", err)
+	}
+	store.mu.Lock()
+	row := store.tableData[begun.ID]
+	store.mu.Unlock()
+	if row.Status != provisioning.TableDataAborted {
+		t.Fatalf("the stored row is %q, want aborted", row.Status)
+	}
+
+	if _, err := service.AbortTableUpload(t.Context(), uuid.New(), contest, begun.ID); !errors.Is(err, provisioning.ErrTableDataAlreadyComplete) {
+		t.Fatalf("second abort = %v, want ErrTableDataAlreadyComplete", err)
+	}
+	// A table freed by the abort takes a fresh upload: nothing is left
+	// 'receiving' behind migration 27's own partial index.
+	if _, err := service.BeginTableUpload(t.Context(), contest, "suspects", 32); err != nil {
+		t.Fatalf("begin after an abort: %v", err)
+	}
+}
+
+// The janitor's two sweeps on the table builder's own volume — the branch of
+// SweepUploads that WithTableData turns on. Every test of that janitor used
+// to assemble the service with WithUploads only, so this whole half of it
+// (sweepAbandonedTableData, sweepOrphanTableFiles, abortTableData) had never
+// once run: the leak SweepUploads' own doc calls the more dangerous of the
+// two — bytes on the volume no row names — was written for the table builder
+// and never executed.
+func TestSweepUploadsAbandonsAStaleTableUploadAndRemovesATableFileWithNoRow(t *testing.T) {
+	t.Parallel()
+	service, store, _, files, dir := tableDataGamesOnDisk(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	stale, err := service.BeginTableUpload(t.Context(), contest, "suspects", 1024)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	// Aged rather than waited for, the same convention the dump janitor's own
+	// test uses against the real column.
+	store.ageTableData(stale.ID, 48*time.Hour)
+
+	// A file with no row at all: Store.Begin on a second handle, bypassing
+	// Games entirely — what a crash between the reservation and the INSERT
+	// leaves behind.
+	orphanID := uuid.New()
+	if err := tableStoreOn(t, dir).Begin(orphanID.String(), 1<<16); err != nil {
+		t.Fatalf("reserve an orphan table file: %v", err)
+	}
+	age(t, dir, orphanID, time.Hour)
+
+	result, err := service.SweepUploads(t.Context(), 24*time.Hour)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Abandoned != 1 {
+		t.Fatalf("abandoned = %d, want 1", result.Abandoned)
+	}
+	if result.OrphanFiles != 1 {
+		t.Fatalf("orphan files = %d, want 1", result.OrphanFiles)
+	}
+	if _, err := files.Received(stale.ID.String()); !errors.Is(err, gamefile.ErrNotFound) {
+		t.Fatalf("the abandoned table upload's file is still on disk: %v", err)
+	}
+	if _, err := files.Received(orphanID.String()); !errors.Is(err, gamefile.ErrNotFound) {
+		t.Fatalf("the orphan table file — no row ever named it — is still on disk: %v", err)
+	}
+
+	store.mu.Lock()
+	swept := store.tableData[stale.ID]
+	store.mu.Unlock()
+	if swept.Status != provisioning.TableDataAborted {
+		t.Fatalf("the swept row is %q, want aborted", swept.Status)
+	}
+}
+
+// The other side of the same two cut-offs: an upload begun moments ago, and a
+// file reserved moments ago, are both entirely ordinary and must survive.
+// Without this, a sweep with no cut-off at all — or one reading a zero
+// timestamp — passes the test above.
+func TestSweepUploadsLeavesARecentTableUploadAndAYoungTableFileAlone(t *testing.T) {
+	t.Parallel()
+	service, _, _, files, dir := tableDataGamesOnDisk(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	fresh, err := service.BeginTableUpload(t.Context(), contest, "suspects", 1024)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	// Reserved this instant and never aged: the window BeginTableUpload opens
+	// between Store.Begin and its own INSERT, which orphanFileGrace exists to
+	// keep the sweep out of.
+	youngOrphan := uuid.New()
+	if err := tableStoreOn(t, dir).Begin(youngOrphan.String(), 1<<16); err != nil {
+		t.Fatalf("reserve a young orphan table file: %v", err)
+	}
+
+	result, err := service.SweepUploads(t.Context(), 24*time.Hour)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Abandoned != 0 {
+		t.Fatalf("abandoned = %d, want 0 for an upload begun moments ago", result.Abandoned)
+	}
+	if result.OrphanFiles != 0 {
+		t.Fatalf("orphan files = %d, want 0 for a file reserved moments ago", result.OrphanFiles)
+	}
+	if _, err := files.Received(fresh.ID.String()); err != nil {
+		t.Fatalf("a fresh table upload's file was removed by the sweep: %v", err)
+	}
+	if _, err := files.Received(youngOrphan.String()); err != nil {
+		t.Fatalf("a file younger than orphanFileGrace was removed by the sweep: %v", err)
+	}
+}
+
+// wrapTableFileErr translates internal/gamefile's own refusals into this
+// package's sentinels, and until this test not one of its branches had ever
+// run: every one of them would have reached a handler as "internal error"
+// (CLAUDE.md rule 1) and no test would have noticed. Reached through the
+// public methods rather than the function directly, which is the only way a
+// caller ever reaches it.
+func TestGamefileRefusalsReachTheCallerAsTableDataSentinels(t *testing.T) {
+	t.Parallel()
+	service, _, _, files, _ := tableDataGamesOnDisk(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	// ErrFileTooLarge: a declared length past the store's own ceiling.
+	if _, err := service.BeginTableUpload(t.Context(), contest, "suspects",
+		tableDataLimits.MaxFileBytes+1); !errors.Is(err, provisioning.ErrTableDataTooLarge) {
+		t.Fatalf("an oversized declaration = %v, want ErrTableDataTooLarge", err)
+	}
+
+	begun, err := service.BeginTableUpload(t.Context(), contest, "suspects", 64)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	// ErrChunkOutOfOrder: an offset that does not continue the file.
+	if _, err := service.AppendTableChunk(t.Context(), contest, begun.ID, 9,
+		strings.NewReader("id,name,nickname\n")); !errors.Is(err, provisioning.ErrTableDataChunkOutOfOrder) {
+		t.Fatalf("an out-of-order chunk = %v, want ErrTableDataChunkOutOfOrder", err)
+	}
+
+	// ErrLengthMismatch: completing with fewer bytes than were declared.
+	if _, err := service.AppendTableChunk(t.Context(), contest, begun.ID, 0,
+		strings.NewReader("id,name,nickname\n1,A,\n")); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if _, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest,
+		begun.ID); !errors.Is(err, provisioning.ErrTableDataLengthMismatch) {
+		t.Fatalf("completing short = %v, want ErrTableDataLengthMismatch", err)
+	}
+
+	// ErrNotFound: a row whose bytes the volume no longer has. The row is left
+	// in place so the bookkeeping's own "no such upload" cannot be what
+	// answers — only the file is taken away.
+	if _, err := service.AbortTableUpload(t.Context(), uuid.New(), contest, begun.ID); err != nil {
+		t.Fatalf("abort the short upload: %v", err)
+	}
+	missing := beginTableUploadWithContent(t, service, contest, "suspects", "id,name,nickname\n2,B,\n")
+	if err := files.Abort(missing.ID.String()); err != nil {
+		t.Fatalf("remove the file behind the row: %v", err)
+	}
+	if _, err := service.AppendTableChunk(t.Context(), contest, missing.ID, 0,
+		strings.NewReader("x")); !errors.Is(err, provisioning.ErrTableDataNotFound) {
+		t.Fatalf("appending to a file the volume lost = %v, want ErrTableDataNotFound", err)
+	}
+}
+
+// TableDataLimits reports the table store's own ceilings, never the dump
+// store's — the whole reason WithTableData takes a second, independent
+// gamefile.Store. internal/api publishes these to the editor (CLAUDE.md
+// rule 11), so an installation whose two volumes are configured differently
+// must not be told the wrong one.
+func TestTableDataLimitsReportsTheTableStoresOwnCeilings(t *testing.T) {
+	t.Parallel()
+	service, _, _, _ := tableDataGames(t, true)
+
+	limits, ok := service.TableDataLimits()
+	if !ok {
+		t.Fatal("TableDataLimits reported no table data volume on a service given one")
+	}
+	if limits != tableDataLimits {
+		t.Fatalf("limits = %+v, want %+v", limits, tableDataLimits)
+	}
+
+	bare, _, _ := games(true)
+	if _, ok := bare.TableDataLimits(); ok {
+		t.Fatal("a service never given WithTableData reported a table data volume")
+	}
+}
+
+// The audit trail for a table's own data, action by action.
+//
+// This is a published contract — every action code is in audit.Actions, and
+// the journal is append-only, so an entry that stops being written cannot be
+// recovered afterwards from anything. Five of the six recording sites this
+// feature added were asserted by nothing at all: an early return, a `g.audit
+// == nil` that stopped being false, a Record moved outside the unit of work
+// — none of them failed a test.
+//
+// One test rather than five, because what has to hold is the same thing five
+// times, and because a sixth site added later is a row added to this table.
+func TestEveryTableDataChangeIsRecordedInTheAuditTrail(t *testing.T) {
+	t.Parallel()
+	service, _, _, _ := tableDataGames(t, true)
+	trail := &sink{}
+	service = service.WithAudit(audit.New(trail), directly{})
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+	actor := uuid.New()
+
+	// One recording site each, in the order an organiser would reach them.
+	// The first row goes through bootstrapTableRow and the second through
+	// AppendTableRow's own append: two Record calls in two places, both
+	// writing ActionGameTableDataRowAdd.
+	if _, err := service.AppendTableRow(t.Context(), actor, contest, "suspects", []string{"1", "Margot", ""}); err != nil {
+		t.Fatalf("bootstrap row: %v", err)
+	}
+	if _, err := service.AppendTableRow(t.Context(), actor, contest, "suspects", []string{"2", "Sparrow", ""}); err != nil {
+		t.Fatalf("append row: %v", err)
+	}
+	if err := service.DeleteTableRow(t.Context(), actor, contest, "suspects", 2); err != nil {
+		t.Fatalf("delete row: %v", err)
+	}
+	abandoned, err := service.BeginTableUpload(t.Context(), contest, "suspects", 32)
+	if err != nil {
+		t.Fatalf("begin the upload to abort: %v", err)
+	}
+	if _, err := service.AbortTableUpload(t.Context(), actor, contest, abandoned.ID); err != nil {
+		t.Fatalf("abort: %v", err)
+	}
+	replacing := beginTableUploadWithContent(t, service, contest, "suspects", "id,name,nickname\n9,Uploaded,\n")
+	if _, err := service.CompleteTableUpload(t.Context(), actor, contest, replacing.ID); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	want := []struct {
+		action  string
+		payload map[string]any
+	}{
+		{audit.ActionGameTableDataRowAdd, map[string]any{"table": "suspects", "row": int64(1)}},
+		{audit.ActionGameTableDataRowAdd, map[string]any{"table": "suspects", "row": int64(2)}},
+		{audit.ActionGameTableDataRowDelete, map[string]any{"table": "suspects", "row": int64(2)}},
+		{audit.ActionGameTableDataUploadAbort, map[string]any{"table": "suspects", "bytes": int64(0)}},
+		{audit.ActionGameTableDataUpload, map[string]any{"table": "suspects", "rows": int64(1), "bytes": int64(29)}},
+	}
+	// SetDefinition's own entry (contest.game_definition_set, asserted in
+	// template_test.go) is the first thing withSuspects above wrote, and is
+	// skipped here rather than restated.
+	entries := trail.entries[1:]
+	if len(entries) != len(want) {
+		t.Fatalf("the trail holds %d table-data entr(ies), want %d: %+v", len(entries), len(want), entries)
+	}
+	for i, w := range want {
+		got := entries[i]
+		if got.Action != w.action {
+			t.Fatalf("entry %d is %q, want %q", i, got.Action, w.action)
+		}
+		if got.Entity != "contest" || got.EntityID != contest.String() {
+			t.Fatalf("entry %d points at %s/%s, want contest/%s", i, got.Entity, got.EntityID, contest)
+		}
+		if got.ActorID == nil || *got.ActorID != actor {
+			t.Fatalf("entry %d names actor %v, want %s", i, got.ActorID, actor)
+		}
+		for key, value := range w.payload {
+			if got.Payload[key] != value {
+				t.Fatalf("entry %d (%s) payload[%q] = %v (%T), want %v", i, got.Action, key, got.Payload[key], got.Payload[key], value)
+			}
+		}
+	}
+}
+
+// The janitor's own abort is a system event: the entry is written with no
+// actor, the same convention the dump janitor keeps — an operator reading
+// "who cancelled this upload" must not be shown somebody who did not.
+func TestTheJanitorsOwnTableUploadAbortIsRecordedWithNoActor(t *testing.T) {
+	t.Parallel()
+	service, store, _, _ := tableDataGames(t, true)
+	trail := &sink{}
+	service = service.WithAudit(audit.New(trail), directly{})
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	stale, err := service.BeginTableUpload(t.Context(), contest, "suspects", 1024)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	store.ageTableData(stale.ID, 48*time.Hour)
+
+	if _, err := service.SweepUploads(t.Context(), 24*time.Hour); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	last := trail.entries[len(trail.entries)-1]
+	if last.Action != audit.ActionGameTableDataUploadAbort {
+		t.Fatalf("the sweep recorded %q, want %q", last.Action, audit.ActionGameTableDataUploadAbort)
+	}
+	if last.ActorID != nil {
+		t.Fatalf("the janitor's own abort names actor %s; it must name nobody", last.ActorID)
+	}
+}
+
 // TestDeleteTableRowTombstonesWithoutTouchingTheFile is the brief's own
 // requirement for delete: the row disappears from a window read, but the
 // bytes on disk are untouched — no rewrite, whatever the file's size.
@@ -904,70 +1091,39 @@ func TestDeleteTableRowTombstonesWithoutTouchingTheFile(t *testing.T) {
 	}
 }
 
-// TestDeleteTableRowRefusesPastMaxTableDeletedRows is the boundary test the
-// brief asks for on the bound this package invents (MaxTableDeletedRows).
-// The file itself is never grown to that size — DeleteTableRow's own cost is
-// independent of the file, which is the point being tested — only the
-// bookkeeping the fake repository holds is, directly, the same way a real
-// database's row would be past migration 27's own CHECK.
-func TestDeleteTableRowRefusesPastMaxTableDeletedRows(t *testing.T) {
+// MaxTableDeletedRows is not a bound this package checks: DeleteTableRow
+// holds no comparison against it at all. The bound is migration 27's own
+// CHECK on deleted_rows, and turning a constraint violation into
+// ErrTooManyDeletedRows is postgres.GameInstances.DeleteTableDataRow's job —
+// which is where it is proved, against a real database
+// (TestDeleteTableDataRowTombstonesAndRefusesADuplicateOrAnOverflow).
+//
+// What this level can honestly claim is the half the service does own: the
+// database's refusal reaches the caller as itself. DeleteTableRow wraps the
+// call in an audit entry and a unit of work, and both are places a sentinel
+// can be swallowed or rewritten into a bare 500 — so the fake is told to
+// answer exactly what the repository answers, and the assertion is that
+// nothing on the way out changed it.
+//
+// Deliberately not a fake reimplementing the CHECK in Go: a bound the test's
+// own stand-in invents is a test of the stand-in. Remove the CHECK from the
+// migration, or break the SQLSTATE mapping, and that version stayed green.
+func TestDeleteTableRowSurfacesTheDatabasesOwnRefusalPastMaxTableDeletedRows(t *testing.T) {
 	t.Parallel()
 	service, store, _, _ := tableDataGames(t, true)
 	contest := uuid.New()
 	withSuspects(t, service, contest)
 
-	data, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", "A", ""})
-	if err != nil {
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", "A", ""}); err != nil {
 		t.Fatalf("row 1: %v", err)
 	}
 
-	already := make([]int64, provisioning.MaxTableDeletedRows)
-	for i := range already {
-		already[i] = int64(i + 100) // none of these collide with row 1 or row 2 below
-	}
 	store.mu.Lock()
-	seeded := store.tableData[data.ID]
-	seeded.Lines = int64(provisioning.MaxTableDeletedRows) + 100
-	seeded.DeletedRows = already
-	store.tableData[data.ID] = seeded
+	store.deleteRowErr = provisioning.ErrTooManyDeletedRows
 	store.mu.Unlock()
 
-	if err := service.DeleteTableRow(t.Context(), uuid.New(), contest, "suspects", 2); !errors.Is(err, provisioning.ErrTooManyDeletedRows) {
+	if err := service.DeleteTableRow(t.Context(), uuid.New(), contest, "suspects", 1); !errors.Is(err, provisioning.ErrTooManyDeletedRows) {
 		t.Fatalf("error = %v, want ErrTooManyDeletedRows", err)
-	}
-}
-
-// TestCompleteTableUploadRefusesOneRowPastMaxTableDataRows is the boundary
-// test for the row-count bound: MaxTableDataRows rows complete, one more is
-// refused. A one-column table keeps the file small enough that both halves
-// of this test run in well under a second.
-func TestCompleteTableUploadRefusesOneRowPastMaxTableDataRows(t *testing.T) {
-	t.Parallel()
-	service, _, _, _ := tableDataGames(t, true)
-	contest := uuid.New()
-	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, provisioning.Definition{
-		Tables: []provisioning.TableDefinition{{
-			Name:    "codes",
-			Columns: []provisioning.ColumnDefinition{{Name: "id", Type: provisioning.ColumnInteger}},
-		}},
-	}); err != nil {
-		t.Fatalf("save the definition: %v", err)
-	}
-
-	var atLimit strings.Builder
-	atLimit.WriteString("id\n")
-	for i := 0; i < provisioning.MaxTableDataRows; i++ {
-		atLimit.WriteString("1\n")
-	}
-	data := beginTableUploadWithContent(t, service, contest, "codes", atLimit.String())
-	if _, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID); err != nil {
-		t.Fatalf("exactly MaxTableDataRows rows was refused: %v", err)
-	}
-
-	overLimit := atLimit.String() + "1\n"
-	data2 := beginTableUploadWithContent(t, service, contest, "codes", overLimit)
-	if _, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, data2.ID); !errors.Is(err, provisioning.ErrTableTooManyRows) {
-		t.Fatalf("error = %v, want ErrTableTooManyRows", err)
 	}
 }
 
@@ -1089,6 +1245,343 @@ func TestTableDataWindowReturnsATruncatedRowRatherThanNoneAtAll(t *testing.T) {
 	}
 	if window.Rows[0].Row != 1 || window.Rows[0].Fields[1] != longName {
 		t.Fatalf("row = %+v, want row 1 with its name kept whole, not cut to the byte budget", window.Rows[0])
+	}
+}
+
+// The rules PostgreSQL holds, on the service path a deployment uses.
+//
+// Everything above this line runs against the fake repository, which
+// reinvents each of these in Go — a map scan under a mutex where the schema
+// has a unique partial index, a `max` where the statement has GREATEST. That
+// is precisely the check-then-write the index exists to make unnecessary, so
+// those tests say nothing at all about the real schema: drop either index
+// and every one of them stays green. These four do not (CLAUDE.md rule 10).
+
+// The guarantee migration 27's own game_table_data_one_receiving_idx exists
+// for, at the service level rather than the repository's —
+// TestASecondUploadForTheSameContestIsRejectedByTheDatabaseNotByGoCode's own
+// doc, at the finer grain of one table.
+func TestASecondUploadForTheSameTableIsRejectedByTheDatabaseNotByGoCode(t *testing.T) {
+	service, files := tableDataGamesOnRepo(t, true)
+	contest, _ := contestFor(t, t.Context(), 0)
+	withTwoTables(t, service, contest.ID)
+
+	first, err := service.BeginTableUpload(t.Context(), contest.ID, "suspects", 1024)
+	if err != nil {
+		t.Fatalf("first begin: %v", err)
+	}
+	if _, err := service.BeginTableUpload(t.Context(), contest.ID, "suspects", 1024); !errors.Is(err, provisioning.ErrTableDataInProgress) {
+		t.Fatalf("a second upload for the same table = %v, want ErrTableDataInProgress", err)
+	}
+	if _, err := files.Received(first.ID.String()); err != nil {
+		t.Fatalf("the first, still-receiving upload's file disappeared: %v", err)
+	}
+
+	// The index is per (contest, table), not per contest: a second table of
+	// the same definition may be uploaded at the same time.
+	if _, err := service.BeginTableUpload(t.Context(), contest.ID, "sightings", 1024); err != nil {
+		t.Fatalf("a second table's own upload was refused: %v", err)
+	}
+}
+
+// Completing a second upload for a table retires the first in the one
+// statement, and the bytes of the displaced file are freed rather than
+// stranded on the volume.
+//
+// Deliberately not claimed as a test of game_table_data_one_complete_idx:
+// this path never reaches the index, because tableDataToDisplace has already
+// named the row to retire and CompleteTableData retires it in the same
+// statement. Dropping the index leaves this test green, which is how it was
+// found out — the race the index is actually for is the one below.
+func TestCompletingASecondUploadForATableRetiresTheFirstAndFreesItsBytes(t *testing.T) {
+	service, files := tableDataGamesOnRepo(t, true)
+	contest, _ := contestFor(t, t.Context(), 0)
+	withTwoTables(t, service, contest.ID)
+
+	const firstCSV = "id,name,nickname\n1,Margot,\n"
+	first := beginTableUploadWithContent(t, service, contest.ID, "suspects", firstCSV)
+	if _, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest.ID, first.ID); err != nil {
+		t.Fatalf("complete the first: %v", err)
+	}
+
+	const secondCSV = "id,name,nickname\n2,Sparrow,Bird\n3,Someone,\n"
+	second := beginTableUploadWithContent(t, service, contest.ID, "suspects", secondCSV)
+	completed, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest.ID, second.ID)
+	if err != nil {
+		t.Fatalf("complete the second: %v", err)
+	}
+	if completed.Lines != 2 {
+		t.Fatalf("the current file holds %d row(s), want 2 (the second upload's)", completed.Lines)
+	}
+
+	// The displaced file is gone from the volume, not merely unreferenced:
+	// this is the leak SweepUploads' own doc calls the more dangerous half,
+	// closed at the moment it is created rather than a tick later.
+	if _, err := files.Received(first.ID.String()); !errors.Is(err, gamefile.ErrNotFound) {
+		t.Fatalf("the displaced upload's file is still on the volume: %v", err)
+	}
+	window, err := service.TableDataWindow(t.Context(), contest.ID, "suspects", 1, 10, 1<<20)
+	if err != nil {
+		t.Fatalf("window: %v", err)
+	}
+	if len(window.Rows) != 2 || window.Rows[0].Fields[1] != "Sparrow" {
+		t.Fatalf("the table reads back as %+v, want the second upload's two rows", window.Rows)
+	}
+}
+
+// game_table_data_one_complete_idx, on the one path that really reaches it:
+// two forms adding the very first row of the same table at the same moment.
+// Neither has an upload to displace — bootstrapTableRow inserts a 'complete'
+// row outright — so the only thing that can stop the table ending up with
+// two current files, two sets of bytes and a build loading whichever the
+// query happened to pick, is the index.
+//
+// The two are made to read "no data yet" together rather than left to the
+// scheduler: heldReady releases its callers only once both have arrived,
+// which is exactly the snapshot two browser tabs share.
+func TestTwoFormsBootstrappingTheSameTableAtOnceLeaveOneCurrentFileNotTwo(t *testing.T) {
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
+	}
+	dir := t.TempDir()
+	files, err := gamefile.NewStore(dir, tableDataLimits)
+	if err != nil {
+		t.Fatalf("open the table data store: %v", err)
+	}
+	repo := &heldReady{
+		TemplateRepository: postgres.NewGameInstances(testPool),
+		gate:               &arrivalGate{remaining: 2, open: make(chan struct{})},
+	}
+	service := provisioning.NewGames(repo, &buildCluster{}, authoring{editable: true}).
+		WithTableData(files, tableDataLimits)
+
+	contest, _ := contestFor(t, t.Context(), 0)
+	withTwoTables(t, service, contest.ID)
+
+	results := make(chan error, 2)
+	for i, name := range []string{"Margot", "Sparrow"} {
+		go func() {
+			_, err := service.AppendTableRow(context.Background(), uuid.New(), contest.ID, "suspects",
+				[]string{strconv.Itoa(i + 1), name, ""})
+			results <- err
+		}()
+	}
+
+	var won, refused int
+	for range 2 {
+		switch err := <-results; {
+		case err == nil:
+			won++
+		case errors.Is(err, provisioning.ErrTableDataInProgress):
+			refused++
+		default:
+			t.Fatalf("bootstrapping the first row = %v, want nil or ErrTableDataInProgress", err)
+		}
+	}
+	if won != 1 || refused != 1 {
+		t.Fatalf("%d caller(s) bootstrapped the table and %d were refused, want 1 and 1", won, refused)
+	}
+
+	// One current file, and one file on the volume: the refused caller's own
+	// bytes were written before its row was refused, and bootstrapTableRow
+	// gives them back rather than leaving them for the janitor.
+	window, err := service.TableDataWindow(t.Context(), contest.ID, "suspects", 1, 10, 1<<20)
+	if err != nil {
+		t.Fatalf("window: %v", err)
+	}
+	if len(window.Rows) != 1 {
+		t.Fatalf("the table holds %d row(s), want 1: %+v", len(window.Rows), window.Rows)
+	}
+	ids, err := tableStoreOn(t, dir).UploadIDs(anyAge())
+	if err != nil {
+		t.Fatalf("list the volume: %v", err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("the volume holds %d file(s), want 1", len(ids))
+	}
+}
+
+// heldReady is the real repository with ReadyTableData gated: every caller
+// takes its answer and then waits until as many of them have arrived as the
+// gate was armed for. Everything else is the real statement, so what the
+// test above proves is the schema's own behaviour, not a stand-in's.
+type heldReady struct {
+	provisioning.TemplateRepository
+	gate *arrivalGate
+}
+
+func (h *heldReady) ReadyTableData(ctx context.Context, contestID uuid.UUID, table string) (provisioning.TableData, error) {
+	data, err := h.TemplateRepository.ReadyTableData(ctx, contestID, table)
+	h.gate.arrive()
+	return data, err
+}
+
+// The GREATEST floors of postgres.GameInstances.AppendTableDataRow, reached
+// the way production reaches them: two forms adding a row to the same table,
+// recording their counts in the opposite order to the one they wrote in.
+//
+// AppendTableRow's own doc is explicit that this is what the floors are for —
+// "the two callers reaching storage in the opposite order to the one they
+// read in cannot leave the bookkeeping describing the shorter file" — and
+// until this ran on the real statement, nothing said so anywhere but in a
+// fake's own `max`. A plain assignment leaves the row counting three rows as
+// two, and every later append then writes at an offset the file already has,
+// which gamefile.Store.Append reports as a retry: the table takes no more
+// rows, for ever.
+//
+// The inversion is staged rather than raced: heldAppend holds the first
+// caller between writing its bytes and recording them, which is a window the
+// scheduler would otherwise open only now and then.
+func TestTwoFormsRecordingOutOfOrderCannotMakeTheBookkeepingDescribeAShorterFile(t *testing.T) {
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
+	}
+	files, err := gamefile.NewStore(t.TempDir(), tableDataLimits)
+	if err != nil {
+		t.Fatalf("open the table data store: %v", err)
+	}
+	held := &heldAppend{
+		TemplateRepository: postgres.NewGameInstances(testPool),
+		arrived:            make(chan struct{}),
+		release:            make(chan struct{}),
+	}
+	service := provisioning.NewGames(held, &buildCluster{}, authoring{editable: true}).
+		WithTableData(files, tableDataLimits)
+
+	contest, _ := contestFor(t, t.Context(), 0)
+	withTwoTables(t, service, contest.ID)
+
+	// Row 1 bootstraps the file (CreateReadyTableData, not the statement
+	// under test), so the two rows below are the first two appends.
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest.ID, "suspects", []string{"1", "Margot", ""}); err != nil {
+		t.Fatalf("row 1: %v", err)
+	}
+
+	slow := make(chan error, 1)
+	go func() {
+		_, err := service.AppendTableRow(context.Background(), uuid.New(), contest.ID, "suspects", []string{"2", "Sparrow", ""})
+		slow <- err
+	}()
+	<-held.arrived // row 2's bytes are on disk; its count is not recorded yet
+
+	// Row 3 reads the file rather than the stale bookkeeping (tableFileState),
+	// so it appends after row 2 and records three rows.
+	third, err := service.AppendTableRow(t.Context(), uuid.New(), contest.ID, "suspects", []string{"3", "Someone", ""})
+	if err != nil {
+		t.Fatalf("row 3: %v", err)
+	}
+	if third.Lines != 3 {
+		t.Fatalf("row 3 recorded %d line(s), want 3", third.Lines)
+	}
+
+	close(held.release) // row 2 now records its own, smaller pair
+	if err := <-slow; err != nil {
+		t.Fatalf("row 2: %v", err)
+	}
+
+	current, err := postgres.NewGameInstances(testPool).ReadyTableData(t.Context(), contest.ID, "suspects")
+	if err != nil {
+		t.Fatalf("read the table's current data: %v", err)
+	}
+	onVolume, err := files.Received(current.ID.String())
+	if err != nil {
+		t.Fatalf("stat the file: %v", err)
+	}
+	if current.Lines != 3 || current.ReceivedBytes != onVolume {
+		t.Fatalf("the bookkeeping says %d row(s) / %d bytes, the file holds 3 rows / %d bytes",
+			current.Lines, current.ReceivedBytes, onVolume)
+	}
+
+	// And the table still takes rows: a bookkeeping that went backwards would
+	// send this append to an offset the file already covers, which
+	// gamefile.Store.Append answers as a retry — no row, no error, for ever.
+	fourth, err := service.AppendTableRow(t.Context(), uuid.New(), contest.ID, "suspects", []string{"4", "Later", ""})
+	if err != nil {
+		t.Fatalf("row 4: %v", err)
+	}
+	if fourth.Lines != 4 {
+		t.Fatalf("row 4 recorded %d line(s), want 4 — the table was wedged", fourth.Lines)
+	}
+}
+
+// heldAppend is the real repository with one call held open: the first
+// AppendTableDataRow waits on release, having announced itself on arrived.
+// Everything else — every statement, every constraint — is the real one, so
+// what the test below proves is the SQL's own behaviour and not a stand-in's.
+type heldAppend struct {
+	provisioning.TemplateRepository
+	once    sync.Once
+	arrived chan struct{}
+	release chan struct{}
+}
+
+func (h *heldAppend) AppendTableDataRow(ctx context.Context, id uuid.UUID, receivedBytes, lines int64) (provisioning.TableData, error) {
+	first := false
+	h.once.Do(func() { first = true })
+	if first {
+		close(h.arrived)
+		<-h.release
+	}
+	return h.TemplateRepository.AppendTableDataRow(ctx, id, receivedBytes, lines)
+}
+
+// Migration 26's own source/definition pairing CHECK, on the service path:
+// a row may be 'builder' with a definition or 'editor'/'file' without one,
+// and never a leftover of the source it was replaced from. Nothing in Go
+// enforces that — SaveDefinition and SaveScript each clear the column the
+// other uses, and the constraint is what notices when one of them stops.
+func TestSwitchingASourceClearsWhatTheOtherOneLeftBehind(t *testing.T) {
+	service, _ := tableDataGamesOnRepo(t, true)
+	contest, _ := contestFor(t, t.Context(), 0)
+	withTwoTables(t, service, contest.ID)
+
+	stored, err := postgres.NewGameInstances(testPool).Template(t.Context(), contest.ID)
+	if err != nil {
+		t.Fatalf("read the builder game back: %v", err)
+	}
+	if len(stored.Definition.Tables) != 2 {
+		t.Fatalf("the builder game stored %d table(s), want 2", len(stored.Definition.Tables))
+	}
+
+	// An editor script over a builder game: the definition has to go, or the
+	// CHECK refuses the upsert outright.
+	if _, err := service.SetScript(t.Context(), uuid.New(), contest.ID, "CREATE TABLE t (id integer);"); err != nil {
+		t.Fatalf("switch to an editor script: %v", err)
+	}
+	stored, err = postgres.NewGameInstances(testPool).Template(t.Context(), contest.ID)
+	if err != nil {
+		t.Fatalf("read the editor game back: %v", err)
+	}
+	if len(stored.Definition.Tables) != 0 {
+		t.Fatalf("the editor game still carries a definition: %+v", stored.Definition)
+	}
+
+	// And back again: the definition returns, and the table the organiser had
+	// uploaded data for is theirs to fill again.
+	withTwoTables(t, service, contest.ID)
+	if _, err := service.BeginTableUpload(t.Context(), contest.ID, "suspects", 32); err != nil {
+		t.Fatalf("upload into the restored definition: %v", err)
+	}
+}
+
+// withTwoTables saves the definition the real-repository tests above work
+// against: suspects, plus a second table so a per-(contest, table) index can
+// be told from a per-contest one.
+func withTwoTables(t *testing.T, service *provisioning.Games, contest uuid.UUID) {
+	t.Helper()
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, provisioning.Definition{
+		Tables: []provisioning.TableDefinition{
+			suspectsTable(),
+			{
+				Name: "sightings",
+				Columns: []provisioning.ColumnDefinition{
+					{Name: "suspect_id", Type: provisioning.ColumnInteger},
+					{Name: "seen_at", Type: provisioning.ColumnTimestamp},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("save the definition: %v", err)
 	}
 }
 

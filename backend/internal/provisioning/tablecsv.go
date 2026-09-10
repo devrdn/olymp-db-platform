@@ -542,7 +542,11 @@ func validateScalar(text string, t ColumnType) error {
 // Verified against a live PostgreSQL 16 instance rather than assumed:
 // '1_000'::numeric is 1000, but '1__000', '_1000' and '1000_' are all
 // refused, because an underscore must sit strictly between two digits — never
-// lead, trail, or double. That is exactly what the second case below encodes:
+// lead, trail, or double. Verified again on every run rather than once by
+// hand: TestAScriptSavedInTheCoreDatabaseAgreesWithPostgreSQLAboutEveryValueForm
+// (game_integration_test.go) casts each of those four forms on the game
+// cluster and fails if this file and the database have stopped agreeing.
+// That is exactly what the second case below encodes:
 // an underscore is consumed only together with the digit that must follow it,
 // and only once a digit has already been seen.
 //
@@ -582,7 +586,13 @@ func scanNumericDigits(s string, at *int) int {
 // type's own special values. This was verified against a live PostgreSQL 16
 // instance (this platform's own target, deploy/docker-compose.yml) rather
 // than assumed from the type's older behaviour: 'NaN', 'Infinity', 'Inf',
-// '-Infinity' and '+Inf' all cast to numeric on it.
+// '-Infinity' and '+Inf' all cast to numeric on it — and go on doing so,
+// because that check now runs by itself
+// (TestAScriptSavedInTheCoreDatabaseAgreesWithPostgreSQLAboutEveryValueForm,
+// game_integration_test.go). Every form this function accepts is cast on the
+// real cluster there, so a value waved through here that COPY would refuse —
+// the failed build this whole pre-check exists to prevent — fails a test
+// instead of a contest.
 //
 // Written out rather than expressed as a regular expression, which is what it
 // used to be. This is the hottest routine of the upload's own validation pass:

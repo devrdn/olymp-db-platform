@@ -43,6 +43,16 @@ const uploadId = "22222222-2222-2222-2222-222222222222";
 const t = en.workspace.game;
 const tu = t.upload;
 
+/**
+ * A build failure as `internal/gamedb` writes it — `scriptErrorLinePrefix`
+ * plus PostgreSQL's own words. Named rather than inlined so there is one
+ * place to change if the Go side ever does, and so a reader can see that the
+ * prefix, not the message, is what this panel parses.
+ */
+function buildFailureAtLine(line: number): string {
+  return `line ${line}: the game script was refused: syntax error at or near "FRO" (SQLSTATE 42601)`;
+}
+
 const limits: UploadLimits = { enabled: true, chunkBytes: 5, maxFileBytes: 4 * 1024 * 1024 * 1024 };
 
 function upload(overrides: Partial<Upload> = {}): Upload {
@@ -73,6 +83,7 @@ function game(overrides: Partial<Game> = {}): Game {
     upload: undefined,
     buildError: "",
     scriptBytes: 0,
+    maxScriptBytes: 512 * 1024,
     building: false,
     updatedAt: "",
     uploadLimits: limits,
@@ -252,11 +263,20 @@ describe("the game upload panel", () => {
 
   // The line the build failure names is exactly what a person opening this
   // panel wants to jump to — it is only offered once there is one to jump to.
+  //
+  // `buildFailureAtLine` below is the format `internal/gamedb` writes, in
+  // one place (`scriptErrorLinePrefix`), for both ways a script can be
+  // refused. It is a wire format shared across two languages with no
+  // generator between them, so it is pinned on both sides: here, and by
+  // `TestBothScriptFailuresNameTheLineInTheShapeTheConsoleParses`, which
+  // runs this component's own regular expression over what Go produces.
+  // Changing the prefix on either side fails that Go test, which names this
+  // file.
   test("offers to jump to the failing line once the upload's own build has failed", async () => {
     beginGameUploadAction.mockResolvedValueOnce({ value: upload({ receivedBytes: 0, declaredBytes: 5 }) });
     request.mockResolvedValueOnce({ received_bytes: 5 });
     completeGameUploadAction.mockResolvedValueOnce({
-      value: game({ status: "failed", version: 2, buildError: 'line 3: syntax error at or near "FRO"' }),
+      value: game({ status: "failed", version: 2, buildError: buildFailureAtLine(3) }),
     });
     gameUploadWindowAction
       .mockResolvedValueOnce({
@@ -393,7 +413,7 @@ describe("the game upload panel", () => {
         status: "failed",
         version: 3,
         source: "file",
-        buildError: 'line 3: syntax error at or near "FRO"',
+        buildError: buildFailureAtLine(3),
         upload: { id: uploadId, filename: "dump.sql", bytes: 4096, lines: 7 },
       }),
     });

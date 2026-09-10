@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -915,4 +916,47 @@ func insertDumpBytes(size, rowsPerStatement int) string {
 		b.WriteString(";\n")
 	}
 	return b.String()
+}
+
+// Both ways a script can be refused name the line in one shape, and it is
+// the shape the upload console parses.
+//
+// `frontend/app/(admin)/contests/[contestId]/game/game-upload.tsx` runs
+// `/^line (\d+):/i` over build_error to offer "jump to line" over the file
+// an organiser has just uploaded. That regular expression is repeated here
+// verbatim (Go's own syntax for it) because a format written on one side and
+// parsed on the other has nothing holding the two together otherwise: change
+// the prefix and the console simply stops offering the jump, with no error
+// on either side and no test failing anywhere.
+//
+// The two error types live in two files and used to write the literal each;
+// scriptErrorLinePrefix is now the single place, and this is what says so.
+func TestBothScriptFailuresNameTheLineInTheShapeTheConsoleParses(t *testing.T) {
+	// Exactly the console's own regular expression.
+	console := regexp.MustCompile(`(?i)^line (\d+):`)
+
+	for name, err := range map[string]error{
+		"the reader's own refusal": &gamedb.ScriptSyntaxError{Line: 42, Message: "a psql meta-command"},
+		"PostgreSQL's refusal": &gamedb.ScriptError{
+			Line: 42, Message: `syntax error at or near "SELCT"`, SQLState: "42601",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			found := console.FindStringSubmatch(err.Error())
+			if found == nil {
+				t.Fatalf("the console cannot find a line number in %q", err.Error())
+			}
+			if found[1] != "42" {
+				t.Fatalf("the console reads line %q, want 42, from %q", found[1], err.Error())
+			}
+		})
+	}
+
+	// An error PostgreSQL did not locate carries no prefix at all: the
+	// console must find nothing rather than be sent to a line that does not
+	// exist.
+	unlocated := (&gamedb.ScriptError{Message: "the cluster is out of disk"}).Error()
+	if console.MatchString(unlocated) {
+		t.Fatalf("an unlocated failure offered the console a line to jump to: %q", unlocated)
+	}
 }

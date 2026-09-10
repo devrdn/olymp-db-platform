@@ -142,9 +142,15 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
   //
   // Read alongside tableCurrentUpload, table by table, rather than as a
   // second fan-out over the same list: both are the same "one table's own
-  // best-effort read" this page already makes once per table, and reading
-  // them together halves how many separate round trips the definition's own
-  // fifty tables could cost at the ceiling.
+  // best-effort read" this page already makes once per table.
+  //
+  // The number of round trips is unchanged by this — two per table either
+  // way, up to a hundred at the definition's own fifty-table ceiling. What
+  // changes is when they happen: pairing them means a table's two reads
+  // overlap and the page waits for the slowest table rather than for one
+  // whole fan-out and then another. Cutting the count itself would take an
+  // endpoint that answers for every table at once, which the API does not
+  // offer.
   const tableRowCounts: Record<string, number> = {};
   const tableCurrentUploads: Record<string, TableData | null> = {};
   if (definition && definition.builderLimits.enabled && definition.tables.length > 0) {

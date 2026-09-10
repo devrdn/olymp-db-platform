@@ -141,10 +141,14 @@ describe("the table builder's own structure editor", () => {
     expect(screen.getAllByRole("textbox")).toHaveLength(2); // the table name, the one column name
   });
 
-  // The rule the brief states and this screen enforces itself, since the
-  // server does not (`GameBuilder`'s own doc explains why a table with data
-  // is locked rather than merely warned about): the row count is what
-  // decides it, and it is checked before any click, not after one.
+  // The server enforces this rule and answers 409
+  // (`provisioning.ErrDefinitionTableLocked`, tested at the handler in
+  // `game_handler_test.go`); this screen disables the edit *as well*, so an
+  // organiser is not offered a change only to have a round trip refuse it —
+  // `GameBuilder`'s own doc gives the reasoning. So what this test holds is
+  // the client half: the row count is what decides it, and it is checked
+  // before any click rather than after one. Bypassing this screen does not
+  // bypass the rule.
   test("locks a table's name and columns once it already holds data", () => {
     show({ rowCounts: { suspects: 3 } });
 

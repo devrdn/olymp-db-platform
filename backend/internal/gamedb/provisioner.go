@@ -77,12 +77,11 @@ type ScriptError struct {
 
 func (e *ScriptError) Error() string {
 	var b strings.Builder
-	if e.Line > 0 {
-		// The same prefix ScriptSyntaxError.Error writes, and deliberately
-		// identical: one shape for "where in the file", whichever of the two
-		// refused, so whatever reads it has one thing to read.
-		fmt.Fprintf(&b, "line %d: ", e.Line)
-	}
+	// The same prefix ScriptSyntaxError.Error writes, from the same function,
+	// and deliberately identical: one shape for "where in the file",
+	// whichever of the two refused, so whatever reads it — the upload
+	// console's own "jump to line" among them — has one thing to read.
+	b.WriteString(scriptErrorLinePrefix(e.Line))
 	b.WriteString("the game script was refused: ")
 	b.WriteString(e.Message)
 	if e.SQLState != "" {

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
 import type { Game } from "@/lib/api/game";
+import { FALLBACK_MAX_GAME_SCRIPT_BYTES } from "@/lib/api/game-terms";
 
 import { GameEditor } from "./game-editor";
 
@@ -23,6 +24,7 @@ function game(overrides: Partial<Game> = {}): Game {
     upload: undefined,
     buildError: "",
     scriptBytes: 0,
+    maxScriptBytes: 512 * 1024,
     building: false,
     updatedAt: "",
     uploadLimits: { enabled: false, chunkBytes: 0, maxFileBytes: 0 },
@@ -110,12 +112,35 @@ describe("the game editor", () => {
 
   // The server refuses it too; saying so before the request is made is the
   // difference between a limit and a rejection.
-  test("refuses to submit a script past the size limit", () => {
+  //
+  // The ceiling comes from the status the server just answered with
+  // (`maxScriptBytes`), never from a constant in this bundle — CLAUDE.md
+  // rule 11. A number nothing else in this file uses is what proves it: a
+  // screen that had kept its own copy would take a 200-byte script happily.
+  test("refuses to submit a script past the size limit the server published", () => {
     // Measured from the script the screen opens on, rather than typed in.
-    // Pasting half a mebibyte through userEvent took a second of the suite's
+    // Pasting the whole thing through userEvent took a second of the suite's
     // time to prove a rule that is true the moment the page renders — and
     // that second was enough to push another suite's own timing over.
-    show(game(), { script: "x".repeat(512 * 1024 + 1) });
+    show(game({ maxScriptBytes: 200 }), { script: "x".repeat(201) });
+
+    expect(screen.getByRole("button", { name: t.save })).toBeDisabled();
+    expect(screen.getByText(t.tooLong)).toBeInTheDocument();
+  });
+
+  // Exactly at the published ceiling is still accepted — the refusal is one
+  // byte past it, not near it.
+  test("accepts a script of exactly the size limit the server published", () => {
+    show(game({ maxScriptBytes: 200 }), { script: "x".repeat(200) });
+
+    expect(screen.getByRole("button", { name: t.save })).not.toBeDisabled();
+    expect(screen.queryByText(t.tooLong)).not.toBeInTheDocument();
+  });
+
+  // An API old enough not to publish the field sends zero, and refusing
+  // nothing at all would be worse than refusing by yesterday's figure.
+  test("falls back to the built-in ceiling when the server published none", () => {
+    show(game({ maxScriptBytes: 0 }), { script: "x".repeat(FALLBACK_MAX_GAME_SCRIPT_BYTES + 1) });
 
     expect(screen.getByRole("button", { name: t.save })).toBeDisabled();
     expect(screen.getByText(t.tooLong)).toBeInTheDocument();
