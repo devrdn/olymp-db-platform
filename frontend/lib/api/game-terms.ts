@@ -8,11 +8,18 @@
  */
 
 /**
- * The largest game script the API will take, in bytes — provisioning's own
- * MaxScriptBytes. Held here so the editor can say so before a request is made
- * rather than after one is refused; the server's check is the one that counts.
+ * The largest game script the API will take when it has not said so itself,
+ * in bytes.
+ *
+ * A fallback and nothing more. The real number travels on the game status
+ * (`Game.maxScriptBytes`, `game_handler.go`'s own `max_script_bytes`) and is
+ * what the editor refuses by; this is only what to use when an older API
+ * sent no such field, where refusing nothing at all would be worse than
+ * refusing by yesterday's figure. It used to be the only copy, which meant
+ * raising the server's ceiling left the editor refusing by the old one with
+ * no test on either side to notice.
  */
-export const MAX_GAME_SCRIPT_BYTES = 512 * 1024;
+export const FALLBACK_MAX_GAME_SCRIPT_BYTES = 512 * 1024;
 
 /** How often the interface asks again while a build is running. */
 export const GAME_POLL_MS = 2000;

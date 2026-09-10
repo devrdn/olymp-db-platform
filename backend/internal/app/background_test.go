@@ -84,22 +84,68 @@ func TestAFailingJobKeepsItsSchedule(t *testing.T) {
 // something is not silently unremarkable in the log the operator watches.
 func TestAdvanceContestScheduleReportsFailureAndSilenceOtherwise(t *testing.T) {
 	failure := errors.New("database is away")
-	job := advanceContestSchedule(quiet(), func(context.Context) (int, int, error) {
+	var buf bytes.Buffer
+	job := advanceContestSchedule(slog.New(slog.NewTextHandler(&buf, nil)), func(context.Context) (int, int, error) {
 		return 0, 0, failure
 	})
 
 	if err := job.run(t.Context()); !errors.Is(err, failure) {
 		t.Fatalf("run() = %v, want %v", err, failure)
 	}
+	if strings.Contains(buf.String(), "advanced the contest schedule") {
+		t.Fatalf("a failed tick claimed to have advanced the schedule: %s", buf.String())
+	}
+}
+
+// The other half of the name above, and until now the half nothing asserted:
+// a tick that moved something says so. This log line is the only signal an
+// operator gets that contests started or finished on their own — an early
+// return, or a condition narrowed to "started > 0", takes it away and every
+// other test of this job stays green, because they all pass a discarding
+// logger.
+func TestAdvanceContestScheduleLogsWhatMoved(t *testing.T) {
+	var buf bytes.Buffer
+	job := advanceContestSchedule(slog.New(slog.NewTextHandler(&buf, nil)), func(context.Context) (int, int, error) {
+		return 2, 3, nil
+	})
+
+	if err := job.run(t.Context()); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+	line := buf.String()
+	if !strings.Contains(line, "advanced the contest schedule") {
+		t.Fatalf("a tick that started 2 and finished 3 contests logged nothing: %q", line)
+	}
+	if !strings.Contains(line, "started=2") || !strings.Contains(line, "finished=3") {
+		t.Fatalf("the line does not carry both counts: %q", line)
+	}
+
+	// A tick that finished contests and started none still moved something.
+	buf.Reset()
+	job = advanceContestSchedule(slog.New(slog.NewTextHandler(&buf, nil)), func(context.Context) (int, int, error) {
+		return 0, 1, nil
+	})
+	if err := job.run(t.Context()); err != nil {
+		t.Fatalf("run() = %v", err)
+	}
+	if !strings.Contains(buf.String(), "finished=1") {
+		t.Fatalf("a tick that only finished contests logged %q", buf.String())
+	}
 }
 
 func TestAdvanceContestScheduleSucceedsWhenNothingMoved(t *testing.T) {
-	job := advanceContestSchedule(quiet(), func(context.Context) (int, int, error) {
+	var buf bytes.Buffer
+	job := advanceContestSchedule(slog.New(slog.NewTextHandler(&buf, nil)), func(context.Context) (int, int, error) {
 		return 0, 0, nil
 	})
 
 	if err := job.run(t.Context()); err != nil {
 		t.Fatalf("run() = %v, want nil for a tick that moved nothing", err)
+	}
+	// Silence is the other half of the claim: a line every fifteen seconds
+	// saying nothing happened is a line nobody reads.
+	if buf.Len() != 0 {
+		t.Fatalf("a tick that moved nothing logged %q", buf.String())
 	}
 }
 
@@ -132,11 +178,16 @@ func TestTheSweepAsksForRowsOlderThanALiveQueryCouldBe(t *testing.T) {
 func TestReclaimInstancesPassesTheConfiguredGraceAndReportsFailure(t *testing.T) {
 	failure := errors.New("the game cluster is away")
 	var gotGrace int
-	counters := metrics.NewGameReclaimCounters(metrics.Noop{})
+	// The Prometheus backend, not Noop: with Noop every Add is a no-op by
+	// construction, so a tick that never touched the counters at all would
+	// look identical. reclaimCounterTotals below reads them back by the same
+	// names a dashboard scrapes.
+	recorder := metrics.NewPrometheus()
+	counters := metrics.NewGameReclaimCounters(recorder)
 
 	job := reclaimInstances(quiet(), func(_ context.Context, graceMin int) (provisioning.ReclaimResult, error) {
 		gotGrace = graceMin
-		return provisioning.ReclaimResult{Reclaimed: 2, Failed: 1}, failure
+		return provisioning.ReclaimResult{Reclaimed: 2, Failed: 1, TemplatesReclaimed: 1}, failure
 	}, 90, counters)
 
 	if err := job.run(t.Context()); !errors.Is(err, failure) {
@@ -144,6 +195,20 @@ func TestReclaimInstancesPassesTheConfiguredGraceAndReportsFailure(t *testing.T)
 	}
 	if gotGrace != 90 {
 		t.Fatalf("grace passed to Reclaim = %d, want 90", gotGrace)
+	}
+	// "regardless" is the word this half of the doc has always used and
+	// nothing has ever checked: the tick failed, and the databases it *did*
+	// drop before failing still have to reach the counters, or a dashboard
+	// reads a partially failed sweep as one that did nothing.
+	totals := reclaimCounterTotals(t, recorder)
+	for name, want := range map[string]float64{
+		"game_instances_reclaimed_total":      2,
+		"game_instances_reclaim_failed_total": 1,
+		"game_templates_reclaimed_total":      1,
+	} {
+		if totals[name] != want {
+			t.Errorf("%s = %v after a failed tick, want %v", name, totals[name], want)
+		}
 	}
 }
 
@@ -159,17 +224,21 @@ func TestReclaimInstancesSucceedsWhenNothingWasThere(t *testing.T) {
 }
 
 // A tick that only skipped busy databases used to report "reclaimed=0
-// failed=0", indistinguishable from nothing being due at all. This proves
-// the wrapping surfaces Skipped (and a Stuck entry) without erroring, so an
-// operator reading the log — or the counters underneath it — can tell the
-// two apart.
+// failed=0", indistinguishable from nothing being due at all. The claim is
+// that an operator can tell the two apart, so both places the answer reaches
+// them are asserted here — the summary line and the counters — rather than
+// only that the tick returned no error, which a version that logged nothing
+// and counted nothing would also satisfy.
 func TestReclaimInstancesReportsSkippedAndStuckWithoutError(t *testing.T) {
-	counters := metrics.NewGameReclaimCounters(metrics.Noop{})
-	job := reclaimInstances(quiet(), func(context.Context, int) (provisioning.ReclaimResult, error) {
+	var buf bytes.Buffer
+	recorder := metrics.NewPrometheus()
+	counters := metrics.NewGameReclaimCounters(recorder)
+	contest := uuid.New()
+	job := reclaimInstances(slog.New(slog.NewTextHandler(&buf, nil)), func(context.Context, int) (provisioning.ReclaimResult, error) {
 		return provisioning.ReclaimResult{
 			Skipped: 3,
 			Stuck: []provisioning.StuckInstance{
-				{Database: "game_c1_u1", ContestID: uuid.New(), Overdue: 48 * time.Hour},
+				{Database: "game_c1_u1", ContestID: contest, Overdue: 48 * time.Hour},
 			},
 		}, nil
 	}, 60, counters)
@@ -177,6 +246,39 @@ func TestReclaimInstancesReportsSkippedAndStuckWithoutError(t *testing.T) {
 	if err := job.run(t.Context()); err != nil {
 		t.Fatalf("run() = %v, want nil for a tick that only skipped busy databases", err)
 	}
+
+	logged := buf.String()
+	if !strings.Contains(logged, "reclaimed game instances") || !strings.Contains(logged, "skipped=3") {
+		t.Fatalf("a tick that skipped three databases did not say so: %q", logged)
+	}
+	if !strings.Contains(logged, "game_c1_u1") || stuckWarningLines(&buf) != 1 {
+		t.Fatalf("the stuck database was not named in its own warning: %q", logged)
+	}
+	if totals := reclaimCounterTotals(t, recorder); totals["game_instances_reclaim_skipped_total"] != 3 {
+		t.Fatalf("game_instances_reclaim_skipped_total = %v, want 3",
+			totals["game_instances_reclaim_skipped_total"])
+	}
+}
+
+// reclaimCounterTotals reads the reclaim counters back off a Prometheus
+// recorder's own registry, keyed by the metric names a dashboard uses. The
+// counters themselves are unexported in internal/platform/metrics, and going
+// through Gather is the same path a scrape takes.
+func reclaimCounterTotals(t *testing.T, p *metrics.Prometheus) map[string]float64 {
+	t.Helper()
+	families, err := p.Registry().Gather()
+	if err != nil {
+		t.Fatalf("gather the metrics: %v", err)
+	}
+	totals := map[string]float64{}
+	for _, family := range families {
+		for _, m := range family.GetMetric() {
+			if c := m.GetCounter(); c != nil {
+				totals[family.GetName()] = c.GetValue()
+			}
+		}
+	}
+	return totals
 }
 
 // stuckWarningLines counts the "busy long past its grace deadline" warning
