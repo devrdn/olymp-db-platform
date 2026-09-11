@@ -49,6 +49,15 @@ CORE_DB_DSN ?= postgres://$(CORE_DB_USER):$(CORE_DB_PASSWORD)@localhost:$(CORE_D
 # publishes this port; the stack itself keeps the cluster off the host.
 GAME_DB_DSN ?= postgres://$(GAME_DB_USER):$(GAME_DB_PASSWORD)@localhost:$(GAME_DB_PORT)/$(GAME_DB_NAME)?sslmode=disable
 
+# The database the DB-backed tests run against: on the same server as the
+# product's, and never the product's own. The tests used to be handed
+# CORE_DB_DSN itself, and every run left a few hundred fixture accounts in the
+# database `make run` serves from. A test database is one whose name ends in
+# _test; the tests refuse to connect to anything else, and cmd/testdb refuses
+# to recreate anything else (internal/platform/storage/storagetest).
+CORE_TEST_DB_NAME ?= $(CORE_DB_NAME)_test
+CORE_TEST_DB_DSN  ?= postgres://$(CORE_DB_USER):$(CORE_DB_PASSWORD)@localhost:$(CORE_DB_PORT)/$(CORE_TEST_DB_NAME)?sslmode=disable
+
 # Redis is optional: with no address the service uses its in-process cache.
 #
 # deploy/.env also sets REDIS_ADDR — for the containerized api service, which
@@ -128,8 +137,22 @@ test-race: ## Run the tests with the race detector
 # afterwards instead. Without CORE_DB_DSN they skip rather than failing: a
 # developer with no database to hand can still run `make test`. This target
 # is what makes sure the SQL is actually exercised — `make dev-up` first.
-test-db: require-env ## Run the repository tests against the development database
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" go test -count=1 ./internal/postgres/... ./internal/provisioning/... ./internal/queryproxy/...
+#
+# Against CORE_TEST_DB_DSN, recreated and migrated from zero by test-db-reset
+# before every run: nothing a previous run left behind survives into this
+# one, and nothing this run does reaches the product's database.
+# internal/platform/storage is in the list for storagetest's own proof that
+# it refuses a database that is not a test database.
+test-db: require-env test-db-reset ## Run the repository tests against a fresh test database
+	cd $(BACKEND) && CORE_DB_DSN="$(CORE_TEST_DB_DSN)" go test -count=1 ./internal/platform/storage/... ./internal/postgres/... ./internal/provisioning/... ./internal/queryproxy/...
+
+# Once per run and before any test binary starts: `go test` runs packages in
+# parallel, and they share this database. The migrations are applied by the
+# same command a deployment uses.
+.PHONY: test-db-reset
+test-db-reset: require-env
+	cd $(BACKEND) && CORE_DB_DSN="$(CORE_TEST_DB_DSN)" go run ./cmd/testdb
+	cd $(BACKEND) && CORE_DB_DSN="$(CORE_TEST_DB_DSN)" go run ./cmd/migrate up
 
 # The game cluster tests connect as the participant's own database role and
 # provoke what it must not be able to do. They cannot be faked: every guarantee
@@ -154,8 +177,8 @@ test-game: require-env ## Run the game cluster tests against the development clu
 # feature stops at a boundary, which is how BuildTemplate went months with no
 # caller at all.
 .PHONY: test-game-build
-test-game-build:
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" GAME_DB_DSN="$(GAME_DB_DSN)" $(GAME_ROLE_PASSWORDS) \
+test-game-build: require-env test-db-reset
+	cd $(BACKEND) && CORE_DB_DSN="$(CORE_TEST_DB_DSN)" GAME_DB_DSN="$(GAME_DB_DSN)" $(GAME_ROLE_PASSWORDS) \
 		go test -count=1 -run TestAScriptSavedInTheCoreDatabase ./internal/provisioning/
 
 # The contract between the Core API and the Query Runner. Generated code is

@@ -54,13 +54,20 @@ jobs:
     # existed, GAME_DB_DSN was unset here, gamedbtest skipped on it, and the
     # whole of internal/gamedb plus both end-to-end build tests were silently
     # not run on any pull request: the CI output said "ok".
+    #
+    # The database is named dbcontest_core_test because the tests refuse to
+    # connect to one whose name does not end in _test
+    # (internal/platform/storage/storagetest). Nothing here is at risk — the
+    # container dies with the runner — but CI states the same rule a
+    # developer's machine runs under rather than an exception to it, so the
+    # guard is exercised on every pull request.
     services:
       postgres:
         image: postgres:16-alpine
         env:
           POSTGRES_USER: dbcontest
           POSTGRES_PASSWORD: dbcontest
-          POSTGRES_DB: dbcontest_core
+          POSTGRES_DB: dbcontest_core_test
         ports:
           - 5432:5432
         options: >-
@@ -109,7 +116,7 @@ jobs:
     # cluster older than this job, so a literal is the honest form: it names
     # what the tests will set, on a container destroyed with the runner.
     env:
-      CORE_DB_DSN: postgres://dbcontest:dbcontest@localhost:5432/dbcontest_core?sslmode=disable
+      CORE_DB_DSN: postgres://dbcontest:dbcontest@localhost:5432/dbcontest_core_test?sslmode=disable
       GAME_DB_DSN: postgres://dbcontest_game:dbcontest@localhost:5433/dbcontest_game?sslmode=disable
       GAME_READER_PASSWORD: dbcontest
       GAME_WRITER_PASSWORD: dbcontest

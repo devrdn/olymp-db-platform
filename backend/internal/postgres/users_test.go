@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -953,23 +953,23 @@ func (c *queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryE
 // is shared by the whole package's test run, so tracing it would count every
 // other test's queries too.
 func TestSearchDoesNotComputeADiscardedCount(t *testing.T) {
-	dsn := os.Getenv("CORE_DB_DSN")
-	if dsn == "" {
-		t.Skip("set CORE_DB_DSN to run the database tests")
-	}
-
-	cfg, err := pgxpool.ParseConfig(dsn)
-	if err != nil {
-		t.Fatalf("parse CORE_DB_DSN: %v", err)
-	}
 	counter := &queryCounter{}
-	cfg.ConnConfig.Tracer = counter
-
-	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	pool, err := storagetest.OpenCore(context.Background(), func(cfg *pgxpool.Config) {
+		cfg.ConnConfig.Tracer = counter
+		// One connection, so Search reuses the one storagetest already
+		// checked rather than opening another and sending the guard's own
+		// question on it — which the counter would then report as Search's.
+		cfg.MaxConns = 1
+	})
 	if err != nil {
 		t.Fatalf("open traced pool: %v", err)
 	}
+	if pool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
 	defer pool.Close()
+	// What was counted so far is the guard asking which database this is.
+	counter.n.Store(0)
 
 	if _, err := NewUsers(pool).Search(context.Background(), "no-such-account-zzz", 10); err != nil {
 		t.Fatalf("Search() = %v", err)
