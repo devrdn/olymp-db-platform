@@ -81,6 +81,14 @@ services:
       - max_connections=200
     volumes:
       - pg-game-data:/var/lib/postgresql/data
+    # PostgreSQL puts the shared memory of a parallel query in /dev/shm, and
+    # Docker's default for it is 64 MB. A few participants running a parallel
+    # hash join at once exhaust that, and each of them is told "could not
+    # resize shared memory segment … No space left on device" for a query
+    # that was fine — the load test found it in 2% of a burst. 256 MB holds
+    # what eight concurrent queries (QUERY_CONCURRENT) ask for; the pages
+    # count against the memory limit below only while they are in use.
+    shm_size: 256mb
     # cgroup limits, so that "the game cluster degrades" stays a statement
     # about this container rather than about the machine. Sized for the
     # pilot; raise them together with the semaphore in section 4.3.
