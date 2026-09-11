@@ -12,7 +12,8 @@
     "contrast": "node scripts/contrast.mjs",
     "typecheck": "next typegen && tsc --noEmit",
     "error-codes": "node scripts/error-codes.mjs",
-    "type-scale": "node scripts/type-scale.mjs"
+    "type-scale": "node scripts/type-scale.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
