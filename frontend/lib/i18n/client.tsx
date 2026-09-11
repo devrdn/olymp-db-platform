@@ -2,6 +2,8 @@
 
 import { createContext, useContext } from "react";
 
+import { ADMIN_SECTIONS, APP_SECTIONS, PARTICIPANT_SECTIONS, SESSION_SECTIONS } from "./scopes";
+
 import type { Locale } from "./config";
 import type { Dictionary } from "./dictionary";
 
@@ -25,8 +27,11 @@ import type { Dictionary } from "./dictionary";
  * trail, the settings, the contest register — came to 31.8 KB of it, 63% of
  * the dictionary, crossing the wire for nothing.
  *
- * A scope names the sections one part of the tree can reach, and it does the
- * narrowing **on the server**, in `select`, before the value is ever a prop.
+ * A scope names the sections one part of the tree can reach, and the narrowing
+ * happens **on the server**, before the value is ever a prop — in `scopes.ts`,
+ * not here. A Server Component cannot call a function exported from this file:
+ * it gets a client reference, and calling it throws. The narrowing lived here
+ * once, and every page of the product answered 500 until it moved.
  * That is the whole mechanism: a provider that took the whole dictionary and
  * narrowed it in the browser would have shipped the whole dictionary to do
  * it. The type is what keeps the two honest — a boundary that reads a section
@@ -38,13 +43,6 @@ import type { Dictionary } from "./dictionary";
  * twice.
  */
 export type DictionaryScope<Section extends keyof Dictionary> = {
-  /**
-   * Narrows a whole dictionary to this scope's sections.
-   *
-   * Called by a Server Component, always: this is the line where the sections
-   * nobody downstream can read stop crossing the wire.
-   */
-  select: (dict: Dictionary) => Pick<Dictionary, Section>;
   Provider: (props: {
     dict: Pick<Dictionary, Section>;
     locale: Locale;
@@ -62,16 +60,6 @@ function dictionaryScope<const Sections extends readonly (keyof Dictionary)[]>(
   const Context = createContext<{ dict: Sliced; locale: Locale } | null>(null);
 
   return {
-    select(dict) {
-      // Built through a mutable record and handed back as the slice: the
-      // dictionary is deeply readonly and `section` is a union of this
-      // scope's keys rather than one of them, neither of which a per-key
-      // assignment can be expressed against. The cast is checked by the
-      // return type, and `sections` is the only thing that can be wrong.
-      const sliced: Record<string, unknown> = {};
-      for (const section of sections) sliced[section] = dict[section];
-      return sliced as Sliced;
-    },
     Provider({ dict, locale, children }) {
       return <Context.Provider value={{ dict, locale }}>{children}</Context.Provider>;
     },
@@ -89,22 +77,33 @@ function dictionaryScope<const Sections extends readonly (keyof Dictionary)[]>(
  * Every screen in the product, because `app/error.tsx` catches a failure on
  * any of them. One section, and a small one.
  */
-export const AppDictionary = dictionaryScope("app", ["screens"]);
+export const AppDictionary = dictionaryScope("app", APP_SECTIONS);
 
 /** The participant's own group: `/my`, `/open`, and the play workspace. */
-export const ParticipantDictionary = dictionaryScope("participant", ["participant"]);
+export const ParticipantDictionary = dictionaryScope("participant", PARTICIPANT_SECTIONS);
 
 /**
  * The profile, which both audiences share. It carries `participant` as well
  * as `profile` because its own boundary borrows the retry wording from there
  * rather than repeating it — see `app/(session)/error.tsx`.
  */
-export const SessionDictionary = dictionaryScope("session", ["profile", "participant"]);
+export const SessionDictionary = dictionaryScope("session", SESSION_SECTIONS);
 
 /** The constructor's group, whose four boundaries each name their own screen. */
-export const AdminDictionary = dictionaryScope("admin", [
-  "contests",
-  "accounts",
-  "audit",
-  "settings",
-]);
+export const AdminDictionary = dictionaryScope("admin", ADMIN_SECTIONS);
+
+
+/**
+ * The providers, each as its own top-level export.
+ *
+ * A Server Component renders these, and it can only render a top-level export
+ * of a "use client" module: that is what becomes a client reference. Reaching
+ * one as a member — `<AppDictionary.Provider>` — yields `undefined` on the
+ * server, and the root layout answered 500 with "Element type is invalid"
+ * until they were exported here. The scope objects above remain for the hook,
+ * which only ever runs in the browser, inside a client boundary.
+ */
+export const AppDictionaryProvider = AppDictionary.Provider;
+export const ParticipantDictionaryProvider = ParticipantDictionary.Provider;
+export const SessionDictionaryProvider = SessionDictionary.Provider;
+export const AdminDictionaryProvider = AdminDictionary.Provider;

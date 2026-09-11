@@ -5,7 +5,8 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
 import en from "./dictionaries/en";
-import { AppDictionary, ParticipantDictionary } from "./client";
+import { ParticipantDictionary } from "./client";
+import { selectApp, selectParticipant } from "./scopes";
 
 /**
  * Finding 5: one provider at the root carried every section, so the whole
@@ -21,12 +22,12 @@ import { AppDictionary, ParticipantDictionary } from "./client";
  */
 describe("a dictionary scope", () => {
   test("hands over its own sections and no others", () => {
-    expect(Object.keys(ParticipantDictionary.select(en))).toEqual(["participant"]);
-    expect(ParticipantDictionary.select(en).participant).toBe(en.participant);
+    expect(Object.keys(selectParticipant(en))).toEqual(["participant"]);
+    expect(selectParticipant(en).participant).toBe(en.participant);
   });
 
   test("the sections it drops are not smuggled through as undefined keys", () => {
-    const selected = AppDictionary.select(en) as Record<string, unknown>;
+    const selected = selectApp(en) as Record<string, unknown>;
 
     expect("workspace" in selected).toBe(false);
     expect("errors" in selected).toBe(false);
@@ -39,7 +40,7 @@ describe("a dictionary scope", () => {
     }
 
     render(
-      <ParticipantDictionary.Provider dict={ParticipantDictionary.select(en)} locale="en">
+      <ParticipantDictionary.Provider dict={selectParticipant(en)} locale="en">
         <Boundary />
       </ParticipantDictionary.Provider>,
     );
@@ -77,15 +78,30 @@ describe("how the scopes are wired into the app", () => {
     expect(layouts.length).toBeGreaterThan(0);
 
     const providers = layouts.flatMap((file) =>
-      [...readFileSync(file, "utf8").matchAll(/<(\w+Dictionary)\.Provider\s+dict=\{([^}]*)\}/g)].map(
+      [...readFileSync(file, "utf8").matchAll(/<(\w+Dictionary)Provider\s+dict=\{([^}]*)\}/g)].map(
         ([, scope, value]) => ({ file, scope, value }),
       ),
     );
 
+    // This assertion used to demand `${scope}.select(dict)` — a call to a
+    // function exported from a "use client" module, which a Server Component
+    // cannot make. It was green here because vitest does not enforce that
+    // boundary, and it was the reason every page answered 500: a test that
+    // required the defect. The invariant it exists for is unchanged — each
+    // provider is handed its own slice, never the whole dictionary — and the
+    // slice now comes from the server module, `scopes.ts`.
+    const selectorFor: Record<string, string> = {
+      AppDictionary: "selectApp",
+      AdminDictionary: "selectAdmin",
+      ParticipantDictionary: "selectParticipant",
+      SessionDictionary: "selectSession",
+    };
+
     expect(providers.length).toBeGreaterThan(0);
     for (const { file, scope, value } of providers) {
+      expect(selectorFor[scope], `${file}: no server selector is known for ${scope}`).toBeDefined();
       expect(value, `${file} hands ${scope} something other than its own slice`).toBe(
-        `${scope}.select(dict)`,
+        `${selectorFor[scope]}(dict)`,
       );
     }
   });
@@ -105,7 +121,7 @@ describe("how the scopes are wired into the app", () => {
         while (dir.startsWith(appDir)) {
           const layout = path.join(dir, "layout.tsx");
           try {
-            if (readFileSync(layout, "utf8").includes(`<${scope}.Provider`)) {
+            if (readFileSync(layout, "utf8").includes(`<${scope}Provider`)) {
               provided = true;
               break;
             }
