@@ -251,3 +251,13 @@ describe("⌘↵", () => {
     await waitFor(() => expect(runQueryAction).toHaveBeenCalled());
   });
 });
+
+describe("the SQL editor's one rule", () => {
+  // A second statement is refused (`query_not_one_statement`), so the rule is
+  // kept in sight on the toolbar rather than behind a "?".
+  test("says one statement at a time, on screen", () => {
+    render(<ConsoleEditor contestId="c1" dict={en} onResult={vi.fn()} />);
+
+    expect(screen.getByText(en.participant.console.hint)).toBeVisible();
+  });
+});

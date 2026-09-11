@@ -1,11 +1,12 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Tag } from "@/components/ui/tag";
+import { Tooltip } from "@/components/ui/tooltip";
 import { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS } from "@/lib/api/contests-terms";
 import { type Contest, type ContestSummary } from "@/lib/api/contests";
 import { SQL_MODES } from "@/lib/api/policy-terms";
@@ -29,29 +30,68 @@ import {
  * fields, the language set, the translations and the SQL policy. A single save
  * would send all four on every change, and a refusal from one would discard
  * the other three.
+ *
+ * What the block is for sits behind a "?" beside the heading (`help`); the
+ * short rules stay under their own fields.
  */
 function Panel({
   title,
-  hint,
+  help,
+  dict,
   frozen,
   children,
 }: {
   title: string;
-  hint?: string;
+  help?: string;
+  dict: Dictionary;
   frozen?: string;
   children: React.ReactNode;
 }) {
   return (
     <section className="flex flex-col gap-5 border-t border-line pt-5">
-      <div className="flex flex-col gap-1.5">
-        <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <div className="flex items-center gap-2">
           <h3 className="text-h3 text-ink">{title}</h3>
-          {frozen ? <Tag tone="mute">{frozen}</Tag> : null}
+          {help ? <Tooltip label={dict.chrome.helpLabel}>{help}</Tooltip> : null}
         </div>
-        {hint ? <p className="max-w-body text-small text-ink-2">{hint}</p> : null}
+        {frozen ? <Tag tone="mute">{frozen}</Tag> : null}
       </div>
       {children}
     </section>
+  );
+}
+
+/**
+ * A fieldset's legend with an explanation behind a "?".
+ *
+ * The "?" sits *inside* the `<legend>` on purpose. These fieldsets are
+ * disabled once the contest starts, and a `<fieldset disabled>` disables every
+ * button in it — except those in its first legend, which the HTML spec
+ * exempts. Anywhere else the explanation of a frozen setting would become
+ * unreadable exactly when the setting is frozen. Inside the legend, though,
+ * the button's name would join the group's ("Question order Hint"), so the
+ * fieldset takes its name from the legend's text alone, by id.
+ */
+function HelpLegend({
+  id,
+  children,
+  help,
+  dict,
+}: {
+  id: string;
+  children: React.ReactNode;
+  help: string;
+  dict: Dictionary;
+}) {
+  return (
+    <legend className="pb-2">
+      <span className="inline-flex items-center gap-1.5">
+        <span id={id} className="font-mono text-label text-ink-3 uppercase">
+          {children}
+        </span>
+        <Tooltip label={dict.chrome.helpLabel}>{help}</Tooltip>
+      </span>
+    </legend>
   );
 }
 
@@ -176,6 +216,8 @@ export function ContestPanel({
   );
   const [timing, setTiming] = useState<string>(contest.timing);
   const [progression, setProgression] = useState<string>(contest.progression);
+  const orderLegendId = useId();
+  const scoringLegendId = useId();
 
   // The form is keyed by the server's own version of what it renders.
   //
@@ -192,7 +234,7 @@ export function ContestPanel({
   // is not a save leaves what somebody is typing alone.
   return (
     <form key={contest.updatedAt} action={formAction} className="contents">
-      <Panel title={t.schedule.heading} hint={t.schedule.hint}>
+      <Panel title={t.schedule.heading} help={t.schedule.help} dict={dict}>
         <input type="hidden" name="contestId" value={contest.id} />
 
         <div className="grid gap-6 narrow:grid-cols-2">
@@ -235,7 +277,12 @@ export function ContestPanel({
             />
           </Field>
 
-          <Field id="gracePeriodMin" label={t.schedule.grace} hint={t.schedule.graceHint}>
+          <Field
+            id="gracePeriodMin"
+            label={t.schedule.grace}
+            help={t.schedule.graceHelp}
+            helpLabel={dict.chrome.helpLabel}
+          >
             <Input
               name="gracePeriodMin"
               type="number"
@@ -252,7 +299,8 @@ export function ContestPanel({
 
       <Panel
         title={t.shape.heading}
-        hint={t.shape.hint}
+        help={t.shape.help}
+        dict={dict}
         frozen={shapeOpen ? undefined : dict.workspace.facts.frozen}
       >
         <fieldset className="flex flex-col gap-3" disabled={!shapeOpen}>
@@ -300,11 +348,10 @@ export function ContestPanel({
             from submissions. Both freeze with the rest of the shape — a
             participant already mid-sequence, or already scored one way,
             must not have the rule under them change. */}
-        <fieldset className="flex flex-col gap-3" disabled={!shapeOpen}>
-          <legend className="pb-2 font-mono text-label text-ink-3 uppercase">
+        <fieldset className="flex flex-col gap-3" disabled={!shapeOpen} aria-labelledby={orderLegendId}>
+          <HelpLegend id={orderLegendId} help={t.shape.orderHelp} dict={dict}>
             {t.shape.order}
-          </legend>
-          <p className="max-w-body text-small text-ink-2">{t.shape.orderHint}</p>
+          </HelpLegend>
           <Choices
             name="progression"
             values={PROGRESSIONS}
@@ -322,11 +369,10 @@ export function ContestPanel({
           ) : null}
         </fieldset>
 
-        <fieldset className="flex flex-col gap-3" disabled={!shapeOpen}>
-          <legend className="pb-2 font-mono text-label text-ink-3 uppercase">
+        <fieldset className="flex flex-col gap-3" disabled={!shapeOpen} aria-labelledby={scoringLegendId}>
+          <HelpLegend id={scoringLegendId} help={t.shape.scoringHelp} dict={dict}>
             {t.shape.scoring}
-          </legend>
-          <p className="max-w-body text-small text-ink-2">{t.shape.scoringHint}</p>
+          </HelpLegend>
           <Choices
             name="scoring"
             values={SCORINGS}
@@ -337,7 +383,7 @@ export function ContestPanel({
         </fieldset>
       </Panel>
 
-      <Panel title={t.access.heading} hint={t.access.hint}>
+      <Panel title={t.access.heading} help={t.access.help} dict={dict}>
         <fieldset className="flex flex-col gap-3" disabled={!editable}>
           <legend className="pb-2 font-mono text-label text-ink-3 uppercase">
             {t.access.enrollment}
@@ -418,7 +464,7 @@ export function LanguagePanel({
 
   return (
     <form action={formAction} className="contents">
-      <Panel title={t.languages.heading} hint={t.languages.hint}>
+      <Panel title={t.languages.heading} help={t.languages.help} dict={dict}>
         <input type="hidden" name="contestId" value={contest.id} />
 
         <div className="flex flex-col gap-2.5">
@@ -511,7 +557,8 @@ export function PolicyPanel({
     <form key={policy.updatedAt} action={formAction} className="contents">
       <Panel
         title={t.policy.heading}
-        hint={t.policy.hint}
+        help={t.policy.help}
+        dict={dict}
         frozen={editable ? undefined : dict.workspace.facts.frozen}
       >
         <input type="hidden" name="contestId" value={contest.id} />
@@ -534,7 +581,13 @@ export function PolicyPanel({
             read-only mode, the field would describe access that mode does not
             grant. */}
         {mode === "read_write" ? (
-          <Field id="writableTables" label={t.policy.tables} hint={t.policy.tablesHint}>
+          <Field
+            id="writableTables"
+            label={t.policy.tables}
+            hint={t.policy.tablesHint}
+            help={t.policy.tablesHelp}
+            helpLabel={dict.chrome.helpLabel}
+          >
             <Input
               name="writableTables"
               defaultValue={policy.writableTables.join(", ")}

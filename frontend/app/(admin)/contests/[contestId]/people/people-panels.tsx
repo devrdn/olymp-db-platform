@@ -6,6 +6,7 @@ import { StateView } from "@/components/product/state-view";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip } from "@/components/ui/tooltip";
 import { removable } from "@/lib/api/people-terms";
 import { type Manager, type Participant, type RegistrationStatus } from "@/lib/api/people";
 import { formatMoment } from "@/lib/format/datetime";
@@ -64,9 +65,9 @@ export function ManagerPanel({
 
   return (
     <section className="flex flex-col gap-5">
-      <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2">
         <h3 className="text-h3 text-ink">{t.managers.heading}</h3>
-        <p className="max-w-body text-small text-ink-2">{t.managers.hint}</p>
+        <Tooltip label={dict.chrome.helpLabel}>{t.managers.help}</Tooltip>
       </div>
 
       <div className="overflow-x-auto">
@@ -185,9 +186,9 @@ export function ParticipantPanel({
   return (
     <section className="flex flex-col gap-5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1.5">
-        <div className="flex flex-col gap-1.5">
+        <div className="flex items-center gap-2">
           <h3 className="text-h3 text-ink">{t.participants.heading}</h3>
-          <p className="max-w-body text-small text-ink-2">{t.participants.hint}</p>
+          <Tooltip label={dict.chrome.helpLabel}>{t.participants.help}</Tooltip>
         </div>
         <span className="font-mono text-data text-ink-3">
           {total} {t.participants.countLabel}
@@ -358,9 +359,9 @@ function AddOneParticipant({ contestId, dict }: { contestId: string; dict: Dicti
           participant" as the field's own visible label, and a heading
           repeating it word for word would be the same fact said twice in a
           row — see `ImportParticipants` just below, whose own label plays
-          the same double duty. */}
-      <p className="max-w-body text-small text-ink-2">{t.addOne.hint}</p>
-
+          the same double duty. How to use it sits behind the "?" beside
+          that label; the picker's own line under the input still says how
+          the keyboard drives it. */}
       <div className="flex flex-wrap items-end gap-3">
         <PersonPicker
           id="participantId"
@@ -374,6 +375,8 @@ function AddOneParticipant({ contestId, dict }: { contestId: string; dict: Dicti
           searchFailedText={t.picker.searchFailed}
           changeText={t.picker.change}
           selectedTemplate={t.picker.selected}
+          help={t.addOne.help}
+          helpLabel={dict.chrome.helpLabel}
         />
 
         <Button type="submit" variant="secondary" disabled={pending}>
@@ -408,14 +411,21 @@ function ImportParticipants({ contestId, dict }: { contestId: string; dict: Dict
     <form action={formAction} className="flex flex-col gap-3 border-t border-line pt-5">
       <input type="hidden" name="contestId" value={contestId} />
 
-      <label htmlFor="logins" className="font-mono text-label text-ink-3 uppercase">
-        {t.import.heading}
-      </label>
-      <p className="max-w-body text-small text-ink-2">{t.import.hint}</p>
+      <div className="flex items-center gap-1.5">
+        <label htmlFor="logins" className="font-mono text-label text-ink-3 uppercase">
+          {t.import.heading}
+        </label>
+        <Tooltip label={dict.chrome.helpLabel}>{t.import.help}</Tooltip>
+      </div>
+      {/* The format stays on screen, and is the textarea's description. */}
+      <p id="logins-format" className="max-w-body text-small text-ink-2">
+        {t.import.hint}
+      </p>
 
       <Textarea
         id="logins"
         name="logins"
+        aria-describedby="logins-format"
         className="min-h-28 max-w-96 font-mono text-data"
         placeholder={t.import.placeholder}
       />

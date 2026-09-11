@@ -197,6 +197,11 @@
   --container-lede: 60ch;
   --container-body: 66ch;
   --container-narrative: 58ch;
+  /* The explanation behind a "?" (`components/ui/tooltip.tsx`). Narrower than
+     a body measure because it is read in a box floating over a form, not in
+     a column: at `text-small` it keeps a few hundred characters to six or
+     seven comfortable lines instead of two very long ones. */
+  --container-tip: 44ch;
 
   /**
    * The two perpetual motions the spec allows, and the reason each is allowed:

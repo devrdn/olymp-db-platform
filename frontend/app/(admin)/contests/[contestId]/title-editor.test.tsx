@@ -165,3 +165,30 @@ describe("TitleEditor: dismissal is blocked while the save is pending", () => {
     );
   });
 });
+
+/**
+ * The one "?" that lives inside a Base UI modal. The dialog closes on Escape
+ * too, and one press should close one layer: the bubble first, the dialog on
+ * the next press.
+ */
+describe("TitleEditor: the explanation beside the title", () => {
+  test("Escape closes the explanation and leaves the dialog open", async () => {
+    const user = userEvent.setup();
+    render(<TitleEditor contest={contest()} editable dict={dict} />);
+
+    await user.click(screen.getByRole("button", { name: dict.workspace.titleEditor.edit }));
+    const dialog = await screen.findByRole("dialog");
+    // Named by the title alone: the "?" is beside it, not inside it.
+    expect(dialog).toHaveAccessibleName(dict.workspace.titleEditor.heading);
+
+    await user.click(screen.getByRole("button", { name: dict.chrome.helpLabel }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent(dict.workspace.titleEditor.help);
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+});

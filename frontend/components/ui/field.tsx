@@ -1,7 +1,22 @@
 import * as React from "react";
 
 import { Label } from "@/components/ui/label";
+import { Tooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+
+/**
+ * An explanation behind a "?" beside the label, or none. Both halves or
+ * neither: a "?" with no name is a button a screen reader announces as
+ * nothing, so the name travels with the text rather than being optional.
+ */
+type FieldHelp =
+  | { help?: undefined; helpLabel?: undefined }
+  | {
+      /** Why the field is what it is — read once, then in the way. */
+      help: React.ReactNode;
+      /** The "?" button's accessible name (`chrome.helpLabel`). */
+      helpLabel: string;
+    };
 
 /**
  * Label, control and message as one block.
@@ -16,6 +31,18 @@ import { cn } from "@/lib/utils";
  * error on moves nothing under the cursor; a field with neither reserves no
  * space at all.
  *
+ * The hint is for what somebody must know *before* they get it wrong — a
+ * format, a limit, what an empty field means — and it stays on screen. Why a
+ * field exists or what it does goes in `help` instead: a "?" beside the label
+ * that opens a `Tooltip`. That split is the client's, made deliberately (the
+ * image rule was once moved above the upload so a 5 MB phone photo stops
+ * being refused after the fact; behind a hover it would be refused after the
+ * fact again). The "?" sits beside the `<label>`, never inside it, so the
+ * control's name stays exactly the label; and it is not added to the
+ * control's `aria-describedby`, whose contents stay what they were — the
+ * message and a form-level failure — because the "?" already carries the
+ * explanation as its own description, one Tab stop earlier.
+ *
  * A failure that belongs to the form rather than to one field is passed as
  * `invalid` plus `describedBy`: the message is written once, elsewhere, and
  * every field it concerns points at it.
@@ -24,6 +51,8 @@ export function Field({
   id,
   label,
   hint,
+  help,
+  helpLabel,
   error,
   invalid,
   describedBy,
@@ -32,6 +61,7 @@ export function Field({
 }: {
   id: string;
   label: React.ReactNode;
+  /** A short rule that stays visible under the control. */
   hint?: React.ReactNode;
   error?: React.ReactNode;
   /**
@@ -43,7 +73,7 @@ export function Field({
   describedBy?: string;
   className?: string;
   children: React.ReactElement<React.ComponentProps<"input">>;
-}) {
+} & FieldHelp) {
   const messageId = `${id}-message`;
   const message = error ?? hint;
   const describedByIds = [message ? messageId : null, describedBy].filter(Boolean).join(" ");
@@ -65,7 +95,14 @@ export function Field({
 
   return (
     <div className={cn("flex flex-col gap-2", className)}>
-      <Label htmlFor={id}>{label}</Label>
+      {help && helpLabel ? (
+        <div className="flex items-center gap-1.5">
+          <Label htmlFor={id}>{label}</Label>
+          <Tooltip label={helpLabel}>{help}</Tooltip>
+        </div>
+      ) : (
+        <Label htmlFor={id}>{label}</Label>
+      )}
       {control}
       {message ? (
         <p

@@ -38,11 +38,17 @@ export function SettingsForm({ settings, dict }: { settings: Settings; dict: Dic
       action={formAction}
       className="flex max-w-narrative flex-col gap-6 border-t border-line pt-6"
     >
-      <Field id="name" label={t.name} hint={t.nameHint}>
+      <Field id="name" label={t.name} help={t.nameHelp} helpLabel={dict.chrome.helpLabel}>
         <Input name="name" defaultValue={settings.name} required />
       </Field>
 
-      <Field id="contact" label={t.contact} hint={t.contactHint}>
+      <Field
+        id="contact"
+        label={t.contact}
+        hint={t.contactHint}
+        help={t.contactHelp}
+        helpLabel={dict.chrome.helpLabel}
+      >
         <Input name="contact" type="email" defaultValue={settings.contact} />
       </Field>
 

@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Combobox as ComboboxPrimitive } from "@base-ui/react/combobox";
 
+import { Tooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 /**
@@ -45,6 +46,8 @@ export function Combobox<T>({
   disabled,
   className,
   describedBy,
+  help,
+  helpLabel,
 }: {
   id: string;
   label: string;
@@ -66,6 +69,10 @@ export function Combobox<T>({
    * which is how a describing paragraph ends up in the DOM with nothing
    * pointing at it. */
   describedBy?: string;
+  /** An explanation behind a "?" beside the label, as `Field` has one. */
+  help?: string;
+  /** The "?" button's accessible name (`chrome.helpLabel`); required with `help`. */
+  helpLabel?: string;
 }) {
   return (
     <ComboboxPrimitive.Root
@@ -87,9 +94,14 @@ export function Combobox<T>({
           — it is a typeahead built on `Combobox.Input` directly, and the
           primitive's own development warning says a native label (or
           `Field.Label`) is what labels that form control. */}
-      <label htmlFor={id} className="font-mono text-label text-ink-3 uppercase">
-        {label}
-      </label>
+      {/* The "?" beside the label, never inside it, so the input's name
+          stays the label alone — the same rule `Field` follows. */}
+      <div className="flex items-center gap-1.5">
+        <label htmlFor={id} className="font-mono text-label text-ink-3 uppercase">
+          {label}
+        </label>
+        {help && helpLabel ? <Tooltip label={helpLabel}>{help}</Tooltip> : null}
+      </div>
 
       <ComboboxPrimitive.Input
         id={id}
