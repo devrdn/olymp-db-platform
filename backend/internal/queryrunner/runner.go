@@ -126,15 +126,18 @@ type Limits struct {
 // DefaultLimits are the figures section 4.3 and section 5 name.
 //
 // Concurrent is a placeholder for "two to three times the cores", which the
-// composition root sets from the machine it is on; the rest are the
-// architecture's own numbers.
+// composition root sets from the machine it is on. QueueDepth is sized so
+// that Concurrent + QueueDepth covers the forty participants the olympiad
+// expects: each has at most one query in flight, so a queue that deep turns
+// a round's simultaneous Run into a wait rather than a refusal (see
+// config.Runner.QueueDepth). The rest are the architecture's own numbers.
 func DefaultLimits() Limits {
 	return Limits{
 		Deadline:   5 * time.Second,
 		MaxRows:    1000,
 		MaxBytes:   5 << 20,
 		Concurrent: 8,
-		QueueDepth: 16,
+		QueueDepth: 32,
 		PerMinute:  30,
 	}
 }
