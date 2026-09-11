@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 
@@ -74,13 +74,21 @@ describe("the questions panel", () => {
     expect(screen.getByText("10 pts")).toBeInTheDocument();
   });
 
+  // `useActionState`'s own state update settles on a later microtask than
+  // `userEvent.click` awaits (console.test.tsx's own finding, for the same
+  // `formAction`/`pending` shape) — asserting immediately after `submit()`
+  // passed on an idle machine and failed once several `vitest run` processes
+  // were contending for the same CPUs (reproduced by running this suite four
+  // times in parallel). Every assertion below that reads what a submission
+  // settled to is therefore wrapped in `waitFor` rather than asserted
+  // straight after `submit()` returns.
   test("a correct answer shows the verdict and the points awarded", async () => {
     answer.current = { kind: "answer", result: { correct: true, pointsAwarded: 10, attemptsRemaining: 2, closed: false } };
     render(<QuestionsPanel contestId="c1" items={[entry({ attemptsRemaining: 3 })]} dict={en} />);
 
     await submit();
 
-    expect(screen.getByRole("status")).toHaveTextContent("Correct! +10 points.");
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Correct! +10 points."));
   });
 
   test("attempts left comes from the submission, not from the page's own load", async () => {
@@ -92,7 +100,7 @@ describe("the questions panel", () => {
 
     await submit("wrong guess");
 
-    expect(screen.getByText("1 attempts left")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("1 attempts left")).toBeInTheDocument());
   });
 
   test("a wrong guess clears the field rather than leaving it under the verdict", async () => {
@@ -104,7 +112,7 @@ describe("the questions panel", () => {
 
     await submit("wrong guess");
 
-    expect(screen.getByRole("textbox")).toHaveValue("");
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
   });
 
   test("a closed question shows no form, and keeps the verdict that closed it", async () => {
@@ -114,7 +122,9 @@ describe("the questions panel", () => {
 
     await submit();
 
-    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    // The one assertion actually gated on the submission settling; the two
+    // that follow read the same render once it has.
+    await waitFor(() => expect(screen.queryByRole("textbox")).not.toBeInTheDocument());
     expect(screen.getByText(en.participant.play.questions.closed)).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Correct!");
   });
@@ -144,7 +154,14 @@ describe("the questions panel", () => {
     await userEvent.click(screen.getAllByRole("button", { name: en.participant.play.questions.submit })[0]);
 
     expect(await screen.findByText(en.participant.play.questions.closed)).toBeInTheDocument();
-    expect(screen.queryByText(en.participant.play.questions.locked)).not.toBeInTheDocument();
+    // Two settles, not one: q1's own submission closing is the first, and it
+    // is what `findByText` above waits for — but the re-read that unlocks q2
+    // is a *second* one, kicked off from an Effect that only runs after that
+    // first render commits. `findByText` resolving here says nothing about
+    // whether that second settle has happened yet, and asserting straight
+    // after it — reliably true on an idle machine — is exactly what failed
+    // under a full-suite run: q2 was still shown locked.
+    await waitFor(() => expect(screen.queryByText(en.participant.play.questions.locked)).not.toBeInTheDocument());
     expect(screen.getByText(/Name the hour/)).toBeInTheDocument();
     expect(refresh.calls).toBe(1);
   });
@@ -208,8 +225,10 @@ describe("the questions panel", () => {
 
     await submit();
 
-    const statuses = screen.getAllByRole("status");
-    expect(within(statuses[statuses.length - 1]).getByText(en.errors.question_not_open)).toBeInTheDocument();
+    await waitFor(() => {
+      const statuses = screen.getAllByRole("status");
+      expect(within(statuses[statuses.length - 1]).getByText(en.errors.question_not_open)).toBeInTheDocument();
+    });
   });
 
   test("two questions answer independently: one closing does not touch what the other is holding", async () => {
