@@ -21,6 +21,11 @@
    switches language mid-sentence to cite a brief or a conversation is
    unreadable to exactly the person the rule is written for; translate the
    point or drop the quotation.
+4. **History stays linear: integrate branches by rebase, never by merge
+   commit.** `main` has no merge commit anywhere in its history, and the
+   client merges pull requests on GitHub by rebase or squash, never by the
+   default merge button. A branch that falls behind is caught up with
+   `git rebase`, not `git merge`; nothing ever runs `git merge` against `main`.
 
 ## Code
 
