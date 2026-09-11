@@ -80,6 +80,14 @@ jobs:
 
       - run: npm run build
 
+      # Every check above can be green while no page opens. jsdom never
+      # enforces the Server Component boundary, and the build renders no
+      # dynamic route — both were green on the day every page answered 500
+      # because a server layout called into a "use client" module. This serves
+      # the build and asks it for /login, the way a person would.
+      - name: Serve the build and open a page
+        run: npm run smoke
+
   # Same shape as the backend's: a merge proves the image builds, a tag
   # publishes it, and only the second holds a token that can write to the
   # registry.
