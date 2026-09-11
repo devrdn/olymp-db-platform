@@ -27,6 +27,12 @@ func TestLoadRunnerAppliesTheArchitecturesFigures(t *testing.T) {
 	if cfg.ListenAddr != ":9100" {
 		t.Fatalf("listen address = %q", cfg.ListenAddr)
 	}
+	// Running plus waiting covers forty participants, one query each: a
+	// round in which all of them press Run is queued, not refused.
+	if cfg.Concurrent+cfg.QueueDepth < 40 {
+		t.Fatalf("admission = %d running + %d waiting, fewer than the forty participants the olympiad expects",
+			cfg.Concurrent, cfg.QueueDepth)
+	}
 }
 
 func TestTheGameDatabaseIsRequired(t *testing.T) {
