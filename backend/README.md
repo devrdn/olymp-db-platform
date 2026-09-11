@@ -82,6 +82,14 @@ test` runnable with no database to hand; `make test-db` is what actually
 exercises the SQL, and CI sets the variable. A query is the one thing a fake
 cannot verify.
 
+Those tests never run against the database the product serves from. `make
+test-db` drops and recreates `dbcontest_core_test` (`cmd/testdb`), migrates it
+with `cmd/migrate`, and hands the tests that. The tests themselves connect only
+through `internal/platform/storage/storagetest`, which refuses any database
+whose name — as the server reports it — does not end in `_test`, so a copied or
+mistyped `CORE_DB_DSN` fails the run instead of filling a real database with
+fixtures.
+
 ## Two listeners
 
 The service opens two ports, and the split is deliberate:

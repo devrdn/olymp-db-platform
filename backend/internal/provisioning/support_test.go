@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
@@ -29,30 +30,29 @@ import (
 // asked what it was told to do.
 var testPool *pgxpool.Pool
 
+// TestMain opens the pool through storagetest, which refuses any database that
+// is not a test database. These tests commit fixtures, and they used to commit
+// them into the database `make run` serves the product from.
 func TestMain(m *testing.M) {
-	dsn := os.Getenv("CORE_DB_DSN")
-	if dsn == "" {
-		os.Exit(m.Run())
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, dsn)
+	pool, err := storagetest.OpenCore(ctx, nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cannot open the core database: %v\n", err)
+		fmt.Fprintf(os.Stderr, "cannot use the core test database: %v\n", err)
 		os.Exit(1)
 	}
-	if err := pool.Ping(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "cannot reach the core database: %v\n", err)
-		os.Exit(1)
+	if pool == nil {
+		os.Exit(m.Run())
 	}
 	testPool = pool
 
 	// The standing net under every test in this package, not only the reclaim
 	// ones: whatever a test does, no game database row that was already in the
-	// developer's installation may have a different status when the package is
-	// done. See gameRowStatuses below.
+	// database may have a different status when the package is done. See
+	// gameRowStatuses below. storagetest now keeps these tests off the
+	// developer's installation altogether; this still catches a test that
+	// damages rows it did not create, which is a defect wherever the rows live.
 	before := gameRowStatuses(ctx)
 
 	code := m.Run()
