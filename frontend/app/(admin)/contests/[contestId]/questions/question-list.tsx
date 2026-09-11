@@ -6,6 +6,7 @@ import { useActionState } from "react";
 import { StateView } from "@/components/product/state-view";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
+import { Tooltip } from "@/components/ui/tooltip";
 import { answerable, untranslated } from "@/lib/api/content-terms";
 import { type Question } from "@/lib/api/content";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -128,10 +129,15 @@ export function QuestionList({
                       {/* Only what is wrong or unusual is marked. A row with no
                           tags is a question that is finished, and that is worth
                           being able to see down the column. */}
+                      {/* `title` cannot be reached by touch or keyboard, so
+                          the explanation sits beside the tag as the same
+                          Tooltip every "?" affordance in the product uses,
+                          rather than on the tag itself. */}
                       {!question.isVisible ? (
-                        <Tag tone="mute" title={t.hiddenHint}>
-                          {t.hidden}
-                        </Tag>
+                        <span className="flex items-center gap-1">
+                          <Tag tone="mute">{t.hidden}</Tag>
+                          <Tooltip label={dict.chrome.helpLabel}>{t.hiddenHint}</Tooltip>
+                        </span>
                       ) : null}
                       {!answerable(question) ? <Tag tone="warn">{t.noAnswer}</Tag> : null}
                       {missing.length > 0 ? (
