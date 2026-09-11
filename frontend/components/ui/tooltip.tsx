@@ -82,14 +82,22 @@ export function Tooltip({
   label,
   children,
   className,
+  id,
 }: {
   /** The trigger's accessible name, from the dictionary (`chrome.helpLabel`). */
   label: string;
   /** The explanation itself. */
   children: React.ReactNode;
   className?: string;
+  /**
+   * The bubble's id, when something besides the trigger must point at it.
+   * `Field` passes one so the control it wraps is described by the
+   * explanation too — see that component for why.
+   */
+  id?: string;
 }) {
-  const bubbleId = React.useId();
+  const generatedId = React.useId();
+  const bubbleId = id ?? generatedId;
   const [openers, setOpeners] = React.useState<Openers>(CLOSED);
   const open = openers.hover || openers.focus || openers.pinned;
 
