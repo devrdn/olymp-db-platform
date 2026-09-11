@@ -3,7 +3,8 @@ import { SectionNav } from "@/components/layout/section-nav";
 import { fetchIdentity } from "@/lib/auth/session";
 import { branding } from "@/lib/api/branding";
 import { imageHref } from "@/lib/api/settings";
-import { ParticipantDictionary } from "@/lib/i18n/client";
+import { ParticipantDictionaryProvider } from "@/lib/i18n/client";
+import { selectParticipant } from "@/lib/i18n/scopes";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -59,9 +60,9 @@ export default async function ParticipantLayout({ children }: { children: React.
           and none of that is a section the root scope carries. The sections
           are chosen here, on the server, so what crosses the wire is what
           this subtree can actually read (finding 5). */}
-      <ParticipantDictionary.Provider dict={ParticipantDictionary.select(dict)} locale={locale}>
+      <ParticipantDictionaryProvider dict={selectParticipant(dict)} locale={locale}>
         {children}
-      </ParticipantDictionary.Provider>
+      </ParticipantDictionaryProvider>
     </ProductShell>
   );
 }

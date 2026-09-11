@@ -3,7 +3,8 @@ import { JetBrains_Mono, Literata, Onest } from "next/font/google";
 
 import { branding } from "@/lib/api/branding";
 import { imageHref } from "@/lib/api/settings";
-import { AppDictionary } from "@/lib/i18n/client";
+import { AppDictionaryProvider } from "@/lib/i18n/client";
+import { selectApp } from "@/lib/i18n/scopes";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { themeAttribute } from "@/lib/theme/config";
 import { activeTheme } from "@/lib/theme/server";
@@ -97,9 +98,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             on one. What crosses is this scope's own sections and no others
             (finding 5) — the root boundary reads one, and a group whose
             boundaries read more adds its own scope in its own layout. */}
-        <AppDictionary.Provider dict={AppDictionary.select(dict)} locale={locale}>
+        <AppDictionaryProvider dict={selectApp(dict)} locale={locale}>
           {children}
-        </AppDictionary.Provider>
+        </AppDictionaryProvider>
       </body>
     </html>
   );
