@@ -127,7 +127,11 @@ describe("QuestionEditor, rules on screen and explanations behind a question mar
     const t = dict.workspace.question.shape;
     expect(screen.getByText(t.attemptsHint)).toBeVisible();
     expect(screen.getByText(t.choicesHint)).toBeVisible();
-    expect(screen.getByLabelText(t.choices)).toHaveAccessibleDescription(t.choicesHint);
+    // The rule, then the explanation behind the "?": a screen-reader user who
+    // moves between fields reaches the control, never the button beside it.
+    expect(screen.getByLabelText(t.choices)).toHaveAccessibleDescription(
+      `${t.choicesHint} ${t.choicesHelp}`,
+    );
   });
 
   test("puts the penalty's and the identifiers' reasons behind a question mark", async () => {
