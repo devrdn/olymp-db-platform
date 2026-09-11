@@ -34,6 +34,59 @@ services:
     ports:
       - "127.0.0.1:${GAME_DB_PORT:-5433}:5432"
 
+  # A second game cluster, for the tests and nothing else.
+  #
+  # Not a database inside pg-game, because on a game cluster the unit the
+  # tests act on is the cluster: CREATE DATABASE and DROP DATABASE name
+  # cluster-wide objects, and preparing the cluster rewrites the shared
+  # game_reader, game_writer and game_author roles — the very roles a running
+  # Query Runner authenticates as. Pointed at pg-game, the tests once took
+  # those credentials away mid-session and left their own databases behind in
+  # the cluster the product's disk quota is measured on. Here they can do
+  # neither: nothing but the tests ever connects to this one.
+  #
+  # Written out rather than `extends: pg-game`, which would copy pg-game's
+  # data volume along with everything else and put two servers on one data
+  # directory. Its data lives in memory and dies with the container, and the
+  # Makefile recreates the container for every run, so no run inherits what
+  # the last one left. It is started by the test targets themselves (`make
+  # test-game-build`, `make test-game`), never by `make dev-up`.
+  #
+  # The maintenance database ends in _test, which is how the tests recognise a
+  # cluster that is theirs (internal/platform/storage/storagetest).
+  pg-game-test:
+    image: postgres:16-alpine
+    profiles: [test]
+    environment:
+      POSTGRES_USER: ${GAME_DB_USER:?set GAME_DB_USER in .env}
+      POSTGRES_PASSWORD: ${GAME_DB_PASSWORD:?set GAME_DB_PASSWORD in .env}
+      POSTGRES_DB: ${GAME_DB_NAME:-dbcontest_game}_test
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    # The settings pg-game runs with that a test can observe, so a guarantee
+    # proved here is one the product's cluster keeps too (CLAUDE.md rule 10).
+    command:
+      - postgres
+      - -c
+      - idle_in_transaction_session_timeout=30s
+      - -c
+      - max_connections=200
+    tmpfs:
+      - /var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${GAME_TEST_DB_PORT:-5434}:5432"
+    # Over TCP, not the socket: during initialisation the image runs a
+    # temporary server on the socket alone, and a socket check would call the
+    # cluster ready before the real one — and the database — exist.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 1s
+      timeout: 5s
+      retries: 60
+    # Off the internal network: nothing in the stack has any business reaching
+    # the tests' cluster, and that network's range is the one TRUSTED_PROXIES
+    # names.
+    networks: [tests]
+
   redis:
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
@@ -94,3 +147,7 @@ services:
     # the one pg-core is actually on, and "pg-core" would not resolve at all —
     # caught by trying to actually connect, not by reading the config.
     networks: [internal]
+
+# The test cluster's own network (see pg-game-test above).
+networks:
+  tests: {}
