@@ -6,13 +6,13 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Tooltip } from "@/components/ui/tooltip";
 import { type Contest } from "@/lib/api/contests";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
@@ -83,8 +83,13 @@ function TitleForm({
       <input type="hidden" name="contestId" value={contest.id} />
 
       <DialogHeader>
-        <DialogTitle>{t.heading}</DialogTitle>
-        <DialogDescription>{t.hint}</DialogDescription>
+        {/* The "?" beside the title rather than inside it, so the dialog's
+            name stays the title alone. Its Escape closes the bubble and not
+            the dialog — see `Tooltip` for how. */}
+        <div className="flex items-center gap-2">
+          <DialogTitle>{t.heading}</DialogTitle>
+          <Tooltip label={dict.chrome.helpLabel}>{t.help}</Tooltip>
+        </div>
       </DialogHeader>
 
       <div className="flex flex-col gap-4">

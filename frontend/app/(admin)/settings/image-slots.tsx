@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 
 import { buttonVariants } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import { imageHref, type ImageKind } from "@/lib/api/settings-terms";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
@@ -24,13 +25,14 @@ import { removeImageAction, uploadImageAction, type SettingsState } from "./acti
 function Slot({
   kind,
   label,
-  hint,
+  help,
   hash,
   dict,
 }: {
   kind: ImageKind;
   label: string;
-  hint: string;
+  /** What this mark is for; behind the "?" beside its label. */
+  help: string;
   hash?: string;
   dict: Dictionary;
 }) {
@@ -48,9 +50,9 @@ function Slot({
 
   return (
     <div className="flex flex-col gap-2.5 border-t border-line pt-5">
-      <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-1.5">
         <span className="font-mono text-label text-ink uppercase">{label}</span>
-        <span className="max-w-body text-small text-ink-2">{hint}</span>
+        <Tooltip label={dict.chrome.helpLabel}>{help}</Tooltip>
       </div>
 
       <div className="flex flex-wrap items-center gap-4">
@@ -121,18 +123,26 @@ export function ImageSlots({
   return (
     <section className="flex max-w-narrative flex-col gap-5">
       <div className="flex flex-col gap-1.5">
-        <h2 className="text-h3 text-ink">{t.heading}</h2>
-        {/* Says what is accepted and, for the one that is not, why. An
-            administrator refused an SVG with no reason will try again. */}
+        <div className="flex items-center gap-2">
+          <h2 className="text-h3 text-ink">{t.heading}</h2>
+          {/* Why the format is read from the file, why no .ico, and why an
+              SVG is refused — an administrator refused one with no reason
+              will try again, so the reason is one press away. */}
+          <Tooltip label={dict.chrome.helpLabel}>{t.help}</Tooltip>
+        </div>
+        {/* What is accepted, and the one thing that is not, stays on screen
+            above the upload buttons: it was put before the upload on purpose,
+            so a 5 MB photo from a phone is not chosen blind and refused after
+            the fact. Behind a hover, it would be. */}
         <p className="max-w-body text-small text-ink-2">{t.hint}</p>
       </div>
 
-      <Slot kind="logo" label={t.logo} hint={t.logoHint} hash={images.logo} dict={dict} />
-      <Slot kind="icon" label={t.icon} hint={t.iconHint} hash={images.icon} dict={dict} />
+      <Slot kind="logo" label={t.logo} help={t.logoHelp} hash={images.logo} dict={dict} />
+      <Slot kind="icon" label={t.icon} help={t.iconHelp} hash={images.icon} dict={dict} />
       <Slot
         kind="favicon"
         label={t.favicon}
-        hint={t.faviconHint}
+        help={t.faviconHelp}
         hash={images.favicon}
         dict={dict}
       />
