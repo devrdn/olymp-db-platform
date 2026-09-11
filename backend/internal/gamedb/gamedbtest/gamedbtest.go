@@ -10,24 +10,37 @@
 // developer with no cluster to hand can still run `make test`. `make test-game`
 // is what makes sure they actually run.
 //
+// # Which cluster
+//
+// Never the one the product runs on. On a game cluster what the tests act on
+// is the cluster itself: CREATE DATABASE and DROP DATABASE name cluster-wide
+// objects, and preparing the cluster rewrites game_reader, game_writer and
+// game_author, which are cluster-wide too. Pointed at the development
+// cluster, test runs did both to the installation — took a running Query
+// Runner's credentials away mid-session, so the next participant's query
+// failed to connect, and left databases of their own behind in the cluster
+// the product's disk quota is measured on.
+//
+// So the test targets start a cluster of their own (pg-game-test in
+// deploy/docker-compose.dev.yml, recreated for every run), CI starts one per
+// job, and connect refuses any cluster whose maintenance database — the one
+// GAME_DB_DSN names, as the server reports it — does not end in "_test". That
+// is the core database's rule (internal/platform/storage/storagetest), applied
+// here to the database that stands for the cluster.
+//
 // # Why it does not invent credentials
 //
-// The cluster it prepares is the same one `make dev-up` starts and the same
-// pair of roles `make runner` connects as — game_reader and game_writer are
-// cluster-wide, and preparing them states their passwords. So a harness with
-// passwords of its own is a test run that silently takes a running Query
-// Runner's credentials away from it: every query after it fails to connect,
-// and the participant is the one who finds out. That is not hypothetical. It
-// is where the connection failure a console once displayed came from.
-//
-// The roles stay shared, because what these tests prove is what PostgreSQL
-// refuses to *those* roles as the deploy prepares them — a copy under another
-// name would be a copy of the code under test rather than the thing itself.
-// What changes is where the passwords come from: GAME_READER_PASSWORD and
-// GAME_WRITER_PASSWORD, the same two variables the deployment sets, so
-// preparing the cluster for a test writes back exactly what is already there.
-// Missing, they are a hard failure and never a default — a harness guessing a
-// password here is the whole defect.
+// The roles are the product's roles, by name and by the code that prepares
+// them (gamedb.PrepareCluster), because what these tests prove is what
+// PostgreSQL refuses to *those* roles as the deploy prepares them — a copy
+// under another name would be a copy of the code under test rather than the
+// thing itself. Their passwords are the caller's to state, in
+// GAME_READER_PASSWORD, GAME_WRITER_PASSWORD and GAME_AUTHOR_PASSWORD: the
+// Makefile passes deploy/.env's, CI passes literals. Missing, they are a hard
+// failure and never a default. A harness that picked its own is how a test
+// run once locked the Query Runner out of a shared cluster; the test cluster
+// is what makes that impossible now, and refusing to guess keeps it harmless
+// if a DSN ever points somewhere the guard has been talked into accepting.
 package gamedbtest
 
 import (
@@ -40,6 +53,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -64,6 +78,10 @@ var (
 // connect opens the cluster once for the whole test binary. Lazy rather than
 // in a TestMain, so that a package using these helpers does not have to have
 // one — and so two packages cannot disagree about how it is set up.
+//
+// Through storagetest.Open, so the pool refuses a cluster that is not a test
+// cluster before any helper has prepared a role or created a database on it.
+// The refusal lands in open and fails every test that asks for the cluster.
 func connect() {
 	dsn = os.Getenv("GAME_DB_DSN")
 	if dsn == "" {
@@ -73,17 +91,18 @@ func connect() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	p, err := pgxpool.New(ctx, dsn)
+	p, err := storagetest.Open(ctx, dsn, nil)
 	if err != nil {
-		open = fmt.Errorf("opening the game cluster: %w", err)
-		return
-	}
-	if err := p.Ping(ctx); err != nil {
-		open = fmt.Errorf("reaching the game cluster: %w", err)
+		open = fmt.Errorf("the game cluster in GAME_DB_DSN: %w", err)
 		return
 	}
 	pool = p
 }
+
+// Configured reports whether this run was given a game cluster at all. A test
+// that has to decide before it builds any fixture asks this; everything else
+// simply calls Admin or Scratch, which skip on their own.
+func Configured() bool { return os.Getenv("GAME_DB_DSN") != "" }
 
 // ReaderPassword and WriterPassword are what the two participant roles
 // authenticate with, for the tests that connect as one of them.
@@ -140,9 +159,8 @@ func Admin(t *testing.T) *pgxpool.Pool {
 
 	requireCluster(t)
 
-	// The deployment's own passwords, so that preparing the cluster for a test
-	// writes back what a running Query Runner is already using instead of
-	// locking it out.
+	// The caller's passwords, never ones made up here: see the package
+	// comment.
 	if err := gamedb.PrepareCluster(t.Context(), pool, gamedb.Roles{
 		ReaderPassword: ReaderPassword(t),
 		WriterPassword: WriterPassword(t),
@@ -154,10 +172,14 @@ func Admin(t *testing.T) *pgxpool.Pool {
 }
 
 // DSN builds a connection string for a role and a database.
+//
+// On the cluster connect accepted, and only on it: a refused or missing
+// cluster stops the test here rather than handing it an address to connect to
+// on its own, outside the guard.
 func DSN(t *testing.T, user, password, database string) string {
 	t.Helper()
 
-	once.Do(connect)
+	requireCluster(t)
 	parsed, err := url.Parse(dsn)
 	if err != nil {
 		t.Fatalf("GAME_DB_DSN is not a URL: %v", err)
@@ -171,7 +193,7 @@ func DSN(t *testing.T, user, password, database string) string {
 func AdminCredentials(t *testing.T) (string, string) {
 	t.Helper()
 
-	once.Do(connect)
+	requireCluster(t)
 	parsed, err := url.Parse(dsn)
 	if err != nil {
 		t.Fatalf("GAME_DB_DSN is not a URL: %v", err)

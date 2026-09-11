@@ -90,6 +90,13 @@ whose name — as the server reports it — does not end in `_test`, so a copied
 mistyped `CORE_DB_DSN` fails the run instead of filling a real database with
 fixtures.
 
+The game-cluster tests get a whole cluster of their own, `pg-game-test`, which
+`make test-game` and `make test-game-build` recreate for every run: what those
+tests act on — databases and the shared participant roles — is cluster-wide,
+so a separate database inside `pg-game` would isolate nothing.
+`internal/gamedb/gamedbtest` applies the same `_test` rule to the maintenance
+database `GAME_DB_DSN` names.
+
 ## Two listeners
 
 The service opens two ports, and the split is deliberate:

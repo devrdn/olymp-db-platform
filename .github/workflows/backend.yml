@@ -79,17 +79,20 @@ jobs:
       # The game cluster, as deploy/docker-compose.yml starts it: the
       # provisioning role owns it, and the three roles the tests prepare
       # (game_reader, game_writer, game_author) are created by the tests
-      # themselves through gamedb.PrepareCluster. Published on 5433, the port
-      # the development overlay uses, so nothing about a DSN differs between
-      # a developer's stack and this one.
+      # themselves through gamedb.PrepareCluster. Published on 5434 with a
+      # maintenance database named dbcontest_game_test — what the development
+      # overlay gives pg-game-test, the cluster `make test-game` runs on — so
+      # nothing about the DSN differs between a developer's test run and this
+      # one, and gamedbtest's refusal of a cluster that is not a test cluster
+      # is exercised here too.
       postgres-game:
         image: postgres:16-alpine
         env:
           POSTGRES_USER: dbcontest_game
           POSTGRES_PASSWORD: dbcontest
-          POSTGRES_DB: dbcontest_game
+          POSTGRES_DB: dbcontest_game_test
         ports:
-          - 5433:5432
+          - 5434:5432
         options: >-
           --health-cmd "pg_isready -U dbcontest_game"
           --health-interval 5s
@@ -109,15 +112,14 @@ jobs:
     # The same reasoning covers the game cluster's four values below.
     # GAME_DB_DSN connects as the provisioning role; the three role passwords
     # are what gamedbtest writes onto game_reader, game_writer and
-    # game_author while preparing the cluster. On a developer's machine those
-    # three are shared with a running Query Runner, which is why `make
-    # test-game` insists on taking them from deploy/.env rather than inventing
-    # any (gamedbtest's own package doc). Here there is no Query Runner and no
-    # cluster older than this job, so a literal is the honest form: it names
-    # what the tests will set, on a container destroyed with the runner.
+    # game_author while preparing the cluster. gamedbtest never invents them
+    # (its own package doc), so somebody has to state them; here there is no
+    # Query Runner and no cluster older than this job, so a literal is the
+    # honest form: it names what the tests will set, on a container destroyed
+    # with the runner.
     env:
       CORE_DB_DSN: postgres://dbcontest:dbcontest@localhost:5432/dbcontest_core_test?sslmode=disable
-      GAME_DB_DSN: postgres://dbcontest_game:dbcontest@localhost:5433/dbcontest_game?sslmode=disable
+      GAME_DB_DSN: postgres://dbcontest_game:dbcontest@localhost:5434/dbcontest_game_test?sslmode=disable
       GAME_READER_PASSWORD: dbcontest
       GAME_WRITER_PASSWORD: dbcontest
       GAME_AUTHOR_PASSWORD: dbcontest

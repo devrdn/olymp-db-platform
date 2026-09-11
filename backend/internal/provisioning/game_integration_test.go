@@ -3,7 +3,6 @@ package provisioning_test
 import (
 	"context"
 	"errors"
-	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -31,7 +30,7 @@ func TestAScriptSavedInTheCoreDatabaseBecomesARealDatabaseOnTheGameCluster(t *te
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
 	}
-	if os.Getenv("GAME_DB_DSN") == "" {
+	if !gamedbtest.Configured() {
 		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
 	}
 
@@ -119,7 +118,7 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesTellsTheOrganiserWhat
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
 	}
-	if os.Getenv("GAME_DB_DSN") == "" {
+	if !gamedbtest.Configured() {
 		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
 	}
 
@@ -191,7 +190,7 @@ func TestAScriptSavedInTheCoreDatabaseThatPostgreSQLRefusesNamesTheLineOfTheFile
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
 	}
-	if os.Getenv("GAME_DB_DSN") == "" {
+	if !gamedbtest.Configured() {
 		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
 	}
 
@@ -258,7 +257,7 @@ func TestAScriptSavedInTheCoreDatabaseWithACOPYBlockBuildsARealTable(t *testing.
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
 	}
-	if os.Getenv("GAME_DB_DSN") == "" {
+	if !gamedbtest.Configured() {
 		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
 	}
 
@@ -350,7 +349,7 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionBuildsARealData
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
 	}
-	if os.Getenv("GAME_DB_DSN") == "" {
+	if !gamedbtest.Configured() {
 		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
 	}
 
@@ -489,7 +488,7 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
 	}
-	if os.Getenv("GAME_DB_DSN") == "" {
+	if !gamedbtest.Configured() {
 		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
 	}
 
@@ -704,7 +703,7 @@ func TestAScriptSavedInTheCoreDatabaseAgreesWithPostgreSQLAboutEveryValueForm(t 
 	if testPool == nil {
 		t.Skip("CORE_DB_DSN is not set; run `make test-game-build`")
 	}
-	if os.Getenv("GAME_DB_DSN") == "" {
+	if !gamedbtest.Configured() {
 		t.Skip("GAME_DB_DSN is not set; run `make test-game-build`")
 	}
 
