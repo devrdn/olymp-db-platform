@@ -29,18 +29,35 @@ describe("the real editor", () => {
     // and how long that takes is a property of the machine running the suite
     // rather than of the editor: a fixed 800ms passed alone and failed under a
     // full-suite run, which is a flaky test rather than a caught bug.
-    const surface = await waitFor(() => {
-      const found = document.querySelector(".ProseMirror");
-      expect(found?.textContent).toContain("A heading");
-      return found;
-    });
+    //
+    // `waitFor`'s own default budget (1000ms) turned out to be the same bug
+    // wearing a smaller number: tuned for a UI update settling, not for
+    // building a ProseMirror instance behind a dynamic import, it still
+    // passed on an idle machine and still failed once several `vitest run`
+    // processes were contending for the same CPUs (reproduced by running
+    // this suite four times in parallel). The wait is condition-based
+    // either way — this only widens the ceiling to what that contention was
+    // observed to need, with the test's own timeout raised to match so
+    // Vitest is not the one that cuts it short.
+    const surface = await waitFor(
+      () => {
+        const found = document.querySelector(".ProseMirror");
+        expect(found?.textContent).toContain("A heading");
+        return found;
+      },
+      { timeout: 10_000 },
+    );
     expect(surface).toHaveAttribute("contenteditable", "true");
 
     // The form field carries the Markdown, not the rendered text: the field is
     // what a save actually sends.
     const field = document.querySelector('input[name="story"]') as HTMLInputElement;
     expect(field.value).toContain("# A heading");
-  });
+    // Matches the `waitFor` timeout above, with headroom: Vitest's own
+    // default test timeout (5000ms) sits inside that budget, so without
+    // this Vitest would be the one to cut the test off before `waitFor`
+    // ever got to.
+  }, 15_000);
 
   // The code block's own editor is off, because it crashes. What must survive
   // that is the block itself: a fence is still written, saved and rendered as
@@ -54,14 +71,20 @@ describe("the real editor", () => {
         labels={{ expand: "e", collapse: "c", unavailable: "plain" }}
       />,
     );
-    await waitFor(() =>
-      expect(document.querySelector(".ProseMirror")?.textContent).toContain("SELECT 1;"),
+    // Same reasoning as the test above: `waitFor`'s default 1000ms ceiling is
+    // sized for a UI update, not for a ProseMirror instance built behind a
+    // dynamic import, and this editor is a fresh instance again (a new
+    // `render`, cleaned up between tests) rather than one reusing work the
+    // first test already paid for.
+    await waitFor(
+      () => expect(document.querySelector(".ProseMirror")?.textContent).toContain("SELECT 1;"),
+      { timeout: 10_000 },
     );
 
     const field = document.querySelector('input[name="story"]') as HTMLInputElement;
     expect(field.value).toContain("```");
     expect(field.value).toContain("SELECT 1;");
-  });
+  }, 15_000);
 });
 
 /**
