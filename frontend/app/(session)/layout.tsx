@@ -5,7 +5,8 @@ import { homeFor } from "@/lib/auth/destination";
 import { fetchIdentity } from "@/lib/auth/session";
 import { branding } from "@/lib/api/branding";
 import { imageHref } from "@/lib/api/settings";
-import { SessionDictionary } from "@/lib/i18n/client";
+import { SessionDictionaryProvider } from "@/lib/i18n/client";
+import { selectSession } from "@/lib/i18n/scopes";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
@@ -48,9 +49,9 @@ export default async function SessionLayout({ children }: { children: React.Reac
           and none of that is a section the root scope carries. The sections
           are chosen here, on the server, so what crosses the wire is what
           this subtree can actually read (finding 5). */}
-      <SessionDictionary.Provider dict={SessionDictionary.select(dict)} locale={locale}>
+      <SessionDictionaryProvider dict={selectSession(dict)} locale={locale}>
         {children}
-      </SessionDictionary.Provider>
+      </SessionDictionaryProvider>
     </ProductShell>
   );
 }
