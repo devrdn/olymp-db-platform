@@ -99,13 +99,15 @@ describe("Field, with an explanation behind a question mark", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent(WHY);
   });
 
-  test("leaves the control's name and description exactly what they were", () => {
+  test("keeps the control's name the label, and describes it by the rule and then the explanation", () => {
     withHelp();
 
     // Beside the label, not inside it: the "?" does not become "Attempts Hint".
     const control = screen.getByRole("textbox", { name: "Attempts" });
     expect(control).toHaveAccessibleName("Attempts");
-    expect(control).toHaveAccessibleDescription(RULE);
+    // The rule first, because it is what somebody must know before typing;
+    // the explanation after, so a user moving between fields still hears it.
+    expect(control).toHaveAccessibleDescription(`${RULE} ${WHY}`);
   });
 
   test("still lets an error take the rule's slot, and keeps the caller's aria-invalid", () => {
@@ -113,7 +115,48 @@ describe("Field, with an explanation behind a question mark", () => {
 
     const control = screen.getByRole("textbox", { name: "Attempts" });
     expect(control).toHaveAttribute("aria-invalid", "true");
-    expect(control).toHaveAccessibleDescription("Must be a whole number.");
+    // The error replaces the rule, not the explanation: why the field exists
+    // is still true when the value in it is wrong.
+    expect(control).toHaveAccessibleDescription(`Must be a whole number. ${WHY}`);
     expect(screen.queryByText(RULE)).toBeNull();
+  });
+
+  /**
+   * A screen-reader user who moves between form fields — NVDA's F key, the
+   * form-control rotor in VoiceOver — lands on the control and never on the
+   * "?" beside its label. Before explanations moved behind a question mark
+   * that user heard the whole explanation on reaching the field; if the field
+   * stopped naming it, the redesign would have taken it away from exactly the
+   * people who could not see the clutter it was removing.
+   */
+  test("describes the control by its explanation, so moving between fields still reads it", () => {
+    render(
+      <Field id="penalty" label="Penalty" help="Taken off for every wrong attempt already made." helpLabel="Explain">
+        <input />
+      </Field>,
+    );
+
+    const control = screen.getByLabelText("Penalty");
+    expect(control).toHaveAccessibleDescription("Taken off for every wrong attempt already made.");
+  });
+
+  test("keeps the visible rule in the description alongside the explanation", () => {
+    render(
+      <Field
+        id="network"
+        label="Network"
+        hint="CIDR ranges, comma separated."
+        help="Checked on every attempt, against the address a trusted proxy reports."
+        helpLabel="Explain"
+      >
+        <input />
+      </Field>,
+    );
+
+    const described = screen.getByLabelText("Network").getAttribute("aria-describedby") ?? "";
+    expect(described.split(" ")).toHaveLength(2);
+    expect(screen.getByLabelText("Network")).toHaveAccessibleDescription(
+      "CIDR ranges, comma separated. Checked on every attempt, against the address a trusted proxy reports.",
+    );
   });
 });

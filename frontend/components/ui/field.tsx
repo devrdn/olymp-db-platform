@@ -38,10 +38,18 @@ type FieldHelp =
  * image rule was once moved above the upload so a 5 MB phone photo stops
  * being refused after the fact; behind a hover it would be refused after the
  * fact again). The "?" sits beside the `<label>`, never inside it, so the
- * control's name stays exactly the label; and it is not added to the
- * control's `aria-describedby`, whose contents stay what they were — the
- * message and a form-level failure — because the "?" already carries the
- * explanation as its own description, one Tab stop earlier.
+ * control's name stays exactly the label.
+ *
+ * The explanation also describes the control itself, not only the "?". A
+ * screen-reader user moving between form fields — NVDA's F key, VoiceOver's
+ * form-control rotor — lands on the control and never on the button beside
+ * its label. Before explanations moved behind a question mark that user heard
+ * the whole explanation on reaching the field; describing only the "?" would
+ * have taken it away from exactly the people who could not see the clutter
+ * the question mark exists to remove. The cost is that somebody who Tabs
+ * through both hears it twice, which is the lesser loss. The bubble stays in
+ * the DOM while closed (see `Tooltip`), so the description resolves whether
+ * or not it is open.
  *
  * A failure that belongs to the form rather than to one field is passed as
  * `invalid` plus `describedBy`: the message is written once, elsewhere, and
@@ -75,8 +83,11 @@ export function Field({
   children: React.ReactElement<React.ComponentProps<"input">>;
 } & FieldHelp) {
   const messageId = `${id}-message`;
+  const helpId = `${id}-help`;
   const message = error ?? hint;
-  const describedByIds = [message ? messageId : null, describedBy].filter(Boolean).join(" ");
+  const describedByIds = [message ? messageId : null, help && helpLabel ? helpId : null, describedBy]
+    .filter(Boolean)
+    .join(" ");
 
   /**
    * Only keys that carry a value go into the clone.
@@ -98,7 +109,9 @@ export function Field({
       {help && helpLabel ? (
         <div className="flex items-center gap-1.5">
           <Label htmlFor={id}>{label}</Label>
-          <Tooltip label={helpLabel}>{help}</Tooltip>
+          <Tooltip id={helpId} label={helpLabel}>
+            {help}
+          </Tooltip>
         </div>
       ) : (
         <Label htmlFor={id}>{label}</Label>
