@@ -58,6 +58,14 @@ GAME_DB_DSN ?= postgres://$(GAME_DB_USER):$(GAME_DB_PASSWORD)@localhost:$(GAME_D
 CORE_TEST_DB_NAME ?= $(CORE_DB_NAME)_test
 CORE_TEST_DB_DSN  ?= postgres://$(CORE_DB_USER):$(CORE_DB_PASSWORD)@localhost:$(CORE_DB_PORT)/$(CORE_TEST_DB_NAME)?sslmode=disable
 
+# The game cluster the tests run against: a cluster of its own (pg-game-test
+# in the development overlay), not a database inside pg-game, because what
+# the game tests act on — databases and roles — is cluster-wide. Its
+# maintenance database ends in _test, which is what the tests check before
+# they touch it (internal/gamedb/gamedbtest).
+GAME_TEST_DB_PORT ?= 5434
+GAME_TEST_DB_DSN  ?= postgres://$(GAME_DB_USER):$(GAME_DB_PASSWORD)@localhost:$(GAME_TEST_DB_PORT)/$(GAME_DB_NAME)_test?sslmode=disable
+
 # Redis is optional: with no address the service uses its in-process cache.
 #
 # deploy/.env also sets REDIS_ADDR — for the containerized api service, which
@@ -156,29 +164,37 @@ test-db-reset: require-env
 
 # The game cluster tests connect as the participant's own database role and
 # provoke what it must not be able to do. They cannot be faked: every guarantee
-# under test is a refusal by PostgreSQL, not by our code. `make dev-up` first —
-# it starts pg-game along with the core database.
+# under test is a refusal by PostgreSQL, not by our code.
 #
-# The three role passwords travel with the DSN because these tests prepare the
-# cluster, and preparing it states what game_reader, game_writer and
-# game_author authenticate with. They are the same roles `make runner` connects as, so a
-# harness with passwords of its own would take a running Query Runner's
-# credentials away mid-session; given the deployment's own, a test run writes
-# back what is already there and both keep working. Missing, the tests stop
-# and say so rather than inventing a password (internal/gamedb/gamedbtest).
+# They run on pg-game-test, never on pg-game. Preparing a cluster rewrites the
+# shared game_reader, game_writer and game_author roles, and on pg-game those
+# are what `make runner` authenticates as: a test run there once took a
+# running Query Runner's credentials away and broke the installation. The
+# three role passwords still travel with the DSN, because preparing the
+# cluster states them and the tests refuse to invent any
+# (internal/gamedb/gamedbtest); deploy/.env's are as good as any on a cluster
+# nothing else uses.
 GAME_ROLE_PASSWORDS := GAME_READER_PASSWORD="$(GAME_READER_PASSWORD)" GAME_WRITER_PASSWORD="$(GAME_WRITER_PASSWORD)" GAME_AUTHOR_PASSWORD="$(GAME_AUTHOR_PASSWORD)"
 
-test-game: require-env ## Run the game cluster tests against the development cluster
-	cd $(BACKEND) && GAME_DB_DSN="$(GAME_DB_DSN)" $(GAME_ROLE_PASSWORDS) \
+test-game: require-env test-game-cluster ## Run the game cluster tests against a fresh test cluster
+	cd $(BACKEND) && GAME_DB_DSN="$(GAME_TEST_DB_DSN)" $(GAME_ROLE_PASSWORDS) \
 		go test -count=1 ./internal/gamedb/... ./internal/queryrunner/... ./internal/rpc/...
+
+# Recreated, not merely started: its data lives in memory, so a new container
+# is an empty cluster, and no run inherits a database or a role the last one
+# left behind. --wait holds until the health check sees the real server over
+# TCP, so the tests never meet the image's initialisation phase.
+.PHONY: test-game-cluster
+test-game-cluster: require-env
+	GAME_TEST_DB_PORT=$(GAME_TEST_DB_PORT) $(COMPOSE_DEV) --profile test up -d --wait --force-recreate pg-game-test
 
 # The one test that crosses both clusters: a script saved in the core database
 # has to become a real database on the game cluster. Every other test of that
 # feature stops at a boundary, which is how BuildTemplate went months with no
 # caller at all.
 .PHONY: test-game-build
-test-game-build: require-env test-db-reset
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_TEST_DB_DSN)" GAME_DB_DSN="$(GAME_DB_DSN)" $(GAME_ROLE_PASSWORDS) \
+test-game-build: require-env test-db-reset test-game-cluster
+	cd $(BACKEND) && CORE_DB_DSN="$(CORE_TEST_DB_DSN)" GAME_DB_DSN="$(GAME_TEST_DB_DSN)" $(GAME_ROLE_PASSWORDS) \
 		go test -count=1 -run TestAScriptSavedInTheCoreDatabase ./internal/provisioning/
 
 # The contract between the Core API and the Query Runner. Generated code is
@@ -493,8 +509,9 @@ dev-down: ## Stop the development infrastructure
 	# dev-up starts redis by naming it, which activates its "shared" profile for
 	# that command only. A plain `down` does not re-activate the profile, so it
 	# would leave redis running and then refuse to remove the network it is still
-	# attached to. Activating the profiles here tears down everything dev can start.
-	$(COMPOSE_DEV) --profile shared --profile observability --profile dbui --profile full down
+	# attached to. Activating the profiles here tears down everything dev can start,
+	# the test targets' own game cluster included.
+	$(COMPOSE_DEV) --profile shared --profile observability --profile dbui --profile full --profile test down
 
 dev-logs: ## Follow the development infrastructure logs
 	$(COMPOSE_DEV) logs -f

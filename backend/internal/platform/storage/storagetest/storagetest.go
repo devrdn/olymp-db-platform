@@ -73,8 +73,8 @@ func CheckName(name string) error {
 	if len(name) > len(Suffix) && strings.HasSuffix(name, Suffix) {
 		return nil
 	}
-	return fmt.Errorf("%w: %q does not end in %q. Point the tests at a database of their own "+
-		"(`make test-db` creates one) — never at the one the product runs from",
+	return fmt.Errorf("%w: %q does not end in %q. The tests run only against databases of their own "+
+		"— `make test-db` and `make test-game-build` provide them — never against the ones the product runs from",
 		ErrNotATestDatabase, name, Suffix)
 }
 
@@ -143,7 +143,7 @@ func Open(ctx context.Context, dsn string, configure func(*pgxpool.Config)) (*pg
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("opening the test database: %w", err)
+		return nil, fmt.Errorf("opening the database: %w", err)
 	}
 
 	// Ping takes a connection from the pool, which is what runs the guard:
@@ -152,7 +152,7 @@ func Open(ctx context.Context, dsn string, configure func(*pgxpool.Config)) (*pg
 	defer cancel()
 	if err := pool.Ping(ping); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("reaching the test database: %w", err)
+		return nil, fmt.Errorf("connecting: %w", err)
 	}
 	return pool, nil
 }
