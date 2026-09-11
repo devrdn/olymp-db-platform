@@ -126,3 +126,63 @@ describe("ContestPanel, question order and scoring", () => {
     ).toBeInTheDocument();
   });
 });
+
+/**
+ * The client's split between what stays on screen and what moves behind a
+ * "?": a format or a limit is needed before the mistake, an explanation is
+ * read once.
+ */
+describe("ContestPanel, rules on screen and explanations behind a question mark", () => {
+  test("keeps the network and rate rules visible, and the access explanation closed", () => {
+    render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
+
+    const t = dict.workspace.settings.access;
+    expect(screen.getByText(t.networkHint)).toBeVisible();
+    expect(screen.getByText(t.rateHint)).toBeVisible();
+    expect(screen.getByText(t.help)).not.toBeVisible();
+  });
+
+  test("the rules remain the fields' own descriptions", () => {
+    render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
+
+    const t = dict.workspace.settings.access;
+    expect(screen.getByLabelText(t.network)).toHaveAccessibleDescription(t.networkHint);
+    expect(screen.getByLabelText(t.rate)).toHaveAccessibleDescription(t.rateHint);
+  });
+
+  test("opens an explanation from its question mark", async () => {
+    const user = userEvent.setup();
+    render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
+
+    const t = dict.workspace.settings.shape;
+    const hint = screen
+      .getAllByRole("button", { name: dict.chrome.helpLabel })
+      .find((button) => button.getAttribute("aria-describedby") === screen.getByText(t.orderHelp).id)!;
+
+    await user.click(hint);
+    expect(screen.getByText(t.orderHelp)).toBeVisible();
+  });
+
+  /**
+   * A started contest disables these fieldsets, and a disabled fieldset
+   * disables every button in it except those in its legend. The question
+   * mark lives in the legend so that explaining a frozen setting still works
+   * when it is frozen — and the group keeps its name without "Hint" in it.
+   */
+  test("still explains the question order once the shape is frozen", async () => {
+    const user = userEvent.setup();
+    render(<ContestPanel contest={contest()} editable shapeOpen={false} dict={dict} />);
+
+    const t = dict.workspace.settings.shape;
+    const group = screen.getByRole("group", { name: t.order });
+    expect(group).toBeDisabled();
+
+    const hint = screen
+      .getAllByRole("button", { name: dict.chrome.helpLabel })
+      .find((button) => button.getAttribute("aria-describedby") === screen.getByText(t.orderHelp).id)!;
+    expect(hint).toBeEnabled();
+
+    await user.click(hint);
+    expect(screen.getByText(t.orderHelp)).toBeVisible();
+  });
+});

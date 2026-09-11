@@ -126,3 +126,26 @@ describe("AccountCard, the status-explanation panel", () => {
     expect(screen.queryByText(/,\s*\.$/)).not.toBeInTheDocument();
   });
 });
+
+describe("AccountCard, the roles panel", () => {
+  // Split from one string: what roles are is an explanation behind the "?";
+  // that saving them signs the account out everywhere is a consequence to
+  // read before pressing Save, so it stays on screen.
+  test("keeps the consequence of saving visible and the explanation closed", () => {
+    render(
+      <AccountCard
+        account={account()}
+        roles={roles}
+        viewerId={viewerId}
+        dict={en}
+        statusChangedAtLabel={null}
+      />,
+    );
+
+    expect(screen.getByText(en.accounts.card.rolesHint)).toBeVisible();
+    expect(screen.getByText(en.accounts.card.rolesHelp)).not.toBeVisible();
+    expect(screen.getByRole("button", { name: en.chrome.helpLabel })).toHaveAccessibleDescription(
+      en.accounts.card.rolesHelp,
+    );
+  });
+});

@@ -193,3 +193,27 @@ describe("Combobox, status and disabled state", () => {
     expect(screen.getByRole("combobox")).toBeDisabled();
   });
 });
+
+describe("Combobox, with an explanation behind a question mark", () => {
+  test("puts the question mark beside the label, leaving the input named by the label alone", () => {
+    render(
+      <Combobox
+        id="picker"
+        label="Person"
+        items={OPTIONS}
+        inputValue=""
+        onInputValueChange={() => {}}
+        value={null}
+        onValueChange={() => {}}
+        emptyMessage="No matches"
+        help="Search by login, name or email, then choose from the list."
+        helpLabel="Hint"
+      />,
+    );
+
+    expect(screen.getByRole("combobox", { name: "Person" })).toHaveAccessibleName("Person");
+    expect(screen.getByRole("button", { name: "Hint" })).toHaveAccessibleDescription(
+      "Search by login, name or email, then choose from the list.",
+    );
+  });
+});

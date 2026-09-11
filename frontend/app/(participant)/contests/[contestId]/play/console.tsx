@@ -143,7 +143,11 @@ export function ConsoleEditor({
             ⌘↵
           </span>
         </button>
-        <div className="flex-1" />
+        {/* The one rule a participant can break by typing — a second
+            statement is refused — so it stays in sight rather than behind
+            a "?". It takes the toolbar's spare width and may wrap there on a
+            phone rather than push the buttons off the edge. */}
+        <span className="min-w-0 flex-1 text-small text-ink-3">{t.hint}</span>
         {actions}
       </div>
 

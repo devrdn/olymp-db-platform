@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip } from "@/components/ui/tooltip";
 import type { Account, Role } from "@/lib/api/accounts";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
@@ -37,19 +38,31 @@ import { offeredActions } from "./offered";
  * correcting the spelling of their name.
  */
 
+/**
+ * A titled block. `help` is what the block is for, behind a "?" beside the
+ * heading; `hint` is a consequence worth reading before acting, and stays on
+ * screen under it.
+ */
 function Panel({
   title,
   hint,
+  help,
+  helpLabel,
   children,
 }: {
   title: string;
   hint?: string;
+  help?: string;
+  helpLabel?: string;
   children: React.ReactNode;
 }) {
   return (
     <section className="flex flex-col gap-5 border-t border-line pt-5">
       <div className="flex flex-col gap-1.5">
-        <h3 className="text-h3 text-ink">{title}</h3>
+        <div className="flex items-center gap-2">
+          <h3 className="text-h3 text-ink">{title}</h3>
+          {help && helpLabel ? <Tooltip label={helpLabel}>{help}</Tooltip> : null}
+        </div>
         {hint ? <p className="max-w-body text-small text-ink-2">{hint}</p> : null}
       </div>
       {children}
@@ -208,7 +221,7 @@ export function AccountCard({
       ) : null}
 
       {offered.roles ? (
-        <Panel title={t.roles} hint={t.rolesHint}>
+        <Panel title={t.roles} hint={t.rolesHint} help={t.rolesHelp} helpLabel={dict.chrome.helpLabel}>
           <form key={account.roles.join(",")} action={saveRoles} className="flex flex-col gap-5">
             <input type="hidden" name="userId" value={account.id} />
 

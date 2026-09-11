@@ -101,6 +101,8 @@ export function PersonPicker({
   changeText,
   selectedTemplate,
   disabled,
+  help,
+  helpLabel,
 }: {
   id: string;
   /** The hidden field's name — what the surrounding `<form>` submits. */
@@ -116,6 +118,9 @@ export function PersonPicker({
   /** "Selected: {name} ({login})", filled in once somebody is chosen. */
   selectedTemplate: string;
   disabled?: boolean;
+  /** Passed through to `Combobox`: an explanation behind a "?" beside the label. */
+  help?: string;
+  helpLabel?: string;
 }) {
   const [inputValue, setInputValue] = useState("");
   const [options, setOptions] = useState<Candidate[]>([]);
@@ -224,6 +229,8 @@ export function PersonPicker({
         statusMessage={status}
         disabled={disabled}
         describedBy={`${id}-help`}
+        help={help}
+        helpLabel={helpLabel}
       />
 
       {/* `role="status"` + `aria-live="polite"`: the moment a choice is made

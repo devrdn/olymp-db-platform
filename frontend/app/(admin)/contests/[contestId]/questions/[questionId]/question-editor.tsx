@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip } from "@/components/ui/tooltip";
 import { MATCH_KINDS, QUESTION_KINDS } from "@/lib/api/content-terms";
 import { type Question } from "@/lib/api/content";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -107,20 +108,23 @@ export function QuestionEditor({
   );
 }
 
+/** A titled part of the question; what it covers sits behind a "?" beside the heading. */
 function Section({
   title,
-  hint,
+  help,
+  dict,
   children,
 }: {
   title: string;
-  hint?: string;
+  help: string;
+  dict: Dictionary;
   children: React.ReactNode;
 }) {
   return (
     <section className="flex flex-col gap-5 border-t border-line pt-5">
-      <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2">
         <h3 className="text-h3 text-ink">{title}</h3>
-        {hint ? <p className="max-w-body text-small text-ink-2">{hint}</p> : null}
+        <Tooltip label={dict.chrome.helpLabel}>{help}</Tooltip>
       </div>
       {children}
     </section>
@@ -200,7 +204,7 @@ function ShapeSection({
 
   return (
     <>
-      <Section title={t.shape.heading} hint={t.shape.hint}>
+      <Section title={t.shape.heading} help={t.shape.help} dict={dict}>
         <fieldset className="flex flex-col gap-2.5">
           <legend className="pb-2 font-mono text-label text-ink-3 uppercase">{t.shape.kind}</legend>
           {QUESTION_KINDS.map((value) => (
@@ -226,7 +230,12 @@ function ShapeSection({
         </fieldset>
 
         <div className="grid gap-6 narrow:grid-cols-2">
-          <Field id="points" label={t.shape.points} hint={t.shape.pointsHint}>
+          <Field
+            id="points"
+            label={t.shape.points}
+            help={t.shape.pointsHelp}
+            helpLabel={dict.chrome.helpLabel}
+          >
             <Input
               name="points"
               type="number"
@@ -263,7 +272,12 @@ function ShapeSection({
           <p className="max-w-body text-small text-warn">{t.shape.sequentialNeedsAttempts}</p>
         ) : null}
 
-        <Field id="penaltyPct" label={t.shape.penalty} hint={t.shape.penaltyHint}>
+        <Field
+          id="penaltyPct"
+          label={t.shape.penalty}
+          help={t.shape.penaltyHelp}
+          helpLabel={dict.chrome.helpLabel}
+        >
           <Input
             name="penaltyPct"
             type="number"
@@ -297,7 +311,13 @@ function ShapeSection({
             other kind — so the field disappears with the kind rather than
             sending values that would be rejected. */}
         {kind === "choice" ? (
-          <Field id="choiceIds" label={t.shape.choices} hint={t.shape.choicesHint}>
+          <Field
+            id="choiceIds"
+            label={t.shape.choices}
+            hint={t.shape.choicesHint}
+            help={t.shape.choicesHelp}
+            helpLabel={dict.chrome.helpLabel}
+          >
             <Input
               name="choiceIds"
               defaultValue={choiceIds.join(", ")}
@@ -314,17 +334,21 @@ function ShapeSection({
           </Field>
         ) : null}
 
-        <label className="flex w-fit cursor-pointer items-center gap-3 text-control text-ink">
-          <input
-            type="checkbox"
-            name="isVisible"
-            defaultChecked={question.isVisible}
-            disabled={!editable}
-            className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
-          />
-          {t.shape.visible}
-        </label>
-        <p className="-mt-3 max-w-body text-small text-ink-3">{t.shape.visibleHint}</p>
+        {/* The "?" beside the label, not inside it: inside, its name would
+            become part of the checkbox's own. */}
+        <div className="flex items-center gap-2">
+          <label className="flex w-fit cursor-pointer items-center gap-3 text-control text-ink">
+            <input
+              type="checkbox"
+              name="isVisible"
+              defaultChecked={question.isVisible}
+              disabled={!editable}
+              className="size-4 cursor-pointer accent-cta disabled:cursor-not-allowed"
+            />
+            {t.shape.visible}
+          </label>
+          <Tooltip label={dict.chrome.helpLabel}>{t.shape.visibleHelp}</Tooltip>
+        </div>
 
       </Section>
     </>
@@ -347,7 +371,7 @@ function TextsSection({
   const t = dict.workspace.question;
   return (
     <>
-      <Section title={t.texts.heading} hint={t.texts.hint}>
+      <Section title={t.texts.heading} help={t.texts.help} dict={dict}>
         {languages.length === 0 ? (
           <p className="max-w-body text-body text-ink-3">{dict.workspace.story.noLanguages}</p>
         ) : (
@@ -414,7 +438,7 @@ function AnswersSection({
 
   return (
     <>
-      <Section title={t.answers.heading} hint={t.answers.hint}>
+      <Section title={t.answers.heading} help={t.answers.help} dict={dict}>
         <div className="flex flex-col gap-3">
           {[...rows, ...Array.from({ length: extra }, () => null)].map((answer, index) => (
             <div key={index} className="flex flex-wrap items-center gap-3">

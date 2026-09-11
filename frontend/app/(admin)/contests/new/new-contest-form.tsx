@@ -5,6 +5,7 @@ import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Tooltip } from "@/components/ui/tooltip";
 import { ENROLLMENTS, QUESTION_MODES, TIMINGS } from "@/lib/api/contests-terms";
 import { LOCALES, LOCALE_NAMES, type Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -59,7 +60,7 @@ export function NewContestForm({ dict, locale }: { dict: Dictionary; locale: Loc
 
   return (
     <form action={formAction} className="flex max-w-2xl flex-col gap-10" noValidate>
-      <Group legend={t.languages.legend} hint={t.languages.hint}>
+      <Group legend={t.languages.legend} help={t.languages.help} dict={dict}>
         <div className="flex flex-col gap-2.5">
           {LOCALES.map((code) => {
             const on = chosen.includes(code);
@@ -105,7 +106,7 @@ export function NewContestForm({ dict, locale }: { dict: Dictionary; locale: Loc
         </div>
       </Group>
 
-      <Group legend={t.titles.legend} hint={t.titles.hint}>
+      <Group legend={t.titles.legend} hint={t.titles.hint} help={t.titles.help} dict={dict}>
         <div className="flex flex-col gap-6">
           {chosen.map((code) => (
             <div key={code} className="flex flex-col gap-4 border-l-2 border-line-2 pl-4">
@@ -131,7 +132,7 @@ export function NewContestForm({ dict, locale }: { dict: Dictionary; locale: Loc
         </div>
       </Group>
 
-      <Group legend={t.format.legend} hint={t.format.hint}>
+      <Group legend={t.format.legend} help={t.format.help} dict={dict}>
         <Choices
           name="questionMode"
           values={QUESTION_MODES}
@@ -140,7 +141,7 @@ export function NewContestForm({ dict, locale }: { dict: Dictionary; locale: Loc
         />
       </Group>
 
-      <Group legend={t.timingGroup.legend} hint={t.timingGroup.hint}>
+      <Group legend={t.timingGroup.legend} help={t.timingGroup.help} dict={dict}>
         <div className="flex flex-col gap-5">
           <Choices
             name="timing"
@@ -169,7 +170,7 @@ export function NewContestForm({ dict, locale }: { dict: Dictionary; locale: Loc
         </div>
       </Group>
 
-      <Group legend={t.enrollmentGroup.legend} hint={t.enrollmentGroup.hint}>
+      <Group legend={t.enrollmentGroup.legend} help={t.enrollmentGroup.help} dict={dict}>
         <Choices
           name="enrollment"
           values={ENROLLMENTS}
@@ -199,20 +200,34 @@ export function NewContestForm({ dict, locale }: { dict: Dictionary; locale: Loc
  * A real `<fieldset>` and `<legend>`: a group of radios announced without one
  * is a list of options with no question attached, which is exactly how a
  * screen reader meets "fixed / individual".
+ *
+ * What the block decides sits behind a "?" beside the legend (`help`); a rule
+ * the author has to meet — the one title that is required — stays on screen
+ * as `hint`. The "?" is beside the legend rather than inside it, so the
+ * group's name stays the legend's words; none of these fieldsets is ever
+ * disabled, which is the one reason to put it inside (see the contest
+ * settings panels).
  */
 function Group({
   legend,
   hint,
+  help,
+  dict,
   children,
 }: {
   legend: string;
   hint?: string;
+  help: string;
+  dict: Dictionary;
   children: React.ReactNode;
 }) {
   return (
     <fieldset className="flex flex-col gap-4 border-t border-line pt-5">
       <div className="flex flex-col gap-1.5">
-        <legend className="text-h3 text-ink">{legend}</legend>
+        <div className="flex items-center gap-2">
+          <legend className="text-h3 text-ink">{legend}</legend>
+          <Tooltip label={dict.chrome.helpLabel}>{help}</Tooltip>
+        </div>
         {hint ? <p className="max-w-body text-small text-ink-2">{hint}</p> : null}
       </div>
       {children}

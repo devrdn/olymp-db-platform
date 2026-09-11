@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 
 import { Field } from "./field";
@@ -61,5 +62,58 @@ describe("Field", () => {
     expect(screen.getByRole("textbox")).toHaveAccessibleDescription(
       "Issued by the department. Wrong login or password.",
     );
+  });
+});
+
+/**
+ * The client's split: a rule the person needs before they get it wrong stays
+ * under the field; why the field exists goes behind a "?" beside its label.
+ */
+describe("Field, with an explanation behind a question mark", () => {
+  const RULE = "Leave empty for unlimited.";
+  const WHY = "A participant stuck on a question with no limit has nothing left to move on to.";
+
+  function withHelp(props: { error?: string } = {}) {
+    render(
+      <Field id="attempts" label="Attempts" hint={RULE} help={WHY} helpLabel="Hint" {...props}>
+        <input name="attempts" />
+      </Field>,
+    );
+  }
+
+  test("keeps the rule visible and the explanation closed", () => {
+    withHelp();
+
+    expect(screen.getByText(RULE)).toBeVisible();
+    expect(screen.getByRole("tooltip", { hidden: true })).not.toBeVisible();
+  });
+
+  test("opens the explanation from a named question mark beside the label", async () => {
+    const user = userEvent.setup();
+    withHelp();
+
+    const trigger = screen.getByRole("button", { name: "Hint" });
+    expect(trigger).toHaveAccessibleDescription(WHY);
+
+    await user.click(trigger);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(WHY);
+  });
+
+  test("leaves the control's name and description exactly what they were", () => {
+    withHelp();
+
+    // Beside the label, not inside it: the "?" does not become "Attempts Hint".
+    const control = screen.getByRole("textbox", { name: "Attempts" });
+    expect(control).toHaveAccessibleName("Attempts");
+    expect(control).toHaveAccessibleDescription(RULE);
+  });
+
+  test("still lets an error take the rule's slot, and keeps the caller's aria-invalid", () => {
+    withHelp({ error: "Must be a whole number." });
+
+    const control = screen.getByRole("textbox", { name: "Attempts" });
+    expect(control).toHaveAttribute("aria-invalid", "true");
+    expect(control).toHaveAccessibleDescription("Must be a whole number.");
+    expect(screen.queryByText(RULE)).toBeNull();
   });
 });

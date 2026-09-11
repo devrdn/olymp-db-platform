@@ -103,3 +103,56 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
     ).toBeNull();
   });
 });
+
+// The client's split, on the busiest form in the constructor: what a person
+// needs before the mistake stays under the field; why the field exists sits
+// behind a "?" beside its label.
+describe("QuestionEditor, rules on screen and explanations behind a question mark", () => {
+  function renderChoice() {
+    render(
+      <QuestionEditor
+        contestId="c1"
+        question={question({ kind: "choice", choiceIds: ["a", "b"] })}
+        languages={["en"]}
+        editable
+        sequentialActive={false}
+        dict={dict}
+      />,
+    );
+  }
+
+  test("keeps the attempts rule and the option-identifier rule visible", () => {
+    renderChoice();
+
+    const t = dict.workspace.question.shape;
+    expect(screen.getByText(t.attemptsHint)).toBeVisible();
+    expect(screen.getByText(t.choicesHint)).toBeVisible();
+    expect(screen.getByLabelText(t.choices)).toHaveAccessibleDescription(t.choicesHint);
+  });
+
+  test("puts the penalty's and the identifiers' reasons behind a question mark", async () => {
+    const user = userEvent.setup();
+    renderChoice();
+
+    const t = dict.workspace.question.shape;
+    expect(screen.getByText(t.penaltyHelp)).not.toBeVisible();
+    expect(screen.getByText(t.choicesHelp)).not.toBeVisible();
+
+    const penaltyHint = screen
+      .getAllByRole("button", { name: dict.chrome.helpLabel })
+      .find((button) => button.getAttribute("aria-describedby") === screen.getByText(t.penaltyHelp).id)!;
+    await user.click(penaltyHint);
+
+    expect(screen.getByText(t.penaltyHelp)).toBeVisible();
+    // Beside the label, not in it: the field is still named by its label alone.
+    expect(screen.getByRole("spinbutton", { name: t.penalty })).toBeInTheDocument();
+  });
+
+  test("keeps the checkbox named by its own words, with the reason beside it", () => {
+    renderChoice();
+
+    const t = dict.workspace.question.shape;
+    expect(screen.getByRole("checkbox", { name: t.visible })).toBeInTheDocument();
+    expect(screen.getByText(t.visibleHelp)).not.toBeVisible();
+  });
+});
