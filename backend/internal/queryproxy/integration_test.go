@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/netip"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
@@ -31,16 +31,17 @@ import (
 // `make test-db` is what runs this file against a real database; without
 // CORE_DB_DSN it skips, same as every test in internal/postgres.
 
-// integrationPool opens the database named by CORE_DB_DSN, or skips.
+// integrationPool opens the test database named by CORE_DB_DSN, or skips.
+// storagetest refuses a database that is not a test database, which matters
+// here more than anywhere: the fixtures below are committed, not rolled back.
 func integrationPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("CORE_DB_DSN")
-	if dsn == "" {
-		t.Skip("set CORE_DB_DSN to run this test against a real database")
-	}
-	pool, err := pgxpool.New(context.Background(), dsn)
+	pool, err := storagetest.OpenCore(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("open the test database: %v", err)
+	}
+	if pool == nil {
+		t.Skip("set CORE_DB_DSN to run this test against a real database")
 	}
 	t.Cleanup(pool.Close)
 	return pool

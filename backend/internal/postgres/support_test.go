@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,23 +31,21 @@ var testPool *pgxpool.Pool
 // needs a server, and what stays is the constraint mapping, which is pure. A
 // developer with no PostgreSQL to hand should not be stopped from running the
 // suite — but nor should the SQL go unverified, so CI sets the variable.
+//
+// Through storagetest, which refuses any database that is not a test
+// database: `make test-db` used to point this at the one `make run` serves
+// the product from, and every run left its fixtures there.
 func TestMain(m *testing.M) {
-	dsn := os.Getenv("CORE_DB_DSN")
-	if dsn == "" {
-		os.Exit(m.Run())
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, dsn)
+	pool, err := storagetest.OpenCore(ctx, nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cannot open the test database: %v\n", err)
+		fmt.Fprintf(os.Stderr, "cannot use the test database: %v\n", err)
 		os.Exit(1)
 	}
-	if err := pool.Ping(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "cannot reach the test database: %v\n", err)
-		os.Exit(1)
+	if pool == nil {
+		os.Exit(m.Run())
 	}
 	testPool = pool
 
