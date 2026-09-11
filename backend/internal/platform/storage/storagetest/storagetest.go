@@ -26,6 +26,11 @@
 // theirs; that is a decision this package cannot second-guess and does not
 // try to.
 //
+// A guard protects only the tests that pass through it, so this package's own
+// tests also read the module's test code and fail on any test that reads
+// CORE_DB_DSN or GAME_DB_DSN itself instead of coming through here or through
+// gamedbtest (TestNoTestReadsADatabaseDSNPastTheGuard).
+//
 // # What it does not do
 //
 // It does not create, migrate or reset the test database: that is a step
