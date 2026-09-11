@@ -3,13 +3,97 @@ package storagetest
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// The guard only protects the tests that go through it. A test that reads
+// CORE_DB_DSN or GAME_DB_DSN itself and opens its own pool walks straight
+// past it — which is how every core test connected until this package
+// existed, and what the next test written in a hurry would do by habit. So
+// this reads the test code of the whole module and fails on any read of
+// either variable outside the two doors: this package for the core database,
+// gamedbtest for the game cluster.
+//
+// It looks for the literal read, the form that habit produces. It is a
+// tripwire, not a proof: a test that goes out of its way to build the name
+// can still get past it, and review is what catches that.
+func TestNoTestReadsADatabaseDSNPastTheGuard(t *testing.T) {
+	root := moduleRoot(t)
+	read := regexp.MustCompile(`(Getenv|LookupEnv)\("(CORE|GAME)_DB_DSN"\)`)
+	doors := map[string]bool{
+		"internal/platform/storage/storagetest": true,
+		"internal/gamedb/gamedbtest":            true,
+	}
+
+	var offenders []string
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		dir := filepath.ToSlash(filepath.Dir(rel))
+
+		// Test code is a _test.go file or anything in a <pkg>test helper
+		// package. The product's own reads (internal/platform/config, the
+		// commands under cmd/) are neither, and are not this test's business.
+		testCode := strings.HasSuffix(path, "_test.go") || strings.HasSuffix(filepath.Base(filepath.Dir(path)), "test")
+		if !testCode || doors[dir] {
+			return nil
+		}
+
+		source, err := os.ReadFile(path) // #nosec G304 -- a file of this module, found by walking it.
+		if err != nil {
+			return err
+		}
+		if read.Match(source) {
+			offenders = append(offenders, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the module: %v", err)
+	}
+	if len(offenders) > 0 {
+		t.Fatalf("these read a database DSN themselves instead of going through storagetest.OpenCore "+
+			"or gamedbtest, so nothing stops them connecting to the product's database:\n  %s",
+			strings.Join(offenders, "\n  "))
+	}
+}
+
+// moduleRoot is the directory holding go.mod, found by walking up from this
+// package — where `go test` runs it.
+func moduleRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("no go.mod above the test's working directory")
+		}
+		dir = parent
+	}
+}
 
 func TestCheckName(t *testing.T) {
 	for name, want := range map[string]bool{
