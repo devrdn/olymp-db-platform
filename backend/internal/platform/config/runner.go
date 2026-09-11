@@ -46,6 +46,13 @@ type Runner struct {
 	// Concurrent is how many queries may run at once against the instance, and
 	// QueueDepth how many may wait. Section 4.3 puts Concurrent at two to
 	// three times the cores.
+	//
+	// QueueDepth is sized from the roster rather than from the cores. A
+	// participant has at most one query in flight (queryrunner.ErrAlreadyRunning),
+	// so Concurrent + QueueDepth at or above the number of participants means
+	// a round in which everybody presses Run at once is queued rather than
+	// refused. The default, 32, is that sum for the forty participants the
+	// olympiad expects; `make loadtest` measures a deployment's own.
 	Concurrent int
 	QueueDepth int
 	// PerMinute bounds how often one participant may ask. The semaphore
@@ -87,7 +94,7 @@ func LoadRunner() (Runner, error) {
 	if cfg.Concurrent, err = intEnv("QUERY_CONCURRENT", 8); err != nil {
 		return Runner{}, err
 	}
-	if cfg.QueueDepth, err = intEnv("QUERY_QUEUE_DEPTH", 16); err != nil {
+	if cfg.QueueDepth, err = intEnv("QUERY_QUEUE_DEPTH", 32); err != nil {
 		return Runner{}, err
 	}
 	if cfg.PerMinute, err = intEnv("QUERY_PER_MINUTE", 30); err != nil {

@@ -152,9 +152,11 @@ services:
       QUERY_DEADLINE: ${QUERY_DEADLINE:-5s}
       QUERY_MAX_ROWS: ${QUERY_MAX_ROWS:-1000}
       QUERY_MAX_BYTES: ${QUERY_MAX_BYTES:-5242880}
-      # Two to three times the cores of the game cluster (section 4.3).
+      # Two to three times the cores of the game cluster (section 4.3). The
+      # queue is sized from the roster instead: the two together at or above
+      # the number of participants (see deploy/.env.example).
       QUERY_CONCURRENT: ${QUERY_CONCURRENT:-8}
-      QUERY_QUEUE_DEPTH: ${QUERY_QUEUE_DEPTH:-16}
+      QUERY_QUEUE_DEPTH: ${QUERY_QUEUE_DEPTH:-32}
       QUERY_PER_MINUTE: ${QUERY_PER_MINUTE:-30}
       # Functions an operator added to the allow-list after a pilot, without
       # waiting for a release. Comma-separated.
