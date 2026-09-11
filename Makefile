@@ -471,6 +471,26 @@ game-orphans: require-env ## List (ARGS=-apply to remove) databases the core dat
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" GAME_DB_ADMIN_DSN="$(GAME_DB_DSN)" \
 		go run ./cmd/gameorphans $(ARGS)
 
+# The console's load test (cmd/consoleload). It measures whatever API is
+# listening on API_PORT and whatever Query Runner that API reaches — start
+# them first (`make run` and `make runner`, or the deployed stack) — so the
+# same command measures a laptop or the olympiad's own hardware. It creates
+# its own contest, participants and database copies and removes all of them
+# at the end; `make loadtest ARGS=sweep` removes what an interrupted run left.
+#
+#   make loadtest ARGS="-source-template game_tpl_c50372dca6388 \
+#       -watch-pid api=$$(lsof -ti tcp:8080 -sTCP:LISTEN) \
+#       -watch-container game=db-contest-pg-game-1"
+#
+# It is given the provisioner's credentials, as the API is, because it makes
+# the copies through the product's own provisioning code; it never holds the
+# participant roles' credentials, which stay with the Query Runner.
+.PHONY: loadtest
+loadtest: require-env ## Load the SQL console with synthetic participants (ARGS=... see cmd/consoleload)
+	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" GAME_PROVISIONER_DSN="$(GAME_DB_DSN)" \
+		LOADTEST_API="http://localhost:$(API_PORT)" \
+		go run ./cmd/consoleload $(ARGS)
+
 .PHONY: runner
 runner: require-env ## Run the Query Runner against the dev game cluster
 	cd $(BACKEND) && \
