@@ -39,7 +39,9 @@ Five rules, from which the rest follows. Each one decides something later.
 4. **A state is always explained.** No empty screen without a reason and a next
    step, no error without what to do about it.
 5. **One accent, three semantics.** Widening the palette is a change to the
-   system, not a decision taken on the spot.
+   system, not a decision taken on the spot. It has been widened twice, each
+   time as a named sub-palette with one job: SQL highlighting (section 3.1) and
+   the standings (section 3.5).
 
 ## 3. The token layer
 
@@ -117,6 +119,40 @@ places: under the media query and under the explicit choice. Repeating twenty
 values across two blocks is precisely the mechanism by which they diverge — one
 copy gets corrected and the other keeps the old value until somebody notices in
 the wrong theme.
+
+### 3.5 The standings sub-palette
+
+The leaderboard is the one screen read for its colour before its numbers: who
+is on the podium, which row is yours, whether the table is frozen. Those three
+questions get colour, and nothing else on that screen does. The palette lives in
+`tokens.css` beside the rest and is checked by the same contrast script — every
+hue as text on its own wash and on the page ground, in both themes.
+
+| Token | Light | Dark | Job |
+|---|---|---|---|
+| `--gold` / `-wash` | `#7a5600` / `#fbf0d2` | `#e6c061` / 14 % | place 1, the winner |
+| `--silver` / `-wash` | `#4e5865` / `#ebeef2` | `#c3cbd5` / 12 % | place 2 |
+| `--bronze` / `-wash` | `#8a4318` / `#f8e8dd` | `#e8a070` / 14 % | place 3 |
+| `--frost` / `-wash` | `#0b5c77` / `#e2f1f7` | `#7dd0ea` / 12 % | a frozen table |
+| `--you` / `-wash` | `#1e4a8e` / `#e7eefa` | `#97b6f3` / 13 % | the participant's own row |
+| `--id-1`…`--id-6` / `-wash` | rose, ochre, olive, cyan, ocean, sienna | the same, lightened | a participant's initials and score bar |
+
+Rules that keep it a palette rather than decoration:
+
+- **Medals only for places 1–3.** A shared place shares the medal; place 4 is
+  ink like any other number.
+- **Frost is not the accent.** The accent means "live", and a frozen table is
+  the opposite of live, so the two must never be confusable. A live table
+  carries the accent's pulsing dot; a frozen one carries frost.
+- **An identity hue is chosen by a hash of the label**, so a person keeps their
+  colour between reads and between the tab and the public page. It is drawn
+  only as a disc of initials and as the fill of the score bar — a shape nothing
+  else in the system uses, which is what keeps rose from reading as an error and
+  olive as success.
+- **Colour is never the only carrier.** A medal also has its number, the frozen
+  state its sentence, your row the word "you", a winner the word "winner".
+- The section 15 boundaries still hold: no purple, no glow, no gradient text, no
+  emoji. A medal is a tinted disc with a number in it, not a trophy picture.
 
 ## 4. Typography
 
