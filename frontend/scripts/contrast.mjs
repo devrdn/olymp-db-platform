@@ -49,6 +49,9 @@ const PAIRS = [
   ["warn", "warn-wash", TEXT],
   ["bad", "bad-wash", TEXT],
   ["bad", "bg", TEXT],
+  // The ICPC grid's first-to-solve cell: a solid `good` fill with the page
+  // ground as its text, the same construction as the medal discs below.
+  ["bg", "good", TEXT],
   // The standings sub-palette (SPEC 3.5): every hue is read as text on its
   // own wash and on the page ground, where a medal or a name also appears.
   ["gold", "gold-wash", TEXT],

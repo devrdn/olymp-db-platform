@@ -5,7 +5,7 @@ import { useActionState, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-import { Initials, medalEdge, PlaceBadge } from "@/components/product/standings";
+import { GridCells, GridHeaderCells, Initials, medalEdge, PlaceBadge } from "@/components/product/standings";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
@@ -60,6 +60,7 @@ export function StaffStandingsView({
 
   const revealable =
     (status === "finished" || status === "archived") && standings.freezeMin !== null && !standings.revealedAt;
+  const icpc = standings.scoring === "icpc";
 
   return (
     <div className="flex flex-col gap-6">
@@ -101,15 +102,29 @@ export function StaffStandingsView({
                 <th scope="col" className="px-2 py-2 text-left font-normal max-narrow:hidden">
                   {t.staff.login}
                 </th>
-                <th scope="col" className="px-2 py-2 text-right font-normal">
-                  {t.columns.points}
-                </th>
-                <th scope="col" className="px-2 py-2 text-right font-normal max-narrow:hidden">
-                  {t.columns.solved}
-                </th>
-                <th scope="col" className="py-2 pr-3 pl-2 text-right font-normal max-narrow:hidden">
-                  {t.columns.last}
-                </th>
+                {icpc ? (
+                  <>
+                    {standings.questions ? <GridHeaderCells questions={standings.questions} /> : null}
+                    <th scope="col" className="px-2 py-2 text-right font-normal">
+                      {t.columns.solved}
+                    </th>
+                    <th scope="col" className="py-2 pr-3 pl-2 text-right font-normal">
+                      {t.columns.penalty}
+                    </th>
+                  </>
+                ) : (
+                  <>
+                    <th scope="col" className="px-2 py-2 text-right font-normal">
+                      {t.columns.points}
+                    </th>
+                    <th scope="col" className="px-2 py-2 text-right font-normal max-narrow:hidden">
+                      {t.columns.solved}
+                    </th>
+                    <th scope="col" className="py-2 pr-3 pl-2 text-right font-normal max-narrow:hidden">
+                      {t.columns.last}
+                    </th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -139,15 +154,31 @@ export function StaffStandingsView({
                   <td className="px-2 py-2.5 align-middle font-mono text-data text-ink-2 max-narrow:hidden">
                     {row.login}
                   </td>
-                  <td className="px-2 py-2.5 text-right align-middle font-mono text-data text-ink tabular-nums">
-                    {row.points}
-                  </td>
-                  <td className="px-2 py-2.5 text-right align-middle font-mono text-data text-ink-2 tabular-nums max-narrow:hidden">
-                    {row.solved}
-                  </td>
-                  <td className="py-2.5 pr-3 pl-2 text-right align-middle font-mono text-data text-ink-3 tabular-nums max-narrow:hidden">
-                    {row.lastScoredAt ? formatTime(row.lastScoredAt, { locale }) : "—"}
-                  </td>
+                  {icpc ? (
+                    <>
+                      {standings.questions && row.cells ? (
+                        <GridCells cells={row.cells} questions={standings.questions} dict={dict} />
+                      ) : null}
+                      <td className="px-2 py-2.5 text-right align-middle font-mono text-data text-ink tabular-nums">
+                        {row.solved}
+                      </td>
+                      <td className="py-2.5 pr-3 pl-2 text-right align-middle font-mono text-data text-ink tabular-nums">
+                        {row.penalty}
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td className="px-2 py-2.5 text-right align-middle font-mono text-data text-ink tabular-nums">
+                        {row.points}
+                      </td>
+                      <td className="px-2 py-2.5 text-right align-middle font-mono text-data text-ink-2 tabular-nums max-narrow:hidden">
+                        {row.solved}
+                      </td>
+                      <td className="py-2.5 pr-3 pl-2 text-right align-middle font-mono text-data text-ink-3 tabular-nums max-narrow:hidden">
+                        {row.lastScoredAt ? formatTime(row.lastScoredAt, { locale }) : "—"}
+                      </td>
+                    </>
+                  )}
                 </tr>
               ))}
             </tbody>

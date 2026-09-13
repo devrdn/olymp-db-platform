@@ -27,9 +27,10 @@ function board(overrides: Partial<StaffStandings> = {}): StaffStandings {
     revealedAt: undefined,
     generatedAt: "2026-09-20T12:00:00Z",
     truncated: false,
+    questions: undefined,
     rows: [
-      { place: 1, login: "holmes", fullName: "Sherlock Holmes", deleted: false, disqualified: false, points: 30, solved: 3, lastScoredAt: undefined, winner: false },
-      { place: 2, login: "moriarty", fullName: "James Moriarty", deleted: false, disqualified: true, points: 99, solved: 9, lastScoredAt: undefined, winner: false },
+      { place: 1, login: "holmes", fullName: "Sherlock Holmes", deleted: false, disqualified: false, points: 30, solved: 3, penalty: undefined, cells: undefined, lastScoredAt: undefined, winner: false },
+      { place: 2, login: "moriarty", fullName: "James Moriarty", deleted: false, disqualified: true, points: 99, solved: 9, penalty: undefined, cells: undefined, lastScoredAt: undefined, winner: false },
     ],
     ...overrides,
   };
@@ -83,5 +84,40 @@ describe("the staff table", () => {
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(t().revealBody)).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: t().revealConfirm })).toBeInTheDocument();
+  });
+
+  test("shows the ICPC grid, solved and penalty, with no points column", () => {
+    show(
+      board({
+        scoring: "icpc",
+        questions: ["A", "B"],
+        rows: [
+          {
+            place: 1,
+            login: "holmes",
+            fullName: "Sherlock Holmes",
+            deleted: false,
+            disqualified: false,
+            points: 0,
+            solved: 1,
+            penalty: 12,
+            cells: [
+              { state: "solved", attempts: 1, minute: 12, first: true },
+              { state: "untried" },
+            ],
+            lastScoredAt: undefined,
+            winner: false,
+          },
+        ],
+      }),
+      "running",
+    );
+
+    expect(dict.leaderboard.columns.penalty).toBeTruthy();
+    expect(screen.getByText(dict.leaderboard.columns.penalty)).toBeInTheDocument();
+    expect(screen.queryByText(dict.leaderboard.columns.points)).not.toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "A" })).toBeInTheDocument();
+    expect(screen.getByText("A: solved at minute 12 on attempt 1, first to solve")).toBeInTheDocument();
+    expect(screen.getByText("B: untried")).toBeInTheDocument();
   });
 });
