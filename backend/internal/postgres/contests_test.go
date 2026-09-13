@@ -23,6 +23,7 @@ func TestContestSurvivesARoundTrip(t *testing.T) {
 		end := start.Add(3 * time.Hour)
 		deadline := start.Add(-time.Hour)
 		minutes := 90
+		freeze := 20
 
 		created, err := repo.Create(ctx, contests.Contest{
 			Status:       contests.StatusDraft,
@@ -40,7 +41,9 @@ func TestContestSurvivesARoundTrip(t *testing.T) {
 				QueryRateLimitPerMin: 30,
 				GracePeriodMin:       15,
 			},
-			CreatedBy: author.ID,
+			LeaderboardFreezeMin: &freeze,
+			LeaderboardNames:     contests.LeaderboardNamesFullName,
+			CreatedBy:            author.ID,
 		})
 		if err != nil {
 			t.Fatalf("Create() = %v", err)
@@ -72,6 +75,12 @@ func TestContestSurvivesARoundTrip(t *testing.T) {
 			t.Errorf("query rate limit = %d, want 30", loaded.Settings.QueryRateLimitPerMin)
 		case loaded.Settings.EnrollmentDeadline == nil || !loaded.Settings.EnrollmentDeadline.Equal(deadline):
 			t.Errorf("enrollment deadline = %v, want %v", loaded.Settings.EnrollmentDeadline, deadline)
+		case loaded.LeaderboardFreezeMin == nil || *loaded.LeaderboardFreezeMin != freeze:
+			t.Errorf("leaderboard freeze = %v, want %d", loaded.LeaderboardFreezeMin, freeze)
+		case loaded.LeaderboardNames != contests.LeaderboardNamesFullName:
+			t.Errorf("leaderboard names = %q, want full_name", loaded.LeaderboardNames)
+		case loaded.LeaderboardRevealedAt != nil:
+			t.Errorf("leaderboard revealed at = %v, want nil", loaded.LeaderboardRevealedAt)
 		case loaded.CreatedBy != author.ID:
 			t.Errorf("created_by = %v, want %v", loaded.CreatedBy, author.ID)
 		}
