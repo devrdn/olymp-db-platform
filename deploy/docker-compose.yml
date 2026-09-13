@@ -89,27 +89,43 @@ services:
     # what eight concurrent queries (QUERY_CONCURRENT) ask for; the pages
     # count against the memory limit below only while they are in use.
     shm_size: 256mb
+    # The real bound on one query's memory: a per-process cap (RLIMIT_DATA) on
+    # every backend. Nothing in SQL bounds the size of a value a query builds —
+    # a string_agg or array_agg of a manufactured string over a long series
+    # reaches PostgreSQL's ~1 GiB per-value ceiling, and the validator
+    # deliberately does not try to (it is a first line only). Under this cap
+    # such a query gets a NULL from malloc and raises PostgreSQL's own "out of
+    # memory" ERROR in its own backend; the postmaster and every other session
+    # are untouched. Without it the container's cgroup limit is reached instead
+    # and the Linux OOM killer takes a backend, which the postmaster treats as
+    # a crash and restarts every session. Shared memory — shared_buffers and a
+    # parallel query's dynamic shared memory — is mapped shared and does not
+    # count against RLIMIT_DATA, so parallel queries keep working; 256 MiB was
+    # measured against this image to leave a template build's COPY and index
+    # creation, CREATE DATABASE … TEMPLATE and autovacuum ample room while
+    # stopping a gigabyte-scale value. It must equal PerProcessMemoryBytes in
+    # backend/internal/platform/config.
+    ulimits:
+      data: 268435456
     # cgroup limits, so that "the game cluster degrades" stays a statement
     # about this container rather than about the machine. Sized for the
     # pilot; raise them together with the semaphore in section 4.3.
     #
-    # Memory is not free to pick: one query can, worst case, make a backend
-    # build a value close to PostgreSQL's ~1 GiB per-value ceiling (a
-    # string_agg or array_agg of the largest value the SQL validator admits,
-    # over the longest series it admits), and QUERY_CONCURRENT of those run at
-    # once. The container must hold QUERY_CONCURRENT × 1 GiB plus ~1 GiB for
-    # shared_buffers, the parallel-query shared memory (shm_size below) and the
-    # postmaster — nine gibibytes at the default concurrency of eight — or the
-    # OOM killer takes a backend and the postmaster restarts every session
-    # instead of the one runaway query failing with "out of memory". The Query
-    # Runner is told this same limit (GAME_DB_MEMORY_BYTES) and refuses to
-    # start with a concurrency it cannot hold. Lower one and you may lower the
-    # other; the two must agree.
+    # Memory follows from the cap above and the concurrency: one participant
+    # query occupies a leader plus up to max_parallel_workers_per_gather (1 on
+    # the participant roles) worker processes, each up to the 256 MiB cap, and
+    # QUERY_CONCURRENT of them run at once. The container must hold
+    # QUERY_CONCURRENT × (1 + 1) × 256 MiB plus ~1.5 GiB for shared_buffers,
+    # the postmaster and a provisioning build — 5.5 GiB at the default
+    # concurrency of eight, rounded up here to six. The Query Runner is told
+    # this same limit (GAME_DB_MEMORY_BYTES) and refuses to start with a
+    # concurrency it cannot hold. Lower one and the others can come down; the
+    # memory and GAME_DB_MEMORY_BYTES must agree.
     deploy:
       resources:
         limits:
           cpus: "${GAME_DB_CPUS:-2.0}"
-          memory: ${GAME_DB_MEMORY:-9g}
+          memory: ${GAME_DB_MEMORY:-6g}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -181,10 +197,10 @@ services:
       QUERY_PER_MINUTE: ${QUERY_PER_MINUTE:-30}
       # The game cluster's memory limit, in bytes, so the runner can refuse to
       # start with a concurrency the cluster cannot hold (see pg-game above).
-      # Nine gibibytes matches GAME_DB_MEMORY's 9g default; keep the two in
-      # step. Left empty, the check does not run — for a development cluster
-      # with no cgroup limit.
-      GAME_DB_MEMORY_BYTES: ${GAME_DB_MEMORY_BYTES:-9663676416}
+      # Six gibibytes matches GAME_DB_MEMORY's 6g default; keep the two in step.
+      # Left empty, the check does not run — for a development cluster with no
+      # cgroup limit.
+      GAME_DB_MEMORY_BYTES: ${GAME_DB_MEMORY_BYTES:-6442450944}
       # Functions an operator added to the allow-list after a pilot, without
       # waiting for a release. Comma-separated.
       QUERY_EXTRA_FUNCTIONS: ${QUERY_EXTRA_FUNCTIONS:-}

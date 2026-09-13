@@ -63,13 +63,27 @@ services:
       POSTGRES_DB: ${GAME_DB_NAME:-dbcontest_game}_test
       POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
     # The settings pg-game runs with that a test can observe, so a guarantee
-    # proved here is one the product's cluster keeps too (CLAUDE.md rule 10).
+    # proved here is one the product's cluster keeps too (CLAUDE.md rule 10) —
+    # including the per-process memory cap below, which the sandbox tests rely
+    # on to prove a runaway query fails in one backend without crashing the
+    # cluster.
     command:
       - postgres
       - -c
       - idle_in_transaction_session_timeout=30s
       - -c
       - max_connections=200
+    # RLIMIT_DATA per process, the same 256 MiB pg-game runs with: a backend
+    # that tries to build more than this gets a NULL from malloc and raises
+    # PostgreSQL's own "out of memory" ERROR, rather than the container's cgroup
+    # limit being hit and the Linux OOM killer taking the backend (which the
+    # postmaster treats as a crash, restarting every session). Shared memory —
+    # shared_buffers and a parallel query's dynamic shared memory — is mapped
+    # shared and does not count against this limit, so parallel queries still
+    # run. See deploy/docker-compose.yml for the arithmetic tying it to the
+    # container memory and the semaphore.
+    ulimits:
+      data: 268435456
     tmpfs:
       - /var/lib/postgresql/data
     ports:

@@ -40,6 +40,12 @@ func TestTheReaderStartsWithTheIntendedSettings(t *testing.T) {
 		"idle_in_transaction_session_timeout": "5s",
 		"work_mem":                            "16MB",
 		"temp_file_limit":                     "64MB",
+		// Capped so a participant query occupies at most a leader plus one
+		// worker process, each under the per-process memory cap — the count the
+		// deployment's memory arithmetic is sized for (config.Runner). A
+		// participant cannot raise it: SET is not a statement the validator
+		// admits.
+		"max_parallel_workers_per_gather": "1",
 	} {
 		t.Run(setting, func(t *testing.T) {
 			var got string

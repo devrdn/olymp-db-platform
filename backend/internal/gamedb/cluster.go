@@ -126,6 +126,15 @@ var sessionDefaults = [][2]string{
 	{"work_mem", "16MB"},
 	{"temp_file_limit", "64MB"},
 	{"lock_timeout", "2s"},
+	// One parallel worker at most, so a participant query occupies a leader
+	// plus one worker process rather than the server default of two — the
+	// process count the game cluster's memory is sized for (config.Runner's
+	// MaxParallelWorkersPerQuery). Parallel query stays on, which the steady
+	// state wants; the cap only bounds how many processes one query spreads
+	// across. Unlike statement_timeout above this is a real bound for a
+	// participant, not only a default: SET is not a statement the SQL
+	// validator admits, so a participant cannot raise it.
+	{"max_parallel_workers_per_gather", "1"},
 }
 
 // authorDefaults are the game-script role's, and deliberately not the

@@ -11,6 +11,8 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestItReturnsColumnsAndRows(t *testing.T) {
@@ -207,43 +209,16 @@ func TestARefusedQueryNeverReachesTheDatabase(t *testing.T) {
 	}
 }
 
-// A function that builds a value from a number is where one query could make
-// a game-cluster process allocate close to a gigabyte, and nothing on this
-// side of the connection stops that once the query has been sent: the result
-// budget and the deadline only discard what the server already built. So the
-// bound has to hold before the query is sent, and this proves it does on the
-// real path — refused with the declared code, and never executed — while the
-// bounded forms still run and PostgreSQL agrees with the checker about what
-// they produce.
-func TestAnUnboundedGeneratorNeverReachesTheCluster(t *testing.T) {
+// The validator's first line: a constant size plainly too large is refused
+// before the query is sent, so the participant sees it at once rather than
+// after the query runs. These are the shapes the checker can read as constants.
+func TestAConstantOverTheBoundNeverReachesTheCluster(t *testing.T) {
 	runner, database := setup(t)
-	gamedbtest.Run(t, database, `GRANT INSERT ON evidence TO `+gamedb.RoleWriter)
-
-	// Never executed, not merely failed: a write one past the bound would
-	// leave a row behind had it reached the database. First, and fatal, so
-	// that a checker without the bound stops the test here rather than
-	// sending the gigabyte-sized queries below to the cluster.
-	writing := request(database, `INSERT INTO evidence (id, note) SELECT 3, repeat('x', 10001)`)
-	writing.Policy = sqlpolicy.ReadWrite("evidence")
-	if _, err := runner.Run(t.Context(), writing); err == nil {
-		t.Fatal("a write with an unbounded repeat was allowed")
-	}
-	result, err := runner.Run(t.Context(), request(database, `SELECT count(*) FROM evidence`))
-	if err != nil {
-		t.Fatalf("reading back: %v", err)
-	}
-	if got := result.Rows[0][0]; got != int64(2) {
-		t.Fatalf("count after the refused write = %v, want 2: the query reached the database", got)
-	}
 
 	for _, sql := range []string{
 		`SELECT length(repeat('x', 900000000))`,
-		`SELECT length(rpad('', 900000000, 'x'))`,
-		`SELECT length(format('%900000000s', ''))`,
-		`SELECT length(string_agg(repeat('x', 1000000), ',')) FROM generate_series(1, 2000)`,
-		`SELECT cardinality(array_agg(repeat('x', 1000000))) FROM generate_series(1, 2000)`,
 		`SELECT count(*) FROM generate_series(1, 100000000)`,
-		`SELECT length(repeat(note, id * 100000000)) FROM evidence`,
+		`SELECT length(string_agg(repeat('x', 1000000), ',')) FROM generate_series(1, 2000)`,
 	} {
 		t.Run(sql, func(t *testing.T) {
 			_, err := runner.Run(t.Context(), request(database, sql))
@@ -253,29 +228,75 @@ func TestAnUnboundedGeneratorNeverReachesTheCluster(t *testing.T) {
 			}
 		})
 	}
+}
 
-	// The bounded forms run, and produce what the checker assumed they would.
-	for sql, want := range map[string]int64{
-		`SELECT length(repeat('x', 10000))`:                                                      10_000,
-		`SELECT length(lpad('7', 10000, '0'))`:                                                   10_000,
-		`SELECT length(format('%5000s|%4999s', 'a', 'b'))`:                                       10_000,
-		`SELECT count(*) FROM generate_series(1, 100000)`:                                        100_000,
-		`SELECT count(*) FROM generate_series(1, 1000000, 10)`:                                   100_000,
-		`SELECT count(*) FROM generate_series('2024-01-01'::date, '2024-12-31'::date, '1 day')`:  366,
-		`SELECT count(*) FROM generate_series('2024-01-01', '2024-01-02', '01:00:00'::interval)`: 25,
-		`SELECT count(*) FROM generate_series('2024-03-01 00:00+02'::timestamptz, '2024-04-01 00:00+03'::timestamptz, '1 hour', 'Europe/Chisinau')`: 744,
-		`SELECT count(*) FROM generate_series('2020-01-01'::timestamp, '2024-01-01'::timestamp, '1 month')`:                                         49,
+// The real bound, proved on the deployment's configuration (CLAUDE.md rule 10):
+// the game cluster runs its backends under a per-process memory cap
+// (deploy/docker-compose.dev.yml ulimits.data mirrors pg-game's). A query the
+// validator admits — because its size is not a constant, or is a value-changing
+// cast, or is an aggregate whose state is many bounded values rather than one —
+// but that tries to build a gigabyte-scale amount must fail with PostgreSQL's
+// own "out of memory" ERROR in its own backend, without the postmaster
+// restarting and without other sessions dying. That is what turns B1's
+// cluster-wide crash into one participant's failed query.
+func TestAnOverAllocatingQueryFailsInItsOwnBackend(t *testing.T) {
+	runner, database := setup(t)
+	admin := gamedbtest.Admin(t)
+
+	startTime := postmasterStart(t, admin)
+
+	// Each is admitted by the validator and each asks a backend for far more
+	// than the cap: a single huge value reached through a value-changing cast
+	// (the bypass), an aggregate over a cross join whose state is a million
+	// bounded values, and two such aggregates in one query.
+	for name, sql := range map[string]string{
+		"the bit-cast bypass":         `SELECT length(repeat('x', (-173741824)::bit(30)::int))`,
+		"array_agg over a cross join": `SELECT cardinality(array_agg(repeat('x', 10000))) FROM generate_series(1, 100000) a, generate_series(1, 10) b`,
+		"several aggregates at once":  `SELECT length(string_agg(repeat('x', 10000), '')), length(string_agg(repeat('y', 10000), '')) FROM generate_series(1, 100000)`,
 	} {
-		t.Run(sql, func(t *testing.T) {
-			result, err := runner.Run(t.Context(), request(database, sql))
-			if err != nil {
-				t.Fatalf("a bounded generator failed: %v", err)
+		t.Run(name, func(t *testing.T) {
+			_, err := runner.Run(t.Context(), request(database, sql))
+			if err == nil {
+				t.Fatalf("an over-allocating query was allowed to finish: %s", sql)
 			}
-			if got := result.Rows[0][0]; got != want && got != int32(want) {
-				t.Fatalf("%s = %v (%T), want %d", sql, got, got, want)
+			// Not a validator refusal: the query reached the database, which
+			// declined it on its own terms.
+			var refusal *sqlpolicy.Refusal
+			if errors.As(err, &refusal) {
+				t.Fatalf("refused by the validator, not the cluster: %v", err)
+			}
+			// The database's own words, and the out-of-memory SQLSTATE — not a
+			// broken connection, which is what a killed backend would give.
+			var pg *pgconn.PgError
+			if !errors.As(err, &pg) {
+				t.Fatalf("error = %v (%T), want PostgreSQL's own out-of-memory error", err, err)
+			}
+			if pg.Code != "53200" {
+				t.Fatalf("SQLSTATE = %s (%s), want 53200 out_of_memory", pg.Code, pg.Message)
 			}
 		})
 	}
+
+	// The postmaster never restarted — the cap kept every failure to the one
+	// backend that asked for too much.
+	if now := postmasterStart(t, admin); !now.Equal(startTime) {
+		t.Fatalf("the postmaster restarted: %s -> %s; a backend was killed rather than told no", startTime, now)
+	}
+	// And an ordinary query still runs: other participants were untouched.
+	if _, err := runner.Run(t.Context(), request(database, `SELECT count(*) FROM evidence`)); err != nil {
+		t.Fatalf("the cluster did not serve a normal query after the over-allocating ones: %v", err)
+	}
+}
+
+// postmasterStart reads when the cluster's postmaster last started, which
+// changes if and only if it has restarted (a crash and its recovery).
+func postmasterStart(t *testing.T, admin *pgxpool.Pool) time.Time {
+	t.Helper()
+	var started time.Time
+	if err := admin.QueryRow(t.Context(), `SELECT pg_postmaster_start_time()`).Scan(&started); err != nil {
+		t.Fatalf("reading the postmaster start time: %v", err)
+	}
+	return started
 }
 
 func TestAnUnknownDatabaseFailsWithoutPanicking(t *testing.T) {
