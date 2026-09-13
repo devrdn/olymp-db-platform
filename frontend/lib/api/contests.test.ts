@@ -55,6 +55,7 @@ const detail = {
   starts_at: "2026-11-08T19:00:00Z",
   ends_at: "2026-11-08T21:00:00Z",
   allowed_cidrs: ["10.24.0.0/16"],
+  leaderboard: { freeze_min: 30, names: "full_name", revealed_at: "2026-11-09T10:00:00Z" },
   settings: { query_rate_limit_per_min: 30, grace_period_min: 5 },
   languages: [
     { code: "en", is_default: false },
@@ -89,6 +90,17 @@ describe("contestSchema", () => {
    * because the field is a pointer. Left as `null` it would reach a number
    * input as the string "null".
    */
+  test("reads how the leaderboard is frozen, labelled and revealed", () => {
+    expect(contestSchema.parse(detail).leaderboard).toEqual({
+      freezeMin: 30,
+      names: "full_name",
+      revealedAt: "2026-11-09T10:00:00Z",
+    });
+    expect(
+      contestSchema.parse({ ...detail, leaderboard: { freeze_min: null, names: "login" } }).leaderboard,
+    ).toEqual({ freezeMin: null, names: "login", revealedAt: undefined });
+  });
+
   test("reads a null duration as an absent one", () => {
     const parsed = contestSchema.parse({ ...detail, timing: "fixed", duration_min: null });
 

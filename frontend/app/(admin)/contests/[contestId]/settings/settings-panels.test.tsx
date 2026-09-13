@@ -28,6 +28,7 @@ function contest(overrides: Partial<Contest> = {}): Contest {
     endsAt: "2026-11-08T21:30:00Z",
     allowedCidrs: [],
     settings: { queryRateLimitPerMin: 0, gracePeriodMin: 0 },
+    leaderboard: { freezeMin: null, names: "login", revealedAt: undefined },
     languages: [{ code: "en", isDefault: true }],
     translations: { en: { title: "Night in the archive" } },
     createdAt: "2026-08-01T10:00:00Z",
@@ -184,5 +185,52 @@ describe("ContestPanel, rules on screen and explanations behind a question mark"
 
     await user.click(hint);
     expect(screen.getByText(t.orderHelp)).toBeVisible();
+  });
+});
+
+describe("ContestPanel, the leaderboard", () => {
+  test("asks for an amount only once a freeze is chosen", async () => {
+    const user = userEvent.setup();
+    render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
+    const t = dict.workspace.settings.leaderboard;
+
+    expect(screen.getByLabelText(t.freezeNone)).toBeChecked();
+    expect(screen.queryByLabelText(t.freezeAmount)).not.toBeInTheDocument();
+
+    await user.click(screen.getByLabelText(t.freezeBefore));
+    expect(screen.getByLabelText(t.freezeAmount)).toHaveValue(30);
+  });
+
+  test("shows a freeze of whole hours in hours", () => {
+    render(
+      <ContestPanel
+        contest={contest({ leaderboard: { freezeMin: 120, names: "full_name", revealedAt: undefined } })}
+        editable
+        shapeOpen
+        dict={dict}
+      />,
+    );
+    const t = dict.workspace.settings.leaderboard;
+
+    expect(screen.getByLabelText(t.freezeAmount)).toHaveValue(2);
+    expect(screen.getByLabelText(t.unitHours)).toBeChecked();
+    expect(screen.getByLabelText(t.namesFullName)).toBeChecked();
+    expect(screen.getByText(t.namesPublicHint)).toBeInTheDocument();
+  });
+
+  test("locks the freeze once the contest runs, and leaves the label free", () => {
+    render(
+      <ContestPanel
+        contest={contest({ status: "running", leaderboard: { freezeMin: 30, names: "login", revealedAt: undefined } })}
+        editable
+        shapeOpen={false}
+        dict={dict}
+      />,
+    );
+    const t = dict.workspace.settings.leaderboard;
+
+    expect(screen.getByLabelText(t.freezeBefore)).toBeDisabled();
+    expect(screen.getByLabelText(t.freezeAmount)).toBeDisabled();
+    expect(screen.getByLabelText(t.namesFullName)).toBeEnabled();
   });
 });

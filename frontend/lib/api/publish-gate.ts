@@ -27,6 +27,10 @@ export const PUBLISH_PROBLEMS = {
   // contest-wide problem does.
   sequentialNeedsMaxAttempts: "sequential_needs_max_attempts",
   sequentialHidesQuestion: "sequential_hides_question",
+  // Contest-wide, like the two above: winner mode with no final question, and
+  // a leaderboard freeze that no longer fits the window.
+  winnerNeedsFinal: "winner_needs_final",
+  leaderboardFreezeExceedsWindow: "leaderboard_freeze_exceeds_window",
 } as const;
 
 export type PublishProblem = {
