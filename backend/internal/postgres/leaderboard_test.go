@@ -227,15 +227,22 @@ func (f icpcFixture) answerAt(t *testing.T, registration, question uuid.UUID, at
 
 func (f icpcFixture) standings(t *testing.T, q leaderboard.Query) map[string]leaderboard.Entry {
 	t.Helper()
+	entries, _ := f.table(t, q)
+	return byLogin(entries)
+}
+
+// table runs the ICPC query and returns the rows in order and the grid.
+func (f icpcFixture) table(t *testing.T, q leaderboard.Query) ([]leaderboard.Entry, leaderboard.Grid) {
+	t.Helper()
 	q.ContestID, q.Scoring = f.contest, contests.ScoringICPC
 	if q.Limit == 0 {
 		q.Limit = 10
 	}
-	entries, err := NewLeaderboard(testPool).Standings(f.ctx, q)
+	entries, grid, err := NewLeaderboard(testPool).ICPCStandings(f.ctx, q)
 	if err != nil {
-		t.Fatalf("Standings() = %v", err)
+		t.Fatalf("ICPCStandings() = %v", err)
 	}
-	return byLogin(entries)
+	return entries, grid
 }
 
 func cellString(c leaderboard.Cell) string {
@@ -325,13 +332,14 @@ func TestICPCStandingsLeaveAHiddenQuestionOffTheGrid(t *testing.T) {
 		f.answerAt(t, alice, f.hidden, 1, true, boardAt(3))
 		f.answerAt(t, alice, f.b, 1, true, boardAt(4))
 
-		e := f.standings(t, leaderboard.Query{Cutoff: boardAt(60)})["icpc-hidden"]
+		entries, grid := f.table(t, leaderboard.Query{Cutoff: boardAt(60)})
+		e := byLogin(entries)["icpc-hidden"]
 		if e.Solved != 1 || e.Penalty != 4 || len(e.Cells) != 2 || e.Cells[0].SolvedAt != nil || e.Cells[1].Minute != 4 {
 			t.Errorf("entry = %+v, want only B solved, at minute 4, on a grid of A and B", e)
 		}
-		n, err := NewLeaderboard(testPool).VisibleQuestions(ctx, f.contest)
-		if err != nil || n != 2 {
-			t.Errorf("VisibleQuestions() = %d, %v, want 2", n, err)
+		if grid.Questions != 2 || len(grid.FirstSolves) != 2 || grid.FirstSolves[0] != nil ||
+			grid.FirstSolves[1] == nil || !grid.FirstSolves[1].Equal(boardAt(4)) {
+			t.Errorf("grid = %d questions, first solves %v; want 2, [nil, minute 4]", grid.Questions, grid.FirstSolves)
 		}
 	})
 }
@@ -418,13 +426,7 @@ func TestICPCStandingsCutTheListBelowTheTopOfTheTable(t *testing.T) {
 		f.answerAt(t, banned, f.b, 1, true, boardAt(2))
 		exec(t, ctx, `UPDATE registrations SET status = 'disqualified' WHERE id = $1`, banned)
 
-		repo := NewLeaderboard(testPool)
-		entries, err := repo.Standings(ctx, leaderboard.Query{
-			ContestID: f.contest, Cutoff: boardAt(60), Scoring: contests.ScoringICPC, Limit: 2,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
+		entries, _ := f.table(t, leaderboard.Query{Cutoff: boardAt(60), Limit: 2})
 		if len(entries) != 2 || entries[0].Login != "icpc-two" || entries[1].Login != "icpc-fast" {
 			t.Errorf("order = %+v, want icpc-two, icpc-fast", entries)
 		}
@@ -432,6 +434,56 @@ func TestICPCStandingsCutTheListBelowTheTopOfTheTable(t *testing.T) {
 		staff := f.standings(t, leaderboard.Query{Cutoff: boardAt(60), IncludeDisqualified: true})
 		if e, ok := staff["icpc-banned"]; !ok || !e.Disqualified || e.Solved != 2 {
 			t.Errorf("staff entry = %+v, %v, want the disqualified row with 2 solved", e, ok)
+		}
+	})
+}
+
+// A table with nobody on it still knows its grid: the letters and the cells
+// of the first row to arrive must agree, and there is no row to count from.
+func TestICPCStandingsReturnTheGridWithNoRegistrations(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newICPCFixture(t, ctx, 20)
+
+		entries, grid := f.table(t, leaderboard.Query{Cutoff: boardAt(60)})
+		if len(entries) != 0 || grid.Questions != 2 || len(grid.FirstSolves) != 2 ||
+			grid.FirstSolves[0] != nil || grid.FirstSolves[1] != nil {
+			t.Errorf("entries = %+v, grid = %+v; want no rows on a grid of 2 unsolved questions", entries, grid)
+		}
+	})
+}
+
+// A question's earliest solve is the contest's, not the page's: the first
+// solver is below the row bound here, a disqualified registration solved
+// earlier still, the staff query lists that registration, and an answer
+// after the cutoff is earlier than nothing. Two solves in the same instant
+// both carry the earliest moment.
+func TestICPCStandingsNameEachQuestionsEarliestSolveOverTheWholeContest(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newICPCFixture(t, ctx, 20)
+		banned := f.participant(t, "icpc-banned", 0)
+		f.answerAt(t, banned, f.a, 1, true, boardAt(1))
+		f.answerAt(t, banned, f.b, 1, true, boardAt(2))
+		exec(t, ctx, `UPDATE registrations SET status = 'disqualified' WHERE id = $1`, banned)
+		top := f.participant(t, "icpc-top", 0)
+		f.answerAt(t, top, f.a, 1, true, boardAt(20))
+		f.answerAt(t, top, f.b, 1, true, boardAt(30))
+		tie := f.participant(t, "icpc-tie", 0)
+		f.answerAt(t, tie, f.a, 1, true, boardAt(25))
+		f.answerAt(t, tie, f.b, 1, true, boardAt(30))
+		early := f.participant(t, "icpc-early-one", 0)
+		f.answerAt(t, early, f.a, 1, true, boardAt(5))
+		after := f.participant(t, "icpc-after-cutoff", 0)
+		f.answerAt(t, after, f.b, 1, true, boardAt(61))
+
+		for _, staff := range []bool{false, true} {
+			entries, grid := f.table(t, leaderboard.Query{Cutoff: boardAt(60), Limit: 2, IncludeDisqualified: staff})
+			if _, ok := byLogin(entries)["icpc-early-one"]; ok {
+				t.Fatalf("staff %v: the first solver of A is on a page of 2; the test no longer cuts it off", staff)
+			}
+			if len(grid.FirstSolves) != 2 || grid.FirstSolves[0] == nil || grid.FirstSolves[1] == nil ||
+				!grid.FirstSolves[0].Equal(boardAt(5)) || !grid.FirstSolves[1].Equal(boardAt(30)) {
+				t.Errorf("staff %v: first solves = %v, want minute 5 and minute 30", staff, grid.FirstSolves)
+			}
 		}
 	})
 }

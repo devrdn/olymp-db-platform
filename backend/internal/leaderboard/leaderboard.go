@@ -118,6 +118,19 @@ type Entry struct {
 	Cells []Cell
 }
 
+// Grid is what one ICPC computation knows beside its rows, taken from the
+// same statement so that the two always agree.
+type Grid struct {
+	// Questions is the number of visible questions: the grid's width, and the
+	// length of every row's Cells.
+	Questions int
+	// FirstSolves holds, per visible question in the questions' order, the
+	// earliest solve before the cutoff among the registrations that are not
+	// disqualified and were made before the cutoff — over the whole contest,
+	// not only the rows returned. Nil where nobody has solved the question.
+	FirstSolves []*time.Time
+}
+
 // The states of a cell on the ICPC grid.
 const (
 	// CellSolved is a question answered correctly before the cutoff.

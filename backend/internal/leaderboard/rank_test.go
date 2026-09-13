@@ -119,20 +119,47 @@ func icpcEntry(login string, solved, penalty int, last *time.Time, cells ...lead
 
 func solvedCell(at *time.Time) leaderboard.Cell { return leaderboard.Cell{SolvedAt: at} }
 
+func grid(firstSolves ...*time.Time) leaderboard.Grid {
+	return leaderboard.Grid{Questions: len(firstSolves), FirstSolves: firstSolves}
+}
+
+func firstMarks(rows []leaderboard.Row) map[string][]bool {
+	marks := map[string][]bool{}
+	for _, r := range rows {
+		marks[r.Login] = []bool{}
+		for _, c := range r.Cells {
+			marks[r.Login] = append(marks[r.Login], c.First)
+		}
+	}
+	return marks
+}
+
+func sameMarks(a, b []bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // ICPC: more solved first, then less penalty; the same solved and penalty
 // share a place (1, 1, 3) whenever the last solve came. Points, which are
 // zero in this mode, decide nothing even when a row carries some.
-func TestRankInICPCModeSharesAPlaceForEqualSolvedAndPenalty(t *testing.T) {
+func TestRankICPCSharesAPlaceForEqualSolvedAndPenalty(t *testing.T) {
 	fewer := icpcEntry("fewer", 1, 5, at(5))
 	fewer.Points = 100
 
-	rows := leaderboard.Rank(contests.ScoringICPC, []leaderboard.Entry{
+	rows := leaderboard.RankICPC([]leaderboard.Entry{
 		icpcEntry("tie-late", 2, 50, at(40)),
 		fewer,
 		icpcEntry("tie-early", 2, 50, at(30)),
 		icpcEntry("less-penalty", 2, 40, at(50)),
 		icpcEntry("nothing", 0, 0, nil),
-	})
+	}, grid())
 
 	got := summary(rows)
 	want := []string{"less-penalty:1", "tie-early:2", "tie-late:2", "fewer:4", "nothing:5"}
@@ -143,32 +170,46 @@ func TestRankInICPCModeSharesAPlaceForEqualSolvedAndPenalty(t *testing.T) {
 	}
 }
 
-// The first solver of a question is the earliest solve among the rows that are
-// not disqualified: the staff table lists the disqualified, and their solve
-// must not take the mark from somebody who is still in the contest.
-func TestRankInICPCModeMarksTheFirstSolverAmongTheNotDisqualified(t *testing.T) {
-	banned := icpcEntry("banned", 1, 1, at(1), solvedCell(at(1)), leaderboard.Cell{})
+// A cell is first when its solve is the question's earliest solve as storage
+// computed it over the whole contest — not the earliest among the rows at
+// hand, which a row bound or the disqualified on the staff table would skew.
+// A disqualified row is never first, even in the same instant.
+func TestRankICPCMarksTheFirstSolverByTheContestsEarliestSolve(t *testing.T) {
+	banned := icpcEntry("banned", 2, 31, at(30), solvedCell(at(1)), solvedCell(at(30)))
 	banned.Disqualified = true
 	early := icpcEntry("early", 2, 35, at(30), solvedCell(at(5)), solvedCell(at(30)))
 	late := icpcEntry("late", 1, 10, at(10), solvedCell(at(10)), leaderboard.Cell{Wrong: 4})
 	entries := []leaderboard.Entry{banned, late, early}
 
-	rows := leaderboard.Rank(contests.ScoringICPC, entries)
+	// Somebody below the row bound solved A at minute 3, before anybody here.
+	rows := leaderboard.RankICPC(entries, grid(at(3), at(30)))
 
-	first := map[string][]bool{}
-	for _, r := range rows {
-		for _, c := range r.Cells {
-			first[r.Login] = append(first[r.Login], c.First)
-		}
-	}
-	want := map[string][]bool{"banned": {false, false}, "early": {true, true}, "late": {false, false}}
+	want := map[string][]bool{"banned": {false, false}, "early": {false, true}, "late": {false, false}}
+	got := firstMarks(rows)
 	for login, marks := range want {
-		if len(first[login]) != len(marks) || first[login][0] != marks[0] || first[login][1] != marks[1] {
-			t.Errorf("%s first marks = %v, want %v", login, first[login], marks)
+		if !sameMarks(got[login], marks) {
+			t.Errorf("%s first marks = %v, want %v", login, got[login], marks)
 		}
 	}
 	// The mark is the ranking's, not storage's: the entries given are untouched.
-	if entries[2].Cells[0].First {
-		t.Error("Rank wrote the first mark into the entries it was given")
+	if entries[2].Cells[1].First {
+		t.Error("RankICPC wrote the first mark into the entries it was given")
+	}
+}
+
+// Two solves in the same instant are both first: neither was earlier.
+func TestRankICPCMarksBothSolvesInTheSameInstantFirst(t *testing.T) {
+	rows := leaderboard.RankICPC([]leaderboard.Entry{
+		icpcEntry("a", 1, 7, at(7), solvedCell(at(7))),
+		icpcEntry("b", 1, 7, at(7), solvedCell(at(7))),
+		icpcEntry("c", 1, 8, at(8), solvedCell(at(8))),
+	}, grid(at(7)))
+
+	want := map[string][]bool{"a": {true}, "b": {true}, "c": {false}}
+	got := firstMarks(rows)
+	for login, marks := range want {
+		if !sameMarks(got[login], marks) {
+			t.Errorf("%s first marks = %v, want %v", login, got[login], marks)
+		}
 	}
 }

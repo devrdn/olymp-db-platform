@@ -17,21 +17,27 @@ import (
 // standings is the storage double: it answers every query with the same
 // entries and remembers what it was asked.
 type standings struct {
-	contests  *conteststest.Contests
-	entries   []leaderboard.Entry
-	queries   []leaderboard.Query
-	questions int
-	// questionReads counts VisibleQuestions calls.
-	questionReads int
-}
-
-func (s *standings) VisibleQuestions(context.Context, uuid.UUID) (int, error) {
-	s.questionReads++
-	return s.questions, nil
+	contests *conteststest.Contests
+	entries  []leaderboard.Entry
+	queries  []leaderboard.Query
+	// grid is what ICPCStandings answers beside the entries; icpcReads counts
+	// its calls.
+	grid      leaderboard.Grid
+	icpcReads int
 }
 
 func (s *standings) Standings(_ context.Context, q leaderboard.Query) ([]leaderboard.Entry, error) {
 	s.queries = append(s.queries, q)
+	return s.cut(q), nil
+}
+
+func (s *standings) ICPCStandings(_ context.Context, q leaderboard.Query) ([]leaderboard.Entry, leaderboard.Grid, error) {
+	s.queries = append(s.queries, q)
+	s.icpcReads++
+	return s.cut(q), s.grid, nil
+}
+
+func (s *standings) cut(q leaderboard.Query) []leaderboard.Entry {
 	out := s.entries
 	if !q.IncludeDisqualified {
 		out = nil
@@ -44,7 +50,7 @@ func (s *standings) Standings(_ context.Context, q leaderboard.Query) ([]leaderb
 	if len(out) > q.Limit {
 		out = out[:q.Limit]
 	}
-	return out, nil
+	return out
 }
 
 func (s *standings) MarkRevealed(ctx context.Context, contestID uuid.UUID, at time.Time) (time.Time, bool, error) {
@@ -303,7 +309,7 @@ func (r *rig) seedICPC(status string, freezeMin *int) contests.Contest {
 // of computing, by the public table and the participant's copy of it.
 func TestAFrozenICPCTableAsksForTheAttemptsSinceTheFreeze(t *testing.T) {
 	r := newRig(t)
-	r.standings.questions = 3
+	r.standings.grid = leaderboard.Grid{Questions: 3, FirstSolves: make([]*time.Time, 3)}
 	c := r.seedICPC(contests.StatusRunning, minutes(30))
 	user := uuid.New()
 	if _, err := r.people.Add(context.Background(), c.ID, user); err != nil {
@@ -350,8 +356,8 @@ func TestOnlyAFrozenPublicTableAsksForPendingAttempts(t *testing.T) {
 	}
 }
 
-// The points table does not read the questions: its response has no grid.
-func TestAPointsTableReadsNoQuestions(t *testing.T) {
+// The points table does not read the ICPC standings: its response has no grid.
+func TestAPointsTableReadsNoGrid(t *testing.T) {
 	r := newRig(t)
 	c := r.seed(contests.StatusRunning, minutes(30))
 	r.now = end.Add(-10 * time.Minute)
@@ -360,8 +366,54 @@ func TestAPointsTableReadsNoQuestions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.standings.questionReads != 0 || view.Questions != 0 || r.standings.queries[0].Pending != nil {
-		t.Errorf("questions read %d times, Questions = %d, Pending = %v; want none of them",
-			r.standings.questionReads, view.Questions, r.standings.queries[0].Pending)
+	if r.standings.icpcReads != 0 || view.Questions != 0 || r.standings.queries[0].Pending != nil {
+		t.Errorf("ICPC read %d times, Questions = %d, Pending = %v; want none of them",
+			r.standings.icpcReads, view.Questions, r.standings.queries[0].Pending)
+	}
+}
+
+// The first-solver mark survives the row bound: the question's first solver
+// is cut off the table, and nobody left on it is marked in their place.
+func TestAnICPCFirstSolverMarkSurvivesTheRowBound(t *testing.T) {
+	r := newRig(t)
+	r.service = leaderboard.NewService(leaderboard.Config{
+		Contests: r.contests, Participants: r.people, Standings: r.standings,
+		Audit: audit.New(r.sink), UnitOfWork: &conteststest.UnitOfWork{},
+		Now: func() time.Time { return r.now }, CacheTTL: time.Second, MaxRows: 2,
+	})
+	c := r.seedICPC(contests.StatusRunning, nil)
+	r.standings.entries = []leaderboard.Entry{
+		icpcEntry("top", 2, 40, at(30), solvedCell(at(10)), solvedCell(at(30))),
+		icpcEntry("second", 2, 60, at(40), solvedCell(at(20)), solvedCell(at(40))),
+		icpcEntry("cut", 1, 5, at(5), solvedCell(at(5)), leaderboard.Cell{}),
+	}
+	r.standings.grid = grid(at(5), at(30))
+
+	view, err := r.service.Public(context.Background(), c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.Truncated || len(view.Rows) != 2 || view.Questions != 2 {
+		t.Fatalf("Truncated = %v, rows = %d, Questions = %d; want true, 2, 2", view.Truncated, len(view.Rows), view.Questions)
+	}
+	want := map[string][]bool{"top": {false, true}, "second": {false, false}}
+	got := firstMarks(view.Rows)
+	for login, marks := range want {
+		if !sameMarks(got[login], marks) {
+			t.Errorf("%s first marks = %v, want %v", login, got[login], marks)
+		}
+	}
+}
+
+// The question letters and every row's cells come from one computation and
+// must agree; a grid that does not is refused rather than served misaligned.
+func TestAnICPCGridWhoseRowsDoNotMatchItsWidthIsRefused(t *testing.T) {
+	r := newRig(t)
+	c := r.seedICPC(contests.StatusRunning, nil)
+	r.standings.entries = []leaderboard.Entry{icpcEntry("short", 0, 0, nil, leaderboard.Cell{})}
+	r.standings.grid = grid(nil, nil)
+
+	if _, err := r.service.Public(context.Background(), c.ID); err == nil {
+		t.Error("Public() served a row of 1 cell on a grid of 2 questions")
 	}
 }

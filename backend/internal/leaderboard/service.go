@@ -67,9 +67,11 @@ type Window struct {
 // Repository is the storage the table needs.
 type Repository interface {
 	Standings(ctx context.Context, q Query) ([]Entry, error)
-	// VisibleQuestions counts the contest's visible questions: the width of
-	// the ICPC grid, which a table with no rows must still know.
-	VisibleQuestions(ctx context.Context, contestID uuid.UUID) (int, error)
+	// ICPCStandings is Standings for an ICPC table. The grid — its width and
+	// each question's earliest solve — comes from the same statement as the
+	// entries, so the letters, the cells and the marks describe one moment
+	// even while an organiser changes a question's visibility.
+	ICPCStandings(ctx context.Context, q Query) ([]Entry, Grid, error)
 	// MarkRevealed records the reveal once. It returns the moment in force
 	// and whether this call was the one that set it.
 	MarkRevealed(ctx context.Context, contestID uuid.UUID, at time.Time) (time.Time, bool, error)
@@ -322,28 +324,40 @@ type table struct {
 // rank reads one more entry than the bound, so "there are more" is a fact
 // rather than the guess len == limit would be.
 func (s *Service) rank(ctx context.Context, q Query) (table, error) {
-	var t table
-	if q.Scoring == contests.ScoringICPC {
-		// Questions cannot change once the contest runs (ContentEditable), and
-		// no table has rows before that, so this count and the cells agree.
-		n, err := s.standings.VisibleQuestions(ctx, q.ContestID)
+	q.Limit = s.maxRows + 1
+	if q.Scoring != contests.ScoringICPC {
+		entries, err := s.standings.Standings(ctx, q)
 		if err != nil {
-			return table{}, fmt.Errorf("count the visible questions: %w", err)
+			return table{}, fmt.Errorf("read the standings: %w", err)
 		}
-		t.questions = n
+		entries, truncated := s.cut(entries)
+		return table{rows: Rank(q.Scoring, entries), truncated: truncated}, nil
 	}
 
-	q.Limit = s.maxRows + 1
-	entries, err := s.standings.Standings(ctx, q)
+	entries, grid, err := s.standings.ICPCStandings(ctx, q)
 	if err != nil {
-		return table{}, fmt.Errorf("read the standings: %w", err)
+		return table{}, fmt.Errorf("read the icpc standings: %w", err)
 	}
-	t.truncated = len(entries) > s.maxRows
-	if t.truncated {
-		entries = entries[:s.maxRows]
+	// One statement makes these agree; a grid that does not is refused rather
+	// than served with letters that name the wrong columns.
+	if len(grid.FirstSolves) != grid.Questions {
+		return table{}, fmt.Errorf("the icpc grid has %d questions and %d first solves", grid.Questions, len(grid.FirstSolves))
 	}
-	t.rows = Rank(q.Scoring, entries)
-	return t, nil
+	for _, e := range entries {
+		if len(e.Cells) != grid.Questions {
+			return table{}, fmt.Errorf("an icpc row has %d cells on a grid of %d questions", len(e.Cells), grid.Questions)
+		}
+	}
+	// The marks come from the grid, so cutting the rows cannot move them.
+	entries, truncated := s.cut(entries)
+	return table{rows: RankICPC(entries, grid), truncated: truncated, questions: grid.Questions}, nil
+}
+
+func (s *Service) cut(entries []Entry) ([]Entry, bool) {
+	if len(entries) > s.maxRows {
+		return entries[:s.maxRows], true
+	}
+	return entries, false
 }
 
 // expiry is when a cached table stops being true: the TTL, or the freeze if
