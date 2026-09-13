@@ -69,6 +69,28 @@
   --color-warn-wash: var(--warn-wash);
   --color-bad: var(--bad);
   --color-bad-wash: var(--bad-wash);
+  --color-gold: var(--gold);
+  --color-gold-wash: var(--gold-wash);
+  --color-silver: var(--silver);
+  --color-silver-wash: var(--silver-wash);
+  --color-bronze: var(--bronze);
+  --color-bronze-wash: var(--bronze-wash);
+  --color-frost: var(--frost);
+  --color-frost-wash: var(--frost-wash);
+  --color-you: var(--you);
+  --color-you-wash: var(--you-wash);
+  --color-id-1: var(--id-1);
+  --color-id-1-wash: var(--id-1-wash);
+  --color-id-2: var(--id-2);
+  --color-id-2-wash: var(--id-2-wash);
+  --color-id-3: var(--id-3);
+  --color-id-3-wash: var(--id-3-wash);
+  --color-id-4: var(--id-4);
+  --color-id-4-wash: var(--id-4-wash);
+  --color-id-5: var(--id-5);
+  --color-id-5-wash: var(--id-5-wash);
+  --color-id-6: var(--id-6);
+  --color-id-6-wash: var(--id-6-wash);
 
   /* Aliases shadcn components resolve against. */
   --color-background: var(--background);
