@@ -442,6 +442,9 @@ function DownloadButton({
   );
 }
 
+/** The codes that mean the installation failed, not the query. */
+const FAULT_CODES = ["internal_error", "query_service_down", "game_cluster_full"];
+
 /**
  * Why a query did not run.
  *
@@ -460,6 +463,13 @@ function Refusal({ state, dict }: { state: Extract<ConsoleState, { kind: "refuse
     state.code,
   );
 
+  // Named as the faults rather than as the refusals, because a refusal is
+  // what the list of codes mostly is and a new one should not arrive with a
+  // reference under it. A code this build has no sentence for is counted as a
+  // fault: nobody can say what happened, which is when the reference is the
+  // only thing worth quoting.
+  const fault = !(state.code in errors) || FAULT_CODES.includes(state.code);
+
   return (
     <div
       role="status"
@@ -477,7 +487,7 @@ function Refusal({ state, dict }: { state: Extract<ConsoleState, { kind: "refuse
           the only case where anybody will be asked for it — and a reference
           number printed under an ordinary refusal reads as though the refusal
           were a fault. */}
-      {state.requestId && !passing ? (
+      {state.requestId && fault ? (
         <p className="mt-2 font-mono text-small text-ink-3">
           {dict.participant.console.reference.replace("{id}", state.requestId)}
         </p>

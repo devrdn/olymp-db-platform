@@ -394,3 +394,23 @@ func TestTheDatabasesOwnWordsStillReachTheParticipant(t *testing.T) {
 		t.Fatalf("the database's own words were withheld: %s", rec.Body.String())
 	}
 }
+
+// The words have to arrive where the console reads them. They used to travel
+// only in `message` under `invalid_request`, so the console printed its
+// sentence for a malformed form — "check the fields you filled in", with a
+// support reference under it — and never showed the one line that said what
+// to change. The console reads a query's specifics from `subject`, as it
+// already does for every refusal the validator makes.
+func TestADatabaseRefusalHasItsOwnCodeAndNamesTheReasonAsItsSubject(t *testing.T) {
+	const reason = `ERROR: column "alibi" does not exist (SQLSTATE 42703)`
+	fixture := newConsoleFixture(t, fakeConsole{err: &queryrunner.DatabaseError{Message: reason}})
+
+	rec := fixture.run("select alibi from guests;")
+
+	if code := errorCode(t, rec); code != "query_database_error" {
+		t.Fatalf("code = %q, want query_database_error (body: %s)", code, rec.Body.String())
+	}
+	if subject, _ := decode(t, rec)["subject"].(string); subject != reason {
+		t.Fatalf("subject = %q, want the database's own words %q", subject, reason)
+	}
+}
