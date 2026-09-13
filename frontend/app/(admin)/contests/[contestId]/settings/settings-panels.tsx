@@ -9,6 +9,7 @@ import { Tag } from "@/components/ui/tag";
 import { Tooltip } from "@/components/ui/tooltip";
 import { ENROLLMENTS, PROGRESSIONS, QUESTION_MODES, SCORINGS, TIMINGS } from "@/lib/api/contests-terms";
 import { type Contest, type ContestSummary } from "@/lib/api/contests";
+import { FREEZE_UNITS, freezeForForm } from "@/lib/api/leaderboard";
 import { SQL_MODES } from "@/lib/api/policy-terms";
 import { type SqlPolicy } from "@/lib/api/policy";
 import { wallClockFromInstant } from "@/lib/format/datetime";
@@ -218,6 +219,11 @@ export function ContestPanel({
   const [progression, setProgression] = useState<string>(contest.progression);
   const orderLegendId = useId();
   const scoringLegendId = useId();
+  const freezeLegendId = useId();
+  const namesLegendId = useId();
+  const freezeInitial = freezeForForm(contest.leaderboard.freezeMin);
+  const [freezeMode, setFreezeMode] = useState<string>(freezeInitial.mode);
+  const [names, setNames] = useState<string>(contest.leaderboard.names);
 
   // The form is keyed by the server's own version of what it renders.
   //
@@ -380,6 +386,69 @@ export function ContestPanel({
             initial={contest.scoring}
             disabled={!shapeOpen}
           />
+        </fieldset>
+      </Panel>
+
+      <Panel title={t.leaderboard.heading} help={t.leaderboard.help} dict={dict}>
+        {/* Locked with the shape, and for a stronger reason: moving the
+            freeze mid-contest would open the live table for a moment or hide
+            one participants already saw. A disabled radio submits nothing,
+            and the action reads "nothing" as "leave it alone". */}
+        <fieldset className="flex flex-col gap-3" disabled={!shapeOpen} aria-labelledby={freezeLegendId}>
+          <HelpLegend id={freezeLegendId} help={t.leaderboard.freezeHelp} dict={dict}>
+            {t.leaderboard.freeze}
+          </HelpLegend>
+          <Choices
+            name="leaderboardFreezeMode"
+            values={["none", "before"] as const}
+            labels={{ none: t.leaderboard.freezeNone, before: t.leaderboard.freezeBefore }}
+            initial={freezeInitial.mode}
+            disabled={!shapeOpen}
+            onPick={setFreezeMode}
+          />
+          {freezeMode === "before" ? (
+            <div className="flex flex-wrap items-end gap-6 pl-7">
+              <Field id="leaderboardFreezeAmount" label={t.leaderboard.freezeAmount}>
+                <Input
+                  name="leaderboardFreezeAmount"
+                  type="number"
+                  min={1}
+                  step={1}
+                  required
+                  defaultValue={freezeInitial.amount}
+                  disabled={!shapeOpen}
+                  className="max-w-28"
+                />
+              </Field>
+              <Choices
+                name="leaderboardFreezeUnit"
+                values={FREEZE_UNITS}
+                labels={{ minutes: t.leaderboard.unitMinutes, hours: t.leaderboard.unitHours }}
+                initial={freezeInitial.unit}
+                disabled={!shapeOpen}
+              />
+            </div>
+          ) : null}
+        </fieldset>
+
+        <fieldset className="flex flex-col gap-3" disabled={!editable} aria-labelledby={namesLegendId}>
+          <legend className="pb-2">
+            <span id={namesLegendId} className="font-mono text-label text-ink-3 uppercase">
+              {t.leaderboard.names}
+            </span>
+          </legend>
+          <Choices
+            name="leaderboardNames"
+            values={["login", "full_name"] as const}
+            labels={{ login: t.leaderboard.namesLogin, full_name: t.leaderboard.namesFullName }}
+            initial={contest.leaderboard.names}
+            disabled={!editable}
+            onPick={setNames}
+          />
+          {/* Said where the choice is made: the table is public. */}
+          {names === "full_name" ? (
+            <p className="max-w-body text-small text-warn">{t.leaderboard.namesPublicHint}</p>
+          ) : null}
         </fieldset>
       </Panel>
 

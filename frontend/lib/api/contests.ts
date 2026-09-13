@@ -141,6 +141,11 @@ export const contestSchema = z
     ends_at: z.string().optional(),
     allowed_cidrs: z.array(z.string()),
     settings: settingsSchema,
+    leaderboard: z.object({
+      freeze_min: z.number().nullable(),
+      names: z.enum(["login", "full_name"]),
+      revealed_at: z.string().optional(),
+    }),
     languages: z.array(languageSchema),
     translations: z.record(z.string(), translationSchema),
     created_at: z.string(),
@@ -159,6 +164,11 @@ export const contestSchema = z
     endsAt: raw.ends_at,
     allowedCidrs: raw.allowed_cidrs,
     settings: raw.settings,
+    leaderboard: {
+      freezeMin: raw.leaderboard.freeze_min,
+      names: raw.leaderboard.names,
+      revealedAt: raw.leaderboard.revealed_at,
+    },
     languages: raw.languages,
     translations: raw.translations,
     createdAt: raw.created_at,
