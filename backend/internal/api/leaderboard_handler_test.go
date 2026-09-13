@@ -421,6 +421,35 @@ func TestAPointsTableResponseIsUnchanged(t *testing.T) {
 	}
 }
 
+// The winner table's response is byte for byte what it was before ICPC, in
+// the shape with the most optional fields: frozen, with a winner, an unplaced
+// row and the caller's own row.
+func TestAWinnerTableResponseIsUnchanged(t *testing.T) {
+	f := newBoardFixture(t)
+	freeze := 30
+	c, me := f.contest(t, contests.StatusRunning, &freeze)
+	c.Scoring = contests.ScoringWinner
+	f.stores.Contests.Put(c)
+	freezeAt := c.EndsAt.Add(-30 * time.Minute)
+	f.now = freezeAt.Add(10 * time.Minute)
+	f.standings.entries = []leaderboard.Entry{
+		{Registration: uuid.New(), Login: "rival", Points: 20, LastScoredAt: scoredAt(freezeAt.Add(-30 * time.Minute))},
+		{Registration: me.ID, Login: "student", Points: 5, Solved: 1,
+			LastScoredAt: scoredAt(freezeAt.Add(-20 * time.Minute)), FinalAt: scoredAt(freezeAt.Add(-20 * time.Minute))},
+		{Registration: uuid.New(), Login: "late", Points: 99, LastScoredAt: scoredAt(freezeAt.Add(5 * time.Minute))},
+	}
+
+	student := f.student.ID
+	rec := f.request(http.MethodGet, "/contests/"+c.ID.String()+"/play/leaderboard", &student, "")
+	want := `{"state":"frozen","scoring":"winner","title":"The Library Murder","frozen_at":"2026-03-01T11:30:00Z",` +
+		`"ends_at":"2026-03-01T12:00:00Z","generated_at":"2026-03-01T11:40:00Z","truncated":false,"rows":[` +
+		`{"place":1,"label":"student","points":5,"solved":1,"last_scored_at":"2026-03-01T11:10:00Z","winner":true,"is_you":true},` +
+		`{"place":null,"label":"rival","points":20,"solved":0,"last_scored_at":"2026-03-01T11:00:00Z"}]}` + "\n"
+	if got := rec.Body.String(); got != want {
+		t.Errorf("participant body =\n%s\nwant\n%s", got, want)
+	}
+}
+
 // icpcContest seeds a running ICPC contest frozen 30 minutes before its end,
 // with the clock ten minutes into the freeze, and a board of three questions
 // on which the student and a rival have answered on both sides of the freeze.
