@@ -146,8 +146,17 @@ function cellAccessibleName(cell: StandingsCell, letter: string, t: CellDictiona
     }
     case "failed":
       return t.failed.replace("{letter}", letter).replace("{n}", String(cell.attempts ?? 0));
-    case "pending":
-      return t.pending.replace("{letter}", letter).replace("{n}", String(cell.pending ?? 0));
+    case "pending": {
+      const n = String(cell.pending ?? 0);
+      const wrong = cell.attempts ?? 0;
+      // The design (not the brief's narrower wording) governs: a pending
+      // cell that already carried wrong attempts before the freeze keeps
+      // saying so — that was visible before the table froze, so repeating it
+      // leaks nothing about what happened after.
+      return wrong > 0
+        ? t.pendingWrong.replace("{letter}", letter).replace("{n}", n).replace("{w}", String(wrong))
+        : t.pending.replace("{letter}", letter).replace("{n}", n);
+    }
     case "untried":
       return t.untried.replace("{letter}", letter);
   }
@@ -179,8 +188,10 @@ export function GridHeaderCells({ questions }: { questions: string[] }) {
  * carrying a spelled-out accessible name so the state never rests on colour
  * alone. `solved` shows the attempt above the minute ("+" on the first try,
  * "+N" for N wrong attempts first); a first solve is a solid fill, not just
- * a tint. `failed` shows the wrong-attempt count; `pending` shows "?" and
- * how many attempts came after the freeze; `untried` shows nothing visible.
+ * a tint. `failed` shows the wrong-attempt count; `pending` shows "?" and how
+ * many attempts came after the freeze, plus a "−N" second mark for the wrong
+ * attempts already known before the freeze, when there were any; `untried`
+ * shows nothing visible.
  */
 export function GridCells({
   cells,
@@ -223,6 +234,7 @@ export function GridCells({
                 <>
                   <span>?</span>
                   <span>{cell.pending ?? 0}</span>
+                  {(cell.attempts ?? 0) > 0 ? <span>{`−${cell.attempts}`}</span> : null}
                 </>
               ) : null}
             </div>
@@ -373,8 +385,10 @@ function Row({
 }) {
   const t = dict.leaderboard;
   const medal = medalOf(row);
-  const hue = identityHue(row.label);
-  const share = leader > 0 ? Math.round((row.points / leader) * 100) : 0;
+  // Neither hue nor share means anything on the ICPC branch below — it has
+  // no score bar — so neither is worth computing there.
+  const hue = icpc ? 0 : identityHue(row.label);
+  const share = !icpc && leader > 0 ? Math.round((row.points / leader) * 100) : 0;
 
   return (
     <tr
