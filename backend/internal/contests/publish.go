@@ -55,6 +55,13 @@ const (
 	// the window opens, or one with no ends_at to be measured back from.
 	// Saving refuses the first already, but the window can move afterwards.
 	ProblemLeaderboardFreezeExceedsWindow = "leaderboard_freeze_exceeds_window"
+	// ProblemICPCChoiceNeedsAttemptLimit names a choice question, in ICPC
+	// scoring, with no attempt cap or one that is not strictly below its own
+	// number of choices (design doc's "Принятые решения" §3): without one, a
+	// participant can submit every option in turn and solve the question for
+	// the mere cost of penalty time, never actually needing to know the
+	// answer.
+	ProblemICPCChoiceNeedsAttemptLimit = "icpc_choice_needs_attempt_limit"
 )
 
 // PublishProblem is one reason a contest is not ready.
@@ -153,6 +160,15 @@ func CheckPublishable(c Contest, story Story, questions []Question) error {
 
 	for _, q := range questions {
 		checkQuestionPublishable(q, langs, add)
+		// §3 of the design doc: in ICPC scoring, a choice question with no
+		// attempt cap — or one at least as large as its own choice count —
+		// can be solved by trying every option, for nothing worse than
+		// penalty time. Checked only in this mode: elsewhere the attempt
+		// limit is an ordinary authoring choice, not a way around answering.
+		if c.Scoring == ScoringICPC && q.Kind == KindChoice &&
+			(q.MaxAttempts == nil || *q.MaxAttempts >= len(q.ChoiceIDs)) {
+			add(PublishProblem{Code: ProblemICPCChoiceNeedsAttemptLimit, QuestionID: q.ID})
+		}
 		if c.Progression == ProgressionSequential {
 			// §6.1.1: sequential progression opens the next question only
 			// once the previous one is closed — answered correctly, or every
