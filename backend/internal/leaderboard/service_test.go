@@ -17,9 +17,17 @@ import (
 // standings is the storage double: it answers every query with the same
 // entries and remembers what it was asked.
 type standings struct {
-	contests *conteststest.Contests
-	entries  []leaderboard.Entry
-	queries  []leaderboard.Query
+	contests  *conteststest.Contests
+	entries   []leaderboard.Entry
+	queries   []leaderboard.Query
+	questions int
+	// questionReads counts VisibleQuestions calls.
+	questionReads int
+}
+
+func (s *standings) VisibleQuestions(context.Context, uuid.UUID) (int, error) {
+	s.questionReads++
+	return s.questions, nil
 }
 
 func (s *standings) Standings(_ context.Context, q leaderboard.Query) ([]leaderboard.Entry, error) {
@@ -281,5 +289,79 @@ func TestATableLongerThanTheBoundSaysItWasCut(t *testing.T) {
 	}
 	if !view.Truncated || len(view.Rows) != 2 {
 		t.Errorf("Truncated = %v with %d rows, want true with 2", view.Truncated, len(view.Rows))
+	}
+}
+
+func (r *rig) seedICPC(status string, freezeMin *int) contests.Contest {
+	c := contest(status, freezeMin, nil)
+	c.Scoring = contests.ScoringICPC
+	return r.contests.Put(c)
+}
+
+// Pending attempts are the one thing a frozen ICPC table tells after the
+// freeze, so they are asked for exactly there: from the freeze to the moment
+// of computing, by the public table and the participant's copy of it.
+func TestAFrozenICPCTableAsksForTheAttemptsSinceTheFreeze(t *testing.T) {
+	r := newRig(t)
+	r.standings.questions = 3
+	c := r.seedICPC(contests.StatusRunning, minutes(30))
+	user := uuid.New()
+	if _, err := r.people.Add(context.Background(), c.ID, user); err != nil {
+		t.Fatal(err)
+	}
+	r.now = end.Add(-10 * time.Minute)
+	freezeAt := end.Add(-30 * time.Minute)
+
+	view, _, err := r.service.ForParticipant(context.Background(), c.ID, user)
+	if err != nil {
+		t.Fatalf("ForParticipant() = %v", err)
+	}
+	q := r.standings.queries[0]
+	if q.Pending == nil || !q.Pending.From.Equal(freezeAt) || !q.Pending.Until.Equal(r.now) || !q.Cutoff.Equal(freezeAt) {
+		t.Fatalf("query = %+v, want the cutoff and pending window from %v to %v", q, freezeAt, r.now)
+	}
+	if view.Questions != 3 {
+		t.Errorf("Questions = %d, want 3", view.Questions)
+	}
+}
+
+// Nothing else asks for pending attempts: not a live or a final table, where
+// the cutoff is now and a result is simply shown, and never the staff table,
+// which is cut off now whatever the freeze and sees the result itself.
+func TestOnlyAFrozenPublicTableAsksForPendingAttempts(t *testing.T) {
+	r := newRig(t)
+	live := r.seedICPC(contests.StatusRunning, nil)
+	final := r.seedICPC(contests.StatusFinished, nil)
+	frozen := r.seedICPC(contests.StatusRunning, minutes(30))
+	r.now = end.Add(-10 * time.Minute)
+
+	for _, id := range []uuid.UUID{live.ID, final.ID} {
+		if _, err := r.service.Public(context.Background(), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.service.Live(context.Background(), frozen.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range r.standings.queries {
+		if q.Pending != nil {
+			t.Errorf("query %+v asks for pending attempts", q)
+		}
+	}
+}
+
+// The points table does not read the questions: its response has no grid.
+func TestAPointsTableReadsNoQuestions(t *testing.T) {
+	r := newRig(t)
+	c := r.seed(contests.StatusRunning, minutes(30))
+	r.now = end.Add(-10 * time.Minute)
+
+	view, err := r.service.Public(context.Background(), c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.standings.questionReads != 0 || view.Questions != 0 || r.standings.queries[0].Pending != nil {
+		t.Errorf("questions read %d times, Questions = %d, Pending = %v; want none of them",
+			r.standings.questionReads, view.Questions, r.standings.queries[0].Pending)
 	}
 }
