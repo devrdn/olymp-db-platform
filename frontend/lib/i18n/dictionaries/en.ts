@@ -343,6 +343,7 @@ const en = {
     scoring: {
       points: "Points",
       winner: "First to solve",
+      icpc: "ICPC",
     },
     status: {
       terminal: "This contest has reached its final state.",
@@ -392,6 +393,7 @@ const en = {
         missing_choice_label: "A choice has no label in a declared language.",
         no_reference_answer: "A question has no reference answer, so nothing could mark it.",
         no_schedule: "The contest has no start and end.",
+        icpc_choice_needs_attempt_limit: "A choice question in ICPC scoring has no attempt limit below its own number of options, so a wrong answer could always be guessed through for the price of a penalty.",
         sequential_needs_max_attempts: "A question has no attempt limit, so a participant stuck on it in sequential order could never move on.",
         sequential_hides_question: "A hidden question in sequential order has another question after it, which could never be reached.",
         winner_needs_final: "Scoring is first to solve, but no question is a final one, so nobody could win.",
@@ -471,6 +473,13 @@ const en = {
         penalty: "Penalty per wrong attempt, %",
         penaltyHelp: "Percent of this question's own points, lost for every wrong attempt already made on it. Never takes the question below zero, and never applies while the contest's scoring is set to first to solve.",
         penaltyPreview: "Right now, a wrong attempt costs {n} of {points} points.",
+        // ICPC scoring (Settings → Its shape) does not use a question's own
+        // points or percentage penalty at all — place is decided by how many
+        // questions are solved and, at a tie, by the contest's own penalty
+        // time. Said beside both fields rather than only in the gate, since
+        // the fields themselves stay in the form, disabled, with whatever
+        // they already held.
+        icpcDisabled: "Not used while the contest's scoring is ICPC.",
         choices: "Option identifiers",
         choicesHint: "Short, stable, language-independent — a, b, c.",
         choicesHelp: "The answer is one of these, never a label, which is what keeps checking independent of the language read.",
@@ -601,8 +610,10 @@ const en = {
         orderHelp: "Any order lets a participant answer any open question whenever they like. In order opens the next question only once the previous one is closed — answered correctly, or every attempt spent.",
         sequentialWarning: "In order needs every question to have an attempt limit. A question left unlimited traps a stuck participant with nothing left to do, so publishing is refused until every one has a limit.",
         scoring: "Scoring",
-        scoringHelp: "Points sums every question's own points, penalty included. First to solve has only a winner: whoever is first to answer the final question correctly.",
+        scoringHelp: "Points sums every question's own points, penalty included. First to solve has only a winner: whoever is first to answer the final question correctly. ICPC ranks by how many questions are solved and, at a tie, by penalty time — a question's own points are not used.",
         winnerIgnoresPenalty: "The per-attempt penalty set on each question is ignored while scoring is first to solve.",
+        icpcPenalty: "Penalty per wrong attempt, minutes",
+        icpcPenaltyHint: "Added to a registration's penalty time for every wrong attempt made on a question it later solves. From 0 to 240; cannot change once the contest starts.",
       },
       leaderboard: {
         heading: "Leaderboard",
@@ -1035,7 +1046,16 @@ const en = {
         submit: "Submit",
         submitting: "Submitting…",
         correct: "Correct! +{n} points.",
+        // ICPC scoring awards no points at all (submissions.points_awarded
+        // is always 0 in this mode), so the verdict says nothing about them
+        // rather than announcing "+0 points" as though that were a fact
+        // worth stating.
+        correctIcpc: "Correct!",
         incorrect: "Not correct.",
+        // Shown once, under the whole list, rather than repeated on every
+        // question — the penalty is a property of the contest, not of any
+        // one question. `{n}` is the contest's own `icpc_penalty_min`.
+        icpcPenalty: "+{n} min for a wrong attempt on a question you go on to solve.",
         reference: "If you report this, quote {id}.",
         // Read only by assistive technology, beside the visible "1." marker
         // (finding 6) — a sighted participant already reads the number, so

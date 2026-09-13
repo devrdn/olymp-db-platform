@@ -451,3 +451,61 @@ describe("a question's state", () => {
     expect(screen.queryAllByText(t.accepted)).toHaveLength(2);
   });
 });
+
+// docs/superpowers/specs/2026-09-13-icpc-scoring-design.md: place is decided
+// by how many questions are solved and, at a tie, by penalty time — a
+// question's own points are never shown to a participant in this mode, and a
+// correct answer is worth mentioning without a point value attached.
+describe("the questions panel, ICPC scoring", () => {
+  test("hides a question's own points, and states the penalty once for the whole list", () => {
+    render(
+      <QuestionsPanel contestId="c1" items={[entry()]} scoring="icpc" icpcPenaltyMin={20} dict={en} />,
+    );
+
+    expect(screen.queryByText("10 pts")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(en.participant.play.questions.icpcPenalty.replace("{n}", "20")),
+    ).toBeInTheDocument();
+  });
+
+  test("says nothing about points in the other two scorings", () => {
+    render(<QuestionsPanel contestId="c1" items={[entry()]} scoring="points" icpcPenaltyMin={20} dict={en} />);
+
+    expect(
+      screen.queryByText(en.participant.play.questions.icpcPenalty.replace("{n}", "20")),
+    ).not.toBeInTheDocument();
+  });
+
+  test("a correct answer says so without a point value", async () => {
+    answer.current = { kind: "answer", result: { correct: true, pointsAwarded: 0, attemptsRemaining: 2, closed: false } };
+    render(
+      <QuestionsPanel
+        contestId="c1"
+        items={[entry({ attemptsRemaining: 3 })]}
+        scoring="icpc"
+        icpcPenaltyMin={20}
+        dict={en}
+      />,
+    );
+
+    await submit();
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(en.participant.play.questions.correctIcpc));
+    expect(screen.getByRole("status")).not.toHaveTextContent("points");
+  });
+
+  test("a question closed from an earlier visit also shows the pointless verdict", () => {
+    render(
+      <QuestionsPanel
+        contestId="c1"
+        items={[entry({ closed: true, canAnswer: false, correct: true, pointsAwarded: 0 })]}
+        scoring="icpc"
+        icpcPenaltyMin={20}
+        dict={en}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(en.participant.play.questions.correctIcpc);
+    expect(screen.getByRole("status")).not.toHaveTextContent("points");
+  });
+});

@@ -22,6 +22,7 @@ function contest(overrides: Partial<Contest> = {}): Contest {
     questionMode: "multi",
     progression: "free",
     scoring: "points",
+    icpcPenaltyMin: 20,
     timing: "fixed",
     durationMin: undefined,
     startsAt: "2026-11-08T17:00:00Z",
@@ -185,6 +186,51 @@ describe("ContestPanel, rules on screen and explanations behind a question mark"
 
     await user.click(hint);
     expect(screen.getByText(t.orderHelp)).toBeVisible();
+  });
+});
+
+// The ICPC penalty (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md):
+// minutes, 0..240, shown only while ICPC scoring is picked and locked with
+// the rest of the shape once the contest starts — the same rule as the
+// scoring radio it sits beside.
+describe("ContestPanel, the ICPC penalty", () => {
+  test("is absent while another scoring mode is picked", () => {
+    render(<ContestPanel contest={contest()} editable shapeOpen dict={dict} />);
+
+    expect(
+      screen.queryByLabelText(dict.workspace.settings.shape.icpcPenalty),
+    ).not.toBeInTheDocument();
+  });
+
+  test("appears, defaulted to the contest's own value, once ICPC is picked", async () => {
+    const user = userEvent.setup();
+    render(<ContestPanel contest={contest({ icpcPenaltyMin: 45 })} editable shapeOpen dict={dict} />);
+
+    await user.click(screen.getByRole("radio", { name: dict.workspace.scoring.icpc }));
+
+    expect(screen.getByLabelText(dict.workspace.settings.shape.icpcPenalty)).toHaveValue(45);
+  });
+
+  test("shows the penalty already configured on an ICPC contest", () => {
+    render(
+      <ContestPanel contest={contest({ scoring: "icpc", icpcPenaltyMin: 30 })} editable shapeOpen dict={dict} />,
+    );
+
+    expect(screen.getByLabelText(dict.workspace.settings.shape.icpcPenalty)).toHaveValue(30);
+  });
+
+  test("locks the penalty once the shape is frozen, same as the scoring radio", () => {
+    render(
+      <ContestPanel
+        contest={contest({ status: "running", scoring: "icpc", icpcPenaltyMin: 30 })}
+        editable
+        shapeOpen={false}
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByRole("radio", { name: dict.workspace.scoring.icpc })).toBeDisabled();
+    expect(screen.getByLabelText(dict.workspace.settings.shape.icpcPenalty)).toBeDisabled();
   });
 });
 

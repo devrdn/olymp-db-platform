@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip } from "@/components/ui/tooltip";
 import { MATCH_KINDS, QUESTION_KINDS } from "@/lib/api/content-terms";
 import { type Question } from "@/lib/api/content";
+import type { Scoring } from "@/lib/api/contests";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
@@ -37,6 +38,7 @@ export function QuestionEditor({
   languages,
   editable,
   sequentialActive,
+  scoring,
   dict,
 }: {
   contestId: string;
@@ -49,6 +51,12 @@ export function QuestionEditor({
   // reading contest.progression and contest.questionMode itself and risking
   // a second copy of that rule (finding 4).
   sequentialActive: boolean;
+  // The contest's own scoring mode, read once by the page from the contest
+  // it already loaded. ICPC scoring (decision 1 of the design doc) does not
+  // use a question's own points or percentage penalty at all — the fields
+  // stay in the data, since the mode can still be reverted before the
+  // contest starts, but the editor disables them here.
+  scoring: Scoring;
   dict: Dictionary;
 }) {
   // The option identifiers are edited in the shape form and labelled in the
@@ -76,6 +84,7 @@ export function QuestionEditor({
         question={question}
         editable={editable}
         sequentialActive={sequentialActive}
+        scoring={scoring}
         dict={dict}
         kind={kind}
         onKind={setKind}
@@ -174,6 +183,7 @@ function ShapeSection({
   question,
   editable,
   sequentialActive,
+  scoring,
   dict,
   kind,
   onKind,
@@ -183,6 +193,7 @@ function ShapeSection({
   question: Question;
   editable: boolean;
   sequentialActive: boolean;
+  scoring: Scoring;
   dict: Dictionary;
   kind: string;
   onKind: (value: Question["kind"]) => void;
@@ -190,6 +201,11 @@ function ShapeSection({
   onChoiceIds: (value: string[]) => void;
 }) {
   const t = dict.workspace.question;
+  // ICPC scoring does not use a question's own points or percentage penalty
+  // (decision 1 of the design doc) — the fields stay in the form, disabled,
+  // with whatever they already held, rather than disappearing: the mode can
+  // still be reverted to `points` or `winner` before the contest starts.
+  const icpc = scoring === "icpc";
 
   // Tracked only so the penalty preview and the sequential-attempts warning
   // below can react as an organizer types, the same reason choiceIds above is
@@ -235,9 +251,10 @@ function ShapeSection({
             label={t.shape.points}
             help={t.shape.pointsHelp}
             helpLabel={dict.chrome.helpLabel}
+            hint={icpc ? t.shape.icpcDisabled : undefined}
           >
             <Input
-              name="points"
+              name={icpc ? undefined : "points"}
               type="number"
               min={0}
               step={1}
@@ -246,9 +263,14 @@ function ShapeSection({
                 const value = Number(event.target.value);
                 setPoints(Number.isFinite(value) && value >= 0 ? value : 0);
               }}
-              disabled={!editable}
+              disabled={!editable || icpc}
             />
           </Field>
+          {/* Disabled inputs are excluded from FormData entirely, so without
+              this a save that only touched the wording would submit
+              `points: 0` and silently zero out the question's own points the
+              moment its contest turned ICPC. */}
+          {icpc ? <input type="hidden" name="points" value={points} /> : null}
 
           <Field id="maxAttempts" label={t.shape.attempts} hint={t.shape.attemptsHint}>
             <Input
@@ -277,9 +299,10 @@ function ShapeSection({
           label={t.shape.penalty}
           help={t.shape.penaltyHelp}
           helpLabel={dict.chrome.helpLabel}
+          hint={icpc ? t.shape.icpcDisabled : undefined}
         >
           <Input
-            name="penaltyPct"
+            name={icpc ? undefined : "penaltyPct"}
             type="number"
             min={0}
             max={100}
@@ -294,18 +317,30 @@ function ShapeSection({
               const value = Number(raw);
               setPenaltyPct(Number.isFinite(value) ? value : null);
             }}
-            disabled={!editable}
+            disabled={!editable || icpc}
             className="max-w-40"
           />
         </Field>
+        {/* Same reasoning as the hidden `points` field above: a pointer on
+            the wire, and blank already means "leave the stored penalty
+            alone" (QuestionBody's own doc) — but ICPC always disables the
+            visible field, so without this the stored penalty would never be
+            resubmitted at all, only ever left as it was the day scoring
+            changed. */}
+        {icpc ? (
+          <input type="hidden" name="penaltyPct" value={penaltyPct ?? ""} />
+        ) : null}
 
         {/* What the setting above actually means for this question, worked
-            out instead of left for an organizer to compute by hand (§6.1.1). */}
-        <p className="-mt-3 max-w-body text-small text-ink-3">
-          {t.shape.penaltyPreview
-            .replace("{n}", String(penaltyPerAttempt))
-            .replace("{points}", String(points))}
-        </p>
+            out instead of left for an organizer to compute by hand (§6.1.1).
+            Meaningless in ICPC scoring, where the penalty is not used at all. */}
+        {!icpc ? (
+          <p className="-mt-3 max-w-body text-small text-ink-3">
+            {t.shape.penaltyPreview
+              .replace("{n}", String(penaltyPerAttempt))
+              .replace("{points}", String(points))}
+          </p>
+        ) : null}
 
         {/* Only a choice question has options, and the API refuses them on any
             other kind — so the field disappears with the kind rather than

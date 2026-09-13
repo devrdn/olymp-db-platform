@@ -5,6 +5,7 @@ import {
   contestListSchema,
   contestSchema,
   defaultLanguage,
+  icpcPenaltyFromForm,
   NEXT_STATUSES,
   sequentialActive,
   settingsEditable,
@@ -27,6 +28,8 @@ describe("contestListSchema", () => {
           description: "Опись пропала между полуночью и рассветом.",
           starts_at: "2026-11-08T19:00:00Z",
           ends_at: "2026-11-08T21:00:00Z",
+          scoring: "points",
+          icpc_penalty_min: 20,
         },
       ],
       total: 1,
@@ -39,6 +42,8 @@ describe("contestListSchema", () => {
       status: "running",
       questionMode: "multi",
       title: "Ночь в архиве",
+      scoring: "points",
+      icpcPenaltyMin: 20,
     });
   });
 });
@@ -50,6 +55,7 @@ const detail = {
   question_mode: "single",
   progression: "free",
   scoring: "points",
+  icpc_penalty_min: 20,
   timing: "individual",
   duration_min: 90,
   starts_at: "2026-11-08T19:00:00Z",
@@ -109,6 +115,17 @@ describe("contestSchema", () => {
 
   test("refuses a status the interface has no screen for", () => {
     expect(() => contestSchema.parse({ ...detail, status: "cancelled" })).toThrow();
+  });
+
+  // The ICPC penalty travels alongside scoring rather than nested under
+  // `leaderboard` — it is a property of the contest, not of the table — and
+  // is present whatever the scoring mode is, since the mode can still be
+  // reverted before the contest starts.
+  test("accepts ICPC scoring and reads its own penalty", () => {
+    const parsed = contestSchema.parse({ ...detail, scoring: "icpc", icpc_penalty_min: 15 });
+
+    expect(parsed.scoring).toBe("icpc");
+    expect(parsed.icpcPenaltyMin).toBe(15);
   });
 });
 
@@ -219,5 +236,34 @@ describe("sequentialActive", () => {
     expect(sequentialActive({ progression: "sequential", questionMode: "single" })).toBe(false);
     expect(sequentialActive({ progression: "free", questionMode: "multi" })).toBe(false);
     expect(sequentialActive({ progression: "free", questionMode: "single" })).toBe(false);
+  });
+});
+
+/**
+ * The ICPC penalty is locked with the rest of the shape once the contest
+ * starts (`shapeEditable`), the same as the scoring radio it sits beside — a
+ * disabled field submits nothing, and that has to read as "leave it alone",
+ * never as "clear it" (there is no cleared state for a penalty in this mode).
+ */
+describe("icpcPenaltyFromForm", () => {
+  test("reads a locked field as 'send no key'", () => {
+    expect(icpcPenaltyFromForm(null)).toEqual({ ok: true, value: undefined });
+  });
+
+  test("reads a configured penalty, zero included", () => {
+    expect(icpcPenaltyFromForm("0")).toEqual({ ok: true, value: 0 });
+    expect(icpcPenaltyFromForm("20")).toEqual({ ok: true, value: 20 });
+    expect(icpcPenaltyFromForm("240")).toEqual({ ok: true, value: 240 });
+  });
+
+  test("refuses an amount outside 0 to 240, rather than clamping it", () => {
+    expect(icpcPenaltyFromForm("241")).toEqual({ ok: false });
+    expect(icpcPenaltyFromForm("-1")).toEqual({ ok: false });
+  });
+
+  test("refuses anything that is not a whole number, rather than rounding it", () => {
+    expect(icpcPenaltyFromForm("20.5")).toEqual({ ok: false });
+    expect(icpcPenaltyFromForm("many")).toEqual({ ok: false });
+    expect(icpcPenaltyFromForm("")).toEqual({ ok: false });
   });
 });

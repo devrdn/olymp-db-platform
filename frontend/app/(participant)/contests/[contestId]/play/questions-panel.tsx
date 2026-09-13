@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Tag } from "@/components/ui/tag";
 import type { PlayDictionary } from "./dictionary";
 import type { PlayQuestion } from "@/lib/api/play";
+import type { Scoring } from "@/lib/api/contests";
 import { cn } from "@/lib/utils";
 
 import { refreshQuestionsAction, submitAnswerAction, type AnswerState } from "./actions";
@@ -48,10 +49,20 @@ export type QuestionEntry = { question: PlayQuestion; index: number; body: React
 export function QuestionsPanel({
   contestId,
   items,
+  // Defaulted rather than required: most of this panel's own tests predate
+  // ICPC scoring and have nothing to do with it, and threading a mode
+  // through every one of them would only obscure what each is actually
+  // proving. Real callers (`play/page.tsx`) always pass the contest's own
+  // `scoring`.
+  scoring = "points",
+  icpcPenaltyMin = 20,
   dict,
 }: {
   contestId: string;
   items: QuestionEntry[];
+  scoring?: Scoring;
+  /** Minutes added to the registration's penalty time for a wrong attempt on a question later solved. Read only while `scoring` is `icpc`. */
+  icpcPenaltyMin?: number;
   dict: PlayDictionary;
 }) {
   const t = dict.participant.play.questions;
@@ -129,12 +140,19 @@ export function QuestionsPanel({
               body={body}
               current={index === currentIndex}
               blockedBy={index === currentIndex ? undefined : blockedBy(entries, index)}
+              scoring={scoring}
               dict={dict}
               onClosed={onClosed}
             />
           </div>
         ))}
       </div>
+      {/* Stated once, for the whole list, rather than repeated on every
+          question — the penalty is a property of the contest, not of any one
+          question (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md). */}
+      {scoring === "icpc" ? (
+        <p className="text-small text-ink-3">{t.icpcPenalty.replace("{n}", String(icpcPenaltyMin))}</p>
+      ) : null}
     </div>
   );
 }
@@ -146,6 +164,7 @@ function QuestionCard({
   body,
   current,
   blockedBy,
+  scoring,
   dict,
   onClosed,
 }: {
@@ -157,6 +176,7 @@ function QuestionCard({
   current: boolean;
   /** The question that has to close before this one opens, if any. */
   blockedBy?: number;
+  scoring: Scoring;
   dict: PlayDictionary;
   onClosed: () => void;
 }) {
@@ -236,9 +256,15 @@ function QuestionCard({
             blockedBy={blockedBy}
             t={t}
           />
-          <span className="font-mono text-label text-ink-3 uppercase">
-            {t.points.replace("{n}", String(question.points))}
-          </span>
+          {/* ICPC scoring never awards points (decision 1 of the design
+              doc) — place is decided by how many questions are solved and,
+              at a tie, by penalty time — so a question's own points are not
+              shown at all rather than shown as a meaningless zero. */}
+          {scoring !== "icpc" ? (
+            <span className="font-mono text-label text-ink-3 uppercase">
+              {t.points.replace("{n}", String(question.points))}
+            </span>
+          ) : null}
         </div>
       </div>
 
@@ -250,7 +276,7 @@ function QuestionCard({
               earlier one otherwise (finding 5): losing this the instant a
               question closes, or the instant the page reloads, would hide
               the one feedback a correct answer exists to give. */}
-          <Verdict correct={correct} points={pointsAwarded} dict={dict} />
+          <Verdict correct={correct} points={pointsAwarded} scoring={scoring} dict={dict} />
         </div>
       ) : (
         <form action={formAction} className="flex flex-col gap-2.5">
@@ -312,7 +338,9 @@ function QuestionCard({
             ) : null}
           </div>
 
-          {state.kind === "answer" ? <Verdict correct={state.result.correct} points={state.result.pointsAwarded} dict={dict} /> : null}
+          {state.kind === "answer" ? (
+            <Verdict correct={state.result.correct} points={state.result.pointsAwarded} scoring={scoring} dict={dict} />
+          ) : null}
           {state.kind === "refused" ? <Refusal state={state} dict={dict} /> : null}
         </form>
       )}
@@ -320,11 +348,25 @@ function QuestionCard({
   );
 }
 
-function Verdict({ correct, points, dict }: { correct: boolean; points: number; dict: PlayDictionary }) {
+function Verdict({
+  correct,
+  points,
+  scoring,
+  dict,
+}: {
+  correct: boolean;
+  points: number;
+  scoring: Scoring;
+  dict: PlayDictionary;
+}) {
   const t = dict.participant.play.questions;
+  // ICPC awards no points at all (submissions.points_awarded is always 0 in
+  // this mode), so the verdict says nothing about them rather than
+  // announcing "+0 points" as though that were a fact worth stating.
+  const correctText = scoring === "icpc" ? t.correctIcpc : t.correct.replace("{n}", String(points));
   return (
     <p role="status" className={cn("text-small", correct ? "text-good" : "text-ink-2")}>
-      {correct ? t.correct.replace("{n}", String(points)) : t.incorrect}
+      {correct ? correctText : t.incorrect}
     </p>
   );
 }

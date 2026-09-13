@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip } from "@/components/ui/tooltip";
+import type { Scoring } from "@/lib/api/contests";
 import { removable } from "@/lib/api/people-terms";
 import { type Manager, type Participant, type RegistrationStatus } from "@/lib/api/people";
 import { formatMoment } from "@/lib/format/datetime";
@@ -173,15 +174,22 @@ export function ParticipantPanel({
   participants,
   total,
   locale,
+  scoring,
   dict,
 }: {
   contestId: string;
   participants: Participant[];
   total: number;
   locale: Locale;
+  // ICPC scoring (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md)
+  // ranks by how many questions are solved and, at a tie, by penalty time —
+  // `registrations.total_score` is always 0 in this mode, so the column that
+  // shows it would be a column of zeroes rather than a fact worth a glance.
+  scoring: Scoring;
   dict: Dictionary;
 }) {
   const t = dict.workspace.people;
+  const showScore = scoring !== "icpc";
 
   return (
     <section className="flex flex-col gap-5">
@@ -219,9 +227,11 @@ export function ParticipantPanel({
                 <th scope="col" className={cn(HEAD, "w-44")}>
                   {t.columns.started}
                 </th>
-                <th scope="col" className={cn(HEAD, "w-20 text-right")}>
-                  {t.columns.score}
-                </th>
+                {showScore ? (
+                  <th scope="col" className={cn(HEAD, "w-20 text-right")}>
+                    {t.columns.score}
+                  </th>
+                ) : null}
                 <th scope="col" className={cn(HEAD, "w-36")}>
                   <span className="sr-only">{t.participants.remove}</span>
                 </th>
@@ -248,9 +258,11 @@ export function ParticipantPanel({
                       <span className="text-ink-3">{t.participants.notStarted}</span>
                     )}
                   </td>
-                  <td className={cn(CELL, "text-right font-mono text-data text-ink-2")}>
-                    {participant.totalScore}
-                  </td>
+                  {showScore ? (
+                    <td className={cn(CELL, "text-right font-mono text-data text-ink-2")}>
+                      {participant.totalScore}
+                    </td>
+                  ) : null}
                   <td className={cn(CELL, "text-right")}>
                     {removable(participant) ? (
                       <RowAction

@@ -33,6 +33,8 @@ function contestListPayload(overrides: Partial<Record<string, unknown>> = {}) {
         lang: "en",
         title: "The Warehouse Fire",
         enrolled: true,
+        scoring: "points",
+        icpc_penalty_min: 20,
         ...overrides,
       },
     ],
