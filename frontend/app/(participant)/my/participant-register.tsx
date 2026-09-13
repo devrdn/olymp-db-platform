@@ -73,6 +73,15 @@ function canOpen(contest: ContestSummary): boolean {
   return contest.enrolled && contest.status === "running";
 }
 
+/**
+ * Whether the contest has a table worth opening: from the moment it runs, and
+ * after it finishes, which is when the result is what people come back for.
+ * Offered to everybody listed, enrolled or not — the table is public.
+ */
+function hasTable(contest: ContestSummary): boolean {
+  return contest.status === "running" || contest.status === "finished" || contest.status === "archived";
+}
+
 export function ParticipantRegister({
   contests,
   total,
@@ -170,32 +179,43 @@ export function ParticipantRegister({
                     />
                   </td>
                   <td className={CELL}>
-                    {canOfferToJoin(contest) ? (
-                      <EnrollButton contestId={contest.id} dict={dict} />
-                    ) : canOpen(contest) ? (
-                      /* The one row on this screen with something to do right
-                         now. It outranks "you are enrolled", which is a state
-                         rather than a step — and a contest that is running is
-                         the only thing a participant came here for. */
-                      <Link
-                        href={`/contests/${contest.id}/play`}
-                        className={cn(buttonVariants({ variant: "primary", size: "sm" }))}
-                      >
-                        {t.openConsole}
-                      </Link>
-                    ) : contest.enrolled ? (
-                      /* First, because it outranks every other reason there is
-                         nothing to press. "By invitation" on a contest one is
-                         already invited to reads as though one were not. */
-                      <span className="text-small text-ink-2">{t.enrolled}</span>
-                    ) : (
-                      /* Nothing to do, and the state column already says why.
-                         A disabled button repeating it would be a control that
-                         exists only to be refused. */
-                      <span className="text-small text-ink-3">
-                        {contest.enrollment === "invite_only" ? t.byInvitation : t.noAction}
-                      </span>
-                    )}
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                      {canOfferToJoin(contest) ? (
+                        <EnrollButton contestId={contest.id} dict={dict} />
+                      ) : canOpen(contest) ? (
+                        /* The one row on this screen with something to do right
+                           now. It outranks "you are enrolled", which is a state
+                           rather than a step — and a contest that is running is
+                           the only thing a participant came here for. */
+                        <Link
+                          href={`/contests/${contest.id}/play`}
+                          className={cn(buttonVariants({ variant: "primary", size: "sm" }))}
+                        >
+                          {t.openConsole}
+                        </Link>
+                      ) : contest.enrolled ? (
+                        /* First, because it outranks every other reason there is
+                           nothing to press. "By invitation" on a contest one is
+                           already invited to reads as though one were not. */
+                        <span className="text-small text-ink-2">{t.enrolled}</span>
+                      ) : (
+                        /* Nothing to do, and the state column already says why.
+                           A disabled button repeating it would be a control that
+                           exists only to be refused. */
+                        <span className="text-small text-ink-3">
+                          {contest.enrollment === "invite_only" ? t.byInvitation : t.noAction}
+                        </span>
+                      )}
+                      {hasTable(contest) ? (
+                        <Link
+                          href={`/contests/${contest.id}/leaderboard`}
+                          aria-label={dict.leaderboard.openLabel.replace("{title}", contest.title)}
+                          className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}
+                        >
+                          {dict.leaderboard.open}
+                        </Link>
+                      ) : null}
+                    </div>
                   </td>
                 </tr>
               ))}

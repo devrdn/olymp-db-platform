@@ -13,6 +13,16 @@ import { ApiError } from "@/lib/api/client";
 /** Reachable without a session, because they are how a session is obtained. */
 const PUBLIC_PATHS = ["/login"];
 
+/**
+ * A contest's public table, open to anybody with the link
+ * (docs/superpowers/specs/2026-09-13-leaderboard-design.md).
+ *
+ * A whole-path pattern and not a prefix: `/contests/` as a prefix would open
+ * the play screen and every staff screen to a visitor without a session. One
+ * segment for the contest, and the page itself, and nothing below it.
+ */
+const PUBLIC_PATTERNS = [/^\/contests\/[^/]+\/leaderboard$/];
+
 /** Where a visitor goes to obtain one. */
 const SIGN_IN = "/login";
 
@@ -38,6 +48,9 @@ export function guardRedirect(
 ): string | null {
   if (hasSession) return null;
   if (PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`))) {
+    return null;
+  }
+  if (PUBLIC_PATTERNS.some((pattern) => pattern.test(pathname))) {
     return null;
   }
 
