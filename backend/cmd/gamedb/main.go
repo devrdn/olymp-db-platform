@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
@@ -70,12 +71,38 @@ func run() error {
 	if err := gamedb.PrepareCluster(ctx, pool, roles); err != nil {
 		return err
 	}
+	if err := verifyMemoryCap(ctx, pool); err != nil {
+		return err
+	}
 	if err := hardenTheDefault(ctx, dsn); err != nil {
 		return err
 	}
 
 	fmt.Println("game cluster prepared: roles, session defaults, connect privileges " +
 		"and the catalogue revocations every new database inherits")
+	return nil
+}
+
+// verifyMemoryCap proves, at deploy time, that the game cluster's per-process
+// memory cap is in force, when the deployment states what it is
+// (GAME_DB_PROCESS_MEMORY_BYTES, the ulimits.data value on pg-game). A missing
+// cap fails silently — the cluster looks fine and only OOMs under load — so the
+// deploy refuses to complete rather than let that reach a contest. Unset (a
+// development cluster with no cap) skips the check.
+func verifyMemoryCap(ctx context.Context, pool *pgxpool.Pool) error {
+	raw := os.Getenv("GAME_DB_PROCESS_MEMORY_BYTES")
+	if raw == "" {
+		fmt.Println("GAME_DB_PROCESS_MEMORY_BYTES unset: skipping the per-process memory cap check")
+		return nil
+	}
+	capBytes, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return fmt.Errorf("GAME_DB_PROCESS_MEMORY_BYTES: %q is not a whole number of bytes", raw)
+	}
+	if err := gamedb.VerifyProcessMemoryCap(ctx, pool, capBytes); err != nil {
+		return fmt.Errorf("the game cluster's per-process memory cap could not be confirmed: %w", err)
+	}
+	fmt.Printf("per-process memory cap confirmed: a %d-byte allocation is refused with out of memory\n", capBytes)
 	return nil
 }
 
