@@ -29,6 +29,7 @@ const contestColumns = `
 	c.starts_at, c.ends_at, c.allowed_cidrs, c.settings, c.created_by,
 	c.created_at, c.updated_at,
 	c.leaderboard_freeze_min, c.leaderboard_names, c.leaderboard_revealed_at,
+	c.icpc_penalty_min,
 	COALESCE((
 		SELECT json_agg(json_build_object('code', cl.lang, 'is_default', cl.is_default)
 		                ORDER BY cl.is_default DESC, cl.lang)
@@ -81,6 +82,7 @@ func scanContest(row pgx.Row) (contests.Contest, error) {
 		&c.StartsAt, &c.EndsAt, &c.AllowedCIDRs, &settings, &c.CreatedBy,
 		&c.CreatedAt, &c.UpdatedAt,
 		&c.LeaderboardFreezeMin, &c.LeaderboardNames, &c.LeaderboardRevealedAt,
+		&c.ICPCPenaltyMin,
 		&languages, &translations,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -133,14 +135,14 @@ func (r *Contests) Create(ctx context.Context, c contests.Contest) (contests.Con
 		WITH inserted AS (
 			INSERT INTO contests (status, enrollment, question_mode, progression, scoring, timing, duration_min,
 			                      starts_at, ends_at, allowed_cidrs, settings, created_by,
-			                      leaderboard_freeze_min, leaderboard_names)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			                      leaderboard_freeze_min, leaderboard_names, icpc_penalty_min)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 			RETURNING *
 		)
 		SELECT `+contestColumns+` FROM inserted c`,
 		c.Status, c.Enrollment, c.QuestionMode, c.Progression, c.Scoring, c.Timing, c.DurationMin,
 		c.StartsAt, c.EndsAt, cidrList(c.AllowedCIDRs), settings, c.CreatedBy,
-		c.LeaderboardFreezeMin, c.LeaderboardNames)
+		c.LeaderboardFreezeMin, c.LeaderboardNames, c.ICPCPenaltyMin)
 
 	return scanContest(row)
 }
@@ -209,6 +211,7 @@ func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Cont
 			&c.StartsAt, &c.EndsAt, &c.AllowedCIDRs, &settings, &c.CreatedBy,
 			&c.CreatedAt, &c.UpdatedAt,
 			&c.LeaderboardFreezeMin, &c.LeaderboardNames, &c.LeaderboardRevealedAt,
+			&c.ICPCPenaltyMin,
 			&languages, &translations, &total,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan contest: %w", err)
@@ -240,12 +243,12 @@ func (r *Contests) Update(ctx context.Context, c contests.Contest) error {
 		UPDATE contests
 		SET enrollment = $2, question_mode = $3, progression = $4, scoring = $5, timing = $6, duration_min = $7,
 		    starts_at = $8, ends_at = $9, allowed_cidrs = $10, settings = $11,
-		    leaderboard_freeze_min = $12, leaderboard_names = $13,
+		    leaderboard_freeze_min = $12, leaderboard_names = $13, icpc_penalty_min = $14,
 		    updated_at = now()
 		WHERE id = $1`,
 		c.ID, c.Enrollment, c.QuestionMode, c.Progression, c.Scoring, c.Timing, c.DurationMin,
 		c.StartsAt, c.EndsAt, cidrList(c.AllowedCIDRs), settings,
-		c.LeaderboardFreezeMin, c.LeaderboardNames)
+		c.LeaderboardFreezeMin, c.LeaderboardNames, c.ICPCPenaltyMin)
 	if err != nil {
 		return fmt.Errorf("update contest: %w", err)
 	}

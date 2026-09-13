@@ -43,6 +43,7 @@ func TestContestSurvivesARoundTrip(t *testing.T) {
 			},
 			LeaderboardFreezeMin: &freeze,
 			LeaderboardNames:     contests.LeaderboardNamesFullName,
+			ICPCPenaltyMin:       45,
 			CreatedBy:            author.ID,
 		})
 		if err != nil {
@@ -79,6 +80,8 @@ func TestContestSurvivesARoundTrip(t *testing.T) {
 			t.Errorf("leaderboard freeze = %v, want %d", loaded.LeaderboardFreezeMin, freeze)
 		case loaded.LeaderboardNames != contests.LeaderboardNamesFullName:
 			t.Errorf("leaderboard names = %q, want full_name", loaded.LeaderboardNames)
+		case loaded.ICPCPenaltyMin != 45:
+			t.Errorf("icpc penalty min = %d, want 45", loaded.ICPCPenaltyMin)
 		case loaded.LeaderboardRevealedAt != nil:
 			t.Errorf("leaderboard revealed at = %v, want nil", loaded.LeaderboardRevealedAt)
 		case loaded.CreatedBy != author.ID:
@@ -284,6 +287,38 @@ func TestUpdateLeavesTheStatusAlone(t *testing.T) {
 		}
 		if after.Enrollment != contests.EnrollmentOpen {
 			t.Errorf("enrollment = %q, want the update applied", after.Enrollment)
+		}
+	})
+}
+
+// Update writes icpc_penalty_min the same way Create does — a column added
+// after Update's own SQL was last touched is exactly the one a future column
+// gets left out of by mistake.
+func TestUpdateWritesTheICPCPenalty(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewContests(testPool)
+		author := makeUser(t, ctx, "author-icpc-penalty")
+		id := makeContest(t, ctx, author.ID)
+
+		before, err := repo.ByID(ctx, id)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
+		}
+		if before.ICPCPenaltyMin != 20 {
+			t.Fatalf("icpc penalty min = %d, want the column's own default of 20", before.ICPCPenaltyMin)
+		}
+
+		before.ICPCPenaltyMin = 50
+		if err := repo.Update(ctx, before); err != nil {
+			t.Fatalf("Update() = %v", err)
+		}
+
+		after, err := repo.ByID(ctx, id)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
+		}
+		if after.ICPCPenaltyMin != 50 {
+			t.Errorf("icpc penalty min = %d, want 50", after.ICPCPenaltyMin)
 		}
 	})
 }
