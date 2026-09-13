@@ -16,6 +16,7 @@ import {
   type Timing,
 } from "@/lib/api/contests";
 import { isId } from "@/lib/api/ids";
+import { freezeFromForm } from "@/lib/api/leaderboard";
 import { parseTables, SQL_MODES, type SqlMode } from "@/lib/api/policy";
 import { serverRequest } from "@/lib/api/server";
 import { instantFromWallClock } from "@/lib/format/datetime";
@@ -91,6 +92,20 @@ export async function saveSettingsAction(
 
   if (timing === "individual" && durationMin === null) return { code: "invalid_request" };
 
+  // The freeze is locked once the contest starts; a locked fieldset submits
+  // nothing, which freezeFromForm turns into "send no key" rather than
+  // "clear it".
+  const freeze = freezeFromForm(
+    form.get("leaderboardFreezeMode"),
+    form.get("leaderboardFreezeAmount"),
+    form.get("leaderboardFreezeUnit"),
+  );
+  if (!freeze.ok) return { code: "invalid_request" };
+  const leaderboard: { names: string; freeze_min?: number | null } = {
+    names: oneOf(form.get("leaderboardNames"), ["login", "full_name"] as const) ?? "login",
+  };
+  if (freeze.value !== undefined) leaderboard.freeze_min = freeze.value;
+
   const rate = Number(form.get("queryRateLimitPerMin"));
   const grace = Number(form.get("gracePeriodMin"));
 
@@ -115,6 +130,7 @@ export async function saveSettingsAction(
         starts_at: moment(form.get("startsAt")),
         ends_at: moment(form.get("endsAt")),
         allowed_cidrs: allowedCidrs,
+        leaderboard,
         settings: {
           enrollment_deadline: moment(form.get("enrollmentDeadline")) ?? "",
           query_rate_limit_per_min: Number.isFinite(rate) && rate >= 0 ? Math.floor(rate) : 0,
