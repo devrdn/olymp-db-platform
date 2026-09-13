@@ -1190,7 +1190,7 @@ const ro = {
       solvedFirst: "{letter}: rezolvată la minutul {minute}, încercarea {attempt}, prima rezolvare",
       failed: "{letter}: nerezolvată, {n} încercări greșite",
       pending: "{letter}: {n} încercări după înghețare",
-      pendingWrong: "{letter}: {n} încercări după înghețare, {w} greșite înainte de aceasta",
+      pendingWrong: "{letter}: {n} încercări după înghețare, {w} greșite înainte de înghețare",
       untried: "{letter}: neîncercată",
     },
     you: "Dvs.",

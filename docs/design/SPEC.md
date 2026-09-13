@@ -160,10 +160,14 @@ Rules that keep it a palette rather than decoration:
   ground as its text, the same construction as a medal disc, so it still reads
   from across a hall. A failed cell is `bad` on `bad-wash` with its wrong-attempt
   count; a frozen table's unresolved-but-attempted cell is `warn` on
-  `warn-wash` with a question mark and how many attempts came after the
-  freeze; an untried cell carries no colour at all. Every cell also carries a
-  spelled-out accessible name — the question's letter and its state in words —
-  so none of this rests on colour or on a bare symbol.
+  `warn-wash`, with a question mark over how many attempts came after the
+  freeze and, only when there were any, a second "−N" mark for the wrong
+  attempts already known before the freeze — that count was on screen before
+  the table ever froze, so repeating it leaks nothing about what happened
+  after; an untried cell carries no colour at all. Every cell also carries a
+  spelled-out accessible name — the question's letter and its state in words,
+  naming both counts on a pending cell when both apply — so none of this
+  rests on colour or on a bare symbol.
 - The section 15 boundaries still hold: no purple, no glow, no gradient text, no
   emoji. A medal is a tinted disc with a number in it, not a trophy picture.
 
