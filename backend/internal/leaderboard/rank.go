@@ -18,10 +18,8 @@ import (
 // listed in points order without a place, because "there is only a winner"
 // (§6.1.1) is exactly one place.
 //
-// ICPC: more questions solved first, then less penalty time, the two equal
-// sharing a place (1, 1, 3); rows sharing a place are listed by their last
-// solve. Points, zero in this mode, are not read. Every question's earliest
-// solve among the rows that are not disqualified is marked first.
+// ICPC is ranked by RankICPC, which needs the grid storage computed beside
+// the entries; Rank does not handle it.
 //
 // The registration id is the last key only so that the order of equal rows
 // does not change between two reads; a place never depends on it.
@@ -29,9 +27,6 @@ func Rank(scoring string, entries []Entry) []Row {
 	rows := make([]Row, len(entries))
 	for i, e := range entries {
 		rows[i] = Row{Entry: e}
-	}
-	if scoring == contests.ScoringICPC {
-		return rankICPC(rows)
 	}
 	slices.SortStableFunc(rows, func(a, b Row) int { return comparePoints(a.Entry, b.Entry) })
 
@@ -62,7 +57,35 @@ func Rank(scoring string, entries []Entry) []Row {
 	return rows
 }
 
-func rankICPC(rows []Row) []Row {
+// RankICPC orders ICPC entries and gives them places: more questions solved
+// first, then less penalty time, the two equal sharing a place (1, 1, 3).
+// Rows sharing a place are listed by their last solve, then by registration
+// id, only for a stable order. Points, zero in this mode, are not read.
+//
+// A cell is marked first when it is solved at exactly the moment the grid
+// names as its question's earliest solve, and its row is not disqualified.
+// The moment comes from storage, computed over every registration that is not
+// disqualified — never from the rows at hand, which the row bound may have
+// cut the real first solver from, and which on the staff table include the
+// disqualified. Two solves in the same instant are both first: neither was
+// earlier. The cells are cut off already, so a frozen table marks by the
+// answers before the freeze only.
+func RankICPC(entries []Entry, grid Grid) []Row {
+	rows := make([]Row, len(entries))
+	for i, e := range entries {
+		rows[i] = Row{Entry: e}
+		// Copied, so the mark is never written into the entries given.
+		rows[i].Cells = slices.Clone(e.Cells)
+		if e.Disqualified {
+			continue
+		}
+		for q := range rows[i].Cells {
+			cell := &rows[i].Cells[q]
+			cell.First = cell.SolvedAt != nil && q < len(grid.FirstSolves) &&
+				grid.FirstSolves[q] != nil && cell.SolvedAt.Equal(*grid.FirstSolves[q])
+		}
+	}
+
 	slices.SortStableFunc(rows, func(a, b Row) int { return compareICPC(a.Entry, b.Entry) })
 	for i := range rows {
 		if i > 0 && rows[i-1].Solved == rows[i].Solved && rows[i-1].Penalty == rows[i].Penalty {
@@ -71,7 +94,6 @@ func rankICPC(rows []Row) []Row {
 		}
 		rows[i].Place = i + 1
 	}
-	markFirstSolvers(rows)
 	return rows
 }
 
@@ -86,41 +108,6 @@ func compareICPC(a, b Entry) int {
 		return c
 	}
 	return bytes.Compare(a.Registration[:], b.Registration[:])
-}
-
-// markFirstSolvers marks, per question, the earliest solve among the rows that
-// are not disqualified. The staff table lists the disqualified, and their
-// solve must not take the mark from anybody still in the contest. Two solves
-// in the same instant are both first: neither was earlier.
-//
-// The cells are cut off already, so a frozen table marks by the answers before
-// the freeze only. Each row's cells are copied before they are marked, so the
-// mark is never written into the entries storage handed over.
-func markFirstSolvers(rows []Row) {
-	var earliest []*time.Time
-	for i := range rows {
-		rows[i].Cells = slices.Clone(rows[i].Cells)
-		if rows[i].Disqualified {
-			continue
-		}
-		for q, cell := range rows[i].Cells {
-			if q >= len(earliest) {
-				earliest = append(earliest, make([]*time.Time, q+1-len(earliest))...)
-			}
-			if cell.SolvedAt != nil && (earliest[q] == nil || cell.SolvedAt.Before(*earliest[q])) {
-				earliest[q] = cell.SolvedAt
-			}
-		}
-	}
-	for i := range rows {
-		if rows[i].Disqualified {
-			continue
-		}
-		for q := range rows[i].Cells {
-			cell := &rows[i].Cells[q]
-			cell.First = cell.SolvedAt != nil && cell.SolvedAt.Equal(*earliest[q])
-		}
-	}
 }
 
 // compareFinal orders two correct final answers: the earlier one wins, and two

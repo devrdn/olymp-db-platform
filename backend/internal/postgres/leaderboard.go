@@ -31,18 +31,10 @@ func (r *Leaderboard) querier(ctx context.Context) storage.Querier {
 	return storage.QuerierFrom(ctx, r.pool)
 }
 
-// Standings aggregates every registration's submissions up to the cutoff.
+// Standings aggregates every registration's submissions up to the cutoff,
+// for points and winner mode; ICPC has ICPCStandings.
 //
-// The cutoff is exclusive and applies to registrations too. ICPC has a query
-// of its own, because its rows carry a grid; see icpcStandings.
-func (r *Leaderboard) Standings(ctx context.Context, q leaderboard.Query) ([]leaderboard.Entry, error) {
-	if q.Scoring == contests.ScoringICPC {
-		return r.icpcStandings(ctx, q)
-	}
-	return r.pointsStandings(ctx, q)
-}
-
-// pointsStandings serves points and winner mode. The order is the
+// The cutoff is exclusive and applies to registrations too. The order is the
 // one leaderboard.Rank puts rows in — the winner first in winner mode, then
 // points, then the moment the score was reached, then the id — so LIMIT cuts
 // below the top of the table, never through it. Rank sorts again; this order
@@ -50,7 +42,7 @@ func (r *Leaderboard) Standings(ctx context.Context, q leaderboard.Query) ([]lea
 //
 // submissions_registration_submitted_idx (migration 30) serves the join and
 // the time filter, and carries the three columns the aggregate reads.
-func (r *Leaderboard) pointsStandings(ctx context.Context, q leaderboard.Query) ([]leaderboard.Entry, error) {
+func (r *Leaderboard) Standings(ctx context.Context, q leaderboard.Query) ([]leaderboard.Entry, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		WITH scored AS (
 			SELECT r.id,
@@ -100,9 +92,11 @@ func (r *Leaderboard) pointsStandings(ctx context.Context, q leaderboard.Query) 
 	return entries, nil
 }
 
-// icpcStandings computes every registration's ICPC row up to the cutoff: a
+// ICPCStandings computes every registration's ICPC row up to the cutoff — a
 // cell per visible question in the questions' order, and from the cells the
-// number solved, the penalty time and the last solve.
+// number solved, the penalty time and the last solve — and, in the same
+// statement, the grid: how many visible questions there are and each one's
+// earliest solve.
 //
 // A cell's solve is the first correct answer before the cutoff; its wrong
 // count is the wrong answers before that solve, or before the cutoff when
@@ -118,8 +112,17 @@ func (r *Leaderboard) pointsStandings(ctx context.Context, q leaderboard.Query) 
 // table): answers in [From, Until) on a question with no solve before the
 // cutoff. Nothing else about those answers reaches the row.
 //
-// The order is leaderboard.Rank's — solved, penalty, last solve, id — so LIMIT
-// cuts below the top of the table, never through it.
+// A question's earliest solve is taken over every registration made before
+// the cutoff that is not disqualified, whether or not the query includes the
+// disqualified and whatever LIMIT cuts, so a first-solver mark does not
+// depend on which rows are returned. The width comes from the same visible
+// questions the cells are built from, so the letters and the cells cannot
+// disagree even while an organiser toggles a question's visibility.
+//
+// The order is leaderboard.RankICPC's — solved, penalty, last solve, id — so
+// LIMIT cuts below the top of the table, never through it. The grid rides on
+// the first row; a table with no rows still returns one row, carrying only
+// the grid.
 //
 // Indexes: questions_contest_id_ord_key (contest_id, ord) reads the contest's
 // questions in order; submissions_registration_submitted_idx (migration 30)
@@ -127,7 +130,7 @@ func (r *Leaderboard) pointsStandings(ctx context.Context, q leaderboard.Query) 
 // INCLUDE carries question_id and is_correct, the only other columns read.
 // The attempt a question was solved with is derived from the wrong count
 // rather than read from attempt_no, which the index does not carry.
-func (r *Leaderboard) icpcStandings(ctx context.Context, q leaderboard.Query) ([]leaderboard.Entry, error) {
+func (r *Leaderboard) ICPCStandings(ctx context.Context, q leaderboard.Query) ([]leaderboard.Entry, leaderboard.Grid, error) {
 	var pendingFrom, pendingUntil *time.Time
 	if q.Pending != nil {
 		pendingFrom, pendingUntil = &q.Pending.From, &q.Pending.Until
@@ -162,6 +165,12 @@ func (r *Leaderboard) icpcStandings(ctx context.Context, q leaderboard.Query) ([
 			       COUNT(*) FILTER (WHERE NOT is_correct AND (solved_at IS NULL OR submitted_at < solved_at)) AS wrong
 			FROM answer
 			GROUP BY registration_id, question_id
+		), first_solve AS (
+			SELECT t.question_id, MIN(t.solved_at) AS solved_at
+			FROM tried t
+			JOIN entrant e ON e.id = t.registration_id
+			WHERE NOT e.disqualified
+			GROUP BY t.question_id
 		), waiting AS (
 			SELECT s.registration_id, s.question_id, COUNT(*) AS pending
 			FROM entrant e
@@ -194,51 +203,71 @@ func (r *Leaderboard) icpcStandings(ctx context.Context, q leaderboard.Query) ([
 			CROSS JOIN contest k
 			LEFT JOIN cell c ON c.registration_id = e.id
 			GROUP BY e.id, e.login, e.full_name, e.account_deleted, e.disqualified
+		), page AS (
+			SELECT ranked.*,
+			       row_number() OVER (ORDER BY solved DESC, penalty ASC, last_solved_at ASC NULLS LAST, id) AS n
+			FROM ranked
+			ORDER BY n
+			LIMIT $4
+		), grid AS (
+			SELECT (SELECT COUNT(*) FROM visible)::int AS width,
+			       (SELECT COALESCE(array_agg(f.solved_at ORDER BY v.pos), '{}')
+			        FROM visible v LEFT JOIN first_solve f ON f.question_id = v.id) AS first_solves
 		)
-		SELECT id, login, full_name, account_deleted, disqualified, solved, penalty, last_solved_at,
-		       solved_ats, minutes, wrongs, pendings
-		FROM ranked
-		ORDER BY solved DESC, penalty ASC, last_solved_at ASC NULLS LAST, id
-		LIMIT $4`,
+		SELECT g.width, CASE WHEN p.n IS NULL OR p.n = 1 THEN g.first_solves END,
+		       p.id, p.login, p.full_name, p.account_deleted, p.disqualified, p.solved, p.penalty, p.last_solved_at,
+		       p.solved_ats, p.minutes, p.wrongs, p.pendings
+		FROM grid g
+		LEFT JOIN page p ON true
+		ORDER BY p.n`,
 		q.ContestID, q.Cutoff, q.IncludeDisqualified, q.Limit, pendingFrom, pendingUntil)
 	if err != nil {
-		return nil, fmt.Errorf("read icpc standings: %w", err)
+		return nil, leaderboard.Grid{}, fmt.Errorf("read icpc standings: %w", err)
 	}
 	defer rows.Close()
 
-	var entries []leaderboard.Entry
+	var (
+		grid    leaderboard.Grid
+		entries []leaderboard.Entry
+		first   = true
+	)
 	for rows.Next() {
 		var (
-			e                        leaderboard.Entry
-			solvedAts                []*time.Time
+			width                    int
+			firstSolves, solvedAts   []*time.Time
+			id                       *uuid.UUID
+			login, fullName          *string
+			deleted, disqualified    *bool
+			solved, penalty          *int
+			lastSolvedAt             *time.Time
 			minutes, wrongs, pending []int
 		)
-		if err := rows.Scan(&e.Registration, &e.Login, &e.FullName, &e.AccountDeleted, &e.Disqualified,
-			&e.Solved, &e.Penalty, &e.LastSolvedAt, &solvedAts, &minutes, &wrongs, &pending); err != nil {
-			return nil, fmt.Errorf("scan icpc standings: %w", err)
+		if err := rows.Scan(&width, &firstSolves, &id, &login, &fullName, &deleted, &disqualified,
+			&solved, &penalty, &lastSolvedAt, &solvedAts, &minutes, &wrongs, &pending); err != nil {
+			return nil, leaderboard.Grid{}, fmt.Errorf("scan icpc standings: %w", err)
 		}
-		e.Cells = make([]leaderboard.Cell, len(solvedAts))
+		if first {
+			grid = leaderboard.Grid{Questions: width, FirstSolves: firstSolves}
+			first = false
+		}
+		if id == nil {
+			// The grid's own row on a table with nobody on it.
+			continue
+		}
+		e := leaderboard.Entry{
+			Registration: *id, Login: *login, FullName: *fullName, AccountDeleted: *deleted, Disqualified: *disqualified,
+			Solved: *solved, Penalty: *penalty, LastSolvedAt: lastSolvedAt,
+			Cells: make([]leaderboard.Cell, len(solvedAts)),
+		}
 		for i := range solvedAts {
 			e.Cells[i] = leaderboard.Cell{SolvedAt: solvedAts[i], Minute: minutes[i], Wrong: wrongs[i], Pending: pending[i]}
 		}
 		entries = append(entries, e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read icpc standings: %w", err)
+		return nil, leaderboard.Grid{}, fmt.Errorf("read icpc standings: %w", err)
 	}
-	return entries, nil
-}
-
-// VisibleQuestions counts the contest's visible questions, the width of its
-// ICPC grid. questions_contest_id_ord_key leads with contest_id.
-func (r *Leaderboard) VisibleQuestions(ctx context.Context, contestID uuid.UUID) (int, error) {
-	var n int
-	err := r.querier(ctx).QueryRow(ctx,
-		`SELECT COUNT(*) FROM questions WHERE contest_id = $1 AND is_visible`, contestID).Scan(&n)
-	if err != nil {
-		return 0, fmt.Errorf("count the visible questions: %w", err)
-	}
-	return n, nil
+	return entries, grid, nil
 }
 
 // MarkRevealed sets leaderboard_revealed_at once and reports the moment in
