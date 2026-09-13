@@ -3,6 +3,7 @@ package contests
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -46,6 +47,14 @@ const (
 	// becomes the lockout, which is why the refusal lives here rather than
 	// forbidding is_visible = false outright.
 	ProblemSequentialHidesQuestion = "sequential_hides_question"
+	// ProblemWinnerNeedsFinal names a winner-mode contest with no final
+	// question (§6.1.1): the winner is whoever first answers the final
+	// question, so without one the contest ends with nobody placed.
+	ProblemWinnerNeedsFinal = "winner_needs_final"
+	// ProblemLeaderboardFreezeExceedsWindow names a freeze that begins before
+	// the window opens, or one with no ends_at to be measured back from.
+	// Saving refuses the first already, but the window can move afterwards.
+	ProblemLeaderboardFreezeExceedsWindow = "leaderboard_freeze_exceeds_window"
 )
 
 // PublishProblem is one reason a contest is not ready.
@@ -168,6 +177,15 @@ func CheckPublishable(c Contest, story Story, questions []Question) error {
 				add(PublishProblem{Code: ProblemSequentialHidesQuestion, QuestionID: q.ID})
 			}
 		}
+	}
+
+	if c.Scoring == ScoringWinner && !slices.ContainsFunc(questions, func(q Question) bool {
+		return q.Kind == KindFinal
+	}) {
+		add(PublishProblem{Code: ProblemWinnerNeedsFinal})
+	}
+	if !c.FreezeFitsWindow() {
+		add(PublishProblem{Code: ProblemLeaderboardFreezeExceedsWindow})
 	}
 
 	if len(problems) > 0 {

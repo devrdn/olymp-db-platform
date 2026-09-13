@@ -24,6 +24,8 @@ func publishable() (contests.Contest, contests.Story, []contests.Question) {
 		StartsAt:     &start,
 		EndsAt:       &end,
 		Languages:    []contests.ContestLanguage{{Code: "en", IsDefault: true}, {Code: "ro"}},
+
+		LeaderboardNames: contests.LeaderboardNamesLogin,
 		Translations: map[string]contests.Translation{
 			"en": {Lang: "en", Title: "The Library Murder"},
 			"ro": {Lang: "ro", Title: "Crima din bibliotecă"},
@@ -306,5 +308,57 @@ func TestNotPublishableMatchesItsSentinel(t *testing.T) {
 
 	if err := contests.CheckPublishable(c, story, nil); !errors.Is(err, contests.ErrNotPublishable) {
 		t.Errorf("contests.CheckPublishable() = %v, want it to match contests.ErrNotPublishable", err)
+	}
+}
+
+// Winner mode names the winner by the final question (§6.1.1). Without one the
+// contest can end with nobody placed at all, which is exactly the day nobody
+// can fix it.
+func TestGateRefusesWinnerScoringWithNoFinalQuestion(t *testing.T) {
+	c, story, questions := publishable()
+	c.Scoring = contests.ScoringWinner
+	questions[0].Kind = contests.KindText
+
+	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
+	if !contains(codes, contests.ProblemWinnerNeedsFinal) {
+		t.Errorf("problems = %v, want %s", codes, contests.ProblemWinnerNeedsFinal)
+	}
+}
+
+func TestGateAcceptsWinnerScoringWithAFinalQuestion(t *testing.T) {
+	c, story, questions := publishable()
+	c.Scoring = contests.ScoringWinner
+	// publishable()'s one question is already a final one.
+
+	if err := contests.CheckPublishable(c, story, questions); err != nil {
+		t.Errorf("contests.CheckPublishable() = %v, want nil", err)
+	}
+}
+
+// Saving already refuses a freeze as long as the window, but the window can
+// move after the freeze was saved; the gate is the last moment that is cheap.
+func TestGateRefusesAFreezeThatNoLongerFitsTheWindow(t *testing.T) {
+	c, story, questions := publishable()
+	freeze := 180 // publishable()'s window is exactly three hours
+	c.LeaderboardFreezeMin = &freeze
+
+	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
+	if !contains(codes, contests.ProblemLeaderboardFreezeExceedsWindow) {
+		t.Errorf("problems = %v, want %s", codes, contests.ProblemLeaderboardFreezeExceedsWindow)
+	}
+}
+
+// A freeze is measured back from ends_at. An individual-timing contest may
+// publish with no ends_at, and then there is nothing to measure from.
+func TestGateRefusesAFreezeWithNoEndToMeasureFrom(t *testing.T) {
+	c, story, questions := publishable()
+	duration := 60
+	c.Timing, c.DurationMin, c.EndsAt = contests.TimingIndividual, &duration, nil
+	freeze := 30
+	c.LeaderboardFreezeMin = &freeze
+
+	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
+	if !contains(codes, contests.ProblemLeaderboardFreezeExceedsWindow) {
+		t.Errorf("problems = %v, want %s", codes, contests.ProblemLeaderboardFreezeExceedsWindow)
 	}
 }

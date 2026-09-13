@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -164,10 +166,47 @@ type ContestResponse struct {
 	EndsAt       string                         `json:"ends_at,omitempty"`
 	AllowedCIDRs []string                       `json:"allowed_cidrs"`
 	Settings     SettingsResponse               `json:"settings"`
+	Leaderboard  LeaderboardSettingsResponse    `json:"leaderboard"`
 	Languages    []LanguageResponse             `json:"languages"`
 	Translations map[string]TranslationResponse `json:"translations"`
 	CreatedAt    string                         `json:"created_at"`
 	UpdatedAt    string                         `json:"updated_at"`
+}
+
+// LeaderboardSettingsResponse is how the contest's table is shown.
+//
+// FreezeMin is sent as null rather than omitted when there is no freeze, so a
+// client reads "no freeze" instead of guessing at a missing key.
+type LeaderboardSettingsResponse struct {
+	FreezeMin  *int   `json:"freeze_min"`
+	Names      string `json:"names"`
+	RevealedAt string `json:"revealed_at,omitempty"`
+}
+
+// leaderboardRequest changes the table's settings. Present means "set these";
+// the whole object absent means "leave them alone". Inside it, freeze_min
+// distinguishes three things a *int cannot: a number sets the freeze, null
+// removes it, and no key leaves it as it was.
+type leaderboardRequest struct {
+	FreezeMin json.RawMessage `json:"freeze_min"`
+	Names     string          `json:"names"`
+}
+
+// apply writes the request onto cmd.
+func (req *leaderboardRequest) apply(cmd *contests.UpdateCommand) error {
+	cmd.LeaderboardNames = req.Names
+	switch raw := bytes.TrimSpace(req.FreezeMin); {
+	case len(raw) == 0:
+	case bytes.Equal(raw, []byte("null")):
+		cmd.ClearLeaderboardFreeze = true
+	default:
+		var minutes int
+		if err := json.Unmarshal(raw, &minutes); err != nil {
+			return fmt.Errorf("leaderboard.freeze_min must be a whole number of minutes or null")
+		}
+		cmd.LeaderboardFreezeMin = &minutes
+	}
+	return nil
 }
 
 // SettingsResponse mirrors contests.Settings on the wire.
@@ -226,6 +265,11 @@ func toContestResponse(c contests.Contest) ContestResponse {
 			EnrollmentDeadline:   formatTime(c.Settings.EnrollmentDeadline),
 			QueryRateLimitPerMin: c.Settings.QueryRateLimitPerMin,
 			GracePeriodMin:       c.Settings.GracePeriodMin,
+		},
+		Leaderboard: LeaderboardSettingsResponse{
+			FreezeMin:  c.LeaderboardFreezeMin,
+			Names:      c.LeaderboardNames,
+			RevealedAt: formatTime(c.LeaderboardRevealedAt),
 		},
 		Languages:    make([]LanguageResponse, 0, len(c.Languages)),
 		Translations: make(map[string]TranslationResponse, len(c.Translations)),
@@ -397,6 +441,7 @@ type contestRequest struct {
 	EndsAt       *string                        `json:"ends_at"`
 	AllowedCIDRs []string                       `json:"allowed_cidrs"`
 	Settings     *SettingsResponse              `json:"settings"`
+	Leaderboard  *leaderboardRequest            `json:"leaderboard"`
 	Languages    []LanguageResponse             `json:"languages"`
 	Translations map[string]TranslationResponse `json:"translations"`
 }
@@ -423,22 +468,33 @@ func (h *ContestsHandler) create(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
+	// The same decoding as update, so the two cannot disagree about what a
+	// freeze of null means; on create "clear" and "absent" are both no freeze.
+	var board contests.UpdateCommand
+	if req.Leaderboard != nil {
+		if err := req.Leaderboard.apply(&board); err != nil {
+			httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+			return
+		}
+	}
 
 	identity, _ := auth.IdentityFrom(r.Context())
 	created, err := h.service.Create(r.Context(), contests.CreateCommand{
-		ActorID:      identity.UserID,
-		Enrollment:   req.Enrollment,
-		QuestionMode: req.QuestionMode,
-		Progression:  req.Progression,
-		Scoring:      req.Scoring,
-		Timing:       req.Timing,
-		DurationMin:  req.DurationMin,
-		StartsAt:     starts,
-		EndsAt:       ends,
-		AllowedCIDRs: cidrs,
-		Settings:     settings,
-		Languages:    toDomainLanguages(req.Languages),
-		Translations: toDomainTranslations(req.Translations),
+		LeaderboardFreezeMin: board.LeaderboardFreezeMin,
+		LeaderboardNames:     board.LeaderboardNames,
+		ActorID:              identity.UserID,
+		Enrollment:           req.Enrollment,
+		QuestionMode:         req.QuestionMode,
+		Progression:          req.Progression,
+		Scoring:              req.Scoring,
+		Timing:               req.Timing,
+		DurationMin:          req.DurationMin,
+		StartsAt:             starts,
+		EndsAt:               ends,
+		AllowedCIDRs:         cidrs,
+		Settings:             settings,
+		Languages:            toDomainLanguages(req.Languages),
+		Translations:         toDomainTranslations(req.Translations),
 	})
 	if err != nil {
 		h.fail(w, r, err)
@@ -504,6 +560,12 @@ func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		cmd.Settings = &settings
+	}
+	if req.Leaderboard != nil {
+		if err := req.Leaderboard.apply(&cmd); err != nil {
+			httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+			return
+		}
 	}
 	identity, _ := auth.IdentityFrom(r.Context())
 	cmd.ActorID = identity.UserID

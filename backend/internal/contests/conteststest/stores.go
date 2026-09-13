@@ -47,6 +47,11 @@ func (r *Contests) Put(c contests.Contest) contests.Contest {
 	if c.ID == uuid.Nil {
 		c.ID = uuid.New()
 	}
+	// The column's own default (migration 30), so a seed that predates the
+	// leaderboard reads back the way a stored row does.
+	if c.LeaderboardNames == "" {
+		c.LeaderboardNames = contests.LeaderboardNamesLogin
+	}
 	if _, exists := r.byID[c.ID]; !exists {
 		r.order = append(r.order, c.ID)
 	}
