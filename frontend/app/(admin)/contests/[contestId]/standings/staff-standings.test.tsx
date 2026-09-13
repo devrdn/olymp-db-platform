@@ -128,4 +128,41 @@ describe("the staff table", () => {
     expect(screen.getByText("A: solved at minute 12 on attempt 1, first to solve")).toBeInTheDocument();
     expect(screen.getByText("B: untried")).toBeInTheDocument();
   });
+
+  test("gives the table a minimum width covering the grid, so the name stays legible", () => {
+    const questions = Array.from({ length: 12 }, (_, i) => String.fromCharCode(65 + i));
+    show(
+      board({
+        scoring: "icpc",
+        questions,
+        rows: [
+          {
+            place: 1,
+            login: "holmes",
+            fullName: "Sherlock Holmes",
+            deleted: false,
+            disqualified: false,
+            points: 0,
+            solved: 1,
+            penalty: 10,
+            cells: questions.map(() => ({ state: "untried" as const })),
+            lastScoredAt: undefined,
+            winner: false,
+          },
+        ],
+      }),
+      "running",
+    );
+
+    // Place (w-16 = 4rem) + login (w-28 = 7rem) + solved (w-20 = 5rem)
+    // + penalty (w-20 = 5rem) + 12 grid cells (w-12 = 3rem each) + a
+    // still-legible 12rem name column.
+    expect(screen.getByRole("table")).toHaveStyle({ minWidth: "69rem" });
+  });
+
+  test("sets no minimum width in points mode, which has no grid", () => {
+    show(board(), "running");
+
+    expect(screen.getByRole("table").style.minWidth).toBe("");
+  });
 });

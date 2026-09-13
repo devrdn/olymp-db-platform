@@ -162,6 +162,31 @@ function cellAccessibleName(cell: StandingsCell, letter: string, t: CellDictiona
   }
 }
 
+/** A grid column's own width — must match `GridHeaderCells`'/`GridCells`' `w-12`. */
+const GRID_CELL_REM = 3;
+
+/**
+ * A still-legible width for the name column once the grid has crowded it.
+ * The name column carries no width class of its own — it is the one column
+ * meant to give way — but with enough questions the grid's fixed columns
+ * alone exceed the viewport, and an unconstrained column given no room left
+ * collapses to nothing rather than "gives way". Past that point the table
+ * needs a floor, so it scrolls inside its own `overflow-x-auto` instead.
+ */
+const GRID_NAME_MIN_REM = 12;
+
+/**
+ * The `min-width` (in rem) a table needs once its ICPC grid is on screen:
+ * every fixed column, in rem matching the Tailwind width classes the caller
+ * actually applies to them, plus one grid cell per question, plus the name
+ * column's floor above. `undefined` when there is no grid to protect against
+ * — `points` mode, or `icpc` without a grid on screen (the narrow panel) —
+ * so the table is left to size itself exactly as it already did.
+ */
+export function gridMinWidthRem(fixedColumnsRem: number, questionCount: number): number {
+  return fixedColumnsRem + questionCount * GRID_CELL_REM + GRID_NAME_MIN_REM;
+}
+
 /**
  * The ICPC grid's header row: one column per question letter, shown only on
  * the full page and only from the `narrow` breakpoint up — the play tab and
@@ -264,6 +289,14 @@ export function StandingsView({
   const { state, rows } = standings;
   const icpc = standings.scoring === "icpc";
   const leader = rows.reduce((max, r) => Math.max(max, r.points), 0);
+  // The grid only ever appears on `page` — never in the narrow panel — so
+  // only there does the table need a floor under it (see gridMinWidthRem).
+  const gridQuestions = variant === "page" && icpc ? standings.questions : undefined;
+  const tableMinWidth = gridQuestions?.length
+    ? // Place (w-14) + solved (w-20) + penalty (w-20) — keep in sync with
+      // the `<th>` widths below.
+      `${gridMinWidthRem(3.5 + 5 + 5, gridQuestions.length)}rem`
+    : undefined;
 
   return (
     <div className="flex flex-col gap-4">
@@ -281,8 +314,14 @@ export function StandingsView({
           <div className="overflow-x-auto">
             {/* Fixed layout, so the name is the column that gives way: under an
                 automatic layout a long name pushed the points off a phone's
-                screen, into a sideways scroll nobody knows to try. */}
-            <table className="w-full table-fixed border-collapse">
+                screen, into a sideways scroll nobody knows to try. A
+                `min-width` protects that same name column from the opposite
+                failure once a wide ICPC grid is on screen — the table
+                scrolls inside the wrapper above instead of squeezing it. */}
+            <table
+              className="w-full table-fixed border-collapse"
+              style={tableMinWidth ? { minWidth: tableMinWidth } : undefined}
+            >
               <caption className="sr-only">{t.heading}</caption>
               <thead>
                 <tr className="border-b border-line-2 font-mono text-label text-ink-3 uppercase">

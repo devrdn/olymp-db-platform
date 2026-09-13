@@ -5,7 +5,7 @@ import { useActionState, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-import { GridCells, GridHeaderCells, Initials, medalEdge, PlaceBadge } from "@/components/product/standings";
+import { GridCells, GridHeaderCells, gridMinWidthRem, Initials, medalEdge, PlaceBadge } from "@/components/product/standings";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
@@ -61,6 +61,11 @@ export function StaffStandingsView({
   const revealable =
     (status === "finished" || status === "archived") && standings.freezeMin !== null && !standings.revealedAt;
   const icpc = standings.scoring === "icpc";
+  const tableMinWidth = icpc && standings.questions?.length
+    ? // Place (w-16) + login (w-28) + solved (w-20) + penalty (w-20) — keep
+      // in sync with the `<th>` widths below.
+      `${gridMinWidthRem(4 + 7 + 5 + 5, standings.questions.length)}rem`
+    : undefined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -92,8 +97,14 @@ export function StaffStandingsView({
           {/* Fixed layout, the same construction as the public table
               (components/product/standings.tsx): every column but the name
               carries a width, so the name is the one that gives way to a
-              long full name rather than widening the table. */}
-          <table className="w-full table-fixed border-collapse">
+              long full name rather than widening the table. `min-width`
+              protects that same column from the opposite failure once a
+              wide ICPC grid is on screen — the table scrolls inside the
+              wrapper above instead of squeezing the name to a sliver. */}
+          <table
+            className="w-full table-fixed border-collapse"
+            style={tableMinWidth ? { minWidth: tableMinWidth } : undefined}
+          >
             <caption className="sr-only">{t.heading}</caption>
             <thead>
               <tr className="border-b border-line-2 font-mono text-label text-ink-3 uppercase">
