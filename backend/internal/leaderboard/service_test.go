@@ -331,6 +331,40 @@ func TestAFrozenICPCTableAsksForTheAttemptsSinceTheFreeze(t *testing.T) {
 	}
 }
 
+// Sequential progression opens a question only once the one before it is
+// closed, so a pending attempt on a later question would say that the earlier
+// one was closed after the freeze. A frozen sequential ICPC table asks for no
+// pending attempts; the same table under free progression still does.
+func TestAFrozenSequentialICPCTableAsksForNoPendingAttempts(t *testing.T) {
+	r := newRig(t)
+	r.standings.grid = leaderboard.Grid{Questions: 2, FirstSolves: make([]*time.Time, 2)}
+	sequential := contest(contests.StatusRunning, minutes(30), nil)
+	sequential.Scoring = contests.ScoringICPC
+	sequential.QuestionMode, sequential.Progression = contests.QuestionModeMulti, contests.ProgressionSequential
+	sequential = r.contests.Put(sequential)
+	free := contest(contests.StatusRunning, minutes(30), nil)
+	free.Scoring = contests.ScoringICPC
+	free.QuestionMode, free.Progression = contests.QuestionModeMulti, contests.ProgressionFree
+	free = r.contests.Put(free)
+	r.now = end.Add(-10 * time.Minute)
+
+	if _, err := r.service.Public(context.Background(), sequential.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.service.Public(context.Background(), free.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.standings.queries) != 2 {
+		t.Fatalf("queries = %d, want 2", len(r.standings.queries))
+	}
+	if q := r.standings.queries[0]; q.Pending != nil {
+		t.Errorf("the sequential table asks for pending attempts: %+v", q.Pending)
+	}
+	if q := r.standings.queries[1]; q.Pending == nil {
+		t.Error("the free-progression table asks for no pending attempts, want the window since the freeze")
+	}
+}
+
 // Nothing else asks for pending attempts: not a live or a final table, where
 // the cutoff is now and a result is simply shown, and never the staff table,
 // which is cut off now whatever the freeze and sees the result itself.

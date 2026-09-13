@@ -48,9 +48,10 @@ type Query struct {
 	// IncludeDisqualified is true only for the staff table.
 	IncludeDisqualified bool
 	// Pending asks for the attempts inside a window, on questions not solved
-	// before the cutoff (Cell.Pending). It is set only for a frozen ICPC table,
-	// from the freeze to the moment of computing, and never for the staff's
-	// table, which is cut off now and sees the results themselves.
+	// before the cutoff (Cell.Pending). It is set only for a frozen ICPC table
+	// whose progression is not sequential, from the freeze to the moment of
+	// computing, and never for the staff's table, which is cut off now and
+	// sees the results themselves.
 	Pending *Window
 	// Limit is how many entries to return at most, in the order Rank would
 	// put them — with the winner first in winner mode — so that cutting the
@@ -182,7 +183,14 @@ func (s *Service) Public(ctx context.Context, contestID uuid.UUID) (View, error)
 		q := Query{ContestID: c.ID, Cutoff: decision.Cutoff, Scoring: c.Scoring}
 		// The one thing a frozen ICPC table tells about the time since the
 		// freeze: how many attempts there were, never what came of them.
-		if decision.State == StateFrozen && c.Scoring == contests.ScoringICPC {
+		//
+		// Not under sequential progression. There a question opens only once
+		// the one before it is closed — solved, or every attempt spent — so
+		// an attempt on B after the freeze says A was closed after it, and A
+		// pending with attempts still left says A was solved. Whether an
+		// attempt exists is itself the result there, and the table shows only
+		// what was true at the freeze.
+		if decision.State == StateFrozen && c.Scoring == contests.ScoringICPC && !c.SequentialActive() {
 			q.Pending = &Window{From: *decision.FrozenAt, Until: now}
 		}
 		t, err := s.rank(ctx, q)
