@@ -67,6 +67,16 @@
   --silver-wash: #ebeef2;
   --bronze: #8a4318;
   --bronze-wash: #f8e8dd;
+  /* The solid medal itself — a disc, a score bar, a podium edge — and the
+     number written on it. Bright on both themes, which a text colour held to
+     4.5:1 on white cannot be: a gold dark enough to read as text on paper
+     reads as brown on a disc. */
+  --gold-fill: #e2b53c;
+  --gold-on: #2e2000;
+  --silver-fill: #c2cad4;
+  --silver-on: #1f2731;
+  --bronze-fill: #d88e57;
+  --bronze-on: #331704;
   /* A frozen table. Cold, and deliberately not the accent: the accent means
      "live", and a frozen table is the opposite of live. */
   --frost: #0b5c77;
@@ -138,6 +148,12 @@
   --dark-silver-wash: rgb(195 203 213 / 0.12);
   --dark-bronze: #e8a070;
   --dark-bronze-wash: rgb(232 160 112 / 0.14);
+  --dark-gold-fill: #e6c061;
+  --dark-gold-on: #0a0b0f;
+  --dark-silver-fill: #c3cbd5;
+  --dark-silver-on: #0a0b0f;
+  --dark-bronze-fill: #e8a070;
+  --dark-bronze-on: #0a0b0f;
   --dark-frost: #7dd0ea;
   --dark-frost-wash: rgb(125 208 234 / 0.12);
   --dark-you: #97b6f3;
@@ -205,6 +221,12 @@
     --silver-wash: var(--dark-silver-wash);
     --bronze: var(--dark-bronze);
     --bronze-wash: var(--dark-bronze-wash);
+    --gold-fill: var(--dark-gold-fill);
+    --gold-on: var(--dark-gold-on);
+    --silver-fill: var(--dark-silver-fill);
+    --silver-on: var(--dark-silver-on);
+    --bronze-fill: var(--dark-bronze-fill);
+    --bronze-on: var(--dark-bronze-on);
     --frost: var(--dark-frost);
     --frost-wash: var(--dark-frost-wash);
     --you: var(--dark-you);
@@ -261,6 +283,12 @@
     --silver-wash: var(--dark-silver-wash);
     --bronze: var(--dark-bronze);
     --bronze-wash: var(--dark-bronze-wash);
+    --gold-fill: var(--dark-gold-fill);
+    --gold-on: var(--dark-gold-on);
+    --silver-fill: var(--dark-silver-fill);
+    --silver-on: var(--dark-silver-on);
+    --bronze-fill: var(--dark-bronze-fill);
+    --bronze-on: var(--dark-bronze-on);
     --frost: var(--dark-frost);
     --frost-wash: var(--dark-frost-wash);
     --you: var(--dark-you);

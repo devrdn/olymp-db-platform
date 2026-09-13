@@ -133,6 +133,7 @@ hue as text on its own wash and on the page ground, in both themes.
 | `--gold` / `-wash` | `#7a5600` / `#fbf0d2` | `#e6c061` / 14 % | place 1, the winner |
 | `--silver` / `-wash` | `#4e5865` / `#ebeef2` | `#c3cbd5` / 12 % | place 2 |
 | `--bronze` / `-wash` | `#8a4318` / `#f8e8dd` | `#e8a070` / 14 % | place 3 |
+| `--gold-fill` / `-on`, `--silver-fill` / `-on`, `--bronze-fill` / `-on` | `#e2b53c` / `#2e2000`, `#c2cad4` / `#1f2731`, `#d88e57` / `#331704` | the dark medal colours / `#0a0b0f` | the solid medal: its disc, its score bar, its podium edge, and the number on it |
 | `--frost` / `-wash` | `#0b5c77` / `#e2f1f7` | `#7dd0ea` / 12 % | a frozen table |
 | `--you` / `-wash` | `#1e4a8e` / `#e7eefa` | `#97b6f3` / 13 % | the participant's own row |
 | `--id-1`…`--id-6` / `-wash` | rose, ochre, olive, cyan, ocean, sienna | the same, lightened | a participant's initials and score bar |
@@ -140,7 +141,9 @@ hue as text on its own wash and on the page ground, in both themes.
 Rules that keep it a palette rather than decoration:
 
 - **Medals only for places 1–3.** A shared place shares the medal; place 4 is
-  ink like any other number.
+  ink like any other number. A medal has two colours on purpose: `--gold` is
+  held to 4.5:1 as text on white, and a gold that dark reads as brown on a
+  disc, so the disc takes `--gold-fill` and the number on it `--gold-on`.
 - **Frost is not the accent.** The accent means "live", and a frozen table is
   the opposite of live, so the two must never be confusable. A live table
   carries the accent's pulsing dot; a frozen one carries frost.

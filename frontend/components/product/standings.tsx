@@ -28,27 +28,33 @@ type Medal = "gold" | "silver" | "bronze";
 const MEDALS: Record<number, Medal> = { 1: "gold", 2: "silver", 3: "bronze" };
 
 // Written out whole so Tailwind finds every class in the source.
+// A medal is a solid disc — the page ground on the medal colour, checked by
+// the contrast script — so the podium reads from across a hall, not only up
+// close. `row` tints a medal's whole row; your own row's tint wins over it.
 const MEDAL_CLASSES: Record<
   Medal,
-  { disc: string; bar: string; edge: string; step: string }
+  { disc: string; bar: string; edge: string; step: string; row: string }
 > = {
   gold: {
-    disc: "bg-gold-wash text-gold ring-gold/40",
-    bar: "bg-gold",
-    edge: "border-l-gold",
-    step: "bg-gold-wash border-t-gold",
+    disc: "bg-gold-fill text-gold-on ring-gold-fill/40",
+    bar: "bg-gold-fill",
+    edge: "border-l-gold-fill",
+    step: "bg-gold-wash border-t-gold-fill",
+    row: "bg-gold-wash",
   },
   silver: {
-    disc: "bg-silver-wash text-silver ring-silver/40",
-    bar: "bg-silver",
-    edge: "border-l-silver",
-    step: "bg-silver-wash border-t-silver",
+    disc: "bg-silver-fill text-silver-on ring-silver-fill/40",
+    bar: "bg-silver-fill",
+    edge: "border-l-silver-fill",
+    step: "bg-silver-wash border-t-silver-fill",
+    row: "bg-silver-wash",
   },
   bronze: {
-    disc: "bg-bronze-wash text-bronze ring-bronze/40",
-    bar: "bg-bronze",
-    edge: "border-l-bronze",
-    step: "bg-bronze-wash border-t-bronze",
+    disc: "bg-bronze-fill text-bronze-on ring-bronze-fill/40",
+    bar: "bg-bronze-fill",
+    edge: "border-l-bronze-fill",
+    step: "bg-bronze-wash border-t-bronze-fill",
+    row: "bg-bronze-wash",
   },
 };
 
@@ -86,7 +92,7 @@ export function PlaceBadge({ place, unplaced }: { place: number | null; unplaced
       ) : medal ? (
         <span
           className={cn(
-            "grid size-7 place-items-center rounded-full font-mono text-label tabular-nums ring-1",
+            "grid size-7 place-items-center rounded-full font-mono text-label font-medium tabular-nums ring-2 ring-offset-1 ring-offset-bg",
             MEDAL_CLASSES[medal].disc,
           )}
         >
@@ -155,33 +161,42 @@ export function StandingsView({
             <Podium rows={rows} dict={dict} />
           ) : null}
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
+            {/* Fixed layout, so the name is the column that gives way: under an
+                automatic layout a long name pushed the points off a phone's
+                screen, into a sideways scroll nobody knows to try. */}
+            <table className="w-full table-fixed border-collapse">
               <caption className="sr-only">{t.heading}</caption>
               <thead>
                 <tr className="border-b border-line-2 font-mono text-label text-ink-3 uppercase">
                   <th
                     scope="col"
-                    className="w-16 py-2 pr-2 pl-3 text-left font-normal"
+                    className="w-14 py-2 pr-2 pl-3 text-left font-normal"
                   >
                     {t.columns.place}
                   </th>
                   <th scope="col" className="px-2 py-2 text-left font-normal">
                     {t.columns.participant}
                   </th>
-                  <th scope="col" className="px-2 py-2 text-right font-normal">
+                  <th
+                    scope="col"
+                    className={cn(
+                      "px-2 py-2 text-right font-normal",
+                      variant === "page" ? "w-44 max-narrow:w-24" : "w-24",
+                    )}
+                  >
                     {t.columns.points}
                   </th>
                   {variant === "page" ? (
                     <>
                       <th
                         scope="col"
-                        className="px-2 py-2 text-right font-normal max-narrow:hidden"
+                        className="w-24 px-2 py-2 text-right font-normal max-narrow:hidden"
                       >
                         {t.columns.solved}
                       </th>
                       <th
                         scope="col"
-                        className="py-2 pr-3 pl-2 text-right font-normal max-narrow:hidden"
+                        className="w-28 py-2 pr-3 pl-2 text-right font-normal max-narrow:hidden"
                       >
                         {t.columns.last}
                       </th>
@@ -235,7 +250,11 @@ function Row({
   return (
     <tr
       data-you={row.isYou ? "true" : undefined}
-      className={cn("border-b border-line", row.isYou && "bg-you-wash")}
+      className={cn(
+        "border-b border-line",
+        medal && MEDAL_CLASSES[medal].row,
+        row.isYou && "bg-you-wash",
+      )}
     >
       <td
         className={cn("border-l-3 py-2.5 pr-2 pl-3 align-middle", medalEdge(row.place))}
@@ -274,8 +293,8 @@ function Row({
         </span>
         <div
           className={cn(
-            "mt-1.5 ml-auto h-1 max-w-full rounded-full bg-sunk",
-            variant === "page" ? "w-28" : "w-16",
+            "mt-1.5 ml-auto h-1.5 max-w-full rounded-full bg-line-2",
+            variant === "page" ? "w-36 max-narrow:w-16" : "w-16",
           )}
         >
           <div
@@ -341,7 +360,7 @@ function Podium({
           <div key={i} className="flex min-w-0 flex-col items-center gap-2">
             <span
               className={cn(
-                "grid size-12 place-items-center rounded-full font-mono text-h3 ring-2",
+                "grid size-14 place-items-center rounded-full font-mono text-h3 ring-4 ring-offset-2 ring-offset-bg",
                 MEDAL_CLASSES[medal].disc,
               )}
             >
@@ -355,7 +374,7 @@ function Podium({
             </span>
             <div
               className={cn(
-                "w-full border-t-3",
+                "w-full border-t-4",
                 heights[i],
                 MEDAL_CLASSES[medal].step,
               )}
