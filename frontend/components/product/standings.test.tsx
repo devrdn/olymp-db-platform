@@ -20,6 +20,8 @@ function row(overrides: Partial<StandingsRow>): StandingsRow {
     deleted: false,
     points: 10,
     solved: 1,
+    penalty: undefined,
+    cells: undefined,
     lastScoredAt: "2026-09-20T10:00:00Z",
     winner: false,
     isYou: false,
@@ -36,6 +38,7 @@ function standings(overrides: Partial<Standings> = {}): Standings {
     endsAt: "2099-01-01T00:00:00Z",
     generatedAt: "2026-09-20T10:05:00Z",
     truncated: false,
+    questions: undefined,
     rows: [
       row({ place: 1, label: "alpha", points: 40 }),
       row({ place: 2, label: "beta", points: 20, isYou: true }),
@@ -167,5 +170,122 @@ describe("the standings", () => {
 
     show(standings(), "panel");
     expect(screen.queryByTestId("podium")).not.toBeInTheDocument();
+  });
+});
+
+function icpcRow(overrides: Partial<StandingsRow> & { cells: NonNullable<StandingsRow["cells"]> }): StandingsRow {
+  return {
+    place: 1,
+    label: "ivanov",
+    deleted: false,
+    points: 0,
+    solved: 0,
+    penalty: 0,
+    lastScoredAt: undefined,
+    winner: false,
+    isYou: false,
+    ...overrides,
+  };
+}
+
+function icpcStandings(overrides: Partial<Standings> = {}): Standings {
+  return {
+    state: "live",
+    scoring: "icpc",
+    title: "The Library Murder",
+    frozenAt: undefined,
+    endsAt: "2099-01-01T00:00:00Z",
+    generatedAt: "2026-09-20T10:05:00Z",
+    truncated: false,
+    questions: ["A", "B", "C", "D"],
+    rows: [
+      icpcRow({
+        place: 1,
+        label: "alpha",
+        solved: 2,
+        penalty: 65,
+        cells: [
+          { state: "solved", attempts: 2, minute: 47, first: true },
+          { state: "failed", attempts: 3 },
+          { state: "pending", attempts: 0, pending: 2 },
+          { state: "untried" },
+        ],
+      }),
+    ],
+    ...overrides,
+  };
+}
+
+describe("the ICPC standings", () => {
+  test("show the grid on the page, and not in the narrow panel", () => {
+    const { unmount } = show(icpcStandings(), "page");
+    expect(screen.getByRole("columnheader", { name: "A" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "D" })).toBeInTheDocument();
+    unmount();
+
+    show(icpcStandings(), "panel");
+    expect(screen.queryByRole("columnheader", { name: "A" })).not.toBeInTheDocument();
+  });
+
+  test("show place, participant, solved and penalty columns without a points column", () => {
+    show(icpcStandings(), "panel");
+
+    expect(screen.getByText(t.columns.solved)).toBeInTheDocument();
+    expect(screen.getByText(t.columns.penalty)).toBeInTheDocument();
+    expect(screen.queryByText(t.columns.points)).not.toBeInTheDocument();
+    // The panel never renders the grid, so no cell competes with these cells
+    // for the same digits.
+    const cells = within(rowOf("alpha")).getAllByRole("cell");
+    expect(cells.at(-2)).toHaveTextContent("2");
+    expect(cells.at(-1)).toHaveTextContent("65");
+  });
+
+  test("give a solved cell its attempt count, minute and a spelled-out accessible name", () => {
+    show(icpcStandings(), "page");
+
+    expect(screen.getByText("+1")).toBeInTheDocument();
+    expect(screen.getByText("47")).toBeInTheDocument();
+    expect(
+      screen.getByText("A: solved at minute 47 on attempt 2, first to solve"),
+    ).toBeInTheDocument();
+  });
+
+  test("mark a first solve with a solid fill, not colour alone", () => {
+    show(icpcStandings(), "page");
+
+    const cell = screen.getByText("A: solved at minute 47 on attempt 2, first to solve").closest("td");
+    expect(cell).toHaveClass("bg-good");
+    expect(cell).toHaveClass("text-bg");
+  });
+
+  test("give a failed cell its wrong-attempt count and accessible name", () => {
+    show(icpcStandings(), "page");
+
+    expect(screen.getByText("−3")).toBeInTheDocument();
+    expect(screen.getByText("B: failed, 3 wrong attempts")).toBeInTheDocument();
+  });
+
+  test("give a pending cell a question mark, its count and accessible name", () => {
+    show(icpcStandings(), "page");
+
+    const cell = screen.getAllByTestId("cell").find((el) => el.dataset.state === "pending") as HTMLElement;
+    expect(cell).toBeTruthy();
+    expect(within(cell).getByText("?")).toBeInTheDocument();
+    expect(within(cell).getByText("2")).toBeInTheDocument();
+    expect(
+      screen.getByText("C: pending, 2 attempts since the freeze"),
+    ).toBeInTheDocument();
+  });
+
+  test("give an untried cell an accessible name and no visible marks", () => {
+    show(icpcStandings(), "page");
+
+    expect(screen.getByText("D: untried")).toBeInTheDocument();
+  });
+
+  test("show solved and penalty under the podium name instead of points", () => {
+    show(icpcStandings(), "page");
+
+    expect(within(screen.getByTestId("podium")).getByText("2 · 65")).toBeInTheDocument();
   });
 });

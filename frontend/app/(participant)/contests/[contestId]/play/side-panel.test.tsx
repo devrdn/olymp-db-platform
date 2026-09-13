@@ -237,8 +237,8 @@ describe("the side panel's table", () => {
       kind: "ok",
       standings: {
         state: "live", scoring: "points", title: "", generatedAt: "2026-09-20T10:00:00Z", truncated: false,
-        frozenAt: undefined, endsAt: undefined,
-        rows: [{ place: 1, label: "sherlock", deleted: false, points: 12, solved: 2, lastScoredAt: undefined, winner: false, isYou: true }],
+        frozenAt: undefined, endsAt: undefined, questions: undefined,
+        rows: [{ place: 1, label: "sherlock", deleted: false, points: 12, solved: 2, penalty: undefined, cells: undefined, lastScoredAt: undefined, winner: false, isYou: true }],
       },
     });
     show();

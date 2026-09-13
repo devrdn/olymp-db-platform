@@ -11,7 +11,7 @@ const FROZEN_MS = STANDINGS_POLL_MS.frozen ?? 0;
 function table(state: Standings["state"]): Standings {
   return {
     state, scoring: "points", title: "", frozenAt: undefined, endsAt: undefined,
-    generatedAt: "2026-09-20T10:00:00Z", truncated: false, rows: [],
+    generatedAt: "2026-09-20T10:00:00Z", truncated: false, questions: undefined, rows: [],
   };
 }
 
