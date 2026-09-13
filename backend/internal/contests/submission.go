@@ -312,11 +312,12 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 	deadlineWithGrace := deadline.Add(s.grace)
 
 	correct := s.grade(ctx, q, cmd.Value)
+	points := awardablePoints(q, cmd.Contest)
 	penaltyPerAttempt := penaltyAmount(q, cmd.Contest)
 
 	var result Submission
 	for attempt := 0; ; attempt++ {
-		result, err = s.submitOnce(ctx, participant.ID, q, cmd.Value, correct, penaltyPerAttempt, deadlineWithGrace)
+		result, err = s.submitOnce(ctx, participant.ID, q, cmd.Value, correct, points, penaltyPerAttempt, deadlineWithGrace)
 		if !errors.Is(err, ErrAttemptConflict) {
 			break
 		}
@@ -349,10 +350,27 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 // mode may change, and the percentage an organizer set must still be there,
 // unapplied, if it changes back.
 func penaltyAmount(q Question, c Contest) int {
-	if c.Scoring == ScoringWinner {
+	if c.Scoring == ScoringWinner || c.Scoring == ScoringICPC {
 		return 0
 	}
 	return q.Points * q.PenaltyPct / 100
+}
+
+// awardablePoints is the face value fed to Insert for it to compute
+// points_awarded from: q.Points in every mode but ICPC, where a question
+// carries no points at all (design doc: place is decided by how many
+// questions are solved and by penalty time, never by points) and every
+// submission must write points_awarded = 0 so total_score stays 0 too —
+// whether the answer is correct or not, and regardless of q.Points, exactly
+// as if the question were configured worth nothing. Not a flat refusal by
+// configuration, for the same reason penaltyAmount is not: a contest's
+// scoring mode may change, and the points an organizer set on a question
+// must still be there, unapplied, if it changes back to points or winner.
+func awardablePoints(q Question, c Contest) int {
+	if c.Scoring == ScoringICPC {
+		return 0
+	}
+	return q.Points
 }
 
 // submitOnce writes one attempt: the deadline check, the attempt-number
@@ -362,29 +380,30 @@ func penaltyAmount(q Question, c Contest) int {
 // taken effect and Submit calls it again.
 //
 // A unit of work wraps the write whenever a correct answer could possibly
-// earn something — q.Points > 0 — because how much it actually earns is not
+// earn something — points > 0 — because how much it actually earns is not
 // known until Insert computes it from however many wrong attempts already
 // landed; that amount might still turn out to be zero (the penalty already
 // exhausted the question, §6.1.1's own floor), in which case the score update
 // is skipped inside the same transaction rather than writing a zero delta
-// (CLAUDE.md rule 6). A wrong answer, or a question worth zero points to
-// begin with, needs no transaction at all — points_awarded is provably zero
-// either way without asking the database anything — and opening one anyway
-// would hold a pooled connection for a second round trip (COMMIT) that
-// changes nothing.
-func (s *Service) submitOnce(ctx context.Context, registrationID uuid.UUID, q Question, value string, correct bool, penaltyPerAttempt int, deadline time.Time) (Submission, error) {
+// (CLAUDE.md rule 6). A wrong answer, or points already zero — a question
+// worth nothing to begin with, or ICPC scoring zeroing every question
+// outright (awardablePoints) — needs no transaction at all — points_awarded
+// is provably zero either way without asking the database anything — and
+// opening one anyway would hold a pooled connection for a second round trip
+// (COMMIT) that changes nothing.
+func (s *Service) submitOnce(ctx context.Context, registrationID uuid.UUID, q Question, value string, correct bool, points, penaltyPerAttempt int, deadline time.Time) (Submission, error) {
 	req := SubmissionRequest{
 		RegistrationID:    registrationID,
 		QuestionID:        q.ID,
 		Value:             value,
 		IsCorrect:         correct,
-		Points:            q.Points,
+		Points:            points,
 		PenaltyPerAttempt: penaltyPerAttempt,
 		Deadline:          deadline,
 		MaxAttempts:       q.MaxAttempts,
 	}
 
-	if !correct || q.Points <= 0 {
+	if !correct || points <= 0 {
 		return s.submissions.Insert(ctx, req)
 	}
 
