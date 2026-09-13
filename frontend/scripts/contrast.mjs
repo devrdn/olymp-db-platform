@@ -62,6 +62,10 @@ const PAIRS = [
   ["you", "you-wash", TEXT],
   // The "You" label is page-ground text on a solid --you pill.
   ["bg", "you", TEXT],
+  // A medal disc: the place number on the solid medal.
+  ["gold-on", "gold-fill", TEXT],
+  ["silver-on", "silver-fill", TEXT],
+  ["bronze-on", "bronze-fill", TEXT],
   // The staff table's "Disqualified" pill.
   ["bg", "bad", TEXT],
   ["you", "bg", TEXT],

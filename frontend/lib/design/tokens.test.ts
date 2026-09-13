@@ -104,6 +104,10 @@ describe("the colours the interface names", () => {
         if (known.has(name) || sizes.has(name) || NOT_A_COLOUR.has(name)) continue;
         // `border-l-2`, `border-b-0`: a side and a width, not a colour.
         if (/^[blrtxyse]-\d+$/.test(name)) continue;
+        // `border-l-gold`, `border-t-transparent`: a side and a colour — and
+        // the colour after the side is held to the same list as any other.
+        const side = /^[blrtxyse]-([a-z][a-z0-9-]*)$/.exec(name);
+        if (side && (known.has(side[1]) || NOT_A_COLOUR.has(side[1]))) continue;
         // `ring-offset-2`, `ring-offset-bg`: a different utility that happens
         // to share the prefix.
         if (name.startsWith("offset-")) continue;
