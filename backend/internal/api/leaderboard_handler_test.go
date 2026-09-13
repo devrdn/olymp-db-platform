@@ -600,6 +600,59 @@ func TestAFrozenICPCTableShowsOnlyHowManyAttemptsCameAfterTheFreeze(t *testing.T
 	}
 }
 
+// Under sequential progression a question opens only once the one before it
+// is closed — solved, or every attempt spent — so a pending attempt on B would
+// say that A was closed after the freeze, and a pending A with attempts left
+// beside it would say A was solved. A frozen sequential ICPC table therefore
+// shows no pending attempts at all: only what was true at the freeze.
+// Checked on the body, for the public table and the participant's copy.
+func TestAFrozenSequentialICPCTableShowsNoPendingAttempts(t *testing.T) {
+	f := newBoardFixture(t)
+	freeze := 30
+	c, me := f.contest(t, contests.StatusRunning, &freeze)
+	c.Scoring, c.ICPCPenaltyMin = contests.ScoringICPC, 20
+	c.QuestionMode, c.Progression = contests.QuestionModeMulti, contests.ProgressionSequential
+	f.stores.Contests.Put(c)
+	freezeAt := c.EndsAt.Add(-30 * time.Minute)
+	f.now = freezeAt.Add(10 * time.Minute)
+	afterFreeze := func(n int) time.Time { return freezeAt.Add(time.Duration(n) * time.Minute) }
+
+	// Before the freeze the student gets A wrong once. After it they solve A,
+	// which opens B, and try B.
+	f.standings.icpc = &icpcBoard{questions: 2, start: *c.StartsAt, penaltyMin: 20, entrants: []icpcEntrant{
+		{registration: me.ID, login: "student", answers: []icpcAnswer{
+			{question: 0, at: freezeAt.Add(-5 * time.Minute)},
+			{question: 0, at: afterFreeze(1), correct: true},
+			{question: 1, at: afterFreeze(2)},
+		}},
+	}}
+	student := f.student.ID
+
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"public":      f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard", nil, ""),
+		"participant": f.request(http.MethodGet, "/contests/"+c.ID.String()+"/play/leaderboard", &student, ""),
+	} {
+		raw := rec.Body.String()
+		body := decodeICPC(t, rec)
+		if body.State != leaderboard.StateFrozen || strings.Join(body.Questions, ",") != "A,B" || len(body.Rows) != 1 {
+			t.Fatalf("%s: body = %s, want a frozen table of A, B with one row", name, raw)
+		}
+		if strings.Contains(raw, "pending") {
+			t.Errorf("%s: a sequential table says pending: %s", name, raw)
+		}
+		row := body.Rows[0]
+		wantCells := `[{"state":"failed","attempts":1},{"state":"untried"}]`
+		if row.Solved != 0 || row.Penalty == nil || *row.Penalty != 0 || string(row.Cells) != wantCells {
+			t.Errorf("%s: solved %d, penalty %s, cells\n%s\nwant 0, 0,\n%s", name, row.Solved, intString(row.Penalty), row.Cells, wantCells)
+		}
+		for _, leak := range []string{`"minute"`, `"attempts":2`, `"solved"`} {
+			if strings.Contains(string(row.Cells), leak) {
+				t.Errorf("%s: the cells carry %s from after the freeze: %s", name, leak, row.Cells)
+			}
+		}
+	}
+}
+
 // The staff table is cut off now: it sees the solves after the freeze, marks
 // the first solver by them, and never says pending.
 func TestTheLiveICPCTableSeesTheResultsAndNoPending(t *testing.T) {
