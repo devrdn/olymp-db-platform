@@ -178,10 +178,10 @@ type Contest struct {
 	// ScoringPoints, ScoringWinner, ScoringICPC).
 	Scoring string
 	// ICPCPenaltyMin is how many minutes one wrong attempt costs a solved
-	// question when Scoring is ScoringICPC (§ design doc). Meaningless in
-	// every other mode but always present and always bounded, so a contest
-	// that switches back to icpc later has a value ready rather than a fresh
-	// default nobody chose.
+	// question when Scoring is ScoringICPC (see ScoringICPC's own doc).
+	// Meaningless in every other mode but always present and always bounded,
+	// so a contest that switches back to icpc later has a value ready rather
+	// than a fresh default nobody chose.
 	ICPCPenaltyMin int
 	Timing         string
 	// DurationMin is the per-participant session length, set only for

@@ -57,10 +57,10 @@ const (
 	ProblemLeaderboardFreezeExceedsWindow = "leaderboard_freeze_exceeds_window"
 	// ProblemICPCChoiceNeedsAttemptLimit names a choice question, in ICPC
 	// scoring, with no attempt cap or one that is not strictly below its own
-	// number of choices (design doc's "Принятые решения" §3): without one, a
-	// participant can submit every option in turn and solve the question for
-	// the mere cost of penalty time, never actually needing to know the
-	// answer.
+	// number of choices — decision 3 of the design doc's own decisions
+	// section: without one, a participant can submit every option in turn
+	// and solve the question for the mere cost of penalty time, never
+	// actually needing to know the answer.
 	ProblemICPCChoiceNeedsAttemptLimit = "icpc_choice_needs_attempt_limit"
 )
 
