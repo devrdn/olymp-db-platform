@@ -1450,6 +1450,7 @@ const en = {
       "This contest answers questions in order. Answer the earlier one first.",
     too_many_connections:
       "You already have as many live connections to this contest as this installation allows. Close another tab and try again.",
+    query_database_error: "The database refused that query:",
     query_declined:
       "The database refused that query. This contest hides its schema, so the reason is not shown — discovering the tables is part of it.",
     query_service_down:

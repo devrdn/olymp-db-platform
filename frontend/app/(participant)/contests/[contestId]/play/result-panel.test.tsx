@@ -73,6 +73,33 @@ describe("the result panel", () => {
     expect(screen.getByRole("status")).not.toHaveTextContent("req-42");
   });
 
+  test("a query the database refused shows the database's own words, as a refusal rather than a fault", () => {
+    const reason = 'ERROR: column "alibi" does not exist (SQLSTATE 42703)';
+    show({ kind: "refused", code: "query_database_error", subject: reason, requestId: "req-42" });
+
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent(en.errors.query_database_error);
+    expect(status).toHaveTextContent(reason);
+    expect(status).not.toHaveTextContent(en.errors.invalid_request);
+    expect(status).not.toHaveTextContent("req-42");
+  });
+
+  test("a query the checks refused carries no reference, because nothing on our side went wrong", () => {
+    for (const code of ["query_parse_error", "query_function_not_supported", "query_declined", "query_timed_out"]) {
+      const { unmount } = show({ kind: "refused", code, subject: "x", requestId: "req-42" });
+      expect(screen.getByRole("status"), code).not.toHaveTextContent("req-42");
+      unmount();
+    }
+  });
+
+  test("a fault, or a code this build cannot name, keeps its reference", () => {
+    for (const code of ["internal_error", "game_cluster_full", "something_from_the_future"]) {
+      const { unmount } = show({ kind: "refused", code, requestId: "req-42" });
+      expect(screen.getByRole("status"), code).toHaveTextContent("req-42");
+      unmount();
+    }
+  });
+
   test("offers a download only when there are rows to download", () => {
     const { unmount } = show({ kind: "idle" });
     expect(screen.queryByRole("button", { name: en.participant.play.workspace.download })).not.toBeInTheDocument();

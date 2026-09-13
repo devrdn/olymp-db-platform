@@ -1354,6 +1354,7 @@ const ro = {
       "Această olimpiadă răspunde la întrebări în ordine. Răspundeți mai întâi la cea anterioară.",
     too_many_connections:
       "Aveți deja atâtea conexiuni active la această olimpiadă câte permite această instalare. Închideți altă filă și încercați din nou.",
+    query_database_error: "Baza de date a refuzat interogarea:",
     query_declined:
       "Baza de date a refuzat interogarea. Această olimpiadă își ascunde schema, așa că motivul nu este afișat — descoperirea tabelelor face parte din sarcină.",
     query_service_down:

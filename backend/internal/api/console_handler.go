@@ -272,9 +272,15 @@ func (h *ConsoleHandler) fail(w http.ResponseWriter, r *http.Request, err error)
 	// says what to change. (A contest that hides its schema never gets here:
 	// queryproxy turns this into ErrDatabaseDeclined above, because there the
 	// same sentence is a way to enumerate the schema.)
+	//
+	// Under a code of its own and with the words in `subject`, which is where
+	// the console reads a query's specifics. Sent as invalid_request, the
+	// console printed its sentence for a malformed form instead — with a
+	// support reference under it, as though the refusal were a fault.
 	var database *queryrunner.DatabaseError
 	if errors.As(err, &database) {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, database.Error())
+		httpx.ErrorWithDetails(w, r, http.StatusBadRequest, codeQueryDatabaseError, database.Error(),
+			map[string]any{"subject": database.Error()})
 		return
 	}
 
