@@ -680,6 +680,11 @@ func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err er
 		httpx.Error(w, r, http.StatusNotFound, codeQuestionNotFound, "No such question in this contest")
 	case errors.Is(err, contests.ErrAnswerTooLong):
 		httpx.Error(w, r, http.StatusBadRequest, codeAnswerTooLong, err.Error())
+	case errors.Is(err, contests.ErrNotAChoice):
+		// The caller's own malformed request, like an overlong answer: the
+		// interface only ever sends an option id for a choice question.
+		httpx.Error(w, r, http.StatusBadRequest, codeAnswerNotAChoice,
+			"A choice question takes one of its own option identifiers")
 	case errors.Is(err, contests.ErrQuestionClosed):
 		httpx.Error(w, r, http.StatusConflict, codeQuestionClosed,
 			"This question is already answered correctly, or every attempt has been used")

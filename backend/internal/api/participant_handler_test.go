@@ -52,6 +52,9 @@ type fakeAccess struct {
 	// can prove a refusal here stops the request before Access's own lookups.
 	admitReadErr error
 	accessCalled bool
+	// admitReads counts AdmitRead calls, so a test can prove a request spent
+	// its rate budget even though it was refused further in.
+	admitReads int
 	// delay, when set, is how long AccessForEvents waits before answering —
 	// events_handler_test.go's own way of standing for a resync tick's two
 	// lookups running slow (finding 2), without a real, adjustable-latency
@@ -76,6 +79,9 @@ func (a *fakeAccess) Schema(_ context.Context, contestID, _ uuid.UUID, _ netip.A
 }
 
 func (a *fakeAccess) AdmitRead(uuid.UUID) error {
+	a.mu.Lock()
+	a.admitReads++
+	a.mu.Unlock()
 	return a.admitReadErr
 }
 
@@ -886,6 +892,9 @@ func TestAnswerRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 	}{
 		{"question not found", contests.ErrQuestionNotFound, http.StatusNotFound, "question_not_found"},
 		{"answer too long", contests.ErrAnswerTooLong, http.StatusBadRequest, "answer_too_long"},
+		// A choice question takes one of its option ids and nothing else; any
+		// other string is the caller's own malformed request.
+		{"answer not a choice", contests.ErrNotAChoice, http.StatusBadRequest, "answer_not_a_choice"},
 		{"question closed", contests.ErrQuestionClosed, http.StatusConflict, "question_closed"},
 		// §6.1.1: a sequential contest refuses an answer to a question a
 		// registration has not opened yet, whatever the interface shows.
@@ -1042,6 +1051,26 @@ func TestAnswerRateLimitRefusalIsA429AndNeverReachesSubmit(t *testing.T) {
 	}
 	if f.access.accessCalled || f.submitter.called {
 		t.Fatal("Access or Submit was reached after AdmitRead refused")
+	}
+}
+
+// CLAUDE.md rule 13: a value refused for not being one of a choice
+// question's options still spent the caller's rate budget, which is checked
+// before Submit ever reads the question; a stream of guesses is not free.
+func TestAnAnswerRefusedAsNotAChoiceStillSpendsTheRateBudget(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.submitter.err = contests.ErrNotAChoice
+
+	rec := f.post("/contests/"+contestID.String()+"/questions/"+uuid.New().String()+"/answer", `{"value":"abc"}`)
+	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "answer_not_a_choice" {
+		t.Fatalf("status = %d, body %s; want 400 answer_not_a_choice", rec.Code, rec.Body.String())
+	}
+	if f.access.admitReads != 1 || !f.submitter.called {
+		t.Fatalf("AdmitRead called %d times, Submit called %v; want the budget spent once before Submit",
+			f.access.admitReads, f.submitter.called)
 	}
 }
 

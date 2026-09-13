@@ -1536,6 +1536,8 @@ const en = {
       "You have finished this contest. The console is closed for you.",
     answer_too_long:
       "That answer is longer than this installation accepts.",
+    answer_not_a_choice:
+      "That answer is not one of this question's options. Pick one of them; no attempt was used.",
     question_closed:
       "This question is already answered correctly, or every attempt is used.",
     deadline_passed:

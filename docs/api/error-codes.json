@@ -18,6 +18,10 @@
       "meaning": "The account already takes part in this contest."
     },
     {
+      "code": "answer_not_a_choice",
+      "meaning": "The question is a choice question and the submitted value is not exactly one of its option identifiers. Nothing was recorded and no attempt was used."
+    },
+    {
       "code": "answer_too_long",
       "meaning": "The submitted answer is longer than this installation accepts. The message names the limit."
     },
