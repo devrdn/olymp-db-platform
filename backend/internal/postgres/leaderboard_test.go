@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -184,6 +185,230 @@ func TestStandingsCutTheListBelowTheTopOfTheTable(t *testing.T) {
 		}
 		if len(winnerMode) != 2 || winnerMode[0].Login != "board-winner" || winnerMode[1].Login != "board-p1" {
 			t.Errorf("winner order = %+v, want winner, p1", winnerMode)
+		}
+	})
+}
+
+// icpcFixture is a fixed-window ICPC contest that opened at boardStart with
+// three questions in this order: A, a hidden one, and B. The grid is A and B.
+type icpcFixture struct {
+	boardFixture
+	a, hidden, b uuid.UUID
+}
+
+func newICPCFixture(t *testing.T, ctx context.Context, penaltyMin int) icpcFixture {
+	t.Helper()
+	author := makeUser(t, ctx, "icpc-author")
+	f := icpcFixture{boardFixture: boardFixture{ctx: ctx, contest: makeContest(t, ctx, author.ID)}}
+	exec(t, ctx, `UPDATE contests SET scoring = 'icpc', icpc_penalty_min = $2, starts_at = $3, ends_at = $4 WHERE id = $1`,
+		f.contest, penaltyMin, boardAt(0), boardAt(180))
+	questions := NewQuestions(testPool)
+	for _, q := range []struct {
+		id      *uuid.UUID
+		visible bool
+	}{{&f.a, true}, {&f.hidden, false}, {&f.b, true}} {
+		created, err := questions.Create(ctx, contests.Question{ContestID: f.contest, Kind: contests.KindText, IsVisible: q.visible})
+		if err != nil {
+			t.Fatalf("create question: %v", err)
+		}
+		*q.id = created.ID
+	}
+	return f
+}
+
+// answerAt stores an ICPC answer, which never carries points, at an exact moment.
+func (f icpcFixture) answerAt(t *testing.T, registration, question uuid.UUID, attempt int, correct bool, at time.Time) {
+	t.Helper()
+	exec(t, f.ctx, `
+		INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct, points_awarded, submitted_at)
+		VALUES ($1, $2, $3, 'an answer', $4, 0, $5)`,
+		registration, question, attempt, correct, at)
+}
+
+func (f icpcFixture) standings(t *testing.T, q leaderboard.Query) map[string]leaderboard.Entry {
+	t.Helper()
+	q.ContestID, q.Scoring = f.contest, contests.ScoringICPC
+	if q.Limit == 0 {
+		q.Limit = 10
+	}
+	entries, err := NewLeaderboard(testPool).Standings(f.ctx, q)
+	if err != nil {
+		t.Fatalf("Standings() = %v", err)
+	}
+	return byLogin(entries)
+}
+
+func cellString(c leaderboard.Cell) string {
+	solved := "-"
+	if c.SolvedAt != nil {
+		solved = c.SolvedAt.UTC().Format("15:04:05")
+	}
+	return fmt.Sprintf("{solved %s minute %d wrong %d pending %d}", solved, c.Minute, c.Wrong, c.Pending)
+}
+
+// The solving minute is whole minutes from the start, rounded down: 59 seconds
+// is minute 0 and 60 seconds is minute 1.
+func TestICPCStandingsRoundTheSolvingMinuteDown(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newICPCFixture(t, ctx, 20)
+		early := f.participant(t, "icpc-59s", 0)
+		onTheMinute := f.participant(t, "icpc-60s", 0)
+		f.answerAt(t, early, f.a, 1, true, boardStart.Add(59*time.Second+999*time.Millisecond))
+		f.answerAt(t, onTheMinute, f.a, 1, true, boardStart.Add(60*time.Second))
+
+		got := f.standings(t, leaderboard.Query{Cutoff: boardAt(60)})
+		if e := got["icpc-59s"]; len(e.Cells) != 2 || e.Cells[0].Minute != 0 || e.Penalty != 0 || e.Solved != 1 {
+			t.Errorf("59 s: %+v, want minute 0, penalty 0, solved 1", e)
+		}
+		if e := got["icpc-60s"]; len(e.Cells) != 2 || e.Cells[0].Minute != 1 || e.Penalty != 1 {
+			t.Errorf("60 s: %+v, want minute 1, penalty 1", e)
+		}
+	})
+}
+
+// With an individual timer the minute is measured from the participant's own
+// start, not from the window's.
+func TestICPCStandingsMeasureAnIndividualTimerFromTheParticipantsStart(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newICPCFixture(t, ctx, 20)
+		exec(t, ctx, `UPDATE contests SET timing = 'individual', duration_min = 60 WHERE id = $1`, f.contest)
+		late := f.participant(t, "icpc-late-start", 0)
+		exec(t, ctx, `UPDATE registrations SET started_at = $2 WHERE id = $1`, late, boardAt(30))
+		f.answerAt(t, late, f.a, 1, true, boardAt(45).Add(30*time.Second))
+
+		e := f.standings(t, leaderboard.Query{Cutoff: boardAt(120)})["icpc-late-start"]
+		if len(e.Cells) != 2 || e.Cells[0].Minute != 15 || e.Penalty != 15 {
+			t.Errorf("entry = %+v, want minute 15 from started_at", e)
+		}
+	})
+}
+
+// Only wrong attempts before the solve cost, at the contest's own penalty: a
+// wrong attempt after the solve and the wrong attempts on an unsolved question
+// cost nothing.
+func TestICPCStandingsChargeOnlyWrongAttemptsBeforeTheSolve(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newICPCFixture(t, ctx, 7)
+		alice := f.participant(t, "icpc-alice", 0)
+		f.answerAt(t, alice, f.a, 1, false, boardAt(1))
+		f.answerAt(t, alice, f.a, 2, false, boardAt(2))
+		f.answerAt(t, alice, f.a, 3, true, boardAt(10))
+		f.answerAt(t, alice, f.a, 4, false, boardAt(11))
+		f.answerAt(t, alice, f.b, 1, false, boardAt(5))
+		f.answerAt(t, alice, f.b, 2, false, boardAt(6))
+
+		e := f.standings(t, leaderboard.Query{Cutoff: boardAt(60)})["icpc-alice"]
+		if e.Solved != 1 || e.Penalty != 10+7*2 {
+			t.Errorf("solved, penalty = %d, %d, want 1, %d", e.Solved, e.Penalty, 10+7*2)
+		}
+		if e.LastSolvedAt == nil || !e.LastSolvedAt.Equal(boardAt(10)) {
+			t.Errorf("LastSolvedAt = %v, want %v", e.LastSolvedAt, boardAt(10))
+		}
+		if len(e.Cells) != 2 {
+			t.Fatalf("cells = %d, want 2", len(e.Cells))
+		}
+		a, b := e.Cells[0], e.Cells[1]
+		if a.SolvedAt == nil || !a.SolvedAt.Equal(boardAt(10)) || a.Minute != 10 || a.Wrong != 2 || a.Pending != 0 {
+			t.Errorf("cell A = %s, want solved at minute 10 after 2 wrong", cellString(a))
+		}
+		if b.SolvedAt != nil || b.Wrong != 2 || b.Minute != 0 {
+			t.Errorf("cell B = %s, want unsolved with 2 wrong", cellString(b))
+		}
+	})
+}
+
+// A hidden question is neither on the grid nor in the count, even solved.
+func TestICPCStandingsLeaveAHiddenQuestionOffTheGrid(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newICPCFixture(t, ctx, 20)
+		alice := f.participant(t, "icpc-hidden", 0)
+		f.answerAt(t, alice, f.hidden, 1, true, boardAt(3))
+		f.answerAt(t, alice, f.b, 1, true, boardAt(4))
+
+		e := f.standings(t, leaderboard.Query{Cutoff: boardAt(60)})["icpc-hidden"]
+		if e.Solved != 1 || e.Penalty != 4 || len(e.Cells) != 2 || e.Cells[0].SolvedAt != nil || e.Cells[1].Minute != 4 {
+			t.Errorf("entry = %+v, want only B solved, at minute 4, on a grid of A and B", e)
+		}
+		n, err := NewLeaderboard(testPool).VisibleQuestions(ctx, f.contest)
+		if err != nil || n != 2 {
+			t.Errorf("VisibleQuestions() = %d, %v, want 2", n, err)
+		}
+	})
+}
+
+// Pending attempts are counted only when the query asks, over [From, Until),
+// and only on a question not solved before the cutoff; nothing after the
+// cutoff moves solved, penalty or a cell's solve — not even a correct answer.
+func TestICPCStandingsCountPendingAttemptsInTheWindowOnUnsolvedQuestions(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newICPCFixture(t, ctx, 20)
+		bob := f.participant(t, "icpc-bob", 0)
+		f.answerAt(t, bob, f.a, 1, true, boardAt(30))
+		f.answerAt(t, bob, f.a, 2, false, boardAt(70)) // after its solve: never pending
+		f.answerAt(t, bob, f.b, 1, false, boardAt(40))
+		f.answerAt(t, bob, f.b, 2, false, boardAt(60)) // exactly at the freeze: pending
+		f.answerAt(t, bob, f.b, 3, true, boardAt(65))  // correct, still only a count
+		f.answerAt(t, bob, f.b, 4, false, boardAt(90)) // exactly at Until: not yet
+
+		cutoff := boardAt(60)
+		frozen := f.standings(t, leaderboard.Query{
+			Cutoff: cutoff, Pending: &leaderboard.Window{From: cutoff, Until: boardAt(90)},
+		})["icpc-bob"]
+		if frozen.Solved != 1 || frozen.Penalty != 30 || frozen.LastSolvedAt == nil || !frozen.LastSolvedAt.Equal(boardAt(30)) {
+			t.Errorf("frozen entry = %+v, want solved 1, penalty 30, last solve at minute 30", frozen)
+		}
+		if len(frozen.Cells) != 2 {
+			t.Fatalf("cells = %d, want 2", len(frozen.Cells))
+		}
+		if a := frozen.Cells[0]; a.Pending != 0 || a.SolvedAt == nil {
+			t.Errorf("cell A = %s, want solved without pending", cellString(a))
+		}
+		if b := frozen.Cells[1]; b.SolvedAt != nil || b.Minute != 0 || b.Wrong != 1 || b.Pending != 2 {
+			t.Errorf("cell B = %s, want unsolved, 1 wrong before the freeze, 2 pending", cellString(b))
+		}
+
+		unasked := f.standings(t, leaderboard.Query{Cutoff: cutoff})["icpc-bob"]
+		for _, c := range unasked.Cells {
+			if c.Pending != 0 {
+				t.Errorf("cell %s carries pending attempts nobody asked for", cellString(c))
+			}
+		}
+	})
+}
+
+// The order and the cut match the ranking: more solved first, then less
+// penalty, then the earlier last solve — so LIMIT never cuts the top.
+func TestICPCStandingsCutTheListBelowTheTopOfTheTable(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newICPCFixture(t, ctx, 20)
+		none := f.participant(t, "icpc-none", 0)
+		f.answerAt(t, none, f.a, 1, false, boardAt(1))
+		slow := f.participant(t, "icpc-slow", 0)
+		f.answerAt(t, slow, f.a, 1, true, boardAt(50))
+		fast := f.participant(t, "icpc-fast", 0)
+		f.answerAt(t, fast, f.a, 1, true, boardAt(40))
+		two := f.participant(t, "icpc-two", 0)
+		f.answerAt(t, two, f.a, 1, true, boardAt(55))
+		f.answerAt(t, two, f.b, 1, true, boardAt(59))
+		banned := f.participant(t, "icpc-banned", 0)
+		f.answerAt(t, banned, f.a, 1, true, boardAt(1))
+		f.answerAt(t, banned, f.b, 1, true, boardAt(2))
+		exec(t, ctx, `UPDATE registrations SET status = 'disqualified' WHERE id = $1`, banned)
+
+		repo := NewLeaderboard(testPool)
+		entries, err := repo.Standings(ctx, leaderboard.Query{
+			ContestID: f.contest, Cutoff: boardAt(60), Scoring: contests.ScoringICPC, Limit: 2,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 2 || entries[0].Login != "icpc-two" || entries[1].Login != "icpc-fast" {
+			t.Errorf("order = %+v, want icpc-two, icpc-fast", entries)
+		}
+
+		staff := f.standings(t, leaderboard.Query{Cutoff: boardAt(60), IncludeDisqualified: true})
+		if e, ok := staff["icpc-banned"]; !ok || !e.Disqualified || e.Solved != 2 {
+			t.Errorf("staff entry = %+v, %v, want the disqualified row with 2 solved", e, ok)
 		}
 	})
 }

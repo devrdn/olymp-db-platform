@@ -32,6 +32,10 @@ type boardStandings struct {
 	entries  []leaderboard.Entry
 }
 
+func (s *boardStandings) VisibleQuestions(context.Context, uuid.UUID) (int, error) {
+	return 0, nil
+}
+
 func (s *boardStandings) Standings(_ context.Context, q leaderboard.Query) ([]leaderboard.Entry, error) {
 	var out []leaderboard.Entry
 	for _, e := range s.entries {

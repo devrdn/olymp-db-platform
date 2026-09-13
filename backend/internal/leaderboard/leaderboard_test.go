@@ -80,3 +80,41 @@ func TestDecideRefusesADraft(t *testing.T) {
 		t.Errorf("Decide() = %v, want ErrNotFound", err)
 	}
 }
+
+// A cell's state is decided by what it holds, in the design's order: a solve
+// before the cutoff wins, attempts waiting since the freeze come next, then
+// wrong attempts, and a question nobody touched is untried.
+func TestCellStateFollowsWhatTheCellHolds(t *testing.T) {
+	cases := []struct {
+		name string
+		cell leaderboard.Cell
+		want string
+	}{
+		{"nothing", leaderboard.Cell{}, leaderboard.CellUntried},
+		{"wrong attempts only", leaderboard.Cell{Wrong: 2}, leaderboard.CellFailed},
+		{"solved after wrong attempts", leaderboard.Cell{SolvedAt: at(12), Wrong: 2}, leaderboard.CellSolved},
+		{"attempts since the freeze", leaderboard.Cell{Pending: 1}, leaderboard.CellPending},
+		{"wrong before the freeze, attempts since", leaderboard.Cell{Wrong: 3, Pending: 2}, leaderboard.CellPending},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cell.State(); got != tc.want {
+				t.Errorf("State() = %s, want %s", got, tc.want)
+			}
+		})
+	}
+	if got := (leaderboard.Cell{SolvedAt: at(12), Wrong: 2}).SolvedOnAttempt(); got != 3 {
+		t.Errorf("SolvedOnAttempt() = %d, want 3", got)
+	}
+}
+
+// A question on the grid is named by its position among the visible ones,
+// never by an identifier, and the names do not run out after Z.
+func TestQuestionLetterNamesAQuestionByItsPosition(t *testing.T) {
+	cases := map[int]string{0: "A", 1: "B", 25: "Z", 26: "AA", 27: "AB", 701: "ZZ", 702: "AAA"}
+	for position, want := range cases {
+		if got := leaderboard.QuestionLetter(position); got != want {
+			t.Errorf("QuestionLetter(%d) = %q, want %q", position, got, want)
+		}
+	}
+}

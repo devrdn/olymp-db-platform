@@ -109,3 +109,66 @@ func TestLabelFollowsTheContestsChoiceAndHidesADeletedAccount(t *testing.T) {
 		t.Errorf("deleted account label = %q, want empty", got)
 	}
 }
+
+func icpcEntry(login string, solved, penalty int, last *time.Time, cells ...leaderboard.Cell) leaderboard.Entry {
+	return leaderboard.Entry{
+		Registration: uuid.New(), Login: login, Solved: solved, Penalty: penalty,
+		LastSolvedAt: last, Cells: cells,
+	}
+}
+
+func solvedCell(at *time.Time) leaderboard.Cell { return leaderboard.Cell{SolvedAt: at} }
+
+// ICPC: more solved first, then less penalty; the same solved and penalty
+// share a place (1, 1, 3) whenever the last solve came. Points, which are
+// zero in this mode, decide nothing even when a row carries some.
+func TestRankInICPCModeSharesAPlaceForEqualSolvedAndPenalty(t *testing.T) {
+	fewer := icpcEntry("fewer", 1, 5, at(5))
+	fewer.Points = 100
+
+	rows := leaderboard.Rank(contests.ScoringICPC, []leaderboard.Entry{
+		icpcEntry("tie-late", 2, 50, at(40)),
+		fewer,
+		icpcEntry("tie-early", 2, 50, at(30)),
+		icpcEntry("less-penalty", 2, 40, at(50)),
+		icpcEntry("nothing", 0, 0, nil),
+	})
+
+	got := summary(rows)
+	want := []string{"less-penalty:1", "tie-early:2", "tie-late:2", "fewer:4", "nothing:5"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order = %v, want %v", got, want)
+		}
+	}
+}
+
+// The first solver of a question is the earliest solve among the rows that are
+// not disqualified: the staff table lists the disqualified, and their solve
+// must not take the mark from somebody who is still in the contest.
+func TestRankInICPCModeMarksTheFirstSolverAmongTheNotDisqualified(t *testing.T) {
+	banned := icpcEntry("banned", 1, 1, at(1), solvedCell(at(1)), leaderboard.Cell{})
+	banned.Disqualified = true
+	early := icpcEntry("early", 2, 35, at(30), solvedCell(at(5)), solvedCell(at(30)))
+	late := icpcEntry("late", 1, 10, at(10), solvedCell(at(10)), leaderboard.Cell{Wrong: 4})
+	entries := []leaderboard.Entry{banned, late, early}
+
+	rows := leaderboard.Rank(contests.ScoringICPC, entries)
+
+	first := map[string][]bool{}
+	for _, r := range rows {
+		for _, c := range r.Cells {
+			first[r.Login] = append(first[r.Login], c.First)
+		}
+	}
+	want := map[string][]bool{"banned": {false, false}, "early": {true, true}, "late": {false, false}}
+	for login, marks := range want {
+		if len(first[login]) != len(marks) || first[login][0] != marks[0] || first[login][1] != marks[1] {
+			t.Errorf("%s first marks = %v, want %v", login, first[login], marks)
+		}
+	}
+	// The mark is the ranking's, not storage's: the entries given are untouched.
+	if entries[2].Cells[0].First {
+		t.Error("Rank wrote the first mark into the entries it was given")
+	}
+}

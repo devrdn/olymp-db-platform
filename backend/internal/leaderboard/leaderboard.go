@@ -104,6 +104,87 @@ type Entry struct {
 	// FinalAt is the first correct answer to a final question, which decides
 	// the winner in winner mode.
 	FinalAt *time.Time
+
+	// The rest is ICPC's (contests.ScoringICPC) and zero in every other mode,
+	// where Solved still counts every question but here counts only the
+	// visible ones the grid shows.
+	//
+	// Penalty is the minutes the solved questions cost: each one's solving
+	// minute plus the contest's penalty for every wrong attempt before it.
+	Penalty int
+	// LastSolvedAt is the latest solve, which orders rows sharing a place.
+	LastSolvedAt *time.Time
+	// Cells hold one cell per visible question, in the questions' order.
+	Cells []Cell
+}
+
+// The states of a cell on the ICPC grid.
+const (
+	// CellSolved is a question answered correctly before the cutoff.
+	CellSolved = "solved"
+	// CellFailed is a question with only wrong attempts before the cutoff.
+	CellFailed = "failed"
+	// CellPending is a frozen table's question that was not solved before the
+	// freeze and has been attempted since. It tells how many attempts there
+	// were and nothing about them.
+	CellPending = "pending"
+	// CellUntried is a question with nothing to show.
+	CellUntried = "untried"
+)
+
+// Cell is one registration's record on one visible question.
+type Cell struct {
+	// SolvedAt is the first correct answer before the cutoff.
+	SolvedAt *time.Time
+	// Minute is the whole minutes, rounded down, from the registration's start
+	// to SolvedAt. Zero when the question is not solved.
+	Minute int
+	// Wrong counts the wrong attempts before the cutoff — only those before
+	// SolvedAt when the question is solved, since nothing after a solve costs.
+	Wrong int
+	// Pending counts the attempts inside Query.Pending. Storage fills it only
+	// when the query asked, and only for a question not solved before the
+	// cutoff.
+	Pending int
+	// First marks the earliest solve of this question among the rows that are
+	// not disqualified. Rank sets it; storage never does.
+	First bool
+}
+
+// State names what the cell shows.
+//
+// A solve is checked first because a cell cut off at the freeze carries a
+// pending count only when the question was not solved by then; pending comes
+// before failed because a frozen table must not say that attempts made since
+// the freeze were wrong — the wrong count before the freeze travels with it.
+func (c Cell) State() string {
+	switch {
+	case c.SolvedAt != nil:
+		return CellSolved
+	case c.Pending > 0:
+		return CellPending
+	case c.Wrong > 0:
+		return CellFailed
+	default:
+		return CellUntried
+	}
+}
+
+// SolvedOnAttempt is the attempt a solved question was solved with: every
+// attempt before the first correct one was wrong.
+func (c Cell) SolvedOnAttempt() int {
+	return c.Wrong + 1
+}
+
+// QuestionLetter names a visible question by its zero-based position among
+// the visible questions: A, B, … Z, then AA, AB, … as a spreadsheet names
+// its columns. A question on the table is never named by its identifier.
+func QuestionLetter(position int) string {
+	var name []byte
+	for n := position + 1; n > 0; n = (n - 1) / 26 {
+		name = append([]byte{byte('A' + (n-1)%26)}, name...)
+	}
+	return string(name)
 }
 
 // Row is an entry with its place.
