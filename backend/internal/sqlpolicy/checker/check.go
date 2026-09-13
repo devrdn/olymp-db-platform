@@ -387,10 +387,13 @@ func (c *Checker) functionAllowed(call *pg.FuncCall) error {
 	if _, allowed := c.functions[name]; !allowed {
 		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeFunctionNotSupported, Subject: name}
 	}
-	// On the list is not the same as unbounded: the functions that build a
-	// value or a series from a number are allowed only with that number
-	// written in the query and within a bound (generators.go). Checked
-	// whatever the list holds, so an operator extending it lifts no bound.
+	// A first line against the functions that build a value, or a series of
+	// rows, from a size: a constant size plainly too large is refused here so
+	// the participant sees it at once, rather than after the query runs and
+	// the game cluster's per-process memory limit stops it (generators.go).
+	// Anything the checker cannot read as a constant is admitted and left to
+	// that limit. Run whatever the allow-list holds, so an operator extending
+	// it does not lose the first line.
 	return sizeAllowed(name, call)
 }
 
