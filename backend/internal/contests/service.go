@@ -513,11 +513,10 @@ func checkRunningChange(current, updated Contest) error {
 		// it is free to change: that is a choice about names, not results.
 		return fmt.Errorf("%w: the leaderboard freeze cannot change while it runs", ErrNotEditable)
 	case current.ICPCPenaltyMin != updated.ICPCPenaltyMin:
-		// The penalty is applied per submission, at the moment of answering,
-		// exactly like the scoring mode itself (whose own change is already
-		// refused above): moving it mid-run would make earlier answers in the
-		// same contest disagree with later ones about how much a wrong
-		// attempt cost, for a reason no participant could see.
+		// The ICPC penalty is not stored with any submission: it is applied
+		// when the table is read, to every wrong attempt at once. Changing it
+		// mid-run would retroactively rescore everybody's penalty time, and
+		// could reorder a table participants have already seen.
 		return fmt.Errorf("%w: the ICPC penalty cannot change while it runs", ErrNotEditable)
 	}
 	return nil

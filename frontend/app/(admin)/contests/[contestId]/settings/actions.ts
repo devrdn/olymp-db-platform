@@ -53,9 +53,11 @@ function moment(value: FormDataEntryValue | null): string | null {
 /**
  * The contest's own fields.
  *
- * `PATCH` on the wire, a full replacement in meaning: the endpoint takes every
- * field and writes every field, so the form has to submit all of them. Sending
- * a subset would clear whatever it left out.
+ * `PATCH` in meaning as well as on the wire: a field the body leaves out is
+ * left unchanged by the endpoint. The fields this form can always edit are
+ * sent every time; a field locked once the contest starts is omitted when its
+ * control submitted nothing, and its absence means "unchanged", never
+ * "cleared".
  *
  * Two different freezes apply, and the form obeys both. Settings stay editable
  * while the contest runs — extending the window after a power cut is exactly
