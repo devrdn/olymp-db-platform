@@ -294,7 +294,7 @@ func TestAnAnswerTooLargeToReadArrivesAsSuch(t *testing.T) {
 	limits.MaxBytes = 64 << 10
 	client, database := serving(t, limits, checker.NewChecker())
 
-	_, err := client.Run(t.Context(), ask(database, `SELECT repeat('x', 8 * 1024 * 1024)`))
+	_, err := client.Run(t.Context(), ask(database, `SELECT string_agg(repeat('x', 10000), '') FROM generate_series(1, 1000)`))
 	if !errors.Is(err, queryrunner.ErrResultTooLarge) {
 		t.Fatalf("error = %v, want ErrResultTooLarge", err)
 	}
@@ -363,7 +363,7 @@ func TestTheColumnTypesAndTheDurationCrossTheWire(t *testing.T) {
 // plausible-looking duration, so this pins the magnitude against something
 // the test measured itself.
 //
-// Counting two million rows server-side is tens of milliseconds and cannot be
+// Counting ten million rows server-side is tens of milliseconds and cannot be
 // less than one; the whole call is the ceiling, because the answer was carried
 // by it. Nanoseconds mistaken for microseconds put the value a thousand times
 // over that ceiling, and microseconds mistaken for nanoseconds put it a
@@ -372,14 +372,14 @@ func TestTheDurationKeepsItsUnitAcrossTheWire(t *testing.T) {
 	client, database := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
 	before := time.Now()
-	result, err := client.Run(t.Context(), ask(database, `SELECT count(*) FROM generate_series(1, 2000000)`))
+	result, err := client.Run(t.Context(), ask(database, `SELECT count(*) FROM generate_series(1, 100000) a, generate_series(1, 100) b`))
 	whole := time.Since(before)
 	if err != nil {
 		t.Fatalf("running: %v", err)
 	}
 
 	if result.Duration < time.Millisecond {
-		t.Fatalf("counting two million rows was reported as %v; the duration arrived "+
+		t.Fatalf("counting ten million rows was reported as %v; the duration arrived "+
 			"in a smaller unit than the contract's microseconds", result.Duration)
 	}
 	if result.Duration > whole {

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
@@ -86,6 +87,61 @@ func TestAnEmptyQueueIsAllowedButANegativeOneIsNot(t *testing.T) {
 	if _, err := LoadRunner(); err == nil {
 		t.Fatal("a negative queue was accepted")
 	}
+}
+
+// The game cluster runs in a container with a memory limit, and one query can,
+// worst case, make a backend build close to PostgreSQL's ~1 GiB per-value
+// ceiling — a string_agg or array_agg of the largest bounded value the
+// validator admits, over the longest series it admits. QUERY_CONCURRENT of
+// those at once must fit the container, or the Linux OOM killer takes a
+// backend and the postmaster restarts every session. When the container's
+// limit is declared (GAME_DB_MEMORY_BYTES), the runner refuses to start with
+// a concurrency the limit cannot hold, so the misconfiguration is a failed
+// deploy rather than a cluster that flaps under load.
+func TestConcurrencyMustFitTheDeclaredGameClusterMemory(t *testing.T) {
+	t.Run("a limit that cannot hold the concurrency is refused", func(t *testing.T) {
+		setRunnerRequired(t)
+		t.Setenv("QUERY_CONCURRENT", "8")
+		// Two gibibytes cannot hold eight worst-case queries plus the cluster's
+		// own shared memory — this is the size B1 found flapping.
+		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(2<<30, 10))
+
+		if _, err := LoadRunner(); err == nil {
+			t.Fatal("a runner started with a concurrency its game cluster cannot hold")
+		}
+	})
+
+	t.Run("a limit with room is accepted", func(t *testing.T) {
+		setRunnerRequired(t)
+		t.Setenv("QUERY_CONCURRENT", "8")
+		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(10<<30, 10))
+
+		if _, err := LoadRunner(); err != nil {
+			t.Fatalf("a runner with ample game-cluster memory was refused: %v", err)
+		}
+	})
+
+	t.Run("lowering the concurrency lets a smaller limit through", func(t *testing.T) {
+		setRunnerRequired(t)
+		t.Setenv("QUERY_CONCURRENT", "1")
+		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(3<<30, 10))
+
+		if _, err := LoadRunner(); err != nil {
+			t.Fatalf("one query in three gibibytes was refused: %v", err)
+		}
+	})
+
+	t.Run("without the limit declared the check does not run", func(t *testing.T) {
+		// The limit is optional: a development runner against a cluster with no
+		// cgroup limit has nothing to check against, and must still start.
+		setRunnerRequired(t)
+		t.Setenv("QUERY_CONCURRENT", "64")
+		t.Setenv("GAME_DB_MEMORY_BYTES", "")
+
+		if _, err := LoadRunner(); err != nil {
+			t.Fatalf("a runner with no declared game-cluster memory was refused: %v", err)
+		}
+	})
 }
 
 func TestTheAllowListCanBeExtendedFromTheEnvironment(t *testing.T) {

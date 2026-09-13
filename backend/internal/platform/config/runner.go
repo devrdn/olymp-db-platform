@@ -61,7 +61,45 @@ type Runner struct {
 	// ExtraFunctions are functions an operator has added to the allow-list
 	// after a pilot, without waiting for a release (section 5, point 3).
 	ExtraFunctions []string
+
+	// GameDBMemoryBytes is the memory limit of the game cluster's container,
+	// in bytes, when the deployment declares it (GAME_DB_MEMORY_BYTES). It is
+	// not used to run anything — it exists so the runner can refuse to start
+	// with a concurrency the cluster cannot hold. Zero means undeclared, which
+	// a development cluster with no cgroup limit is, and then the check does
+	// not run.
+	GameDBMemoryBytes int64
 }
+
+// The game cluster's memory is the bound the whole admission-control story
+// rests on, and these two numbers turn QUERY_CONCURRENT into a demand on it.
+//
+// perQueryMemoryBytes is what one query may need at its worst. The SQL policy
+// bounds a single manufactured value to kilobytes, but it deliberately does
+// not bound a generator-fed aggregate — string_agg or array_agg of the
+// longest bounded value over the longest bounded series — and that reaches
+// PostgreSQL's ~1 GiB ceiling on any one value (measured at ~0.95 GiB on the
+// test cluster). Bounding the aggregate too would mean summing memory across
+// the plan, which is a memory accountant the service deliberately does not
+// build; the honest figure is therefore the ceiling itself.
+//
+// reservedMemoryBytes is what the cluster needs before any query runs:
+// shared_buffers, the parallel-query shared memory (shm_size, 256 MiB), the
+// postmaster and the per-backend base. One gibibyte is comfortably above the
+// sum for the pilot's settings.
+//
+// So a container holds QUERY_CONCURRENT × perQueryMemoryBytes +
+// reservedMemoryBytes at worst, and GAME_DB_MEMORY must be at least that. At
+// the default concurrency of eight that is nine gibibytes, which is why
+// deploy/.env.example sets GAME_DB_MEMORY accordingly and an operator who
+// lowers one lowers the other. The numbers are worst-case on purpose: the
+// point is that the OOM killer never fires, so a runaway query fails with
+// "out of memory" for its author rather than crashing every participant's
+// session.
+const (
+	perQueryMemoryBytes = 1 << 30
+	reservedMemoryBytes = 1 << 30
+)
 
 // LoadRunner reads the Query Runner's configuration from the environment.
 func LoadRunner() (Runner, error) {
@@ -112,6 +150,10 @@ func LoadRunner() (Runner, error) {
 		}
 	}
 
+	if cfg.GameDBMemoryBytes, err = int64Env("GAME_DB_MEMORY_BYTES", 0); err != nil {
+		return Runner{}, err
+	}
+
 	// Each of these turns a limit into no limit at all, and a zero from a
 	// mistyped variable is exactly how that happens. Refusing at startup is
 	// the difference between a misconfiguration and an olympiad that quietly
@@ -130,6 +172,21 @@ func LoadRunner() (Runner, error) {
 	}
 	if cfg.Deadline <= 0 {
 		return Runner{}, fmt.Errorf("QUERY_DEADLINE must be positive, got %s", cfg.Deadline)
+	}
+	// A concurrency the game cluster's memory cannot hold is a cluster that
+	// flaps under load rather than degrades: the OOM killer takes one backend
+	// and the postmaster restarts every session. Caught here when the limit
+	// is declared, so it is a failed deploy and not a discovery during a
+	// contest. Undeclared (a development cluster with no cgroup limit) leaves
+	// nothing to check against.
+	if cfg.GameDBMemoryBytes > 0 {
+		need := int64(cfg.Concurrent)*perQueryMemoryBytes + reservedMemoryBytes
+		if need > cfg.GameDBMemoryBytes {
+			return Runner{}, fmt.Errorf(
+				"QUERY_CONCURRENT=%d needs %d bytes of game-cluster memory (%d per query plus %d reserved), "+
+					"but GAME_DB_MEMORY_BYTES is %d: raise GAME_DB_MEMORY or lower QUERY_CONCURRENT",
+				cfg.Concurrent, need, perQueryMemoryBytes, reservedMemoryBytes, cfg.GameDBMemoryBytes)
+		}
 	}
 	return cfg, nil
 }
