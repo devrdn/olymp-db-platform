@@ -62,6 +62,8 @@ const PAIRS = [
   ["you", "you-wash", TEXT],
   // The "You" label is page-ground text on a solid --you pill.
   ["bg", "you", TEXT],
+  // The staff table's "Disqualified" pill.
+  ["bg", "bad", TEXT],
   ["you", "bg", TEXT],
   ["id-1", "id-1-wash", TEXT],
   ["id-1", "bg", TEXT],
