@@ -88,6 +88,9 @@ type leaderboardResponse struct {
 	Title   string `json:"title"`
 	// FrozenAt is set while the table is frozen.
 	FrozenAt string `json:"frozen_at,omitempty"`
+	// EndsAt lets a frozen table say whether the contest is still going. The
+	// window is not a secret: the contest lists already show it.
+	EndsAt string `json:"ends_at,omitempty"`
 	// GeneratedAt is when the table was computed, never when anybody last
 	// answered: during a freeze the second would say that something changed.
 	GeneratedAt string           `json:"generated_at"`
@@ -219,8 +222,9 @@ func (h *LeaderboardHandler) toResponse(r *http.Request, view leaderboard.View, 
 	lang := negotiateLang(r, c.LanguageCodes(), c.DefaultLanguage(), h.defaultLocale)
 	out := leaderboardResponse{
 		State: view.State, Scoring: c.Scoring, Title: c.Translations[lang].Title,
-		FrozenAt: formatTime(view.FrozenAt), GeneratedAt: view.GeneratedAt.UTC().Format(timeLayout),
-		Truncated: view.Truncated, Rows: make([]leaderboardRow, 0, len(view.Rows)),
+		FrozenAt: formatTime(view.FrozenAt), EndsAt: formatTime(c.EndsAt),
+		GeneratedAt: view.GeneratedAt.UTC().Format(timeLayout),
+		Truncated:   view.Truncated, Rows: make([]leaderboardRow, 0, len(view.Rows)),
 	}
 	// The rows are the shared cached computation: read, never written.
 	for _, row := range view.Rows {
