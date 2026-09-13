@@ -158,19 +158,23 @@ type ContestResponse struct {
 	// contests.ProgressionFree or contests.ProgressionSequential.
 	Progression string `json:"progression"`
 	// Scoring decides how a result is derived from submissions (§6.1.1):
-	// contests.ScoringPoints or contests.ScoringWinner.
-	Scoring      string                         `json:"scoring"`
-	Timing       string                         `json:"timing"`
-	DurationMin  *int                           `json:"duration_min,omitempty"`
-	StartsAt     string                         `json:"starts_at,omitempty"`
-	EndsAt       string                         `json:"ends_at,omitempty"`
-	AllowedCIDRs []string                       `json:"allowed_cidrs"`
-	Settings     SettingsResponse               `json:"settings"`
-	Leaderboard  LeaderboardSettingsResponse    `json:"leaderboard"`
-	Languages    []LanguageResponse             `json:"languages"`
-	Translations map[string]TranslationResponse `json:"translations"`
-	CreatedAt    string                         `json:"created_at"`
-	UpdatedAt    string                         `json:"updated_at"`
+	// contests.ScoringPoints, contests.ScoringWinner or contests.ScoringICPC.
+	Scoring     string `json:"scoring"`
+	Timing      string `json:"timing"`
+	DurationMin *int   `json:"duration_min,omitempty"`
+	StartsAt    string `json:"starts_at,omitempty"`
+	EndsAt      string `json:"ends_at,omitempty"`
+	// ICPCPenaltyMin is the per-attempt penalty, in minutes, ICPC scoring
+	// applies to a solved question — meaningless in every other mode, but
+	// always present (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md).
+	ICPCPenaltyMin int                            `json:"icpc_penalty_min"`
+	AllowedCIDRs   []string                       `json:"allowed_cidrs"`
+	Settings       SettingsResponse               `json:"settings"`
+	Leaderboard    LeaderboardSettingsResponse    `json:"leaderboard"`
+	Languages      []LanguageResponse             `json:"languages"`
+	Translations   map[string]TranslationResponse `json:"translations"`
+	CreatedAt      string                         `json:"created_at"`
+	UpdatedAt      string                         `json:"updated_at"`
 }
 
 // LeaderboardSettingsResponse is how the contest's table is shown.
@@ -235,11 +239,16 @@ type ContestSummary struct {
 	Status       string `json:"status"`
 	Enrollment   string `json:"enrollment"`
 	QuestionMode string `json:"question_mode"`
-	Lang         string `json:"lang"`
-	Title        string `json:"title"`
-	Description  string `json:"description,omitempty"`
-	StartsAt     string `json:"starts_at,omitempty"`
-	EndsAt       string `json:"ends_at,omitempty"`
+	// Scoring and ICPCPenaltyMin let the game screen tell ICPC scoring apart
+	// from points and winner before it renders a question (design doc: no
+	// points shown, a penalty note under the question list).
+	Scoring        string `json:"scoring"`
+	ICPCPenaltyMin int    `json:"icpc_penalty_min"`
+	Lang           string `json:"lang"`
+	Title          string `json:"title"`
+	Description    string `json:"description,omitempty"`
+	StartsAt       string `json:"starts_at,omitempty"`
+	EndsAt         string `json:"ends_at,omitempty"`
 	// Enrolled says whether the caller is registered for this contest, and
 	// only ever about the caller: it is filled from the authenticated
 	// identity, never from anything the request carries. Without it a
@@ -250,17 +259,18 @@ type ContestSummary struct {
 
 func toContestResponse(c contests.Contest) ContestResponse {
 	out := ContestResponse{
-		ID:           c.ID.String(),
-		Status:       c.Status,
-		Enrollment:   c.Enrollment,
-		QuestionMode: c.QuestionMode,
-		Progression:  c.Progression,
-		Scoring:      c.Scoring,
-		Timing:       c.Timing,
-		DurationMin:  c.DurationMin,
-		StartsAt:     formatTime(c.StartsAt),
-		EndsAt:       formatTime(c.EndsAt),
-		AllowedCIDRs: make([]string, 0, len(c.AllowedCIDRs)),
+		ID:             c.ID.String(),
+		Status:         c.Status,
+		Enrollment:     c.Enrollment,
+		QuestionMode:   c.QuestionMode,
+		Progression:    c.Progression,
+		Scoring:        c.Scoring,
+		Timing:         c.Timing,
+		DurationMin:    c.DurationMin,
+		StartsAt:       formatTime(c.StartsAt),
+		EndsAt:         formatTime(c.EndsAt),
+		ICPCPenaltyMin: c.ICPCPenaltyMin,
+		AllowedCIDRs:   make([]string, 0, len(c.AllowedCIDRs)),
 		Settings: SettingsResponse{
 			EnrollmentDeadline:   formatTime(c.Settings.EnrollmentDeadline),
 			QueryRateLimitPerMin: c.Settings.QueryRateLimitPerMin,
@@ -292,15 +302,17 @@ func (h *ContestsHandler) toSummary(r *http.Request, c contests.Contest) Contest
 	lang := h.negotiate(r, c)
 	translation := c.Translations[lang]
 	return ContestSummary{
-		ID:           c.ID.String(),
-		Status:       c.Status,
-		Enrollment:   c.Enrollment,
-		QuestionMode: c.QuestionMode,
-		Lang:         lang,
-		Title:        translation.Title,
-		Description:  translation.Description,
-		StartsAt:     formatTime(c.StartsAt),
-		EndsAt:       formatTime(c.EndsAt),
+		ID:             c.ID.String(),
+		Status:         c.Status,
+		Enrollment:     c.Enrollment,
+		QuestionMode:   c.QuestionMode,
+		Scoring:        c.Scoring,
+		ICPCPenaltyMin: c.ICPCPenaltyMin,
+		Lang:           lang,
+		Title:          translation.Title,
+		Description:    translation.Description,
+		StartsAt:       formatTime(c.StartsAt),
+		EndsAt:         formatTime(c.EndsAt),
 	}
 }
 
@@ -433,17 +445,22 @@ type contestRequest struct {
 	// empty string on update means "leave it alone" (see UpdateCommand's
 	// doc), and on create means "use the domain's default" (see
 	// CreateCommand's doc) — neither is a value an organizer can mean to set.
-	Progression  string                         `json:"progression"`
-	Scoring      string                         `json:"scoring"`
-	Timing       string                         `json:"timing"`
-	DurationMin  *int                           `json:"duration_min"`
-	StartsAt     *string                        `json:"starts_at"`
-	EndsAt       *string                        `json:"ends_at"`
-	AllowedCIDRs []string                       `json:"allowed_cidrs"`
-	Settings     *SettingsResponse              `json:"settings"`
-	Leaderboard  *leaderboardRequest            `json:"leaderboard"`
-	Languages    []LanguageResponse             `json:"languages"`
-	Translations map[string]TranslationResponse `json:"translations"`
+	Progression string  `json:"progression"`
+	Scoring     string  `json:"scoring"`
+	Timing      string  `json:"timing"`
+	DurationMin *int    `json:"duration_min"`
+	StartsAt    *string `json:"starts_at"`
+	EndsAt      *string `json:"ends_at"`
+	// ICPCPenaltyMin follows DurationMin's own rule: nil on update means
+	// "leave it alone", and nil on create means "use the domain's default"
+	// (contests.DefaultICPCPenaltyMin) — a whole number of minutes is the
+	// only value an organizer can mean to set.
+	ICPCPenaltyMin *int                           `json:"icpc_penalty_min"`
+	AllowedCIDRs   []string                       `json:"allowed_cidrs"`
+	Settings       *SettingsResponse              `json:"settings"`
+	Leaderboard    *leaderboardRequest            `json:"leaderboard"`
+	Languages      []LanguageResponse             `json:"languages"`
+	Translations   map[string]TranslationResponse `json:"translations"`
 }
 
 func (h *ContestsHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -491,6 +508,7 @@ func (h *ContestsHandler) create(w http.ResponseWriter, r *http.Request) {
 		DurationMin:          req.DurationMin,
 		StartsAt:             starts,
 		EndsAt:               ends,
+		ICPCPenaltyMin:       req.ICPCPenaltyMin,
 		AllowedCIDRs:         cidrs,
 		Settings:             settings,
 		Languages:            toDomainLanguages(req.Languages),
@@ -542,16 +560,17 @@ func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cmd := contests.UpdateCommand{
-		ContestID:    id,
-		Enrollment:   req.Enrollment,
-		QuestionMode: req.QuestionMode,
-		Progression:  req.Progression,
-		Scoring:      req.Scoring,
-		Timing:       req.Timing,
-		DurationMin:  req.DurationMin,
-		StartsAt:     starts,
-		EndsAt:       ends,
-		AllowedCIDRs: cidrs,
+		ContestID:      id,
+		Enrollment:     req.Enrollment,
+		QuestionMode:   req.QuestionMode,
+		Progression:    req.Progression,
+		Scoring:        req.Scoring,
+		Timing:         req.Timing,
+		DurationMin:    req.DurationMin,
+		StartsAt:       starts,
+		EndsAt:         ends,
+		ICPCPenaltyMin: req.ICPCPenaltyMin,
+		AllowedCIDRs:   cidrs,
 	}
 	if req.Settings != nil {
 		settings, err := req.settings()

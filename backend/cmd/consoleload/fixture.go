@@ -187,8 +187,10 @@ func setup(ctx context.Context, st *stores, f *fixture, source string, participa
 		StartsAt:     &starts,
 		EndsAt:       &ends,
 		CreatedBy:    owner.ID,
-		// Written straight to the repository, past the domain that defaults it.
+		// Written straight to the repository, past the domain that defaults
+		// both of these.
 		LeaderboardNames: contests.LeaderboardNamesLogin,
+		ICPCPenaltyMin:   contests.DefaultICPCPenaltyMin,
 	})
 	if err != nil {
 		return report, fmt.Errorf("create the contest: %w", err)

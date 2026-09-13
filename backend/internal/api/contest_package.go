@@ -77,6 +77,10 @@ type PackagedContest struct {
 	// which is configuration worth carrying over, not a fact about one run.
 	AllowedCIDRs []string         `json:"allowed_cidrs"`
 	Settings     PackagedSettings `json:"settings"`
+	// ICPCPenaltyMin is the per-attempt penalty ICPC scoring applies, in
+	// minutes — configuration, exactly like Scoring itself, and carried
+	// whether or not the contest currently uses that mode.
+	ICPCPenaltyMin int `json:"icpc_penalty_min"`
 	// Leaderboard is how the table is frozen and labelled — configuration.
 	// When results were revealed is a fact about one run and stays behind.
 	Leaderboard PackagedLeaderboard `json:"leaderboard"`
@@ -234,6 +238,7 @@ func toContestPackage(pkg contests.Package) ContestPackage {
 				QueryRateLimitPerMin: c.Settings.QueryRateLimitPerMin,
 				GracePeriodMin:       c.Settings.GracePeriodMin,
 			},
+			ICPCPenaltyMin: c.ICPCPenaltyMin,
 			Leaderboard: PackagedLeaderboard{
 				FreezeMin: c.LeaderboardFreezeMin,
 				Names:     c.LeaderboardNames,

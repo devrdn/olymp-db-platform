@@ -492,6 +492,37 @@ func TestUpdatingAContestPreservesUnmentionedProgressionAndScoring(t *testing.T)
 	}
 }
 
+// The ICPC scoring mode (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md):
+// icpc_penalty_min is a pointer on the wire the same way freeze_min is, so an
+// update that never mentions it leaves it alone — round-tripped here the same
+// way progression and scoring are above.
+func TestICPCPenaltyMinSurvivesARoundTripThroughTheAPI(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(),
+		`{"scoring": "icpc", "icpc_penalty_min": 15}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+
+	body := decode(t, rec)
+	if body["scoring"] != "icpc" {
+		t.Errorf("scoring = %v, want icpc", body["scoring"])
+	}
+	if body["icpc_penalty_min"] != float64(15) {
+		t.Errorf("icpc_penalty_min = %v, want 15", body["icpc_penalty_min"])
+	}
+
+	rec = f.do(http.MethodPatch, "/contests/"+c.ID.String(), `{"enrollment": "open"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if got := decode(t, rec)["icpc_penalty_min"]; got != float64(15) {
+		t.Errorf("icpc_penalty_min = %v, want it to survive an unrelated update", got)
+	}
+}
+
 func TestAMalformedNetworkIsRejected(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
