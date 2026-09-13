@@ -89,51 +89,65 @@ func TestAnEmptyQueueIsAllowedButANegativeOneIsNot(t *testing.T) {
 	}
 }
 
-// The game cluster runs in a container with a memory limit, and one query can,
-// worst case, make a backend build close to PostgreSQL's ~1 GiB per-value
-// ceiling — a string_agg or array_agg of the largest bounded value the
-// validator admits, over the longest series it admits. QUERY_CONCURRENT of
-// those at once must fit the container, or the Linux OOM killer takes a
-// backend and the postmaster restarts every session. When the container's
-// limit is declared (GAME_DB_MEMORY_BYTES), the runner refuses to start with
-// a concurrency the limit cannot hold, so the misconfiguration is a failed
-// deploy rather than a cluster that flaps under load.
+// The game cluster runs in a container whose backends have a per-process
+// memory cap (deploy ulimits.data): a query that over-allocates fails with an
+// "out of memory" ERROR in its own backend instead of tripping the container's
+// cgroup limit and the OOM killer, which would restart every session. That
+// only holds while the container is large enough to hold every backend at the
+// cap at once — QUERY_CONCURRENT queries, each a leader plus its parallel
+// workers. When the container's limit is declared (GAME_DB_MEMORY_BYTES), the
+// runner refuses to start with a concurrency it cannot hold, so the
+// misconfiguration is a failed deploy rather than a cluster that flaps.
 func TestConcurrencyMustFitTheDeclaredGameClusterMemory(t *testing.T) {
+	// The arithmetic the check enforces, stated here so the test fails if the
+	// constants drift from what the deployment is sized for.
+	perQuery := int64(PerProcessMemoryBytes) * (1 + MaxParallelWorkersPerQuery)
+
 	t.Run("a limit that cannot hold the concurrency is refused", func(t *testing.T) {
 		setRunnerRequired(t)
 		t.Setenv("QUERY_CONCURRENT", "8")
-		// Two gibibytes cannot hold eight worst-case queries plus the cluster's
-		// own shared memory — this is the size B1 found flapping.
-		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(2<<30, 10))
+		// Just below what eight queries plus the reserve need.
+		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(8*perQuery+ReservedMemoryBytes-1, 10))
 
 		if _, err := LoadRunner(); err == nil {
 			t.Fatal("a runner started with a concurrency its game cluster cannot hold")
 		}
 	})
 
-	t.Run("a limit with room is accepted", func(t *testing.T) {
+	t.Run("the limit the deployment ships is accepted", func(t *testing.T) {
 		setRunnerRequired(t)
 		t.Setenv("QUERY_CONCURRENT", "8")
-		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(10<<30, 10))
+		// Six gibibytes, the deploy default, holds eight.
+		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(6<<30, 10))
 
 		if _, err := LoadRunner(); err != nil {
-			t.Fatalf("a runner with ample game-cluster memory was refused: %v", err)
+			t.Fatalf("the shipped six-gibibyte limit was refused at concurrency eight: %v", err)
+		}
+	})
+
+	t.Run("exactly enough is accepted", func(t *testing.T) {
+		setRunnerRequired(t)
+		t.Setenv("QUERY_CONCURRENT", "8")
+		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(8*perQuery+ReservedMemoryBytes, 10))
+
+		if _, err := LoadRunner(); err != nil {
+			t.Fatalf("a limit exactly at the requirement was refused: %v", err)
 		}
 	})
 
 	t.Run("lowering the concurrency lets a smaller limit through", func(t *testing.T) {
 		setRunnerRequired(t)
 		t.Setenv("QUERY_CONCURRENT", "1")
-		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(3<<30, 10))
+		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(perQuery+ReservedMemoryBytes, 10))
 
 		if _, err := LoadRunner(); err != nil {
-			t.Fatalf("one query in three gibibytes was refused: %v", err)
+			t.Fatalf("one query at exactly its requirement was refused: %v", err)
 		}
 	})
 
 	t.Run("without the limit declared the check does not run", func(t *testing.T) {
-		// The limit is optional: a development runner against a cluster with no
-		// cgroup limit has nothing to check against, and must still start.
+		// The limit is optional: a development cluster with no cgroup limit and
+		// no ulimit has nothing to check against, and must still start.
 		setRunnerRequired(t)
 		t.Setenv("QUERY_CONCURRENT", "64")
 		t.Setenv("GAME_DB_MEMORY_BYTES", "")
