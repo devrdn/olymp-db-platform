@@ -231,6 +231,20 @@ describe("the questions panel", () => {
     });
   });
 
+  test("a value refused as not one of the options says so in a sentence, not the fallback", async () => {
+    answer.current = { kind: "refused", code: "answer_not_a_choice" };
+    render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
+
+    await submit();
+
+    await waitFor(() => {
+      const statuses = screen.getAllByRole("status");
+      const last = statuses[statuses.length - 1];
+      expect((en.errors as Record<string, string>).answer_not_a_choice).toBeTruthy();
+      expect(within(last).getByText((en.errors as Record<string, string>).answer_not_a_choice)).toBeInTheDocument();
+    });
+  });
+
   test("two questions answer independently: one closing does not touch what the other is holding", async () => {
     answer.current = {
       kind: "answer",

@@ -60,6 +60,13 @@ var (
 	// checks this, not the interface: hiding an unopened question in the UI
 	// is not what stops a direct request from answering it out of order.
 	ErrQuestionNotOpen = errors.New("this question has not opened yet")
+	// ErrNotAChoice is a value for a choice question that is not exactly one
+	// of its option identifiers. A choice question is answered by picking an
+	// option; grading free text against it would let a string that matches
+	// several options at once (an unanchored pattern, say) solve the question
+	// without choosing. Refused before grading and before any write, so it
+	// costs no attempt.
+	ErrNotAChoice = errors.New("the answer is not one of the question's options")
 )
 
 // maxAnswerRunes bounds a submitted answer.
@@ -289,6 +296,17 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 		if !open {
 			return SubmitOutcome{}, ErrQuestionNotOpen
 		}
+	}
+
+	// A choice question is answered by picking one of its options, and only
+	// an option is graded: free text would be matched against the reference
+	// answers as-is, and an unanchored pattern accepting option "b" would
+	// accept "abc" too, solving the question without choosing. Refused here,
+	// before the clock is started, before grading and before any write, so a
+	// refused value costs no attempt. The caller's rate budget was already
+	// spent on the way in (CLAUDE.md rule 13).
+	if q.Kind == KindChoice && !q.HasChoice(cmd.Value) {
+		return SubmitOutcome{}, ErrNotAChoice
 	}
 
 	participant := cmd.Participant
