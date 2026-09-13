@@ -89,6 +89,7 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
             settings: t.tabs.settings,
             game: t.tabs.game,
             databases: t.tabs.databases,
+            standings: t.tabs.leaderboard,
           }}
         />
 
@@ -210,6 +211,9 @@ async function navigation(
         // you may publish" — which is exactly the meaning `note` carries
         // everywhere else it appears.
         { href: `${base}/databases`, label: t.tabs.databases },
+        // Beside the databases, for the same reason they are here: it is read
+        // while the contest is running and after, not while it is written.
+        { href: `${base}/standings`, label: t.tabs.leaderboard },
       ],
     },
   ];
