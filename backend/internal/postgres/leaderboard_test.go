@@ -376,6 +376,29 @@ func TestICPCStandingsCountPendingAttemptsInTheWindowOnUnsolvedQuestions(t *test
 	})
 }
 
+// A registration made after the cutoff is not on a frozen ICPC table, even
+// with attempts inside the pending window: its row would say that somebody
+// joined during the freeze, and its pending count what they did since.
+func TestICPCStandingsLeaveOutARegistrationAfterTheCutoffWithPendingAttempts(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newICPCFixture(t, ctx, 20)
+		f.participant(t, "icpc-before", 0)
+		late := f.participant(t, "icpc-joined-late", 70)
+		f.answerAt(t, late, f.a, 1, false, boardAt(75))
+
+		cutoff := boardAt(60)
+		got := f.standings(t, leaderboard.Query{
+			Cutoff: cutoff, Pending: &leaderboard.Window{From: cutoff, Until: boardAt(90)},
+		})
+		if _, ok := got["icpc-joined-late"]; ok {
+			t.Errorf("a registration after the cutoff is on the frozen table: %+v", got["icpc-joined-late"])
+		}
+		if _, ok := got["icpc-before"]; !ok {
+			t.Error("a registration before the cutoff is missing")
+		}
+	})
+}
+
 // The order and the cut match the ranking: more solved first, then less
 // penalty, then the earlier last solve — so LIMIT never cuts the top.
 func TestICPCStandingsCutTheListBelowTheTopOfTheTable(t *testing.T) {
