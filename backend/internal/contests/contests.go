@@ -79,7 +79,32 @@ const (
 	// configured percentage is forbidden here, but because a contest's
 	// scoring mode may change and the setting must survive that.
 	ScoringWinner = "winner"
+	// ScoringICPC ranks a registration by how many questions it solved and,
+	// to break ties, by how much penalty time solving them cost — the way
+	// ICPC itself scores (docs/superpowers/specs/
+	// 2026-09-13-icpc-scoring-design.md). A question's own points and
+	// percentage penalty stay in the data (the mode can be switched back
+	// before the contest starts) but mean nothing while this mode is in
+	// force: Service.Submit writes points_awarded = 0 for every submission,
+	// the same way it skips the penalty in ScoringWinner, and place is
+	// decided instead by ICPCPenaltyMin applied per wrong attempt on a
+	// question that is eventually solved.
+	ScoringICPC = "icpc"
 )
+
+// DefaultICPCPenaltyMin is how many minutes one wrong attempt costs a solved
+// question in ICPC scoring, when nothing else was chosen — the migration's
+// own column default (000031), mirrored here so Service.Create and the test
+// stores can apply the identical default without hard-coding 20 twice.
+const DefaultICPCPenaltyMin = 20
+
+// maxICPCPenaltyMin bounds Contest.ICPCPenaltyMin (CLAUDE.md rule 2), matching
+// the migration's own CHECK (icpc_penalty_min BETWEEN 0 AND 240). 240 minutes
+// is already four hours of penalty for a single wrong attempt — far beyond
+// anything a real contest window would make survivable to climb back from —
+// and staying at a round, generous ceiling rather than an arbitrary one keeps
+// the domain and the schema trivially readable as the same rule.
+const maxICPCPenaltyMin = 240
 
 // Leaderboard labels: how a participant is named on a table somebody other
 // than the contest's staff reads (docs/superpowers/specs/
@@ -150,9 +175,15 @@ type Contest struct {
 	// ProgressionFree, ProgressionSequential).
 	Progression string
 	// Scoring decides how a result is derived from submissions (see
-	// ScoringPoints, ScoringWinner).
+	// ScoringPoints, ScoringWinner, ScoringICPC).
 	Scoring string
-	Timing  string
+	// ICPCPenaltyMin is how many minutes one wrong attempt costs a solved
+	// question when Scoring is ScoringICPC (§ design doc). Meaningless in
+	// every other mode but always present and always bounded, so a contest
+	// that switches back to icpc later has a value ready rather than a fresh
+	// default nobody chose.
+	ICPCPenaltyMin int
+	Timing         string
 	// DurationMin is the per-participant session length, set only for
 	// TimingIndividual.
 	DurationMin *int
@@ -371,8 +402,12 @@ func (c Contest) Validate() error {
 	if !slices.Contains([]string{ProgressionFree, ProgressionSequential}, c.Progression) {
 		return fmt.Errorf("%w: unknown progression %q", ErrInvalidContest, c.Progression)
 	}
-	if !slices.Contains([]string{ScoringPoints, ScoringWinner}, c.Scoring) {
+	if !slices.Contains([]string{ScoringPoints, ScoringWinner, ScoringICPC}, c.Scoring) {
 		return fmt.Errorf("%w: unknown scoring mode %q", ErrInvalidContest, c.Scoring)
+	}
+	if c.ICPCPenaltyMin < 0 || c.ICPCPenaltyMin > maxICPCPenaltyMin {
+		return fmt.Errorf("%w: icpc_penalty_min of %d is outside 0..%d",
+			ErrInvalidContest, c.ICPCPenaltyMin, maxICPCPenaltyMin)
 	}
 
 	switch c.Timing {
@@ -549,5 +584,6 @@ func (c Contest) auditFields() map[string]any {
 		"grace_period_min":         c.Settings.GracePeriodMin,
 		"leaderboard_freeze_min":   c.LeaderboardFreezeMin,
 		"leaderboard_names":        c.LeaderboardNames,
+		"icpc_penalty_min":         c.ICPCPenaltyMin,
 	}
 }

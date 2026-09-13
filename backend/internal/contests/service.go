@@ -202,6 +202,8 @@ type CreateCommand struct {
 	// defaults to LeaderboardNamesLogin.
 	LeaderboardFreezeMin *int
 	LeaderboardNames     string
+	// ICPCPenaltyMin is nil for the default of DefaultICPCPenaltyMin minutes.
+	ICPCPenaltyMin *int
 }
 
 // Create registers a contest and makes its author the owner.
@@ -223,6 +225,7 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (Contest, error
 
 		LeaderboardFreezeMin: cmd.LeaderboardFreezeMin,
 		LeaderboardNames:     orDefault(cmd.LeaderboardNames, LeaderboardNamesLogin),
+		ICPCPenaltyMin:       orDefaultInt(cmd.ICPCPenaltyMin, DefaultICPCPenaltyMin),
 	}
 	if err := c.Validate(); err != nil {
 		return Contest{}, err
@@ -305,6 +308,10 @@ type UpdateCommand struct {
 	LeaderboardFreezeMin   *int
 	ClearLeaderboardFreeze bool
 	LeaderboardNames       string
+	// ICPCPenaltyMin sets the ICPC per-attempt penalty, in minutes. Nil means
+	// "leave it alone" — the field's own zero value (no penalty at all) is a
+	// configuration an organizer can mean, so it cannot double as "unset".
+	ICPCPenaltyMin *int
 }
 
 // Update changes a contest's settings.
@@ -356,6 +363,9 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 	}
 	if cmd.LeaderboardNames != "" {
 		updated.LeaderboardNames = cmd.LeaderboardNames
+	}
+	if cmd.ICPCPenaltyMin != nil {
+		updated.ICPCPenaltyMin = *cmd.ICPCPenaltyMin
 	}
 
 	// The session length belongs to individual timing. Without this the switch
@@ -502,6 +512,13 @@ func checkRunningChange(current, updated Contest) error {
 		// or hides a table participants have already seen. The label below
 		// it is free to change: that is a choice about names, not results.
 		return fmt.Errorf("%w: the leaderboard freeze cannot change while it runs", ErrNotEditable)
+	case current.ICPCPenaltyMin != updated.ICPCPenaltyMin:
+		// The penalty is applied per submission, at the moment of answering,
+		// exactly like the scoring mode itself (whose own change is already
+		// refused above): moving it mid-run would make earlier answers in the
+		// same contest disagree with later ones about how much a wrong
+		// attempt cost, for a reason no participant could see.
+		return fmt.Errorf("%w: the ICPC penalty cannot change while it runs", ErrNotEditable)
 	}
 	return nil
 }
@@ -749,6 +766,16 @@ func orDefault(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// orDefaultInt is orDefault's pointer-typed counterpart, for a setting whose
+// zero value (unlike an empty string) is a configuration an organizer can
+// mean and so cannot itself stand for "not sent" — nil is what says that.
+func orDefaultInt(value *int, fallback int) int {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }
 
 func equalDuration(a, b *int) bool {
