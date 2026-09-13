@@ -336,21 +336,77 @@ func TestGateAcceptsWinnerScoringWithAFinalQuestion(t *testing.T) {
 }
 
 // The ICPC scoring mode (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md):
-// a choice question needs an attempt limit strictly below the number of
-// choices, or a participant can exhaust every option for the cost of nothing
-// but penalty time.
+// a choice question needs an attempt limit of at most the number of choices
+// less the number of correct ones, or a participant can exhaust every wrong
+// option and still reach a right one for the cost of nothing but penalty time.
 
 // asChoiceQuestion turns publishable()'s one question into a choice question
-// with ids "a", "b", "c" — labelled in every language it is asked in, so a
-// test about the attempt limit does not also trip ProblemMissingChoiceLabel.
+// with ids "a", "b", "c" and "a" as its one correct choice — labelled in every
+// language it is asked in, so a test about the attempt limit does not also
+// trip ProblemMissingChoiceLabel.
 func asChoiceQuestion(q contests.Question) contests.Question {
+	return withChoices(q, []string{"a", "b", "c"}, "a")
+}
+
+// withChoices turns q into a choice question with the given option ids,
+// labelled in every language, whose reference answers are exactly correct.
+func withChoices(q contests.Question, ids []string, correct ...string) contests.Question {
 	q.Kind = contests.KindChoice
-	q.ChoiceIDs = []string{"a", "b", "c"}
+	q.ChoiceIDs = ids
 	for lang, text := range q.Texts {
-		text.Choices = map[string]string{"a": "Alpha", "b": "Bravo", "c": "Charlie"}
+		text.Choices = make(map[string]string, len(ids))
+		for _, id := range ids {
+			text.Choices[id] = "Option " + id
+		}
 		q.Texts[lang] = text
 	}
+	q.Answers = nil
+	for _, id := range correct {
+		q.Answers = append(q.Answers, contests.Answer{MatchKind: contests.MatchExact, Value: id})
+	}
 	return q
+}
+
+// With several correct choices, fewer attempts are enough to be sure of one:
+// n options with k correct are always solved by attempt n-k+1. The limit is
+// held to n-k, and cases below and at the boundary pin it for one and for two
+// correct choices out of four.
+func TestGateHoldsAnICPCChoiceLimitBelowTheWrongChoicesPlusOne(t *testing.T) {
+	cases := []struct {
+		name    string
+		correct []string
+		limit   int
+		refused bool
+	}{
+		{"one correct of four, limit 3", []string{"a"}, 3, false},
+		{"one correct of four, limit 4", []string{"a"}, 4, true},
+		{"two correct of four, limit 2", []string{"a", "c"}, 2, false},
+		{"two correct of four, limit 3", []string{"a", "c"}, 3, true},
+		// The same correct choice written twice is still one choice.
+		{"one correct of four written twice, limit 3", []string{"a", "a"}, 3, false},
+		{"every choice correct, limit 1", []string{"a", "b", "c", "d"}, 1, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, story, questions := publishable()
+			c.Scoring = contests.ScoringICPC
+			questions[0] = withChoices(questions[0], []string{"a", "b", "c", "d"}, tc.correct...)
+			limit := tc.limit
+			questions[0].MaxAttempts = &limit
+
+			err := contests.CheckPublishable(c, story, questions)
+			if tc.refused {
+				codes := problemCodes(t, err)
+				if !contains(codes, contests.ProblemICPCChoiceNeedsAttemptLimit) {
+					t.Errorf("problems = %v, want %s", codes, contests.ProblemICPCChoiceNeedsAttemptLimit)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("contests.CheckPublishable() = %v, want nil", err)
+			}
+		})
+	}
 }
 
 func TestGateRefusesAnICPCChoiceQuestionWithNoAttemptLimit(t *testing.T) {

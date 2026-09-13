@@ -106,6 +106,21 @@ func TestChoiceQuestionKnowsItsOwnOptions(t *testing.T) {
 	}
 }
 
+// An option is counted once however many answers accept it, and by the
+// matcher grading uses, so a case-insensitive answer counts the option it
+// would score.
+func TestCorrectChoicesCountsEachAcceptedOptionOnce(t *testing.T) {
+	q := contests.Question{Kind: contests.KindChoice, ChoiceIDs: []string{"a", "B", "c", "d"}, Answers: []contests.Answer{
+		{MatchKind: contests.MatchExact, Value: "a"},
+		{MatchKind: contests.MatchExact, Value: "a"},
+		{MatchKind: contests.MatchExactCI, Value: "b"},
+	}}
+
+	if got := q.CorrectChoices(); got != 2 {
+		t.Errorf("CorrectChoices() = %d, want 2", got)
+	}
+}
+
 func TestAnswerRejectsAnEmptyValue(t *testing.T) {
 	a := contests.Answer{MatchKind: contests.MatchExactCI, Value: "  "}
 
