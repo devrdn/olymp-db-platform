@@ -1,6 +1,7 @@
 package checker
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -36,7 +37,9 @@ const MaxGeneratedLength = 10_000
 // first-line reasoning as MaxGeneratedLength: a series whose bounds are a
 // column or a subquery — generate_series(1, (SELECT max(id) FROM t)) — is
 // admitted, because the checker cannot know the count without running the
-// query, and a runaway one costs a single execution slot until the deadline.
+// query. What bounds an admitted runaway is not this constant but the layers
+// below: the runner's deadline and its cancellation of the server backend, and
+// the per-process memory cap if the series feeds something that allocates.
 const MaxSeriesLength = 100_000
 
 // sizeAllowed is the first-line check on the functions that build a value, or
@@ -153,8 +156,14 @@ func constantNumber(node *pg.Node) (float64, bool) {
 		case c.GetIval() != nil:
 			return float64(c.GetIval().GetIval()), true
 		case c.GetFval() != nil:
+			// A constant too large for a float64 (1e400) parses to infinity
+			// with an ErrRange error. It is still a constant the participant
+			// wrote, and one plainly above any bound, so it is kept and
+			// refused — not read as unreadable and admitted. Only a genuinely
+			// unparseable value (which the grammar should never produce for a
+			// numeric literal) is treated as not a constant.
 			v, err := strconv.ParseFloat(c.GetFval().GetFval(), 64)
-			if err != nil || math.IsInf(v, 0) || math.IsNaN(v) {
+			if math.IsNaN(v) || (err != nil && !errors.Is(err, strconv.ErrRange)) {
 				return 0, false
 			}
 			return v, true
@@ -211,7 +220,11 @@ func numericTypeName(tn *pg.TypeName) bool {
 
 // formatSize prints a constant the way it was written, as a whole number where
 // it is one and with no exponent where it is not, so the refusal names the
-// value the participant typed rather than a float's scientific form.
+// value the participant typed rather than a float's scientific form. A value
+// too large for a float64 is named as such rather than printed.
 func formatSize(v float64) string {
+	if math.IsInf(v, 0) {
+		return "a number out of range"
+	}
 	return strconv.FormatFloat(v, 'f', -1, 64)
 }
