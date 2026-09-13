@@ -1,6 +1,8 @@
 "use server";
 
+import type { StandingsResult } from "@/components/product/use-standings";
 import { ApiError } from "@/lib/api/client";
+import { standingsSchema } from "@/lib/api/leaderboard";
 import { queryResultSchema, type QueryResult } from "@/lib/api/console";
 import { answerResultSchema, playQuestionListSchema, type AnswerResult, type PlayQuestion } from "@/lib/api/play";
 import { queryLogResponseSchema, type QueryLogEntry } from "@/lib/api/querylog";
@@ -175,6 +177,24 @@ export async function fetchQueryLogAction(
     const payload = await serverRequest(`/contests/${contestId}/play/log?limit=${limit}&offset=${offset}`);
     const parsed = queryLogResponseSchema.parse(payload);
     return { kind: "ok", items: parsed.items, total: parsed.total };
+  } catch (error: unknown) {
+    if (error instanceof ApiError) return { kind: "refused", code: error.code };
+    return { kind: "refused", code: "unreachable" };
+  }
+}
+
+/**
+ * Reads the contest's table as this participant sees it: the shared public
+ * table plus which row is theirs (GET .../play/leaderboard).
+ *
+ * Called from the table tab while it is on screen, the same way the query log
+ * refreshes itself. The title comes back in the participant's own language.
+ */
+export async function fetchStandingsAction(contestId: string): Promise<StandingsResult> {
+  try {
+    const locale = await activeLocale();
+    const payload = await serverRequest(`/contests/${contestId}/play/leaderboard?lang=${locale}`);
+    return { kind: "ok", standings: standingsSchema.parse(payload) };
   } catch (error: unknown) {
     if (error instanceof ApiError) return { kind: "refused", code: error.code };
     return { kind: "refused", code: "unreachable" };
