@@ -3,19 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { ApiError } from "@/lib/api/client";
-import {
-  ENROLLMENTS,
-  icpcPenaltyFromForm,
-  PROGRESSIONS,
-  QUESTION_MODES,
-  SCORINGS,
-  TIMINGS,
-  type Enrollment,
-  type Progression,
-  type QuestionMode,
-  type Scoring,
-  type Timing,
-} from "@/lib/api/contests";
+import { ENROLLMENTS, icpcPenaltyFromForm, shapeFromForm, type Enrollment } from "@/lib/api/contests";
 import { isId } from "@/lib/api/ids";
 import { freezeFromForm } from "@/lib/api/leaderboard";
 import { parseTables, SQL_MODES, type SqlMode } from "@/lib/api/policy";
@@ -73,9 +61,13 @@ function moment(value: FormDataEntryValue | null): string | null {
  * while the contest runs — extending the window after a power cut is exactly
  * what a running contest needs — but the shape does not: the question format,
  * the question order, the scoring mode, the timing model and the session
- * length are what people are already answering under. The frozen fields are
- * submitted unchanged from what the contest already holds, so a running
- * contest's shape survives a save of its schedule.
+ * length are what people are already answering under. Their fieldset is
+ * disabled once the contest starts, and a disabled radio group is excluded
+ * from `FormData` entirely — `shapeFromForm` reads that absence as "send no
+ * key" (see its own doc), the same "leave it alone" contract every other
+ * lockable field on this form already follows, rather than falling back to
+ * a hard-coded default that `checkRunningChange` on the Go side would then
+ * refuse the whole save over.
  */
 export async function saveSettingsAction(
   _previous: SettingsState,
@@ -84,14 +76,8 @@ export async function saveSettingsAction(
   const contestId = form.get("contestId");
   if (!isId(contestId)) return { code: "invalid_contest_id" };
 
-  const timing = oneOf<Timing>(form.get("timing"), TIMINGS) ?? "fixed";
-  const duration = Number(form.get("durationMin"));
-  const durationMin =
-    timing === "individual" && Number.isFinite(duration) && duration > 0
-      ? Math.floor(duration)
-      : null;
-
-  if (timing === "individual" && durationMin === null) return { code: "invalid_request" };
+  const shape = shapeFromForm(form);
+  if (!shape.ok) return { code: "invalid_request" };
 
   // The freeze is locked once the contest starts; a locked fieldset submits
   // nothing, which freezeFromForm turns into "send no key" rather than
@@ -126,11 +112,7 @@ export async function saveSettingsAction(
 
   const body: Record<string, unknown> = {
     enrollment: oneOf<Enrollment>(form.get("enrollment"), ENROLLMENTS) ?? "invite_only",
-    question_mode: oneOf<QuestionMode>(form.get("questionMode"), QUESTION_MODES) ?? "multi",
-    progression: oneOf<Progression>(form.get("progression"), PROGRESSIONS) ?? "free",
-    scoring: oneOf<Scoring>(form.get("scoring"), SCORINGS) ?? "points",
-    timing,
-    duration_min: durationMin,
+    ...shape.value,
     starts_at: moment(form.get("startsAt")),
     ends_at: moment(form.get("endsAt")),
     allowed_cidrs: allowedCidrs,
