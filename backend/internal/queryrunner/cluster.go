@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgconn/ctxwatch"
 )
 
 // ErrNoWriter is a read-write contest reaching a runner that was given no
@@ -92,6 +94,29 @@ func (c *Cluster) connect(ctx context.Context, database string, write bool, read
 	config, err := pgx.ParseConfig(target.String())
 	if err != nil {
 		return nil, nil, fmt.Errorf("connecting to the game database: %w", err)
+	}
+
+	// Cancel the server's work when this process abandons a query, rather than
+	// only closing the socket. pgx's default handler drops the connection on a
+	// cancelled context and sends nothing to the server; the backend then runs
+	// on until statement_timeout, holding a memory cap's worth of the cluster
+	// while the Query Runner has already freed the slot and the participant's
+	// one-query-at-a-time mark — so a participant who abandons request after
+	// request leaves a backend behind each time, past the semaphore's bound.
+	// This handler sends a real CancelRequest, and pgx does not let the
+	// abandoned query call return until the cancel has been dispatched, so the
+	// slot is still held (release runs after this connection is closed) when
+	// the server is told to stop. client_connection_check_interval on the role
+	// is the backstop for a backend too busy to notice between the two.
+	config.BuildContextWatcherHandler = func(pgConn *pgconn.PgConn) ctxwatch.Handler {
+		return &pgconn.CancelRequestContextWatcherHandler{
+			Conn: pgConn,
+			// Send the cancel at once; the socket deadline is a backstop far
+			// enough out not to pre-empt a cancel the server is honouring, and
+			// bounded anyway by the runner's own closing context.
+			CancelRequestDelay: 0,
+			DeadlineDelay:      5 * time.Second,
+		}
 	}
 
 	// The budget is enforced at the socket, which is the only place it can

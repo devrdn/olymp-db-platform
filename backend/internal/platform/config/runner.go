@@ -81,31 +81,40 @@ type Runner struct {
 // rather than the container's cgroup limit being reached and the Linux OOM
 // killer taking the backend, which the postmaster treats as a crash. Measured
 // against the deployment's own image: legitimate work (a template build's COPY
-// and index creation, CREATE DATABASE … TEMPLATE, a parallel query's dynamic
-// shared memory, which is shared and does not count against the cap) fits
-// comfortably, and a query that manufactures a gigabyte-scale value fails
-// cleanly. It must equal the ulimit in deploy/docker-compose.yml.
+// and index creation up to maintenance_work_mem, CREATE DATABASE … TEMPLATE, a
+// parallel query's dynamic shared memory, which is shared and does not count
+// against the cap, a JIT-compiled query) fits comfortably, and a query that
+// manufactures a gigabyte-scale value fails cleanly. It must equal the ulimit
+// in deploy/docker-compose.yml.
 //
-// MaxParallelWorkersPerQuery is how many parallel worker processes one
-// participant query may add to its leader, each with its own cap. It equals
-// max_parallel_workers_per_gather on the participant roles (internal/gamedb),
-// and a participant cannot raise it: SET is not a statement the SQL validator
-// admits. So one query occupies at most (1 + this) processes at the cap.
+// MaxParallelWorkers is how many parallel worker processes the whole cluster
+// runs at once — a shared pool, pinned with max_parallel_workers on the
+// pg-game command, not a per-query number. Every one of them can reach the
+// cap, so they are counted once against the container, not once per concurrent
+// query. Participant queries are held to one worker each
+// (max_parallel_workers_per_gather on the roles), so this pool is what bounds
+// their sum. It must equal max_parallel_workers on the pg-game command.
 //
-// ReservedMemoryBytes is what the cluster needs before any participant query
-// runs: shared_buffers, the postmaster and its background workers, and the
-// headroom a provisioning build or autovacuum takes. A gibibyte and a half is
-// above the sum measured for the pilot's settings.
+// ReservedMemoryBytes is what the cluster needs before a participant query's
+// leaders and the worker pool: shared_buffers, the postmaster and its
+// background workers, the /dev/shm parallel-query segment (256 MiB, which is
+// container memory though not RLIMIT_DATA), the autovacuum workers
+// (autovacuum_max_workers, pinned low) and a provisioning build or two. Two
+// gibibytes is above the sum measured for the pilot's settings.
 //
-// So a container holds QUERY_CONCURRENT × (1 + MaxParallelWorkersPerQuery) ×
-// PerProcessMemoryBytes + ReservedMemoryBytes at worst, and GAME_DB_MEMORY
-// must be at least that: at the default concurrency of eight, 8 × 2 × 256 MiB
-// + 1.5 GiB = 5.5 GiB, which deploy/.env.example rounds up to a six-gibibyte
-// GAME_DB_MEMORY. Lower one and the others can come down with it.
+// So a container holds
+//
+//	(QUERY_CONCURRENT + MaxParallelWorkers) × PerProcessMemoryBytes
+//	+ ReservedMemoryBytes
+//
+// at worst, and GAME_DB_MEMORY must be at least that: at the default
+// concurrency of eight, (8 + 4) × 256 MiB + 2 GiB = 5 GiB, which
+// deploy/.env.example rounds up to a six-gibibyte GAME_DB_MEMORY. Lower one and
+// the others can come down with it.
 const (
-	PerProcessMemoryBytes      = 256 << 20
-	MaxParallelWorkersPerQuery = 1
-	ReservedMemoryBytes        = 1536 << 20
+	PerProcessMemoryBytes = 256 << 20
+	MaxParallelWorkers    = 4
+	ReservedMemoryBytes   = 2 << 30
 )
 
 // LoadRunner reads the Query Runner's configuration from the environment.
@@ -189,14 +198,14 @@ func LoadRunner() (Runner, error) {
 	// contest. Undeclared (a development cluster with neither a cgroup limit
 	// nor the ulimit) leaves nothing to check against.
 	if cfg.GameDBMemoryBytes > 0 {
-		perQuery := int64(PerProcessMemoryBytes) * (1 + MaxParallelWorkersPerQuery)
-		need := int64(cfg.Concurrent)*perQuery + ReservedMemoryBytes
+		processes := int64(cfg.Concurrent) + int64(MaxParallelWorkers)
+		need := processes*int64(PerProcessMemoryBytes) + ReservedMemoryBytes
 		if need > cfg.GameDBMemoryBytes {
 			return Runner{}, fmt.Errorf(
 				"QUERY_CONCURRENT=%d needs %d bytes of game-cluster memory "+
-					"(%d per query — %d per process × (1 + %d workers) — plus %d reserved), "+
+					"(%d leaders plus %d parallel workers at %d each, plus %d reserved), "+
 					"but GAME_DB_MEMORY_BYTES is %d: raise GAME_DB_MEMORY or lower QUERY_CONCURRENT",
-				cfg.Concurrent, need, perQuery, PerProcessMemoryBytes, MaxParallelWorkersPerQuery,
+				cfg.Concurrent, need, cfg.Concurrent, MaxParallelWorkers, PerProcessMemoryBytes,
 				ReservedMemoryBytes, cfg.GameDBMemoryBytes)
 		}
 	}

@@ -101,13 +101,15 @@ func TestAnEmptyQueueIsAllowedButANegativeOneIsNot(t *testing.T) {
 func TestConcurrencyMustFitTheDeclaredGameClusterMemory(t *testing.T) {
 	// The arithmetic the check enforces, stated here so the test fails if the
 	// constants drift from what the deployment is sized for.
-	perQuery := int64(PerProcessMemoryBytes) * (1 + MaxParallelWorkersPerQuery)
+	perBudget := func(concurrent int) int64 {
+		return (int64(concurrent)+int64(MaxParallelWorkers))*int64(PerProcessMemoryBytes) + ReservedMemoryBytes
+	}
 
 	t.Run("a limit that cannot hold the concurrency is refused", func(t *testing.T) {
 		setRunnerRequired(t)
 		t.Setenv("QUERY_CONCURRENT", "8")
 		// Just below what eight queries plus the reserve need.
-		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(8*perQuery+ReservedMemoryBytes-1, 10))
+		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(perBudget(8)-1, 10))
 
 		if _, err := LoadRunner(); err == nil {
 			t.Fatal("a runner started with a concurrency its game cluster cannot hold")
@@ -128,7 +130,7 @@ func TestConcurrencyMustFitTheDeclaredGameClusterMemory(t *testing.T) {
 	t.Run("exactly enough is accepted", func(t *testing.T) {
 		setRunnerRequired(t)
 		t.Setenv("QUERY_CONCURRENT", "8")
-		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(8*perQuery+ReservedMemoryBytes, 10))
+		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(perBudget(8), 10))
 
 		if _, err := LoadRunner(); err != nil {
 			t.Fatalf("a limit exactly at the requirement was refused: %v", err)
@@ -138,7 +140,7 @@ func TestConcurrencyMustFitTheDeclaredGameClusterMemory(t *testing.T) {
 	t.Run("lowering the concurrency lets a smaller limit through", func(t *testing.T) {
 		setRunnerRequired(t)
 		t.Setenv("QUERY_CONCURRENT", "1")
-		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(perQuery+ReservedMemoryBytes, 10))
+		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(perBudget(1), 10))
 
 		if _, err := LoadRunner(); err != nil {
 			t.Fatalf("one query at exactly its requirement was refused: %v", err)
