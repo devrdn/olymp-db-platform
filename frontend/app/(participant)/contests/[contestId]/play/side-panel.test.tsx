@@ -4,7 +4,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
 
+import { fetchStandingsAction } from "./actions";
 import { SidePanel } from "./side-panel";
+
+vi.mock("./actions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./actions")>()),
+  fetchStandingsAction: vi.fn(),
+}));
 
 function show() {
   return render(
@@ -14,6 +20,7 @@ function show() {
       contestId="c1"
       questionEntries={[]}
       dict={en}
+      locale="en"
     />,
   );
 }
@@ -53,6 +60,7 @@ describe("the side panel", () => {
         contestId="c1"
         questionEntries={[]}
         dict={en}
+        locale="en"
       />,
     );
 
@@ -183,6 +191,7 @@ describe("the side panel", () => {
         contestId="c1"
         questionEntries={[]}
         dict={en}
+        locale="en"
       />,
     );
 
@@ -212,6 +221,7 @@ test("each scrolling panel is the containing block for the hidden labels inside 
       contestId="c1"
       questionEntries={[]}
       dict={en}
+      locale="en"
     />,
   );
 
@@ -219,4 +229,26 @@ test("each scrolling panel is the containing block for the hidden labels inside 
     expect(panel.className).toMatch(/(^|\s)overflow-y-auto(\s|$)/);
     expect(panel.className).toMatch(/(^|\s)relative(\s|$)/);
   }
+});
+
+describe("the side panel's table", () => {
+  test("is read only once its tab is chosen, and shows whose row is whose", async () => {
+    vi.mocked(fetchStandingsAction).mockResolvedValue({
+      kind: "ok",
+      standings: {
+        state: "live", scoring: "points", title: "", generatedAt: "2026-09-20T10:00:00Z", truncated: false,
+        frozenAt: undefined, endsAt: undefined,
+        rows: [{ place: 1, label: "sherlock", deleted: false, points: 12, solved: 2, lastScoredAt: undefined, winner: false, isYou: true }],
+      },
+    });
+    show();
+
+    const tab = screen.getByRole("tab", { name: en.leaderboard.tab });
+    expect(fetchStandingsAction).not.toHaveBeenCalled();
+
+    await userEvent.click(tab);
+    expect(await screen.findByText("sherlock")).toBeInTheDocument();
+    expect(fetchStandingsAction).toHaveBeenCalledWith("c1");
+    expect(screen.getByText(en.leaderboard.you)).toBeInTheDocument();
+  });
 });

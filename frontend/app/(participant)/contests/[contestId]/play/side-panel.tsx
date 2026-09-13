@@ -1,7 +1,12 @@
 "use client";
 
+import { useState } from "react";
+
 import { ExportMenu } from "@/components/product/export-menu";
+import { StandingsView } from "@/components/product/standings";
+import { useStandings } from "@/components/product/use-standings";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { fetchStandingsAction } from "./actions";
 import type { PlayDictionary } from "./dictionary";
 
 import { QuestionsPanel, type QuestionEntry } from "./questions-panel";
@@ -81,21 +86,25 @@ export function SidePanel({
   contestId,
   questionEntries,
   dict,
+  locale,
 }: {
   storyBody: React.ReactNode;
   storyUnavailable: string | null;
   contestId: string;
   questionEntries: QuestionEntry[];
   dict: PlayDictionary;
+  locale: string;
 }) {
   const t = dict.participant.play.workspace.tabs;
   const storyT = dict.participant.play.workspace.story;
+  const [tab, setTab] = useState("questions");
 
   return (
-    <Tabs defaultValue="questions" className="h-full min-h-0">
+    <Tabs value={tab} onValueChange={setTab} className="h-full min-h-0">
       <TabsList>
         <TabsTrigger value="story">{t.story}</TabsTrigger>
         <TabsTrigger value="questions">{t.questions}</TabsTrigger>
+        <TabsTrigger value="leaderboard">{dict.leaderboard.tab}</TabsTrigger>
       </TabsList>
       {/* Neither tab has a child that needs to fill the panel's height —
           the story is prose and the questions are a form, both laid out
@@ -146,6 +155,33 @@ export function SidePanel({
       <TabsContent value="questions" fill={false} className="relative overflow-y-auto p-4">
         <QuestionsPanel contestId={contestId} items={questionEntries} dict={dict} />
       </TabsContent>
+      <TabsContent value="leaderboard" fill={false} className="relative overflow-y-auto p-4">
+        <LeaderboardTab contestId={contestId} active={tab === "leaderboard"} dict={dict} locale={locale} />
+      </TabsContent>
     </Tabs>
   );
+}
+
+/**
+ * The table, read only while its tab is the one showing: the panel stays
+ * mounted behind the other tabs, and a table nobody is looking at is a request
+ * every fifteen seconds for nothing.
+ */
+function LeaderboardTab({
+  contestId,
+  active,
+  dict,
+  locale,
+}: {
+  contestId: string;
+  active: boolean;
+  dict: PlayDictionary;
+  locale: string;
+}) {
+  const { standings, failed } = useStandings({ load: () => fetchStandingsAction(contestId), active });
+
+  if (!standings) {
+    return <p className="text-body text-ink-2">{failed ? dict.leaderboard.failed : dict.leaderboard.heading}</p>;
+  }
+  return <StandingsView standings={standings} dict={dict} locale={locale} variant="panel" failed={failed} />;
 }

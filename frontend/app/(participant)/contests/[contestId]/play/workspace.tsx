@@ -380,6 +380,7 @@ export function Workspace({
               contestId={contestId}
               questionEntries={questionEntries}
               dict={dict}
+              locale={locale}
             />
           </div>
         </div>
