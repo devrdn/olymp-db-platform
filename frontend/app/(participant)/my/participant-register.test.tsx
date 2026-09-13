@@ -191,3 +191,29 @@ describe("the way into a running contest", () => {
     expect(screen.queryByRole("link", { name: en.participant.openConsole })).not.toBeInTheDocument();
   });
 });
+
+describe("the way to a contest's table", () => {
+  const label = (title: string) => en.leaderboard.openLabel.replace("{title}", title);
+
+  test("sits beside the way in once the contest is under way", () => {
+    render_([contest({ status: "running", enrolled: true })]);
+
+    expect(screen.getByRole("link", { name: en.participant.openConsole })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: label("The Greenhouse") })).toHaveAttribute(
+      "href",
+      "/contests/6f1b7d2e-3a4c-4f8b-9c1d-2e5a7b8c9d01/leaderboard",
+    );
+  });
+
+  test("stays after the contest has finished, when the result is what people come back for", () => {
+    render_([contest({ status: "finished", enrolled: true })]);
+
+    expect(screen.getByRole("link", { name: label("The Greenhouse") })).toBeInTheDocument();
+  });
+
+  test("is not offered before there is a table to see", () => {
+    render_([contest({ status: "published" })]);
+
+    expect(screen.queryByRole("link", { name: label("The Greenhouse") })).not.toBeInTheDocument();
+  });
+});
