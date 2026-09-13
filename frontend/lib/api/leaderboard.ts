@@ -13,7 +13,12 @@ import { SCORINGS } from "./contests-terms";
  * other by accident.
  */
 
-export const STANDINGS_STATES = ["not_started", "live", "frozen", "final"] as const;
+export const STANDINGS_STATES = [
+  "not_started",
+  "live",
+  "frozen",
+  "final",
+] as const;
 export type StandingsState = (typeof STANDINGS_STATES)[number];
 
 const rowSchema = z
@@ -46,6 +51,7 @@ export const standingsSchema = z
     scoring: z.enum(SCORINGS),
     title: z.string(),
     frozen_at: z.string().optional(),
+    ends_at: z.string().optional(),
     generated_at: z.string(),
     truncated: z.boolean(),
     rows: z.array(rowSchema),
@@ -55,6 +61,7 @@ export const standingsSchema = z
     scoring: raw.scoring,
     title: raw.title,
     frozenAt: raw.frozen_at,
+    endsAt: raw.ends_at,
     generatedAt: raw.generated_at,
     truncated: raw.truncated,
     rows: raw.rows,
@@ -90,7 +97,10 @@ export type StaffStandingsRow = z.infer<typeof staffRowSchema>;
 
 export const staffStandingsSchema = z
   .object({
-    shown: z.object({ state: z.enum(STANDINGS_STATES), frozen_at: z.string().optional() }),
+    shown: z.object({
+      state: z.enum(STANDINGS_STATES),
+      frozen_at: z.string().optional(),
+    }),
     scoring: z.enum(SCORINGS),
     freeze_min: z.number().nullable(),
     names: z.enum(["login", "full_name"]),
@@ -162,8 +172,13 @@ export function freezeFromForm(
 }
 
 /** The stored freeze as the form shows it: hours when it divides into hours. */
-export function freezeForForm(freezeMin: number | null): { mode: "none" | "before"; amount: number; unit: FreezeUnit } {
+export function freezeForForm(freezeMin: number | null): {
+  mode: "none" | "before";
+  amount: number;
+  unit: FreezeUnit;
+} {
   if (freezeMin === null) return { mode: "none", amount: 30, unit: "minutes" };
-  if (freezeMin % 60 === 0) return { mode: "before", amount: freezeMin / 60, unit: "hours" };
+  if (freezeMin % 60 === 0)
+    return { mode: "before", amount: freezeMin / 60, unit: "hours" };
   return { mode: "before", amount: freezeMin, unit: "minutes" };
 }

@@ -262,8 +262,8 @@ func TestNothingScoredAfterTheFreezeLeavesTheServer(t *testing.T) {
 		if rec.Code != http.StatusOK || strings.Contains(body, "777") || strings.Contains(body, "latecomer") {
 			t.Errorf("status %d, body = %s, want a frozen table without the late score", rec.Code, body)
 		}
-		if decode(t, rec)["state"] != "frozen" {
-			t.Errorf("state = %v, want frozen", decode(t, rec)["state"])
+		if body := decode(t, rec); body["state"] != "frozen" || body["ends_at"] == nil {
+			t.Errorf("state = %v, ends_at = %v, want frozen with the contest's end", body["state"], body["ends_at"])
 		}
 	}
 
