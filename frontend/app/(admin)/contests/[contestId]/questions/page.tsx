@@ -52,6 +52,7 @@ export default async function QuestionsPage(props: PageProps<"/contests/[contest
         questions={questions}
         languages={languages}
         editable={editable}
+        scoring={contest.scoring}
         dict={dict}
       />
     </div>
