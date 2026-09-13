@@ -162,8 +162,25 @@ function cellAccessibleName(cell: StandingsCell, letter: string, t: CellDictiona
   }
 }
 
-/** A grid column's own width — must match `GridHeaderCells`'/`GridCells`' `w-12`. */
-const GRID_CELL_REM = 3;
+/**
+ * The ICPC grid's fixed-width columns, named once: a `<th>`'s Tailwind class
+ * and the rem number `gridMinWidthRem` sums are the same fact told from one
+ * place, not two numbers a comment merely promises stay in sync. Both tables
+ * (the public/participant view here, the staff view in `staff-standings.tsx`)
+ * read from this — a place column is `place` on the public table and
+ * `placeWide` on the staff one (which also names a login next to it).
+ */
+export const ICPC_COLUMN = {
+  place: { className: "w-14", rem: 3.5 },
+  placeWide: { className: "w-16", rem: 4 },
+  login: { className: "w-28", rem: 7 },
+  solved: { className: "w-20", rem: 5 },
+  penalty: { className: "w-20", rem: 5 },
+  /** One grid cell — `GridHeaderCells` wears this class; `table-fixed` gives
+   * `GridCells`' own `<td>`s the same width from the header without needing
+   * the class repeated on every cell of every row. */
+  grid: { className: "w-12", rem: 3 },
+} as const;
 
 /**
  * A still-legible width for the name column once the grid has crowded it.
@@ -178,13 +195,43 @@ const GRID_NAME_MIN_REM = 12;
 /**
  * The `min-width` (in rem) a table needs once its ICPC grid is on screen:
  * every fixed column, in rem matching the Tailwind width classes the caller
- * actually applies to them, plus one grid cell per question, plus the name
- * column's floor above. `undefined` when there is no grid to protect against
- * — `points` mode, or `icpc` without a grid on screen (the narrow panel) —
- * so the table is left to size itself exactly as it already did.
+ * actually applies to them (see `ICPC_COLUMN`), plus one grid cell per
+ * question, plus the name column's floor above.
  */
 export function gridMinWidthRem(fixedColumnsRem: number, questionCount: number): number {
-  return fixedColumnsRem + questionCount * GRID_CELL_REM + GRID_NAME_MIN_REM;
+  return fixedColumnsRem + questionCount * ICPC_COLUMN.grid.rem + GRID_NAME_MIN_REM;
+}
+
+/** The CSS variable a table's `min-width` is read from — see `gridTableWidth`. */
+const GRID_MIN_WIDTH_VAR = "--grid-min-width";
+
+/**
+ * The class and inline style a table needs to protect its name column once
+ * its ICPC grid is on screen — `undefined` when there is no grid to protect
+ * against (`points` mode, or ICPC without a grid on screen, the narrow
+ * panel), so the table is left to size itself exactly as it already did.
+ *
+ * The value travels as a CSS custom property, read by a class scoped to
+ * `narrow` and up — the same breakpoint `GridHeaderCells`/`GridCells`
+ * themselves appear at (they are `max-narrow:hidden`). Setting `min-width`
+ * itself unconditionally, rather than through this breakpoint-scoped class,
+ * was the bug this replaced: a phone never shows the grid, so a `min-width`
+ * sized for it forced every ICPC table into a sideways scroll on every
+ * phone, grid or no grid to see.
+ */
+export function gridTableWidth(
+  fixedColumnsRem: number,
+  questionCount: number | undefined,
+): { className: string; style: React.CSSProperties } | undefined {
+  if (!questionCount) return undefined;
+  return {
+    // Written out whole, not assembled from GRID_MIN_WIDTH_VAR, so Tailwind's
+    // build-time scan of this file's literal text finds the exact class —
+    // a class built from a template string at runtime is invisible to it,
+    // and the rule it names would never be generated.
+    className: "narrow:min-w-(--grid-min-width)",
+    style: { [GRID_MIN_WIDTH_VAR]: `${gridMinWidthRem(fixedColumnsRem, questionCount)}rem` } as React.CSSProperties,
+  };
 }
 
 /**
@@ -199,7 +246,7 @@ export function GridHeaderCells({ questions }: { questions: string[] }) {
         <th
           key={letter}
           scope="col"
-          className="w-12 px-1 py-2 text-center font-mono font-normal max-narrow:hidden"
+          className={cn(ICPC_COLUMN.grid.className, "px-1 py-2 text-center font-mono font-normal max-narrow:hidden")}
         >
           {letter}
         </th>
@@ -290,13 +337,12 @@ export function StandingsView({
   const icpc = standings.scoring === "icpc";
   const leader = rows.reduce((max, r) => Math.max(max, r.points), 0);
   // The grid only ever appears on `page` — never in the narrow panel — so
-  // only there does the table need a floor under it (see gridMinWidthRem).
+  // only there does the table need protecting against it (see gridTableWidth).
   const gridQuestions = variant === "page" && icpc ? standings.questions : undefined;
-  const tableMinWidth = gridQuestions?.length
-    ? // Place (w-14) + solved (w-20) + penalty (w-20) — keep in sync with
-      // the `<th>` widths below.
-      `${gridMinWidthRem(3.5 + 5 + 5, gridQuestions.length)}rem`
-    : undefined;
+  const gridWidth = gridTableWidth(
+    ICPC_COLUMN.place.rem + ICPC_COLUMN.solved.rem + ICPC_COLUMN.penalty.rem,
+    gridQuestions?.length,
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -314,20 +360,21 @@ export function StandingsView({
           <div className="overflow-x-auto">
             {/* Fixed layout, so the name is the column that gives way: under an
                 automatic layout a long name pushed the points off a phone's
-                screen, into a sideways scroll nobody knows to try. A
-                `min-width` protects that same name column from the opposite
-                failure once a wide ICPC grid is on screen — the table
-                scrolls inside the wrapper above instead of squeezing it. */}
+                screen, into a sideways scroll nobody knows to try. The
+                `narrow`-scoped min-width class protects that same name
+                column from the opposite failure once a wide ICPC grid is on
+                screen — the table scrolls inside the wrapper above instead
+                of squeezing it. */}
             <table
-              className="w-full table-fixed border-collapse"
-              style={tableMinWidth ? { minWidth: tableMinWidth } : undefined}
+              className={cn("w-full table-fixed border-collapse", gridWidth?.className)}
+              style={gridWidth?.style}
             >
               <caption className="sr-only">{t.heading}</caption>
               <thead>
                 <tr className="border-b border-line-2 font-mono text-label text-ink-3 uppercase">
                   <th
                     scope="col"
-                    className="w-14 py-2 pr-2 pl-3 text-left font-normal"
+                    className={cn(ICPC_COLUMN.place.className, "py-2 pr-2 pl-3 text-left font-normal")}
                   >
                     {t.columns.place}
                   </th>
@@ -339,10 +386,10 @@ export function StandingsView({
                       {variant === "page" && standings.questions ? (
                         <GridHeaderCells questions={standings.questions} />
                       ) : null}
-                      <th scope="col" className="w-20 px-2 py-2 text-right font-normal">
+                      <th scope="col" className={cn(ICPC_COLUMN.solved.className, "px-2 py-2 text-right font-normal")}>
                         {t.columns.solved}
                       </th>
-                      <th scope="col" className="w-20 py-2 pr-3 pl-2 text-right font-normal">
+                      <th scope="col" className={cn(ICPC_COLUMN.penalty.className, "py-2 pr-3 pl-2 text-right font-normal")}>
                         {t.columns.penalty}
                       </th>
                     </>
