@@ -318,6 +318,8 @@ var (
 
 	codeAnswerTooLong = httpx.NewCode("answer_too_long",
 		"The submitted answer is longer than this installation accepts. The message names the limit.")
+	codeAnswerNotAChoice = httpx.NewCode("answer_not_a_choice",
+		"The question is a choice question and the submitted value is not exactly one of its option identifiers. Nothing was recorded and no attempt was used.")
 	codeQuestionClosed = httpx.NewCode("question_closed",
 		"This question can no longer be answered by this participant: they already answered it correctly, or every attempt is spent.")
 	codeDeadlinePassed = httpx.NewCode("deadline_passed",

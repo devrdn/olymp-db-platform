@@ -451,6 +451,122 @@ func TestSubmitRefusesAnOverlongAnswer(t *testing.T) {
 	}
 }
 
+// A choice question is answered by picking one of its options, so a value
+// that is not exactly one of its choice ids is refused before it is graded
+// and before anything is written: it costs no attempt, starts no clock, and
+// the question still takes one of its options afterwards.
+func TestSubmitRefusesAValueThatIsNotOneOfTheChoices(t *testing.T) {
+	f := conteststest.NewFixture()
+	starts := conteststest.FixtureNow.Add(-time.Hour)
+	ends := conteststest.FixtureNow.Add(2 * time.Hour)
+	duration := 30
+	c := f.Contests.Put(contests.Contest{
+		Status: contests.StatusRunning, Timing: contests.TimingIndividual,
+		DurationMin: &duration, StartsAt: &starts, EndsAt: &ends,
+	})
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationRegistered})
+	limit := 2
+	q := f.Questions.Put(contests.Question{
+		ContestID: c.ID, Kind: contests.KindChoice, Points: 10, IsVisible: true, MaxAttempts: &limit,
+		ChoiceIDs: []string{"a", "b", "c"},
+		Answers:   []contests.Answer{{MatchKind: contests.MatchExact, Value: "b"}},
+	})
+
+	for _, value := range []string{"", "d", "B", " b", "b ", "abc"} {
+		_, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+			Participant: p, Contest: c, QuestionID: q.ID, Value: value,
+		})
+		if !errors.Is(err, contests.ErrNotAChoice) {
+			t.Errorf("Submit(%q) = %v, want ErrNotAChoice", value, err)
+		}
+	}
+	if got := f.Submissions.All(p.ID, q.ID); len(got) != 0 {
+		t.Fatalf("submissions = %d, want none written for a refused value", len(got))
+	}
+	stored, err := f.Registrations.ByUser(t.Context(), c.ID, p.UserID)
+	if err != nil {
+		t.Fatalf("ByUser() = %v", err)
+	}
+	if stored.StartedAt != nil {
+		t.Fatalf("StartedAt = %v, want nil: a refused value must not start the clock", stored.StartedAt)
+	}
+
+	outcome, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q.ID, Value: "a",
+	})
+	if err != nil {
+		t.Fatalf("Submit(a) = %v", err)
+	}
+	if outcome.Correct || outcome.AttemptsRemaining == nil || *outcome.AttemptsRemaining != 1 {
+		t.Fatalf("outcome = %+v, want a wrong first attempt with 1 left", outcome)
+	}
+	if got := f.Submissions.All(p.ID, q.ID); len(got) != 1 || got[0].AttemptNo != 1 {
+		t.Fatalf("submissions = %+v, want exactly one, attempt 1", got)
+	}
+}
+
+// The hole this closes: an unanchored regex reference answer "b" matches any
+// string containing b, so submitting "abc" solved the question on its first
+// attempt without choosing anything — in every scoring mode.
+func TestSubmitRefusesAStringThatWouldMatchAChoiceRegex(t *testing.T) {
+	for _, scoring := range []string{contests.ScoringPoints, contests.ScoringICPC} {
+		t.Run(scoring, func(t *testing.T) {
+			f := conteststest.NewFixture()
+			starts := conteststest.FixtureNow.Add(-time.Hour)
+			ends := conteststest.FixtureNow.Add(time.Hour)
+			c := f.Contests.Put(contests.Contest{
+				Status: contests.StatusRunning, Timing: contests.TimingFixed, Scoring: scoring,
+				StartsAt: &starts, EndsAt: &ends,
+			})
+			p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
+			limit := 1
+			q := f.Questions.Put(contests.Question{
+				ContestID: c.ID, Kind: contests.KindChoice, Points: 10, IsVisible: true, MaxAttempts: &limit,
+				ChoiceIDs: []string{"a", "b", "c"},
+				Answers:   []contests.Answer{{MatchKind: contests.MatchRegex, Value: "b"}},
+			})
+
+			outcome, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+				Participant: p, Contest: c, QuestionID: q.ID, Value: "abc",
+			})
+			if !errors.Is(err, contests.ErrNotAChoice) || outcome.Correct {
+				t.Fatalf("Submit(abc) = %+v, %v; want ErrNotAChoice", outcome, err)
+			}
+			stored, err := f.Registrations.ByUser(t.Context(), c.ID, p.UserID)
+			if err != nil {
+				t.Fatalf("ByUser() = %v", err)
+			}
+			if len(f.Submissions.All(p.ID, q.ID)) != 0 || stored.TotalScore != 0 {
+				t.Fatalf("submissions = %d, total score = %d; want nothing recorded",
+					len(f.Submissions.All(p.ID, q.ID)), stored.TotalScore)
+			}
+		})
+	}
+}
+
+// Only a choice question has options to be one of: a text or final question
+// still takes free text, whatever it is.
+func TestSubmitTakesFreeTextForTextAndFinalQuestions(t *testing.T) {
+	for _, kind := range []string{contests.KindText, contests.KindFinal} {
+		t.Run(kind, func(t *testing.T) {
+			f := conteststest.NewFixture()
+			c := runningFixedContest(f)
+			p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
+			q := f.Questions.Put(contests.Question{
+				ContestID: c.ID, Kind: kind, Points: 5, IsVisible: true,
+				Answers: []contests.Answer{{MatchKind: contests.MatchExactCI, Value: "the butler"}},
+			})
+
+			outcome, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+				Participant: p, Contest: c, QuestionID: q.ID, Value: "The Butler",
+			})
+			if err != nil || !outcome.Correct {
+				t.Fatalf("Submit() = %+v, %v; want a correct answer", outcome, err)
+			}
+		})
+	}
+}
+
 // Once a question is answered correctly, a further attempt is refused even
 // though attempts remain — scoring it twice is exactly what this guards
 // against.
