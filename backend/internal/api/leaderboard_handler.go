@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/leaderboard"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
@@ -80,6 +81,22 @@ type leaderboardRow struct {
 	LastScoredAt string `json:"last_scored_at,omitempty"`
 	Winner       bool   `json:"winner,omitempty"`
 	IsYou        bool   `json:"is_you,omitempty"`
+	// Penalty and Cells are ICPC's, and absent in every other mode.
+	Penalty *int              `json:"penalty,omitempty"`
+	Cells   []leaderboardCell `json:"cells,omitzero"`
+}
+
+// leaderboardCell is one question on a row of the ICPC grid, carrying exactly
+// what its state means: a solve's attempt, minute and first-solver mark; a
+// failure's wrong attempts; a pending cell's attempts since the freeze and the
+// wrong ones before it; nothing for an untried question. It names no question
+// — the position is the response's questions list.
+type leaderboardCell struct {
+	State    string `json:"state"`
+	Attempts *int   `json:"attempts,omitempty"`
+	Minute   *int   `json:"minute,omitempty"`
+	First    *bool  `json:"first,omitempty"`
+	Pending  *int   `json:"pending,omitempty"`
 }
 
 type leaderboardResponse struct {
@@ -93,9 +110,12 @@ type leaderboardResponse struct {
 	EndsAt string `json:"ends_at,omitempty"`
 	// GeneratedAt is when the table was computed, never when anybody last
 	// answered: during a freeze the second would say that something changed.
-	GeneratedAt string           `json:"generated_at"`
-	Truncated   bool             `json:"truncated"`
-	Rows        []leaderboardRow `json:"rows"`
+	GeneratedAt string `json:"generated_at"`
+	Truncated   bool   `json:"truncated"`
+	// Questions names the ICPC grid's columns by letter; absent in every
+	// other mode.
+	Questions []string         `json:"questions,omitzero"`
+	Rows      []leaderboardRow `json:"rows"`
 }
 
 // public is the table anybody may read.
@@ -149,6 +169,10 @@ type staffRow struct {
 	Solved       int    `json:"solved"`
 	LastScoredAt string `json:"last_scored_at,omitempty"`
 	Winner       bool   `json:"winner,omitempty"`
+	// The ICPC fields, as on leaderboardRow. Cut off now, the staff's cells
+	// are never pending.
+	Penalty *int              `json:"penalty,omitempty"`
+	Cells   []leaderboardCell `json:"cells,omitzero"`
 }
 
 type staffLeaderboardResponse struct {
@@ -163,6 +187,7 @@ type staffLeaderboardResponse struct {
 	RevealedAt  string     `json:"revealed_at,omitempty"`
 	GeneratedAt string     `json:"generated_at"`
 	Truncated   bool       `json:"truncated"`
+	Questions   []string   `json:"questions,omitzero"`
 	Rows        []staffRow `json:"rows"`
 }
 
@@ -183,15 +208,17 @@ func (h *LeaderboardHandler) live(w http.ResponseWriter, r *http.Request) {
 		Scoring: view.Contest.Scoring, FreezeMin: view.Contest.LeaderboardFreezeMin,
 		Names: view.Contest.LeaderboardNames, RevealedAt: formatTime(view.Contest.LeaderboardRevealedAt),
 		GeneratedAt: view.GeneratedAt.UTC().Format(timeLayout), Truncated: view.Truncated,
-		Rows: make([]staffRow, 0, len(view.Rows)),
+		Questions: questionLetters(view.Contest.Scoring, view.Questions),
+		Rows:      make([]staffRow, 0, len(view.Rows)),
 	}
 	out.Shown.State = view.Shown.State
 	out.Shown.FrozenAt = formatTime(view.Shown.FrozenAt)
 	for _, row := range view.Rows {
+		penalty, cells := icpcRow(view.Contest.Scoring, row)
 		out.Rows = append(out.Rows, staffRow{
 			Place: place(row), Login: row.Login, FullName: row.FullName, Deleted: row.AccountDeleted,
 			Disqualified: row.Disqualified, Points: row.Points, Solved: row.Solved,
-			LastScoredAt: formatTime(row.LastScoredAt), Winner: row.Winner,
+			LastScoredAt: formatTime(row.LastScoredAt), Winner: row.Winner, Penalty: penalty, Cells: cells,
 		})
 	}
 	httpx.JSON(w, r, http.StatusOK, out)
@@ -224,17 +251,59 @@ func (h *LeaderboardHandler) toResponse(r *http.Request, view leaderboard.View, 
 		State: view.State, Scoring: c.Scoring, Title: c.Translations[lang].Title,
 		FrozenAt: formatTime(view.FrozenAt), EndsAt: formatTime(c.EndsAt),
 		GeneratedAt: view.GeneratedAt.UTC().Format(timeLayout),
-		Truncated:   view.Truncated, Rows: make([]leaderboardRow, 0, len(view.Rows)),
+		Truncated:   view.Truncated, Questions: questionLetters(c.Scoring, view.Questions),
+		Rows: make([]leaderboardRow, 0, len(view.Rows)),
 	}
 	// The rows are the shared cached computation: read, never written.
 	for _, row := range view.Rows {
+		penalty, cells := icpcRow(c.Scoring, row)
 		out.Rows = append(out.Rows, leaderboardRow{
 			Place: place(row), Label: row.Label(c.LeaderboardNames), Deleted: row.AccountDeleted,
 			Points: row.Points, Solved: row.Solved, LastScoredAt: formatTime(row.LastScoredAt),
 			Winner: row.Winner, IsYou: own != uuid.Nil && row.Registration == own,
+			Penalty: penalty, Cells: cells,
 		})
 	}
 	return out
+}
+
+// questionLetters names the ICPC grid's columns; nil, and so absent from the
+// response, in every other mode.
+func questionLetters(scoring string, n int) []string {
+	if scoring != contests.ScoringICPC {
+		return nil
+	}
+	letters := make([]string, n)
+	for i := range letters {
+		letters[i] = leaderboard.QuestionLetter(i)
+	}
+	return letters
+}
+
+// icpcRow is a row's penalty and grid; nil for both, and so absent from the
+// response, in every other mode.
+func icpcRow(scoring string, row leaderboard.Row) (*int, []leaderboardCell) {
+	if scoring != contests.ScoringICPC {
+		return nil, nil
+	}
+	penalty := row.Penalty
+	cells := make([]leaderboardCell, len(row.Cells))
+	for i, c := range row.Cells {
+		cell := leaderboardCell{State: c.State()}
+		switch cell.State {
+		case leaderboard.CellSolved:
+			attempt, minute, first := c.SolvedOnAttempt(), c.Minute, c.First
+			cell.Attempts, cell.Minute, cell.First = &attempt, &minute, &first
+		case leaderboard.CellFailed:
+			wrong := c.Wrong
+			cell.Attempts = &wrong
+		case leaderboard.CellPending:
+			wrong, pending := c.Wrong, c.Pending
+			cell.Attempts, cell.Pending = &wrong, &pending
+		}
+		cells[i] = cell
+	}
+	return &penalty, cells
 }
 
 func place(row leaderboard.Row) *int {
