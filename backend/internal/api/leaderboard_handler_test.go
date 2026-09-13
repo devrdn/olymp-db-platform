@@ -32,21 +32,19 @@ import (
 type boardStandings struct {
 	contests *conteststest.Contests
 	entries  []leaderboard.Entry
-	// icpc answers an ICPC query in place of entries.
+	// icpc answers an ICPC query.
 	icpc *icpcBoard
 }
 
-func (s *boardStandings) VisibleQuestions(context.Context, uuid.UUID) (int, error) {
+func (s *boardStandings) ICPCStandings(_ context.Context, q leaderboard.Query) ([]leaderboard.Entry, leaderboard.Grid, error) {
 	if s.icpc == nil {
-		return 0, nil
+		return nil, leaderboard.Grid{}, nil
 	}
-	return s.icpc.questions, nil
+	entries, grid := s.icpc.standings(q)
+	return entries, grid, nil
 }
 
-func (s *boardStandings) Standings(ctx context.Context, q leaderboard.Query) ([]leaderboard.Entry, error) {
-	if q.Scoring == contests.ScoringICPC && s.icpc != nil {
-		return s.icpc.standings(q), nil
-	}
+func (s *boardStandings) Standings(_ context.Context, q leaderboard.Query) ([]leaderboard.Entry, error) {
 	var out []leaderboard.Entry
 	for _, e := range s.entries {
 		if e.LastScoredAt != nil && !e.LastScoredAt.Before(q.Cutoff) {
@@ -73,10 +71,12 @@ func (s *boardStandings) MarkRevealed(ctx context.Context, contestID uuid.UUID, 
 	return at, true, nil
 }
 
-// icpcBoard holds raw ICPC answers and computes the rows from them the way
-// the real query does — the cutoff on solves and wrong counts, the pending
-// window only when asked and only on a question unsolved by the cutoff — so a
-// test can put answers on either side of a freeze and read the body.
+// icpcBoard holds raw ICPC answers and computes rows and a grid from them
+// the way the real query does — the cutoff on solves and wrong counts, the
+// pending window only when asked and only on a question unsolved by the
+// cutoff, each question's earliest solve among the entrants that are not
+// disqualified — so a test can put answers on either side of a freeze and
+// read the body.
 type icpcBoard struct {
 	questions  int
 	start      time.Time
@@ -97,12 +97,18 @@ type icpcAnswer struct {
 	correct  bool
 }
 
-func (b *icpcBoard) standings(q leaderboard.Query) []leaderboard.Entry {
+// standings is a stand-in for the handler tests only: it follows the rules
+// closely enough that a leak through the service or the handler shows in the
+// body, and it ignores what the handler cannot affect (registration times, the
+// row bound, deleted accounts). The real rules are pinned against the database
+// by the TestICPCStandings* tests in internal/postgres/leaderboard_test.go —
+// the minute rounding, the individual start, what a wrong attempt costs,
+// hidden questions, the pending window, the registration cutoff, the earliest
+// solve over the whole contest and the order LIMIT cuts in.
+func (b *icpcBoard) standings(q leaderboard.Query) ([]leaderboard.Entry, leaderboard.Grid) {
+	grid := leaderboard.Grid{Questions: b.questions, FirstSolves: make([]*time.Time, b.questions)}
 	var out []leaderboard.Entry
 	for _, p := range b.entrants {
-		if p.disqualified && !q.IncludeDisqualified {
-			continue
-		}
 		e := leaderboard.Entry{Registration: p.registration, Login: p.login, Disqualified: p.disqualified,
 			Cells: make([]leaderboard.Cell, b.questions)}
 		for i := range e.Cells {
@@ -131,11 +137,17 @@ func (b *icpcBoard) standings(q leaderboard.Query) []leaderboard.Entry {
 				if e.LastSolvedAt == nil || cell.SolvedAt.After(*e.LastSolvedAt) {
 					e.LastSolvedAt = cell.SolvedAt
 				}
+				if !p.disqualified && (grid.FirstSolves[i] == nil || cell.SolvedAt.Before(*grid.FirstSolves[i])) {
+					grid.FirstSolves[i] = cell.SolvedAt
+				}
 			}
+		}
+		if p.disqualified && !q.IncludeDisqualified {
+			continue
 		}
 		out = append(out, e)
 	}
-	return out
+	return out, grid
 }
 
 type boardFixture struct {
@@ -447,6 +459,29 @@ func TestAWinnerTableResponseIsUnchanged(t *testing.T) {
 		`{"place":null,"label":"rival","points":20,"solved":0,"last_scored_at":"2026-03-01T11:00:00Z"}]}` + "\n"
 	if got := rec.Body.String(); got != want {
 		t.Errorf("participant body =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// An ICPC table with nobody on it still names its questions, and the letters
+// come with the grid rather than being counted from rows.
+func TestAnICPCTableWithNobodyOnItStillNamesItsQuestions(t *testing.T) {
+	f := newBoardFixture(t)
+	freeze := 30
+	c, _ := f.contest(t, contests.StatusRunning, &freeze)
+	c.Scoring = contests.ScoringICPC
+	f.stores.Contests.Put(c)
+	f.standings.icpc = &icpcBoard{questions: 3, start: *c.StartsAt, penaltyMin: 20}
+
+	organizer := f.organizer.ID
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"public": f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard", nil, ""),
+		"live":   f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard/live", &organizer, ""),
+	} {
+		raw := rec.Body.String()
+		if body := decodeICPC(t, rec); strings.Join(body.Questions, ",") != "A,B,C" || len(body.Rows) != 0 ||
+			!strings.Contains(raw, `"rows":[]`) {
+			t.Errorf("%s: body = %s, want questions A, B, C and no rows", name, raw)
+		}
 	}
 }
 
