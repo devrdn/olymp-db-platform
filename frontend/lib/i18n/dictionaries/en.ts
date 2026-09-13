@@ -1506,6 +1506,8 @@ const en = {
       "That construct is not supported here. Anything unrecognised is refused rather than guessed at.",
     query_function_not_supported:
       "That function is not available in this contest.",
+    query_argument_not_bounded:
+      "That function builds something whose size you set, and here the size has to be a number written in the query, within the limit shown.",
     query_catalog_not_readable:
       "That system catalogue describes the installation and other participants, and is never readable.",
     query_catalog_not_allowed:

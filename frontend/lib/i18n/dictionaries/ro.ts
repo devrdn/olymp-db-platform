@@ -1397,6 +1397,8 @@ const ro = {
       "Această construcție nu este acceptată aici. Tot ce nu este recunoscut se refuză, nu se ghicește.",
     query_function_not_supported:
       "Această funcție nu este disponibilă în această olimpiadă.",
+    query_argument_not_bounded:
+      "Această funcție construiește ceva a cărui mărime o stabiliți, iar aici mărimea trebuie să fie un număr scris direct în interogare, în limita afișată.",
     query_catalog_not_readable:
       "Acest catalog de sistem descrie instalarea și ceilalți participanți și nu poate fi citit niciodată.",
     query_catalog_not_allowed:

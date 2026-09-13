@@ -198,6 +198,8 @@ var (
 		"The query uses a construct the validator does not know. Anything unrecognised is refused rather than guessed at.")
 	codeQueryFunctionNotSupported = httpx.NewCode("query_function_not_supported",
 		"The query calls a function that is not on the allow-list. The details name it, which is what an operator needs to decide whether it belongs there.")
+	codeQueryArgumentNotBounded = httpx.NewCode("query_argument_not_bounded",
+		"The query calls a function that builds a value or a series of rows whose size an argument decides, and that size is not a number written in the query within the bound. The details name the function and the bound.")
 	codeQueryCatalogNotReadable = httpx.NewCode("query_catalog_not_readable",
 		"The query reads a system catalogue describing the installation or other participants. Refused in every contest.")
 	codeQueryCatalogNotAllowed = httpx.NewCode("query_catalog_not_allowed",
