@@ -24,6 +24,13 @@ const (
 	CodeTooLong               Code = "too_long"
 	CodeTableNotWritable      Code = "table_not_writable"
 	CodeNotPermitted          Code = "not_permitted"
+
+	// CodeArgumentNotBounded refuses a function that is on the allow-list but
+	// builds a value, or a series of rows, whose size one of its arguments
+	// decides — when that argument is not a number written in the query, or
+	// is one above the checker's bound. The subject names the function and
+	// the bound, which is what the participant needs to rewrite the call.
+	CodeArgumentNotBounded Code = "argument_not_bounded"
 )
 
 // Refusal is why one query was not allowed to run.
@@ -85,5 +92,6 @@ func Codes() []Code {
 		CodeNotOneStatement, CodeStatementNotSupported, CodeConstructNotSupported,
 		CodeFunctionNotSupported, CodeCatalogNotReadable, CodeCatalogNotAllowed,
 		CodeTooDeep, CodeTooLong, CodeTableNotWritable, CodeNotPermitted,
+		CodeArgumentNotBounded,
 	}
 }

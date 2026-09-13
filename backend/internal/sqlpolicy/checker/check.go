@@ -387,7 +387,11 @@ func (c *Checker) functionAllowed(call *pg.FuncCall) error {
 	if _, allowed := c.functions[name]; !allowed {
 		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeFunctionNotSupported, Subject: name}
 	}
-	return nil
+	// On the list is not the same as unbounded: the functions that build a
+	// value or a series from a number are allowed only with that number
+	// written in the query and within a bound (generators.go). Checked
+	// whatever the list holds, so an operator extending it lifts no bound.
+	return sizeAllowed(name, call)
 }
 
 // relationAllowed checks a table reference against the catalog rules.

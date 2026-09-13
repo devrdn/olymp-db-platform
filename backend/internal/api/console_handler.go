@@ -309,6 +309,7 @@ var refusalCodes = map[sqlpolicy.Code]httpx.Code{
 	sqlpolicy.CodeStatementNotSupported: codeQueryStatementNotSupported,
 	sqlpolicy.CodeConstructNotSupported: codeQueryConstructNotSupported,
 	sqlpolicy.CodeFunctionNotSupported:  codeQueryFunctionNotSupported,
+	sqlpolicy.CodeArgumentNotBounded:    codeQueryArgumentNotBounded,
 	sqlpolicy.CodeCatalogNotReadable:    codeQueryCatalogNotReadable,
 	sqlpolicy.CodeCatalogNotAllowed:     codeQueryCatalogNotAllowed,
 	sqlpolicy.CodeTooDeep:               codeQueryTooDeep,

@@ -138,6 +138,27 @@ func TestAQueryOverTheLengthBoundIsA400(t *testing.T) {
 	}
 }
 
+// A generating function whose size is not bounded is refused with a code of
+// its own rather than as a function that is not available: the function is
+// available, and the participant needs to be told that the size is what to
+// change. The subject carries the function and the bound.
+func TestAnUnboundedGeneratorIsA400WithItsOwnCode(t *testing.T) {
+	fixture := newConsoleFixture(t, fakeConsole{
+		err: &sqlpolicy.Refusal{Code: sqlpolicy.CodeArgumentNotBounded, Subject: "repeat: at most 10000"},
+	})
+
+	rec := fixture.run("SELECT repeat('x', 900000000)")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "query_argument_not_bounded" {
+		t.Fatalf("code = %q, want %q", code, "query_argument_not_bounded")
+	}
+	if subject := decode(t, rec)["subject"]; subject != "repeat: at most 10000" {
+		t.Fatalf("subject = %v, want the function and its bound (body: %s)", subject, rec.Body.String())
+	}
+}
+
 // A syntax error carries a position so the console can point at the
 // character rather than making a participant count them under a timer — the
 // position pg_query's own C parser reported, not a value this handler
