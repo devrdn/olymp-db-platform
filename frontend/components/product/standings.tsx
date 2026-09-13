@@ -61,8 +61,60 @@ const HUE_CLASSES: Record<number, { disc: string; bar: string }> = {
   6: { disc: "bg-id-6-wash text-id-6", bar: "bg-id-6" },
 };
 
-function medalOf(row: StandingsRow): Medal | undefined {
+function medalOf(row: { place: number | null }): Medal | undefined {
   return row.place === null ? undefined : MEDALS[row.place];
+}
+
+/** The left edge a medal row carries, for a table that is not StandingsView. */
+export function medalEdge(place: number | null): string {
+  const medal = medalOf({ place });
+  return medal ? MEDAL_CLASSES[medal].edge : "border-l-transparent";
+}
+
+/** A place: a medal disc for one to three, a plain number after, a dash for none. */
+export function PlaceBadge({ place, unplaced }: { place: number | null; unplaced: string }) {
+  const medal = medalOf({ place });
+  return (
+    <span data-testid="place" data-medal={medal} className="inline-flex">
+      {place === null ? (
+        <>
+          <span aria-hidden className="font-mono text-data text-ink-3">
+            —
+          </span>
+          <span className="sr-only">{unplaced}</span>
+        </>
+      ) : medal ? (
+        <span
+          className={cn(
+            "grid size-7 place-items-center rounded-full font-mono text-label tabular-nums ring-1",
+            MEDAL_CLASSES[medal].disc,
+          )}
+        >
+          {place}
+        </span>
+      ) : (
+        <span className="grid size-7 place-items-center font-mono text-data text-ink-2 tabular-nums">{place}</span>
+      )}
+    </span>
+  );
+}
+
+/** A person's initials on their identity hue; a deleted account gets neither. */
+export function Initials({ label, deleted }: { label: string; deleted: boolean }) {
+  const hue = identityHue(label);
+  return (
+    <span
+      aria-hidden
+      data-testid="initials"
+      data-hue={deleted ? undefined : hue}
+      className={cn(
+        "grid size-8 shrink-0 place-items-center rounded-full font-mono text-label uppercase",
+        deleted ? "bg-sunk text-ink-3" : HUE_CLASSES[hue].disc,
+      )}
+    >
+      {deleted ? "" : initials(label)}
+    </span>
+  );
 }
 
 /** Whether the contest's window has closed, read against the viewer's clock. */
@@ -186,49 +238,14 @@ function Row({
       className={cn("border-b border-line", row.isYou && "bg-you-wash")}
     >
       <td
-        className={cn(
-          "border-l-3 py-2.5 pr-2 pl-3 align-middle",
-          medal ? MEDAL_CLASSES[medal].edge : "border-l-transparent",
-        )}
+        className={cn("border-l-3 py-2.5 pr-2 pl-3 align-middle", medalEdge(row.place))}
       >
-        <span data-testid="place" data-medal={medal} className="inline-flex">
-          {row.place === null ? (
-            <>
-              <span aria-hidden className="font-mono text-data text-ink-3">
-                —
-              </span>
-              <span className="sr-only">{t.unplaced}</span>
-            </>
-          ) : medal ? (
-            <span
-              className={cn(
-                "grid size-7 place-items-center rounded-full font-mono text-label tabular-nums ring-1",
-                MEDAL_CLASSES[medal].disc,
-              )}
-            >
-              {row.place}
-            </span>
-          ) : (
-            <span className="grid size-7 place-items-center font-mono text-data text-ink-2 tabular-nums">
-              {row.place}
-            </span>
-          )}
-        </span>
+        <PlaceBadge place={row.place} unplaced={t.unplaced} />
       </td>
 
       <td className="px-2 py-2.5 align-middle">
         <div className="flex min-w-0 items-center gap-2.5">
-          <span
-            aria-hidden
-            data-testid="initials"
-            data-hue={row.deleted ? undefined : hue}
-            className={cn(
-              "grid size-8 shrink-0 place-items-center rounded-full font-mono text-label uppercase",
-              row.deleted ? "bg-sunk text-ink-3" : HUE_CLASSES[hue].disc,
-            )}
-          >
-            {row.deleted ? "" : initials(row.label)}
-          </span>
+          <Initials label={row.label} deleted={row.deleted} />
           <span
             className={cn(
               "min-w-0 truncate text-body",
