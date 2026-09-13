@@ -56,10 +56,10 @@ const (
 	// Saving refuses the first already, but the window can move afterwards.
 	ProblemLeaderboardFreezeExceedsWindow = "leaderboard_freeze_exceeds_window"
 	// ProblemICPCChoiceNeedsAttemptLimit names a choice question, in ICPC
-	// scoring, with no attempt cap or one that is not strictly below its own
-	// number of choices — decision 3 of the design doc's own decisions
-	// section: without one, a participant can submit every option in turn
-	// and solve the question for the mere cost of penalty time, never
+	// scoring, with no attempt cap or one above its number of choices less
+	// its number of correct choices — decision 3 of the design doc's own
+	// decisions section: without one, a participant can submit option after
+	// option and solve the question for the mere cost of penalty time, never
 	// actually needing to know the answer.
 	ProblemICPCChoiceNeedsAttemptLimit = "icpc_choice_needs_attempt_limit"
 )
@@ -160,13 +160,13 @@ func CheckPublishable(c Contest, story Story, questions []Question) error {
 
 	for _, q := range questions {
 		checkQuestionPublishable(q, langs, add)
-		// §3 of the design doc: in ICPC scoring, a choice question with no
-		// attempt cap — or one at least as large as its own choice count —
-		// can be solved by trying every option, for nothing worse than
-		// penalty time. Checked only in this mode: elsewhere the attempt
-		// limit is an ordinary authoring choice, not a way around answering.
-		if c.Scoring == ScoringICPC && q.Kind == KindChoice &&
-			(q.MaxAttempts == nil || *q.MaxAttempts >= len(q.ChoiceIDs)) {
+		// Decision 3 of the design doc: in ICPC scoring a choice question
+		// must not be solvable by trying options, for nothing worse than
+		// penalty time. With n options of which k are correct, attempt
+		// n-k+1 is sure to hit a correct one, so the cap must be at most
+		// n-k. Checked only in this mode: elsewhere the attempt limit is an
+		// ordinary authoring choice, not a way around answering.
+		if c.Scoring == ScoringICPC && q.Kind == KindChoice && !icpcChoiceCapped(q) {
 			add(PublishProblem{Code: ProblemICPCChoiceNeedsAttemptLimit, QuestionID: q.ID})
 		}
 		if c.Progression == ProgressionSequential {
@@ -208,6 +208,25 @@ func CheckPublishable(c Contest, story Story, questions []Question) error {
 		return &NotPublishableError{Problems: problems}
 	}
 	return nil
+}
+
+// icpcChoiceCapped reports whether a choice question's attempt limit keeps it
+// from being solved by trying options.
+//
+// A question none of whose options is correct is counted as having one: it
+// cannot be brute-forced at all, and holding it to the stricter single-answer
+// bound keeps the rule from loosening for an answer that is broken anyway
+// (ProblemNoReferenceAnswer covers the question with no answer at all). Every
+// option correct leaves no bound to meet: any single attempt solves it.
+func icpcChoiceCapped(q Question) bool {
+	if q.MaxAttempts == nil {
+		return false
+	}
+	n, k := len(q.ChoiceIDs), max(q.CorrectChoices(), 1)
+	if k >= n {
+		return false
+	}
+	return *q.MaxAttempts <= n-k
 }
 
 // checkQuestionPublishable collects one question's reasons.

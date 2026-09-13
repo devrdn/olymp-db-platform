@@ -170,6 +170,24 @@ func (q Question) HasChoice(id string) bool {
 	return slices.Contains(q.ChoiceIDs, id)
 }
 
+// CorrectChoices counts the options that grade as correct: each option id at
+// most once, however many reference answers accept it. It asks the same
+// matcher Submit grades with, so an option that a case-insensitive answer or
+// a pattern accepts is counted exactly when submitting it would be scored
+// correct. A pattern that does not compile matches nothing, as in grading.
+func (q Question) CorrectChoices() int {
+	n := 0
+	for _, id := range q.ChoiceIDs {
+		for _, a := range q.Answers {
+			if ok, err := matchAnswer(a, id); err == nil && ok {
+				n++
+				break
+			}
+		}
+	}
+	return n
+}
+
 // Validate checks a reference answer.
 //
 // A regular expression is compiled here, at authoring time, rather than when
