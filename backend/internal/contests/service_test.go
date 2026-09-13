@@ -739,3 +739,89 @@ func TestUpdateSetsAndClearsTheFreezeBeforeTheContestStarts(t *testing.T) {
 		t.Fatalf("clear: Update() = %+v, %v", updated.LeaderboardFreezeMin, err)
 	}
 }
+
+// The ICPC scoring mode (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md).
+
+// A contest that never mentions the penalty gets the same 20 minutes the
+// column default would give it, so a seed created before an organizer ever
+// opens the ICPC settings still has a sane value.
+func TestCreateDefaultsTheICPCPenaltyToTwenty(t *testing.T) {
+	f := conteststest.NewFixture()
+
+	created, err := f.Service.Create(context.Background(), contests.CreateCommand{ActorID: uuid.New()})
+	if err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
+	if created.ICPCPenaltyMin != 20 {
+		t.Errorf("ICPCPenaltyMin = %d, want 20", created.ICPCPenaltyMin)
+	}
+}
+
+func TestCreateHonoursAnExplicitICPCPenalty(t *testing.T) {
+	f := conteststest.NewFixture()
+	penalty := 15
+
+	created, err := f.Service.Create(context.Background(), contests.CreateCommand{
+		ActorID: uuid.New(), ICPCPenaltyMin: &penalty,
+	})
+	if err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
+	if created.ICPCPenaltyMin != 15 {
+		t.Errorf("ICPCPenaltyMin = %d, want 15", created.ICPCPenaltyMin)
+	}
+}
+
+// UpdateCommand.ICPCPenaltyMin is a pointer for the same reason
+// LeaderboardFreezeMin's setting half is: nil has to mean "leave it alone",
+// and the field's own zero value (no penalty at all) is a configuration an
+// organizer can mean.
+func TestUpdateLeavesTheICPCPenaltyAloneWhenNotMentioned(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	c.ICPCPenaltyMin = 30
+	f.Contests.Put(c)
+
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, Enrollment: contests.EnrollmentOpen,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+	if updated.ICPCPenaltyMin != 30 {
+		t.Errorf("ICPCPenaltyMin = %d, want it to survive an unrelated update", updated.ICPCPenaltyMin)
+	}
+}
+
+func TestUpdateSetsTheICPCPenalty(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	penalty := 45
+
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, ICPCPenaltyMin: &penalty,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+	if updated.ICPCPenaltyMin != 45 {
+		t.Errorf("ICPCPenaltyMin = %d, want 45", updated.ICPCPenaltyMin)
+	}
+}
+
+// The penalty is applied per submission, at the moment of answering; moving
+// it mid-run would make earlier answers disagree with later ones about how
+// much a wrong attempt cost, for a reason no participant could see — the
+// same reasoning that already refuses a scoring-mode change while running.
+func TestUpdateRefusesToChangeTheICPCPenaltyWhileRunning(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+	penalty := 30
+
+	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, ICPCPenaltyMin: &penalty,
+	})
+	if !errors.Is(err, contests.ErrNotEditable) {
+		t.Errorf("Update() = %v, want ErrNotEditable", err)
+	}
+}
