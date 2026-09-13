@@ -94,10 +94,7 @@ func TestRankInWinnerModeWithNoFinalAnswerPlacesNobody(t *testing.T) {
 	}
 }
 
-// The label follows the contest's choice, and a deleted account is never
-// shown under a login that may since belong to somebody else.
-// ICPC goes through RankICPC, which needs the grid; handing it to Rank is a
-// programmer error, and ranking by points would serve a table of zeros.
+// Rank panics on icpc: ICPC tables are ranked by RankICPC, with the grid.
 func TestRankRefusesICPC(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -107,6 +104,8 @@ func TestRankRefusesICPC(t *testing.T) {
 	leaderboard.Rank(contests.ScoringICPC, []leaderboard.Entry{entry("alice", 0, nil)})
 }
 
+// The label follows the contest's choice, and a deleted account is never
+// shown under a login that may since belong to somebody else.
 func TestLabelFollowsTheContestsChoiceAndHidesADeletedAccount(t *testing.T) {
 	row := leaderboard.Row{Entry: leaderboard.Entry{Login: "ivanov", FullName: "Ivan Ivanov"}}
 	if got := row.Label(contests.LeaderboardNamesLogin); got != "ivanov" {
