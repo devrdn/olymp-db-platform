@@ -88,8 +88,9 @@ type leaderboardRow struct {
 
 // leaderboardCell is one question on a row of the ICPC grid, carrying exactly
 // what its state means: a solve's attempt, minute and first-solver mark; a
-// failure's wrong attempts; a pending cell's attempts since the freeze and the
-// wrong ones before it; nothing for an untried question. It names no question
+// failure's wrong attempts; a pending cell's attempts since the freeze and,
+// when there were any, the wrong ones before it; nothing for an untried
+// question. It names no question
 // — the position is the response's questions list.
 type leaderboardCell struct {
 	State    string `json:"state"`
@@ -298,8 +299,14 @@ func icpcRow(scoring string, row leaderboard.Row) (*int, []leaderboardCell) {
 			wrong := c.Wrong
 			cell.Attempts = &wrong
 		case leaderboard.CellPending:
-			wrong, pending := c.Wrong, c.Pending
-			cell.Attempts, cell.Pending = &wrong, &pending
+			pending := c.Pending
+			cell.Pending = &pending
+			// The wrong attempts before the freeze are sent only when there
+			// were any; absent reads as none.
+			if c.Wrong > 0 {
+				wrong := c.Wrong
+				cell.Attempts = &wrong
+			}
 		}
 		cells[i] = cell
 	}

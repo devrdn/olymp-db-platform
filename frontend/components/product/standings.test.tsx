@@ -207,7 +207,7 @@ function icpcStandings(overrides: Partial<Standings> = {}): Standings {
         cells: [
           { state: "solved", attempts: 2, minute: 47, first: true },
           { state: "failed", attempts: 3 },
-          { state: "pending", attempts: 0, pending: 2 },
+          { state: "pending", pending: 2 },
           { state: "untried" },
         ],
       }),

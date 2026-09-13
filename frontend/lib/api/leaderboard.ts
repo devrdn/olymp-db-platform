@@ -22,8 +22,8 @@ export const STANDINGS_STATES = [
 export type StandingsState = (typeof STANDINGS_STATES)[number];
 
 /**
- * The ICPC grid's cell states (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md
- * "Клетки сетки"). `cells` and `questions` are present only when
+ * The ICPC grid's cell states (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md,
+ * the section on grid cells). `cells` and `questions` are present only when
  * `scoring` is `"icpc"` — `points` and `winner` rows carry neither.
  */
 export const CELL_STATES = ["solved", "failed", "pending", "untried"] as const;
@@ -32,7 +32,8 @@ export type CellState = (typeof CELL_STATES)[number];
 const cellSchema = z.object({
   state: z.enum(CELL_STATES),
   // Solved: the 1-based attempt the correct answer was on. Failed: the
-  // number of wrong attempts. Pending: the wrong attempts before the freeze.
+  // number of wrong attempts. Pending: the wrong attempts before the freeze,
+  // absent when there were none.
   attempts: z.number().optional(),
   // Solved only: the minute of the correct answer.
   minute: z.number().optional(),

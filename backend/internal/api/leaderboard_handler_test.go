@@ -577,9 +577,9 @@ func TestAFrozenICPCTableShowsOnlyHowManyAttemptsCameAfterTheFreeze(t *testing.T
 			cells           string
 		}{
 			{1, 10, `[{"state":"solved","attempts":1,"minute":10,"first":true},` +
-				`{"state":"pending","attempts":1,"pending":1},{"state":"pending","attempts":0,"pending":1}]`},
+				`{"state":"pending","attempts":1,"pending":1},{"state":"pending","pending":1}]`},
 			{1, 20, `[{"state":"solved","attempts":1,"minute":20,"first":false},` +
-				`{"state":"pending","attempts":0,"pending":1},{"state":"untried"}]`},
+				`{"state":"pending","pending":1},{"state":"untried"}]`},
 		}
 		for i, want := range wantRows {
 			row := body.Rows[i]
