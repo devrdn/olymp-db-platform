@@ -73,6 +73,13 @@ services:
       - idle_in_transaction_session_timeout=30s
       - -c
       - max_connections=200
+      # The same worker-pool pins pg-game runs with, so the memory the proof
+      # observes is the product's: parallel workers and autovacuum workers are
+      # counted, capped pools rather than open-ended.
+      - -c
+      - max_parallel_workers=4
+      - -c
+      - autovacuum_max_workers=2
     # RLIMIT_DATA per process, the same 256 MiB pg-game runs with: a backend
     # that tries to build more than this gets a NULL from malloc and raises
     # PostgreSQL's own "out of memory" ERROR, rather than the container's cgroup
@@ -84,6 +91,13 @@ services:
     # container memory and the semaphore.
     ulimits:
       data: 268435456
+    # The product's /dev/shm and container memory, so the proof runs on the
+    # deployment's configuration (CLAUDE.md rule 10): a parallel query's shared
+    # memory has the same room, and the cgroup limit is the computed six-gibibyte
+    # default, so the OOM-killer-versus-clean-error behaviour the sandbox tests
+    # assert is the one production would show.
+    shm_size: 256mb
+    mem_limit: 6g
     tmpfs:
       - /var/lib/postgresql/data
     ports:

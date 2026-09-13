@@ -129,12 +129,22 @@ var sessionDefaults = [][2]string{
 	// One parallel worker at most, so a participant query occupies a leader
 	// plus one worker process rather than the server default of two — the
 	// process count the game cluster's memory is sized for (config.Runner's
-	// MaxParallelWorkersPerQuery). Parallel query stays on, which the steady
-	// state wants; the cap only bounds how many processes one query spreads
-	// across. Unlike statement_timeout above this is a real bound for a
-	// participant, not only a default: SET is not a statement the SQL
-	// validator admits, so a participant cannot raise it.
+	// MaxParallelWorkers). Parallel query stays on, which the steady state
+	// wants; the cap only bounds how many processes one query spreads across.
+	// Unlike statement_timeout above this is a real bound for a participant,
+	// not only a default: SET is not a statement the SQL validator admits, so
+	// a participant cannot raise it.
 	{"max_parallel_workers_per_gather", "1"},
+	// Notice a client that has gone away, so a backend whose query was
+	// abandoned stops within this interval instead of running to
+	// statement_timeout. The Query Runner also sends an explicit cancel when
+	// it abandons a query (queryrunner.Cluster.connect), and this is the
+	// backstop for a backend so busy it never reaches an interrupt check
+	// between the cancel and its next socket read. It bounds how long an
+	// abandoned backend keeps a memory cap's worth of the cluster to itself,
+	// which is what keeps the count of live backends near the semaphore's
+	// limit rather than the rate limit's.
+	{"client_connection_check_interval", "250ms"},
 }
 
 // authorDefaults are the game-script role's, and deliberately not the

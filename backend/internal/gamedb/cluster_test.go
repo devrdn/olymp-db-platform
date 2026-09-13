@@ -46,6 +46,10 @@ func TestTheReaderStartsWithTheIntendedSettings(t *testing.T) {
 		// participant cannot raise it: SET is not a statement the validator
 		// admits.
 		"max_parallel_workers_per_gather": "1",
+		// Bounds how long a backend keeps running after its client has gone,
+		// so an abandoned query does not hold a memory cap's worth of the
+		// cluster until statement_timeout.
+		"client_connection_check_interval": "250ms",
 	} {
 		t.Run(setting, func(t *testing.T) {
 			var got string

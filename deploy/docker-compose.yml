@@ -79,6 +79,19 @@ services:
       # reaching this number means admission control has already failed.
       - -c
       - max_connections=200
+      # Parallel worker processes are a cluster-wide pool, and each one can
+      # reach the per-process memory cap below. Pinned so the memory arithmetic
+      # (config.Runner.MaxParallelWorkers) can count them once against the
+      # container rather than once per concurrent query. Participant queries
+      # take at most one worker each (max_parallel_workers_per_gather on the
+      # roles), so four is parallelism for up to four of the eight concurrent
+      # queries at any moment — best effort, not a per-query guarantee.
+      - -c
+      - max_parallel_workers=4
+      # Autovacuum workers also run under the cap; kept few so their worst-case
+      # memory is a small, countable part of the reserve.
+      - -c
+      - autovacuum_max_workers=2
     volumes:
       - pg-game-data:/var/lib/postgresql/data
     # PostgreSQL puts the shared memory of a parallel query in /dev/shm, and
@@ -111,16 +124,23 @@ services:
     # about this container rather than about the machine. Sized for the
     # pilot; raise them together with the semaphore in section 4.3.
     #
-    # Memory follows from the cap above and the concurrency: one participant
-    # query occupies a leader plus up to max_parallel_workers_per_gather (1 on
-    # the participant roles) worker processes, each up to the 256 MiB cap, and
-    # QUERY_CONCURRENT of them run at once. The container must hold
-    # QUERY_CONCURRENT × (1 + 1) × 256 MiB plus ~1.5 GiB for shared_buffers,
-    # the postmaster and a provisioning build — 5.5 GiB at the default
-    # concurrency of eight, rounded up here to six. The Query Runner is told
-    # this same limit (GAME_DB_MEMORY_BYTES) and refuses to start with a
-    # concurrency it cannot hold. Lower one and the others can come down; the
-    # memory and GAME_DB_MEMORY_BYTES must agree.
+    # Memory follows from the cap above, the concurrency and the worker pool.
+    # QUERY_CONCURRENT query leaders run at once, each up to the 256 MiB cap,
+    # and the parallel workers are a separate cluster-wide pool
+    # (max_parallel_workers above), also each up to the cap — counted once, not
+    # once per query. So the container must hold
+    # (QUERY_CONCURRENT + max_parallel_workers) × 256 MiB plus ~2 GiB reserved
+    # for shared_buffers, the /dev/shm parallel segment (256 MiB), the
+    # postmaster and background workers, the autovacuum workers and a
+    # provisioning build: (8 + 4) × 256 MiB + 2 GiB = 5 GiB at the default
+    # concurrency, rounded up here to six. Measured legitimate ceilings under
+    # the cap (for an operator tuning these): a single COPY value up to ~40 MiB,
+    # CREATE INDEX / REINDEX up to maintenance_work_mem ~240 MiB, JIT-compiled
+    # queries (~130 MiB peak), and parallel queries whose shared memory does not
+    # count against the cap. The Query Runner is told this same limit
+    # (GAME_DB_MEMORY_BYTES) and refuses to start with a concurrency it cannot
+    # hold. Lower one and the others can come down; the memory,
+    # GAME_DB_MEMORY_BYTES and GAME_DB_PROCESS_MEMORY_BYTES must agree.
     deploy:
       resources:
         limits:
@@ -153,6 +173,13 @@ services:
       # is a cluster with no game_author on it at all — and `gamedb` refuses
       # to run without it rather than silently preparing two roles of three.
       GAME_AUTHOR_PASSWORD: ${GAME_AUTHOR_PASSWORD:?set GAME_AUTHOR_PASSWORD in .env}
+      # The per-process memory cap (pg-game's ulimits.data), so this job proves
+      # at deploy time that the cap is in force — a throwaway session allocating
+      # over it must be refused with "out of memory", one allocating a quarter
+      # of it must succeed — and fails the preparation with a clear error if it
+      # is not. Equal to the ulimit above; leave empty only for a cluster with
+      # no cap.
+      GAME_DB_PROCESS_MEMORY_BYTES: ${GAME_DB_PROCESS_MEMORY_BYTES:-268435456}
     depends_on:
       pg-game:
         condition: service_healthy

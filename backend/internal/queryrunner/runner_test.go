@@ -3,6 +3,7 @@ package queryrunner_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -243,6 +244,20 @@ func TestAnOverAllocatingQueryFailsInItsOwnBackend(t *testing.T) {
 	runner, database := setup(t)
 	admin := gamedbtest.Admin(t)
 
+	// A dedicated connection held open across every probe. If the postmaster
+	// restarts — a backend killed by the OOM killer, crash recovery — this
+	// connection's own backend dies with it, so the same pg_backend_pid()
+	// answering afterwards is direct proof the cluster never went down. The
+	// pool would paper over a restart by handing back a fresh connection.
+	watcher, err := admin.Acquire(t.Context())
+	if err != nil {
+		t.Fatalf("acquiring a watcher connection: %v", err)
+	}
+	defer watcher.Release()
+	var watcherPID int
+	if err := watcher.QueryRow(t.Context(), `SELECT pg_backend_pid()`).Scan(&watcherPID); err != nil {
+		t.Fatalf("reading the watcher backend pid: %v", err)
+	}
 	startTime := postmasterStart(t, admin)
 
 	// Each is admitted by the validator and each asks a backend for far more
@@ -278,13 +293,95 @@ func TestAnOverAllocatingQueryFailsInItsOwnBackend(t *testing.T) {
 	}
 
 	// The postmaster never restarted — the cap kept every failure to the one
-	// backend that asked for too much.
+	// backend that asked for too much. Two independent proofs: the start time
+	// is unchanged, and the connection held open throughout is still the same
+	// live backend (a restart would have killed it).
 	if now := postmasterStart(t, admin); !now.Equal(startTime) {
 		t.Fatalf("the postmaster restarted: %s -> %s; a backend was killed rather than told no", startTime, now)
+	}
+	var samePID int
+	if err := watcher.QueryRow(t.Context(), `SELECT pg_backend_pid()`).Scan(&samePID); err != nil {
+		t.Fatalf("the watcher connection did not survive the probes (crash recovery?): %v", err)
+	}
+	if samePID != watcherPID {
+		t.Fatalf("the watcher backend changed pid %d -> %d: the cluster restarted", watcherPID, samePID)
 	}
 	// And an ordinary query still runs: other participants were untouched.
 	if _, err := runner.Run(t.Context(), request(database, `SELECT count(*) FROM evidence`)); err != nil {
 		t.Fatalf("the cluster did not serve a normal query after the over-allocating ones: %v", err)
+	}
+}
+
+// Critical: an abandoned query must not leave its backend running. pgx's
+// default handler closes the socket on a cancelled context and tells the server
+// nothing, so the backend runs on to statement_timeout while the runner has
+// already freed the slot and the participant's one-query mark — and a
+// participant who abandons request after request stacks backends far past the
+// semaphore's bound, each holding a memory cap's worth of the cluster. With a
+// real CancelRequest and client_connection_check_interval, an abandoned backend
+// stops in well under a second, so the count of live participant backends stays
+// near the semaphore, not the rate limit.
+func TestAbandonedQueriesDoNotOutliveTheirSlot(t *testing.T) {
+	limits := queryrunner.DefaultLimits()
+	runner, database := setupWith(t, limits, checker.NewChecker())
+	admin := gamedbtest.Admin(t)
+
+	// A long, cheap query: it runs for many seconds without approaching the
+	// memory cap, so what ends it is cancellation, not out-of-memory. Both
+	// series are within the validator's bounds, so it is admitted.
+	const slow = `SELECT count(*) FROM generate_series(1, 100000) a, generate_series(1, 100000) b`
+
+	// Sample the live participant backends throughout the burst, tracking the
+	// most seen at once.
+	// Sample past the burst: an abandoned backend that is not cancelled lives
+	// until statement_timeout (5s), so the pile-up peaks after the last query
+	// is fired, not during. Cover the burst plus that tail.
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	var peak int64
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			var active int
+			err := admin.QueryRow(context.Background(),
+				`SELECT count(*) FROM pg_stat_activity
+				   WHERE usename = $1 AND state = 'active' AND query NOT LIKE '%pg_stat_activity%'`,
+				gamedb.RoleReader).Scan(&active)
+			if err == nil && int64(active) > atomic.LoadInt64(&peak) {
+				atomic.StoreInt64(&peak, int64(active))
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+
+	// One participant abandoning query after query: each Run gets a short-lived
+	// context that is cancelled while the query is still running on the server,
+	// exactly as an aborted HTTP request would. They are sequential because the
+	// gate allows one query per participant at a time — the leak, if any, is
+	// backends that outlive the Run that started them.
+	deadline := time.Now().Add(3 * time.Second)
+	for i := 0; time.Now().Before(deadline); i++ {
+		ctx, cancel := context.WithTimeout(t.Context(), 120*time.Millisecond)
+		_, _ = runner.Run(ctx, request(database, slow))
+		cancel()
+	}
+	// Watch the tail: uncancelled backends would keep piling up here toward
+	// statement_timeout; cancelled ones drain.
+	time.Sleep(6 * time.Second)
+	close(stop)
+	<-done
+	// The semaphore allows QUERY_CONCURRENT at once; a small tolerance covers
+	// backends caught mid-cancellation. Without a real cancel this climbs with
+	// the number of abandoned queries instead.
+	tolerance := int64(3)
+	if got := atomic.LoadInt64(&peak); got > int64(limits.Concurrent)+tolerance {
+		t.Fatalf("peak live participant backends = %d, over the semaphore's %d + %d tolerance: "+
+			"abandoned queries are outliving their slot", got, limits.Concurrent, tolerance)
 	}
 }
 
