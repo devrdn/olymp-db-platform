@@ -10,9 +10,16 @@ import {
   sequentialActive,
   settingsEditable,
   shapeEditable,
+  shapeFromForm,
   titleIn,
   type Contest,
 } from "./contests";
+
+function shapeForm(fields: Record<string, string>): FormData {
+  const data = new FormData();
+  for (const [key, value] of Object.entries(fields)) data.set(key, value);
+  return data;
+}
 
 describe("contestListSchema", () => {
   test("parses the listing the API actually returns", () => {
@@ -265,5 +272,87 @@ describe("icpcPenaltyFromForm", () => {
     expect(icpcPenaltyFromForm("20.5")).toEqual({ ok: false });
     expect(icpcPenaltyFromForm("many")).toEqual({ ok: false });
     expect(icpcPenaltyFromForm("")).toEqual({ ok: false });
+  });
+});
+
+/**
+ * Reviewer finding: `question_mode`, `progression`, `scoring` and `timing`
+ * (with `duration_min`) all live in the same fieldset a running contest
+ * disables — a disabled radio group submits nothing at all, not its own
+ * default — and the settings action used to fall back to a hard-coded
+ * default (`"multi"`, `"free"`, `"points"`, `"fixed"`) whenever a field was
+ * absent. `checkRunningChange` on the Go side then refused the *whole*
+ * PATCH the moment any one of those defaults disagreed with what the
+ * contest actually held — which is every running contest that is not
+ * `multi`/`free`/`points`/`fixed`, on a save that touched none of it (only
+ * the schedule, say, or the leaderboard label).
+ *
+ * Each field here is therefore included only when the form actually
+ * submitted it, the same "absent = leave unchanged" contract
+ * `icpcPenaltyFromForm` above already gives `icpc_penalty_min`.
+ */
+describe("shapeFromForm", () => {
+  test("sends nothing at all when the whole shape is locked", () => {
+    expect(shapeFromForm(shapeForm({}))).toEqual({ ok: true, value: {} });
+  });
+
+  test("sends every field when the shape is open, duration included for individual timing", () => {
+    expect(
+      shapeFromForm(
+        shapeForm({
+          questionMode: "single",
+          progression: "sequential",
+          scoring: "icpc",
+          timing: "individual",
+          durationMin: "45",
+        }),
+      ),
+    ).toEqual({
+      ok: true,
+      value: {
+        question_mode: "single",
+        progression: "sequential",
+        scoring: "icpc",
+        timing: "individual",
+        duration_min: 45,
+      },
+    });
+  });
+
+  test("sends a null duration for fixed timing, never leaving it unset", () => {
+    // `Update` on the Go side forces `duration_min` to null whenever the
+    // contest's own timing ends up fixed either way — but the form always
+    // says so explicitly while the fieldset is open, rather than depending
+    // on that.
+    expect(
+      shapeFromForm(shapeForm({ questionMode: "multi", progression: "free", scoring: "points", timing: "fixed" })),
+    ).toEqual({
+      ok: true,
+      value: { question_mode: "multi", progression: "free", scoring: "points", timing: "fixed", duration_min: null },
+    });
+  });
+
+  test("refuses individual timing with no valid duration, only while timing was actually submitted", () => {
+    expect(shapeFromForm(shapeForm({ timing: "individual" }))).toEqual({ ok: false });
+    expect(shapeFromForm(shapeForm({ timing: "individual", durationMin: "0" }))).toEqual({ ok: false });
+    expect(shapeFromForm(shapeForm({ timing: "individual", durationMin: "many" }))).toEqual({ ok: false });
+  });
+
+  test("never validates a duration when the shape is locked, whatever a stray field carries", () => {
+    // Nothing renders `durationMin` while `timing` itself is absent, but a
+    // garbage value reaching this function anyway must not block a save
+    // that has nothing to do with the shape.
+    expect(shapeFromForm(shapeForm({ durationMin: "not a number" }))).toEqual({ ok: true, value: {} });
+  });
+
+  test("sends only the fields the form actually carried, never inventing the others", () => {
+    expect(shapeFromForm(shapeForm({ scoring: "winner" }))).toEqual({
+      ok: true,
+      value: { scoring: "winner" },
+    });
+  });
+
+  test("ignores a value outside the closed set, the same as an absent field", () => {
+    expect(shapeFromForm(shapeForm({ questionMode: "essay" }))).toEqual({ ok: true, value: {} });
   });
 });

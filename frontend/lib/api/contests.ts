@@ -292,6 +292,82 @@ export function icpcPenaltyFromForm(
   return { ok: true, value: whole };
 }
 
+function enumFromForm<T extends string>(
+  value: FormDataEntryValue | null,
+  allowed: readonly T[],
+): T | undefined {
+  return typeof value === "string" && (allowed as readonly string[]).includes(value)
+    ? (value as T)
+    : undefined;
+}
+
+/** The shape fields the settings form submits, before `duration_min` joins them (`shapeFromForm`'s own doc). */
+export type ShapeUpdate = {
+  question_mode?: QuestionMode;
+  progression?: Progression;
+  scoring?: Scoring;
+  timing?: Timing;
+  duration_min?: number | null;
+};
+
+/**
+ * The contest's shape — `question_mode`, `progression`, `scoring`, `timing`
+ * and `timing`'s own `duration_min` — as the settings form submitted it.
+ *
+ * All five freeze together once the contest starts (`shapeEditable`), in
+ * fieldsets a running contest disables — and a disabled radio group is
+ * excluded from `FormData` entirely, not merely empty. Building the request
+ * as `oneOf(form.get("scoring"), SCORINGS) ?? "points"` once treated that
+ * absence as a request to actually *set* scoring to `"points"`: a save that
+ * touched nothing about the shape (extending the window, say, or renaming
+ * the leaderboard) on a running ICPC contest sent `scoring: "points"`
+ * alongside it, and `checkRunningChange` on the Go side refused the whole
+ * `PATCH` for a change nobody asked for. Each field here is included only
+ * when the form actually carried it — the same "absent means leave it
+ * alone" contract `icpcPenaltyFromForm` above already gives
+ * `icpc_penalty_min`, and the one `UpdateCommand` itself already documents
+ * for every one of these fields on the Go side.
+ *
+ * `duration_min` piggybacks on `timing` rather than being asked for on its
+ * own: its own field only exists in the DOM while "individual" is the
+ * picked timing model (`settings-panels.tsx`), so there is no "the shape is
+ * open but only duration is locked" state to represent. While `timing` is
+ * present and `"individual"`, a missing or non-positive duration refuses
+ * the whole save (`{ ok: false }`) exactly as it always has; while `timing`
+ * is present and `"fixed"`, `duration_min` is sent as `null` explicitly —
+ * harmless, since `contests.Service.Update` forces it to nil whenever the
+ * contest's own timing ends up fixed regardless of what was sent, but
+ * explicit rather than relying on that.
+ */
+export function shapeFromForm(
+  form: FormData,
+): { ok: true; value: ShapeUpdate } | { ok: false } {
+  const value: ShapeUpdate = {};
+
+  const questionMode = enumFromForm<QuestionMode>(form.get("questionMode"), QUESTION_MODES);
+  if (questionMode !== undefined) value.question_mode = questionMode;
+
+  const progression = enumFromForm<Progression>(form.get("progression"), PROGRESSIONS);
+  if (progression !== undefined) value.progression = progression;
+
+  const scoring = enumFromForm<Scoring>(form.get("scoring"), SCORINGS);
+  if (scoring !== undefined) value.scoring = scoring;
+
+  const timing = enumFromForm<Timing>(form.get("timing"), TIMINGS);
+  if (timing !== undefined) {
+    value.timing = timing;
+    if (timing === "individual") {
+      const duration = Number(form.get("durationMin"));
+      if (!Number.isFinite(duration) || duration <= 0) return { ok: false };
+      value.duration_min = Math.floor(duration);
+    } else {
+      value.duration_min = null;
+    }
+  }
+
+  return { ok: true, value };
+}
+
 export const publishProblemSchema = z.object({
   code: z.string(),
   lang: z.string().optional(),
