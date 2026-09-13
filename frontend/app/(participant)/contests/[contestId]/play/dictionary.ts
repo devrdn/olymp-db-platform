@@ -22,9 +22,14 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
  * `lib/i18n/client.tsx` does the same thing for the client boundaries that
  * read from context; its own doc carries the rest of the reasoning.
  */
-export type PlayDictionary = Pick<Dictionary, "participant" | "errors">;
+export type PlayDictionary = Pick<Dictionary, "participant" | "errors" | "leaderboard">;
 
-/** Narrows a whole dictionary to this screen's own. Called on the server, which is the point. */
+/**
+ * Narrows a whole dictionary to this screen's own. Called on the server, which is the point.
+ *
+ * `leaderboard` is the table tab's vocabulary — about 2 KB, and read by the
+ * same participants in the same minute as everything else here.
+ */
 export function playDictionary(dict: Dictionary): PlayDictionary {
-  return { participant: dict.participant, errors: dict.errors };
+  return { participant: dict.participant, errors: dict.errors, leaderboard: dict.leaderboard };
 }
