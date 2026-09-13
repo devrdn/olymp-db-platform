@@ -60,6 +60,8 @@ const PAIRS = [
   ["frost", "frost-wash", TEXT],
   ["frost", "bg", TEXT],
   ["you", "you-wash", TEXT],
+  // The "You" label is page-ground text on a solid --you pill.
+  ["bg", "you", TEXT],
   ["you", "bg", TEXT],
   ["id-1", "id-1-wash", TEXT],
   ["id-1", "bg", TEXT],
