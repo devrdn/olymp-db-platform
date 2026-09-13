@@ -306,6 +306,14 @@
       "meaning": "The change would leave the installation with no account able to manage accounts, so it is refused."
     },
     {
+      "code": "leaderboard_not_revealable",
+      "meaning": "The result cannot be revealed: the contest has not finished yet, or it was never frozen and so has nothing to reveal."
+    },
+    {
+      "code": "leaderboard_too_often",
+      "meaning": "The leaderboard was asked for faster than one address or one account may ask. The table only changes every few seconds, so waiting costs nothing."
+    },
+    {
       "code": "login_taken",
       "meaning": "Another account already uses this login."
     },

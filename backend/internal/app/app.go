@@ -23,6 +23,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/gamefile"
 	"github.com/devrdn/db-contest/backend/internal/health"
+	"github.com/devrdn/db-contest/backend/internal/leaderboard"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
@@ -408,6 +409,17 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			settings.NewService(postgres.NewSettings(pool), postgres.NewSettingsImages(pool), auditRecorder, storage.NewUnitOfWork(pool)),
 			authMiddleware, log),
 		api.NewContestsHandler(contestService, authMiddleware, log, cfg.DefaultLocale),
+		// The contest's table for its staff, its participants and anybody
+		// with the link. Its own service rather than a corner of
+		// contestService: it records nothing but a reveal, it caches, and
+		// one of its routes is deliberately outside authentication.
+		api.NewLeaderboardHandler(leaderboard.NewService(leaderboard.Config{
+			Contests:     postgres.NewContests(pool),
+			Participants: postgres.NewRegistrations(pool),
+			Standings:    postgres.NewLeaderboard(pool),
+			Audit:        auditRecorder,
+			UnitOfWork:   storage.NewUnitOfWork(pool),
+		}), limiter, authMiddleware, log, cfg.DefaultLocale),
 		// The trail is written by every module above; this is the only way
 		// to read it back, and it is behind its own permission.
 		api.NewAuditHandler(auditTrail, authMiddleware, log),

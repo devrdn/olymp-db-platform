@@ -182,6 +182,10 @@ var (
 		"The Query Runner could not be reached. Nothing to do with the query, and a retry is the right response rather than an edit.")
 	codeQueryDeclined = httpx.NewCode("query_declined",
 		"The database refused the query, in a contest that hides its schema. The reason is deliberately withheld: PostgreSQL names the relation that does not exist, which in such a contest is a way to enumerate the schema the closed catalogues were hiding.")
+	codeLeaderboardTooOften = httpx.NewCode("leaderboard_too_often",
+		"The leaderboard was asked for faster than one address or one account may ask. The table only changes every few seconds, so waiting costs nothing.")
+	codeLeaderboardNotRevealable = httpx.NewCode("leaderboard_not_revealable",
+		"The result cannot be revealed: the contest has not finished yet, or it was never frozen and so has nothing to reveal.")
 	codeQueryDatabaseError = httpx.NewCode("query_database_error",
 		"The query passed every check and reached the database, which refused it on its own terms: a column that does not exist, a type that does not match, a division by zero. The database's own words are in `subject`, because they are the sentence that says what to change.")
 	codeQueryParseError = httpx.NewCode("query_parse_error",
