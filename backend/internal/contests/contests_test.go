@@ -390,3 +390,37 @@ func TestValidateRejectsAnUnknownLeaderboardLabel(t *testing.T) {
 		}
 	}
 }
+
+// The ICPC scoring mode (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md).
+
+func TestValidateAcceptsICPCScoring(t *testing.T) {
+	c := validContest()
+	c.Scoring = contests.ScoringICPC
+
+	if err := c.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil", err)
+	}
+}
+
+// CLAUDE.md rule 2: a minute count that reaches storage has a range, matching
+// the migration's own CHECK (icpc_penalty_min BETWEEN 0 AND 240).
+func TestValidateRejectsAnICPCPenaltyOutsideItsBounds(t *testing.T) {
+	for _, penalty := range []int{-1, 241} {
+		c := validContest()
+		c.ICPCPenaltyMin = penalty
+		if err := c.Validate(); !errors.Is(err, contests.ErrInvalidContest) {
+			t.Errorf("penalty %d: Validate() = %v, want ErrInvalidContest", penalty, err)
+		}
+	}
+}
+
+// The bounds are inclusive: 0 (no penalty at all) and 240 are both accepted.
+func TestValidateAcceptsAnICPCPenaltyAtItsBounds(t *testing.T) {
+	for _, penalty := range []int{0, 240} {
+		c := validContest()
+		c.ICPCPenaltyMin = penalty
+		if err := c.Validate(); err != nil {
+			t.Errorf("penalty %d: Validate() = %v, want nil", penalty, err)
+		}
+	}
+}

@@ -52,6 +52,12 @@ func (r *Contests) Put(c contests.Contest) contests.Contest {
 	if c.LeaderboardNames == "" {
 		c.LeaderboardNames = contests.LeaderboardNamesLogin
 	}
+	// Same reasoning, for the column migration 31 adds: a seed that never
+	// mentions the ICPC penalty reads back the way a stored row does, with
+	// the column's own default of 20 rather than a bare Go zero value.
+	if c.ICPCPenaltyMin == 0 {
+		c.ICPCPenaltyMin = contests.DefaultICPCPenaltyMin
+	}
 	if _, exists := r.byID[c.ID]; !exists {
 		r.order = append(r.order, c.ID)
 	}
