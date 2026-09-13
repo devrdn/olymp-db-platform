@@ -212,6 +212,47 @@ func TestSubmitIgnoresThePenaltyInWinnerMode(t *testing.T) {
 	}
 }
 
+// The ICPC scoring mode (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md):
+// a question carries no points in this mode — place is decided by how many
+// questions are solved and by penalty time, not by points — so a correct
+// answer must write points_awarded = 0 and leave total_score at 0, exactly
+// as if the question were worth nothing to begin with.
+func TestSubmitAwardsNoPointsInICPCMode(t *testing.T) {
+	f := conteststest.NewFixture()
+	starts := conteststest.FixtureNow.Add(-time.Hour)
+	ends := conteststest.FixtureNow.Add(time.Hour)
+	c := f.Contests.Put(contests.Contest{
+		Status: contests.StatusRunning, Timing: contests.TimingFixed, Scoring: contests.ScoringICPC,
+		StartsAt: &starts, EndsAt: &ends,
+	})
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
+	q := f.Questions.Put(contests.Question{
+		ContestID: c.ID, Kind: contests.KindText, Points: 10, PenaltyPct: 50, IsVisible: true,
+		Answers: []contests.Answer{{MatchKind: contests.MatchExact, Value: "yes"}},
+	})
+
+	outcome, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q.ID, Value: "yes",
+	})
+	if err != nil {
+		t.Fatalf("Submit() = %v", err)
+	}
+	if !outcome.Correct || outcome.PointsAwarded != 0 {
+		t.Fatalf("outcome = %+v, want a correct answer worth 0 points in ICPC mode", outcome)
+	}
+
+	stored, err := f.Registrations.ByUser(t.Context(), c.ID, p.UserID)
+	if err != nil {
+		t.Fatalf("ByUser() = %v", err)
+	}
+	if stored.TotalScore != 0 {
+		t.Fatalf("TotalScore = %d, want 0 in ICPC mode", stored.TotalScore)
+	}
+	if got := f.Submissions.All(p.ID, q.ID)[0].PointsAwarded; got != 0 {
+		t.Fatalf("the stored submission's PointsAwarded = %d, want 0", got)
+	}
+}
+
 // §6.1.1: sequential progression refuses an answer to a question ordered
 // after one that is not closed yet — proven here by a direct Submit call, not
 // by anything the interface would have hidden, since the server is what
