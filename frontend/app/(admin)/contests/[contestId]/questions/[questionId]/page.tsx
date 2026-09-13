@@ -67,6 +67,7 @@ export default async function QuestionPage(
         languages={contest.languages.map((l) => l.code)}
         editable={editable}
         sequentialActive={sequentialActive(contest)}
+        scoring={contest.scoring}
         dict={dict}
       />
     </div>

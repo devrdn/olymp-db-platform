@@ -31,6 +31,11 @@ export const PUBLISH_PROBLEMS = {
   // a leaderboard freeze that no longer fits the window.
   winnerNeedsFinal: "winner_needs_final",
   leaderboardFreezeExceedsWindow: "leaderboard_freeze_exceeds_window",
+  // ICPC-only, like the sequential pair above: a choice question whose
+  // attempt limit is not below its own number of options can always be
+  // guessed through for the price of a penalty. Names a question, not a
+  // language, so it falls into the same global list.
+  icpcChoiceNeedsAttemptLimit: "icpc_choice_needs_attempt_limit",
 } as const;
 
 export type PublishProblem = {

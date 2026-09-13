@@ -1,9 +1,22 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, describe, expect, test } from "vitest";
+import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { Question } from "@/lib/api/content";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
+
+// The save action is a Server Action ("use server"): importing the real
+// module pulls Next's server runtime into a component test (the same reason
+// `title-editor.test.tsx` fakes it). Built with `vi.hoisted` because
+// `vi.mock` factories run before the rest of this file's top-level code.
+const { saveQuestionAction } = vi.hoisted(() => ({
+  saveQuestionAction: vi.fn(async (previous: unknown, form: FormData) => {
+    void previous;
+    void form;
+    return { saved: true };
+  }),
+}));
+vi.mock("./actions", () => ({ saveQuestionAction }));
 
 import { QuestionEditor } from "./question-editor";
 
@@ -11,6 +24,10 @@ let dict: Dictionary;
 
 beforeAll(async () => {
   dict = await getDictionary("en");
+});
+
+beforeEach(() => {
+  saveQuestionAction.mockClear();
 });
 
 function question(overrides: Partial<Question> = {}): Question {
@@ -43,6 +60,7 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
         question={question({ points: 10, penaltyPct: 20 })}
         languages={["en"]}
         editable
+        scoring="points"
         sequentialActive={false}
         dict={dict}
       />,
@@ -70,6 +88,7 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
         question={question({ maxAttempts: undefined })}
         languages={["en"]}
         editable
+        scoring="points"
         sequentialActive
         dict={dict}
       />,
@@ -93,6 +112,7 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
         question={question({ maxAttempts: undefined })}
         languages={["en"]}
         editable
+        scoring="points"
         sequentialActive={false}
         dict={dict}
       />,
@@ -115,6 +135,7 @@ describe("QuestionEditor, rules on screen and explanations behind a question mar
         question={question({ kind: "choice", choiceIds: ["a", "b"] })}
         languages={["en"]}
         editable
+        scoring="points"
         sequentialActive={false}
         dict={dict}
       />,
@@ -158,5 +179,80 @@ describe("QuestionEditor, rules on screen and explanations behind a question mar
     const t = dict.workspace.question.shape;
     expect(screen.getByRole("checkbox", { name: t.visible })).toBeInTheDocument();
     expect(screen.getByText(t.visibleHelp)).not.toBeVisible();
+  });
+});
+
+// docs/superpowers/specs/2026-09-13-icpc-scoring-design.md, decision 1: a
+// question's own points and percentage penalty do not exist in ICPC scoring
+// — place is decided by how many questions are solved and, at a tie, by the
+// contest's own penalty time. The fields stay in the data (the mode can
+// still be reverted before the contest starts), so the editor disables them
+// rather than removing them, and a save must not wipe what they already held.
+describe("QuestionEditor, ICPC scoring", () => {
+  test("disables the points and penalty fields, with the reason beside them", () => {
+    render(
+      <QuestionEditor
+        contestId="c1"
+        question={question({ points: 10, penaltyPct: 20 })}
+        languages={["en"]}
+        editable
+        scoring="icpc"
+        sequentialActive={false}
+        dict={dict}
+      />,
+    );
+
+    const t = dict.workspace.question.shape;
+    const points = screen.getByLabelText(t.points);
+    const penalty = screen.getByLabelText(t.penalty);
+
+    expect(points).toBeDisabled();
+    expect(points).toHaveValue(10);
+    expect(penalty).toBeDisabled();
+    expect(penalty).toHaveValue(20);
+    expect(screen.getAllByText(t.icpcDisabled).length).toBeGreaterThan(0);
+  });
+
+  test("says nothing about a wrong attempt's cost, since the penalty does not apply", () => {
+    render(
+      <QuestionEditor
+        contestId="c1"
+        question={question({ points: 10, penaltyPct: 20 })}
+        languages={["en"]}
+        editable
+        scoring="icpc"
+        sequentialActive={false}
+        dict={dict}
+      />,
+    );
+
+    expect(
+      screen.queryByText(dict.workspace.question.shape.penaltyPreview.replace("{n}", "2").replace("{points}", "10")),
+    ).toBeNull();
+  });
+
+  // Finding: a disabled input is excluded from FormData entirely, so a save
+  // that only touched the wording would submit `points: 0` and silently
+  // zero out a question's own points the moment its contest turned ICPC.
+  test("still submits the disabled fields' current values on save", async () => {
+    const user = userEvent.setup();
+    render(
+      <QuestionEditor
+        contestId="c1"
+        question={question({ points: 10, penaltyPct: 20 })}
+        languages={["en"]}
+        editable
+        scoring="icpc"
+        sequentialActive={false}
+        dict={dict}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: dict.workspace.question.save }));
+
+    expect(saveQuestionAction).toHaveBeenCalled();
+    const form = saveQuestionAction.mock.calls[0][1] as FormData;
+    expect(form.get("points")).toBe("10");
+    expect(form.get("penaltyPct")).toBe("20");
   });
 });
