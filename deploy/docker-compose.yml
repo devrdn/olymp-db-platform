@@ -92,11 +92,24 @@ services:
     # cgroup limits, so that "the game cluster degrades" stays a statement
     # about this container rather than about the machine. Sized for the
     # pilot; raise them together with the semaphore in section 4.3.
+    #
+    # Memory is not free to pick: one query can, worst case, make a backend
+    # build a value close to PostgreSQL's ~1 GiB per-value ceiling (a
+    # string_agg or array_agg of the largest value the SQL validator admits,
+    # over the longest series it admits), and QUERY_CONCURRENT of those run at
+    # once. The container must hold QUERY_CONCURRENT × 1 GiB plus ~1 GiB for
+    # shared_buffers, the parallel-query shared memory (shm_size below) and the
+    # postmaster — nine gibibytes at the default concurrency of eight — or the
+    # OOM killer takes a backend and the postmaster restarts every session
+    # instead of the one runaway query failing with "out of memory". The Query
+    # Runner is told this same limit (GAME_DB_MEMORY_BYTES) and refuses to
+    # start with a concurrency it cannot hold. Lower one and you may lower the
+    # other; the two must agree.
     deploy:
       resources:
         limits:
           cpus: "${GAME_DB_CPUS:-2.0}"
-          memory: ${GAME_DB_MEMORY:-2g}
+          memory: ${GAME_DB_MEMORY:-9g}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -166,6 +179,12 @@ services:
       QUERY_CONCURRENT: ${QUERY_CONCURRENT:-8}
       QUERY_QUEUE_DEPTH: ${QUERY_QUEUE_DEPTH:-32}
       QUERY_PER_MINUTE: ${QUERY_PER_MINUTE:-30}
+      # The game cluster's memory limit, in bytes, so the runner can refuse to
+      # start with a concurrency the cluster cannot hold (see pg-game above).
+      # Nine gibibytes matches GAME_DB_MEMORY's 9g default; keep the two in
+      # step. Left empty, the check does not run — for a development cluster
+      # with no cgroup limit.
+      GAME_DB_MEMORY_BYTES: ${GAME_DB_MEMORY_BYTES:-9663676416}
       # Functions an operator added to the allow-list after a pilot, without
       # waiting for a release. Comma-separated.
       QUERY_EXTRA_FUNCTIONS: ${QUERY_EXTRA_FUNCTIONS:-}

@@ -543,10 +543,11 @@ func TestOneCellLargerThanTheBudgetIsRefusedWithoutBeingRead(t *testing.T) {
 	limits.MaxBytes = 64 << 10
 	runner, database := setupWith(t, limits, checker.NewChecker())
 
-	// Eight megabytes in one cell: past the budget and past its slack, and
-	// small enough that reading it whole would not itself fail the test —
-	// what fails the test is reading it at all.
-	_, err := runner.Run(t.Context(), request(database, `SELECT repeat('x', 8 * 1024 * 1024)`))
+	// Ten megabytes in one cell — a thousand copies of the longest string the
+	// validator admits, folded into a single value: past the budget and past
+	// its slack, and small enough that reading it whole would not itself fail
+	// the test. What fails the test is reading it at all.
+	_, err := runner.Run(t.Context(), request(database, `SELECT string_agg(repeat('x', 10000), '') FROM generate_series(1, 1000)`))
 	if !errors.Is(err, queryrunner.ErrResultTooLarge) {
 		t.Fatalf("error = %v, want ErrResultTooLarge", err)
 	}
@@ -660,13 +661,13 @@ func TestTheDurationMeasuresTheStatementAndNotSomethingConstant(t *testing.T) {
 		t.Fatalf("running the cheap query: %v", err)
 	}
 	costly, err := runner.Run(t.Context(),
-		request(database, `SELECT count(*) FROM generate_series(1, 2000000)`))
+		request(database, `SELECT count(*) FROM generate_series(1, 100000) a, generate_series(1, 100) b`))
 	if err != nil {
 		t.Fatalf("running the costly query: %v", err)
 	}
 
 	if costly.Duration <= cheap.Duration {
-		t.Fatalf("counting two million rows took %v and reading two rows took %v; "+
+		t.Fatalf("counting ten million rows took %v and reading two rows took %v; "+
 			"the duration is not measuring the statement", costly.Duration, cheap.Duration)
 	}
 }
