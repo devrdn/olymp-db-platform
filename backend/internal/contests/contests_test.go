@@ -172,6 +172,8 @@ func validContest() contests.Contest {
 		Scoring:      contests.ScoringPoints,
 		Timing:       contests.TimingFixed,
 		Languages:    []contests.ContestLanguage{{Code: "en", IsDefault: true}, {Code: "ro"}},
+
+		LeaderboardNames: contests.LeaderboardNamesLogin,
 	}
 }
 
@@ -341,5 +343,50 @@ func TestValidateRejectsAnUnknownEnrollmentType(t *testing.T) {
 
 	if err := c.Validate(); !errors.Is(err, contests.ErrInvalidContest) {
 		t.Errorf("Validate() = %v, want contests.ErrInvalidContest", err)
+	}
+}
+
+// The leaderboard settings (docs/superpowers/specs/2026-09-13-leaderboard-design.md).
+
+func TestValidateRejectsAFreezeOutsideItsBounds(t *testing.T) {
+	// CLAUDE.md rule 2: a minute count that reaches storage has a range. Zero
+	// is not "no freeze" — that is nil — so a zero here is a client that
+	// meant something else.
+	for _, freeze := range []int{0, -5, 10081} {
+		c := validContest()
+		c.LeaderboardFreezeMin = &freeze
+		if err := c.Validate(); !errors.Is(err, contests.ErrInvalidContest) {
+			t.Errorf("freeze %d: Validate() = %v, want ErrInvalidContest", freeze, err)
+		}
+	}
+}
+
+// A freeze as long as the window would freeze the table before anybody
+// answered anything: the table would be empty for the whole contest.
+func TestValidateRejectsAFreezeThatIsNotShorterThanTheWindow(t *testing.T) {
+	c := validContest()
+	start := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	end := start.Add(2 * time.Hour)
+	c.StartsAt, c.EndsAt = &start, &end
+
+	freeze := 120
+	c.LeaderboardFreezeMin = &freeze
+	if err := c.Validate(); !errors.Is(err, contests.ErrInvalidContest) {
+		t.Errorf("freeze equal to the window: Validate() = %v, want ErrInvalidContest", err)
+	}
+
+	freeze = 119
+	if err := c.Validate(); err != nil {
+		t.Errorf("freeze one minute shorter than the window: Validate() = %v, want nil", err)
+	}
+}
+
+func TestValidateRejectsAnUnknownLeaderboardLabel(t *testing.T) {
+	for _, label := range []string{"", "email", "FULL_NAME"} {
+		c := validContest()
+		c.LeaderboardNames = label
+		if err := c.Validate(); !errors.Is(err, contests.ErrInvalidContest) {
+			t.Errorf("label %q: Validate() = %v, want ErrInvalidContest", label, err)
+		}
 	}
 }

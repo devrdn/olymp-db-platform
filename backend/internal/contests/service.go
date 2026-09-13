@@ -198,6 +198,10 @@ type CreateCommand struct {
 	Settings     Settings
 	Languages    []ContestLanguage
 	Translations []Translation
+	// LeaderboardFreezeMin is nil for no freeze; LeaderboardNames empty
+	// defaults to LeaderboardNamesLogin.
+	LeaderboardFreezeMin *int
+	LeaderboardNames     string
 }
 
 // Create registers a contest and makes its author the owner.
@@ -216,6 +220,9 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (Contest, error
 		Settings:     cmd.Settings,
 		Languages:    cmd.Languages,
 		CreatedBy:    cmd.ActorID,
+
+		LeaderboardFreezeMin: cmd.LeaderboardFreezeMin,
+		LeaderboardNames:     orDefault(cmd.LeaderboardNames, LeaderboardNamesLogin),
 	}
 	if err := c.Validate(); err != nil {
 		return Contest{}, err
@@ -292,6 +299,12 @@ type UpdateCommand struct {
 	// clears it; nil leaves it as it was.
 	AllowedCIDRs []netip.Prefix
 	Settings     *Settings
+	// LeaderboardFreezeMin sets the freeze; ClearLeaderboardFreeze removes it.
+	// Two fields because nil already means "leave it as it was", and "no
+	// freeze" has to be sayable too.
+	LeaderboardFreezeMin   *int
+	ClearLeaderboardFreeze bool
+	LeaderboardNames       string
 }
 
 // Update changes a contest's settings.
@@ -334,6 +347,15 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 	}
 	if cmd.Settings != nil {
 		updated.Settings = *cmd.Settings
+	}
+	switch {
+	case cmd.ClearLeaderboardFreeze:
+		updated.LeaderboardFreezeMin = nil
+	case cmd.LeaderboardFreezeMin != nil:
+		updated.LeaderboardFreezeMin = cmd.LeaderboardFreezeMin
+	}
+	if cmd.LeaderboardNames != "" {
+		updated.LeaderboardNames = cmd.LeaderboardNames
 	}
 
 	// The session length belongs to individual timing. Without this the switch
@@ -475,6 +497,11 @@ func checkRunningChange(current, updated Contest) error {
 		return fmt.Errorf("%w: the timing model cannot change while it runs", ErrNotEditable)
 	case !equalDuration(current.DurationMin, updated.DurationMin):
 		return fmt.Errorf("%w: the session length cannot change while it runs", ErrNotEditable)
+	case !equalDuration(current.LeaderboardFreezeMin, updated.LeaderboardFreezeMin):
+		// Moving the freeze mid-run either opens the live table for a moment
+		// or hides a table participants have already seen. The label below
+		// it is free to change: that is a choice about names, not results.
+		return fmt.Errorf("%w: the leaderboard freeze cannot change while it runs", ErrNotEditable)
 	}
 	return nil
 }

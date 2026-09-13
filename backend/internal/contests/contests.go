@@ -81,6 +81,20 @@ const (
 	ScoringWinner = "winner"
 )
 
+// Leaderboard labels: how a participant is named on a table somebody other
+// than the contest's staff reads (docs/superpowers/specs/
+// 2026-09-13-leaderboard-design.md). The table is public, which is why the
+// login is the default and a full name is something an organiser chooses.
+const (
+	LeaderboardNamesLogin    = "login"
+	LeaderboardNamesFullName = "full_name"
+)
+
+// maxLeaderboardFreezeMin bounds leaderboard_freeze_min (CLAUDE.md rule 2): a
+// week, the same ceiling a session length has, and far beyond any window a
+// freeze could sensibly be measured back across.
+const maxLeaderboardFreezeMin = 7 * 24 * 60
+
 // Timing models, see docs/ARCHITECTURE.md §8.
 const (
 	// TimingFixed gives everybody the same window.
@@ -148,6 +162,14 @@ type Contest struct {
 	// restriction, and it never applies to staff (see AllowsAddress).
 	AllowedCIDRs []netip.Prefix
 	Settings     Settings
+	// LeaderboardFreezeMin is how many minutes before EndsAt the table stops
+	// changing for everybody but the staff. Nil is no freeze.
+	LeaderboardFreezeMin *int
+	// LeaderboardNames is LeaderboardNamesLogin or LeaderboardNamesFullName.
+	LeaderboardNames string
+	// LeaderboardRevealedAt is when an organiser revealed a frozen table's
+	// final state. Set once, never cleared, and never through Update.
+	LeaderboardRevealedAt *time.Time
 	// Languages are the languages this contest is offered in, exactly one of
 	// which is the default.
 	Languages []ContestLanguage
@@ -229,6 +251,28 @@ func (c Contest) CanTransitionTo(status string) error {
 // answering it.
 func (c Contest) ContentEditable() bool {
 	return c.Status == StatusDraft || c.Status == StatusPublished
+}
+
+// FreezeAt is the moment the leaderboard freezes: LeaderboardFreezeMin before
+// EndsAt. ok is false when the contest has no freeze or no end to measure it
+// from.
+func (c Contest) FreezeAt() (time.Time, bool) {
+	if c.LeaderboardFreezeMin == nil || c.EndsAt == nil {
+		return time.Time{}, false
+	}
+	return c.EndsAt.Add(-time.Duration(*c.LeaderboardFreezeMin) * time.Minute), true
+}
+
+// FreezeFitsWindow reports whether the freeze begins after the window opens,
+// so the table is not frozen before anybody could have answered. A contest
+// with no freeze always fits; one with a freeze but no complete window does
+// not, because there is nothing to measure it against.
+func (c Contest) FreezeFitsWindow() bool {
+	if c.LeaderboardFreezeMin == nil {
+		return true
+	}
+	freezeAt, ok := c.FreezeAt()
+	return ok && c.StartsAt != nil && c.StartsAt.Before(freezeAt)
 }
 
 // SettingsEditable reports whether the contest's own fields may still change.
@@ -359,6 +403,22 @@ func (c Contest) Validate() error {
 			ErrInvalidContest, c.Settings.GracePeriodMin, maxGracePeriodMin)
 	}
 
+	if !slices.Contains([]string{LeaderboardNamesLogin, LeaderboardNamesFullName}, c.LeaderboardNames) {
+		return fmt.Errorf("%w: unknown leaderboard label %q", ErrInvalidContest, c.LeaderboardNames)
+	}
+	if freeze := c.LeaderboardFreezeMin; freeze != nil {
+		if *freeze < 1 || *freeze > maxLeaderboardFreezeMin {
+			return fmt.Errorf("%w: leaderboard_freeze_min of %d is outside 1..%d",
+				ErrInvalidContest, *freeze, maxLeaderboardFreezeMin)
+		}
+		// Checked here when the window is known; the publish gate checks it
+		// again, because the window can move after the freeze was saved.
+		if !c.FreezeFitsWindow() && c.StartsAt != nil && c.EndsAt != nil {
+			return fmt.Errorf("%w: a freeze of %d minutes is not shorter than the window",
+				ErrInvalidContest, *freeze)
+		}
+	}
+
 	return validateLanguages(c.Languages)
 }
 
@@ -487,5 +547,7 @@ func (c Contest) auditFields() map[string]any {
 		"enrollment_deadline":      c.Settings.EnrollmentDeadline,
 		"query_rate_limit_per_min": c.Settings.QueryRateLimitPerMin,
 		"grace_period_min":         c.Settings.GracePeriodMin,
+		"leaderboard_freeze_min":   c.LeaderboardFreezeMin,
+		"leaderboard_names":        c.LeaderboardNames,
 	}
 }
