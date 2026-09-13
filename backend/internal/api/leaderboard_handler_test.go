@@ -2,9 +2,11 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -30,13 +32,21 @@ import (
 type boardStandings struct {
 	contests *conteststest.Contests
 	entries  []leaderboard.Entry
+	// icpc answers an ICPC query in place of entries.
+	icpc *icpcBoard
 }
 
 func (s *boardStandings) VisibleQuestions(context.Context, uuid.UUID) (int, error) {
-	return 0, nil
+	if s.icpc == nil {
+		return 0, nil
+	}
+	return s.icpc.questions, nil
 }
 
-func (s *boardStandings) Standings(_ context.Context, q leaderboard.Query) ([]leaderboard.Entry, error) {
+func (s *boardStandings) Standings(ctx context.Context, q leaderboard.Query) ([]leaderboard.Entry, error) {
+	if q.Scoring == contests.ScoringICPC && s.icpc != nil {
+		return s.icpc.standings(q), nil
+	}
 	var out []leaderboard.Entry
 	for _, e := range s.entries {
 		if e.LastScoredAt != nil && !e.LastScoredAt.Before(q.Cutoff) {
@@ -61,6 +71,71 @@ func (s *boardStandings) MarkRevealed(ctx context.Context, contestID uuid.UUID, 
 	c.LeaderboardRevealedAt = &at
 	s.contests.Put(c)
 	return at, true, nil
+}
+
+// icpcBoard holds raw ICPC answers and computes the rows from them the way
+// the real query does — the cutoff on solves and wrong counts, the pending
+// window only when asked and only on a question unsolved by the cutoff — so a
+// test can put answers on either side of a freeze and read the body.
+type icpcBoard struct {
+	questions  int
+	start      time.Time
+	penaltyMin int
+	entrants   []icpcEntrant
+}
+
+type icpcEntrant struct {
+	registration uuid.UUID
+	login        string
+	disqualified bool
+	answers      []icpcAnswer
+}
+
+type icpcAnswer struct {
+	question int
+	at       time.Time
+	correct  bool
+}
+
+func (b *icpcBoard) standings(q leaderboard.Query) []leaderboard.Entry {
+	var out []leaderboard.Entry
+	for _, p := range b.entrants {
+		if p.disqualified && !q.IncludeDisqualified {
+			continue
+		}
+		e := leaderboard.Entry{Registration: p.registration, Login: p.login, Disqualified: p.disqualified,
+			Cells: make([]leaderboard.Cell, b.questions)}
+		for i := range e.Cells {
+			cell := &e.Cells[i]
+			for _, a := range p.answers {
+				if a.question == i && a.correct && a.at.Before(q.Cutoff) && (cell.SolvedAt == nil || a.at.Before(*cell.SolvedAt)) {
+					solved := a.at
+					cell.SolvedAt = &solved
+				}
+			}
+			for _, a := range p.answers {
+				if a.question != i {
+					continue
+				}
+				if !a.correct && a.at.Before(q.Cutoff) && (cell.SolvedAt == nil || a.at.Before(*cell.SolvedAt)) {
+					cell.Wrong++
+				}
+				if q.Pending != nil && cell.SolvedAt == nil && !a.at.Before(q.Pending.From) && a.at.Before(q.Pending.Until) {
+					cell.Pending++
+				}
+			}
+			if cell.SolvedAt != nil {
+				cell.Minute = int(cell.SolvedAt.Sub(b.start) / time.Minute)
+				e.Solved++
+				e.Penalty += cell.Minute + b.penaltyMin*cell.Wrong
+				if e.LastSolvedAt == nil || cell.SolvedAt.After(*e.LastSolvedAt) {
+					e.LastSolvedAt = cell.SolvedAt
+				}
+			}
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 type boardFixture struct {
@@ -343,5 +418,147 @@ func TestAPointsTableResponseIsUnchanged(t *testing.T) {
 		`{"place":2,"login":"idle","full_name":"","points":0,"solved":0}]}` + "\n"
 	if got := live.Body.String(); got != want {
 		t.Errorf("live body =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// icpcContest seeds a running ICPC contest frozen 30 minutes before its end,
+// with the clock ten minutes into the freeze, and a board of three questions
+// on which the student and a rival have answered on both sides of the freeze.
+//
+// Before the freeze: the student solves A at minute 10 and gets B wrong once;
+// the rival solves A at minute 20. After it: the rival solves B, the student
+// solves B a minute later, and the student solves C.
+func (f *boardFixture) icpcContest(t *testing.T) (contests.Contest, time.Time) {
+	t.Helper()
+	freeze := 30
+	c, me := f.contest(t, contests.StatusRunning, &freeze)
+	c.Scoring, c.ICPCPenaltyMin = contests.ScoringICPC, 20
+	f.stores.Contests.Put(c)
+	freezeAt := c.EndsAt.Add(-30 * time.Minute)
+	f.now = freezeAt.Add(10 * time.Minute)
+	minute := func(n int) time.Time { return c.StartsAt.Add(time.Duration(n) * time.Minute) }
+	afterFreeze := func(n int) time.Time { return freezeAt.Add(time.Duration(n) * time.Minute) }
+
+	f.standings.icpc = &icpcBoard{questions: 3, start: *c.StartsAt, penaltyMin: 20, entrants: []icpcEntrant{
+		{registration: me.ID, login: "student", answers: []icpcAnswer{
+			{question: 0, at: minute(10), correct: true},
+			{question: 1, at: freezeAt.Add(-5 * time.Minute)},
+			{question: 1, at: afterFreeze(2), correct: true},
+			{question: 2, at: afterFreeze(1), correct: true},
+		}},
+		{registration: uuid.New(), login: "rival", answers: []icpcAnswer{
+			{question: 0, at: minute(20), correct: true},
+			{question: 1, at: afterFreeze(1), correct: true},
+		}},
+	}}
+	return c, freezeAt
+}
+
+type icpcBody struct {
+	State     string   `json:"state"`
+	Questions []string `json:"questions"`
+	Rows      []struct {
+		Label   string          `json:"label"`
+		Login   string          `json:"login"`
+		Place   *int            `json:"place"`
+		Solved  int             `json:"solved"`
+		Penalty *int            `json:"penalty"`
+		Cells   json.RawMessage `json:"cells"`
+	} `json:"rows"`
+}
+
+func intString(n *int) string {
+	if n == nil {
+		return "absent"
+	}
+	return strconv.Itoa(*n)
+}
+
+func decodeICPC(t *testing.T, rec *httptest.ResponseRecorder) icpcBody {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	var body icpcBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	return body
+}
+
+// A frozen ICPC table tells how many attempts came after the freeze on a
+// question not solved before it, and nothing else about them: no solve, no
+// minute, no attempt number, no first-solver mark, and no change to solved,
+// penalty or order — even where the attempt was correct. Checked on the body,
+// for the public table and the participant's copy.
+func TestAFrozenICPCTableShowsOnlyHowManyAttemptsCameAfterTheFreeze(t *testing.T) {
+	f := newBoardFixture(t)
+	c, _ := f.icpcContest(t)
+	student := f.student.ID
+
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"public":      f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard", nil, ""),
+		"participant": f.request(http.MethodGet, "/contests/"+c.ID.String()+"/play/leaderboard", &student, ""),
+	} {
+		raw := rec.Body.String()
+		body := decodeICPC(t, rec)
+		if body.State != leaderboard.StateFrozen || strings.Join(body.Questions, ",") != "A,B,C" {
+			t.Fatalf("%s: state %s, questions %v; want frozen with A, B, C", name, body.State, body.Questions)
+		}
+		if len(body.Rows) != 2 || body.Rows[0].Label != "student" || body.Rows[1].Label != "rival" {
+			t.Fatalf("%s: rows = %s, want student then rival", name, raw)
+		}
+		wantRows := []struct {
+			solved, penalty int
+			cells           string
+		}{
+			{1, 10, `[{"state":"solved","attempts":1,"minute":10,"first":true},` +
+				`{"state":"pending","attempts":1,"pending":1},{"state":"pending","attempts":0,"pending":1}]`},
+			{1, 20, `[{"state":"solved","attempts":1,"minute":20,"first":false},` +
+				`{"state":"pending","attempts":0,"pending":1},{"state":"untried"}]`},
+		}
+		for i, want := range wantRows {
+			row := body.Rows[i]
+			if row.Solved != want.solved || row.Penalty == nil || *row.Penalty != want.penalty || row.Place == nil || *row.Place != i+1 {
+				t.Errorf("%s: %s solved %d, penalty %s, place %s; want %d, %d, %d",
+					name, row.Label, row.Solved, intString(row.Penalty), intString(row.Place), want.solved, want.penalty, i+1)
+			}
+			if string(row.Cells) != want.cells {
+				t.Errorf("%s: %s cells =\n%s\nwant\n%s", name, row.Label, row.Cells, want.cells)
+			}
+		}
+		// Minutes 151 and 152 are the solves after the freeze.
+		for _, leak := range []string{`"minute":151`, `"minute":152`, `"attempts":2`} {
+			if strings.Contains(raw, leak) {
+				t.Errorf("%s: the body carries %s from after the freeze: %s", name, leak, raw)
+			}
+		}
+	}
+}
+
+// The staff table is cut off now: it sees the solves after the freeze, marks
+// the first solver by them, and never says pending.
+func TestTheLiveICPCTableSeesTheResultsAndNoPending(t *testing.T) {
+	f := newBoardFixture(t)
+	c, _ := f.icpcContest(t)
+	organizer := f.organizer.ID
+
+	rec := f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard/live", &organizer, "")
+	raw := rec.Body.String()
+	body := decodeICPC(t, rec)
+	if strings.Contains(raw, "pending") {
+		t.Errorf("the staff table says pending: %s", raw)
+	}
+	if strings.Join(body.Questions, ",") != "A,B,C" || len(body.Rows) != 2 || body.Rows[0].Login != "student" {
+		t.Fatalf("body = %s, want questions A, B, C and the student first", raw)
+	}
+	student := body.Rows[0]
+	wantCells := `[{"state":"solved","attempts":1,"minute":10,"first":true},` +
+		`{"state":"solved","attempts":2,"minute":152,"first":false},{"state":"solved","attempts":1,"minute":151,"first":true}]`
+	if student.Solved != 3 || student.Penalty == nil || *student.Penalty != 10+152+20+151 || string(student.Cells) != wantCells {
+		t.Errorf("student solved %d, penalty %s, cells\n%s\nwant 3, %d,\n%s", student.Solved, intString(student.Penalty), student.Cells, 10+152+20+151, wantCells)
+	}
+	if rival := body.Rows[1]; !strings.Contains(string(rival.Cells), `{"state":"solved","attempts":1,"minute":151,"first":true}`) {
+		t.Errorf("rival cells = %s, want B solved first at minute 151", rival.Cells)
 	}
 }
