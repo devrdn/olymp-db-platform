@@ -129,7 +129,7 @@ describe("the staff table", () => {
     expect(screen.getByText("B: untried")).toBeInTheDocument();
   });
 
-  test("gives the table a minimum width covering the grid, so the name stays legible", () => {
+  test("gives the table a min-width variable scoped to the narrow breakpoint, not an unconditional one", () => {
     const questions = Array.from({ length: 12 }, (_, i) => String.fromCharCode(65 + i));
     show(
       board({
@@ -154,15 +154,22 @@ describe("the staff table", () => {
       "running",
     );
 
+    const table = screen.getByRole("table");
     // Place (w-16 = 4rem) + login (w-28 = 7rem) + solved (w-20 = 5rem)
     // + penalty (w-20 = 5rem) + 12 grid cells (w-12 = 3rem each) + a
-    // still-legible 12rem name column.
-    expect(screen.getByRole("table")).toHaveStyle({ minWidth: "69rem" });
+    // still-legible 12rem name column. The grid (and the login column) are
+    // `max-narrow:hidden`, so an unconditional `min-width` would force a
+    // sideways scroll on a phone showing none of the columns it is sized for.
+    expect(table.style.getPropertyValue("--grid-min-width")).toBe("69rem");
+    expect(table.className).toContain("narrow:min-w-(--grid-min-width)");
+    expect(table.style.minWidth).toBe("");
   });
 
-  test("sets no minimum width in points mode, which has no grid", () => {
+  test("sets no grid-width variable or class in points mode, which has no grid", () => {
     show(board(), "running");
 
-    expect(screen.getByRole("table").style.minWidth).toBe("");
+    const table = screen.getByRole("table");
+    expect(table.style.getPropertyValue("--grid-min-width")).toBe("");
+    expect(table.className).not.toContain("--grid-min-width");
   });
 });
