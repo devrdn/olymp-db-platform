@@ -47,15 +47,29 @@ type Query struct {
 	Scoring string
 	// IncludeDisqualified is true only for the staff table.
 	IncludeDisqualified bool
+	// Pending asks for the attempts inside a window, on questions not solved
+	// before the cutoff (Cell.Pending). It is set only for a frozen ICPC table,
+	// from the freeze to the moment of computing, and never for the staff's
+	// table, which is cut off now and sees the results themselves.
+	Pending *Window
 	// Limit is how many entries to return at most, in the order Rank would
 	// put them — with the winner first in winner mode — so that cutting the
 	// list never cuts the top of the table.
 	Limit int
 }
 
+// Window is the half-open span [From, Until).
+type Window struct {
+	From  time.Time
+	Until time.Time
+}
+
 // Repository is the storage the table needs.
 type Repository interface {
 	Standings(ctx context.Context, q Query) ([]Entry, error)
+	// VisibleQuestions counts the contest's visible questions: the width of
+	// the ICPC grid, which a table with no rows must still know.
+	VisibleQuestions(ctx context.Context, contestID uuid.UUID) (int, error)
 	// MarkRevealed records the reveal once. It returns the moment in force
 	// and whether this call was the one that set it.
 	MarkRevealed(ctx context.Context, contestID uuid.UUID, at time.Time) (time.Time, bool, error)
@@ -83,7 +97,10 @@ type View struct {
 	// latest answer, which during a freeze would say that something changed.
 	GeneratedAt time.Time
 	Truncated   bool
-	Rows        []Row
+	// Questions is how many visible questions the ICPC grid has; zero in
+	// every other mode.
+	Questions int
+	Rows      []Row
 }
 
 // StaffView is the live table, with what everybody else is being shown.
@@ -92,6 +109,7 @@ type StaffView struct {
 	Shown       Decision
 	GeneratedAt time.Time
 	Truncated   bool
+	Questions   int
 	Rows        []Row
 }
 
@@ -159,12 +177,17 @@ func (s *Service) Public(ctx context.Context, contestID uuid.UUID) (View, error)
 
 	view := View{Contest: c, Decision: decision, GeneratedAt: now, Rows: []Row{}}
 	if decision.State != StateNotStarted {
-		view.Rows, view.Truncated, err = s.rank(ctx, Query{
-			ContestID: c.ID, Cutoff: decision.Cutoff, Scoring: c.Scoring,
-		})
+		q := Query{ContestID: c.ID, Cutoff: decision.Cutoff, Scoring: c.Scoring}
+		// The one thing a frozen ICPC table tells about the time since the
+		// freeze: how many attempts there were, never what came of them.
+		if decision.State == StateFrozen && c.Scoring == contests.ScoringICPC {
+			q.Pending = &Window{From: *decision.FrozenAt, Until: now}
+		}
+		t, err := s.rank(ctx, q)
 		if err != nil {
 			return View{}, err
 		}
+		view.Rows, view.Truncated, view.Questions = t.rows, t.truncated, t.questions
 	}
 
 	s.store(contestID, view, s.expiry(c, decision, now))
@@ -209,13 +232,16 @@ func (s *Service) Live(ctx context.Context, contestID uuid.UUID) (StaffView, err
 		// A draft: nobody else sees anything, and there is nothing to rank.
 		return StaffView{Contest: c, Shown: Decision{State: StateNotStarted, Cutoff: now}, GeneratedAt: now, Rows: []Row{}}, nil
 	}
-	rows, truncated, err := s.rank(ctx, Query{
+	// Never Pending: cut off now, the staff table shows the results themselves.
+	t, err := s.rank(ctx, Query{
 		ContestID: c.ID, Cutoff: now, Scoring: c.Scoring, IncludeDisqualified: true,
 	})
 	if err != nil {
 		return StaffView{}, err
 	}
-	return StaffView{Contest: c, Shown: shown, GeneratedAt: now, Truncated: truncated, Rows: rows}, nil
+	return StaffView{
+		Contest: c, Shown: shown, GeneratedAt: now, Truncated: t.truncated, Questions: t.questions, Rows: t.rows,
+	}, nil
 }
 
 // Reveal opens a frozen table's final state to everybody, once.
@@ -285,19 +311,39 @@ func (s *Service) contest(ctx context.Context, id uuid.UUID) (contests.Contest, 
 	return c, nil
 }
 
+// table is one computation of the rows.
+type table struct {
+	rows      []Row
+	truncated bool
+	// questions is the ICPC grid's width, zero in every other mode.
+	questions int
+}
+
 // rank reads one more entry than the bound, so "there are more" is a fact
 // rather than the guess len == limit would be.
-func (s *Service) rank(ctx context.Context, q Query) ([]Row, bool, error) {
+func (s *Service) rank(ctx context.Context, q Query) (table, error) {
+	var t table
+	if q.Scoring == contests.ScoringICPC {
+		// Questions cannot change once the contest runs (ContentEditable), and
+		// no table has rows before that, so this count and the cells agree.
+		n, err := s.standings.VisibleQuestions(ctx, q.ContestID)
+		if err != nil {
+			return table{}, fmt.Errorf("count the visible questions: %w", err)
+		}
+		t.questions = n
+	}
+
 	q.Limit = s.maxRows + 1
 	entries, err := s.standings.Standings(ctx, q)
 	if err != nil {
-		return nil, false, fmt.Errorf("read the standings: %w", err)
+		return table{}, fmt.Errorf("read the standings: %w", err)
 	}
-	truncated := len(entries) > s.maxRows
-	if truncated {
+	t.truncated = len(entries) > s.maxRows
+	if t.truncated {
 		entries = entries[:s.maxRows]
 	}
-	return Rank(q.Scoring, entries), truncated, nil
+	t.rows = Rank(q.Scoring, entries)
+	return t, nil
 }
 
 // expiry is when a cached table stops being true: the TTL, or the freeze if
