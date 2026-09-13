@@ -76,6 +76,10 @@ const (
 	// walked out of the door and somebody may later need to know whose
 	// account it left through. The payload carries counts only (§9.2).
 	ActionContestPackageExport = "contest.package_export"
+	// ActionContestLeaderboardReveal records an organiser revealing a frozen
+	// table's final state. Irreversible, and the moment everybody sees who
+	// won, which is exactly what somebody later asks "who pressed it, when".
+	ActionContestLeaderboardReveal = "contest.leaderboard_reveal"
 
 	ActionParticipantAdd        = "participant.add"
 	ActionParticipantRemove     = "participant.remove"
@@ -173,7 +177,7 @@ var actions = []string{
 	ActionContestStoryChange, ActionQuestionCreate,
 	ActionQuestionUpdate, ActionQuestionDelete, ActionQuestionReorder,
 	ActionAnswersChange, ActionManagerGrant, ActionManagerRevoke,
-	ActionContestPackageExport,
+	ActionContestPackageExport, ActionContestLeaderboardReveal,
 
 	ActionParticipantAdd, ActionParticipantRemove, ActionParticipantDisqualify,
 	ActionParticipantEnroll, ActionContestAccessDenied, ActionContestStartBlocked,
