@@ -7,6 +7,7 @@ import type { QuestionEntry } from "./questions-panel";
 import type { QueryLogEntry } from "@/lib/api/querylog";
 import type { PlayDictionary } from "./dictionary";
 import type { GameSchema } from "@/lib/api/schema";
+import type { Scoring } from "@/lib/api/contests";
 import type { Locale } from "@/lib/i18n/config";
 
 import type { ConsoleState } from "./actions";
@@ -95,6 +96,8 @@ export function Workspace({
   printView,
   storyUnavailable,
   questionEntries,
+  scoring = "points",
+  icpcPenaltyMin = 20,
   schema,
   initialLog,
   locale,
@@ -106,6 +109,10 @@ export function Workspace({
   printView: React.ReactNode;
   storyUnavailable: string | null;
   questionEntries: QuestionEntry[];
+  /** The contest's own scoring mode, read from the summary `page.tsx` already loads — see `questions-panel.tsx` for what ICPC changes on this screen. Defaulted, like `icpcPenaltyMin` below, because most of this component's own tests predate ICPC scoring and have nothing to do with it. */
+  scoring?: Scoring;
+  /** Minutes added for a wrong attempt on a question later solved. Read only while `scoring` is `icpc`. */
+  icpcPenaltyMin?: number;
   /** The game's shape, or null in a contest that hides it — see SchemaPanel. */
   schema: GameSchema | null;
   initialLog: { items: QueryLogEntry[]; total: number; failed: boolean };
@@ -379,6 +386,8 @@ export function Workspace({
               storyUnavailable={storyUnavailable}
               contestId={contestId}
               questionEntries={questionEntries}
+              scoring={scoring}
+              icpcPenaltyMin={icpcPenaltyMin}
               dict={dict}
               locale={locale}
             />

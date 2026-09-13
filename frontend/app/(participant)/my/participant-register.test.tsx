@@ -31,6 +31,8 @@ const contest = (over: Partial<ContestSummary> = {}): ContestSummary => ({
   startsAt: "2026-05-14T07:00:00Z",
   endsAt: "2026-05-14T10:00:00Z",
   enrolled: false,
+  scoring: "points",
+  icpcPenaltyMin: 20,
   ...over,
 });
 

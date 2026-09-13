@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { ApiError } from "@/lib/api/client";
 import {
   ENROLLMENTS,
+  icpcPenaltyFromForm,
   PROGRESSIONS,
   QUESTION_MODES,
   SCORINGS,
@@ -106,6 +107,13 @@ export async function saveSettingsAction(
   };
   if (freeze.value !== undefined) leaderboard.freeze_min = freeze.value;
 
+  // Locked with the rest of the shape, the same as `scoring` itself: a
+  // disabled field submits nothing, which `icpcPenaltyFromForm` reads as
+  // "send no key" rather than "clear it" — there is no cleared state for a
+  // penalty in this mode.
+  const icpcPenalty = icpcPenaltyFromForm(form.get("icpcPenaltyMin"));
+  if (!icpcPenalty.ok) return { code: "invalid_request" };
+
   const rate = Number(form.get("queryRateLimitPerMin"));
   const grace = Number(form.get("gracePeriodMin"));
 
@@ -116,30 +124,29 @@ export async function saveSettingsAction(
     .map((cidr) => cidr.trim())
     .filter(Boolean);
 
-  return attempt(
-    `/contests/${contestId}`,
-    {
-      method: "PATCH",
-      body: {
-        enrollment: oneOf<Enrollment>(form.get("enrollment"), ENROLLMENTS) ?? "invite_only",
-        question_mode: oneOf<QuestionMode>(form.get("questionMode"), QUESTION_MODES) ?? "multi",
-        progression: oneOf<Progression>(form.get("progression"), PROGRESSIONS) ?? "free",
-        scoring: oneOf<Scoring>(form.get("scoring"), SCORINGS) ?? "points",
-        timing,
-        duration_min: durationMin,
-        starts_at: moment(form.get("startsAt")),
-        ends_at: moment(form.get("endsAt")),
-        allowed_cidrs: allowedCidrs,
-        leaderboard,
-        settings: {
-          enrollment_deadline: moment(form.get("enrollmentDeadline")) ?? "",
-          query_rate_limit_per_min: Number.isFinite(rate) && rate >= 0 ? Math.floor(rate) : 0,
-          grace_period_min: Number.isFinite(grace) && grace >= 0 ? Math.floor(grace) : 0,
-        },
-      },
+  const body: Record<string, unknown> = {
+    enrollment: oneOf<Enrollment>(form.get("enrollment"), ENROLLMENTS) ?? "invite_only",
+    question_mode: oneOf<QuestionMode>(form.get("questionMode"), QUESTION_MODES) ?? "multi",
+    progression: oneOf<Progression>(form.get("progression"), PROGRESSIONS) ?? "free",
+    scoring: oneOf<Scoring>(form.get("scoring"), SCORINGS) ?? "points",
+    timing,
+    duration_min: durationMin,
+    starts_at: moment(form.get("startsAt")),
+    ends_at: moment(form.get("endsAt")),
+    allowed_cidrs: allowedCidrs,
+    leaderboard,
+    settings: {
+      enrollment_deadline: moment(form.get("enrollmentDeadline")) ?? "",
+      query_rate_limit_per_min: Number.isFinite(rate) && rate >= 0 ? Math.floor(rate) : 0,
+      grace_period_min: Number.isFinite(grace) && grace >= 0 ? Math.floor(grace) : 0,
     },
-    contestId,
-  );
+  };
+  // Locked with the rest of the shape: a disabled field submits nothing, and
+  // `icpcPenaltyFromForm` reads that as "send no key" — the same reasoning
+  // `leaderboard.freeze_min` above already follows.
+  if (icpcPenalty.value !== undefined) body.icpc_penalty_min = icpcPenalty.value;
+
+  return attempt(`/contests/${contestId}`, { method: "PATCH", body }, contestId);
 }
 
 /**

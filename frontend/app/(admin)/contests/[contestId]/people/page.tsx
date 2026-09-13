@@ -53,6 +53,7 @@ export default async function PeoplePage(props: PageProps<"/contests/[contestId]
           participants={participants.items}
           total={participants.total}
           locale={locale}
+          scoring={contest.scoring}
           dict={dict}
         />
       ) : null}

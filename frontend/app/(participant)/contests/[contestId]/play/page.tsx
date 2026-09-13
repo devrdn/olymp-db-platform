@@ -155,6 +155,8 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
         <PlayPanels
           contestId={contestId}
           contestTitle={contest.title}
+          scoring={contest.scoring}
+          icpcPenaltyMin={contest.icpcPenaltyMin}
           locale={locale}
           dict={dict}
         />
@@ -181,12 +183,18 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
 async function PlayPanels({
   contestId,
   contestTitle,
+  scoring,
+  icpcPenaltyMin,
   locale,
   dict,
 }: {
   contestId: string;
   /** Carried only for the print copy's byline — the bar above already shows it. */
   contestTitle: string;
+  /** The contest's own scoring mode, from the summary this route already read — see `questions-panel.tsx` for what ICPC changes on this screen. */
+  scoring: ContestSummary["scoring"];
+  /** Minutes added for a wrong attempt on a question later solved, read only while `scoring` is `icpc`. */
+  icpcPenaltyMin: number;
   locale: Locale;
   dict: PlayDictionary;
 }) {
@@ -349,6 +357,8 @@ async function PlayPanels({
       printView={printView}
       storyUnavailable={storyUnavailable}
       questionEntries={questionEntries}
+      scoring={scoring}
+      icpcPenaltyMin={icpcPenaltyMin}
       schema={schema}
       initialLog={initialLog}
       locale={locale}

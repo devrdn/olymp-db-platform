@@ -217,6 +217,7 @@ export function ContestPanel({
   );
   const [timing, setTiming] = useState<string>(contest.timing);
   const [progression, setProgression] = useState<string>(contest.progression);
+  const [scoring, setScoring] = useState<string>(contest.scoring);
   const orderLegendId = useId();
   const scoringLegendId = useId();
   const freezeLegendId = useId();
@@ -385,7 +386,29 @@ export function ContestPanel({
             labels={dict.workspace.scoring}
             initial={contest.scoring}
             disabled={!shapeOpen}
+            onPick={setScoring}
           />
+
+          {/* ICPC's own penalty (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md):
+              minutes added to a registration's penalty time for every wrong
+              attempt on a question it later solves. Shown only in this mode —
+              the other two scorings have no use for it — and locked with the
+              rest of the shape, the same as the radio above: a disabled field
+              submits nothing, which the action reads as "leave it alone". */}
+          {scoring === "icpc" ? (
+            <Field id="icpcPenaltyMin" label={t.shape.icpcPenalty} hint={t.shape.icpcPenaltyHint}>
+              <Input
+                name="icpcPenaltyMin"
+                type="number"
+                min={0}
+                max={240}
+                step={1}
+                defaultValue={contest.icpcPenaltyMin}
+                disabled={!shapeOpen}
+                className="max-w-40"
+              />
+            </Field>
+          ) : null}
         </fieldset>
       </Panel>
 

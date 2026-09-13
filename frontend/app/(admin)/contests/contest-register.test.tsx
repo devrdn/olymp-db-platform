@@ -19,6 +19,8 @@ const nightInTheArchive: ContestSummary = {
   // The author's register ignores it — an organizer's own participation is a
   // fact about a different question — but the shape it receives carries it.
   enrolled: false,
+  scoring: "points",
+  icpcPenaltyMin: 20,
 };
 
 let en: Dictionary;

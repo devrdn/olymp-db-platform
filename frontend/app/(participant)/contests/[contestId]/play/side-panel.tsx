@@ -6,6 +6,7 @@ import { ExportMenu } from "@/components/product/export-menu";
 import { StandingsView } from "@/components/product/standings";
 import { useStandings } from "@/components/product/use-standings";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type { Scoring } from "@/lib/api/contests";
 import { fetchStandingsAction } from "./actions";
 import type { PlayDictionary } from "./dictionary";
 
@@ -85,6 +86,8 @@ export function SidePanel({
   storyUnavailable,
   contestId,
   questionEntries,
+  scoring = "points",
+  icpcPenaltyMin = 20,
   dict,
   locale,
 }: {
@@ -92,6 +95,8 @@ export function SidePanel({
   storyUnavailable: string | null;
   contestId: string;
   questionEntries: QuestionEntry[];
+  scoring?: Scoring;
+  icpcPenaltyMin?: number;
   dict: PlayDictionary;
   locale: string;
 }) {
@@ -153,7 +158,13 @@ export function SidePanel({
         )}
       </TabsContent>
       <TabsContent value="questions" fill={false} className="relative overflow-y-auto p-4">
-        <QuestionsPanel contestId={contestId} items={questionEntries} dict={dict} />
+        <QuestionsPanel
+          contestId={contestId}
+          items={questionEntries}
+          scoring={scoring}
+          icpcPenaltyMin={icpcPenaltyMin}
+          dict={dict}
+        />
       </TabsContent>
       <TabsContent value="leaderboard" fill={false} className="relative overflow-y-auto p-4">
         <LeaderboardTab contestId={contestId} active={tab === "leaderboard"} dict={dict} locale={locale} />

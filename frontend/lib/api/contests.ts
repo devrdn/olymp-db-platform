@@ -69,6 +69,13 @@ export const contestSummarySchema = z
      * which of two labels a row shows, and no screen depends on it to be safe.
      */
     enrolled: z.boolean().default(false),
+    // The two fields the play screen needs to know whether it is running
+    // under ICPC scoring at all (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md):
+    // whether to show a question's points, and what a wrong attempt on a
+    // question later solved costs. Read here rather than from the staff-only
+    // `Contest`, which a participant may not fetch.
+    scoring: z.enum(SCORINGS),
+    icpc_penalty_min: z.number(),
   })
   .transform((raw) => ({
     id: raw.id,
@@ -82,6 +89,8 @@ export const contestSummarySchema = z
     startsAt: raw.starts_at,
     endsAt: raw.ends_at,
     enrolled: raw.enrolled,
+    scoring: raw.scoring,
+    icpcPenaltyMin: raw.icpc_penalty_min,
   }));
 
 export type ContestSummary = z.infer<typeof contestSummarySchema>;
@@ -135,6 +144,12 @@ export const contestSchema = z
     question_mode: z.enum(QUESTION_MODES),
     progression: z.enum(PROGRESSIONS),
     scoring: z.enum(SCORINGS),
+    // Minutes added to an ICPC registration's penalty time for every wrong
+    // attempt on a question it goes on to solve. Present regardless of
+    // `scoring` — the column carries a default (20) and the mode can be
+    // reverted before the contest starts — but only read and shown while
+    // `scoring` is `icpc`.
+    icpc_penalty_min: z.number(),
     timing: z.enum(TIMINGS),
     duration_min: z.number().nullish(),
     starts_at: z.string().optional(),
@@ -158,6 +173,7 @@ export const contestSchema = z
     questionMode: raw.question_mode,
     progression: raw.progression,
     scoring: raw.scoring,
+    icpcPenaltyMin: raw.icpc_penalty_min,
     timing: raw.timing,
     durationMin: raw.duration_min ?? undefined,
     startsAt: raw.starts_at,
@@ -246,6 +262,34 @@ export function settingsEditable(status: ContestStatus): boolean {
  */
 export function shapeEditable(status: ContestStatus): boolean {
   return status === "draft" || status === "published";
+}
+
+/**
+ * The ICPC penalty the settings form submitted, as the API's
+ * `icpc_penalty_min`.
+ *
+ * Locked with the rest of the shape (`shapeEditable`), the same as the
+ * scoring radio it appears beside: a disabled field submits nothing, which
+ * this reads as "send no key" rather than "clear it" — `null` is never a
+ * meaningful outcome here, unlike `leaderboard.freeze_min`'s own three-way
+ * split (`freezeFromForm`), because there is no way to unset a penalty in
+ * this mode.
+ *
+ * A non-integer or an amount outside 0..240 is refused rather than rounded:
+ * the column's own `CHECK` bound is 0 to 240, and a value the form quietly
+ * adjusted would save a setting nobody chose.
+ */
+export function icpcPenaltyFromForm(
+  value: FormDataEntryValue | null,
+): { ok: true; value: number | undefined } | { ok: false } {
+  if (value === null) return { ok: true, value: undefined };
+
+  const raw = String(value).trim();
+  if (!/^\d+$/.test(raw)) return { ok: false };
+
+  const whole = Number(raw);
+  if (whole > 240) return { ok: false };
+  return { ok: true, value: whole };
 }
 
 export const publishProblemSchema = z.object({
