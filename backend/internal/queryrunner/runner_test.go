@@ -207,6 +207,77 @@ func TestARefusedQueryNeverReachesTheDatabase(t *testing.T) {
 	}
 }
 
+// A function that builds a value from a number is where one query could make
+// a game-cluster process allocate close to a gigabyte, and nothing on this
+// side of the connection stops that once the query has been sent: the result
+// budget and the deadline only discard what the server already built. So the
+// bound has to hold before the query is sent, and this proves it does on the
+// real path — refused with the declared code, and never executed — while the
+// bounded forms still run and PostgreSQL agrees with the checker about what
+// they produce.
+func TestAnUnboundedGeneratorNeverReachesTheCluster(t *testing.T) {
+	runner, database := setup(t)
+	gamedbtest.Run(t, database, `GRANT INSERT ON evidence TO `+gamedb.RoleWriter)
+
+	// Never executed, not merely failed: a write one past the bound would
+	// leave a row behind had it reached the database. First, and fatal, so
+	// that a checker without the bound stops the test here rather than
+	// sending the gigabyte-sized queries below to the cluster.
+	writing := request(database, `INSERT INTO evidence (id, note) SELECT 3, repeat('x', 10001)`)
+	writing.Policy = sqlpolicy.ReadWrite("evidence")
+	if _, err := runner.Run(t.Context(), writing); err == nil {
+		t.Fatal("a write with an unbounded repeat was allowed")
+	}
+	result, err := runner.Run(t.Context(), request(database, `SELECT count(*) FROM evidence`))
+	if err != nil {
+		t.Fatalf("reading back: %v", err)
+	}
+	if got := result.Rows[0][0]; got != int64(2) {
+		t.Fatalf("count after the refused write = %v, want 2: the query reached the database", got)
+	}
+
+	for _, sql := range []string{
+		`SELECT length(repeat('x', 900000000))`,
+		`SELECT length(rpad('', 900000000, 'x'))`,
+		`SELECT length(format('%900000000s', ''))`,
+		`SELECT length(string_agg(repeat('x', 1000000), ',')) FROM generate_series(1, 2000)`,
+		`SELECT cardinality(array_agg(repeat('x', 1000000))) FROM generate_series(1, 2000)`,
+		`SELECT count(*) FROM generate_series(1, 100000000)`,
+		`SELECT length(repeat(note, id * 100000000)) FROM evidence`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := runner.Run(t.Context(), request(database, sql))
+			var refusal *sqlpolicy.Refusal
+			if !errors.As(err, &refusal) || refusal.Code != sqlpolicy.CodeArgumentNotBounded {
+				t.Fatalf("error = %v, want a refusal with code %q", err, sqlpolicy.CodeArgumentNotBounded)
+			}
+		})
+	}
+
+	// The bounded forms run, and produce what the checker assumed they would.
+	for sql, want := range map[string]int64{
+		`SELECT length(repeat('x', 10000))`:                                                      10_000,
+		`SELECT length(lpad('7', 10000, '0'))`:                                                   10_000,
+		`SELECT length(format('%5000s|%4999s', 'a', 'b'))`:                                       10_000,
+		`SELECT count(*) FROM generate_series(1, 100000)`:                                        100_000,
+		`SELECT count(*) FROM generate_series(1, 1000000, 10)`:                                   100_000,
+		`SELECT count(*) FROM generate_series('2024-01-01'::date, '2024-12-31'::date, '1 day')`:  366,
+		`SELECT count(*) FROM generate_series('2024-01-01', '2024-01-02', '01:00:00'::interval)`: 25,
+		`SELECT count(*) FROM generate_series('2024-03-01 00:00+02'::timestamptz, '2024-04-01 00:00+03'::timestamptz, '1 hour', 'Europe/Chisinau')`: 744,
+		`SELECT count(*) FROM generate_series('2020-01-01'::timestamp, '2024-01-01'::timestamp, '1 month')`:                                         49,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			result, err := runner.Run(t.Context(), request(database, sql))
+			if err != nil {
+				t.Fatalf("a bounded generator failed: %v", err)
+			}
+			if got := result.Rows[0][0]; got != want && got != int32(want) {
+				t.Fatalf("%s = %v (%T), want %d", sql, got, got, want)
+			}
+		})
+	}
+}
+
 func TestAnUnknownDatabaseFailsWithoutPanicking(t *testing.T) {
 	runner, _ := setup(t)
 

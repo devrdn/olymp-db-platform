@@ -378,6 +378,10 @@
       "meaning": "This participant already has a query in flight. One at a time, so that ten open tabs cannot hold ten execution slots."
     },
     {
+      "code": "query_argument_not_bounded",
+      "meaning": "The query calls a function that builds a value or a series of rows whose size an argument decides, and that size is not a number written in the query within the bound. The details name the function and the bound."
+    },
+    {
       "code": "query_busy",
       "meaning": "The instance is running as many queries as it will at once. Answered immediately rather than queued indefinitely."
     },
