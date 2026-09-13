@@ -1398,7 +1398,7 @@ const ro = {
     query_function_not_supported:
       "Această funcție nu este disponibilă în această olimpiadă.",
     query_argument_not_bounded:
-      "Această funcție construiește ceva a cărui mărime o stabiliți, iar aici mărimea trebuie să fie un număr scris direct în interogare, în limita afișată.",
+      "Această funcție construiește o valoare pe baza unei mărimi, iar mărimea scrisă aici este un număr fix mult peste ce este permis. O mărime care provine dintr-o coloană sau un subinterogare este acceptată — se refuză doar o constantă atât de mare. Reduceți-o și încercați din nou.",
     query_catalog_not_readable:
       "Acest catalog de sistem descrie instalarea și ceilalți participanți și nu poate fi citit niciodată.",
     query_catalog_not_allowed:

@@ -144,7 +144,7 @@ func TestAQueryOverTheLengthBoundIsA400(t *testing.T) {
 // change. The subject carries the function and the bound.
 func TestAnUnboundedGeneratorIsA400WithItsOwnCode(t *testing.T) {
 	fixture := newConsoleFixture(t, fakeConsole{
-		err: &sqlpolicy.Refusal{Code: sqlpolicy.CodeArgumentNotBounded, Subject: "repeat: at most 10000"},
+		err: &sqlpolicy.Refusal{Code: sqlpolicy.CodeArgumentNotBounded, Subject: "repeat length 900000000 exceeds the 10000 limit"},
 	})
 
 	rec := fixture.run("SELECT repeat('x', 900000000)")
@@ -154,7 +154,7 @@ func TestAnUnboundedGeneratorIsA400WithItsOwnCode(t *testing.T) {
 	if code := errorCode(t, rec); code != "query_argument_not_bounded" {
 		t.Fatalf("code = %q, want %q", code, "query_argument_not_bounded")
 	}
-	if subject := decode(t, rec)["subject"]; subject != "repeat: at most 10000" {
+	if subject := decode(t, rec)["subject"]; subject != "repeat length 900000000 exceeds the 10000 limit" {
 		t.Fatalf("subject = %v, want the function and its bound (body: %s)", subject, rec.Body.String())
 	}
 }

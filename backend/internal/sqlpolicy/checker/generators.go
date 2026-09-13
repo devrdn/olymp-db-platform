@@ -3,124 +3,149 @@ package checker
 import (
 	"fmt"
 	"math"
-	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 
 	pg "github.com/pganalyze/pg_query_go/v6"
 )
 
-// MaxGeneratedLength bounds the length a string-building function may be
-// asked to produce: the count of repeat, the length of lpad and rpad, a width
-// inside a format string.
+// MaxGeneratedLength is the length above which a string-building function —
+// repeat, lpad, rpad — is refused when the length is written in the query as a
+// constant.
 //
-// These are the allow-listed functions whose output size is decided by a
-// number rather than by the data they are given. PostgreSQL builds the whole
-// value inside the server process before a single byte of it is sent, so
-// nothing the Query Runner applies to a result — the byte budget, the row
-// limit, the deadline — stops the allocation; it only discards what was
-// already built. A line of dashes, a padded identifier or an aligned column
-// is tens of characters, so ten thousand leaves room for every legitimate use
-// and keeps one call a few megabytes even in a four-byte encoding.
+// This is a first line, not the bound. The bound is a per-process memory limit
+// on the game cluster's backends (deploy/docker-compose.yml, ulimits.data): a
+// query that over-allocates fails with PostgreSQL's own "out of memory" ERROR
+// in that one backend, and the postmaster does not restart. What this constant
+// buys is a clear, immediate refusal for the obvious case — a constant length
+// nobody could mean — rather than making a participant wait for the query to
+// run and fail. Anything the checker cannot read as a constant (a column, a
+// subquery, an aggregate, arithmetic, a value-changing cast) is admitted and
+// left to the memory limit; that is deliberate, so an ordinary query like
+// repeat('#', count(*)::int) is not refused for a size the checker cannot know.
+//
+// Ten thousand leaves room for every legitimate use (a line of dashes, a
+// padded identifier, an aligned column are tens of characters) while refusing
+// a constant that is plainly abusive.
 const MaxGeneratedLength = 10_000
 
-// MaxSeriesLength bounds how many values one generate_series may produce.
-//
-// A series is harmless on its own, but it is the row source that turns a
-// bounded value into an unbounded aggregate: a string built once is bounded,
-// the same string built once per row of a series and folded by string_agg is
-// not. A hundred thousand is far beyond a calendar of a year in minutes'
-// resolution and far beyond any numbering a detective query needs.
+// MaxSeriesLength is the number of values above which generate_series is
+// refused when its bounds are written in the query as constants. The same
+// first-line reasoning as MaxGeneratedLength: a series whose bounds are a
+// column or a subquery — generate_series(1, (SELECT max(id) FROM t)) — is
+// admitted, because the checker cannot know the count without running the
+// query, and a runaway one costs a single execution slot until the deadline.
 const MaxSeriesLength = 100_000
 
-// sizeAllowed checks the argument that decides how much a generating function
-// produces, for the functions that have one. Every other function passes.
+// sizeAllowed is the first-line check on the functions that build a value, or
+// a series of rows, from a size. It refuses only what it can prove abusive
+// from constants written in the query; everything else it admits, leaving the
+// game cluster's per-process memory limit as the real bound.
 //
-// The rule is deliberately narrow: the size has to be written in the query as
-// a number (optionally negative, optionally cast), and within the bound. A
-// column, a parameter, arithmetic, a subquery or another call is refused even
-// when its value would be small, because the checker cannot know the value
-// without running the query — and a rule that tried to evaluate expressions
-// would be a second SQL interpreter to keep correct.
-//
-// This bounds the values these functions build directly. It does not, and
-// cannot, bound everything a query can build: concatenation in a recursive
-// CTE doubles a string without calling any of them. That is bounded by the
-// per-process memory limit the game cluster runs under (deploy/
-// docker-compose.yml), which turns an oversized allocation into an "out of
-// memory" error for that one query instead of a killed server.
+// Only the functions whose output size is a plain multiple of a number are
+// here. Functions that multiply their input another way — replace,
+// regexp_replace, and the like — are not: bounding them would be a growing
+// list of special cases, and the memory limit already covers them.
 func sizeAllowed(name string, call *pg.FuncCall) error {
 	switch name {
-	case "repeat":
-		return lengthAllowed(name, call, 2, 2)
-	case "lpad", "rpad":
-		return lengthAllowed(name, call, 2, 3)
-	case "format":
-		return formatAllowed(call)
+	case "repeat", "lpad", "rpad":
+		return lengthAllowed(name, call)
 	case "generate_series":
 		return seriesAllowed(call)
 	}
 	return nil
 }
 
-// lengthRefusal is the one refusal for a string builder, whatever was wrong
-// with the call: the subject is stable per function, so the journal groups
-// them, and it carries the bound, so the participant can fix the call.
-func lengthRefusal(name string) error {
-	return &sqlpolicy.Refusal{
-		Code:    sqlpolicy.CodeArgumentNotBounded,
-		Subject: fmt.Sprintf("%s: at most %d", name, MaxGeneratedLength),
-	}
-}
-
-func seriesRefusal() error {
-	return &sqlpolicy.Refusal{
-		Code:    sqlpolicy.CodeArgumentNotBounded,
-		Subject: fmt.Sprintf("generate_series: at most %d values", MaxSeriesLength),
-	}
-}
-
-// positional returns the call's arguments when they can be read by position:
-// the expected number of them, none named, and no VARIADIC array standing in
-// for several.
-func positional(call *pg.FuncCall, least, most int) ([]*pg.Node, bool) {
+// lengthAllowed refuses repeat, lpad and rpad when their length argument is a
+// constant above MaxGeneratedLength. The length is the second argument of all
+// three.
+func lengthAllowed(name string, call *pg.FuncCall) error {
 	args := call.GetArgs()
-	if call.GetFuncVariadic() || len(args) < least || len(args) > most {
-		return nil, false
+	// A VARIADIC array or a named argument cannot be read by position; those
+	// are admitted and left to the memory limit rather than guessed at.
+	if call.GetFuncVariadic() || len(args) < 2 || args[1].GetNamedArgExpr() != nil {
+		return nil
+	}
+	size, ok := constantNumber(args[1])
+	if !ok || size <= MaxGeneratedLength {
+		return nil
+	}
+	return &sqlpolicy.Refusal{
+		Code:    sqlpolicy.CodeArgumentNotBounded,
+		Subject: fmt.Sprintf("%s length %s exceeds the %d limit", name, formatSize(size), MaxGeneratedLength),
+	}
+}
+
+// seriesAllowed refuses generate_series when its bounds and step are constants
+// whose span holds more than MaxSeriesLength values. Only the numeric form is
+// read; a date or timestamp series, and any form with a non-constant argument,
+// is admitted and left to the memory limit.
+func seriesAllowed(call *pg.FuncCall) error {
+	args := call.GetArgs()
+	if call.GetFuncVariadic() || len(args) < 2 || len(args) > 3 {
+		return nil
 	}
 	for _, arg := range args {
 		if arg.GetNamedArgExpr() != nil {
-			return nil, false
+			return nil
 		}
 	}
-	return args, true
-}
 
-// lengthAllowed checks repeat, lpad and rpad, whose second argument is the
-// length of what they build.
-func lengthAllowed(name string, call *pg.FuncCall, least, most int) error {
-	args, ok := positional(call, least, most)
+	start, ok := constantNumber(args[0])
 	if !ok {
-		return lengthRefusal(name)
+		return nil
 	}
-	size, ok := literalNumber(args[1])
-	if !ok || size > MaxGeneratedLength {
-		return lengthRefusal(name)
+	stop, ok := constantNumber(args[1])
+	if !ok {
+		return nil
 	}
-	return nil
+	step := 1.0
+	if len(args) == 3 {
+		// A step of zero is a runtime error in PostgreSQL, not a count this
+		// can read; admitted and left to fail there.
+		if step, ok = constantNumber(args[2]); !ok || step == 0 {
+			return nil
+		}
+	}
+
+	values := seriesCount(start, stop, step)
+	if values <= MaxSeriesLength {
+		return nil
+	}
+	return &sqlpolicy.Refusal{
+		Code:    sqlpolicy.CodeArgumentNotBounded,
+		Subject: fmt.Sprintf("generate_series produces %s values, over the %d limit", formatSize(values), MaxSeriesLength),
+	}
 }
 
-// literalNumber reads a number written in the query: an integer or decimal
-// constant, negated or cast any number of times. Anything else is not a
-// literal and reports false.
+// seriesCount is how many values generate_series(start, stop, step) yields:
+// none when the step points away from the stop, one more than the whole steps
+// between them otherwise. Non-finite inputs (a constant like 1e400) count as
+// over any bound.
+func seriesCount(start, stop, step float64) float64 {
+	steps := (stop - start) / step
+	if math.IsInf(steps, 0) || math.IsNaN(steps) {
+		return math.Inf(1)
+	}
+	if steps < 0 {
+		return 0
+	}
+	return math.Floor(steps) + 1
+}
+
+// constantNumber reads a number written in the query as a constant: an integer
+// or decimal literal, negated, or cast to a numeric type — nothing else.
 //
-// A decimal constant is read as a float64, which is exact for every integer
-// that matters to a bound of this size, saturates to infinity rather than
-// allocating for a constant like 1e400, and is refused as not finite.
-func literalNumber(node *pg.Node) (float64, bool) {
+// A cast is followed only when its target is a numeric type (integer, numeric
+// or floating point), because those preserve the value the checker is reading.
+// A cast to any other type is not followed: (-173741824)::bit(30)::int reads,
+// at runtime, as 900000000 — the bit(30) reinterprets the bits — so following
+// it and taking the inner literal would read a size the query does not use.
+// Such a cast makes the argument one the checker cannot know, which is admitted
+// and left to the memory limit, not read as its inner literal.
+func constantNumber(node *pg.Node) (float64, bool) {
 	switch {
 	case node.GetAConst() != nil:
 		c := node.GetAConst()
@@ -136,295 +161,57 @@ func literalNumber(node *pg.Node) (float64, bool) {
 		}
 		return 0, false
 	case node.GetTypeCast() != nil:
-		return literalNumber(node.GetTypeCast().GetArg())
+		if !numericTypeName(node.GetTypeCast().GetTypeName()) {
+			return 0, false
+		}
+		return constantNumber(node.GetTypeCast().GetArg())
 	case node.GetAExpr() != nil:
-		// The grammar folds a minus sign into the constant it precedes, so
-		// this is reached only for a minus in front of something else — a
-		// cast, say. A plus sign is not folded and not accepted.
+		// The grammar folds a minus sign into the constant it precedes, so a
+		// bare negative literal never reaches here; this catches a minus in
+		// front of something else, such as a cast.
 		e := node.GetAExpr()
 		if e.GetKind() != pg.A_Expr_Kind_AEXPR_OP || e.GetLexpr() != nil || len(e.GetName()) != 1 ||
 			e.GetName()[0].GetString_().GetSval() != "-" {
 			return 0, false
 		}
-		v, ok := literalNumber(e.GetRexpr())
+		v, ok := constantNumber(e.GetRexpr())
 		return -v, ok
 	}
 	return 0, false
 }
 
-// formatAllowed checks format, whose format string can ask for any width.
-//
-// The format string has to be written in the query, so that its widths can be
-// read; a width taken from an argument (`%*s`) is refused, the same as a
-// length argument that is not a literal would be.
-func formatAllowed(call *pg.FuncCall) error {
-	const name = "format"
+// numericTypes are PostgreSQL's own names for the integer, numeric and
+// floating-point types, which is what the parser normalises every spelling to:
+// smallint to int2, integer and int to int4, bigint to int8, decimal to
+// numeric, real to float4, double precision to float8.
+var numericTypes = names("int2", "int4", "int8", "numeric", "float4", "float8")
 
-	if call.GetFuncVariadic() || len(call.GetArgs()) == 0 || call.GetArgs()[0].GetNamedArgExpr() != nil {
-		return lengthRefusal(name)
+// numericTypeName reports whether a cast target is one of those, bare or
+// qualified with pg_catalog (both spell the same type).
+func numericTypeName(tn *pg.TypeName) bool {
+	parts := tn.GetNames()
+	if len(parts) == 0 || tn.GetArrayBounds() != nil {
+		return false
 	}
-	spec, ok := literalString(call.GetArgs()[0])
-	if !ok || !formatWidthsBounded(spec) {
-		return lengthRefusal(name)
-	}
-	return nil
-}
-
-// formatWidthsBounded reads a format string the way PostgreSQL's format()
-// does — %[position$][flags][width]type — and reports whether its widths are
-// all written as numbers and add up to no more than the bound.
-//
-// The sum rather than each width: a format string may hold thousands of
-// specifiers, and each one pads its own copy. A malformed specifier is left
-// to format(), which refuses it.
-func formatWidthsBounded(spec string) bool {
-	digits := func(i int) int {
-		for i < len(spec) && spec[i] >= '0' && spec[i] <= '9' {
-			i++
-		}
-		return i
-	}
-
-	total := 0
-	for i := 0; i < len(spec); i++ {
-		if spec[i] != '%' {
-			continue
-		}
-		i++
-		if i < len(spec) && spec[i] == '%' {
-			continue
-		}
-		// An argument position is digits followed by '$'; digits that are not
-		// followed by one are the width itself.
-		if end := digits(i); end > i && end < len(spec) && spec[end] == '$' {
-			i = end + 1
-		}
-		for i < len(spec) && spec[i] == '-' {
-			i++
-		}
-		if i < len(spec) && spec[i] == '*' {
-			// The width comes from an argument, which is not read.
+	var bare string
+	switch len(parts) {
+	case 1:
+		bare = strings.ToLower(parts[0].GetString_().GetSval())
+	case 2:
+		if strings.ToLower(parts[0].GetString_().GetSval()) != "pg_catalog" {
 			return false
 		}
-		end := digits(i)
-		if end > i {
-			width := strings.TrimLeft(spec[i:end], "0")
-			// Nine digits cannot overflow an int anywhere this runs, and any
-			// width that long is past the bound whatever its value.
-			if len(width) > 9 {
-				return false
-			}
-			n, _ := strconv.Atoi(width)
-			if total += n; total > MaxGeneratedLength {
-				return false
-			}
-		}
-		// i now rests on the type character, which the loop's own step skips.
-		i = end
+		bare = strings.ToLower(parts[1].GetString_().GetSval())
+	default:
+		return false
 	}
-	return true
+	_, ok := numericTypes[bare]
+	return ok
 }
 
-// literalString reads a string written in the query, bare or cast.
-func literalString(node *pg.Node) (string, bool) {
-	if cast := node.GetTypeCast(); cast != nil {
-		return literalString(cast.GetArg())
-	}
-	if c := node.GetAConst(); c != nil && c.GetSval() != nil {
-		return c.GetSval().GetSval(), true
-	}
-	return "", false
-}
-
-// seriesAllowed checks generate_series, whose bounds and step decide how many
-// rows it produces.
-//
-// Two forms are read: numbers, where the count is the span divided by the
-// step, and dates or timestamps with an interval step, where the step is
-// taken at its shortest (a month as 28 days, a year as 365) so that the
-// estimate is never below the real count. Every other form is refused.
-func seriesAllowed(call *pg.FuncCall) error {
-	// Four arguments is the time-zone form of the timestamp series; the fourth
-	// names a zone and does not change the count.
-	args, ok := positional(call, 2, 4)
-	if !ok {
-		return seriesRefusal()
-	}
-
-	if len(args) <= 3 {
-		if count, ok := numericSeries(args); ok {
-			if count > MaxSeriesLength {
-				return seriesRefusal()
-			}
-			return nil
-		}
-	}
-	if len(args) >= 3 {
-		if count, ok := temporalSeries(args); ok {
-			if count > MaxSeriesLength {
-				return seriesRefusal()
-			}
-			return nil
-		}
-	}
-	return seriesRefusal()
-}
-
-// numericSeries counts a series whose bounds and step are numbers written in
-// the query. A step of zero is reported as unreadable: PostgreSQL refuses it,
-// and there is no count to compare.
-func numericSeries(args []*pg.Node) (float64, bool) {
-	start, ok := literalNumber(args[0])
-	if !ok {
-		return 0, false
-	}
-	stop, ok := literalNumber(args[1])
-	if !ok {
-		return 0, false
-	}
-	step := 1.0
-	if len(args) == 3 {
-		if step, ok = literalNumber(args[2]); !ok || step == 0 {
-			return 0, false
-		}
-	}
-	return seriesCount((stop - start) / step), true
-}
-
-// seriesCount turns the number of steps between the bounds into the number of
-// values: none when the step points away from the stop, one more than the
-// whole steps otherwise.
-func seriesCount(steps float64) float64 {
-	if math.IsInf(steps, 0) || math.IsNaN(steps) {
-		return math.Inf(1)
-	}
-	if steps < 0 {
-		return 0
-	}
-	return math.Floor(steps) + 1
-}
-
-// temporalSeries counts a series of dates or timestamps written in the query,
-// with an interval step written in the query.
-func temporalSeries(args []*pg.Node) (float64, bool) {
-	start, ok := literalTimestamp(args[0])
-	if !ok {
-		return 0, false
-	}
-	stop, ok := literalTimestamp(args[1])
-	if !ok {
-		return 0, false
-	}
-	step, ok := literalInterval(args[2])
-	if !ok || step == 0 {
-		return 0, false
-	}
-	span := float64(stop.Unix() - start.Unix())
-	return seriesCount(span / float64(step)), true
-}
-
-// timestampLayouts are the spellings of a date or timestamp literal that are
-// read. A spelling outside them — 'infinity', 'today', an era, a five-digit
-// year — is not read, and the series is refused rather than guessed at.
-var timestampLayouts = func() []string {
-	var layouts []string
-	for _, clock := range []string{"", " 15:04", " 15:04:05", " 15:04:05.999999", "T15:04", "T15:04:05", "T15:04:05.999999"} {
-		for _, zone := range []string{"", "Z07", "Z07:00", "Z0700"} {
-			if clock == "" && zone != "" {
-				continue
-			}
-			layouts = append(layouts, "2006-01-02"+clock+zone)
-		}
-	}
-	return layouts
-}()
-
-// literalTimestamp reads a date or timestamp written in the query: a bare
-// string, or one cast to date, timestamp or timestamptz.
-func literalTimestamp(node *pg.Node) (time.Time, bool) {
-	text, ok := typedString(node, "date", "timestamp", "timestamptz")
-	if !ok {
-		return time.Time{}, false
-	}
-	text = strings.TrimSpace(text)
-	for _, layout := range timestampLayouts {
-		if t, err := time.Parse(layout, text); err == nil {
-			return t, true
-		}
-	}
-	return time.Time{}, false
-}
-
-// intervalUnits are the interval units a step may be written in, each at its
-// shortest length in seconds.
-var intervalUnits = map[string]int64{
-	"second": 1, "sec": 1,
-	"minute": 60, "min": 60,
-	"hour": 3600,
-	"day":  86400,
-	"week": 7 * 86400,
-	// The shortest month and the shortest year, so a count computed with them
-	// is never below the real one.
-	"month": 28 * 86400, "mon": 28 * 86400,
-	"year": 365 * 86400,
-}
-
-var (
-	intervalAmount = regexp.MustCompile(`^([+-]?\d{1,9})\s*([a-z]+)$`)
-	intervalClock  = regexp.MustCompile(`^(\d{1,4}):(\d{2})(?::(\d{2}))?$`)
-)
-
-// literalInterval reads an interval step written in the query, as a bare
-// string or one cast to interval, in seconds. Two spellings are read: one
-// amount and one unit ('15 minutes', '1 day'), and a clock ('01:30:00').
-// Anything else — several parts, fractions, ISO 8601 — is not read.
-func literalInterval(node *pg.Node) (int64, bool) {
-	text, ok := typedString(node, "interval")
-	if !ok {
-		return 0, false
-	}
-	text = strings.ToLower(strings.TrimSpace(text))
-
-	if m := intervalAmount.FindStringSubmatch(text); m != nil {
-		amount, err := strconv.ParseInt(m[1], 10, 64)
-		if err != nil {
-			return 0, false
-		}
-		unit, known := intervalUnits[strings.TrimSuffix(m[2], "s")]
-		if !known {
-			return 0, false
-		}
-		return amount * unit, true
-	}
-	if m := intervalClock.FindStringSubmatch(text); m != nil {
-		hours, _ := strconv.ParseInt(m[1], 10, 64)
-		minutes, _ := strconv.ParseInt(m[2], 10, 64)
-		seconds, _ := strconv.ParseInt(m[3], 10, 64)
-		return hours*3600 + minutes*60 + seconds, true
-	}
-	return 0, false
-}
-
-// typedString reads a string constant, bare or cast to one of the named
-// types, whether or not the cast is qualified with pg_catalog.
-func typedString(node *pg.Node, types ...string) (string, bool) {
-	if cast := node.GetTypeCast(); cast != nil {
-		names := cast.GetTypeName().GetNames()
-		if len(names) == 0 || cast.GetTypeName().GetArrayBounds() != nil {
-			return "", false
-		}
-		last := strings.ToLower(names[len(names)-1].GetString_().GetSval())
-		matched := false
-		for _, t := range types {
-			matched = matched || last == t
-		}
-		if !matched {
-			return "", false
-		}
-		node = cast.GetArg()
-	}
-	if c := node.GetAConst(); c != nil && c.GetSval() != nil {
-		return c.GetSval().GetSval(), true
-	}
-	return "", false
+// formatSize prints a constant the way it was written, as a whole number where
+// it is one and with no exponent where it is not, so the refusal names the
+// value the participant typed rather than a float's scientific form.
+func formatSize(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64)
 }

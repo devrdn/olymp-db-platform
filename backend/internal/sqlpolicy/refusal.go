@@ -25,11 +25,13 @@ const (
 	CodeTableNotWritable      Code = "table_not_writable"
 	CodeNotPermitted          Code = "not_permitted"
 
-	// CodeArgumentNotBounded refuses a function that is on the allow-list but
-	// builds a value, or a series of rows, whose size one of its arguments
-	// decides — when that argument is not a number written in the query, or
-	// is one above the checker's bound. The subject names the function and
-	// the bound, which is what the participant needs to rewrite the call.
+	// CodeArgumentNotBounded is the validator's first line against a function
+	// that builds a value, or a series of rows, from a size: it refuses a call
+	// whose size is written in the query as a constant plainly above the limit
+	// (repeat('x', 900000000)). A size the checker cannot read as a constant —
+	// a column, a subquery, an aggregate — is not refused here; the game
+	// cluster's per-process memory limit bounds those. The subject names the
+	// function, the constant and the limit.
 	CodeArgumentNotBounded Code = "argument_not_bounded"
 )
 
