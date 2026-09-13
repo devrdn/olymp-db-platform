@@ -1507,7 +1507,7 @@ const en = {
     query_function_not_supported:
       "That function is not available in this contest.",
     query_argument_not_bounded:
-      "That function builds something whose size you set, and here the size has to be a number written in the query, within the limit shown.",
+      "That function builds a value from a size, and the size written here is a fixed number far above what is allowed. A size that comes from a column or a subquery is fine — only a constant this large is refused. Lower it and run again.",
     query_catalog_not_readable:
       "That system catalogue describes the installation and other participants, and is never readable.",
     query_catalog_not_allowed:
