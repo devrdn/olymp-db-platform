@@ -9,6 +9,7 @@ import { Tag } from "@/components/ui/tag";
 import { Tooltip } from "@/components/ui/tooltip";
 import { answerable, untranslated } from "@/lib/api/content-terms";
 import { type Question } from "@/lib/api/content";
+import type { Scoring } from "@/lib/api/contests";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
@@ -43,15 +44,21 @@ export function QuestionList({
   questions,
   languages,
   editable,
+  scoring,
   dict,
 }: {
   contestId: string;
   questions: Question[];
   languages: string[];
   editable: boolean;
+  // The contest's scoring mode. A question has no points in ICPC scoring
+  // (decision 1 of the ICPC design doc), so the column is not shown there,
+  // as the question editor disables the field.
+  scoring: Scoring;
   dict: Dictionary;
 }) {
   const t = dict.workspace.questions;
+  const showPoints = scoring !== "icpc";
 
   if (questions.length === 0) {
     return (
@@ -79,9 +86,11 @@ export function QuestionList({
               <th scope="col" className={cn(HEAD, "w-36")}>
                 {t.columns.kind}
               </th>
-              <th scope="col" className={cn(HEAD, "w-20 text-right")}>
-                {t.columns.points}
-              </th>
+              {showPoints ? (
+                <th scope="col" className={cn(HEAD, "w-20 text-right")}>
+                  {t.columns.points}
+                </th>
+              ) : null}
               <th scope="col" className={cn(HEAD, "w-56")}>
                 {t.columns.state}
               </th>
@@ -120,9 +129,11 @@ export function QuestionList({
 
                   <td className={cn(CELL, "text-small text-ink-2")}>{t.kind[question.kind]}</td>
 
-                  <td className={cn(CELL, "text-right font-mono text-data text-ink-2")}>
-                    {question.points}
-                  </td>
+                  {showPoints ? (
+                    <td className={cn(CELL, "text-right font-mono text-data text-ink-2")}>
+                      {question.points}
+                    </td>
+                  ) : null}
 
                   <td className={CELL}>
                     <div className="flex flex-wrap gap-1.5">
