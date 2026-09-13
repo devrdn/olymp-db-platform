@@ -77,6 +77,9 @@ type PackagedContest struct {
 	// which is configuration worth carrying over, not a fact about one run.
 	AllowedCIDRs []string         `json:"allowed_cidrs"`
 	Settings     PackagedSettings `json:"settings"`
+	// Leaderboard is how the table is frozen and labelled — configuration.
+	// When results were revealed is a fact about one run and stays behind.
+	Leaderboard PackagedLeaderboard `json:"leaderboard"`
 	// DefaultLanguage is the language served when the requested one is
 	// missing. Named separately as well as flagged in Languages because it is
 	// the one thing about the set that must survive a round trip intact.
@@ -84,6 +87,12 @@ type PackagedContest struct {
 	// Languages are the declared codes, in declaration order.
 	Languages    []string                       `json:"languages"`
 	Translations map[string]TranslationResponse `json:"translations"`
+}
+
+// PackagedLeaderboard is the table's configuration.
+type PackagedLeaderboard struct {
+	FreezeMin *int   `json:"freeze_min"`
+	Names     string `json:"names"`
 }
 
 // PackagedSettings is the part of contests.Settings that is configuration
@@ -224,6 +233,10 @@ func toContestPackage(pkg contests.Package) ContestPackage {
 			Settings: PackagedSettings{
 				QueryRateLimitPerMin: c.Settings.QueryRateLimitPerMin,
 				GracePeriodMin:       c.Settings.GracePeriodMin,
+			},
+			Leaderboard: PackagedLeaderboard{
+				FreezeMin: c.LeaderboardFreezeMin,
+				Names:     c.LeaderboardNames,
 			},
 			DefaultLanguage: c.DefaultLanguage(),
 			Languages:       c.LanguageCodes(),

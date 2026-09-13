@@ -683,3 +683,59 @@ func TestChangingTheTitlesRecordsTheLanguagesButNotTheText(t *testing.T) {
 	}
 	t.Fatalf("no %s entry", audit.ActionContestTranslations)
 }
+
+// Moving the freeze while the contest runs would either open the live table
+// for a moment or hide a table participants already saw; neither is a setting.
+func TestUpdateRefusesToMoveTheFreezeWhileRunning(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+
+	freeze := 30
+	settings := c.Settings
+	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, Settings: &settings,
+		LeaderboardFreezeMin: &freeze,
+	})
+	if !errors.Is(err, contests.ErrNotEditable) {
+		t.Errorf("Update() = %v, want ErrNotEditable", err)
+	}
+}
+
+// The label is the organiser's choice about names, not a property of the
+// result, and it may change while the contest runs.
+func TestUpdateChangesTheLeaderboardLabelWhileRunning(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, LeaderboardNames: contests.LeaderboardNamesFullName,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+	if updated.LeaderboardNames != contests.LeaderboardNamesFullName {
+		t.Errorf("LeaderboardNames = %q, want %q", updated.LeaderboardNames, contests.LeaderboardNamesFullName)
+	}
+}
+
+// A draft sets its freeze, and clears it again: "no freeze" has to be
+// sayable, not only "a different freeze".
+func TestUpdateSetsAndClearsTheFreezeBeforeTheContestStarts(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+
+	freeze := 30
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, LeaderboardFreezeMin: &freeze,
+	})
+	if err != nil || updated.LeaderboardFreezeMin == nil || *updated.LeaderboardFreezeMin != 30 {
+		t.Fatalf("set: Update() = %+v, %v", updated.LeaderboardFreezeMin, err)
+	}
+
+	updated, err = f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, ClearLeaderboardFreeze: true,
+	})
+	if err != nil || updated.LeaderboardFreezeMin != nil {
+		t.Fatalf("clear: Update() = %+v, %v", updated.LeaderboardFreezeMin, err)
+	}
+}

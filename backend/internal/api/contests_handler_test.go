@@ -636,3 +636,40 @@ func TestTheEnrolmentNarrowingIsRefusedWhereItMeansNothing(t *testing.T) {
 		t.Errorf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
 	}
 }
+
+// The leaderboard settings travel as one object, so that "no freeze" (null)
+// and "leave the freeze alone" (no object at all) are both sayable.
+func TestLeaderboardSettingsSurviveARoundTripThroughTheAPI(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(),
+		`{"leaderboard": {"freeze_min": 30, "names": "full_name"}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	board, _ := decode(t, rec)["leaderboard"].(map[string]any)
+	if board["freeze_min"] != float64(30) || board["names"] != "full_name" {
+		t.Fatalf("leaderboard = %v, want freeze_min 30 and names full_name", board)
+	}
+
+	// An unrelated update leaves it alone.
+	rec = f.do(http.MethodPatch, "/contests/"+c.ID.String(), `{"enrollment": "open"}`)
+	board, _ = decode(t, rec)["leaderboard"].(map[string]any)
+	if board["freeze_min"] != float64(30) {
+		t.Fatalf("leaderboard = %v, want the freeze to survive an unrelated update", board)
+	}
+
+	// And null clears it.
+	rec = f.do(http.MethodPatch, "/contests/"+c.ID.String(), `{"leaderboard": {"freeze_min": null}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	board, _ = decode(t, rec)["leaderboard"].(map[string]any)
+	if value, present := board["freeze_min"]; !present || value != nil {
+		t.Fatalf("leaderboard = %v, want freeze_min present and null", board)
+	}
+	if board["names"] != "full_name" {
+		t.Fatalf("leaderboard = %v, want names to survive clearing the freeze", board)
+	}
+}
