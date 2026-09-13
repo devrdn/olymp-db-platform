@@ -43,6 +43,11 @@ func (r *Leaderboard) querier(ctx context.Context) storage.Querier {
 // submissions_registration_submitted_idx (migration 30) serves the join and
 // the time filter, and carries the three columns the aggregate reads.
 func (r *Leaderboard) Standings(ctx context.Context, q leaderboard.Query) ([]leaderboard.Entry, error) {
+	// An ICPC table here would come back ordered by points, all zero, with no
+	// grid: refused before the query rather than served wrong.
+	if q.Scoring == contests.ScoringICPC {
+		return nil, errors.New("icpc standings are read by ICPCStandings, not Standings")
+	}
 	rows, err := r.querier(ctx).Query(ctx, `
 		WITH scored AS (
 			SELECT r.id,
