@@ -60,6 +60,82 @@ describe("the standings a viewer is sent", () => {
     ).toThrow();
   });
 
+  test("reads an ICPC table's questions, penalty and cells", () => {
+    const parsed = standingsSchema.parse({
+      state: "live",
+      scoring: "icpc",
+      title: "The Library Murder",
+      generated_at: "2026-09-20T12:04:10Z",
+      truncated: false,
+      questions: ["A", "B", "C"],
+      rows: [
+        {
+          place: 1,
+          label: "ivanov",
+          points: 0,
+          solved: 2,
+          penalty: 65,
+          cells: [
+            { state: "solved", attempts: 2, minute: 47, first: true },
+            { state: "failed", attempts: 3 },
+            { state: "untried" },
+          ],
+        },
+      ],
+    });
+
+    expect(parsed.questions).toEqual(["A", "B", "C"]);
+    expect(parsed.rows[0].penalty).toBe(65);
+    expect(parsed.rows[0].cells).toEqual([
+      { state: "solved", attempts: 2, minute: 47, first: true },
+      { state: "failed", attempts: 3 },
+      { state: "untried" },
+    ]);
+  });
+
+  test("leaves questions, penalty and cells absent for points and winner", () => {
+    const parsed = standingsSchema.parse({
+      state: "live",
+      scoring: "points",
+      title: "",
+      generated_at: "x",
+      truncated: false,
+      rows: [{ place: 1, label: "a", points: 4, solved: 1 }],
+    });
+
+    expect(parsed.questions).toBeUndefined();
+    expect(parsed.rows[0].penalty).toBeUndefined();
+    expect(parsed.rows[0].cells).toBeUndefined();
+  });
+
+  test("reads the staff table's ICPC grid the same way", () => {
+    const parsed = staffStandingsSchema.parse({
+      shown: { state: "live" },
+      scoring: "icpc",
+      freeze_min: null,
+      names: "login",
+      generated_at: "2026-09-20T12:04:10Z",
+      truncated: false,
+      questions: ["A"],
+      rows: [
+        {
+          place: 1,
+          login: "ivanov",
+          full_name: "Ivan Ivanov",
+          points: 0,
+          solved: 1,
+          penalty: 10,
+          cells: [{ state: "solved", attempts: 1, minute: 10, first: true }],
+        },
+      ],
+    });
+
+    expect(parsed.questions).toEqual(["A"]);
+    expect(parsed.rows[0].cells).toEqual([
+      { state: "solved", attempts: 1, minute: 10, first: true },
+    ]);
+  });
+
   test("reads the staff table with both names and what everybody else sees", () => {
     const parsed = staffStandingsSchema.parse({
       shown: { state: "frozen", frozen_at: "2026-09-20T11:30:00Z" },

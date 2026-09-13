@@ -21,6 +21,29 @@ export const STANDINGS_STATES = [
 ] as const;
 export type StandingsState = (typeof STANDINGS_STATES)[number];
 
+/**
+ * The ICPC grid's cell states (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md
+ * "Клетки сетки"). `cells` and `questions` are present only when
+ * `scoring` is `"icpc"` — `points` and `winner` rows carry neither.
+ */
+export const CELL_STATES = ["solved", "failed", "pending", "untried"] as const;
+export type CellState = (typeof CELL_STATES)[number];
+
+const cellSchema = z.object({
+  state: z.enum(CELL_STATES),
+  // Solved: the 1-based attempt the correct answer was on. Failed: the
+  // number of wrong attempts. Pending: the wrong attempts before the freeze.
+  attempts: z.number().optional(),
+  // Solved only: the minute of the correct answer.
+  minute: z.number().optional(),
+  // Solved only: the earliest solve of this question among placed rows.
+  first: z.boolean().optional(),
+  // Pending only: the attempts made in [freeze_at, now).
+  pending: z.number().optional(),
+});
+
+export type StandingsCell = z.infer<typeof cellSchema>;
+
 const rowSchema = z
   .object({
     place: z.number().nullable(),
@@ -28,6 +51,8 @@ const rowSchema = z
     deleted: z.boolean().optional(),
     points: z.number(),
     solved: z.number(),
+    penalty: z.number().optional(),
+    cells: z.array(cellSchema).optional(),
     last_scored_at: z.string().optional(),
     winner: z.boolean().optional(),
     is_you: z.boolean().optional(),
@@ -38,6 +63,8 @@ const rowSchema = z
     deleted: raw.deleted ?? false,
     points: raw.points,
     solved: raw.solved,
+    penalty: raw.penalty,
+    cells: raw.cells,
     lastScoredAt: raw.last_scored_at,
     winner: raw.winner ?? false,
     isYou: raw.is_you ?? false,
@@ -54,6 +81,7 @@ export const standingsSchema = z
     ends_at: z.string().optional(),
     generated_at: z.string(),
     truncated: z.boolean(),
+    questions: z.array(z.string()).optional(),
     rows: z.array(rowSchema),
   })
   .transform((raw) => ({
@@ -64,6 +92,7 @@ export const standingsSchema = z
     endsAt: raw.ends_at,
     generatedAt: raw.generated_at,
     truncated: raw.truncated,
+    questions: raw.questions,
     rows: raw.rows,
   }));
 
@@ -78,6 +107,8 @@ const staffRowSchema = z
     disqualified: z.boolean().optional(),
     points: z.number(),
     solved: z.number(),
+    penalty: z.number().optional(),
+    cells: z.array(cellSchema).optional(),
     last_scored_at: z.string().optional(),
     winner: z.boolean().optional(),
   })
@@ -89,6 +120,8 @@ const staffRowSchema = z
     disqualified: raw.disqualified ?? false,
     points: raw.points,
     solved: raw.solved,
+    penalty: raw.penalty,
+    cells: raw.cells,
     lastScoredAt: raw.last_scored_at,
     winner: raw.winner ?? false,
   }));
@@ -107,6 +140,7 @@ export const staffStandingsSchema = z
     revealed_at: z.string().optional(),
     generated_at: z.string(),
     truncated: z.boolean(),
+    questions: z.array(z.string()).optional(),
     rows: z.array(staffRowSchema),
   })
   .transform((raw) => ({
@@ -117,6 +151,7 @@ export const staffStandingsSchema = z
     revealedAt: raw.revealed_at,
     generatedAt: raw.generated_at,
     truncated: raw.truncated,
+    questions: raw.questions,
     rows: raw.rows,
   }));
 

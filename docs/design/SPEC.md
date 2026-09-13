@@ -154,6 +154,16 @@ Rules that keep it a palette rather than decoration:
   olive as success.
 - **Colour is never the only carrier.** A medal also has its number, the frozen
   state its sentence, your row the word "you", a winner the word "winner".
+- **The ICPC grid reuses `good`/`warn`/`bad`, not a fourth family.** A solved
+  cell is `good` text on `good-wash`, with the attempt and the minute written
+  on it; the first solve of a question is a solid `good` fill with the page
+  ground as its text, the same construction as a medal disc, so it still reads
+  from across a hall. A failed cell is `bad` on `bad-wash` with its wrong-attempt
+  count; a frozen table's unresolved-but-attempted cell is `warn` on
+  `warn-wash` with a question mark and how many attempts came after the
+  freeze; an untried cell carries no colour at all. Every cell also carries a
+  spelled-out accessible name — the question's letter and its state in words —
+  so none of this rests on colour or on a bare symbol.
 - The section 15 boundaries still hold: no purple, no glow, no gradient text, no
   emoji. A medal is a tinted disc with a number in it, not a trophy picture.
 

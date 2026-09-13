@@ -1,4 +1,4 @@
-import type { Standings, StandingsRow } from "@/lib/api/leaderboard";
+import type { Standings, StandingsCell, StandingsRow } from "@/lib/api/leaderboard";
 import { identityHue } from "@/lib/api/leaderboard";
 import { formatTime } from "@/lib/format/datetime";
 import { initials } from "@/lib/format/initials";
@@ -128,6 +128,111 @@ function ended(endsAt: string | undefined): boolean {
   return endsAt !== undefined && Date.parse(endsAt) <= Date.now();
 }
 
+type CellDictionary = StandingsDictionary["leaderboard"]["cells"];
+
+/**
+ * The cell's accessible name: the question's letter and its state spelled
+ * out in words, never colour alone (docs/design/SPEC.md §3.5, ICPC cells).
+ */
+function cellAccessibleName(cell: StandingsCell, letter: string, t: CellDictionary): string {
+  switch (cell.state) {
+    case "solved": {
+      const attempt = cell.attempts ?? 1;
+      const template = cell.first ? t.solvedFirst : t.solved;
+      return template
+        .replace("{letter}", letter)
+        .replace("{minute}", String(cell.minute ?? 0))
+        .replace("{attempt}", String(attempt));
+    }
+    case "failed":
+      return t.failed.replace("{letter}", letter).replace("{n}", String(cell.attempts ?? 0));
+    case "pending":
+      return t.pending.replace("{letter}", letter).replace("{n}", String(cell.pending ?? 0));
+    case "untried":
+      return t.untried.replace("{letter}", letter);
+  }
+}
+
+/**
+ * The ICPC grid's header row: one column per question letter, shown only on
+ * the full page and only from the `narrow` breakpoint up — the play tab and
+ * a phone get the plain "solved, penalty" columns instead (SPEC.md §3.5).
+ */
+export function GridHeaderCells({ questions }: { questions: string[] }) {
+  return (
+    <>
+      {questions.map((letter) => (
+        <th
+          key={letter}
+          scope="col"
+          className="w-12 px-1 py-2 text-center font-mono font-normal max-narrow:hidden"
+        >
+          {letter}
+        </th>
+      ))}
+    </>
+  );
+}
+
+/**
+ * One row's ICPC grid: a cell per visible question, coloured by state and
+ * carrying a spelled-out accessible name so the state never rests on colour
+ * alone. `solved` shows the attempt above the minute ("+" on the first try,
+ * "+N" for N wrong attempts first); a first solve is a solid fill, not just
+ * a tint. `failed` shows the wrong-attempt count; `pending` shows "?" and
+ * how many attempts came after the freeze; `untried` shows nothing visible.
+ */
+export function GridCells({
+  cells,
+  questions,
+  dict,
+}: {
+  cells: StandingsCell[];
+  questions: string[];
+  dict: StandingsDictionary;
+}) {
+  const t = dict.leaderboard.cells;
+  return (
+    <>
+      {cells.map((cell, i) => {
+        const letter = questions[i] ?? "";
+        const name = cellAccessibleName(cell, letter, t);
+        const attempt = cell.attempts ?? 1;
+        return (
+          <td
+            key={letter || i}
+            data-testid="cell"
+            data-state={cell.state}
+            className={cn(
+              "px-1 py-2 text-center align-middle font-mono text-label tabular-nums max-narrow:hidden",
+              cell.state === "solved" && (cell.first ? "bg-good text-bg" : "bg-good-wash text-good"),
+              cell.state === "failed" && "bg-bad-wash text-bad",
+              cell.state === "pending" && "bg-warn-wash text-warn",
+            )}
+          >
+            <span className="sr-only">{name}</span>
+            <div aria-hidden className="flex flex-col items-center leading-tight">
+              {cell.state === "solved" ? (
+                <>
+                  <span>{attempt > 1 ? `+${attempt - 1}` : "+"}</span>
+                  <span>{cell.minute}</span>
+                </>
+              ) : cell.state === "failed" ? (
+                <span>{`−${cell.attempts ?? 0}`}</span>
+              ) : cell.state === "pending" ? (
+                <>
+                  <span>?</span>
+                  <span>{cell.pending ?? 0}</span>
+                </>
+              ) : null}
+            </div>
+          </td>
+        );
+      })}
+    </>
+  );
+}
+
 export function StandingsView({
   standings,
   dict,
@@ -145,6 +250,7 @@ export function StandingsView({
 }) {
   const t = dict.leaderboard;
   const { state, rows } = standings;
+  const icpc = standings.scoring === "icpc";
   const leader = rows.reduce((max, r) => Math.max(max, r.points), 0);
 
   return (
@@ -157,8 +263,8 @@ export function StandingsView({
         <p className="text-body text-ink-2">{t.empty}</p>
       ) : (
         <>
-          {variant === "page" && standings.scoring === "points" ? (
-            <Podium rows={rows} dict={dict} />
+          {variant === "page" && (standings.scoring === "points" || icpc) ? (
+            <Podium rows={rows} dict={dict} scoring={standings.scoring} />
           ) : null}
           <div className="overflow-x-auto">
             {/* Fixed layout, so the name is the column that gives way: under an
@@ -177,31 +283,47 @@ export function StandingsView({
                   <th scope="col" className="px-2 py-2 text-left font-normal">
                     {t.columns.participant}
                   </th>
-                  <th
-                    scope="col"
-                    className={cn(
-                      "px-2 py-2 text-right font-normal",
-                      variant === "page" ? "w-44 max-narrow:w-24" : "w-24",
-                    )}
-                  >
-                    {t.columns.points}
-                  </th>
-                  {variant === "page" ? (
+                  {icpc ? (
+                    <>
+                      {variant === "page" && standings.questions ? (
+                        <GridHeaderCells questions={standings.questions} />
+                      ) : null}
+                      <th scope="col" className="w-20 px-2 py-2 text-right font-normal">
+                        {t.columns.solved}
+                      </th>
+                      <th scope="col" className="w-20 py-2 pr-3 pl-2 text-right font-normal">
+                        {t.columns.penalty}
+                      </th>
+                    </>
+                  ) : (
                     <>
                       <th
                         scope="col"
-                        className="w-24 px-2 py-2 text-right font-normal max-narrow:hidden"
+                        className={cn(
+                          "px-2 py-2 text-right font-normal",
+                          variant === "page" ? "w-44 max-narrow:w-24" : "w-24",
+                        )}
                       >
-                        {t.columns.solved}
+                        {t.columns.points}
                       </th>
-                      <th
-                        scope="col"
-                        className="w-28 py-2 pr-3 pl-2 text-right font-normal max-narrow:hidden"
-                      >
-                        {t.columns.last}
-                      </th>
+                      {variant === "page" ? (
+                        <>
+                          <th
+                            scope="col"
+                            className="w-24 px-2 py-2 text-right font-normal max-narrow:hidden"
+                          >
+                            {t.columns.solved}
+                          </th>
+                          <th
+                            scope="col"
+                            className="w-28 py-2 pr-3 pl-2 text-right font-normal max-narrow:hidden"
+                          >
+                            {t.columns.last}
+                          </th>
+                        </>
+                      ) : null}
                     </>
-                  ) : null}
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -213,6 +335,8 @@ export function StandingsView({
                     dict={dict}
                     locale={locale}
                     variant={variant}
+                    icpc={icpc}
+                    questions={standings.questions}
                   />
                 ))}
               </tbody>
@@ -235,12 +359,17 @@ function Row({
   dict,
   locale,
   variant,
+  icpc,
+  questions,
 }: {
   row: StandingsRow;
   leader: number;
   dict: StandingsDictionary;
   locale: string;
   variant: "panel" | "page";
+  icpc: boolean;
+  /** The ICPC grid's letters — absent when the contest has none to show. */
+  questions?: string[];
 }) {
   const t = dict.leaderboard;
   const medal = medalOf(row);
@@ -287,41 +416,57 @@ function Row({
         </div>
       </td>
 
-      <td className="px-2 py-2.5 text-right align-middle">
-        <span className="font-mono text-data text-ink tabular-nums">
-          {row.points}
-        </span>
-        <div
-          className={cn(
-            "mt-1.5 ml-auto h-1.5 max-w-full rounded-full bg-line-2",
-            variant === "page" ? "w-36 max-narrow:w-16" : "w-16",
-          )}
-        >
-          <div
-            data-testid="bar"
-            className={cn(
-              "h-full rounded-full",
-              medal
-                ? MEDAL_CLASSES[medal].bar
-                : row.deleted
-                  ? "bg-ink-3"
-                  : HUE_CLASSES[hue].bar,
-            )}
-            style={{ width: `${share}%` }}
-          />
-        </div>
-      </td>
-
-      {variant === "page" ? (
+      {icpc ? (
         <>
-          <td className="px-2 py-2.5 text-right align-middle font-mono text-data text-ink-2 tabular-nums max-narrow:hidden">
+          {variant === "page" && questions && row.cells ? (
+            <GridCells cells={row.cells} questions={questions} dict={dict} />
+          ) : null}
+          <td className="px-2 py-2.5 text-right align-middle font-mono text-data text-ink tabular-nums">
             {row.solved}
           </td>
-          <td className="py-2.5 pr-3 pl-2 text-right align-middle font-mono text-data text-ink-3 tabular-nums max-narrow:hidden">
-            {row.lastScoredAt ? formatTime(row.lastScoredAt, { locale }) : "—"}
+          <td className="py-2.5 pr-3 pl-2 text-right align-middle font-mono text-data text-ink tabular-nums">
+            {row.penalty}
           </td>
         </>
-      ) : null}
+      ) : (
+        <>
+          <td className="px-2 py-2.5 text-right align-middle">
+            <span className="font-mono text-data text-ink tabular-nums">
+              {row.points}
+            </span>
+            <div
+              className={cn(
+                "mt-1.5 ml-auto h-1.5 max-w-full rounded-full bg-line-2",
+                variant === "page" ? "w-36 max-narrow:w-16" : "w-16",
+              )}
+            >
+              <div
+                data-testid="bar"
+                className={cn(
+                  "h-full rounded-full",
+                  medal
+                    ? MEDAL_CLASSES[medal].bar
+                    : row.deleted
+                      ? "bg-ink-3"
+                      : HUE_CLASSES[hue].bar,
+                )}
+                style={{ width: `${share}%` }}
+              />
+            </div>
+          </td>
+
+          {variant === "page" ? (
+            <>
+              <td className="px-2 py-2.5 text-right align-middle font-mono text-data text-ink-2 tabular-nums max-narrow:hidden">
+                {row.solved}
+              </td>
+              <td className="py-2.5 pr-3 pl-2 text-right align-middle font-mono text-data text-ink-3 tabular-nums max-narrow:hidden">
+                {row.lastScoredAt ? formatTime(row.lastScoredAt, { locale }) : "—"}
+              </td>
+            </>
+          ) : null}
+        </>
+      )}
     </tr>
   );
 }
@@ -335,12 +480,15 @@ function Row({
 function Podium({
   rows,
   dict,
+  scoring,
 }: {
   rows: StandingsRow[];
   dict: StandingsDictionary;
+  scoring: Standings["scoring"];
 }) {
+  const icpc = scoring === "icpc";
   const top = rows
-    .filter((r) => r.place !== null && r.place <= 3 && r.points > 0)
+    .filter((r) => r.place !== null && r.place <= 3 && (icpc ? r.solved > 0 : r.points > 0))
     .slice(0, 3);
   if (top.length === 0) return null;
 
@@ -370,7 +518,7 @@ function Podium({
               {row.deleted ? dict.leaderboard.deleted : row.label}
             </span>
             <span className="font-mono text-data text-ink-2 tabular-nums">
-              {row.points}
+              {icpc ? `${row.solved} · ${row.penalty}` : row.points}
             </span>
             <div
               className={cn(
