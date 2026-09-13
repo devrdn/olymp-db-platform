@@ -311,3 +311,33 @@ func TestRevealIsRefusedBeforeTheFinishAndRecordedAfterIt(t *testing.T) {
 		t.Errorf("audit = %+v, want one reveal", f.sink.Entries)
 	}
 }
+
+// The points table's response is byte for byte what it was before ICPC: no
+// questions, no penalty, no cells, and every other field where it was.
+func TestAPointsTableResponseIsUnchanged(t *testing.T) {
+	f := newBoardFixture(t)
+	c, me := f.contest(t, contests.StatusRunning, nil)
+	f.standings.entries = []leaderboard.Entry{
+		{Registration: me.ID, Login: "student", Points: 12, Solved: 2, LastScoredAt: scoredAt(f.now.Add(-time.Minute))},
+		{Registration: uuid.New(), Login: "idle"},
+	}
+
+	public := f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard", nil, "")
+	want := `{"state":"live","scoring":"points","title":"The Library Murder","ends_at":"2026-03-01T12:00:00Z",` +
+		`"generated_at":"2026-03-01T10:00:00Z","truncated":false,"rows":[` +
+		`{"place":1,"label":"student","points":12,"solved":2,"last_scored_at":"2026-03-01T09:59:00Z"},` +
+		`{"place":2,"label":"idle","points":0,"solved":0}]}` + "\n"
+	if got := public.Body.String(); got != want {
+		t.Errorf("public body =\n%s\nwant\n%s", got, want)
+	}
+
+	organizer := f.organizer.ID
+	live := f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard/live", &organizer, "")
+	want = `{"shown":{"state":"live"},"scoring":"points","freeze_min":null,"names":"login",` +
+		`"generated_at":"2026-03-01T10:00:00Z","truncated":false,"rows":[` +
+		`{"place":1,"login":"student","full_name":"","points":12,"solved":2,"last_scored_at":"2026-03-01T09:59:00Z"},` +
+		`{"place":2,"login":"idle","full_name":"","points":0,"solved":0}]}` + "\n"
+	if got := live.Body.String(); got != want {
+		t.Errorf("live body =\n%s\nwant\n%s", got, want)
+	}
+}
