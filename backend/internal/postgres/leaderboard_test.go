@@ -103,6 +103,18 @@ func TestStandingsAggregateEachRegistrationUpToTheCutoff(t *testing.T) {
 	})
 }
 
+// ICPC standings come from ICPCStandings, with a grid; Standings asked for
+// them is a programmer error refused before any query, so this test needs no
+// database.
+func TestStandingsRefuseICPC(t *testing.T) {
+	entries, err := NewLeaderboard(nil).Standings(context.Background(), leaderboard.Query{
+		ContestID: uuid.New(), Cutoff: boardStart, Scoring: contests.ScoringICPC, Limit: 10,
+	})
+	if err == nil || entries != nil {
+		t.Errorf("Standings(icpc) = %v, %v; want an error and no entries", entries, err)
+	}
+}
+
 // A registration made after the cutoff is not on a frozen table, or its row
 // would appear with a zero and say that somebody joined during the freeze.
 func TestStandingsLeaveOutRegistrationsAfterTheCutoffAndTheDisqualified(t *testing.T) {

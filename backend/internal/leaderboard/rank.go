@@ -19,11 +19,15 @@ import (
 // (§6.1.1) is exactly one place.
 //
 // ICPC is ranked by RankICPC, which needs the grid storage computed beside
-// the entries; Rank does not handle it.
+// the entries. Rank panics when given it: that is a programmer error, and
+// ranking an ICPC table by points would quietly serve a table of zeros.
 //
 // The registration id is the last key only so that the order of equal rows
 // does not change between two reads; a place never depends on it.
 func Rank(scoring string, entries []Entry) []Row {
+	if scoring == contests.ScoringICPC {
+		panic("leaderboard: Rank called for icpc scoring; use RankICPC")
+	}
 	rows := make([]Row, len(entries))
 	for i, e := range entries {
 		rows[i] = Row{Entry: e}
