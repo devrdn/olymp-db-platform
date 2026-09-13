@@ -333,4 +333,36 @@ describe("the ICPC standings", () => {
 
     expect(within(screen.getByTestId("podium")).getByText("2 · 65")).toBeInTheDocument();
   });
+
+  test("gives the page table a minimum width covering the grid, so the name column stays legible", () => {
+    const questions = Array.from({ length: 12 }, (_, i) => String.fromCharCode(65 + i));
+    const wide = icpcStandings({
+      questions,
+      rows: [
+        icpcRow({
+          label: "alpha",
+          solved: 1,
+          penalty: 10,
+          cells: questions.map(() => ({ state: "untried" as const })),
+        }),
+      ],
+    });
+    show(wide, "page");
+
+    // Place (w-14 = 3.5rem) + solved (w-20 = 5rem) + penalty (w-20 = 5rem)
+    // + 12 grid cells (w-12 = 3rem each) + a still-legible 12rem name column.
+    expect(screen.getByRole("table")).toHaveStyle({ minWidth: "61.5rem" });
+  });
+
+  test("sets no minimum width in points mode, which has no grid", () => {
+    show(standings(), "page");
+
+    expect(screen.getByRole("table").style.minWidth).toBe("");
+  });
+
+  test("sets no minimum width for ICPC on the narrow panel, where there is no grid to protect", () => {
+    show(icpcStandings(), "panel");
+
+    expect(screen.getByRole("table").style.minWidth).toBe("");
+  });
 });
