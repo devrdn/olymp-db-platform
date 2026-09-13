@@ -75,6 +75,12 @@
   --color-silver-wash: var(--silver-wash);
   --color-bronze: var(--bronze);
   --color-bronze-wash: var(--bronze-wash);
+  --color-gold-fill: var(--gold-fill);
+  --color-gold-on: var(--gold-on);
+  --color-silver-fill: var(--silver-fill);
+  --color-silver-on: var(--silver-on);
+  --color-bronze-fill: var(--bronze-fill);
+  --color-bronze-on: var(--bronze-on);
   --color-frost: var(--frost);
   --color-frost-wash: var(--frost-wash);
   --color-you: var(--you);
