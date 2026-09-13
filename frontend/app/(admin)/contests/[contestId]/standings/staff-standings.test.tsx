@@ -86,6 +86,14 @@ describe("the staff table", () => {
     expect(within(dialog).getByRole("button", { name: t().revealConfirm })).toBeInTheDocument();
   });
 
+  test("uses a fixed table layout so a long name truncates rather than growing the table", () => {
+    show(board(), "running");
+
+    const table = screen.getByRole("table");
+    expect(table).toHaveClass("table-fixed");
+    expect(screen.getByText("Sherlock Holmes")).toHaveClass("truncate");
+  });
+
   test("shows the ICPC grid, solved and penalty, with no points column", () => {
     show(
       board({

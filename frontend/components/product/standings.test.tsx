@@ -211,9 +211,35 @@ function icpcStandings(overrides: Partial<Standings> = {}): Standings {
           { state: "untried" },
         ],
       }),
+      icpcRow({
+        place: 2,
+        label: "beta",
+        solved: 1,
+        penalty: 20,
+        cells: [
+          { state: "untried" },
+          { state: "untried" },
+          { state: "pending", attempts: 1, pending: 3 },
+          { state: "untried" },
+        ],
+      }),
     ],
     ...overrides,
   };
+}
+
+/**
+ * The table row for a label, distinguished from the podium's own copy of the
+ * same name (both are on screen at once on `page`, since the podium filters
+ * to the same placed, scoring rows the table shows).
+ */
+function tableRowOf(label: string): HTMLElement {
+  const tr = screen
+    .getAllByText(label)
+    .map((el) => el.closest("tr"))
+    .find((el): el is HTMLTableRowElement => el !== null);
+  if (!tr) throw new Error(`No table row found for "${label}"`);
+  return tr;
 }
 
 describe("the ICPC standings", () => {
@@ -265,22 +291,41 @@ describe("the ICPC standings", () => {
     expect(screen.getByText("B: failed, 3 wrong attempts")).toBeInTheDocument();
   });
 
-  test("give a pending cell a question mark, its count and accessible name", () => {
+  test("give a pending cell only the pending mark when nothing was wrong before the freeze", () => {
     show(icpcStandings(), "page");
 
-    const cell = screen.getAllByTestId("cell").find((el) => el.dataset.state === "pending") as HTMLElement;
+    const cell = within(tableRowOf("alpha"))
+      .getAllByTestId("cell")
+      .find((el) => el.dataset.state === "pending") as HTMLElement;
     expect(cell).toBeTruthy();
     expect(within(cell).getByText("?")).toBeInTheDocument();
     expect(within(cell).getByText("2")).toBeInTheDocument();
+    expect(within(cell).queryByText(/^−/)).not.toBeInTheDocument();
+    expect(screen.getByText("C: 2 attempts after the freeze")).toBeInTheDocument();
+  });
+
+  test("give a pending cell both marks when there were wrong attempts before the freeze", () => {
+    show(icpcStandings(), "page");
+
+    const cell = within(tableRowOf("beta"))
+      .getAllByTestId("cell")
+      .find((el) => el.dataset.state === "pending") as HTMLElement;
+    expect(cell).toBeTruthy();
+    expect(within(cell).getByText("?")).toBeInTheDocument();
+    expect(within(cell).getByText("3")).toBeInTheDocument();
+    expect(within(cell).getByText("−1")).toBeInTheDocument();
     expect(
-      screen.getByText("C: pending, 2 attempts since the freeze"),
+      screen.getByText("C: 3 attempts after the freeze, 1 wrong before it"),
     ).toBeInTheDocument();
   });
 
   test("give an untried cell an accessible name and no visible marks", () => {
     show(icpcStandings(), "page");
 
-    expect(screen.getByText("D: untried")).toBeInTheDocument();
+    const name = within(tableRowOf("alpha")).getByText("D: untried");
+    const cell = name.closest("td") as HTMLElement;
+    const visible = cell.querySelector("[aria-hidden]") as HTMLElement;
+    expect(visible).toBeEmptyDOMElement();
   });
 
   test("show solved and penalty under the podium name instead of points", () => {

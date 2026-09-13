@@ -89,7 +89,11 @@ export function StaffStandingsView({
         <p className="text-body text-ink-2">{t.empty}</p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
+          {/* Fixed layout, the same construction as the public table
+              (components/product/standings.tsx): every column but the name
+              carries a width, so the name is the one that gives way to a
+              long full name rather than widening the table. */}
+          <table className="w-full table-fixed border-collapse">
             <caption className="sr-only">{t.heading}</caption>
             <thead>
               <tr className="border-b border-line-2 font-mono text-label text-ink-3 uppercase">
@@ -99,28 +103,28 @@ export function StaffStandingsView({
                 <th scope="col" className="px-2 py-2 text-left font-normal">
                   {t.staff.fullName}
                 </th>
-                <th scope="col" className="px-2 py-2 text-left font-normal max-narrow:hidden">
+                <th scope="col" className="w-28 px-2 py-2 text-left font-normal max-narrow:hidden">
                   {t.staff.login}
                 </th>
                 {icpc ? (
                   <>
                     {standings.questions ? <GridHeaderCells questions={standings.questions} /> : null}
-                    <th scope="col" className="px-2 py-2 text-right font-normal">
+                    <th scope="col" className="w-20 px-2 py-2 text-right font-normal">
                       {t.columns.solved}
                     </th>
-                    <th scope="col" className="py-2 pr-3 pl-2 text-right font-normal">
+                    <th scope="col" className="w-20 py-2 pr-3 pl-2 text-right font-normal">
                       {t.columns.penalty}
                     </th>
                   </>
                 ) : (
                   <>
-                    <th scope="col" className="px-2 py-2 text-right font-normal">
+                    <th scope="col" className="w-20 px-2 py-2 text-right font-normal">
                       {t.columns.points}
                     </th>
-                    <th scope="col" className="px-2 py-2 text-right font-normal max-narrow:hidden">
+                    <th scope="col" className="w-20 px-2 py-2 text-right font-normal max-narrow:hidden">
                       {t.columns.solved}
                     </th>
-                    <th scope="col" className="py-2 pr-3 pl-2 text-right font-normal max-narrow:hidden">
+                    <th scope="col" className="w-28 py-2 pr-3 pl-2 text-right font-normal max-narrow:hidden">
                       {t.columns.last}
                     </th>
                   </>
@@ -136,7 +140,9 @@ export function StaffStandingsView({
                   <td className="px-2 py-2.5 align-middle">
                     <div className="flex min-w-0 items-center gap-2.5">
                       <Initials label={row.login} deleted={row.deleted} />
-                      <span className={cn("min-w-0 truncate text-body", row.deleted ? "text-ink-3 italic" : "text-ink")}>
+                      <span
+                        className={cn("min-w-0 max-w-full truncate text-body", row.deleted ? "text-ink-3 italic" : "text-ink")}
+                      >
                         {row.deleted ? t.deleted : row.fullName}
                       </span>
                       {row.disqualified ? (
