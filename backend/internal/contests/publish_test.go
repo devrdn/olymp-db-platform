@@ -335,6 +335,74 @@ func TestGateAcceptsWinnerScoringWithAFinalQuestion(t *testing.T) {
 	}
 }
 
+// The ICPC scoring mode (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md):
+// a choice question needs an attempt limit strictly below the number of
+// choices, or a participant can exhaust every option for the cost of nothing
+// but penalty time.
+
+// asChoiceQuestion turns publishable()'s one question into a choice question
+// with ids "a", "b", "c" — labelled in every language it is asked in, so a
+// test about the attempt limit does not also trip ProblemMissingChoiceLabel.
+func asChoiceQuestion(q contests.Question) contests.Question {
+	q.Kind = contests.KindChoice
+	q.ChoiceIDs = []string{"a", "b", "c"}
+	for lang, text := range q.Texts {
+		text.Choices = map[string]string{"a": "Alpha", "b": "Bravo", "c": "Charlie"}
+		q.Texts[lang] = text
+	}
+	return q
+}
+
+func TestGateRefusesAnICPCChoiceQuestionWithNoAttemptLimit(t *testing.T) {
+	c, story, questions := publishable()
+	c.Scoring = contests.ScoringICPC
+	questions[0] = asChoiceQuestion(questions[0])
+	questions[0].MaxAttempts = nil
+
+	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
+	if !contains(codes, contests.ProblemICPCChoiceNeedsAttemptLimit) {
+		t.Errorf("problems = %v, want %s", codes, contests.ProblemICPCChoiceNeedsAttemptLimit)
+	}
+}
+
+func TestGateRefusesAnICPCChoiceQuestionWithALimitEqualToTheChoiceCount(t *testing.T) {
+	c, story, questions := publishable()
+	c.Scoring = contests.ScoringICPC
+	questions[0] = asChoiceQuestion(questions[0])
+	limit := 3
+	questions[0].MaxAttempts = &limit
+
+	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
+	if !contains(codes, contests.ProblemICPCChoiceNeedsAttemptLimit) {
+		t.Errorf("problems = %v, want %s", codes, contests.ProblemICPCChoiceNeedsAttemptLimit)
+	}
+}
+
+func TestGateAcceptsAnICPCChoiceQuestionWithALimitBelowTheChoiceCount(t *testing.T) {
+	c, story, questions := publishable()
+	c.Scoring = contests.ScoringICPC
+	questions[0] = asChoiceQuestion(questions[0])
+	limit := 2
+	questions[0].MaxAttempts = &limit
+
+	if err := contests.CheckPublishable(c, story, questions); err != nil {
+		t.Errorf("contests.CheckPublishable() = %v, want nil", err)
+	}
+}
+
+// The same shape, in points mode, must not trigger: the gate is specific to
+// ICPC, where an unlimited choice question can be brute-forced for the mere
+// cost of penalty time.
+func TestGateIgnoresAChoiceAttemptLimitOutsideICPCMode(t *testing.T) {
+	c, story, questions := publishable()
+	questions[0] = asChoiceQuestion(questions[0])
+	questions[0].MaxAttempts = nil
+
+	if err := contests.CheckPublishable(c, story, questions); err != nil {
+		t.Errorf("contests.CheckPublishable() = %v, want nil", err)
+	}
+}
+
 // Saving already refuses a freeze as long as the window, but the window can
 // move after the freeze was saved; the gate is the last moment that is cheap.
 func TestGateRefusesAFreezeThatNoLongerFitsTheWindow(t *testing.T) {
