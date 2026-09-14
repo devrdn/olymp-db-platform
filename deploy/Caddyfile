@@ -17,16 +17,34 @@
 	# compares this against the Origin header on every write; it is trustworthy
 	# only because this proxy is the sole ingress and overwrites whatever the
 	# client sent.
+	#
+	# X-Forwarded-For is set to the connecting peer explicitly, replacing
+	# whatever the client sent. That is also Caddy's default without a
+	# trusted_proxies option, but the API's client address — its login
+	# throttle, a contest's network restriction, the audit trail — rests on it,
+	# so it is written down rather than inherited from an image tag.
 	reverse_proxy /api/* api:8080 {
 		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-For {remote_host}
+		header_up -X-Ingress-Secret
 	}
 
 	# Everything else is the interface. Serving it from this same name is not a
 	# convenience: the session cookie is SameSite=Lax and the API compares the
 	# Origin header against its own Host on every write, so a frontend on a
 	# second hostname would be rejected by its own backend.
+	#
+	# The interface's server calls the API itself and hands this address on,
+	# and the API believes it. So the interface hands it on only when the
+	# request carries INGRESS_SECRET, which this proxy sets here, replacing any
+	# value a client sent: a request that reached the interface any other way
+	# cannot name its own address (frontend/lib/api/forwarded.ts). The same
+	# value is given to the web service.
 	handle {
-		reverse_proxy web:3000
+		reverse_proxy web:3000 {
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Ingress-Secret {env.INGRESS_SECRET}
+		}
 	}
 
 	log {
