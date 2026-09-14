@@ -605,6 +605,68 @@ func TestPublishAcceptsACompleteContest(t *testing.T) {
 	}
 }
 
+// TestTransitionTriggersThePoolWhenPublishingOrStarting is the manual door
+// into the same moment Scheduler.Advance triggers the pool tender for on its
+// own tick: an organizer publishing or starting a contest by hand is exactly
+// as much reason for the pool to be tended soon as the scheduler doing it.
+func TestTransitionTriggersThePoolWhenPublishingOrStarting(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedPublishableContest()
+
+	if err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusPublished); err != nil {
+		t.Fatalf("Transition(published) = %v", err)
+	}
+	if len(f.PoolTrigger.Triggered) != 1 || f.PoolTrigger.Triggered[0] != c.ID {
+		t.Fatalf("triggered after publishing = %v, want exactly [%s]", f.PoolTrigger.Triggered, c.ID)
+	}
+
+	if err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusRunning); err != nil {
+		t.Fatalf("Transition(running) = %v", err)
+	}
+	if len(f.PoolTrigger.Triggered) != 2 || f.PoolTrigger.Triggered[1] != c.ID {
+		t.Fatalf("triggered after starting = %v, want a second entry for %s", f.PoolTrigger.Triggered, c.ID)
+	}
+	if f.PoolTrigger.TriggeredWhileOpen != 0 {
+		t.Fatalf("the trigger fired while Transition's own transaction was still open, want it fired after commit")
+	}
+}
+
+// Moving on to finished or archived is not the moment a pool needs tending —
+// nobody is arriving to query a contest that is closing, not opening.
+func TestTransitionDoesNotTriggerThePoolForFinishingOrArchiving(t *testing.T) {
+	f := conteststest.NewFixture()
+	running := f.SeedContest(contests.StatusRunning)
+	published := f.SeedPublishableContest()
+	if err := f.Service.Transition(context.Background(), uuid.New(), published.ID, contests.StatusPublished); err != nil {
+		t.Fatalf("Transition(published) = %v", err)
+	}
+	f.PoolTrigger.Triggered = nil // only the two transitions below are under test.
+
+	if err := f.Service.Transition(context.Background(), uuid.New(), running.ID, contests.StatusFinished); err != nil {
+		t.Fatalf("Transition(finished) = %v", err)
+	}
+	if err := f.Service.Transition(context.Background(), uuid.New(), published.ID, contests.StatusArchived); err != nil {
+		t.Fatalf("Transition(archived) = %v", err)
+	}
+	if len(f.PoolTrigger.Triggered) != 0 {
+		t.Fatalf("triggered = %v, want none for finishing or archiving", f.PoolTrigger.Triggered)
+	}
+}
+
+// A transition the publish gate refuses must not wake the pool for a move
+// that never happened.
+func TestTransitionDoesNotTriggerThePoolOnRefusal(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+
+	if err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusPublished); !errors.Is(err, contests.ErrNotPublishable) {
+		t.Fatalf("Transition(published) = %v, want ErrNotPublishable", err)
+	}
+	if len(f.PoolTrigger.Triggered) != 0 {
+		t.Fatalf("triggered = %v, want none for a refused transition", f.PoolTrigger.Triggered)
+	}
+}
+
 func TestStartingAnUnpublishedContestIsRefused(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedPublishableContest()
