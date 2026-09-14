@@ -11,8 +11,9 @@
 // `statement_timeout` is a USERSET parameter: SQL that reached the server
 // unchecked turns it off in one statement. The bound that holds regardless is
 // a deadline on the connection's own context, held by the process that opened
-// it — which is this one. When it fires, the connection is closed, and closing
-// it is what ends the query the server is still running.
+// it — which is this one. When it fires, the server is sent a cancel for the
+// query it is still running, and the connection is closed rather than kept for
+// another query.
 //
 // # What it deliberately does not do
 //
@@ -121,6 +122,10 @@ type Limits struct {
 	// cannot: a thousand cheap queries in a minute pass it one at a time.
 	// Zero means no limit.
 	PerMinute int
+	// IdleTimeout is how long the connection a read finished on is kept for
+	// that database's next read (see pool). Zero keeps none: every query
+	// opens and closes its own connection.
+	IdleTimeout time.Duration
 }
 
 // DefaultLimits are the figures section 4.3 and section 5 name.
@@ -139,6 +144,12 @@ func DefaultLimits() Limits {
 		Concurrent: 8,
 		QueueDepth: 32,
 		PerMinute:  30,
+		// Long enough to span a participant reading one answer and editing
+		// the next query; short enough that a participant who has stopped
+		// holds nothing for long, and that the reclaim sweep's plain DROP
+		// DATABASE — which refuses a database anything is connected to —
+		// meets a finished contest's databases already released.
+		IdleTimeout: 30 * time.Second,
 	}
 }
 
@@ -174,7 +185,7 @@ type Validator interface {
 
 // Runner executes participants' queries.
 type Runner struct {
-	cluster *Cluster
+	conns   *pool
 	checker Validator
 	limits  Limits
 	gate    *gate
@@ -184,13 +195,19 @@ type Runner struct {
 // New assembles a runner.
 func New(cluster *Cluster, checker Validator, limits Limits) *Runner {
 	return &Runner{
-		cluster: cluster,
+		// The pool's bound is the gate's: see pool for why every connection
+		// the runner holds, idle ones included, counts against QUERY_CONCURRENT.
+		conns:   newPool(cluster.connect, limits.Concurrent, limits.IdleTimeout),
 		checker: checker,
 		limits:  limits,
 		gate:    newGate(limits.Concurrent, limits.QueueDepth),
 		rate:    newWindow(limits.PerMinute, time.Minute, nil),
 	}
 }
+
+// Close closes the connections the runner is keeping. Queries still running
+// finish, and their connections are closed rather than kept.
+func (r *Runner) Close() { r.conns.close() }
 
 // Run checks the query, admits it, and executes it.
 //
@@ -233,43 +250,30 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 	return r.execute(ctx, req, statement)
 }
 
-// execute opens a connection, runs the query under the deadline, and closes it.
+// execute runs the query under the deadline on a connection from the pool,
+// and hands the connection back.
 func (r *Runner) execute(ctx context.Context, req Request, statement sqlpolicy.Statement) (*Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.limits.Deadline)
 	defer cancel()
 
-	// As the writer only when the policy permits writing, so that a
-	// read-only contest is read-only by privilege and not only by the
-	// transaction's access mode below, which a query cannot change but a bug
-	// here could.
-	writes := req.Policy.Mode == sqlpolicy.ModeReadWrite
-	conn, meter, err := r.cluster.connect(ctx, req.Database, writes, int64(r.limits.MaxBytes)+readSlack)
-	if err != nil {
-		return nil, timeoutOr(ctx, err)
-	}
-	// Closed with a context of its own: the one above may already be the
-	// expired one, and a close that is skipped because the deadline passed is
-	// a connection left to the server to notice.
-	defer func() {
-		closing, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer stop()
-		_ = conn.Close(closing)
-	}()
-
-	// A transaction per query, read-only for a read-only contest. It is the
-	// database's own answer to "this changes nothing", and it makes a stray
-	// write fail at the first statement rather than half-way through.
-	tx, err := conn.BeginTx(ctx, pgx.TxOptions{AccessMode: accessMode(req.Policy)})
+	sess, tx, err := r.begin(ctx, req)
 	if err != nil {
 		return nil, timeoutOr(ctx, err)
 	}
 	// Rolled back unless a write below commits: a read has nothing to commit,
 	// and a write that failed half-way has nothing that should be kept.
 	// Rollback after a commit is a no-op, so this is safe unconditionally.
+	// Then the connection goes back, kept only if everything here finished
+	// cleanly: clean is set on the one path that returns an answer, and a
+	// context that ended at any point — its watcher may have sent a cancel —
+	// is not clean, however the query itself came out.
+	clean := false
 	defer func() {
 		ending, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer stop()
-		_ = tx.Rollback(ending)
+		rolledBack := tx.Rollback(ending)
+		r.conns.release(ending, sess, clean && ctx.Err() == nil &&
+			(rolledBack == nil || errors.Is(rolledBack, pgx.ErrTxClosed)))
 	}()
 
 	if statement.Writes && req.DiskQuotaBytes > 0 {
@@ -288,7 +292,7 @@ func (r *Runner) execute(ctx context.Context, req Request, statement sqlpolicy.S
 
 	result, err := collect(ctx, tx, text, r.limits, statement.Writes)
 	if err != nil {
-		if meter.exhausted() {
+		if sess.meter.exhausted() {
 			// The connection stopped reading, and the driver reports that as
 			// the connection failing. It did not: this process declined to
 			// hold more of the answer than one is allowed to cost.
@@ -305,7 +309,52 @@ func (r *Runner) execute(ctx context.Context, req Request, statement sqlpolicy.S
 			return nil, timeoutOr(ctx, err)
 		}
 	}
+	clean = true
 	return result, nil
+}
+
+// begin takes a connection and opens the query's transaction on it.
+//
+// As the writer only when the policy permits writing, so that a read-only
+// contest is read-only by privilege and not only by the transaction's access
+// mode, which a query cannot change but a bug here could.
+//
+// A transaction per query, read-only for a read-only contest. It is the
+// database's own answer to "this changes nothing", and it makes a stray write
+// fail at the first statement rather than half-way through.
+//
+// A kept connection can have been severed while it sat idle: the database
+// dropped WITH (FORCE) and perhaps created again under the same name, or the
+// server restarted. BEGIN is the first thing to find out, and nothing has run
+// yet, so the connection is closed and the query goes on a new one — which
+// reaches whatever database carries the name now, never the old one, since no
+// connection outlives the database it was opened to.
+func (r *Runner) begin(ctx context.Context, req Request) (*session, pgx.Tx, error) {
+	writes := req.Policy.Mode == sqlpolicy.ModeReadWrite
+	budget := int64(r.limits.MaxBytes) + readSlack
+	options := pgx.TxOptions{AccessMode: accessMode(req.Policy)}
+
+	sess, err := r.conns.acquire(ctx, req.Database, writes, budget)
+	if err != nil {
+		return nil, nil, err
+	}
+	tx, err := sess.conn.BeginTx(ctx, options)
+	if err == nil {
+		return sess, tx, nil
+	}
+	r.conns.release(ctx, sess, false)
+	if !sess.reused || ctx.Err() != nil {
+		return nil, nil, err
+	}
+
+	if sess, err = r.conns.acquire(ctx, req.Database, writes, budget); err != nil {
+		return nil, nil, err
+	}
+	if tx, err = sess.conn.BeginTx(ctx, options); err != nil {
+		r.conns.release(ctx, sess, false)
+		return nil, nil, err
+	}
+	return sess, tx, nil
 }
 
 // withinQuota refuses a write to a database that has grown past its allowance.

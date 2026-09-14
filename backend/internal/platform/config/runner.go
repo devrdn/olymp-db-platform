@@ -125,7 +125,13 @@ type Runner struct {
 //	(QUERY_CONCURRENT + MaxParallelWorkers + MaxBuildSessions) × ProcessMemoryBytes
 //	+ ReservedMemoryBytes
 //
-// at worst, and GAME_DB_MEMORY_BYTES must be at least that: at the default
+// at worst, and GAME_DB_MEMORY_BYTES must be at least that. QUERY_CONCURRENT
+// here is every participant backend the runner holds, not only the ones
+// running a query: the connections it keeps idle between a participant's
+// queries count against the same bound (queryrunner's pool closes the least
+// recently used one before opening a connection past it), because a kept
+// backend can still hold what its last query grew to. So the formula needs no
+// term for them. At the default
 // concurrency of eight, (8 + 4 + 4) × 256 MiB + 2 GiB = 6 GiB, which
 // deploy/.env.example rounds up to a seven-gibibyte GAME_DB_MEMORY_BYTES. Lower one
 // and the others can come down with it.

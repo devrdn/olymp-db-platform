@@ -127,11 +127,13 @@ func runAll(ctx context.Context, conn Conn, statements []string) error {
 
 // instanceConnectionLimit is the last line under the Query Runner's semaphore.
 //
-// Two rather than one: a query is running while the connection that will
-// replace it is being opened, and a limit of one would turn an ordinary
-// handover into a refusal. Reaching even two means admission control has
-// already failed — a participant is allowed one query at a time, and the
-// runner closes each connection when it is done.
+// Two rather than one: the schema panel's catalogue read (ReadSchema) borrows a
+// connection while the runner may hold one — running a query, or kept idle for
+// the participant's next read — and a limit of one would turn that ordinary
+// overlap into a refusal. The runner itself never holds more than one per
+// database: a participant is allowed one query at a time, and it keeps at most
+// one idle connection per database, which the next query takes rather than
+// opening another.
 const instanceConnectionLimit = 2
 
 // settleInstance applies the privileges that belong to a database rather than

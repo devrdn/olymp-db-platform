@@ -22,10 +22,26 @@ func setup(t *testing.T) (*queryrunner.Runner, string) {
 	return setupWith(t, queryrunner.DefaultLimits(), checker.NewChecker())
 }
 
-func setupWith(t *testing.T, limits queryrunner.Limits, checker *checker.Checker) (*queryrunner.Runner, string) {
+func setupWith(t *testing.T, limits queryrunner.Limits, validator queryrunner.Validator) (*queryrunner.Runner, string) {
+	t.Helper()
+
+	database := seeded(t)
+	return runnerFor(t, database, limits, validator), database
+}
+
+// seeded creates a scratch database holding the fixture every runner test
+// reads, granted to both participant roles.
+func seeded(t *testing.T) string {
 	t.Helper()
 
 	database := gamedbtest.Scratch(t)
+	seed(t, database)
+	return database
+}
+
+func seed(t *testing.T, database string) {
+	t.Helper()
+
 	gamedbtest.Run(t, database,
 		`CREATE TABLE evidence (id int PRIMARY KEY, note text)`,
 		`INSERT INTO evidence VALUES (1, 'a knife'), (2, 'a letter')`,
@@ -37,8 +53,17 @@ func setupWith(t *testing.T, limits queryrunner.Limits, checker *checker.Checker
 		`CREATE SCHEMA work`,
 		`GRANT USAGE, CREATE ON SCHEMA work TO `+gamedb.RoleWriter,
 	)
+}
 
-	return queryrunner.New(clusterFor(t, database), checker, limits), database
+// runnerFor assembles a runner over both participant roles and closes it when
+// the test ends, before the scratch database is dropped: cleanups run in
+// reverse, and the database was created first.
+func runnerFor(t *testing.T, database string, limits queryrunner.Limits, validator queryrunner.Validator) *queryrunner.Runner {
+	t.Helper()
+
+	runner := queryrunner.New(clusterFor(t, database), validator, limits)
+	t.Cleanup(runner.Close)
+	return runner
 }
 
 // clusterFor connects as both participant roles, so a test may run either
@@ -69,3 +94,13 @@ func request(database, sql string) queryrunner.Request {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// anything is a validator that admits every statement unwrapped, for the tests
+// about what a statement the real checker would refuse could leave behind on a
+// connection. The pool's isolation must not rest on the checker: it is the
+// layer underneath it.
+type anything struct{}
+
+func (anything) Analyse(sql string, p sqlpolicy.Policy) (sqlpolicy.Statement, error) {
+	return sqlpolicy.Statement{Text: sql, Explain: true, Writes: p.Mode == sqlpolicy.ModeReadWrite}, nil
+}
