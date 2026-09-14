@@ -240,22 +240,50 @@ describe("the staff table's own poll", () => {
   // `status` is a server prop this poll otherwise never touches — so a
   // frozen table's shown.state would sit on "frozen" straight through the
   // transition and the reveal button would never appear.
-  test("asks the layout to refresh once the contest's own status has moved on, and stops its own chain", async () => {
+  test("asks the layout to refresh once the contest's own status has moved on, and stops once the new status arrives", async () => {
     fetchStaffStandingsAction.mockResolvedValue({
       kind: "ok",
       standings: board({ status: "finished" }),
     });
-    show(board(), "running");
+    const { rerender } = show(board(), "running");
 
     await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS));
     expect(routerRefresh).toHaveBeenCalledTimes(1);
     expect(fetchStaffStandingsAction).toHaveBeenCalledTimes(1);
 
-    // Still mounted with the old "running" prop (a unit test cannot bring
-    // the real navigation a router.refresh() would); this component's own
-    // chain must not have scheduled another poll behind it regardless.
+    // A refresh that brought no new props (it failed, or nothing remounted)
+    // must not leave the table silent for good: the chain carries on and
+    // asks again.
+    await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS));
+    expect(fetchStaffStandingsAction).toHaveBeenCalledTimes(2);
+    expect(routerRefresh).toHaveBeenCalledTimes(2);
+
+    // Once the refresh does bring the new status down, the effect's own
+    // cleanup ends the chain.
+    rerender(<StaffStandingsView contestId={ID} status="finished" standings={board({ status: "finished" })} dict={dict} locale="en" />);
     await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS * 3));
-    expect(fetchStaffStandingsAction).toHaveBeenCalledTimes(1);
+    expect(fetchStaffStandingsAction).toHaveBeenCalledTimes(2);
+  });
+
+  // A server action can throw rather than answer: the network drops, or a
+  // redeploy retired the action's id. That must read as a failed poll, not
+  // as an unhandled rejection that silently ends the chain.
+  test("treats a poll that throws as a failure and keeps polling", async () => {
+    fetchStaffStandingsAction.mockRejectedValueOnce(new Error("Failed to find Server Action"));
+    fetchStaffStandingsAction.mockResolvedValue({
+      kind: "ok",
+      standings: board({ rows: [{ ...board().rows[0], points: 64 }] }),
+    });
+    show(board(), "running");
+
+    await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS));
+    expect(screen.getByText(dict.leaderboard.failed)).toBeInTheDocument();
+    expect(screen.getByText("30")).toBeInTheDocument();
+
+    await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS));
+    expect(fetchStaffStandingsAction).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("64")).toBeInTheDocument();
+    expect(screen.queryByText(dict.leaderboard.failed)).not.toBeInTheDocument();
   });
 
   // An ordinary freeze reached mid-contest also moves shown.state, but it is

@@ -73,10 +73,9 @@ export function StaffStandingsView({
   // stale "running" would leave the reveal button (and the layout's own
   // badges and tabs, outside this component) never catching up. So a poll
   // that finds the contest's own status has moved on asks the layout for a
-  // real router.refresh() instead of applying the answer itself, and stops
-  // its own chain there — the fresh props that refresh brings down restart
+  // real router.refresh() — the fresh props that refresh brings down restart
   // or end the polling correctly on their own, through this same effect's
-  // dependencies.
+  // dependencies and cleanup.
   //
   // The comparison is on status alone, not on the table's own shown.state:
   // this poll runs only while status is "running", and Decide (the backend's
@@ -107,7 +106,19 @@ export function StaffStandingsView({
         return;
       }
       const id = ++requestId;
-      const result = await fetchStaffStandingsAction(contestId);
+      let result: Awaited<ReturnType<typeof fetchStaffStandingsAction>>;
+      try {
+        result = await fetchStaffStandingsAction(contestId);
+      } catch {
+        // A server action can throw instead of answering: the network
+        // dropped, or a redeploy retired the action's id. That is a failed
+        // poll like any refusal — shown, and asked again — not a rejection
+        // nobody handles that ends the chain for good.
+        if (cancelled || id !== requestId) return;
+        setFailed(true);
+        schedule();
+        return;
+      }
       if (cancelled || id !== requestId) return;
 
       if (result.kind === "ok") {
@@ -115,17 +126,19 @@ export function StaffStandingsView({
         setStandings(result.standings);
         if (result.standings.status !== status) {
           router.refresh();
-          return;
         }
-        schedule();
       } else if (result.code === "unauthenticated") {
         // The session no longer holds; a refresh is what lets the layout
         // redirect, rather than a "failed" banner this would keep retrying.
         router.refresh();
       } else {
         setFailed(true);
-        schedule();
       }
+      // Scheduled after a refresh too. The fresh props a refresh brings down
+      // re-run this effect, and its cleanup cancels this timer; a refresh
+      // that brings none (it failed, or nothing remounted) must not leave the
+      // table silent, so the chain asks again and refreshes again.
+      schedule();
     };
 
     schedule();
