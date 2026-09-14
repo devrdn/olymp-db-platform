@@ -63,11 +63,12 @@ type Runner struct {
 	ExtraFunctions []string
 
 	// GameDBMemoryBytes is the memory limit of the game cluster's container,
-	// in bytes, when the deployment declares it (GAME_DB_MEMORY_BYTES). It is
-	// not used to run anything — it exists so the runner can refuse to start
-	// with a concurrency the cluster cannot hold. Zero means undeclared, which
-	// a development cluster with no cgroup limit is, and then the check does
-	// not run.
+	// in bytes (GAME_DB_MEMORY_BYTES) — the single variable the compose file
+	// interpolates the container's limit from, with the same default. It is
+	// not used to run anything; it exists so the runner refuses to start with
+	// a concurrency the cluster cannot hold. There is no "undeclared": an
+	// absent or empty variable means the default-sized container, and the
+	// check runs against that.
 	GameDBMemoryBytes int64
 	// ProcessMemoryBytes is the per-process memory cap the game cluster's
 	// backends run under (GAME_DB_PROCESS_MEMORY_BYTES, the same value set as
@@ -120,9 +121,9 @@ type Runner struct {
 //	(QUERY_CONCURRENT + MaxParallelWorkers + MaxBuildSessions) × ProcessMemoryBytes
 //	+ ReservedMemoryBytes
 //
-// at worst, and GAME_DB_MEMORY must be at least that: at the default
+// at worst, and GAME_DB_MEMORY_BYTES must be at least that: at the default
 // concurrency of eight, (8 + 4 + 4) × 256 MiB + 2 GiB = 6 GiB, which
-// deploy/.env.example rounds up to a seven-gibibyte GAME_DB_MEMORY. Lower one
+// deploy/.env.example rounds up to a seven-gibibyte GAME_DB_MEMORY_BYTES. Lower one
 // and the others can come down with it.
 const (
 	MaxParallelWorkers  = 4
@@ -130,9 +131,16 @@ const (
 	AutovacuumWorkers   = 2
 	ReservedMemoryBytes = 2 << 30
 
-	// defaultProcessMemoryBytes is the pilot's per-process cap, used when
+	// DefaultProcessMemoryBytes is the pilot's per-process cap, used when
 	// GAME_DB_PROCESS_MEMORY_BYTES is unset.
-	defaultProcessMemoryBytes = 256 << 20
+	DefaultProcessMemoryBytes = 256 << 20
+
+	// DefaultGameDBMemoryBytes is the game cluster's container memory limit
+	// when GAME_DB_MEMORY_BYTES is unset — the same default the compose file
+	// interpolates the container limit from (7 GiB, 7516192768 bytes).
+	// Exported because cmd/gamedb verifies the running container against the
+	// same number at deploy.
+	DefaultGameDBMemoryBytes = 7 << 30
 )
 
 // LoadRunner reads the Query Runner's configuration from the environment.
@@ -184,10 +192,13 @@ func LoadRunner() (Runner, error) {
 		}
 	}
 
-	if cfg.GameDBMemoryBytes, err = int64Env("GAME_DB_MEMORY_BYTES", 0); err != nil {
+	if cfg.GameDBMemoryBytes, err = int64Env("GAME_DB_MEMORY_BYTES", DefaultGameDBMemoryBytes); err != nil {
 		return Runner{}, err
 	}
-	if cfg.ProcessMemoryBytes, err = int64Env("GAME_DB_PROCESS_MEMORY_BYTES", defaultProcessMemoryBytes); err != nil {
+	if cfg.GameDBMemoryBytes < 1 {
+		return Runner{}, fmt.Errorf("GAME_DB_MEMORY_BYTES must be at least 1, got %d", cfg.GameDBMemoryBytes)
+	}
+	if cfg.ProcessMemoryBytes, err = int64Env("GAME_DB_PROCESS_MEMORY_BYTES", DefaultProcessMemoryBytes); err != nil {
 		return Runner{}, err
 	}
 	if cfg.ProcessMemoryBytes < 1 {
@@ -217,21 +228,18 @@ func LoadRunner() (Runner, error) {
 	// per-process cap: the cap keeps one backend's failure to an "out of
 	// memory" ERROR, but only while the container can hold every concurrent
 	// backend at the cap at once — otherwise the cgroup limit is reached first
-	// and the OOM killer restarts the cluster. Caught here when the container's
-	// limit is declared, so it is a failed deploy and not a discovery during a
-	// contest. Undeclared (a development cluster with neither a cgroup limit
-	// nor the ulimit) leaves nothing to check against.
-	if cfg.GameDBMemoryBytes > 0 {
-		processes := int64(cfg.Concurrent) + int64(MaxParallelWorkers) + int64(MaxBuildSessions)
-		need := processes*cfg.ProcessMemoryBytes + ReservedMemoryBytes
-		if need > cfg.GameDBMemoryBytes {
-			return Runner{}, fmt.Errorf(
-				"QUERY_CONCURRENT=%d needs %d bytes of game-cluster memory "+
-					"(%d leaders plus %d parallel workers plus %d build sessions at %d each, plus %d reserved), "+
-					"but GAME_DB_MEMORY_BYTES is %d: raise GAME_DB_MEMORY or lower QUERY_CONCURRENT",
-				cfg.Concurrent, need, cfg.Concurrent, MaxParallelWorkers, MaxBuildSessions, cfg.ProcessMemoryBytes,
-				ReservedMemoryBytes, cfg.GameDBMemoryBytes)
-		}
+	// and the OOM killer restarts the cluster. Caught here, so it is a failed
+	// deploy and not a discovery during a contest. Always checked: the limit
+	// has a default, the same one the container is sized from.
+	processes := int64(cfg.Concurrent) + int64(MaxParallelWorkers) + int64(MaxBuildSessions)
+	need := processes*cfg.ProcessMemoryBytes + ReservedMemoryBytes
+	if need > cfg.GameDBMemoryBytes {
+		return Runner{}, fmt.Errorf(
+			"QUERY_CONCURRENT=%d needs %d bytes of game-cluster memory "+
+				"(%d leaders plus %d parallel workers plus %d build sessions at %d each, plus %d reserved), "+
+				"but GAME_DB_MEMORY_BYTES is %d: raise GAME_DB_MEMORY_BYTES or lower QUERY_CONCURRENT",
+			cfg.Concurrent, need, cfg.Concurrent, MaxParallelWorkers, MaxBuildSessions, cfg.ProcessMemoryBytes,
+			ReservedMemoryBytes, cfg.GameDBMemoryBytes)
 	}
 	return cfg, nil
 }

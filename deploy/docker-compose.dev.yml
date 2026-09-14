@@ -93,11 +93,12 @@ services:
       data: ${GAME_DB_PROCESS_MEMORY_BYTES:-268435456}
     # The product's /dev/shm and container memory, so the proof runs on the
     # deployment's configuration (CLAUDE.md rule 10): a parallel query's shared
-    # memory has the same room, and the cgroup limit is the computed seven-gibibyte
-    # default, so the OOM-killer-versus-clean-error behaviour the sandbox tests
-    # assert is the one production would show.
+    # memory has the same room, and the cgroup limit is interpolated from
+    # GAME_DB_MEMORY_BYTES with pg-game's default, so the OOM-killer-versus-
+    # clean-error behaviour the sandbox tests assert is the one production would
+    # show, and the tests can read the limit back and compare.
     shm_size: 256mb
-    mem_limit: 7g
+    mem_limit: ${GAME_DB_MEMORY_BYTES:-7516192768}
     tmpfs:
       - /var/lib/postgresql/data
     ports:

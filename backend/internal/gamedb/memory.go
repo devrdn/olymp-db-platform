@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -109,6 +110,107 @@ func VerifyProcessMemoryCap(ctx context.Context, conn Conn, capBytes int64) erro
 	if !errors.As(err, &pg) || pg.Code != outOfMemory {
 		return fmt.Errorf("an allocation over the %d-byte cap failed with %v, not the expected out-of-memory error; "+
 			"the cap cannot be confirmed", capBytes, err)
+	}
+	return nil
+}
+
+// CgroupMemoryLimitFile is where a cgroup v2 container reads its own memory
+// limit: a byte count, or "max" for none.
+const CgroupMemoryLimitFile = "/sys/fs/cgroup/memory.max"
+
+// ErrContainerLimitUnreadable means the game cluster could not report its own
+// container memory limit — a cgroup v1 host, or a container without a cgroup
+// namespace. The deploy fails on it unless the operator has explicitly opted
+// out (GAME_DB_ALLOW_UNREADABLE_MEMORY_LIMIT), because the arithmetic the Query
+// Runner checked is only true if the limit is the one it was checked against.
+var ErrContainerLimitUnreadable = errors.New("the game cluster's container memory limit cannot be read")
+
+// VerifyContainerMemoryLimit checks, at deploy time, that the game cluster's
+// container runs with the memory limit the Query Runner's arithmetic was
+// checked against (GAME_DB_MEMORY_BYTES). The compose file interpolates both
+// from the same variable, but a container created before a change, or by
+// hand, keeps its old limit silently — and a limit smaller than the arithmetic
+// assumes is exactly how the OOM killer comes back. The backend reads its own
+// cgroup file (superuser, pg_read_file), so the number is the kernel's, not
+// the compose file's.
+//
+// limitFile is CgroupMemoryLimitFile in production; it is a parameter so the
+// unreadable case can be exercised.
+func VerifyContainerMemoryLimit(ctx context.Context, conn Conn, limitFile string, limitBytes int64) error {
+	var raw string
+	if err := conn.QueryRow(ctx, `SELECT pg_read_file($1)`, limitFile).Scan(&raw); err != nil {
+		return fmt.Errorf("%w (%s): %v", ErrContainerLimitUnreadable, limitFile, err)
+	}
+	value := strings.TrimSpace(raw)
+	if value == "max" {
+		return fmt.Errorf("the game cluster's container has no memory limit, not the configured %d bytes "+
+			"(GAME_DB_MEMORY_BYTES): the per-process cap no longer protects the cluster from the OOM killer", limitBytes)
+	}
+	got, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return fmt.Errorf("%w: %s holds %q, not a byte count", ErrContainerLimitUnreadable, limitFile, value)
+	}
+	if got != limitBytes {
+		return fmt.Errorf("the game cluster's container memory limit is %d bytes, not the configured %d "+
+			"(GAME_DB_MEMORY_BYTES): recreate pg-game so its limit is interpolated from the same value", got, limitBytes)
+	}
+	return nil
+}
+
+// MemorySettings are the cluster settings the Query Runner's memory arithmetic
+// restates as constants (config.MaxBuildSessions, config.MaxParallelWorkers,
+// config.AutovacuumWorkers). The platform layer cannot import this package, so
+// the caller passes its own numbers in and this compares them with the cluster.
+type MemorySettings struct {
+	// AuthorConnectionLimit is the build sessions the arithmetic counts; it
+	// must be game_author's CONNECTION LIMIT.
+	AuthorConnectionLimit int
+	// MaxParallelWorkers must be max_parallel_workers on the cluster.
+	MaxParallelWorkers int
+	// AutovacuumWorkers must be autovacuum_max_workers on the cluster.
+	AutovacuumWorkers int
+}
+
+// VerifyMemorySettings reads each setting the memory arithmetic depends on back
+// from the cluster and reports every one that differs, so a pin changed on the
+// pg-game command, or a role limit changed here, cannot drift from the numbers
+// the runner sized the container with.
+func VerifyMemorySettings(ctx context.Context, conn Conn, want MemorySettings) error {
+	var drift []string
+
+	var authorLimit int
+	if err := conn.QueryRow(ctx,
+		`SELECT rolconnlimit FROM pg_roles WHERE rolname = $1`, RoleAuthor).Scan(&authorLimit); err != nil {
+		return fmt.Errorf("reading %s's connection limit: %w", RoleAuthor, err)
+	}
+	if authorLimit != want.AuthorConnectionLimit {
+		drift = append(drift, fmt.Sprintf("%s CONNECTION LIMIT is %d, the arithmetic counts %d build sessions",
+			RoleAuthor, authorLimit, want.AuthorConnectionLimit))
+	}
+
+	for _, setting := range []struct {
+		name string
+		want int
+	}{
+		{"max_parallel_workers", want.MaxParallelWorkers},
+		{"autovacuum_max_workers", want.AutovacuumWorkers},
+	} {
+		var raw string
+		if err := conn.QueryRow(ctx, `SELECT current_setting($1)`, setting.name).Scan(&raw); err != nil {
+			return fmt.Errorf("reading %s: %w", setting.name, err)
+		}
+		got, err := strconv.Atoi(raw)
+		if err != nil {
+			return fmt.Errorf("%s is %q, not a number", setting.name, raw)
+		}
+		if got != setting.want {
+			drift = append(drift, fmt.Sprintf("%s is %d, the arithmetic assumes %d", setting.name, got, setting.want))
+		}
+	}
+
+	if len(drift) > 0 {
+		return fmt.Errorf("the game cluster does not match the Query Runner's memory arithmetic: %s",
+			strings.Join(drift, "; "))
 	}
 	return nil
 }
