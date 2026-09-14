@@ -41,7 +41,7 @@ func newScheduler() schedulerFixture {
 	questions := conteststest.NewQuestions()
 	sink := conteststest.NewSink()
 	uow := &conteststest.UnitOfWork{}
-	poolTrigger := conteststest.NewPoolTrigger()
+	poolTrigger := conteststest.NewPoolTrigger(uow)
 	return schedulerFixture{
 		scheduler: contests.NewScheduler(repo, stories, questions, sink, audit.New(sink), uow, schedulerFixtureGrace).
 			WithPoolTrigger(poolTrigger),
@@ -414,10 +414,10 @@ func TestAdvanceSkipsAContestThatRacedWithAManualTransition(t *testing.T) {
 	}
 }
 
-// TestAdvanceTriggersThePoolForEveryContestItStarts is P-C1's own claim for
-// the scheduler: a contest whose window opens is exactly the moment its
-// pool's roster stops being merely "published" and starts being played on,
-// so the tender is woken rather than left to its own next tick.
+// TestAdvanceTriggersThePoolForEveryContestItStarts is Advance's own claim: a
+// contest whose window opens is exactly the moment its pool's roster stops
+// being merely "published" and starts being played on, so the tender is
+// woken rather than left to its own next tick.
 func TestAdvanceTriggersThePoolForEveryContestItStarts(t *testing.T) {
 	f := newScheduler()
 	due := duePublishable(f)
@@ -429,6 +429,9 @@ func TestAdvanceTriggersThePoolForEveryContestItStarts(t *testing.T) {
 
 	if len(f.poolTrigger.Triggered) != 1 || f.poolTrigger.Triggered[0] != due.ID {
 		t.Fatalf("triggered = %v, want exactly [%s]", f.poolTrigger.Triggered, due.ID)
+	}
+	if f.poolTrigger.TriggeredWhileOpen != 0 {
+		t.Fatalf("the trigger fired while Advance's own transaction was still open, want it fired after commit")
 	}
 }
 

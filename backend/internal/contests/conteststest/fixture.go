@@ -52,6 +52,7 @@ type Fixture struct {
 
 // NewFixture assembles a service over empty stores.
 func NewFixture() *Fixture {
+	uow := &UnitOfWork{}
 	f := &Fixture{
 		Contests:      NewContests(),
 		Stories:       NewStories(),
@@ -64,9 +65,9 @@ func NewFixture() *Fixture {
 		Submissions:   NewSubmissions(),
 		Users:         userstest.New(),
 		Audit:         NewSink(),
-		UnitOfWork:    &UnitOfWork{},
+		UnitOfWork:    uow,
 		Now:           FixtureNow,
-		PoolTrigger:   NewPoolTrigger(),
+		PoolTrigger:   NewPoolTrigger(uow),
 	}
 	// Derived from the same question and submission stores above, not a
 	// third store of its own — see SequentialProgress's own doc.
@@ -129,10 +130,17 @@ type UnitOfWork struct {
 	// Calls counts the transactions opened, so a test can assert an operation
 	// took exactly one rather than a transaction per statement.
 	Calls int
+	// Open is true only while Do is running fn — cleared again before Do
+	// returns, success or failure. A fake that holds the same UnitOfWork (see
+	// PoolTrigger) can check it to prove something happened after the
+	// transaction ended rather than from inside it.
+	Open bool
 }
 
 func (u *UnitOfWork) Do(ctx context.Context, fn func(context.Context) error) error {
 	u.Calls++
+	u.Open = true
+	defer func() { u.Open = false }()
 	return fn(context.WithValue(ctx, txKey{}, true))
 }
 

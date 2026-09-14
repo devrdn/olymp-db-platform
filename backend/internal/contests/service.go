@@ -717,7 +717,7 @@ func (s *Service) Transition(ctx context.Context, actorID, contestID uuid.UUID, 
 		}
 	}
 
-	return s.uow.Do(ctx, func(ctx context.Context) error {
+	err = s.uow.Do(ctx, func(ctx context.Context) error {
 		// c.Status is what the transition rules and the publish gate above
 		// were checked against; the write refuses if it is no longer true.
 		if err := s.contests.SetStatus(ctx, contestID, c.Status, status); err != nil {
@@ -729,6 +729,18 @@ func (s *Service) Transition(ctx context.Context, actorID, contestID uuid.UUID, 
 		changes.Set("status", c.Status, status)
 		return s.record(ctx, actorID, audit.ActionContestStatusChange, contestID, changes.Payload())
 	})
+	if err != nil {
+		return err
+	}
+
+	// Published or running is the same moment PoolTrigger exists for,
+	// whether an organizer moves the contest by hand here or the scheduler
+	// does it on its own tick (Scheduler.Advance) — triggered after commit,
+	// never inside the transaction above.
+	if s.poolTrigger != nil && (status == StatusPublished || status == StatusRunning) {
+		s.poolTrigger.Trigger(contestID)
+	}
+	return nil
 }
 
 // Delete removes a contest that never reached anybody.
