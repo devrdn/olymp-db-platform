@@ -35,6 +35,13 @@ var (
 	// already worked on the contest. Their queries and answers are part of the
 	// record; excluding them is disqualification, not deletion.
 	ErrParticipantStarted = errors.New("this participant has already started; disqualify instead of removing")
+	// ErrStaffCannotParticipate refuses a contest's own owner or manager a
+	// registration on that same contest (self-enrollment or a staff-side
+	// add): its staff already reads the reference answers (contest.view) and
+	// the unfrozen leaderboard (contest.edit), an advantage no other entrant
+	// has, so competing in it too would not be a fair result. See managers.go's
+	// ErrParticipantCannotBeStaff for the opposite direction.
+	ErrStaffCannotParticipate = errors.New("contest staff cannot also register as a participant")
 )
 
 // EnrollmentOpenAt reports whether a student may still sign themselves up.
@@ -197,6 +204,13 @@ const (
 	// list apart from a plain typo. All three locale dictionaries already
 	// carry workspace.people.import.reason.account_blocked for it.
 	SkipAccountBlocked = "account_blocked"
+	// SkipStaffMember reports a roster entry that names one of the contest's
+	// own owners or managers (finding C-05): staffing and taking part in the
+	// same contest is refused in both directions, and a roster is a bulk
+	// operation where one such entry must be reported and skipped rather
+	// than fail the whole import, the same partial-success shape every other
+	// row-level reason above already gets.
+	SkipStaffMember = "staff_member"
 )
 
 // maxRosterEntries bounds one import of participants.
@@ -359,6 +373,17 @@ func (s *Service) addOne(ctx context.Context, cmd AddParticipantsCommand, c Cont
 		result.skip(user.Login, SkipAccountBlocked)
 		return nil
 	}
+	// C-05: the contest's own owner or manager already reads its reference
+	// answers and its unfrozen leaderboard, so registering them as a
+	// participant too would not be a fair result. A roster is a bulk
+	// operation, so this is a skip like every other row-level reason above,
+	// not a refusal of the whole batch.
+	if _, err := s.managers.Get(ctx, c.ID, user.ID); err == nil {
+		result.skip(user.Login, SkipStaffMember)
+		return nil
+	} else if !errors.Is(err, ErrManagerNotFound) {
+		return err
+	}
 
 	if _, err := s.registrations.Add(ctx, c.ID, user.ID); err != nil {
 		if errors.Is(err, ErrAlreadyEnrolled) {
@@ -386,6 +411,18 @@ func (s *Service) Enroll(ctx context.Context, cmd EnrollCommand) (Participant, e
 		return Participant{}, err
 	}
 	if err := c.EnrollmentOpenAt(s.now()); err != nil {
+		return Participant{}, err
+	}
+
+	// C-05: a contest's own owner or manager already reads its reference
+	// answers and its unfrozen leaderboard, so letting them self-enroll would
+	// hand them an advantage no other entrant has. Checked after
+	// EnrollmentOpenAt so a closed contest is still reported as closed first
+	// — this is a stronger, identity-based refusal, not something the
+	// contest's schedule decides.
+	if _, err := s.managers.Get(ctx, c.ID, cmd.UserID); err == nil {
+		return Participant{}, ErrStaffCannotParticipate
+	} else if !errors.Is(err, ErrManagerNotFound) {
 		return Participant{}, err
 	}
 

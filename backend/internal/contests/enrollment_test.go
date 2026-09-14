@@ -11,6 +11,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
+	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 )
@@ -254,6 +255,45 @@ func TestImportSkipsABlockedAccount(t *testing.T) {
 	}
 }
 
+// TestImportSkipsAStaffMember is C-05's own regression test for the roster
+// import: a mistaken attempt to enroll one of the contest's own owners or
+// managers must not fail the whole batch, the same partial-success shape
+// every other row-level refusal already gets.
+func TestImportSkipsAStaffMember(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+	manager := f.AddUser("m.staff")
+	if err := f.Managers.Grant(context.Background(), contests.Manager{
+		ContestID: c.ID, UserID: manager.ID, Role: rbac.RoleManager,
+	}); err != nil {
+		t.Fatalf("Grant() = %v", err)
+	}
+	f.AddUser("s.popescu")
+
+	result, err := f.Service.AddParticipants(context.Background(), contests.AddParticipantsCommand{
+		ActorID:   uuid.New(),
+		ContestID: c.ID,
+		Logins:    []string{"m.staff", "s.popescu"},
+	})
+	if err != nil {
+		t.Fatalf("AddParticipants() = %v", err)
+	}
+
+	if result.Added != 1 {
+		t.Errorf("added = %d, want 1", result.Added)
+	}
+	reasons := map[string]string{}
+	for _, skipped := range result.Skipped {
+		reasons[skipped.Ref] = skipped.Reason
+	}
+	if reasons["m.staff"] != contests.SkipStaffMember {
+		t.Errorf("m.staff skipped as %q, want %q", reasons["m.staff"], contests.SkipStaffMember)
+	}
+	if _, err := f.Registrations.ByUser(context.Background(), c.ID, manager.ID); !errors.Is(err, contests.ErrParticipantNotFound) {
+		t.Errorf("the contest's own manager must not gain a registration: ByUser() = %v", err)
+	}
+}
+
 func TestParticipantsCannotBeAddedToAFinishedContest(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusFinished)
@@ -304,6 +344,37 @@ func TestSelfSignupWorksForAnOpenContest(t *testing.T) {
 
 	if p.Status != contests.RegistrationRegistered {
 		t.Errorf("status = %q, want registered", p.Status)
+	}
+}
+
+// TestStaffCannotSelfEnroll is C-05's own regression test: a contest's own
+// owner or manager reads reference answers through contest.view and the
+// unfrozen leaderboard through contest.edit, so letting them also register as
+// a participant would let them compete with an advantage no other entrant
+// has.
+func TestStaffCannotSelfEnroll(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+	c.Enrollment = contests.EnrollmentOpen
+	f.Contests.Put(c)
+	assistant := f.AddUser("assistant")
+	if err := f.Managers.Grant(context.Background(), contests.Manager{
+		ContestID: c.ID, UserID: assistant.ID, Role: rbac.RoleManager,
+	}); err != nil {
+		t.Fatalf("Grant() = %v", err)
+	}
+
+	_, err := f.Service.Enroll(context.Background(), contests.EnrollCommand{
+		UserID:    assistant.ID,
+		ContestID: c.ID,
+		Address:   netip.MustParseAddr("10.20.30.40"),
+	})
+
+	if !errors.Is(err, contests.ErrStaffCannotParticipate) {
+		t.Errorf("Enroll() = %v, want ErrStaffCannotParticipate", err)
+	}
+	if _, err := f.Registrations.ByUser(context.Background(), c.ID, assistant.ID); !errors.Is(err, contests.ErrParticipantNotFound) {
+		t.Errorf("a refused self-enrollment must not create a registration: ByUser() = %v", err)
 	}
 }
 

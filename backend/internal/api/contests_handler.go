@@ -926,6 +926,10 @@ func (h *ContestsHandler) fail(w http.ResponseWriter, r *http.Request, err error
 		httpx.Error(w, r, http.StatusConflict, codeEnrollmentClosed, err.Error())
 	case errors.Is(err, contests.ErrParticipantStarted):
 		httpx.Error(w, r, http.StatusConflict, codeParticipantStarted, err.Error())
+	case errors.Is(err, contests.ErrStaffCannotParticipate):
+		httpx.Error(w, r, http.StatusConflict, codeStaffCannotParticipate, err.Error())
+	case errors.Is(err, contests.ErrParticipantCannotBeStaff):
+		httpx.Error(w, r, http.StatusConflict, codeParticipantCannotBeStaff, err.Error())
 
 	case errors.Is(err, contests.ErrAddressNotAllowed):
 		// Deliberately explicit: "you are on the wrong network" is something
