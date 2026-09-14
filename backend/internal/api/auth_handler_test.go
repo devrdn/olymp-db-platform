@@ -424,11 +424,11 @@ func TestPasswordChangeReportsThrottlingWith429(t *testing.T) {
 // holdEveryHashingSlot fills the fixture's hasher until the test ends.
 func (f *handlerFixture) holdEveryHashingSlot(t *testing.T) {
 	t.Helper()
-	release, err := f.hasher.Hold(context.Background())
+	slot, err := f.hasher.Hold(context.Background())
 	if err != nil {
 		t.Fatalf("Hold() returned error: %v", err)
 	}
-	t.Cleanup(release)
+	t.Cleanup(slot.Release)
 }
 
 func TestLoginReportsBusyHashingWith503(t *testing.T) {

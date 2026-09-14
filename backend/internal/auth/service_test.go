@@ -575,7 +575,7 @@ func TestASignInThatCannotGetAHashingSlotIsRefusedAndStillCounted(t *testing.T) 
 		MaxAttemptsPerAddress: 1,
 	})
 
-	release, err := hasher.Hold(context.Background())
+	slot, err := hasher.Hold(context.Background())
 	if err != nil {
 		t.Fatalf("Hold() returned error: %v", err)
 	}
@@ -583,7 +583,7 @@ func TestASignInThatCannotGetAHashingSlotIsRefusedAndStillCounted(t *testing.T) 
 	started := time.Now()
 	_, err = service.Login(context.Background(), loginCmd(testPassword))
 	elapsed := time.Since(started)
-	release()
+	slot.Release()
 
 	if !errors.Is(err, password.ErrBusy) {
 		t.Fatalf("Login() with every hashing slot held = %v, want password.ErrBusy", err)
@@ -659,11 +659,11 @@ func TestAnOverlongPasswordIsRefusedBeforeAnyAccountCounterOrHash(t *testing.T) 
 		Logger:    logging.New("error", io.Discard),
 		Passwords: hasher,
 	})
-	release, err := hasher.Hold(context.Background())
+	slot, err := hasher.Hold(context.Background())
 	if err != nil {
 		t.Fatalf("Hold() returned error: %v", err)
 	}
-	defer release()
+	defer slot.Release()
 
 	_, err = service.Login(context.Background(), LoginCommand{
 		Login: "ivanov", Password: strings.Repeat("a", password.MaxLength+1), IP: "10.0.0.9",
@@ -758,5 +758,50 @@ func TestAnAttemptRefusedAtItsAddressDoesNotSpendTheAccountCeiling(t *testing.T)
 
 	if _, err := service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1"}); err != nil {
 		t.Errorf("the owner after one address's refused attempts = %v, want a session", err)
+	}
+}
+
+func TestBusyRefusalsNeverSpendTheAccountsOwnCounters(t *testing.T) {
+	// A refusal for load says nothing about the password, so it must not
+	// count towards the account's guessing limit or its ceiling: otherwise a
+	// flood that fills the hashing slots locks out whoever it names. It still
+	// spends the address budget, so it is not free to repeat either.
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+	repo := userstest.New()
+	repo.Add(users.User{
+		Login: "ivanov", FullName: "Ivan Ivanov", Status: users.StatusActive,
+		PasswordHash: passwordtest.Hash(t, testPassword),
+	})
+	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: 10 * time.Millisecond})
+	const busyAttempts = maxLoginAttemptsPerAccountAddress + 2
+	service := NewService(ServiceConfig{
+		Users:                 repo,
+		Sessions:              NewSessionStore(c, time.Hour),
+		Audit:                 audit.New(&collectingSink{}),
+		Limiter:               NewLimiter(c),
+		Logger:                logging.New("error", io.Discard),
+		Passwords:             hasher,
+		MaxAttemptsPerAddress: busyAttempts + 1,
+		MaxAttemptsPerAccount: 3,
+	})
+	ctx := context.Background()
+
+	slot, err := hasher.Hold(ctx)
+	if err != nil {
+		t.Fatalf("Hold() returned error: %v", err)
+	}
+	for i := range busyAttempts {
+		if _, err := service.Login(ctx, loginCmd("a guess")); !errors.Is(err, password.ErrBusy) {
+			t.Fatalf("attempt %d with every slot held = %v, want password.ErrBusy", i, err)
+		}
+	}
+	slot.Release()
+
+	if _, err := service.Login(ctx, loginCmd(testPassword)); err != nil {
+		t.Fatalf("the owner after %d busy refusals = %v, want a session", busyAttempts, err)
+	}
+	if _, err := service.Login(ctx, loginCmd(testPassword)); !errors.Is(err, ErrTooManyAttempts) {
+		t.Errorf("the attempt past the address budget = %v, want ErrTooManyAttempts: busy refusals did not spend it", err)
 	}
 }
