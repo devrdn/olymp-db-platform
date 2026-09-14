@@ -92,20 +92,27 @@ type Runner struct {
 // runs at once — a shared pool, pinned with max_parallel_workers on the
 // pg-game command, not a per-query number. Every one can reach the cap, so
 // they are counted once against the container, not once per concurrent query.
-// It must equal max_parallel_workers on the pg-game command.
+// It must equal max_parallel_workers on the pg-game command; a test on the
+// prepared test cluster (internal/gamedb) compares the two.
 //
 // MaxBuildSessions is how many game-cluster backends a provisioning build can
 // occupy at the cap at once: an organiser's game-script session runs arbitrary
 // SQL and can allocate as much as a participant's. It equals the game_author
-// role's CONNECTION LIMIT (internal/gamedb.authorConnectionLimit); the
+// role's CONNECTION LIMIT (internal/gamedb.authorConnectionLimit), which a test
+// on the prepared test cluster reads back from pg_roles and compares; the
 // provisioner's own CREATE DATABASE / COPY sessions are lighter and left to the
 // reserve. Counted because a build can coincide with a contest: an organiser
 // publishing one game while participants query another.
 //
+// AutovacuumWorkers is how many autovacuum workers the reserve below allows
+// for. It must equal autovacuum_max_workers on the pg-game command; a test on
+// the prepared test cluster compares the two.
+//
 // ReservedMemoryBytes is what the cluster needs before the leaders, workers and
 // build sessions: shared_buffers, the postmaster and its background workers,
 // the /dev/shm parallel-query segment (256 MiB, container memory though not
-// RLIMIT_DATA), the autovacuum workers and the provisioner's own sessions. Two
+// RLIMIT_DATA), the AutovacuumWorkers autovacuum workers (each bounded by
+// maintenance_work_mem, 64 MiB by default) and the provisioner's own sessions. Two
 // gibibytes is above the sum measured for the pilot's settings.
 //
 // So a container holds
@@ -120,6 +127,7 @@ type Runner struct {
 const (
 	MaxParallelWorkers  = 4
 	MaxBuildSessions    = 4
+	AutovacuumWorkers   = 2
 	ReservedMemoryBytes = 2 << 30
 
 	// defaultProcessMemoryBytes is the pilot's per-process cap, used when

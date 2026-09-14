@@ -312,15 +312,18 @@ func TestAnOverAllocatingQueryFailsInItsOwnBackend(t *testing.T) {
 	}
 }
 
-// Critical: an abandoned query must not leave its backend running. pgx's
-// default handler closes the socket on a cancelled context and tells the server
-// nothing, so the backend runs on to statement_timeout while the runner has
-// already freed the slot and the participant's one-query mark — and a
-// participant who abandons request after request stacks backends far past the
-// semaphore's bound, each holding a memory cap's worth of the cluster. With a
-// real CancelRequest and client_connection_check_interval, an abandoned backend
-// stops in well under a second, so the count of live participant backends stays
-// near the semaphore, not the rate limit.
+// A smoke test of the slot bound on the runner's own, graceful path: one
+// participant abandons query after query, and the live participant backends on
+// the cluster must stay at one plus a small tolerance, because the gate holds
+// one query per participant until its connection has been torn down.
+//
+// It is not the proof that an abandoned backend is stopped. On this path the
+// driver always tells the server: the runner's cancel handler sends a
+// CancelRequest, and even without it pgconn sends one when a cancelled context
+// breaks a read mid-query (asyncClose) — so this test passes with either
+// mechanism removed. The case neither covers, a client that vanishes with no
+// cancel at all, is proved in internal/gamedb
+// (TestAnAbruptlyAbandonedBackendStopsWithinTheCheckInterval).
 func TestAbandonedQueriesDoNotOutliveTheirSlot(t *testing.T) {
 	limits := queryrunner.DefaultLimits()
 	runner, database := setupWith(t, limits, checker.NewChecker())

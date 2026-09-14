@@ -3,12 +3,17 @@ package gamedb_test
 import (
 	"context"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
+	"github.com/devrdn/db-contest/backend/internal/platform/config"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgproto3"
 )
 
 // Running it twice must be as good as running it once: it is applied on every
@@ -317,5 +322,131 @@ func TestPreparingTheClusterTakesBackARoleMembershipSomebodyGranted(t *testing.T
 				t.Fatalf("%s still has the privileges of pg_read_server_files after a deploy", role)
 			}
 		})
+	}
+}
+
+// A backend whose client disappears without a goodbye — the Query Runner killed
+// mid-query, a dropped network — receives no Terminate and no CancelRequest.
+// Nothing then tells it the client is gone: with statement_timeout off it would
+// run for as long as its query does, holding a memory cap's worth of the
+// cluster. client_connection_check_interval on the participant roles is what
+// ends it: the backend polls its socket and gives up once the client is gone.
+//
+// The test reproduces exactly that, and has to go around the driver to do it:
+// pgconn, on any socket error in the middle of a query, sends a CancelRequest
+// before closing (its asyncClose), so closing the socket underneath pgconn is a
+// cancelled query, not a vanished client. Instead the connection is set up as
+// the reader with statement_timeout off, then hijacked — pgconn lets go of it —
+// and the long count(*) is written on the raw socket as a plain Query message.
+// The socket is then closed; no Terminate and no cancel can be sent, because
+// nothing that would send them still holds the connection. The backend must be
+// gone within a second. With the interval at 0 it is still running when the
+// test gives up (and is terminated by the cleanup).
+func TestAnAbruptlyAbandonedBackendStopsWithinTheCheckInterval(t *testing.T) {
+	database := scratchDatabase(t)
+	pool := admin(t)
+
+	conn, err := pgconn.Connect(t.Context(), gamedbtest.DSN(t, roleReader, testReaderPassword(t), database))
+	if err != nil {
+		t.Fatalf("connecting as the reader: %v", err)
+	}
+	pid := conn.PID()
+	// Whatever the outcome, never leave a backend with no statement_timeout
+	// running on the test cluster.
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `SELECT pg_terminate_backend($1)`, pid)
+	})
+
+	if _, err := conn.Exec(t.Context(), `SET statement_timeout = 0`).ReadAll(); err != nil {
+		t.Fatalf("turning statement_timeout off for the session: %v", err)
+	}
+
+	raw, err := conn.Hijack()
+	if err != nil {
+		t.Fatalf("hijacking the connection: %v", err)
+	}
+	raw.Frontend.Send(&pgproto3.Query{
+		String: `SELECT count(*) FROM generate_series(1, 100000) a, generate_series(1, 100000) b`,
+	})
+	if err := raw.Frontend.Flush(); err != nil {
+		t.Fatalf("sending the long query: %v", err)
+	}
+
+	running := func() bool {
+		var active bool
+		if err := pool.QueryRow(t.Context(),
+			`SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+			                 WHERE pid = $1 AND state = 'active' AND query LIKE '%generate_series%')`,
+			pid).Scan(&active); err != nil {
+			t.Fatalf("reading pg_stat_activity: %v", err)
+		}
+		return active
+	}
+	// Executing, not merely received: seen active on the long query, and still
+	// active a moment later.
+	for deadline := time.Now().Add(5 * time.Second); !running(); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("backend %d never started the long query", pid)
+		}
+	}
+	time.Sleep(300 * time.Millisecond)
+	if !running() {
+		t.Fatalf("backend %d stopped before the client went away", pid)
+	}
+
+	// The client vanishes.
+	if err := raw.Conn.Close(); err != nil {
+		t.Fatalf("closing the raw socket: %v", err)
+	}
+	dropped := time.Now()
+
+	for time.Since(dropped) < 3*time.Second {
+		if !running() {
+			if took := time.Since(dropped); took > time.Second {
+				t.Fatalf("backend %d ran %s after its client vanished, want under 1s", pid, took)
+			}
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("backend %d still running 3s after its client vanished with no Terminate and no cancel: "+
+		"client_connection_check_interval is not ending abandoned backends", pid)
+}
+
+// The Query Runner sizes the game cluster's memory from constants that restate
+// settings owned here and on the pg-game command: how many build sessions the
+// game_author role may hold, how many parallel workers and autovacuum workers
+// the cluster runs. They live in the platform layer, which must not import this
+// package, so nothing ties them at compile time; this reads each setting back
+// from the prepared cluster and compares. A change on either side without the
+// other fails here instead of silently leaving the memory arithmetic wrong.
+func TestTheMemoryArithmeticMatchesTheCluster(t *testing.T) {
+	pool := admin(t)
+
+	var authorLimit int
+	if err := pool.QueryRow(t.Context(),
+		`SELECT rolconnlimit FROM pg_roles WHERE rolname = $1`, gamedb.RoleAuthor).Scan(&authorLimit); err != nil {
+		t.Fatalf("reading %s's connection limit: %v", gamedb.RoleAuthor, err)
+	}
+	if authorLimit != config.MaxBuildSessions {
+		t.Errorf("%s CONNECTION LIMIT = %d, but config.MaxBuildSessions = %d",
+			gamedb.RoleAuthor, authorLimit, config.MaxBuildSessions)
+	}
+
+	for setting, want := range map[string]int{
+		"max_parallel_workers":   config.MaxParallelWorkers,
+		"autovacuum_max_workers": config.AutovacuumWorkers,
+	} {
+		var raw string
+		if err := pool.QueryRow(t.Context(), "SHOW "+setting).Scan(&raw); err != nil {
+			t.Fatalf("SHOW %s: %v", setting, err)
+		}
+		got, err := strconv.Atoi(raw)
+		if err != nil {
+			t.Fatalf("SHOW %s = %q is not a number", setting, raw)
+		}
+		if got != want {
+			t.Errorf("%s = %d on the cluster, but the memory arithmetic assumes %d", setting, got, want)
+		}
 	}
 }
