@@ -14,11 +14,36 @@ import (
 	"github.com/google/uuid"
 )
 
-// Brute-force limits. The per-account window stops guessing at one login; the
-// per-address window stops a sweep across many logins from one machine.
+// Brute-force limits, all over the same fixed window. The per-address window
+// stops a sweep across many logins from one machine; the account-and-address
+// window stops guessing at one login from one machine; the account-wide
+// ceiling stops a guess spread across many machines.
 const (
-	maxLoginAttemptsPerAccount = 10
-	loginAttemptWindow         = 15 * time.Minute
+	// maxLoginAttemptsPerAccountAddress is the guessing limit: attempts at
+	// one account from one address.
+	//
+	// It used to be keyed on the account alone, and that made it a lockout
+	// anybody could apply: logins are not secret (a public leaderboard may
+	// list them), and ten wrong guesses from anywhere kept the owner out for
+	// the rest of the window, correct password and all. Keyed on the pair,
+	// the guesser is still stopped, and the owner at their own address is
+	// not.
+	maxLoginAttemptsPerAccountAddress = 10
+	loginAttemptWindow                = 15 * time.Minute
+
+	// DefaultMaxLoginAttemptsPerAccount is the account-wide ceiling when the
+	// deployment does not state one: attempts at one account from every
+	// address together.
+	//
+	// Keying the guessing limit on the address gives somebody with many
+	// addresses a fresh budget at each, and this is the backstop against
+	// that. It is ten times the per-address limit, so reaching it takes at
+	// least ten addresses each spending their whole budget — an attempt
+	// refused at its own address never reaches this counter — and one person
+	// mistyping never comes near it. The price, accepted knowingly, is that a
+	// guess distributed that widely can still hold the account shut for the
+	// window.
+	DefaultMaxLoginAttemptsPerAccount = 100
 
 	// maxPasswordChangeAttempts caps how often a signed-in account may offer a
 	// current password while changing it. The endpoint verifies a password
@@ -73,10 +98,10 @@ var (
 // them identically and at the same time — recording which one happened would
 // put in permanent storage a distinction the wire deliberately erases, and an
 // administrator reading the trail would become the oracle the endpoint was
-// built to deny everyone else. Both throttle windows (per address, per
-// account — see checkThrottle) collapse into ReasonTooManyAttempts for the
-// same reason: the caller is told "too many attempts" either way, never which
-// counter tripped.
+// built to deny everyone else. Every throttle window (per address, per
+// account and address, per account — see checkThrottle) collapses into
+// ReasonTooManyAttempts for the same reason: the caller is told "too many
+// attempts" either way, never which counter tripped.
 //
 // These are vocabulary, not secrets: each is a code the audit trail stores and
 // the interface renders in the reader's own language. A scanner reads
@@ -105,6 +130,10 @@ type ServiceConfig struct {
 	// window. Zero takes DefaultMaxLoginAttemptsPerAddress; a site whose
 	// participants share one NAT address raises it.
 	MaxAttemptsPerAddress int
+	// MaxAttemptsPerAccount caps sign-in attempts at one account from every
+	// address together in a window. Zero takes
+	// DefaultMaxLoginAttemptsPerAccount.
+	MaxAttemptsPerAccount int
 }
 
 // Service runs the login and logout flows.
@@ -116,6 +145,7 @@ type Service struct {
 	passwords     *password.Hasher
 	log           *slog.Logger
 	maxPerAddress int
+	maxPerAccount int
 }
 
 // NewService assembles the authentication service.
@@ -127,6 +157,10 @@ func NewService(cfg ServiceConfig) *Service {
 	if perAddress <= 0 {
 		perAddress = DefaultMaxLoginAttemptsPerAddress
 	}
+	perAccount := cfg.MaxAttemptsPerAccount
+	if perAccount <= 0 {
+		perAccount = DefaultMaxLoginAttemptsPerAccount
+	}
 	return &Service{
 		users:         cfg.Users,
 		sessions:      cfg.Sessions,
@@ -135,6 +169,7 @@ func NewService(cfg ServiceConfig) *Service {
 		passwords:     cfg.Passwords,
 		log:           cfg.Logger,
 		maxPerAddress: perAddress,
+		maxPerAccount: perAccount,
 	}
 }
 
@@ -231,9 +266,12 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 		s.log.WarnContext(ctx, "could not stamp last login", "user_id", user.ID, "error", err)
 	}
 
-	// A successful login clears the counter, so someone who mistypes twice and
-	// then succeeds does not stay near the limit.
-	if err := s.limiter.Reset(ctx, accountSubject(cmd.Login)); err != nil {
+	// A successful login clears the guessing counter for this address, so
+	// someone who mistypes twice and then succeeds does not stay near the
+	// limit. The account-wide ceiling is left to its window: a success here
+	// says nothing about attempts made from elsewhere, and clearing it would
+	// hand a distributed guess a fresh budget every time the owner signs in.
+	if err := s.limiter.Reset(ctx, accountAddressSubject(cmd.Login, cmd.IP)); err != nil {
 		s.log.WarnContext(ctx, "could not reset the login throttle", "error", err)
 	}
 
@@ -277,18 +315,26 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 	return nil
 }
 
-// checkThrottle applies both windows. It runs before anything else, so a
-// throttled attempt costs no hashing work either.
+// checkThrottle applies every window. It runs before anything else, so a
+// throttled attempt costs no hashing work either. Every counter it reaches is
+// spent even when a later step refuses, which is what keeps a refusal from
+// being free to retry.
 //
-// The address is checked first, and the order is a defence rather than a
-// style. Every subject the limiter sees becomes a key in the cache, and the
-// account key is derived from whatever login the caller typed — an unbounded
-// space. Checked the other way round, a single machine that had already spent
-// its address budget could keep minting one new counter per invented login,
-// and on the in-process cache that is a way to fill the store until every
-// counter, and with it every sign-in, is refused. Spending the bounded key
-// (one per address) before the unbounded one caps what a refused caller can
-// create at its own address budget.
+// The order is a defence rather than a style:
+//
+//  1. The address. Every subject the limiter sees becomes a key in the cache,
+//     and the account keys are derived from whatever login the caller typed —
+//     an unbounded space. Checked the other way round, a machine that had
+//     already spent its address budget could keep minting one new counter per
+//     invented login, and on the in-process cache that is a way to fill the
+//     store until every counter, and with it every sign-in, is refused.
+//     Spending the bounded key (one per address) first caps what a refused
+//     caller can create at its own address budget.
+//  2. The lengths, before either value becomes a key or reaches a hash.
+//  3. The account from this address: the guessing limit.
+//  4. The account from every address: the ceiling. Only an attempt the
+//     guessing limit let through reaches it, so one address repeating refused
+//     attempts cannot climb to the ceiling and shut the owner out everywhere.
 func (s *Service) checkThrottle(ctx context.Context, cmd LoginCommand) error {
 	if cmd.IP != "" {
 		allowed, err := s.limiter.Allow(ctx, "ip:"+cmd.IP, s.maxPerAddress, loginAttemptWindow)
@@ -301,15 +347,14 @@ func (s *Service) checkThrottle(ctx context.Context, cmd LoginCommand) error {
 		}
 	}
 
-	// accountSubject turns the login into a rate-limit cache key verbatim, and
-	// nothing before this point has bounded it: the request body is capped at
-	// a megabyte, not the login field inside it. No real account's login can
-	// exceed users.MaxLoginLength, so a longer one is refused here, before it
-	// can mint a key of its own size — the same guard CLAUDE.md's rule 5 asks
-	// for, one step earlier. The answer is the ordinary "wrong login" one,
-	// deliberately: this must not become a way to tell an existing login from
-	// one that could never exist, and the address check above still applies,
-	// so this is not a way around the per-address throttle either.
+	// The account keys hold the login verbatim, and nothing before this point
+	// has bounded it: the request body is capped at a megabyte, not the login
+	// field inside it. No real account's login can exceed
+	// users.MaxLoginLength, so a longer one is refused here, before it can
+	// mint a key of its own size. The answer is the ordinary "wrong login"
+	// one, deliberately: this must not become a way to tell an existing login
+	// from one that could never exist, and the address check above still
+	// applies, so this is not a way around the per-address throttle either.
 	//
 	// The password gets the same treatment for a different reason: no stored
 	// digest can be of one longer than password.MaxLength, so the answer is
@@ -318,13 +363,21 @@ func (s *Service) checkThrottle(ctx context.Context, cmd LoginCommand) error {
 		return ErrInvalidCredentials
 	}
 
-	allowed, err := s.limiter.Allow(ctx, accountSubject(cmd.Login), maxLoginAttemptsPerAccount, loginAttemptWindow)
-	if err != nil {
-		return err
-	}
-	if !allowed {
-		s.recordFailure(ctx, cmd, ReasonTooManyAttempts)
-		return ErrTooManyAttempts
+	for _, window := range []struct {
+		subject string
+		limit   int
+	}{
+		{accountAddressSubject(cmd.Login, cmd.IP), maxLoginAttemptsPerAccountAddress},
+		{accountSubject(cmd.Login), s.maxPerAccount},
+	} {
+		allowed, err := s.limiter.Allow(ctx, window.subject, window.limit, loginAttemptWindow)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			s.recordFailure(ctx, cmd, ReasonTooManyAttempts)
+			return ErrTooManyAttempts
+		}
 	}
 
 	return nil
@@ -414,6 +467,14 @@ func boundLogin(login string) string {
 }
 
 func accountSubject(login string) string { return "login:" + normalizeLogin(login) }
+
+// accountAddressSubject keys the guessing limit. The address comes first and
+// the separator is one no address contains, so the split is unambiguous
+// whatever the login holds: no login a caller invents can produce another
+// address's key.
+func accountAddressSubject(login, ip string) string {
+	return "login-from:" + ip + "|" + normalizeLogin(login)
+}
 
 func passwordChangeSubject(userID uuid.UUID) string { return "pwchange:" + userID.String() }
 

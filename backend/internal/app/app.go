@@ -329,6 +329,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Logger:                log,
 		Passwords:             passwords,
 		MaxAttemptsPerAddress: cfg.MaxLoginAttemptsPerAddress,
+		MaxAttemptsPerAccount: cfg.MaxLoginAttemptsPerAccount,
 	})
 	authMiddleware := auth.NewMiddleware(auth.MiddlewareConfig{
 		Sessions:   sessions,
