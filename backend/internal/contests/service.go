@@ -378,7 +378,7 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 	if err := updated.Validate(); err != nil {
 		return Contest{}, err
 	}
-	if err := checkRunningChange(current, updated); err != nil {
+	if err := checkRunningChange(current, updated, s.now()); err != nil {
 		return Contest{}, err
 	}
 
@@ -484,10 +484,38 @@ func (s *Service) ExtendGrace(ctx context.Context, actorID, contestID uuid.UUID,
 //
 // Extending a window or correcting a network range helps participants; the
 // shape of the contest — how many questions it asks, how the clock works —
-// is what they are already answering under.
-func checkRunningChange(current, updated Contest) error {
+// is what they are already answering under. now is the moment the change is
+// being decided at, needed only to tell whether a freeze the contest already
+// carries has actually been reached yet (see the ends_at case below).
+func checkRunningChange(current, updated Contest, now time.Time) error {
 	if current.Status != StatusRunning {
 		return nil
+	}
+	// C-06: FreezeAt = EndsAt - LeaderboardFreezeMin (contests.go) is
+	// recomputed from EndsAt on every read, with nothing stored for "the
+	// freeze already happened". Moving EndsAt after that moment has passed
+	// pushes FreezeAt itself later, and leaderboard.Decide reads the new,
+	// not-yet-reached FreezeAt as "still live" — unfreezing a public and
+	// participant board that had already stopped showing new results, for as
+	// long as the leaderboard cache stays stale. Before the freeze is
+	// reached this is exactly the "extend after a power cut" operation
+	// SettingsEditable exists for, so only a change that would move an
+	// already-reached freeze is refused, not every ends_at change.
+	if !equalTime(current.EndsAt, updated.EndsAt) {
+		if freezeAt, ok := current.FreezeAt(); ok && !now.Before(freezeAt) {
+			return fmt.Errorf("%w: the leaderboard has already frozen, so the end date cannot move", ErrNotEditable)
+		}
+	}
+	// C-06: ICPC penalty minutes are counted from starts_at at read time
+	// (postgres/leaderboard.go), never stored with a submission — the same
+	// reason the ICPCPenaltyMin case below refuses to move the penalty
+	// itself. Moving starts_at mid-run would retroactively rescore every
+	// fixed-timing participant's penalty for a reason nobody watching the
+	// table could see. Scoped to ICPC: no other scoring mode reads
+	// starts_at at all, so elsewhere this stays the ordinary window
+	// correction SettingsEditable exists for.
+	if !equalTime(current.StartsAt, updated.StartsAt) && current.Scoring == ScoringICPC {
+		return fmt.Errorf("%w: the start date cannot change while ICPC scoring is running", ErrNotEditable)
 	}
 	switch {
 	case current.QuestionMode != updated.QuestionMode:
@@ -785,6 +813,20 @@ func equalDuration(a, b *int) bool {
 		return false
 	default:
 		return *a == *b
+	}
+}
+
+// equalTime is equalDuration's counterpart for the two schedule fields
+// (StartsAt, EndsAt), used by checkRunningChange to tell "the form merely
+// resent the value it already had" from an actual move.
+func equalTime(a, b *time.Time) bool {
+	switch {
+	case a == nil && b == nil:
+		return true
+	case a == nil || b == nil:
+		return false
+	default:
+		return a.Equal(*b)
 	}
 }
 
