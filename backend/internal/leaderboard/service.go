@@ -153,6 +153,13 @@ type Service struct {
 	// by key — into one call to the repository. See computeOnce for why a
 	// panic or a caller's cancellation cannot wedge or narrow it.
 	flight singleflight.Group
+
+	// genMu and generations guard against a computation that is still running
+	// when Reveal invalidates its contest: see Public, Live and Reveal's own
+	// docs for why a generation has to sit between the cache and the flight,
+	// not only inside the cache.
+	genMu       sync.Mutex
+	generations map[uuid.UUID]uint64
 }
 
 // cached is one contest's public table and the moment it stops being true.
@@ -173,6 +180,7 @@ func NewService(cfg Config) *Service {
 		contests: cfg.Contests, participants: cfg.Participants, standings: cfg.Standings,
 		audit: cfg.Audit, uow: cfg.UnitOfWork, now: cfg.Now, ttl: cfg.CacheTTL, liveTTL: cfg.LiveCacheTTL, maxRows: cfg.MaxRows,
 		cache: make(map[uuid.UUID]cached), liveCache: make(map[uuid.UUID]cachedLive),
+		generations: make(map[uuid.UUID]uint64),
 	}
 	if s.now == nil {
 		s.now = time.Now
@@ -201,20 +209,29 @@ func NewService(cfg Config) *Service {
 // same instant — an audience refreshing together right on the cache's own
 // boundary — computeOnce collapses them into the one computation the first of
 // them started (see its own doc for what that guarantees each caller).
+//
+// The generation read below is what keeps a Reveal racing this call honest:
+// see the package doc on generations for what it buys and why the cache's
+// own delete is not enough by itself.
 func (s *Service) Public(ctx context.Context, contestID uuid.UUID) (View, error) {
 	now := s.now()
 	if view, ok := s.fromCache(contestID, now); ok {
 		return view, nil
 	}
 
-	result, err := s.computeOnce(ctx, "public:"+contestID.String(), func(ctx context.Context) (any, error) {
+	gen := s.generationOf(contestID)
+	result, err := s.computeOnce(ctx, fmt.Sprintf("public:%s@%d", contestID, gen), func(ctx context.Context) (any, error) {
 		return s.computePublic(ctx, contestID, now)
 	})
 	if err != nil {
 		return View{}, err
 	}
 	view := result.(View)
-	s.store(contestID, view, s.expiry(view.Contest, view.Decision, now))
+	// The expiry is anchored to when the view was actually generated, not to
+	// this caller's own clock read: a follower that joined the flight late
+	// reads its own, later now here, and basing the expiry on that would
+	// stretch the cache past what the leader's own TTL promised.
+	s.storeIfCurrent(contestID, gen, view, s.expiry(view.Contest, view.Decision, view.GeneratedAt))
 	return view, nil
 }
 
@@ -289,14 +306,17 @@ func (s *Service) Live(ctx context.Context, contestID uuid.UUID) (StaffView, err
 		return view, nil
 	}
 
-	result, err := s.computeOnce(ctx, "live:"+contestID.String(), func(ctx context.Context) (any, error) {
+	gen := s.generationOf(contestID)
+	result, err := s.computeOnce(ctx, fmt.Sprintf("live:%s@%d", contestID, gen), func(ctx context.Context) (any, error) {
 		return s.computeLive(ctx, contestID, now)
 	})
 	if err != nil {
 		return StaffView{}, err
 	}
 	view := result.(StaffView)
-	s.storeLive(contestID, view, now.Add(s.liveTTL))
+	// Anchored to the view's own GeneratedAt, not this caller's now — see
+	// Public's identical comment.
+	s.storeLiveIfCurrent(contestID, gen, view, view.GeneratedAt.Add(s.liveTTL))
 	return view, nil
 }
 
@@ -336,15 +356,31 @@ func (s *Service) computeLive(ctx context.Context, contestID uuid.UUID, now time
 // returns the moment already in force and records nothing, so two organisers
 // pressing the button together see the same result.
 //
-// Both of the contest's cached tables are dropped below, not only the public
-// one: the staff table's own Shown field reports the same decision the
-// public table does, so a frozen copy left in the live cache would tell
-// staff the reveal has not happened for as long as that cache's TTL, right
-// when the two must agree. Nothing else invalidates either cache — a
-// settings change (moving the freeze, say) is not an event this package
+// bumpGeneration below drops both of the contest's cached tables, not only
+// the public one: the staff table's own Shown field reports the same
+// decision the public table does, so a frozen copy left in the live cache
+// would tell staff the reveal has not happened for as long as that cache's
+// TTL, right when the two must agree. Nothing else invalidates either cache
+// — a settings change (moving the freeze, say) is not an event this package
 // hooks, because both caches are short enough that such a change is visible
 // again within their own TTL regardless, the same guarantee they already
 // give every other caller.
+//
+// Deleting the cache entries is not enough by itself: a computation that
+// started before this call — it already read the old, frozen contest and is
+// simply slow to finish, most likely inside the repository — can still
+// return afterwards and store that stale answer right back into the cache
+// this call just cleared, and a request that arrives after this call but
+// before that slow one finishes could join its in-flight singleflight call
+// (keyed, until now, by nothing but the contest id) and be handed the same
+// stale answer. bumpGeneration closes both holes: Public and Live fold the
+// current generation into their singleflight key, so a request arriving
+// after this call starts a flight of its own rather than joining a stale
+// one, and each stores its result only if the generation it captured before
+// starting is still current — so the slow computation above finds the
+// generation has moved and discards its own answer instead of caching it.
+// Any other event that should invalidate a contest's tables the same way
+// belongs on the same call.
 func (s *Service) Reveal(ctx context.Context, actorID, contestID uuid.UUID) (time.Time, error) {
 	c, err := s.contests.ByID(ctx, contestID)
 	if errors.Is(err, contests.ErrNotFound) {
@@ -384,12 +420,7 @@ func (s *Service) Reveal(ctx context.Context, actorID, contestID uuid.UUID) (tim
 		return time.Time{}, err
 	}
 
-	s.mu.Lock()
-	delete(s.cache, contestID)
-	s.mu.Unlock()
-	s.liveMu.Lock()
-	delete(s.liveCache, contestID)
-	s.liveMu.Unlock()
+	s.bumpGeneration(contestID)
 	return revealedAt, nil
 }
 
@@ -489,6 +520,27 @@ func (s *Service) store(id uuid.UUID, view View, expires time.Time) {
 	s.cache[id] = cached{view: view, expires: expires}
 }
 
+// storeIfCurrent is store, but only when gen — the generation Public captured
+// before starting the computation — is still the contest's current one.
+//
+// Checking and writing are one step under genMu, not two: a check that ran,
+// found itself current, and only afterwards raced a concurrent bumpGeneration
+// to the actual write would be exactly the hole this exists to close, just
+// narrowed rather than removed. Held across the write, genMu forces every
+// call here into a total order with every bumpGeneration: either this runs
+// first and stores, and the bump's own delete (also under genMu, see its
+// doc) removes it right after, or the bump runs first and this call's
+// generation is already stale by the time it checks. Either way nothing
+// this stores can outlive the invalidation that raced it.
+func (s *Service) storeIfCurrent(id uuid.UUID, gen uint64, view View, expires time.Time) {
+	s.genMu.Lock()
+	defer s.genMu.Unlock()
+	if s.generations[id] != gen {
+		return
+	}
+	s.store(id, view, expires)
+}
+
 func (s *Service) fromLiveCache(id uuid.UUID, now time.Time) (StaffView, bool) {
 	s.liveMu.Lock()
 	defer s.liveMu.Unlock()
@@ -510,6 +562,43 @@ func (s *Service) storeLive(id uuid.UUID, view StaffView, expires time.Time) {
 		}
 	}
 	s.liveCache[id] = cachedLive{view: view, expires: expires}
+}
+
+// storeLiveIfCurrent is storeIfCurrent for the staff table's cache — see its
+// doc for why genMu has to be held across the check and the write together.
+func (s *Service) storeLiveIfCurrent(id uuid.UUID, gen uint64, view StaffView, expires time.Time) {
+	s.genMu.Lock()
+	defer s.genMu.Unlock()
+	if s.generations[id] != gen {
+		return
+	}
+	s.storeLive(id, view, expires)
+}
+
+// generationOf is the contest's current generation: every increment
+// (bumpGeneration) invalidates whatever a computation captured before it.
+func (s *Service) generationOf(id uuid.UUID) uint64 {
+	s.genMu.Lock()
+	defer s.genMu.Unlock()
+	return s.generations[id]
+}
+
+// bumpGeneration invalidates every cached table for a contest as one step:
+// held across the increment and both deletes, genMu forces every concurrent
+// storeIfCurrent/storeLiveIfCurrent into a strict before-or-after order with
+// this call (see their own docs) — the ordinary map deletes elsewhere in
+// this file are not, by themselves, enough to make an invalidation stick
+// against a computation that is still in flight.
+func (s *Service) bumpGeneration(id uuid.UUID) {
+	s.genMu.Lock()
+	defer s.genMu.Unlock()
+	s.generations[id]++
+	s.mu.Lock()
+	delete(s.cache, id)
+	s.mu.Unlock()
+	s.liveMu.Lock()
+	delete(s.liveCache, id)
+	s.liveMu.Unlock()
 }
 
 // computeOnce collapses every concurrent miss for one key into a single call
