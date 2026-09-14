@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -260,6 +261,25 @@ func (s *fakeSubmitter) Submit(_ context.Context, cmd contests.SubmitCommand) (c
 	return s.outcome, s.err
 }
 
+// fixtureAnswersPerMinute is the answer rate every participant fixture is
+// built with: low enough that a test can reach it in a few requests, high
+// enough that a test posting one or two answers never meets it by accident.
+const fixtureAnswersPerMinute = 3
+
+// answerRate is the answer throttle a handler under test is built with: the
+// real fixed-window limiter over the test's own cache, so what is counted is
+// what the deployment counts.
+func answerRate(c cache.Cache, perMinute int) api.AnswerRate {
+	return api.AnswerRate{Limiter: auth.NewLimiter(c), PerMinute: perMinute}
+}
+
+// failingLimiter is an answer throttle whose counter cannot be kept.
+type failingLimiter struct{}
+
+func (failingLimiter) Allow(context.Context, string, int, time.Duration) (bool, error) {
+	return false, errors.New("cache unreachable")
+}
+
 // participantFixture mounts the participant endpoints behind a session, with
 // a fake Access and a real Reader over in-memory stores — the same
 // conteststest fakes internal/contests's own Reader tests use, so what is
@@ -308,7 +328,7 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 	submitter := &fakeSubmitter{}
 
 	router := chi.NewRouter()
-	api.NewParticipantHandler(access, reader, history, submitter, mw, log, "en").Mount(router)
+	api.NewParticipantHandler(access, reader, history, submitter, answerRate(c, fixtureAnswersPerMinute), mw, log, "en").Mount(router)
 
 	return &participantFixture{
 		router: router, access: access, history: history, submitter: submitter,
@@ -775,7 +795,7 @@ func TestParticipantRoutesDoNotShadowTheStaffContentEndpoints(t *testing.T) {
 	api.NewContestsHandler(stores.Service, mw, log, "en").Mount(router)
 	reader := contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts(), stores.Sequence)
 	access := &fakeAccess{err: queryproxy.ErrNotAParticipant}
-	api.NewParticipantHandler(access, reader, &fakeHistory{}, stores.Service, mw, log, "en").Mount(router)
+	api.NewParticipantHandler(access, reader, &fakeHistory{}, stores.Service, answerRate(c, fixtureAnswersPerMinute), mw, log, "en").Mount(router)
 
 	do := func(path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -1018,7 +1038,7 @@ func TestSevenConcurrentAnswersEndUpAsARefusalNotAnInternalError(t *testing.T) {
 	router := chi.NewRouter()
 	// stores.Service, not a fakeSubmitter: what answers here is the real
 	// retry loop.
-	api.NewParticipantHandler(access, reader, &fakeHistory{}, stores.Service, mw, log, "en").Mount(router)
+	api.NewParticipantHandler(access, reader, &fakeHistory{}, stores.Service, answerRate(c2, fixtureAnswersPerMinute), mw, log, "en").Mount(router)
 
 	req := httptest.NewRequest(http.MethodPost,
 		"/contests/"+c.ID.String()+"/questions/"+q.ID.String()+"/answer",
@@ -1051,6 +1071,135 @@ func TestAnswerRateLimitRefusalIsA429AndNeverReachesSubmit(t *testing.T) {
 	}
 	if f.access.accessCalled || f.submitter.called {
 		t.Fatal("Access or Submit was reached after AdmitRead refused")
+	}
+}
+
+// Answers have a budget of their own, per registration, far below the read
+// budget a console query spends: an answer is a guess, and a guess repeated
+// fast enough turns a candidate list into a solved question. The refusal says
+// when to try again and never reaches grading.
+func TestAnswersBeyondTheRegistrationsRateAreRefusedBeforeGrading(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	path := "/contests/" + contestID.String() + "/questions/" + uuid.New().String() + "/answer"
+
+	for i := 0; i < fixtureAnswersPerMinute; i++ {
+		if rec := f.post(path, `{"value":"x"}`); rec.Code != http.StatusOK {
+			t.Fatalf("answer %d: status = %d, want 200 (body: %s)", i+1, rec.Code, rec.Body.String())
+		}
+	}
+
+	f.submitter.called = false
+	rec := f.post(path, `{"value":"x"}`)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "answer_too_often" {
+		t.Fatalf("code = %q, want answer_too_often", code)
+	}
+	if seconds, err := strconv.Atoi(rec.Header().Get("Retry-After")); err != nil || seconds <= 0 {
+		t.Fatalf("Retry-After = %q, want a positive number of seconds", rec.Header().Get("Retry-After"))
+	}
+	if f.submitter.called {
+		t.Fatal("Submit was reached by an answer over the rate")
+	}
+}
+
+// CLAUDE.md rule 13: the budget counts attempts, not successes. A body that
+// does not decode and an answer the service refuses both spent one, so a
+// stream of malformed or refused guesses meets the limit as surely as a
+// stream of graded ones.
+func TestARefusedAnswerStillCountsAgainstTheAnswerRate(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	path := "/contests/" + contestID.String() + "/questions/" + uuid.New().String() + "/answer"
+
+	if rec := f.post(path, `not json`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("malformed body: status = %d, want 400", rec.Code)
+	}
+	if rec := f.post("/contests/"+contestID.String()+"/questions/not-a-uuid/answer", `{"value":"x"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid question id: status = %d, want 400", rec.Code)
+	}
+	f.submitter.err = contests.ErrQuestionClosed
+	if rec := f.post(path, `{"value":"x"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("closed question: status = %d, want 409", rec.Code)
+	}
+
+	f.submitter.err = nil
+	f.submitter.called = false
+	rec := f.post(path, `{"value":"x"}`)
+	if rec.Code != http.StatusTooManyRequests || errorCode(t, rec) != "answer_too_often" {
+		t.Fatalf("status = %d, body %s; want 429 answer_too_often", rec.Code, rec.Body.String())
+	}
+	if f.submitter.called {
+		t.Fatal("Submit was reached by an answer over the rate")
+	}
+}
+
+// The budget belongs to the registration admission resolved, never to
+// anything the request names: one participant spending theirs leaves another
+// participant's untouched.
+func TestTheAnswerRateIsKeptPerRegistration(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	path := "/contests/" + contestID.String() + "/questions/" + uuid.New().String() + "/answer"
+
+	for i := 0; i <= fixtureAnswersPerMinute; i++ {
+		f.post(path, `{"value":"x"}`)
+	}
+
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	if rec := f.post(path, `{"value":"x"}`); rec.Code != http.StatusOK {
+		t.Fatalf("another registration: status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// A counter that cannot be kept is a protection that is not in place, and the
+// answer is refused rather than graded unthrottled.
+func TestAnAnswerIsRefusedWhenItsRateCannotBeCounted(t *testing.T) {
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+	userRepo := userstest.New()
+	userRepo.GrantRole("student")
+	actor := userRepo.Add(users.User{Login: "student", FullName: "Student", Status: users.StatusActive, Roles: []string{"student"}})
+	log := logging.New("error", io.Discard)
+	sessions := auth.NewSessionStore(c, time.Hour)
+	token, err := sessions.Create(t.Context(), auth.Principal{UserID: actor.ID, Login: actor.Login})
+	if err != nil {
+		t.Fatalf("session Create() returned error: %v", err)
+	}
+	mw := auth.NewMiddleware(auth.MiddlewareConfig{
+		Sessions: sessions, Users: userRepo, Authorizer: rbac.New(noRoles{}),
+		Cookies: auth.NewCookieWriter(false), Logger: log,
+	})
+	contestID := uuid.New()
+	access := &fakeAccess{
+		contest:     contests.Contest{ID: contestID, Status: contests.StatusRunning},
+		participant: contests.Participant{ID: uuid.New()},
+	}
+	submitter := &fakeSubmitter{}
+	router := chi.NewRouter()
+	api.NewParticipantHandler(access, contests.NewReader(conteststest.NewStories(), conteststest.NewQuestions(), conteststest.NewAttempts(), nil),
+		&fakeHistory{}, submitter, api.AnswerRate{Limiter: failingLimiter{}, PerMinute: 6}, mw, log, "en").Mount(router)
+
+	req := httptest.NewRequest(http.MethodPost, "/contests/"+contestID.String()+"/questions/"+uuid.New().String()+"/answer",
+		strings.NewReader(`{"value":"x"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: token})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if submitter.called {
+		t.Fatal("Submit was reached although the answer rate could not be counted")
 	}
 }
 

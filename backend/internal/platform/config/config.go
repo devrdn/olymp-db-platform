@@ -263,6 +263,14 @@ type Config struct {
 	// number to give the SQL console more headroom is raising the ceiling on
 	// that other traffic too, not just on queries.
 	QueryPerMinute int
+	// AnswerRatePerMinute is how many answers one registration may submit in a
+	// minute, across every question of its contest. It is a budget of its own
+	// rather than a share of QueryPerMinute: an answer is a guess, and thirty
+	// guesses a minute walk a candidate list read out of the game database in
+	// no time, where six a minute leave a person typing answers unhindered.
+	// Every attempt counts, refused ones included. Bounded to 1-60: there is
+	// no "unlimited", since an answer budget nobody can turn off is the point.
+	AnswerRatePerMinute int
 	// DeadlineGrace is the network-latency allowance added to a participant's
 	// deadline (docs/ARCHITECTURE.md §8) before an action arriving after it is
 	// refused. It exists because a request sent an instant before the
@@ -420,6 +428,13 @@ func Load() (Config, error) {
 	// for why the two must agree, including what zero means once it is set.
 	if cfg.QueryPerMinute, err = intEnv("QUERY_PER_MINUTE", 30); err != nil {
 		return Config{}, err
+	}
+	if cfg.AnswerRatePerMinute, err = intEnv("ANSWER_RATE_PER_MINUTE", defaultAnswerRatePerMinute); err != nil {
+		return Config{}, err
+	}
+	if cfg.AnswerRatePerMinute < 1 || cfg.AnswerRatePerMinute > maxAnswerRatePerMinute {
+		return Config{}, fmt.Errorf("ANSWER_RATE_PER_MINUTE: %d is outside 1-%d",
+			cfg.AnswerRatePerMinute, maxAnswerRatePerMinute)
 	}
 	// Five seconds unset, the figure docs/ARCHITECTURE.md §8 names.
 	if cfg.DeadlineGrace, err = durationEnv("DEADLINE_GRACE", 5*time.Second); err != nil {
@@ -596,6 +611,13 @@ func requiredEnv(key string) (string, error) {
 	}
 	return v, nil
 }
+
+// defaultAnswerRatePerMinute and maxAnswerRatePerMinute bound
+// ANSWER_RATE_PER_MINUTE (see Config.AnswerRatePerMinute).
+const (
+	defaultAnswerRatePerMinute = 6
+	maxAnswerRatePerMinute     = 60
+)
 
 // intEnv reads a whole number, refusing a negative one: every setting that
 // uses it counts something.

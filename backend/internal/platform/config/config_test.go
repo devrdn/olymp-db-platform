@@ -912,6 +912,48 @@ func TestPasswordHashingOutsideItsBoundsIsRejected(t *testing.T) {
 	}
 }
 
+func TestTheAnswerRateDefaultsToSixAMinute(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.AnswerRatePerMinute != 6 {
+		t.Errorf("AnswerRatePerMinute = %d, want 6", cfg.AnswerRatePerMinute)
+	}
+}
+
+func TestTheAnswerRateIsConfigurableAndBounded(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("ANSWER_RATE_PER_MINUTE", "12")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.AnswerRatePerMinute != 12 {
+		t.Errorf("AnswerRatePerMinute = %d, want 12", cfg.AnswerRatePerMinute)
+	}
+
+	// Zero is not "unlimited" here: an answer budget nobody can turn off is the
+	// point of having one, and above sixty a minute it no longer slows a
+	// script walking a candidate list.
+	for _, value := range []string{"0", "61", "-1", "many"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+			t.Setenv("ANSWER_RATE_PER_MINUTE", value)
+
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() accepted ANSWER_RATE_PER_MINUTE=%s, want error", value)
+			} else if !strings.Contains(err.Error(), "ANSWER_RATE_PER_MINUTE") {
+				t.Errorf("error %q does not name ANSWER_RATE_PER_MINUTE", err)
+			}
+		})
+	}
+}
+
 func TestTheAccountWideLoginCeilingIsLeftToAuthenticationByDefault(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 

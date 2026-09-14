@@ -308,6 +308,22 @@ describe("the questions panel", () => {
     expect(screen.getByRole("textbox")).toHaveValue("the gardener");
   });
 
+  // Answering too often is a wait, not a fault: shown in the same quiet
+  // style as a query sent too often, with no request reference to report and
+  // what the student typed still in the field for when the minute is out.
+  test("answering too often reads as a wait and keeps what the student typed", async () => {
+    answer.current = { kind: "refused", code: "answer_too_often", requestId: "req-7" };
+    render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
+
+    await submit("the gardener");
+
+    const refusal = await screen.findByText(en.errors.answer_too_often);
+    expect(refusal).not.toHaveClass("bg-bad-wash");
+    expect(refusal).toHaveClass("bg-sunk");
+    expect(screen.queryByText(/req-7/)).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveValue("the gardener");
+  });
+
   // Finding 5: a closed question loaded fresh from the server — no live
   // submission behind it — must still say whether it was won, and for how
   // much, the same way one just answered in this session does.

@@ -1441,6 +1441,8 @@ const ro = {
       "Ați terminat această olimpiadă. Consola este închisă pentru dumneavoastră.",
     answer_too_long:
       "Acest răspuns este mai lung decât acceptă această instalare.",
+    answer_too_often:
+      "Răspundeți prea des. Așteptați un minut înainte de a răspunde din nou; nu s-a consumat nicio încercare.",
     answer_not_a_choice:
       "Acest răspuns nu este una dintre variantele întrebării. Alegeți una dintre ele; nu s-a consumat nicio încercare.",
     question_closed:

@@ -510,7 +510,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// Submit is the same contestService every staff endpoint above already
 	// uses — not a second implementation of the answering rules, and not a
 	// second Submissions repository either.
-	modules = append(modules, api.NewParticipantHandler(participantAccess, reader, history, contestService, authMiddleware, log, cfg.DefaultLocale))
+	// The answer throttle shares the one fixed-window limiter every other
+	// counter in this service uses, under its own "answer:" namespace.
+	answers := api.AnswerRate{Limiter: limiter, PerMinute: cfg.AnswerRatePerMinute}
+	modules = append(modules, api.NewParticipantHandler(participantAccess, reader, history, contestService, answers, authMiddleware, log, cfg.DefaultLocale))
 	// The SSE channel (§8) shares participantAccess with the endpoints above
 	// for the same reason: one Access, one AdmitRead budget, not a second
 	// admission decision that could drift from the first. ctx.Done() is the
