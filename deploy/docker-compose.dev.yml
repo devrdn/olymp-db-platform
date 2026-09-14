@@ -120,12 +120,37 @@ services:
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
 
-  # The API and the one-shot jobs are run from the host during development.
+  # The API, the Query Runner, and the one-shot jobs are run from the host
+  # during development (`make run`, `make runner`, `make game-roles`) — none
+  # of the four carries a profile of its own in the base file, so without one
+  # here each would still start on a bare `docker compose … up` alongside
+  # pg-core/pg-game/redis, duplicating the host-run process and reading
+  # ENV=production (and, for the Query Runner, requiring QUERY_RUNNER_TOKEN)
+  # from whatever `--env-file` names, `deploy/.env.example` included.
   migrate:
     profiles: [full]
 
   bootstrap:
     profiles: [full]
+
+  # See the header comment above: no profile of its own in the base file, and
+  # `make runner` (not this container) is the host-run path for local
+  # development. ENV: development matches what that Makefile target passes
+  # explicitly, so the containerized form does not refuse to start on the
+  # example's placeholders when it is asked for under --profile full.
+  queryrunner:
+    profiles: [full]
+    environment:
+      ENV: development
+
+  # Same reasoning as queryrunner above: `make game-roles` is the host-run
+  # path (it also passes ENV=development explicitly, for the same reason),
+  # and this container has no profile of its own to keep it out of a bare
+  # `up` otherwise.
+  game-prepare:
+    profiles: [full]
+    environment:
+      ENV: development
 
   api:
     profiles: [full]

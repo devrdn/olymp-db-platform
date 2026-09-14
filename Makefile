@@ -474,7 +474,7 @@ game-roles: require-env ## Create the game cluster's participant roles
 		GAME_READER_PASSWORD="$(GAME_READER_PASSWORD)" \
 		GAME_WRITER_PASSWORD="$(GAME_WRITER_PASSWORD)" \
 		GAME_AUTHOR_PASSWORD="$(GAME_AUTHOR_PASSWORD)" \
-		go run ./cmd/gamedb
+		ENV=development go run ./cmd/gamedb
 
 # The repair for a database the core database has already written off while
 # the database itself is still on the cluster. Nothing in the product ever
