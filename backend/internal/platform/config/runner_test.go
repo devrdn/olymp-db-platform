@@ -94,6 +94,42 @@ func TestAnEmptyQueueIsAllowedButANegativeOneIsNot(t *testing.T) {
 	}
 }
 
+// How long a read's connection is kept for the participant's next query. Zero
+// is a real choice — the operator's way back to a connection per query — while
+// a negative value is a typo, and a very long one keeps a backend on a
+// database nobody is using past the point anything waits for it.
+func TestTheIdleConnectionTimeoutHasADefaultAndBounds(t *testing.T) {
+	setRunnerRequired(t)
+	cfg, err := LoadRunner()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.IdleConnTimeout != 30*time.Second {
+		t.Fatalf("idle connection timeout = %s, want 30s by default", cfg.IdleConnTimeout)
+	}
+
+	for value, accepted := range map[string]bool{
+		"0s":  true,
+		"10s": true,
+		"5m":  true,
+		"-1s": false,
+		"6m":  false,
+		"ten": false,
+	} {
+		t.Run(value, func(t *testing.T) {
+			setRunnerRequired(t)
+			t.Setenv("QUERY_CONN_IDLE_TIMEOUT", value)
+			cfg, err := LoadRunner()
+			if accepted && err != nil {
+				t.Fatalf("QUERY_CONN_IDLE_TIMEOUT=%s was refused: %v", value, err)
+			}
+			if !accepted && err == nil {
+				t.Fatalf("QUERY_CONN_IDLE_TIMEOUT=%s was accepted as %s", value, cfg.IdleConnTimeout)
+			}
+		})
+	}
+}
+
 // The game cluster runs in a container whose backends have a per-process
 // memory cap (deploy ulimits.data): a query that over-allocates fails with an
 // "out of memory" ERROR in its own backend instead of tripping the container's
