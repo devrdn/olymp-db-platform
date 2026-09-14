@@ -707,7 +707,7 @@ func TestAdvanceFinishedMovesOnlyRunningContestsPastTheirEnd(t *testing.T) {
 		noEnd := makeContest(t, ctx, author.ID)
 		setSchedule(t, ctx, noEnd, contests.StatusRunning, nil, nil)
 
-		moved, err := repo.AdvanceFinished(ctx)
+		moved, err := repo.AdvanceFinished(ctx, 0)
 		if err != nil {
 			t.Fatalf("AdvanceFinished() = %v", err)
 		}
@@ -725,6 +725,52 @@ func TestAdvanceFinishedMovesOnlyRunningContestsPastTheirEnd(t *testing.T) {
 		loaded, _ := repo.ByID(ctx, over)
 		if loaded.Status != contests.StatusFinished {
 			t.Errorf("overdue contest's status = %q, want finished", loaded.Status)
+		}
+	})
+}
+
+// TestAdvanceFinishedRespectsTheGracePeriod is C-07's own regression test: the
+// scheduler used to compare only ends_at against now(), so a contest whose
+// deadline (§8's own formula) still carried its network-latency grace was
+// closed a tick early — the same request a fixed-timing participant's answer
+// or query is admitted for (deadline.go, queryproxy.Admitted) was refused by
+// the scheduler's own comparison, at random depending on which tick won the
+// race. Passing the grace through to the WHERE clause keeps both doors
+// agreeing on one deadline.
+func TestAdvanceFinishedRespectsTheGracePeriod(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewContests(testPool)
+		author := makeUser(t, ctx, "author-advance-grace")
+		const grace = 5 * time.Second
+
+		// Ended two seconds ago: still inside a five-second grace, so a
+		// participant's late answer or query is still admitted (the same
+		// window submission.go and queryproxy.Admitted check), and the
+		// scheduler must not close the contest out from under them.
+		insideGrace := makeContest(t, ctx, author.ID)
+		endedRecently := time.Now().Add(-2 * time.Second)
+		setSchedule(t, ctx, insideGrace, contests.StatusRunning, nil, &endedRecently)
+
+		// Ended ten seconds ago: past even the grace, so this one must finish.
+		pastGrace := makeContest(t, ctx, author.ID)
+		endedAWhileAgo := time.Now().Add(-10 * time.Second)
+		setSchedule(t, ctx, pastGrace, contests.StatusRunning, nil, &endedAWhileAgo)
+
+		moved, err := repo.AdvanceFinished(ctx, grace)
+		if err != nil {
+			t.Fatalf("AdvanceFinished() = %v", err)
+		}
+
+		if idInList(moved, insideGrace) {
+			t.Errorf("AdvanceFinished() finished a contest still inside its grace period")
+		}
+		if !idInList(moved, pastGrace) {
+			t.Errorf("AdvanceFinished() = %v, want it to include the contest past its grace %s", moved, pastGrace)
+		}
+
+		loaded, _ := repo.ByID(ctx, insideGrace)
+		if loaded.Status != contests.StatusRunning {
+			t.Errorf("contest still inside its grace period: status = %q, want running", loaded.Status)
 		}
 	})
 }

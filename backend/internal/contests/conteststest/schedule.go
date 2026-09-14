@@ -2,6 +2,7 @@ package conteststest
 
 import (
 	"context"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/google/uuid"
@@ -42,6 +43,11 @@ type Schedule struct {
 
 	Finished    []uuid.UUID
 	FinishedErr error
+	// GraceSeen records the grace Advance actually passed to AdvanceFinished
+	// on the last call, so a test can prove Scheduler threads its own
+	// configured grace through rather than comparing ends_at bare (finding
+	// C-07).
+	GraceSeen time.Duration
 
 	// LockCalls, DueCalls, SetStatusCalls and FinishedCalls count how many
 	// times each was asked, so a test can prove a lost lock stops the tick
@@ -77,7 +83,8 @@ func (s *Schedule) SetStatus(_ context.Context, id uuid.UUID, from, to string) e
 	return nil
 }
 
-func (s *Schedule) AdvanceFinished(context.Context) ([]uuid.UUID, error) {
+func (s *Schedule) AdvanceFinished(_ context.Context, grace time.Duration) ([]uuid.UUID, error) {
 	s.FinishedCalls++
+	s.GraceSeen = grace
 	return s.Finished, s.FinishedErr
 }
