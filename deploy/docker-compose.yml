@@ -35,7 +35,7 @@ services:
       # Stated explicitly rather than left to the image's own default (which
       # is this same figure), so the headroom is visible next to what draws
       # on it: the API's own pool (CORE_DB_POOL_MAX on the api service below,
-      # 25 unset) plus the one-off tools that briefly open their own pool
+      # 25 when unset) plus the one-off tools that briefly open their own pool
       # against this cluster — migrate, bootstrap, gameorphans — none of
       # which run alongside the API at more than a handful of connections
       # each. A single API replica at its pool's ceiling still leaves most of
