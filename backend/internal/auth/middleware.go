@@ -219,8 +219,10 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 // either the session or the account it was opened under.
 //
 // The account is answered the way Authenticate answers it: from the account
-// cache when the copy there admits the request, from the database otherwise,
-// so a steady stream costs a cache read per push rather than a database read.
+// cache when the copy there admits the request, from the database otherwise.
+// An event stream asks far less often than the cache entry lives, so a quiet
+// stream usually reads the database; the copy it stores is what the next
+// ordinary request is answered from.
 //
 // An error means the session store or the account could not be read, which
 // says nothing about either; the caller decides whether to wait and ask again.
