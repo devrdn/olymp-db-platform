@@ -14,12 +14,25 @@ import (
 // hits its RLIMIT_DATA cap reports this rather than being killed.
 const outOfMemory = "53200"
 
-// verifyChunkBytes is one allocation the over-cap probe stacks. It is far below
-// the smallest supported cap and well within an int4 length, so the probe
-// builds a value larger than any cap by summing enough of these rather than
-// asking for one huge length (which would overflow repeat's integer argument
-// for a large cap).
-const verifyChunkBytes = 64 << 20
+// The range of caps this check can prove, and the unit its over-cap probe is
+// built from.
+//
+// Below MinVerifiableCapBytes the "a quarter of the cap must succeed" probe is
+// small enough to fit in a backend's baseline and says nothing. Above
+// MaxVerifiableCapBytes the probes stop being honest: the quarter-cap value
+// approaches PostgreSQL's 1 GiB limit on a single value, and the over-cap
+// allocation, which must fail with out_of_memory specifically, starts to meet
+// that limit (a different error) or the container's memory before the cap. The
+// deployment's arithmetic is sized for 256–512 MiB; 1.5 GiB leaves room above.
+//
+// verifyChunkBytes is one value the over-cap probe holds. The probe collects
+// enough of them with array_agg to exceed the cap — separate values, so no
+// single one approaches the 1 GiB limit and no length overflows an int4.
+const (
+	MinVerifiableCapBytes = 256 << 20
+	MaxVerifiableCapBytes = 1536 << 20
+	verifyChunkBytes      = 64 << 20
+)
 
 // maxDataSize matches the "Max data size" line of a Linux /proc/*/limits file
 // and captures its soft (hard is the same for a ulimit) value in bytes.
@@ -43,13 +56,13 @@ var maxDataSize = regexp.MustCompile(`(?m)^Max data size\s+(\d+)`)
 // Reading /proc requires superuser (pg_read_file); PrepareCluster's caller is
 // the provisioning superuser, which is who runs this.
 //
-// Supported cap range: from a few times verifyChunkBytes up. The pilot uses
-// 256 MiB and the arithmetic is sized for 256–512 MiB; a much larger cap still
-// works because the over-cap value is built by stacking chunks, not by one
-// oversized length.
+// Supported caps: MinVerifiableCapBytes (256 MiB) to MaxVerifiableCapBytes
+// (1.5 GiB). Anything else is refused as unsupported before a byte is
+// allocated, rather than proved by probes that no longer mean what they say.
 func VerifyProcessMemoryCap(ctx context.Context, conn Conn, capBytes int64) error {
-	if capBytes < 4*verifyChunkBytes {
-		return fmt.Errorf("a per-process cap of %d bytes is below the %d-byte floor this check supports", capBytes, int64(4*verifyChunkBytes))
+	if capBytes < MinVerifiableCapBytes || capBytes > MaxVerifiableCapBytes {
+		return fmt.Errorf("unsupported cap: %d bytes is outside the %d–%d bytes (256 MiB–1.5 GiB) this check can verify",
+			capBytes, int64(MinVerifiableCapBytes), int64(MaxVerifiableCapBytes))
 	}
 
 	// The exact limit the kernel is enforcing on this backend.
@@ -71,25 +84,26 @@ func VerifyProcessMemoryCap(ctx context.Context, conn Conn, capBytes int64) erro
 	}
 
 	// Well under the cap: this must succeed, or the cap is set so low it would
-	// refuse ordinary work.
+	// refuse ordinary work. Within the supported range a quarter of the cap is
+	// at most 384 MiB, an int4 without a cast.
 	var scanned int64
-	small := capBytes / 4
-	if err := conn.QueryRow(ctx, `SELECT length(repeat('x', $1::int))`, small).Scan(&scanned); err != nil {
+	small := int32(capBytes / 4)
+	if err := conn.QueryRow(ctx, `SELECT length(repeat('x', $1))`, small).Scan(&scanned); err != nil {
 		return fmt.Errorf("the game cluster refused a %d-byte allocation, well under the %d-byte cap: %w", small, capBytes, err)
 	}
 
-	// Over the cap: built by stacking chunks into one value, so no single
-	// length argument overflows even for a large cap. This must be refused,
-	// and refused with out_of_memory specifically — any other error would mean
-	// it failed for some unrelated reason and proves nothing about the cap.
-	chunks := capBytes/verifyChunkBytes + 2
+	// Over the cap: enough separate chunks held at once by array_agg to exceed
+	// it. This must be refused, and refused with out_of_memory specifically —
+	// any other error would mean it failed for some unrelated reason and proves
+	// nothing about the cap.
+	chunks := int32(capBytes/verifyChunkBytes + 2)
 	err = conn.QueryRow(ctx,
-		`SELECT length(string_agg(repeat('x', $1::int), '')) FROM generate_series(1, $2)`,
-		int64(verifyChunkBytes), chunks).Scan(&scanned)
+		`SELECT cardinality(array_agg(repeat('x', $1))) FROM generate_series(1, $2)`,
+		int32(verifyChunkBytes), chunks).Scan(&scanned)
 	if err == nil {
-		return fmt.Errorf("the game cluster built a value of about %d bytes, over the %d-byte per-process cap: "+
+		return fmt.Errorf("the game cluster held about %d bytes in one backend, over the %d-byte per-process cap: "+
 			"the cap (ulimits.data on pg-game) is not in force, and a runaway query would crash the cluster instead of failing alone",
-			chunks*verifyChunkBytes, capBytes)
+			int64(chunks)*verifyChunkBytes, capBytes)
 	}
 	var pg *pgconn.PgError
 	if !errors.As(err, &pg) || pg.Code != outOfMemory {
