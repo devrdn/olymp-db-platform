@@ -64,6 +64,20 @@ describe("SignInForm, a rejected sign-in", () => {
     expect(alert).not.toHaveTextContent(en.errors.invalid_credentials);
   });
 
+  test("does not mark the fields invalid when the server was too busy to check them", async () => {
+    // Nothing typed was wrong. Marking both fields invalid would send a
+    // screen reader user back to retype a password that was correct.
+    signInAction.mockResolvedValue({ code: "sign_in_busy" });
+    render(<SignInForm dict={en} />);
+
+    await userEvent.click(screen.getByRole("button", { name: en.auth.signIn.submit }));
+    await screen.findByRole("alert");
+
+    for (const label of [en.auth.signIn.login, en.auth.signIn.password]) {
+      expect(screen.getByLabelText(label)).not.toHaveAttribute("aria-invalid", "true");
+    }
+  });
+
   test("falls back to a general message for a code the dictionary does not know", async () => {
     signInAction.mockResolvedValue({ code: "meteor_strike" });
     render(<SignInForm dict={en} />);
