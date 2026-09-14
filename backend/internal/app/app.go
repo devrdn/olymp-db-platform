@@ -138,6 +138,15 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// deployments gameAuthoring is nil in — both are built inside the block
 	// below, so the handler never sees one without the other.
 	var gameDatabases *provisioning.Service
+	// poolTrigger wakes tendPools between its own ticks when a contest starts
+	// or its roster grows (contests.PoolTrigger). Declared through the
+	// interface and left a true nil interface value in a deployment with no
+	// game cluster — assigning a *provisioning.Tender to it only inside the
+	// block below, never a concrete nil, for the same reason packageGames is
+	// spelled this way further down: a typed nil pointer stored in an
+	// interface is not itself nil, and contestService/Scheduler only ever
+	// check the interface.
+	var poolTrigger contests.PoolTrigger
 
 	// Provisioning is optional: a deployment with no game cluster has nothing
 	// to provision, and refusing to start would make the game circuit a
@@ -178,9 +187,16 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			// (provisioning.Service.roomForOneCopy).
 			WithClusterBudget(cfg.ClusterMaxBytes).
 			WithAudit(auditRecorder, storage.NewUnitOfWork(pool))
+		// Coalesces a burst of registrations or a scheduler start into one
+		// extra tend rather than one per event (provisioning.Tender's own
+		// doc); wired into tendPools below and, further down, into
+		// contestService and the scheduler as the interface both narrow it
+		// to (contests.PoolTrigger).
+		tender := provisioning.NewTender()
+		poolTrigger = tender
 		a.tasks = append(a.tasks, tendPools(log, databases, provisioning.PoolLimits{
 			Headroom: cfg.PoolDepth, MaxCopies: cfg.PoolMax, MaxClusterBytes: cfg.ClusterMaxBytes,
-		}))
+		}, tender))
 		gameDatabases = databases
 
 		// The other half of a contest's game: the script an organiser writes
@@ -273,13 +289,23 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			}
 			a.closers = append(a.closers, func() { _ = client.Close() })
 
+			// One instance rather than a fresh postgres.NewContests(pool) for
+			// each of the two roles below: Contests and ContestAndGame are
+			// two different questions Run asks of the same contests row, and
+			// this type answers both without importing anything the other
+			// callers of Contests do not already need.
+			consoleContests := postgres.NewContests(pool)
 			console = queryproxy.New(
 				postgres.NewRegistrations(pool),
-				postgres.NewContests(pool),
+				consoleContests,
 				games,
 				databases,
 				queryrunner.NewJournalled(client, postgres.NewQueryLog(pool), log),
 			).WithPerMinuteDefault(cfg.QueryPerMinute).WithGrace(cfg.DeadlineGrace).
+				// Collapses Run's own Contests.ByID and Games.Game into the
+				// one round trip consoleContests.Lookup already answers both
+				// halves of.
+				WithContestAndGame(consoleContests).
 				// The console's schema panel. Wired here and only here: the
 				// console-less Service built further down for the participant
 				// read endpoints has no game cluster to read a schema from,
@@ -403,6 +429,11 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		// contest that never set one explicitly that is this installation
 		// default, not zero.
 		DefaultGraceMin: cfg.GameInstanceGraceMin,
+		// Wakes the pool tender the moment a roster grows on a published or
+		// running contest, instead of waiting out its own interval. nil in a
+		// deployment with no game cluster, which is what leaves Enroll and
+		// AddParticipants exactly as they were before this existed.
+		PoolTrigger: poolTrigger,
 	})
 
 	// The background half of §8: published → running → finished without an
@@ -434,7 +465,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		// closes a contest a tick before a late-arriving answer or query
 		// inside that grace would still be admitted.
 		cfg.DeadlineGrace,
-	)
+	).WithPoolTrigger(poolTrigger)
 	a.tasks = append(a.tasks, advanceContestSchedule(log, scheduler.Advance))
 
 	modules := []api.Module{
