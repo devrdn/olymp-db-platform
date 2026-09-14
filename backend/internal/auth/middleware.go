@@ -209,27 +209,60 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 	})
 }
 
-// SessionStillValid reports whether the session cookie on r still names a
-// live session: not signed out, not past its idle timeout or its maximum
-// lifetime. A request is authenticated once, when it arrives; a response held
-// open for a long time — an event stream — asks again before each push so it
-// does not outlive the session it was opened under.
+// SessionStillValid reports whether the session cookie on r would still be
+// admitted by Authenticate: the session not signed out, not past its idle
+// timeout or its maximum lifetime, and its account still allowed to use it —
+// not blocked or deleted, its sessions not retired by a password change or a
+// "log out everywhere", not held at the door by a one-time password. A request
+// is authenticated once, when it arrives; a response held open for a long
+// time — an event stream — asks again before each push so it does not outlive
+// either the session or the account it was opened under.
 //
-// An error means the session store could not be read, which says nothing
-// about the session; the caller decides whether to wait and ask again.
+// The account is answered the way Authenticate answers it: from the account
+// cache when the copy there admits the request, from the database otherwise,
+// so a steady stream costs a cache read per push rather than a database read.
+//
+// An error means the session store or the account could not be read, which
+// says nothing about either; the caller decides whether to wait and ask again.
 func (m *Middleware) SessionStillValid(r *http.Request) (bool, error) {
 	cookie, err := r.Cookie(SessionCookieName)
 	if err != nil {
 		return false, nil
 	}
-	switch _, err := m.sessions.Get(r.Context(), cookie.Value); {
-	case err == nil:
-		return true, nil
+	ctx := r.Context()
+	session, err := m.sessions.Get(ctx, cookie.Value)
+	switch {
 	case errors.Is(err, ErrSessionNotFound):
 		return false, nil
-	default:
+	case err != nil:
 		return false, err
 	}
+
+	var (
+		user users.User
+		hit  bool
+		slot accountSlot
+	)
+	if m.accounts != nil {
+		user, hit, slot = m.accounts.lookup(ctx, session.UserID)
+	}
+	if hit && admits(user, session, r.URL.Path) {
+		return true, nil
+	}
+	user, err = m.users.ByID(ctx, session.UserID)
+	switch {
+	case errors.Is(err, users.ErrNotFound):
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	if !admits(user, session, r.URL.Path) {
+		return false, nil
+	}
+	if m.accounts != nil {
+		m.accounts.store(ctx, slot, user)
+	}
+	return true, nil
 }
 
 // RequirePermission enforces an installation-wide permission.
