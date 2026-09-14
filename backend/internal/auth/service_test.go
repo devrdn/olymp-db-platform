@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
@@ -600,5 +601,75 @@ func TestASignInThatCannotGetAHashingSlotIsRefusedAndStillCounted(t *testing.T) 
 	// by the refused attempt.
 	if _, err := service.Login(context.Background(), loginCmd(testPassword)); !errors.Is(err, ErrTooManyAttempts) {
 		t.Errorf("the next attempt = %v, want ErrTooManyAttempts: the refusal was not counted", err)
+	}
+}
+
+func TestAThrottledAttemptNeverStoresAnOversizedLogin(t *testing.T) {
+	// A caller whose address budget is spent is still recorded, and the
+	// login is what the record carries. The request body is bounded at a
+	// megabyte, not the field: without a bound of its own, each refused
+	// attempt could write a megabyte into a trail kept for a year.
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+	sink := &collectingSink{}
+	service := NewService(ServiceConfig{
+		Users:                 userstest.New(),
+		Sessions:              NewSessionStore(c, time.Hour),
+		Audit:                 audit.New(sink),
+		Limiter:               NewLimiter(c),
+		Logger:                logging.New("error", io.Discard),
+		Passwords:             passwordtest.NewHasher(),
+		MaxAttemptsPerAddress: 1,
+	})
+	ctx := context.Background()
+	_, _ = service.Login(ctx, LoginCommand{Login: "someone", Password: "whatever", IP: "10.0.0.9"})
+
+	oversized := strings.Repeat("ф", 450_000) // 900 kB of two-byte runes
+	_, err := service.Login(ctx, LoginCommand{Login: oversized, Password: "whatever", IP: "10.0.0.9"})
+
+	if !errors.Is(err, ErrTooManyAttempts) {
+		t.Fatalf("Login() = %v, want ErrTooManyAttempts", err)
+	}
+	last := sink.entries[len(sink.entries)-1]
+	stored, _ := last.Payload["login"].(string)
+	if len(stored) > users.MaxLoginLength {
+		t.Errorf("the trail stored a %d-byte login, want at most %d", len(stored), users.MaxLoginLength)
+	}
+	if !utf8.ValidString(stored) {
+		t.Error("the bounded login is not valid UTF-8: it was cut inside a character")
+	}
+}
+
+func TestAnOverlongPasswordIsRefusedBeforeAnyAccountCounterOrHash(t *testing.T) {
+	// No stored digest can be of a password longer than password.MaxLength,
+	// so the answer is known at once. It is the ordinary "wrong login or
+	// password", so nothing is learned about the account, and it comes after
+	// the address counter, so it is not a way around the address budget.
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
+	service := NewService(ServiceConfig{
+		Users:     userstest.New(),
+		Sessions:  NewSessionStore(c, time.Hour),
+		Audit:     audit.New(&collectingSink{}),
+		Limiter:   NewLimiter(c),
+		Logger:    logging.New("error", io.Discard),
+		Passwords: hasher,
+	})
+	release, err := hasher.Hold(context.Background())
+	if err != nil {
+		t.Fatalf("Hold() returned error: %v", err)
+	}
+	defer release()
+
+	_, err = service.Login(context.Background(), LoginCommand{
+		Login: "ivanov", Password: strings.Repeat("a", password.MaxLength+1), IP: "10.0.0.9",
+	})
+
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("Login() with an overlong password = %v, want ErrInvalidCredentials", err)
+	}
+	if got := c.Len(); got != 1 {
+		t.Errorf("the cache holds %d counters, want 1 (the address only)", got)
 	}
 }

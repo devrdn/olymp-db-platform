@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
@@ -308,7 +310,11 @@ func (s *Service) checkThrottle(ctx context.Context, cmd LoginCommand) error {
 	// deliberately: this must not become a way to tell an existing login from
 	// one that could never exist, and the address check above still applies,
 	// so this is not a way around the per-address throttle either.
-	if len(cmd.Login) > users.MaxLoginLength {
+	//
+	// The password gets the same treatment for a different reason: no stored
+	// digest can be of one longer than password.MaxLength, so the answer is
+	// already known, and neither a counter nor a hashing slot is spent on it.
+	if len(cmd.Login) > users.MaxLoginLength || len(cmd.Password) > password.MaxLength {
 		return ErrInvalidCredentials
 	}
 
@@ -369,11 +375,17 @@ func (s *Service) upgradeHash(ctx context.Context, user users.User, plaintext st
 // always one of the Reason* constants above — every call site in this file
 // names one, and that is what keeps the payload a closed vocabulary rather
 // than whatever text a future call site might be tempted to pass.
+//
+// The login is bounded before it is stored. An attempt refused by the address
+// budget is recorded before checkThrottle's length guard runs — the budget has
+// to be spent first — so the caller's string can be as long as the request
+// body. No account's login is longer than users.MaxLoginLength, so the prefix
+// kept is all an investigation could ever match on.
 func (s *Service) recordFailure(ctx context.Context, cmd LoginCommand, reason string) {
 	s.record(ctx, audit.Entry{
 		Action:    audit.ActionAuthLoginFailed,
 		Entity:    "user",
-		Payload:   map[string]any{"login": cmd.Login, "reason": reason},
+		Payload:   map[string]any{"login": boundLogin(cmd.Login), "reason": reason},
 		IP:        cmd.IP,
 		UserAgent: cmd.UserAgent,
 	})
@@ -386,6 +398,19 @@ func (s *Service) record(ctx context.Context, entry audit.Entry) {
 	if err := s.audit.Record(ctx, entry); err != nil {
 		s.log.ErrorContext(ctx, "could not write audit entry", "action", entry.Action, "error", err)
 	}
+}
+
+// boundLogin cuts a login to users.MaxLoginLength bytes, backing off to the
+// start of a character so the stored value stays valid UTF-8.
+func boundLogin(login string) string {
+	if len(login) <= users.MaxLoginLength {
+		return login
+	}
+	cut := users.MaxLoginLength
+	for cut > 0 && !utf8.RuneStart(login[cut]) {
+		cut--
+	}
+	return strings.ToValidUTF8(login[:cut], "")
 }
 
 func accountSubject(login string) string { return "login:" + normalizeLogin(login) }
