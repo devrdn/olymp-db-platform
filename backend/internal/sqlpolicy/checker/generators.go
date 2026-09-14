@@ -75,6 +75,12 @@ func lengthAllowed(name string, call *pg.FuncCall) error {
 	if !ok || size <= MaxGeneratedLength {
 		return nil
 	}
+	if math.IsInf(size, 0) {
+		return &sqlpolicy.Refusal{
+			Code:    sqlpolicy.CodeArgumentNotBounded,
+			Subject: fmt.Sprintf("%s was given a length that is not a real number, far over the %d limit", name, MaxGeneratedLength),
+		}
+	}
 	return &sqlpolicy.Refusal{
 		Code:    sqlpolicy.CodeArgumentNotBounded,
 		Subject: fmt.Sprintf("%s length %s exceeds the %d limit", name, formatSize(size), MaxGeneratedLength),
@@ -116,6 +122,12 @@ func seriesAllowed(call *pg.FuncCall) error {
 	values := seriesCount(start, stop, step)
 	if values <= MaxSeriesLength {
 		return nil
+	}
+	if math.IsInf(values, 0) {
+		return &sqlpolicy.Refusal{
+			Code:    sqlpolicy.CodeArgumentNotBounded,
+			Subject: fmt.Sprintf("generate_series was given bounds too large to count, far over the %d limit", MaxSeriesLength),
+		}
 	}
 	return &sqlpolicy.Refusal{
 		Code:    sqlpolicy.CodeArgumentNotBounded,
@@ -218,13 +230,11 @@ func numericTypeName(tn *pg.TypeName) bool {
 	return ok
 }
 
-// formatSize prints a constant the way it was written, as a whole number where
-// it is one and with no exponent where it is not, so the refusal names the
-// value the participant typed rather than a float's scientific form. A value
-// too large for a float64 is named as such rather than printed.
+// formatSize prints a finite constant the way it was written, as a whole
+// number where it is one and with no exponent where it is not, so the refusal
+// names the value the participant typed rather than a float's scientific form.
+// The out-of-range case is handled by the refusals above, which read as a
+// sentence rather than substituting a phrase for a number.
 func formatSize(v float64) string {
-	if math.IsInf(v, 0) {
-		return "a number out of range"
-	}
 	return strconv.FormatFloat(v, 'f', -1, 64)
 }
