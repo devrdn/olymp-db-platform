@@ -367,8 +367,13 @@ services:
       PUBLIC_ORIGINS: ${PUBLIC_ORIGINS:-}
       # Counts successful sign-ins too, so it bounds people rather than only
       # guesses. Raise it where a whole cohort shares one NAT address; the
-      # per-account limit of ten is what stops guessing.
+      # limit of ten per account and address is what stops guessing.
       MAX_LOGIN_ATTEMPTS_PER_ADDRESS: ${MAX_LOGIN_ATTEMPTS_PER_ADDRESS:-300}
+      # Attempts at one account from every address together, per quarter
+      # hour: the backstop against a guess spread across many addresses. Far
+      # above what one person mistyping reaches, so somebody else's wrong
+      # guesses cannot shut an owner out below it.
+      MAX_LOGIN_ATTEMPTS_PER_ACCOUNT: ${MAX_LOGIN_ATTEMPTS_PER_ACCOUNT:-100}
       # How many argon2id computations — sign-in, password changes, issuing
       # passwords — run at once. Each holds 64 MiB, so this is a memory figure
       # and the limits below are sized from it; stated here rather than left

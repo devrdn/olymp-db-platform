@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -313,7 +314,7 @@ func TestThrottledLoginRecordsTooManyAttempts(t *testing.T) {
 	ctx := context.Background()
 
 	var lastErr error
-	for range maxLoginAttemptsPerAccount + 1 {
+	for range maxLoginAttemptsPerAccountAddress + 1 {
 		_, lastErr = f.service.Login(ctx, loginCmd("wrong password"))
 	}
 	if !errors.Is(lastErr, ErrTooManyAttempts) {
@@ -348,7 +349,7 @@ func TestRepeatedFailuresAreBlocked(t *testing.T) {
 	ctx := context.Background()
 
 	var lastErr error
-	for range maxLoginAttemptsPerAccount + 1 {
+	for range maxLoginAttemptsPerAccountAddress + 1 {
 		_, lastErr = f.service.Login(ctx, loginCmd("wrong password"))
 	}
 
@@ -362,7 +363,7 @@ func TestThrottlingSurvivesTheCorrectPassword(t *testing.T) {
 	// which is exactly the case throttling exists for.
 	f := newFixture(t)
 	ctx := context.Background()
-	for range maxLoginAttemptsPerAccount + 1 {
+	for range maxLoginAttemptsPerAccountAddress + 1 {
 		_, _ = f.service.Login(ctx, loginCmd("wrong password"))
 	}
 
@@ -384,7 +385,7 @@ func TestSuccessClearsTheFailureCount(t *testing.T) {
 	}
 
 	// The counter is clear, so a fresh run of failures is allowed again.
-	for range maxLoginAttemptsPerAccount {
+	for range maxLoginAttemptsPerAccountAddress {
 		if _, err := f.service.Login(ctx, loginCmd("wrong password")); errors.Is(err, ErrTooManyAttempts) {
 			t.Fatal("the failure counter was not cleared by the successful login")
 		}
@@ -483,10 +484,12 @@ func TestAddressThrottleIsSpentBeforeAccountCountersAreCreated(t *testing.T) {
 		})
 	}
 
-	// One address counter, plus an account counter for each of the two attempts
-	// the address was allowed. The eight refused attempts left nothing behind.
-	if got := c.Len(); got != 3 {
-		t.Errorf("the cache holds %d counters, want 3: refused attempts created account keys", got)
+	// One address counter, plus the two account counters — this account from
+	// this address, and the account across all addresses — for each of the
+	// two attempts the address was allowed. The eight refused attempts left
+	// nothing behind.
+	if got := c.Len(); got != 5 {
+		t.Errorf("the cache holds %d counters, want 5: refused attempts created account keys", got)
 	}
 }
 
@@ -671,5 +674,89 @@ func TestAnOverlongPasswordIsRefusedBeforeAnyAccountCounterOrHash(t *testing.T) 
 	}
 	if got := c.Len(); got != 1 {
 		t.Errorf("the cache holds %d counters, want 1 (the address only)", got)
+	}
+}
+
+// throttleService builds a service over a real account with the given
+// account-wide ceiling.
+func throttleService(t *testing.T, ceiling int) *Service {
+	t.Helper()
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+	repo := userstest.New()
+	repo.Add(users.User{
+		Login: "ivanov", FullName: "Ivan Ivanov", Status: users.StatusActive,
+		PasswordHash: passwordtest.Hash(t, testPassword),
+	})
+	return NewService(ServiceConfig{
+		Users:                 repo,
+		Sessions:              NewSessionStore(c, time.Hour),
+		Audit:                 audit.New(&collectingSink{}),
+		Limiter:               NewLimiter(c),
+		Logger:                logging.New("error", io.Discard),
+		Passwords:             passwordtest.NewHasher(),
+		MaxAttemptsPerAccount: ceiling,
+	})
+}
+
+func TestAGuesserAtAnotherAddressCannotLockTheOwnerOut(t *testing.T) {
+	// Logins are not secret — a public leaderboard may list them — so a
+	// counter keyed on the login alone let anybody who knew one keep its
+	// owner from signing in. The guessing limit is per account and address:
+	// it still stops the guesser, and the owner elsewhere is not their
+	// counter.
+	service := throttleService(t, 0)
+	ctx := context.Background()
+
+	var lastErr error
+	for range maxLoginAttemptsPerAccountAddress + 5 {
+		_, lastErr = service.Login(ctx, LoginCommand{Login: "ivanov", Password: "a guess", IP: "10.0.0.66"})
+	}
+	if !errors.Is(lastErr, ErrTooManyAttempts) {
+		t.Fatalf("the guesser's last attempt = %v, want ErrTooManyAttempts", lastErr)
+	}
+
+	if _, err := service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1"}); err != nil {
+		t.Errorf("the owner at another address = %v, want a session", err)
+	}
+}
+
+func TestTheAccountWideCeilingStopsAGuessSpreadAcrossAddresses(t *testing.T) {
+	// Keying the guessing limit on the address hands a guesser with many
+	// addresses a fresh budget at each. The account-wide ceiling is the
+	// backstop: far above what one person mistyping reaches, and still a
+	// limit on a distributed guess.
+	const ceiling = 5
+	service := throttleService(t, ceiling)
+	ctx := context.Background()
+
+	for i := range ceiling {
+		ip := fmt.Sprintf("10.0.1.%d", i)
+		if _, err := service.Login(ctx, LoginCommand{Login: "ivanov", Password: "a guess", IP: ip}); !errors.Is(err, ErrInvalidCredentials) {
+			t.Fatalf("attempt %d = %v, want ErrInvalidCredentials within the ceiling", i, err)
+		}
+	}
+
+	_, err := service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.2.1"})
+	if !errors.Is(err, ErrTooManyAttempts) {
+		t.Errorf("an attempt past the account-wide ceiling = %v, want ErrTooManyAttempts", err)
+	}
+}
+
+func TestAnAttemptRefusedAtItsAddressDoesNotSpendTheAccountCeiling(t *testing.T) {
+	// The per-address guessing limit is checked first, and a refusal there
+	// stops before the account-wide counter. Otherwise one address repeating
+	// refused attempts would climb to the ceiling on its own and lock the
+	// owner out everywhere — the lockout the address key exists to prevent.
+	const ceiling = maxLoginAttemptsPerAccountAddress + 2
+	service := throttleService(t, ceiling)
+	ctx := context.Background()
+
+	for range 3 * ceiling {
+		_, _ = service.Login(ctx, LoginCommand{Login: "ivanov", Password: "a guess", IP: "10.0.0.66"})
+	}
+
+	if _, err := service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1"}); err != nil {
+		t.Errorf("the owner after one address's refused attempts = %v, want a session", err)
 	}
 }
