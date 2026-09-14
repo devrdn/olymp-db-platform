@@ -8,6 +8,9 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/db-contest/backend/internal/provisioning"
+	"github.com/devrdn/db-contest/backend/internal/queryproxy"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -16,6 +19,11 @@ import (
 
 // Registrations implements contests.RegistrationRepository.
 var _ contests.RegistrationRepository = (*Registrations)(nil)
+
+// Registrations also answers queryproxy's combined lookup (see ForRun below):
+// the SQL console's hot path reads one round trip where it used to read
+// three.
+var _ queryproxy.Lookup = (*Registrations)(nil)
 
 // participantColumns joins the account for the same reason the staff list
 // does: a roster of identifiers is unreadable.
@@ -37,10 +45,17 @@ func (r *Registrations) querier(ctx context.Context) storage.Querier {
 	return storage.QuerierFrom(ctx, r.pool)
 }
 
+// participantScanTargets returns pointers matching participantColumns' own
+// column order, so a wider projection (ForRun below) can share this list
+// with scanParticipant instead of repeating it.
+func participantScanTargets(p *contests.Participant) []any {
+	return []any{&p.ID, &p.ContestID, &p.UserID, &p.Login, &p.FullName, &p.Status,
+		&p.StartedAt, &p.FinishedAt, &p.TotalScore, &p.CreatedAt}
+}
+
 func scanParticipant(row pgx.Row) (contests.Participant, error) {
 	var p contests.Participant
-	err := row.Scan(&p.ID, &p.ContestID, &p.UserID, &p.Login, &p.FullName, &p.Status,
-		&p.StartedAt, &p.FinishedAt, &p.TotalScore, &p.CreatedAt)
+	err := row.Scan(participantScanTargets(&p)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return contests.Participant{}, contests.ErrParticipantNotFound
 	}
@@ -93,6 +108,82 @@ func (r *Registrations) ByUser(ctx context.Context, contestID, userID uuid.UUID)
 		FROM registrations r
 		JOIN users u ON u.id = r.user_id
 		WHERE r.contest_id = $1 AND r.user_id = $2`, contestID, userID))
+}
+
+// ForRun implements queryproxy.Lookup: the participant, the contest they are
+// asking about, and its game, in one round trip — where Run used to open
+// three, one apiece against registrations, contests and (through
+// GameInstances.Game) contests again.
+//
+// The INNER JOIN against contests is what keeps "never registered" and "no
+// such contest" one answer rather than two: a registration's own foreign key
+// guarantees the contest it names exists, so there is no separate not-found
+// case to invent for it — the WHERE below simply matches no row for either
+// reason, exactly as the old, separate People.ByUser lookup already did (see
+// lookupParticipant's own doc in queryproxy). The game half is LEFT JOINed
+// rather than INNER, deliberately: a contest with no ready template must
+// still come back with its participant and its own columns populated, only
+// its game reading as absent (provisioning.ErrNoGame) — see
+// queryproxy.LookupResult.
+func (r *Registrations) ForRun(ctx context.Context, contestID, userID uuid.UUID) (queryproxy.LookupResult, error) {
+	var (
+		p                                                              contests.Participant
+		c                                                              contests.Contest
+		settings, languages, translations                              []byte
+		templateDB                                                     *string
+		version                                                        *int
+		mode                                                           string
+		writableTables                                                 []string
+		allowCreateView, allowOwnTables, allowTempTables, allowCatalog bool
+		diskQuotaRatio                                                 int
+	)
+	targets := participantScanTargets(&p)
+	targets = append(targets, contestScanTargets(&c, &settings, &languages, &translations)...)
+	targets = append(targets, &templateDB, &version, &mode, &writableTables,
+		&allowCreateView, &allowOwnTables, &allowTempTables, &allowCatalog, &diskQuotaRatio)
+
+	err := r.querier(ctx).QueryRow(ctx, `
+		SELECT `+participantColumns+`,
+		       `+contestColumns+`,
+		       t.template_db, t.version,
+		       `+policyProjectionColumns+`
+		FROM registrations r
+		JOIN users u ON u.id = r.user_id
+		JOIN contests c ON c.id = r.contest_id
+		LEFT JOIN game_templates t ON t.contest_id = c.id AND t.status = 'ready'
+		LEFT JOIN contest_sql_policies p ON p.contest_id = c.id
+		WHERE r.contest_id = $1 AND r.user_id = $2`, contestID, userID).Scan(targets...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return queryproxy.LookupResult{}, contests.ErrParticipantNotFound
+	}
+	if err != nil {
+		return queryproxy.LookupResult{}, fmt.Errorf("scan participant, contest and game: %w", err)
+	}
+
+	contest, err := hydrate(c, settings, languages, translations)
+	if err != nil {
+		return queryproxy.LookupResult{}, err
+	}
+	result := queryproxy.LookupResult{Participant: p, Contest: contest}
+	if templateDB == nil {
+		result.GameErr = provisioning.ErrNoGame
+		return result, nil
+	}
+	result.Game = provisioning.Contest{
+		ID:       contest.ID,
+		Template: *templateDB,
+		Version:  *version,
+		Policy: sqlpolicy.Policy{
+			Mode:            sqlpolicy.Mode(mode),
+			WritableTables:  writableTables,
+			AllowCreateView: allowCreateView,
+			AllowOwnTables:  allowOwnTables,
+			AllowTempTables: allowTempTables,
+			AllowCatalog:    allowCatalog,
+			DiskQuotaRatio:  diskQuotaRatio,
+		},
+	}
+	return result, nil
 }
 
 // EnrolledIn reports which of these contests the user is registered for.

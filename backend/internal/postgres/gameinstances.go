@@ -214,6 +214,23 @@ func (r *GameInstances) AllCurrent(ctx context.Context, contest uuid.UUID, versi
 	return behind == 0, nil
 }
 
+// policyProjectionColumns is the coalesced SQL for one contest's SQL policy —
+// mode, writable_tables, allow_create_view, allow_own_tables,
+// allow_temp_tables, allow_catalog, disk_quota_ratio — read from a LEFT JOIN
+// against contest_sql_policies p. A contest that never configured one has no
+// row there, and coalesce is what gives it the read-only default rather than
+// no restrictions at all; every query that reads a contest's game (Game,
+// Live, and queryproxy's combined Registrations.ForRun) shares this one
+// projection so that default can never drift between them.
+const policyProjectionColumns = `
+	coalesce(p.mode, 'read_only'),
+	coalesce(p.writable_tables, '{}')::text[],
+	coalesce(p.allow_create_view, false),
+	coalesce(p.allow_own_tables, false),
+	coalesce(p.allow_temp_tables, false),
+	coalesce(p.allow_catalog, true),
+	coalesce(p.disk_quota_ratio, 5)`
+
 // Game returns one contest's game: which template it plays on, at what version,
 // under which policy.
 //
@@ -226,13 +243,7 @@ func (r *GameInstances) Game(ctx context.Context, contestID uuid.UUID) (provisio
 	var mode string
 	err := r.querier(ctx).QueryRow(ctx, `
 		SELECT c.id, t.template_db, t.version,
-		       coalesce(p.mode, 'read_only'),
-		       coalesce(p.writable_tables, '{}')::text[],
-		       coalesce(p.allow_create_view, false),
-		       coalesce(p.allow_own_tables, false),
-		       coalesce(p.allow_temp_tables, false),
-		       coalesce(p.allow_catalog, true),
-		       coalesce(p.disk_quota_ratio, 5)
+		       `+policyProjectionColumns+`
 		FROM contests c
 		JOIN game_templates t ON t.contest_id = c.id
 		LEFT JOIN contest_sql_policies p ON p.contest_id = c.id
@@ -258,19 +269,9 @@ func (r *GameInstances) Game(ctx context.Context, contestID uuid.UUID) (provisio
 // draft has nobody to provision for, and a template still building or failed
 // would have copies made of a database that is not a contest.
 func (r *GameInstances) Live(ctx context.Context) ([]provisioning.Contest, error) {
-	// The policy is joined from contest_sql_policies, which has held it since
-	// the schema's second migration. A contest that was never configured has
-	// no row there, and LEFT JOIN plus coalesce gives it the read-only
-	// default — the absence of a policy must never read as no restrictions.
 	rows, err := r.querier(ctx).Query(ctx, `
 		SELECT c.id, t.template_db, t.version,
-		       coalesce(p.mode, 'read_only'),
-		       coalesce(p.writable_tables, '{}')::text[],
-		       coalesce(p.allow_create_view, false),
-		       coalesce(p.allow_own_tables, false),
-		       coalesce(p.allow_temp_tables, false),
-		       coalesce(p.allow_catalog, true),
-		       coalesce(p.disk_quota_ratio, 5)
+		       `+policyProjectionColumns+`
 		FROM contests c
 		JOIN game_templates t ON t.contest_id = c.id
 		LEFT JOIN contest_sql_policies p ON p.contest_id = c.id
