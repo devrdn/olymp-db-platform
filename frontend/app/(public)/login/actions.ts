@@ -6,7 +6,7 @@ import { redirect } from "next/navigation";
 import { callerHeaders } from "@/lib/api/caller";
 import { cookieSecure } from "@/lib/auth/cookie-policy";
 import { destinationAfterLogin } from "@/lib/auth/destination";
-import { signIn } from "@/lib/auth/sign-in";
+import { DEVICE_COOKIE, signIn } from "@/lib/auth/sign-in";
 import { apiOrigin } from "@/lib/api/config";
 import { fetchIdentity } from "@/lib/auth/session";
 export type SignInState = { code?: string };
@@ -40,6 +40,9 @@ export async function signInAction(
       // server, and without the chain the API's per-address throttle counts
       // every student in the building as one machine.
       headers: await callerHeaders(),
+      // The proof that this browser has signed in to the account before,
+      // handed on for the same reason as the address above.
+      deviceToken: jar.get(DEVICE_COOKIE)?.value,
       setCookie: (cookie) =>
         jar.set(cookie.name, cookie.value, {
           path: cookie.path ?? "/",

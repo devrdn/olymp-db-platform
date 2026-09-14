@@ -378,6 +378,16 @@ services:
       # above what one person mistyping reaches, so somebody else's wrong
       # guesses cannot shut an owner out below it.
       MAX_LOGIN_ATTEMPTS_PER_ACCOUNT: ${MAX_LOGIN_ATTEMPTS_PER_ACCOUNT:-100}
+      # A browser that has signed in to an account gets a signed cookie, and
+      # its later sign-ins to that account are limited per browser instead of
+      # per address — what keeps a rival in the same lecture hall from locking
+      # the owner out. The secret signs it: at least 32 bytes, required outside
+      # development (the API refuses to start without it), and the same on
+      # every replica. Passed empty rather than required here so that compose
+      # commands that do not start the API still read an .env without it.
+      DEVICE_COOKIE_SECRET: ${DEVICE_COOKIE_SECRET:-}
+      DEVICE_COOKIE_TTL: ${DEVICE_COOKIE_TTL:-720h}
+      MAX_LOGIN_ATTEMPTS_PER_DEVICE: ${MAX_LOGIN_ATTEMPTS_PER_DEVICE:-10}
       # How many argon2id computations — sign-in, password changes, issuing
       # passwords — run at once. Each holds 64 MiB, so this is a memory figure
       # and the limits below are sized from it; stated here rather than left

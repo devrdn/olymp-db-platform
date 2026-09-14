@@ -7,6 +7,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"net/netip"
 	"net/url"
@@ -35,6 +37,37 @@ const (
 	minSessionMaxLifetime = 5 * time.Minute
 	maxSessionMaxLifetime = 7 * 24 * time.Hour
 )
+
+// Device cookie bounds. The secret's minimum is SHA-256's own size, the key
+// of the HMAC it signs with. A lifetime under an hour is no trust worth the
+// name; past ninety days a browser handed on to somebody else keeps it.
+const (
+	minDeviceCookieSecretBytes       = 32
+	minDeviceCookieTTL               = time.Hour
+	maxDeviceCookieTTL               = 90 * 24 * time.Hour
+	maxLoginAttemptsPerDeviceCeiling = 1000
+)
+
+// deviceCookieSecret reads DEVICE_COOKIE_SECRET, or generates one for a
+// development stack. Outside development it is required: a generated key
+// would distrust every browser at each restart and differ between replicas.
+func deviceCookieSecret(env string) ([]byte, error) {
+	raw := os.Getenv("DEVICE_COOKIE_SECRET")
+	if raw == "" && env == "development" {
+		secret := make([]byte, minDeviceCookieSecretBytes)
+		if _, err := rand.Read(secret); err != nil {
+			return nil, fmt.Errorf("DEVICE_COOKIE_SECRET: generate a development secret: %w", err)
+		}
+		return secret, nil
+	}
+	if raw == "" {
+		return nil, errors.New("DEVICE_COOKIE_SECRET: required outside development")
+	}
+	if len(raw) < minDeviceCookieSecretBytes {
+		return nil, fmt.Errorf("DEVICE_COOKIE_SECRET: %d bytes, at least %d are required", len(raw), minDeviceCookieSecretBytes)
+	}
+	return []byte(raw), nil
+}
 
 // maxLoginAttemptsCeiling bounds MAX_LOGIN_ATTEMPTS_PER_ACCOUNT.
 const maxLoginAttemptsCeiling = 100_000
@@ -97,6 +130,16 @@ type Config struct {
 	// however actively it is used. SessionTTL alone never ends a session
 	// somebody keeps using, including somebody using a copied cookie.
 	SessionMaxLifetime time.Duration
+	// DeviceCookieSecret keys the HMAC of the device cookie, which marks a
+	// browser an account's owner has signed in from. Required outside
+	// development; a development stack generates one per start, which only
+	// means its browsers are strangers again after a restart.
+	DeviceCookieSecret []byte
+	// DeviceCookieTTL is how long a device cookie lives.
+	DeviceCookieTTL time.Duration
+	// MaxLoginAttemptsPerDevice caps sign-in attempts through one trusted
+	// browser in a quarter of an hour. Zero leaves it to the auth package.
+	MaxLoginAttemptsPerDevice int
 	// GameProvisionerDSN connects to the game cluster as the provisioning
 	// role, which creates and drops participants' databases. Optional: empty
 	// turns provisioning off, which is what a deployment without a game
@@ -308,6 +351,23 @@ func Load() (Config, error) {
 	}
 	if cfg.CookieSecure, err = boolEnv("COOKIE_SECURE", cfg.Env != "development"); err != nil {
 		return Config{}, err
+	}
+	if cfg.DeviceCookieSecret, err = deviceCookieSecret(cfg.Env); err != nil {
+		return Config{}, err
+	}
+	if cfg.DeviceCookieTTL, err = durationEnv("DEVICE_COOKIE_TTL", 30*24*time.Hour); err != nil {
+		return Config{}, err
+	}
+	if cfg.DeviceCookieTTL < minDeviceCookieTTL || cfg.DeviceCookieTTL > maxDeviceCookieTTL {
+		return Config{}, fmt.Errorf("DEVICE_COOKIE_TTL: %s is outside [%s, %s]",
+			cfg.DeviceCookieTTL, minDeviceCookieTTL, maxDeviceCookieTTL)
+	}
+	if cfg.MaxLoginAttemptsPerDevice, err = intEnv("MAX_LOGIN_ATTEMPTS_PER_DEVICE", 0); err != nil {
+		return Config{}, err
+	}
+	if cfg.MaxLoginAttemptsPerDevice > maxLoginAttemptsPerDeviceCeiling {
+		return Config{}, fmt.Errorf("MAX_LOGIN_ATTEMPTS_PER_DEVICE: %d is above the ceiling of %d",
+			cfg.MaxLoginAttemptsPerDevice, maxLoginAttemptsPerDeviceCeiling)
 	}
 
 	// Zero means "not stated", and the authentication service supplies its own
