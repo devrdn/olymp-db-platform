@@ -38,11 +38,14 @@ REDIS_PORT       ?= 6379
 ADMIN_LOGIN      ?= admin
 ADMIN_NAME       ?= System Administrator
 API_PORT         ?= 8080
-# Where `make runner` listens and `make run` dials. One variable, because the
-# Query Runner reads it as its listen address and the API as the address to
-# reach it at, and a development stack where those two disagree is a stack
-# where the console is silently off.
+# Where `make run` dials the Query Runner, and so the port `make runner` listens
+# on. The port is the one thing the two must agree on — a development stack
+# where they disagree is a stack where the console is silently off — so the
+# runner's listen address is derived from this one. The host is not: the
+# runner listens on loopback, because it runs whatever database and policy a
+# request names and a laptop in a lecture hall is on that hall's network.
 QUERY_RUNNER_ADDR ?= localhost:9100
+QUERY_RUNNER_LISTEN ?= 127.0.0.1:$(lastword $(subst :, ,$(QUERY_RUNNER_ADDR)))
 
 CORE_DB_DSN ?= postgres://$(CORE_DB_USER):$(CORE_DB_PASSWORD)@localhost:$(CORE_DB_PORT)/$(CORE_DB_NAME)?sslmode=disable
 # The game cluster, as the provisioning role. Only the development overlay
@@ -496,6 +499,7 @@ runner: require-env ## Run the Query Runner against the dev game cluster
 	cd $(BACKEND) && \
 		GAME_DB_DSN="postgres://game_reader:$(GAME_READER_PASSWORD)@localhost:$(GAME_DB_PORT)/postgres?sslmode=disable" \
 		GAME_DB_WRITER_DSN="postgres://game_writer:$(GAME_WRITER_PASSWORD)@localhost:$(GAME_DB_PORT)/postgres?sslmode=disable" \
+		QUERY_RUNNER_ADDR="$(QUERY_RUNNER_LISTEN)" \
 		ENV=development LOG_LEVEL=debug go run ./cmd/queryrunner
 
 dev-up: ## Start PostgreSQL and Redis for local development
