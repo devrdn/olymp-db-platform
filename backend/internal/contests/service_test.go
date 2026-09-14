@@ -346,6 +346,96 @@ func TestUpdateExtendsTheWindowOfARunningContest(t *testing.T) {
 	}
 }
 
+// TestUpdateRefusesToMoveEndsAtOnceTheFreezeIsReached is C-06's own test: the
+// public and participant leaderboards froze at 11:30 on the strength of a
+// stored ends_at, and moving ends_at now would recompute FreezeAt to a later
+// moment and read the board as live again — showing, for as long as the
+// cache stays stale, results submitted after the freeze that already
+// happened.
+func TestUpdateRefusesToMoveEndsAtOnceTheFreezeIsReached(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+	// SeedContest's EndsAt is FixtureNow+2h; a 130-minute freeze puts
+	// FreezeAt ten minutes before FixtureNow — already reached.
+	freeze := 130
+	c.LeaderboardFreezeMin = &freeze
+	f.Contests.Put(c)
+	later := f.Now.Add(4 * time.Hour)
+
+	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &later,
+	})
+	if !errors.Is(err, contests.ErrNotEditable) {
+		t.Errorf("Update() = %v, want ErrNotEditable", err)
+	}
+}
+
+// TestUpdateAllowsExtendingEndsAtBeforeTheFreezeIsReached is the other half
+// of C-06: the organizer response to a power cut must keep working for as
+// long as the freeze this change protects has not actually happened yet.
+func TestUpdateAllowsExtendingEndsAtBeforeTheFreezeIsReached(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+	// FreezeAt = EndsAt(+2h) - 30min = FixtureNow+90min — not reached yet.
+	freeze := 30
+	c.LeaderboardFreezeMin = &freeze
+	f.Contests.Put(c)
+	later := f.Now.Add(4 * time.Hour)
+
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &later,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+	if updated.EndsAt == nil || !updated.EndsAt.Equal(later) {
+		t.Errorf("EndsAt = %v, want %v", updated.EndsAt, later)
+	}
+}
+
+// TestUpdateRefusesToChangeStartsAtForICPCScoringWhileRunning is C-06's other
+// branch: ICPC penalty minutes are counted from starts_at at read time
+// (postgres/leaderboard.go), never stored with a submission, so moving
+// starts_at mid-run would retroactively rescore every fixed-timing
+// participant's penalty — the same "no path may rescore a result nobody can
+// see the reason for" checkRunningChange already enforces for the penalty
+// setting itself.
+func TestUpdateRefusesToChangeStartsAtForICPCScoringWhileRunning(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+	c.Scoring = contests.ScoringICPC
+	f.Contests.Put(c)
+	earlier := f.Now.Add(-2 * time.Hour)
+
+	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, StartsAt: &earlier,
+	})
+	if !errors.Is(err, contests.ErrNotEditable) {
+		t.Errorf("Update() = %v, want ErrNotEditable", err)
+	}
+}
+
+// TestUpdateAllowsChangingStartsAtOutsideICPCScoringWhileRunning proves the
+// new starts_at guard is scoped to ICPC: a points or winner contest has
+// nothing keyed off starts_at the way ICPC's penalty formula is, so extending
+// or correcting the window's start stays the ordinary "fix it after a power
+// cut" operation SettingsEditable exists for.
+func TestUpdateAllowsChangingStartsAtOutsideICPCScoringWhileRunning(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+	earlier := f.Now.Add(-2 * time.Hour)
+
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, StartsAt: &earlier,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+	if updated.StartsAt == nil || !updated.StartsAt.Equal(earlier) {
+		t.Errorf("StartsAt = %v, want %v", updated.StartsAt, earlier)
+	}
+}
+
 func TestPublishRefusesAnIncompleteContest(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusDraft)
