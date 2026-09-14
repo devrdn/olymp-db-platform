@@ -19,9 +19,8 @@ import (
 
 // countingTracer counts every statement pgx sends over the wire, through the
 // same pgx.QueryTracer hook storagetest.Open's own `configure` callback
-// exists to install. It is the measurement P-H3's own task brief asks for:
-// not a count of Go-level calls into a fake, but of round trips a real
-// connection actually made.
+// exists to install — a count of round trips a real connection actually
+// made, not of Go-level calls into a fake.
 type countingTracer struct {
 	mu    sync.Mutex
 	count int
@@ -88,19 +87,19 @@ func (noOpExecutor) Run(context.Context, queryrunner.Request, uuid.UUID) (*query
 	return &queryrunner.Result{Columns: []string{"a"}}, nil
 }
 
-// TestRunsCoreRoundTripsAreMeasured is the measurement the task brief asks
-// for: how many statements one steady-state Run call sends to the core
-// database, counted with a real pgx.QueryTracer against dbcontest_core_test
-// rather than assumed from reading the code. The scenario is the common
-// case an olympiad spends almost all of its queries in — a fixed-timing,
-// read-only contest, a participant who has already started and already has
-// a current game database — so neither Start nor Quota adds a round trip of
-// its own, and what is left is exactly the lookup(s) this task changed.
+// TestRunsCoreRoundTripsAreMeasured counts how many statements one
+// steady-state Run call sends to the core database, with a real
+// pgx.QueryTracer against dbcontest_core_test rather than assumed from
+// reading the code. The scenario is the common case an olympiad spends
+// almost all of its queries in — a fixed-timing, read-only contest, a
+// participant who has already started and already has a current game
+// database — so neither Start nor Quota adds a round trip of its own, and
+// what is left is exactly the lookup this collapses to one query.
 //
-// Run this same test — after copying it, since the type it measures did not
-// exist yet — against the commit before this task (3d7e881) in a throwaway
-// worktree to get the "before" figure the report cites; see
-// task-6a-report.md's "Fix round 1" section for both numbers.
+// The commit before WithLookup existed measured 5 the same way (People,
+// Contests, Games and Answerable each their own call, plus Ensure); this one
+// measures 3 (the combined lookup, Answerable, Ensure) — two fewer per query,
+// on every query the console runs.
 func TestRunsCoreRoundTripsAreMeasured(t *testing.T) {
 	ctx := context.Background()
 	tracer := &countingTracer{}
@@ -168,11 +167,10 @@ func TestRunsCoreRoundTripsAreMeasured(t *testing.T) {
 
 	got := tracer.get()
 	t.Logf("core round trips for one steady-state Run() with the merged lookup: %d", got)
-	// Three is the claim this task's report makes: one combined lookup
-	// (participant + contest + game), one AnswerableLeft, one Ensure (→
-	// repo.Of). A regression that reopens any of the two collapsed round
-	// trips changes this number, which is exactly what should fail here.
+	// One combined lookup (participant + contest + game), one AnswerableLeft,
+	// one Ensure (→ repo.Of). A regression that reopens either of the two
+	// round trips the lookup collapsed changes this number.
 	if got != 3 {
-		t.Errorf("core round trips = %d, want 3 — see task-6a-report.md's Fix round 1 for what each one is", got)
+		t.Errorf("core round trips = %d, want 3 (one combined lookup, one AnswerableLeft, one Ensure)", got)
 	}
 }
