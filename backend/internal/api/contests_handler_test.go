@@ -312,6 +312,49 @@ func TestEditingAFinishedContestIsAConflict(t *testing.T) {
 	}
 }
 
+// TestMovingEndsAtAfterTheFreezeIsAConflictWithItsOwnCode asserts the
+// declared refusal, not the generic not_editable one: moving ends_at once
+// the leaderboard freeze has already been reached gets its own wire code so
+// the organiser is told why, not just that the contest is running.
+func TestMovingEndsAtAfterTheFreezeIsAConflictWithItsOwnCode(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusRunning)
+	freeze := 130 // SeedContest's EndsAt is +2h; this freeze already passed.
+	c.LeaderboardFreezeMin = &freeze
+	f.stores.Contests.Put(c)
+	later := f.stores.Now.Add(4 * time.Hour).UTC().Format(time.RFC3339)
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(),
+		fmt.Sprintf(`{"ends_at": %q}`, later))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "freeze_already_reached" {
+		t.Errorf("error code = %q, want freeze_already_reached", code)
+	}
+}
+
+// TestMovingStartsAtOnARunningICPCContestIsAConflictWithItsOwnCode is the
+// starts_at counterpart, for ICPC scoring.
+func TestMovingStartsAtOnARunningICPCContestIsAConflictWithItsOwnCode(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusRunning)
+	c.Scoring = contests.ScoringICPC
+	f.stores.Contests.Put(c)
+	earlier := f.stores.Now.Add(-2 * time.Hour).UTC().Format(time.RFC3339)
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(),
+		fmt.Sprintf(`{"starts_at": %q}`, earlier))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "icpc_start_locked" {
+		t.Errorf("error code = %q, want icpc_start_locked", code)
+	}
+}
+
 // The one exception a finished contest's otherwise-frozen settings carry
 // (§2.4, contests.Service.ExtendGrace): an organizer who discovers late that
 // they need more time still has an endpoint to reach for.

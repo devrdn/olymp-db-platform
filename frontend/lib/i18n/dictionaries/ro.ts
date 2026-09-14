@@ -1279,6 +1279,8 @@ const ro = {
     invalid_transition: "Din starea curentă această trecere nu este posibilă.",
     status_changed: "Altcineva a mutat olimpiada cât timp decideați. Reîncărcați pagina — nimic din ce ați făcut nu a fost salvat.",
     not_editable: "O olimpiadă în această stare nu poate fi modificată.",
+    freeze_already_reached: "Clasamentul s-a înghețat deja, așa că data de final nu se poate schimba. Celelalte setări pot fi salvate în continuare.",
+    icpc_start_locked: "Data de început nu se poate schimba cât timp olimpiada rulează cu scorul ICPC, deoarece penalizările se calculează de la ea. Celelalte setări pot fi salvate în continuare.",
     not_publishable: "Olimpiada încă nu este gata de publicare.",
     package_too_large: "Olimpiada are mai multe întrebări decât încape într-un pachet de export.",
     enrollment_closed: "Înscrierea la această olimpiadă este închisă.",
