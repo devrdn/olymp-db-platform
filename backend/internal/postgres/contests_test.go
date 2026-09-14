@@ -879,3 +879,63 @@ func TestLockContestRefusesOutsideATransaction(t *testing.T) {
 		t.Error("LockContest() outside a transaction = nil, want an error")
 	}
 }
+
+// TestLockContestDoesNotBlockAForeignKeyInsertReferencingTheContest proves
+// LockContest takes a lock weak enough to leave the contest's other
+// concurrent writers alone: inserting a row that references this contest by
+// foreign key (game_instances.contest_id, here through AddSpare — the same
+// insert the pool's own background top-ups make) takes a key-share lock on
+// the referenced contests row, and that must not be made to wait behind
+// whatever GrantManager, Enroll or AddParticipants is doing with the
+// stronger lock this type serialises them on. A `FOR UPDATE` lock would
+// block it — exactly what would starve the pool of capacity a participant
+// is waiting on for as long as a roster import runs; `FOR NO KEY UPDATE`
+// does not conflict with a key-share lock, so this insert completes
+// promptly while the first transaction still holds LockContest open.
+func TestLockContestDoesNotBlockAForeignKeyInsertReferencingTheContest(t *testing.T) {
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	ctx := context.Background()
+	author := makeUser(t, ctx, "lock-fk-"+uuid.NewString()[:8])
+	contest := makeContest(t, ctx, author.ID)
+	t.Cleanup(func() {
+		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = testPool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contest)
+	})
+	repo := NewContests(testPool)
+	instances := NewGameInstances(testPool)
+
+	holding := make(chan struct{})
+	release := make(chan struct{})
+	firstDone := make(chan error, 1)
+
+	go func() {
+		firstDone <- storage.NewUnitOfWork(testPool).Do(ctx, func(ctx context.Context) error {
+			if err := repo.LockContest(ctx, contest); err != nil {
+				return err
+			}
+			close(holding)
+			<-release
+			return nil
+		})
+	}()
+
+	<-holding
+
+	// A tight deadline stands in for "did not wait behind the lock": if the
+	// insert were blocked, it would still be waiting when this expires,
+	// long before release is ever closed.
+	insertCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	insertErr := instances.AddSpare(insertCtx, contest, "lockfk_"+uuid.NewString()[:12], 1)
+
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first transaction failed: %v", err)
+	}
+	if insertErr != nil {
+		t.Fatalf("AddSpare() = %v, want the foreign key insert to complete without waiting on LockContest", insertErr)
+	}
+}
