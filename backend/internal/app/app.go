@@ -259,7 +259,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		// simply is not mounted, which is the honest state of a deployment
 		// where the runner has not been rolled out yet.
 		if cfg.QueryRunnerAddr != "" {
-			client, err := rpc.Dial(cfg.QueryRunnerAddr)
+			// Configuration refuses a missing token outside development; in
+			// development it is allowed, and said out loud so that a stack
+			// which lost its token cannot pass for a working one.
+			if cfg.QueryRunnerToken == "" {
+				log.Warn("QUERY_RUNNER_TOKEN is not set: calls to the query runner carry no token, " +
+					"which only a development runner accepts")
+			}
+			client, err := rpc.Dial(cfg.QueryRunnerAddr, cfg.QueryRunnerToken)
 			if err != nil {
 				a.close()
 				return nil, err

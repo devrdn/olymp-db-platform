@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -299,5 +300,64 @@ func TestRunnerReadsTheOptionalWriterDSN(t *testing.T) {
 	}
 	if cfg.GameDBWriterDSN == "" {
 		t.Error("GameDBWriterDSN was not read from the environment")
+	}
+}
+
+// The runner obeys the database and policy a request names, so outside
+// development it refuses to start without the token that proves a request came
+// from the Core API.
+func TestTheRunnerRequiresItsTokenOutsideDevelopment(t *testing.T) {
+	t.Setenv("QUERY_RUNNER_TOKEN", "") // not inherited from the shell
+	setRunnerRequired(t)
+	t.Setenv("ENV", "production")
+
+	if _, err := LoadRunner(); err == nil || !strings.Contains(err.Error(), "QUERY_RUNNER_TOKEN") {
+		t.Fatalf("LoadRunner() without QUERY_RUNNER_TOKEN in production = %v, want an error naming it", err)
+	}
+
+	short := strings.Repeat("t", 31)
+	t.Setenv("QUERY_RUNNER_TOKEN", short)
+	_, err := LoadRunner()
+	if err == nil || !strings.Contains(err.Error(), "QUERY_RUNNER_TOKEN") {
+		t.Fatalf("LoadRunner() with a 31-byte token = %v, want an error naming it", err)
+	}
+	if strings.Contains(err.Error(), short) {
+		t.Fatalf("the refusal repeats the token: %q", err.Error())
+	}
+
+	token := strings.Repeat("t", 32)
+	t.Setenv("QUERY_RUNNER_TOKEN", token)
+	cfg, err := LoadRunner()
+	if err != nil {
+		t.Fatalf("LoadRunner() with a 32-byte token: %v", err)
+	}
+	if cfg.Token != token {
+		t.Error("Token is not the configured value")
+	}
+}
+
+// Any value other than "development" is treated as production, the same rule
+// the API applies to its own secrets: a typo in ENV must not switch a check off.
+func TestAnUnrecognisedEnvironmentIsHeldToProductionsRule(t *testing.T) {
+	t.Setenv("QUERY_RUNNER_TOKEN", "") // not inherited from the shell
+	setRunnerRequired(t)
+	t.Setenv("ENV", "staging")
+
+	if _, err := LoadRunner(); err == nil || !strings.Contains(err.Error(), "QUERY_RUNNER_TOKEN") {
+		t.Fatalf("LoadRunner() with ENV=staging and no token = %v, want an error naming it", err)
+	}
+}
+
+func TestADevelopmentRunnerMayOmitItsToken(t *testing.T) {
+	t.Setenv("QUERY_RUNNER_TOKEN", "") // not inherited from the shell
+	setRunnerRequired(t)
+	t.Setenv("ENV", "development")
+
+	cfg, err := LoadRunner()
+	if err != nil {
+		t.Fatalf("LoadRunner() in development without a token: %v", err)
+	}
+	if cfg.Token != "" {
+		t.Errorf("Token = %q, want empty", cfg.Token)
 	}
 }

@@ -41,9 +41,12 @@ func main() {
 	flag.Parse()
 
 	if *healthcheck {
-		// Only the listen address is read, so a missing database DSN cannot
-		// make the health check fail for the wrong reason.
-		if err := rpc.Probe(context.Background(), rpc.ProbeAddress(os.Getenv("QUERY_RUNNER_ADDR"))); err != nil {
+		// Only the listen address and the token are read, so a missing
+		// database DSN cannot make the health check fail for the wrong reason.
+		// The health service is behind the same token as everything else, and
+		// this runs inside the runner's own container, which holds it.
+		address := rpc.ProbeAddress(os.Getenv("QUERY_RUNNER_ADDR"))
+		if err := rpc.Probe(context.Background(), address, os.Getenv("QUERY_RUNNER_TOKEN")); err != nil {
 			fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
 			os.Exit(1)
 		}
@@ -102,5 +105,5 @@ func run() error {
 		return fmt.Errorf("listen on %s: %w", cfg.ListenAddr, err)
 	}
 
-	return rpc.Serve(ctx, lis, rpc.NewServer(runner, limits, log), cfg.ShutdownTimeout, log)
+	return rpc.Serve(ctx, lis, rpc.NewServer(runner, limits, log), cfg.Token, cfg.ShutdownTimeout, log)
 }

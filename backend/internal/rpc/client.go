@@ -47,8 +47,13 @@ var _ queryrunner.Executor = (*Client)(nil)
 // already be inside the network — while adding certificates to rotate. If the
 // two are ever split across hosts, that reasoning stops holding and this is
 // the line that has to change.
-func Dial(address string) (*Client, error) {
-	conn, err := grpc.NewClient(address,
+//
+// Encryption and authentication are separate questions, though: every call
+// carries token (QUERY_RUNNER_TOKEN), because the runner obeys whatever
+// database and policy a request names and must know the Core API sent it. An
+// empty token sends none, which only a development runner accepts.
+func Dial(address, token string) (*Client, error) {
+	options := append([]grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		// gRPC's own default receive limit is 4 MiB, which is smaller than the
 		// result budget the runner enforces. Left alone, a large but valid
@@ -57,7 +62,8 @@ func Dial(address string) (*Client, error) {
 			grpc.MaxCallRecvMsgSize(MaxPayloadBytes),
 			grpc.MaxCallSendMsgSize(MaxPayloadBytes),
 		),
-	)
+	}, withToken(token)...)
+	conn, err := grpc.NewClient(address, options...)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to the query runner: %w", err)
 	}

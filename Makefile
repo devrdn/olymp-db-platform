@@ -310,6 +310,11 @@ require-env:
 # production. In plain dev there is no proxy and no chain, so requests still
 # log as ::1 — the line exists so the dev API treats a forwarded header the
 # same way production does the moment something does send one.
+#
+# QUERY_RUNNER_TOKEN, when deploy/.env sets it, is exported to `run` and
+# `runner` alike (below), so the two present and expect the same token.
+# Exported rather than written on the command line, which make echoes. Without
+# it both run unauthenticated in development and each warns at start-up.
 run: require-env ## Run the API against the dev infrastructure
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" REDIS_ADDR="$(REDIS_ADDR)" \
 		GAME_PROVISIONER_DSN="$(GAME_DB_DSN)" \
@@ -501,6 +506,9 @@ runner: require-env ## Run the Query Runner against the dev game cluster
 		GAME_DB_WRITER_DSN="postgres://game_writer:$(GAME_WRITER_PASSWORD)@localhost:$(GAME_DB_PORT)/postgres?sslmode=disable" \
 		QUERY_RUNNER_ADDR="$(QUERY_RUNNER_LISTEN)" \
 		ENV=development LOG_LEVEL=debug go run ./cmd/queryrunner
+
+# The API and the runner share one token (see `run` above).
+run runner: export QUERY_RUNNER_TOKEN := $(QUERY_RUNNER_TOKEN)
 
 dev-up: ## Start PostgreSQL and Redis for local development
 	$(COMPOSE_DEV) up -d pg-core pg-game redis

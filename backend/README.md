@@ -141,6 +141,7 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `PASSWORD_HASH_MAX_WAIT` | no | `2s` | how long a sign-in or password change waits for a hashing slot before a 503 `sign_in_busy` (at most `30s`) |
 | `ANSWER_RATE_PER_MINUTE` | no | `6` | answers one registration may submit a minute, refused ones included (1-60); past it a 429 `answer_too_often` |
 | `TRUSTED_PROXIES` | no | — | CIDRs whose `X-Forwarded-For` is believed for client IPs |
+| `QUERY_RUNNER_TOKEN` | outside `development`, when `QUERY_RUNNER_ADDR` is set | — | secret presented on every call to the Query Runner (32-512 printable ASCII bytes); the runner requires the same value |
 | `DEFAULT_LOCALE` | no | `en` | language of last resort; must exist in the `languages` table |
 | `COOKIE_SECURE` | no | true outside `development` | mark the session cookie Secure |
 
