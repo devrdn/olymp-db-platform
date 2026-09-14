@@ -559,6 +559,16 @@ type Repository interface {
 	ReplaceLanguages(ctx context.Context, id uuid.UUID, langs []ContestLanguage) error
 	// ReplaceTranslations sets the contest's titles to exactly these.
 	ReplaceTranslations(ctx context.Context, id uuid.UUID, translations []Translation) error
+	// LockContest takes an exclusive, transaction-scoped lock on this
+	// contest row, held until the surrounding transaction ends. It exists to
+	// serialise writes that live in two different tables and must not race:
+	// GrantManager checks the roster before appointing staff, and
+	// Enroll/AddParticipants check the staff list before registering a
+	// participant, so that a contest's owner or manager can never also end
+	// up its participant no matter how the two requests interleave. Must run
+	// inside a unit of work; an implementation refuses otherwise rather than
+	// silently doing nothing.
+	LockContest(ctx context.Context, id uuid.UUID) error
 }
 
 // auditFields is the part of a contest that may be written to the audit trail.

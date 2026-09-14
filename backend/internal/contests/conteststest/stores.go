@@ -180,6 +180,19 @@ func (r *Contests) ReplaceTranslations(_ context.Context, id uuid.UUID, translat
 	return nil
 }
 
+// LockContest is a no-op beyond checking the contest exists: the real
+// cross-session locking this stands in for is exercised against a real
+// database (internal/postgres/contests_test.go), and this fixture's
+// UnitOfWork already runs every call sequentially in one goroutine, so
+// there is no concurrent second caller for an in-memory lock to matter
+// against.
+func (r *Contests) LockContest(_ context.Context, id uuid.UUID) error {
+	if _, ok := r.byID[id]; !ok {
+		return contests.ErrNotFound
+	}
+	return nil
+}
+
 // Stories is an in-memory contests.StoryRepository.
 type Stories struct {
 	byContest map[uuid.UUID]contests.Story
