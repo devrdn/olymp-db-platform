@@ -303,7 +303,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// down: both read the same table through the same narrow type, and there
 	// is no reason to pay for two.
 	auditTrail := postgres.NewAuditTrail(pool)
-	sessions := auth.NewSessionStore(cacheBackend, cfg.SessionTTL)
+	sessions := auth.NewSessionStore(cacheBackend, cfg.SessionTTL).WithMaxLifetime(cfg.SessionMaxLifetime)
 	cookies := auth.NewCookieWriter(cfg.CookieSecure)
 
 	// One instance, shared with GameHandler's own BeginUpload throttle

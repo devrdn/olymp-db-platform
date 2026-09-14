@@ -431,3 +431,29 @@ func setMustChange(t *testing.T, f *mwFixture) {
 		t.Fatalf("SetPassword returned error: %v", err)
 	}
 }
+
+func TestAuthenticateRefusesASessionPastItsMaximumLifetimeHoweverRecentlyUsed(t *testing.T) {
+	c := cache.NewMemory(100)
+	t.Cleanup(func() { _ = c.Close() })
+	repo := userstest.New()
+	user := repo.Add(users.User{Login: "ivanov", Status: users.StatusActive})
+	sessions := NewSessionStore(c, time.Hour).WithMaxLifetime(12 * time.Hour)
+	token, err := sessions.Create(context.Background(), Principal{UserID: user.ID, Login: user.Login})
+	if err != nil {
+		t.Fatalf("Create() returned error: %v", err)
+	}
+	now := time.Now().UTC()
+	record, _ := json.Marshal(Session{UserID: user.ID, Login: user.Login, IssuedAt: now.Add(-13 * time.Hour), RefreshedAt: now})
+	_ = c.Set(context.Background(), sessionKey(token), record, time.Hour)
+
+	mw := NewMiddleware(MiddlewareConfig{
+		Sessions: sessions, Users: repo, Authorizer: rbac.New(staticRoles{}),
+		Cookies: NewCookieWriter(false), Logger: logging.New("error", io.Discard),
+	})
+	rec := httptest.NewRecorder()
+	mw.Authenticate(http.HandlerFunc(okHandler)).ServeHTTP(rec, authed(token))
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 for a session past its maximum lifetime", rec.Code)
+	}
+}

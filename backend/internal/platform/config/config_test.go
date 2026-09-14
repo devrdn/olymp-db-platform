@@ -942,3 +942,38 @@ func TestTheAccountWideLoginCeilingIsConfigurableAndBounded(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionMaximumLifetimeDefaultsToAWorkingDay(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.SessionMaxLifetime != 12*time.Hour {
+		t.Errorf("SessionMaxLifetime = %v, want 12h", cfg.SessionMaxLifetime)
+	}
+}
+
+func TestSessionMaximumLifetimeIsConfigurableAndBounded(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("SESSION_MAX_LIFETIME", "8h")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.SessionMaxLifetime != 8*time.Hour {
+		t.Errorf("SessionMaxLifetime = %v, want 8h", cfg.SessionMaxLifetime)
+	}
+
+	// Below a few minutes nobody finishes signing in and doing anything; past
+	// a week the limit stops being one.
+	for _, raw := range []string{"0s", "-1h", "4m", "169h"} {
+		t.Setenv("SESSION_MAX_LIFETIME", raw)
+		if _, err := Load(); err == nil {
+			t.Errorf("Load() accepted SESSION_MAX_LIFETIME=%s, want error", raw)
+		}
+	}
+}
