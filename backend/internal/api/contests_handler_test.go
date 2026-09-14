@@ -312,26 +312,61 @@ func TestEditingAFinishedContestIsAConflict(t *testing.T) {
 	}
 }
 
-// TestMovingEndsAtAfterTheFreezeIsAConflictWithItsOwnCode asserts the
-// declared refusal, not the generic not_editable one: moving ends_at once
+// TestMovingEndsAtEarlierAfterTheFreezeIsAConflictWithItsOwnCode asserts the
+// declared refusal, not the generic not_editable one: pulling ends_at in once
 // the leaderboard freeze has already been reached gets its own wire code so
 // the organiser is told why, not just that the contest is running.
-func TestMovingEndsAtAfterTheFreezeIsAConflictWithItsOwnCode(t *testing.T) {
+func TestMovingEndsAtEarlierAfterTheFreezeIsAConflictWithItsOwnCode(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusRunning)
 	freeze := 130 // SeedContest's EndsAt is +2h; this freeze already passed.
 	c.LeaderboardFreezeMin = &freeze
 	f.stores.Contests.Put(c)
-	later := f.stores.Now.Add(4 * time.Hour).UTC().Format(time.RFC3339)
+	earlier := c.EndsAt.Add(-10 * time.Minute).UTC().Format(time.RFC3339)
 
 	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(),
-		fmt.Sprintf(`{"ends_at": %q}`, later))
+		fmt.Sprintf(`{"ends_at": %q}`, earlier))
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409 (%s)", rec.Code, rec.Body.String())
 	}
 	if code := errorCode(t, rec); code != "freeze_already_reached" {
 		t.Errorf("error code = %q, want freeze_already_reached", code)
+	}
+}
+
+// TestExtendingEndsAtAfterTheFreezeLengthensTheFreeze is the settings form's
+// save after the table froze: a later ends_at and no freeze key (the locked
+// field submits none). The save succeeds, and the answer carries a freeze
+// lengthened by the extension, so the table stays frozen where it froze.
+func TestExtendingEndsAtAfterTheFreezeLengthensTheFreeze(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusRunning)
+	freeze := 130
+	c.LeaderboardFreezeMin = &freeze
+	f.stores.Contests.Put(c)
+	later := c.EndsAt.Add(time.Hour).UTC().Format(time.RFC3339)
+
+	rec := f.do(http.MethodPatch, "/contests/"+c.ID.String(),
+		fmt.Sprintf(`{"ends_at": %q, "leaderboard": {"names": "login"}}`, later))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		EndsAt      time.Time `json:"ends_at"`
+		Leaderboard struct {
+			FreezeMin *int `json:"freeze_min"`
+		} `json:"leaderboard"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v (%s)", err, rec.Body.String())
+	}
+	if body.Leaderboard.FreezeMin == nil || *body.Leaderboard.FreezeMin != 190 {
+		t.Errorf("freeze_min = %v, want 190", body.Leaderboard.FreezeMin)
+	}
+	if want := c.EndsAt.Add(time.Hour); !body.EndsAt.Equal(want) {
+		t.Errorf("ends_at = %v, want %v", body.EndsAt, want)
 	}
 }
 

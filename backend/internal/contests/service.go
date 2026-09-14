@@ -25,10 +25,10 @@ var ErrNotEditable = errors.New("contest can no longer be edited")
 // particular moves are refused, for a reason specific enough that the
 // generic "it is running" message would leave an organiser guessing.
 var (
-	// ErrFreezeAlreadyReached refuses an ends_at change that would move a
-	// leaderboard freeze the contest has already reached (see
-	// checkRunningChange's own doc).
-	ErrFreezeAlreadyReached = errors.New("the leaderboard has already frozen, so the end date cannot move")
+	// ErrFreezeAlreadyReached refuses moving ends_at earlier once the
+	// contest has reached its leaderboard freeze (see checkRunningChange's
+	// own doc); a later ends_at lengthens the freeze instead.
+	ErrFreezeAlreadyReached = errors.New("the leaderboard has already frozen, so the end date can only move later")
 	// ErrICPCStartLocked refuses a starts_at change on a running ICPC
 	// contest, whose penalty minutes are counted from starts_at at read
 	// time (see checkRunningChange's own doc).
@@ -399,9 +399,10 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 	}
 
 	// Runs before Validate: on a running contest it may still rewrite
-	// updated.EndsAt/StartsAt back to the exact stored value (see its own
-	// doc), and Validate has to see the value that will actually be
-	// written, not the one the request happened to send.
+	// updated.EndsAt/StartsAt back to the exact stored value, or lengthen
+	// the freeze alongside an extension (see its own doc), and Validate has
+	// to see the value that will actually be written, not the one the
+	// request happened to send.
 	if err := checkRunningChange(current, &updated, s.now()); err != nil {
 		return Contest{}, err
 	}
@@ -528,31 +529,52 @@ func checkRunningChange(current Contest, updated *Contest, now time.Time) error 
 	}
 	// FreezeAt = EndsAt - LeaderboardFreezeMin (contests.go) is recomputed
 	// from EndsAt on every read, with nothing stored for "the freeze already
-	// happened". Moving EndsAt after that moment has passed pushes FreezeAt
-	// itself later, and leaderboard.Decide reads the new, not-yet-reached
-	// FreezeAt as "still live" — unfreezing a public and participant board
-	// that had already stopped showing new results, for as long as the
-	// leaderboard cache stays stale. Before the freeze is reached this is
-	// exactly the "extend after a power cut" operation SettingsEditable
-	// exists for, so only a change that would move an already-reached freeze
-	// is refused, not every ends_at change.
+	// happened". Moving EndsAt alone after that moment has passed would push
+	// FreezeAt itself later, and leaderboard.Decide would read the new,
+	// not-yet-reached FreezeAt as "still live" — unfreezing a public and
+	// participant board that had already stopped showing new results. Before
+	// the freeze is reached, moving EndsAt is exactly the "extend after a
+	// power cut" operation SettingsEditable exists for.
+	//
+	// After the freeze an extension is still that operation, so it is paired
+	// instead of refused: EndsAt moves later by whole minutes and the freeze
+	// grows by the same minutes in the same write, which leaves FreezeAt
+	// exactly where it was. The settings form cannot send the freeze of a
+	// running contest (the field is locked), so the freeze it leaves unchanged
+	// is lengthened here; a client that sends the already-lengthened value is
+	// asking for the same change. Any other freeze is still refused by the
+	// freeze case below, and moving EndsAt earlier is refused outright: it
+	// would need a shorter freeze reaching back to a moment the table was
+	// still live.
 	//
 	// The settings form only ever sends whole minutes, so "did this change"
 	// is asked at minute precision (sameMinute, not exact equality): a
 	// resend of the value the form was given back — every field but this one
 	// being the actual edit — must never read as "the deadline moved" just
-	// because the stored value happens to carry seconds. But once the freeze
-	// has been reached, a same-minute value is not simply let through as
-	// unchanged: updated.EndsAt is reset to the exact value already stored,
-	// so a save cannot drift the real deadline by up to 59 seconds — the gap
-	// sameMinute cannot see — while reading as "nothing changed" both here
-	// and in the audit trail. A value in a different minute is still refused
-	// outright: there is no ambiguity there for a snap-back to resolve.
+	// because the stored value happens to carry seconds. A same-minute value
+	// is reset to the exact value already stored, and an extension is applied
+	// to the stored value by whole minutes, so a save never drifts the real
+	// deadline by the up to 59 seconds sameMinute cannot see.
+	freezeLengthened := false
 	if freezeAt, ok := current.FreezeAt(); ok && !now.Before(freezeAt) {
-		if !sameMinute(current.EndsAt, updated.EndsAt) {
+		switch {
+		case sameMinute(current.EndsAt, updated.EndsAt):
+			updated.EndsAt = current.EndsAt
+		case updated.EndsAt != nil && updated.EndsAt.After(*current.EndsAt):
+			minutes := int(updated.EndsAt.UTC().Truncate(time.Minute).
+				Sub(current.EndsAt.UTC().Truncate(time.Minute)) / time.Minute)
+			lengthened := *current.LeaderboardFreezeMin + minutes
+			if !equalDuration(updated.LeaderboardFreezeMin, current.LeaderboardFreezeMin) &&
+				!equalDuration(updated.LeaderboardFreezeMin, &lengthened) {
+				return fmt.Errorf("%w: the leaderboard freeze cannot change while it runs", ErrNotEditable)
+			}
+			endsAt := current.EndsAt.Add(time.Duration(minutes) * time.Minute)
+			updated.EndsAt = &endsAt
+			updated.LeaderboardFreezeMin = &lengthened
+			freezeLengthened = true
+		default:
 			return ErrFreezeAlreadyReached
 		}
-		updated.EndsAt = current.EndsAt
 	}
 	// ICPC penalty minutes are counted from starts_at at read time
 	// (postgres/leaderboard.go), never stored with a submission — the same
@@ -588,7 +610,7 @@ func checkRunningChange(current Contest, updated *Contest, now time.Time) error 
 		return fmt.Errorf("%w: the timing model cannot change while it runs", ErrNotEditable)
 	case !equalDuration(current.DurationMin, updated.DurationMin):
 		return fmt.Errorf("%w: the session length cannot change while it runs", ErrNotEditable)
-	case !equalDuration(current.LeaderboardFreezeMin, updated.LeaderboardFreezeMin):
+	case !freezeLengthened && !equalDuration(current.LeaderboardFreezeMin, updated.LeaderboardFreezeMin):
 		// Moving the freeze mid-run either opens the live table for a moment
 		// or hides a table participants have already seen. The label below
 		// it is free to change: that is a choice about names, not results.

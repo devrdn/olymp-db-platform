@@ -346,27 +346,143 @@ func TestUpdateExtendsTheWindowOfARunningContest(t *testing.T) {
 	}
 }
 
-// TestUpdateRefusesToMoveEndsAtOnceTheFreezeIsReached: the public and
-// participant leaderboards froze at 11:30 on the strength of a stored
-// ends_at, and moving ends_at now would recompute FreezeAt to a later
-// moment and read the board as live again — showing, for as long as the
-// cache stays stale, results submitted after the freeze that already
-// happened.
-func TestUpdateRefusesToMoveEndsAtOnceTheFreezeIsReached(t *testing.T) {
-	f := conteststest.NewFixture()
+// frozenRunningContest seeds a running contest whose leaderboard freeze has
+// already been reached: SeedContest's EndsAt is FixtureNow+2h, and a 130-minute
+// freeze puts FreezeAt ten minutes before FixtureNow.
+func frozenRunningContest(t *testing.T, f *conteststest.Fixture) contests.Contest {
+	t.Helper()
 	c := f.SeedContest(contests.StatusRunning)
-	// SeedContest's EndsAt is FixtureNow+2h; a 130-minute freeze puts
-	// FreezeAt ten minutes before FixtureNow — already reached.
 	freeze := 130
 	c.LeaderboardFreezeMin = &freeze
 	f.Contests.Put(c)
-	later := f.Now.Add(4 * time.Hour)
+	return c
+}
+
+// TestUpdateExtendsEndsAtAfterTheFreezeWithoutMovingTheFreeze: the freeze is
+// measured back from ends_at, so extending a contest whose table has already
+// frozen must lengthen the freeze by the same amount. The table then stays
+// frozen at the moment it froze, and the organiser still gets the extension a
+// power cut calls for.
+func TestUpdateExtendsEndsAtAfterTheFreezeWithoutMovingTheFreeze(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := frozenRunningContest(t, f)
+	freezeAt, _ := c.FreezeAt()
+	later := c.EndsAt.Add(45 * time.Minute)
+
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &later,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+	if updated.EndsAt == nil || !updated.EndsAt.Equal(later) {
+		t.Errorf("EndsAt = %v, want %v", updated.EndsAt, later)
+	}
+	if updated.LeaderboardFreezeMin == nil || *updated.LeaderboardFreezeMin != 130+45 {
+		t.Errorf("LeaderboardFreezeMin = %v, want %d", updated.LeaderboardFreezeMin, 130+45)
+	}
+	reloaded, err := f.Service.ByID(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	if got, ok := reloaded.FreezeAt(); !ok || !got.Equal(freezeAt) {
+		t.Errorf("stored FreezeAt = %v, want it to stay at %v", got, freezeAt)
+	}
+}
+
+// TestUpdateExtendsEndsAtAfterTheFreezeKeepsTheStoredSeconds: the form sends
+// whole minutes, and the freeze is whole minutes. A stored ends_at with seconds
+// moves by the whole minutes the form's value moved, so the freeze can move by
+// exactly the same amount and the frozen moment stays put to the second.
+func TestUpdateExtendsEndsAtAfterTheFreezeKeepsTheStoredSeconds(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := frozenRunningContest(t, f)
+	withSeconds := c.EndsAt.Truncate(time.Minute).Add(17 * time.Second)
+	c.EndsAt = &withSeconds
+	f.Contests.Put(c)
+	freezeAt, _ := c.FreezeAt()
+
+	fromForm := withSeconds.Truncate(time.Minute).Add(time.Hour)
+	unchanged := 130 // the form resending the freeze it was given
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &fromForm, LeaderboardFreezeMin: &unchanged,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+	if want := withSeconds.Add(time.Hour); updated.EndsAt == nil || !updated.EndsAt.Equal(want) {
+		t.Errorf("EndsAt = %v, want %v", updated.EndsAt, want)
+	}
+	if got, ok := updated.FreezeAt(); !ok || !got.Equal(freezeAt) {
+		t.Errorf("FreezeAt = %v, want it to stay at %v", got, freezeAt)
+	}
+}
+
+// TestUpdateAcceptsAnExtensionThatAlreadyCarriesThePairedFreeze: a client that
+// did the arithmetic itself sends the lengthened freeze along with ends_at,
+// and that is the same change.
+func TestUpdateAcceptsAnExtensionThatAlreadyCarriesThePairedFreeze(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := frozenRunningContest(t, f)
+	later := c.EndsAt.Add(30 * time.Minute)
+	paired := 160
+
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &later, LeaderboardFreezeMin: &paired,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+	if updated.LeaderboardFreezeMin == nil || *updated.LeaderboardFreezeMin != paired {
+		t.Errorf("LeaderboardFreezeMin = %v, want %d", updated.LeaderboardFreezeMin, paired)
+	}
+}
+
+// TestUpdateRefusesToMoveEndsAtEarlierOnceTheFreezeIsReached: pulling the end
+// in after the freeze would need a shorter freeze to keep the frozen moment,
+// and a shorter freeze cannot reach back past a moment that already happened
+// without the table having been frozen for a stretch it was actually live.
+// Only an extension is paired with the freeze.
+func TestUpdateRefusesToMoveEndsAtEarlierOnceTheFreezeIsReached(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := frozenRunningContest(t, f)
+	earlier := c.EndsAt.Add(-5 * time.Minute)
 
 	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
-		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &later,
+		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &earlier,
 	})
 	if !errors.Is(err, contests.ErrFreezeAlreadyReached) {
 		t.Errorf("Update() = %v, want ErrFreezeAlreadyReached", err)
+	}
+}
+
+// TestUpdateRefusesAnExtensionWithAFreezeOtherThanThePairedOne: the freeze
+// itself still cannot move while the contest runs. Only the value that keeps
+// the frozen moment exactly where it is may accompany an extension.
+func TestUpdateRefusesAnExtensionWithAFreezeOtherThanThePairedOne(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := frozenRunningContest(t, f)
+	later := c.EndsAt.Add(30 * time.Minute)
+	another := 200
+
+	for name, cmd := range map[string]contests.UpdateCommand{
+		"another freeze": {LeaderboardFreezeMin: &another},
+		"no freeze":      {ClearLeaderboardFreeze: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cmd.ActorID, cmd.ContestID, cmd.EndsAt = uuid.New(), c.ID, &later
+			_, err := f.Service.Update(context.Background(), cmd)
+			if !errors.Is(err, contests.ErrNotEditable) {
+				t.Errorf("Update() = %v, want ErrNotEditable", err)
+			}
+		})
+	}
+	reloaded, err := f.Service.ByID(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	if !reloaded.EndsAt.Equal(*c.EndsAt) || *reloaded.LeaderboardFreezeMin != 130 {
+		t.Errorf("stored contest = ends %v, freeze %v; a refused change was written", reloaded.EndsAt, *reloaded.LeaderboardFreezeMin)
 	}
 }
 
