@@ -513,8 +513,14 @@ func randomSecret() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+// fixtureHasher hashes the harness's own fixture passwords. It is not the
+// server's hasher — this is a separate process preparing accounts — but it is
+// bounded the same way, so preparing a large cohort does not allocate a
+// digest's memory per account at once.
+var fixtureHasher = password.NewHasher(password.HasherConfig{MaxWait: time.Minute})
+
 func mustHash(secret string) string {
-	hash, err := password.Hash(secret)
+	hash, err := fixtureHasher.Hash(context.Background(), secret)
 	if err != nil {
 		panic(err)
 	}

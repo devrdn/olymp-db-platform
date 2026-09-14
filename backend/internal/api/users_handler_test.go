@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,8 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
+	"github.com/devrdn/db-contest/backend/internal/platform/password"
+	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/users/userstest"
@@ -27,6 +30,7 @@ type apiFixture struct {
 	repo   *userstest.Repository
 	admin  users.User
 	cookie *http.Cookie
+	hasher *password.Hasher
 }
 
 // newAPIFixture mounts the account endpoints behind a session for an account
@@ -52,7 +56,8 @@ func newAPIFixture(t *testing.T, permissions ...string) *apiFixture {
 		Sessions: sessions, Users: repo,
 		Authorizer: rbac.New(noRoles{}), Cookies: auth.NewCookieWriter(false), Logger: log,
 	})
-	service := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{})
+	hasher := passwordtest.NewHasher()
+	service := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}, hasher)
 
 	router := chi.NewRouter()
 	api.NewUsersHandler(service, repo, mw, log).Mount(router)
@@ -62,6 +67,7 @@ func newAPIFixture(t *testing.T, permissions ...string) *apiFixture {
 		repo:   repo,
 		admin:  admin,
 		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		hasher: hasher,
 	}
 }
 
@@ -563,5 +569,35 @@ func TestCreateEndpointAnswersABadRequestForUnusableDetails(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateEndpointReportsBusyHashingWith503(t *testing.T) {
+	// Issuing a password waits for a hashing slot far longer than a sign-in
+	// does, but not past the request: once the caller's own deadline passes,
+	// the answer is the declared "busy", never a 500.
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	for range 4 { // passwordtest.NewHasher's concurrency
+		release, err := f.hasher.Hold(context.Background())
+		if err != nil {
+			t.Fatalf("Hold() returned error: %v", err)
+		}
+		t.Cleanup(release)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/users",
+		strings.NewReader(`{"login":"petrov","full_name":"Pyotr Petrov","roles":["student"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(f.cookie)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "sign_in_busy" {
+		t.Errorf("code = %q, want sign_in_busy", code)
 	}
 }

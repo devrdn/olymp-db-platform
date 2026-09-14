@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/users"
@@ -780,5 +781,24 @@ func TestBulkResetPasswordAbortsWhenTheParallelPhaseFailsRatherThanSkipping(t *t
 	}
 	if after.MustChangePassword {
 		t.Errorf("the account was updated despite the phase failing")
+	}
+}
+
+func TestBulkResetPasswordWaitsLongerThanASignInForAHashingSlot(t *testing.T) {
+	// The same reasoning as an import: the batch is an administrator's, and
+	// refusing it because anonymous sign-ins hold the slots for a moment would
+	// make a routine operation fail under exactly the load it is run during.
+	f := newBulkFixture(t)
+	first := f.createUser(t, "ivanov")
+	service, _, release := busyService(t, f.repo)
+	time.AfterFunc(200*time.Millisecond, release)
+
+	res, err := service.BulkResetPassword(context.Background(), f.admin.ID, []uuid.UUID{first.ID})
+
+	if err != nil {
+		t.Fatalf("BulkResetPassword() = %v, want it to wait for the slot", err)
+	}
+	if len(res.Issued) != 1 {
+		t.Errorf("issued %d passwords, want 1", len(res.Issued))
 	}
 }

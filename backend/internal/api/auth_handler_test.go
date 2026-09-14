@@ -16,6 +16,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
+	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/users/userstest"
@@ -27,6 +28,9 @@ type handlerFixture struct {
 	router http.Handler
 	repo   *userstest.Repository
 	user   users.User
+	// hasher has a single slot and a short wait, so a test can fill it and
+	// see the refusal an overloaded process answers with.
+	hasher *password.Hasher
 }
 
 func newHandlerFixture(t *testing.T) *handlerFixture {
@@ -37,20 +41,19 @@ func newHandlerFixture(t *testing.T) *handlerFixture {
 
 	repo := userstest.New()
 	repo.GrantRole("student")
-	hash, err := password.Hash(testPassword)
-	if err != nil {
-		t.Fatalf("password.Hash() returned error: %v", err)
-	}
+	hash := passwordtest.Hash(t, testPassword)
 	user := repo.Add(users.User{
 		Login: "ivanov", FullName: "Ivan Ivanov", PasswordHash: hash,
 		Status: users.StatusActive, Roles: []string{"student"},
 	})
 
 	log := logging.New("error", io.Discard)
+	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: 50 * time.Millisecond})
 	sessions := auth.NewSessionStore(c, time.Hour)
 	service := auth.NewService(auth.ServiceConfig{
 		Users: repo, Sessions: sessions,
 		Audit: audit.New(&apiSink{}), Limiter: auth.NewLimiter(c), Logger: log,
+		Passwords: hasher,
 	})
 	mw := auth.NewMiddleware(auth.MiddlewareConfig{
 		Sessions: sessions, Users: repo,
@@ -58,9 +61,9 @@ func newHandlerFixture(t *testing.T) *handlerFixture {
 	})
 
 	router := chi.NewRouter()
-	api.NewAuthHandler(service, users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}), repo, mw, auth.NewCookieWriter(false), log).Mount(router)
+	api.NewAuthHandler(service, users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}, hasher), repo, mw, auth.NewCookieWriter(false), log).Mount(router)
 
-	return &handlerFixture{router: router, repo: repo, user: user}
+	return &handlerFixture{router: router, repo: repo, user: user, hasher: hasher}
 }
 
 // post sends a JSON body to the router.
@@ -230,7 +233,7 @@ func TestLoginReportsThrottlingWith429(t *testing.T) {
 
 func TestLoginTellsTheClientAPasswordChangeIsDue(t *testing.T) {
 	f := newHandlerFixture(t)
-	hash, _ := password.Hash(testPassword)
+	hash := passwordtest.Hash(t, testPassword)
 	_ = f.repo.SetPassword(context.Background(), f.user.ID, hash, true)
 
 	rec := f.post("/auth/login", `{"login":"ivanov","password":"`+testPassword+`"}`)
@@ -352,7 +355,7 @@ func TestPasswordChangeEndpointReplacesTheDigest(t *testing.T) {
 		t.Fatalf("status = %d, want 204 (body: %s)", rec.Code, rec.Body.String())
 	}
 	stored, _ := f.repo.Get(f.user.ID)
-	if ok, _ := password.Verify(stored.PasswordHash, "a brand new password"); !ok {
+	if !passwordtest.Matches(t, stored.PasswordHash, "a brand new password") {
 		t.Error("the new password does not verify against the stored digest")
 	}
 }
@@ -415,5 +418,46 @@ func TestPasswordChangeReportsThrottlingWith429(t *testing.T) {
 
 	if rec.Code != http.StatusTooManyRequests {
 		t.Errorf("status = %d, want 429 after repeated wrong current passwords", rec.Code)
+	}
+}
+
+// holdEveryHashingSlot fills the fixture's hasher until the test ends.
+func (f *handlerFixture) holdEveryHashingSlot(t *testing.T) {
+	t.Helper()
+	release, err := f.hasher.Hold(context.Background())
+	if err != nil {
+		t.Fatalf("Hold() returned error: %v", err)
+	}
+	t.Cleanup(release)
+}
+
+func TestLoginReportsBusyHashingWith503(t *testing.T) {
+	// Not 401: the password was never checked, and telling somebody who typed
+	// it correctly that it was wrong sends them to reset a password that works.
+	f := newHandlerFixture(t)
+	f.holdEveryHashingSlot(t)
+
+	rec := f.post("/auth/login", `{"login":"ivanov","password":"`+testPassword+`"}`)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "sign_in_busy" {
+		t.Errorf("code = %q, want sign_in_busy", code)
+	}
+}
+
+func TestPasswordChangeReportsBusyHashingWith503(t *testing.T) {
+	f := newHandlerFixture(t)
+	cookie := f.login(t)
+	f.holdEveryHashingSlot(t)
+
+	rec := f.post("/auth/password", `{"old_password":"`+testPassword+`","new_password":"a brand new password"}`, cookie)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "sign_in_busy" {
+		t.Errorf("code = %q, want sign_in_busy", code)
 	}
 }

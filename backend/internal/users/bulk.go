@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
-	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 )
@@ -417,7 +416,7 @@ func (s *Service) BulkResetPassword(ctx context.Context, actorID uuid.UUID, ids 
 			if err != nil {
 				return err
 			}
-			hash, err := password.Hash(oneTime)
+			hash, err := s.issuing.Hash(groupCtx, oneTime)
 			if err != nil {
 				return fmt.Errorf("hash password: %w", err)
 			}

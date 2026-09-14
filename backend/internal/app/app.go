@@ -29,6 +29,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
+	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/platform/server"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
@@ -311,12 +312,22 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// and one counter type serve every fixed-window rate limit this service
 	// keeps rather than each feature growing its own.
 	limiter := auth.NewLimiter(cacheBackend)
+
+	// The process's one password hasher. Every argon2id computation holds
+	// 64 MiB, so sign-in, password changes and account management share one
+	// bound on how many run at once — two hashers would be two bounds, and
+	// the memory limit in the deployment is sized against exactly one.
+	passwords := password.NewHasher(password.HasherConfig{
+		Concurrency: cfg.PasswordHashConcurrency,
+		MaxWait:     cfg.PasswordHashMaxWait,
+	})
 	authService := auth.NewService(auth.ServiceConfig{
 		Users:                 userRepo,
 		Sessions:              sessions,
 		Audit:                 auditRecorder,
 		Limiter:               limiter,
 		Logger:                log,
+		Passwords:             passwords,
 		MaxAttemptsPerAddress: cfg.MaxLoginAttemptsPerAddress,
 	})
 	authMiddleware := auth.NewMiddleware(auth.MiddlewareConfig{
@@ -326,7 +337,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Cookies:    cookies,
 		Logger:     log,
 	})
-	userService := users.NewService(userRepo, auditRecorder, storage.NewUnitOfWork(pool))
+	userService := users.NewService(userRepo, auditRecorder, storage.NewUnitOfWork(pool), passwords)
 
 	// The game script the contest package carries (contests.GameSource,
 	// Service.ExportPackage). Assigned through a declared interface variable

@@ -1244,6 +1244,7 @@ const ro = {
     account_blocked: "Contul este blocat. Contactați un administrator.",
     password_change_required: "Schimbați parola temporară pentru a continua.",
     too_many_attempts: "Prea multe încercări. Așteptați și încercați din nou.",
+    sign_in_busy: "Sistemul verifică în acest moment prea multe parole. Încercați din nou peste câteva clipe.",
     wrong_password: "Parola curentă este greșită.",
     invalid_password: "Parola nu îndeplinește cerințele.",
     weak_password: "Parola este prea simplă. Faceți-o mai lungă și mai variată.",
