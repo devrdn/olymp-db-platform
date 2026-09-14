@@ -9,6 +9,7 @@ import (
 	"net/mail"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
@@ -43,13 +44,39 @@ type Service struct {
 	repo  Repository
 	audit *audit.Recorder
 	uow   storage.UnitOfWork
+	// passwords checks and sets a password for the account's owner.
+	passwords *password.Hasher
+	// issuing sets the passwords an administrator hands out.
+	issuing *password.Hasher
 }
 
 // NewService assembles the account service. Every multi-write operation runs
 // inside uow, so an action and its audit entry land together or not at all.
-func NewService(repo Repository, recorder *audit.Recorder, uow storage.UnitOfWork) *Service {
-	return &Service{repo: repo, audit: recorder, uow: uow}
+//
+// hasher is the process's one password hasher, shared with sign-in: its bound
+// on concurrent hashing only holds if every caller goes through the same one.
+func NewService(repo Repository, recorder *audit.Recorder, uow storage.UnitOfWork, hasher *password.Hasher) *Service {
+	if hasher == nil {
+		panic("users: NewService needs the shared password hasher")
+	}
+	return &Service{
+		repo: repo, audit: recorder, uow: uow,
+		passwords: hasher,
+		issuing:   hasher.WithMaxWait(administrativeHashWait),
+	}
 }
+
+// administrativeHashWait is how long issuing a password — creating an
+// account, resetting one, a roster import or a bulk reset — waits for a
+// hashing slot, against the sign-in wait of a couple of seconds.
+//
+// These callers are authenticated administrators, their batches are bounded
+// (maxImportRows, MaxBulkAccounts), and an import that gives up halfway
+// through has already shown one-time passwords the response then discards.
+// So they wait, sharing the same slots, rather than being refused because
+// anonymous sign-ins filled them for a moment; the request's own context still
+// ends the wait when the administrator's browser gives up.
+const administrativeHashWait = 30 * time.Second
 
 // CreateCommand describes a new account.
 type CreateCommand struct {
@@ -101,7 +128,7 @@ func (s *Service) Create(ctx context.Context, cmd CreateCommand) (CreateResult, 
 	if err != nil {
 		return CreateResult{}, err
 	}
-	hash, err := password.Hash(oneTime)
+	hash, err := s.issuing.Hash(ctx, oneTime)
 	if err != nil {
 		return CreateResult{}, fmt.Errorf("hash password: %w", err)
 	}
@@ -246,7 +273,12 @@ func (s *Service) ChangePassword(ctx context.Context, cmd ChangePasswordCommand)
 
 	// Proving knowledge of the current password is what stops a borrowed
 	// unlocked browser from becoming a permanent takeover.
-	matched, err := password.Verify(user.PasswordHash, cmd.OldPassword)
+	matched, err := s.passwords.Verify(ctx, user.PasswordHash, cmd.OldPassword)
+	if errors.Is(err, password.ErrBusy) {
+		// Load, not a verdict: telling somebody who typed their password
+		// correctly that they did not would be the wrong answer.
+		return err
+	}
 	if err != nil || !matched {
 		return ErrWrongPassword
 	}
@@ -257,7 +289,7 @@ func (s *Service) ChangePassword(ctx context.Context, cmd ChangePasswordCommand)
 		return ErrSamePassword
 	}
 
-	hash, err := password.Hash(cmd.NewPassword)
+	hash, err := s.passwords.Hash(ctx, cmd.NewPassword)
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}
@@ -293,7 +325,7 @@ func (s *Service) ResetPassword(ctx context.Context, actorID, userID uuid.UUID) 
 	if err != nil {
 		return "", err
 	}
-	hash, err := password.Hash(oneTime)
+	hash, err := s.issuing.Hash(ctx, oneTime)
 	if err != nil {
 		return "", fmt.Errorf("hash password: %w", err)
 	}

@@ -12,7 +12,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
-	"github.com/devrdn/db-contest/backend/internal/platform/password"
+	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/platform/server"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
@@ -318,12 +318,13 @@ func newDeletionFixture(t *testing.T) *deletionFixture {
 
 	authService := auth.NewService(auth.ServiceConfig{
 		Users: repo, Sessions: sessions, Audit: audit.New(&apiSink{}), Limiter: auth.NewLimiter(c), Logger: log,
+		Passwords: passwordtest.NewHasher(),
 	})
 	mw := auth.NewMiddleware(auth.MiddlewareConfig{
 		Sessions: sessions, Users: repo,
 		Authorizer: rbac.New(noRoles{}), Cookies: auth.NewCookieWriter(false), Logger: log,
 	})
-	usersService := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{})
+	usersService := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}, passwordtest.NewHasher())
 
 	router := chi.NewRouter()
 	api.NewUsersHandler(usersService, repo, mw, log).Mount(router)
@@ -369,10 +370,7 @@ func (f *deletionFixture) signIn(login, plaintext string) *httptest.ResponseReco
 // other stays exactly as locked out as the day it was deleted.
 func TestDeletionAndBulkRoundTrip(t *testing.T) {
 	f := newDeletionFixture(t)
-	hash, err := password.Hash(testPassword)
-	if err != nil {
-		t.Fatalf("password.Hash() returned error: %v", err)
-	}
+	hash := passwordtest.Hash(t, testPassword)
 	first := f.repo.Add(users.User{
 		Login: "orlov", FullName: "Orlov", PasswordHash: hash, Status: users.StatusActive,
 	})

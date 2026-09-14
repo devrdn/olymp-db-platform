@@ -7,9 +7,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
+	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/users/userstest"
 	"github.com/google/uuid"
@@ -59,7 +61,7 @@ func newFixture(t *testing.T) *fixture {
 	sink := &collectingSink{}
 	uow := &userstest.SpyUnitOfWork{}
 	return &fixture{
-		service: users.NewService(repo, audit.New(sink), uow),
+		service: users.NewService(repo, audit.New(sink), uow, passwordtest.NewHasher()),
 		repo:    repo,
 		sink:    sink,
 		uow:     uow,
@@ -70,11 +72,7 @@ func newFixture(t *testing.T) *fixture {
 // addUser stores an account with a known password.
 func (f *fixture) addUser(t *testing.T, login, plaintext string) users.User {
 	t.Helper()
-	hash, err := password.Hash(plaintext)
-	if err != nil {
-		t.Fatalf("password.Hash() returned error: %v", err)
-	}
-	return f.repo.Add(users.User{Login: login, FullName: "Test User", PasswordHash: hash})
+	return f.repo.Add(users.User{Login: login, FullName: "Test User", PasswordHash: passwordtest.Hash(t, plaintext)})
 }
 
 func TestCreateStoresTheAccount(t *testing.T) {
@@ -117,8 +115,7 @@ func TestCreateIssuesAOneTimePassword(t *testing.T) {
 		t.Error("the account was not marked as needing a password change")
 	}
 
-	ok, err := password.Verify(stored.PasswordHash, created.OneTimePassword)
-	if err != nil || !ok {
+	if !passwordtest.Matches(t, stored.PasswordHash, created.OneTimePassword) {
 		t.Error("the issued password does not match the stored digest")
 	}
 }
@@ -410,10 +407,10 @@ func TestChangePasswordReplacesTheDigest(t *testing.T) {
 	}
 
 	after, _ := f.repo.Get(user.ID)
-	if ok, _ := password.Verify(after.PasswordHash, "a brand new password"); !ok {
+	if !passwordtest.Matches(t, after.PasswordHash, "a brand new password") {
 		t.Error("the new password does not verify against the stored digest")
 	}
-	if ok, _ := password.Verify(after.PasswordHash, "old password"); ok {
+	if passwordtest.Matches(t, after.PasswordHash, "old password") {
 		t.Error("the old password still works")
 	}
 }
@@ -488,7 +485,7 @@ func TestResetPasswordIssuesANewOneTimePassword(t *testing.T) {
 	}
 
 	after, _ := f.repo.Get(user.ID)
-	if ok, _ := password.Verify(after.PasswordHash, issued); !ok {
+	if !passwordtest.Matches(t, after.PasswordHash, issued) {
 		t.Error("the issued password does not verify against the stored digest")
 	}
 	if !after.MustChangePassword {
@@ -594,11 +591,7 @@ func TestOperationsOnADeletedAccountReportAccountDeleted(t *testing.T) {
 
 func mustHash(t *testing.T, plaintext string) string {
 	t.Helper()
-	hash, err := password.Hash(plaintext)
-	if err != nil {
-		t.Fatalf("password.Hash() returned error: %v", err)
-	}
-	return hash
+	return passwordtest.Hash(t, plaintext)
 }
 
 func TestBootstrapCreatesTheFirstAdministrator(t *testing.T) {
@@ -649,7 +642,7 @@ func TestBootstrapIsIdempotent(t *testing.T) {
 	}
 
 	stored, _ := f.repo.Get(first.User.ID)
-	if ok, _ := password.Verify(stored.PasswordHash, first.OneTimePassword); !ok {
+	if !passwordtest.Matches(t, stored.PasswordHash, first.OneTimePassword) {
 		t.Error("the existing administrator's password was replaced")
 	}
 }
@@ -1161,5 +1154,77 @@ func TestRestoreRefusesWhenTheEmailWasTaken(t *testing.T) {
 
 	if !errors.Is(err, users.ErrEmailTaken) {
 		t.Errorf("Restore() = %v, want ErrEmailTaken", err)
+	}
+}
+
+// busyService is a service whose only hashing slot is already taken, with a
+// sign-in wait short enough that a test can tell it from the longer wait the
+// administrative paths are given.
+func busyService(t *testing.T, repo *userstest.Repository) (*users.Service, *password.Hasher, func()) {
+	t.Helper()
+	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
+	release, err := hasher.Hold(context.Background())
+	if err != nil {
+		t.Fatalf("Hold() returned error: %v", err)
+	}
+	t.Cleanup(release)
+	return users.NewService(repo, audit.New(&collectingSink{}), &userstest.SpyUnitOfWork{}, hasher), hasher, release
+}
+
+func TestChangePasswordReportsBusyHashingRatherThanAWrongPassword(t *testing.T) {
+	// A refusal for load is not a verdict on the password. Reporting it as
+	// ErrWrongPassword would tell somebody who typed their password correctly
+	// that they did not.
+	f := newFixture(t)
+	user := f.addUser(t, "petrov", "old password")
+	service, _, _ := busyService(t, f.repo)
+
+	err := service.ChangePassword(context.Background(), users.ChangePasswordCommand{
+		UserID: user.ID, OldPassword: "old password", NewPassword: "a brand new password",
+	})
+
+	if !errors.Is(err, password.ErrBusy) {
+		t.Errorf("err = %v, want password.ErrBusy", err)
+	}
+	if errors.Is(err, users.ErrWrongPassword) {
+		t.Error("a refusal for load was reported as a wrong password")
+	}
+}
+
+func TestCreateReportsBusyHashingWhenNoSlotComesFree(t *testing.T) {
+	f := newFixture(t)
+	service, _, _ := busyService(t, f.repo)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := service.Create(ctx, users.CreateCommand{ActorID: f.actor, Login: "petrov", FullName: "Pyotr Petrov"})
+
+	if !errors.Is(err, password.ErrBusy) {
+		t.Errorf("err = %v, want password.ErrBusy", err)
+	}
+	if _, err := f.repo.ByLogin(context.Background(), "petrov"); !errors.Is(err, users.ErrNotFound) {
+		t.Error("an account was stored without a password digest")
+	}
+}
+
+func TestImportWaitsLongerThanASignInForAHashingSlot(t *testing.T) {
+	// An administrator's roster is authenticated, bounded and legitimate, and
+	// a refusal halfway through it discards the one-time passwords already
+	// issued. So it waits well past the sign-in wait rather than giving up
+	// the moment anonymous traffic fills the slots.
+	f := newFixture(t)
+	service, _, release := busyService(t, f.repo)
+	time.AfterFunc(200*time.Millisecond, release)
+
+	result, err := service.Import(context.Background(), users.ImportCommand{
+		ActorID: f.actor,
+		Rows:    []users.ImportRow{{Login: "petrov", FullName: "Pyotr Petrov"}},
+	})
+
+	if err != nil {
+		t.Fatalf("Import() = %v, want it to wait for the slot", err)
+	}
+	if len(result.Created) != 1 {
+		t.Errorf("created %d accounts, want 1", len(result.Created))
 	}
 }

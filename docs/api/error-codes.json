@@ -486,6 +486,10 @@
       "meaning": "This contest does not show the game's schema. A rule of this olympiad rather than a missing thing: the organiser closed the catalogues so the shape has to be found by playing, and serving it from the console's panel would hand over exactly what that withholds."
     },
     {
+      "code": "sign_in_busy",
+      "meaning": "The service is already checking as many passwords as it will at once, and none came free in time. The password was not evaluated — neither accepted nor judged wrong, though a sign-in attempt still counts against the attempt limits — so retrying in a moment is the right response. Also answered when issuing or changing a password meets the same limit."
+    },
+    {
       "code": "status_changed",
       "meaning": "Somebody else moved the contest while this request was being decided. Reload and look again; nothing was changed."
     },

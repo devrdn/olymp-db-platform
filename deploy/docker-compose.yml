@@ -369,6 +369,25 @@ services:
       # guesses. Raise it where a whole cohort shares one NAT address; the
       # per-account limit of ten is what stops guessing.
       MAX_LOGIN_ATTEMPTS_PER_ADDRESS: ${MAX_LOGIN_ATTEMPTS_PER_ADDRESS:-300}
+      # How many argon2id computations — sign-in, password changes, issuing
+      # passwords — run at once. Each holds 64 MiB, so this is a memory figure
+      # and the limits below are sized from it; stated here rather than left
+      # to the per-CPU default, which would make the arithmetic depend on the
+      # host. A request that finds every slot taken waits up to
+      # PASSWORD_HASH_MAX_WAIT and is then answered 503 sign_in_busy.
+      PASSWORD_HASH_CONCURRENCY: ${PASSWORD_HASH_CONCURRENCY:-4}
+      PASSWORD_HASH_MAX_WAIT: ${PASSWORD_HASH_MAX_WAIT:-2s}
+      # The Go runtime's soft memory target: it collects harder as the heap
+      # approaches this, instead of growing until the container is killed.
+      #   hashing:  PASSWORD_HASH_CONCURRENCY × 64 MiB = 4 × 64 MiB =  256 MiB
+      #   base:     runtime, connection pools, the in-process session and
+      #             rate-limit cache, console results relayed from the Query
+      #             Runner (QUERY_CONCURRENT + QUERY_QUEUE_DEPTH = 40 of up to
+      #             QUERY_MAX_BYTES = 5 MiB, decoded and re-encoded) and
+      #             8 MiB upload chunks                               = 1024 MiB
+      #   GOMEMLIMIT                                                   = 1280 MiB
+      # Raise PASSWORD_HASH_CONCURRENCY and both figures rise by 64 MiB a slot.
+      GOMEMLIMIT: ${API_GOMEMLIMIT:-1280MiB}
       # The provisioning role, not a participant's: this creates and drops
       # databases and never runs anybody's SQL. The Query Runner holds the
       # participant credentials and this process does not.
@@ -449,6 +468,15 @@ services:
       # organiser stepping away mid-upload does not lose their place, and a
       # browser tab closed mid-upload does not hold gigabytes indefinitely.
       GAME_UPLOAD_ABANDONED_AFTER: ${GAME_UPLOAD_ABANDONED_AFTER:-24h}
+    # The hard ceiling, GOMEMLIMIT above plus 256 MiB: 1280 + 256 = 1536 MiB.
+    # GOMEMLIMIT is a target the collector works towards, not a wall — live
+    # data can briefly exceed it — and the headroom is what lets it do that
+    # without the kernel killing the process, which would end every
+    # participant's session at once. Move it with API_GOMEMLIMIT.
+    deploy:
+      resources:
+        limits:
+          memory: ${API_MEMORY_BYTES:-1610612736}
     # No host port: Caddy is the only way in. The development overlay exposes
     # the API directly for debugging.
     # game-uploads-data is local to this container's own host. It works

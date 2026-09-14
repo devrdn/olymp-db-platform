@@ -48,6 +48,22 @@ describe("SignInForm, a rejected sign-in", () => {
     }
   });
 
+  /**
+   * An overloaded server refuses before checking the password at all. Saying
+   * "wrong login or password" there would send somebody who typed both
+   * correctly off to reset a password that works.
+   */
+  test("tells the visitor to retry when the server is too busy to check", async () => {
+    signInAction.mockResolvedValue({ code: "sign_in_busy" });
+    render(<SignInForm dict={en} />);
+
+    await userEvent.click(screen.getByRole("button", { name: en.auth.signIn.submit }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(en.errors.sign_in_busy);
+    expect(alert).not.toHaveTextContent(en.errors.invalid_credentials);
+  });
+
   test("falls back to a general message for a code the dictionary does not know", async () => {
     signInAction.mockResolvedValue({ code: "meteor_strike" });
     render(<SignInForm dict={en} />);

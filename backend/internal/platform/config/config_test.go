@@ -851,3 +851,61 @@ func apiServiceEnvironment(t *testing.T) map[string]bool {
 	}
 	return keys
 }
+
+func TestPasswordHashConcurrencyIsLeftToThePasswordPackageByDefault(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.PasswordHashConcurrency != 0 {
+		t.Errorf("PasswordHashConcurrency = %d, want 0 (the password package's own default)", cfg.PasswordHashConcurrency)
+	}
+	if cfg.PasswordHashMaxWait != 2*time.Second {
+		t.Errorf("PasswordHashMaxWait = %v, want 2s", cfg.PasswordHashMaxWait)
+	}
+}
+
+func TestPasswordHashingIsConfigurable(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("PASSWORD_HASH_CONCURRENCY", "4")
+	t.Setenv("PASSWORD_HASH_MAX_WAIT", "500ms")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.PasswordHashConcurrency != 4 {
+		t.Errorf("PasswordHashConcurrency = %d, want 4", cfg.PasswordHashConcurrency)
+	}
+	if cfg.PasswordHashMaxWait != 500*time.Millisecond {
+		t.Errorf("PasswordHashMaxWait = %v, want 500ms", cfg.PasswordHashMaxWait)
+	}
+}
+
+func TestPasswordHashingOutsideItsBoundsIsRejected(t *testing.T) {
+	// Each slot is 64 MiB, so the concurrency is a memory figure and has a
+	// ceiling; a wait of zero would refuse every sign-in that meets another
+	// one, and a long wait parks a goroutine per request of a flood.
+	for name, env := range map[string][2]string{
+		"concurrency above the ceiling": {"PASSWORD_HASH_CONCURRENCY", "65"},
+		"negative concurrency":          {"PASSWORD_HASH_CONCURRENCY", "-1"},
+		"zero wait":                     {"PASSWORD_HASH_MAX_WAIT", "0s"},
+		"negative wait":                 {"PASSWORD_HASH_MAX_WAIT", "-1s"},
+		"wait above the ceiling":        {"PASSWORD_HASH_MAX_WAIT", "31s"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+			t.Setenv(env[0], env[1])
+
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() accepted %s=%s, want error", env[0], env[1])
+			} else if !strings.Contains(err.Error(), env[0]) {
+				t.Errorf("error %q does not name %s", err, env[0])
+			}
+		})
+	}
+}

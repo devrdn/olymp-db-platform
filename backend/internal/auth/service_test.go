@@ -56,10 +56,7 @@ func newFixture(t *testing.T) *fixture {
 
 	repo := userstest.New()
 	sink := &collectingSink{}
-	hash, err := password.Hash(testPassword)
-	if err != nil {
-		t.Fatalf("password.Hash() returned error: %v", err)
-	}
+	hash := passwordtest.Hash(t, testPassword)
 	user := repo.Add(users.User{
 		Login:        "ivanov",
 		FullName:     "Ivan Ivanov",
@@ -68,11 +65,12 @@ func newFixture(t *testing.T) *fixture {
 	})
 
 	service := NewService(ServiceConfig{
-		Users:    repo,
-		Sessions: NewSessionStore(c, time.Hour),
-		Audit:    audit.New(sink),
-		Limiter:  NewLimiter(c),
-		Logger:   logging.New("error", io.Discard),
+		Users:     repo,
+		Sessions:  NewSessionStore(c, time.Hour),
+		Audit:     audit.New(sink),
+		Limiter:   NewLimiter(c),
+		Logger:    logging.New("error", io.Discard),
+		Passwords: passwordtest.NewHasher(),
 	})
 
 	return &fixture{service: service, repo: repo, sink: sink, user: user}
@@ -218,7 +216,7 @@ func TestLoginStampsTheLastLoginTime(t *testing.T) {
 func TestLoginSurfacesAOneTimePassword(t *testing.T) {
 	// An administrator-issued password has to end in the user choosing theirs.
 	f := newFixture(t)
-	hash, _ := password.Hash(testPassword)
+	hash := passwordtest.Hash(t, testPassword)
 	_ = f.repo.SetPassword(context.Background(), f.user.ID, hash, true)
 
 	result, err := f.service.Login(context.Background(), loginCmd(testPassword))
@@ -473,6 +471,7 @@ func TestAddressThrottleIsSpentBeforeAccountCountersAreCreated(t *testing.T) {
 		Audit:                 audit.New(&collectingSink{}),
 		Limiter:               NewLimiter(c),
 		Logger:                logging.New("error", io.Discard),
+		Passwords:             passwordtest.NewHasher(),
 		MaxAttemptsPerAddress: 2,
 	})
 	ctx := context.Background()
@@ -502,11 +501,12 @@ func TestAnOverlongLoginNeverBecomesARateLimitKey(t *testing.T) {
 	t.Cleanup(func() { _ = c.Close() })
 
 	service := NewService(ServiceConfig{
-		Users:    userstest.New(),
-		Sessions: NewSessionStore(c, time.Hour),
-		Audit:    audit.New(&collectingSink{}),
-		Limiter:  NewLimiter(c),
-		Logger:   logging.New("error", io.Discard),
+		Users:     userstest.New(),
+		Sessions:  NewSessionStore(c, time.Hour),
+		Audit:     audit.New(&collectingSink{}),
+		Limiter:   NewLimiter(c),
+		Logger:    logging.New("error", io.Discard),
+		Passwords: passwordtest.NewHasher(),
 	})
 
 	overlong := strings.Repeat("a", users.MaxLoginLength+1)
@@ -542,5 +542,63 @@ func TestPasswordChangeIsThrottledPerAccount(t *testing.T) {
 	f.service.ClearPasswordChangeThrottle(ctx, f.user.ID)
 	if err := f.service.AllowPasswordChange(ctx, f.user.ID); err != nil {
 		t.Errorf("AllowPasswordChange() after a reset = %v, want nil", err)
+	}
+}
+
+func TestASignInThatCannotGetAHashingSlotIsRefusedAndStillCounted(t *testing.T) {
+	// Every verification holds 64 MiB, so the hasher admits a bounded number
+	// at once. An attempt that finds every slot taken is refused within the
+	// wait rather than queued — and it has already spent its address budget:
+	// a refusal that cost the caller nothing could be retried at no cost.
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+	repo := userstest.New()
+	repo.Add(users.User{
+		Login: "ivanov", FullName: "Ivan Ivanov", Status: users.StatusActive,
+		PasswordHash: passwordtest.Hash(t, testPassword),
+	})
+
+	const wait = 50 * time.Millisecond
+	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: wait})
+	sink := &collectingSink{}
+	service := NewService(ServiceConfig{
+		Users:                 repo,
+		Sessions:              NewSessionStore(c, time.Hour),
+		Audit:                 audit.New(sink),
+		Limiter:               NewLimiter(c),
+		Logger:                logging.New("error", io.Discard),
+		Passwords:             hasher,
+		MaxAttemptsPerAddress: 1,
+	})
+
+	release, err := hasher.Hold(context.Background())
+	if err != nil {
+		t.Fatalf("Hold() returned error: %v", err)
+	}
+
+	started := time.Now()
+	_, err = service.Login(context.Background(), loginCmd(testPassword))
+	elapsed := time.Since(started)
+	release()
+
+	if !errors.Is(err, password.ErrBusy) {
+		t.Fatalf("Login() with every hashing slot held = %v, want password.ErrBusy", err)
+	}
+	if errors.Is(err, ErrInvalidCredentials) {
+		t.Error("a refusal for load was reported as wrong credentials")
+	}
+	if elapsed > wait+time.Second {
+		t.Errorf("Login() took %v, far past the %v wait", elapsed, wait)
+	}
+	for _, entry := range sink.entries {
+		if entry.Action == audit.ActionAuthLoginFailed && entry.Payload["reason"] == ReasonInvalidCredentials {
+			t.Error("the refused attempt was recorded as a wrong password")
+		}
+	}
+
+	// The slot is free again, and the address budget of one is already spent
+	// by the refused attempt.
+	if _, err := service.Login(context.Background(), loginCmd(testPassword)); !errors.Is(err, ErrTooManyAttempts) {
+		t.Errorf("the next attempt = %v, want ErrTooManyAttempts: the refusal was not counted", err)
 	}
 }

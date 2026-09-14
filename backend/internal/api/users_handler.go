@@ -11,6 +11,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
+	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/go-chi/chi/v5"
@@ -544,6 +545,13 @@ func (h *UsersHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
 	case errors.Is(err, users.ErrWeakPassword), errors.Is(err, users.ErrSamePassword):
 		httpx.Error(w, r, http.StatusBadRequest, codeInvalidPassword, err.Error())
+	case errors.Is(err, password.ErrBusy):
+		// Issuing a password waits far longer for a hashing slot than a
+		// sign-in does, and still ran out — or the administrator's request
+		// ended first. The operation stops there: a single change writes
+		// nothing, and an import keeps the rows it had already created, as it
+		// does for any other failure partway through a roster.
+		busy(w, r)
 	default:
 		h.log.ErrorContext(r.Context(), "account operation failed", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
