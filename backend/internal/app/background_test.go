@@ -460,7 +460,7 @@ func TestWhichBackgroundJobsRunAtStartup(t *testing.T) {
 		why     string
 	}{
 		{
-			job:     tendPools(quiet(), nil, provisioning.PoolLimits{Headroom: 5, MaxCopies: 100}),
+			job:     tendPools(quiet(), nil, provisioning.PoolLimits{Headroom: 5, MaxCopies: 100}, nil),
 			atStart: true,
 			why:     "a pool left untended for ten minutes is every participant waiting for CREATE DATABASE",
 		},
@@ -523,5 +523,90 @@ func TestTheStaleBuildCutOffOutlastsWhateverBudgetABuildWasGiven(t *testing.T) {
 			t.Errorf("GAME_BUILD_TIMEOUT=%s: a build is reclaimed after %s, "+
 				"so one still inside its own budget is claimed a second time", budget, asked)
 		}
+	}
+}
+
+// A trigger (see provisioning.Tender) is a second way to run a job besides
+// its own tick. The interval here is an hour, so nothing but a send on wake
+// can make this pass before the test's own deadline.
+func TestATriggerRunsTheJobBeforeItsNextTick(t *testing.T) {
+	wake := make(chan struct{}, 1)
+	ran := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go runPeriodically(ctx, quiet(), task{
+		name:  "tender",
+		every: time.Hour,
+		wake:  wake,
+		run:   func(context.Context) error { ran <- struct{}{}; return nil },
+	})
+
+	wake <- struct{}{}
+
+	select {
+	case <-ran:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a trigger did not run the job before its own interval")
+	}
+}
+
+// A job that never sets wake (every job but the pool tender) must not be
+// affected by this at all — runPeriodically has to leave a nil channel out
+// of its select without a nil-channel panic or a spurious run.
+func TestAJobWithNoTriggerWiredIsUnaffected(t *testing.T) {
+	var runs atomic.Int64
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go runPeriodically(ctx, quiet(), task{
+		name:  "no-trigger",
+		every: time.Hour,
+		run:   func(context.Context) error { runs.Add(1); return nil },
+	})
+
+	time.Sleep(200 * time.Millisecond)
+	if got := runs.Load(); got != 0 {
+		t.Fatalf("a job with no trigger and an hour-long interval ran %d times", got)
+	}
+}
+
+// The pool tender's cadence is now a minute rather than the ten minutes it
+// used to be — Live already narrows every tick to published or running
+// contests, so the shorter interval costs nothing on any other contest.
+func TestTendPoolsTicksEveryMinute(t *testing.T) {
+	job := tendPools(quiet(), nil, provisioning.PoolLimits{}, nil)
+
+	if job.every != time.Minute {
+		t.Fatalf("tendPools interval = %s, want 1 minute", job.every)
+	}
+}
+
+// tendPools must wire a tender's own channel through as the task's wake, so
+// runPeriodically's select actually listens for it — the coalescing and
+// non-blocking guarantees are provisioning.Tender's own (see
+// internal/provisioning/tender_test.go); this only has to prove the two are
+// actually connected.
+func TestTendPoolsWiresTheTendersWakeChannel(t *testing.T) {
+	tender := provisioning.NewTender()
+	job := tendPools(quiet(), nil, provisioning.PoolLimits{}, tender)
+
+	tender.Trigger(uuid.New())
+
+	select {
+	case <-job.wake:
+	case <-time.After(time.Second):
+		t.Fatal("tendPools' task did not wire the tender's own wake channel")
+	}
+}
+
+// A pool tender built with no Tender at all (an installation with no game
+// cluster never makes one) must not panic — job.wake is simply nil, which a
+// select never selects.
+func TestTendPoolsWithNoTenderIsUnaffected(t *testing.T) {
+	job := tendPools(quiet(), nil, provisioning.PoolLimits{}, nil)
+
+	if job.wake != nil {
+		t.Fatalf("wake = %v, want nil with no tender wired", job.wake)
 	}
 }

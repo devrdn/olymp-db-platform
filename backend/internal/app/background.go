@@ -31,7 +31,14 @@ type task struct {
 	// decisions are taken correctly one interval later. See each job below
 	// for its own answer.
 	atStart bool
-	run     func(context.Context) error
+	// wake, when set, is a second way to run this job right now, besides its
+	// own interval: a send on it (from outside the loop, see
+	// provisioning.Tender) runs the job immediately, in addition to whatever
+	// tick comes next. nil for every job except the pool tender — a nil
+	// channel is never selected, so runPeriodically needs no branch for a
+	// job that never sets this.
+	wake <-chan struct{}
+	run  func(context.Context) error
 }
 
 // runPeriodically runs the task until the context is cancelled.
@@ -60,6 +67,11 @@ func runPeriodically(ctx context.Context, log *slog.Logger, t task) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			runOnce(ctx, log, t)
+		case <-t.wake:
+			// Somebody asked for this sooner than the interval — a
+			// registration or a scheduler transition, for the one job that
+			// sets this (tendPools). Runs the same body a tick would.
 			runOnce(ctx, log, t)
 		}
 	}
@@ -159,9 +171,20 @@ func advanceContestSchedule(log *slog.Logger, advance func(context.Context) (int
 //
 // The background half of section 4.2, and the reason a participant arriving
 // mid-contest does not wait: CREATE DATABASE happens here, on a timer, while
-// nothing depends on it. Every ten minutes rather than every minute — a pool
-// drains at the speed people register, which is not a per-minute event, and
-// each tick may create databases.
+// nothing depends on it. Every minute rather than the ten minutes this used
+// to be — Live already narrows this job to contests that are published or
+// running, so a shorter cadence costs nothing on every other contest, and a
+// tick that finds every pool already deep enough costs one query per live
+// contest either way.
+//
+// Between ticks, tender — when the caller supplies one (see internal/app.go's
+// own wiring) — lets two events skip the wait entirely rather than trim it to
+// a minute: the scheduler moving a contest to running, and a roster growing
+// on one that is published or running (contests.Scheduler and
+// contests.Service, both through the same provisioning.Tender). Both fire
+// after their own transaction commits and never block on this job actually
+// running, which is what makes triggering them safe from a request handler
+// and from the scheduler's own advisory-locked tick alike.
 //
 // How deep is its own roster's answer rather than a flat number — see
 // provisioning.Service.RosterDepth, and the two bounds it is cut back to.
@@ -172,19 +195,23 @@ func advanceContestSchedule(log *slog.Logger, advance func(context.Context) (int
 // the line carries the measurements rather than only the outcome — "the pool
 // stopped growing" is a support ticket, and the numbers beside it are the
 // answer to it.
-func tendPools(log *slog.Logger, service *provisioning.Service, limits provisioning.PoolLimits) task {
+func tendPools(log *slog.Logger, service *provisioning.Service, limits provisioning.PoolLimits, tender *provisioning.Tender) task {
+	var wake <-chan struct{}
+	if tender != nil {
+		wake = tender.C()
+	}
 	return task{
 		name: "game-pool",
-		// The job this was added for. Ten minutes is a long time to be idle
-		// about a pool: an API restarted five minutes before a contest opens
-		// used to do nothing until five minutes after it opened, and what
-		// waits on that is every participant, for CREATE DATABASE, inside
-		// their own page load — on a ten-connection pool whose statement
-		// timeout is ten minutes. A tick that finds every pool already deep
-		// enough costs one query per live contest, which is what makes this
-		// safe to do at boot rather than something to be careful about.
+		// The job this was added for. A pool left idle even for a minute
+		// after an API restart is every participant, for CREATE DATABASE,
+		// inside their own page load — on a ten-connection pool whose
+		// statement timeout is ten minutes. A tick that finds every pool
+		// already deep enough costs one query per live contest, which is
+		// what makes this safe to do at boot rather than something to be
+		// careful about.
 		atStart: true,
-		every:   10 * time.Minute,
+		every:   time.Minute,
+		wake:    wake,
 		run: func(ctx context.Context) error {
 			depth := service.RosterDepth(limits, func(ctx context.Context, contest provisioning.Contest, sizing provisioning.Sizing) {
 				// Warning and not info: a pool short of its roster means
