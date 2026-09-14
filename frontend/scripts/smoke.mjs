@@ -36,7 +36,16 @@ try {
 // starts next-server as a child; killing only serve.mjs left that child
 // running, reparented, holding the port.
 const server = spawn(process.execPath, ["scripts/serve.mjs"], {
-  env: { ...process.env, PORT, API_ORIGIN, COOKIE_SECURE: "false", NODE_ENV: "production" },
+  // No proxy in front, so nothing for INGRESS_SECRET to prove: the explicit
+  // local flag lets the production entry point start without it.
+  env: {
+    ...process.env,
+    PORT,
+    API_ORIGIN,
+    COOKIE_SECURE: "false",
+    NODE_ENV: "production",
+    ALLOW_MISSING_INGRESS_SECRET: "true",
+  },
   stdio: ["ignore", "pipe", "pipe"],
   detached: true,
 });

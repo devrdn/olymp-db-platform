@@ -1,5 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 
+import { MIN_INGRESS_SECRET_LENGTH } from "./ingress-secret.mjs";
+
 /**
  * The headers that carry who is really asking, from the browser's request to
  * this server's own request against the API.
@@ -28,11 +30,6 @@ import { createHash, timingSafeEqual } from "node:crypto";
 /** The header the ingress proxy proves itself with. Lower case, as Node reads it. */
 export const INGRESS_HEADER = "x-ingress-secret";
 
-/**
- * A secret shorter than this is treated as no secret: nothing is vouched for.
- * The same 256-bit floor the backend's shared secrets use.
- */
-export const MIN_INGRESS_SECRET_LENGTH = 32;
 
 /**
  * Whether the presented value is the configured ingress secret.
