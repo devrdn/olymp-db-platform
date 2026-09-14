@@ -73,8 +73,9 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}()
 
 	// The core database is the one hard dependency: without it there are no
-	// users, contests or answers to serve.
-	pool, err := storage.NewPool(ctx, cfg.CoreDBDSN)
+	// users, contests or answers to serve. Sized by CoreDBPoolMax when the
+	// deployment set one; zero keeps storage's own default.
+	pool, err := storage.NewPoolWithMaxConns(ctx, cfg.CoreDBDSN, int32(cfg.CoreDBPoolMax)) // #nosec G115 -- config.Load bounds CoreDBPoolMax to [0, maxCoreDBPoolMax], well within int32.
 	if err != nil {
 		return nil, err
 	}

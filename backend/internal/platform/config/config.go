@@ -134,6 +134,13 @@ func queryRunnerToken(env string, required bool) (string, error) {
 // maxLoginAttemptsCeiling bounds MAX_LOGIN_ATTEMPTS_PER_ACCOUNT.
 const maxLoginAttemptsCeiling = 100_000
 
+// maxCoreDBPoolMax bounds CORE_DB_POOL_MAX at pg-core's own default
+// max_connections (deploy/docker-compose.yml). A value past it could not be
+// honoured by the cluster anyway, and raising the ceiling is a deliberate
+// code change alongside raising that cluster's own setting, not an operator
+// typo away.
+const maxCoreDBPoolMax = 100
+
 // validLogLevels mirrors the levels understood by the logging package.
 var validLogLevels = []string{"debug", "info", "warn", "error"}
 
@@ -151,6 +158,13 @@ type Config struct {
 	ShutdownTimeout time.Duration
 	// CoreDBDSN is required: the service has nothing to serve without it.
 	CoreDBDSN string
+	// CoreDBPoolMax overrides how many connections the API keeps open to the
+	// core database (storage.defaultMaxConns otherwise). Zero leaves it to
+	// that default. Bounded by maxCoreDBPoolMax so a mistyped value cannot
+	// ask Postgres for more connections than pg-core's own max_connections
+	// allows once migrations, bootstrap and an operator's own psql are
+	// counted too (see deploy/docker-compose.yml).
+	CoreDBPoolMax int
 	// RedisAddr is optional. Empty selects the in-process cache, which is
 	// correct for a single instance and wrong for several (see the cache
 	// package).
@@ -412,6 +426,16 @@ func Load() (Config, error) {
 	var err error
 	if cfg.CoreDBDSN, err = requiredEnv("CORE_DB_DSN"); err != nil {
 		return Config{}, err
+	}
+	// Zero leaves the pool's own default in place (storage.PoolConfig);
+	// bounded because a value the core cluster's own max_connections cannot
+	// honour is not a size, it is a startup that will fail under load instead
+	// of at boot.
+	if cfg.CoreDBPoolMax, err = intEnv("CORE_DB_POOL_MAX", 0); err != nil {
+		return Config{}, err
+	}
+	if cfg.CoreDBPoolMax < 0 || cfg.CoreDBPoolMax > maxCoreDBPoolMax {
+		return Config{}, fmt.Errorf("CORE_DB_POOL_MAX: %d is outside [0, %d]", cfg.CoreDBPoolMax, maxCoreDBPoolMax)
 	}
 	cfg.RedisAddr = os.Getenv("REDIS_ADDR")
 	cfg.MetricsBackend = envOrDefault("METRICS_BACKEND", "prometheus")
