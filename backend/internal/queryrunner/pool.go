@@ -70,8 +70,8 @@ type dialer func(ctx context.Context, database string, write bool, readBudget in
 //
 // A write to a database closes the read connection kept for it before dialling
 // its own: a write never takes a kept connection (it runs as the writer), and
-// the runner holding two to one instance would leave the schema panel no room
-// under CONNECTION LIMIT 2.
+// the runner holding two to one instance would use up its CONNECTION LIMIT 2,
+// leaving no headroom for a backend still exiting.
 //
 // Only a read that finished cleanly returns its connection, and only after
 // the session is reset (release). A write, a query that failed, and one that
