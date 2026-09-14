@@ -593,3 +593,134 @@ func TestRosterImportRefusesMoreEntriesThanTheBound(t *testing.T) {
 		t.Errorf("AddParticipants() = %v, want ErrRosterTooLarge", err)
 	}
 }
+
+// TestEnrollTriggersThePoolTenderOnSuccess is P-C1's own claim for
+// self-signup: a student joining a published or running contest wakes the
+// game pool's background tender rather than leaving a late registration
+// unreflected in any spare copy until its own next tick.
+func TestEnrollTriggersThePoolTenderOnSuccess(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+	c.Enrollment = contests.EnrollmentOpen
+	f.Contests.Put(c)
+	student := f.AddUser("s.popescu")
+
+	if _, err := f.Service.Enroll(context.Background(), contests.EnrollCommand{
+		UserID: student.ID, ContestID: c.ID, Address: netip.MustParseAddr("10.20.30.40"),
+	}); err != nil {
+		t.Fatalf("Enroll() = %v", err)
+	}
+
+	if len(f.PoolTrigger.Triggered) != 1 || f.PoolTrigger.Triggered[0] != c.ID {
+		t.Fatalf("triggered = %v, want exactly [%s]", f.PoolTrigger.Triggered, c.ID)
+	}
+}
+
+// A refused enrollment must not wake anything: nothing about the pool's
+// roster changed, and triggering on a refusal would be extra housekeeping
+// work for every probe of a closed contest.
+func TestEnrollDoesNotTriggerThePoolTenderOnRefusal(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished) // invite-only by default
+	student := f.AddUser("s.popescu")
+
+	_, err := f.Service.Enroll(context.Background(), contests.EnrollCommand{
+		UserID: student.ID, ContestID: c.ID, Address: netip.MustParseAddr("10.20.30.40"),
+	})
+	if !errors.Is(err, contests.ErrEnrollmentClosed) {
+		t.Fatalf("Enroll() = %v, want ErrEnrollmentClosed", err)
+	}
+	if len(f.PoolTrigger.Triggered) != 0 {
+		t.Fatalf("triggered = %v, want none for a refused enrollment", f.PoolTrigger.Triggered)
+	}
+}
+
+// A deployment with no game cluster wires no trigger at all — Service must
+// not panic reaching for one that was never set.
+func TestEnrollWithNoPoolTriggerWiredStillWorks(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+	c.Enrollment = contests.EnrollmentOpen
+	f.Contests.Put(c)
+	student := f.AddUser("s.popescu")
+	f.Service = contests.NewService(contests.ServiceConfig{
+		Contests: f.Contests, Stories: f.Stories, Questions: f.Questions, Managers: f.Managers,
+		Registrations: f.Registrations, Policies: f.Policies, Languages: f.Languages,
+		Users: f.Users, Audit: audit.New(f.Audit), UnitOfWork: f.UnitOfWork,
+		Now: func() time.Time { return f.Now },
+		// PoolTrigger deliberately left unset.
+	})
+
+	if _, err := f.Service.Enroll(context.Background(), contests.EnrollCommand{
+		UserID: student.ID, ContestID: c.ID, Address: netip.MustParseAddr("10.20.30.40"),
+	}); err != nil {
+		t.Fatalf("Enroll() with no pool trigger wired = %v", err)
+	}
+}
+
+// TestAddParticipantsTriggersThePoolTenderOnceForTheWholeImport is P-C1's own
+// claim for a staff-side roster: importing several people into a running
+// contest wakes the tender exactly once, not once per row — a burst that
+// large is exactly what the coalescing trigger exists to absorb into one
+// extra tend, not into a trigger per participant.
+func TestAddParticipantsTriggersThePoolTenderOnceForTheWholeImport(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+	f.AddUser("s.popescu")
+	f.AddUser("s.ionescu")
+
+	result, err := f.Service.AddParticipants(context.Background(), contests.AddParticipantsCommand{
+		ActorID: uuid.New(), ContestID: c.ID, Logins: []string{"s.popescu", "s.ionescu"},
+	})
+	if err != nil {
+		t.Fatalf("AddParticipants() = %v", err)
+	}
+	if result.Added != 2 {
+		t.Fatalf("added = %d, want 2", result.Added)
+	}
+	if len(f.PoolTrigger.Triggered) != 1 || f.PoolTrigger.Triggered[0] != c.ID {
+		t.Fatalf("triggered = %v, want exactly one trigger for %s", f.PoolTrigger.Triggered, c.ID)
+	}
+}
+
+// A draft has no participants querying it yet, and the ordinary tick before
+// it publishes is plenty — importing a roster onto one must not wake
+// anything.
+func TestAddParticipantsDoesNotTriggerThePoolTenderForADraftContest(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusDraft)
+	f.AddUser("s.popescu")
+
+	result, err := f.Service.AddParticipants(context.Background(), contests.AddParticipantsCommand{
+		ActorID: uuid.New(), ContestID: c.ID, Logins: []string{"s.popescu"},
+	})
+	if err != nil {
+		t.Fatalf("AddParticipants() = %v", err)
+	}
+	if result.Added != 1 {
+		t.Fatalf("added = %d, want 1", result.Added)
+	}
+	if len(f.PoolTrigger.Triggered) != 0 {
+		t.Fatalf("triggered = %v, want none for a draft contest", f.PoolTrigger.Triggered)
+	}
+}
+
+// A roster where every entry was skipped changed nothing about the pool's
+// roster count, so nothing should wake it.
+func TestAddParticipantsDoesNotTriggerThePoolTenderWhenNothingWasAdded(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+
+	result, err := f.Service.AddParticipants(context.Background(), contests.AddParticipantsCommand{
+		ActorID: uuid.New(), ContestID: c.ID, Logins: []string{"nobody.such"},
+	})
+	if err != nil {
+		t.Fatalf("AddParticipants() = %v", err)
+	}
+	if result.Added != 0 {
+		t.Fatalf("added = %d, want 0", result.Added)
+	}
+	if len(f.PoolTrigger.Triggered) != 0 {
+		t.Fatalf("triggered = %v, want none when nothing was actually added", f.PoolTrigger.Triggered)
+	}
+}

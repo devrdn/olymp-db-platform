@@ -132,11 +132,25 @@ type Scheduler struct {
 	// finish check agrees with theirs about when a contest's window
 	// actually closes.
 	grace time.Duration
+	// poolTrigger asks the game pool to be tended again soon for every
+	// contest this tick moves to running (see PoolTrigger's own doc). nil
+	// until WithPoolTrigger, which is the state of every test that predates
+	// it and of an installation with no game cluster at all.
+	poolTrigger PoolTrigger
 }
 
 // NewScheduler assembles the background scheduler.
 func NewScheduler(repo ScheduleRepository, stories scheduleStories, questions scheduleQuestions, blocked blockedContests, auditRecorder *audit.Recorder, uow storage.UnitOfWork, grace time.Duration) *Scheduler {
 	return &Scheduler{repo: repo, stories: stories, questions: questions, blocked: blocked, audit: auditRecorder, uow: uow, grace: grace}
+}
+
+// WithPoolTrigger wires the trigger Advance fires for every contest it moves
+// to running. Optional, the same way provisioning.Service's own With methods
+// are: a Scheduler built without one — every test that predates this, and
+// any installation with no game cluster — simply never triggers.
+func (s *Scheduler) WithPoolTrigger(trigger PoolTrigger) *Scheduler {
+	s.poolTrigger = trigger
+	return s
 }
 
 // checkPublishable is the body behind both Service.checkPublishable and
@@ -203,6 +217,12 @@ func checkPublishable(ctx context.Context, stories scheduleStories, questions sc
 // nothing's window has turned or because another replica already had this
 // one.
 func (s *Scheduler) Advance(ctx context.Context) (started, finished int, err error) {
+	// Collected inside the transaction below and only ever acted on once it
+	// has committed (see the trigger loop after uow.Do): a contest counted
+	// here that the transaction then rolls back — the audit sink failing,
+	// say — must not wake the pool tender for a move that never happened.
+	var startedContests []uuid.UUID
+
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
 		ok, err := s.repo.TryLock(ctx)
 		if err != nil {
@@ -253,6 +273,7 @@ func (s *Scheduler) Advance(ctx context.Context) (started, finished int, err err
 				return fmt.Errorf("start contest %s: %w", c.ID, err)
 			}
 			started++
+			startedContests = append(startedContests, c.ID)
 			entries = append(entries, scheduleEntry(c.ID, StatusPublished, StatusRunning))
 		}
 
@@ -270,6 +291,15 @@ func (s *Scheduler) Advance(ctx context.Context) (started, finished int, err err
 		}
 		return s.audit.RecordMany(ctx, entries)
 	})
+	if err == nil && s.poolTrigger != nil {
+		// After commit, off this tick's own transaction: a participant who
+		// registered for this contest before it started waits behind
+		// nothing now, rather than up to a full tender interval — see
+		// PoolTrigger's own doc.
+		for _, id := range startedContests {
+			s.poolTrigger.Trigger(id)
+		}
+	}
 	return started, finished, err
 }
 
