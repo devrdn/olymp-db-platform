@@ -3,7 +3,6 @@
 import { useActionState, useEffect, useState } from "react";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 
 import { GridCells, GridHeaderCells, gridTableWidth, ICPC_COLUMN, Initials, medalEdge, PlaceBadge } from "@/components/product/standings";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -21,10 +20,10 @@ import { formatTime } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
-import { revealStandingsAction, type RevealState } from "./actions";
+import { fetchStaffStandingsAction, revealStandingsAction, type RevealState } from "./actions";
 
 /** How often a running contest's staff table asks the server again. */
-const STAFF_REFRESH_MS = 15_000;
+export const STAFF_REFRESH_MS = 15_000;
 
 /**
  * The contest's live table as its staff see it: both names, the disqualified
@@ -35,7 +34,7 @@ const STAFF_REFRESH_MS = 15_000;
 export function StaffStandingsView({
   contestId,
   status,
-  standings,
+  standings: initial,
   dict,
   locale,
 }: {
@@ -46,17 +45,45 @@ export function StaffStandingsView({
   locale: string;
 }) {
   const t = dict.leaderboard;
-  const router = useRouter();
+  const [standings, setStandings] = useState(initial);
+  const [failed, setFailed] = useState(false);
+  // Tracked so a fresh server-rendered `initial` (a real navigation, or the
+  // reveal action's own revalidatePath) can replace whatever the poll below
+  // last read. Adjusted during render rather than from an effect — the
+  // pattern React's own docs give for resetting state when a prop changes —
+  // so a new copy is not one extra render behind the prop that carries it.
+  const [renderedInitial, setRenderedInitial] = useState(initial);
+  if (initial !== renderedInitial) {
+    setRenderedInitial(initial);
+    setStandings(initial);
+    setFailed(false);
+  }
 
-  // A running contest's table moves; the page is a server component, so the
-  // freshest copy is a refresh away. Nothing else here changes by itself.
+  // A running contest's table moves, so it is asked for again on its own —
+  // but only for itself: a plain fetch of the standings endpoint
+  // (fetchStaffStandingsAction), not router.refresh() of the whole contest
+  // layout, which would re-run the contest lookup, the publish check and the
+  // questions list on every poll for a table that is the only thing that
+  // actually changed.
   useEffect(() => {
     if (status !== "running") return;
-    const timer = setInterval(() => {
-      if (!document.hidden) router.refresh();
+    let cancelled = false;
+    const timer = setInterval(async () => {
+      if (document.hidden) return;
+      const result = await fetchStaffStandingsAction(contestId);
+      if (cancelled) return;
+      if (result.kind === "ok") {
+        setStandings(result.standings);
+        setFailed(false);
+      } else {
+        setFailed(true);
+      }
     }, STAFF_REFRESH_MS);
-    return () => clearInterval(timer);
-  }, [status, router]);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [status, contestId]);
 
   const revealable =
     (status === "finished" || status === "archived") && standings.freezeMin !== null && !standings.revealedAt;
@@ -82,6 +109,8 @@ export function StaffStandingsView({
           {revealable ? <Reveal contestId={contestId} dict={dict} /> : null}
         </div>
       </div>
+
+      {failed ? <p className="text-small text-warn">{t.failed}</p> : null}
 
       {standings.revealedAt ? (
         <p className="font-mono text-label text-gold uppercase">
