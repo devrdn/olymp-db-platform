@@ -12,6 +12,7 @@ type EventsSnapshot = {
   deadlineRef: { current: number | null | undefined };
   phase: ContestPhase;
   channelError?: string | null;
+  resync?: () => void;
 };
 
 // The hook itself is tested on its own (use-contest-events.test.ts); this
@@ -22,6 +23,7 @@ const events = vi.hoisted(() => ({
 }));
 vi.mock("./use-contest-events", () => ({ useContestEvents: () => events.current }));
 
+import { ContentLoadedProvider, ContentLoadedSignal } from "./content-loaded";
 import { PlayHeader } from "./play-header";
 
 beforeEach(() => {
@@ -78,6 +80,46 @@ describe("PlayHeader", () => {
 
     expect(screen.getByRole("timer")).toHaveTextContent(en.participant.play.clock.syncing);
     expect(screen.getByRole("timer")).not.toHaveTextContent(en.participant.play.clock.notStarted);
+  });
+
+  // The page's own content reads start an individual participant's clock on
+  // the server, possibly after the channel's first sync said there was no
+  // deadline yet. Once the workspace has loaded, that sync is stale: the clock
+  // asks for one fresh sync, once, and says it is synchronising meanwhile
+  // rather than claiming the countdown has not started.
+  test("once the workspace has loaded, a sync with no deadline reads as synchronising and asks for one resync", () => {
+    const resync = vi.fn();
+    events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running", resync };
+    const { rerender } = render(
+      <ContentLoadedProvider>
+        <PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />
+        <ContentLoadedSignal />
+      </ContentLoadedProvider>,
+    );
+
+    expect(screen.getByRole("timer")).not.toHaveTextContent(en.participant.play.clock.notStarted);
+    expect(screen.getByRole("timer")).toHaveTextContent(en.participant.play.clock.syncing);
+    expect(resync).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <ContentLoadedProvider>
+        <PlayHeader contestId="c1" title="Y" waitingForStart={false} dict={en} />
+        <ContentLoadedSignal />
+      </ContentLoadedProvider>,
+    );
+    expect(resync).toHaveBeenCalledTimes(1);
+  });
+
+  test("asks for no resync before the workspace has loaded", () => {
+    const resync = vi.fn();
+    events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running", resync };
+    render(
+      <ContentLoadedProvider>
+        <PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />
+      </ContentLoadedProvider>,
+    );
+
+    expect(resync).not.toHaveBeenCalled();
   });
 
   test("says a deadline has not started rather than showing a blank clock", () => {
