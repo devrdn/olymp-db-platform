@@ -795,3 +795,32 @@ func TestTheDurationMeasuresTheStatementAndNotSomethingConstant(t *testing.T) {
 			"the duration is not measuring the statement", costly.Duration, cheap.Duration)
 	}
 }
+
+// A database dropped and created again under the same name — a reset, an
+// organiser's drop and rebuild — is served by a new connection. The drop
+// severs the kept one; BEGIN (Runner.begin) is where the runner notices, and it
+// connects again rather than failing the participant's query.
+func TestARecreatedDatabaseIsNotServedByTheConnectionToTheOldOne(t *testing.T) {
+	runner, database := setupWith(t, unlimited(), anything{})
+	admin := gamedbtest.Admin(t)
+
+	old := backend(t, runner, database)
+
+	// The way provisioning drops an instance under a participant.
+	if _, err := admin.Exec(t.Context(), `DROP DATABASE `+sqlpolicy.QuoteIdentifier(database)+` WITH (FORCE)`); err != nil {
+		t.Fatalf("dropping with a kept connection: %v", err)
+	}
+	recreate(t, database)
+	gamedbtest.Run(t, database, `DELETE FROM evidence WHERE id = 2`)
+
+	result, err := runner.Run(t.Context(), request(database, `SELECT pg_backend_pid(), count(*) FROM evidence`))
+	if err != nil {
+		t.Fatalf("the first query to the recreated database: %v", err)
+	}
+	if pid := result.Rows[0][0].(int32); pid == old {
+		t.Fatalf("backend %d served the recreated database", pid)
+	}
+	if n := result.Rows[0][1].(int64); n != 1 {
+		t.Fatalf("count = %d, want the recreated database's one row", n)
+	}
+}
