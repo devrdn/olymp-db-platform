@@ -34,6 +34,10 @@ export function SignInForm({ dict, next }: { dict: Dictionary; next?: string }) 
   const failure = state.code
     ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
     : null;
+  // A server too busy to check the password says nothing about what was
+  // typed, so the fields are not marked invalid for it; the message alone
+  // tells the visitor to try again in a moment.
+  const blamesFields = Boolean(failure) && state.code !== "sign_in_busy";
 
   return (
     <form action={formAction} className="flex w-full max-w-96 flex-col gap-7" noValidate>
@@ -46,8 +50,8 @@ export function SignInForm({ dict, next }: { dict: Dictionary; next?: string }) 
       <Field
         id="login"
         label={t.login}
-        invalid={Boolean(failure)}
-        describedBy={failure ? FAILURE_ID : undefined}
+        invalid={blamesFields}
+        describedBy={blamesFields ? FAILURE_ID : undefined}
       >
         <Input name="login" autoComplete="username" required />
       </Field>
@@ -69,8 +73,8 @@ export function SignInForm({ dict, next }: { dict: Dictionary; next?: string }) 
         <Field
           id="password"
           label={t.password}
-          invalid={Boolean(failure)}
-          describedBy={failure ? FAILURE_ID : undefined}
+          invalid={blamesFields}
+          describedBy={blamesFields ? FAILURE_ID : undefined}
         >
           <Input name="password" type="password" autoComplete="current-password" required />
         </Field>
