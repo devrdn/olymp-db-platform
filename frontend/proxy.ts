@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { ingressSecret } from "@/lib/api/config";
-import { apiRequestHeaders } from "@/lib/api/forwarded";
+import { headedForApi, incomingRequestHeaders } from "@/lib/api/forwarded";
 import { guardRedirect } from "@/lib/auth/guard";
 import { SESSION_COOKIE } from "@/lib/auth/session";
 
@@ -10,20 +10,27 @@ import { SESSION_COOKIE } from "@/lib/auth/session";
  * make the network boundary explicit, and the runtime is Node with no edge
  * option.
  *
- * Two jobs. Keep a signed-out visitor off a screen that would only fail at the
- * API — language is not decided here, because it is not in the URL. And on the
- * API's own prefix, which reaches this application only when no reverse proxy
- * is in front of it and is then passed to the API by the rewrite in
- * next.config.ts with the browser's headers as they came: remove a forwarded
- * address the proxy did not vouch for, because the API believes this server's
- * (lib/api/forwarded.ts). A rewrite cannot change headers; this runs before it.
+ * Two jobs.
+ *
+ * On every request, whatever the path: remove a forwarded client address the
+ * reverse proxy did not vouch for (lib/api/forwarded.ts). The API believes the
+ * address this server sends, and the `/api/*` rewrite in next.config.ts passes
+ * the browser's headers to it as they came — only when no reverse proxy is in
+ * front, and matching the prefix without regard to case. A rewrite cannot
+ * change headers; this runs before it, and does not depend on spelling.
+ *
+ * Then keep a signed-out visitor off a screen that would only fail at the API.
+ * Language is not decided here, because it is not in the URL.
  */
 export function proxy(request: NextRequest) {
-  if (request.nextUrl.pathname.startsWith("/api/")) {
-    return NextResponse.next({
-      request: { headers: apiRequestHeaders(request.headers, ingressSecret()) },
+  const towardsApi = headedForApi(request.nextUrl.pathname);
+  const next = () =>
+    NextResponse.next({
+      request: { headers: incomingRequestHeaders(request.headers, ingressSecret(), { towardsApi }) },
     });
-  }
+
+  // The API guards its own endpoints, the public ones among them.
+  if (towardsApi) return next();
 
   // Path and query are passed separately: the path decides whether the screen
   // is public, the query is only carried along so that a filtered register or
@@ -35,7 +42,7 @@ export function proxy(request: NextRequest) {
     request.cookies.has(SESSION_COOKIE),
   );
 
-  if (!target) return NextResponse.next();
+  if (!target) return next();
 
   const url = request.nextUrl.clone();
   const [pathname, search = ""] = target.split("?");
@@ -49,12 +56,13 @@ export function proxy(request: NextRequest) {
  *
  * `/api/*` is included, but only for its headers. It is not a route this
  * application serves: the reverse proxy sends it to the API before Next is
- * reached (deploy/Caddyfile), and without one the rewrite does. Guarding it
+ * reached (deploy/Caddyfile), and without one the rewrite does — in any letter
+ * case. Guarding it
  * would mean answering a sign-in redirect on behalf of endpoints that are the
  * API's to guard, including the ones that are deliberately public — the logo
  * and the icons the sign-in screen itself wears, which are requested by a
  * browser that has, by definition, not signed in yet — so `proxy` returns
- * before the guard for that prefix.
+ * before the guard for that prefix, in any case.
  *
  * The exclusions are named rather than inferred from the path. Skipping
  * anything containing a dot is the usual shorthand and it is a hole with a

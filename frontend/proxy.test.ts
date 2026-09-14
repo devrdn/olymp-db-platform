@@ -74,23 +74,23 @@ describe("proxy", () => {
 });
 
 /**
- * `/api/*` reaches this application only when nothing is in front of it — the
- * reverse proxy takes that prefix first — and next.config.ts then passes it to
- * the API with the browser's own headers. The API believes this server's
- * forwarded address, so the proxy removes one nobody vouched for before the
- * rewrite runs, and never lets the ingress secret travel on.
+ * The API believes the forwarded address this server sends it, so a forwarded
+ * address the reverse proxy did not vouch for is removed from every request
+ * this proxy sees, whatever the path. Path-specific handling is what failed:
+ * the `/api/*` rewrite in next.config.ts matches without regard to case, and a
+ * check for the lower-case prefix alone let `/API/...` carry a browser-written
+ * header through it.
  */
-describe("proxy on the API's prefix", () => {
+describe("proxy's forwarded headers", () => {
   const SECRET = "an-ingress-secret-of-at-least-32-characters";
 
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  function passedOn(headers: Record<string, string>) {
-    const req = new NextRequest(new URL("/api/v1/settings/images/logo", "http://localhost:3000"), {
-      headers,
-    });
+  function passedOn(path: string, headers: Record<string, string>, session = true) {
+    const req = new NextRequest(new URL(path, "http://localhost:3000"), { headers });
+    if (session) req.cookies.set(SESSION_COOKIE, "opaque");
     const response = proxy(req);
     const overridden = (response.headers.get("x-middleware-override-headers") ?? "").split(",");
     return {
@@ -100,37 +100,67 @@ describe("proxy on the API's prefix", () => {
     };
   }
 
-  test("does not send a signed-out browser to sign-in: the API guards its own", () => {
-    vi.stubEnv("INGRESS_SECRET", SECRET);
+  const forged = {
+    "x-forwarded-for": "10.20.30.40",
+    "x-real-ip": "10.20.30.41",
+    forwarded: "for=10.20.30.42",
+    accept: "text/html",
+  };
 
-    expect(passedOn({}).redirect).toBeNull();
-  });
+  test.each(["/api/v1/auth/login", "/API/v1/auth/login", "/Api/V1/auth/login", "/contests", "/login"])(
+    "removes a forwarded address the browser wrote itself on %s",
+    (path) => {
+      vi.stubEnv("INGRESS_SECRET", SECRET);
 
-  test("removes a forwarded address the browser wrote itself", () => {
-    vi.stubEnv("INGRESS_SECRET", SECRET);
+      const out = passedOn(path, forged);
 
-    const out = passedOn({ "x-forwarded-for": "10.20.30.40", accept: "image/png" });
-
-    expect(out.has("x-forwarded-for")).toBe(false);
-    expect(out.value("x-forwarded-for")).toBeNull();
-    expect(out.value("accept")).toBe("image/png");
-  });
+      expect(out.redirect).toBeNull();
+      for (const name of ["x-forwarded-for", "x-real-ip", "forwarded"]) {
+        expect(out.has(name)).toBe(false);
+        expect(out.value(name)).toBeNull();
+      }
+      expect(out.value("accept")).toBe("text/html");
+    },
+  );
 
   test("removes it too when this server has no secret configured", () => {
     vi.stubEnv("INGRESS_SECRET", "");
 
-    const out = passedOn({ "x-forwarded-for": "10.20.30.40", [INGRESS_HEADER]: "" });
+    const out = passedOn("/API/v1/auth/login", { ...forged, [INGRESS_HEADER]: "" });
 
     expect(out.has("x-forwarded-for")).toBe(false);
   });
 
-  test("keeps a vouched address and drops the secret that vouched for it", () => {
+  test.each(["/api/v1/settings/images/logo", "/API/v1/settings/images/logo"])(
+    "does not send a signed-out browser to sign-in on %s: the API guards its own",
+    (path) => {
+      vi.stubEnv("INGRESS_SECRET", SECRET);
+
+      expect(passedOn(path, {}, false).redirect).toBeNull();
+    },
+  );
+
+  test.each(["/api/v1/settings", "/API/v1/settings"])(
+    "keeps a vouched address on %s and drops the secret before the API",
+    (path) => {
+      vi.stubEnv("INGRESS_SECRET", SECRET);
+
+      const out = passedOn(path, { "x-forwarded-for": "203.0.113.7", [INGRESS_HEADER]: SECRET });
+
+      expect(out.value("x-forwarded-for")).toBe("203.0.113.7");
+      expect(out.has(INGRESS_HEADER)).toBe(false);
+    },
+  );
+
+  test("keeps a vouched address and its secret on a screen, where the server checks it again", () => {
+    // lib/api/forwarded.ts verifies the secret at the point it forwards the
+    // address; removing it here would make every vouched request unvouched.
     vi.stubEnv("INGRESS_SECRET", SECRET);
 
-    const out = passedOn({ "x-forwarded-for": "203.0.113.7", [INGRESS_HEADER]: SECRET });
+    const out = passedOn("/contests", { "x-forwarded-for": "203.0.113.7", [INGRESS_HEADER]: SECRET });
 
     expect(out.value("x-forwarded-for")).toBe("203.0.113.7");
-    expect(out.has(INGRESS_HEADER)).toBe(false);
+    expect(out.value(INGRESS_HEADER)).toBe(SECRET);
   });
 });
 
