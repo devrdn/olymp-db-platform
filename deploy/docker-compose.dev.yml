@@ -90,14 +90,14 @@ services:
     # run. See deploy/docker-compose.yml for the arithmetic tying it to the
     # container memory and the semaphore.
     ulimits:
-      data: 268435456
+      data: ${GAME_DB_PROCESS_MEMORY_BYTES:-268435456}
     # The product's /dev/shm and container memory, so the proof runs on the
     # deployment's configuration (CLAUDE.md rule 10): a parallel query's shared
-    # memory has the same room, and the cgroup limit is the computed six-gibibyte
+    # memory has the same room, and the cgroup limit is the computed seven-gibibyte
     # default, so the OOM-killer-versus-clean-error behaviour the sandbox tests
     # assert is the one production would show.
     shm_size: 256mb
-    mem_limit: 6g
+    mem_limit: 7g
     tmpfs:
       - /var/lib/postgresql/data
     ports:

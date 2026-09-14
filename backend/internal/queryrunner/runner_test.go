@@ -375,13 +375,15 @@ func TestAbandonedQueriesDoNotOutliveTheirSlot(t *testing.T) {
 	time.Sleep(6 * time.Second)
 	close(stop)
 	<-done
-	// The semaphore allows QUERY_CONCURRENT at once; a small tolerance covers
-	// backends caught mid-cancellation. Without a real cancel this climbs with
-	// the number of abandoned queries instead.
-	tolerance := int64(3)
-	if got := atomic.LoadInt64(&peak); got > int64(limits.Concurrent)+tolerance {
-		t.Fatalf("peak live participant backends = %d, over the semaphore's %d + %d tolerance: "+
-			"abandoned queries are outliving their slot", got, limits.Concurrent, tolerance)
+	// One participant holds at most one query through the gate, so with
+	// cancellation working the live count stays at one plus a small tolerance
+	// for a backend caught mid-cancellation. Without it, abandoned backends
+	// accumulate toward the number of queries fired.
+	const want = int64(1)
+	tolerance := int64(2)
+	if got := atomic.LoadInt64(&peak); got > want+tolerance {
+		t.Fatalf("peak live participant backends = %d, over %d + %d tolerance: "+
+			"abandoned queries are outliving their slot", got, want, tolerance)
 	}
 }
 

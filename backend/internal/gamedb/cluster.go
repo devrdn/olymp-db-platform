@@ -73,9 +73,12 @@ const connectionLimit = 60
 //
 // Much smaller than the participants', because the population is different:
 // only the Core API authenticates as this role, and only while building a
-// template. A handful is room for every provisioning worker and a retry, and
-// nothing beyond that is anything but a leak.
-const authorConnectionLimit = 8
+// template — one build at a time, plus room for a retry. It is deliberately
+// this low because each such session runs an organiser's arbitrary SQL and can
+// allocate up to the per-process memory cap, so it is counted against the game
+// cluster's memory (config.Runner.MaxBuildSessions, which must equal this);
+// a higher limit would be more build memory the container has to hold at once.
+const authorConnectionLimit = 4
 
 // Roles carries the credentials the three non-provisioning roles are given.
 type Roles struct {
@@ -137,13 +140,13 @@ var sessionDefaults = [][2]string{
 	{"max_parallel_workers_per_gather", "1"},
 	// Notice a client that has gone away, so a backend whose query was
 	// abandoned stops within this interval instead of running to
-	// statement_timeout. The Query Runner also sends an explicit cancel when
-	// it abandons a query (queryrunner.Cluster.connect), and this is the
-	// backstop for a backend so busy it never reaches an interrupt check
-	// between the cancel and its next socket read. It bounds how long an
-	// abandoned backend keeps a memory cap's worth of the cluster to itself,
-	// which is what keeps the count of live backends near the semaphore's
-	// limit rather than the rate limit's.
+	// statement_timeout. The Query Runner sends an explicit cancel when it
+	// abandons a query in the ordinary way (queryrunner.Cluster.connect); this
+	// is the backstop for when no cancel arrives at all — the runner process
+	// crashed mid-query, or the network dropped — where nothing else would
+	// tell the backend its client is gone until statement_timeout. It bounds
+	// how long such an abandoned backend keeps a memory cap's worth of the
+	// cluster to itself.
 	{"client_connection_check_interval", "250ms"},
 }
 
