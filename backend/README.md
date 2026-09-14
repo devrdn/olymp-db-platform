@@ -131,6 +131,7 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `SHUTDOWN_TIMEOUT` | no | `15s` | drain period on SIGTERM |
 | `SESSION_TTL` | no | `12h` | idle lifetime of a session; slides on activity |
 | `SESSION_MAX_LIFETIME` | no | `12h` | absolute lifetime of a session from sign-in, 5m to 168h; activity does not extend it |
+| `SESSION_ACCOUNT_CACHE_TTL` | no | `5s` | how long authentication may use a cached copy of the account, 0s to 30s (0s reads it every request); changes made in the application invalidate it at once, a change made directly in the database applies within this long |
 | `MAX_LOGIN_ATTEMPTS_PER_ADDRESS` | no | `300` | sign-in attempts from one address per 15 minutes, successes included |
 | `MAX_LOGIN_ATTEMPTS_PER_ACCOUNT` | no | `100` | sign-in attempts at one account from all addresses per 15 minutes; the guessing limit itself is 10 per account and address |
 | `DEVICE_COOKIE_SECRET` | outside `development` | generated per start in development | HMAC key (at least 32 bytes) of the cookie marking a browser the owner signed in from |

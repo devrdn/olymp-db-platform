@@ -38,6 +38,13 @@ const (
 	maxSessionMaxLifetime = 7 * 24 * time.Hour
 )
 
+// maxSessionAccountCacheTTL bounds SESSION_ACCOUNT_CACHE_TTL. The lifetime is
+// how long a change to an account that the cache was not told about — one
+// made by hand in the database, or one whose notification failed — goes
+// unnoticed by requests; past half a minute a block made that way would no
+// longer be "at once" in any sense an organiser means.
+const maxSessionAccountCacheTTL = 30 * time.Second
+
 // Device cookie bounds. The secret's minimum is SHA-256's own size, the key
 // of the HMAC it signs with. A lifetime under an hour is no trust worth the
 // name; past ninety days a browser handed on to somebody else keeps it.
@@ -206,6 +213,12 @@ type Config struct {
 	// however actively it is used. SessionTTL alone never ends a session
 	// somebody keeps using, including somebody using a copied cookie.
 	SessionMaxLifetime time.Duration
+	// SessionAccountCacheTTL is how long the authentication middleware may
+	// decide on a cached copy of an account rather than reading it again.
+	// Changes made through the service invalidate the copy at once; this is
+	// the bound for any change that cannot. Zero reads the account on every
+	// request.
+	SessionAccountCacheTTL time.Duration
 	// DeviceCookieSecret keys the HMAC of the device cookie, which marks a
 	// browser an account's owner has signed in from. Required outside
 	// development; a development stack generates one per start, which only
@@ -452,6 +465,13 @@ func Load() (Config, error) {
 	if cfg.SessionMaxLifetime < minSessionMaxLifetime || cfg.SessionMaxLifetime > maxSessionMaxLifetime {
 		return Config{}, fmt.Errorf("SESSION_MAX_LIFETIME: %s is outside [%s, %s]",
 			cfg.SessionMaxLifetime, minSessionMaxLifetime, maxSessionMaxLifetime)
+	}
+	if cfg.SessionAccountCacheTTL, err = durationEnv("SESSION_ACCOUNT_CACHE_TTL", 5*time.Second); err != nil {
+		return Config{}, err
+	}
+	if cfg.SessionAccountCacheTTL < 0 || cfg.SessionAccountCacheTTL > maxSessionAccountCacheTTL {
+		return Config{}, fmt.Errorf("SESSION_ACCOUNT_CACHE_TTL: %s is outside [0s, %s]",
+			cfg.SessionAccountCacheTTL, maxSessionAccountCacheTTL)
 	}
 	if cfg.CookieSecure, err = boolEnv("COOKIE_SECURE", cfg.Env != "development"); err != nil {
 		return Config{}, err

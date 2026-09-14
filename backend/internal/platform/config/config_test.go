@@ -1054,6 +1054,44 @@ func TestSessionMaximumLifetimeIsConfigurableAndBounded(t *testing.T) {
 	}
 }
 
+func TestTheAccountCacheLifetimeDefaultsToAFewSeconds(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.SessionAccountCacheTTL != 5*time.Second {
+		t.Errorf("SessionAccountCacheTTL = %v, want 5s", cfg.SessionAccountCacheTTL)
+	}
+}
+
+func TestTheAccountCacheLifetimeIsConfigurableAndBounded(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	// Zero turns the cache off: every request reads the account.
+	for raw, want := range map[string]time.Duration{"0s": 0, "2s": 2 * time.Second, "30s": 30 * time.Second} {
+		t.Setenv("SESSION_ACCOUNT_CACHE_TTL", raw)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() with SESSION_ACCOUNT_CACHE_TTL=%s returned error: %v", raw, err)
+		}
+		if cfg.SessionAccountCacheTTL != want {
+			t.Errorf("SESSION_ACCOUNT_CACHE_TTL=%s gave %v, want %v", raw, cfg.SessionAccountCacheTTL, want)
+		}
+	}
+
+	// It is how long a change nothing could announce takes to apply, a
+	// block made by hand included; past half a minute that stops being soon.
+	for _, raw := range []string{"-1s", "31s", "5m", "soon"} {
+		t.Setenv("SESSION_ACCOUNT_CACHE_TTL", raw)
+		if _, err := Load(); err == nil {
+			t.Errorf("Load() accepted SESSION_ACCOUNT_CACHE_TTL=%s, want error", raw)
+		}
+	}
+}
+
 func TestTheDeviceCookieSecretIsRequiredOutsideDevelopment(t *testing.T) {
 	// Without it every device cookie would be signed with a key nobody chose
 	// — or a fresh one per restart, silently distrusting every browser.
