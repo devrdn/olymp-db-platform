@@ -385,9 +385,11 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 		case <-ticker.C:
 			// The session was checked when the stream opened; the stream
 			// outlives that check, so each push asks again. A session past
-			// its maximum lifetime, signed out or expired ends the stream; a
-			// session store that is briefly unreadable is retried next tick,
-			// like the transient failures below.
+			// its maximum lifetime, signed out or expired ends the stream, and
+			// so does an account that was blocked, deleted or had its
+			// sessions retired since; a session or account store that is
+			// briefly unreadable is retried next tick, like the transient
+			// failures below.
 			alive, err := h.mw.SessionStillValid(r)
 			if err != nil {
 				h.log.WarnContext(r.Context(), "events resync could not read the session; retrying next tick", "error", err)
