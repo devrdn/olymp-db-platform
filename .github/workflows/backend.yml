@@ -50,7 +50,7 @@ jobs:
     # is executed and a participant's copy lives, and every guarantee
     # internal/gamedb makes is a guarantee about what PostgreSQL refuses to a
     # particular role — which cannot be faked and cannot be checked from the
-    # core database either (CLAUDE.md rule 10). Until this second service
+    # core database either (CLAUDE.md rule 10). Until this second cluster
     # existed, GAME_DB_DSN was unset here, gamedbtest skipped on it, and the
     # whole of internal/gamedb plus both end-to-end build tests were silently
     # not run on any pull request: the CI output said "ok".
@@ -76,31 +76,8 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
-      # The game cluster, as deploy/docker-compose.yml starts it: the
-      # provisioning role owns it, and the three roles the tests prepare
-      # (game_reader, game_writer, game_author) are created by the tests
-      # themselves through gamedb.PrepareCluster. Published on 5434 with a
-      # maintenance database named dbcontest_game_test — what the development
-      # overlay gives pg-game-test, the cluster `make test-game` runs on — so
-      # nothing about the DSN differs between a developer's test run and this
-      # one, and gamedbtest's refusal of a cluster that is not a test cluster
-      # is exercised here too.
-      postgres-game:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: dbcontest_game
-          POSTGRES_PASSWORD: dbcontest
-          POSTGRES_DB: dbcontest_game_test
-        ports:
-          - 5434:5432
-        options: >-
-          --health-cmd "pg_isready -U dbcontest_game"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
     # A literal, not a secret, and deliberately so. It has to match the
-    # password three lines above, in this same file; hiding one half of a pair
+    # password in the services above, in this same file; hiding one half of a pair
     # in GitHub Secrets would conceal nothing and would suggest something here
     # is protected. The database it names is created by this job on the runner,
     # holds only fixtures the tests roll back, is reachable from nowhere else,
@@ -126,6 +103,29 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # The game cluster is started from the development overlay's own
+      # pg-game-test definition — the one `make test-game-cluster` starts —
+      # rather than as a job service, because a service cannot carry what the
+      # game-cluster tests prove: the per-process memory cap (ulimits.data),
+      # the container memory limit, /dev/shm and the worker-pool pins passed on
+      # the postgres command line. One definition means CI proves the
+      # configuration the product runs with (CLAUDE.md rule 10), not a plain
+      # PostgreSQL that merely answers on the same port.
+      #
+      # deploy/.env.example supplies every variable the compose files
+      # interpolate; the three set here override it so the cluster's
+      # superuser and database match GAME_DB_DSN above.
+      - name: Start the game cluster
+        working-directory: .
+        env:
+          GAME_DB_USER: dbcontest_game
+          GAME_DB_PASSWORD: dbcontest
+          GAME_DB_NAME: dbcontest_game
+        run: >-
+          docker compose --env-file deploy/.env.example
+          -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml
+          --profile test up -d --wait pg-game-test
 
       - uses: actions/setup-go@v5
         with:
