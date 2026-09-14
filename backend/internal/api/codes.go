@@ -312,6 +312,10 @@ var (
 		"The contest is not accepting sign-ups: it does not invite them, it is in the wrong state, or the deadline has passed.")
 	codeAddressNotAllowed = httpx.NewCode("address_not_allowed",
 		"The contest restricts participation to certain networks and this request did not come from one. Applies to participants only; staff are never checked against it.")
+	codeStaffCannotParticipate = httpx.NewCode("staff_cannot_participate",
+		"This account already staffs the contest (owner or manager), so it cannot also register as a participant: staff read the reference answers and the unfrozen leaderboard.")
+	codeParticipantCannotBeStaff = httpx.NewCode("participant_cannot_be_staff",
+		"This account is already registered as a participant of the contest, so it cannot also be appointed to its staff.")
 
 	// --- The events channel --------------------------------------------------
 

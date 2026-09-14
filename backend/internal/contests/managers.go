@@ -20,6 +20,12 @@ var (
 	// and a contest with two owners has an ambiguous one.
 	ErrOwnerImmutable = errors.New("the contest owner cannot be changed here")
 	ErrInvalidRole    = errors.New("unknown contest role")
+	// ErrParticipantCannotBeStaff refuses to appoint somebody already
+	// registered as this contest's participant: staff reads the reference
+	// answers (contest.view) and the unfrozen leaderboard (contest.edit), an
+	// advantage no other entrant has. See enrollment.go's
+	// ErrStaffCannotParticipate for the opposite direction.
+	ErrParticipantCannotBeStaff = errors.New("a participant cannot be appointed to the contest staff")
 )
 
 // ownerRole is the role a contest's author is appointed to.
@@ -99,6 +105,14 @@ func (s *Service) GrantManager(ctx context.Context, actorID, contestID, userID u
 	}
 	if user.Status == users.StatusBlocked {
 		return users.ErrAccountBlocked
+	}
+	// C-05: appointing this contest's own participant would hand them the
+	// reference answers and the unfrozen leaderboard for a contest they are
+	// competing in.
+	if _, err := s.registrations.ByUser(ctx, contestID, userID); err == nil {
+		return ErrParticipantCannotBeStaff
+	} else if !errors.Is(err, ErrParticipantNotFound) {
+		return err
 	}
 	// Overwriting the owner's own row would demote them by another route.
 	if existing, err := s.managers.Get(ctx, contestID, userID); err == nil && existing.Role == rbac.RoleOwner {

@@ -80,6 +80,28 @@ func TestAppointingABlockedAccountIsRefused(t *testing.T) {
 	}
 }
 
+// TestGrantManagerRefusesARegisteredParticipant is C-05's other direction: a
+// contest's own participant must not also be appointed to its staff, which
+// would hand them the reference answers (contest.view) and the unfrozen
+// leaderboard (contest.edit) for a contest they are competing in.
+func TestGrantManagerRefusesARegisteredParticipant(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+	student := f.AddUser("s.popescu")
+	if _, err := f.Registrations.Add(context.Background(), c.ID, student.ID); err != nil {
+		t.Fatalf("Add() = %v", err)
+	}
+
+	err := f.Service.GrantManager(context.Background(), uuid.New(), c.ID, student.ID, rbac.RoleManager)
+
+	if !errors.Is(err, contests.ErrParticipantCannotBeStaff) {
+		t.Errorf("GrantManager() = %v, want ErrParticipantCannotBeStaff", err)
+	}
+	if _, err := f.Managers.Get(context.Background(), c.ID, student.ID); !errors.Is(err, contests.ErrManagerNotFound) {
+		t.Errorf("a refused appointment must not staff the contest: Get() = %v", err)
+	}
+}
+
 func TestOwnershipCannotBeHandedOverThroughTheStaffList(t *testing.T) {
 	// Two owners make "who may appoint staff" ambiguous, and the staff list is
 	// not where a transfer of ownership should quietly happen.

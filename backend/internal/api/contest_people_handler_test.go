@@ -129,6 +129,90 @@ func TestAppointingABlockedAccountIsRefusedWithAConflict(t *testing.T) {
 	}
 }
 
+// TestGrantManagerRefusesARegisteredParticipantWithAConflict is C-05's
+// handler-level test for one direction of the overlap: appointing a
+// contest's own participant is refused with a declared 409, not an internal
+// error, and the roster entry stays unpromoted.
+func TestGrantManagerRefusesARegisteredParticipantWithAConflict(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusPublished)
+	student := f.addAccount("s.popescu")
+	if _, err := f.stores.Registrations.Add(t.Context(), c.ID, student.ID); err != nil {
+		t.Fatalf("Add() = %v", err)
+	}
+
+	rec := f.do(http.MethodPut,
+		"/contests/"+c.ID.String()+"/managers/"+student.ID.String(), `{"role": "manager"}`)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "participant_cannot_be_staff" {
+		t.Errorf("error code = %q, want participant_cannot_be_staff", code)
+	}
+	if _, err := f.stores.Managers.Get(t.Context(), c.ID, student.ID); err == nil {
+		t.Error("the participant must not have been appointed")
+	}
+}
+
+// TestStaffSelfEnrollIsRefusedWithAConflict is C-05's handler-level test for
+// the other direction: a contest's own manager cannot self-enroll as its
+// participant.
+func TestStaffSelfEnrollIsRefusedWithAConflict(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.stores.SeedContest(contests.StatusPublished)
+	c.Enrollment = contests.EnrollmentOpen
+	f.stores.Contests.Put(c)
+	if err := f.stores.Managers.Grant(t.Context(), contests.Manager{
+		ContestID: c.ID, UserID: f.actor.ID, Role: rbac.RoleManager, GrantedBy: uuid.New(),
+	}); err != nil {
+		t.Fatalf("Grant() = %v", err)
+	}
+
+	rec := f.do(http.MethodPost, "/contests/"+c.ID.String()+"/enroll", "")
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "staff_cannot_participate" {
+		t.Errorf("error code = %q, want staff_cannot_participate", code)
+	}
+	if _, err := f.stores.Registrations.ByUser(t.Context(), c.ID, f.actor.ID); err == nil {
+		t.Error("a refused self-enrollment must not create a registration")
+	}
+}
+
+// TestImportSkipsAStaffMemberWithAReason is C-05's handler-level test for the
+// roster import: a mistaken entry naming one of the contest's own staff is
+// reported as skipped, not rejected as an unrelated failure, and the rest of
+// the roster still goes in.
+func TestImportSkipsAStaffMemberWithAReason(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusPublished)
+	manager := f.addAccount("m.staff")
+	if err := f.stores.Managers.Grant(t.Context(), contests.Manager{
+		ContestID: c.ID, UserID: manager.ID, Role: rbac.RoleManager, GrantedBy: uuid.New(),
+	}); err != nil {
+		t.Fatalf("Grant() = %v", err)
+	}
+	f.addAccount("s.popescu")
+
+	rec := f.do(http.MethodPost, "/contests/"+c.ID.String()+"/participants",
+		`{"logins": ["m.staff", "s.popescu"]}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	body := decode(t, rec)
+	if body["added"] != float64(1) {
+		t.Errorf("added = %v, want 1", body["added"])
+	}
+	skipped, _ := body["skipped"].([]any)
+	if len(skipped) != 1 || skipped[0].(map[string]any)["reason"] != contests.SkipStaffMember {
+		t.Fatalf("skipped = %v, want one entry reasoned %s", skipped, contests.SkipStaffMember)
+	}
+}
+
 func TestImportingARosterReportsWhatItCouldNotUse(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusPublished)
