@@ -186,6 +186,13 @@ services:
     restart: "no"
     entrypoint: ["/usr/local/bin/gamedb"]
     environment:
+      # Same variable, same default, as api and queryrunner above: outside
+      # development this job refuses to run on an admin DSN or role password
+      # still carrying deploy/.env.example's placeholder (config.RefusePlaceholder).
+      # Without this line the job never read ENV at all and defaulted to
+      # "development", so a production deploy left on the example's passwords
+      # would prepare the cluster anyway instead of refusing.
+      ENV: ${ENV:-production}
       GAME_DB_ADMIN_DSN: postgres://${GAME_DB_USER}:${GAME_DB_PASSWORD}@pg-game:5432/${GAME_DB_NAME:-dbcontest_game}?sslmode=disable
       GAME_READER_PASSWORD: ${GAME_READER_PASSWORD:?set GAME_READER_PASSWORD in .env}
       GAME_WRITER_PASSWORD: ${GAME_WRITER_PASSWORD:?set GAME_WRITER_PASSWORD in .env}
