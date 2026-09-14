@@ -26,8 +26,11 @@ func TestLoadRunnerAppliesTheArchitecturesFigures(t *testing.T) {
 	if cfg.MaxRows != 1000 || cfg.MaxBytes != 5<<20 {
 		t.Fatalf("result limits = %d rows / %d bytes", cfg.MaxRows, cfg.MaxBytes)
 	}
-	if cfg.ListenAddr != ":9100" {
-		t.Fatalf("listen address = %q", cfg.ListenAddr)
+	// Loopback unless told otherwise: a runner started on a laptop must not be
+	// reachable from the lecture hall's network. The compose file names ":9100"
+	// explicitly, inside a network nothing outside can route into.
+	if cfg.ListenAddr != "127.0.0.1:9100" {
+		t.Fatalf("listen address = %q, want 127.0.0.1:9100", cfg.ListenAddr)
 	}
 	// Running plus waiting covers forty participants, one query each: a
 	// round in which all of them press Run is queued, not refused.

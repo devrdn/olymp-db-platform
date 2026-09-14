@@ -53,7 +53,7 @@ func Probe(ctx context.Context, address string) error {
 // interface" when listening and nothing at all when connecting.
 func ProbeAddress(listen string) string {
 	if listen == "" {
-		listen = ":9100"
+		listen = "127.0.0.1:9100"
 	}
 	if strings.HasPrefix(listen, ":") {
 		return "127.0.0.1" + listen
