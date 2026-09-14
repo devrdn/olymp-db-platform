@@ -2,6 +2,7 @@ package queryrunner
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -20,6 +21,16 @@ type session struct {
 	// (FORCE) under it — which the first statement on it discovers.
 	reused bool
 }
+
+// errPoolExhausted is the pool at its bound with nothing idle to close.
+//
+// The gate admits no more executions than the pool holds connections, so this
+// is never the ordinary answer to load: it means the two bounds have come
+// apart. It is refused rather than exceeded, because exceeding it is a game
+// cluster holding more backends than its memory is sized for; and it is
+// ErrBusy to everything above, which already knows how to tell a participant
+// to try again.
+var errPoolExhausted = fmt.Errorf("%w: every game-database connection the runner may hold is in use", ErrBusy)
 
 // dialer opens a new connection to one database as one of the two roles.
 type dialer func(ctx context.Context, database string, write bool, readBudget int64) (*pgx.Conn, *readMeter, error)
@@ -48,9 +59,16 @@ type dialer func(ctx context.Context, database string, write bool, readBudget in
 // backend may still hold what its last query grew to; so a new connection
 // needed while the runner is at the bound first closes the least recently
 // used idle one. The gate admits at most capacity executions, which is what
-// makes an idle connection always available to close at that point.
+// makes an idle connection always available to close at that point; if none
+// is, the bounds have come apart and the pool refuses (errPoolExhausted)
+// rather than exceed its own.
 //
 // # What it never keeps
+//
+// A write to a database closes the read connection kept for it before dialling
+// its own: a write never takes a kept connection (it runs as the writer), and
+// the runner holding two to one instance would leave the schema panel no room
+// under CONNECTION LIMIT 2.
 //
 // Only a read that finished cleanly returns its connection, and only after
 // the session is reset (release). A write, a query that failed, and one that
@@ -59,6 +77,26 @@ type dialer func(ctx context.Context, database string, write bool, readBudget in
 // find, a failure leaves a session nothing here inspects, and an abandoned
 // query may still have a cancel on its way to the server that would land on
 // whatever the backend ran next.
+//
+// # What the reset leaves
+//
+// DISCARD ALL does not make a kept backend indistinguishable from a new one.
+// Two pieces of session state survive it, and both are reachable only through
+// functions the checker does not admit (set_config, current_setting, setseed):
+//
+//   - a custom placeholder setting (a dotted name such as `x.y`) that a read set
+//     with set_config(..., false): the value is rolled back with the read's
+//     transaction and reset by DISCARD ALL, but the placeholder stays defined,
+//     so current_setting('x.y', true) answers ” on the kept backend where a
+//     new one answers NULL;
+//   - the random seed set by setseed, which DISCARD ALL does not touch, so the
+//     next query's random() continues that sequence.
+//
+// Neither carries data between participants — a kept connection only ever
+// serves the database it was opened to, and a database belongs to one
+// participant — and neither is a privilege. Backend-local caches (catalogue,
+// relation) also survive, as they do for any pooled PostgreSQL session; they
+// are not visible to SQL.
 type pool struct {
 	dial        dialer
 	capacity    int
@@ -99,26 +137,35 @@ func newPool(dial dialer, capacity int, idleTimeout time.Duration) *pool {
 // when it is a read and one is kept, a new one otherwise.
 func (p *pool) acquire(ctx context.Context, database string, write bool, readBudget int64) (*session, error) {
 	p.mu.Lock()
-	if !write {
-		if kept, ok := p.idle[database]; ok {
-			delete(p.idle, database)
-			kept.timer.Stop()
-			p.mu.Unlock()
-			// A fresh budget for a fresh answer: the meter belongs to the
-			// connection, the allowance to the query.
-			kept.session.meter.reset(readBudget)
-			kept.session.reused = true
-			return kept.session, nil
-		}
+	kept, ok := p.idle[database]
+	if ok && !write {
+		delete(p.idle, database)
+		kept.timer.Stop()
+		p.mu.Unlock()
+		// A fresh budget for a fresh answer: the meter belongs to the
+		// connection, the allowance to the query.
+		kept.session.meter.reset(readBudget)
+		kept.session.reused = true
+		return kept.session, nil
 	}
 
-	// At the bound, a new connection takes the place of the least recently
-	// used idle one, which is closed before the new one is dialled.
+	// A new connection is needed. It takes the place of an idle one when
+	// there is a reason to close one: a write closes the read connection kept
+	// for its own database, and at the bound the least recently used idle
+	// connection goes. Either is closed before the new one is dialled, and
+	// its place in open passes to the new one.
 	var evicted *session
-	if p.open >= p.capacity {
-		evicted = p.oldestIdleLocked()
-	}
-	if evicted == nil {
+	switch {
+	case ok: // a write, with a read connection kept for the same database
+		delete(p.idle, database)
+		kept.timer.Stop()
+		evicted = kept.session
+	case p.open >= p.capacity:
+		if evicted = p.oldestIdleLocked(); evicted == nil {
+			p.mu.Unlock()
+			return nil, errPoolExhausted
+		}
+	default:
 		p.open++
 	}
 	p.mu.Unlock()
@@ -206,10 +253,14 @@ func (p *pool) expire(kept *idleConn) {
 		return
 	}
 	delete(p.idle, kept.session.database)
-	p.open--
 	p.mu.Unlock()
 
+	// Closed before its place is given up, as release does: open never counts
+	// fewer connections than the server holds.
 	closeConn(context.Background(), kept.session.conn)
+	p.mu.Lock()
+	p.open--
+	p.mu.Unlock()
 }
 
 // close closes every idle connection and keeps none from here on. Connections
@@ -223,11 +274,13 @@ func (p *pool) close() {
 		idle = append(idle, kept)
 		delete(p.idle, database)
 	}
-	p.open -= len(idle)
 	p.mu.Unlock()
 
 	for _, kept := range idle {
 		closeConn(context.Background(), kept.session.conn)
+		p.mu.Lock()
+		p.open--
+		p.mu.Unlock()
 	}
 }
 
