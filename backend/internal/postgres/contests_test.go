@@ -729,7 +729,7 @@ func TestAdvanceFinishedMovesOnlyRunningContestsPastTheirEnd(t *testing.T) {
 	})
 }
 
-// TestAdvanceFinishedRespectsTheGracePeriod is C-07's own regression test: the
+// TestAdvanceFinishedRespectsTheGracePeriod is a regression test: the
 // scheduler used to compare only ends_at against now(), so a contest whose
 // deadline (§8's own formula) still carried its network-latency grace was
 // closed a tick early — the same request a fixed-timing participant's answer
@@ -793,4 +793,89 @@ func idSet(found []contests.Contest) map[uuid.UUID]bool {
 		seen[c.ID] = true
 	}
 	return seen
+}
+
+// TestLockContestSerialisesConcurrentWriters proves LockContest is a real
+// lock between database sessions, not merely decoration: a second caller
+// must block until the first transaction holding it ends, across two real
+// connections rather than one (CLAUDE.md rule 10 — prove it on the path the
+// deployment uses; TestTryLockRefusesASecondHolderUntilTheFirstEndsItsTransaction
+// above proves the same thing for the scheduler's advisory lock). This is
+// what contests.Service.GrantManager and Service.Enroll/AddParticipants rely
+// on to keep a contest's staff and its participants from overlapping no
+// matter how two requests for the same contest interleave: the two checks
+// live in different tables, so only a lock shared by both directions can
+// make one of them wait for the other to finish.
+func TestLockContestSerialisesConcurrentWriters(t *testing.T) {
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	ctx := context.Background()
+	author := makeUser(t, ctx, "lock-contest-"+uuid.NewString()[:8])
+	contest := makeContest(t, ctx, author.ID)
+	t.Cleanup(func() {
+		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = testPool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contest)
+	})
+	repo := NewContests(testPool)
+
+	holding := make(chan struct{})
+	release := make(chan struct{})
+	firstDone := make(chan error, 1)
+
+	go func() {
+		firstDone <- storage.NewUnitOfWork(testPool).Do(ctx, func(ctx context.Context) error {
+			if err := repo.LockContest(ctx, contest); err != nil {
+				return err
+			}
+			close(holding)
+			<-release
+			return nil
+		})
+	}()
+
+	<-holding
+
+	secondAcquired := make(chan error, 1)
+	go func() {
+		secondAcquired <- storage.NewUnitOfWork(testPool).Do(ctx, func(ctx context.Context) error {
+			return repo.LockContest(ctx, contest)
+		})
+	}()
+
+	select {
+	case <-secondAcquired:
+		t.Fatal("a second caller acquired the lock while the first still holds it")
+	case <-time.After(200 * time.Millisecond):
+		// Still blocked, as expected.
+	}
+
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first transaction failed: %v", err)
+	}
+
+	select {
+	case err := <-secondAcquired:
+		if err != nil {
+			t.Fatalf("second LockContest() = %v, want it to succeed once the first released", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("second caller never acquired the lock after the first released it")
+	}
+}
+
+// TestLockContestRefusesOutsideATransaction proves the guard: a lock that
+// silently did nothing outside a transaction would be indistinguishable from
+// one that worked, until two requests actually raced.
+func TestLockContestRefusesOutsideATransaction(t *testing.T) {
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	repo := NewContests(testPool)
+
+	if err := repo.LockContest(context.Background(), uuid.New()); err == nil {
+		t.Error("LockContest() outside a transaction = nil, want an error")
+	}
 }

@@ -205,11 +205,11 @@ const (
 	// carry workspace.people.import.reason.account_blocked for it.
 	SkipAccountBlocked = "account_blocked"
 	// SkipStaffMember reports a roster entry that names one of the contest's
-	// own owners or managers (finding C-05): staffing and taking part in the
-	// same contest is refused in both directions, and a roster is a bulk
-	// operation where one such entry must be reported and skipped rather
-	// than fail the whole import, the same partial-success shape every other
-	// row-level reason above already gets.
+	// own owners or managers: staffing and taking part in the same contest
+	// is refused in both directions, and a roster is a bulk operation where
+	// one such entry must be reported and skipped rather than fail the
+	// whole import, the same partial-success shape every other row-level
+	// reason above already gets.
 	SkipStaffMember = "staff_member"
 )
 
@@ -302,6 +302,15 @@ func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsComman
 
 	var result AddParticipantsResult
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
+		// Locks the contest row for the whole import, once, rather than once
+		// per row: every addOne call below checks the same contest's staff
+		// list, and the lock is what stops a concurrent GrantManager for the
+		// same contest from landing between one row's check and this
+		// transaction's commit — see managers.go's own comment on the same
+		// lock.
+		if err := s.contests.LockContest(ctx, c.ID); err != nil {
+			return err
+		}
 		for _, id := range cmd.UserIDs {
 			user, err := s.users.ByID(ctx, id)
 			if err != nil {
@@ -373,7 +382,7 @@ func (s *Service) addOne(ctx context.Context, cmd AddParticipantsCommand, c Cont
 		result.skip(user.Login, SkipAccountBlocked)
 		return nil
 	}
-	// C-05: the contest's own owner or manager already reads its reference
+	// The contest's own owner or manager already reads its reference
 	// answers and its unfrozen leaderboard, so registering them as a
 	// participant too would not be a fair result. A roster is a bulk
 	// operation, so this is a skip like every other row-level reason above,
@@ -414,18 +423,6 @@ func (s *Service) Enroll(ctx context.Context, cmd EnrollCommand) (Participant, e
 		return Participant{}, err
 	}
 
-	// C-05: a contest's own owner or manager already reads its reference
-	// answers and its unfrozen leaderboard, so letting them self-enroll would
-	// hand them an advantage no other entrant has. Checked after
-	// EnrollmentOpenAt so a closed contest is still reported as closed first
-	// — this is a stronger, identity-based refusal, not something the
-	// contest's schedule decides.
-	if _, err := s.managers.Get(ctx, c.ID, cmd.UserID); err == nil {
-		return Participant{}, ErrStaffCannotParticipate
-	} else if !errors.Is(err, ErrManagerNotFound) {
-		return Participant{}, err
-	}
-
 	// Checked after the contest is known to accept signups, so the trail
 	// carries real attempts rather than noise about closed contests.
 	if !c.AllowsAddress(cmd.Address) {
@@ -442,6 +439,23 @@ func (s *Service) Enroll(ctx context.Context, cmd EnrollCommand) (Participant, e
 	// button sends two requests, and a lookup would let both through.
 	var enrolled Participant
 	err = s.uow.Do(ctx, func(ctx context.Context) error {
+		// Locks the contest row for the rest of this transaction, serialising
+		// against a concurrent GrantManager for the same account — see
+		// managers.go's own comment on the same lock. Checked here, inside
+		// the lock, rather than before s.uow.Do: a contest's own owner or
+		// manager already reads its reference answers and its unfrozen
+		// leaderboard, so letting them self-enroll would hand them an
+		// advantage no other entrant has, and a check made outside the
+		// transaction is a decision the write below can no longer be sure is
+		// still true.
+		if err := s.contests.LockContest(ctx, c.ID); err != nil {
+			return err
+		}
+		if _, err := s.managers.Get(ctx, c.ID, cmd.UserID); err == nil {
+			return ErrStaffCannotParticipate
+		} else if !errors.Is(err, ErrManagerNotFound) {
+			return err
+		}
 		var err error
 		if enrolled, err = s.registrations.Add(ctx, c.ID, cmd.UserID); err != nil {
 			return err

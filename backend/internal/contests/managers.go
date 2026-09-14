@@ -106,14 +106,6 @@ func (s *Service) GrantManager(ctx context.Context, actorID, contestID, userID u
 	if user.Status == users.StatusBlocked {
 		return users.ErrAccountBlocked
 	}
-	// C-05: appointing this contest's own participant would hand them the
-	// reference answers and the unfrozen leaderboard for a contest they are
-	// competing in.
-	if _, err := s.registrations.ByUser(ctx, contestID, userID); err == nil {
-		return ErrParticipantCannotBeStaff
-	} else if !errors.Is(err, ErrParticipantNotFound) {
-		return err
-	}
 	// Overwriting the owner's own row would demote them by another route.
 	if existing, err := s.managers.Get(ctx, contestID, userID); err == nil && existing.Role == rbac.RoleOwner {
 		return ErrOwnerImmutable
@@ -122,6 +114,23 @@ func (s *Service) GrantManager(ctx context.Context, actorID, contestID, userID u
 	}
 
 	return s.uow.Do(ctx, func(ctx context.Context) error {
+		// Locks the contest row for the rest of this transaction, serialising
+		// against a concurrent Enroll or AddParticipants for the same
+		// account: both directions of the staff/participant overlap check
+		// read a different table than the one they write, so without a
+		// shared lock two requests racing in opposite directions could each
+		// see the other's table still clean and both succeed. Checked here,
+		// inside the lock, rather than before s.uow.Do — a check made
+		// outside the transaction is a decision the write below can no
+		// longer be sure is still true.
+		if err := s.contests.LockContest(ctx, c.ID); err != nil {
+			return err
+		}
+		if _, err := s.registrations.ByUser(ctx, contestID, userID); err == nil {
+			return ErrParticipantCannotBeStaff
+		} else if !errors.Is(err, ErrParticipantNotFound) {
+			return err
+		}
 		if err := s.managers.Grant(ctx, Manager{
 			ContestID: c.ID,
 			UserID:    user.ID,
