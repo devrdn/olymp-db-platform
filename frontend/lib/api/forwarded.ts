@@ -30,7 +30,6 @@ import { MIN_INGRESS_SECRET_LENGTH } from "./ingress-secret.mjs";
 /** The header the ingress proxy proves itself with. Lower case, as Node reads it. */
 export const INGRESS_HEADER = "x-ingress-secret";
 
-
 /**
  * Whether the presented value is the configured ingress secret.
  *
