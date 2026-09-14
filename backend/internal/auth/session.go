@@ -271,8 +271,13 @@ func (s *SessionStore) Delete(ctx context.Context, token string) error {
 	return nil
 }
 
-// TTL reports the configured session lifetime, used to set the cookie expiry.
+// TTL reports the configured idle timeout.
 func (s *SessionStore) TTL() time.Duration { return s.ttl }
+
+// CookieLifetime is how long the cookie of a session issued now should live:
+// the idle timeout, or the maximum lifetime when that is shorter, so the
+// browser stops sending the token no later than the server stops accepting it.
+func (s *SessionStore) CookieLifetime() time.Duration { return min(s.ttl, s.maxLifetime) }
 
 // sessionKey derives the cache key from the token.
 //
