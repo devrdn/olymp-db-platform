@@ -390,10 +390,14 @@ func (s *Service) Update(ctx context.Context, cmd UpdateCommand) (Contest, error
 		updated.DurationMin = nil
 	}
 
-	if err := updated.Validate(); err != nil {
+	// Runs before Validate: on a running contest it may still rewrite
+	// updated.EndsAt/StartsAt back to the exact stored value (see its own
+	// doc), and Validate has to see the value that will actually be
+	// written, not the one the request happened to send.
+	if err := checkRunningChange(current, &updated, s.now()); err != nil {
 		return Contest{}, err
 	}
-	if err := checkRunningChange(current, updated, s.now()); err != nil {
+	if err := updated.Validate(); err != nil {
 		return Contest{}, err
 	}
 
@@ -495,14 +499,22 @@ func (s *Service) ExtendGrace(ctx context.Context, actorID, contestID uuid.UUID,
 	return updated, nil
 }
 
-// checkRunningChange refuses the fields that must not move mid-flight.
+// checkRunningChange refuses the fields that must not move mid-flight, and —
+// for the two guarded schedule fields — corrects a same-minute drift in
+// place rather than merely tolerating it.
 //
 // Extending a window or correcting a network range helps participants; the
 // shape of the contest — how many questions it asks, how the clock works —
 // is what they are already answering under. now is the moment the change is
 // being decided at, needed only to tell whether a freeze the contest already
 // carries has actually been reached yet (see the ends_at case below).
-func checkRunningChange(current, updated Contest, now time.Time) error {
+// updated is taken by pointer, unlike every other parameter in this package's
+// service methods, specifically so the two guarded-field cases below can
+// snap a same-minute value back to the one already stored before Update
+// validates and writes it — see their own comments for why leaving updated
+// as the caller's (truncated) value would not be merely tolerating a resend,
+// but silently moving the deadline it names.
+func checkRunningChange(current Contest, updated *Contest, now time.Time) error {
 	if current.Status != StatusRunning {
 		return nil
 	}
@@ -515,15 +527,24 @@ func checkRunningChange(current, updated Contest, now time.Time) error {
 	// leaderboard cache stays stale. Before the freeze is reached this is
 	// exactly the "extend after a power cut" operation SettingsEditable
 	// exists for, so only a change that would move an already-reached freeze
-	// is refused, not every ends_at change. Compared at minute precision
-	// (sameMinute, not full equality): the settings form only ever sends
-	// whole minutes, so resending the value it was given back — every field
-	// but this one being the actual edit — must never read as "the deadline
-	// moved" just because the stored value happens to carry seconds.
-	if !sameMinute(current.EndsAt, updated.EndsAt) {
-		if freezeAt, ok := current.FreezeAt(); ok && !now.Before(freezeAt) {
+	// is refused, not every ends_at change.
+	//
+	// The settings form only ever sends whole minutes, so "did this change"
+	// is asked at minute precision (sameMinute, not exact equality): a
+	// resend of the value the form was given back — every field but this one
+	// being the actual edit — must never read as "the deadline moved" just
+	// because the stored value happens to carry seconds. But once the freeze
+	// has been reached, a same-minute value is not simply let through as
+	// unchanged: updated.EndsAt is reset to the exact value already stored,
+	// so a save cannot drift the real deadline by up to 59 seconds — the gap
+	// sameMinute cannot see — while reading as "nothing changed" both here
+	// and in the audit trail. A value in a different minute is still refused
+	// outright: there is no ambiguity there for a snap-back to resolve.
+	if freezeAt, ok := current.FreezeAt(); ok && !now.Before(freezeAt) {
+		if !sameMinute(current.EndsAt, updated.EndsAt) {
 			return ErrFreezeAlreadyReached
 		}
+		updated.EndsAt = current.EndsAt
 	}
 	// ICPC penalty minutes are counted from starts_at at read time
 	// (postgres/leaderboard.go), never stored with a submission — the same
@@ -532,10 +553,14 @@ func checkRunningChange(current, updated Contest, now time.Time) error {
 	// fixed-timing participant's penalty for a reason nobody watching the
 	// table could see. Scoped to ICPC: no other scoring mode reads
 	// starts_at at all, so elsewhere this stays the ordinary window
-	// correction SettingsEditable exists for. Minute precision again, for
-	// the same resend-of-an-unchanged-value reason as above.
-	if !sameMinute(current.StartsAt, updated.StartsAt) && current.Scoring == ScoringICPC {
-		return ErrICPCStartLocked
+	// correction SettingsEditable exists for. Minute precision and the
+	// same-minute snap-back, for the same resend-of-an-unchanged-value
+	// reason as the ends_at case above.
+	if current.Scoring == ScoringICPC {
+		if !sameMinute(current.StartsAt, updated.StartsAt) {
+			return ErrICPCStartLocked
+		}
+		updated.StartsAt = current.StartsAt
 	}
 	switch {
 	case current.QuestionMode != updated.QuestionMode:

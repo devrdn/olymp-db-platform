@@ -425,6 +425,53 @@ func TestUpdateAllowsAnUnrelatedFieldWhenEndsAtIsResentUnchangedAfterTheFreeze(t
 	if updated.LeaderboardNames != contests.LeaderboardNamesFullName {
 		t.Errorf("LeaderboardNames = %q, want it to have been saved", updated.LeaderboardNames)
 	}
+	// The stored deadline itself must survive to the nanosecond: passing the
+	// minute-precision comparison must not mean the truncated, resent value
+	// is what actually gets written. A save that silently moved the
+	// deadline by up to 59 seconds would still show "no change" here if this
+	// only checked the same-minute comparison again instead of the exact
+	// stored value.
+	if updated.EndsAt == nil || !updated.EndsAt.Equal(withSeconds) {
+		t.Errorf("EndsAt = %v, want the exact stored value %v unchanged", updated.EndsAt, withSeconds)
+	}
+}
+
+// TestUpdateKeepsTheStoredEndsAtWhenAnExplicitMoveStaysInTheSameMinute is the
+// regression this guards against directly: an explicit attempt to move
+// ends_at from one second within a minute to another, after the freeze has
+// been reached, must not silently succeed at moving the deadline by however
+// many seconds separate the two — the settings form cannot express that
+// distinction, so the service must not let it through by accident. Keeping
+// the stored value (rather than refusing outright) is the chosen behaviour:
+// an organiser saving the form after the freeze sees their save succeed, not
+// a spurious conflict over a difference of seconds they never intended.
+func TestUpdateKeepsTheStoredEndsAtWhenAnExplicitMoveStaysInTheSameMinute(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+	freeze := 130 // FreezeAt already reached.
+	c.LeaderboardFreezeMin = &freeze
+	stored := c.EndsAt.Truncate(time.Minute) // exactly 12:00:00, say.
+	c.EndsAt = &stored
+	f.Contests.Put(c)
+
+	movedWithinMinute := stored.Add(59 * time.Second) // 12:00:59.
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &movedWithinMinute,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+	if updated.EndsAt == nil || !updated.EndsAt.Equal(stored) {
+		t.Errorf("EndsAt = %v, want it to stay at the stored %v rather than move within the minute", updated.EndsAt, stored)
+	}
+
+	reloaded, err := f.Service.ByID(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	if reloaded.EndsAt == nil || !reloaded.EndsAt.Equal(stored) {
+		t.Errorf("stored EndsAt = %v, want %v", reloaded.EndsAt, stored)
+	}
 }
 
 // TestUpdateRefusesToChangeStartsAtForICPCScoringWhileRunning: ICPC penalty
@@ -470,6 +517,45 @@ func TestUpdateAllowsAnUnrelatedFieldWhenStartsAtIsResentUnchangedOnICPC(t *test
 	}
 	if updated.LeaderboardNames != contests.LeaderboardNamesFullName {
 		t.Errorf("LeaderboardNames = %q, want it to have been saved", updated.LeaderboardNames)
+	}
+	// Same exactness requirement as the ends_at case: the stored starts_at
+	// must survive to the nanosecond, not merely stay within the same
+	// minute as before.
+	if updated.StartsAt == nil || !updated.StartsAt.Equal(withSeconds) {
+		t.Errorf("StartsAt = %v, want the exact stored value %v unchanged", updated.StartsAt, withSeconds)
+	}
+}
+
+// TestUpdateKeepsTheStoredStartsAtWhenAnExplicitMoveStaysInTheSameMinute is
+// the starts_at half of the same regression: on a running ICPC contest, an
+// explicit move from one second within a minute to another must not
+// silently rescore every fixed-timing participant's penalty by however many
+// seconds separate the two.
+func TestUpdateKeepsTheStoredStartsAtWhenAnExplicitMoveStaysInTheSameMinute(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+	c.Scoring = contests.ScoringICPC
+	stored := c.StartsAt.Truncate(time.Minute)
+	c.StartsAt = &stored
+	f.Contests.Put(c)
+
+	movedWithinMinute := stored.Add(59 * time.Second)
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, StartsAt: &movedWithinMinute,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+	if updated.StartsAt == nil || !updated.StartsAt.Equal(stored) {
+		t.Errorf("StartsAt = %v, want it to stay at the stored %v rather than move within the minute", updated.StartsAt, stored)
+	}
+
+	reloaded, err := f.Service.ByID(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	if reloaded.StartsAt == nil || !reloaded.StartsAt.Equal(stored) {
+		t.Errorf("stored StartsAt = %v, want %v", reloaded.StartsAt, stored)
 	}
 }
 
