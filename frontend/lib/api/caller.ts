@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 
+import { ingressSecret } from "./config";
 import { forwardedHeaders } from "./forwarded";
 
 /**
@@ -9,5 +10,5 @@ import { forwardedHeaders } from "./forwarded";
  */
 export async function callerHeaders(): Promise<Record<string, string>> {
   const incoming = await headers();
-  return forwardedHeaders((name) => incoming.get(name));
+  return forwardedHeaders((name) => incoming.get(name), ingressSecret());
 }

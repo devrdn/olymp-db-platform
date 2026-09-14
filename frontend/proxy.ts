@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { ingressSecret } from "@/lib/api/config";
+import { apiRequestHeaders } from "@/lib/api/forwarded";
 import { guardRedirect } from "@/lib/auth/guard";
 import { SESSION_COOKIE } from "@/lib/auth/session";
 
@@ -8,10 +10,21 @@ import { SESSION_COOKIE } from "@/lib/auth/session";
  * make the network boundary explicit, and the runtime is Node with no edge
  * option.
  *
- * One job: keep a signed-out visitor off a screen that would only fail at the
- * API. Language is not decided here, because it is not in the URL.
+ * Two jobs. Keep a signed-out visitor off a screen that would only fail at the
+ * API — language is not decided here, because it is not in the URL. And on the
+ * API's own prefix, which reaches this application only when no reverse proxy
+ * is in front of it and is then passed to the API by the rewrite in
+ * next.config.ts with the browser's headers as they came: remove a forwarded
+ * address the proxy did not vouch for, because the API believes this server's
+ * (lib/api/forwarded.ts). A rewrite cannot change headers; this runs before it.
  */
 export function proxy(request: NextRequest) {
+  if (request.nextUrl.pathname.startsWith("/api/")) {
+    return NextResponse.next({
+      request: { headers: apiRequestHeaders(request.headers, ingressSecret()) },
+    });
+  }
+
   // Path and query are passed separately: the path decides whether the screen
   // is public, the query is only carried along so that a filtered register or
   // a search somebody typed survives signing in. Joined into one string, the
@@ -32,14 +45,16 @@ export function proxy(request: NextRequest) {
 }
 
 /**
- * Every route except the framework's own assets and the API's prefix.
+ * Every route except the framework's own assets.
  *
- * `/api/*` is not a route this application serves: the reverse proxy sends it
- * to the API before Next is reached (deploy/Caddyfile). Claiming it here would
- * mean answering a sign-in redirect on behalf of endpoints that are the API's
- * to guard, including the ones that are deliberately public — the logo and the
- * icons the sign-in screen itself wears, which are requested by a browser that
- * has, by definition, not signed in yet.
+ * `/api/*` is included, but only for its headers. It is not a route this
+ * application serves: the reverse proxy sends it to the API before Next is
+ * reached (deploy/Caddyfile), and without one the rewrite does. Guarding it
+ * would mean answering a sign-in redirect on behalf of endpoints that are the
+ * API's to guard, including the ones that are deliberately public — the logo
+ * and the icons the sign-in screen itself wears, which are requested by a
+ * browser that has, by definition, not signed in yet — so `proxy` returns
+ * before the guard for that prefix.
  *
  * The exclusions are named rather than inferred from the path. Skipping
  * anything containing a dot is the usual shorthand and it is a hole with a
@@ -48,5 +63,5 @@ export function proxy(request: NextRequest) {
  * and nothing says so.
  */
 export const config = {
-  matcher: ["/((?!api/|_next/static|_next/image|favicon\\.ico|robots\\.txt|sitemap\\.xml).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon\\.ico|robots\\.txt|sitemap\\.xml).*)"],
 };
