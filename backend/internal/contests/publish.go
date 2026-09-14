@@ -51,6 +51,13 @@ const (
 	// question (§6.1.1): the winner is whoever first answers the final
 	// question, so without one the contest ends with nobody placed.
 	ProblemWinnerNeedsFinal = "winner_needs_final"
+	// ProblemWinnerFinalNeedsAttemptLimit names a final question with no
+	// attempt limit in a winner-mode contest. There the first correct final
+	// answer wins outright and a wrong one costs nothing (penaltyAmount is
+	// zero in this mode), so without a limit the contest can be won by
+	// trying candidates one after another rather than by solving it — the
+	// answer rate slows that down, only a limit stops it.
+	ProblemWinnerFinalNeedsAttemptLimit = "winner_final_needs_attempt_limit"
 	// ProblemLeaderboardFreezeExceedsWindow names a freeze that begins before
 	// the window opens, or one with no ends_at to be measured back from.
 	// Saving refuses the first already, but the window can move afterwards.
@@ -168,6 +175,9 @@ func CheckPublishable(c Contest, story Story, questions []Question) error {
 		// ordinary authoring choice, not a way around answering.
 		if c.Scoring == ScoringICPC && q.Kind == KindChoice && !icpcChoiceCapped(q) {
 			add(PublishProblem{Code: ProblemICPCChoiceNeedsAttemptLimit, QuestionID: q.ID})
+		}
+		if c.Scoring == ScoringWinner && q.Kind == KindFinal && q.MaxAttempts == nil {
+			add(PublishProblem{Code: ProblemWinnerFinalNeedsAttemptLimit, QuestionID: q.ID})
 		}
 		if c.Progression == ProgressionSequential {
 			// §6.1.1: sequential progression opens the next question only
