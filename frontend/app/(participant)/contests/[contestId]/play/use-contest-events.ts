@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { API_PREFIX } from "@/lib/api/client";
 
@@ -119,6 +119,9 @@ export function useContestEvents(contestId: string, initialPhase: ContestPhase =
   const deadlineRef = useRef<number | null | undefined>(undefined);
   const [phase, setPhase] = useState<ContestPhase>(initialPhase);
   const [channelError, setChannelError] = useState<string | null>(null);
+  // Set by the effect below to the live channel's own resync; a no-op until
+  // then and after unmount.
+  const resyncRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const url = `${API_PREFIX}/contests/${contestId}/events`;
@@ -240,14 +243,40 @@ export function useContestEvents(contestId: string, initialPhase: ContestPhase =
 
     connect();
 
+    /**
+     * Asks for one fresh sync now, rather than at the next periodic one —
+     * once for this channel's lifetime, whatever calls it and however often.
+     *
+     * The server sends a sync when a connection opens and has no other way to
+     * be asked for one, so this reopens the channel: the current connection is
+     * closed and a new one opened at once. Bounded to one because every
+     * connection spends the read budget this channel shares with the SQL
+     * console, and a caller that asked on every render must not become a
+     * reconnect loop. A connection that has already failed is left to the
+     * reconnect already scheduled for it, whose own first sync is the fresh
+     * one this asks for.
+     */
+    let resynced = false;
+    resyncRef.current = () => {
+      if (cancelled || resynced) return;
+      resynced = true;
+      if (source === null || source.readyState === EventSource.CLOSED) return;
+      source.close();
+      connect();
+    };
+
     return () => {
       cancelled = true;
       clearRetryTimer();
       source?.close();
+      resyncRef.current = () => {};
     };
   }, [contestId]);
 
-  return { offsetRef, deadlineRef, phase, channelError };
+  // Stable across renders, so a caller can list it as an effect dependency.
+  const resync = useCallback(() => resyncRef.current(), []);
+
+  return { offsetRef, deadlineRef, phase, channelError, resync };
 }
 
 /** What asking the same URL again turned up: an admission, or the API's own reason for refusing one. */

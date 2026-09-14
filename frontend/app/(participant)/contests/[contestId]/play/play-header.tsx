@@ -7,6 +7,7 @@ import { Tag } from "@/components/ui/tag";
 import type { PlayDictionary } from "./dictionary";
 import { cn } from "@/lib/utils";
 
+import { useContentLoaded } from "./content-loaded";
 import { useContestEvents } from "./use-contest-events";
 
 /**
@@ -44,10 +45,21 @@ export function PlayHeader({
 }) {
   const t = dict.participant.play;
   const router = useRouter();
-  const { offsetRef, deadlineRef, phase, channelError } = useContestEvents(
+  const { offsetRef, deadlineRef, phase, channelError, resync } = useContestEvents(
     contestId,
     waitingForStart ? "waiting" : "running",
   );
+
+  // The workspace's content reads start an individual participant's clock on
+  // the server, and may have finished after this channel's first sync told
+  // the clock there was no deadline (content-loaded.tsx's own doc). Once they
+  // have succeeded, one fresh sync brings the deadline they created; the hook
+  // itself bounds the resync to one. Skipped when a deadline is already
+  // known: no read can change one that exists.
+  const contentLoaded = useContentLoaded();
+  useEffect(() => {
+    if (contentLoaded && phase === "running" && typeof deadlineRef.current !== "number") resync();
+  }, [contentLoaded, phase, resync, deadlineRef]);
 
   // Refreshed once, the moment this specific transition matters. Every other
   // phase change (running while already showing the running screen, or
@@ -82,7 +94,13 @@ export function PlayHeader({
         <h1 className="truncate text-row text-ink max-narrow:whitespace-normal">{title}</h1>
         {phase === "finished" ? <Tag tone="mute">{t.finishedTag}</Tag> : null}
       </div>
-      <PlayClock offsetRef={offsetRef} deadlineRef={deadlineRef} phase={phase} dict={dict} />
+      <PlayClock
+        offsetRef={offsetRef}
+        deadlineRef={deadlineRef}
+        phase={phase}
+        contentLoaded={contentLoaded}
+        dict={dict}
+      />
       {/* Finding 1: the channel this clock runs on can fail outright (a
           connection limit, a rate limit, this account losing access) and, per
           the SSE spec, the browser then never retries on its own — see
@@ -123,11 +141,14 @@ function PlayClock({
   offsetRef,
   deadlineRef,
   phase,
+  contentLoaded,
   dict,
 }: {
   offsetRef: React.RefObject<number>;
   deadlineRef: React.RefObject<number | null | undefined>;
   phase: "waiting" | "running" | "finished";
+  /** The workspace's content reads have succeeded — see content-loaded.tsx. */
+  contentLoaded: boolean;
   dict: PlayDictionary;
 }) {
   const t = dict.participant.play.clock;
@@ -224,11 +245,24 @@ function PlayClock({
       </>
     );
   }
+  if (deadline === null && contentLoaded) {
+    // No deadline, but the workspace's content reads have succeeded, and
+    // under individual timing those reads are what start the clock: the sync
+    // that said "no deadline" predates them. The header has asked for a fresh
+    // one; until it arrives, the honest thing to say is that we are
+    // synchronising.
+    return (
+      <>
+        {live}
+        <ClockText tone="ink-3">{t.syncing}</ClockText>
+      </>
+    );
+  }
   if (deadline === null) {
     // A sync arrived and carried no deadline, which the server only does for
     // an individual-timing participant who has not started: their deadline
-    // arrives with their first action, not with the contest's own start
-    // (Deadline's own doc on the Go side).
+    // arrives with their first read of the contest, not with the contest's
+    // own start (Deadline's own doc on the Go side).
     return (
       <>
         {live}

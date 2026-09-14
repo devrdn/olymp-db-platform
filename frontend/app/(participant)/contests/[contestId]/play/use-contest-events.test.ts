@@ -377,4 +377,39 @@ describe("useContestEvents", () => {
       expect(result.current.channelError).toBeNull();
     });
   });
+
+  // The play page's content reads are what start an individual participant's
+  // clock, and they finish on the server after this channel may already have
+  // sent its first sync. One immediate resync, once the workspace has loaded,
+  // brings the deadline those reads created instead of waiting for the next
+  // periodic sync.
+  describe("a one-shot resync", () => {
+    test("reopens the channel once, and a second request does nothing", () => {
+      const { result, unmount } = renderHook(() => useContestEvents("c1", "running"));
+      expect(FakeEventSource.instances).toHaveLength(1);
+
+      act(() => result.current.resync());
+      expect(FakeEventSource.instances[0].closed).toBe(true);
+      expect(FakeEventSource.instances).toHaveLength(2);
+
+      act(() => result.current.resync());
+      expect(FakeEventSource.instances).toHaveLength(2);
+
+      const deadline = "2026-03-01T10:30:00Z";
+      act(() => FakeEventSource.instances[1].emit("sync", { server_now: "2026-03-01T10:00:00Z", deadline }));
+      expect(result.current.deadlineRef.current).toBe(new Date(deadline).getTime());
+
+      unmount();
+      expect(FakeEventSource.instances[1].closed).toBe(true);
+    });
+
+    test("does not open a connection of its own while the channel is already failed and waiting to reconnect", () => {
+      const { result } = renderHook(() => useContestEvents("c1", "running"));
+      FakeEventSource.instances[0].readyState = FakeEventSource.CLOSED;
+
+      act(() => result.current.resync());
+
+      expect(FakeEventSource.instances).toHaveLength(1);
+    });
+  });
 });
