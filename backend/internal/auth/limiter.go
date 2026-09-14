@@ -67,16 +67,19 @@ func (l *Limiter) Generation(ctx context.Context, family string) (string, error)
 // The value is 128 random bits in hex, so it does not repeat — a repeated
 // value would bring counters abandoned by an earlier generation back, and a
 // clock is not fine-grained enough to promise that for two unlocks in a row.
-// It lives for window, the longest window any counter of the family uses: by
-// the time it lapses and the family reads "0" again, every counter created
-// under "0" before the first replacement has expired with its own window.
+// It lives for twice window, where window is the longest window any counter
+// of the family uses. One window would already be enough for the counters
+// created under "0" before the first replacement to have expired by the time
+// the family reads "0" again; the second is margin, so a lapse landing at a
+// window's edge cannot meet a counter with a moment left to run and hand a
+// guesser who timed it a second fresh start from one unlock.
 func (l *Limiter) NewGeneration(ctx context.Context, family string, window time.Duration) error {
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
 		return fmt.Errorf("new rate limit generation %s: %w", family, err)
 	}
 	value := hex.EncodeToString(raw)
-	if err := l.cache.Set(ctx, generationKeyPrefix+family, []byte(value), window); err != nil {
+	if err := l.cache.Set(ctx, generationKeyPrefix+family, []byte(value), 2*window); err != nil {
 		return fmt.Errorf("new rate limit generation %s: %w", family, err)
 	}
 	return nil
