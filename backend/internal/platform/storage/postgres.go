@@ -14,7 +14,20 @@ import (
 // Pool defaults sized for the Core API: short-lived request queries only.
 // The game cluster is served by the Query Runner with its own settings.
 const (
-	defaultMaxConns        = int32(10)
+	// defaultMaxConns is what a deployment gets unless it sets
+	// CORE_DB_POOL_MAX (config.Config.CoreDBPoolMax) or embeds
+	// pool_max_conns in the DSN itself. Ten was sized for a trickle of admin
+	// traffic; a live olympiad draws on this pool far more widely — a
+	// roster's console pre-checks and submissions, SSE resyncs, the
+	// leaderboard's own reads, staff dashboards, and a CSV export that pins
+	// one connection for up to a minute apiece (participant_handler.go's
+	// exportDeadline), with no cap on how many run at once. 25 leaves room
+	// for several such exports alongside the steady stream of short
+	// request-scoped queries everything else makes, without asking Postgres
+	// for more than one API instance will ever hold open (see pg-core's
+	// max_connections in deploy/docker-compose.yml for the arithmetic on the
+	// other side).
+	defaultMaxConns        = int32(25)
 	defaultMinConns        = int32(2)
 	defaultMaxConnLifetime = time.Hour
 	defaultMaxConnIdleTime = 30 * time.Minute
@@ -56,7 +69,17 @@ func dsnSetsPoolMaxConns(dsn string) bool {
 }
 
 func PoolConfig(dsn string) (*pgxpool.Config, error) {
-	return poolConfig(dsn, coreStatementTimeout)
+	return poolConfig(dsn, coreStatementTimeout, 0)
+}
+
+// PoolConfigWithMaxConns is PoolConfig, taking the pool size a deployment
+// configured (config.Config.CoreDBPoolMax, from CORE_DB_POOL_MAX) rather than
+// the service default. maxConns <= 0 means the deployment left it unset and
+// keeps PoolConfig's own default; either way a pool_max_conns the DSN already
+// sets still wins, so the two ways of tuning the pool cannot disagree with
+// each other.
+func PoolConfigWithMaxConns(dsn string, maxConns int32) (*pgxpool.Config, error) {
+	return poolConfig(dsn, coreStatementTimeout, maxConns)
 }
 
 // MaintenancePoolConfig is PoolConfig with a statement timeout sized for
@@ -68,10 +91,10 @@ func PoolConfig(dsn string) (*pgxpool.Config, error) {
 // would fail provisioning exactly for the contests big enough to need it —
 // silently, at the first tick that tried.
 func MaintenancePoolConfig(dsn string, statementTimeout time.Duration) (*pgxpool.Config, error) {
-	return poolConfig(dsn, statementTimeout)
+	return poolConfig(dsn, statementTimeout, 0)
 }
 
-func poolConfig(dsn string, statementTimeout time.Duration) (*pgxpool.Config, error) {
+func poolConfig(dsn string, statementTimeout time.Duration, maxConns int32) (*pgxpool.Config, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse core database DSN: invalid connection string")
@@ -79,9 +102,13 @@ func poolConfig(dsn string, statementTimeout time.Duration) (*pgxpool.Config, er
 
 	// Not "if it is zero": pgxpool has already put max(4, NumCPU) there. The
 	// question is whether the deployment asked for a size, and only if it did
-	// not does the service default apply.
+	// not does a configured override or the service default apply.
 	if !dsnSetsPoolMaxConns(dsn) {
-		cfg.MaxConns = defaultMaxConns
+		if maxConns > 0 {
+			cfg.MaxConns = maxConns
+		} else {
+			cfg.MaxConns = defaultMaxConns
+		}
 	}
 	if cfg.MinConns == 0 {
 		cfg.MinConns = defaultMinConns
@@ -110,7 +137,16 @@ func poolConfig(dsn string, statementTimeout time.Duration) (*pgxpool.Config, er
 // NewPool opens the core database pool and verifies it is reachable, so a
 // misconfigured deployment fails at startup rather than on the first request.
 func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
-	cfg, err := PoolConfig(dsn)
+	return NewPoolWithMaxConns(ctx, dsn, 0)
+}
+
+// NewPoolWithMaxConns is NewPool, sized by PoolConfigWithMaxConns instead of
+// PoolConfig. The Core API is the one caller that passes a configured value
+// (config.Config.CoreDBPoolMax); every other caller — the one-off tools that
+// briefly open their own pool against this database — keeps asking for
+// NewPool's own default, which is enough for a job that runs alone.
+func NewPoolWithMaxConns(ctx context.Context, dsn string, maxConns int32) (*pgxpool.Pool, error) {
+	cfg, err := PoolConfigWithMaxConns(dsn, maxConns)
 	if err != nil {
 		return nil, err
 	}
