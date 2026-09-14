@@ -4,11 +4,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"log/slog"
+	"sync/atomic"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -41,38 +45,74 @@ type tokenGate struct {
 	// too, which subtle.ConstantTimeCompare on the raw strings does not.
 	digest [sha256.Size]byte
 	open   bool
+
+	// refused counts every refused call since start. A refusal is either
+	// somebody on the network without the token or a Core API holding the
+	// wrong one, and an operator must hear about both; lastLogged (Unix
+	// nanoseconds) keeps a flood of refusals from becoming a flood of lines.
+	log         *slog.Logger
+	logInterval time.Duration
+	refused     atomic.Int64
+	lastLogged  atomic.Int64
 }
 
-func newTokenGate(token string) tokenGate {
+// refusalLogInterval is the least time between two refusal lines. A variable
+// only so a test can shorten it.
+var refusalLogInterval = 10 * time.Second
+
+func newTokenGate(token string, log *slog.Logger) *tokenGate {
+	gate := &tokenGate{log: log, logInterval: refusalLogInterval}
 	if token == "" {
-		return tokenGate{open: true}
+		gate.open = true
+		return gate
 	}
-	return tokenGate{digest: sha256.Sum256([]byte(bearerScheme + token))}
+	gate.digest = sha256.Sum256([]byte(bearerScheme + token))
+	return gate
 }
 
 // admit reports whether the incoming call carries exactly one authorization
-// value equal to the expected one.
-func (g tokenGate) admit(ctx context.Context) error {
+// value equal to the expected one, and counts it when it does not.
+func (g *tokenGate) admit(ctx context.Context) error {
 	if g.open {
 		return nil
 	}
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return errUnauthenticated
+		return g.refuse(ctx)
 	}
 	values := md.Get(authorizationHeader)
 	if len(values) != 1 {
-		return errUnauthenticated
+		return g.refuse(ctx)
 	}
 	presented := sha256.Sum256([]byte(values[0]))
 	if subtle.ConstantTimeCompare(presented[:], g.digest[:]) != 1 {
-		return errUnauthenticated
+		return g.refuse(ctx)
 	}
 	return nil
 }
 
+// refuse counts a refusal and logs it, at most once per interval, with the
+// running total and the peer's address. Never with anything the caller
+// presented: a wrong token may be a right one with a typo.
+func (g *tokenGate) refuse(ctx context.Context) error {
+	total := g.refused.Add(1)
+
+	now := time.Now().UnixNano()
+	last := g.lastLogged.Load()
+	due := last == 0 || now-last >= int64(g.logInterval)
+	if due && g.lastLogged.CompareAndSwap(last, now) {
+		address := "unknown"
+		if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
+			address = p.Addr.String()
+		}
+		g.log.Warn("query runner refused a call without a valid token",
+			"peer", address, "refused_total", total)
+	}
+	return errUnauthenticated
+}
+
 // unary guards every unary call, the health check included.
-func (g tokenGate) unary(
+func (g *tokenGate) unary(
 	ctx context.Context,
 	req any,
 	_ *grpc.UnaryServerInfo,
@@ -87,7 +127,7 @@ func (g tokenGate) unary(
 // stream guards every streaming call. The only stream served today is the
 // health service's Watch; guarding the chain rather than the method is what
 // keeps a stream added later from arriving unauthenticated.
-func (g tokenGate) stream(
+func (g *tokenGate) stream(
 	srv any,
 	ss grpc.ServerStream,
 	_ *grpc.StreamServerInfo,
