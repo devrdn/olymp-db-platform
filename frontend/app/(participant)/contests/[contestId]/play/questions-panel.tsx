@@ -377,7 +377,9 @@ function Refusal({ state, dict }: { state: Extract<AnswerState, { kind: "refused
   const errors = dict.errors as Record<string, string>;
   const message = errors[state.code] ?? errors.fallback;
 
-  const passing = ["query_too_often", "attempt_conflict"].includes(state.code);
+  // A wait rather than a fault: asking again later is the whole remedy, so
+  // these read quietly and carry no request reference to report.
+  const passing = ["query_too_often", "answer_too_often", "attempt_conflict"].includes(state.code);
 
   return (
     <div

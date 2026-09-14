@@ -26,6 +26,10 @@
       "meaning": "The submitted answer is longer than this installation accepts. The message names the limit."
     },
     {
+      "code": "answer_too_often",
+      "meaning": "This participant has submitted as many answers this minute as the installation allows, refused ones included. Nothing was recorded and no attempt was used; `Retry-After` says how long to wait at most."
+    },
+    {
       "code": "attempt_conflict",
       "meaning": "Too many submissions to this exact question arrived at the same moment for the retry to resolve. Nothing was recorded; submitting again is the right response."
     },
