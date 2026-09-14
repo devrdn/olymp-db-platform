@@ -293,6 +293,12 @@ function ShapeSection({
         {sequentialActive && unlimitedAttempts ? (
           <p className="max-w-body text-small text-warn">{t.shape.sequentialNeedsAttempts}</p>
         ) : null}
+        {/* The same, for winner scoring: the first correct final answer wins
+            and a wrong one costs nothing, so the gate refuses an unlimited
+            final question there. */}
+        {scoring === "winner" && kind === "final" && unlimitedAttempts ? (
+          <p className="max-w-body text-small text-warn">{t.shape.winnerFinalNeedsAttempts}</p>
+        ) : null}
 
         <Field
           id="penaltyPct"
