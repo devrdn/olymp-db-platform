@@ -289,23 +289,22 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			}
 			a.closers = append(a.closers, func() { _ = client.Close() })
 
-			// One instance rather than a fresh postgres.NewContests(pool) for
-			// each of the two roles below: Contests and ContestAndGame are
-			// two different questions Run asks of the same contests row, and
-			// this type answers both without importing anything the other
-			// callers of Contests do not already need.
-			consoleContests := postgres.NewContests(pool)
+			// One instance rather than a fresh postgres.NewRegistrations(pool)
+			// for each of the two roles below: People and Lookup are two
+			// different questions Run asks of the same registrations row,
+			// and this type answers both.
+			consoleRegistrations := postgres.NewRegistrations(pool)
 			console = queryproxy.New(
-				postgres.NewRegistrations(pool),
-				consoleContests,
+				consoleRegistrations,
+				postgres.NewContests(pool),
 				games,
 				databases,
 				queryrunner.NewJournalled(client, postgres.NewQueryLog(pool), log),
 			).WithPerMinuteDefault(cfg.QueryPerMinute).WithGrace(cfg.DeadlineGrace).
-				// Collapses Run's own Contests.ByID and Games.Game into the
-				// one round trip consoleContests.Lookup already answers both
-				// halves of.
-				WithContestAndGame(consoleContests).
+				// Collapses Run's own participant, contest and game lookups
+				// into the one round trip consoleRegistrations.ForRun answers
+				// together.
+				WithLookup(consoleRegistrations).
 				// The console's schema panel. Wired here and only here: the
 				// console-less Service built further down for the participant
 				// read endpoints has no game cluster to read a schema from,
