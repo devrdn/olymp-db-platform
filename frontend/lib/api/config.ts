@@ -29,3 +29,35 @@ export function apiOrigin(): string {
 
   return LOCAL_STACK;
 }
+
+/** Shorter than this is no secret at all (lib/api/forwarded.ts). */
+const MIN_INGRESS_SECRET_LENGTH = 32;
+
+let reportedMissingIngressSecret = false;
+
+/**
+ * The secret the reverse proxy adds to every request it forwards here
+ * (`INGRESS_SECRET`, deploy/Caddyfile), or null when none usable is set.
+ *
+ * Null is safe — no forwarded address is handed to the API, so nobody can
+ * choose theirs — but behind the proxy it makes every visitor look like this
+ * server, and the per-address login limit becomes one counter for everybody.
+ * In production that is almost always a deployment that forgot the variable,
+ * so it is reported once per process, naming the variable and not the value.
+ * A production build served locally without a proxy (`make front-start`) sees
+ * the same line once, and can ignore it.
+ */
+export function ingressSecret(): string | null {
+  const configured = process.env.INGRESS_SECRET ?? "";
+  if (configured.length >= MIN_INGRESS_SECRET_LENGTH) return configured;
+
+  if (process.env.NODE_ENV === "production" && !reportedMissingIngressSecret) {
+    reportedMissingIngressSecret = true;
+    console.error(
+      `INGRESS_SECRET is ${configured ? "shorter than " + MIN_INGRESS_SECRET_LENGTH + " characters" : "not set"}: ` +
+        "client addresses are not forwarded to the API, so every request counts as coming from this server. " +
+        "Set the same value for the caddy and web services.",
+    );
+  }
+  return null;
+}

@@ -307,9 +307,11 @@ require-env:
 #
 # Loopback is trusted so the interface running on the host (`make front`) may
 # hand a forwarded address on, the way the web container does behind Caddy in
-# production. In plain dev there is no proxy and no chain, so requests still
-# log as ::1 — the line exists so the dev API treats a forwarded header the
-# same way production does the moment something does send one.
+# production. In plain dev there is no proxy, so the interface hands nothing on
+# — it forwards an address only on a request Caddy vouched for with
+# INGRESS_SECRET — and requests log as ::1. The line exists so the dev API
+# treats a forwarded header the same way production does the moment something
+# does send one.
 #
 # QUERY_RUNNER_TOKEN, when deploy/.env sets it, is exported to `run` and
 # `runner` alike (below), so the two present and expect the same token.

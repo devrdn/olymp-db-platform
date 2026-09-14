@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { INGRESS_HEADER } from "@/lib/api/forwarded";
 import { SESSION_COOKIE } from "@/lib/auth/session";
 
 import { config, proxy } from "./proxy";
@@ -73,6 +74,67 @@ describe("proxy", () => {
 });
 
 /**
+ * `/api/*` reaches this application only when nothing is in front of it — the
+ * reverse proxy takes that prefix first — and next.config.ts then passes it to
+ * the API with the browser's own headers. The API believes this server's
+ * forwarded address, so the proxy removes one nobody vouched for before the
+ * rewrite runs, and never lets the ingress secret travel on.
+ */
+describe("proxy on the API's prefix", () => {
+  const SECRET = "an-ingress-secret-of-at-least-32-characters";
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function passedOn(headers: Record<string, string>) {
+    const req = new NextRequest(new URL("/api/v1/settings/images/logo", "http://localhost:3000"), {
+      headers,
+    });
+    const response = proxy(req);
+    const overridden = (response.headers.get("x-middleware-override-headers") ?? "").split(",");
+    return {
+      redirect: response.headers.get("location"),
+      has: (name: string) => overridden.includes(name),
+      value: (name: string) => response.headers.get(`x-middleware-request-${name}`),
+    };
+  }
+
+  test("does not send a signed-out browser to sign-in: the API guards its own", () => {
+    vi.stubEnv("INGRESS_SECRET", SECRET);
+
+    expect(passedOn({}).redirect).toBeNull();
+  });
+
+  test("removes a forwarded address the browser wrote itself", () => {
+    vi.stubEnv("INGRESS_SECRET", SECRET);
+
+    const out = passedOn({ "x-forwarded-for": "10.20.30.40", accept: "image/png" });
+
+    expect(out.has("x-forwarded-for")).toBe(false);
+    expect(out.value("x-forwarded-for")).toBeNull();
+    expect(out.value("accept")).toBe("image/png");
+  });
+
+  test("removes it too when this server has no secret configured", () => {
+    vi.stubEnv("INGRESS_SECRET", "");
+
+    const out = passedOn({ "x-forwarded-for": "10.20.30.40", [INGRESS_HEADER]: "" });
+
+    expect(out.has("x-forwarded-for")).toBe(false);
+  });
+
+  test("keeps a vouched address and drops the secret that vouched for it", () => {
+    vi.stubEnv("INGRESS_SECRET", SECRET);
+
+    const out = passedOn({ "x-forwarded-for": "203.0.113.7", [INGRESS_HEADER]: SECRET });
+
+    expect(out.value("x-forwarded-for")).toBe("203.0.113.7");
+    expect(out.has(INGRESS_HEADER)).toBe(false);
+  });
+});
+
+/**
  * The matcher, checked through the same door the runtime uses.
  *
  * `config.matcher` is a string the framework compiles, so nothing in the type
@@ -83,8 +145,6 @@ describe("proxy's matcher", () => {
   const pattern = new RegExp(`^${config.matcher[0]}$`);
 
   test.each([
-    ["/api/v1/settings", "the API's, served by the reverse proxy, not by Next"],
-    ["/api/v1/settings/images/logo", "public on purpose: the sign-in screen wears it"],
     ["/_next/static/chunk.js", "the framework's own asset"],
     ["/favicon.ico", "an asset, not a screen"],
   ])("leaves %s alone — %s", (path) => {
@@ -95,7 +155,9 @@ describe("proxy's matcher", () => {
     ["/", "a screen"],
     ["/contests", "a screen"],
     ["/users/8f3a.tar.gz", "a screen whose path happens to carry dots"],
-  ])("guards %s — %s", (path) => {
+    ["/api/v1/settings", "the API's: its forwarded address is checked, sign-in is not"],
+    ["/api/v1/settings/images/logo", "public on purpose, and still passed through the same check"],
+  ])("runs on %s — %s", (path) => {
     // Named exclusions rather than "anything with a dot": the shorthand stops
     // guarding the day a route legitimately carries one, and says nothing.
     expect(pattern.test(path)).toBe(true);

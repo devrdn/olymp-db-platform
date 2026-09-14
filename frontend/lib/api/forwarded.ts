@@ -1,3 +1,5 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+
 /**
  * The headers that carry who is really asking, from the browser's request to
  * this server's own request against the API.
@@ -6,12 +8,50 @@
  * and every admin action are Server Actions that dial the API themselves.
  * The API resolves the client address from `X-Forwarded-For` — believing it
  * only from its configured proxies, of which this server is one — so if the
- * chain the ingress proxy established is not handed on here, the API's answer
- * to "who?" is this process. Three real things then break: the per-address
- * login throttle collapses into one counter for the whole installation, a
- * contest's network restriction compares against the web container instead of
- * the participant, and the audit trail records the proxy for every action.
+ * address the ingress proxy established is not handed on here, the API's
+ * answer to "who?" is this process. Three real things then break: the
+ * per-address login throttle collapses into one counter for the whole
+ * installation, a contest's network restriction compares against the web
+ * container instead of the participant, and the audit trail records the proxy
+ * for every action.
+ *
+ * The other half of that trust is this server's to keep. The API believes what
+ * this server hands on, so this server may hand on only an address the ingress
+ * proxy set. Next does not expose the socket a request arrived on, so "it came
+ * through the proxy" cannot be read off the connection; the proxy proves it
+ * instead, with a secret it adds to every request it forwards here
+ * (`INGRESS_SECRET`, sent as {@link INGRESS_HEADER}, see deploy/Caddyfile). A
+ * request without that secret reached this server some other way, and its
+ * `X-Forwarded-For` is whatever the browser chose to write.
  */
+
+/** The header the ingress proxy proves itself with. Lower case, as Node reads it. */
+export const INGRESS_HEADER = "x-ingress-secret";
+
+/**
+ * A secret shorter than this is treated as no secret: nothing is vouched for.
+ * The same 256-bit floor the backend's shared secrets use.
+ */
+export const MIN_INGRESS_SECRET_LENGTH = 32;
+
+/**
+ * Whether the presented value is the configured ingress secret.
+ *
+ * Both sides are hashed before the comparison, so it is constant-time whatever
+ * the presented length. An absent or too-short configured secret vouches for
+ * nothing: an unconfigured server cannot tell the proxy from a browser, so it
+ * believes neither.
+ */
+export function vouchedByIngress(
+  presented: string | null | undefined,
+  configured: string | null | undefined,
+): boolean {
+  if (!configured || configured.length < MIN_INGRESS_SECRET_LENGTH) return false;
+  if (!presented) return false;
+
+  const digest = (value: string) => createHash("sha256").update(value, "utf8").digest();
+  return timingSafeEqual(digest(presented), digest(configured));
+}
 
 /**
  * A forwarded chain is addresses joined by commas. The exact parsing belongs
@@ -24,13 +64,19 @@ const plausibleChain = /^[0-9a-fA-F.:,\s]+$/;
 
 /**
  * Builds the pass-through headers from a reader over the incoming request's
- * own. Injected as a function so the logic is testable without a framework;
- * the wiring hands it `headers().get` from `next/headers`.
+ * own. Injected as functions and values so the logic is testable without a
+ * framework; the wiring hands it `headers().get` from `next/headers` and the
+ * configured secret.
  */
 export function forwardedHeaders(
   get: (name: string) => string | null,
+  secret: string | null | undefined,
 ): Record<string, string> {
   const headers: Record<string, string> = {};
+
+  // Nothing is handed on unless the proxy vouched for this request: an
+  // unvouched chain is the browser's own claim about its address.
+  if (!vouchedByIngress(get(INGRESS_HEADER), secret)) return headers;
 
   const chain = get("x-forwarded-for");
   if (chain && plausibleChain.test(chain)) {
@@ -47,4 +93,20 @@ export function forwardedHeaders(
   }
 
   return headers;
+}
+
+/**
+ * The headers a request passed straight through to the API should carry — the
+ * `/api/*` rewrite in next.config.ts, which forwards the browser's headers as
+ * they are. The same rule as above: the forwarded chain survives only when the
+ * proxy vouched for it, and the proxy's secret never travels further than this
+ * server. Returns a copy; the incoming headers are left as they were.
+ */
+export function apiRequestHeaders(incoming: Headers, secret: string | null | undefined): Headers {
+  const outgoing = new Headers(incoming);
+  if (!vouchedByIngress(incoming.get(INGRESS_HEADER), secret)) {
+    outgoing.delete("x-forwarded-for");
+  }
+  outgoing.delete(INGRESS_HEADER);
+  return outgoing;
 }
