@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"regexp/syntax"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -174,7 +175,9 @@ func (q Question) HasChoice(id string) bool {
 // most once, however many reference answers accept it. It asks the same
 // matcher Submit grades with, so an option that a case-insensitive answer or
 // a pattern accepts is counted exactly when submitting it would be scored
-// correct. A pattern that does not compile matches nothing, as in grading.
+// correct — a pattern included, which matches a whole option id and never a
+// fragment of a longer one. A pattern that does not compile matches nothing,
+// as in grading.
 func (q Question) CorrectChoices() int {
 	n := 0
 	for _, id := range q.ChoiceIDs {
@@ -214,11 +217,35 @@ func (a Answer) Validate() error {
 		return fmt.Errorf("%w: unknown match kind %q", ErrInvalidAnswer, a.MatchKind)
 	}
 	if a.MatchKind == MatchRegex {
-		if _, err := regexp.Compile(a.Value); err != nil {
+		if _, err := compileAnswerPattern(a.Value); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidAnswer, err)
 		}
 	}
 	return nil
+}
+
+// compileAnswerPattern compiles a regex reference answer the one way it is
+// ever evaluated: against the whole answer, as if written between ^ and $.
+//
+// An organiser writes "john\s+smith" meaning the name, not "any text that
+// contains the name somewhere". Matched as a substring, a single value listing
+// every candidate would be graded correct, so the anchors are added here, at
+// the single point every caller compiles through (grading, the correct-option
+// count, authoring validation), rather than left to whoever writes the
+// pattern. A stored pattern keeps its text; only its meaning is fixed.
+//
+// The pattern is parsed on its own first. Wrapped in a group, text that is not
+// a complete expression by itself — one that closes a parenthesis it never
+// opened and opens another — can still compile while escaping the group and
+// leaving part of the pattern unanchored. Requiring the bare pattern to parse
+// guarantees the group holds all of it. Flags set inside the pattern ((?i),
+// (?m), (?s)) are scoped to that group and cannot change what the outer
+// anchors mean.
+func compileAnswerPattern(pattern string) (*regexp.Regexp, error) {
+	if _, err := syntax.Parse(pattern, syntax.Perl); err != nil {
+		return nil, err
+	}
+	return regexp.Compile(`^(?:` + pattern + `)$`)
 }
 
 // validateAnswersFor checks a whole set of reference answers against the

@@ -550,6 +550,10 @@ function AnswersSection({
             so clearing a field and saving is the deletion. Said out loud,
             because a control that is absent has to be explained. */}
         <p className="max-w-body text-small text-ink-3">{t.answers.removeHint}</p>
+        {/* Grading anchors a pattern to the whole answer (the backend's
+            compileAnswerPattern). An author used to substring matching would
+            otherwise write a pattern that no longer accepts what they meant. */}
+        <p className="max-w-body text-small text-ink-3">{t.answers.regexHint}</p>
 
       </Section>
     </>
