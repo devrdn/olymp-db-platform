@@ -169,3 +169,36 @@ func TestStatusRecorderDefaultsToOKWhenHandlerNeverWritesHeader(t *testing.T) {
 		t.Errorf("status = %v, want %d", rec["status"], http.StatusOK)
 	}
 }
+
+func TestAddressSubjectGroupsAnIPv6NetworkAndLeavesIPv4Alone(t *testing.T) {
+	// One IPv6 subscriber is routinely handed a whole /64, so an address
+	// taken verbatim is a fresh rate-limit budget per address they care to
+	// use. IPv4 is one address per machine or NAT and stays exact.
+	for name, tc := range map[string]struct{ in, want string }{
+		"ipv4":                    {"203.0.113.7", "203.0.113.7"},
+		"ipv4-mapped ipv6":        {"::ffff:203.0.113.7", "203.0.113.7"},
+		"ipv6 host":               {"2001:db8:1:2:aaaa:bbbb:cccc:dddd", "2001:db8:1:2::/64"},
+		"another host, same /64":  {"2001:db8:1:2::1", "2001:db8:1:2::/64"},
+		"ipv6 with a zone":        {"fe80::1%eth0", "fe80::/64"},
+		"empty":                   {"", ""},
+		"unparseable is verbatim": {"not-an-address", "not-an-address"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := AddressSubject(tc.in); got != tc.want {
+				t.Errorf("AddressSubject(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+	if AddressSubject("2001:db8:1:2::1") == AddressSubject("2001:db8:1:3::1") {
+		t.Error("two different /64 networks share a subject")
+	}
+}
+
+func TestClientSubjectIsTheSubjectOfTheClientAddress(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "[2001:db8:1:2::42]:443"
+
+	if got := ClientSubject(req); got != "2001:db8:1:2::/64" {
+		t.Errorf("ClientSubject() = %q, want the /64", got)
+	}
+}

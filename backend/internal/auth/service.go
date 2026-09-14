@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
@@ -357,7 +358,7 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 // checkAddress spends the address budget and applies the length guards.
 func (s *Service) checkAddress(ctx context.Context, cmd LoginCommand) error {
 	if cmd.IP != "" {
-		allowed, err := s.limiter.Allow(ctx, "ip:"+cmd.IP, s.maxPerAddress, loginAttemptWindow)
+		allowed, err := s.limiter.Allow(ctx, "ip:"+httpx.AddressSubject(cmd.IP), s.maxPerAddress, loginAttemptWindow)
 		if err != nil {
 			return err
 		}
@@ -491,12 +492,13 @@ func boundLogin(login string) string {
 
 func accountSubject(login string) string { return "login:" + normalizeLogin(login) }
 
-// accountAddressSubject keys the guessing limit. The address comes first and
-// the separator is one no address contains, so the split is unambiguous
-// whatever the login holds: no login a caller invents can produce another
-// address's key.
+// accountAddressSubject keys the guessing limit. The address is grouped the
+// way every address budget is (httpx.AddressSubject: an IPv6 /64 is one
+// caller). It comes first and the separator is one no address contains, so
+// the split is unambiguous whatever the login holds: no login a caller
+// invents can produce another address's key.
 func accountAddressSubject(login, ip string) string {
-	return "login-from:" + ip + "|" + normalizeLogin(login)
+	return "login-from:" + httpx.AddressSubject(ip) + "|" + normalizeLogin(login)
 }
 
 func passwordChangeSubject(userID uuid.UUID) string { return "pwchange:" + userID.String() }

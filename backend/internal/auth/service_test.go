@@ -805,3 +805,27 @@ func TestBusyRefusalsNeverSpendTheAccountsOwnCounters(t *testing.T) {
 		t.Errorf("the attempt past the address budget = %v, want ErrTooManyAttempts: busy refusals did not spend it", err)
 	}
 }
+
+func TestAnIPv6NetworkIsOneAddressToTheSignInThrottle(t *testing.T) {
+	// A /64 is one subscriber. Taken host by host, each of its addresses
+	// would be a fresh address budget and a fresh guessing limit per account.
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+	service := NewService(ServiceConfig{
+		Users:                 userstest.New(),
+		Sessions:              NewSessionStore(c, time.Hour),
+		Audit:                 audit.New(&collectingSink{}),
+		Limiter:               NewLimiter(c),
+		Logger:                logging.New("error", io.Discard),
+		Passwords:             passwordtest.NewHasher(),
+		MaxAttemptsPerAddress: 1,
+	})
+	ctx := context.Background()
+
+	_, _ = service.Login(ctx, LoginCommand{Login: "ivanov", Password: "a guess", IP: "2001:db8:1:2::1"})
+	_, err := service.Login(ctx, LoginCommand{Login: "ivanov", Password: "a guess", IP: "2001:db8:1:2::ffff"})
+
+	if !errors.Is(err, ErrTooManyAttempts) {
+		t.Errorf("a second host of the same /64 = %v, want ErrTooManyAttempts from the shared budget", err)
+	}
+}
