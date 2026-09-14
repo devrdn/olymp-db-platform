@@ -126,11 +126,19 @@ export type ImportSkippedRow = z.infer<typeof importSkippedRowSchema>;
  *
  * Partial success, the same honesty `bulkResultSchema` reports: one taken
  * login must not cost the rest of the roster the accounts they could have
- * had, and whoever pasted the list has to see which line to fix.
+ * had, and whoever pasted the list has to see which line to fix. An import
+ * stopped partway also names the rows it never reached (`not_imported`) and
+ * why (`stopped`, an error code).
  */
 export const importResultSchema = z.object({
   created: z.array(createdAccountSchema),
   skipped: z.array(importSkippedRowSchema),
+  // An import the server's password hashing was too busy to finish is still
+  // answered with what it created — those passwords exist nowhere else — plus
+  // the logins it never reached and the error code saying why. Optional so a
+  // server that predates them still parses.
+  not_imported: z.array(z.string()).optional(),
+  stopped: z.string().optional(),
 });
 
 export type ImportResult = z.infer<typeof importResultSchema>;

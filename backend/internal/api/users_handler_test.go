@@ -663,3 +663,92 @@ func TestSignInUnlockEndpointNeedsThePermission(t *testing.T) {
 		t.Errorf("status = %d, calls = %d, want 403 and no unlock", rec.Code, f.unlocker.calls)
 	}
 }
+
+// slotTakingUsers takes every slot of the hasher once the first account is
+// stored, so the rows of an import after it find the hasher at capacity.
+type slotTakingUsers struct {
+	*userstest.Repository
+	hasher *password.Hasher
+	t      *testing.T
+	taken  bool
+}
+
+func (r *slotTakingUsers) Create(ctx context.Context, u users.User) (users.User, error) {
+	created, err := r.Repository.Create(ctx, u)
+	if !r.taken {
+		r.taken = true
+		for range r.hasher.Concurrency() {
+			slot, holdErr := r.hasher.Hold(context.Background())
+			if holdErr != nil {
+				r.t.Fatalf("Hold() returned error: %v", holdErr)
+			}
+			r.t.Cleanup(slot.Release)
+		}
+	}
+	return created, err
+}
+
+func TestAnImportStoppedForLoadStillHandsOverThePasswordsItIssued(t *testing.T) {
+	// The accounts created before the hasher ran out of room exist, and their
+	// one-time passwords are shown here or never. A bare 503 would leave those
+	// people with accounts nobody can hand over; the answer carries them, and
+	// names the rows that were never tried and why, so the rest can be
+	// imported again.
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
+	repo := &slotTakingUsers{Repository: f.repo, hasher: hasher, t: t}
+	service := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}, hasher)
+	log := logging.New("error", io.Discard)
+	c := cache.NewMemory(100)
+	t.Cleanup(func() { _ = c.Close() })
+	sessions := auth.NewSessionStore(c, time.Hour)
+	token, err := sessions.Create(t.Context(), auth.Principal{UserID: f.admin.ID, Login: f.admin.Login})
+	if err != nil {
+		t.Fatalf("session Create() returned error: %v", err)
+	}
+	mw := auth.NewMiddleware(auth.MiddlewareConfig{
+		Sessions: sessions, Users: f.repo,
+		Authorizer: rbac.New(noRoles{}), Cookies: auth.NewCookieWriter(false), Logger: log,
+	})
+	router := chi.NewRouter()
+	api.NewUsersHandler(service, f.repo, &recordingUnlocker{}, mw, log).Mount(router)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/users/import", strings.NewReader(`{
+		"roles": ["student"],
+		"rows": [
+			{"login": "s.popescu", "full_name": "Sergiu Popescu"},
+			{"login": "i.ivanov", "full_name": "Ivan Ivanov"},
+			{"login": "a.rusu", "full_name": "Ana Rusu"}
+		]
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: token})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with the partial result (body: %s)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Created []struct {
+			User            UserRef `json:"user"`
+			OneTimePassword string  `json:"one_time_password"`
+		} `json:"created"`
+		NotImported []string `json:"not_imported"`
+		Stopped     string   `json:"stopped"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	if len(body.Created) != 1 || body.Created[0].User.Login != "s.popescu" || body.Created[0].OneTimePassword == "" {
+		t.Errorf("created = %+v, want s.popescu with a password to hand over", body.Created)
+	}
+	if strings.Join(body.NotImported, ",") != "i.ivanov,a.rusu" {
+		t.Errorf("not_imported = %v, want [i.ivanov a.rusu]", body.NotImported)
+	}
+	if body.Stopped != "sign_in_busy" {
+		t.Errorf("stopped = %q, want sign_in_busy", body.Stopped)
+	}
+}

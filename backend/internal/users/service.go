@@ -686,6 +686,13 @@ type ImportCommand struct {
 type ImportResult struct {
 	Created []CreateResult
 	Skipped []SkippedRow
+	// NotImported names, by login as given, the rows an import that stopped
+	// with an error never reached: the row it stopped at and every one after
+	// it. Empty when the import ran to the end. It is not a skip — nothing
+	// was wrong with those rows — and it travels with the error so the
+	// accounts already created, and their one-time passwords, are not lost
+	// with it.
+	NotImported []string
 }
 
 // SkippedRow is one line that produced no account.
@@ -710,7 +717,7 @@ func (s *Service) Import(ctx context.Context, cmd ImportCommand) (ImportResult, 
 	}
 
 	var result ImportResult
-	for _, row := range cmd.Rows {
+	for i, row := range cmd.Rows {
 		created, err := s.Create(ctx, CreateCommand{
 			ActorID:  cmd.ActorID,
 			Login:    row.Login,
@@ -735,7 +742,11 @@ func (s *Service) Import(ctx context.Context, cmd ImportCommand) (ImportResult, 
 			// row. Reporting it as "invalid row" would tell the importer to
 			// fix a line that was fine, and hide an outage behind a list of
 			// them; the accounts already created stay created and are
-			// reported by the error, not swallowed.
+			// reported with the error, not swallowed, and so are the rows
+			// that were never tried.
+			for _, rest := range cmd.Rows[i:] {
+				result.NotImported = append(result.NotImported, rest.Login)
+			}
 			return result, fmt.Errorf("import row %q: %w", row.Login, err)
 		}
 	}
