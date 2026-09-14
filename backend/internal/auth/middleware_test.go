@@ -6,11 +6,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
+	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/users/userstest"
@@ -455,5 +458,305 @@ func TestAuthenticateRefusesASessionPastItsMaximumLifetimeHoweverRecentlyUsed(t 
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401 for a session past its maximum lifetime", rec.Code)
+	}
+}
+
+// countingUsers counts the account reads the middleware makes.
+type countingUsers struct {
+	*userstest.Repository
+	mu    sync.Mutex
+	reads int
+}
+
+func (c *countingUsers) ByID(ctx context.Context, id uuid.UUID) (users.User, error) {
+	c.mu.Lock()
+	c.reads++
+	c.mu.Unlock()
+	return c.Repository.ByID(ctx, id)
+}
+
+func (c *countingUsers) readCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.reads
+}
+
+// cachedFixture is the middleware as the deployment assembles it: accounts
+// cached between requests, and the account service telling that cache about
+// every change, sharing one account store.
+type cachedFixture struct {
+	mw       *Middleware
+	repo     *userstest.Repository
+	counted  *countingUsers
+	sessions *SessionStore
+	// store is the account cache's own backend, so a test can make it fail
+	// without failing the session store.
+	store   *switchableCache
+	service *users.Service
+	user    users.User
+	token   string
+}
+
+const cachedFixturePassword = "the current password"
+
+func newCachedFixture(t *testing.T, ttl time.Duration) *cachedFixture {
+	t.Helper()
+
+	c := cache.NewMemory(100)
+	t.Cleanup(func() { _ = c.Close() })
+	log := logging.New("error", io.Discard)
+
+	repo := userstest.New()
+	repo.GrantRole("tester", rbac.PermissionUsersManage)
+	user := repo.Add(users.User{
+		Login: "ivanov", FullName: "Ivanov", Status: users.StatusActive, Roles: []string{"tester"},
+		PasswordHash: passwordtest.Hash(t, cachedFixturePassword),
+	})
+	counted := &countingUsers{Repository: repo}
+
+	sessions := NewSessionStore(c, time.Hour)
+	token, err := sessions.Create(context.Background(), Principal{UserID: user.ID, Login: user.Login})
+	if err != nil {
+		t.Fatalf("Create() returned error: %v", err)
+	}
+
+	store := newSwitchableCache(t)
+	accounts := NewAccountCache(store, ttl, log)
+	mw := NewMiddleware(MiddlewareConfig{
+		Sessions:   sessions,
+		Users:      counted,
+		Accounts:   accounts,
+		Authorizer: rbac.New(staticRoles{}),
+		Cookies:    NewCookieWriter(false),
+		Logger:     log,
+	})
+	service := users.NewService(repo, audit.New(&collectingSink{}), &userstest.SpyUnitOfWork{}, passwordtest.NewHasher()).
+		WithAccessCache(accounts)
+
+	return &cachedFixture{
+		mw: mw, repo: repo, counted: counted, sessions: sessions, store: store,
+		service: service, user: user, token: token,
+	}
+}
+
+// serve sends one request with the session token and answers its status and
+// the identity the handler saw, if any.
+func (f *cachedFixture) serve(token string) (int, rbac.Identity) {
+	var seen rbac.Identity
+	handler := f.mw.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen, _ = IdentityFrom(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, authed(token))
+	return rec.Code, seen
+}
+
+func TestACachedAccountSparesTheDatabaseReadAndTheCacheWrite(t *testing.T) {
+	f := newCachedFixture(t, time.Minute)
+
+	for i := range 5 {
+		code, identity := f.serve(f.token)
+		if code != http.StatusOK {
+			t.Fatalf("request %d: status = %d, want 200", i, code)
+		}
+		if identity.UserID != f.user.ID || !identity.Has(rbac.PermissionUsersManage) {
+			t.Fatalf("request %d: identity %+v lacks the account or its permissions", i, identity)
+		}
+	}
+
+	if got := f.counted.readCount(); got != 1 {
+		t.Errorf("five requests read the account %d times, want once", got)
+	}
+	if got := f.store.setCount(); got != 1 {
+		t.Errorf("five requests wrote the account cache %d times, want once", got)
+	}
+}
+
+// TestEveryChangeToAccessIsHonouredOnTheNextRequest is the promise the cache
+// must not weaken: blocking, deleting, changing roles or a password takes
+// effect on the account's very next request, not when a copy expires. The
+// lifetime here is far longer than the test, so only invalidation can pass it.
+func TestEveryChangeToAccessIsHonouredOnTheNextRequest(t *testing.T) {
+	actor := uuid.New()
+	operations := []struct {
+		name string
+		run  func(f *cachedFixture) error
+	}{
+		{"Block", func(f *cachedFixture) error {
+			return f.service.Block(context.Background(), actor, f.user.ID, "cheating")
+		}},
+		{"Delete", func(f *cachedFixture) error {
+			return f.service.Delete(context.Background(), actor, f.user.ID, "graduated")
+		}},
+		{"BulkSetStatus", func(f *cachedFixture) error {
+			_, err := f.service.BulkSetStatus(context.Background(), actor, []uuid.UUID{f.user.ID}, users.StatusBlocked, "cheating")
+			return err
+		}},
+		{"ReplaceRoles", func(f *cachedFixture) error {
+			return f.service.ReplaceRoles(context.Background(), actor, f.user.ID, nil)
+		}},
+		{"BulkReplaceRoles", func(f *cachedFixture) error {
+			_, err := f.service.BulkReplaceRoles(context.Background(), actor, []uuid.UUID{f.user.ID}, nil)
+			return err
+		}},
+		{"ChangePassword", func(f *cachedFixture) error {
+			return f.service.ChangePassword(context.Background(), users.ChangePasswordCommand{
+				UserID: f.user.ID, OldPassword: cachedFixturePassword, NewPassword: "a brand new password",
+			})
+		}},
+		{"ResetPassword", func(f *cachedFixture) error {
+			_, err := f.service.ResetPassword(context.Background(), actor, f.user.ID)
+			return err
+		}},
+		{"BulkResetPassword", func(f *cachedFixture) error {
+			_, err := f.service.BulkResetPassword(context.Background(), actor, []uuid.UUID{f.user.ID})
+			return err
+		}},
+	}
+
+	for _, op := range operations {
+		t.Run(op.name, func(t *testing.T) {
+			f := newCachedFixture(t, time.Hour)
+			if code, _ := f.serve(f.token); code != http.StatusOK {
+				t.Fatalf("before the change: status = %d, want 200", code)
+			}
+			if code, _ := f.serve(f.token); code != http.StatusOK || f.counted.readCount() != 1 {
+				t.Fatalf("the account was not served from the cache before the change (status %d, %d reads)",
+					code, f.counted.readCount())
+			}
+
+			if err := op.run(f); err != nil {
+				t.Fatalf("%s returned error: %v", op.name, err)
+			}
+
+			if code, _ := f.serve(f.token); code != http.StatusUnauthorized {
+				t.Errorf("the request after %s: status = %d, want 401", op.name, code)
+			}
+		})
+	}
+}
+
+func TestAChangeOfPermissionsIsSeenByTheNextSession(t *testing.T) {
+	// Roles retire the account's sessions, so the permissions a new session
+	// is built from have to be the new ones, not a cached copy of the old.
+	f := newCachedFixture(t, time.Hour)
+	if code, identity := f.serve(f.token); code != http.StatusOK || !identity.Has(rbac.PermissionUsersManage) {
+		t.Fatalf("before the change: status %d, identity %+v", code, identity)
+	}
+
+	if err := f.service.ReplaceRoles(context.Background(), uuid.New(), f.user.ID, nil); err != nil {
+		t.Fatalf("ReplaceRoles() returned error: %v", err)
+	}
+	changed, _ := f.repo.Get(f.user.ID)
+	token, err := f.sessions.Create(context.Background(), Principal{
+		UserID: changed.ID, Login: changed.Login, Generation: changed.SessionGeneration,
+	})
+	if err != nil {
+		t.Fatalf("Create() returned error: %v", err)
+	}
+
+	code, identity := f.serve(token)
+	if code != http.StatusOK {
+		t.Fatalf("the new session: status = %d, want 200", code)
+	}
+	if identity.Has(rbac.PermissionUsersManage) {
+		t.Error("the new session still carries a permission its roles no longer grant")
+	}
+}
+
+func TestACachedCopyNeverRefusesWhatTheDatabaseWouldAdmit(t *testing.T) {
+	// A copy can be stale the other way too — the account's sessions were
+	// retired and it signed in again, or it was unblocked — and the change was
+	// made somewhere the cache was not told. A refusal is never decided on a
+	// copy: the account is read again first.
+	f := newCachedFixture(t, time.Hour)
+	if code, _ := f.serve(f.token); code != http.StatusOK {
+		t.Fatalf("warming request: status = %d, want 200", code)
+	}
+
+	generation, err := f.repo.BumpSessionGeneration(context.Background(), f.user.ID)
+	if err != nil {
+		t.Fatalf("BumpSessionGeneration() returned error: %v", err)
+	}
+	token, err := f.sessions.Create(context.Background(), Principal{
+		UserID: f.user.ID, Login: f.user.Login, Generation: generation,
+	})
+	if err != nil {
+		t.Fatalf("Create() returned error: %v", err)
+	}
+	reads := f.counted.readCount()
+
+	if code, _ := f.serve(token); code != http.StatusOK {
+		t.Errorf("a session of the current generation was refused on a stale copy: status = %d", code)
+	}
+	if f.counted.readCount() != reads+1 {
+		t.Error("the refusal the copy suggested was not checked against the database")
+	}
+	if _, err := f.sessions.Get(context.Background(), token); err != nil {
+		t.Errorf("the new session was discarded: %v", err)
+	}
+	if code, _ := f.serve(f.token); code != http.StatusUnauthorized {
+		t.Errorf("the retired session: status = %d, want 401", code)
+	}
+}
+
+func TestAChangeTheCacheWasNotToldAboutAppliesWithinItsLifetime(t *testing.T) {
+	// The bound for everything invalidation cannot reach — SQL by hand, a
+	// Forget that failed: one lifetime, and not a moment longer.
+	const ttl = 50 * time.Millisecond
+	f := newCachedFixture(t, ttl)
+	if code, _ := f.serve(f.token); code != http.StatusOK {
+		t.Fatalf("warming request: status = %d, want 200", code)
+	}
+
+	if err := f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusBlocked, users.StatusChange{}); err != nil {
+		t.Fatalf("SetStatus() returned error: %v", err)
+	}
+	time.Sleep(3 * ttl)
+
+	if code, _ := f.serve(f.token); code != http.StatusUnauthorized {
+		t.Errorf("one lifetime after an untold block: status = %d, want 401", code)
+	}
+}
+
+func TestAnUnreachableAccountCacheFallsBackToTheDatabase(t *testing.T) {
+	f := newCachedFixture(t, time.Hour)
+	if code, _ := f.serve(f.token); code != http.StatusOK {
+		t.Fatalf("warming request: status = %d, want 200", code)
+	}
+	f.store.fail(true)
+	reads := f.counted.readCount()
+
+	if code, _ := f.serve(f.token); code != http.StatusOK {
+		t.Errorf("with the account cache down: status = %d, want 200", code)
+	}
+	if f.counted.readCount() != reads+1 {
+		t.Error("the account was not read from the database while its cache was down")
+	}
+
+	// Blocked where the cache cannot be told, and the cache cannot be read:
+	// the database decides, at once.
+	if err := f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusBlocked, users.StatusChange{}); err != nil {
+		t.Fatalf("SetStatus() returned error: %v", err)
+	}
+	if code, _ := f.serve(f.token); code != http.StatusUnauthorized {
+		t.Errorf("a blocked account with the account cache down: status = %d, want 401", code)
+	}
+}
+
+func TestAOneTimePasswordAccountIsHeldAtTheDoorFromACachedCopyToo(t *testing.T) {
+	f := newCachedFixture(t, time.Hour)
+	if err := f.repo.SetPassword(context.Background(), f.user.ID, "digest", true); err != nil {
+		t.Fatalf("SetPassword() returned error: %v", err)
+	}
+
+	for i := range 3 {
+		if code, _ := f.serve(f.token); code != http.StatusForbidden {
+			t.Errorf("request %d: status = %d, want 403", i, code)
+		}
+	}
+	if got := f.store.setCount(); got != 1 {
+		t.Errorf("three refused requests wrote the account cache %d times, want once", got)
 	}
 }
