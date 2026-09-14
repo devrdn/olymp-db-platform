@@ -388,50 +388,42 @@ func effectiveRateLimit(contestLimit, installationLimit int) int {
 // admitted here could have been refused by a contest-specific limit anyway
 // (CLAUDE.md rules 5 and 13).
 //
-// The second is the existing registration-keyed check below: who is asking is
-// a single row, the contest is another, and the rate check comes right after
-// those two, keyed by the registration they named, ahead of every refusal
-// downstream of it. A refused query still cost these two lookups, and used to
-// cost them for free, over and over, with nothing beyond the check above
-// counting the attempt: an individual participant hammering this endpoint
-// after their own deadline passed, or before their contest opened, met no
-// limiter of its own otherwise. Now every one of them is admitted or refused
-// by the same limiter, keyed by their own registration this time so a
-// contest's own tighter setting is what binds, and only a query that clears
-// it is charged the work below.
+// The second is the registration-keyed check right after the one lookup
+// (s.lookup.ForRun) that answers who is asking, the contest and its game
+// together, ahead of every refusal downstream of it. A refused query still
+// cost that lookup, and used to cost it for free, over and over, with nothing
+// beyond the check above counting the attempt: an individual participant
+// hammering this endpoint after their own deadline passed, or before their
+// contest opened, met no limiter of its own otherwise. Now every one of them
+// is admitted or refused by the same limiter, keyed by their own registration
+// this time so a contest's own tighter setting is what binds, and only a query
+// that clears it is charged the work below.
 //
-// What still needs its own registration is checked next — is the contest
-// running at all, and (the one formula every timing check in the system uses,
-// §8) has this participant's own deadline passed — because both are already
-// answerable from what the two lookups above returned and neither has to
-// wait for anything else. The one exception is a not-yet-started individual
-// participant, who has no deadline to compare against yet: for that one case
-// this checks the contest's own window instead (finding 1) and leaves the
-// deadline check itself for after the clock is actually started, further
-// down.
+// Then, in this order, from values already in hand: is the contest running
+// for this participant and has their own deadline passed (the one formula
+// every timing check in the system uses, §8), are they calling from an address
+// it allows, and is the query within its length. The one exception is a
+// not-yet-started individual participant, who has no deadline to compare
+// against yet: for that one case this checks the contest's own window instead
+// (finding 1) and leaves the deadline check itself for after the clock is
+// actually started, further down.
 //
-// Only past that does the address restriction, the query's own length and the
-// game's existence get checked, each cheaper than a database round trip and
-// each placed so an oversized or misdirected query pays the same lookups and
-// the same rate check a legitimate one does rather than dodging them for
-// free.
+// Next is the one check that costs a round trip of its own: has this
+// participant anything left to answer at all (ErrNothingLeftToAnswer)? After
+// the checks above because those are comparisons of values already in hand
+// and this is a query; before the game is looked at and before provisioning
+// because a participant who can no longer score a point must not be able to
+// make this service create them a database, nor ask the game cluster for a
+// template, by asking for one. After the rate check for the same reason every
+// other refusal is (finding 3): a refused query still costs this read, so it
+// still counts. It is skipped entirely when nothing was wired to answer it —
+// see WithAnswerable for why a missing wire lets the query through rather than
+// refusing it.
 //
-// s.lookup answers who, what and its game together, but the game is not
-// looked at until the switch below: whether it exists is still checked at the
-// same point in the order — after the address, length and answerable checks —
-// a standalone call to it always was.
-//
-// Between the length check and the game lookup sits the one check that costs
-// a round trip of its own: has this participant anything left to answer at
-// all (ErrNothingLeftToAnswer)? After the two checks above it because those
-// are comparisons of values already in hand and this is a query; before the
-// game lookup and before provisioning because a participant who can no
-// longer score a point must not be able to make this service create them a
-// database, nor ask the game cluster for a template, by asking for one.
-// After the rate check for the same reason every other refusal is (finding
-// 3): a refused query still costs this read, so it still counts. It is
-// skipped entirely when nothing was wired to answer it — see WithAnswerable
-// for why a missing wire lets the query through rather than refusing it.
+// Then whether the contest has a game at all (ErrNoGameYet). The game was read
+// by the same combined lookup, but its answer is not looked at until here, so
+// an unprovisioned game is reported at the same point in the order a separate
+// lookup of it used to be.
 //
 // Only then is a database provisioned, which may create one. And only
 // once every one of those has admitted the request does a not-yet-started

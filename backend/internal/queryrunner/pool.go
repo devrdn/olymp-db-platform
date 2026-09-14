@@ -49,8 +49,11 @@ type dialer func(ctx context.Context, database string, write bool, readBudget in
 // # What it keeps, and for how long
 //
 // At most one idle connection per database. A participant runs one query at a
-// time, so one is all their next query can use, and an instance database
-// carries CONNECTION LIMIT 2, of which the schema panel borrows the other.
+// time, so one is all their next query can use; an instance database carries
+// CONNECTION LIMIT 2, the second slot being headroom for a backend that has
+// not yet exited after its connection was closed (gamedb's
+// instanceConnectionLimit). The schema panel reads as a superuser and is not
+// counted against it.
 // An idle connection is closed after idleTimeout.
 //
 // At most capacity connections in all, idle and in use together, where

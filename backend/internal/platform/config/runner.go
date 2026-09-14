@@ -91,9 +91,6 @@ type Runner struct {
 }
 
 // The game cluster's memory is the bound the whole admission-control story
-// rests on, and these numbers turn QUERY_CONCURRENT into a demand on it.
-//
-// The game cluster's memory is the bound the whole admission-control story
 // rests on, and these numbers turn QUERY_CONCURRENT into a demand on it. The
 // per-process cap itself is not here — it is configuration (ProcessMemoryBytes,
 // GAME_DB_PROCESS_MEMORY_BYTES), so the compose ulimit, the runner's arithmetic
