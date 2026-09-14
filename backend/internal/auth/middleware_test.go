@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -759,4 +760,65 @@ func TestAOneTimePasswordAccountIsHeldAtTheDoorFromACachedCopyToo(t *testing.T) 
 	if got := f.store.setCount(); got != 1 {
 		t.Errorf("three refused requests wrote the account cache %d times, want once", got)
 	}
+}
+
+// An event stream is authenticated once, when it opens, and asks
+// SessionStillValid before every push after that. The question has to be the
+// one Authenticate asks — is the account still allowed to use this session —
+// or a blocked account, or one whose sessions were retired by a password
+// change, keeps receiving a contest's events for as long as the connection
+// holds.
+func TestSessionStillValidEndsWithTheAccountNotOnlyWithTheSession(t *testing.T) {
+	cases := map[string]func(t *testing.T, f *mwFixture){
+		"blocked": func(t *testing.T, f *mwFixture) {
+			_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusBlocked, users.StatusChange{})
+		},
+		"deleted": func(t *testing.T, f *mwFixture) {
+			_ = f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusDeleted, users.StatusChange{})
+		},
+		"sessions retired": func(t *testing.T, f *mwFixture) {
+			if _, err := f.repo.BumpSessionGeneration(context.Background(), f.user.ID); err != nil {
+				t.Fatalf("BumpSessionGeneration() returned error: %v", err)
+			}
+		},
+		"one-time password issued": func(t *testing.T, f *mwFixture) {
+			_ = f.repo.SetPassword(context.Background(), f.user.ID, "not-a-real-hash", true)
+		},
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newMiddlewareFixture(t, staticRoles{})
+			if alive, err := f.mw.SessionStillValid(authed(f.token)); err != nil || !alive {
+				t.Fatalf("before the change SessionStillValid() = %v, %v; want true", alive, err)
+			}
+
+			change(t, f)
+
+			alive, err := f.mw.SessionStillValid(authed(f.token))
+			if err != nil {
+				t.Fatalf("SessionStillValid() returned error: %v", err)
+			}
+			if alive {
+				t.Error("the stream's session was still reported valid after the account changed")
+			}
+		})
+	}
+}
+
+// A store that cannot be read says nothing about the account, the same as a
+// session store that cannot be read: the caller asks again later.
+func TestSessionStillValidReportsAnUnreadableAccountAsAnError(t *testing.T) {
+	f := newMiddlewareFixture(t, staticRoles{})
+	f.mw.users = failingUsers{UserStore: f.repo}
+
+	alive, err := f.mw.SessionStillValid(authed(f.token))
+	if err == nil {
+		t.Fatalf("SessionStillValid() = %v, nil; want the store's error", alive)
+	}
+}
+
+type failingUsers struct{ UserStore }
+
+func (failingUsers) ByID(context.Context, uuid.UUID) (users.User, error) {
+	return users.User{}, errors.New("the database is away")
 }
