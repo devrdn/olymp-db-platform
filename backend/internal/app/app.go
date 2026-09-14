@@ -338,6 +338,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		MaxAttemptsPerAccount: cfg.MaxLoginAttemptsPerAccount,
 		Devices:               devices,
 		MaxAttemptsPerDevice:  cfg.MaxLoginAttemptsPerDevice,
+		// Every trusted browser of one account together.
+		MaxTrustedAttemptsPerAccount: cfg.MaxTrustedLoginAttemptsPerAccount,
 	})
 	authMiddleware := auth.NewMiddleware(auth.MiddlewareConfig{
 		Sessions:   sessions,

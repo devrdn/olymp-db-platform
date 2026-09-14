@@ -135,7 +135,8 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `MAX_LOGIN_ATTEMPTS_PER_ACCOUNT` | no | `100` | sign-in attempts at one account from all addresses per 15 minutes; the guessing limit itself is 10 per account and address |
 | `DEVICE_COOKIE_SECRET` | outside `development` | generated per start in development | HMAC key (at least 32 bytes) of the cookie marking a browser the owner signed in from |
 | `DEVICE_COOKIE_TTL` | no | `720h` | lifetime of that cookie, 1h to 2160h |
-| `MAX_LOGIN_ATTEMPTS_PER_DEVICE` | no | `10` | sign-in attempts through one trusted browser per 15 minutes, instead of the address and account limits |
+| `MAX_LOGIN_ATTEMPTS_PER_DEVICE` | no | `10` | sign-in attempts through one trusted browser per 15 minutes, successes included, instead of the address and account limits |
+| `MAX_TRUSTED_LOGIN_ATTEMPTS_PER_ACCOUNT` | no | `20` | sign-in attempts through all of one account's trusted browsers together per 15 minutes, successes included |
 | `PASSWORD_HASH_CONCURRENCY` | no | one per CPU, at least 2 | argon2id computations run at once (1-64); 64 MiB each, so size the memory limit from it |
 | `PASSWORD_HASH_MAX_WAIT` | no | `2s` | how long a sign-in or password change waits for a hashing slot before a 503 `sign_in_busy` (at most `30s`) |
 | `TRUSTED_PROXIES` | no | — | CIDRs whose `X-Forwarded-For` is believed for client IPs |

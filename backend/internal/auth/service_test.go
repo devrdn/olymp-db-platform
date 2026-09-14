@@ -1105,3 +1105,138 @@ func TestUnlockingSignInClearsTheDeviceLimitToo(t *testing.T) {
 		t.Errorf("the trusted browser after the unlock = %v, want a session", err)
 	}
 }
+
+func TestTrustedSignInsAreBoundedEvenWithTheRightPassword(t *testing.T) {
+	// A success does not give a device its attempts back: otherwise the
+	// account's own cookie signs in without limit, and every one of those
+	// sign-ins takes a hashing slot, a session and an audit row.
+	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerDevice: 5, MaxTrustedAttemptsPerAccount: 50})
+	cookie := f.trustedBrowser(t, "10.0.0.1")
+	ctx := context.Background()
+
+	for i := range 5 {
+		if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie}); err != nil {
+			t.Fatalf("trusted sign-in %d = %v, want a session within the device limit", i, err)
+		}
+	}
+	if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie}); !errors.Is(err, ErrTooManyAttempts) {
+		t.Errorf("the trusted sign-in past the device limit = %v, want ErrTooManyAttempts", err)
+	}
+}
+
+func TestFreshDeviceCookiesShareTheAccountsTrustedBudget(t *testing.T) {
+	// Signing in again mints another device id, so a per-device limit alone
+	// multiplies by however many cookies were collected in advance. Every
+	// trusted attempt at the account counts once more, across all of them.
+	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerDevice: 10, MaxTrustedAttemptsPerAccount: 4})
+	ctx := context.Background()
+	cookies := []string{
+		f.trustedBrowser(t, "10.0.1.1"), f.trustedBrowser(t, "10.0.1.2"), f.trustedBrowser(t, "10.0.1.3"),
+	}
+
+	signedIn := 0
+	for _, cookie := range cookies {
+		for range 2 {
+			if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie}); err == nil {
+				signedIn++
+			} else if !errors.Is(err, ErrTooManyAttempts) {
+				t.Fatalf("trusted sign-in = %v, want a session or ErrTooManyAttempts", err)
+			}
+		}
+	}
+
+	if signedIn != 4 {
+		t.Errorf("%d trusted sign-ins succeeded across three cookies, want the account budget of 4", signedIn)
+	}
+}
+
+func TestATrustedSignInDoesNotRenewTheDeviceCookie(t *testing.T) {
+	// A cookie renewed by every trusted sign-in would never expire for a
+	// browser that keeps using it, stolen or not. It lives out the lifetime it
+	// was issued with; the next ordinary sign-in issues the next one.
+	f := newUnlockFixture(t, ServiceConfig{})
+	cookie := f.trustedBrowser(t, "10.0.0.1")
+
+	result, err := f.service.Login(context.Background(), LoginCommand{
+		Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie,
+	})
+	if err != nil {
+		t.Fatalf("trusted sign-in = %v", err)
+	}
+	if result.DeviceToken != "" {
+		t.Error("a trusted sign-in issued a new device cookie, extending the old one's lifetime")
+	}
+}
+
+// slotWatch reports whether the hasher's only slot is free at the moment it is
+// asked, recording every time it was not.
+type slotWatch struct {
+	hasher *password.Hasher
+	held   []string
+}
+
+func (w *slotWatch) check(where string) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	slot, err := w.hasher.Hold(ctx)
+	if err != nil {
+		w.held = append(w.held, where)
+		return
+	}
+	slot.Release()
+}
+
+type watchedUsers struct {
+	*userstest.Repository
+	watch *slotWatch
+}
+
+func (u watchedUsers) ByLogin(ctx context.Context, login string) (users.User, error) {
+	u.watch.check("ByLogin")
+	return u.Repository.ByLogin(ctx, login)
+}
+
+type watchedSink struct {
+	collectingSink
+	watch *slotWatch
+}
+
+func (s *watchedSink) Append(ctx context.Context, e audit.Entry) error {
+	s.watch.check("audit " + e.Action)
+	return s.collectingSink.Append(ctx, e)
+}
+
+func TestTheHashingSlotIsNeverHeldAcrossTheLookupOrTheTrail(t *testing.T) {
+	// A slot is 64 MiB and one of a handful. Held while the database answers a
+	// lookup or takes an audit row, it stands idle while sign-ins queue for it.
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+	repo := userstest.New()
+	repo.Add(users.User{
+		Login: "ivanov", FullName: "Ivan Ivanov", Status: users.StatusActive,
+		PasswordHash: passwordtest.Hash(t, testPassword),
+	})
+	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: time.Second})
+	watch := &slotWatch{hasher: hasher}
+	sink := &watchedSink{watch: watch}
+	service := NewService(ServiceConfig{
+		Users:     watchedUsers{Repository: repo, watch: watch},
+		Sessions:  NewSessionStore(c, time.Hour),
+		Audit:     audit.New(sink),
+		Limiter:   NewLimiter(c),
+		Logger:    logging.New("error", io.Discard),
+		Passwords: hasher,
+		Devices:   testDevices(t),
+	})
+	ctx := context.Background()
+
+	for range maxLoginAttemptsPerAccountAddress + 2 { // failures, then refusals
+		_, _ = service.Login(ctx, loginCmd("a guess"))
+	}
+	_, _ = service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.2"})
+	_, _ = service.Login(ctx, LoginCommand{Login: "nobody", Password: "whatever", IP: "10.0.0.3"})
+
+	if len(watch.held) != 0 {
+		t.Errorf("the hashing slot was held during: %v", watch.held)
+	}
+}
