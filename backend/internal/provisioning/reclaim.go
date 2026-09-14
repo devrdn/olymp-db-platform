@@ -103,13 +103,15 @@ type ReclaimResult struct {
 // A database still in use is left alone rather than forced: cluster.DropIdle
 // reports "not dropped, no error" for one PostgreSQL itself refuses to touch
 // because something is connected, and Reclaim reads that as "try again next
-// time", never as a failure. This is deliberate, not merely cautious —
-// connections to a game database are opened by the Query Runner for one
-// query at a time (§4.3) and never held open, so a database still busy this
-// long after its contest finished is a query the runner had already admitted
-// and is still running, not a forgotten session. Severing that would erase a
-// participant's work in progress instead of housekeeping after it, which is
-// exactly what the grace period exists to prevent.
+// time", never as a failure. This is deliberate, not merely cautious — the
+// Query Runner runs one query at a time per participant (§4.3) and keeps at
+// most the one connection a read finished on, closing it after its idle
+// timeout (queryrunner's pool), so a database still busy this long after its
+// contest finished is either a query the runner had already admitted and is
+// still running or a kept connection that is about to close, not a forgotten
+// session. Severing the first would erase a participant's work in progress
+// instead of housekeeping after it, which is exactly what the grace period
+// exists to prevent; the second is gone by a later tick on its own.
 //
 // Any other failure — the cluster is unreachable, the row cannot be marked —
 // is recorded and the pass moves on to the rest of the list: one broken

@@ -127,13 +127,17 @@ func runAll(ctx context.Context, conn Conn, statements []string) error {
 
 // instanceConnectionLimit is the last line under the Query Runner's semaphore.
 //
-// Two rather than one: the schema panel's catalogue read (ReadSchema) borrows a
-// connection while the runner may hold one — running a query, or kept idle for
-// the participant's next read — and a limit of one would turn that ordinary
-// overlap into a refusal. The runner itself never holds more than one per
-// database: a participant is allowed one query at a time, and it keeps at most
-// one idle connection per database, which the next query takes rather than
-// opening another.
+// The runner never holds more than one connection per database: a participant
+// is allowed one query at a time, and it keeps at most one idle connection per
+// database, which the next query takes rather than opening another. The
+// schema panel's catalogue read (ReadSchema) does not count against the limit
+// at all: it connects as the provisioning role, a superuser, and PostgreSQL
+// does not apply a database's CONNECTION LIMIT to superusers.
+//
+// Two rather than one is headroom for the runner's own turnover: a connection
+// it has just closed is still counted until its server backend has exited,
+// which happens after the close returns, and a limit of one could refuse the
+// next query that opens a connection in that moment.
 const instanceConnectionLimit = 2
 
 // settleInstance applies the privileges that belong to a database rather than
