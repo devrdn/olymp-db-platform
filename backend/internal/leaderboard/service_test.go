@@ -706,3 +706,143 @@ func TestRevealInvalidatesTheLiveCacheTooSoStaffSeeItAtOnce(t *testing.T) {
 		t.Fatalf("Live() right after Reveal() = %+v, %v, want final, not a cached frozen copy", live, err)
 	}
 }
+
+// A computation that started before a reveal — it read the contest while the
+// table was still frozen, and only then got blocked inside the repository —
+// must not win the race against the reveal and store its stale answer over
+// it. The read it already had in hand is allowed to come back frozen (it is
+// not wrong, only overtaken); what matters is that nothing it does afterwards
+// can poison the cache for the very next, distinct call.
+func TestAComputationStartedBeforeARevealDoesNotCacheItsStaleAnswerOverIt(t *testing.T) {
+	r := newRig(t)
+	c := r.seed(contests.StatusFinished, minutes(30))
+	r.now = end.Add(time.Hour)
+	release := make(chan struct{})
+	r.standings.release = release
+
+	staleDone := make(chan struct{}, 2)
+	go func() {
+		defer func() { staleDone <- struct{}{} }()
+		view, err := r.service.Public(context.Background(), c.ID)
+		if err != nil || view.State != leaderboard.StateFrozen {
+			t.Errorf("the in-flight Public() = %+v, %v, want frozen (it started before the reveal)", view, err)
+		}
+	}()
+	waitForCallCount(t, r.standings, 1)
+	go func() {
+		defer func() { staleDone <- struct{}{} }()
+		view, err := r.service.Live(context.Background(), c.ID)
+		if err != nil || view.Shown.State != leaderboard.StateFrozen {
+			t.Errorf("the in-flight Live() = %+v, %v, want frozen (it started before the reveal)", view, err)
+		}
+	}()
+	waitForCallCount(t, r.standings, 2)
+
+	if _, err := r.service.Reveal(context.Background(), uuid.New(), c.ID); err != nil {
+		t.Fatalf("Reveal() = %v", err)
+	}
+	close(release)
+	for range 2 {
+		select {
+		case <-staleDone:
+		case <-time.After(time.Second):
+			t.Fatal("a computation started before the reveal never finished")
+		}
+	}
+
+	// The one guarantee that matters: the next, distinct call must see the
+	// reveal, not a stale frozen answer the computation above wrote back
+	// after Reveal had already cleared it.
+	view, err := r.service.Public(context.Background(), c.ID)
+	if err != nil || view.State != leaderboard.StateFinal {
+		t.Fatalf("Public() after the stale computations = %+v, %v, want final", view, err)
+	}
+	live, err := r.service.Live(context.Background(), c.ID)
+	if err != nil || live.Shown.State != leaderboard.StateFinal {
+		t.Fatalf("Live() after the stale computations = %+v, %v, want final", live, err)
+	}
+}
+
+// A follower that joins a flight long after the leader started must not
+// stretch the cache: the expiry has to be anchored to when the view was
+// actually generated, not to whichever caller's own clock happened to store
+// it.
+// syncClock is a clock several goroutines can read and advance safely — a
+// plain field mutated from one goroutine while another's Public() call reads
+// it through the service's Now func is itself a data race, which would only
+// hide the real one this test exists to catch.
+type syncClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *syncClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *syncClock) set(t time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = t
+}
+
+func TestTheCacheExpiryIsAnchoredToWhenTheViewWasGeneratedNotAFollowersOwnClock(t *testing.T) {
+	r := newRig(t)
+	clock := &syncClock{}
+	leaderStart := r.now
+	clock.set(leaderStart)
+	r.service = leaderboard.NewService(leaderboard.Config{
+		Contests: r.contests, Participants: r.people, Standings: r.standings,
+		Audit: audit.New(r.sink), UnitOfWork: &conteststest.UnitOfWork{},
+		Now: clock.now, CacheTTL: 10 * time.Second, MaxRows: 2000,
+	})
+	c := r.seed(contests.StatusRunning, nil)
+	release := make(chan struct{})
+	r.standings.release = release
+
+	leaderDone := make(chan struct{})
+	go func() {
+		defer close(leaderDone)
+		if _, err := r.service.Public(context.Background(), c.ID); err != nil {
+			t.Errorf("leader Public() = %v", err)
+		}
+	}()
+	waitForCallCount(t, r.standings, 1)
+
+	// Several followers join well after the leader started, their own clocks
+	// increasingly far into the ten-second TTL — several of them, and spread
+	// across the window, so that whichever one happens to be the last to
+	// write still exposes a caller's-own-clock bug (a single follower's
+	// write race against the leader's is not decisive on its own).
+	const followers = 8
+	var wg sync.WaitGroup
+	wg.Add(followers)
+	for i := 1; i <= followers; i++ {
+		clock.set(leaderStart.Add(time.Duration(i) * 500 * time.Millisecond))
+		go func() {
+			defer wg.Done()
+			if _, err := r.service.Public(context.Background(), c.ID); err != nil {
+				t.Errorf("follower Public() = %v", err)
+			}
+		}()
+	}
+	time.Sleep(20 * time.Millisecond) // let every follower join before releasing.
+	close(release)
+	<-leaderDone
+	wg.Wait()
+
+	// Just past the leader's own TTL (leaderStart + 10s): if a follower's
+	// later clock read had become the expiry base instead, the entry would
+	// still have several seconds left to live and this would wrongly hit the
+	// cache.
+	clock.set(leaderStart.Add(10*time.Second + time.Millisecond))
+	if _, err := r.service.Public(context.Background(), c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.standings.callCount(); got != 2 {
+		t.Errorf("standings were read %d times just past the leader's own TTL, want 2 — "+
+			"the cache outlived the leader's own generation time", got)
+	}
+}
