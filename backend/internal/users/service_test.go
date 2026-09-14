@@ -1419,3 +1419,58 @@ func TestAFailedChangeLeavesTheCacheAlone(t *testing.T) {
 		t.Errorf("a failed change forgot %v", f.access.forgotten)
 	}
 }
+
+// slotTakingRepository takes every slot of a hasher the moment the first
+// account is stored, so an import's later rows meet a hasher at capacity.
+type slotTakingRepository struct {
+	*userstest.Repository
+	hasher *password.Hasher
+	t      *testing.T
+	taken  bool
+}
+
+func (r *slotTakingRepository) Create(ctx context.Context, u users.User) (users.User, error) {
+	created, err := r.Repository.Create(ctx, u)
+	if !r.taken {
+		r.taken = true
+		for range r.hasher.Concurrency() {
+			slot, holdErr := r.hasher.Hold(context.Background())
+			if holdErr != nil {
+				r.t.Fatalf("Hold() returned error: %v", holdErr)
+			}
+			r.t.Cleanup(slot.Release)
+		}
+	}
+	return created, err
+}
+
+func TestAnImportStoppedForLoadKeepsWhatItCreatedAndNamesTheRest(t *testing.T) {
+	// The accounts created before the hasher ran out of room are real, and
+	// their one-time passwords exist nowhere else: the result must still
+	// carry them, and say which rows were never tried, alongside the error.
+	f := newFixture(t)
+	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
+	repo := &slotTakingRepository{Repository: f.repo, hasher: hasher, t: t}
+	service := users.NewService(repo, audit.New(&collectingSink{}), &userstest.SpyUnitOfWork{}, hasher)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	result, err := service.Import(ctx, users.ImportCommand{
+		ActorID: f.actor,
+		Rows: []users.ImportRow{
+			{Login: "petrov", FullName: "Pyotr Petrov"},
+			{Login: "sidorov", FullName: "Semyon Sidorov"},
+			{Login: "kuznetsov", FullName: "Kirill Kuznetsov"},
+		},
+	})
+
+	if !errors.Is(err, password.ErrBusy) {
+		t.Fatalf("Import() = %v, want password.ErrBusy", err)
+	}
+	if len(result.Created) != 1 || result.Created[0].User.Login != "petrov" || result.Created[0].OneTimePassword == "" {
+		t.Errorf("created = %+v, want petrov with a one-time password", result.Created)
+	}
+	if want := []string{"sidorov", "kuznetsov"}; !slices.Equal(result.NotImported, want) {
+		t.Errorf("NotImported = %v, want %v", result.NotImported, want)
+	}
+}

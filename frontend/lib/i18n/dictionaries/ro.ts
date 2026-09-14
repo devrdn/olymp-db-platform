@@ -893,6 +893,7 @@ const ro = {
           "Predați fiecare proprietarului. Se afișează o singură dată și nu mai poate fi recuperată.",
         created: "{n} create",
         skipped: "{n} omise",
+        notImported: "{n} neimportate — importați din nou aceste rânduri peste câteva clipe",
         none: "Nu s-a importat nimic.",
         copy: "Copiați",
         copied: "Copiat",

@@ -964,6 +964,7 @@ const en = {
         handover: "Hand each one over to its owner. Shown once and cannot be retrieved again.",
         created: "{n} created",
         skipped: "{n} skipped",
+        notImported: "{n} not imported — import these lines again in a moment",
         none: "Nothing was imported.",
         copy: "Copy",
         copied: "Copied",

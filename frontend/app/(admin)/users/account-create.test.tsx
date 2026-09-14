@@ -200,6 +200,33 @@ describe("import a roster: skipped rows are named, not hidden", () => {
     expect(screen.getByText("s.popescu")).toBeVisible();
   });
 
+  test("hands over what an import created even when it stopped for load, and names the rows it never reached", async () => {
+    importAccountsAction.mockResolvedValueOnce({
+      result: {
+        created: [
+          { user: { id: "a", login: "s.popescu", fullName: "Sergiu Popescu" }, one_time_password: "swordfish-1" },
+        ],
+        skipped: [],
+        not_imported: ["i.ivanov", "a.rusu"],
+        stopped: "sign_in_busy",
+      },
+    });
+    render(<AccountCreateControls roles={roles} dict={en} />);
+
+    await userEvent.click(screen.getByRole("button", { name: en.accounts.create.import }));
+    await userEvent.type(
+      screen.getByLabelText(en.accounts.create.roster.rosterLabel),
+      "s.popescu, Sergiu Popescu{enter}i.ivanov, Ivan Ivanov{enter}a.rusu, Ana Rusu",
+    );
+    await userEvent.click(screen.getByRole("button", { name: en.accounts.create.roster.submit }));
+
+    expect(await screen.findByText("swordfish-1")).toBeVisible();
+    expect(screen.getByText(en.accounts.create.roster.notImported.replace("{n}", "2"))).toBeVisible();
+    expect(screen.getByText(en.errors.sign_in_busy)).toBeVisible();
+    expect(screen.getByText("i.ivanov")).toBeVisible();
+    expect(screen.getByText("a.rusu")).toBeVisible();
+  });
+
   test("Escape does not close the dialog while passwords are on screen", async () => {
     importAccountsAction.mockResolvedValueOnce({
       result: {

@@ -187,6 +187,26 @@ function SkippedRows({
   );
 }
 
+/** The rows an import stopped before reaching — nothing was wrong with them,
+ * the server stopped (`stopped` names why) — so the administrator can paste
+ * exactly those lines again. Shown apart from the skipped rows, which are
+ * lines to fix. */
+function NotImportedRows({ logins, title, why }: { logins: readonly string[]; title: string; why: string | null }) {
+  return (
+    <div role="alert" className="flex flex-col gap-1 border-t border-line pt-3">
+      <p className="text-small text-warn">{title}</p>
+      {why ? <p className="text-small text-ink-2">{why}</p> : null}
+      <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto">
+        {logins.map((login, index) => (
+          <li key={`${login}-${index}`} className="font-mono text-data text-ink-2">
+            {login}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function NewAccountForm({
   roles,
   dict,
@@ -304,6 +324,8 @@ function ImportRosterForm({
   if (state.result) {
     const created = state.result.created;
     const skipped = state.result.skipped;
+    const notImported = state.result.not_imported ?? [];
+    const stopped = state.result.stopped;
     const reasons = t.roster.reason as Record<string, string>;
 
     return (
@@ -362,7 +384,15 @@ function ImportRosterForm({
 
         <SkippedRows skipped={skipped} reasons={reasons} />
 
-        {created.length === 0 && skipped.length === 0 ? (
+        {notImported.length > 0 ? (
+          <NotImportedRows
+            logins={notImported}
+            title={t.roster.notImported.replace("{n}", String(notImported.length))}
+            why={stopped ? ((dict.errors as Record<string, string>)[stopped] ?? dict.errors.fallback) : null}
+          />
+        ) : null}
+
+        {created.length === 0 && skipped.length === 0 && notImported.length === 0 ? (
           <p className="text-small text-ink-2">{t.roster.none}</p>
         ) : null}
 

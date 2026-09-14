@@ -262,9 +262,18 @@ type importRow struct {
 // twenty-nine, and whoever pasted the list has to see which line to fix. The
 // one-time passwords appear here and nowhere else — they are not stored in
 // clear and cannot be fetched later.
+//
+// An import the hasher's load stops partway is still answered 200 with what it
+// did: the accounts created before it stopped exist, and their passwords are
+// shown here or never. NotImported names every row it never reached, and
+// Stopped carries the code saying why, so the rest can be imported again.
+// Nothing else that stops an import is answered this way: an outage is an
+// error, not a result.
 type accountImportResponse struct {
-	Created []createResponse `json:"created"`
-	Skipped []skippedAccount `json:"skipped"`
+	Created     []createResponse `json:"created"`
+	Skipped     []skippedAccount `json:"skipped"`
+	NotImported []string         `json:"not_imported"`
+	Stopped     string           `json:"stopped,omitempty"`
 }
 
 type skippedAccount struct {
@@ -292,7 +301,13 @@ func (h *UsersHandler) importRoster(w http.ResponseWriter, r *http.Request) {
 		Rows:    rows,
 		Roles:   req.Roles,
 	})
-	if err != nil {
+	stopped := ""
+	switch {
+	case errors.Is(err, password.ErrBusy):
+		stopped = codeSignInBusy.String()
+		h.log.WarnContext(r.Context(), "an import stopped for lack of a hashing slot",
+			"created", len(result.Created), "not_imported", len(result.NotImported))
+	case err != nil:
 		h.fail(w, r, err)
 		return
 	}
@@ -308,7 +323,13 @@ func (h *UsersHandler) importRoster(w http.ResponseWriter, r *http.Request) {
 	for _, one := range result.Skipped {
 		skipped = append(skipped, skippedAccount{Login: one.Login, Reason: one.Reason})
 	}
-	httpx.JSON(w, r, http.StatusOK, accountImportResponse{Created: created, Skipped: skipped})
+	notImported := result.NotImported
+	if notImported == nil {
+		notImported = []string{}
+	}
+	httpx.JSON(w, r, http.StatusOK, accountImportResponse{
+		Created: created, Skipped: skipped, NotImported: notImported, Stopped: stopped,
+	})
 }
 
 type listResponse struct {
