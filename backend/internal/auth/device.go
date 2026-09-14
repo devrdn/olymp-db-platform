@@ -53,6 +53,7 @@ type Device struct {
 	accountID  uuid.UUID
 	generation int64
 	statusAt   int64
+	issued     time.Time
 }
 
 // Vouches reports whether the cookie still speaks for account as it is now.
@@ -154,15 +155,21 @@ func (d *DeviceTrust) Verify(token, login string) (Device, bool) {
 	var device Device
 	copy(device.accountID[:], payload[1:17])
 	copy(device.ID[:], payload[17:33])
-	issued := time.Unix(int64(binary.BigEndian.Uint64(payload[33:41])), 0) // #nosec G115 -- written by Issue from a timestamp.
-	device.generation = int64(binary.BigEndian.Uint64(payload[41:49]))     // #nosec G115 -- as above.
-	device.statusAt = int64(binary.BigEndian.Uint64(payload[49:57]))       // #nosec G115 -- as above.
+	device.issued = time.Unix(int64(binary.BigEndian.Uint64(payload[33:41])), 0) // #nosec G115 -- written by Issue from a timestamp.
+	device.generation = int64(binary.BigEndian.Uint64(payload[41:49]))           // #nosec G115 -- as above.
+	device.statusAt = int64(binary.BigEndian.Uint64(payload[49:57]))             // #nosec G115 -- as above.
 
 	now := d.now()
-	if issued.After(now.Add(deviceClockSkew)) || now.Sub(issued) > d.ttl {
+	if device.issued.After(now.Add(deviceClockSkew)) || now.Sub(device.issued) > d.ttl {
 		return Device{}, false
 	}
 	return device, true
+}
+
+// DueForRenewal reports whether a verified cookie has lived past half its
+// lifetime, the point from which a trusted sign-in renews it.
+func (d *DeviceTrust) DueForRenewal(device Device) bool {
+	return d.now().Sub(device.issued) > d.ttl/2
 }
 
 // mac signs a payload for one login, normalised the way every lookup and
