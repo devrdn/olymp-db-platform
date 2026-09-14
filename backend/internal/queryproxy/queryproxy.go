@@ -116,32 +116,26 @@ type Games interface {
 	Game(ctx context.Context, contestID uuid.UUID) (provisioning.Contest, error)
 }
 
-// ContestGame is a contest together with its game, read in one round trip
-// instead of the two separate calls Contests.ByID and Games.Game would
-// otherwise each make against the same contests row.
-type ContestGame struct {
-	Contest contests.Contest
-	// Game and GameErr mirror what a separate call to Games.Game would have
-	// answered: GameErr is provisioning.ErrNoGame for a contest with no ready
-	// template, nil once Game is populated. Kept apart from the lookup's own
-	// error (ContestAndGame.Lookup's second return value) so a caller already
-	// holding Contest can use it right away and decide what a missing game
-	// means only once it actually needs one — the same point in Run's own
-	// admission order the separate call used to be checked at.
+// LookupResult is everything Run needs about one query before it reaches the
+// runner: who is asking, what they are asking about, and its game — the
+// three rows People.ByUser, Contests.ByID and Games.Game each once read
+// separately.
+type LookupResult struct {
+	Participant contests.Participant
+	Contest     contests.Contest
+	// Game and GameErr are checked at the same point in Run's admission order
+	// a standalone Games.Game call always was: GameErr is
+	// provisioning.ErrNoGame for a contest with no ready template, nil once
+	// Game is populated.
 	Game    provisioning.Contest
 	GameErr error
 }
 
-// ContestAndGame is the optional single round trip behind
-// Service.WithContestAndGame: a contest and its game, read together.
-//
-// Nothing requires a caller to wire one. Access, AccessForEvents and Schema
-// never touch it — they have no reason to read a game at all, or already
-// call Games.Game on their own — and Run itself falls back to the ordinary
-// Contests.ByID and Games.Game pair unless this is set, which is what every
-// test written before this existed keeps doing.
-type ContestAndGame interface {
-	Lookup(ctx context.Context, contestID uuid.UUID) (ContestGame, error)
+// Lookup is the one round trip Run depends on exclusively. See defaultLookup
+// for what New wires by default and postgres.Registrations.ForRun for the
+// real single query a deployment replaces it with (WithLookup).
+type Lookup interface {
+	ForRun(ctx context.Context, contestID, userID uuid.UUID) (LookupResult, error)
 }
 
 // Databases hands out the participant's own copy, and says how large it may
@@ -230,11 +224,9 @@ type Service struct {
 	// work towards. Set by WithAnswerable and nil until then — see that
 	// option for why a build that never wired it runs the query anyway.
 	answerable Answerable
-	// contestGame is the optional combined lookup WithContestAndGame sets.
-	// nil until then, which is the ordinary two-call path every deployment
-	// used before it existed and every test but the ones about this option
-	// still exercises.
-	contestGame ContestAndGame
+	// lookup answers everything LookupResult carries. See defaultLookup for
+	// what New sets it to, and WithLookup for replacing it.
+	lookup Lookup
 }
 
 // defaultGrace is the network-latency allowance a deployment gets unless
@@ -246,11 +238,35 @@ const defaultGrace = 5 * time.Second
 func New(people People, contests Contests, games Games, databases Databases, runner Executor) *Service {
 	return &Service{
 		people: people, contests: contests, games: games, databases: databases, runner: runner,
+		lookup:           defaultLookup{people: people, contests: contests, games: games},
 		rate:             queryrunner.NewRateLimiter(0, time.Minute),
 		perMinuteDefault: queryrunner.DefaultLimits().PerMinute,
 		now:              func() time.Time { return time.Now().UTC() },
 		grace:            defaultGrace,
 	}
+}
+
+// defaultLookup is New's own Lookup: the three separate calls Run made
+// before this existed, still made the same way and in the same order, behind
+// the one interface Run now depends on exclusively. WithLookup replaces it
+// with a real single query.
+type defaultLookup struct {
+	people   People
+	contests Contests
+	games    Games
+}
+
+func (d defaultLookup) ForRun(ctx context.Context, contestID, userID uuid.UUID) (LookupResult, error) {
+	participant, err := d.people.ByUser(ctx, contestID, userID)
+	if err != nil {
+		return LookupResult{}, err
+	}
+	contest, err := d.contests.ByID(ctx, contestID)
+	if err != nil {
+		return LookupResult{}, err
+	}
+	game, gameErr := d.games.Game(ctx, contestID)
+	return LookupResult{Participant: participant, Contest: contest, Game: game, GameErr: gameErr}, nil
 }
 
 // WithClock overrides the wall clock Run compares a participant's deadline
@@ -318,13 +334,10 @@ func (s *Service) WithAnswerable(answerable Answerable) *Service {
 	return s
 }
 
-// WithContestAndGame supplies the combined lookup Run uses instead of its own
-// separate calls to Contests.ByID and Games.Game, removing one of the core
-// round trips a query otherwise pays for on every single request. A
-// deployment with no game cluster, and every existing test, never calls this
-// and keeps the two-call path unchanged.
-func (s *Service) WithContestAndGame(cg ContestAndGame) *Service {
-	s.contestGame = cg
+// WithLookup replaces New's own three-call default with a single query,
+// removing two of the core round trips Run otherwise pays on every request.
+func (s *Service) WithLookup(lookup Lookup) *Service {
+	s.lookup = lookup
 	return s
 }
 
@@ -403,14 +416,10 @@ func effectiveRateLimit(contestLimit, installationLimit int) int {
 // the same rate check a legitimate one does rather than dodging them for
 // free.
 //
-// The contest and the game are two different questions about the same
-// contests row, and a deployment with WithContestAndGame wired answers both
-// in the one round trip lookupContestAndGame opens here — but the game
-// itself is not looked at yet: whether it exists is still checked at the
-// same point in the order below, after the address, length and answerable
-// checks, exactly as it was when it was its own separate call. pendingGame is
-// what lets the two stay this far apart in the order while only ever costing
-// one round trip when there is one to save.
+// s.lookup answers who, what and its game together, but the game is not
+// looked at until the switch below: whether it exists is still checked at the
+// same point in the order — after the address, length and answerable checks —
+// a standalone call to it always was.
 //
 // Between the length check and the game lookup sits the one check that costs
 // a round trip of its own: has this participant anything left to answer at
@@ -440,15 +449,12 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		return nil, err
 	}
 
-	participant, err := s.lookupParticipant(ctx, cmd.ContestID, cmd.UserID)
+	lookup, lookupErr := s.lookup.ForRun(ctx, cmd.ContestID, cmd.UserID)
+	participant, err := classifyParticipant(lookup.Participant, lookupErr, "look up the participant and the contest")
 	if err != nil {
 		return nil, err
 	}
-
-	contest, pending, err := s.lookupContestAndGame(ctx, cmd.ContestID)
-	if err != nil {
-		return nil, fmt.Errorf("%w: look up the contest: %w", ErrUnavailable, err)
-	}
+	contest := lookup.Contest
 
 	// The same registration a refusal is journalled against, so a participant
 	// asking too fast — or hammering this endpoint while every answer is a
@@ -502,13 +508,13 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		}
 	}
 
-	game, err := pending.resolve(ctx, s, cmd.ContestID)
 	switch {
-	case errors.Is(err, provisioning.ErrNoGame):
+	case errors.Is(lookup.GameErr, provisioning.ErrNoGame):
 		return nil, ErrNoGameYet
-	case err != nil:
-		return nil, fmt.Errorf("%w: look up the contest's game: %w", ErrUnavailable, err)
+	case lookup.GameErr != nil:
+		return nil, fmt.Errorf("%w: look up the contest's game: %w", ErrUnavailable, lookup.GameErr)
 	}
+	game := lookup.Game
 
 	database, err := s.databases.Ensure(ctx, game, participant.ID)
 	if err != nil {
@@ -559,50 +565,6 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 	return result, err
 }
 
-// pendingGame is the game half of lookupContestAndGame's answer: either
-// already known (a combined lookup read it in the same round trip as the
-// contest) or still to be asked for with the ordinary separate call to
-// Games.Game, exactly as every build made before WithContestAndGame existed.
-//
-// Kept apart from the contest itself so Run can use the contest immediately
-// and only decide what resolved means — in particular, what a missing game
-// means — once it reaches the point in its own admission order where the
-// game is actually needed.
-type pendingGame struct {
-	resolved bool
-	game     provisioning.Contest
-	err      error
-}
-
-// resolve answers the game a pendingGame stands for: what a combined lookup
-// already read, or the separate call lookupContestAndGame skipped because
-// there was no combined lookup to make in the first place.
-func (p pendingGame) resolve(ctx context.Context, s *Service, contestID uuid.UUID) (provisioning.Contest, error) {
-	if p.resolved {
-		return p.game, p.err
-	}
-	return s.games.Game(ctx, contestID)
-}
-
-// lookupContestAndGame resolves the contest Run is asking about, and — when
-// WithContestAndGame wired one — its game in the same round trip, folding
-// what would otherwise be two separate queries against the same contests row
-// into one. A build with nothing wired there gets exactly the single
-// Contests.ByID call it always made; the game stays a pendingGame that has
-// not resolved anything yet, and Run's later call into pending.resolve is
-// what actually asks Games.Game for it, the same one call it always was.
-func (s *Service) lookupContestAndGame(ctx context.Context, contestID uuid.UUID) (contests.Contest, pendingGame, error) {
-	if s.contestGame == nil {
-		contest, err := s.contests.ByID(ctx, contestID)
-		return contest, pendingGame{}, err
-	}
-	cg, err := s.contestGame.Lookup(ctx, contestID)
-	if err != nil {
-		return contests.Contest{}, pendingGame{}, err
-	}
-	return cg.Contest, pendingGame{resolved: true, game: cg.Game, err: cg.GameErr}, nil
-}
-
 // provisionFailure is what both callers of Databases.Ensure turn its error
 // into: the cluster having no room becomes this façade's own sentinel, and
 // everything else stays what it was, an outage of ours wearing ErrUnavailable.
@@ -618,28 +580,37 @@ func provisionFailure(err error) error {
 	return fmt.Errorf("%w: provide the participant's database: %w", ErrUnavailable, err)
 }
 
-// lookupParticipant resolves who is asking, folding "never registered" and
-// "disqualified" into the one answer a caller probing a contest should not be
-// able to tell apart (ErrNotAParticipant) and reporting a finished participant
-// separately (ErrFinished), which is a different sentence to send them.
+// classifyParticipant turns a raw participant and its lookup error into the
+// one answer both Run (via s.lookup) and lookupParticipant (via People)
+// promise a caller: "never registered" and "disqualified" fold into the same
+// ErrNotAParticipant, so probing a contest for who is on it learns nothing;
+// "finished" is its own sentence (ErrFinished); anything else is ours
+// (ErrUnavailable, wrapped with wrap so the two callers can each name what
+// they were trying to do).
 //
-// Factored out of Run so the participant-facing read endpoints (Access) start
-// from the same lookup rather than a second one that could drift from it —
-// this project's own history is full of the bug two implementations of "who
-// is this and are they still in" makes.
-func (s *Service) lookupParticipant(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, error) {
-	participant, err := s.people.ByUser(ctx, contestID, userID)
+// Shared so the two lookups this package makes cannot classify the same
+// participant two different ways — this project's own history is full of the
+// bug two implementations of "who is this and are they still in" makes.
+func classifyParticipant(participant contests.Participant, err error, wrap string) (contests.Participant, error) {
 	switch {
 	case errors.Is(err, contests.ErrParticipantNotFound):
 		return contests.Participant{}, ErrNotAParticipant
 	case err != nil:
-		return contests.Participant{}, fmt.Errorf("%w: look up the participant: %w", ErrUnavailable, err)
+		return contests.Participant{}, fmt.Errorf("%w: %s: %w", ErrUnavailable, wrap, err)
 	case participant.Status == contests.RegistrationDisqualified:
 		return contests.Participant{}, ErrNotAParticipant
 	case participant.Status == contests.RegistrationFinished:
 		return contests.Participant{}, ErrFinished
 	}
 	return participant, nil
+}
+
+// lookupParticipant resolves who is asking, for the participant-facing read
+// endpoints (Access, AccessForEvents) that have no reason to read a game and
+// so never go through s.lookup.
+func (s *Service) lookupParticipant(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, error) {
+	participant, err := s.people.ByUser(ctx, contestID, userID)
+	return classifyParticipant(participant, err, "look up the participant")
 }
 
 // Admitted reports whether participant may interact with contest right now:
