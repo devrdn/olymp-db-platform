@@ -57,6 +57,16 @@ func run() error {
 	if roles.AuthorPassword, err = required("GAME_AUTHOR_PASSWORD"); err != nil {
 		return err
 	}
+	// Same rule the API and the Query Runner hold their own credentials to:
+	// a deployment copied from deploy/.env.example and never edited must not
+	// come up on the password everybody who has read that file knows.
+	env := os.Getenv("ENV")
+	if env == "" {
+		env = "development"
+	}
+	if err := refusePlaceholderCredentials(env, dsn, roles); err != nil {
+		return err
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -212,4 +222,27 @@ func required(key string) (string, error) {
 		return "", fmt.Errorf("%s is required", key)
 	}
 	return value, nil
+}
+
+// refusePlaceholderCredentials refuses, outside development, an admin DSN or
+// role password that still carries deploy/.env.example's placeholder. This
+// job runs before the Query Runner and the Core API ever connect to this
+// cluster, on credentials neither of them validates on this path (the
+// runner and the API only check the DSNs and passwords they themselves read),
+// so a deployment left on the example's values would otherwise prepare the
+// cluster successfully and only fail once something tries to use it.
+func refusePlaceholderCredentials(env, adminDSN string, roles gamedb.Roles) error {
+	for _, cred := range []struct {
+		name, value string
+	}{
+		{"GAME_DB_ADMIN_DSN", adminDSN},
+		{"GAME_READER_PASSWORD", roles.ReaderPassword},
+		{"GAME_WRITER_PASSWORD", roles.WriterPassword},
+		{"GAME_AUTHOR_PASSWORD", roles.AuthorPassword},
+	} {
+		if err := config.RefusePlaceholder(env, cred.name, cred.value); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -71,7 +71,7 @@ func deviceCookieSecret(env string) ([]byte, error) {
 	if raw == "" {
 		return nil, errors.New("DEVICE_COOKIE_SECRET: required outside development")
 	}
-	if err := refusePlaceholder(env, "DEVICE_COOKIE_SECRET", raw); err != nil {
+	if err := RefusePlaceholder(env, "DEVICE_COOKIE_SECRET", raw); err != nil {
 		return nil, err
 	}
 	if len(raw) < minDeviceCookieSecretBytes {
@@ -84,11 +84,16 @@ func deviceCookieSecret(env string) ([]byte, error) {
 // must choose.
 const placeholderMarker = "change-me"
 
-// refusePlaceholder refuses, outside development, a credential still carrying
+// RefusePlaceholder refuses, outside development, a credential still carrying
 // the example file's placeholder: a deployment running on a password or key
 // anybody who has read the repository knows. The error names the variable and
 // never repeats the value. A development stack may keep the example's values.
-func refusePlaceholder(env, name, value string) error {
+//
+// Exported so a one-shot job outside this package (cmd/gamedb, which prepares
+// the game cluster's roles and has no other reason to import this package's
+// unexported machinery) can hold the credentials it reads to the same rule
+// the API and the Query Runner hold theirs to.
+func RefusePlaceholder(env, name, value string) error {
 	if env == "development" || !strings.Contains(strings.ToLower(value), placeholderMarker) {
 		return nil
 	}
@@ -122,7 +127,7 @@ func queryRunnerToken(env string, required bool) (string, error) {
 		}
 		return "", nil
 	}
-	if err := refusePlaceholder(env, "QUERY_RUNNER_TOKEN", raw); err != nil {
+	if err := RefusePlaceholder(env, "QUERY_RUNNER_TOKEN", raw); err != nil {
 		return "", err
 	}
 	if len(raw) < minQueryRunnerTokenBytes || len(raw) > maxQueryRunnerTokenBytes {
@@ -568,7 +573,7 @@ func Load() (Config, error) {
 		"GAME_PROVISIONER_DSN": cfg.GameProvisionerDSN,
 		"GAME_AUTHOR_PASSWORD": cfg.GameAuthorPassword,
 	} {
-		if err := refusePlaceholder(cfg.Env, name, value); err != nil {
+		if err := RefusePlaceholder(cfg.Env, name, value); err != nil {
 			return Config{}, err
 		}
 	}
