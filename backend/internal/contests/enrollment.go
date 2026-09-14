@@ -44,6 +44,27 @@ var (
 	ErrStaffCannotParticipate = errors.New("contest staff cannot also register as a participant")
 )
 
+// PoolTrigger asks the background game-pool tender to run again soon for a
+// contest whose roster just changed, rather than waiting out its own
+// periodic interval — a late roster is otherwise only reflected in a spare
+// copy at the next tick, up to a full interval away, and the participant it
+// left short waits for CREATE DATABASE inside their own first request.
+//
+// Declared here because this package is where every caller of it lives:
+// Enroll and AddParticipants below, and the scheduler's own published →
+// running transition (schedule.go). provisioning.Tender implements it, wired
+// in by internal/app only where there is a game cluster to keep a pool for —
+// a Service or Scheduler built without one (every test that predates this,
+// and any installation with GAME_PROVISIONER_DSN unset) simply never
+// triggers, which changes nothing else about either type.
+//
+// Trigger must never block the caller and never fail: it only wakes
+// housekeeping that runs later, off the request path and outside of whatever
+// transaction the caller is finishing.
+type PoolTrigger interface {
+	Trigger(contestID uuid.UUID)
+}
+
 // EnrollmentOpenAt reports whether a student may still sign themselves up.
 //
 // Three things have to hold: the contest invites self-signup, it is in a state
@@ -347,6 +368,16 @@ func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsComman
 	if err != nil {
 		return AddParticipantsResult{}, err
 	}
+
+	// Triggered after the transaction has committed, never inside it: a
+	// contest a roster import actually grew, and only one already taking
+	// part in an olympiad — a draft has no participants querying it yet, and
+	// the ordinary tick before it publishes is plenty. Nothing to trigger for
+	// a roster where every entry was skipped, since the pool's own roster
+	// count did not move.
+	if result.Added > 0 && s.poolTrigger != nil && (c.Status == StatusPublished || c.Status == StatusRunning) {
+		s.poolTrigger.Trigger(c.ID)
+	}
 	return result, nil
 }
 
@@ -464,6 +495,14 @@ func (s *Service) Enroll(ctx context.Context, cmd EnrollCommand) (Participant, e
 	})
 	if err != nil {
 		return Participant{}, err
+	}
+
+	// EnrollmentOpenAt above already refuses anything but a published or
+	// running contest, so every self-signup that reaches here is one this
+	// trigger belongs on — triggered after commit, never inside the
+	// transaction above.
+	if s.poolTrigger != nil {
+		s.poolTrigger.Trigger(c.ID)
 	}
 	return enrolled, nil
 }
