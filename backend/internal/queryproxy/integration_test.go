@@ -505,9 +505,10 @@ func TestRunsCoreRoundTripsAreMeasured(t *testing.T) {
 	// A ready template — read-only, so Quota is never asked for — and a
 	// participant already holding a current copy of it, so Ensure answers
 	// from repo.Of alone.
-	// The names are unique per run: both columns are unique across the
-	// installation, and a committed fixture must not collide with a
-	// concurrent or leftover run.
+	// The names are unique per run: the fixture is committed, a game
+	// database's name is unique across the installation, and a template
+	// name that looks like another run's would make any leftover row
+	// ambiguous to whoever reads the test database afterwards.
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO game_templates (contest_id, template_db, version, init_script, status)
