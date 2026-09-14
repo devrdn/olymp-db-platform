@@ -394,10 +394,10 @@ services:
       # this bounds one made directly in the database.
       SESSION_ACCOUNT_CACHE_TTL: ${SESSION_ACCOUNT_CACHE_TTL:-5s}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
-      # The compose network: Caddy's X-Forwarded-For is believed, a direct
-      # client's is not. Without this, every request appears to come from the
-      # proxy and the per-IP login throttle becomes one global counter.
-      # The two containers that actually front a browser, and only those.
+      # Whose X-Forwarded-For is believed: the two containers that actually
+      # front a browser, and only those; a direct client's is not. Without
+      # this, every request appears to come from the proxy and the per-address
+      # login throttle becomes one global counter.
       # A forwarded address decides the audit trail, the per-address login
       # throttle and a contest's network restriction, so trusting the whole
       # compose subnet would let any container on it — promtail, which mounts

@@ -247,7 +247,7 @@ var (
 	codeTooManyAttempts = httpx.NewCode("too_many_attempts",
 		"Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account. Try again later.")
 	codeSignInBusy = httpx.NewCode("sign_in_busy",
-		"The service is already checking as many passwords as it will at once, and none came free in time. The password was not evaluated — neither accepted nor judged wrong, though a sign-in attempt still counts against the attempt limits — so retrying in a moment is the right response. Also answered when issuing or changing a password meets the same limit.")
+		"The service is already checking as many passwords as it will at once, and none came free in time, or this address already has as many sign-ins waiting as it may. The password was not evaluated — neither accepted nor judged wrong. A sign-in attempt refused this way has spent the budget it pays before waiting (its address's, or a trusted browser's own) but nothing of the account's own attempt limits, so retrying in a moment is the right response. Also answered when issuing or changing a password meets the same limit.")
 	codeWrongPassword = httpx.NewCode("wrong_password",
 		"The current password given while changing it is not correct.")
 	codeWeakPassword = httpx.NewCode("weak_password",
