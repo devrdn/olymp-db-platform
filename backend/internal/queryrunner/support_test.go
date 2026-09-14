@@ -3,6 +3,7 @@ package queryrunner_test
 import (
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
@@ -103,4 +104,73 @@ type anything struct{}
 
 func (anything) Analyse(sql string, p sqlpolicy.Policy) (sqlpolicy.Statement, error) {
 	return sqlpolicy.Statement{Text: sql, Explain: true, Writes: p.Mode == sqlpolicy.ModeReadWrite}, nil
+}
+
+// unlimited is the default limits without the per-participant rate, which
+// these tests exceed on purpose and are not about.
+func unlimited() queryrunner.Limits {
+	limits := queryrunner.DefaultLimits()
+	limits.PerMinute = 0
+	return limits
+}
+
+// backend runs a query that answers with the server process serving it. The
+// runner must have been built with the anything validator: the checker
+// refuses a server function like this one.
+func backend(t *testing.T, runner *queryrunner.Runner, database string) int32 {
+	t.Helper()
+
+	result, err := runner.Run(t.Context(), request(database, `SELECT pg_backend_pid()`))
+	if err != nil {
+		t.Fatalf("reading the backend pid: %v", err)
+	}
+	return result.Rows[0][0].(int32)
+}
+
+// participantBackends counts the connections the reader role holds to these
+// databases, whatever state they are in.
+func participantBackends(t *testing.T, databases ...string) int {
+	t.Helper()
+
+	var n int
+	if err := gamedbtest.Admin(t).QueryRow(t.Context(),
+		`SELECT count(*) FROM pg_stat_activity WHERE usename = $1 AND datname = ANY($2)`,
+		gamedb.RoleReader, databases).Scan(&n); err != nil {
+		t.Fatalf("counting participant backends: %v", err)
+	}
+	return n
+}
+
+// eventually polls until the count of participant backends is want, and
+// reports the last count it saw. Closing a connection is a message to the
+// server, not a wait for its process to exit, so the count lags by a moment.
+func eventually(t *testing.T, want int, databases ...string) int {
+	t.Helper()
+
+	var got int
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+		if got = participantBackends(t, databases...); got == want {
+			return got
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return got
+}
+
+// recreate makes a database of this name again, hardened and seeded as
+// Scratch and seed made the first one.
+func recreate(t *testing.T, database string) {
+	t.Helper()
+
+	admin := gamedbtest.Admin(t)
+	if _, err := admin.Exec(t.Context(), `CREATE DATABASE `+sqlpolicy.QuoteIdentifier(database)); err != nil {
+		t.Fatalf("recreating %s: %v", database, err)
+	}
+	user, password := gamedbtest.AdminCredentials(t)
+	conn := gamedbtest.Connect(t, user, password, database)
+	if err := gamedb.HardenDatabase(t.Context(), conn); err != nil {
+		t.Fatalf("hardening %s: %v", database, err)
+	}
+	_ = conn.Close(t.Context())
+	seed(t, database)
 }
