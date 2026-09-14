@@ -111,6 +111,7 @@ describe("the standings a viewer is sent", () => {
   test("reads the staff table's ICPC grid the same way", () => {
     const parsed = staffStandingsSchema.parse({
       shown: { state: "live" },
+      status: "running",
       scoring: "icpc",
       freeze_min: null,
       names: "login",
@@ -136,9 +137,10 @@ describe("the standings a viewer is sent", () => {
     ]);
   });
 
-  test("reads the staff table with both names and what everybody else sees", () => {
+  test("reads the staff table with both names and what everybody else sees, and the contest's own status", () => {
     const parsed = staffStandingsSchema.parse({
       shown: { state: "frozen", frozen_at: "2026-09-20T11:30:00Z" },
+      status: "finished",
       scoring: "points",
       freeze_min: 30,
       names: "login",
@@ -160,6 +162,7 @@ describe("the standings a viewer is sent", () => {
       state: "frozen",
       frozenAt: "2026-09-20T11:30:00Z",
     });
+    expect(parsed.status).toBe("finished");
     expect(parsed.freezeMin).toBe(30);
     expect(parsed.revealedAt).toBeUndefined();
     expect(parsed.rows[0]).toMatchObject({
