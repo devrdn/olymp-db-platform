@@ -67,7 +67,7 @@
     },
     {
       "code": "freeze_already_reached",
-      "meaning": "The contest is running and its leaderboard freeze has already been reached, so the end date cannot move — moving it would push the freeze itself later and briefly unfreeze the board. Every other setting may still be saved."
+      "meaning": "The contest is running and its leaderboard freeze has already been reached, so the end date cannot move earlier. A later end date is accepted and lengthens the freeze by the same minutes, so the board stays frozen where it froze. Every other setting may still be saved."
     },
     {
       "code": "game_cluster_full",
