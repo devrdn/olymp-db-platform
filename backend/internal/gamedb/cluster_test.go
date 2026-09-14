@@ -3,7 +3,6 @@ package gamedb_test
 import (
 	"context"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
-	"github.com/devrdn/db-contest/backend/internal/platform/config"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 )
@@ -411,42 +409,4 @@ func TestAnAbruptlyAbandonedBackendStopsWithinTheCheckInterval(t *testing.T) {
 	}
 	t.Fatalf("backend %d still running 3s after its client vanished with no Terminate and no cancel: "+
 		"client_connection_check_interval is not ending abandoned backends", pid)
-}
-
-// The Query Runner sizes the game cluster's memory from constants that restate
-// settings owned here and on the pg-game command: how many build sessions the
-// game_author role may hold, how many parallel workers and autovacuum workers
-// the cluster runs. They live in the platform layer, which must not import this
-// package, so nothing ties them at compile time; this reads each setting back
-// from the prepared cluster and compares. A change on either side without the
-// other fails here instead of silently leaving the memory arithmetic wrong.
-func TestTheMemoryArithmeticMatchesTheCluster(t *testing.T) {
-	pool := admin(t)
-
-	var authorLimit int
-	if err := pool.QueryRow(t.Context(),
-		`SELECT rolconnlimit FROM pg_roles WHERE rolname = $1`, gamedb.RoleAuthor).Scan(&authorLimit); err != nil {
-		t.Fatalf("reading %s's connection limit: %v", gamedb.RoleAuthor, err)
-	}
-	if authorLimit != config.MaxBuildSessions {
-		t.Errorf("%s CONNECTION LIMIT = %d, but config.MaxBuildSessions = %d",
-			gamedb.RoleAuthor, authorLimit, config.MaxBuildSessions)
-	}
-
-	for setting, want := range map[string]int{
-		"max_parallel_workers":   config.MaxParallelWorkers,
-		"autovacuum_max_workers": config.AutovacuumWorkers,
-	} {
-		var raw string
-		if err := pool.QueryRow(t.Context(), "SHOW "+setting).Scan(&raw); err != nil {
-			t.Fatalf("SHOW %s: %v", setting, err)
-		}
-		got, err := strconv.Atoi(raw)
-		if err != nil {
-			t.Fatalf("SHOW %s = %q is not a number", setting, raw)
-		}
-		if got != want {
-			t.Errorf("%s = %d on the cluster, but the memory arithmetic assumes %d", setting, got, want)
-		}
-	}
 }

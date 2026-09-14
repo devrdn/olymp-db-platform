@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -101,7 +102,7 @@ func TestAnEmptyQueueIsAllowedButANegativeOneIsNot(t *testing.T) {
 func TestConcurrencyMustFitTheDeclaredGameClusterMemory(t *testing.T) {
 	// The arithmetic the check enforces, stated here so the test fails if the
 	// constants drift from what the deployment is sized for.
-	const cap = int64(defaultProcessMemoryBytes)
+	const cap = int64(DefaultProcessMemoryBytes)
 	perBudget := func(concurrent int) int64 {
 		return (int64(concurrent)+int64(MaxParallelWorkers)+int64(MaxBuildSessions))*cap + ReservedMemoryBytes
 	}
@@ -148,15 +149,42 @@ func TestConcurrencyMustFitTheDeclaredGameClusterMemory(t *testing.T) {
 		}
 	})
 
-	t.Run("without the limit declared the check does not run", func(t *testing.T) {
-		// The limit is optional: a development cluster with no cgroup limit and
-		// no ulimit has nothing to check against, and must still start.
-		setRunnerRequired(t)
-		t.Setenv("QUERY_CONCURRENT", "64")
-		t.Setenv("GAME_DB_MEMORY_BYTES", "")
+	t.Run("an absent or empty limit falls back to the default and is still checked", func(t *testing.T) {
+		// The check is never skipped: GAME_DB_MEMORY_BYTES is also what the
+		// game cluster's container limit is interpolated from, with the same
+		// default, so an unset variable means the default-sized container —
+		// and a concurrency it cannot hold must still be refused.
+		for _, value := range []string{"", "unset"} {
+			setRunnerRequired(t)
+			t.Setenv("QUERY_CONCURRENT", "64")
+			if value == "unset" {
+				t.Setenv("GAME_DB_MEMORY_BYTES", "")
+				os.Unsetenv("GAME_DB_MEMORY_BYTES")
+			} else {
+				t.Setenv("GAME_DB_MEMORY_BYTES", value)
+			}
+			if _, err := LoadRunner(); err == nil {
+				t.Fatalf("GAME_DB_MEMORY_BYTES %s: concurrency 64 started against the default-sized cluster", value)
+			}
+		}
 
-		if _, err := LoadRunner(); err != nil {
-			t.Fatalf("a runner with no declared game-cluster memory was refused: %v", err)
+		setRunnerRequired(t)
+		t.Setenv("QUERY_CONCURRENT", "8")
+		t.Setenv("GAME_DB_MEMORY_BYTES", "")
+		cfg, err := LoadRunner()
+		if err != nil {
+			t.Fatalf("the default concurrency was refused against the default limit: %v", err)
+		}
+		if cfg.GameDBMemoryBytes != DefaultGameDBMemoryBytes {
+			t.Fatalf("limit = %d, want the %d default", cfg.GameDBMemoryBytes, DefaultGameDBMemoryBytes)
+		}
+	})
+
+	t.Run("a zero limit is refused rather than read as no limit", func(t *testing.T) {
+		setRunnerRequired(t)
+		t.Setenv("GAME_DB_MEMORY_BYTES", "0")
+		if _, err := LoadRunner(); err == nil {
+			t.Fatal("GAME_DB_MEMORY_BYTES=0 was accepted")
 		}
 	})
 }
@@ -172,8 +200,8 @@ func TestTheProcessCapIsReadFromTheEnvironment(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load: %v", err)
 		}
-		if cfg.ProcessMemoryBytes != defaultProcessMemoryBytes {
-			t.Fatalf("cap = %d, want the %d default", cfg.ProcessMemoryBytes, defaultProcessMemoryBytes)
+		if cfg.ProcessMemoryBytes != DefaultProcessMemoryBytes {
+			t.Fatalf("cap = %d, want the %d default", cfg.ProcessMemoryBytes, DefaultProcessMemoryBytes)
 		}
 	})
 
