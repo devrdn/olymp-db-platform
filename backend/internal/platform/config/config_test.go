@@ -987,6 +987,38 @@ func TestTheAccountWideLoginCeilingIsConfigurableAndBounded(t *testing.T) {
 	}
 }
 
+func TestCoreDBPoolMaxIsLeftToThePoolsOwnDefaultByDefault(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.CoreDBPoolMax != 0 {
+		t.Errorf("CoreDBPoolMax = %d, want 0 (the pool's own default)", cfg.CoreDBPoolMax)
+	}
+}
+
+func TestCoreDBPoolMaxIsConfigurableAndBounded(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("CORE_DB_POOL_MAX", "40")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.CoreDBPoolMax != 40 {
+		t.Errorf("CoreDBPoolMax = %d, want 40", cfg.CoreDBPoolMax)
+	}
+
+	for _, raw := range []string{"-1", "101"} {
+		t.Setenv("CORE_DB_POOL_MAX", raw)
+		if _, err := Load(); err == nil {
+			t.Errorf("Load() accepted CORE_DB_POOL_MAX=%s, want error", raw)
+		}
+	}
+}
+
 func TestSessionMaximumLifetimeDefaultsToAWorkingDay(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 
