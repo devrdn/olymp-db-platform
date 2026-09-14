@@ -96,17 +96,41 @@ export function forwardedHeaders(
 }
 
 /**
- * The headers a request passed straight through to the API should carry — the
- * `/api/*` rewrite in next.config.ts, which forwards the browser's headers as
- * they are. The same rule as above: the forwarded chain survives only when the
- * proxy vouched for it, and the proxy's secret never travels further than this
- * server. Returns a copy; the incoming headers are left as they were.
+ * Headers that name a client address. The API reads only `X-Forwarded-For`
+ * (backend CLAUDE.md, rule 9), but none of these may reach it — or anything
+ * else — as a claim nobody vouched for.
  */
-export function apiRequestHeaders(incoming: Headers, secret: string | null | undefined): Headers {
+const FORWARDED_ADDRESS_HEADERS = ["x-forwarded-for", "x-real-ip", "forwarded"];
+
+/**
+ * Whether a path is headed for the API through the `/api/*` rewrite in
+ * next.config.ts. Case-insensitive, because the rewrite's own match is: a
+ * lower-case check alone is how `/API/...` was passed through untouched.
+ */
+export function headedForApi(pathname: string): boolean {
+  return pathname.toLowerCase().startsWith("/api/");
+}
+
+/**
+ * The headers every request continues with, from the proxy file (proxy.ts).
+ *
+ * A forwarded address the ingress proxy did not vouch for is removed whatever
+ * the path: the `/api/*` rewrite passes the browser's headers to the API as
+ * they came, and a rule that depends on recognising that path is a rule a
+ * differently-spelled path walks past. The proxy's secret is removed on the way
+ * to the API, which has no use for it; on a screen it is kept, because
+ * {@link forwardedHeaders} checks it again at the point it hands an address on.
+ * Returns a copy; the incoming headers are left as they were.
+ */
+export function incomingRequestHeaders(
+  incoming: Headers,
+  secret: string | null | undefined,
+  { towardsApi }: { towardsApi: boolean },
+): Headers {
   const outgoing = new Headers(incoming);
   if (!vouchedByIngress(incoming.get(INGRESS_HEADER), secret)) {
-    outgoing.delete("x-forwarded-for");
+    for (const name of FORWARDED_ADDRESS_HEADERS) outgoing.delete(name);
   }
-  outgoing.delete(INGRESS_HEADER);
+  if (towardsApi) outgoing.delete(INGRESS_HEADER);
   return outgoing;
 }
