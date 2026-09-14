@@ -388,6 +388,9 @@ services:
       DEVICE_COOKIE_SECRET: ${DEVICE_COOKIE_SECRET:-}
       DEVICE_COOKIE_TTL: ${DEVICE_COOKIE_TTL:-720h}
       MAX_LOGIN_ATTEMPTS_PER_DEVICE: ${MAX_LOGIN_ATTEMPTS_PER_DEVICE:-10}
+      # Every trusted browser of one account together: a success resets
+      # neither limit, so an account's own cookies cannot sign in without end.
+      MAX_TRUSTED_LOGIN_ATTEMPTS_PER_ACCOUNT: ${MAX_TRUSTED_LOGIN_ATTEMPTS_PER_ACCOUNT:-20}
       # How many argon2id computations — sign-in, password changes, issuing
       # passwords — run at once. Each holds 64 MiB, so this is a memory figure
       # and the limits below are sized from it; stated here rather than left

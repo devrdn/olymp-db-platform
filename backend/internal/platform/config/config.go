@@ -42,10 +42,11 @@ const (
 // of the HMAC it signs with. A lifetime under an hour is no trust worth the
 // name; past ninety days a browser handed on to somebody else keeps it.
 const (
-	minDeviceCookieSecretBytes       = 32
-	minDeviceCookieTTL               = time.Hour
-	maxDeviceCookieTTL               = 90 * 24 * time.Hour
-	maxLoginAttemptsPerDeviceCeiling = 1000
+	minDeviceCookieSecretBytes = 32
+	minDeviceCookieTTL         = time.Hour
+	maxDeviceCookieTTL         = 90 * 24 * time.Hour
+	// maxTrustedLoginAttemptsCeiling bounds both limits on trusted browsers.
+	maxTrustedLoginAttemptsCeiling = 1000
 )
 
 // deviceCookieSecret reads DEVICE_COOKIE_SECRET, or generates one for a
@@ -140,6 +141,10 @@ type Config struct {
 	// MaxLoginAttemptsPerDevice caps sign-in attempts through one trusted
 	// browser in a quarter of an hour. Zero leaves it to the auth package.
 	MaxLoginAttemptsPerDevice int
+	// MaxTrustedLoginAttemptsPerAccount caps sign-in attempts through every
+	// trusted browser of one account together in a quarter of an hour. Zero
+	// leaves it to the auth package.
+	MaxTrustedLoginAttemptsPerAccount int
 	// GameProvisionerDSN connects to the game cluster as the provisioning
 	// role, which creates and drops participants' databases. Optional: empty
 	// turns provisioning off, which is what a deployment without a game
@@ -365,9 +370,16 @@ func Load() (Config, error) {
 	if cfg.MaxLoginAttemptsPerDevice, err = intEnv("MAX_LOGIN_ATTEMPTS_PER_DEVICE", 0); err != nil {
 		return Config{}, err
 	}
-	if cfg.MaxLoginAttemptsPerDevice > maxLoginAttemptsPerDeviceCeiling {
+	if cfg.MaxLoginAttemptsPerDevice > maxTrustedLoginAttemptsCeiling {
 		return Config{}, fmt.Errorf("MAX_LOGIN_ATTEMPTS_PER_DEVICE: %d is above the ceiling of %d",
-			cfg.MaxLoginAttemptsPerDevice, maxLoginAttemptsPerDeviceCeiling)
+			cfg.MaxLoginAttemptsPerDevice, maxTrustedLoginAttemptsCeiling)
+	}
+	if cfg.MaxTrustedLoginAttemptsPerAccount, err = intEnv("MAX_TRUSTED_LOGIN_ATTEMPTS_PER_ACCOUNT", 0); err != nil {
+		return Config{}, err
+	}
+	if cfg.MaxTrustedLoginAttemptsPerAccount > maxTrustedLoginAttemptsCeiling {
+		return Config{}, fmt.Errorf("MAX_TRUSTED_LOGIN_ATTEMPTS_PER_ACCOUNT: %d is above the ceiling of %d",
+			cfg.MaxTrustedLoginAttemptsPerAccount, maxTrustedLoginAttemptsCeiling)
 	}
 
 	// Zero means "not stated", and the authentication service supplies its own

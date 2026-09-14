@@ -1036,10 +1036,14 @@ func TestDeviceCookieSettingsHaveDefaultsAndBounds(t *testing.T) {
 	if cfg.MaxLoginAttemptsPerDevice != 0 {
 		t.Errorf("MaxLoginAttemptsPerDevice = %d, want 0 (the auth package's default)", cfg.MaxLoginAttemptsPerDevice)
 	}
+	if cfg.MaxTrustedLoginAttemptsPerAccount != 0 {
+		t.Errorf("MaxTrustedLoginAttemptsPerAccount = %d, want 0 (the auth package's default)", cfg.MaxTrustedLoginAttemptsPerAccount)
+	}
 
 	for env, bad := range map[string][]string{
-		"DEVICE_COOKIE_TTL":             {"0s", "59m", "2161h"},
-		"MAX_LOGIN_ATTEMPTS_PER_DEVICE": {"-1", "1001"},
+		"DEVICE_COOKIE_TTL":                      {"0s", "59m", "2161h"},
+		"MAX_LOGIN_ATTEMPTS_PER_DEVICE":          {"-1", "1001"},
+		"MAX_TRUSTED_LOGIN_ATTEMPTS_PER_ACCOUNT": {"-1", "1001"},
 	} {
 		for _, raw := range bad {
 			t.Run(env+"="+raw, func(t *testing.T) {
@@ -1049,5 +1053,18 @@ func TestDeviceCookieSettingsHaveDefaultsAndBounds(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestTheTrustedSignInBudgetIsConfigurable(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("MAX_TRUSTED_LOGIN_ATTEMPTS_PER_ACCOUNT", "40")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.MaxTrustedLoginAttemptsPerAccount != 40 {
+		t.Errorf("MaxTrustedLoginAttemptsPerAccount = %d, want 40", cfg.MaxTrustedLoginAttemptsPerAccount)
 	}
 }
