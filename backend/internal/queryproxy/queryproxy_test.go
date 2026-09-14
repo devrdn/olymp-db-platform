@@ -71,8 +71,8 @@ type contestStore struct {
 	contest contests.Contest
 	err     error
 	// calls counts how often ByID was reached, so a test can prove
-	// WithContestAndGame really did replace this call rather than merely
-	// adding a second one beside it.
+	// WithLookup really did replace this call rather than merely adding a
+	// second one beside it.
 	calls *int
 }
 
@@ -100,27 +100,29 @@ func (g games) Game(context.Context, uuid.UUID) (provisioning.Contest, error) {
 	return g.game, g.err
 }
 
-// contestAndGame is the fake behind queryproxy.ContestAndGame: the combined
-// lookup WithContestAndGame wires in, standing in for
-// postgres.Contests.Lookup. calls counts how often it was reached, so a test
-// can prove Run used this single round trip instead of its own separate
-// Contests.ByID and Games.Game.
-type contestAndGame struct {
-	contest contests.Contest
-	game    provisioning.Contest
-	gameErr error
-	err     error
-	calls   *int
+// lookupFake is the fake behind queryproxy.Lookup: the single round trip
+// WithLookup wires in, standing in for postgres.Registrations.ForRun. calls
+// counts how often it was reached, so a test can prove Run used this one
+// call instead of its own default's three separate ones.
+type lookupFake struct {
+	participant contests.Participant
+	contest     contests.Contest
+	game        provisioning.Contest
+	gameErr     error
+	err         error
+	calls       *int
 }
 
-func (cg contestAndGame) Lookup(context.Context, uuid.UUID) (queryproxy.ContestGame, error) {
-	if cg.calls != nil {
-		*cg.calls++
+func (l lookupFake) ForRun(context.Context, uuid.UUID, uuid.UUID) (queryproxy.LookupResult, error) {
+	if l.calls != nil {
+		*l.calls++
 	}
-	if cg.err != nil {
-		return queryproxy.ContestGame{}, cg.err
+	if l.err != nil {
+		return queryproxy.LookupResult{}, l.err
 	}
-	return queryproxy.ContestGame{Contest: cg.contest, Game: cg.game, GameErr: cg.gameErr}, nil
+	return queryproxy.LookupResult{
+		Participant: l.participant, Contest: l.contest, Game: l.game, GameErr: l.gameErr,
+	}, nil
 }
 
 // answerable is the fake behind queryproxy.Answerable: whether this contest
@@ -1821,25 +1823,25 @@ func TestAServiceWithNoAnswerableWiredStillRunsQueries(t *testing.T) {
 	}
 }
 
-// The check is placed ahead of the game lookup and of provisioning: a refused
-// query must not create a participant's database, and must not ask the game
-// cluster anything either.
+// The check is placed ahead of provisioning: a refused query must not create
+// a participant's database. It no longer proves the game was never looked
+// up — s.lookup answers the participant, the contest and the game together,
+// so the game arrives with the same one call the participant and the contest
+// already needed, before this check ever runs; what the merge actually saves
+// is the two separate round trips TestTheSingleLookupRemovesTwoCoreRoundTripsFromRun
+// measures, not this one.
 func TestNothingLeftToAnswerIsRefusedBeforeAnyDatabaseIsProvisioned(t *testing.T) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
-	gameCalls := 0
 	db := &databases{database: "game_c1_u1"}
 	service := queryproxy.New(
 		people{participant: contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}},
 		contestStore{contest: contest},
-		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}, calls: &gameCalls},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		db, &runner{result: &queryrunner.Result{}},
 	).WithAnswerable(&answerable{left: false})
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrNothingLeftToAnswer) {
 		t.Fatalf("error = %v, want ErrNothingLeftToAnswer", err)
-	}
-	if gameCalls != 0 {
-		t.Fatalf("the game was looked up %d times, want 0", gameCalls)
 	}
 	if db.asked != nil {
 		t.Fatalf("a database was provisioned for a refused query: %+v", db.asked)
@@ -1861,102 +1863,107 @@ func TestAFailingAnswerableReadsAsUnavailableAndNotAsARefusal(t *testing.T) {
 	}
 }
 
-// TestTheCombinedLookupRemovesOneCoreRoundTripFromRun is the measurement P-H3
-// asks for: without WithContestAndGame wired, Run reads the contest and its
-// game as two separate calls, exactly as it always has; wiring one collapses
-// that into a single call, and neither call site it replaces is reached at
-// all.
-func TestTheCombinedLookupRemovesOneCoreRoundTripFromRun(t *testing.T) {
+// TestTheSingleLookupRemovesTwoCoreRoundTripsFromRun is the measurement: New's
+// own default composes LookupResult from three separate calls (participant,
+// contest, game) so every test built against those three fakes keeps
+// exercising Run's own code; WithLookup replaces that default with one call,
+// and none of the three it replaces runs at all.
+func TestTheSingleLookupRemovesTwoCoreRoundTripsFromRun(t *testing.T) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
+	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}
 	game := provisioning.Contest{ID: contest.ID, Template: "game_tpl_c1", Policy: sqlpolicy.ReadOnly()}
-	newParticipant := func() people {
-		return people{participant: contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}}
-	}
 
-	t.Run("baseline: two separate calls", func(t *testing.T) {
-		contestCalls, gameCalls := 0, 0
+	t.Run("New's own default: three separate calls", func(t *testing.T) {
+		peopleCalls, contestCalls, gameCalls := 0, 0, 0
 		service := queryproxy.New(
-			newParticipant(), contestStore{contest: contest, calls: &contestCalls},
+			people{participant: participant, calls: &peopleCalls},
+			contestStore{contest: contest, calls: &contestCalls},
 			games{game: game, calls: &gameCalls},
 			&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
 		)
 		if _, err := service.Run(t.Context(), command()); err != nil {
 			t.Fatalf("running: %v", err)
 		}
-		if contestCalls != 1 || gameCalls != 1 {
-			t.Fatalf("round trips = contest %d, game %d, want 1 and 1 (the two separate calls this replaces)", contestCalls, gameCalls)
+		if peopleCalls != 1 || contestCalls != 1 || gameCalls != 1 {
+			t.Fatalf("round trips = participant %d, contest %d, game %d, want 1, 1 and 1 — the three calls this replaces",
+				peopleCalls, contestCalls, gameCalls)
 		}
 	})
 
-	t.Run("with the combined lookup wired", func(t *testing.T) {
-		contestCalls, gameCalls, combinedCalls := 0, 0, 0
+	t.Run("with a single query wired", func(t *testing.T) {
+		peopleCalls, contestCalls, gameCalls, lookupCalls := 0, 0, 0, 0
 		service := queryproxy.New(
-			newParticipant(), contestStore{contest: contest, calls: &contestCalls},
+			people{participant: participant, calls: &peopleCalls},
+			contestStore{contest: contest, calls: &contestCalls},
 			games{game: game, calls: &gameCalls},
 			&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
-		).WithContestAndGame(contestAndGame{contest: contest, game: game, calls: &combinedCalls})
+		).WithLookup(lookupFake{participant: participant, contest: contest, game: game, calls: &lookupCalls})
 
 		if _, err := service.Run(t.Context(), command()); err != nil {
 			t.Fatalf("running: %v", err)
 		}
-		if combinedCalls != 1 {
-			t.Fatalf("combined lookup calls = %d, want 1", combinedCalls)
+		if lookupCalls != 1 {
+			t.Fatalf("lookup calls = %d, want 1", lookupCalls)
 		}
-		if contestCalls != 0 || gameCalls != 0 {
-			t.Fatalf("the separate contest/game calls still ran (%d, %d) once a combined lookup was wired",
-				contestCalls, gameCalls)
+		if peopleCalls != 0 || contestCalls != 0 || gameCalls != 0 {
+			t.Fatalf("the default's three separate calls still ran (%d, %d, %d) once a single query was wired",
+				peopleCalls, contestCalls, gameCalls)
 		}
 	})
 }
 
-// A contest that could not be read at all — the combined lookup's own
-// error — must be marked as ours, exactly as the separate Contests.ByID
-// failure always was.
-func TestTheCombinedLookupsFailureIsMarkedAsOurs(t *testing.T) {
-	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
+// A lookup that could not be read at all must be marked as ours, exactly as
+// a separate People.ByUser or Contests.ByID failure always was.
+func TestASingleLookupsFailureIsMarkedAsOurs(t *testing.T) {
 	broken := errors.New("dial tcp 172.28.0.5:5432: connection refused")
 	service := queryproxy.New(
-		people{participant: contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}},
-		contestStore{contest: contest}, games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
-		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
-	).WithContestAndGame(contestAndGame{err: broken})
+		people{}, contestStore{}, games{}, &databases{}, &runner{},
+	).WithLookup(lookupFake{err: broken})
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrUnavailable) {
 		t.Fatalf("error = %v, want ErrUnavailable", err)
 	}
 }
 
-// TestTheCombinedLookupsMissingGameIsStillCheckedAtItsUsualPoint is the claim
-// the whole merge depends on: reading the game together with the contest
-// must not move when a missing game is actually noticed. A combined lookup
-// that already knows there is no game must still let the address, length and
-// answerable checks run first — exactly the order the two-call path always
-// had — and only report ErrNoGameYet once nothing else has refused first.
-func TestTheCombinedLookupsMissingGameIsStillCheckedAtItsUsualPoint(t *testing.T) {
+// TestASingleLookupsMissingGameIsStillCheckedAtItsUsualPoint is the claim the
+// whole merge depends on: reading the game together with the participant and
+// the contest must not move when a missing game is actually noticed. A
+// lookup that already knows there is no game must still let the address,
+// length and answerable checks run first — exactly the order the separate
+// calls always had — and only report ErrNoGameYet once nothing else has
+// refused first.
+func TestASingleLookupsMissingGameIsStillCheckedAtItsUsualPoint(t *testing.T) {
 	contest := contests.Contest{
 		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow,
 		AllowedCIDRs: []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")},
 	}
-	participant := people{participant: contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}}
-	combined := contestAndGame{contest: contest, gameErr: provisioning.ErrNoGame}
+	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}
+	lookup := lookupFake{participant: participant, contest: contest, gameErr: provisioning.ErrNoGame}
 
 	// The address restriction is checked well before the game is ever
 	// consulted, so a disallowed address must still win.
 	fromHome := command()
 	fromHome.Address = netip.MustParseAddr("203.0.113.7")
-	service := queryproxy.New(participant, contestStore{contest: contest}, games{}, &databases{}, &runner{}).
-		WithContestAndGame(combined)
+	service := queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}).WithLookup(lookup)
 	if _, err := service.Run(t.Context(), fromHome); !errors.Is(err, queryproxy.ErrAddressNotAllowed) {
 		t.Fatalf("error = %v, want ErrAddressNotAllowed — the address check comes before the game is looked at", err)
 	}
 
-	// Nothing else refuses one from the contest's own network: the missing
-	// game is what finally answers, exactly as it would have from a separate
-	// Games.Game call.
+	// Whether anything is still answerable is checked before the game too:
+	// a participant with nothing left to work towards is refused for that,
+	// never told their contest has no game, even though both are true.
 	fromRoom := command()
 	fromRoom.Address = netip.MustParseAddr("10.20.3.4")
-	service = queryproxy.New(participant, contestStore{contest: contest}, games{}, &databases{}, &runner{}).
-		WithContestAndGame(combined)
+	service = queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}).
+		WithLookup(lookup).WithAnswerable(&answerable{left: false})
+	if _, err := service.Run(t.Context(), fromRoom); !errors.Is(err, queryproxy.ErrNothingLeftToAnswer) {
+		t.Fatalf("error = %v, want ErrNothingLeftToAnswer — answerable comes before the game is looked at", err)
+	}
+
+	// Nothing else refuses one from the contest's own network with a
+	// question still open: the missing game is what finally answers, exactly
+	// as it would have from a separate Games.Game call.
+	service = queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}).WithLookup(lookup)
 	if _, err := service.Run(t.Context(), fromRoom); !errors.Is(err, queryproxy.ErrNoGameYet) {
 		t.Fatalf("error = %v, want ErrNoGameYet", err)
 	}
