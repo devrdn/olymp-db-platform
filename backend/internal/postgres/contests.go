@@ -491,11 +491,22 @@ func (r *Contests) ReplaceTranslations(ctx context.Context, id uuid.UUID, transl
 // two requests interleave. The lock is released when the surrounding
 // transaction ends, so a caller outside one would see no protection at all
 // while believing it had some — refusing is the honest answer.
+//
+// FOR NO KEY UPDATE rather than the stronger FOR UPDATE: every row that
+// references a contest by foreign key (game_instances.contest_id, inserted
+// continuously by the pool's own background top-ups, among others) takes a
+// key-share lock on this row the moment it is inserted, and FOR UPDATE
+// conflicts with that — a roster import or a manager appointment holding
+// this lock would have stalled the pool for as long as it ran, for a
+// contest whose participants are meanwhile waiting on that same pool for a
+// database. FOR NO KEY UPDATE does not conflict with a key-share lock, and
+// still conflicts with itself, which is the only property GrantManager,
+// Enroll and AddParticipants actually need from it.
 func (r *Contests) LockContest(ctx context.Context, id uuid.UUID) error {
 	if !storage.InTx(ctx) {
 		return errors.New("locking a contest must run inside a transaction")
 	}
-	if _, err := r.querier(ctx).Exec(ctx, `SELECT id FROM contests WHERE id = $1 FOR UPDATE`, id); err != nil {
+	if _, err := r.querier(ctx).Exec(ctx, `SELECT id FROM contests WHERE id = $1 FOR NO KEY UPDATE`, id); err != nil {
 		return fmt.Errorf("lock contest: %w", err)
 	}
 	return nil
