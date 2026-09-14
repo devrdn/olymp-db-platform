@@ -594,7 +594,7 @@ func TestRosterImportRefusesMoreEntriesThanTheBound(t *testing.T) {
 	}
 }
 
-// TestEnrollTriggersThePoolTenderOnSuccess is P-C1's own claim for
+// TestEnrollTriggersThePoolTenderOnSuccess is Enroll's own claim about
 // self-signup: a student joining a published or running contest wakes the
 // game pool's background tender rather than leaving a late registration
 // unreflected in any spare copy until its own next tick.
@@ -613,6 +613,9 @@ func TestEnrollTriggersThePoolTenderOnSuccess(t *testing.T) {
 
 	if len(f.PoolTrigger.Triggered) != 1 || f.PoolTrigger.Triggered[0] != c.ID {
 		t.Fatalf("triggered = %v, want exactly [%s]", f.PoolTrigger.Triggered, c.ID)
+	}
+	if f.PoolTrigger.TriggeredWhileOpen != 0 {
+		t.Fatalf("the trigger fired while the transaction was still open, want it fired after commit")
 	}
 }
 
@@ -658,11 +661,11 @@ func TestEnrollWithNoPoolTriggerWiredStillWorks(t *testing.T) {
 	}
 }
 
-// TestAddParticipantsTriggersThePoolTenderOnceForTheWholeImport is P-C1's own
-// claim for a staff-side roster: importing several people into a running
-// contest wakes the tender exactly once, not once per row — a burst that
-// large is exactly what the coalescing trigger exists to absorb into one
-// extra tend, not into a trigger per participant.
+// TestAddParticipantsTriggersThePoolTenderOnceForTheWholeImport is
+// AddParticipants' own claim for a staff-side roster: importing several
+// people into a running contest wakes the tender exactly once, not once per
+// row — a burst that large is exactly what the coalescing trigger exists to
+// absorb into one extra tend, not into a trigger per participant.
 func TestAddParticipantsTriggersThePoolTenderOnceForTheWholeImport(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
@@ -680,6 +683,9 @@ func TestAddParticipantsTriggersThePoolTenderOnceForTheWholeImport(t *testing.T)
 	}
 	if len(f.PoolTrigger.Triggered) != 1 || f.PoolTrigger.Triggered[0] != c.ID {
 		t.Fatalf("triggered = %v, want exactly one trigger for %s", f.PoolTrigger.Triggered, c.ID)
+	}
+	if f.PoolTrigger.TriggeredWhileOpen != 0 {
+		t.Fatalf("the trigger fired while the import's transaction was still open, want it fired after commit")
 	}
 }
 
