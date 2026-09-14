@@ -321,6 +321,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Concurrency: cfg.PasswordHashConcurrency,
 		MaxWait:     cfg.PasswordHashMaxWait,
 	})
+	checkMemoryLimit(log, passwords.Concurrency())
 	authService := auth.NewService(auth.ServiceConfig{
 		Users:                 userRepo,
 		Sessions:              sessions,
