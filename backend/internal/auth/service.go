@@ -84,11 +84,13 @@ const (
 	DefaultMaxLoginAttemptsPerAddress = 300
 
 	// waitingPerSlot sizes each address's share of the queue for a hashing
-	// slot, per slot the hasher has. Two a slot lets an honest burst from one
-	// NAT address queue up, and keeps the queue one address can build short
-	// enough that a sign-in from anywhere else behind it is served within the
-	// wait.
-	waitingPerSlot = 2
+	// slot, per slot the hasher has. A verification takes roughly 75-100 ms, so
+	// at the compose default of 4 slots the 32 attempts one address may queue
+	// drain in well under a second, leaving a sign-in from anywhere else behind
+	// them served within the 2 s wait, while a lecture hall signing in through
+	// one NAT address at the start of a round mostly queues instead of being
+	// refused.
+	waitingPerSlot = 8
 )
 
 // dummyHash is verified against when the login does not exist, so a missing
