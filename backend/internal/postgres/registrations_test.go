@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/db-contest/backend/internal/provisioning"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
 )
 
@@ -292,6 +295,156 @@ func TestRemovingAParticipantTakesTheRegistrationAway(t *testing.T) {
 
 		if _, err := repo.ByUser(ctx, id, student.ID); !errors.Is(err, contests.ErrParticipantNotFound) {
 			t.Errorf("ByUser() = %v, want ErrParticipantNotFound", err)
+		}
+	})
+}
+
+// putReadyTemplate inserts a ready game_templates row directly, the same row
+// ForRun's game half and GameInstances.Game both read.
+func putReadyTemplate(t *testing.T, ctx context.Context, contest uuid.UUID, database string, version int) {
+	t.Helper()
+	_, err := storage.QuerierFrom(ctx, testPool).Exec(ctx, `
+		INSERT INTO game_templates (contest_id, template_db, version, init_script, status)
+		VALUES ($1, $2, $3, 'SELECT 1', 'ready')`, contest, database, version)
+	if err != nil {
+		t.Fatalf("insert ready template: %v", err)
+	}
+}
+
+// putPolicy inserts a contest's SQL policy directly.
+func putPolicy(t *testing.T, ctx context.Context, contest uuid.UUID, mode string, writable []string) {
+	t.Helper()
+	_, err := storage.QuerierFrom(ctx, testPool).Exec(ctx, `
+		INSERT INTO contest_sql_policies (contest_id, mode, writable_tables, allow_create_view, allow_temp_tables, disk_quota_ratio)
+		VALUES ($1, $2, $3, true, true, 8)`, contest, mode, writable)
+	if err != nil {
+		t.Fatalf("insert sql policy: %v", err)
+	}
+}
+
+// TestForRunReadsTheParticipantContestAndReadyGameTogether is ForRun's own
+// claim: everything queryproxy.Run reads separately through People.ByUser,
+// Contests.ByID and GameInstances.Game comes back from the one call, and
+// neither part is a stale echo of another — the policy ForRun reports is the
+// row this test wrote, not a default GameInstances.Game would have coalesced
+// to.
+func TestForRunReadsTheParticipantContestAndReadyGameTogether(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewRegistrations(testPool)
+		author := makeUser(t, ctx, "author-forrun")
+		student := makeUser(t, ctx, "student-forrun")
+		contestID := makeContest(t, ctx, author.ID)
+		makeRegistration(t, ctx, contestID, student.ID)
+		putReadyTemplate(t, ctx, contestID, "game_tpl_forrun", 3)
+		putPolicy(t, ctx, contestID, string(sqlpolicy.ModeReadWrite), []string{"suspects"})
+
+		got, err := repo.ForRun(ctx, contestID, student.ID)
+		if err != nil {
+			t.Fatalf("ForRun() = %v", err)
+		}
+		if got.Participant.UserID != student.ID || got.Participant.ContestID != contestID {
+			t.Errorf("participant = %+v, want user %s on contest %s", got.Participant, student.ID, contestID)
+		}
+		if got.Contest.ID != contestID {
+			t.Errorf("contest = %+v, want %s", got.Contest, contestID)
+		}
+		if got.GameErr != nil {
+			t.Fatalf("GameErr = %v, want nil — a ready template exists", got.GameErr)
+		}
+		if got.Game.Template != "game_tpl_forrun" || got.Game.Version != 3 {
+			t.Errorf("game = %+v, want template game_tpl_forrun version 3", got.Game)
+		}
+		if got.Game.Policy.Mode != sqlpolicy.ModeReadWrite {
+			t.Errorf("policy mode = %q, want read_write", got.Game.Policy.Mode)
+		}
+		if len(got.Game.Policy.WritableTables) != 1 || got.Game.Policy.WritableTables[0] != "suspects" {
+			t.Errorf("writable tables = %v, want [suspects]", got.Game.Policy.WritableTables)
+		}
+		if got.Game.Policy.DiskQuotaRatio != 8 {
+			t.Errorf("disk quota ratio = %d, want 8", got.Game.Policy.DiskQuotaRatio)
+		}
+	})
+}
+
+// TestForRunReportsNoGameForAContestWithoutAReadyTemplate proves the half of
+// ForRun that lets Run use the participant and the contest before ever
+// deciding what a missing game means: both still come back, and only GameErr
+// carries provisioning.ErrNoGame — the same sentinel a separate call to
+// GameInstances.Game would have returned instead of any participant at all.
+func TestForRunReportsNoGameForAContestWithoutAReadyTemplate(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewRegistrations(testPool)
+		author := makeUser(t, ctx, "author-forrun-nogame")
+		student := makeUser(t, ctx, "student-forrun-nogame")
+		contestID := makeContest(t, ctx, author.ID)
+		makeRegistration(t, ctx, contestID, student.ID)
+
+		got, err := repo.ForRun(ctx, contestID, student.ID)
+		if err != nil {
+			t.Fatalf("ForRun() = %v, want a nil top-level error — the participant and contest were found", err)
+		}
+		if !errors.Is(got.GameErr, provisioning.ErrNoGame) {
+			t.Errorf("GameErr = %v, want provisioning.ErrNoGame", got.GameErr)
+		}
+		if got.Participant.UserID != student.ID {
+			t.Errorf("participant = %+v, want user %s even with no game yet", got.Participant, student.ID)
+		}
+	})
+}
+
+// A template still building, never having reached 'ready', reads the same
+// way as no template at all — the same WHERE t.status = 'ready' that already
+// governed GameInstances.Game, now joined instead of queried separately.
+func TestForRunReportsNoGameForATemplateStillBuilding(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewRegistrations(testPool)
+		author := makeUser(t, ctx, "author-forrun-building")
+		student := makeUser(t, ctx, "student-forrun-building")
+		contestID := makeContest(t, ctx, author.ID)
+		makeRegistration(t, ctx, contestID, student.ID)
+		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx, `
+			INSERT INTO game_templates (contest_id, template_db, version, init_script, status)
+			VALUES ($1, 'game_tpl_building2', 1, 'SELECT 1', 'building')`, contestID); err != nil {
+			t.Fatalf("insert building template: %v", err)
+		}
+
+		got, err := repo.ForRun(ctx, contestID, student.ID)
+		if err != nil {
+			t.Fatalf("ForRun() = %v", err)
+		}
+		if !errors.Is(got.GameErr, provisioning.ErrNoGame) {
+			t.Errorf("GameErr = %v, want provisioning.ErrNoGame for a template still building", got.GameErr)
+		}
+	})
+}
+
+// TestForRunReportsNotAParticipantForAnUnregisteredUser is the same answer
+// People.ByUser already gives a caller who never registered — ForRun must
+// not invent a different one just because it also reads the contest and the
+// game in the same round trip.
+func TestForRunReportsNotAParticipantForAnUnregisteredUser(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewRegistrations(testPool)
+		author := makeUser(t, ctx, "author-forrun-unreg")
+		stranger := makeUser(t, ctx, "stranger-forrun")
+		contestID := makeContest(t, ctx, author.ID)
+
+		if _, err := repo.ForRun(ctx, contestID, stranger.ID); !errors.Is(err, contests.ErrParticipantNotFound) {
+			t.Errorf("ForRun() = %v, want ErrParticipantNotFound", err)
+		}
+	})
+}
+
+// A contest id naming nothing at all reads the same way as one nobody
+// registered for: the INNER JOIN against contests means there is no separate
+// "no such contest" case to invent (see ForRun's own doc).
+func TestForRunReportsNotAParticipantForAnUnknownContest(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewRegistrations(testPool)
+		stranger := makeUser(t, ctx, "stranger-forrun-nocontest")
+
+		if _, err := repo.ForRun(ctx, uuid.New(), stranger.ID); !errors.Is(err, contests.ErrParticipantNotFound) {
+			t.Errorf("ForRun() = %v, want ErrParticipantNotFound — the same answer a never-registered user gets", err)
 		}
 	})
 }
