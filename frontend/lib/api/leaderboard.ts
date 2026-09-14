@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { CONTEST_STATUSES } from "./contests";
 import { SCORINGS } from "./contests-terms";
 
 /**
@@ -135,6 +136,11 @@ export const staffStandingsSchema = z
       state: z.enum(STANDINGS_STATES),
       frozen_at: z.string().optional(),
     }),
+    // The contest's own status, not the table's: shown.state can sit on
+    // "frozen" straight through a contest finishing, since the freeze
+    // persists past the end, so a poller needs this to notice that
+    // transition — and, with it, that revealing may now be possible.
+    status: z.enum(CONTEST_STATUSES),
     scoring: z.enum(SCORINGS),
     freeze_min: z.number().nullable(),
     names: z.enum(["login", "full_name"]),
@@ -146,6 +152,7 @@ export const staffStandingsSchema = z
   })
   .transform((raw) => ({
     shown: { state: raw.shown.state, frozenAt: raw.shown.frozen_at },
+    status: raw.status,
     scoring: raw.scoring,
     freezeMin: raw.freeze_min,
     names: raw.names,
