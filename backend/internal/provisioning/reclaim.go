@@ -129,10 +129,14 @@ type ReclaimResult struct {
 // contest's own databases are never even offered, so nothing here competes
 // with a live contest for the same rows; DropIdle (internal/gamedb) takes no
 // FORCE, so a database anything is still connected to — including one whose
-// grace merely ran out while the Query Runner is mid-query, or one whose idle
-// connection the runner is still keeping for a few seconds after the last
-// query (queryrunner.Limits.IdleTimeout) — is left for the next tick rather
-// than interrupted; and the loop above is sequential, one
+// grace merely ran out while the Query Runner is mid-query — is left for the
+// next tick rather than interrupted. (The connection the runner keeps after a
+// participant's read is not among them in practice: it lasts at most
+// QUERY_CONN_IDLE_TIMEOUT, five minutes at the most, after the last query,
+// and a candidate's contest ended longer ago than its grace, the contest's
+// own grace_period_min or GAME_INSTANCE_GRACE_MIN, a day by default. Only a
+// grace set shorter than the idle timeout can meet one, and then only until
+// the next tick); and the loop above is sequential, one
 // DropIdle awaited to completion before the next starts, so the cluster
 // never sees more than one DROP DATABASE in flight from this pass at a time,
 // however large the batch. What a full batch still costs is real disk I/O
