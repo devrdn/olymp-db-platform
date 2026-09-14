@@ -24,7 +24,7 @@ type Runner struct {
 	Env      string
 	LogLevel string
 	// ListenAddr is where the Core API reaches this service. It is never
-	// published outside the private network.
+	// published outside the private network, and defaults to loopback.
 	ListenAddr string
 	// GameDBDSN connects as the reading participant role — game_reader — and
 	// is the only place in the system that holds it.
@@ -146,9 +146,13 @@ const (
 // LoadRunner reads the Query Runner's configuration from the environment.
 func LoadRunner() (Runner, error) {
 	cfg := Runner{
-		Env:        envOrDefault("ENV", "development"),
-		LogLevel:   envOrDefault("LOG_LEVEL", "info"),
-		ListenAddr: envOrDefault("QUERY_RUNNER_ADDR", ":9100"),
+		Env:      envOrDefault("ENV", "development"),
+		LogLevel: envOrDefault("LOG_LEVEL", "info"),
+		// Loopback unless told otherwise. This service runs the database and
+		// policy a request names, so a runner started on a laptop must not be
+		// reachable from the network it sits on; the compose file names ":9100"
+		// explicitly, inside a network nothing outside routes into.
+		ListenAddr: envOrDefault("QUERY_RUNNER_ADDR", "127.0.0.1:9100"),
 	}
 
 	var err error

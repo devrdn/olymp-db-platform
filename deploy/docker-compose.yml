@@ -219,6 +219,8 @@ services:
     environment:
       ENV: ${ENV:-production}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Every interface of this container, inside a network nothing outside
+      # routes into. Named here because the binary's own default is loopback.
       QUERY_RUNNER_ADDR: ":9100"
       # As the participant's role, never the provisioning one. The database in
       # this URL is a placeholder: the runner replaces it per request with the
