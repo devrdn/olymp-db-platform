@@ -8,6 +8,7 @@ package config
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -618,6 +619,15 @@ func Load() (Config, error) {
 	// Only an API that dials the runner has anything to send it.
 	if cfg.QueryRunnerToken, err = queryRunnerToken(cfg.Env, cfg.QueryRunnerAddr != ""); err != nil {
 		return Config{}, err
+	}
+	// The two secrets guard different things — the device cookie's HMAC lets a
+	// browser skip the sign-in address limit, the token travels to another
+	// service with every query — and one value in both places turns a leak of
+	// either into both. Compared in constant time and refused without
+	// repeating either value.
+	if cfg.QueryRunnerToken != "" &&
+		subtle.ConstantTimeCompare(cfg.DeviceCookieSecret, []byte(cfg.QueryRunnerToken)) == 1 {
+		return Config{}, errors.New("DEVICE_COOKIE_SECRET and QUERY_RUNNER_TOKEN must be different secrets")
 	}
 	// A day unset: long enough for an organizer to pull reports and for a
 	// participant's last-second answer to land safely, short enough that a
