@@ -112,8 +112,8 @@ services:
       timeout: 5s
       retries: 60
     # Off the internal network: nothing in the stack has any business reaching
-    # the tests' cluster, and that network's range is the one TRUSTED_PROXIES
-    # names.
+    # the tests' cluster, and that network is the one whose two pinned proxy
+    # addresses TRUSTED_PROXIES names.
     networks: [tests]
 
   redis:

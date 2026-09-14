@@ -361,3 +361,38 @@ func TestADevelopmentRunnerMayOmitItsToken(t *testing.T) {
 		t.Errorf("Token = %q, want empty", cfg.Token)
 	}
 }
+
+// The runner's own credentials and its token, held to the same rule as the
+// API's: a "change-me" value from deploy/.env.example is refused outside
+// development, naming the variable and never the value.
+func TestARunnerPlaceholderCredentialIsRefusedOutsideDevelopment(t *testing.T) {
+	for name, value := range map[string]string{
+		"QUERY_RUNNER_TOKEN": "change-me-to-the-output-of-openssl-rand-hex",
+		"GAME_DB_DSN":        "postgres://game_reader:change-me-before-first-run@pg-game:5432/postgres",
+		"GAME_DB_WRITER_DSN": "postgres://game_writer:CHANGE-ME-before-first-run@pg-game:5432/postgres",
+	} {
+		t.Run(name, func(t *testing.T) {
+			setRunnerRequired(t)
+			t.Setenv("ENV", "production")
+			t.Setenv("QUERY_RUNNER_TOKEN", strings.Repeat("t", 32))
+			t.Setenv("GAME_DB_WRITER_DSN", "")
+			if _, err := LoadRunner(); err != nil {
+				t.Fatalf("the baseline production configuration was refused: %v", err)
+			}
+
+			t.Setenv(name, value)
+			_, err := LoadRunner()
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("LoadRunner() with a placeholder %s = %v, want an error naming it", name, err)
+			}
+			if strings.Contains(strings.ToLower(err.Error()), "change-me") {
+				t.Fatalf("the refusal repeats the value: %q", err.Error())
+			}
+
+			t.Setenv("ENV", "development")
+			if _, err := LoadRunner(); err != nil {
+				t.Fatalf("development refused a placeholder %s: %v", name, err)
+			}
+		})
+	}
+}

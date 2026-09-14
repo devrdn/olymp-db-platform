@@ -64,10 +64,29 @@ func deviceCookieSecret(env string) ([]byte, error) {
 	if raw == "" {
 		return nil, errors.New("DEVICE_COOKIE_SECRET: required outside development")
 	}
+	if err := refusePlaceholder(env, "DEVICE_COOKIE_SECRET", raw); err != nil {
+		return nil, err
+	}
 	if len(raw) < minDeviceCookieSecretBytes {
 		return nil, fmt.Errorf("DEVICE_COOKIE_SECRET: %d bytes, at least %d are required", len(raw), minDeviceCookieSecretBytes)
 	}
 	return []byte(raw), nil
+}
+
+// placeholderMarker is how deploy/.env.example marks every value an operator
+// must choose.
+const placeholderMarker = "change-me"
+
+// refusePlaceholder refuses, outside development, a credential still carrying
+// the example file's placeholder: a deployment running on a password or key
+// anybody who has read the repository knows. The error names the variable and
+// never repeats the value. A development stack may keep the example's values.
+func refusePlaceholder(env, name, value string) error {
+	if env == "development" || !strings.Contains(strings.ToLower(value), placeholderMarker) {
+		return nil
+	}
+	return fmt.Errorf("%s: still carries the placeholder from deploy/.env.example; "+
+		"set a generated value (required outside development)", name)
 }
 
 // Query Runner token bounds. The minimum is the same 256 bits the device
@@ -95,6 +114,9 @@ func queryRunnerToken(env string, required bool) (string, error) {
 				"(the Query Runner answers only callers holding it)")
 		}
 		return "", nil
+	}
+	if err := refusePlaceholder(env, "QUERY_RUNNER_TOKEN", raw); err != nil {
+		return "", err
 	}
 	if len(raw) < minQueryRunnerTokenBytes || len(raw) > maxQueryRunnerTokenBytes {
 		return "", fmt.Errorf("QUERY_RUNNER_TOKEN: %d bytes, want between %d and %d",
@@ -494,6 +516,18 @@ func Load() (Config, error) {
 	// Checked at boot rather than at the first build, which would be an
 	// organiser pressing "build" during preparation and being told the
 	// deployment is misconfigured.
+	// Every credential this process reads, whole or inside a URL, held to the
+	// same rule as the secrets above.
+	for name, value := range map[string]string{
+		"CORE_DB_DSN":          cfg.CoreDBDSN,
+		"REDIS_ADDR":           cfg.RedisAddr,
+		"GAME_PROVISIONER_DSN": cfg.GameProvisionerDSN,
+		"GAME_AUTHOR_PASSWORD": cfg.GameAuthorPassword,
+	} {
+		if err := refusePlaceholder(cfg.Env, name, value); err != nil {
+			return Config{}, err
+		}
+	}
 	if cfg.GameProvisionerDSN != "" && cfg.GameAuthorPassword == "" {
 		return Config{}, fmt.Errorf(
 			"GAME_AUTHOR_PASSWORD is required when GAME_PROVISIONER_DSN is set: " +
