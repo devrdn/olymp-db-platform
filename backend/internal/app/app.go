@@ -374,14 +374,29 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		// Every trusted browser of one account together.
 		MaxTrustedAttemptsPerAccount: cfg.MaxTrustedLoginAttemptsPerAccount,
 	})
+	// The account behind a session, cached for a few seconds so an
+	// authenticated request is a cache read rather than a query with two
+	// aggregations. The account service below tells it about every change it
+	// makes, so a block applies on the next request; SessionAccountCacheTTL
+	// bounds whatever it cannot be told about. Zero turns it off.
+	var accounts *auth.AccountCache
+	if cfg.SessionAccountCacheTTL > 0 {
+		accounts = auth.NewAccountCache(cacheBackend, cfg.SessionAccountCacheTTL, log)
+	}
 	authMiddleware := auth.NewMiddleware(auth.MiddlewareConfig{
 		Sessions:   sessions,
 		Users:      userRepo,
+		Accounts:   accounts,
 		Authorizer: rbac.New(postgres.NewContestRoles(pool)),
 		Cookies:    cookies,
 		Logger:     log,
 	})
 	userService := users.NewService(userRepo, auditRecorder, storage.NewUnitOfWork(pool), passwords)
+	if accounts != nil {
+		// Guarded rather than passed through: a nil *AccountCache in the
+		// interface would not be a nil interface.
+		userService.WithAccessCache(accounts)
+	}
 
 	// The game script the contest package carries (contests.GameSource,
 	// Service.ExportPackage). Assigned through a declared interface variable

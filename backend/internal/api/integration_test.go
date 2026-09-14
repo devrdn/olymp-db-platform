@@ -18,10 +18,12 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/users/userstest"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -297,6 +299,28 @@ type deletionFixture struct {
 	repo   *userstest.Repository
 	admin  users.User
 	cookie *http.Cookie
+	// accountReads counts the account reads authentication makes.
+	accountReads *countingAccounts
+}
+
+// countingAccounts counts ByID calls on the store authentication reads from.
+type countingAccounts struct {
+	*userstest.Repository
+	mu    sync.Mutex
+	reads int
+}
+
+func (c *countingAccounts) ByID(ctx context.Context, id uuid.UUID) (users.User, error) {
+	c.mu.Lock()
+	c.reads++
+	c.mu.Unlock()
+	return c.Repository.ByID(ctx, id)
+}
+
+func (c *countingAccounts) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.reads
 }
 
 func newDeletionFixture(t *testing.T) *deletionFixture {
@@ -321,21 +345,27 @@ func newDeletionFixture(t *testing.T) *deletionFixture {
 		Passwords: passwordtest.NewHasher(),
 		Devices:   devices(t),
 	})
+	// Accounts cached between requests, and the account service telling the
+	// cache about every change — as app.New assembles them.
+	accounts := auth.NewAccountCache(c, time.Hour, log)
+	reads := &countingAccounts{Repository: repo}
 	mw := auth.NewMiddleware(auth.MiddlewareConfig{
-		Sessions: sessions, Users: repo,
+		Sessions: sessions, Users: reads, Accounts: accounts,
 		Authorizer: rbac.New(noRoles{}), Cookies: auth.NewCookieWriter(false), Logger: log,
 	})
-	usersService := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}, passwordtest.NewHasher())
+	usersService := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}, passwordtest.NewHasher()).
+		WithAccessCache(accounts)
 
 	router := chi.NewRouter()
 	api.NewUsersHandler(usersService, repo, authService, mw, log).Mount(router)
 	api.NewAuthHandler(authService, usersService, repo, mw, auth.NewCookieWriter(false), log).Mount(router)
 
 	return &deletionFixture{
-		router: router,
-		repo:   repo,
-		admin:  admin,
-		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: adminToken},
+		router:       router,
+		repo:         repo,
+		admin:        admin,
+		cookie:       &http.Cookie{Name: auth.SessionCookieName, Value: adminToken},
+		accountReads: reads,
 	}
 }
 
@@ -458,5 +488,63 @@ func TestStaffUnlockReopensSignInOverHTTP(t *testing.T) {
 
 	if rec = f.signIn("orlov", testPassword); rec.Code != http.StatusOK {
 		t.Errorf("after the unlock: status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestABlockedParticipantIsRefusedOnTheNextRequestOverHTTP is blocking as the
+// deployment runs it: a participant signed in through the login endpoint and
+// working, so their account is being served from the cache between requests;
+// an administrator blocks them through the account endpoint; the very next
+// request the participant makes is refused — not the next one after the
+// cached copy expires, which here would be an hour.
+func TestABlockedParticipantIsRefusedOnTheNextRequestOverHTTP(t *testing.T) {
+	f := newDeletionFixture(t)
+	participant := f.repo.Add(users.User{
+		Login: "orlov", FullName: "Orlov", PasswordHash: passwordtest.Hash(t, testPassword), Status: users.StatusActive,
+	})
+
+	rec := f.signIn("orlov", testPassword)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sign-in status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var session *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == auth.SessionCookieName {
+			session = c
+		}
+	}
+	if session == nil {
+		t.Fatal("sign-in set no session cookie")
+	}
+	asParticipant := func() int {
+		req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+		req.AddCookie(session)
+		rec := httptest.NewRecorder()
+		f.router.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	for i := range 3 {
+		if code := asParticipant(); code != http.StatusOK {
+			t.Fatalf("request %d before the block: status = %d, want 200", i, code)
+		}
+	}
+	// /auth/me reads the account for its own answer as well; what matters is
+	// that authentication stopped reading it after the first request.
+	readsBefore := f.accountReads.count()
+	if code := asParticipant(); code != http.StatusOK {
+		t.Fatalf("warm request: status = %d, want 200", code)
+	}
+	if f.accountReads.count() != readsBefore {
+		t.Fatal("authentication read the account again although a cached copy was fresh")
+	}
+
+	rec = f.asAdmin(http.MethodPost, "/users/"+participant.ID.String()+"/block", `{"reason":"cheating"}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("block status = %d, want 204 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	if code := asParticipant(); code != http.StatusUnauthorized {
+		t.Errorf("the request after the block: status = %d, want 401", code)
 	}
 }

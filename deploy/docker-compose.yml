@@ -382,6 +382,10 @@ services:
       # used (5m to 168h). SESSION_TTL above slides with activity and so never
       # ends a session somebody keeps using, a copied cookie included.
       SESSION_MAX_LIFETIME: ${SESSION_MAX_LIFETIME:-12h}
+      # How long a request may be decided on a cached copy of the account
+      # (0s to 30s, 0s off). Changes made in the application apply at once;
+      # this bounds one made directly in the database.
+      SESSION_ACCOUNT_CACHE_TTL: ${SESSION_ACCOUNT_CACHE_TTL:-5s}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       # The compose network: Caddy's X-Forwarded-For is believed, a direct
       # client's is not. Without this, every request appears to come from the
