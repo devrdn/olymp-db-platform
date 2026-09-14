@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useState } from "react";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { GridCells, GridHeaderCells, gridTableWidth, ICPC_COLUMN, Initials, medalEdge, PlaceBadge } from "@/components/product/standings";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -45,6 +46,7 @@ export function StaffStandingsView({
   locale: string;
 }) {
   const t = dict.leaderboard;
+  const router = useRouter();
   const [standings, setStandings] = useState(initial);
   const [failed, setFailed] = useState(false);
   // Tracked so a fresh server-rendered `initial` (a real navigation, or the
@@ -65,25 +67,73 @@ export function StaffStandingsView({
   // layout, which would re-run the contest lookup, the publish check and the
   // questions list on every poll for a table that is the only thing that
   // actually changed.
+  //
+  // `status` is a server prop, though, and nothing here refreshes it: the
+  // scheduler can finish a contest with nobody's tab open to notice, and a
+  // stale "running" would leave the reveal button (and the layout's own
+  // badges and tabs, outside this component) never catching up. So a poll
+  // that finds the contest's own status has moved on asks the layout for a
+  // real router.refresh() instead of applying the answer itself, and stops
+  // its own chain there — the fresh props that refresh brings down restart
+  // or end the polling correctly on their own, through this same effect's
+  // dependencies.
+  //
+  // The comparison is on status alone, not on the table's own shown.state:
+  // this poll runs only while status is "running", and Decide (the backend's
+  // own state machine) can answer "final" only once a contest is finished or
+  // archived — so a response can never carry shown.state "final" without
+  // status having moved on too, and checking status catches that already. An
+  // ordinary freeze reached mid-contest (shown.state live → frozen) leaves
+  // status exactly where it was, so it is not "moved on" here: the table
+  // simply shows it, the same way every other poll response does.
+  //
+  // Chained rather than a fixed interval, so a slow response cannot overlap
+  // the next request; requestId discards an answer that comes back after a
+  // newer one was already applied (or after the effect itself tore down).
   useEffect(() => {
     if (status !== "running") return;
     let cancelled = false;
-    const timer = setInterval(async () => {
-      if (document.hidden) return;
-      const result = await fetchStaffStandingsAction(contestId);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let requestId = 0;
+
+    const schedule = () => {
+      timer = setTimeout(poll, STAFF_REFRESH_MS);
+    };
+
+    const poll = async () => {
       if (cancelled) return;
+      if (document.hidden) {
+        schedule();
+        return;
+      }
+      const id = ++requestId;
+      const result = await fetchStaffStandingsAction(contestId);
+      if (cancelled || id !== requestId) return;
+
       if (result.kind === "ok") {
-        setStandings(result.standings);
         setFailed(false);
+        setStandings(result.standings);
+        if (result.standings.status !== status) {
+          router.refresh();
+          return;
+        }
+        schedule();
+      } else if (result.code === "unauthenticated") {
+        // The session no longer holds; a refresh is what lets the layout
+        // redirect, rather than a "failed" banner this would keep retrying.
+        router.refresh();
       } else {
         setFailed(true);
+        schedule();
       }
-    }, STAFF_REFRESH_MS);
+    };
+
+    schedule();
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      if (timer) clearTimeout(timer);
     };
-  }, [status, contestId]);
+  }, [status, contestId, router]);
 
   const revealable =
     (status === "finished" || status === "archived") && standings.freezeMin !== null && !standings.revealedAt;
