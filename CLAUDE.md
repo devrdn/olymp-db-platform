@@ -115,7 +115,14 @@ mistake that was actually found, not a hypothetical.
    `X-Forwarded-For`; everything else asks `httpx.ClientIP`. The one other
    forwarded header the service reads, `X-Forwarded-Proto` in `httpx.isTLS`,
    comes from any peer, so nothing may fail open because of it: a spoofed
-   value must only ever make a request stricter, never looser.
+   value must only ever make a request stricter, never looser. A limiter
+   subject derived from that address is a different thing from the address
+   itself: it goes through `httpx.AddressSubject` (or `httpx.ClientSubject`
+   for the current request), which groups an IPv6 caller by its /64 rather
+   than one address, because a single subscriber otherwise gets a fresh
+   budget for every address in their own block. The audit trail and a
+   contest's network restriction still use the exact address from
+   `httpx.ClientIP`; only a rate-limit or lockout key uses the grouped one.
 10. **Prove a guarantee on the path the deployment uses.** A write path tested
     only as the reader role never ran a write, and three defects hid behind
     the privilege error it produced instead. Tests of a role-dependent
