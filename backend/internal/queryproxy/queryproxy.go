@@ -548,10 +548,10 @@ func (s *Service) lookupParticipant(ctx context.Context, contestID, userID uuid.
 
 // Admitted reports whether participant may interact with contest right now:
 // its window is open to them and their address is allowed. It never starts an
-// individual participant's clock — that stays Run's own job, once every other
-// check downstream has had its say (§8, finding 2) — so a caller that only
-// wants to know "is this still open to me" can ask without the side effect of
-// asking.
+// individual participant's clock — that is done by Run once every other check
+// downstream has had its say (§8, finding 2), and by StartOnRead once a read
+// of the contest's content has succeeded — so a caller that only wants to
+// know "is this still open to me" can ask without the side effect of asking.
 //
 // The one rule of timing this codebase has (§8) is contests.Deadline, and this
 // is the one place both Run and Access compare against it: a not-yet-started
@@ -581,7 +581,9 @@ func (s *Service) Admitted(contest contests.Contest, participant contests.Partic
 
 // Access resolves who is asking and confirms they may currently interact with
 // contestID, for a caller that only wants to look — the participant-facing
-// story and questions endpoints, not the SQL console.
+// story and questions endpoints, not the SQL console. It starts no clock
+// itself; a reader of the contest's content follows a successful read with
+// StartOnRead.
 //
 // This is deliberately the same admission Run requires before it will take a
 // query — registered and not disqualified or finished, the contest running
@@ -611,6 +613,49 @@ func (s *Service) Access(ctx context.Context, contestID, userID uuid.UUID, addr 
 		return contests.Participant{}, contests.Contest{}, err
 	}
 	return participant, contest, nil
+}
+
+// StartOnRead starts an individual participant's clock on their first read of
+// the contest's content — the story, the question list or the schema — and
+// hands back the participant as it now stands.
+//
+// Under individual timing those reads are the contest itself. If only a query
+// or an answer started the clock, a participant could read every question and
+// the whole schema for as long as the window stays open, prepare offline, and
+// spend their duration only on typing; ICPC penalty minutes, counted from
+// started_at, would shrink by the same preparation. So the first read is the
+// first deliberate action, and it goes through the one seam Run and
+// contests.Service.Submit use (People.Start, which sets started_at at most
+// once however many reads race to it).
+//
+// A separate method rather than part of Access, and called by the reader only
+// once its content has been read successfully: Access also admits the answer
+// endpoint and the query log, which start the clock on their own terms or not
+// at all, and a read refused for any reason — rate, address, a missing story,
+// a hidden schema — showed the participant nothing and must cost them nothing.
+// The events channel (AccessForEvents) and the leaderboards never call it:
+// watching the clock or the standings is not reading the contest.
+//
+// Nothing is written for fixed timing or for a participant already started.
+// Otherwise the window is checked again here rather than trusted from the
+// caller's earlier Access, so this method alone never starts a clock outside
+// it, and a deadline that has already passed by the time the clock starts —
+// ends_at arriving mid-request — is refused the way Run refuses it.
+func (s *Service) StartOnRead(ctx context.Context, contest contests.Contest, participant contests.Participant) (contests.Participant, error) {
+	if contest.Timing != contests.TimingIndividual || participant.StartedAt != nil {
+		return participant, nil
+	}
+	if contest.Status != contests.StatusRunning || !contest.OpenForStart(s.now()) {
+		return contests.Participant{}, ErrContestNotRunning
+	}
+	started, err := s.people.Start(ctx, participant.ID, s.now())
+	if err != nil {
+		return contests.Participant{}, fmt.Errorf("%w: start the participant's clock: %w", ErrUnavailable, err)
+	}
+	if s.deadlinePassed(contest, started) {
+		return contests.Participant{}, ErrContestNotRunning
+	}
+	return started, nil
 }
 
 // resolve is the pair of lookups both Access and AccessForEvents need before

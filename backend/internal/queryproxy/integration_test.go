@@ -332,3 +332,62 @@ func TestTheConsoleClosesOnceNothingIsAnswerableAgainstTheRealSchema(t *testing.
 		t.Fatalf("Access() = %v, want nil — only the console closes", err)
 	}
 }
+
+// Under individual timing the first read of the contest's content starts the
+// participant's clock, against the real registrations table: reading the
+// questions starts it, the events channel's admission never does, and a
+// second read later does not move started_at (CLAUDE.md rule 10 — the
+// once-only guarantee lives in the repository's own WHERE clause, which the
+// fakes cannot show).
+func TestAnIndividualParticipantsFirstReadStartsTheClockOnceAndTheEventsChannelNever(t *testing.T) {
+	pool := integrationPool(t)
+	ctx := context.Background()
+
+	author := makeIntegrationUser(t, ctx, pool, "author-"+uuid.NewString()[:8])
+	student := makeIntegrationUser(t, ctx, pool, "student-"+uuid.NewString()[:8])
+	clock := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	contestID := makeRunningIndividualContest(t, ctx, pool, author, 60, clock.Add(-time.Hour), clock.Add(24*time.Hour))
+	t.Cleanup(func() {
+		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = pool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contestID)
+	})
+
+	registrations := postgres.NewRegistrations(pool)
+	if _, err := registrations.Add(ctx, contestID, student); err != nil {
+		t.Fatalf("Add() = %v", err)
+	}
+	service := queryproxy.New(registrations, postgres.NewContests(pool), nil, nil, nil).
+		WithClock(func() time.Time { return clock })
+
+	if _, _, err := service.AccessForEvents(ctx, contestID, student, netip.Addr{}); err != nil {
+		t.Fatalf("AccessForEvents() = %v", err)
+	}
+	if stored, err := registrations.ByUser(ctx, contestID, student); err != nil || stored.StartedAt != nil {
+		t.Fatalf("after the events channel: StartedAt = %v, err = %v; want no clock started", stored.StartedAt, err)
+	}
+
+	participant, contest, err := service.Access(ctx, contestID, student, netip.Addr{})
+	if err != nil {
+		t.Fatalf("Access() = %v", err)
+	}
+	if _, err := service.StartOnRead(ctx, contest, participant); err != nil {
+		t.Fatalf("StartOnRead() = %v", err)
+	}
+	stored, err := registrations.ByUser(ctx, contestID, student)
+	if err != nil || stored.StartedAt == nil || !stored.StartedAt.Equal(clock) {
+		t.Fatalf("after the first read: StartedAt = %v, err = %v; want %v", stored.StartedAt, err, clock)
+	}
+
+	// A later read by a request still holding the participant as it was
+	// before the start, the way a racing read would: the stored start stays
+	// where it is.
+	clock = clock.Add(7 * time.Minute)
+	if _, err := service.StartOnRead(ctx, contest, participant); err != nil {
+		t.Fatalf("second StartOnRead() = %v", err)
+	}
+	again, err := registrations.ByUser(ctx, contestID, student)
+	if err != nil || again.StartedAt == nil || !again.StartedAt.Equal(*stored.StartedAt) {
+		t.Fatalf("after a second read: StartedAt = %v, err = %v; want %v unchanged", again.StartedAt, err, stored.StartedAt)
+	}
+}
