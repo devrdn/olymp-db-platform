@@ -505,6 +505,7 @@ const en = {
         },
         addRow: "Another answer",
         removeHint: "Clear an answer and save to remove it.",
+        regexHint: "A regular expression must match the whole answer, as if written between ^ and $: (?i)john\\s+smith accepts \"John Smith\" but not a list that merely contains it. Spaces around the submitted answer are ignored.",
       },
     },
     people: {

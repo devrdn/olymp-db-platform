@@ -469,6 +469,7 @@ const ro = {
         },
         addRow: "Încă un răspuns",
         removeHint: "Goliți un răspuns și salvați pentru a-l elimina.",
+        regexHint: "O expresie regulată trebuie să se potrivească cu întregul răspuns, ca și cum ar fi scrisă între ^ și $: (?i)john\\s+smith acceptă „John Smith”, dar nu o listă care doar îl conține. Spațiile din jurul răspunsului trimis sunt ignorate.",
       },
     },
     people: {

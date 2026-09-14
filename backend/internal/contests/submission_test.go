@@ -691,6 +691,50 @@ func TestSubmitStartsAnIndividualParticipantsClockOnFirstAnswer(t *testing.T) {
 	}
 }
 
+// A regex reference answer describes the whole answer, not a fragment of it.
+// Matched as a substring, one value listing every candidate — or every
+// number — would contain the right one and be graded correct on its first
+// attempt. Each case is a fresh fixture, so no attempt spent by one case
+// closes the question for the next.
+func TestSubmitMatchesARegexAgainstTheWholeAnswer(t *testing.T) {
+	for name, given := range map[string]struct {
+		pattern string
+		value   string
+		correct bool
+	}{
+		"a list containing the name":                       {`(?i)john\s+smith`, "alice brown; john smith; carol white", false},
+		"the name alone":                                   {`(?i)john\s+smith`, "John  Smith", true},
+		"a number inside a longer number":                  {`42`, "1042", false},
+		"the number alone":                                 {`42`, "42", true},
+		"alternation is anchored as a group":               {`butler|gardener`, "butler did it", false},
+		"the other side of the alternation":                {`butler|gardener`, "the gardener", false},
+		"either alternative alone":                         {`butler|gardener`, "gardener", true},
+		"a multi-line flag stays in its group":             {`(?m)butler`, "maid\nbutler", false},
+		"surrounding whitespace is not part of the answer": {`butler`, "  butler\n", true},
+		"an organiser's own anchors still work":            {`^(the )?butler$`, "the butler", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := conteststest.NewFixture()
+			c := runningFixedContest(f)
+			p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
+			q := f.Questions.Put(contests.Question{
+				ContestID: c.ID, Kind: contests.KindFinal, Points: 5, IsVisible: true,
+				Answers: []contests.Answer{{MatchKind: contests.MatchRegex, Value: given.pattern}},
+			})
+
+			outcome, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+				Participant: p, Contest: c, QuestionID: q.ID, Value: given.value,
+			})
+			if err != nil {
+				t.Fatalf("Submit() = %v", err)
+			}
+			if outcome.Correct != given.correct {
+				t.Fatalf("pattern %q against %q: Correct = %v, want %v", given.pattern, given.value, outcome.Correct, given.correct)
+			}
+		})
+	}
+}
+
 // A reference answer whose regex does not compile must never fail the
 // request or crash grading — it is treated as never matching. Answer.Validate
 // already refuses this at authoring time; this is the defence-in-depth path

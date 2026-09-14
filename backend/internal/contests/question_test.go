@@ -121,6 +121,19 @@ func TestCorrectChoicesCountsEachAcceptedOptionOnce(t *testing.T) {
 	}
 }
 
+// The count the ICPC choice gate relies on asks the same whole-answer
+// question grading does: a pattern "b" accepts the option "b" and not the
+// option "abc" merely because it contains a b.
+func TestCorrectChoicesMatchesARegexAgainstTheWholeOption(t *testing.T) {
+	q := contests.Question{Kind: contests.KindChoice, ChoiceIDs: []string{"a", "b", "abc"}, Answers: []contests.Answer{
+		{MatchKind: contests.MatchRegex, Value: "b"},
+	}}
+
+	if got := q.CorrectChoices(); got != 1 {
+		t.Errorf("CorrectChoices() = %d, want 1", got)
+	}
+}
+
 func TestAnswerRejectsAnEmptyValue(t *testing.T) {
 	a := contests.Answer{MatchKind: contests.MatchExactCI, Value: "  "}
 
@@ -142,6 +155,17 @@ func TestAnswerRejectsARegularExpressionThatDoesNotCompile(t *testing.T) {
 	// during a running contest breaks grading for everybody who reached that
 	// question, at the one moment nobody can fix it.
 	a := contests.Answer{MatchKind: contests.MatchRegex, Value: "the (butler"}
+
+	if err := a.Validate(); !errors.Is(err, contests.ErrInvalidAnswer) {
+		t.Errorf("Validate() = %v, want contests.ErrInvalidAnswer", err)
+	}
+}
+
+// A pattern is used wrapped as a whole-answer group, so it must be a complete
+// expression on its own: text that only balances once wrapped would close the
+// group early and leave part of the pattern unanchored.
+func TestAnswerRejectsAPatternThatOnlyCompilesOnceWrapped(t *testing.T) {
+	a := contests.Answer{MatchKind: contests.MatchRegex, Value: "butler)|(?:gardener"}
 
 	if err := a.Validate(); !errors.Is(err, contests.ErrInvalidAnswer) {
 		t.Errorf("Validate() = %v, want contests.ErrInvalidAnswer", err)

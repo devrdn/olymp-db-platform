@@ -256,3 +256,24 @@ describe("QuestionEditor, ICPC scoring", () => {
     expect(form.get("penaltyPct")).toBe("20");
   });
 });
+
+// A regular expression reference answer is matched against the whole answer.
+// An author who expects substring matching writes a pattern that no longer
+// accepts what they meant, so the rule is said beside the answers, in words.
+describe("QuestionEditor, the reference answers", () => {
+  test("says that a regular expression must match the whole answer", () => {
+    render(
+      <QuestionEditor
+        contestId="c1"
+        question={question({ answers: [{ id: "a1", matchKind: "regex", value: "(?i)john\\s+smith" }] })}
+        languages={["en"]}
+        editable
+        scoring="points"
+        sequentialActive={false}
+        dict={dict}
+      />,
+    );
+
+    expect(screen.getByText(dict.workspace.question.answers.regexHint)).toBeVisible();
+  });
+});

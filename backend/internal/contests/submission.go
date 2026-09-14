@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -447,6 +446,12 @@ func (s *Service) submitOnce(ctx context.Context, registrationID uuid.UUID, q Qu
 // matchAnswer reports whether value satisfies one reference answer, by that
 // answer's own match_kind (§6).
 //
+// A pattern describes the whole answer (compileAnswerPattern): it is matched
+// against the value with surrounding whitespace trimmed, since the anchors
+// would otherwise make a stray space or a trailing newline from a pasted value
+// the difference between right and wrong. Only the ends are trimmed; nothing
+// inside the value is normalised.
+//
 // Go's regexp package is RE2: matching runs in time linear in the length of
 // the input, with no backtracking construction to blow up on an adversarial
 // value, so match_kind = regex needs no bound of its own beyond the one
@@ -458,11 +463,11 @@ func matchAnswer(a Answer, value string) (bool, error) {
 	case MatchExactCI:
 		return strings.EqualFold(value, a.Value), nil
 	case MatchRegex:
-		re, err := regexp.Compile(a.Value)
+		re, err := compileAnswerPattern(a.Value)
 		if err != nil {
 			return false, err
 		}
-		return re.MatchString(value), nil
+		return re.MatchString(strings.TrimSpace(value)), nil
 	default:
 		// Answer.Validate refuses every match_kind but the three above
 		// before a row is ever stored; an unrecognised one here can only mean
