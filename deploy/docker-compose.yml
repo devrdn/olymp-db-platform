@@ -117,27 +117,33 @@ services:
     # measured against this image to leave a template build's COPY and index
     # creation, CREATE DATABASE … TEMPLATE and autovacuum ample room while
     # stopping a gigabyte-scale value. It must equal PerProcessMemoryBytes in
-    # backend/internal/platform/config.
+    # backend/internal/platform/config. One source of truth: this is
+    # interpolated from GAME_DB_PROCESS_MEMORY_BYTES, the same value the Query
+    # Runner reads for its arithmetic and the game-prepare job proves is in
+    # force.
     ulimits:
-      data: 268435456
+      data: ${GAME_DB_PROCESS_MEMORY_BYTES:-268435456}
     # cgroup limits, so that "the game cluster degrades" stays a statement
     # about this container rather than about the machine. Sized for the
     # pilot; raise them together with the semaphore in section 4.3.
     #
-    # Memory follows from the cap above, the concurrency and the worker pool.
-    # QUERY_CONCURRENT query leaders run at once, each up to the 256 MiB cap,
-    # and the parallel workers are a separate cluster-wide pool
-    # (max_parallel_workers above), also each up to the cap — counted once, not
-    # once per query. So the container must hold
-    # (QUERY_CONCURRENT + max_parallel_workers) × 256 MiB plus ~2 GiB reserved
-    # for shared_buffers, the /dev/shm parallel segment (256 MiB), the
-    # postmaster and background workers, the autovacuum workers and a
-    # provisioning build: (8 + 4) × 256 MiB + 2 GiB = 5 GiB at the default
-    # concurrency, rounded up here to six. Measured legitimate ceilings under
-    # the cap (for an operator tuning these): a single COPY value up to ~40 MiB,
-    # CREATE INDEX / REINDEX up to maintenance_work_mem ~240 MiB, JIT-compiled
-    # queries (~130 MiB peak), and parallel queries whose shared memory does not
-    # count against the cap. The Query Runner is told this same limit
+    # Memory follows from the cap above, the concurrency, the worker pool and
+    # builds. Three classes of backend can each reach the 256 MiB cap:
+    # QUERY_CONCURRENT query leaders; the cluster-wide parallel-worker pool
+    # (max_parallel_workers above, counted once, not per query); and up to
+    # game_author's CONNECTION LIMIT provisioning build sessions, which run an
+    # organiser's arbitrary script and can allocate as much as a participant
+    # (a build can coincide with a contest). So the container must hold
+    # (QUERY_CONCURRENT + max_parallel_workers + build sessions) × 256 MiB plus
+    # ~2 GiB reserved for shared_buffers, the /dev/shm parallel segment
+    # (256 MiB), the postmaster and background workers, the autovacuum workers
+    # and the provisioner's own CREATE DATABASE / COPY sessions:
+    # (8 + 4 + 4) × 256 MiB + 2 GiB = 6 GiB at the default concurrency, rounded
+    # up here to seven. Measured legitimate ceilings under the cap (for an
+    # operator tuning these): a single COPY value up to ~40 MiB, CREATE INDEX /
+    # REINDEX up to maintenance_work_mem ~240 MiB, JIT-compiled queries
+    # (~130 MiB peak), and parallel queries whose shared memory does not count
+    # against the cap. The Query Runner is told this same limit
     # (GAME_DB_MEMORY_BYTES) and refuses to start with a concurrency it cannot
     # hold. Lower one and the others can come down; the memory,
     # GAME_DB_MEMORY_BYTES and GAME_DB_PROCESS_MEMORY_BYTES must agree.
@@ -145,7 +151,7 @@ services:
       resources:
         limits:
           cpus: "${GAME_DB_CPUS:-2.0}"
-          memory: ${GAME_DB_MEMORY:-6g}
+          memory: ${GAME_DB_MEMORY:-7g}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -224,10 +230,13 @@ services:
       QUERY_PER_MINUTE: ${QUERY_PER_MINUTE:-30}
       # The game cluster's memory limit, in bytes, so the runner can refuse to
       # start with a concurrency the cluster cannot hold (see pg-game above).
-      # Six gibibytes matches GAME_DB_MEMORY's 6g default; keep the two in step.
-      # Left empty, the check does not run — for a development cluster with no
-      # cgroup limit.
-      GAME_DB_MEMORY_BYTES: ${GAME_DB_MEMORY_BYTES:-6442450944}
+      # Seven gibibytes matches GAME_DB_MEMORY's 7g default; keep the two in
+      # step. Left empty, the check does not run — for a development cluster
+      # with no cgroup limit.
+      GAME_DB_MEMORY_BYTES: ${GAME_DB_MEMORY_BYTES:-7516192768}
+      # The per-process cap the runner's arithmetic multiplies — the same value
+      # the pg-game ulimit is interpolated from, so the two cannot drift.
+      GAME_DB_PROCESS_MEMORY_BYTES: ${GAME_DB_PROCESS_MEMORY_BYTES:-268435456}
       # Functions an operator added to the allow-list after a pilot, without
       # waiting for a release. Comma-separated.
       QUERY_EXTRA_FUNCTIONS: ${QUERY_EXTRA_FUNCTIONS:-}
