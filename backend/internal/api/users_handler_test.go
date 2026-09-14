@@ -578,11 +578,11 @@ func TestCreateEndpointReportsBusyHashingWith503(t *testing.T) {
 	// the answer is the declared "busy", never a 500.
 	f := newAPIFixture(t, rbac.PermissionUsersManage)
 	for range 4 { // passwordtest.NewHasher's concurrency
-		release, err := f.hasher.Hold(context.Background())
+		slot, err := f.hasher.Hold(context.Background())
 		if err != nil {
 			t.Fatalf("Hold() returned error: %v", err)
 		}
-		t.Cleanup(release)
+		t.Cleanup(slot.Release)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)

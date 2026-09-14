@@ -140,11 +140,11 @@ func TestVerifyRefusesAnOversizedPasswordWithoutTakingASlot(t *testing.T) {
 	// an honest sign-in could have used.
 	h := NewHasher(HasherConfig{Concurrency: 1, MaxWait: 5 * time.Second})
 	hash := mustHash(t, h, "actual password")
-	release, err := h.Hold(context.Background())
+	slot, err := h.Hold(context.Background())
 	if err != nil {
 		t.Fatalf("Hold() returned error: %v", err)
 	}
-	defer release()
+	defer slot.Release()
 
 	started := time.Now()
 	ok, err := h.Verify(context.Background(), hash, strings.Repeat("a", MaxLength+1))
@@ -165,11 +165,11 @@ func TestHasherRefusesWithinTheWaitWhenEverySlotIsHeld(t *testing.T) {
 	h := NewHasher(HasherConfig{Concurrency: 1, MaxWait: wait})
 	hash := mustHash(t, h, "actual password")
 
-	release, err := h.Hold(context.Background())
+	slot, err := h.Hold(context.Background())
 	if err != nil {
 		t.Fatalf("Hold() returned error: %v", err)
 	}
-	defer release()
+	defer slot.Release()
 
 	for name, call := range map[string]func() error{
 		"Verify": func() error { _, err := h.Verify(context.Background(), hash, "actual password"); return err },
@@ -195,11 +195,11 @@ func TestHasherStopsWaitingWhenTheCallerDoes(t *testing.T) {
 	// A request whose client has gone, or whose deadline is shorter than the
 	// wait, must not keep a goroutine parked for the full wait.
 	h := NewHasher(HasherConfig{Concurrency: 1, MaxWait: 30 * time.Second})
-	release, err := h.Hold(context.Background())
+	slot, err := h.Hold(context.Background())
 	if err != nil {
 		t.Fatalf("Hold() returned error: %v", err)
 	}
-	defer release()
+	defer slot.Release()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -220,11 +220,11 @@ func TestHasherStopsWaitingWhenTheCallerDoes(t *testing.T) {
 
 func TestHasherAdmitsAWaiterOnceASlotIsReleased(t *testing.T) {
 	h := NewHasher(HasherConfig{Concurrency: 1, MaxWait: 5 * time.Second})
-	release, err := h.Hold(context.Background())
+	slot, err := h.Hold(context.Background())
 	if err != nil {
 		t.Fatalf("Hold() returned error: %v", err)
 	}
-	time.AfterFunc(20*time.Millisecond, release)
+	time.AfterFunc(20*time.Millisecond, slot.Release)
 
 	if _, err := h.Hash(context.Background(), "a password"); err != nil {
 		t.Errorf("Hash() after the slot was released = %v, want nil", err)
@@ -235,18 +235,18 @@ func TestReleasingASlotTwiceFreesItOnce(t *testing.T) {
 	// A deferred release next to an explicit one must not hand out a slot the
 	// hasher never had.
 	h := NewHasher(HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
-	release, err := h.Hold(context.Background())
+	slot, err := h.Hold(context.Background())
 	if err != nil {
 		t.Fatalf("Hold() returned error: %v", err)
 	}
-	release()
-	release()
+	slot.Release()
+	slot.Release()
 
 	first, err := h.Hold(context.Background())
 	if err != nil {
 		t.Fatalf("Hold() returned error: %v", err)
 	}
-	defer first()
+	defer first.Release()
 	if _, err := h.Hold(context.Background()); !errors.Is(err, ErrBusy) {
 		t.Errorf("second Hold() = %v, want ErrBusy: a double release created a slot", err)
 	}
@@ -258,11 +258,11 @@ func TestWithMaxWaitSharesTheSameSlots(t *testing.T) {
 	h := NewHasher(HasherConfig{Concurrency: 1, MaxWait: time.Second})
 	patient := h.WithMaxWait(30 * time.Millisecond)
 
-	release, err := h.Hold(context.Background())
+	slot, err := h.Hold(context.Background())
 	if err != nil {
 		t.Fatalf("Hold() returned error: %v", err)
 	}
-	defer release()
+	defer slot.Release()
 
 	if _, err := patient.Hash(context.Background(), "a password"); !errors.Is(err, ErrBusy) {
 		t.Errorf("Hash() through WithMaxWait = %v, want ErrBusy: it did not share the slots", err)
@@ -301,5 +301,42 @@ func TestNeedsRehashDetectsOutdatedParameters(t *testing.T) {
 func TestNeedsRehashTreatsAnUnreadableHashAsOutdated(t *testing.T) {
 	if !NeedsRehash("garbage") {
 		t.Error("NeedsRehash() did not flag an unparseable hash")
+	}
+}
+
+func TestAHeldSlotVerifiesWithoutTakingAnother(t *testing.T) {
+	// A caller that must know it has a slot before it spends anything else —
+	// sign-in, before it counts an attempt against an account — takes the
+	// slot first and then verifies inside it.
+	h := NewHasher(HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
+	hash := mustHash(t, h, "actual password")
+
+	slot, err := h.Hold(context.Background())
+	if err != nil {
+		t.Fatalf("Hold() returned error: %v", err)
+	}
+	defer slot.Release()
+
+	ok, err := slot.Verify(hash, "actual password")
+	if err != nil || !ok {
+		t.Errorf("Slot.Verify() = (%v, %v), want (true, nil) inside the slot already held", ok, err)
+	}
+	if ok, err := slot.Verify(hash, strings.Repeat("a", MaxLength+1)); ok || err != nil {
+		t.Errorf("Slot.Verify() of an oversized password = (%v, %v), want (false, nil)", ok, err)
+	}
+}
+
+func TestAReleasedSlotRefusesToHash(t *testing.T) {
+	// Work after Release would run outside the bound the slot stands for.
+	h := NewHasher(HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
+	hash := mustHash(t, h, "actual password")
+	slot, err := h.Hold(context.Background())
+	if err != nil {
+		t.Fatalf("Hold() returned error: %v", err)
+	}
+	slot.Release()
+
+	if _, err := slot.Verify(hash, "actual password"); !errors.Is(err, ErrSlotReleased) {
+		t.Errorf("Slot.Verify() after Release = %v, want ErrSlotReleased", err)
 	}
 }

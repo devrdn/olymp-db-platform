@@ -1163,12 +1163,12 @@ func TestRestoreRefusesWhenTheEmailWasTaken(t *testing.T) {
 func busyService(t *testing.T, repo *userstest.Repository) (*users.Service, *password.Hasher, func()) {
 	t.Helper()
 	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: 20 * time.Millisecond})
-	release, err := hasher.Hold(context.Background())
+	slot, err := hasher.Hold(context.Background())
 	if err != nil {
 		t.Fatalf("Hold() returned error: %v", err)
 	}
-	t.Cleanup(release)
-	return users.NewService(repo, audit.New(&collectingSink{}), &userstest.SpyUnitOfWork{}, hasher), hasher, release
+	t.Cleanup(slot.Release)
+	return users.NewService(repo, audit.New(&collectingSink{}), &userstest.SpyUnitOfWork{}, hasher), hasher, slot.Release
 }
 
 func TestChangePasswordReportsBusyHashingRatherThanAWrongPassword(t *testing.T) {

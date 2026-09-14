@@ -199,9 +199,29 @@ type LoginResult struct {
 //
 // Besides the errors declared above, it returns password.ErrBusy when the
 // process is already running as many password computations as it will: the
-// attempt was counted but not evaluated.
+// attempt spent its address budget but was not evaluated, and cost the
+// account nothing.
 func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, error) {
-	if err := s.checkThrottle(ctx, cmd); err != nil {
+	if err := s.checkAddress(ctx, cmd); err != nil {
+		return LoginResult{}, err
+	}
+
+	// The hashing slot is taken before anything is counted against the
+	// account. A refusal for load is not a verdict on the password, and if it
+	// spent the account's counters, whoever filled the slots would be locking
+	// out whichever login they named. The address budget above is already
+	// spent, so the refusal is still not free to repeat (CLAUDE.md rule 13).
+	//
+	// No slot came free: the password was never evaluated, so this is neither
+	// a failure to record nor a verdict to give, and it is reached before the
+	// account is looked up, so it says nothing about whether one exists.
+	slot, err := s.passwords.Hold(ctx)
+	if err != nil {
+		return LoginResult{}, err
+	}
+	defer slot.Release()
+
+	if err := s.checkAccount(ctx, cmd); err != nil {
 		return LoginResult{}, err
 	}
 
@@ -218,15 +238,10 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 	if found {
 		hash = user.PasswordHash
 	}
-	matched, verifyErr := s.passwords.Verify(ctx, hash, cmd.Password)
-	if errors.Is(verifyErr, password.ErrBusy) {
-		// No slot came free: the password was never evaluated, so this is
-		// neither a failure to record nor a verdict to give. The attempt has
-		// already been counted by checkThrottle, which is what keeps a refusal
-		// from being free to retry. Both a known and an unknown login reach
-		// this point the same way, so it says nothing about which one it was.
-		return LoginResult{}, verifyErr
-	}
+	matched, verifyErr := slot.Verify(hash, cmd.Password)
+	// The comparison is done; the slot is not needed for the rest, and the
+	// rehash below takes one of its own.
+	slot.Release()
 	if verifyErr != nil {
 		// A malformed stored digest is a data problem, not a reason to admit
 		// anyone. Log it for operators and reject the attempt.
@@ -315,27 +330,32 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 	return nil
 }
 
-// checkThrottle applies every window. It runs before anything else, so a
-// throttled attempt costs no hashing work either. Every counter it reaches is
-// spent even when a later step refuses, which is what keeps a refusal from
-// being free to retry.
+// Sign-in throttling runs in two parts, around taking the hashing slot, and
+// the order of every step is a defence rather than a style:
 //
-// The order is a defence rather than a style:
+//  1. checkAddress: the address budget. Every subject the limiter sees becomes
+//     a key in the cache, and the account keys are derived from whatever login
+//     the caller typed — an unbounded space. Checked the other way round, a
+//     machine that had already spent its address budget could keep minting
+//     one new counter per invented login, and on the in-process cache that is
+//     a way to fill the store until every counter, and with it every sign-in,
+//     is refused. Spending the bounded key (one per address) first caps what a
+//     refused caller can create at its own address budget.
+//  2. checkAddress: the lengths, before either value becomes a key or reaches
+//     a hash.
+//  3. Login: the hashing slot, so a refusal for load costs the account
+//     nothing.
+//  4. checkAccount: the account from this address — the guessing limit.
+//  5. checkAccount: the account from every address — the ceiling. Only an
+//     attempt the guessing limit let through reaches it, so one address
+//     repeating refused attempts cannot climb to the ceiling and shut the
+//     owner out everywhere.
 //
-//  1. The address. Every subject the limiter sees becomes a key in the cache,
-//     and the account keys are derived from whatever login the caller typed —
-//     an unbounded space. Checked the other way round, a machine that had
-//     already spent its address budget could keep minting one new counter per
-//     invented login, and on the in-process cache that is a way to fill the
-//     store until every counter, and with it every sign-in, is refused.
-//     Spending the bounded key (one per address) first caps what a refused
-//     caller can create at its own address budget.
-//  2. The lengths, before either value becomes a key or reaches a hash.
-//  3. The account from this address: the guessing limit.
-//  4. The account from every address: the ceiling. Only an attempt the
-//     guessing limit let through reaches it, so one address repeating refused
-//     attempts cannot climb to the ceiling and shut the owner out everywhere.
-func (s *Service) checkThrottle(ctx context.Context, cmd LoginCommand) error {
+// Every counter reached is spent even when a later step refuses, which is
+// what keeps a refusal from being free to retry.
+
+// checkAddress spends the address budget and applies the length guards.
+func (s *Service) checkAddress(ctx context.Context, cmd LoginCommand) error {
 	if cmd.IP != "" {
 		allowed, err := s.limiter.Allow(ctx, "ip:"+cmd.IP, s.maxPerAddress, loginAttemptWindow)
 		if err != nil {
@@ -362,7 +382,11 @@ func (s *Service) checkThrottle(ctx context.Context, cmd LoginCommand) error {
 	if len(cmd.Login) > users.MaxLoginLength || len(cmd.Password) > password.MaxLength {
 		return ErrInvalidCredentials
 	}
+	return nil
+}
 
+// checkAccount spends the account's guessing limit and then its ceiling.
+func (s *Service) checkAccount(ctx context.Context, cmd LoginCommand) error {
 	for _, window := range []struct {
 		subject string
 		limit   int
@@ -379,7 +403,6 @@ func (s *Service) checkThrottle(ctx context.Context, cmd LoginCommand) error {
 			return ErrTooManyAttempts
 		}
 	}
-
 	return nil
 }
 
