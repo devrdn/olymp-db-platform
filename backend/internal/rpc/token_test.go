@@ -277,3 +277,46 @@ func (b *syncBuffer) String() string {
 	defer b.mu.Unlock()
 	return b.buf.String()
 }
+
+// A refused call is somebody on the network who does not hold the token, or a
+// Core API configured with the wrong one — either way an operator must hear of
+// it. Each refusal is counted; the log says so with the running total, at most
+// once per interval so a flood of refusals cannot flood the log, and never
+// with a token in it.
+func TestARefusedCallIsCountedAndLoggedWithoutTheToken(t *testing.T) {
+	address, _, logged := behindTheDoor(t, theToken)
+	client := dialWith(t, address, wrongToken)
+
+	for range 3 {
+		if _, err := client.Run(t.Context(), aQuery()); status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("status = %v, want Unauthenticated", err)
+		}
+	}
+
+	out := logged.String()
+	if strings.Count(out, "refused a call without a valid token") != 1 {
+		t.Fatalf("want exactly one refusal line within the interval, got: %q", out)
+	}
+	if !strings.Contains(out, `"level":"WARN"`) || !strings.Contains(out, `"refused_total":1`) {
+		t.Fatalf("the refusal line is not a WARN carrying the count: %q", out)
+	}
+	if strings.Contains(out, theToken) || strings.Contains(out, wrongToken) {
+		t.Fatalf("the log carries a token: %q", out)
+	}
+}
+
+func TestTheRefusalCountKeepsRunningBetweenLogLines(t *testing.T) {
+	previous := refusalLogInterval
+	refusalLogInterval = 0
+	t.Cleanup(func() { refusalLogInterval = previous })
+
+	address, _, logged := behindTheDoor(t, theToken)
+	client := dialWith(t, address, "")
+	for range 2 {
+		_, _ = client.Run(t.Context(), aQuery())
+	}
+
+	if out := logged.String(); !strings.Contains(out, `"refused_total":2`) {
+		t.Fatalf("the second refusal did not report a running total of 2: %q", out)
+	}
+}
