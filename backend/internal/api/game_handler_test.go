@@ -1141,6 +1141,21 @@ func TestBeginningAnUploadIsRateLimitedPerAddressAcrossContests(t *testing.T) {
 	}
 }
 
+func TestBeginningAnUploadLimitsAnIPv6NetworkAsOneAddress(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+
+	for i := range maxUploadBeginsPerAddressInTest {
+		rec := f.beginUploadFrom(fmt.Sprintf("[2001:db8:1:2::%x]:1234", i+1), uuid.NewString())
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("request %d answered %d: %s", i+1, rec.Code, rec.Body)
+		}
+	}
+	last := f.beginUploadFrom("[2001:db8:1:2::ffff]:1234", uuid.NewString())
+	if last.Code != http.StatusTooManyRequests || !strings.Contains(last.Body.String(), "from this address") {
+		t.Fatalf("another host of the same /64: status %d, want the address budget's 429: %s", last.Code, last.Body)
+	}
+}
+
 // And the contest budget, proven the same way round: every request comes from
 // a different address, so the address counter never reaches twenty and the
 // ninth refusal can only be the contest's own.

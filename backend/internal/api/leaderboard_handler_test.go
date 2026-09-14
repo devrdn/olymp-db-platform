@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -296,6 +297,22 @@ func TestThePublicTableIsLimitedPerAddress(t *testing.T) {
 	}
 	if rec := f.request(http.MethodGet, path, nil, "203.0.113.8"); rec.Code != http.StatusOK {
 		t.Errorf("another address: status = %d, want 200", rec.Code)
+	}
+}
+
+func TestThePublicTableLimitsAnIPv6NetworkAsOneAddress(t *testing.T) {
+	f := newBoardFixture(t)
+	c, _ := f.contest(t, contests.StatusRunning, nil)
+	path := "/contests/" + c.ID.String() + "/leaderboard"
+
+	for i := range api.LeaderboardPublicPerMinute {
+		host := fmt.Sprintf("[2001:db8:1:2::%x]", i+1)
+		if rec := f.request(http.MethodGet, path, nil, host); rec.Code != http.StatusOK {
+			t.Fatalf("request %d: status = %d, want 200", i+1, rec.Code)
+		}
+	}
+	if rec := f.request(http.MethodGet, path, nil, "[2001:db8:1:2::ffff]"); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("another host of the same /64: status = %d, want 429", rec.Code)
 	}
 }
 
