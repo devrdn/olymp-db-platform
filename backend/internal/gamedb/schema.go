@@ -62,9 +62,10 @@ const maxSchemaRows = provisioning.MaxSchemaTables * provisioning.MaxSchemaColum
 // Read from an instance and never from a template — connecting to a template
 // is what makes `CREATE DATABASE ... TEMPLATE` fail for everybody else
 // (SQLSTATE 55006). provisioning.SchemaReader is the caller that guarantees
-// that, and the reason the answer is cached: an instance database carries
-// `CONNECTION LIMIT 2` (see grants.go), which this borrows one of for the
-// length of one catalogue read.
+// that, and caches the answer so a console full of participants costs one
+// catalogue read per build rather than one connection each. It connects as
+// the provisioning role, a superuser, so an instance's `CONNECTION LIMIT 2`
+// (see grants.go) does not count it and it never takes a participant's slot.
 func (p *Provisioner) ReadSchema(ctx context.Context, database string) (provisioning.Schema, error) {
 	if !sqlpolicy.PlainIdentifier(database) {
 		return provisioning.Schema{}, fmt.Errorf("%w: %q", ErrBadName, database)
@@ -81,8 +82,8 @@ func (p *Provisioner) ReadSchema(ctx context.Context, database string) (provisio
 	// This connection is opened for one statement and closed, so a session
 	// timeout is the whole of its life. Ten seconds is the core API's own
 	// figure and generous for a catalogue read; what it rules out is this
-	// holding one of an instance's two connections open indefinitely because
-	// the cluster is wedged (CLAUDE.md rule 15).
+	// holding a backend on the game cluster open indefinitely because the
+	// cluster is wedged (CLAUDE.md rule 15).
 	if _, err := conn.Exec(ctx, `SET statement_timeout = '10s'`); err != nil {
 		return provisioning.Schema{}, fmt.Errorf("bound the schema read of %s: %w", database, err)
 	}
