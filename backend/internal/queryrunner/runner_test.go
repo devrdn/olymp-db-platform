@@ -238,8 +238,9 @@ func TestAConstantOverTheBoundNeverReachesTheCluster(t *testing.T) {
 // cast, or is an aggregate whose state is many bounded values rather than one —
 // but that tries to build a gigabyte-scale amount must fail with PostgreSQL's
 // own "out of memory" ERROR in its own backend, without the postmaster
-// restarting and without other sessions dying. That is what turns B1's
-// cluster-wide crash into one participant's failed query.
+// restarting and without other sessions dying. That is what turns an
+// over-allocating query's cluster-wide crash into one participant's failed
+// query.
 func TestAnOverAllocatingQueryFailsInItsOwnBackend(t *testing.T) {
 	runner, database := setup(t)
 	admin := gamedbtest.Admin(t)

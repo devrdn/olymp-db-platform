@@ -255,10 +255,10 @@ func TestImportSkipsABlockedAccount(t *testing.T) {
 	}
 }
 
-// TestImportSkipsAStaffMember is C-05's own regression test for the roster
-// import: a mistaken attempt to enroll one of the contest's own owners or
-// managers must not fail the whole batch, the same partial-success shape
-// every other row-level refusal already gets.
+// TestImportSkipsAStaffMember is a regression test for the roster import: a
+// mistaken attempt to enroll one of the contest's own owners or managers
+// must not fail the whole batch, the same partial-success shape every other
+// row-level refusal already gets.
 func TestImportSkipsAStaffMember(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
@@ -347,10 +347,10 @@ func TestSelfSignupWorksForAnOpenContest(t *testing.T) {
 	}
 }
 
-// TestStaffCannotSelfEnroll is C-05's own regression test: a contest's own
-// owner or manager reads reference answers through contest.view and the
-// unfrozen leaderboard through contest.edit, so letting them also register as
-// a participant would let them compete with an advantage no other entrant
+// TestStaffCannotSelfEnroll is a regression test: a contest's own owner or
+// manager reads reference answers through contest.view and the unfrozen
+// leaderboard through contest.edit, so letting them also register as a
+// participant would let them compete with an advantage no other entrant
 // has.
 func TestStaffCannotSelfEnroll(t *testing.T) {
 	f := conteststest.NewFixture()

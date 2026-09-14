@@ -432,7 +432,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		// participant's own deadline (cfg.DeadlineGrace, one grace for the
 		// whole installation, §8), so the scheduler's own finish check never
 		// closes a contest a tick before a late-arriving answer or query
-		// inside that grace would still be admitted (finding C-07).
+		// inside that grace would still be admitted.
 		cfg.DeadlineGrace,
 	)
 	a.tasks = append(a.tasks, advanceContestSchedule(log, scheduler.Advance))

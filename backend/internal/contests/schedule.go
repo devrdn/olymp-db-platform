@@ -52,7 +52,7 @@ type ScheduleRepository interface {
 	// queryproxy.Admitted add before refusing a late answer or query (§8's
 	// one deadline formula), so a participant's request inside that window
 	// is never refused by an API that thinks the contest is already
-	// finished (finding C-07). A contest with no ends_at (individual timing
+	// finished. A contest with no ends_at (individual timing
 	// needs none to publish, see CheckPublishable) never matches, and stays
 	// running until an organizer moves it by hand. No gate runs here:
 	// CheckPublishable is what admits participants, and finishing only ever
@@ -129,8 +129,8 @@ type Scheduler struct {
 	// grace is the same network-latency allowance Submit and
 	// queryproxy.Admitted add to a participant's own deadline (cfg.
 	// DeadlineGrace) — passed to AdvanceFinished so the scheduler's own
-	// finish check agrees with theirs about when a contest's window actually
-	// closes (finding C-07).
+	// finish check agrees with theirs about when a contest's window
+	// actually closes.
 	grace time.Duration
 }
 
