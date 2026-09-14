@@ -608,7 +608,7 @@ const en = {
         format: "Question format",
         timing: "Timing",
         duration: "Minutes per participant",
-        durationHint: "Counted from their own start, and never past the contest's end.",
+        durationHint: "Counted from the moment each participant first opens the contest, and never past the contest's end.",
         order: "Question order",
         orderHelp: "Any order lets a participant answer any open question whenever they like. In order opens the next question only once the previous one is closed — answered correctly, or every attempt spent.",
         sequentialWarning: "In order needs every question to have an attempt limit. A question left unlimited traps a stuck participant with nothing left to do, so publishing is refused until every one has a limit.",
@@ -710,7 +710,7 @@ const en = {
         legend: "Timing",
         help: "Everyone against one window, or each participant against their own clock.",
         duration: "Minutes per participant",
-        durationHint: "Counted from their own start, and never past the contest's end.",
+        durationHint: "Counted from the moment each participant first opens the contest, and never past the contest's end.",
       },
       enrollmentGroup: {
         legend: "Who may enter",
@@ -1012,7 +1012,7 @@ const en = {
       finishedTag: "finished",
       clock: {
         waiting: "Not started yet",
-        notStarted: "Your countdown starts with your first query",
+        notStarted: "Your countdown starts as soon as the contest opens for you",
         syncing: "synchronising…",
         timeUp: "Time is up",
         // Announced once, to a screen reader only, the moment the countdown

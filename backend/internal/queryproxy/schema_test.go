@@ -167,6 +167,63 @@ func TestSchemaRequiresTheSameAdmissionAsEveryOtherRead(t *testing.T) {
 	}
 }
 
+// individualSchemaFixture is schemaFixture for a participant of an
+// individual-timing contest who has not started yet.
+func individualSchemaFixture(policy sqlpolicy.Policy, allowed []netip.Prefix) (*queryproxy.Service, *schemas, *int) {
+	contest := individualContest()
+	contest.AllowedCIDRs = allowed
+	starts := 0
+	registration := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered}
+	reader := &schemas{schema: provisioning.Schema{Tables: []provisioning.Table{{Name: "guests"}}}}
+	service := queryproxy.New(
+		people{participant: registration, starts: &starts},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{ID: contest.ID, Template: "game_tpl_c1", Version: 3, Policy: policy}},
+		&databases{database: "game_c1_u1"}, &runner{},
+	).WithSchemas(reader)
+	return service, reader, &starts
+}
+
+// The schema is contest content like the story and the questions: under
+// individual timing, reading it is a first read that starts the clock.
+func TestReadingTheSchemaStartsAnIndividualParticipantsClock(t *testing.T) {
+	service, _, starts := individualSchemaFixture(sqlpolicy.ReadOnly(), nil)
+
+	if _, err := service.Schema(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("192.0.2.7")); err != nil {
+		t.Fatalf("Schema() = %v", err)
+	}
+	if *starts != 1 {
+		t.Fatalf("Start called %d times, want 1", *starts)
+	}
+}
+
+// A schema read that is refused showed nothing, so it starts nothing: not from
+// an address the contest does not allow, and not where the contest hides its
+// schema.
+func TestARefusedSchemaReadStartsNoClock(t *testing.T) {
+	closed := sqlpolicy.ReadOnly()
+	closed.AllowCatalog = false
+	for name, given := range map[string]struct {
+		policy  sqlpolicy.Policy
+		allowed []netip.Prefix
+		want    error
+	}{
+		"an address the contest does not allow": {sqlpolicy.ReadOnly(), []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}, queryproxy.ErrAddressNotAllowed},
+		"a contest that hides its schema":       {closed, nil, queryproxy.ErrSchemaHidden},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service, _, starts := individualSchemaFixture(given.policy, given.allowed)
+
+			if _, err := service.Schema(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("192.0.2.7")); !errors.Is(err, given.want) {
+				t.Fatalf("Schema() = %v, want %v", err, given.want)
+			}
+			if *starts != 0 {
+				t.Fatalf("Start called %d times by a refused read, want 0", *starts)
+			}
+		})
+	}
+}
+
 // A contest whose game was never built has no schema to show, and that is not
 // a fault.
 func TestSchemaReportsAContestWithNoGame(t *testing.T) {

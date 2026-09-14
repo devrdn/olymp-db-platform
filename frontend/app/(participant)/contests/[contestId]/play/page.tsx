@@ -209,6 +209,12 @@ async function PlayPanels({
   // the questions list, the log or the console still work, so `Promise.all`
   // (which would fail the whole page on either rejecting) is deliberately
   // not used here; `allSettled` lets each answer be read on its own.
+  //
+  // Under individual timing these reads are also what starts the
+  // participant's clock: the API starts it on the first successful read of the
+  // story, the questions or the schema, so the countdown covers the time spent
+  // reading the contest and not only the time spent typing. Any of the three
+  // may be the one that starts it; the server starts it once.
   const [storyResult, questionsResult, logResult, schemaResult] = await Promise.allSettled([
     serverRequest(`/contests/${contestId}/play/story?lang=${locale}`),
     serverRequest(`/contests/${contestId}/play/questions?lang=${locale}`),
