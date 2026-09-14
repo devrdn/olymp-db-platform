@@ -16,6 +16,12 @@ import { parseSetCookie, type ParsedCookie } from "./cookie";
 
 export type Credentials = { login: string; password: string };
 
+/**
+ * The cookie the API sets on a browser that has signed in to an account. It
+ * has to match `auth.DeviceCookieName` in the Go service.
+ */
+export const DEVICE_COOKIE = "dbcontest_device";
+
 export type SignInDeps = {
   fetchImpl: typeof fetch;
   setCookie: (cookie: ParsedCookie) => void;
@@ -26,6 +32,14 @@ export type SignInDeps = {
    * API throttles and audits the web container instead of the person.
    */
   headers?: Record<string, string>;
+  /**
+   * The browser's device cookie, when it has one. The API throttles a browser
+   * the owner has signed in from on its own, rather than with the address a
+   * whole lecture hall shares — which it can only do if the cookie reaches it
+   * through this server. Only this cookie is sent: the rest of the browser's
+   * jar is none of the sign-in's business.
+   */
+  deviceToken?: string;
 };
 
 export type SignInOutcome =
@@ -36,11 +50,15 @@ export async function signIn(
   credentials: Credentials,
   deps: SignInDeps,
 ): Promise<SignInOutcome> {
-  const { fetchImpl, setCookie, origin = "", headers = {} } = deps;
+  const { fetchImpl, setCookie, origin = "", headers = {}, deviceToken } = deps;
 
   const response = await fetchImpl(`${origin}${API_PREFIX}/auth/login`, {
     method: "POST",
-    headers: { ...headers, "content-type": "application/json" },
+    headers: {
+      ...headers,
+      ...(deviceToken ? { cookie: `${DEVICE_COOKIE}=${deviceToken}` } : {}),
+      "content-type": "application/json",
+    },
     body: JSON.stringify(credentials),
   });
 

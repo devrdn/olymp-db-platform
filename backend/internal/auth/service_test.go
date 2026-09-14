@@ -73,6 +73,7 @@ func newFixture(t *testing.T) *fixture {
 		Limiter:   NewLimiter(c),
 		Logger:    logging.New("error", io.Discard),
 		Passwords: passwordtest.NewHasher(),
+		Devices:   testDevices(t),
 	})
 
 	return &fixture{service: service, repo: repo, sink: sink, user: user}
@@ -474,6 +475,7 @@ func TestAddressThrottleIsSpentBeforeAccountCountersAreCreated(t *testing.T) {
 		Limiter:               NewLimiter(c),
 		Logger:                logging.New("error", io.Discard),
 		Passwords:             passwordtest.NewHasher(),
+		Devices:               testDevices(t),
 		MaxAttemptsPerAddress: 2,
 	})
 	ctx := context.Background()
@@ -511,6 +513,7 @@ func TestAnOverlongLoginNeverBecomesARateLimitKey(t *testing.T) {
 		Limiter:   NewLimiter(c),
 		Logger:    logging.New("error", io.Discard),
 		Passwords: passwordtest.NewHasher(),
+		Devices:   testDevices(t),
 	})
 
 	overlong := strings.Repeat("a", users.MaxLoginLength+1)
@@ -572,6 +575,7 @@ func TestASignInThatCannotGetAHashingSlotIsRefusedAndStillCounted(t *testing.T) 
 		Limiter:               NewLimiter(c),
 		Logger:                logging.New("error", io.Discard),
 		Passwords:             hasher,
+		Devices:               testDevices(t),
 		MaxAttemptsPerAddress: 1,
 	})
 
@@ -622,6 +626,7 @@ func TestAThrottledAttemptNeverStoresAnOversizedLogin(t *testing.T) {
 		Limiter:               NewLimiter(c),
 		Logger:                logging.New("error", io.Discard),
 		Passwords:             passwordtest.NewHasher(),
+		Devices:               testDevices(t),
 		MaxAttemptsPerAddress: 1,
 	})
 	ctx := context.Background()
@@ -658,6 +663,7 @@ func TestAnOverlongPasswordIsRefusedBeforeAnyAccountCounterOrHash(t *testing.T) 
 		Limiter:   NewLimiter(c),
 		Logger:    logging.New("error", io.Discard),
 		Passwords: hasher,
+		Devices:   testDevices(t),
 	})
 	slot, err := hasher.Hold(context.Background())
 	if err != nil {
@@ -695,6 +701,7 @@ func throttleService(t *testing.T, ceiling int) *Service {
 		Limiter:               NewLimiter(c),
 		Logger:                logging.New("error", io.Discard),
 		Passwords:             passwordtest.NewHasher(),
+		Devices:               testDevices(t),
 		MaxAttemptsPerAccount: ceiling,
 	})
 }
@@ -782,6 +789,7 @@ func TestBusyRefusalsNeverSpendTheAccountsOwnCounters(t *testing.T) {
 		Limiter:               NewLimiter(c),
 		Logger:                logging.New("error", io.Discard),
 		Passwords:             hasher,
+		Devices:               testDevices(t),
 		MaxAttemptsPerAddress: busyAttempts + 1,
 		MaxAttemptsPerAccount: 3,
 	})
@@ -818,6 +826,7 @@ func TestAnIPv6NetworkIsOneAddressToTheSignInThrottle(t *testing.T) {
 		Limiter:               NewLimiter(c),
 		Logger:                logging.New("error", io.Discard),
 		Passwords:             passwordtest.NewHasher(),
+		Devices:               testDevices(t),
 		MaxAttemptsPerAddress: 1,
 	})
 	ctx := context.Background()
@@ -836,6 +845,7 @@ type unlockFixture struct {
 	service *Service
 	sink    *collectingSink
 	user    users.User
+	repo    *userstest.Repository
 }
 
 func newUnlockFixture(t *testing.T, cfg ServiceConfig) *unlockFixture {
@@ -850,7 +860,10 @@ func newUnlockFixture(t *testing.T, cfg ServiceConfig) *unlockFixture {
 	sink := &collectingSink{}
 	cfg.Users, cfg.Sessions, cfg.Audit = repo, NewSessionStore(c, time.Hour), audit.New(sink)
 	cfg.Limiter, cfg.Logger, cfg.Passwords = NewLimiter(c), logging.New("error", io.Discard), passwordtest.NewHasher()
-	return &unlockFixture{service: NewService(cfg), sink: sink, user: user}
+	if cfg.Devices == nil {
+		cfg.Devices = testDevices(t)
+	}
+	return &unlockFixture{service: NewService(cfg), sink: sink, user: user, repo: repo}
 }
 
 func TestUnlockingSignInClearsTheAccountsGuessingLimitAndCeiling(t *testing.T) {
@@ -924,5 +937,171 @@ func TestUnlockingSignInForAnUnknownAccountIsNotFound(t *testing.T) {
 	}
 	if len(f.sink.entries) != 0 {
 		t.Error("an unlock of nothing was audited")
+	}
+}
+
+// trustedBrowser signs in successfully from ip and returns the device cookie
+// that sign-in issued.
+func (f *unlockFixture) trustedBrowser(t *testing.T, ip string) string {
+	t.Helper()
+	result, err := f.service.Login(context.Background(), LoginCommand{Login: "ivanov", Password: testPassword, IP: ip})
+	if err != nil {
+		t.Fatalf("the owner's first sign-in = %v, want a session", err)
+	}
+	if result.DeviceToken == "" {
+		t.Fatal("a successful sign-in issued no device cookie")
+	}
+	return result.DeviceToken
+}
+
+// lockOut spends ivanov's guessing limit, and the address budget, from ip.
+func (f *unlockFixture) lockOut(t *testing.T, ip string) {
+	t.Helper()
+	ctx := context.Background()
+	for range maxLoginAttemptsPerAccountAddress + 1 {
+		_, _ = f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: "a guess", IP: ip})
+	}
+	if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: ip}); !errors.Is(err, ErrTooManyAttempts) {
+		t.Fatalf("without a device cookie after the rival's guesses = %v, want ErrTooManyAttempts", err)
+	}
+}
+
+func TestTheOwnersBrowserSignsInThroughARivalsLockoutAtTheSameAddress(t *testing.T) {
+	// A lecture hall is one address. A rival there can spend the owner's
+	// guessing limit, and the address budget with it, but not the limit of
+	// a browser the owner has already signed in from.
+	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerAddress: maxLoginAttemptsPerAccountAddress + 3})
+	cookie := f.trustedBrowser(t, "10.0.0.1")
+	f.lockOut(t, "10.0.0.1")
+
+	_, err := f.service.Login(context.Background(), LoginCommand{
+		Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie,
+	})
+	if err != nil {
+		t.Errorf("the owner's trusted browser = %v, want a session", err)
+	}
+}
+
+func TestADeviceCookieForAnotherAccountDoesNotHelp(t *testing.T) {
+	f := newUnlockFixture(t, ServiceConfig{})
+	f.repo.Add(users.User{
+		Login: "petrov", FullName: "Pyotr Petrov", Status: users.StatusActive,
+		PasswordHash: passwordtest.Hash(t, testPassword),
+	})
+	result, err := f.service.Login(context.Background(), LoginCommand{Login: "petrov", Password: testPassword, IP: "10.0.0.1"})
+	if err != nil {
+		t.Fatalf("petrov's sign-in = %v", err)
+	}
+	f.lockOut(t, "10.0.0.1")
+
+	_, err = f.service.Login(context.Background(), LoginCommand{
+		Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: result.DeviceToken,
+	})
+	if !errors.Is(err, ErrTooManyAttempts) {
+		t.Errorf("ivanov with petrov's device cookie = %v, want ErrTooManyAttempts", err)
+	}
+}
+
+func TestAForgedOrExpiredDeviceCookieIsTreatedAsNone(t *testing.T) {
+	expired, err := NewDeviceTrust(testDeviceSecret, 30*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newUnlockFixture(t, ServiceConfig{Devices: expired})
+	cookie := f.trustedBrowser(t, "10.0.0.1")
+	f.lockOut(t, "10.0.0.1")
+
+	payload, mac, _ := strings.Cut(cookie, ".")
+	forged := payload[:len(payload)-1] + "A" + "." + mac
+	if forged == cookie {
+		forged = payload[:len(payload)-1] + "B" + "." + mac
+	}
+	if _, err := f.service.Login(context.Background(), LoginCommand{
+		Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: forged,
+	}); !errors.Is(err, ErrTooManyAttempts) {
+		t.Errorf("a forged device cookie = %v, want ErrTooManyAttempts", err)
+	}
+
+	expired.now = func() time.Time { return time.Now().Add(31 * 24 * time.Hour) }
+	if _, err := f.service.Login(context.Background(), LoginCommand{
+		Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie,
+	}); !errors.Is(err, ErrTooManyAttempts) {
+		t.Errorf("an expired device cookie = %v, want ErrTooManyAttempts", err)
+	}
+}
+
+func TestAPasswordChangeRetiresEveryDeviceCookie(t *testing.T) {
+	// Changing a password is what somebody does when they think another
+	// person has the account; that person's browser must not keep its trust.
+	f := newUnlockFixture(t, ServiceConfig{})
+	cookie := f.trustedBrowser(t, "10.0.0.1")
+	f.lockOut(t, "10.0.0.1")
+	if _, err := f.repo.BumpSessionGeneration(context.Background(), f.user.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := f.service.Login(context.Background(), LoginCommand{
+		Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie,
+	})
+	if !errors.Is(err, ErrTooManyAttempts) {
+		t.Errorf("a device cookie from before the password change = %v, want ErrTooManyAttempts", err)
+	}
+}
+
+func TestABlockRetiresEveryDeviceCookie(t *testing.T) {
+	f := newUnlockFixture(t, ServiceConfig{})
+	cookie := f.trustedBrowser(t, "10.0.0.1")
+	f.lockOut(t, "10.0.0.1")
+	if err := f.repo.SetStatus(context.Background(), []uuid.UUID{f.user.ID}, users.StatusBlocked, users.StatusChange{}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := f.service.Login(context.Background(), LoginCommand{
+		Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie,
+	})
+	if !errors.Is(err, ErrTooManyAttempts) {
+		t.Errorf("a blocked account's device cookie = %v, want the ordinary limits' ErrTooManyAttempts", err)
+	}
+}
+
+func TestTheDeviceLimitStopsGuessingThroughAStolenCookie(t *testing.T) {
+	// A copied cookie skips the address and account limits, so it carries a
+	// guessing limit of its own, keyed on the device it names.
+	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerDevice: 4})
+	cookie := f.trustedBrowser(t, "10.0.0.1")
+	ctx := context.Background()
+
+	for i := range 4 {
+		if _, err := f.service.Login(ctx, LoginCommand{
+			Login: "ivanov", Password: "a guess", IP: fmt.Sprintf("10.0.9.%d", i), DeviceToken: cookie,
+		}); !errors.Is(err, ErrInvalidCredentials) {
+			t.Fatalf("guess %d through the cookie = %v, want ErrInvalidCredentials", i, err)
+		}
+	}
+	if _, err := f.service.Login(ctx, LoginCommand{
+		Login: "ivanov", Password: testPassword, IP: "10.0.9.99", DeviceToken: cookie,
+	}); !errors.Is(err, ErrTooManyAttempts) {
+		t.Errorf("past the device limit = %v, want ErrTooManyAttempts", err)
+	}
+	// The owner's own guessing limit at their own address was not spent.
+	if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1"}); err != nil {
+		t.Errorf("the owner without the cookie = %v, want a session", err)
+	}
+}
+
+func TestUnlockingSignInClearsTheDeviceLimitToo(t *testing.T) {
+	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerDevice: 2})
+	cookie := f.trustedBrowser(t, "10.0.0.1")
+	ctx := context.Background()
+	for range 3 {
+		_, _ = f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: "a guess", IP: "10.0.0.1", DeviceToken: cookie})
+	}
+
+	if err := f.service.UnlockSignIn(ctx, uuid.New(), f.user.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie}); err != nil {
+		t.Errorf("the trusted browser after the unlock = %v, want a session", err)
 	}
 }

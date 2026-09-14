@@ -322,6 +322,11 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		MaxWait:     cfg.PasswordHashMaxWait,
 	})
 	checkMemoryLimit(log, passwords.Concurrency())
+
+	devices, err := auth.NewDeviceTrust(cfg.DeviceCookieSecret, cfg.DeviceCookieTTL)
+	if err != nil {
+		return nil, fmt.Errorf("device trust: %w", err)
+	}
 	authService := auth.NewService(auth.ServiceConfig{
 		Users:                 userRepo,
 		Sessions:              sessions,
@@ -331,6 +336,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Passwords:             passwords,
 		MaxAttemptsPerAddress: cfg.MaxLoginAttemptsPerAddress,
 		MaxAttemptsPerAccount: cfg.MaxLoginAttemptsPerAccount,
+		Devices:               devices,
+		MaxAttemptsPerDevice:  cfg.MaxLoginAttemptsPerDevice,
 	})
 	authMiddleware := auth.NewMiddleware(auth.MiddlewareConfig{
 		Sessions:   sessions,

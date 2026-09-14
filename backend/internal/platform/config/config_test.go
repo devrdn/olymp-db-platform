@@ -19,6 +19,7 @@ func TestLoadReadsValuesFromEnvironment(t *testing.T) {
 	setRequired(t)
 	t.Setenv("HTTP_ADDR", ":8081")
 	t.Setenv("ENV", "production")
+	t.Setenv("DEVICE_COOKIE_SECRET", strings.Repeat("s", 32))
 	t.Setenv("LOG_LEVEL", "warn")
 	t.Setenv("SHUTDOWN_TIMEOUT", "30s")
 
@@ -364,6 +365,7 @@ func TestCookieIsSecureOutsideDevelopment(t *testing.T) {
 	// to remember a flag to get it right.
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 	t.Setenv("ENV", "production")
+	t.Setenv("DEVICE_COOKIE_SECRET", strings.Repeat("s", 32))
 
 	cfg, err := Load()
 	if err != nil {
@@ -974,6 +976,78 @@ func TestSessionMaximumLifetimeIsConfigurableAndBounded(t *testing.T) {
 		t.Setenv("SESSION_MAX_LIFETIME", raw)
 		if _, err := Load(); err == nil {
 			t.Errorf("Load() accepted SESSION_MAX_LIFETIME=%s, want error", raw)
+		}
+	}
+}
+
+func TestTheDeviceCookieSecretIsRequiredOutsideDevelopment(t *testing.T) {
+	// Without it every device cookie would be signed with a key nobody chose
+	// — or a fresh one per restart, silently distrusting every browser.
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("ENV", "production")
+
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DEVICE_COOKIE_SECRET") {
+		t.Fatalf("Load() without DEVICE_COOKIE_SECRET in production = %v, want an error naming it", err)
+	}
+
+	t.Setenv("DEVICE_COOKIE_SECRET", strings.Repeat("s", 31))
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DEVICE_COOKIE_SECRET") {
+		t.Errorf("Load() with a 31-byte DEVICE_COOKIE_SECRET = %v, want an error naming it", err)
+	}
+
+	t.Setenv("DEVICE_COOKIE_SECRET", strings.Repeat("s", 32))
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with a 32-byte secret returned error: %v", err)
+	}
+	if string(cfg.DeviceCookieSecret) != strings.Repeat("s", 32) {
+		t.Error("DeviceCookieSecret is not the configured value")
+	}
+}
+
+func TestADevelopmentStackGeneratesItsOwnDeviceCookieSecret(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("ENV", "development")
+
+	first, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	second, _ := Load()
+
+	if len(first.DeviceCookieSecret) < 32 {
+		t.Errorf("generated secret is %d bytes, want at least 32", len(first.DeviceCookieSecret))
+	}
+	if string(first.DeviceCookieSecret) == string(second.DeviceCookieSecret) {
+		t.Error("two loads generated the same secret: it is not random")
+	}
+}
+
+func TestDeviceCookieSettingsHaveDefaultsAndBounds(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.DeviceCookieTTL != 30*24*time.Hour {
+		t.Errorf("DeviceCookieTTL = %v, want 720h", cfg.DeviceCookieTTL)
+	}
+	if cfg.MaxLoginAttemptsPerDevice != 0 {
+		t.Errorf("MaxLoginAttemptsPerDevice = %d, want 0 (the auth package's default)", cfg.MaxLoginAttemptsPerDevice)
+	}
+
+	for env, bad := range map[string][]string{
+		"DEVICE_COOKIE_TTL":             {"0s", "59m", "2161h"},
+		"MAX_LOGIN_ATTEMPTS_PER_DEVICE": {"-1", "1001"},
+	} {
+		for _, raw := range bad {
+			t.Run(env+"="+raw, func(t *testing.T) {
+				t.Setenv(env, raw)
+				if _, err := Load(); err == nil {
+					t.Errorf("Load() accepted %s=%s", env, raw)
+				}
+			})
 		}
 	}
 }
