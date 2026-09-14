@@ -113,14 +113,15 @@ services:
     # and the Linux OOM killer takes a backend, which the postmaster treats as
     # a crash and restarts every session. Shared memory — shared_buffers and a
     # parallel query's dynamic shared memory — is mapped shared and does not
-    # count against RLIMIT_DATA, so parallel queries keep working; 256 MiB was
-    # measured against this image to leave a template build's COPY and index
-    # creation, CREATE DATABASE … TEMPLATE and autovacuum ample room while
-    # stopping a gigabyte-scale value. It must equal PerProcessMemoryBytes in
-    # backend/internal/platform/config. One source of truth: this is
-    # interpolated from GAME_DB_PROCESS_MEMORY_BYTES, the same value the Query
-    # Runner reads for its arithmetic and the game-prepare job proves is in
-    # force.
+    # count against RLIMIT_DATA, so parallel queries keep working. 256 MiB was
+    # measured against this image: a template build's COPY (single values to
+    # ~40 MiB) and index creation (maintenance_work_mem to ~240 MiB), CREATE
+    # DATABASE … TEMPLATE and a VACUUM removing two million dead tuples at the
+    # default maintenance_work_mem all succeed, while a gigabyte-scale value is
+    # refused. The value comes from GAME_DB_PROCESS_MEMORY_BYTES, the one
+    # source of truth: the Query Runner reads the same variable for its memory
+    # arithmetic, and the game-prepare job reads the running limit back from
+    # /proc and proves it equals this before the cluster serves anything.
     ulimits:
       data: ${GAME_DB_PROCESS_MEMORY_BYTES:-268435456}
     # cgroup limits, so that "the game cluster degrades" stays a statement
