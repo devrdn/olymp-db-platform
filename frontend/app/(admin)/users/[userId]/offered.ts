@@ -20,6 +20,8 @@ export type Offered = {
   /** The one action a deleted account can take. */
   restore: boolean;
   resetPassword: boolean;
+  /** Forgets the failed sign-in attempts counted against the account. */
+  unlockSignIn: boolean;
   roles: boolean;
   profile: boolean;
 };
@@ -54,6 +56,10 @@ export function offeredActions(
     // new password, so there is nothing to withhold. Meaningless once the
     // account cannot sign in at all — nobody is left to hand it to.
     resetPassword: !deleted,
+    // Clearing counted attempts locks nobody out and hands nobody a secret,
+    // so it is offered on your own account too and whether or not the viewer
+    // is known. A deleted account cannot sign in, so there is nothing to clear.
+    unlockSignIn: !deleted,
     // Allowed on your own record. Demoting yourself retires your sessions and
     // you find out at once, which is honest — and forbidding it would leave
     // the last administrator unable to correct their own row. A deleted

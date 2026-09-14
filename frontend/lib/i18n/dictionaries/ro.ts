@@ -731,6 +731,15 @@ const ro = {
       resetPassword: "Resetați parola",
       resetNote: "Emite o parolă nouă de unică folosință și încheie toate sesiunile contului.",
       handover: "Predați-o proprietarului. Se afișează o singură dată și nu mai poate fi recuperată.",
+      unlockSignIn: "Deblocați autentificarea",
+      unlockSignInNote:
+        "Șterge încercările de autentificare eșuate contorizate pentru acest cont, astfel încât titularul să poată încerca acum, fără să aștepte până la 15 minute. Încercările contorizate pentru o adresă se păstrează.",
+      unlockSignInConfirmTitle: "Deblocați autentificarea pentru {login}?",
+      unlockSignInConfirmBody:
+        "Faceți acest lucru doar când știți că titularul încearcă să se autentifice: cine ghicește parola primește și el încercările înapoi.",
+      unlockSignInConfirm: "Deblocați",
+      unlockSignInCancel: "Anulați",
+      unlocked: "Autentificarea a fost deblocată",
       created: "Creat",
       back: "← Toate conturile",
       delete: "Ștergeți",
@@ -1124,6 +1133,7 @@ const ro = {
       "user.roles_change": "A schimbat rolurile unui cont",
       "user.password_reset": "A resetat o parolă",
       "user.password_change": "Și-a schimbat parola",
+      "user.sign_in_unlock": "A deblocat autentificarea unui cont",
       "contest.create": "A creat o olimpiadă",
       "contest.update": "A modificat o olimpiadă",
       "contest.delete": "A șters o olimpiadă",

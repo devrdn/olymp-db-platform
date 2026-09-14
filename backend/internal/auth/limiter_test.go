@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,4 +117,53 @@ type brokenCache struct{ cache.Cache }
 
 func (brokenCache) Incr(context.Context, string, time.Duration) (int64, error) {
 	return 0, context.DeadlineExceeded
+}
+
+func TestANewGenerationAbandonsEveryCounterDerivedFromTheOldOne(t *testing.T) {
+	// Counters are keyed by whatever a caller typed and whatever address it
+	// came from, so there is no list of them to delete. Folding a generation
+	// into every key and replacing the generation abandons them all at once.
+	limiter := newTestLimiter(t)
+	ctx := context.Background()
+
+	before, err := limiter.Generation(ctx, "account:ivanov")
+	if err != nil {
+		t.Fatalf("Generation() returned error: %v", err)
+	}
+	for range 3 {
+		_, _ = limiter.Allow(ctx, "guess:"+before+"|ivanov", 3, time.Minute)
+	}
+	if allowed, _ := limiter.Allow(ctx, "guess:"+before+"|ivanov", 3, time.Minute); allowed {
+		t.Fatal("the counter was not at its limit before the new generation")
+	}
+
+	if err := limiter.NewGeneration(ctx, "account:ivanov", time.Minute); err != nil {
+		t.Fatalf("NewGeneration() returned error: %v", err)
+	}
+	after, err := limiter.Generation(ctx, "account:ivanov")
+	if err != nil {
+		t.Fatalf("Generation() returned error: %v", err)
+	}
+
+	if after == before {
+		t.Fatalf("the generation did not change: %q", after)
+	}
+	if allowed, _ := limiter.Allow(ctx, "guess:"+after+"|ivanov", 3, time.Minute); !allowed {
+		t.Error("the counter under the new generation was not fresh")
+	}
+}
+
+func TestGenerationsAreNeverReused(t *testing.T) {
+	// A repeated value would bring back counters abandoned by an earlier one.
+	limiter := newTestLimiter(t)
+	ctx := context.Background()
+	seen := map[string]bool{}
+	for range 5 {
+		_ = limiter.NewGeneration(ctx, "account:ivanov", time.Minute)
+		gen, _ := limiter.Generation(ctx, "account:ivanov")
+		if seen[gen] || strings.Contains(gen, "|") {
+			t.Fatalf("generation %q was reused or contains the key separator", gen)
+		}
+		seen[gen] = true
+	}
 }

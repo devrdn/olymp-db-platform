@@ -29,19 +29,26 @@ type RoleCatalog interface {
 	Roles(ctx context.Context) ([]users.Role, error)
 }
 
+// SignInUnlocker clears an account's sign-in throttling — the one method of
+// auth.Service this handler needs, declared here by the consumer.
+type SignInUnlocker interface {
+	UnlockSignIn(ctx context.Context, actorID, userID uuid.UUID) error
+}
+
 // UsersHandler serves the account management endpoints. Every route requires the
 // installation-wide users.manage permission: these operations are not scoped
 // to a contest, and running one must never grant power over accounts.
 type UsersHandler struct {
-	service *users.Service
-	roles   RoleCatalog
-	mw      *auth.Middleware
-	log     *slog.Logger
+	service  *users.Service
+	roles    RoleCatalog
+	unlocker SignInUnlocker
+	mw       *auth.Middleware
+	log      *slog.Logger
 }
 
 // NewUsersHandler assembles the account endpoints.
-func NewUsersHandler(service *users.Service, roles RoleCatalog, mw *auth.Middleware, log *slog.Logger) *UsersHandler {
-	return &UsersHandler{service: service, roles: roles, mw: mw, log: log}
+func NewUsersHandler(service *users.Service, roles RoleCatalog, unlocker SignInUnlocker, mw *auth.Middleware, log *slog.Logger) *UsersHandler {
+	return &UsersHandler{service: service, roles: roles, unlocker: unlocker, mw: mw, log: log}
 }
 
 // Mount registers the routes under /users, and the role catalogue beside them.
@@ -80,6 +87,7 @@ func (h *UsersHandler) Mount(r chi.Router) {
 			r.Post("/delete", h.deleteAccount)
 			r.Post("/restore", h.restore)
 			r.Post("/password-reset", h.resetPassword)
+			r.Post("/sign-in/unlock", h.unlockSignIn)
 			r.Put("/roles", h.replaceRoles)
 		})
 	})
@@ -476,6 +484,25 @@ func (h *UsersHandler) resetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, resetResponse{OneTimePassword: issued})
+}
+
+// unlockSignIn clears the account's sign-in throttling, so an owner shut out
+// by somebody else's wrong guesses — a rival behind the same lab address, a
+// guess spread across many — can try again now rather than when the window
+// runs out. Answered 204: there is nothing to return but that it happened,
+// and the trail records who did it.
+func (h *UsersHandler) unlockSignIn(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.accountID(w, r)
+	if !ok {
+		return
+	}
+
+	identity, _ := auth.IdentityFrom(r.Context())
+	if err := h.unlocker.UnlockSignIn(r.Context(), identity.UserID, id); err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.NoContent(w, r)
 }
 
 type rolesRequest struct {

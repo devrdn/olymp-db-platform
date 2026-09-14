@@ -770,6 +770,15 @@ const en = {
       resetPassword: "Reset password",
       resetNote: "Issues a new one-time password and ends every session this account holds.",
       handover: "Hand this over to its owner. It is shown once and cannot be retrieved again.",
+      unlockSignIn: "Clear sign-in lockout",
+      unlockSignInNote:
+        "Forgets the failed sign-in attempts counted against this account, so its owner can try again now instead of waiting up to 15 minutes. Attempts counted against an address are kept.",
+      unlockSignInConfirmTitle: "Clear the sign-in lockout for {login}?",
+      unlockSignInConfirmBody:
+        "Do this once you know it is the owner trying to sign in: anybody guessing the password gets their attempts back too.",
+      unlockSignInConfirm: "Clear lockout",
+      unlockSignInCancel: "Cancel",
+      unlocked: "Sign-in lockout cleared",
       created: "Created",
       back: "← All accounts",
       delete: "Delete",
@@ -1229,6 +1238,7 @@ const en = {
       "user.roles_change": "Changed an account's roles",
       "user.password_reset": "Reset a password",
       "user.password_change": "Changed their own password",
+      "user.sign_in_unlock": "Cleared a sign-in lockout",
       "contest.create": "Created a contest",
       "contest.update": "Changed a contest",
       "contest.delete": "Deleted a contest",

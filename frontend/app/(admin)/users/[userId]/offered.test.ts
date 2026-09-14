@@ -73,6 +73,8 @@ describe("offeredActions, for a deleted account", () => {
     expect(offered.unblock).toBe(false);
     expect(offered.resetPassword).toBe(false);
     expect(offered.roles).toBe(false);
+    // Nobody can sign in to a deleted account, so there is no lockout to clear.
+    expect(offered.unlockSignIn).toBe(false);
     // The server refuses a profile edit on a deleted account the same way it
     // refuses a password reset or a role change (ErrAccountDeleted); a
     // control that exists only to be refused teaches nothing.
@@ -98,5 +100,17 @@ describe("offeredActions, for a deleted account", () => {
     // Same fail-closed reasoning as block: an empty viewerId must not read as
     // "not you" on every account, including one that happens to be deleted.
     expect(offeredActions(deleted, "").restore).toBe(false);
+  });
+});
+
+describe("offeredActions, clearing a sign-in lockout", () => {
+  test("is offered on an active or blocked account, and on your own", () => {
+    // Clearing counted attempts locks nobody out and hands nobody a secret,
+    // so there is nothing to withhold — including from yourself, shut out by
+    // somebody else's guesses and signed in elsewhere.
+    expect(offeredActions(other, viewer).unlockSignIn).toBe(true);
+    expect(offeredActions({ ...other, status: "blocked" }, viewer).unlockSignIn).toBe(true);
+    expect(offeredActions(self, viewer).unlockSignIn).toBe(true);
+    expect(offeredActions(other, "").unlockSignIn).toBe(true);
   });
 });

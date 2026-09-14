@@ -179,3 +179,19 @@ export async function resetPasswordAction(
   revalidatePath("/users", "layout");
   return { done: true, oneTimePassword: outcome.body.one_time_password };
 }
+
+/**
+ * Clears the sign-in lockout of an account: the failed attempts counted
+ * against it, at every address, are forgotten, so its owner — shut out by a
+ * rival behind the same lab address, say — can try again now. Attempts counted
+ * against an address are not touched; the server records who did this.
+ */
+export async function unlockSignInAction(
+  _previous: AccountState,
+  form: FormData,
+): Promise<AccountState> {
+  const userId = subject(form);
+  if (!userId) return { code: "invalid_user_id" };
+
+  return attempt(() => serverRequest(`/users/${userId}/sign-in/unlock`, { method: "POST" }));
+}

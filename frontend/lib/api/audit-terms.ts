@@ -44,6 +44,7 @@ export const AUDIT_ACTIONS = [
   "user.roles_change",
   "user.password_reset",
   "user.password_change",
+  "user.sign_in_unlock",
 
   "contest.create",
   "contest.update",
