@@ -124,17 +124,32 @@ func (h *Hasher) WithMaxWait(d time.Duration) *Hasher {
 	return &Hasher{slots: h.slots, maxWait: d}
 }
 
+// ErrSlotReleased reports work asked of a slot after it was given back: that
+// work would run outside the bound the slot stands for.
+var ErrSlotReleased = errors.New("password hashing slot already released")
+
+// Slot is one unit of the hasher's concurrency, held by the caller until
+// Release. Release is safe to call more than once.
+type Slot struct {
+	hasher *Hasher
+	once   sync.Once
+	mu     sync.Mutex
+	done   bool
+}
+
 // Hold takes one slot, waiting at most the hasher's wait and never past the
-// context, and returns the function that gives it back. Calling the release
-// function more than once frees the slot once.
+// context.
 //
-// Hash and Verify take their slot this way. It is exported so a caller can
-// fill the gate on purpose — a test that proves a refusal, or work that must
-// not overlap hashing — on exactly the terms a hash would.
-func (h *Hasher) Hold(ctx context.Context) (func(), error) {
+// Hash and Verify take their slot this way for the duration of one
+// computation. A caller holds one itself when it must know a computation will
+// be admitted before it spends anything else on the attempt — sign-in takes
+// its slot before it counts the attempt against the account, so a refusal for
+// load never costs the account's owner an attempt — and then computes inside
+// it with Slot.Verify.
+func (h *Hasher) Hold(ctx context.Context) (*Slot, error) {
 	select {
 	case h.slots <- struct{}{}:
-		return h.releaser(), nil
+		return &Slot{hasher: h}, nil
 	default:
 	}
 
@@ -143,7 +158,7 @@ func (h *Hasher) Hold(ctx context.Context) (func(), error) {
 
 	select {
 	case h.slots <- struct{}{}:
-		return h.releaser(), nil
+		return &Slot{hasher: h}, nil
 	case <-timer.C:
 		return nil, ErrBusy
 	case <-ctx.Done():
@@ -153,9 +168,50 @@ func (h *Hasher) Hold(ctx context.Context) (func(), error) {
 	}
 }
 
-func (h *Hasher) releaser() func() {
-	var once sync.Once
-	return func() { once.Do(func() { <-h.slots }) }
+// Release gives the slot back. Only the first call has an effect.
+func (s *Slot) Release() {
+	s.once.Do(func() {
+		s.mu.Lock()
+		s.done = true
+		s.mu.Unlock()
+		<-s.hasher.slots
+	})
+}
+
+// Verify reports whether password matches the stored digest, computing inside
+// this slot. It has the same answers as Hasher.Verify, except that it never
+// waits and reports ErrSlotReleased once the slot has been given back.
+func (s *Slot) Verify(encoded, password string) (bool, error) {
+	params, salt, want, err := decodeHash(encoded)
+	if err != nil {
+		return false, err
+	}
+	// Every digest this package writes is argonKeyLen bytes. Any other length
+	// is a corrupt or foreign column value, not an older parameter set — the
+	// cost parameters vary between versions, the key length does not.
+	// Deriving with the constant also keeps the call free of a length
+	// conversion that would have to be range-checked.
+	if len(want) != int(argonKeyLen) {
+		return false, ErrInvalidHash
+	}
+	// Hash never stores a digest of a longer password, so this one cannot
+	// match — and deciding that costs no computation.
+	if len(password) > MaxLength {
+		return false, nil
+	}
+
+	// The lock is held across the computation so a concurrent Release waits
+	// for it rather than freeing the slot while the memory is still in use.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.done {
+		return false, ErrSlotReleased
+	}
+	got := argon2.IDKey([]byte(password), salt, params.time, params.memory, params.threads, argonKeyLen)
+
+	// Constant-time comparison: a byte-by-byte match would leak how much of a
+	// guess was right through timing.
+	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }
 
 // Hash returns a PHC-encoded argon2id digest of the password.
@@ -172,12 +228,12 @@ func (h *Hasher) Hash(ctx context.Context, password string) (string, error) {
 		return "", fmt.Errorf("generate salt: %w", err)
 	}
 
-	release, err := h.Hold(ctx)
+	slot, err := h.Hold(ctx)
 	if err != nil {
 		return "", err
 	}
 	key := argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
-	release()
+	slot.Release()
 
 	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
 		argon2.Version, argonMemory, argonTime, argonThreads,
@@ -189,39 +245,27 @@ func (h *Hasher) Hash(ctx context.Context, password string) (string, error) {
 // Verify reports whether password matches the stored digest.
 //
 // It returns an error when the digest itself is unusable, or ErrBusy when no
-// slot came free; a wrong password is (false, nil).
+// slot came free; a wrong password is (false, nil). A digest that cannot be
+// read and a password no digest could be of are both answered without a slot.
 func (h *Hasher) Verify(ctx context.Context, encoded, password string) (bool, error) {
-	params, salt, want, err := decodeHash(encoded)
-	if err != nil {
+	if _, _, _, err := decodeHash(encoded); err != nil {
 		return false, err
 	}
-
-	// Every digest this package writes is argonKeyLen bytes. Any other length
-	// is a corrupt or foreign column value, not an older parameter set — the
-	// cost parameters vary between versions, the key length does not.
-	// Deriving with the constant also keeps the call free of a length
-	// conversion that would have to be range-checked.
-	if len(want) != int(argonKeyLen) {
-		return false, ErrInvalidHash
-	}
-
-	// Hash never stores a digest of a longer password, so this one cannot
-	// match — and deciding that costs neither a slot nor a computation.
 	if len(password) > MaxLength {
 		return false, nil
 	}
 
-	release, err := h.Hold(ctx)
+	slot, err := h.Hold(ctx)
 	if err != nil {
 		return false, err
 	}
-	got := argon2.IDKey([]byte(password), salt, params.time, params.memory, params.threads, argonKeyLen)
-	release()
-
-	// Constant-time comparison: a byte-by-byte match would leak how much of a
-	// guess was right through timing.
-	return subtle.ConstantTimeCompare(got, want) == 1, nil
+	defer slot.Release()
+	return slot.Verify(encoded, password)
 }
+
+// Concurrency reports how many computations this hasher admits at once, so a
+// deployment's memory arithmetic can be checked against the real figure.
+func (h *Hasher) Concurrency() int { return cap(h.slots) }
 
 // NeedsRehash reports whether a digest was produced with weaker parameters
 // than the current ones, or cannot be read at all. Callers upgrade the stored
