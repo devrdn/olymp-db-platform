@@ -51,10 +51,10 @@ func TestManyTriggersCoalesceIntoOnePendingWake(t *testing.T) {
 // TestTriggerNeverBlocksEvenWhenNobodyIsListening is what makes Trigger safe
 // to call from a request handler or from inside a transaction's commit path:
 // it must return immediately whether or not a background loop is currently
-// reading from C, and it must never spawn a goroutine per call — a
-// concurrent burst of callers proves both, since a blocking or
-// goroutine-per-call implementation would either hang this test or let it
-// race under -race.
+// reading from C. A concurrent burst of callers proves it: a version that
+// blocked on a full channel would hang this test rather than return within
+// its own deadline; run with -race, the same burst also confirms Trigger's
+// internal state is safe for many goroutines to reach at once.
 func TestTriggerNeverBlocksEvenWhenNobodyIsListening(t *testing.T) {
 	tender := provisioning.NewTender()
 
