@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
@@ -45,14 +46,18 @@ type ScheduleRepository interface {
 	// matters here too, an organizer's own manual Transition racing this
 	// tick for the same contest.
 	SetStatus(ctx context.Context, id uuid.UUID, from, to string) error
-	// AdvanceFinished moves every running contest whose ends_at has passed,
-	// by the core database's own clock, to finished, and returns their ids.
-	// A contest with no ends_at (individual timing needs none to publish,
-	// see CheckPublishable) never matches, and stays running until an
-	// organizer moves it by hand. No gate runs here: CheckPublishable is
-	// what admits participants, and finishing only ever shuts a door that
-	// was already open.
-	AdvanceFinished(ctx context.Context) ([]uuid.UUID, error)
+	// AdvanceFinished moves every running contest whose deadline — ends_at
+	// plus grace — has passed, by the core database's own clock, to
+	// finished, and returns their ids. The same grace Submit and
+	// queryproxy.Admitted add before refusing a late answer or query (§8's
+	// one deadline formula), so a participant's request inside that window
+	// is never refused by an API that thinks the contest is already
+	// finished (finding C-07). A contest with no ends_at (individual timing
+	// needs none to publish, see CheckPublishable) never matches, and stays
+	// running until an organizer moves it by hand. No gate runs here:
+	// CheckPublishable is what admits participants, and finishing only ever
+	// shuts a door that was already open.
+	AdvanceFinished(ctx context.Context, grace time.Duration) ([]uuid.UUID, error)
 }
 
 // scheduleStories and scheduleQuestions are the one-method slices of
@@ -121,11 +126,17 @@ type Scheduler struct {
 	blocked   blockedContests
 	audit     *audit.Recorder
 	uow       storage.UnitOfWork
+	// grace is the same network-latency allowance Submit and
+	// queryproxy.Admitted add to a participant's own deadline (cfg.
+	// DeadlineGrace) — passed to AdvanceFinished so the scheduler's own
+	// finish check agrees with theirs about when a contest's window actually
+	// closes (finding C-07).
+	grace time.Duration
 }
 
 // NewScheduler assembles the background scheduler.
-func NewScheduler(repo ScheduleRepository, stories scheduleStories, questions scheduleQuestions, blocked blockedContests, auditRecorder *audit.Recorder, uow storage.UnitOfWork) *Scheduler {
-	return &Scheduler{repo: repo, stories: stories, questions: questions, blocked: blocked, audit: auditRecorder, uow: uow}
+func NewScheduler(repo ScheduleRepository, stories scheduleStories, questions scheduleQuestions, blocked blockedContests, auditRecorder *audit.Recorder, uow storage.UnitOfWork, grace time.Duration) *Scheduler {
+	return &Scheduler{repo: repo, stories: stories, questions: questions, blocked: blocked, audit: auditRecorder, uow: uow, grace: grace}
 }
 
 // checkPublishable is the body behind both Service.checkPublishable and
@@ -245,7 +256,7 @@ func (s *Scheduler) Advance(ctx context.Context) (started, finished int, err err
 			entries = append(entries, scheduleEntry(c.ID, StatusPublished, StatusRunning))
 		}
 
-		finishedIDs, err := s.repo.AdvanceFinished(ctx)
+		finishedIDs, err := s.repo.AdvanceFinished(ctx, s.grace)
 		if err != nil {
 			return fmt.Errorf("advance contests to finished: %w", err)
 		}

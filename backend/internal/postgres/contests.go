@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
@@ -351,17 +352,25 @@ func (r *Contests) DueToStart(ctx context.Context) ([]contests.Contest, error) {
 	return due, rows.Err()
 }
 
-// AdvanceFinished moves every running contest whose ends_at has passed to
-// finished. A contest with no ends_at (individual timing needs none to
-// publish) never matches this WHERE clause, and stays running until an
-// organizer moves it by hand — the same absence CheckPublishable already
-// tolerates for that timing model.
-func (r *Contests) AdvanceFinished(ctx context.Context) ([]uuid.UUID, error) {
+// AdvanceFinished moves every running contest whose deadline has passed to
+// finished: ends_at plus grace, the same network-latency allowance
+// submission.go and queryproxy.Admitted add before refusing a fixed-timing
+// participant's own late answer or query (§8's one deadline formula, one
+// grace). Comparing against ends_at alone used to close a contest a tick
+// before that grace ran out, so which of two answers submitted a moment
+// apart was accepted depended on whether the scheduler had ticked yet — a
+// race no participant could see or control (finding C-07).
+//
+// A contest with no ends_at (individual timing needs none to publish) never
+// matches this WHERE clause, and stays running until an organizer moves it by
+// hand — the same absence CheckPublishable already tolerates for that timing
+// model.
+func (r *Contests) AdvanceFinished(ctx context.Context, grace time.Duration) ([]uuid.UUID, error) {
 	rows, err := r.querier(ctx).Query(ctx,
 		`UPDATE contests SET status = $1, updated_at = now()
-		 WHERE status = $2 AND ends_at IS NOT NULL AND ends_at <= now()
+		 WHERE status = $2 AND ends_at IS NOT NULL AND ends_at + $3::interval <= now()
 		 RETURNING id`,
-		contests.StatusFinished, contests.StatusRunning)
+		contests.StatusFinished, contests.StatusRunning, grace)
 	if err != nil {
 		return nil, fmt.Errorf("advance contests to finished: %w", err)
 	}

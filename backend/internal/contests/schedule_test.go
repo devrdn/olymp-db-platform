@@ -4,12 +4,19 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
 	"github.com/google/uuid"
 )
+
+// schedulerFixtureGrace is the grace newScheduler wires every Scheduler up
+// with, standing in for cfg.DeadlineGrace — a fixed, recognisable value so a
+// test can tell it apart from the zero value a forgotten wiring would leave
+// behind.
+const schedulerFixtureGrace = 5 * time.Second
 
 // schedulerFixture is everything one Scheduler test needs, assembled so a
 // test only ever has to name the pieces it actually stages.
@@ -32,7 +39,7 @@ func newScheduler() schedulerFixture {
 	sink := conteststest.NewSink()
 	uow := &conteststest.UnitOfWork{}
 	return schedulerFixture{
-		scheduler: contests.NewScheduler(repo, stories, questions, sink, audit.New(sink), uow),
+		scheduler: contests.NewScheduler(repo, stories, questions, sink, audit.New(sink), uow, schedulerFixtureGrace),
 		repo:      repo, stories: stories, questions: questions, sink: sink, uow: uow,
 	}
 }
@@ -274,6 +281,23 @@ func TestAdvanceRecordsASecondEntryWhenABlockedContestIsFixedAndBrokenAgain(t *t
 	}
 	if len(blocked) != 2 {
 		t.Fatalf("start_blocked entries = %d, want 2 — the second break is a fresh refusal, not a repeat", len(blocked))
+	}
+}
+
+// TestAdvanceFinishesWithTheSchedulersOwnGrace is C-07's own service-level
+// test: Scheduler must hand AdvanceFinished the exact grace it was
+// constructed with (cfg.DeadlineGrace in production), not compare ends_at
+// bare — the repository is what turns that into "ends_at + grace <= now()",
+// but only if the value actually arrives.
+func TestAdvanceFinishesWithTheSchedulersOwnGrace(t *testing.T) {
+	f := newScheduler()
+
+	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
+		t.Fatalf("Advance() = %v", err)
+	}
+
+	if f.repo.GraceSeen != schedulerFixtureGrace {
+		t.Errorf("AdvanceFinished() was called with grace = %v, want %v", f.repo.GraceSeen, schedulerFixtureGrace)
 	}
 }
 
