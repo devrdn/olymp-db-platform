@@ -346,9 +346,9 @@ func TestUpdateExtendsTheWindowOfARunningContest(t *testing.T) {
 	}
 }
 
-// TestUpdateRefusesToMoveEndsAtOnceTheFreezeIsReached is C-06's own test: the
-// public and participant leaderboards froze at 11:30 on the strength of a
-// stored ends_at, and moving ends_at now would recompute FreezeAt to a later
+// TestUpdateRefusesToMoveEndsAtOnceTheFreezeIsReached: the public and
+// participant leaderboards froze at 11:30 on the strength of a stored
+// ends_at, and moving ends_at now would recompute FreezeAt to a later
 // moment and read the board as live again — showing, for as long as the
 // cache stays stale, results submitted after the freeze that already
 // happened.
@@ -365,14 +365,15 @@ func TestUpdateRefusesToMoveEndsAtOnceTheFreezeIsReached(t *testing.T) {
 	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
 		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &later,
 	})
-	if !errors.Is(err, contests.ErrNotEditable) {
-		t.Errorf("Update() = %v, want ErrNotEditable", err)
+	if !errors.Is(err, contests.ErrFreezeAlreadyReached) {
+		t.Errorf("Update() = %v, want ErrFreezeAlreadyReached", err)
 	}
 }
 
 // TestUpdateAllowsExtendingEndsAtBeforeTheFreezeIsReached is the other half
-// of C-06: the organizer response to a power cut must keep working for as
-// long as the freeze this change protects has not actually happened yet.
+// of the freeze guard: the organizer response to a power cut must keep
+// working for as long as the freeze this change protects has not actually
+// happened yet.
 func TestUpdateAllowsExtendingEndsAtBeforeTheFreezeIsReached(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
@@ -393,13 +394,45 @@ func TestUpdateAllowsExtendingEndsAtBeforeTheFreezeIsReached(t *testing.T) {
 	}
 }
 
-// TestUpdateRefusesToChangeStartsAtForICPCScoringWhileRunning is C-06's other
-// branch: ICPC penalty minutes are counted from starts_at at read time
-// (postgres/leaderboard.go), never stored with a submission, so moving
-// starts_at mid-run would retroactively rescore every fixed-timing
-// participant's penalty — the same "no path may rescore a result nobody can
-// see the reason for" checkRunningChange already enforces for the penalty
-// setting itself.
+// TestUpdateAllowsAnUnrelatedFieldWhenEndsAtIsResentUnchangedAfterTheFreeze
+// is the resend case the minute-precision comparison exists for: the
+// settings form always resends every field, including ends_at, and a
+// contest whose ends_at carries seconds (set through the API rather than
+// the form) must not have every save of an unrelated field refused just
+// because the resent value, truncated to a minute by the form, does not
+// match the stored value byte-for-byte.
+func TestUpdateAllowsAnUnrelatedFieldWhenEndsAtIsResentUnchangedAfterTheFreeze(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+	freeze := 130 // FreezeAt already reached, as above.
+	c.LeaderboardFreezeMin = &freeze
+	// A stored ends_at with seconds on it — set through the API directly,
+	// never something the settings form itself would have produced.
+	withSeconds := c.EndsAt.Add(17 * time.Second)
+	c.EndsAt = &withSeconds
+	f.Contests.Put(c)
+
+	// The form resends ends_at truncated to the minute, unchanged, while
+	// editing an unrelated field.
+	resent := withSeconds.Truncate(time.Minute)
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, EndsAt: &resent,
+		LeaderboardNames: contests.LeaderboardNamesFullName,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v, want the resend of an unchanged ends_at to be harmless", err)
+	}
+	if updated.LeaderboardNames != contests.LeaderboardNamesFullName {
+		t.Errorf("LeaderboardNames = %q, want it to have been saved", updated.LeaderboardNames)
+	}
+}
+
+// TestUpdateRefusesToChangeStartsAtForICPCScoringWhileRunning: ICPC penalty
+// minutes are counted from starts_at at read time (postgres/leaderboard.go),
+// never stored with a submission, so moving starts_at mid-run would
+// retroactively rescore every fixed-timing participant's penalty — the same
+// "no path may rescore a result nobody can see the reason for"
+// checkRunningChange already enforces for the penalty setting itself.
 func TestUpdateRefusesToChangeStartsAtForICPCScoringWhileRunning(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusRunning)
@@ -410,8 +443,33 @@ func TestUpdateRefusesToChangeStartsAtForICPCScoringWhileRunning(t *testing.T) {
 	_, err := f.Service.Update(context.Background(), contests.UpdateCommand{
 		ActorID: uuid.New(), ContestID: c.ID, StartsAt: &earlier,
 	})
-	if !errors.Is(err, contests.ErrNotEditable) {
-		t.Errorf("Update() = %v, want ErrNotEditable", err)
+	if !errors.Is(err, contests.ErrICPCStartLocked) {
+		t.Errorf("Update() = %v, want ErrICPCStartLocked", err)
+	}
+}
+
+// TestUpdateAllowsAnUnrelatedFieldWhenStartsAtIsResentUnchangedOnICPC is the
+// starts_at half of the resend case: an ICPC contest whose starts_at carries
+// seconds must still accept an unrelated save when the form resends
+// starts_at at its own minute precision.
+func TestUpdateAllowsAnUnrelatedFieldWhenStartsAtIsResentUnchangedOnICPC(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+	c.Scoring = contests.ScoringICPC
+	withSeconds := c.StartsAt.Add(42 * time.Second)
+	c.StartsAt = &withSeconds
+	f.Contests.Put(c)
+
+	resent := withSeconds.Truncate(time.Minute)
+	updated, err := f.Service.Update(context.Background(), contests.UpdateCommand{
+		ActorID: uuid.New(), ContestID: c.ID, StartsAt: &resent,
+		LeaderboardNames: contests.LeaderboardNamesFullName,
+	})
+	if err != nil {
+		t.Fatalf("Update() = %v, want the resend of an unchanged starts_at to be harmless", err)
+	}
+	if updated.LeaderboardNames != contests.LeaderboardNamesFullName {
+		t.Errorf("LeaderboardNames = %q, want it to have been saved", updated.LeaderboardNames)
 	}
 }
 
