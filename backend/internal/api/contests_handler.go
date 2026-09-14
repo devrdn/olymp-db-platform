@@ -918,6 +918,10 @@ func (h *ContestsHandler) fail(w http.ResponseWriter, r *http.Request, err error
 		httpx.Error(w, r, http.StatusConflict, codeStatusChanged, err.Error())
 	case errors.Is(err, contests.ErrNotEditable):
 		httpx.Error(w, r, http.StatusConflict, codeNotEditable, err.Error())
+	case errors.Is(err, contests.ErrFreezeAlreadyReached):
+		httpx.Error(w, r, http.StatusConflict, codeFreezeAlreadyReached, err.Error())
+	case errors.Is(err, contests.ErrICPCStartLocked):
+		httpx.Error(w, r, http.StatusConflict, codeICPCStartLocked, err.Error())
 	case errors.Is(err, contests.ErrOwnerImmutable):
 		httpx.Error(w, r, http.StatusConflict, codeOwnerImmutable, err.Error())
 	case errors.Is(err, contests.ErrAlreadyEnrolled):

@@ -20,6 +20,21 @@ import (
 // ErrNotEditable reports a change the contest's current status forbids.
 var ErrNotEditable = errors.New("contest can no longer be edited")
 
+// Errors about a running contest's schedule, both narrower than
+// ErrNotEditable: the contest is still editable in general, only these two
+// particular moves are refused, for a reason specific enough that the
+// generic "it is running" message would leave an organiser guessing.
+var (
+	// ErrFreezeAlreadyReached refuses an ends_at change that would move a
+	// leaderboard freeze the contest has already reached (see
+	// checkRunningChange's own doc).
+	ErrFreezeAlreadyReached = errors.New("the leaderboard has already frozen, so the end date cannot move")
+	// ErrICPCStartLocked refuses a starts_at change on a running ICPC
+	// contest, whose penalty minutes are counted from starts_at at read
+	// time (see checkRunningChange's own doc).
+	ErrICPCStartLocked = errors.New("the start date cannot change while ICPC scoring is running")
+)
+
 // UserDirectory is the slice of the account repository this package needs:
 // resolving the people it appoints and enrolls, and finding them by a typed
 // search. It is deliberately three methods wide and no more — contests
@@ -491,31 +506,36 @@ func checkRunningChange(current, updated Contest, now time.Time) error {
 	if current.Status != StatusRunning {
 		return nil
 	}
-	// C-06: FreezeAt = EndsAt - LeaderboardFreezeMin (contests.go) is
-	// recomputed from EndsAt on every read, with nothing stored for "the
-	// freeze already happened". Moving EndsAt after that moment has passed
-	// pushes FreezeAt itself later, and leaderboard.Decide reads the new,
-	// not-yet-reached FreezeAt as "still live" — unfreezing a public and
-	// participant board that had already stopped showing new results, for as
-	// long as the leaderboard cache stays stale. Before the freeze is
-	// reached this is exactly the "extend after a power cut" operation
-	// SettingsEditable exists for, so only a change that would move an
-	// already-reached freeze is refused, not every ends_at change.
-	if !equalTime(current.EndsAt, updated.EndsAt) {
+	// FreezeAt = EndsAt - LeaderboardFreezeMin (contests.go) is recomputed
+	// from EndsAt on every read, with nothing stored for "the freeze already
+	// happened". Moving EndsAt after that moment has passed pushes FreezeAt
+	// itself later, and leaderboard.Decide reads the new, not-yet-reached
+	// FreezeAt as "still live" — unfreezing a public and participant board
+	// that had already stopped showing new results, for as long as the
+	// leaderboard cache stays stale. Before the freeze is reached this is
+	// exactly the "extend after a power cut" operation SettingsEditable
+	// exists for, so only a change that would move an already-reached freeze
+	// is refused, not every ends_at change. Compared at minute precision
+	// (sameMinute, not full equality): the settings form only ever sends
+	// whole minutes, so resending the value it was given back — every field
+	// but this one being the actual edit — must never read as "the deadline
+	// moved" just because the stored value happens to carry seconds.
+	if !sameMinute(current.EndsAt, updated.EndsAt) {
 		if freezeAt, ok := current.FreezeAt(); ok && !now.Before(freezeAt) {
-			return fmt.Errorf("%w: the leaderboard has already frozen, so the end date cannot move", ErrNotEditable)
+			return ErrFreezeAlreadyReached
 		}
 	}
-	// C-06: ICPC penalty minutes are counted from starts_at at read time
+	// ICPC penalty minutes are counted from starts_at at read time
 	// (postgres/leaderboard.go), never stored with a submission — the same
 	// reason the ICPCPenaltyMin case below refuses to move the penalty
 	// itself. Moving starts_at mid-run would retroactively rescore every
 	// fixed-timing participant's penalty for a reason nobody watching the
 	// table could see. Scoped to ICPC: no other scoring mode reads
 	// starts_at at all, so elsewhere this stays the ordinary window
-	// correction SettingsEditable exists for.
-	if !equalTime(current.StartsAt, updated.StartsAt) && current.Scoring == ScoringICPC {
-		return fmt.Errorf("%w: the start date cannot change while ICPC scoring is running", ErrNotEditable)
+	// correction SettingsEditable exists for. Minute precision again, for
+	// the same resend-of-an-unchanged-value reason as above.
+	if !sameMinute(current.StartsAt, updated.StartsAt) && current.Scoring == ScoringICPC {
+		return ErrICPCStartLocked
 	}
 	switch {
 	case current.QuestionMode != updated.QuestionMode:
@@ -816,17 +836,22 @@ func equalDuration(a, b *int) bool {
 	}
 }
 
-// equalTime is equalDuration's counterpart for the two schedule fields
+// sameMinute is equalDuration's counterpart for the two schedule fields
 // (StartsAt, EndsAt), used by checkRunningChange to tell "the form merely
-// resent the value it already had" from an actual move.
-func equalTime(a, b *time.Time) bool {
+// resent the value it already had" from an actual move. Truncated to the
+// minute in UTC rather than compared exactly: the settings form has no
+// finer resolution than a minute, so a stored value with seconds on it (set
+// through the API directly, or nudged by a migration) would otherwise make
+// every ordinary resend of an untouched field look like a move of the field
+// itself.
+func sameMinute(a, b *time.Time) bool {
 	switch {
 	case a == nil && b == nil:
 		return true
 	case a == nil || b == nil:
 		return false
 	default:
-		return a.Equal(*b)
+		return a.UTC().Truncate(time.Minute).Equal(b.UTC().Truncate(time.Minute))
 	}
 }
 
