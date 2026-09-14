@@ -288,6 +288,10 @@ func (s *Service) BulkSetStatus(ctx context.Context, actorID uuid.UUID, ids []uu
 	if err != nil {
 		return BulkResult{}, err
 	}
+	// Every move, a return to active included: the authentication path
+	// must not keep deciding on a status the account no longer has, in
+	// either direction.
+	s.forget(ctx, changed...)
 	return BulkResult{Changed: changed, Skipped: sel.skipped}, nil
 }
 
@@ -349,6 +353,7 @@ func (s *Service) BulkReplaceRoles(ctx context.Context, actorID uuid.UUID, ids [
 	if err != nil {
 		return BulkResult{}, err
 	}
+	s.forget(ctx, changed...)
 	return BulkResult{Changed: changed, Skipped: sel.skipped}, nil
 }
 
@@ -449,6 +454,7 @@ func (s *Service) BulkResetPassword(ctx context.Context, actorID uuid.UUID, ids 
 	if err != nil {
 		return BulkPasswordResult{}, err
 	}
+	s.forget(ctx, changed...)
 	return BulkPasswordResult{Issued: issued, Skipped: sel.skipped}, nil
 }
 

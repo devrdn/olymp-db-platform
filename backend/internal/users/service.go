@@ -48,6 +48,49 @@ type Service struct {
 	passwords *password.Hasher
 	// issuing sets the passwords an administrator hands out.
 	issuing *password.Hasher
+	// access is told which accounts changed in a way the authentication path
+	// must notice. Nil when nothing caches accounts.
+	access AccessCache
+}
+
+// AccessCache is a short-lived copy of accounts kept by the authentication
+// path, so it does not have to read the account on every request.
+//
+// It is declared here, by the package that knows when an account changes,
+// and implemented by package auth, which keeps the copy. Every operation that
+// changes what authentication decides on — the status, the roles and with
+// them the permissions, the password and its one-time flag, the session
+// generation — names the accounts it changed once the change has committed.
+//
+// Forget reports nothing back. The change has already landed by then and
+// cannot be undone for a cache's sake; the implementation logs a failure, and
+// a copy it could not drop still expires on its own after a few seconds.
+type AccessCache interface {
+	Forget(ctx context.Context, ids []uuid.UUID)
+}
+
+// WithAccessCache sets the cache to tell about changes to access. It is meant
+// for the composition root, before the service is shared.
+func (s *Service) WithAccessCache(c AccessCache) *Service {
+	s.access = c
+	return s
+}
+
+// forget tells the access cache that the accounts changed. It is called once
+// the unit of work has returned, which is when the change commits: told
+// earlier, a request landing in between would read the old row and cache it
+// again. That holds because no caller runs these operations inside a
+// transaction of its own; one that did would commit later than this, and a
+// copy cached in that gap would outlive the change by the cache's lifetime.
+//
+// The caller's cancellation is not passed on. The change has landed whether
+// or not the administrator's browser is still waiting, and a request that
+// hangs up at the wrong moment must not leave the old state cached.
+func (s *Service) forget(ctx context.Context, ids ...uuid.UUID) {
+	if s.access == nil || len(ids) == 0 {
+		return
+	}
+	s.access.Forget(context.WithoutCancel(ctx), ids)
 }
 
 // NewService assembles the account service. Every multi-write operation runs
@@ -293,7 +336,7 @@ func (s *Service) ChangePassword(ctx context.Context, cmd ChangePasswordCommand)
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}
-	return s.uow.Do(ctx, func(ctx context.Context) error {
+	err = s.uow.Do(ctx, func(ctx context.Context) error {
 		if err := s.repo.SetPassword(ctx, user.ID, hash, false); err != nil {
 			return err
 		}
@@ -304,6 +347,11 @@ func (s *Service) ChangePassword(ctx context.Context, cmd ChangePasswordCommand)
 		}
 		return s.record(ctx, user.ID, audit.ActionPasswordChange, user.ID, nil)
 	})
+	if err != nil {
+		return err
+	}
+	s.forget(ctx, user.ID)
+	return nil
 }
 
 // ResetPassword issues a fresh one-time password for an account the user can
@@ -342,6 +390,7 @@ func (s *Service) ResetPassword(ctx context.Context, actorID, userID uuid.UUID) 
 	if err != nil {
 		return "", err
 	}
+	s.forget(ctx, userID)
 	return oneTime, nil
 }
 
@@ -398,7 +447,7 @@ func (s *Service) ReplaceRoles(ctx context.Context, actorID, userID uuid.UUID, r
 		}
 	}
 
-	return s.uow.Do(ctx, func(ctx context.Context) error {
+	err = s.uow.Do(ctx, func(ctx context.Context) error {
 		if err := s.repo.ReplaceRoles(ctx, userID, roleCodes); err != nil {
 			return err
 		}
@@ -413,6 +462,11 @@ func (s *Service) ReplaceRoles(ctx context.Context, actorID, userID uuid.UUID, r
 		changes.Set("roles", user.Roles, roleCodes)
 		return s.record(ctx, actorID, audit.ActionUserRolesChange, userID, changes.Payload())
 	})
+	if err != nil {
+		return err
+	}
+	s.forget(ctx, userID)
+	return nil
 }
 
 // entry builds an audit entry for an action on an account.

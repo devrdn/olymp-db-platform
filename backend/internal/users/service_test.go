@@ -1228,3 +1228,194 @@ func TestImportWaitsLongerThanASignInForAHashingSlot(t *testing.T) {
 		t.Errorf("created %d accounts, want 1", len(result.Created))
 	}
 }
+
+// recordingAccessCache is a users.AccessCache that notes every account it is
+// told to forget, and whether the unit of work was still open at the time.
+type recordingAccessCache struct {
+	uow *trackingUnitOfWork
+	// forgotten is every id named, in order.
+	forgotten []uuid.UUID
+	// duringTransaction counts calls made before the change committed.
+	duringTransaction int
+	// cancelled counts calls whose context was already done.
+	cancelled int
+}
+
+func (c *recordingAccessCache) Forget(ctx context.Context, ids []uuid.UUID) {
+	if c.uow.open {
+		c.duringTransaction++
+	}
+	if ctx.Err() != nil {
+		c.cancelled++
+	}
+	c.forgotten = append(c.forgotten, ids...)
+}
+
+// trackingUnitOfWork runs the function in place and knows whether it is
+// inside it. afterCommit, when set, runs once the function has returned
+// successfully — the moment a real transaction commits.
+type trackingUnitOfWork struct {
+	open        bool
+	afterCommit func()
+}
+
+func (u *trackingUnitOfWork) Do(ctx context.Context, fn func(context.Context) error) error {
+	u.open = true
+	err := fn(ctx)
+	u.open = false
+	if err == nil && u.afterCommit != nil {
+		u.afterCommit()
+	}
+	return err
+}
+
+type accessFixture struct {
+	service *users.Service
+	repo    *userstest.Repository
+	access  *recordingAccessCache
+	uow     *trackingUnitOfWork
+	admin   users.User
+}
+
+func newAccessFixture(t *testing.T) *accessFixture {
+	t.Helper()
+	repo := userstest.New()
+	uow := &trackingUnitOfWork{}
+	access := &recordingAccessCache{uow: uow}
+	service := users.NewService(repo, audit.New(&collectingSink{}), uow, passwordtest.NewHasher()).
+		WithAccessCache(access)
+	admin := repo.Add(users.User{Login: "admin", FullName: "Admin"})
+	return &accessFixture{service: service, repo: repo, access: access, uow: uow, admin: admin}
+}
+
+// TestEveryChangeToAccessForgetsTheCachedAccount covers each operation that
+// changes what the authentication path decides on — status, roles and with
+// them permissions, the password and its one-time flag, the session
+// generation. The cached copy of the account has to be dropped once the
+// change has committed: before, a request in between could cache the old
+// state again; not at all, and the old state keeps being served.
+func TestEveryChangeToAccessForgetsTheCachedAccount(t *testing.T) {
+	const plaintext = "some password"
+	operations := []struct {
+		name string
+		// prepare runs before the operation, outside what is recorded.
+		prepare func(t *testing.T, f *accessFixture, target users.User)
+		run     func(f *accessFixture, target, other users.User) error
+		// both is true for a bulk operation over target and other.
+		both bool
+	}{
+		{name: "Block", run: func(f *accessFixture, target, _ users.User) error {
+			return f.service.Block(context.Background(), f.admin.ID, target.ID, "cheating")
+		}},
+		{name: "Unblock", prepare: func(t *testing.T, f *accessFixture, target users.User) {
+			if err := f.service.Block(context.Background(), f.admin.ID, target.ID, "cheating"); err != nil {
+				t.Fatalf("Block() returned error: %v", err)
+			}
+		}, run: func(f *accessFixture, target, _ users.User) error {
+			return f.service.Unblock(context.Background(), f.admin.ID, target.ID)
+		}},
+		{name: "Delete", run: func(f *accessFixture, target, _ users.User) error {
+			return f.service.Delete(context.Background(), f.admin.ID, target.ID, "graduated")
+		}},
+		{name: "Restore", prepare: func(t *testing.T, f *accessFixture, target users.User) {
+			if err := f.service.Delete(context.Background(), f.admin.ID, target.ID, "mistake"); err != nil {
+				t.Fatalf("Delete() returned error: %v", err)
+			}
+		}, run: func(f *accessFixture, target, _ users.User) error {
+			return f.service.Restore(context.Background(), f.admin.ID, target.ID)
+		}},
+		{name: "BulkSetStatus", both: true, run: func(f *accessFixture, target, other users.User) error {
+			_, err := f.service.BulkSetStatus(context.Background(), f.admin.ID,
+				[]uuid.UUID{target.ID, other.ID}, users.StatusBlocked, "cheating")
+			return err
+		}},
+		{name: "ReplaceRoles", run: func(f *accessFixture, target, _ users.User) error {
+			return f.service.ReplaceRoles(context.Background(), f.admin.ID, target.ID, []string{"student"})
+		}},
+		{name: "BulkReplaceRoles", both: true, run: func(f *accessFixture, target, other users.User) error {
+			_, err := f.service.BulkReplaceRoles(context.Background(), f.admin.ID,
+				[]uuid.UUID{target.ID, other.ID}, []string{"student"})
+			return err
+		}},
+		{name: "ChangePassword", run: func(f *accessFixture, target, _ users.User) error {
+			return f.service.ChangePassword(context.Background(), users.ChangePasswordCommand{
+				UserID: target.ID, OldPassword: plaintext, NewPassword: "a brand new password",
+			})
+		}},
+		{name: "ResetPassword", run: func(f *accessFixture, target, _ users.User) error {
+			_, err := f.service.ResetPassword(context.Background(), f.admin.ID, target.ID)
+			return err
+		}},
+		{name: "BulkResetPassword", both: true, run: func(f *accessFixture, target, other users.User) error {
+			_, err := f.service.BulkResetPassword(context.Background(), f.admin.ID, []uuid.UUID{target.ID, other.ID})
+			return err
+		}},
+	}
+
+	for _, op := range operations {
+		t.Run(op.name, func(t *testing.T) {
+			f := newAccessFixture(t)
+			target := f.repo.Add(users.User{Login: "ivanov", FullName: "Ivanov", PasswordHash: passwordtest.Hash(t, plaintext)})
+			other := f.repo.Add(users.User{Login: "popa", FullName: "Popa"})
+			if op.prepare != nil {
+				op.prepare(t, f, target)
+				f.access.forgotten = nil
+			}
+
+			if err := op.run(f, target, other); err != nil {
+				t.Fatalf("%s returned error: %v", op.name, err)
+			}
+
+			want := []uuid.UUID{target.ID}
+			if op.both {
+				want = append(want, other.ID)
+			}
+			for _, id := range want {
+				if !slices.Contains(f.access.forgotten, id) {
+					t.Errorf("%s did not forget the cached copy of %v (forgotten: %v)", op.name, id, f.access.forgotten)
+				}
+			}
+			if f.access.duringTransaction != 0 {
+				t.Errorf("%s forgot the cached account before the change committed", op.name)
+			}
+		})
+	}
+}
+
+// TestForgettingOutlivesTheCallersContext: once the change has committed, the
+// caller hanging up must not leave the old state cached. The context handed
+// on is detached from the request's cancellation.
+func TestForgettingOutlivesTheCallersContext(t *testing.T) {
+	f := newAccessFixture(t)
+	target := f.repo.Add(users.User{Login: "ivanov", FullName: "Ivanov"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.uow.afterCommit = cancel
+
+	if err := f.service.Block(ctx, f.admin.ID, target.ID, "cheating"); err != nil {
+		t.Fatalf("Block() returned error: %v", err)
+	}
+
+	if len(f.access.forgotten) == 0 {
+		t.Fatal("Block did not forget the cached account")
+	}
+	if f.access.cancelled != 0 {
+		t.Error("the cache was told with a context the caller had already cancelled")
+	}
+}
+
+// TestAFailedChangeLeavesTheCacheAlone: nothing changed, so there is nothing
+// to forget — and a failure must not be dressed up as one.
+func TestAFailedChangeLeavesTheCacheAlone(t *testing.T) {
+	f := newAccessFixture(t)
+	target := f.repo.Add(users.User{Login: "ivanov", FullName: "Ivanov"})
+	f.repo.Err = errors.New("database is down")
+
+	if err := f.service.Block(context.Background(), f.admin.ID, target.ID, "cheating"); err == nil {
+		t.Fatal("Block() succeeded against a failing repository")
+	}
+
+	if len(f.access.forgotten) != 0 {
+		t.Errorf("a failed change forgot %v", f.access.forgotten)
+	}
+}
