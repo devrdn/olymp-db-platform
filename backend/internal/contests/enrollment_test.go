@@ -3,6 +3,7 @@ package contests_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"strconv"
 	"testing"
@@ -291,6 +292,41 @@ func TestImportSkipsAStaffMember(t *testing.T) {
 	}
 	if _, err := f.Registrations.ByUser(context.Background(), c.ID, manager.ID); !errors.Is(err, contests.ErrParticipantNotFound) {
 		t.Errorf("the contest's own manager must not gain a registration: ByUser() = %v", err)
+	}
+}
+
+// A roster holds the contest's row lock for the whole import, so every
+// statement per row lengthens how long a concurrent staff change or
+// enrolment waits. The staff list is read once under that lock and each row
+// is checked against it in memory, not looked up row by row.
+func TestImportReadsTheStaffListOnceNotOncePerRow(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+	manager := f.AddUser("m.staff")
+	if err := f.Managers.Grant(context.Background(), contests.Manager{
+		ContestID: c.ID, UserID: manager.ID, Role: rbac.RoleManager,
+	}); err != nil {
+		t.Fatalf("Grant() = %v", err)
+	}
+	logins := []string{"m.staff"}
+	for i := range 20 {
+		login := fmt.Sprintf("student-%02d", i)
+		f.AddUser(login)
+		logins = append(logins, login)
+	}
+	f.Managers.Lookups = 0
+
+	result, err := f.Service.AddParticipants(context.Background(), contests.AddParticipantsCommand{
+		ActorID: uuid.New(), ContestID: c.ID, Logins: logins,
+	})
+	if err != nil {
+		t.Fatalf("AddParticipants() = %v", err)
+	}
+	if result.Added != 20 || len(result.Skipped) != 1 || result.Skipped[0].Reason != contests.SkipStaffMember {
+		t.Errorf("result = %+v, want 20 added and the manager skipped as staff", result)
+	}
+	if f.Managers.Lookups != 1 {
+		t.Errorf("the import looked the staff up %d times, want once", f.Managers.Lookups)
 	}
 }
 

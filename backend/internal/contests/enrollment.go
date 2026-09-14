@@ -332,6 +332,19 @@ func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsComman
 		if err := s.contests.LockContest(ctx, c.ID); err != nil {
 			return err
 		}
+		// The staff list cannot change while the lock is held, so it is read
+		// once here and each row is checked against it in memory. A lookup
+		// per row would be a statement per row of a roster of up to
+		// maxRosterEntries, every one of them lengthening how long the lock
+		// keeps a concurrent staff change or enrolment waiting.
+		staff, err := s.managers.List(ctx, c.ID)
+		if err != nil {
+			return err
+		}
+		staffIDs := make(map[uuid.UUID]struct{}, len(staff))
+		for _, m := range staff {
+			staffIDs[m.UserID] = struct{}{}
+		}
 		for _, id := range cmd.UserIDs {
 			user, err := s.users.ByID(ctx, id)
 			if err != nil {
@@ -341,7 +354,7 @@ func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsComman
 				}
 				return err
 			}
-			if err := s.addOne(ctx, cmd, c, user, &result); err != nil {
+			if err := s.addOne(ctx, cmd, c, staffIDs, user, &result); err != nil {
 				return err
 			}
 		}
@@ -359,7 +372,7 @@ func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsComman
 				}
 				return err
 			}
-			if err := s.addOne(ctx, cmd, c, user, &result); err != nil {
+			if err := s.addOne(ctx, cmd, c, staffIDs, user, &result); err != nil {
 				return err
 			}
 		}
@@ -404,7 +417,7 @@ func (s *Service) AddParticipants(ctx context.Context, cmd AddParticipantsComman
 // overlapping rosters at the same moment would both pass a lookup. Treating
 // that verdict as an ordinary skip is what keeps one such row from failing the
 // other three hundred.
-func (s *Service) addOne(ctx context.Context, cmd AddParticipantsCommand, c Contest, user users.User, result *AddParticipantsResult) error {
+func (s *Service) addOne(ctx context.Context, cmd AddParticipantsCommand, c Contest, staff map[uuid.UUID]struct{}, user users.User, result *AddParticipantsResult) error {
 	if user.Status == users.StatusDeleted {
 		result.skip(user.Login, SkipUnknownAccount)
 		return nil
@@ -417,12 +430,11 @@ func (s *Service) addOne(ctx context.Context, cmd AddParticipantsCommand, c Cont
 	// answers and its unfrozen leaderboard, so registering them as a
 	// participant too would not be a fair result. A roster is a bulk
 	// operation, so this is a skip like every other row-level reason above,
-	// not a refusal of the whole batch.
-	if _, err := s.managers.Get(ctx, c.ID, user.ID); err == nil {
+	// not a refusal of the whole batch. staff is the contest's staff, read
+	// once under the contest's lock by the caller.
+	if _, isStaff := staff[user.ID]; isStaff {
 		result.skip(user.Login, SkipStaffMember)
 		return nil
-	} else if !errors.Is(err, ErrManagerNotFound) {
-		return err
 	}
 
 	if _, err := s.registrations.Add(ctx, c.ID, user.ID); err != nil {
