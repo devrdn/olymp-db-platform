@@ -167,3 +167,22 @@ func TestGenerationsAreNeverReused(t *testing.T) {
 		seen[gen] = true
 	}
 }
+
+func TestAGenerationOutlivesTheWindowItWasSetFor(t *testing.T) {
+	// Kept for two windows: a generation lapsing back to "0" right at the end
+	// of one would meet counters from the window it replaced that have not
+	// quite expired, and a guesser who timed the lapse would get a second
+	// fresh start out of one unlock.
+	limiter := newTestLimiter(t)
+	ctx := context.Background()
+	const window = 60 * time.Millisecond
+
+	if err := limiter.NewGeneration(ctx, "account:ivanov", window); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(window + 30*time.Millisecond)
+
+	if gen, _ := limiter.Generation(ctx, "account:ivanov"); gen == "0" {
+		t.Error("the generation lapsed after one window")
+	}
+}
