@@ -248,9 +248,10 @@ type LoginResult struct {
 // The order of the steps is deliberate, and each one is explained where it
 // happens:
 //
-//  1. The budget the attempt spends before anything else: the address budget
-//     and the length guards, or, through a trusted browser, that browser's
-//     limit and the account's trusted budget (checkTrusted).
+//  1. The budget the attempt spends before anything else: through a trusted
+//     browser, that browser's limit and the account's trusted budget
+//     (spendTrusted); otherwise — or once those are spent — the address budget
+//     and the length guards.
 //  2. The account lookup, which runs for every attempt the same way, whether
 //     or not the login exists.
 //  3. Whether the device cookie still vouches for the account; if it does
@@ -268,14 +269,14 @@ type LoginResult struct {
 // Besides the errors declared above, it returns password.ErrBusy when the
 // process is already running as many password computations as it will: the
 // attempt spent its step-1 budget but was not evaluated, and cost the
-// account's own counters nothing.
+// account's guessing limit and ceiling nothing.
 func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, error) {
 	// A browser the owner has signed in from before carries a device cookie,
 	// and an attempt through it is not limited by the address, which a lecture
 	// hall shares with every rival in it, nor by the account's guessing limit
 	// and ceiling, which anybody who knows the login can spend. That is what
-	// keeps a rival at the next desk from locking the owner out. It is limited
-	// instead by what only the cookie's holders can spend (checkTrusted).
+	// keeps a rival at the next desk from locking the owner out. It spends
+	// instead what only the cookie's holders can spend (spendTrusted).
 	//
 	// The cookie is only looked at when the lengths are within bounds: its
 	// check hashes the login, and an oversized one must go the ordinary way,
@@ -289,11 +290,22 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 	}
 
 	if trusted {
-		if err := s.checkTrusted(ctx, cmd, device); err != nil {
+		spent, err := s.spendTrusted(ctx, cmd, device)
+		if err != nil {
 			return LoginResult{}, err
 		}
-	} else if err := s.checkAddress(ctx, cmd); err != nil {
-		return LoginResult{}, err
+		// Past the trusted limits the attempt is not refused: it goes on as
+		// one with no cookie at all, through the ordinary limits below. A
+		// refusal here would let whoever holds a copy of the cookie spend the
+		// owner's trusted limits and shut the owner out — the very lockout
+		// the cookie is for. Nothing is recorded for it either: nothing was
+		// refused, and the ordinary path records its own refusals.
+		trusted = !spent
+	}
+	if !trusted {
+		if err := s.checkAddress(ctx, cmd); err != nil {
+			return LoginResult{}, err
+		}
 	}
 
 	user, lookupErr := s.users.ByLogin(ctx, cmd.Login)
@@ -398,6 +410,18 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 	}
 
 	var deviceToken string
+	if trusted && s.devices.DueForRenewal(device) {
+		// Past half its lifetime the cookie is renewed under the same device
+		// id, so a browser in regular use keeps its trust without an ordinary
+		// sign-in every month. Renewal happens only here, after the right
+		// password: a copy of the cookie without the password never extends
+		// itself. The same id keeps every attempt already counted against the
+		// device, and nothing is reset.
+		if deviceToken, err = s.devices.Issue(user, device.ID); err != nil {
+			s.log.WarnContext(ctx, "could not renew a device cookie", "error", err)
+			deviceToken = ""
+		}
+	}
 	if !trusted {
 		// A successful ordinary sign-in clears the guessing counter for this
 		// address, so someone who mistypes twice and then succeeds does not
@@ -417,14 +441,12 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 			deviceToken = ""
 		}
 	}
-	// A trusted success resets nothing and issues nothing. The device's limit
-	// and the account's trusted budget count every attempt, successes
-	// included, exactly as the address budget does: resetting them would let
-	// the account's own cookie sign in without limit, each time taking a
-	// hashing slot, a session and an audit row. And the cookie is not renewed:
-	// renewed on every use it would never expire for a browser that keeps
-	// using it, stolen or not. It lives out the lifetime it was issued with,
-	// and the next ordinary sign-in issues the next one.
+	// A trusted success resets nothing. The device's limit and the account's
+	// trusted budget count every attempt, successes included, exactly as the
+	// address budget does: resetting them would let the account's own cookie
+	// sign in without limit on the trusted path, each time taking a hashing
+	// slot, a session and an audit row. Past them the attempt pays the
+	// ordinary limits, so the bound holds whichever path it takes.
 
 	s.record(ctx, audit.Entry{
 		ActorID:   &user.ID,
@@ -489,11 +511,11 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 //     the ceiling, so one address repeating refused attempts cannot climb to
 //     it and shut the owner out everywhere.
 //
-// Through a trusted browser, checkTrusted replaces all three and runs first.
+// Through a trusted browser, spendTrusted replaces all three and runs first.
 // It needs no address-first guard: its keys are a device id and a login taken
-// from a cookie this installation signed, which a caller cannot invent. A
-// cookie that verifies but no longer vouches for the account falls back to
-// checkAddress once the account is read, and to spendAccount after it.
+// from a cookie this installation signed, which a caller cannot invent. Once
+// its limits are spent, or when a cookie verifies but no longer vouches for
+// the account, the attempt falls back to all three.
 
 // withinLengths reports whether the login and password are short enough to be
 // real. No account's login is longer than users.MaxLoginLength, and no stored
@@ -502,22 +524,22 @@ func withinLengths(cmd LoginCommand) bool {
 	return len(cmd.Login) <= users.MaxLoginLength && len(cmd.Password) <= password.MaxLength
 }
 
-// checkTrusted spends a trusted browser's own limit and then the account's
+// spendTrusted spends a trusted browser's own limit and then the account's
 // trusted budget, both under the account's throttle generation so a staff
-// unlock clears them too.
+// unlock clears them too, and reports whether either was already spent. It
+// records nothing: a spent trusted limit is not a refusal (see Login).
 //
 // Both count every attempt, successes included, and nothing resets them but
 // their window or an unlock. The device limit bounds one copied cookie; the
 // trusted budget bounds all of the account's cookies together, however many
-// were collected by signing in again. Only a holder of a valid cookie for the
-// account can spend either, so neither is a way for somebody else to lock the
-// owner out. They are spent before the hashing slot: a refusal for load then
-// costs the budget an attempt, which is the rule every other first budget
-// follows, and the only holders it can cost are the account's own browsers.
-func (s *Service) checkTrusted(ctx context.Context, cmd LoginCommand, device Device) error {
+// were collected by signing in again. Past either, the attempt pays the
+// ordinary limits. The trusted budget is not spent by an attempt the device
+// limit already turned away, so one copied cookie cannot use up the budget
+// the owner's other browsers share.
+func (s *Service) spendTrusted(ctx context.Context, cmd LoginCommand, device Device) (bool, error) {
 	gen, err := s.limiter.Generation(ctx, accountFamily(cmd.Login))
 	if err != nil {
-		return err
+		return false, err
 	}
 	for _, window := range []struct {
 		subject string
@@ -528,14 +550,13 @@ func (s *Service) checkTrusted(ctx context.Context, cmd LoginCommand, device Dev
 	} {
 		allowed, err := s.limiter.Allow(ctx, window.subject, window.limit, loginAttemptWindow)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if !allowed {
-			s.recordFailure(ctx, cmd, ReasonTooManyAttempts)
-			return ErrTooManyAttempts
+			return true, nil
 		}
 	}
-	return nil
+	return false, nil
 }
 
 // checkAddress spends the address budget and applies the length guards.
