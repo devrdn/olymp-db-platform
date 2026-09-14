@@ -285,7 +285,7 @@ var (
 	codeNotEditable = httpx.NewCode("not_editable",
 		"The contest's status no longer allows this change. The message says which status.")
 	codeFreezeAlreadyReached = httpx.NewCode("freeze_already_reached",
-		"The contest is running and its leaderboard freeze has already been reached, so the end date cannot move — moving it would push the freeze itself later and briefly unfreeze the board. Every other setting may still be saved.")
+		"The contest is running and its leaderboard freeze has already been reached, so the end date cannot move earlier. A later end date is accepted and lengthens the freeze by the same minutes, so the board stays frozen where it froze. Every other setting may still be saved.")
 	codeICPCStartLocked = httpx.NewCode("icpc_start_locked",
 		"The contest is running under ICPC scoring, whose penalty minutes are counted from the start date, so it cannot move while the contest runs. Every other setting may still be saved.")
 	codeNotPublishable = httpx.NewCode("not_publishable",
