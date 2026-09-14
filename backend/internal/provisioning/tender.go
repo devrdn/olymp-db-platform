@@ -25,11 +25,9 @@ func NewTender() *Tender {
 	return &Tender{wake: make(chan struct{}, 1)}
 }
 
-// Trigger asks for a tend soon because contestID's roster changed, or because
-// it just started. The id is not otherwise used — Tend tends every live
-// contest in one pass regardless of which one asked — but the parameter is
-// what makes a call site read as "this contest's pool needs attention" rather
-// than "the pool in general", the same as every other caller of this method.
+// Trigger asks for a tend soon because contestID's roster changed or it just
+// started. The id itself is unused (see the type doc); the parameter is only
+// what makes a call site read as "this contest needs attention".
 func (t *Tender) Trigger(uuid.UUID) {
 	select {
 	case t.wake <- struct{}{}:
