@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -20,20 +21,31 @@ import (
 	"github.com/google/uuid"
 )
 
-// collectingSink keeps audit entries for assertions.
-type collectingSink struct{ entries []audit.Entry }
+// collectingSink keeps audit entries for assertions. Appends are guarded: a
+// test that signs in from several goroutines at once records from each of
+// them. Assertions read entries directly once those goroutines are done.
+type collectingSink struct {
+	mu      sync.Mutex
+	entries []audit.Entry
+}
 
 func (s *collectingSink) Append(_ context.Context, e audit.Entry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.entries = append(s.entries, e)
 	return nil
 }
 
 func (s *collectingSink) AppendMany(_ context.Context, entries []audit.Entry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.entries = append(s.entries, entries...)
 	return nil
 }
 
 func (s *collectingSink) actions() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	out := make([]string, 0, len(s.entries))
 	for _, e := range s.entries {
 		out = append(out, e.Action)
