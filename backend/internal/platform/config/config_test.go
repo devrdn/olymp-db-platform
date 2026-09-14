@@ -1217,6 +1217,32 @@ func TestTheQueryRunnerTokenIsRequiredOutsideDevelopmentWhenTheConsoleIsOn(t *te
 	}
 }
 
+// The device cookie secret signs what a browser presents to sign in without
+// the address limit; the Query Runner token is sent to another service on
+// every query. One value in both places makes a leak of either the other, so
+// the API refuses to start with them equal — and says so without repeating it.
+func TestTheDeviceCookieSecretMustNotBeTheQueryRunnerToken(t *testing.T) {
+	shared := strings.Repeat("x", 40)
+	for _, env := range []string{"production", "development"} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+			t.Setenv("ENV", env)
+			t.Setenv("QUERY_RUNNER_ADDR", "queryrunner:9100")
+			t.Setenv("DEVICE_COOKIE_SECRET", shared)
+			t.Setenv("QUERY_RUNNER_TOKEN", shared)
+
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), "DEVICE_COOKIE_SECRET") ||
+				!strings.Contains(err.Error(), "QUERY_RUNNER_TOKEN") {
+				t.Fatalf("Load() with one value for both = %v, want an error naming both", err)
+			}
+			if strings.Contains(err.Error(), shared) {
+				t.Fatalf("the refusal repeats the secret: %q", err.Error())
+			}
+		})
+	}
+}
+
 // Without an address the API never dials the runner, so there is nothing for
 // a token to protect and nothing to refuse.
 func TestTheQueryRunnerTokenIsNotRequiredWithoutAConsole(t *testing.T) {
