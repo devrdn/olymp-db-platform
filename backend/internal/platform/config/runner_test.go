@@ -101,8 +101,9 @@ func TestAnEmptyQueueIsAllowedButANegativeOneIsNot(t *testing.T) {
 func TestConcurrencyMustFitTheDeclaredGameClusterMemory(t *testing.T) {
 	// The arithmetic the check enforces, stated here so the test fails if the
 	// constants drift from what the deployment is sized for.
+	const cap = int64(defaultProcessMemoryBytes)
 	perBudget := func(concurrent int) int64 {
-		return (int64(concurrent)+int64(MaxParallelWorkers))*int64(PerProcessMemoryBytes) + ReservedMemoryBytes
+		return (int64(concurrent)+int64(MaxParallelWorkers)+int64(MaxBuildSessions))*cap + ReservedMemoryBytes
 	}
 
 	t.Run("a limit that cannot hold the concurrency is refused", func(t *testing.T) {
@@ -119,11 +120,11 @@ func TestConcurrencyMustFitTheDeclaredGameClusterMemory(t *testing.T) {
 	t.Run("the limit the deployment ships is accepted", func(t *testing.T) {
 		setRunnerRequired(t)
 		t.Setenv("QUERY_CONCURRENT", "8")
-		// Six gibibytes, the deploy default, holds eight.
-		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(6<<30, 10))
+		// Seven gibibytes, the deploy default, holds eight.
+		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(7<<30, 10))
 
 		if _, err := LoadRunner(); err != nil {
-			t.Fatalf("the shipped six-gibibyte limit was refused at concurrency eight: %v", err)
+			t.Fatalf("the shipped seven-gibibyte limit was refused at concurrency eight: %v", err)
 		}
 	})
 
@@ -156,6 +157,43 @@ func TestConcurrencyMustFitTheDeclaredGameClusterMemory(t *testing.T) {
 
 		if _, err := LoadRunner(); err != nil {
 			t.Fatalf("a runner with no declared game-cluster memory was refused: %v", err)
+		}
+	})
+}
+
+// The per-process cap the sizing check multiplies comes from the environment —
+// the same GAME_DB_PROCESS_MEMORY_BYTES the compose ulimit and the deploy
+// self-check read — not a constant, so the three cannot drift. A larger cap
+// makes the same concurrency need more memory.
+func TestTheProcessCapIsReadFromTheEnvironment(t *testing.T) {
+	t.Run("default when unset", func(t *testing.T) {
+		setRunnerRequired(t)
+		cfg, err := LoadRunner()
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if cfg.ProcessMemoryBytes != defaultProcessMemoryBytes {
+			t.Fatalf("cap = %d, want the %d default", cfg.ProcessMemoryBytes, defaultProcessMemoryBytes)
+		}
+	})
+
+	t.Run("a larger cap raises the memory the concurrency needs", func(t *testing.T) {
+		setRunnerRequired(t)
+		t.Setenv("QUERY_CONCURRENT", "8")
+		// A 512 MiB cap doubles the per-process demand, so the seven gibibytes
+		// that held eight at 256 MiB no longer does.
+		t.Setenv("GAME_DB_PROCESS_MEMORY_BYTES", strconv.FormatInt(512<<20, 10))
+		t.Setenv("GAME_DB_MEMORY_BYTES", strconv.FormatInt(7<<30, 10))
+		if _, err := LoadRunner(); err == nil {
+			t.Fatal("a 512 MiB cap at concurrency eight fit in seven gibibytes")
+		}
+	})
+
+	t.Run("zero is refused", func(t *testing.T) {
+		setRunnerRequired(t)
+		t.Setenv("GAME_DB_PROCESS_MEMORY_BYTES", "0")
+		if _, err := LoadRunner(); err == nil {
+			t.Fatal("a zero per-process cap was accepted")
 		}
 	})
 }
