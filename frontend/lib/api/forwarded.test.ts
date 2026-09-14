@@ -1,6 +1,12 @@
 import { describe, expect, test } from "vitest";
 
-import { INGRESS_HEADER, apiRequestHeaders, forwardedHeaders, vouchedByIngress } from "./forwarded";
+import {
+  INGRESS_HEADER,
+  forwardedHeaders,
+  headedForApi,
+  incomingRequestHeaders,
+  vouchedByIngress,
+} from "./forwarded";
 
 /**
  * Every request the Go API ever sees comes from this server, not from the
@@ -131,41 +137,58 @@ describe("vouchedByIngress", () => {
 });
 
 /**
- * The same rule for the requests this server passes to the API untouched: the
- * `/api/*` rewrite in next.config.ts, which only runs when the browser reached
- * this server without the proxy in front (the proxy takes that prefix first).
+ * The headers every request carries on from the proxy file: a forwarded
+ * address nobody vouched for is removed whatever the path, and the proxy's
+ * secret is removed where the request is headed for the API.
  */
-describe("apiRequestHeaders", () => {
+describe("incomingRequestHeaders", () => {
   const SECRET = "an-ingress-secret-of-at-least-32-characters";
 
-  test("removes a forwarded chain nobody vouched for, and keeps the rest", () => {
+  test("removes every forwarded address header nobody vouched for, and keeps the rest", () => {
     const incoming = new Headers({
       "x-forwarded-for": "10.20.30.40",
+      "x-real-ip": "10.20.30.41",
+      forwarded: "for=10.20.30.42",
       cookie: "dbcontest_session=opaque",
       accept: "image/png",
     });
 
-    const outgoing = apiRequestHeaders(incoming, SECRET);
+    const outgoing = incomingRequestHeaders(incoming, SECRET, { towardsApi: false });
 
     expect(outgoing.get("x-forwarded-for")).toBeNull();
+    expect(outgoing.get("x-real-ip")).toBeNull();
+    expect(outgoing.get("forwarded")).toBeNull();
     expect(outgoing.get("cookie")).toBe("dbcontest_session=opaque");
     expect(outgoing.get("accept")).toBe("image/png");
   });
 
-  test("keeps a vouched chain but never the secret that vouched for it", () => {
+  test("keeps a vouched chain, and the secret only where the server checks it again", () => {
     const incoming = new Headers({ "x-forwarded-for": "203.0.113.7", [INGRESS_HEADER]: SECRET });
 
-    const outgoing = apiRequestHeaders(incoming, SECRET);
+    const towardsApi = incomingRequestHeaders(incoming, SECRET, { towardsApi: true });
+    const towardsScreen = incomingRequestHeaders(incoming, SECRET, { towardsApi: false });
 
-    expect(outgoing.get("x-forwarded-for")).toBe("203.0.113.7");
-    expect(outgoing.get(INGRESS_HEADER)).toBeNull();
+    expect(towardsApi.get("x-forwarded-for")).toBe("203.0.113.7");
+    expect(towardsApi.get(INGRESS_HEADER)).toBeNull();
+    expect(towardsScreen.get("x-forwarded-for")).toBe("203.0.113.7");
+    expect(towardsScreen.get(INGRESS_HEADER)).toBe(SECRET);
   });
 
   test("does not change the headers it was given", () => {
     const incoming = new Headers({ "x-forwarded-for": "10.20.30.40" });
 
-    apiRequestHeaders(incoming, SECRET);
+    incomingRequestHeaders(incoming, SECRET, { towardsApi: true });
 
     expect(incoming.get("x-forwarded-for")).toBe("10.20.30.40");
+  });
+});
+
+describe("headedForApi", () => {
+  test.each(["/api/v1/auth/login", "/API/v1/auth/login", "/Api/V1/x", "/api/"])("recognises %s", (path) => {
+    expect(headedForApi(path)).toBe(true);
+  });
+
+  test.each(["/contests", "/apix/v1", "/login", "/"])("does not claim %s", (path) => {
+    expect(headedForApi(path)).toBe(false);
   });
 });
