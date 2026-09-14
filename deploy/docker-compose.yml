@@ -222,6 +222,12 @@ services:
       # Every interface of this container, inside a network nothing outside
       # routes into. Named here because the binary's own default is loopback.
       QUERY_RUNNER_ADDR: ":9100"
+      # The secret every call must carry, the health check's included (it
+      # reads it from this same environment). Required outside development:
+      # the runner refuses to start without it. Passed empty rather than
+      # required here so that compose commands that do not start the runner
+      # still read an .env without it.
+      QUERY_RUNNER_TOKEN: ${QUERY_RUNNER_TOKEN:-}
       # As the participant's role, never the provisioning one. The database in
       # this URL is a placeholder: the runner replaces it per request with the
       # participant's own, taken from game_instances by the Core API. Only the
@@ -456,6 +462,11 @@ services:
       # The console reaches the Query Runner over the private network; the
       # runner's own port is published nowhere.
       QUERY_RUNNER_ADDR: ${QUERY_RUNNER_ADDR:-queryrunner:9100}
+      # The same secret the queryrunner service is given, presented on every
+      # call: the runner runs whatever database a request names and answers
+      # only the Core API. Required outside development when the address above
+      # is set (the API refuses to start without it).
+      QUERY_RUNNER_TOKEN: ${QUERY_RUNNER_TOKEN:-}
       # The same figure the queryrunner service below is given, so the
       # console's own pre-check (ahead of the query journal) refuses a
       # participant asking too fast at the same rate the Query Runner would —

@@ -70,6 +70,45 @@ func deviceCookieSecret(env string) ([]byte, error) {
 	return []byte(raw), nil
 }
 
+// Query Runner token bounds. The minimum is the same 256 bits the device
+// cookie's key asks for; the maximum only keeps a pasted file out of a header.
+const (
+	minQueryRunnerTokenBytes = 32
+	maxQueryRunnerTokenBytes = 512
+)
+
+// queryRunnerToken reads QUERY_RUNNER_TOKEN, the secret shared by the Core API
+// and the Query Runner (see Config.QueryRunnerToken). Both binaries read it
+// through this one function so that the two cannot disagree about what a
+// valid token is.
+//
+// Outside development — any ENV other than "development", as for the device
+// cookie secret — an absent token is refused when required. A token that is
+// set is held to the same bounds everywhere. It travels as a gRPC metadata
+// value, which must be printable ASCII, so anything else is refused here
+// rather than at the first call. No error repeats the value.
+func queryRunnerToken(env string, required bool) (string, error) {
+	raw := os.Getenv("QUERY_RUNNER_TOKEN")
+	if raw == "" {
+		if required && env != "development" {
+			return "", errors.New("QUERY_RUNNER_TOKEN: required outside development " +
+				"(the Query Runner answers only callers holding it)")
+		}
+		return "", nil
+	}
+	if len(raw) < minQueryRunnerTokenBytes || len(raw) > maxQueryRunnerTokenBytes {
+		return "", fmt.Errorf("QUERY_RUNNER_TOKEN: %d bytes, want between %d and %d",
+			len(raw), minQueryRunnerTokenBytes, maxQueryRunnerTokenBytes)
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] < '!' || raw[i] > '~' {
+			return "", fmt.Errorf("QUERY_RUNNER_TOKEN: byte %d is not printable ASCII "+
+				"(no spaces or control characters; `openssl rand -hex 32` produces a valid one)", i)
+		}
+	}
+	return raw, nil
+}
+
 // maxLoginAttemptsCeiling bounds MAX_LOGIN_ATTEMPTS_PER_ACCOUNT.
 const maxLoginAttemptsCeiling = 100_000
 
@@ -211,6 +250,12 @@ type Config struct {
 	// the SQL console off, which is what a deployment without a game cluster
 	// wants — and what one has before the runner is deployed.
 	QueryRunnerAddr string
+	// QueryRunnerToken is the shared secret every call to the Query Runner
+	// carries (QUERY_RUNNER_TOKEN). The runner executes whatever database and
+	// policy a request names, so it answers only callers holding this.
+	// Required outside development whenever QueryRunnerAddr is set; never
+	// logged.
+	QueryRunnerToken string
 	// ProvisionWorkers is how many copies are made at once. Section 4.2 says
 	// two to four: enough to fill a pool in reasonable time, few enough that
 	// filling it is never what the cluster is busy doing.
@@ -487,6 +532,10 @@ func Load() (Config, error) {
 	}
 	cfg.CopyStrategy = os.Getenv("GAME_COPY_STRATEGY")
 	cfg.QueryRunnerAddr = os.Getenv("QUERY_RUNNER_ADDR")
+	// Only an API that dials the runner has anything to send it.
+	if cfg.QueryRunnerToken, err = queryRunnerToken(cfg.Env, cfg.QueryRunnerAddr != ""); err != nil {
+		return Config{}, err
+	}
 	// A day unset: long enough for an organizer to pull reports and for a
 	// participant's last-second answer to land safely, short enough that a
 	// forgotten contest does not sit on a database indefinitely.

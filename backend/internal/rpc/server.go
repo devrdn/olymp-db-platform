@@ -30,8 +30,14 @@ var ServiceName = pb.QueryRunner_ServiceDesc.ServiceName
 //
 // Used by the container health check, which runs this binary with a flag
 // rather than a shell: the runtime image has neither a shell nor grpc_health_probe.
-func Probe(ctx context.Context, address string) error {
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+//
+// It presents the token like any other caller. The health service sits behind
+// the same check as the Query Runner itself rather than on an exemption list,
+// and the health check runs inside the runner's own container, which holds the
+// token already.
+func Probe(ctx context.Context, address, token string) error {
+	options := append([]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}, withToken(token)...)
+	conn, err := grpc.NewClient(address, options...)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", address, err)
 	}
@@ -168,11 +174,23 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 // The standard gRPC health service is registered alongside it, because the
 // runtime image is distroless: it carries no shell and no probe, so the
 // container's health check is the binary dialling itself (see Probe).
-func Serve(ctx context.Context, lis net.Listener, server *Server, shutdown time.Duration, log *slog.Logger) error {
+//
+// Every call, on every service, must carry token (QUERY_RUNNER_TOKEN); the
+// check runs first in both interceptor chains, before any handler work. An
+// empty token serves without authentication, which configuration allows only
+// in development, and says so in the log.
+func Serve(ctx context.Context, lis net.Listener, server *Server, token string, shutdown time.Duration, log *slog.Logger) error {
+	gate := newTokenGate(token)
+	if gate.open {
+		log.Warn("QUERY_RUNNER_TOKEN is not set: the query runner answers any caller that reaches it. " +
+			"Acceptable only on a development machine listening on loopback.")
+	}
+
 	grpcServer := grpc.NewServer(
 		grpc.MaxRecvMsgSize(MaxPayloadBytes),
 		grpc.MaxSendMsgSize(MaxPayloadBytes),
-		grpc.UnaryInterceptor(correlate),
+		grpc.ChainUnaryInterceptor(gate.unary, correlate),
+		grpc.ChainStreamInterceptor(gate.stream),
 	)
 	server.Register(grpcServer)
 

@@ -54,10 +54,10 @@ func serving(t *testing.T, limits queryrunner.Limits, checker *checker.Checker) 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_ = Serve(ctx, lis, NewServer(queryrunner.New(cluster, checker, limits), limits, quiet), 5*time.Second, quiet)
+		_ = Serve(ctx, lis, NewServer(queryrunner.New(cluster, checker, limits), limits, quiet), theToken, 5*time.Second, quiet)
 	}()
 
-	client, err := Dial(lis.Addr().String())
+	client, err := Dial(lis.Addr().String(), theToken)
 	if err != nil {
 		t.Fatalf("dialling: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestTheJournalCanWrapTheClient(t *testing.T) {
 func TestTheServiceReportsItselfHealthy(t *testing.T) {
 	client, _ := serving(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
-	if err := Probe(t.Context(), client.conn.Target()); err != nil {
+	if err := Probe(t.Context(), client.conn.Target(), theToken); err != nil {
 		t.Fatalf("the service is not reporting itself healthy: %v", err)
 	}
 }
