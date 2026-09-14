@@ -1110,3 +1110,89 @@ func TestTheTrustedSignInBudgetIsConfigurable(t *testing.T) {
 		t.Errorf("MaxTrustedLoginAttemptsPerAccount = %d, want 40", cfg.MaxTrustedLoginAttemptsPerAccount)
 	}
 }
+
+// The Query Runner runs whatever database and policy a request names, so the
+// Core API's calls to it must carry the shared token wherever the console is
+// on. A production API that starts without one would find out at the first
+// participant's query, from a refusal; refusing the boot names the cause.
+func TestTheQueryRunnerTokenIsRequiredOutsideDevelopmentWhenTheConsoleIsOn(t *testing.T) {
+	t.Setenv("QUERY_RUNNER_TOKEN", "") // not inherited from the shell
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("ENV", "production")
+	t.Setenv("DEVICE_COOKIE_SECRET", strings.Repeat("s", 32))
+	t.Setenv("QUERY_RUNNER_ADDR", "queryrunner:9100")
+
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "QUERY_RUNNER_TOKEN") {
+		t.Fatalf("Load() without QUERY_RUNNER_TOKEN in production = %v, want an error naming it", err)
+	}
+
+	short := strings.Repeat("t", 31)
+	t.Setenv("QUERY_RUNNER_TOKEN", short)
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "QUERY_RUNNER_TOKEN") {
+		t.Fatalf("Load() with a 31-byte QUERY_RUNNER_TOKEN = %v, want an error naming it", err)
+	}
+	if strings.Contains(err.Error(), short) {
+		t.Fatalf("the refusal repeats the token: %q", err.Error())
+	}
+
+	token := strings.Repeat("t", 32)
+	t.Setenv("QUERY_RUNNER_TOKEN", token)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with a 32-byte token returned error: %v", err)
+	}
+	if cfg.QueryRunnerToken != token {
+		t.Error("QueryRunnerToken is not the configured value")
+	}
+}
+
+// Without an address the API never dials the runner, so there is nothing for
+// a token to protect and nothing to refuse.
+func TestTheQueryRunnerTokenIsNotRequiredWithoutAConsole(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("ENV", "production")
+	t.Setenv("DEVICE_COOKIE_SECRET", strings.Repeat("s", 32))
+	t.Setenv("QUERY_RUNNER_ADDR", "")
+
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load() without a console refused a missing token: %v", err)
+	}
+}
+
+// Development may run without a token, but a token that is set is held to the
+// same bounds everywhere: a short one set on a laptop is the one copied into
+// production.
+func TestADevelopmentAPIMayOmitTheQueryRunnerTokenButNotShortenIt(t *testing.T) {
+	t.Setenv("QUERY_RUNNER_TOKEN", "") // not inherited from the shell
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("ENV", "development")
+	t.Setenv("QUERY_RUNNER_ADDR", "localhost:9100")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() in development without a token: %v", err)
+	}
+	if cfg.QueryRunnerToken != "" {
+		t.Errorf("QueryRunnerToken = %q, want empty", cfg.QueryRunnerToken)
+	}
+
+	for name, raw := range map[string]string{
+		"too short":      strings.Repeat("t", 31),
+		"too long":       strings.Repeat("t", 513),
+		"a space inside": strings.Repeat("t", 20) + " " + strings.Repeat("t", 20),
+		"a control char": strings.Repeat("t", 40) + "\n",
+		"non-ascii":      strings.Repeat("t", 40) + "é",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("QUERY_RUNNER_TOKEN", raw)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), "QUERY_RUNNER_TOKEN") {
+				t.Fatalf("Load() = %v, want an error naming QUERY_RUNNER_TOKEN", err)
+			}
+			if strings.Contains(err.Error(), raw) {
+				t.Fatalf("the refusal repeats the token: %q", err.Error())
+			}
+		})
+	}
+}

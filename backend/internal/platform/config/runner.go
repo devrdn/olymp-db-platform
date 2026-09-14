@@ -26,6 +26,10 @@ type Runner struct {
 	// ListenAddr is where the Core API reaches this service. It is never
 	// published outside the private network, and defaults to loopback.
 	ListenAddr string
+	// Token is the shared secret every call must carry (QUERY_RUNNER_TOKEN):
+	// this service runs whatever database and policy a request names, so it
+	// answers only the Core API. Required outside development; never logged.
+	Token string
 	// GameDBDSN connects as the reading participant role — game_reader — and
 	// is the only place in the system that holds it.
 	GameDBDSN string
@@ -156,6 +160,9 @@ func LoadRunner() (Runner, error) {
 	}
 
 	var err error
+	if cfg.Token, err = queryRunnerToken(cfg.Env, true); err != nil {
+		return Runner{}, err
+	}
 	if cfg.GameDBDSN, err = requiredEnv("GAME_DB_DSN"); err != nil {
 		return Runner{}, err
 	}
