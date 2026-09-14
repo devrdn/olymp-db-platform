@@ -1,15 +1,20 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { StaffStandings } from "@/lib/api/leaderboard";
 import { formatTime } from "@/lib/format/datetime";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
-vi.mock("./actions", () => ({ revealStandingsAction: vi.fn(async () => ({ revealedAt: "2026-09-20T13:00:00Z" })) }));
+const { fetchStaffStandingsAction } = vi.hoisted(() => ({
+  fetchStaffStandingsAction: vi.fn(),
+}));
+vi.mock("./actions", () => ({
+  revealStandingsAction: vi.fn(async () => ({ revealedAt: "2026-09-20T13:00:00Z" })),
+  fetchStaffStandingsAction,
+}));
 
-import { StaffStandingsView } from "./staff-standings";
+import { STAFF_REFRESH_MS, StaffStandingsView } from "./staff-standings";
 
 let dict: Dictionary;
 beforeAll(async () => {
@@ -42,6 +47,11 @@ function show(value: StaffStandings, status: "running" | "finished") {
 
 describe("the staff table", () => {
   const t = () => dict.leaderboard.staff;
+
+  beforeEach(() => {
+    fetchStaffStandingsAction.mockReset();
+    fetchStaffStandingsAction.mockResolvedValue({ kind: "ok", standings: board() });
+  });
 
   test("names people twice over, marks the disqualified, and says what everybody else sees", () => {
     show(board(), "running");
@@ -171,5 +181,49 @@ describe("the staff table", () => {
     const table = screen.getByRole("table");
     expect(table.style.getPropertyValue("--grid-min-width")).toBe("");
     expect(table.className).not.toContain("--grid-min-width");
+  });
+});
+
+describe("the staff table's own poll", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fetchStaffStandingsAction.mockReset();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  test("refreshes only its own data while the contest runs, not the whole page", async () => {
+    fetchStaffStandingsAction.mockResolvedValue({
+      kind: "ok",
+      standings: board({ rows: [{ ...board().rows[0], points: 77 }] }),
+    });
+
+    show(board(), "running");
+    expect(screen.getByText("30")).toBeInTheDocument();
+    expect(fetchStaffStandingsAction).not.toHaveBeenCalled();
+
+    await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS));
+
+    expect(fetchStaffStandingsAction).toHaveBeenCalledWith(ID);
+    expect(screen.getByText("77")).toBeInTheDocument();
+    expect(screen.queryByText("30")).not.toBeInTheDocument();
+  });
+
+  test("does not poll a contest that is not running", async () => {
+    fetchStaffStandingsAction.mockResolvedValue({ kind: "ok", standings: board() });
+    show(board(), "finished");
+
+    await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS * 3));
+
+    expect(fetchStaffStandingsAction).not.toHaveBeenCalled();
+  });
+
+  test("keeps the last copy and says so when a poll is refused", async () => {
+    fetchStaffStandingsAction.mockResolvedValue({ kind: "refused", code: "leaderboard_too_often" });
+    show(board(), "running");
+
+    await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS));
+
+    expect(screen.getByText("30")).toBeInTheDocument();
+    expect(screen.getByText(dict.leaderboard.failed)).toBeInTheDocument();
   });
 });
