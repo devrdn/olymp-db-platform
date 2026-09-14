@@ -185,7 +185,7 @@ func LoadRunner() (Runner, error) {
 	}
 	cfg.GameDBWriterDSN = os.Getenv("GAME_DB_WRITER_DSN")
 	for name, value := range map[string]string{"GAME_DB_DSN": cfg.GameDBDSN, "GAME_DB_WRITER_DSN": cfg.GameDBWriterDSN} {
-		if err := refusePlaceholder(cfg.Env, name, value); err != nil {
+		if err := RefusePlaceholder(cfg.Env, name, value); err != nil {
 			return Runner{}, err
 		}
 	}
