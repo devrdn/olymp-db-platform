@@ -10,6 +10,9 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/db-contest/backend/internal/provisioning"
+	"github.com/devrdn/db-contest/backend/internal/queryproxy"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,6 +20,11 @@ import (
 
 // Contests implements contests.Repository.
 var _ contests.Repository = (*Contests)(nil)
+
+// Contests also answers queryproxy's combined contest-and-game lookup (see
+// Lookup below), so the SQL console's hot path reads one round trip where it
+// used to read two.
+var _ queryproxy.ContestAndGame = (*Contests)(nil)
 
 // contestColumns is the projection every contest read shares, so a new column
 // is added in one place and the scan order cannot drift between queries.
@@ -152,6 +160,89 @@ func (r *Contests) Create(ctx context.Context, c contests.Contest) (contests.Con
 func (r *Contests) ByID(ctx context.Context, id uuid.UUID) (contests.Contest, error) {
 	return scanContest(r.querier(ctx).QueryRow(ctx,
 		`SELECT `+contestColumns+` FROM contests c WHERE c.id = $1`, id))
+}
+
+// contestGameColumns is the game half of Lookup's projection: the same
+// columns postgres.GameInstances.Game reads about one contest's template and
+// its SQL policy, joined onto contestColumns instead of read by a second
+// query. LEFT JOINs throughout, deliberately: a contest with no ready
+// template, or no policy row yet, must still come back with its own columns
+// populated — only the game columns read as absent — so Lookup's caller can
+// use the contest immediately and decide what a missing game means on its
+// own schedule (see queryproxy.ContestGame).
+const contestGameColumns = `
+	t.template_db, t.version,
+	coalesce(p.mode, 'read_only'), coalesce(p.writable_tables, '{}')::text[],
+	coalesce(p.allow_create_view, false), coalesce(p.allow_own_tables, false),
+	coalesce(p.allow_temp_tables, false), coalesce(p.allow_catalog, true),
+	coalesce(p.disk_quota_ratio, 5)`
+
+// Lookup implements queryproxy.ContestAndGame: it reads a contest and its
+// game together, in one round trip, where the SQL console's Run used to open
+// two — one against this same contests row through ByID, a second through
+// GameInstances.Game.
+func (r *Contests) Lookup(ctx context.Context, id uuid.UUID) (queryproxy.ContestGame, error) {
+	var (
+		c                                                              contests.Contest
+		settings, languages, translations                              []byte
+		templateDB                                                     *string
+		version                                                        *int
+		mode                                                           string
+		writableTables                                                 []string
+		allowCreateView, allowOwnTables, allowTempTables, allowCatalog bool
+		diskQuotaRatio                                                 int
+	)
+	err := r.querier(ctx).QueryRow(ctx, `
+		SELECT `+contestColumns+`,
+		       `+contestGameColumns+`
+		FROM contests c
+		LEFT JOIN game_templates t ON t.contest_id = c.id AND t.status = 'ready'
+		LEFT JOIN contest_sql_policies p ON p.contest_id = c.id
+		WHERE c.id = $1`, id).Scan(
+		&c.ID, &c.Status, &c.Enrollment, &c.QuestionMode, &c.Progression, &c.Scoring, &c.Timing, &c.DurationMin,
+		&c.StartsAt, &c.EndsAt, &c.AllowedCIDRs, &settings, &c.CreatedBy,
+		&c.CreatedAt, &c.UpdatedAt,
+		&c.LeaderboardFreezeMin, &c.LeaderboardNames, &c.LeaderboardRevealedAt,
+		&c.ICPCPenaltyMin,
+		&languages, &translations,
+		&templateDB, &version,
+		&mode, &writableTables,
+		&allowCreateView, &allowOwnTables, &allowTempTables, &allowCatalog, &diskQuotaRatio,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return queryproxy.ContestGame{}, contests.ErrNotFound
+	}
+	if err != nil {
+		return queryproxy.ContestGame{}, fmt.Errorf("scan contest and game: %w", err)
+	}
+
+	contest, err := hydrate(c, settings, languages, translations)
+	if err != nil {
+		return queryproxy.ContestGame{}, err
+	}
+	if templateDB == nil {
+		// No ready template: the same fact GameInstances.Game reports as
+		// provisioning.ErrNoGame, carried here instead of returned outright so
+		// the caller can still use contest.
+		return queryproxy.ContestGame{Contest: contest, GameErr: provisioning.ErrNoGame}, nil
+	}
+	return queryproxy.ContestGame{
+		Contest: contest,
+		Game: provisioning.Contest{
+			ID:       contest.ID,
+			Template: *templateDB,
+			Version:  *version,
+			Policy: sqlpolicy.Policy{
+				Mode:            sqlpolicy.Mode(mode),
+				WritableTables:  writableTables,
+				AllowCreateView: allowCreateView,
+				AllowOwnTables:  allowOwnTables,
+				AllowTempTables: allowTempTables,
+				AllowCatalog:    allowCatalog,
+				DiskQuotaRatio:  diskQuotaRatio,
+			},
+		},
+	}, nil
 }
 
 // List returns a page of contests and the total matching the filter.
