@@ -37,6 +37,7 @@ type eventsFixture struct {
 	access   *fakeAccess
 	shutdown chan struct{}
 	cookie   *http.Cookie
+	sessions *auth.SessionStore
 }
 
 func newEventsFixture(t *testing.T) *eventsFixture {
@@ -71,7 +72,8 @@ func newEventsFixture(t *testing.T) *eventsFixture {
 
 	return &eventsFixture{
 		router: router, handler: handler, access: access, shutdown: shutdown,
-		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		cookie:   &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		sessions: sessions,
 	}
 }
 
@@ -910,4 +912,24 @@ func waitForActiveConnections(t *testing.T, h *api.EventsHandler, id uuid.UUID, 
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("ActiveConnections() never reached %d (last: %d)", want, h.ActiveConnections(id))
+}
+
+// A stream outlives the request that authenticated it, so the session's
+// absolute lifetime is checked again on every tick: a channel opened just
+// before the limit must not keep a signed-out browser informed for hours.
+func TestEventsCloseWhenTheSessionPassesItsMaximumLifetime(t *testing.T) {
+	f := newEventsFixture(t)
+	f.sessions.WithMaxLifetime(150 * time.Millisecond)
+	contestID := uuid.New()
+	ends := time.Now().Add(time.Hour)
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.handler.WithResyncInterval(testResync)
+
+	req, cancel := f.request(contestID)
+	defer cancel()
+	rec, done := f.serve(req)
+
+	waitForSubstring(t, rec, "event: sync")
+	waitDone(t, done)
 }

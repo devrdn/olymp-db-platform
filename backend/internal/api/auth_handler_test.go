@@ -49,7 +49,9 @@ func newHandlerFixture(t *testing.T) *handlerFixture {
 
 	log := logging.New("error", io.Discard)
 	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: 50 * time.Millisecond})
-	sessions := auth.NewSessionStore(c, time.Hour)
+	// The maximum lifetime below the idle timeout, so the cookie's lifetime
+	// shows which of the two it was set from.
+	sessions := auth.NewSessionStore(c, time.Hour).WithMaxLifetime(30 * time.Minute)
 	service := auth.NewService(auth.ServiceConfig{
 		Users: repo, Sessions: sessions,
 		Audit: audit.New(&apiSink{}), Limiter: auth.NewLimiter(c), Logger: log,
@@ -459,5 +461,16 @@ func TestPasswordChangeReportsBusyHashingWith503(t *testing.T) {
 	}
 	if code := errorCode(t, rec); code != "sign_in_busy" {
 		t.Errorf("code = %q, want sign_in_busy", code)
+	}
+}
+
+func TestTheSessionCookieExpiresWithTheSessionsMaximumLifetime(t *testing.T) {
+	f := newHandlerFixture(t)
+
+	cookie := f.login(t)
+
+	if cookie.MaxAge != int((30 * time.Minute).Seconds()) {
+		t.Errorf("session cookie Max-Age = %d, want %d: the maximum lifetime is shorter than the idle timeout",
+			cookie.MaxAge, int((30 * time.Minute).Seconds()))
 	}
 }

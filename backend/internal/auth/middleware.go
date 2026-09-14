@@ -175,6 +175,29 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 	})
 }
 
+// SessionStillValid reports whether the session cookie on r still names a
+// live session: not signed out, not past its idle timeout or its maximum
+// lifetime. A request is authenticated once, when it arrives; a response held
+// open for a long time — an event stream — asks again before each push so it
+// does not outlive the session it was opened under.
+//
+// An error means the session store could not be read, which says nothing
+// about the session; the caller decides whether to wait and ask again.
+func (m *Middleware) SessionStillValid(r *http.Request) (bool, error) {
+	cookie, err := r.Cookie(SessionCookieName)
+	if err != nil {
+		return false, nil
+	}
+	switch _, err := m.sessions.Get(r.Context(), cookie.Value); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, ErrSessionNotFound):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
 // RequirePermission enforces an installation-wide permission.
 func (m *Middleware) RequirePermission(permission string) func(http.Handler) http.Handler {
 	return m.require(permission, func(*http.Request) (uuid.UUID, error) { return uuid.Nil, nil })
