@@ -91,6 +91,30 @@ type QueryHistory interface {
 	ExportHistory(ctx context.Context, registrationID uuid.UUID, yield func(queryrunner.HistoryEntry) error) (truncated bool, err error)
 }
 
+// AnswerLimiter is the slice of auth.Limiter the answer endpoint needs
+// (CLAUDE.md rule 3): one fixed-window counter per subject.
+type AnswerLimiter interface {
+	Allow(ctx context.Context, subject string, limit int, window time.Duration) (bool, error)
+}
+
+// AnswerRate is the answer endpoint's own throttle: PerMinute answers per
+// registration, counted by Limiter.
+//
+// A budget of its own, not the read budget AdmitRead spends. That one is sized
+// for SQL queries and polling; an answer is a guess, and at thirty a minute a
+// candidate list read out of the game database is tried in no time. Keyed by
+// the registration admission resolved — one per enrolment, never anything the
+// request names — so the key space is bounded by the roster (CLAUDE.md rule
+// 5), and it follows AdmitRead, whose key is the account, so a caller who is
+// not a participant never creates a counter here at all.
+type AnswerRate struct {
+	Limiter   AnswerLimiter
+	PerMinute int
+}
+
+// answerWindow is the answer throttle's fixed window.
+const answerWindow = time.Minute
+
 // ParticipantHandler serves a participant's own view of, and actions on, a
 // running contest.
 type ParticipantHandler struct {
@@ -98,6 +122,7 @@ type ParticipantHandler struct {
 	reader    *contests.Reader
 	history   QueryHistory
 	submitter Submitter
+	answers   AnswerRate
 	mw        *auth.Middleware
 	log       *slog.Logger
 	// defaultLocale answers when a request expresses no usable preference and
@@ -147,11 +172,18 @@ func (e *inFlightExports) enter(registration uuid.UUID) (release func(), free bo
 }
 
 // NewParticipantHandler assembles the endpoints.
-func NewParticipantHandler(access ParticipantAccess, reader *contests.Reader, history QueryHistory, submitter Submitter, mw *auth.Middleware, log *slog.Logger, defaultLocale string) *ParticipantHandler {
+//
+// Panics without an answer throttle: config.Load never produces a rate below
+// one, so a missing one is a wiring bug, and answering unthrottled is not a
+// state to fall back to quietly.
+func NewParticipantHandler(access ParticipantAccess, reader *contests.Reader, history QueryHistory, submitter Submitter, answers AnswerRate, mw *auth.Middleware, log *slog.Logger, defaultLocale string) *ParticipantHandler {
+	if answers.Limiter == nil || answers.PerMinute < 1 {
+		panic(fmt.Sprintf("api: participant handler needs an answer limiter and a positive rate, got %d", answers.PerMinute))
+	}
 	if defaultLocale == "" {
 		defaultLocale = "en"
 	}
-	return &ParticipantHandler{access: access, reader: reader, history: history, submitter: submitter, mw: mw, log: log, defaultLocale: defaultLocale}
+	return &ParticipantHandler{access: access, reader: reader, history: history, submitter: submitter, answers: answers, mw: mw, log: log, defaultLocale: defaultLocale}
 }
 
 // Mount registers the routes.
@@ -598,6 +630,13 @@ func (h *ParticipantHandler) answer(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Before the question is parsed, the body decoded or anything graded or
+	// written: a malformed or refused answer is an attempt too (CLAUDE.md rule
+	// 13), and counting only the ones that reach grading would leave a way to
+	// probe for free.
+	if !h.admitAnswer(w, r, participant.ID) {
+		return
+	}
 
 	questionID, err := uuid.Parse(chi.URLParam(r, questionIDParam))
 	if err != nil {
@@ -628,6 +667,29 @@ func (h *ParticipantHandler) answer(w http.ResponseWriter, r *http.Request) {
 		AttemptsRemaining: outcome.AttemptsRemaining,
 		Closed:            outcome.Closed,
 	})
+}
+
+// admitAnswer spends one answer of this registration's budget, and answers
+// the refusal itself when there is none left.
+//
+// Retry-After is the whole window: the counter's window began at the first
+// answer counted in it, which this handler does not know, so a minute is the
+// honest upper bound. A counter that cannot be kept refuses (auth.Limiter's
+// own rule): grading unthrottled is exactly what this exists to prevent.
+func (h *ParticipantHandler) admitAnswer(w http.ResponseWriter, r *http.Request, registrationID uuid.UUID) bool {
+	allowed, err := h.answers.Limiter.Allow(r.Context(), "answer:reg:"+registrationID.String(), h.answers.PerMinute, answerWindow)
+	if err != nil {
+		h.log.ErrorContext(r.Context(), "could not check the answer rate limit", "error", err)
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+		return false
+	}
+	if !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(int(answerWindow/time.Second)))
+		httpx.Error(w, r, http.StatusTooManyRequests, codeAnswerTooOften,
+			"Too many answers this minute; wait before answering again")
+		return false
+	}
+	return true
 }
 
 // fail maps a refusal from queryproxy.Service.AdmitRead, from

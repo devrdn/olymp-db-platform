@@ -460,6 +460,10 @@ services:
       # not the architecture's own default, which may not be what this
       # deployment actually runs with.
       QUERY_PER_MINUTE: ${QUERY_PER_MINUTE:-30}
+      # Answers one registration may submit a minute, refused ones included
+      # (1-60). Its own budget, far below QUERY_PER_MINUTE: an answer is a
+      # guess, and a fast stream of guesses solves a question by elimination.
+      ANSWER_RATE_PER_MINUTE: ${ANSWER_RATE_PER_MINUTE:-6}
       # The contest clock's own grace (docs/ARCHITECTURE.md §8) — not
       # QUERY_DEADLINE above, which is the Query Runner's unrelated per-query
       # execution timeout. This one is consumed here, by queryproxy.Service,
