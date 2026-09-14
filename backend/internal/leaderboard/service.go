@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
@@ -21,10 +22,21 @@ const (
 	// at, and it caps the database at one aggregate per contest per window
 	// however many anonymous viewers the public page draws.
 	DefaultCacheTTL = 10 * time.Second
+	// DefaultLiveCacheTTL is the same idea for the staff table, kept far
+	// shorter: it exists only to collapse several staff tabs (or one tab's
+	// own retries) refreshing within the same instant into one computation,
+	// never to hide anything from the people running the contest.
+	DefaultLiveCacheTTL = 3 * time.Second
 	// DefaultMaxRows bounds a table (CLAUDE.md rule 2). An open contest can
 	// collect more registrations than anybody will scroll, and a public answer
 	// without a bound is an answer whose size the caller chooses.
 	DefaultMaxRows = 2000
+	// computeTimeout bounds one shared computation once it no longer belongs
+	// to any single caller (see computeOnce). Comfortably above how long an
+	// ordinary standings query takes — the core pool's own statement timeout
+	// already caps the query itself — so what this actually guards against is
+	// a connection acquire that never returns, not a slow but honest query.
+	computeTimeout = 20 * time.Second
 )
 
 // ContestReader is the one contest lookup this package needs.
@@ -90,6 +102,8 @@ type Config struct {
 	// CacheTTL and MaxRows default to DefaultCacheTTL and DefaultMaxRows.
 	CacheTTL time.Duration
 	MaxRows  int
+	// LiveCacheTTL defaults to DefaultLiveCacheTTL.
+	LiveCacheTTL time.Duration
 }
 
 // View is the table as everybody but the staff sees it.
@@ -125,10 +139,20 @@ type Service struct {
 	uow          storage.UnitOfWork
 	now          func() time.Time
 	ttl          time.Duration
+	liveTTL      time.Duration
 	maxRows      int
 
 	mu    sync.Mutex
 	cache map[uuid.UUID]cached
+
+	liveMu    sync.Mutex
+	liveCache map[uuid.UUID]cachedLive
+
+	// flight collapses concurrent misses of the same key — a contest's public
+	// table or its staff table, computeOnce's own callers tell the two apart
+	// by key — into one call to the repository. See computeOnce for why a
+	// panic or a caller's cancellation cannot wedge or narrow it.
+	flight singleflight.Group
 }
 
 // cached is one contest's public table and the moment it stops being true.
@@ -137,18 +161,27 @@ type cached struct {
 	expires time.Time
 }
 
+// cachedLive is cached for the staff table.
+type cachedLive struct {
+	view    StaffView
+	expires time.Time
+}
+
 // NewService returns a Service.
 func NewService(cfg Config) *Service {
 	s := &Service{
 		contests: cfg.Contests, participants: cfg.Participants, standings: cfg.Standings,
-		audit: cfg.Audit, uow: cfg.UnitOfWork, now: cfg.Now, ttl: cfg.CacheTTL, maxRows: cfg.MaxRows,
-		cache: make(map[uuid.UUID]cached),
+		audit: cfg.Audit, uow: cfg.UnitOfWork, now: cfg.Now, ttl: cfg.CacheTTL, liveTTL: cfg.LiveCacheTTL, maxRows: cfg.MaxRows,
+		cache: make(map[uuid.UUID]cached), liveCache: make(map[uuid.UUID]cachedLive),
 	}
 	if s.now == nil {
 		s.now = time.Now
 	}
 	if s.ttl <= 0 {
 		s.ttl = DefaultCacheTTL
+	}
+	if s.liveTTL <= 0 {
+		s.liveTTL = DefaultLiveCacheTTL
 	}
 	if s.maxRows <= 0 {
 		s.maxRows = DefaultMaxRows
@@ -163,12 +196,31 @@ func NewService(cfg Config) *Service {
 // number of entries is bounded by the number of real contests, never by how
 // many identifiers a caller can invent; a refusal is not cached and costs
 // what the HTTP layer's per-address limit lets it cost.
+//
+// A miss is shared rather than repeated: however many viewers arrive in the
+// same instant — an audience refreshing together right on the cache's own
+// boundary — computeOnce collapses them into the one computation the first of
+// them started (see its own doc for what that guarantees each caller).
 func (s *Service) Public(ctx context.Context, contestID uuid.UUID) (View, error) {
 	now := s.now()
 	if view, ok := s.fromCache(contestID, now); ok {
 		return view, nil
 	}
 
+	result, err := s.computeOnce(ctx, "public:"+contestID.String(), func(ctx context.Context) (any, error) {
+		return s.computePublic(ctx, contestID, now)
+	})
+	if err != nil {
+		return View{}, err
+	}
+	view := result.(View)
+	s.store(contestID, view, s.expiry(view.Contest, view.Decision, now))
+	return view, nil
+}
+
+// computePublic is Public's actual computation, run at most once per miss
+// (see computeOnce) rather than once per caller.
+func (s *Service) computePublic(ctx context.Context, contestID uuid.UUID, now time.Time) (View, error) {
 	c, err := s.contest(ctx, contestID)
 	if err != nil {
 		return View{}, err
@@ -199,8 +251,6 @@ func (s *Service) Public(ctx context.Context, contestID uuid.UUID) (View, error)
 		}
 		view.Rows, view.Truncated, view.Questions = t.rows, t.truncated, t.questions
 	}
-
-	s.store(contestID, view, s.expiry(c, decision, now))
 	return view, nil
 }
 
@@ -224,11 +274,35 @@ func (s *Service) ForParticipant(ctx context.Context, contestID, userID uuid.UUI
 }
 
 // Live returns the staff table: cut off now whatever the freeze, with the
-// disqualified on it, and never cached — a handful of staff do not need it,
-// and a stale staff table is the one place a freeze could hide something from
-// the people who run the contest.
+// disqualified on it.
+//
+// Cached for DefaultLiveCacheTTL — a handful of staff refreshing their
+// dashboard together should not each recompute the same heavy query, but the
+// window has to stay short: a stale staff table is the one place a freeze
+// could hide something from the people who run the contest. Reveal clears
+// this cache explicitly (see its own doc) rather than waiting the TTL out,
+// because that is the one moment a staler answer would say the wrong thing
+// about whether the result is out yet.
 func (s *Service) Live(ctx context.Context, contestID uuid.UUID) (StaffView, error) {
 	now := s.now()
+	if view, ok := s.fromLiveCache(contestID, now); ok {
+		return view, nil
+	}
+
+	result, err := s.computeOnce(ctx, "live:"+contestID.String(), func(ctx context.Context) (any, error) {
+		return s.computeLive(ctx, contestID, now)
+	})
+	if err != nil {
+		return StaffView{}, err
+	}
+	view := result.(StaffView)
+	s.storeLive(contestID, view, now.Add(s.liveTTL))
+	return view, nil
+}
+
+// computeLive is Live's actual computation, run at most once per miss (see
+// computeOnce) rather than once per staff request.
+func (s *Service) computeLive(ctx context.Context, contestID uuid.UUID, now time.Time) (StaffView, error) {
 	c, err := s.contests.ByID(ctx, contestID)
 	if errors.Is(err, contests.ErrNotFound) {
 		return StaffView{}, ErrNotFound
@@ -261,6 +335,16 @@ func (s *Service) Live(ctx context.Context, contestID uuid.UUID) (StaffView, err
 // because it has nothing to reveal. A second reveal is not an error: it
 // returns the moment already in force and records nothing, so two organisers
 // pressing the button together see the same result.
+//
+// Both of the contest's cached tables are dropped below, not only the public
+// one: the staff table's own Shown field reports the same decision the
+// public table does, so a frozen copy left in the live cache would tell
+// staff the reveal has not happened for as long as that cache's TTL, right
+// when the two must agree. Nothing else invalidates either cache — a
+// settings change (moving the freeze, say) is not an event this package
+// hooks, because both caches are short enough that such a change is visible
+// again within their own TTL regardless, the same guarantee they already
+// give every other caller.
 func (s *Service) Reveal(ctx context.Context, actorID, contestID uuid.UUID) (time.Time, error) {
 	c, err := s.contests.ByID(ctx, contestID)
 	if errors.Is(err, contests.ErrNotFound) {
@@ -303,6 +387,9 @@ func (s *Service) Reveal(ctx context.Context, actorID, contestID uuid.UUID) (tim
 	s.mu.Lock()
 	delete(s.cache, contestID)
 	s.mu.Unlock()
+	s.liveMu.Lock()
+	delete(s.liveCache, contestID)
+	s.liveMu.Unlock()
 	return revealedAt, nil
 }
 
@@ -400,4 +487,68 @@ func (s *Service) store(id uuid.UUID, view View, expires time.Time) {
 		}
 	}
 	s.cache[id] = cached{view: view, expires: expires}
+}
+
+func (s *Service) fromLiveCache(id uuid.UUID, now time.Time) (StaffView, bool) {
+	s.liveMu.Lock()
+	defer s.liveMu.Unlock()
+	entry, ok := s.liveCache[id]
+	if !ok || !now.Before(entry.expires) {
+		return StaffView{}, false
+	}
+	return entry.view, true
+}
+
+// storeLive is store for the staff table's own, shorter-lived cache.
+func (s *Service) storeLive(id uuid.UUID, view StaffView, expires time.Time) {
+	s.liveMu.Lock()
+	defer s.liveMu.Unlock()
+	now := s.now()
+	for key, entry := range s.liveCache {
+		if !now.Before(entry.expires) {
+			delete(s.liveCache, key)
+		}
+	}
+	s.liveCache[id] = cachedLive{view: view, expires: expires}
+}
+
+// computeOnce collapses every concurrent miss for one key into a single call
+// to fn, so however many callers arrive while a table is being computed, the
+// repository is asked once and all of them read the same answer.
+//
+// fn runs detached from any one caller's context (context.WithoutCancel),
+// bounded instead by computeTimeout: the computation belongs to the key, not
+// to whichever caller's request happened to start it, so one caller giving up
+// must not cut short an answer the callers behind it are still waiting for.
+// Each caller of computeOnce still honours its own context — it stops
+// waiting the moment ctx is done, without touching the flight it joined.
+//
+// A panic inside fn is recovered into an error rather than left to
+// singleflight's own handling, which — when a call has joiners — re-panics
+// on a fresh, unrecovered goroutine specifically so the crash cannot be
+// swallowed. That is the right choice for a bug an operator must see, but the
+// wrong one for a single bad computation to cost the whole process; recovery
+// here turns it into an ordinary refusal instead. Either way, singleflight
+// forgets a key the moment its call returns — before any of it is reported
+// back — so a failed or recovered computation is never cached, and the very
+// next call for the same key starts a fresh one rather than waiting behind a
+// key that could never resolve.
+func (s *Service) computeOnce(ctx context.Context, key string, fn func(ctx context.Context) (any, error)) (any, error) {
+	ch := s.flight.DoChan(key, func() (result any, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("compute %s: %v", key, r)
+			}
+		}()
+		flightCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), computeTimeout)
+		defer cancel()
+		return fn(flightCtx)
+	})
+
+	select {
+	case res := <-ch:
+		return res.Val, res.Err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
