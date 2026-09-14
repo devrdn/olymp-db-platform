@@ -3,6 +3,7 @@ package leaderboard_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,7 +20,16 @@ import (
 type standings struct {
 	contests *conteststest.Contests
 	entries  []leaderboard.Entry
-	queries  []leaderboard.Query
+	// release, when set, is waited on inside a read before it returns — a
+	// test's way of holding the single flight's leader in place long enough
+	// to prove what joins it and what a cancelled waiter does not disturb.
+	release <-chan struct{}
+	// panicOnce makes the first read panic instead of answering, to prove a
+	// panicking leader does not wedge the key for the call after it.
+	panicOnce bool
+
+	mu      sync.Mutex
+	queries []leaderboard.Query
 	// grid is what ICPCStandings answers beside the entries; icpcReads counts
 	// its calls.
 	grid      leaderboard.Grid
@@ -27,14 +37,50 @@ type standings struct {
 }
 
 func (s *standings) Standings(_ context.Context, q leaderboard.Query) ([]leaderboard.Entry, error) {
-	s.queries = append(s.queries, q)
+	s.record(q)
+	s.maybePanic()
+	s.wait()
 	return s.cut(q), nil
 }
 
+func (s *standings) maybePanic() {
+	s.mu.Lock()
+	should := s.panicOnce
+	s.panicOnce = false
+	s.mu.Unlock()
+	if should {
+		panic("the fake repository was told to panic once")
+	}
+}
+
 func (s *standings) ICPCStandings(_ context.Context, q leaderboard.Query) ([]leaderboard.Entry, leaderboard.Grid, error) {
-	s.queries = append(s.queries, q)
+	s.mu.Lock()
 	s.icpcReads++
+	s.mu.Unlock()
+	s.record(q)
+	s.wait()
 	return s.cut(q), s.grid, nil
+}
+
+func (s *standings) record(q leaderboard.Query) {
+	s.mu.Lock()
+	s.queries = append(s.queries, q)
+	s.mu.Unlock()
+}
+
+func (s *standings) wait() {
+	if s.release != nil {
+		<-s.release
+	}
+}
+
+// callCount is queries read under the same lock its writers use, so a test
+// synchronising through a WaitGroup or a channel (rather than through this
+// lock) still reads a value the writes happened before.
+func (s *standings) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.queries)
 }
 
 func (s *standings) cut(q leaderboard.Query) []leaderboard.Entry {
@@ -449,5 +495,214 @@ func TestAnICPCGridWhoseRowsDoNotMatchItsWidthIsRefused(t *testing.T) {
 
 	if _, err := r.service.Public(context.Background(), c.ID); err == nil {
 		t.Error("Public() served a row of 1 cell on a grid of 2 questions")
+	}
+}
+
+// waitForCallCount polls until the fake has recorded n reads, or fails the
+// test. It exists because a repository call the test means to hold open is
+// started on a goroutine the test does not otherwise synchronise with —
+// spinning on the fake's own counter is the one thing that tells the test the
+// call has actually begun (and, since fn's registration with the single
+// flight happens before it is ever called, that any waiter started from this
+// point on is joining rather than racing it).
+func waitForCallCount(t *testing.T, s *standings, n int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if s.callCount() >= n {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("the repository was not called %d time(s) within a second (got %d)", n, s.callCount())
+}
+
+// Concurrent misses on the same contest must not each recompute the table:
+// the whole point of the shared cache is one aggregate per contest per
+// window, however many people are asking at once.
+func TestConcurrentMissesOnTheSameContestShareOneComputation(t *testing.T) {
+	r := newRig(t)
+	c := r.seed(contests.StatusRunning, nil)
+	release := make(chan struct{})
+	r.standings.release = release
+
+	// The leader: started first and alone, so it is certainly the one that
+	// reaches the repository below.
+	leaderDone := make(chan struct{})
+	var leaderView leaderboard.View
+	var leaderErr error
+	go func() {
+		leaderView, leaderErr = r.service.Public(context.Background(), c.ID)
+		close(leaderDone)
+	}()
+	waitForCallCount(t, r.standings, 1)
+
+	// Every one of these joins the same in-flight computation rather than
+	// starting its own, because the repository has not answered yet and the
+	// leader's key is still in flight.
+	const followers = 4
+	var wg sync.WaitGroup
+	results := make([]leaderboard.View, followers)
+	errs := make([]error, followers)
+	wg.Add(followers)
+	for i := range followers {
+		go func(i int) {
+			defer wg.Done()
+			results[i], errs[i] = r.service.Public(context.Background(), c.ID)
+		}(i)
+	}
+	// x/sync/singleflight's own tests use the same allowance to let
+	// concurrently started goroutines reach Do before the flight is released
+	// (singleflight_test.go, TestDoDupSuppress) — joining a flight is a
+	// couple of uncontended mutex operations, so this is generous rather than
+	// exact.
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	<-leaderDone
+
+	if leaderErr != nil {
+		t.Fatalf("the leader's Public() = %v", leaderErr)
+	}
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("follower %d Public() = %v", i, err)
+		}
+		if results[i].State != leaderboard.StateLive || results[i].GeneratedAt != leaderView.GeneratedAt {
+			t.Errorf("follower %d view = %+v, want the leader's own %+v", i, results[i], leaderView)
+		}
+	}
+	if got := r.standings.callCount(); got != 1 {
+		t.Errorf("the repository was called %d times, want 1", got)
+	}
+}
+
+// A waiter that gives up must not wait for the flight it joined, and must
+// not take the flight down with it: the computation belongs to the key, not
+// to whichever caller happened to start it.
+func TestACancelledWaiterDoesNotDisturbTheFlightItJoined(t *testing.T) {
+	r := newRig(t)
+	c := r.seed(contests.StatusRunning, nil)
+	release := make(chan struct{})
+	r.standings.release = release
+
+	leaderDone := make(chan struct{})
+	var leaderView leaderboard.View
+	var leaderErr error
+	go func() {
+		leaderView, leaderErr = r.service.Public(context.Background(), c.ID)
+		close(leaderDone)
+	}()
+	waitForCallCount(t, r.standings, 1)
+
+	waiterCtx, cancel := context.WithCancel(context.Background())
+	waiterErr := make(chan error, 1)
+	go func() {
+		_, err := r.service.Public(waiterCtx, c.ID)
+		waiterErr <- err
+	}()
+	time.Sleep(20 * time.Millisecond) // let the waiter join the leader's flight.
+	cancel()
+
+	select {
+	case err := <-waiterErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("the cancelled waiter's Public() = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the cancelled waiter never returned")
+	}
+
+	// The cancellation must not have reached the leader: it is still blocked
+	// in the repository, exactly as if the waiter had never joined.
+	select {
+	case <-leaderDone:
+		t.Fatal("the leader finished before being released — the waiter's cancellation reached it")
+	default:
+	}
+
+	close(release)
+	select {
+	case <-leaderDone:
+	case <-time.After(time.Second):
+		t.Fatal("the leader never finished once released")
+	}
+	if leaderErr != nil || leaderView.State != leaderboard.StateLive {
+		t.Fatalf("the leader's Public() = %+v, %v, want a live view", leaderView, leaderErr)
+	}
+	if got := r.standings.callCount(); got != 1 {
+		t.Errorf("the repository was called %d times, want 1", got)
+	}
+}
+
+// A leader that panics must not wedge the key: the next call has to try
+// again rather than hang behind a flight that can never finish.
+func TestAPanickingLeaderDoesNotWedgeLaterCalls(t *testing.T) {
+	r := newRig(t)
+	c := r.seed(contests.StatusRunning, nil)
+	r.standings.entries = []leaderboard.Entry{entry("a", 1, at(1))}
+	r.standings.panicOnce = true
+
+	if _, err := r.service.Public(context.Background(), c.ID); err == nil {
+		t.Fatal("Public() over a panicking repository = nil error, want one")
+	}
+
+	view, err := r.service.Public(context.Background(), c.ID)
+	if err != nil {
+		t.Fatalf("Public() after the panic = %v, want the next call to try again", err)
+	}
+	if len(view.Rows) != 1 {
+		t.Errorf("Rows = %d, want 1 from the retried call", len(view.Rows))
+	}
+}
+
+// The staff table is cached too, briefly — just long enough that several
+// staff tabs refreshing together share one computation rather than each
+// recomputing the same heavy query.
+func TestTheLiveTableIsCachedForItsOwnShortTTL(t *testing.T) {
+	r := newRig(t)
+	c := r.seed(contests.StatusRunning, nil)
+
+	for range 3 {
+		if _, err := r.service.Live(context.Background(), c.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := r.standings.callCount(); got != 1 {
+		t.Fatalf("standings were read %d times within the live TTL, want 1", got)
+	}
+
+	r.now = r.now.Add(leaderboard.DefaultLiveCacheTTL)
+	if _, err := r.service.Live(context.Background(), c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.standings.callCount(); got != 2 {
+		t.Errorf("standings were read %d times after the live TTL, want 2", got)
+	}
+}
+
+// A reveal must not leave the staff table saying "frozen" for as long as its
+// own cache TTL after the result is already public — the one view a reveal
+// exists to change is exactly the one it must not leave stale. A settings
+// change (moving the freeze, say) gets no equivalent hook: it is eventually
+// reflected within the same short TTL, the same guarantee the table already
+// gives everyone else, so nothing beyond that TTL is asked of it here.
+func TestRevealInvalidatesTheLiveCacheTooSoStaffSeeItAtOnce(t *testing.T) {
+	r := newRig(t)
+	c := r.seed(contests.StatusFinished, minutes(30))
+	r.now = end.Add(time.Hour)
+
+	live, err := r.service.Live(context.Background(), c.ID)
+	if err != nil || live.Shown.State != leaderboard.StateFrozen {
+		t.Fatalf("setup: Live() = %+v, %v, want frozen", live, err)
+	}
+
+	if _, err := r.service.Reveal(context.Background(), uuid.New(), c.ID); err != nil {
+		t.Fatalf("Reveal() = %v", err)
+	}
+
+	live, err = r.service.Live(context.Background(), c.ID)
+	if err != nil || live.Shown.State != leaderboard.StateFinal {
+		t.Fatalf("Live() right after Reveal() = %+v, %v, want final, not a cached frozen copy", live, err)
 	}
 }
