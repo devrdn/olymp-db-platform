@@ -24,17 +24,17 @@ var ErrNoWriter = errors.New("this runner has no writer credentials")
 // one answer is allowed to cost.
 var errResultBudget = errors.New("the result exceeded the read budget")
 
-// Cluster opens one connection to one participant's database.
+// Cluster opens connections to participants' databases.
 //
-// Short-lived by design (section 4.3): a connection is opened for an execution
-// and closed after it, so nothing is shared between two queries — no temporary
-// table, no session setting, no open transaction. In a local network the cost
-// is milliseconds, which at thirty queries a minute is not worth trading for
-// state that would have to be reasoned about.
+// It dials; it does not decide how long a connection lives. That is the pool's
+// (pool.go): a clean read's connection is reset and kept for the participant's
+// next read, and everything else is closed after its query, as every
+// connection was before the pool existed.
 //
-// It is also what makes the deadline enforceable. Closing the connection is
-// what ends a query the server is still running, and a pooled connection is
-// one you have to hand back rather than close.
+// The deadline does not depend on closing. An abandoned query is stopped by the
+// CancelRequest the context watcher below sends, and its connection is then
+// closed rather than kept, so a cancel still on its way cannot land on another
+// query.
 //
 // Two sets of credentials, one per participant role (section 4): which one a
 // query runs as is decided by the contest's policy, never by the query.
@@ -96,6 +96,19 @@ func (c *Cluster) connect(ctx context.Context, database string, write bool, read
 		return nil, nil, fmt.Errorf("connecting to the game database: %w", err)
 	}
 
+	// No statement cache on either side. The driver's default names and keeps
+	// a server-side prepared statement for every distinct query text, which on
+	// a kept connection is one participant's past queries accumulating in a
+	// backend's memory (and listed in pg_prepared_statements), and a cache on
+	// this side that the reset between queries (DISCARD ALL) would silently
+	// invalidate. Describe-then-execute uses the unnamed statement, which the
+	// next query replaces, and costs the same two round trips a cache miss
+	// did — and participants' queries are almost never repeated verbatim, so
+	// the cache was missing anyway.
+	config.DefaultQueryExecMode = pgx.QueryExecModeDescribeExec
+	config.StatementCacheCapacity = 0
+	config.DescriptionCacheCapacity = 0
+
 	// Cancel the server's work when this process abandons a query, and do it
 	// as the handler's job rather than as a side effect. pgx's default handler
 	// breaks the socket with a past deadline; the server is then only told to
@@ -149,6 +162,15 @@ type readMeter struct {
 	mu        sync.Mutex
 	remaining int64
 	tripped   bool
+}
+
+// reset gives the meter a new allowance, for the next query on a kept
+// connection. A tripped meter never reaches here: its connection is closed.
+func (m *readMeter) reset(budget int64) {
+	m.mu.Lock()
+	m.remaining = budget
+	m.tripped = false
+	m.mu.Unlock()
 }
 
 // take spends up to n bytes of the budget and reports how many may be read.

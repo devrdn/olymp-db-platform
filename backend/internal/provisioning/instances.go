@@ -168,9 +168,9 @@ func (s *Service) fillSizes(ctx context.Context, records []InstanceRecord) {
 // pressing a button on a database they have decided is broken, usually in the
 // middle of an olympiad with a participant sitting in front of a copy that
 // does not work. "Somebody is connected, try again later" is not an answer
-// they can act on: connections to a game database are opened per query (§4.3),
-// so a participant retrying against a broken copy holds one almost
-// continuously, and the case that most needs this button is precisely the one
+// they can act on: the Query Runner keeps a participant's connection between
+// their queries, so a participant retrying against a broken copy holds one
+// almost continuously, and the case that most needs this button is precisely the one
 // where DropIdle would refuse for as long as they keep trying. An organizer
 // who cannot fix a broken database is a worse outcome than a lost query, and
 // a refusal with no way to ever succeed is worse still.

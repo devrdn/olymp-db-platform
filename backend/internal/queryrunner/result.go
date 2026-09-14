@@ -81,10 +81,11 @@ func trimStatement(sql string) string {
 
 // collect reads a result set, stopping at whichever limit comes first.
 //
-// It takes the transaction rather than the connection. Both work today, since
+// It takes the transaction rather than the connection. Both would work, since
 // a pgx transaction is bound to the connection that began it — but only one of
-// them says so, and the day a connection comes from a pool the other would
-// send the query outside the read-only transaction without a word.
+// them says so, and with connections kept between queries (pool.go) a query
+// sent on the connection rather than the transaction is one step from running
+// outside the read-only transaction without a word.
 func collect(ctx context.Context, tx pgx.Tx, statement string, limits Limits, write bool) (*Result, error) {
 	// The clock starts here and stops when the last row this answer will carry
 	// has been read. It is the statement's own execution and nothing around it

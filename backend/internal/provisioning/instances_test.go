@@ -155,7 +155,7 @@ func TestInstancesSaysSoWhenThereAreMoreThanItWillShow(t *testing.T) {
 
 // The choice this whole endpoint turns on. An organizer pressing "drop" has
 // decided the copy is broken, usually while its owner is still retrying
-// against it — and a connection to a game database is opened per query, so
+// against it — and the Query Runner keeps their connection between queries, so
 // DropIdle would refuse for exactly as long as they keep trying. Drop forces
 // them closed; see Service.DropInstance's own doc for the full reasoning.
 func TestDroppingForcesConnectionsClosedRatherThanWaitingForAnIdleMoment(t *testing.T) {
