@@ -22,6 +22,52 @@ func aContest(t *testing.T, ctx context.Context) uuid.UUID {
 	return makeContest(t, ctx, author.ID)
 }
 
+// anotherPackagesPendingGame commits, outside the test's own transaction, a
+// pending game belonging to nobody this test knows about — what a package
+// running in parallel against the same database leaves in game_templates —
+// and aged so that an installation-wide claim would reach it before any fresh
+// row. The claim tests must pass with it present: a test that claims such a
+// row fails in its own assertions and, while it holds the row's lock, hides
+// it from the package that owns it. It is removed when the test ends.
+func anotherPackagesPendingGame(t *testing.T) {
+	t.Helper()
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
+	}
+	ctx := context.Background()
+	author := makeUser(t, ctx, "game-other-"+uuid.NewString()[:8])
+	contest := makeContest(t, ctx, author.ID)
+	t.Cleanup(func() {
+		q := storage.QuerierFrom(context.Background(), testPool)
+		_, _ = q.Exec(context.Background(), `DELETE FROM contests WHERE id = $1`, contest)
+		_, _ = q.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, author.ID)
+	})
+	repo := NewGameInstances(testPool)
+	if _, err := repo.SaveScript(ctx, contest, "game_tpl_c"+uuid.NewString()[:12], `SELECT 1`); err != nil {
+		t.Fatalf("save another package's game: %v", err)
+	}
+	if _, err := testPool.Exec(ctx,
+		`UPDATE game_templates SET updated_at = now() - interval '5 years' WHERE contest_id = $1`, contest); err != nil {
+		t.Fatalf("age another package's game: %v", err)
+	}
+}
+
+// markBuilding puts this test's own game into 'building', aged by age, the way
+// a claim would have left it — without an installation-wide claim, which
+// could take another package's row instead of this one.
+func markBuilding(t *testing.T, ctx context.Context, contest uuid.UUID, age string) {
+	t.Helper()
+	tag, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+		`UPDATE game_templates SET status = 'building', updated_at = now() - $2::interval WHERE contest_id = $1`,
+		contest, age)
+	if err != nil {
+		t.Fatalf("mark the game building: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("marked %d games building, want this test's one", tag.RowsAffected())
+	}
+}
+
 func TestSavingAScriptCreatesTheGameAndSavingAgainBumpsItsVersion(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
@@ -248,9 +294,11 @@ func TestTheSourcePairingConstraintTiesBuilderToDefinitionJSON(t *testing.T) {
 //
 // So the row is aged first, which is what makes it the one ClaimBuild
 // reaches: `ORDER BY updated_at LIMIT 1` takes the oldest, and ten years is
-// older than anything an installation holds. Nothing outlives the test — the
+// older than anything an installation holds, or than the other package's row
+// anotherPackagesPendingGame leaves. Nothing else outlives the test — the
 // whole body runs in a transaction withTx rolls back, this UPDATE included.
-func TestOnlyOneClaimOfAGameSucceedsAndTheRestFindNothing(t *testing.T) {
+func TestAClaimTakesTheOldestGameAndLeavesItOutOfReachOfTheNextClaim(t *testing.T) {
+	anotherPackagesPendingGame(t)
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
 		repo := NewGameInstances(testPool)
@@ -275,13 +323,21 @@ func TestOnlyOneClaimOfAGameSucceedsAndTheRestFindNothing(t *testing.T) {
 				claimed.ContestID, contest)
 		}
 
-		// Claimed once, it is no longer pending — and the stale window has
-		// not passed, so nothing may take it again. The second claim may
-		// legitimately find some other installation row; what it must never
-		// find is this one.
-		again, err := repo.ClaimBuild(ctx, time.Hour)
-		if err == nil && again.ContestID == contest {
-			t.Fatal("the same game was claimed twice")
+		// Claimed once, it is no longer pending, and the claim restarted its
+		// stale window, so no claim may take it again until that passes.
+		// Asked of the row rather than of a second claim: a second
+		// installation-wide claim would take whatever other package's pending
+		// game comes next, and hold it locked from that package until this
+		// transaction rolls back.
+		var status string
+		var fresh bool
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+			`SELECT status, updated_at = now() FROM game_templates WHERE contest_id = $1`, contest,
+		).Scan(&status, &fresh); err != nil {
+			t.Fatalf("read the claimed game back: %v", err)
+		}
+		if status != string(provisioning.TemplateBuilding) || !fresh {
+			t.Fatalf("after the claim the game is %q (stale window restarted: %v); another claim could take it again", status, fresh)
 		}
 	})
 }
@@ -289,20 +345,17 @@ func TestOnlyOneClaimOfAGameSucceedsAndTheRestFindNothing(t *testing.T) {
 // An API that died mid-build must not leave an organiser watching a spinner
 // that will never stop.
 func TestAGameStuckBuildingIsClaimedAgainOnceItIsStale(t *testing.T) {
+	anotherPackagesPendingGame(t)
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
 		repo := NewGameInstances(testPool)
 		if _, err := repo.SaveScript(ctx, contest, "game_tpl_c"+uuid.NewString()[:12], `SELECT 1`); err != nil {
 			t.Fatalf("save: %v", err)
 		}
-		if _, err := repo.ClaimBuild(ctx, time.Hour); err != nil {
-			t.Fatalf("claim: %v", err)
-		}
-		// Aged deliberately rather than waited for.
-		if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
-			`UPDATE game_templates SET updated_at = now() - interval '2 hours' WHERE contest_id = $1`, contest); err != nil {
-			t.Fatalf("age the row: %v", err)
-		}
+		// Left building by a build that never finished, and aged deliberately
+		// rather than waited for: ten years is older than any other package's
+		// row, which is what makes this the one the claim below reaches.
+		markBuilding(t, ctx, contest, "10 years")
 
 		again, err := repo.ClaimBuild(ctx, time.Hour)
 		if err != nil {
@@ -315,6 +368,7 @@ func TestAGameStuckBuildingIsClaimedAgainOnceItIsStale(t *testing.T) {
 }
 
 func TestFinishingABuildRecordsReadyOrTheErrorItFailedWith(t *testing.T) {
+	anotherPackagesPendingGame(t)
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
 		repo := NewGameInstances(testPool)
@@ -322,9 +376,7 @@ func TestFinishingABuildRecordsReadyOrTheErrorItFailedWith(t *testing.T) {
 		if err != nil {
 			t.Fatalf("save: %v", err)
 		}
-		if _, err := repo.ClaimBuild(ctx, time.Hour); err != nil {
-			t.Fatalf("claim: %v", err)
-		}
+		markBuilding(t, ctx, contest, "0 seconds")
 
 		if err := repo.FinishBuild(ctx, contest, saved.Version, `ERROR: type "nosuchtype" does not exist`); err != nil {
 			t.Fatalf("finish: %v", err)
@@ -343,6 +395,7 @@ func TestFinishingABuildRecordsReadyOrTheErrorItFailedWith(t *testing.T) {
 // build's outcome speaks for a script nobody is waiting on any more, and must
 // not mark the new one ready — or fail it with the old one's error.
 func TestABuildCannotFinishAVersionThatHasAlreadyBeenReplaced(t *testing.T) {
+	anotherPackagesPendingGame(t)
 	withTx(t, func(ctx context.Context) {
 		contest := aContest(t, ctx)
 		repo := NewGameInstances(testPool)
@@ -351,9 +404,7 @@ func TestABuildCannotFinishAVersionThatHasAlreadyBeenReplaced(t *testing.T) {
 		if err != nil {
 			t.Fatalf("save: %v", err)
 		}
-		if _, err := repo.ClaimBuild(ctx, time.Hour); err != nil {
-			t.Fatalf("claim: %v", err)
-		}
+		markBuilding(t, ctx, contest, "0 seconds")
 		// The organiser saves a correction while the build is still running.
 		if _, err := repo.SaveScript(ctx, contest, name, `SELECT 2`); err != nil {
 			t.Fatalf("second save: %v", err)
