@@ -1406,8 +1406,8 @@ func TestOneAddressCannotFillTheQueueForAHashingSlot(t *testing.T) {
 		t.Fatalf("Hold() returned error: %v", err)
 	}
 
-	// Fill the address's share of the queue: twice the slots.
-	waiting := 2 * hasher.Concurrency()
+	// Fill the address's share of the queue.
+	waiting := waitingPerSlot * hasher.Concurrency()
 	done := make(chan error, waiting)
 	for range waiting {
 		go func() {
