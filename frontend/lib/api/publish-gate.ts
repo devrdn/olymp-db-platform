@@ -30,6 +30,9 @@ export const PUBLISH_PROBLEMS = {
   // Contest-wide, like the two above: winner mode with no final question, and
   // a leaderboard freeze that no longer fits the window.
   winnerNeedsFinal: "winner_needs_final",
+  // Winner mode only: a final question with no attempt limit, which the
+  // first correct guess wins for nothing. Names a question, not a language.
+  winnerFinalNeedsAttemptLimit: "winner_final_needs_attempt_limit",
   leaderboardFreezeExceedsWindow: "leaderboard_freeze_exceeds_window",
   // ICPC-only, like the sequential pair above: a choice question whose
   // attempt limit is not below its own number of options can always be

@@ -329,9 +329,63 @@ func TestGateAcceptsWinnerScoringWithAFinalQuestion(t *testing.T) {
 	c, story, questions := publishable()
 	c.Scoring = contests.ScoringWinner
 	// publishable()'s one question is already a final one.
+	limit := 3
+	questions[0].MaxAttempts = &limit
 
 	if err := contests.CheckPublishable(c, story, questions); err != nil {
 		t.Errorf("contests.CheckPublishable() = %v, want nil", err)
+	}
+}
+
+// In winner mode the first correct final answer wins outright, and a wrong
+// one costs nothing. A final question with no attempt limit can therefore be
+// won by trying candidates until one is right, however slowly each is sent.
+func TestGateRefusesWinnerScoringWithAnUnlimitedFinalQuestion(t *testing.T) {
+	c, story, questions := publishable()
+	c.Scoring = contests.ScoringWinner
+	// publishable()'s one question is a final one with no attempt limit.
+
+	var notReady *contests.NotPublishableError
+	if !errors.As(contests.CheckPublishable(c, story, questions), &notReady) {
+		t.Fatalf("contests.CheckPublishable() accepted an unlimited final question in winner mode")
+	}
+	var found bool
+	for _, p := range notReady.Problems {
+		if p.Code == contests.ProblemWinnerFinalNeedsAttemptLimit {
+			found = true
+			if p.QuestionID != questions[0].ID {
+				t.Errorf("problem names question %s, want %s", p.QuestionID, questions[0].ID)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("problems = %+v, want %s", notReady.Problems, contests.ProblemWinnerFinalNeedsAttemptLimit)
+	}
+}
+
+// Only the final question decides a winner-mode contest, and only winner mode
+// makes one guess worth the whole contest: an unlimited text question beside
+// it, or an unlimited final question under points scoring, stays an ordinary
+// authoring choice.
+func TestGateAsksForAFinalAttemptLimitOnlyInWinnerMode(t *testing.T) {
+	c, story, questions := publishable()
+	limit := 3
+	questions[0].MaxAttempts = &limit
+	text := questions[0]
+	text.ID = uuid.New()
+	text.Kind = contests.KindText
+	text.MaxAttempts = nil
+	text.Texts = map[string]contests.QuestionText{"en": {BodyMD: "When?"}, "ro": {BodyMD: "Când?"}}
+
+	c.Scoring = contests.ScoringWinner
+	if err := contests.CheckPublishable(c, story, append(questions, text)); err != nil {
+		t.Errorf("winner mode with an unlimited text question: CheckPublishable() = %v, want nil", err)
+	}
+
+	c.Scoring = contests.ScoringPoints
+	questions[0].MaxAttempts = nil
+	if err := contests.CheckPublishable(c, story, questions); err != nil {
+		t.Errorf("points mode with an unlimited final question: CheckPublishable() = %v, want nil", err)
 	}
 }
 

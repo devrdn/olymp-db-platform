@@ -105,6 +105,43 @@ describe("QuestionEditor, the penalty and the sequential warning", () => {
     ).toBeNull();
   });
 
+  test("warns about the winner-mode publish-gate refusal on an unlimited final question", async () => {
+    const user = userEvent.setup();
+    render(
+      <QuestionEditor
+        contestId="c1"
+        question={question({ kind: "final", maxAttempts: undefined })}
+        languages={["en"]}
+        editable
+        scoring="winner"
+        sequentialActive={false}
+        dict={dict}
+      />,
+    );
+
+    const warning = dict.workspace.question.shape.winnerFinalNeedsAttempts;
+    expect(screen.getByText(warning)).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(dict.workspace.question.shape.attempts), "3");
+    expect(screen.queryByText(warning)).toBeNull();
+  });
+
+  test("says nothing about a final question's attempts outside winner mode", () => {
+    render(
+      <QuestionEditor
+        contestId="c1"
+        question={question({ kind: "final", maxAttempts: undefined })}
+        languages={["en"]}
+        editable
+        scoring="points"
+        sequentialActive={false}
+        dict={dict}
+      />,
+    );
+
+    expect(screen.queryByText(dict.workspace.question.shape.winnerFinalNeedsAttempts)).toBeNull();
+  });
+
   test("says nothing about sequential order when this contest does not use it", () => {
     render(
       <QuestionEditor
