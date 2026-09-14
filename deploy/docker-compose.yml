@@ -345,6 +345,10 @@ services:
       # seeded), which is why it is an operator's choice and not a constant.
       DEFAULT_LOCALE: ${DEFAULT_LOCALE:-en}
       SESSION_TTL: ${SESSION_TTL:-12h}
+      # How long a session may exist from sign-in, however actively it is
+      # used (5m to 168h). SESSION_TTL above slides with activity and so never
+      # ends a session somebody keeps using, a copied cookie included.
+      SESSION_MAX_LIFETIME: ${SESSION_MAX_LIFETIME:-12h}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       # The compose network: Caddy's X-Forwarded-For is believed, a direct
       # client's is not. Without this, every request appears to come from the

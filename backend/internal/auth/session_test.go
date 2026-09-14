@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -262,5 +264,98 @@ func TestTouchTreatsARecordWithoutARefreshTimeAsDue(t *testing.T) {
 	after, _ := store.Get(ctx, token)
 	if after.RefreshedAt.IsZero() {
 		t.Error("a legacy record was not stamped with a refresh time")
+	}
+}
+
+// ageSession rewrites a stored session as if it had been issued age ago and
+// kept in use ever since — the record a stolen cookie kept warm would have.
+func ageSession(t *testing.T, c cache.Cache, token string, age time.Duration) {
+	t.Helper()
+	now := time.Now().UTC()
+	record, err := json.Marshal(Session{
+		UserID:      testPrincipal().UserID,
+		Login:       testPrincipal().Login,
+		Generation:  testPrincipal().Generation,
+		IssuedAt:    now.Add(-age),
+		RefreshedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("encode session: %v", err)
+	}
+	if err := c.Set(context.Background(), sessionKey(token), record, time.Hour); err != nil {
+		t.Fatalf("store session: %v", err)
+	}
+}
+
+func TestASessionOlderThanItsMaximumLifetimeIsRefusedAndRemoved(t *testing.T) {
+	// The idle timeout slides on every request, so on its own it never ends a
+	// session somebody keeps using — including somebody using a copied cookie.
+	// The maximum lifetime counts from sign-in and nothing extends it.
+	c := cache.NewMemory(100)
+	t.Cleanup(func() { _ = c.Close() })
+	store := NewSessionStore(c, time.Hour).WithMaxLifetime(12 * time.Hour)
+	ctx := context.Background()
+	token, err := store.Create(ctx, testPrincipal())
+	if err != nil {
+		t.Fatalf("Create() returned error: %v", err)
+	}
+	ageSession(t, c, token, 12*time.Hour+time.Minute)
+
+	if _, err := store.Get(ctx, token); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("Get() of a session past its maximum lifetime = %v, want ErrSessionNotFound", err)
+	}
+	if _, found, _ := c.Get(ctx, sessionKey(token)); found {
+		t.Error("the expired session was left in the store")
+	}
+}
+
+func TestASessionWithinItsMaximumLifetimeIsStillValid(t *testing.T) {
+	c := cache.NewMemory(100)
+	t.Cleanup(func() { _ = c.Close() })
+	store := NewSessionStore(c, time.Hour).WithMaxLifetime(12 * time.Hour)
+	ctx := context.Background()
+	token, _ := store.Create(ctx, testPrincipal())
+	ageSession(t, c, token, 11*time.Hour)
+
+	if _, err := store.Get(ctx, token); err != nil {
+		t.Errorf("Get() of a session within its maximum lifetime = %v, want it valid", err)
+	}
+}
+
+func TestActivityNeverExtendsASessionPastItsMaximumLifetime(t *testing.T) {
+	c := cache.NewMemory(100)
+	t.Cleanup(func() { _ = c.Close() })
+	store := NewSessionStore(c, time.Hour).WithMaxLifetime(120 * time.Millisecond)
+	ctx := context.Background()
+	token, _ := store.Create(ctx, testPrincipal())
+
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if session, err := store.Get(ctx, token); err == nil {
+			_ = store.Refresh(ctx, token)
+			_ = store.Touch(ctx, token, session)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if _, err := store.Get(ctx, token); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("Get() after the maximum lifetime of constant use = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestAStoredSessionExpiresFromTheStoreAtItsMaximumLifetime(t *testing.T) {
+	// The record is written with no more time to live than the session has
+	// left, so a session nobody asks about again does not sit in the store
+	// for a full idle timeout past its end.
+	c := cache.NewMemory(100)
+	t.Cleanup(func() { _ = c.Close() })
+	store := NewSessionStore(c, time.Hour).WithMaxLifetime(40 * time.Millisecond)
+	ctx := context.Background()
+	token, _ := store.Create(ctx, testPrincipal())
+
+	time.Sleep(80 * time.Millisecond)
+
+	if _, found, _ := c.Get(ctx, sessionKey(token)); found {
+		t.Error("the record outlived the session's maximum lifetime in the store")
 	}
 }

@@ -29,6 +29,13 @@ const DefaultInternalAddr = ":9090"
 // sign-in attempts is a flood of parked requests rather than of answers.
 const maxPasswordHashWait = 30 * time.Second
 
+// Bounds on SESSION_MAX_LIFETIME: below a few minutes nobody could sign in and
+// get anything done, and past a week the limit no longer limits anything.
+const (
+	minSessionMaxLifetime = 5 * time.Minute
+	maxSessionMaxLifetime = 7 * 24 * time.Hour
+)
+
 // maxLoginAttemptsCeiling bounds MAX_LOGIN_ATTEMPTS_PER_ACCOUNT.
 const maxLoginAttemptsCeiling = 100_000
 
@@ -86,6 +93,10 @@ type Config struct {
 	// every authenticated request, so it bounds idle time rather than the
 	// length of a working session.
 	SessionTTL time.Duration
+	// SessionMaxLifetime is how long a session may exist from sign-in,
+	// however actively it is used. SessionTTL alone never ends a session
+	// somebody keeps using, including somebody using a copied cookie.
+	SessionMaxLifetime time.Duration
 	// GameProvisionerDSN connects to the game cluster as the provisioning
 	// role, which creates and drops participants' databases. Optional: empty
 	// turns provisioning off, which is what a deployment without a game
@@ -287,6 +298,13 @@ func Load() (Config, error) {
 	}
 	if cfg.SessionTTL, err = durationEnv("SESSION_TTL", 12*time.Hour); err != nil {
 		return Config{}, err
+	}
+	if cfg.SessionMaxLifetime, err = durationEnv("SESSION_MAX_LIFETIME", 12*time.Hour); err != nil {
+		return Config{}, err
+	}
+	if cfg.SessionMaxLifetime < minSessionMaxLifetime || cfg.SessionMaxLifetime > maxSessionMaxLifetime {
+		return Config{}, fmt.Errorf("SESSION_MAX_LIFETIME: %s is outside [%s, %s]",
+			cfg.SessionMaxLifetime, minSessionMaxLifetime, maxSessionMaxLifetime)
 	}
 	if cfg.CookieSecure, err = boolEnv("COOKIE_SECURE", cfg.Env != "development"); err != nil {
 		return Config{}, err
