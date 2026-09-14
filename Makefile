@@ -367,8 +367,13 @@ front-build: front-install ## Build the interface for production
 # over plain http on localhost with no proxy and no certificate — and a browser
 # silently discards a Secure cookie delivered over http. Without this, signing
 # in appears to succeed and the very next click goes back to the form.
+#
+# ALLOW_MISSING_INGRESS_SECRET=true for the same reason: a production server
+# refuses to start without INGRESS_SECRET, which proves a request came through
+# Caddy, and there is no Caddy here (frontend/scripts/start.mjs).
 front-start: front-build ## Serve the production build against the dev API
-	cd $(FRONTEND) && API_ORIGIN="$(FRONT_API_ORIGIN)" COOKIE_SECURE=false npm run start
+	cd $(FRONTEND) && API_ORIGIN="$(FRONT_API_ORIGIN)" COOKIE_SECURE=false \
+		ALLOW_MISSING_INGRESS_SECRET=true npm run start
 
 front-test: front-install ## Run the interface's tests
 	cd $(FRONTEND) && npm test

@@ -15,6 +15,7 @@ export default defineConfig({
       "{app,lib,components}/**/*.test.{ts,tsx}",
       "proxy.test.ts",
       "next.config.test.ts",
+      "scripts/**/*.test.ts",
     ],
   },
 });

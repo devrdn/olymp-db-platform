@@ -32,7 +32,14 @@ COPY --from=build /src/.next/standalone ./
 COPY --from=build /src/.next/static ./.next/static
 COPY --from=build /src/public ./public
 
+# The entry point checks INGRESS_SECRET and refuses to start a production server
+# without a usable one before handing over to server.js (scripts/start.mjs).
+# Copied as plain files next to server.js: it runs under bare Node, outside the
+# build, and imports the rule by bare file name.
+COPY --from=build /src/scripts/start.mjs ./start.mjs
+COPY --from=build /src/lib/api/ingress-secret.mjs ./ingress-secret.mjs
+
 USER node
 EXPOSE 3000
 
-CMD ["node", "server.js"]
+CMD ["node", "start.mjs"]

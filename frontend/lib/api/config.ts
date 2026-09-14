@@ -1,3 +1,5 @@
+import { ingressSecretProblem } from "./ingress-secret.mjs";
+
 /**
  * Where the Core API lives, from the server's point of view.
  *
@@ -30,42 +32,27 @@ export function apiOrigin(): string {
   return LOCAL_STACK;
 }
 
-/** Shorter than this is no secret at all (lib/api/forwarded.ts). */
-const MIN_INGRESS_SECRET_LENGTH = 32;
-
 let reportedMissingIngressSecret = false;
-
-/** How deploy/.env.example marks a value an operator must choose. */
-const PLACEHOLDER_MARKER = "change-me";
 
 /**
  * The secret the reverse proxy adds to every request it forwards here
  * (`INGRESS_SECRET`, deploy/Caddyfile), or null when none usable is set.
  *
- * Null is safe — no forwarded address is handed to the API, so nobody can
- * choose theirs — but behind the proxy it makes every visitor look like this
- * server, and the per-address login limit becomes one counter for everybody.
- * In production that is almost always a deployment that forgot the variable
- * (the compose file refuses to render without it) or kept the example file's
- * placeholder, which everybody who read the repository knows and so vouches
- * for nobody. Either is reported once per process, naming the variable and not
- * the value. A production build served locally without a proxy
- * (`make front-start`) sees the same line once, and can ignore it.
+ * A production server does not start without a usable one (scripts/start.mjs),
+ * so null there means a production build served locally with the explicit
+ * flag, or a server started some other way. Null is safe — no forwarded address
+ * is handed to the API, so nobody can choose theirs — but behind the proxy it
+ * would make every visitor look like this server, so in production it is
+ * reported once per process, naming the variable and not the value.
  */
 export function ingressSecret(): string | null {
-  const configured = process.env.INGRESS_SECRET ?? "";
+  const configured = process.env.INGRESS_SECRET;
   const production = process.env.NODE_ENV === "production";
-  const placeholder = configured.toLowerCase().includes(PLACEHOLDER_MARKER);
-
-  if (configured.length >= MIN_INGRESS_SECRET_LENGTH && !(production && placeholder)) return configured;
+  const problem = ingressSecretProblem(configured, production);
+  if (!problem) return configured ?? null;
 
   if (production && !reportedMissingIngressSecret) {
     reportedMissingIngressSecret = true;
-    const problem = !configured
-      ? "not set"
-      : placeholder
-        ? "still the placeholder from deploy/.env.example"
-        : `shorter than ${MIN_INGRESS_SECRET_LENGTH} characters`;
     console.error(
       `INGRESS_SECRET is ${problem}: ` +
         "client addresses are not forwarded to the API, so every request counts as coming from this server. " +

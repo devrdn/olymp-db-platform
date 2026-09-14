@@ -36,8 +36,14 @@ function stage(from, to) {
 
 stage(".next/static", join(STANDALONE, ".next/static"));
 stage("public", join(STANDALONE, "public"));
+// The container's entry point and the rule it reads, placed where the
+// Dockerfile places them, so a local start goes through the same INGRESS_SECRET
+// check. `make front-start` and `npm run smoke` pass ALLOW_MISSING_INGRESS_SECRET=true,
+// because they serve the build with no proxy in front.
+cpSync("scripts/start.mjs", join(STANDALONE, "start.mjs"));
+cpSync("lib/api/ingress-secret.mjs", join(STANDALONE, "ingress-secret.mjs"));
 
-const server = spawn(process.execPath, [join(STANDALONE, "server.js")], {
+const server = spawn(process.execPath, [join(STANDALONE, "start.mjs")], {
   stdio: "inherit",
   env: { ...process.env, NODE_ENV: "production" },
 });
