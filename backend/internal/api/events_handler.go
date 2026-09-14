@@ -383,6 +383,19 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 		case <-h.shutdown:
 			return
 		case <-ticker.C:
+			// The session was checked when the stream opened; the stream
+			// outlives that check, so each push asks again. A session past
+			// its maximum lifetime, signed out or expired ends the stream; a
+			// session store that is briefly unreadable is retried next tick,
+			// like the transient failures below.
+			alive, err := h.mw.SessionStillValid(r)
+			if err != nil {
+				h.log.WarnContext(r.Context(), "events resync could not read the session; retrying next tick", "error", err)
+				continue
+			}
+			if !alive {
+				return
+			}
 			// Armed after the lookups below, not before: AccessForEvents is
 			// two database reads, and a deadline meant to bound how long this
 			// goroutine may block trying to write must not start ticking

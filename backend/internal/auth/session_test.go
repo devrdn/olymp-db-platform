@@ -359,3 +359,17 @@ func TestAStoredSessionExpiresFromTheStoreAtItsMaximumLifetime(t *testing.T) {
 		t.Error("the record outlived the session's maximum lifetime in the store")
 	}
 }
+
+func TestTheCookieLivesNoLongerThanTheSessionCan(t *testing.T) {
+	// A cookie that outlives its session is a browser sending a dead token on
+	// every request until the idle timeout it was stamped with runs out.
+	c := cache.NewMemory(100)
+	t.Cleanup(func() { _ = c.Close() })
+
+	if got := NewSessionStore(c, 24*time.Hour).WithMaxLifetime(12 * time.Hour).CookieLifetime(); got != 12*time.Hour {
+		t.Errorf("CookieLifetime() = %v, want the 12h maximum lifetime below a 24h idle timeout", got)
+	}
+	if got := NewSessionStore(c, time.Hour).WithMaxLifetime(12 * time.Hour).CookieLifetime(); got != time.Hour {
+		t.Errorf("CookieLifetime() = %v, want the 1h idle timeout below a 12h maximum lifetime", got)
+	}
+}

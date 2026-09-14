@@ -119,7 +119,7 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.cookies.Set(w, result.Token, h.service.Sessions().TTL())
+	h.cookies.Set(w, result.Token, h.service.Sessions().CookieLifetime())
 	httpx.JSON(w, r, http.StatusOK, loginResponse{
 		User:               toIdentityResponse(result.User),
 		MustChangePassword: result.MustChangePassword,
