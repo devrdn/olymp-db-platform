@@ -829,3 +829,100 @@ func TestAnIPv6NetworkIsOneAddressToTheSignInThrottle(t *testing.T) {
 		t.Errorf("a second host of the same /64 = %v, want ErrTooManyAttempts from the shared budget", err)
 	}
 }
+
+// unlockFixture is a service over one real account, with the sink and the
+// account exposed for the unlock tests.
+type unlockFixture struct {
+	service *Service
+	sink    *collectingSink
+	user    users.User
+}
+
+func newUnlockFixture(t *testing.T, cfg ServiceConfig) *unlockFixture {
+	t.Helper()
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+	repo := userstest.New()
+	user := repo.Add(users.User{
+		Login: "ivanov", FullName: "Ivan Ivanov", Status: users.StatusActive,
+		PasswordHash: passwordtest.Hash(t, testPassword),
+	})
+	sink := &collectingSink{}
+	cfg.Users, cfg.Sessions, cfg.Audit = repo, NewSessionStore(c, time.Hour), audit.New(sink)
+	cfg.Limiter, cfg.Logger, cfg.Passwords = NewLimiter(c), logging.New("error", io.Discard), passwordtest.NewHasher()
+	return &unlockFixture{service: NewService(cfg), sink: sink, user: user}
+}
+
+func TestUnlockingSignInClearsTheAccountsGuessingLimitAndCeiling(t *testing.T) {
+	// A rival sharing the owner's address, or a guess spread across many
+	// addresses, can still shut an account for a window. Staff can reopen it
+	// at once rather than tell a participant to wait out the clock.
+	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerAccount: maxLoginAttemptsPerAccountAddress + 1})
+	ctx := context.Background()
+
+	for range maxLoginAttemptsPerAccountAddress + 1 {
+		_, _ = f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: "a guess", IP: "10.0.0.1"})
+	}
+	_, _ = f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: "a guess", IP: "10.0.0.2"})
+	if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1"}); !errors.Is(err, ErrTooManyAttempts) {
+		t.Fatalf("before the unlock = %v, want ErrTooManyAttempts", err)
+	}
+	if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.3"}); !errors.Is(err, ErrTooManyAttempts) {
+		t.Fatalf("before the unlock, another address = %v, want the ceiling's ErrTooManyAttempts", err)
+	}
+
+	if err := f.service.UnlockSignIn(ctx, uuid.New(), f.user.ID); err != nil {
+		t.Fatalf("UnlockSignIn() returned error: %v", err)
+	}
+
+	if _, err := f.service.Login(ctx, LoginCommand{Login: "IVANOV", Password: testPassword, IP: "10.0.0.1"}); err != nil {
+		t.Errorf("the owner at the locked address after the unlock = %v, want a session", err)
+	}
+}
+
+func TestUnlockingSignInLeavesTheAddressBudgetAlone(t *testing.T) {
+	// The address budget is about a machine, not an account: clearing it
+	// for one account's sake would reopen a sweep across every other login.
+	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerAddress: 1})
+	ctx := context.Background()
+	_, _ = f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: "a guess", IP: "10.0.0.1"})
+
+	if err := f.service.UnlockSignIn(ctx, uuid.New(), f.user.ID); err != nil {
+		t.Fatalf("UnlockSignIn() returned error: %v", err)
+	}
+
+	if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1"}); !errors.Is(err, ErrTooManyAttempts) {
+		t.Errorf("after the unlock = %v, want the address budget still spent", err)
+	}
+}
+
+func TestUnlockingSignInIsAuditedWithWhoDidIt(t *testing.T) {
+	f := newUnlockFixture(t, ServiceConfig{})
+	actor := uuid.New()
+
+	if err := f.service.UnlockSignIn(context.Background(), actor, f.user.ID); err != nil {
+		t.Fatalf("UnlockSignIn() returned error: %v", err)
+	}
+
+	if len(f.sink.entries) != 1 {
+		t.Fatalf("audit entries = %v, want one", f.sink.actions())
+	}
+	entry := f.sink.entries[0]
+	if entry.Action != audit.ActionUserSignInUnlock || entry.ActorID == nil || *entry.ActorID != actor ||
+		entry.Entity != "user" || entry.EntityID != f.user.ID.String() {
+		t.Errorf("audit entry = %+v, want %s by the actor on the account", entry, audit.ActionUserSignInUnlock)
+	}
+}
+
+func TestUnlockingSignInForAnUnknownAccountIsNotFound(t *testing.T) {
+	f := newUnlockFixture(t, ServiceConfig{})
+
+	err := f.service.UnlockSignIn(context.Background(), uuid.New(), uuid.New())
+
+	if !errors.Is(err, users.ErrNotFound) {
+		t.Errorf("err = %v, want users.ErrNotFound", err)
+	}
+	if len(f.sink.entries) != 0 {
+		t.Error("an unlock of nothing was audited")
+	}
+}

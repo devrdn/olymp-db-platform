@@ -13,7 +13,7 @@ vi.mock("@/lib/api/server", () => ({ serverRequest }));
 
 import { ApiError } from "@/lib/api/client";
 
-import { blockAction, deleteAction, restoreAction } from "./actions";
+import { blockAction, deleteAction, restoreAction, unlockSignInAction } from "./actions";
 
 const userId = "9a1f0c3e-2b44-4e77-8d0a-1c5b8e91a4d6";
 
@@ -115,5 +115,30 @@ describe("restoreAction", () => {
     const state = await restoreAction({}, form({ userId }));
 
     expect(state).toEqual({ code: "email_taken" });
+  });
+});
+
+describe("unlockSignInAction", () => {
+  test("posts to the account's sign-in unlock and revalidates", async () => {
+    serverRequest.mockResolvedValueOnce(undefined);
+
+    const state = await unlockSignInAction({}, form({ userId }));
+
+    expect(serverRequest).toHaveBeenCalledWith(`/users/${userId}/sign-in/unlock`, { method: "POST" });
+    expect(state).toEqual({ done: true });
+    expect(revalidatePath).toHaveBeenCalledWith("/users", "layout");
+  });
+
+  test("refuses an identifier that is not one without calling the server", async () => {
+    const state = await unlockSignInAction({}, form({ userId: "../roles" }));
+
+    expect(state).toEqual({ code: "invalid_user_id" });
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+
+  test("reports the server's refusal by its code", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("not_found", 404, "User not found"));
+
+    expect(await unlockSignInAction({}, form({ userId }))).toEqual({ code: "not_found" });
   });
 });

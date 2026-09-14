@@ -417,7 +417,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 
 	modules := []api.Module{
 		api.NewAuthHandler(authService, userService, userRepo, authMiddleware, cookies, log),
-		api.NewUsersHandler(userService, userRepo, authMiddleware, log),
+		api.NewUsersHandler(userService, userRepo, authService, authMiddleware, log),
 		api.NewSettingsHandler(
 			settings.NewService(postgres.NewSettings(pool), postgres.NewSettingsImages(pool), auditRecorder, storage.NewUnitOfWork(pool)),
 			authMiddleware, log),

@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -287,7 +288,7 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 	// limit. The account-wide ceiling is left to its window: a success here
 	// says nothing about attempts made from elsewhere, and clearing it would
 	// hand a distributed guess a fresh budget every time the owner signs in.
-	if err := s.limiter.Reset(ctx, accountAddressSubject(cmd.Login, cmd.IP)); err != nil {
+	if err := s.resetAccountAddress(ctx, cmd); err != nil {
 		s.log.WarnContext(ctx, "could not reset the login throttle", "error", err)
 	}
 
@@ -386,14 +387,19 @@ func (s *Service) checkAddress(ctx context.Context, cmd LoginCommand) error {
 	return nil
 }
 
-// checkAccount spends the account's guessing limit and then its ceiling.
+// checkAccount spends the account's guessing limit and then its ceiling, both
+// under the account's current throttle generation.
 func (s *Service) checkAccount(ctx context.Context, cmd LoginCommand) error {
+	gen, err := s.limiter.Generation(ctx, accountFamily(cmd.Login))
+	if err != nil {
+		return err
+	}
 	for _, window := range []struct {
 		subject string
 		limit   int
 	}{
-		{accountAddressSubject(cmd.Login, cmd.IP), maxLoginAttemptsPerAccountAddress},
-		{accountSubject(cmd.Login), s.maxPerAccount},
+		{accountAddressSubject(cmd.Login, cmd.IP, gen), maxLoginAttemptsPerAccountAddress},
+		{accountSubject(cmd.Login, gen), s.maxPerAccount},
 	} {
 		allowed, err := s.limiter.Allow(ctx, window.subject, window.limit, loginAttemptWindow)
 		if err != nil {
@@ -432,6 +438,38 @@ func (s *Service) ClearPasswordChangeThrottle(ctx context.Context, userID uuid.U
 	if err := s.limiter.Reset(ctx, passwordChangeSubject(userID)); err != nil {
 		s.log.WarnContext(ctx, "could not reset the password-change throttle", "error", err)
 	}
+}
+
+// UnlockSignIn clears the sign-in throttling of an account: its guessing
+// limit at every address and its account-wide ceiling. The address budgets are
+// left alone — they are about machines, and clearing one for an account's sake
+// would reopen a sweep across every other login.
+//
+// The counters are keyed by the login and by whatever address each attempt
+// came from, so there is no list of them to delete. Every account key carries
+// the account's throttle generation instead (see accountGeneration), and a new
+// generation abandons them all.
+//
+// The unlock is made before it is recorded, and a failure to record it is
+// returned rather than logged: this is an administrator's action, and one the
+// trail cannot show should not look like a success to whoever asked for it.
+func (s *Service) UnlockSignIn(ctx context.Context, actorID, userID uuid.UUID) error {
+	user, err := s.users.ByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if err := s.limiter.NewGeneration(ctx, accountFamily(user.Login), loginAttemptWindow); err != nil {
+		return err
+	}
+	if err := s.audit.Record(ctx, audit.Entry{
+		ActorID:  &actorID,
+		Action:   audit.ActionUserSignInUnlock,
+		Entity:   "user",
+		EntityID: user.ID.String(),
+	}); err != nil {
+		return fmt.Errorf("record sign-in unlock: %w", err)
+	}
+	return nil
 }
 
 // upgradeHash replaces a digest made with weaker parameters. A failure here
@@ -490,15 +528,34 @@ func boundLogin(login string) string {
 	return strings.ToValidUTF8(login[:cut], "")
 }
 
-func accountSubject(login string) string { return "login:" + normalizeLogin(login) }
+// resetAccountAddress clears the guessing counter this attempt was counted
+// against, under the account's current generation.
+func (s *Service) resetAccountAddress(ctx context.Context, cmd LoginCommand) error {
+	gen, err := s.limiter.Generation(ctx, accountFamily(cmd.Login))
+	if err != nil {
+		return err
+	}
+	return s.limiter.Reset(ctx, accountAddressSubject(cmd.Login, cmd.IP, gen))
+}
+
+// accountFamily names the throttle generation of one account. It is keyed by
+// the normalised login, because the counters are: they are spent before the
+// account is looked up, when the login is all there is.
+func accountFamily(login string) string { return "login:" + normalizeLogin(login) }
+
+// accountSubject keys the account-wide ceiling. The generation is hex digits
+// only, so the separator after it is unambiguous whatever the login holds.
+func accountSubject(login, gen string) string {
+	return "login:" + gen + "|" + normalizeLogin(login)
+}
 
 // accountAddressSubject keys the guessing limit. The address is grouped the
 // way every address budget is (httpx.AddressSubject: an IPv6 /64 is one
-// caller). It comes first and the separator is one no address contains, so
-// the split is unambiguous whatever the login holds: no login a caller
-// invents can produce another address's key.
-func accountAddressSubject(login, ip string) string {
-	return "login-from:" + httpx.AddressSubject(ip) + "|" + normalizeLogin(login)
+// caller). The address comes first and no address contains the separator, the
+// generation is hex digits only, so the split is unambiguous whatever the login
+// holds: no login a caller invents can produce another address's key.
+func accountAddressSubject(login, ip, gen string) string {
+	return "login-from:" + httpx.AddressSubject(ip) + "|" + gen + "|" + normalizeLogin(login)
 }
 
 func passwordChangeSubject(userID uuid.UUID) string { return "pwchange:" + userID.String() }
