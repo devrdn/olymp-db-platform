@@ -327,7 +327,7 @@ func newDeletionFixture(t *testing.T) *deletionFixture {
 	usersService := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}, passwordtest.NewHasher())
 
 	router := chi.NewRouter()
-	api.NewUsersHandler(usersService, repo, mw, log).Mount(router)
+	api.NewUsersHandler(usersService, repo, authService, mw, log).Mount(router)
 	api.NewAuthHandler(authService, usersService, repo, mw, auth.NewCookieWriter(false), log).Mount(router)
 
 	return &deletionFixture{
@@ -430,5 +430,32 @@ func TestDeletionAndBulkRoundTrip(t *testing.T) {
 	}
 	if code := errorCode(t, rec); code != "account_blocked" {
 		t.Errorf("popa's sign-in code = %q, want account_blocked", code)
+	}
+}
+
+// TestStaffUnlockReopensSignInOverHTTP is the unlock as the deployment runs
+// it: a guessing limit spent through the login endpoint, cleared through the
+// account endpoint by an administrator, with one account store and one cache
+// between them.
+func TestStaffUnlockReopensSignInOverHTTP(t *testing.T) {
+	f := newDeletionFixture(t)
+	owner := f.repo.Add(users.User{
+		Login: "orlov", FullName: "Orlov", PasswordHash: passwordtest.Hash(t, testPassword), Status: users.StatusActive,
+	})
+
+	var rec *httptest.ResponseRecorder
+	for range maxLoginAttempts + 1 {
+		rec = f.signIn("orlov", "a guess")
+	}
+	if rec = f.signIn("orlov", testPassword); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("before the unlock: status = %d, want 429 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	if rec = f.asAdmin(http.MethodPost, "/users/"+owner.ID.String()+"/sign-in/unlock", ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("unlock status = %d, want 204 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	if rec = f.signIn("orlov", testPassword); rec.Code != http.StatusOK {
+		t.Errorf("after the unlock: status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
 }

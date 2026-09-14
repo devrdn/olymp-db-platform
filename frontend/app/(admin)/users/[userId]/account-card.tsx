@@ -1,8 +1,16 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { startTransition, useActionState, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -17,6 +25,7 @@ import {
   resetPasswordAction,
   restoreAction,
   unblockAction,
+  unlockSignInAction,
   updateProfileAction,
   type AccountState,
   type ResetState,
@@ -70,7 +79,16 @@ function Panel({
   );
 }
 
-function Outcome({ state, dict }: { state: AccountState; dict: Dictionary }) {
+function Outcome({
+  state,
+  dict,
+  doneLabel,
+}: {
+  state: AccountState;
+  dict: Dictionary;
+  /** What success says, when "Saved" is not the right word for it. */
+  doneLabel?: string;
+}) {
   const failure = state.code
     ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
     : null;
@@ -85,7 +103,7 @@ function Outcome({ state, dict }: { state: AccountState; dict: Dictionary }) {
   if (state.done) {
     return (
       <p role="status" className="text-small text-good">
-        {dict.accounts.card.saved}
+        {doneLabel ?? dict.accounts.card.saved}
       </p>
     );
   }
@@ -123,6 +141,58 @@ function ReasonField({
         className="min-h-24 font-sans text-body"
         onChange={(event) => onChange(event.currentTarget.value.trim() === "")}
       />
+    </div>
+  );
+}
+
+/**
+ * Clearing a sign-in lockout, behind a confirmation.
+ *
+ * It is confirmed because it cannot tell the owner from whoever was guessing:
+ * both get their attempts back. The confirmation says so, and names the login,
+ * so it is not pressed on the wrong card. The request is dispatched from the
+ * confirming button rather than a form inside the dialog, which unmounts the
+ * moment it closes.
+ */
+function UnlockSignIn({ account, dict }: { account: Account; dict: Dictionary }) {
+  const t = dict.accounts.card;
+  const [open, setOpen] = useState(false);
+  const [state, run, pending] = useActionState<AccountState, FormData>(unlockSignInAction, {});
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      <p className="max-w-body text-small text-ink-2">{t.unlockSignInNote}</p>
+      <div className="flex flex-wrap items-center gap-4">
+        <Button type="button" variant="secondary" disabled={pending} onClick={() => setOpen(true)}>
+          {pending ? t.saving : t.unlockSignIn}
+        </Button>
+        <Outcome state={state} dict={dict} doneLabel={t.unlocked} />
+      </div>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent closeLabel={dict.accounts.selection.bulk.close}>
+          <DialogHeader>
+            <DialogTitle>{t.unlockSignInConfirmTitle.replace("{login}", account.login)}</DialogTitle>
+            <DialogDescription>{t.unlockSignInConfirmBody}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="secondary" onClick={() => setOpen(false)}>
+              {t.unlockSignInCancel}
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                const form = new FormData();
+                form.set("userId", account.id);
+                setOpen(false);
+                startTransition(() => run(form));
+              }}
+            >
+              {t.unlockSignInConfirm}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -168,7 +238,12 @@ export function AccountCard({
   const [deleteReasonMissing, setDeleteReasonMissing] = useState(false);
 
   const offersDanger =
-    offered.block || offered.unblock || offered.delete || offered.restore || offered.resetPassword;
+    offered.block ||
+    offered.unblock ||
+    offered.delete ||
+    offered.restore ||
+    offered.resetPassword ||
+    offered.unlockSignIn;
 
   return (
     <div className="flex flex-col gap-8">
@@ -354,6 +429,8 @@ export function AccountCard({
                 </div>
               </form>
             ) : null}
+
+            {offered.unlockSignIn ? <UnlockSignIn account={account} dict={dict} /> : null}
 
             {offered.resetPassword ? (
               <form action={resetPassword} className="flex flex-col gap-2.5">

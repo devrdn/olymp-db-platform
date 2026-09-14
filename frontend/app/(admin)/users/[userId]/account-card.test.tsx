@@ -1,5 +1,13 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeAll, describe, expect, test } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+
+// Only the unlock is replaced: it is the one action these tests submit, and
+// the server action behind it would otherwise need a running API.
+const unlockSignInAction = vi.hoisted(() => vi.fn());
+vi.mock("./actions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./actions")>()),
+  unlockSignInAction,
+}));
 
 import type { Account, Role } from "@/lib/api/accounts";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
@@ -147,5 +155,54 @@ describe("AccountCard, the roles panel", () => {
     expect(screen.getByRole("button", { name: en.chrome.helpLabel })).toHaveAccessibleDescription(
       en.accounts.card.rolesHelp,
     );
+  });
+});
+
+describe("AccountCard, clearing a sign-in lockout", () => {
+  beforeEach(() => {
+    unlockSignInAction.mockReset();
+    unlockSignInAction.mockResolvedValue({ done: true });
+  });
+
+  const renderCard = () =>
+    render(
+      <AccountCard account={account()} roles={roles} viewerId={viewerId} dict={en} statusChangedAtLabel={null} />,
+    );
+
+  test("asks for confirmation before anything is sent", () => {
+    renderCard();
+
+    fireEvent.click(screen.getByRole("button", { name: en.accounts.card.unlockSignIn }));
+
+    expect(
+      screen.getByText(en.accounts.card.unlockSignInConfirmTitle.replace("{login}", "s.popescu")),
+    ).toBeInTheDocument();
+    expect(unlockSignInAction).not.toHaveBeenCalled();
+  });
+
+  test("sends nothing when the confirmation is cancelled", async () => {
+    renderCard();
+
+    fireEvent.click(screen.getByRole("button", { name: en.accounts.card.unlockSignIn }));
+    fireEvent.click(screen.getByRole("button", { name: en.accounts.card.unlockSignInCancel }));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText(en.accounts.card.unlockSignInConfirmTitle.replace("{login}", "s.popescu")),
+      ).not.toBeInTheDocument(),
+    );
+    expect(unlockSignInAction).not.toHaveBeenCalled();
+  });
+
+  test("clears the lockout for this account once confirmed, and says so", async () => {
+    renderCard();
+
+    fireEvent.click(screen.getByRole("button", { name: en.accounts.card.unlockSignIn }));
+    fireEvent.click(screen.getByRole("button", { name: en.accounts.card.unlockSignInConfirm }));
+
+    await waitFor(() => expect(unlockSignInAction).toHaveBeenCalledTimes(1));
+    const submitted = unlockSignInAction.mock.calls[0][1] as FormData;
+    expect(submitted.get("userId")).toBe(account().id);
+    expect(await screen.findByText(en.accounts.card.unlocked)).toBeInTheDocument();
   });
 });

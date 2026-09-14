@@ -26,11 +26,12 @@ import (
 )
 
 type apiFixture struct {
-	router http.Handler
-	repo   *userstest.Repository
-	admin  users.User
-	cookie *http.Cookie
-	hasher *password.Hasher
+	router   http.Handler
+	repo     *userstest.Repository
+	admin    users.User
+	cookie   *http.Cookie
+	hasher   *password.Hasher
+	unlocker *recordingUnlocker
 }
 
 // newAPIFixture mounts the account endpoints behind a session for an account
@@ -58,16 +59,18 @@ func newAPIFixture(t *testing.T, permissions ...string) *apiFixture {
 	})
 	hasher := passwordtest.NewHasher()
 	service := users.NewService(repo, audit.New(&apiSink{}), &userstest.SpyUnitOfWork{}, hasher)
+	unlocker := &recordingUnlocker{}
 
 	router := chi.NewRouter()
-	api.NewUsersHandler(service, repo, mw, log).Mount(router)
+	api.NewUsersHandler(service, repo, unlocker, mw, log).Mount(router)
 
 	return &apiFixture{
-		router: router,
-		repo:   repo,
-		admin:  admin,
-		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: token},
-		hasher: hasher,
+		router:   router,
+		repo:     repo,
+		admin:    admin,
+		cookie:   &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		hasher:   hasher,
+		unlocker: unlocker,
 	}
 }
 
@@ -599,5 +602,64 @@ func TestCreateEndpointReportsBusyHashingWith503(t *testing.T) {
 	}
 	if code := errorCode(t, rec); code != "sign_in_busy" {
 		t.Errorf("code = %q, want sign_in_busy", code)
+	}
+}
+
+// recordingUnlocker stands in for auth.Service's UnlockSignIn: it remembers
+// what it was asked and answers with err.
+type recordingUnlocker struct {
+	actor, user uuid.UUID
+	calls       int
+	err         error
+}
+
+func (u *recordingUnlocker) UnlockSignIn(_ context.Context, actorID, userID uuid.UUID) error {
+	u.actor, u.user = actorID, userID
+	u.calls++
+	return u.err
+}
+
+func TestSignInUnlockEndpointClearsTheAccountsThrottleAs204(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	target := uuid.New()
+
+	rec := f.do(http.MethodPost, "/users/"+target.String()+"/sign-in/unlock", "")
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if f.unlocker.calls != 1 || f.unlocker.user != target || f.unlocker.actor != f.admin.ID {
+		t.Errorf("unlocker = %+v, want one call for %v by the administrator %v", f.unlocker, target, f.admin.ID)
+	}
+}
+
+func TestSignInUnlockEndpointAnswers404ForAnUnknownAccount(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+	f.unlocker.err = users.ErrNotFound
+
+	rec := f.do(http.MethodPost, "/users/"+uuid.NewString()+"/sign-in/unlock", "")
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSignInUnlockEndpointRefusesAMalformedID(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionUsersManage)
+
+	rec := f.do(http.MethodPost, "/users/not-a-uuid/sign-in/unlock", "")
+
+	if rec.Code != http.StatusBadRequest || f.unlocker.calls != 0 {
+		t.Errorf("status = %d, calls = %d, want 400 and no unlock", rec.Code, f.unlocker.calls)
+	}
+}
+
+func TestSignInUnlockEndpointNeedsThePermission(t *testing.T) {
+	f := newAPIFixture(t, rbac.PermissionReportsView)
+
+	rec := f.do(http.MethodPost, "/users/"+uuid.NewString()+"/sign-in/unlock", "")
+
+	if rec.Code != http.StatusForbidden || f.unlocker.calls != 0 {
+		t.Errorf("status = %d, calls = %d, want 403 and no unlock", rec.Code, f.unlocker.calls)
 	}
 }

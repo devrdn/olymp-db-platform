@@ -35,6 +35,11 @@ const (
 	ActionUserRolesChange   = "user.roles_change"
 	ActionUserPasswordReset = "user.password_reset"
 	ActionPasswordChange    = "user.password_change"
+	// ActionUserSignInUnlock records staff clearing an account's sign-in
+	// throttling: the attempts counted against it are forgotten and its owner
+	// may try again at once. The trail is where somebody later finds out why
+	// a guessing limit did not hold for an account on a given afternoon.
+	ActionUserSignInUnlock = "user.sign_in_unlock"
 
 	ActionContestCreate       = "contest.create"
 	ActionContestUpdate       = "contest.update"
@@ -169,7 +174,7 @@ var actions = []string{
 	ActionAuthLogin, ActionAuthLoginFailed, ActionAuthLogout,
 	ActionUserCreate, ActionUserUpdate, ActionUserBlock, ActionUserUnblock,
 	ActionUserDelete, ActionUserRestore, ActionUserRolesChange,
-	ActionUserPasswordReset, ActionPasswordChange,
+	ActionUserPasswordReset, ActionPasswordChange, ActionUserSignInUnlock,
 
 	ActionContestCreate, ActionContestUpdate, ActionContestDelete,
 	ActionContestStatusChange, ActionContestLanguages, ActionContestTranslations,
