@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
+	"github.com/devrdn/db-contest/backend/internal/platform/config"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -71,7 +73,7 @@ func run() error {
 	if err := gamedb.PrepareCluster(ctx, pool, roles); err != nil {
 		return err
 	}
-	if err := verifyMemoryCap(ctx, pool); err != nil {
+	if err := verifyMemory(ctx, pool); err != nil {
 		return err
 	}
 	if err := hardenTheDefault(ctx, dsn); err != nil {
@@ -83,27 +85,95 @@ func run() error {
 	return nil
 }
 
-// verifyMemoryCap proves, at deploy time, that the game cluster's per-process
-// memory cap is in force, when the deployment states what it is
-// (GAME_DB_PROCESS_MEMORY_BYTES, the ulimits.data value on pg-game). A missing
-// cap fails silently — the cluster looks fine and only OOMs under load — so the
-// deploy refuses to complete rather than let that reach a contest. Unset (a
-// development cluster with no cap) skips the check.
-func verifyMemoryCap(ctx context.Context, pool *pgxpool.Pool) error {
-	raw := os.Getenv("GAME_DB_PROCESS_MEMORY_BYTES")
-	if raw == "" {
-		fmt.Println("GAME_DB_PROCESS_MEMORY_BYTES unset: skipping the per-process memory cap check")
+// verifyMemory proves, at deploy time, that the game cluster is the cluster the
+// Query Runner's memory arithmetic was checked against. Three checks, in order:
+//
+//   - the per-process cap (GAME_DB_PROCESS_MEMORY_BYTES) is the limit the
+//     backends run under and is enforced;
+//   - the settings the arithmetic restates as constants — game_author's
+//     CONNECTION LIMIT, max_parallel_workers, autovacuum_max_workers — are what
+//     the cluster actually runs with, so a pin changed on one side cannot drift;
+//   - the container's memory limit, read from its own cgroup, is
+//     GAME_DB_MEMORY_BYTES.
+//
+// Each fails silently in production if left unchecked — the cluster looks fine
+// and only OOMs under load — so the deploy refuses to finish instead.
+//
+// The deploy always sets both variables. A run with neither set is a
+// development run against a cluster not created by the compose file (make
+// game-roles), and the checks are skipped with a notice saying so; set either
+// and the other takes the same default the compose file and the Query Runner
+// use.
+func verifyMemory(ctx context.Context, pool *pgxpool.Pool) error {
+	capRaw := os.Getenv("GAME_DB_PROCESS_MEMORY_BYTES")
+	limitRaw := os.Getenv("GAME_DB_MEMORY_BYTES")
+	if capRaw == "" && limitRaw == "" {
+		fmt.Println("NOTICE: GAME_DB_PROCESS_MEMORY_BYTES and GAME_DB_MEMORY_BYTES are unset: " +
+			"skipping the memory checks the deploy runs (cap, cluster settings, container limit)")
 		return nil
 	}
-	capBytes, err := strconv.ParseInt(raw, 10, 64)
+	capBytes, err := bytesEnv("GAME_DB_PROCESS_MEMORY_BYTES", config.DefaultProcessMemoryBytes)
 	if err != nil {
-		return fmt.Errorf("GAME_DB_PROCESS_MEMORY_BYTES: %q is not a whole number of bytes", raw)
+		return err
 	}
+	limitBytes, err := bytesEnv("GAME_DB_MEMORY_BYTES", config.DefaultGameDBMemoryBytes)
+	if err != nil {
+		return err
+	}
+	allowUnreadable, err := strconv.ParseBool(orDefault(os.Getenv("GAME_DB_ALLOW_UNREADABLE_MEMORY_LIMIT"), "false"))
+	if err != nil {
+		return fmt.Errorf("GAME_DB_ALLOW_UNREADABLE_MEMORY_LIMIT: %w", err)
+	}
+
 	if err := gamedb.VerifyProcessMemoryCap(ctx, pool, capBytes); err != nil {
 		return fmt.Errorf("the game cluster's per-process memory cap could not be confirmed: %w", err)
 	}
-	fmt.Printf("per-process memory cap confirmed: a %d-byte allocation is refused with out of memory\n", capBytes)
+	fmt.Printf("per-process memory cap confirmed: %d bytes, enforced\n", capBytes)
+
+	if err := gamedb.VerifyMemorySettings(ctx, pool, gamedb.MemorySettings{
+		AuthorConnectionLimit: config.MaxBuildSessions,
+		MaxParallelWorkers:    config.MaxParallelWorkers,
+		AutovacuumWorkers:     config.AutovacuumWorkers,
+	}); err != nil {
+		return err
+	}
+	fmt.Println("cluster settings match the memory arithmetic: build sessions, parallel workers, autovacuum workers")
+
+	err = gamedb.VerifyContainerMemoryLimit(ctx, pool, gamedb.CgroupMemoryLimitFile, limitBytes)
+	switch {
+	case err == nil:
+		fmt.Printf("container memory limit confirmed: %d bytes\n", limitBytes)
+	case errors.Is(err, gamedb.ErrContainerLimitUnreadable) && allowUnreadable:
+		fmt.Printf("WARNING: %v; continuing because GAME_DB_ALLOW_UNREADABLE_MEMORY_LIMIT is set — "+
+			"the container is assumed, not confirmed, to have a %d-byte limit\n", err, limitBytes)
+	case errors.Is(err, gamedb.ErrContainerLimitUnreadable):
+		return fmt.Errorf("%w; on a host whose containers cannot report their limit (cgroup v1), "+
+			"set GAME_DB_ALLOW_UNREADABLE_MEMORY_LIMIT=true to deploy without confirming it", err)
+	default:
+		return err
+	}
 	return nil
+}
+
+// bytesEnv reads a positive byte count, or the default when the variable is
+// unset or empty.
+func bytesEnv(key string, fallback int64) (int64, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback, nil
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v < 1 {
+		return 0, fmt.Errorf("%s: %q is not a positive whole number of bytes", key, raw)
+	}
+	return v, nil
+}
+
+func orDefault(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 // hardenTheDefault applies the catalogue revocations to template1.
