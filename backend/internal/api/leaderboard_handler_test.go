@@ -420,6 +420,29 @@ func TestRevealIsRefusedBeforeTheFinishAndRecordedAfterIt(t *testing.T) {
 	}
 }
 
+// The staff table names the contest's own status, not only the shown
+// decision: a frozen table's shown.state stays "frozen" straight through a
+// contest finishing (the freeze persists past the end), so the interface
+// needs the raw status to notice that transition — in particular, that
+// revealing has become possible — even while shown.state has not moved.
+func TestTheLiveTableNamesTheContestsOwnStatus(t *testing.T) {
+	f := newBoardFixture(t)
+	freeze := 30
+	running, _ := f.contest(t, contests.StatusRunning, &freeze)
+	organizer := f.organizer.ID
+
+	rec := f.request(http.MethodGet, "/contests/"+running.ID.String()+"/leaderboard/live", &organizer, "")
+	if got := decode(t, rec)["status"]; got != "running" {
+		t.Fatalf("status = %v, want running", got)
+	}
+
+	finished, _ := f.contest(t, contests.StatusFinished, &freeze)
+	rec = f.request(http.MethodGet, "/contests/"+finished.ID.String()+"/leaderboard/live", &organizer, "")
+	if got := decode(t, rec)["status"]; got != "finished" {
+		t.Fatalf("status = %v, want finished", got)
+	}
+}
+
 // The points table's response is byte for byte what it was before ICPC: no
 // questions, no penalty, no cells, and every other field where it was.
 func TestAPointsTableResponseIsUnchanged(t *testing.T) {
@@ -441,7 +464,7 @@ func TestAPointsTableResponseIsUnchanged(t *testing.T) {
 
 	organizer := f.organizer.ID
 	live := f.request(http.MethodGet, "/contests/"+c.ID.String()+"/leaderboard/live", &organizer, "")
-	want = `{"shown":{"state":"live"},"scoring":"points","freeze_min":null,"names":"login",` +
+	want = `{"shown":{"state":"live"},"status":"running","scoring":"points","freeze_min":null,"names":"login",` +
 		`"generated_at":"2026-03-01T10:00:00Z","truncated":false,"rows":[` +
 		`{"place":1,"login":"student","full_name":"","points":12,"solved":2,"last_scored_at":"2026-03-01T09:59:00Z"},` +
 		`{"place":2,"login":"idle","full_name":"","points":0,"solved":0}]}` + "\n"

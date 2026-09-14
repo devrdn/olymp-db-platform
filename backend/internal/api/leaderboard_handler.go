@@ -182,6 +182,12 @@ type staffLeaderboardResponse struct {
 		State    string `json:"state"`
 		FrozenAt string `json:"frozen_at,omitempty"`
 	} `json:"shown"`
+	// Status is the contest's own status (running, finished, …), not the
+	// table's — Shown.State can sit on "frozen" straight through a contest
+	// finishing, since the freeze persists past the end, so this is the one
+	// field that tells the interface a running contest has actually ended
+	// (and, with it, that revealing may now be possible).
+	Status      string     `json:"status"`
 	Scoring     string     `json:"scoring"`
 	FreezeMin   *int       `json:"freeze_min"`
 	Names       string     `json:"names"`
@@ -206,6 +212,7 @@ func (h *LeaderboardHandler) live(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := staffLeaderboardResponse{
+		Status:  view.Contest.Status,
 		Scoring: view.Contest.Scoring, FreezeMin: view.Contest.LeaderboardFreezeMin,
 		Names: view.Contest.LeaderboardNames, RevealedAt: formatTime(view.Contest.LeaderboardRevealedAt),
 		GeneratedAt: view.GeneratedAt.UTC().Format(timeLayout), Truncated: view.Truncated,
