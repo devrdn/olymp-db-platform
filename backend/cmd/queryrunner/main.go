@@ -81,6 +81,10 @@ func run() error {
 		Concurrent: cfg.Concurrent,
 		QueueDepth: cfg.QueueDepth,
 		PerMinute:  cfg.PerMinute,
+		// Kept connections count against Concurrent (see queryrunner's pool),
+		// so this changes how many handshakes the cluster pays, not how many
+		// backends it holds.
+		IdleTimeout: queryrunner.DefaultLimits().IdleTimeout,
 	}
 
 	// A result budget larger than what the transport will carry produces the
@@ -94,6 +98,10 @@ func run() error {
 	}
 
 	runner := queryrunner.New(cluster, checker.NewChecker(cfg.ExtraFunctions...), limits)
+	// After the server has stopped taking queries: the connections kept for a
+	// participant's next query are closed rather than left to the server to
+	// notice.
+	defer runner.Close()
 
 	// Shut down on SIGINT/SIGTERM: the container runtime sends SIGTERM and
 	// waits before killing the process.
