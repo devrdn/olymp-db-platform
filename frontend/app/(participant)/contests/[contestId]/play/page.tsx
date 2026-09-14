@@ -17,6 +17,7 @@ import { formatDay, formatMoment } from "@/lib/format/datetime";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import type { Locale } from "@/lib/i18n/config";
 
+import { ContentLoadedProvider, ContentLoadedSignal } from "./content-loaded";
 import { playDictionary, type PlayDictionary } from "./dictionary";
 import { PlayHeader } from "./play-header";
 import { PrintView } from "./print-view";
@@ -150,17 +151,22 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   // copy of the story `Workspace` carries would be clipped at one screen.
   return (
     <div className="flex min-h-0 flex-col print:contents narrow:h-[calc(100dvh-3rem-1px)]">
-      <PlayHeader contestId={contestId} title={contest.title} waitingForStart={false} dict={dict} />
-      <Suspense fallback={<WorkspaceSkeleton dict={dict} />}>
-        <PlayPanels
-          contestId={contestId}
-          contestTitle={contest.title}
-          scoring={contest.scoring}
-          icpcPenaltyMin={contest.icpcPenaltyMin}
-          locale={locale}
-          dict={dict}
-        />
-      </Suspense>
+      {/* The provider carries one fact across the Suspense boundary: the
+          workspace's content reads succeeded, which under individual timing
+          means the participant's clock has started (content-loaded.tsx). */}
+      <ContentLoadedProvider>
+        <PlayHeader contestId={contestId} title={contest.title} waitingForStart={false} dict={dict} />
+        <Suspense fallback={<WorkspaceSkeleton dict={dict} />}>
+          <PlayPanels
+            contestId={contestId}
+            contestTitle={contest.title}
+            scoring={contest.scoring}
+            icpcPenaltyMin={contest.icpcPenaltyMin}
+            locale={locale}
+            dict={dict}
+          />
+        </Suspense>
+      </ContentLoadedProvider>
     </div>
   );
 }
@@ -356,20 +362,25 @@ async function PlayPanels({
       />
     ) : null;
 
+  // The signal mounts only here, on the path where the content reads
+  // succeeded, and tells the header above the boundary so (content-loaded.tsx).
   return (
-    <Workspace
-      contestId={contestId}
-      storyBody={storyBody !== null ? <StoryText markdown={storyBody} /> : null}
-      printView={printView}
-      storyUnavailable={storyUnavailable}
-      questionEntries={questionEntries}
-      scoring={scoring}
-      icpcPenaltyMin={icpcPenaltyMin}
-      schema={schema}
-      initialLog={initialLog}
-      locale={locale}
-      dict={dict}
-    />
+    <>
+      <ContentLoadedSignal />
+      <Workspace
+        contestId={contestId}
+        storyBody={storyBody !== null ? <StoryText markdown={storyBody} /> : null}
+        printView={printView}
+        storyUnavailable={storyUnavailable}
+        questionEntries={questionEntries}
+        scoring={scoring}
+        icpcPenaltyMin={icpcPenaltyMin}
+        schema={schema}
+        initialLog={initialLog}
+        locale={locale}
+        dict={dict}
+      />
+    </>
   );
 }
 
