@@ -375,6 +375,9 @@ func (r *Questions) ReplaceAnswers(_ context.Context, questionID uuid.UUID, answ
 // Managers is an in-memory contests.ManagerRepository.
 type Managers struct {
 	byContest map[uuid.UUID][]contests.Manager
+	// Lookups counts Get and List calls, so a test can tell how many staff
+	// lookups a bulk operation made.
+	Lookups int
 }
 
 var _ contests.ManagerRepository = (*Managers)(nil)
@@ -385,6 +388,7 @@ func NewManagers() *Managers {
 }
 
 func (r *Managers) List(_ context.Context, contestID uuid.UUID) ([]contests.Manager, error) {
+	r.Lookups++
 	staff := slices.Clone(r.byContest[contestID])
 	slices.SortFunc(staff, func(a, b contests.Manager) int {
 		if a.Role == b.Role {
@@ -399,6 +403,7 @@ func (r *Managers) List(_ context.Context, contestID uuid.UUID) ([]contests.Mana
 }
 
 func (r *Managers) Get(_ context.Context, contestID, userID uuid.UUID) (contests.Manager, error) {
+	r.Lookups++
 	for _, m := range r.byContest[contestID] {
 		if m.UserID == userID {
 			return m, nil
