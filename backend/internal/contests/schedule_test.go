@@ -284,11 +284,11 @@ func TestAdvanceRecordsASecondEntryWhenABlockedContestIsFixedAndBrokenAgain(t *t
 	}
 }
 
-// TestAdvanceFinishesWithTheSchedulersOwnGrace is C-07's own service-level
-// test: Scheduler must hand AdvanceFinished the exact grace it was
-// constructed with (cfg.DeadlineGrace in production), not compare ends_at
-// bare — the repository is what turns that into "ends_at + grace <= now()",
-// but only if the value actually arrives.
+// TestAdvanceFinishesWithTheSchedulersOwnGrace is a service-level test:
+// Scheduler must hand AdvanceFinished the exact grace it was constructed
+// with (cfg.DeadlineGrace in production), not compare ends_at bare — the
+// repository is what turns that into "ends_at + grace <= now()", but only
+// if the value actually arrives.
 func TestAdvanceFinishesWithTheSchedulersOwnGrace(t *testing.T) {
 	f := newScheduler()
 
