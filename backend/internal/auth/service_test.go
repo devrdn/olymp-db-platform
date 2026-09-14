@@ -1371,3 +1371,78 @@ func TestTheHashingSlotIsNeverHeldAcrossTheLookupOrTheTrail(t *testing.T) {
 		t.Errorf("the hashing slot was held during: %v", watch.held)
 	}
 }
+
+func TestOneAddressCannotFillTheQueueForAHashingSlot(t *testing.T) {
+	// Before it waits for a slot an attempt has paid only its address budget,
+	// and that budget is hundreds. Were that the only bound, one machine could
+	// line up enough attempts in front of the handful of slots that everybody
+	// else's sign-in outlasted the wait. Past a few waiting attempts of its own
+	// an address is refused at once, and another address still gets a slot.
+	c := cache.NewMemory(1000)
+	t.Cleanup(func() { _ = c.Close() })
+	repo := userstest.New()
+	repo.Add(users.User{
+		Login: "ivanov", FullName: "Ivan Ivanov", Status: users.StatusActive,
+		PasswordHash: passwordtest.Hash(t, testPassword),
+	})
+
+	// Roomy: the attempts ahead of the other address each run a full
+	// verification, which is slow under the race detector.
+	const wait = 20 * time.Second
+	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: wait})
+	service := NewService(ServiceConfig{
+		Users:     repo,
+		Sessions:  NewSessionStore(c, time.Hour),
+		Audit:     audit.New(&collectingSink{}),
+		Limiter:   NewLimiter(c),
+		Logger:    logging.New("error", io.Discard),
+		Passwords: hasher,
+		Devices:   testDevices(t),
+	})
+	ctx := context.Background()
+
+	slot, err := hasher.Hold(ctx)
+	if err != nil {
+		t.Fatalf("Hold() returned error: %v", err)
+	}
+
+	// Fill the address's share of the queue: twice the slots.
+	waiting := 2 * hasher.Concurrency()
+	done := make(chan error, waiting)
+	for range waiting {
+		go func() {
+			_, err := service.Login(ctx, LoginCommand{Login: "nobody", Password: "a guess", IP: "10.0.0.1"})
+			done <- err
+		}()
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	started := time.Now()
+	_, err = service.Login(ctx, LoginCommand{Login: "nobody", Password: "a guess", IP: "10.0.0.1"})
+	elapsed := time.Since(started)
+	if !errors.Is(err, password.ErrBusy) {
+		t.Errorf("one attempt past the address's waiting share = %v, want password.ErrBusy", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("the refusal took %v: it waited for a slot instead of being refused at once", elapsed)
+	}
+
+	// Another address is not refused for the first one's queue: it waits
+	// behind it and signs in once the slot comes free.
+	other := make(chan error, 1)
+	go func() {
+		_, err := service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.2"})
+		other <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	slot.Release()
+
+	if err := <-other; err != nil {
+		t.Errorf("a sign-in from another address = %v, want a session", err)
+	}
+	for range waiting {
+		if err := <-done; !errors.Is(err, ErrInvalidCredentials) {
+			t.Errorf("a waiting attempt = %v, want ErrInvalidCredentials once it got a slot", err)
+		}
+	}
+}
