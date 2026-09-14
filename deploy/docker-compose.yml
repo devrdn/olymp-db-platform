@@ -395,7 +395,9 @@ services:
       #             QUERY_MAX_BYTES = 5 MiB, decoded and re-encoded) and
       #             8 MiB upload chunks                               = 1024 MiB
       #   GOMEMLIMIT                                                   = 1280 MiB
-      # Raise PASSWORD_HASH_CONCURRENCY and both figures rise by 64 MiB a slot.
+      # The base is an estimate, not a measured peak. The API logs a warning
+      # at start-up when GOMEMLIMIT is below concurrency × 64 MiB + 1 GiB.
+      # Raise PASSWORD_HASH_CONCURRENCY and this figure rises by 64 MiB a slot.
       GOMEMLIMIT: ${API_GOMEMLIMIT:-1280MiB}
       # The provisioning role, not a participant's: this creates and drops
       # databases and never runs anybody's SQL. The Query Runner holds the
@@ -477,15 +479,17 @@ services:
       # organiser stepping away mid-upload does not lose their place, and a
       # browser tab closed mid-upload does not hold gigabytes indefinitely.
       GAME_UPLOAD_ABANDONED_AFTER: ${GAME_UPLOAD_ABANDONED_AFTER:-24h}
-    # The hard ceiling, GOMEMLIMIT above plus 256 MiB: 1280 + 256 = 1536 MiB.
-    # GOMEMLIMIT is a target the collector works towards, not a wall — live
-    # data can briefly exceed it — and the headroom is what lets it do that
-    # without the kernel killing the process, which would end every
-    # participant's session at once. Move it with API_GOMEMLIMIT.
+    # The hard ceiling: 3 GiB, generous headroom over GOMEMLIMIT's 1280 MiB,
+    # not a measured peak — nobody has measured this process's peak under a
+    # contest's load yet. GOMEMLIMIT is a target the collector works towards,
+    # not a wall; live data can exceed it, and this ceiling exists so the
+    # kernel kills a runaway process rather than the host, not to be reached
+    # by an honest burst — being killed would end every participant's session
+    # at once. Lower it only with a measurement to lower it to.
     deploy:
       resources:
         limits:
-          memory: ${API_MEMORY_BYTES:-1610612736}
+          memory: ${API_MEMORY_BYTES:-3221225472}
     # No host port: Caddy is the only way in. The development overlay exposes
     # the API directly for debugging.
     # game-uploads-data is local to this container's own host. It works
