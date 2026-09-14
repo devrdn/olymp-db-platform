@@ -82,6 +82,13 @@ const (
 	// this one exists to stop a sweep across many logins, and a few hundred
 	// is still far below what a sweep needs.
 	DefaultMaxLoginAttemptsPerAddress = 300
+
+	// waitingPerSlot sizes each address's share of the queue for a hashing
+	// slot, per slot the hasher has. Two a slot lets an honest burst from one
+	// NAT address queue up, and keeps the queue one address can build short
+	// enough that a sign-in from anywhere else behind it is served within the
+	// wait.
+	waitingPerSlot = 2
 )
 
 // dummyHash is verified against when the login does not exist, so a missing
@@ -177,6 +184,8 @@ type Service struct {
 	devices       *DeviceTrust
 	maxPerDevice  int
 	maxTrusted    int
+	// waiting caps each address's share of the queue for a hashing slot.
+	waiting *waitingQueue
 }
 
 // NewService assembles the authentication service.
@@ -215,6 +224,7 @@ func NewService(cfg ServiceConfig) *Service {
 		devices:       cfg.Devices,
 		maxPerDevice:  perDevice,
 		maxTrusted:    trustedPerAccount,
+		waiting:       newWaitingQueue(waitingPerSlot * cfg.Passwords.Concurrency()),
 	}
 }
 
@@ -339,7 +349,7 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 	// a failure to record nor a verdict to give. It is reached by a known and
 	// an unknown login alike, after the same lookup, so it says nothing about
 	// which one it was.
-	slot, err := s.passwords.Hold(ctx)
+	slot, err := s.holdSlot(ctx, cmd, trusted)
 	if err != nil {
 		return LoginResult{}, err
 	}
@@ -588,6 +598,34 @@ func (s *Service) checkAddress(ctx context.Context, cmd LoginCommand) error {
 		return ErrInvalidCredentials
 	}
 	return nil
+}
+
+// errAddressQueueFull refuses an attempt whose address already has its share
+// of the queue for a hashing slot. It is password.ErrBusy to every caller: the
+// password was not evaluated, and the answer is the same busy one.
+var errAddressQueueFull = fmt.Errorf("%w: this address already has its share of sign-ins waiting", password.ErrBusy)
+
+// holdSlot takes a hashing slot for the attempt.
+//
+// An attempt without trust first joins its address's share of the queue, and
+// past that share it is refused without waiting: its address budget is already
+// spent, so the refusal is counted as every other one is. An attempt through a
+// browser that still vouches for the account skips the share, as it skips the
+// address budget, so a rival flooding from the same lecture hall cannot keep
+// the owner's own browser out; the trusted budgets bound how many of those
+// there can be.
+func (s *Service) holdSlot(ctx context.Context, cmd LoginCommand, trusted bool) (*password.Slot, error) {
+	if trusted || cmd.IP == "" {
+		return s.passwords.Hold(ctx)
+	}
+	leave, ok := s.waiting.join(httpx.AddressSubject(cmd.IP))
+	if !ok {
+		return nil, errAddressQueueFull
+	}
+	// Only waiting is capped: once the slot is taken or refused the attempt
+	// has left the queue.
+	defer leave()
+	return s.passwords.Hold(ctx)
 }
 
 // spendAccount spends the account's guessing limit and then its ceiling under
