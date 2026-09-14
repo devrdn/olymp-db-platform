@@ -101,9 +101,16 @@ func TestAConstantOverTheLimitIsRefused(t *testing.T) {
 	}
 
 	// A constant too large for a float64 is a constant all the same, and one
-	// plainly over the bound — refused, not admitted as unreadable.
-	overBound(t, `SELECT repeat('x', 1e400)`, "repeat", sqlpolicy.ReadOnly())
-	overBound(t, `SELECT count(*) FROM generate_series(1, 1e400)`, "generate_series", sqlpolicy.ReadOnly())
+	// plainly over the bound — refused, not admitted as unreadable, with a
+	// subject that reads as a sentence rather than printing an infinity.
+	rInf := refusal(t, `SELECT repeat('x', 1e400)`, sqlpolicy.ReadOnly())
+	if rInf.Code != sqlpolicy.CodeArgumentNotBounded || !strings.Contains(rInf.Subject, "not a real number") {
+		t.Fatalf("repeat 1e400 subject = %q", rInf.Subject)
+	}
+	sInf := refusal(t, `SELECT count(*) FROM generate_series(1, 1e400)`, sqlpolicy.ReadOnly())
+	if sInf.Code != sqlpolicy.CodeArgumentNotBounded || !strings.Contains(sInf.Subject, "too large to count") {
+		t.Fatalf("generate_series 1e400 subject = %q", sInf.Subject)
+	}
 
 	series := strconv.Itoa(checker.MaxSeriesLength)
 	allow(t, `SELECT count(*) FROM generate_series(1, `+series+`)`, sqlpolicy.ReadOnly())
