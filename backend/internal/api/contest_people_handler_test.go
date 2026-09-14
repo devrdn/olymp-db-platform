@@ -129,10 +129,10 @@ func TestAppointingABlockedAccountIsRefusedWithAConflict(t *testing.T) {
 	}
 }
 
-// TestGrantManagerRefusesARegisteredParticipantWithAConflict is C-05's
-// handler-level test for one direction of the overlap: appointing a
-// contest's own participant is refused with a declared 409, not an internal
-// error, and the roster entry stays unpromoted.
+// TestGrantManagerRefusesARegisteredParticipantWithAConflict is a
+// handler-level test for one direction of the staff/participant overlap:
+// appointing a contest's own participant is refused with a declared 409,
+// not an internal error, and the roster entry stays unpromoted.
 func TestGrantManagerRefusesARegisteredParticipantWithAConflict(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusPublished)
@@ -155,9 +155,9 @@ func TestGrantManagerRefusesARegisteredParticipantWithAConflict(t *testing.T) {
 	}
 }
 
-// TestStaffSelfEnrollIsRefusedWithAConflict is C-05's handler-level test for
-// the other direction: a contest's own manager cannot self-enroll as its
-// participant.
+// TestStaffSelfEnrollIsRefusedWithAConflict is a handler-level test for the
+// other direction of the overlap: a contest's own manager cannot
+// self-enroll as its participant.
 func TestStaffSelfEnrollIsRefusedWithAConflict(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.stores.SeedContest(contests.StatusPublished)
@@ -182,7 +182,7 @@ func TestStaffSelfEnrollIsRefusedWithAConflict(t *testing.T) {
 	}
 }
 
-// TestImportSkipsAStaffMemberWithAReason is C-05's handler-level test for the
+// TestImportSkipsAStaffMemberWithAReason is a handler-level test for the
 // roster import: a mistaken entry naming one of the contest's own staff is
 // reported as skipped, not rejected as an unrelated failure, and the rest of
 // the roster still goes in.

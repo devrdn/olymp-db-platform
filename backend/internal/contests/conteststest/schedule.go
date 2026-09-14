@@ -45,8 +45,7 @@ type Schedule struct {
 	FinishedErr error
 	// GraceSeen records the grace Advance actually passed to AdvanceFinished
 	// on the last call, so a test can prove Scheduler threads its own
-	// configured grace through rather than comparing ends_at bare (finding
-	// C-07).
+	// configured grace through rather than comparing ends_at bare.
 	GraceSeen time.Duration
 
 	// LockCalls, DueCalls, SetStatusCalls and FinishedCalls count how many

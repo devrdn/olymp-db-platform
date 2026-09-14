@@ -80,10 +80,11 @@ func TestAppointingABlockedAccountIsRefused(t *testing.T) {
 	}
 }
 
-// TestGrantManagerRefusesARegisteredParticipant is C-05's other direction: a
-// contest's own participant must not also be appointed to its staff, which
-// would hand them the reference answers (contest.view) and the unfrozen
-// leaderboard (contest.edit) for a contest they are competing in.
+// TestGrantManagerRefusesARegisteredParticipant covers the other direction
+// of the staff/participant overlap: a contest's own participant must not
+// also be appointed to its staff, which would hand them the reference
+// answers (contest.view) and the unfrozen leaderboard (contest.edit) for a
+// contest they are competing in.
 func TestGrantManagerRefusesARegisteredParticipant(t *testing.T) {
 	f := conteststest.NewFixture()
 	c := f.SeedContest(contests.StatusPublished)
