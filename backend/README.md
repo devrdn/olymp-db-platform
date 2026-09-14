@@ -130,6 +130,7 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn`, `error` |
 | `SHUTDOWN_TIMEOUT` | no | `15s` | drain period on SIGTERM |
 | `SESSION_TTL` | no | `12h` | idle lifetime of a session; slides on activity |
+| `SESSION_MAX_LIFETIME` | no | `12h` | absolute lifetime of a session from sign-in, 5m to 168h; activity does not extend it |
 | `MAX_LOGIN_ATTEMPTS_PER_ADDRESS` | no | `300` | sign-in attempts from one address per 15 minutes, successes included |
 | `MAX_LOGIN_ATTEMPTS_PER_ACCOUNT` | no | `100` | sign-in attempts at one account from all addresses per 15 minutes; the guessing limit itself is 10 per account and address |
 | `PASSWORD_HASH_CONCURRENCY` | no | one per CPU, at least 2 | argon2id computations run at once (1-64); 64 MiB each, so size the memory limit from it |

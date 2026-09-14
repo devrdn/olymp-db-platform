@@ -84,20 +84,44 @@ type Session struct {
 // indistinguishable from every request to anybody working through a contest.
 const maxRefreshInterval = time.Minute
 
+// DefaultMaxSessionLifetime is how long a session may exist from sign-in,
+// however actively it is used, when the deployment does not state otherwise.
+// A working day: longer than any contest, short enough that a copied cookie
+// does not stay useful for days just because somebody keeps it warm.
+const DefaultMaxSessionLifetime = 12 * time.Hour
+
 // SessionStore keeps sessions in the shared cache.
 //
 // With Redis every replica sees the same sessions. On the in-process fallback
 // they are per-instance, which is one of the reasons that mode is documented
 // as single-instance only.
+//
+// A session ends at whichever comes first of two limits. The idle timeout
+// (ttl) slides with activity, so somebody working through a contest is not
+// signed out mid-answer. The maximum lifetime counts from sign-in and nothing
+// extends it: without it, a session kept in use — by its owner or by whoever
+// copied its cookie off a shared machine — never ends at all.
 type SessionStore struct {
-	cache cache.Cache
-	ttl   time.Duration
+	cache       cache.Cache
+	ttl         time.Duration
+	maxLifetime time.Duration
 }
 
 // NewSessionStore returns a store whose sessions live for ttl, extended on
-// activity by Refresh.
+// activity by Refresh, and never longer than DefaultMaxSessionLifetime from
+// sign-in.
 func NewSessionStore(c cache.Cache, ttl time.Duration) *SessionStore {
-	return &SessionStore{cache: c, ttl: ttl}
+	return &SessionStore{cache: c, ttl: ttl, maxLifetime: DefaultMaxSessionLifetime}
+}
+
+// WithMaxLifetime sets how long a session may exist from sign-in, however
+// actively it is used. A non-positive value keeps the default. It is meant
+// for the composition root, before the store is shared.
+func (s *SessionStore) WithMaxLifetime(d time.Duration) *SessionStore {
+	if d > 0 {
+		s.maxLifetime = d
+	}
+	return s
 }
 
 // Create issues a session and returns its token. The token is the only copy
@@ -123,13 +147,21 @@ func (s *SessionStore) Create(ctx context.Context, p Principal) (string, error) 
 	return token, nil
 }
 
-// put writes a session under its token for a full lifetime.
+// put writes a session under its token for a full idle timeout, or for what
+// is left of its maximum lifetime when that is shorter — so the store drops a
+// session at its end even if nobody asks about it again.
 func (s *SessionStore) put(ctx context.Context, token string, session Session) error {
+	ttl := min(s.ttl, s.remaining(session, time.Now()))
+	if ttl <= 0 {
+		// Already past its end: there is nothing to extend, and writing it
+		// would only resurrect a record Get is about to refuse.
+		return ErrSessionNotFound
+	}
 	record, err := json.Marshal(session)
 	if err != nil {
 		return fmt.Errorf("encode session: %w", err)
 	}
-	if err := s.cache.Set(ctx, sessionKey(token), record, s.ttl); err != nil {
+	if err := s.cache.Set(ctx, sessionKey(token), record, ttl); err != nil {
 		return fmt.Errorf("store session: %w", err)
 	}
 	return nil
@@ -156,7 +188,26 @@ func (s *SessionStore) Get(ctx context.Context, token string) (Session, error) {
 		return Session{}, fmt.Errorf("decode session: %w", err)
 	}
 
+	// Past its maximum lifetime the session is over, however recently it was
+	// used. The record is removed so it stops occupying the store; if that
+	// write fails, the refusal stands and the record's own expiry, which put
+	// never set past this point, removes it anyway. A record without an issue
+	// time is refused too: its age cannot be known, so it cannot be shown to
+	// be within the limit.
+	if s.remaining(session, time.Now()) <= 0 {
+		_ = s.cache.Delete(ctx, sessionKey(token))
+		return Session{}, ErrSessionNotFound
+	}
+
 	return session, nil
+}
+
+// remaining is how long the session has left before its maximum lifetime.
+func (s *SessionStore) remaining(session Session, now time.Time) time.Duration {
+	if session.IssuedAt.IsZero() {
+		return 0
+	}
+	return session.IssuedAt.Add(s.maxLifetime).Sub(now)
 }
 
 // Refresh extends an active session by a full lifetime, unconditionally.
