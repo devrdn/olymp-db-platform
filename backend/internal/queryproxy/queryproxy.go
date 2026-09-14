@@ -116,6 +116,34 @@ type Games interface {
 	Game(ctx context.Context, contestID uuid.UUID) (provisioning.Contest, error)
 }
 
+// ContestGame is a contest together with its game, read in one round trip
+// instead of the two separate calls Contests.ByID and Games.Game would
+// otherwise each make against the same contests row.
+type ContestGame struct {
+	Contest contests.Contest
+	// Game and GameErr mirror what a separate call to Games.Game would have
+	// answered: GameErr is provisioning.ErrNoGame for a contest with no ready
+	// template, nil once Game is populated. Kept apart from the lookup's own
+	// error (ContestAndGame.Lookup's second return value) so a caller already
+	// holding Contest can use it right away and decide what a missing game
+	// means only once it actually needs one — the same point in Run's own
+	// admission order the separate call used to be checked at.
+	Game    provisioning.Contest
+	GameErr error
+}
+
+// ContestAndGame is the optional single round trip behind
+// Service.WithContestAndGame: a contest and its game, read together.
+//
+// Nothing requires a caller to wire one. Access, AccessForEvents and Schema
+// never touch it — they have no reason to read a game at all, or already
+// call Games.Game on their own — and Run itself falls back to the ordinary
+// Contests.ByID and Games.Game pair unless this is set, which is what every
+// test written before this existed keeps doing.
+type ContestAndGame interface {
+	Lookup(ctx context.Context, contestID uuid.UUID) (ContestGame, error)
+}
+
 // Databases hands out the participant's own copy, and says how large it may
 // grow.
 type Databases interface {
@@ -202,6 +230,11 @@ type Service struct {
 	// work towards. Set by WithAnswerable and nil until then — see that
 	// option for why a build that never wired it runs the query anyway.
 	answerable Answerable
+	// contestGame is the optional combined lookup WithContestAndGame sets.
+	// nil until then, which is the ordinary two-call path every deployment
+	// used before it existed and every test but the ones about this option
+	// still exercises.
+	contestGame ContestAndGame
 }
 
 // defaultGrace is the network-latency allowance a deployment gets unless
@@ -285,6 +318,16 @@ func (s *Service) WithAnswerable(answerable Answerable) *Service {
 	return s
 }
 
+// WithContestAndGame supplies the combined lookup Run uses instead of its own
+// separate calls to Contests.ByID and Games.Game, removing one of the core
+// round trips a query otherwise pays for on every single request. A
+// deployment with no game cluster, and every existing test, never calls this
+// and keeps the two-call path unchanged.
+func (s *Service) WithContestAndGame(cg ContestAndGame) *Service {
+	s.contestGame = cg
+	return s
+}
+
 // effectiveRateLimit resolves a contest's own rate against the installation's,
 // so that the number an organiser sets describes what will actually happen.
 //
@@ -360,6 +403,15 @@ func effectiveRateLimit(contestLimit, installationLimit int) int {
 // the same rate check a legitimate one does rather than dodging them for
 // free.
 //
+// The contest and the game are two different questions about the same
+// contests row, and a deployment with WithContestAndGame wired answers both
+// in the one round trip lookupContestAndGame opens here — but the game
+// itself is not looked at yet: whether it exists is still checked at the
+// same point in the order below, after the address, length and answerable
+// checks, exactly as it was when it was its own separate call. pendingGame is
+// what lets the two stay this far apart in the order while only ever costing
+// one round trip when there is one to save.
+//
 // Between the length check and the game lookup sits the one check that costs
 // a round trip of its own: has this participant anything left to answer at
 // all (ErrNothingLeftToAnswer)? After the two checks above it because those
@@ -393,7 +445,7 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		return nil, err
 	}
 
-	contest, err := s.contests.ByID(ctx, cmd.ContestID)
+	contest, pending, err := s.lookupContestAndGame(ctx, cmd.ContestID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: look up the contest: %w", ErrUnavailable, err)
 	}
@@ -450,7 +502,7 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		}
 	}
 
-	game, err := s.games.Game(ctx, cmd.ContestID)
+	game, err := pending.resolve(ctx, s, cmd.ContestID)
 	switch {
 	case errors.Is(err, provisioning.ErrNoGame):
 		return nil, ErrNoGameYet
@@ -505,6 +557,50 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		return nil, ErrDatabaseDeclined
 	}
 	return result, err
+}
+
+// pendingGame is the game half of lookupContestAndGame's answer: either
+// already known (a combined lookup read it in the same round trip as the
+// contest) or still to be asked for with the ordinary separate call to
+// Games.Game, exactly as every build made before WithContestAndGame existed.
+//
+// Kept apart from the contest itself so Run can use the contest immediately
+// and only decide what resolved means — in particular, what a missing game
+// means — once it reaches the point in its own admission order where the
+// game is actually needed.
+type pendingGame struct {
+	resolved bool
+	game     provisioning.Contest
+	err      error
+}
+
+// resolve answers the game a pendingGame stands for: what a combined lookup
+// already read, or the separate call lookupContestAndGame skipped because
+// there was no combined lookup to make in the first place.
+func (p pendingGame) resolve(ctx context.Context, s *Service, contestID uuid.UUID) (provisioning.Contest, error) {
+	if p.resolved {
+		return p.game, p.err
+	}
+	return s.games.Game(ctx, contestID)
+}
+
+// lookupContestAndGame resolves the contest Run is asking about, and — when
+// WithContestAndGame wired one — its game in the same round trip, folding
+// what would otherwise be two separate queries against the same contests row
+// into one. A build with nothing wired there gets exactly the single
+// Contests.ByID call it always made; the game stays a pendingGame that has
+// not resolved anything yet, and Run's later call into pending.resolve is
+// what actually asks Games.Game for it, the same one call it always was.
+func (s *Service) lookupContestAndGame(ctx context.Context, contestID uuid.UUID) (contests.Contest, pendingGame, error) {
+	if s.contestGame == nil {
+		contest, err := s.contests.ByID(ctx, contestID)
+		return contest, pendingGame{}, err
+	}
+	cg, err := s.contestGame.Lookup(ctx, contestID)
+	if err != nil {
+		return contests.Contest{}, pendingGame{}, err
+	}
+	return cg.Contest, pendingGame{resolved: true, game: cg.Game, err: cg.GameErr}, nil
 }
 
 // provisionFailure is what both callers of Databases.Ensure turn its error
