@@ -84,7 +84,7 @@ func run() error {
 		// Kept connections count against Concurrent (see queryrunner's pool),
 		// so this changes how many handshakes the cluster pays, not how many
 		// backends it holds.
-		IdleTimeout: queryrunner.DefaultLimits().IdleTimeout,
+		IdleTimeout: cfg.IdleConnTimeout,
 	}
 
 	// A result budget larger than what the transport will carry produces the
