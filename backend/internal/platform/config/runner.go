@@ -62,6 +62,12 @@ type Runner struct {
 	// PerMinute bounds how often one participant may ask. The semaphore
 	// cannot: a thousand cheap queries pass it one at a time.
 	PerMinute int
+	// IdleConnTimeout is how long the connection a clean read finished on is
+	// kept for that database's next query (QUERY_CONN_IDLE_TIMEOUT), sparing
+	// the next query a connection handshake. Zero keeps none. Kept connections
+	// count against Concurrent, so this changes how often the game cluster
+	// pays for a handshake, never how many backends it holds.
+	IdleConnTimeout time.Duration
 	// ExtraFunctions are functions an operator has added to the allow-list
 	// after a pilot, without waiting for a release (section 5, point 3).
 	ExtraFunctions []string
@@ -141,6 +147,11 @@ const (
 	AutovacuumWorkers   = 2
 	ReservedMemoryBytes = 2 << 30
 
+	// DefaultIdleConnTimeout and MaxIdleConnTimeout are QUERY_CONN_IDLE_TIMEOUT's
+	// default and ceiling.
+	DefaultIdleConnTimeout = 30 * time.Second
+	MaxIdleConnTimeout     = 5 * time.Minute
+
 	// DefaultProcessMemoryBytes is the pilot's per-process cap, used when
 	// GAME_DB_PROCESS_MEMORY_BYTES is unset.
 	DefaultProcessMemoryBytes = 256 << 20
@@ -201,6 +212,17 @@ func LoadRunner() (Runner, error) {
 	}
 	if cfg.PerMinute, err = intEnv("QUERY_PER_MINUTE", 30); err != nil {
 		return Runner{}, err
+	}
+	if cfg.IdleConnTimeout, err = durationEnv("QUERY_CONN_IDLE_TIMEOUT", DefaultIdleConnTimeout); err != nil {
+		return Runner{}, err
+	}
+	// Zero is the way back to a connection per query. Past the ceiling a
+	// backend stays on a database nobody has queried for minutes, which only
+	// delays the reclaim sweep's plain DROP DATABASE and buys no handshake a
+	// participant is waiting on.
+	if cfg.IdleConnTimeout < 0 || cfg.IdleConnTimeout > MaxIdleConnTimeout {
+		return Runner{}, fmt.Errorf("QUERY_CONN_IDLE_TIMEOUT must be between 0 and %s, got %s",
+			MaxIdleConnTimeout, cfg.IdleConnTimeout)
 	}
 	if cfg.PerMinute < 0 {
 		return Runner{}, fmt.Errorf("QUERY_PER_MINUTE cannot be negative, got %d", cfg.PerMinute)
