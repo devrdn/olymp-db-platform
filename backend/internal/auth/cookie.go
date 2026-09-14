@@ -29,23 +29,32 @@ func NewCookieWriter(secure bool) CookieWriter {
 // blocks the cross-site POSTs that CSRF relies on while still allowing an
 // ordinary link into the application to carry the session.
 func (c CookieWriter) Set(w http.ResponseWriter, token string, ttl time.Duration) {
-	http.SetCookie(w, c.cookie(token, int(ttl.Seconds())))
+	http.SetCookie(w, c.cookie(SessionCookieName, token, int(ttl.Seconds())))
 }
 
 // Clear deletes the cookie, so a browser holding a dead session stops sending
 // it on every request.
 func (c CookieWriter) Clear(w http.ResponseWriter) {
-	http.SetCookie(w, c.cookie("", -1))
+	http.SetCookie(w, c.cookie(SessionCookieName, "", -1))
 }
 
-func (c CookieWriter) cookie(value string, maxAge int) *http.Cookie {
+// SetDevice writes the device cookie: the proof that this browser has signed
+// in to an account, which sign-in weighs instead of the address (see
+// DeviceTrust). The same protections as the session cookie, for the same
+// reasons, and a lifetime of its own. It is not cleared at sign-out: signing
+// out ends a session, not the fact that this browser is the owner's.
+func (c CookieWriter) SetDevice(w http.ResponseWriter, token string, ttl time.Duration) {
+	http.SetCookie(w, c.cookie(DeviceCookieName, token, int(ttl.Seconds())))
+}
+
+func (c CookieWriter) cookie(name, value string, maxAge int) *http.Cookie {
 	// #nosec G124 -- Secure is deliberately configured rather than hard-coded.
 	// It defaults to true outside development (see platform/config); forcing
 	// it on would make a local stack without a certificate impossible to sign
 	// into, because browsers silently drop Secure cookies over plain HTTP.
 	// HttpOnly and SameSite, which have no such trade-off, are unconditional.
 	return &http.Cookie{
-		Name:     SessionCookieName,
+		Name:     name,
 		Value:    value,
 		Path:     "/",
 		MaxAge:   maxAge,

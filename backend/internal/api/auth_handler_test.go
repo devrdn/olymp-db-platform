@@ -56,6 +56,7 @@ func newHandlerFixture(t *testing.T) *handlerFixture {
 		Users: repo, Sessions: sessions,
 		Audit: audit.New(&apiSink{}), Limiter: auth.NewLimiter(c), Logger: log,
 		Passwords: hasher,
+		Devices:   devices(t),
 	})
 	mw := auth.NewMiddleware(auth.MiddlewareConfig{
 		Sessions: sessions, Users: repo,
@@ -472,5 +473,66 @@ func TestTheSessionCookieExpiresWithTheSessionsMaximumLifetime(t *testing.T) {
 	if cookie.MaxAge != int((30 * time.Minute).Seconds()) {
 		t.Errorf("session cookie Max-Age = %d, want %d: the maximum lifetime is shorter than the idle timeout",
 			cookie.MaxAge, int((30 * time.Minute).Seconds()))
+	}
+}
+
+// devices is device trust for the handler tests, keyed by a fixed secret.
+func devices(t *testing.T) *auth.DeviceTrust {
+	t.Helper()
+	trust, err := auth.NewDeviceTrust([]byte(strings.Repeat("k", auth.MinDeviceSecretLength)), 30*24*time.Hour)
+	if err != nil {
+		t.Fatalf("NewDeviceTrust() returned error: %v", err)
+	}
+	return trust
+}
+
+func responseCookie(rec *httptest.ResponseRecorder, name string) *http.Cookie {
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
+}
+
+func TestLoginMarksTheBrowserAsOneTheOwnerSignedInFrom(t *testing.T) {
+	f := newHandlerFixture(t)
+
+	rec := f.post("/auth/login", `{"login":"ivanov","password":"`+testPassword+`"}`)
+
+	device := responseCookie(rec, auth.DeviceCookieName)
+	if device == nil || device.Value == "" {
+		t.Fatalf("no device cookie was set on a successful sign-in; cookies: %v", rec.Result().Cookies())
+	}
+	if !device.HttpOnly || device.MaxAge != int((30*24*time.Hour).Seconds()) {
+		t.Errorf("device cookie = %+v, want HttpOnly and thirty days", device)
+	}
+	if failed := f.post("/auth/login", `{"login":"ivanov","password":"wrong"}`); responseCookie(failed, auth.DeviceCookieName) != nil {
+		t.Error("a failed sign-in set a device cookie")
+	}
+}
+
+func TestTheOwnersBrowserSignsInThroughALockoutAtItsOwnAddress(t *testing.T) {
+	// Every request here comes from httptest's one address, as a lecture
+	// hall's do: the rival spends the guessing limit, and the owner's browser,
+	// holding the cookie from an earlier sign-in, still gets in.
+	f := newHandlerFixture(t)
+	first := f.post("/auth/login", `{"login":"ivanov","password":"`+testPassword+`"}`)
+	device := responseCookie(first, auth.DeviceCookieName)
+	if device == nil {
+		t.Fatal("no device cookie from the first sign-in")
+	}
+
+	for range maxLoginAttempts + 1 {
+		f.post("/auth/login", `{"login":"ivanov","password":"a rival's guess"}`)
+	}
+	if rec := f.post("/auth/login", `{"login":"ivanov","password":"`+testPassword+`"}`); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("without the device cookie: status = %d, want 429", rec.Code)
+	}
+
+	rec := f.post("/auth/login", `{"login":"ivanov","password":"`+testPassword+`"}`,
+		&http.Cookie{Name: auth.DeviceCookieName, Value: device.Value})
+	if rec.Code != http.StatusOK {
+		t.Errorf("with the device cookie: status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
 }

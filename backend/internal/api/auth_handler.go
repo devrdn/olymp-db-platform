@@ -91,11 +91,20 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The device cookie, when the browser has one: a browser the owner has
+	// signed in from is throttled on its own rather than with the address it
+	// shares. An absent or unreadable cookie is simply no cookie.
+	var deviceToken string
+	if cookie, err := r.Cookie(auth.DeviceCookieName); err == nil {
+		deviceToken = cookie.Value
+	}
+
 	result, err := h.service.Login(r.Context(), auth.LoginCommand{
-		Login:     req.Login,
-		Password:  req.Password,
-		IP:        httpx.ClientIP(r),
-		UserAgent: r.UserAgent(),
+		Login:       req.Login,
+		Password:    req.Password,
+		IP:          httpx.ClientIP(r),
+		UserAgent:   r.UserAgent(),
+		DeviceToken: deviceToken,
 	})
 	switch {
 	case err == nil:
@@ -120,6 +129,9 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.cookies.Set(w, result.Token, h.service.Sessions().CookieLifetime())
+	if result.DeviceToken != "" {
+		h.cookies.SetDevice(w, result.DeviceToken, h.service.DeviceCookieLifetime())
+	}
 	httpx.JSON(w, r, http.StatusOK, loginResponse{
 		User:               toIdentityResponse(result.User),
 		MustChangePassword: result.MustChangePassword,

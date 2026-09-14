@@ -319,6 +319,7 @@ func newDeletionFixture(t *testing.T) *deletionFixture {
 	authService := auth.NewService(auth.ServiceConfig{
 		Users: repo, Sessions: sessions, Audit: audit.New(&apiSink{}), Limiter: auth.NewLimiter(c), Logger: log,
 		Passwords: passwordtest.NewHasher(),
+		Devices:   devices(t),
 	})
 	mw := auth.NewMiddleware(auth.MiddlewareConfig{
 		Sessions: sessions, Users: repo,

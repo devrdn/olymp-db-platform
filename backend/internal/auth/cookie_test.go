@@ -91,3 +91,30 @@ func TestClearSessionCookieExpiresIt(t *testing.T) {
 		t.Errorf("Value = %q, want it emptied", cookie.Value)
 	}
 }
+
+func TestTheDeviceCookieIsHttpOnlySameSiteAndLongLived(t *testing.T) {
+	// The same protections as the session cookie: a script must not read it
+	// and a cross-site request must not carry it. Its lifetime is its own.
+	rec := httptest.NewRecorder()
+
+	NewCookieWriter(true).SetDevice(rec, "device-token", 30*24*time.Hour)
+
+	var cookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == DeviceCookieName {
+			cookie = c
+		}
+	}
+	if cookie == nil {
+		t.Fatalf("no %s cookie was set", DeviceCookieName)
+	}
+	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteLaxMode || cookie.Path != "/" {
+		t.Errorf("cookie = %+v, want HttpOnly, Secure as configured, SameSite=Lax, Path=/", cookie)
+	}
+	if cookie.MaxAge != int((30 * 24 * time.Hour).Seconds()) {
+		t.Errorf("MaxAge = %d, want thirty days", cookie.MaxAge)
+	}
+	if cookie.Value != "device-token" {
+		t.Errorf("Value = %q", cookie.Value)
+	}
+}
