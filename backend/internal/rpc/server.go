@@ -180,7 +180,7 @@ func (s *Server) Run(ctx context.Context, req *pb.RunRequest) (*pb.RunResponse, 
 // empty token serves without authentication, which configuration allows only
 // in development, and says so in the log.
 func Serve(ctx context.Context, lis net.Listener, server *Server, token string, shutdown time.Duration, log *slog.Logger) error {
-	gate := newTokenGate(token)
+	gate := newTokenGate(token, log)
 	if gate.open {
 		log.Warn("QUERY_RUNNER_TOKEN is not set: the query runner answers any caller that reaches it. " +
 			"Acceptable only on a development machine listening on loopback.")
