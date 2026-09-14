@@ -21,26 +21,31 @@ const schedulerFixtureGrace = 5 * time.Second
 // schedulerFixture is everything one Scheduler test needs, assembled so a
 // test only ever has to name the pieces it actually stages.
 type schedulerFixture struct {
-	scheduler *contests.Scheduler
-	repo      *conteststest.Schedule
-	stories   *conteststest.Stories
-	questions *conteststest.Questions
-	sink      *conteststest.Sink
-	uow       *conteststest.UnitOfWork
+	scheduler   *contests.Scheduler
+	repo        *conteststest.Schedule
+	stories     *conteststest.Stories
+	questions   *conteststest.Questions
+	sink        *conteststest.Sink
+	uow         *conteststest.UnitOfWork
+	poolTrigger *conteststest.PoolTrigger
 }
 
 // newScheduler assembles a Scheduler over the in-memory fakes, mirroring
 // conteststest.NewFixture's own wiring for the pieces Scheduler actually
-// uses.
+// uses. poolTrigger is wired by default, the same way conteststest.Fixture
+// wires one for Service — a test about it asserts on
+// f.poolTrigger.Triggered, and every other test simply never looks.
 func newScheduler() schedulerFixture {
 	repo := conteststest.NewSchedule()
 	stories := conteststest.NewStories()
 	questions := conteststest.NewQuestions()
 	sink := conteststest.NewSink()
 	uow := &conteststest.UnitOfWork{}
+	poolTrigger := conteststest.NewPoolTrigger()
 	return schedulerFixture{
-		scheduler: contests.NewScheduler(repo, stories, questions, sink, audit.New(sink), uow, schedulerFixtureGrace),
-		repo:      repo, stories: stories, questions: questions, sink: sink, uow: uow,
+		scheduler: contests.NewScheduler(repo, stories, questions, sink, audit.New(sink), uow, schedulerFixtureGrace).
+			WithPoolTrigger(poolTrigger),
+		repo: repo, stories: stories, questions: questions, sink: sink, uow: uow, poolTrigger: poolTrigger,
 	}
 }
 
@@ -406,5 +411,102 @@ func TestAdvanceSkipsAContestThatRacedWithAManualTransition(t *testing.T) {
 	}
 	if len(f.sink.Entries) != 0 {
 		t.Error("a raced contest must not get this tick's own audit entry")
+	}
+}
+
+// TestAdvanceTriggersThePoolForEveryContestItStarts is P-C1's own claim for
+// the scheduler: a contest whose window opens is exactly the moment its
+// pool's roster stops being merely "published" and starts being played on,
+// so the tender is woken rather than left to its own next tick.
+func TestAdvanceTriggersThePoolForEveryContestItStarts(t *testing.T) {
+	f := newScheduler()
+	due := duePublishable(f)
+	f.repo.Due = []contests.Contest{due}
+
+	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
+		t.Fatalf("Advance() = %v", err)
+	}
+
+	if len(f.poolTrigger.Triggered) != 1 || f.poolTrigger.Triggered[0] != due.ID {
+		t.Fatalf("triggered = %v, want exactly [%s]", f.poolTrigger.Triggered, due.ID)
+	}
+}
+
+// A tick that starts nothing — nothing was due, or the gate refused every
+// contest that was — must not wake the pool tender for a move that never
+// happened.
+func TestAdvanceDoesNotTriggerThePoolWhenNothingStarted(t *testing.T) {
+	f := newScheduler()
+	c, _, questions := publishable()
+	for _, q := range questions {
+		q.ContestID = c.ID
+		f.questions.Put(q)
+	}
+	// The story never staged: the gate refuses this one (see
+	// TestAdvanceBlocksAContestThatFailsThePublishGate).
+	f.repo.Due = []contests.Contest{c}
+
+	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
+		t.Fatalf("Advance() = %v", err)
+	}
+	if len(f.poolTrigger.Triggered) != 0 {
+		t.Fatalf("triggered = %v, want none — the gate refused the only contest due", f.poolTrigger.Triggered)
+	}
+}
+
+// A contest a concurrent manual Transition already started is not this
+// tick's move to announce: it raced this tick's own write, and this tick did
+// not actually start it.
+func TestAdvanceDoesNotTriggerThePoolForAContestThatRacedAManualTransition(t *testing.T) {
+	f := newScheduler()
+	due := duePublishable(f)
+	f.repo.Due = []contests.Contest{due}
+	f.repo.Raced = map[uuid.UUID]error{due.ID: contests.ErrStatusChanged}
+
+	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
+		t.Fatalf("Advance() = %v", err)
+	}
+	if len(f.poolTrigger.Triggered) != 0 {
+		t.Fatalf("triggered = %v, want none for a raced contest", f.poolTrigger.Triggered)
+	}
+}
+
+// TestAdvanceDoesNotTriggerThePoolWhenTheTransactionFails is the ordering
+// this whole feature depends on: a tick that started a contest but then
+// failed to commit — here, the audit sink refusing the entry — must not wake
+// the pool tender for a move the database itself rolled back. The trigger
+// only ever fires after Advance's own transaction has actually committed.
+func TestAdvanceDoesNotTriggerThePoolWhenTheTransactionFails(t *testing.T) {
+	f := newScheduler()
+	due := duePublishable(f)
+	f.repo.Due = []contests.Contest{due}
+	f.sink.AppendManyErr = errors.New("audit sink is down")
+
+	if _, _, err := f.scheduler.Advance(context.Background()); err == nil {
+		t.Fatal("Advance() succeeded despite the audit sink failing")
+	}
+
+	if len(f.poolTrigger.Triggered) != 0 {
+		t.Fatalf("triggered = %v, want none — the transaction that started the contest never committed", f.poolTrigger.Triggered)
+	}
+}
+
+// A Scheduler built without WithPoolTrigger — every deployment with no game
+// cluster, and every test above this one — must not panic reaching for a
+// trigger that was never wired.
+func TestAdvanceWithNoPoolTriggerWiredStillWorks(t *testing.T) {
+	repo := conteststest.NewSchedule()
+	stories := conteststest.NewStories()
+	questions := conteststest.NewQuestions()
+	sink := conteststest.NewSink()
+	uow := &conteststest.UnitOfWork{}
+	scheduler := contests.NewScheduler(repo, stories, questions, sink, audit.New(sink), uow, schedulerFixtureGrace)
+
+	f := schedulerFixture{scheduler: scheduler, repo: repo, stories: stories, questions: questions, sink: sink, uow: uow}
+	due := duePublishable(f)
+	f.repo.Due = []contests.Contest{due}
+
+	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
+		t.Fatalf("Advance() with no pool trigger wired = %v", err)
 	}
 }

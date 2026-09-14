@@ -130,6 +130,12 @@ type ServiceConfig struct {
 	// first time — harmless, since such a caller never constructs a Service
 	// a contest's own game databases are reclaimed through.
 	DefaultGraceMin int
+	// PoolTrigger asks the background game-pool tender to run again soon
+	// after a roster changes (see PoolTrigger's own doc). Optional: nil is
+	// the state of a Service with no game cluster behind it, or of a test
+	// with nothing to do with provisioning, and both Enroll and
+	// AddParticipants simply skip the trigger when it is unset.
+	PoolTrigger PoolTrigger
 }
 
 // Service holds the rules of authoring and running a contest.
@@ -152,6 +158,7 @@ type Service struct {
 	log             *slog.Logger
 	sleep           func(time.Duration)
 	defaultGraceMin int
+	poolTrigger     PoolTrigger
 }
 
 // NewService assembles the contest service.
@@ -190,6 +197,7 @@ func NewService(cfg ServiceConfig) *Service {
 		log:             log,
 		sleep:           sleep,
 		defaultGraceMin: cfg.DefaultGraceMin,
+		poolTrigger:     cfg.PoolTrigger,
 	}
 }
 

@@ -42,6 +42,12 @@ type Fixture struct {
 	Audit         *Sink
 	UnitOfWork    *UnitOfWork
 	Now           time.Time
+	// PoolTrigger records every contest Enroll or AddParticipants asked the
+	// pool tender to wake for. Wired in by default so an ordinary test that
+	// never mentions it still gets a real fake rather than a nil interface —
+	// a test about the trigger itself asserts on f.PoolTrigger.Triggered, and
+	// every other test simply never looks.
+	PoolTrigger *PoolTrigger
 }
 
 // NewFixture assembles a service over empty stores.
@@ -60,6 +66,7 @@ func NewFixture() *Fixture {
 		Audit:         NewSink(),
 		UnitOfWork:    &UnitOfWork{},
 		Now:           FixtureNow,
+		PoolTrigger:   NewPoolTrigger(),
 	}
 	// Derived from the same question and submission stores above, not a
 	// third store of its own — see SequentialProgress's own doc.
@@ -106,6 +113,7 @@ func NewFixture() *Fixture {
 		Sleep: func(time.Duration) {},
 		// See FixtureDefaultGraceMin's own doc.
 		DefaultGraceMin: FixtureDefaultGraceMin,
+		PoolTrigger:     f.PoolTrigger,
 	})
 	return f
 }
