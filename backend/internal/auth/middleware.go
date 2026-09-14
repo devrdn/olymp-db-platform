@@ -77,8 +77,11 @@ type Authorizer interface {
 
 // MiddlewareConfig collects what the middleware needs.
 type MiddlewareConfig struct {
-	Sessions   *SessionStore
-	Users      UserStore
+	Sessions *SessionStore
+	Users    UserStore
+	// Accounts, when set, spares the account read on requests that follow
+	// one another within its lifetime. Nil reads the account every time.
+	Accounts   *AccountCache
 	Authorizer Authorizer
 	Cookies    CookieWriter
 	Logger     *slog.Logger
@@ -88,6 +91,7 @@ type MiddlewareConfig struct {
 type Middleware struct {
 	sessions *SessionStore
 	users    UserStore
+	accounts *AccountCache
 	authz    Authorizer
 	cookies  CookieWriter
 	log      *slog.Logger
@@ -98,6 +102,7 @@ func NewMiddleware(cfg MiddlewareConfig) *Middleware {
 	return &Middleware{
 		sessions: cfg.Sessions,
 		users:    cfg.Users,
+		accounts: cfg.Accounts,
 		authz:    cfg.Authorizer,
 		cookies:  cfg.Cookies,
 		log:      cfg.Logger,
@@ -106,9 +111,13 @@ func NewMiddleware(cfg MiddlewareConfig) *Middleware {
 
 // Authenticate resolves the session cookie into an identity, or answers 401.
 //
-// The account is re-read on every request rather than trusted from the session
-// record. That is one indexed query, and it is what makes blocking an account
-// take effect immediately instead of whenever its session happens to lapse.
+// The account is looked up on every request rather than trusted from the
+// session record, which is what makes blocking an account take effect
+// immediately instead of whenever its session happens to lapse. With an
+// AccountCache the lookup is usually a cache read; the cache is told about
+// every change package users makes, and whatever it is not told about applies
+// within its lifetime (see AccountCache). A refusal is never decided on a
+// cached copy: the account is read from the database first.
 func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(SessionCookieName)
@@ -127,22 +136,47 @@ func (m *Middleware) Authenticate(next http.Handler) http.Handler {
 			return
 		}
 
-		user, err := m.users.ByID(ctx, session.UserID)
-		if err != nil {
-			if !errors.Is(err, users.ErrNotFound) {
-				m.log.ErrorContext(ctx, "could not load the session's account", "error", err)
+		// A copy that would admit the request is used as it is. One that
+		// would refuse it may be stale in the other direction — the account
+		// signed in again after its sessions were retired, or was unblocked —
+		// so the refusal is left to the database's answer.
+		var (
+			user   users.User
+			hit    bool
+			cached bool
+			slot   accountSlot
+		)
+		if m.accounts != nil {
+			user, hit, slot = m.accounts.lookup(ctx, session.UserID)
+			cached = hit && admits(user, session, r.URL.Path)
+		}
+		if !cached {
+			user, err = m.users.ByID(ctx, session.UserID)
+			if err != nil {
+				if !errors.Is(err, users.ErrNotFound) {
+					m.log.ErrorContext(ctx, "could not load the session's account", "error", err)
+				}
+				m.discard(ctx, cookie.Value)
+				m.unauthenticated(w, r)
+				return
 			}
+		}
+
+		// A blocked account and a session from before a "log out everywhere"
+		// are both dead; drop the record so it stops occupying the store.
+		if !live(user, session) {
 			m.discard(ctx, cookie.Value)
 			m.unauthenticated(w, r)
 			return
 		}
 
-		// A blocked account and a session from before a "log out everywhere"
-		// are both dead; drop the record so it stops occupying the store.
-		if !user.IsActive() || session.Generation != user.SessionGeneration {
-			m.discard(ctx, cookie.Value)
-			m.unauthenticated(w, r)
-			return
+		// Only on a miss, and only for an account this session may use: a
+		// request served from the cache writes nothing. A copy that was
+		// checked against the database is replaced only when it turned out
+		// stale; one that was right to hold a one-time password at the door
+		// is left alone, so knocking repeatedly does not write each time.
+		if m.accounts != nil && !cached && (!hit || admits(user, session, r.URL.Path)) {
+			m.accounts.store(ctx, slot, user)
 		}
 
 		// An administrator-issued password is a handover secret, not a
@@ -259,6 +293,18 @@ func (m *Middleware) discard(ctx context.Context, token string) {
 func (m *Middleware) unauthenticated(w http.ResponseWriter, r *http.Request) {
 	m.cookies.Clear(w)
 	httpx.Error(w, r, http.StatusUnauthorized, CodeUnauthenticated, "Sign in to continue")
+}
+
+// live reports whether the account may still use the session: it is active,
+// and the session is of its current generation.
+func live(user users.User, session Session) bool {
+	return user.IsActive() && session.Generation == user.SessionGeneration
+}
+
+// admits reports whether Authenticate would let the request through on this
+// account: live, and not held at the door by a one-time password.
+func admits(user users.User, session Session, path string) bool {
+	return live(user, session) && (!user.MustChangePassword || passwordChangeExempt(path))
 }
 
 func passwordChangeExempt(path string) bool {
