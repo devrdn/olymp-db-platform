@@ -366,6 +366,10 @@
       "meaning": "The contest carries more questions than one exported package holds. Refused rather than cut short: a package missing questions is not a smaller contest but one whose answer key no longer matches, and nothing in the file would say so. The message names the limit."
     },
     {
+      "code": "participant_cannot_be_staff",
+      "meaning": "This account is already registered as a participant of the contest, so it cannot also be appointed to its staff."
+    },
+    {
       "code": "participant_not_found",
       "meaning": "That account does not take part in this contest."
     },
@@ -492,6 +496,10 @@
     {
       "code": "sign_in_busy",
       "meaning": "The service is already checking as many passwords as it will at once, and none came free in time. The password was not evaluated — neither accepted nor judged wrong, though a sign-in attempt still counts against the attempt limits — so retrying in a moment is the right response. Also answered when issuing or changing a password meets the same limit."
+    },
+    {
+      "code": "staff_cannot_participate",
+      "meaning": "This account already staffs the contest (owner or manager), so it cannot also register as a participant: staff read the reference answers and the unfrozen leaderboard."
     },
     {
       "code": "status_changed",
