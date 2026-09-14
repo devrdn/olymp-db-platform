@@ -1196,3 +1196,49 @@ func TestADevelopmentAPIMayOmitTheQueryRunnerTokenButNotShortenIt(t *testing.T) 
 		})
 	}
 }
+
+// TRUSTED_PROXIES decides whose X-Forwarded-For the API believes, and so the
+// per-address login throttle, a contest's network restriction and the audit
+// trail. The compose file pins the two containers that front a browser and
+// defaults to exactly those; an operator who follows `cp .env.example .env`
+// must get the same, not a range that trusts every container on the network.
+func TestTheExampleTrustsOnlyThePinnedProxies(t *testing.T) {
+	compose := repoFile(t, "deploy/docker-compose.yml")
+
+	pinned := map[string]bool{}
+	for _, match := range regexp.MustCompile(`(?m)^\s+ipv4_address:\s*(\S+)\s*$`).FindAllStringSubmatch(compose, -1) {
+		pinned[match[1]] = true
+	}
+	if len(pinned) == 0 {
+		t.Fatal("docker-compose.yml pins no address; the shape has changed")
+	}
+
+	fallback := regexp.MustCompile(`TRUSTED_PROXIES:\s*\$\{TRUSTED_PROXIES:-([^}]*)\}`).FindStringSubmatch(compose)
+	if fallback == nil {
+		t.Fatal("docker-compose.yml no longer defaults TRUSTED_PROXIES; the shape has changed")
+	}
+
+	var example string
+	for _, line := range strings.Split(repoFile(t, "deploy/.env.example"), "\n") {
+		if value, ok := strings.CutPrefix(strings.TrimSpace(line), "TRUSTED_PROXIES="); ok {
+			example = value
+		}
+	}
+
+	for name, list := range map[string]string{"compose default": fallback[1], ".env.example": example} {
+		entries := strings.Split(list, ",")
+		for _, entry := range entries {
+			entry = strings.TrimSpace(entry)
+			address, bits, _ := strings.Cut(entry, "/")
+			if bits != "" && bits != "32" {
+				t.Errorf("%s trusts %s, a range rather than one host", name, entry)
+			}
+			if !pinned[address] {
+				t.Errorf("%s trusts %s, which is not an address docker-compose.yml pins", name, entry)
+			}
+		}
+	}
+	if example != fallback[1] {
+		t.Errorf(".env.example sets TRUSTED_PROXIES=%s, but the compose default is %s", example, fallback[1])
+	}
+}
