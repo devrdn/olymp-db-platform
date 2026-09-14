@@ -831,7 +831,8 @@ const (
 func (h *GameHandler) allowUploadBegin(w http.ResponseWriter, r *http.Request, contestID uuid.UUID) bool {
 	ctx := r.Context()
 
-	if addr := httpx.ClientIP(r); addr != "" {
+	// The address as a rate-limit subject: an IPv6 /64 is one caller.
+	if addr := httpx.ClientSubject(r); addr != "" {
 		allowed, err := h.limiter.Allow(ctx, "game_upload_begin:ip:"+addr, maxUploadBeginsPerAddress, uploadBeginWindow)
 		if err != nil {
 			h.log.ErrorContext(ctx, "could not check the upload rate limit", "error", err)

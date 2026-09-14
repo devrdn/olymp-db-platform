@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"runtime/debug"
 	"time"
 
@@ -105,4 +106,40 @@ func ClientIP(r *http.Request) string {
 		return ""
 	}
 	return host
+}
+
+// ipv6SubjectBits is how much of an IPv6 address names one subscriber. A /64
+// is the smallest network a provider hands out, and every host inside it is
+// the same caller choosing a different address.
+const ipv6SubjectBits = 64
+
+// ClientSubject is the client address as a rate-limit subject: what every
+// limiter keyed on an address must use instead of ClientIP.
+//
+// ClientIP stays exact, because the audit trail and a contest's network
+// restriction need the real address. A budget does not: taken host by host,
+// one IPv6 subscriber has a fresh budget for every address in their /64.
+func ClientSubject(r *http.Request) string {
+	return AddressSubject(ClientIP(r))
+}
+
+// AddressSubject turns an address into a rate-limit subject. IPv4 is kept
+// exact, an IPv4-mapped IPv6 address is read as the IPv4 address it carries,
+// and IPv6 is reduced to its /64 in prefix notation. A value that is not an
+// address is returned unchanged: it cannot be grouped, and making it empty
+// would merge it into whatever bucket an empty subject means to the caller.
+func AddressSubject(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap().WithZone("")
+	if addr.Is4() {
+		return addr.String()
+	}
+	prefix, err := addr.Prefix(ipv6SubjectBits)
+	if err != nil {
+		return ip
+	}
+	return prefix.String()
 }

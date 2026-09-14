@@ -337,10 +337,11 @@ func (h *LeaderboardHandler) admit(w http.ResponseWriter, r *http.Request, subje
 	return true
 }
 
-// addressKey is the caller's address, or one shared bucket when none can be
-// read: an unreadable address must not become a way around the limit.
+// addressKey is the caller's address as a rate-limit subject (an IPv6 /64 is
+// one caller), or one shared bucket when none can be read: an unreadable
+// address must not become a way around the limit.
 func addressKey(r *http.Request) string {
-	if addr := httpx.ClientIP(r); addr != "" {
+	if addr := httpx.ClientSubject(r); addr != "" {
 		return addr
 	}
 	return "unknown"
