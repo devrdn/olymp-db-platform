@@ -359,7 +359,7 @@ func (r *Contests) DueToStart(ctx context.Context) ([]contests.Contest, error) {
 // grace). Comparing against ends_at alone used to close a contest a tick
 // before that grace ran out, so which of two answers submitted a moment
 // apart was accepted depended on whether the scheduler had ticked yet — a
-// race no participant could see or control (finding C-07).
+// race no participant could see or control.
 //
 // A contest with no ends_at (individual timing needs none to publish) never
 // matches this WHERE clause, and stays running until an organizer moves it by
@@ -478,6 +478,25 @@ func (r *Contests) ReplaceTranslations(ctx context.Context, id uuid.UUID, transl
 		id, langs, titles, descriptions)
 	if err != nil {
 		return fmt.Errorf("replace contest translations: %w", err)
+	}
+	return nil
+}
+
+// LockContest takes the contest row itself, the same technique
+// internal/postgres/questions.go's own lockContest uses to serialise
+// ordinal allocation within one contest — here to serialise across two
+// different tables instead of two rows of one: appointing a manager
+// (contest_managers) and registering a participant (registrations) for the
+// same contest must never both succeed for the same account, however the
+// two requests interleave. The lock is released when the surrounding
+// transaction ends, so a caller outside one would see no protection at all
+// while believing it had some — refusing is the honest answer.
+func (r *Contests) LockContest(ctx context.Context, id uuid.UUID) error {
+	if !storage.InTx(ctx) {
+		return errors.New("locking a contest must run inside a transaction")
+	}
+	if _, err := r.querier(ctx).Exec(ctx, `SELECT id FROM contests WHERE id = $1 FOR UPDATE`, id); err != nil {
+		return fmt.Errorf("lock contest: %w", err)
 	}
 	return nil
 }
