@@ -30,6 +30,19 @@ services:
       # Scram is the default in PG16; stated explicitly so a base image change
       # cannot silently weaken it.
       POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    command:
+      - postgres
+      # Stated explicitly rather than left to the image's own default (which
+      # is this same figure), so the headroom is visible next to what draws
+      # on it: the API's own pool (CORE_DB_POOL_MAX on the api service below,
+      # 25 unset) plus the one-off tools that briefly open their own pool
+      # against this cluster — migrate, bootstrap, gameorphans — none of
+      # which run alongside the API at more than a handful of connections
+      # each. A single API replica at its pool's ceiling still leaves most of
+      # this for those tools, an operator's own psql, and PostgreSQL's own
+      # reserved superuser connections.
+      - -c
+      - max_connections=100
     volumes:
       - pg-core-data:/var/lib/postgresql/data
     healthcheck:
@@ -348,6 +361,14 @@ services:
       HTTP_ADDR: ":8080"
       INTERNAL_ADDR: ":9090"
       CORE_DB_DSN: postgres://${CORE_DB_USER}:${CORE_DB_PASSWORD}@pg-core:5432/${CORE_DB_NAME:-dbcontest_core}?sslmode=disable
+      # How many connections the API keeps open to the core database. Ten was
+      # sized for a trickle of admin traffic; a roster's worth of console
+      # pre-checks, SSE resyncs, exports pinning a connection for up to a
+      # minute apiece, the leaderboard's own reads and staff dashboards now
+      # share it too. 25 leaves room for several long exports alongside
+      # everything else without asking pg-core (max_connections=100 above)
+      # for more than this API will ever hold open at once.
+      CORE_DB_POOL_MAX: ${CORE_DB_POOL_MAX:-25}
       # Empty selects the in-process cache. Set it (and start the "shared"
       # profile) as soon as more than one replica runs.
       REDIS_ADDR: ${REDIS_ADDR:-redis://:${REDIS_PASSWORD}@redis:6379/0}
