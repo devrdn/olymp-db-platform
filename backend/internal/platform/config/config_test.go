@@ -1242,3 +1242,58 @@ func TestTheExampleTrustsOnlyThePinnedProxies(t *testing.T) {
 		t.Errorf(".env.example sets TRUSTED_PROXIES=%s, but the compose default is %s", example, fallback[1])
 	}
 }
+
+// deploy/.env.example marks every value an operator must choose with
+// "change-me". A deployment started from a copied file without replacing them
+// runs on credentials anybody who has read the repository knows, and nothing
+// else in the system notices. Outside development each variable the API reads
+// a credential from refuses one, naming the variable and never the value.
+func TestAPlaceholderCredentialIsRefusedOutsideDevelopment(t *testing.T) {
+	production := func(t *testing.T) {
+		t.Helper()
+		t.Setenv("ENV", "production")
+		t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+		t.Setenv("REDIS_ADDR", "")
+		t.Setenv("DEVICE_COOKIE_SECRET", strings.Repeat("s", 32))
+		t.Setenv("QUERY_RUNNER_ADDR", "queryrunner:9100")
+		t.Setenv("QUERY_RUNNER_TOKEN", strings.Repeat("t", 32))
+		t.Setenv("GAME_PROVISIONER_DSN", "")
+		t.Setenv("GAME_AUTHOR_PASSWORD", "")
+	}
+
+	for name, value := range map[string]string{
+		"DEVICE_COOKIE_SECRET": "change-me-to-at-least-32-random-bytes",
+		"QUERY_RUNNER_TOKEN":   "CHANGE-ME-to-the-output-of-openssl-rand",
+		"CORE_DB_DSN":          "postgres://dbcontest:change-me-before-first-run@pg-core:5432/core",
+		"REDIS_ADDR":           "redis://:Change-Me-Before-First-Run@redis:6379/0",
+		"GAME_PROVISIONER_DSN": "postgres://game:change-me-before-first-run@pg-game:5432/game",
+		"GAME_AUTHOR_PASSWORD": "change-me-before-first-run",
+	} {
+		t.Run(name, func(t *testing.T) {
+			production(t)
+			if name == "GAME_AUTHOR_PASSWORD" || name == "GAME_PROVISIONER_DSN" {
+				// The two are required together.
+				t.Setenv("GAME_PROVISIONER_DSN", "postgres://game:real@pg-game:5432/game")
+				t.Setenv("GAME_AUTHOR_PASSWORD", "a-real-author-password")
+			}
+			if _, err := Load(); err != nil {
+				t.Fatalf("the baseline production configuration was refused: %v", err)
+			}
+
+			t.Setenv(name, value)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("Load() with a placeholder %s = %v, want an error naming it", name, err)
+			}
+			if strings.Contains(strings.ToLower(err.Error()), "change-me") {
+				t.Fatalf("the refusal repeats the value: %q", err.Error())
+			}
+
+			// A development stack may keep the example's values.
+			t.Setenv("ENV", "development")
+			if _, err := Load(); err != nil {
+				t.Fatalf("development refused a placeholder %s: %v", name, err)
+			}
+		})
+	}
+}

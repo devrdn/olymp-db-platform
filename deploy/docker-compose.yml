@@ -223,11 +223,10 @@ services:
       # routes into. Named here because the binary's own default is loopback.
       QUERY_RUNNER_ADDR: ":9100"
       # The secret every call must carry, the health check's included (it
-      # reads it from this same environment). Required outside development:
-      # the runner refuses to start without it. Passed empty rather than
-      # required here so that compose commands that do not start the runner
-      # still read an .env without it.
-      QUERY_RUNNER_TOKEN: ${QUERY_RUNNER_TOKEN:-}
+      # reads it from this same environment). Required here, so a deployment
+      # without it fails at `compose up` rather than at the first query; the
+      # binary also refuses to start without it outside development.
+      QUERY_RUNNER_TOKEN: ${QUERY_RUNNER_TOKEN:?set QUERY_RUNNER_TOKEN in .env (openssl rand -hex 32)}
       # As the participant's role, never the provisioning one. The database in
       # this URL is a placeholder: the runner replaces it per request with the
       # participant's own, taken from game_instances by the Core API. Only the
@@ -464,9 +463,10 @@ services:
       QUERY_RUNNER_ADDR: ${QUERY_RUNNER_ADDR:-queryrunner:9100}
       # The same secret the queryrunner service is given, presented on every
       # call: the runner runs whatever database a request names and answers
-      # only the Core API. Required outside development when the address above
-      # is set (the API refuses to start without it).
-      QUERY_RUNNER_TOKEN: ${QUERY_RUNNER_TOKEN:-}
+      # only the Core API. Required here, as on the queryrunner service; the API
+      # also refuses to start without it outside development when the address
+      # above is set.
+      QUERY_RUNNER_TOKEN: ${QUERY_RUNNER_TOKEN:?set QUERY_RUNNER_TOKEN in .env (openssl rand -hex 32)}
       # The same figure the queryrunner service below is given, so the
       # console's own pre-check (ahead of the query journal) refuses a
       # participant asking too fast at the same rate the Query Runner would —
@@ -567,9 +567,10 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       # The secret Caddy proves itself with (deploy/Caddyfile). The address a
       # request says it came from is handed to the API only when it carries
-      # this, because the API believes whatever this service hands on. Unset,
-      # nothing is handed on and every visitor counts as this container.
-      INGRESS_SECRET: ${INGRESS_SECRET:-}
+      # this, because the API believes whatever this service hands on. Required
+      # here: without it nothing is handed on, every visitor counts as this
+      # container, and the site would otherwise run that way without a word.
+      INGRESS_SECRET: ${INGRESS_SECRET:?set INGRESS_SECRET in .env (openssl rand -hex 32)}
     # No host port: Caddy is the only way in, exactly as for the API.
     depends_on:
       api:
@@ -595,8 +596,8 @@ services:
     environment:
       SITE_ADDRESS: ${SITE_ADDRESS:-localhost}
       # Added to every request forwarded to web, replacing any value a client
-      # sent; the same value web is given (see the Caddyfile).
-      INGRESS_SECRET: ${INGRESS_SECRET:-}
+      # sent; the same value web is given (see the Caddyfile). Required.
+      INGRESS_SECRET: ${INGRESS_SECRET:?set INGRESS_SECRET in .env (openssl rand -hex 32)}
     ports:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
