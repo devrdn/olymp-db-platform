@@ -859,7 +859,10 @@ func newUnlockFixture(t *testing.T, cfg ServiceConfig) *unlockFixture {
 	})
 	sink := &collectingSink{}
 	cfg.Users, cfg.Sessions, cfg.Audit = repo, NewSessionStore(c, time.Hour), audit.New(sink)
-	cfg.Limiter, cfg.Logger, cfg.Passwords = NewLimiter(c), logging.New("error", io.Discard), passwordtest.NewHasher()
+	cfg.Limiter, cfg.Logger = NewLimiter(c), logging.New("error", io.Discard)
+	if cfg.Passwords == nil {
+		cfg.Passwords = passwordtest.NewHasher()
+	}
 	if cfg.Devices == nil {
 		cfg.Devices = testDevices(t)
 	}
@@ -1064,37 +1067,45 @@ func TestABlockRetiresEveryDeviceCookie(t *testing.T) {
 	}
 }
 
-func TestTheDeviceLimitStopsGuessingThroughAStolenCookie(t *testing.T) {
-	// A copied cookie skips the address and account limits, so it carries a
-	// guessing limit of its own, keyed on the device it names.
+func TestGuessingThroughAStolenCookieIsBoundedByTheOrdinaryLimitsPastTheDevices(t *testing.T) {
+	// A copied cookie skips the address and account limits only for the
+	// device's own attempts. Past them its guesses pay the guessing limit at
+	// the thief's address like anybody's — and the owner, at their own
+	// address, is untouched by either.
 	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerDevice: 4})
 	cookie := f.trustedBrowser(t, "10.0.0.1")
 	ctx := context.Background()
+	guess := LoginCommand{Login: "ivanov", Password: "a guess", IP: "10.0.9.1", DeviceToken: cookie}
 
-	for i := range 4 {
-		if _, err := f.service.Login(ctx, LoginCommand{
-			Login: "ivanov", Password: "a guess", IP: fmt.Sprintf("10.0.9.%d", i), DeviceToken: cookie,
-		}); !errors.Is(err, ErrInvalidCredentials) {
-			t.Fatalf("guess %d through the cookie = %v, want ErrInvalidCredentials", i, err)
+	for i := range 4 + maxLoginAttemptsPerAccountAddress {
+		if _, err := f.service.Login(ctx, guess); !errors.Is(err, ErrInvalidCredentials) {
+			t.Fatalf("guess %d through the cookie = %v, want ErrInvalidCredentials", i+1, err)
 		}
 	}
 	if _, err := f.service.Login(ctx, LoginCommand{
-		Login: "ivanov", Password: testPassword, IP: "10.0.9.99", DeviceToken: cookie,
+		Login: "ivanov", Password: testPassword, IP: "10.0.9.1", DeviceToken: cookie,
 	}); !errors.Is(err, ErrTooManyAttempts) {
-		t.Errorf("past the device limit = %v, want ErrTooManyAttempts", err)
+		t.Errorf("past the device limit and the thief's guessing limit = %v, want ErrTooManyAttempts", err)
 	}
-	// The owner's own guessing limit at their own address was not spent.
 	if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1"}); err != nil {
 		t.Errorf("the owner without the cookie = %v, want a session", err)
 	}
 }
 
 func TestUnlockingSignInClearsTheDeviceLimitToo(t *testing.T) {
-	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerDevice: 2})
-	cookie := f.trustedBrowser(t, "10.0.0.1")
+	// The address budget is spent, so the ordinary fallback is closed and
+	// only a cleared device limit can let the owner's browser in.
+	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerDevice: 2, MaxAttemptsPerAddress: 3})
+	cookie := f.trustedBrowser(t, "10.0.0.9")
 	ctx := context.Background()
 	for range 3 {
-		_, _ = f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: "a guess", IP: "10.0.0.1", DeviceToken: cookie})
+		_, _ = f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: "a rival's guess", IP: "10.0.0.1"})
+	}
+	for range 2 {
+		_, _ = f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: "a typo", IP: "10.0.0.1", DeviceToken: cookie})
+	}
+	if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie}); !errors.Is(err, ErrTooManyAttempts) {
+		t.Fatalf("before the unlock = %v, want ErrTooManyAttempts", err)
 	}
 
 	if err := f.service.UnlockSignIn(ctx, uuid.New(), f.user.ID); err != nil {
@@ -1106,65 +1117,185 @@ func TestUnlockingSignInClearsTheDeviceLimitToo(t *testing.T) {
 	}
 }
 
-func TestTrustedSignInsAreBoundedEvenWithTheRightPassword(t *testing.T) {
-	// A success does not give a device its attempts back: otherwise the
-	// account's own cookie signs in without limit, and every one of those
-	// sign-ins takes a hashing slot, a session and an audit row.
-	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerDevice: 5, MaxTrustedAttemptsPerAccount: 50})
+// tooManyAttemptRows counts the throttle refusals the trail recorded.
+func (f *unlockFixture) tooManyAttemptRows() int {
+	n := 0
+	for _, e := range f.sink.entries {
+		if e.Action == audit.ActionAuthLoginFailed && e.Payload["reason"] == ReasonTooManyAttempts {
+			n++
+		}
+	}
+	return n
+}
+
+func TestATrustedBrowserPastItsLimitFallsBackToTheOrdinaryPath(t *testing.T) {
+	// A spent trusted limit is not a refusal: the attempt goes on as one with
+	// no cookie at all. Refusing instead would let whoever holds a copy of a
+	// cookie spend the owner's trusted limits and shut the owner out, which
+	// is the lockout the cookie exists to prevent. The limits still count
+	// every attempt, successes included, so past them the attempt pays the
+	// address budget and the account's counters like anybody's.
+	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerAddress: 2})
+	cookie := f.trustedBrowser(t, "10.0.0.9")
+	ctx := context.Background()
+
+	for i := range DefaultMaxLoginAttemptsPerDevice + 2 {
+		if _, err := f.service.Login(ctx, LoginCommand{
+			Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie,
+		}); err != nil {
+			t.Fatalf("correct sign-in %d through the cookie = %v, want a session", i+1, err)
+		}
+	}
+
+	// The eleventh and twelfth went the ordinary way and spent the clean
+	// address's budget of two; the thirteenth has none left.
+	if _, err := f.service.Login(ctx, LoginCommand{
+		Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie,
+	}); !errors.Is(err, ErrTooManyAttempts) {
+		t.Errorf("past the device limit and the address budget = %v, want ErrTooManyAttempts", err)
+	}
+	if got := f.tooManyAttemptRows(); got != 1 {
+		t.Errorf("the trail holds %d too_many_attempts rows, want 1: a spent trusted limit is not itself a refusal", got)
+	}
+}
+
+func TestBusyRefusalsThroughATrustedBrowserCostTheOwnerNothing(t *testing.T) {
+	// Past the trusted limits a busy refusal goes the ordinary way, and on
+	// that way it spends the address budget and nothing of the account's.
+	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1, MaxWait: 10 * time.Millisecond})
+	f := newUnlockFixture(t, ServiceConfig{Passwords: hasher})
 	cookie := f.trustedBrowser(t, "10.0.0.1")
 	ctx := context.Background()
 
-	for i := range 5 {
-		if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie}); err != nil {
-			t.Fatalf("trusted sign-in %d = %v, want a session within the device limit", i, err)
+	slot, err := hasher.Hold(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range maxLoginAttemptsPerAccountAddress + 2 {
+		if _, err := f.service.Login(ctx, LoginCommand{
+			Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie,
+		}); !errors.Is(err, password.ErrBusy) {
+			t.Fatalf("attempt %d with every slot held = %v, want password.ErrBusy", i+1, err)
 		}
 	}
-	if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie}); !errors.Is(err, ErrTooManyAttempts) {
-		t.Errorf("the trusted sign-in past the device limit = %v, want ErrTooManyAttempts", err)
+	slot.Release()
+
+	if _, err := f.service.Login(ctx, LoginCommand{
+		Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie,
+	}); err != nil {
+		t.Errorf("the owner after the busy refusals = %v, want a session", err)
 	}
+}
+
+func TestPastTheTrustedBudgetALoopIsStillBounded(t *testing.T) {
+	// The fallback must not undo the bound on the trusted path: an account's
+	// own cookie looping with the right password gets its trusted attempts,
+	// and then exactly what the address budget or the account ceiling allow.
+	loop := func(t *testing.T, f *unlockFixture, cookie string, ip func(int) string) int {
+		t.Helper()
+		signedIn := 0
+		for i := range 30 {
+			if _, err := f.service.Login(context.Background(), LoginCommand{
+				Login: "ivanov", Password: testPassword, IP: ip(i), DeviceToken: cookie,
+			}); err == nil {
+				signedIn++
+			}
+		}
+		return signedIn
+	}
+
+	t.Run("by the address budget", func(t *testing.T) {
+		f := newUnlockFixture(t, ServiceConfig{
+			MaxAttemptsPerDevice: 3, MaxTrustedAttemptsPerAccount: 3, MaxAttemptsPerAddress: 5,
+		})
+		cookie := f.trustedBrowser(t, "10.0.0.9")
+
+		if got := loop(t, f, cookie, func(int) string { return "10.0.0.1" }); got != 3+5 {
+			t.Errorf("%d sign-ins succeeded, want 3 trusted + 5 on the address budget", got)
+		}
+	})
+
+	t.Run("by the account ceiling", func(t *testing.T) {
+		f := newUnlockFixture(t, ServiceConfig{
+			MaxAttemptsPerDevice: 3, MaxTrustedAttemptsPerAccount: 3, MaxAttemptsPerAccount: 4,
+		})
+		cookie := f.trustedBrowser(t, "10.0.0.9")
+
+		// The first sign-in that issued the cookie spent one of the ceiling's
+		// four; every address below is fresh, so only the ceiling binds.
+		if got := loop(t, f, cookie, func(i int) string { return fmt.Sprintf("10.0.3.%d", i) }); got != 3+3 {
+			t.Errorf("%d sign-ins succeeded, want 3 trusted + the ceiling's remaining 3", got)
+		}
+	})
 }
 
 func TestFreshDeviceCookiesShareTheAccountsTrustedBudget(t *testing.T) {
 	// Signing in again mints another device id, so a per-device limit alone
 	// multiplies by however many cookies were collected in advance. Every
-	// trusted attempt at the account counts once more, across all of them.
-	f := newUnlockFixture(t, ServiceConfig{MaxAttemptsPerDevice: 10, MaxTrustedAttemptsPerAccount: 4})
+	// trusted attempt at the account counts once more, across all of them:
+	// past four, each one pays the clean address's budget of two.
+	f := newUnlockFixture(t, ServiceConfig{
+		MaxAttemptsPerDevice: 10, MaxTrustedAttemptsPerAccount: 4, MaxAttemptsPerAddress: 2,
+	})
 	ctx := context.Background()
 	cookies := []string{
 		f.trustedBrowser(t, "10.0.1.1"), f.trustedBrowser(t, "10.0.1.2"), f.trustedBrowser(t, "10.0.1.3"),
 	}
 
-	signedIn := 0
-	for _, cookie := range cookies {
-		for range 2 {
-			if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie}); err == nil {
-				signedIn++
-			} else if !errors.Is(err, ErrTooManyAttempts) {
-				t.Fatalf("trusted sign-in = %v, want a session or ErrTooManyAttempts", err)
+	for i, cookie := range cookies {
+		for j := range 2 {
+			if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie}); err != nil {
+				t.Fatalf("sign-in %d through cookie %d = %v, want a session", j+1, i+1, err)
 			}
 		}
 	}
 
-	if signedIn != 4 {
-		t.Errorf("%d trusted sign-ins succeeded across three cookies, want the account budget of 4", signedIn)
+	if _, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookies[2]}); !errors.Is(err, ErrTooManyAttempts) {
+		t.Errorf("the seventh trusted sign-in = %v, want ErrTooManyAttempts: the fifth and sixth should have paid the address budget", err)
 	}
 }
 
-func TestATrustedSignInDoesNotRenewTheDeviceCookie(t *testing.T) {
-	// A cookie renewed by every trusted sign-in would never expire for a
-	// browser that keeps using it, stolen or not. It lives out the lifetime it
-	// was issued with; the next ordinary sign-in issues the next one.
-	f := newUnlockFixture(t, ServiceConfig{})
+func TestATrustedSignInRenewsTheCookieOnlyPastHalfItsLifetime(t *testing.T) {
+	// A browser in regular use keeps its trust without an ordinary sign-in
+	// every month. Renewal needs the right password — it happens only on a
+	// success — so a copied cookie without the password never extends
+	// itself, and a renewed cookie keeps its device id and with it every
+	// attempt already counted against that device.
+	devices := testDevices(t)
+	issued := time.Now()
+	devices.now = func() time.Time { return issued }
+	f := newUnlockFixture(t, ServiceConfig{Devices: devices})
 	cookie := f.trustedBrowser(t, "10.0.0.1")
+	ctx := context.Background()
+	original, _ := devices.Verify(cookie, "ivanov")
 
-	result, err := f.service.Login(context.Background(), LoginCommand{
-		Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie,
-	})
+	early, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie})
 	if err != nil {
 		t.Fatalf("trusted sign-in = %v", err)
 	}
-	if result.DeviceToken != "" {
-		t.Error("a trusted sign-in issued a new device cookie, extending the old one's lifetime")
+	if early.DeviceToken != "" {
+		t.Error("a trusted sign-in early in the cookie's life renewed it")
+	}
+
+	devices.now = func() time.Time { return issued.Add(16 * 24 * time.Hour) }
+	late, err := f.service.Login(ctx, LoginCommand{Login: "ivanov", Password: testPassword, IP: "10.0.0.1", DeviceToken: cookie})
+	if err != nil {
+		t.Fatalf("trusted sign-in past half the lifetime = %v", err)
+	}
+	if late.DeviceToken == "" {
+		t.Fatal("a trusted sign-in past half the cookie's lifetime did not renew it")
+	}
+	renewed, ok := devices.Verify(late.DeviceToken, "ivanov")
+	if !ok || renewed.ID != original.ID {
+		t.Errorf("renewed device = %v (ok %v), want the same device id %v", renewed.ID, ok, original.ID)
+	}
+
+	devices.now = func() time.Time { return issued.Add(31 * 24 * time.Hour) }
+	if _, ok := devices.Verify(cookie, "ivanov"); ok {
+		t.Error("the original cookie outlived its own lifetime")
+	}
+	if _, ok := devices.Verify(late.DeviceToken, "ivanov"); !ok {
+		t.Error("the renewed cookie did not get a lifetime of its own")
 	}
 }
 
