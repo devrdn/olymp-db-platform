@@ -29,6 +29,9 @@ const DefaultInternalAddr = ":9090"
 // sign-in attempts is a flood of parked requests rather than of answers.
 const maxPasswordHashWait = 30 * time.Second
 
+// maxLoginAttemptsCeiling bounds MAX_LOGIN_ATTEMPTS_PER_ACCOUNT.
+const maxLoginAttemptsCeiling = 100_000
+
 // validLogLevels mirrors the levels understood by the logging package.
 var validLogLevels = []string{"debug", "info", "warn", "error"}
 
@@ -162,6 +165,11 @@ type Config struct {
 	// only guesses: a hall of students behind one NAT address is one address
 	// here. Raise it where the whole cohort shares an address.
 	MaxLoginAttemptsPerAddress int
+	// MaxLoginAttemptsPerAccount caps sign-in attempts at one account from
+	// every address together in a quarter of an hour: the backstop against a
+	// guess spread across many addresses, since the guessing limit itself is
+	// per account and address. Zero leaves it to the auth package's default.
+	MaxLoginAttemptsPerAccount int
 	// PasswordHashConcurrency is how many argon2id computations the process
 	// runs at once, across sign-in, password changes and account management.
 	// Each holds 64 MiB, so this is a memory figure: the deployment's memory
@@ -290,6 +298,15 @@ func Load() (Config, error) {
 	// packages do not depend on a domain (CLAUDE.md, Go layout rule 7).
 	if cfg.MaxLoginAttemptsPerAddress, err = intEnv("MAX_LOGIN_ATTEMPTS_PER_ADDRESS", 0); err != nil {
 		return Config{}, err
+	}
+	// The same convention. Bounded because a ceiling nobody could reach is no
+	// backstop at all.
+	if cfg.MaxLoginAttemptsPerAccount, err = intEnv("MAX_LOGIN_ATTEMPTS_PER_ACCOUNT", 0); err != nil {
+		return Config{}, err
+	}
+	if cfg.MaxLoginAttemptsPerAccount > maxLoginAttemptsCeiling {
+		return Config{}, fmt.Errorf("MAX_LOGIN_ATTEMPTS_PER_ACCOUNT: %d is above the ceiling of %d",
+			cfg.MaxLoginAttemptsPerAccount, maxLoginAttemptsCeiling)
 	}
 	// Both bounded: the concurrency is 64 MiB a slot, and the wait is how long
 	// each request of a burst keeps a goroutine parked.

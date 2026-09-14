@@ -909,3 +909,36 @@ func TestPasswordHashingOutsideItsBoundsIsRejected(t *testing.T) {
 		})
 	}
 }
+
+func TestTheAccountWideLoginCeilingIsLeftToAuthenticationByDefault(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.MaxLoginAttemptsPerAccount != 0 {
+		t.Errorf("MaxLoginAttemptsPerAccount = %d, want 0 (the auth package's own default)", cfg.MaxLoginAttemptsPerAccount)
+	}
+}
+
+func TestTheAccountWideLoginCeilingIsConfigurableAndBounded(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("MAX_LOGIN_ATTEMPTS_PER_ACCOUNT", "250")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.MaxLoginAttemptsPerAccount != 250 {
+		t.Errorf("MaxLoginAttemptsPerAccount = %d, want 250", cfg.MaxLoginAttemptsPerAccount)
+	}
+
+	for _, raw := range []string{"-1", "100001"} {
+		t.Setenv("MAX_LOGIN_ATTEMPTS_PER_ACCOUNT", raw)
+		if _, err := Load(); err == nil {
+			t.Errorf("Load() accepted MAX_LOGIN_ATTEMPTS_PER_ACCOUNT=%s, want error", raw)
+		}
+	}
+}
