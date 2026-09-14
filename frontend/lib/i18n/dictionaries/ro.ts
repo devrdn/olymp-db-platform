@@ -570,7 +570,7 @@ const ro = {
         format: "Formatul întrebărilor",
         timing: "Timp",
         duration: "Minute per participant",
-        durationHint: "Numărate de la startul propriu și niciodată peste sfârșitul olimpiadei.",
+        durationHint: "Numărate din momentul în care fiecare participant deschide prima dată olimpiada și niciodată peste sfârșitul ei.",
         order: "Ordinea întrebărilor",
         orderHelp: "Orice ordine lasă participantul să răspundă la orice întrebare deschisă, oricând dorește. În ordine deschide întrebarea următoare doar când cea precedentă este închisă — răspunsă corect sau cu toate încercările folosite.",
         sequentialWarning: "În ordine cere ca fiecare întrebare să aibă o limită de încercări. O întrebare lăsată nelimitată blochează un participant fără nimic la care să treacă mai departe, așa că publicarea este refuzată până când toate au o limită.",
@@ -672,7 +672,7 @@ const ro = {
         legend: "Timp",
         help: "Toți într-o fereastră comună sau fiecare participant cu ceasul lui.",
         duration: "Minute per participant",
-        durationHint: "Numărate de la startul propriu și niciodată peste sfârșitul olimpiadei.",
+        durationHint: "Numărate din momentul în care fiecare participant deschide prima dată olimpiada și niciodată peste sfârșitul ei.",
       },
       enrollmentGroup: {
         legend: "Cine poate intra",
@@ -941,7 +941,7 @@ const ro = {
       finishedTag: "încheiată",
       clock: {
         waiting: "Nu a început încă",
-        notStarted: "Cronometrul pornește la prima interogare",
+        notStarted: "Cronometrul pornește imediat ce olimpiada se deschide pentru dumneavoastră",
         syncing: "sincronizare…",
         timeUp: "Timpul a expirat",
         fiveMinutesLeft: "Mai sunt cinci minute.",

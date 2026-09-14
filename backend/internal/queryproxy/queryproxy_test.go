@@ -838,8 +838,9 @@ func TestAccessRefusesAFixedContestPastItsDeadline(t *testing.T) {
 // An individual participant who has not started yet has nothing for the
 // deadline formula to compute from — Access must fall back to the contest's
 // own window (contest.OpenForStart), exactly as Run does before it will ever
-// start a clock, and it must not start one either: reading is not the
-// deliberate action that does that.
+// start a clock, and it must not start one itself: Access also admits the
+// answer endpoint and the query log, and a content read starts the clock
+// separately, once it has succeeded (StartOnRead).
 func TestAccessLetsAnIndividualParticipantReadBeforeTheyHaveStartedAndNeverStartsTheirClock(t *testing.T) {
 	future := time.Now().Add(time.Hour)
 	duration := 30
@@ -863,6 +864,127 @@ func TestAccessLetsAnIndividualParticipantReadBeforeTheyHaveStartedAndNeverStart
 	}
 	if gotContest.Status != contests.StatusRunning {
 		t.Fatalf("contest returned = %+v", gotContest)
+	}
+}
+
+// individualContest is a running individual-timing contest whose window is
+// open around the test's wall clock.
+func individualContest() contests.Contest {
+	opened := time.Now().Add(-time.Hour)
+	closes := time.Now().Add(time.Hour)
+	duration := 30
+	return contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingIndividual,
+		DurationMin: &duration, StartsAt: &opened, EndsAt: &closes,
+	}
+}
+
+// Under individual timing the story, the questions and the schema are the
+// contest itself: reading them is where the participant's time begins, or
+// the whole window becomes preparation time the duration never counts. The
+// first read starts the clock through the same Start seam Run uses.
+func TestStartOnReadStartsAnIndividualParticipantsClock(t *testing.T) {
+	contest := individualContest()
+	starts := 0
+	registered := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered}
+	service := accessFixture(people{participant: registered, starts: &starts}, contestStore{contest: contest})
+
+	started, err := service.StartOnRead(t.Context(), contest, registered)
+	if err != nil {
+		t.Fatalf("StartOnRead() = %v", err)
+	}
+	if starts != 1 || started.StartedAt == nil {
+		t.Fatalf("Start called %d times, StartedAt = %v; want the clock started once", starts, started.StartedAt)
+	}
+}
+
+// A second read costs no write and moves nothing: the clock already running is
+// the one the participant keeps.
+func TestStartOnReadDoesNotMoveAClockAlreadyRunning(t *testing.T) {
+	contest := individualContest()
+	starts := 0
+	began := time.Now().Add(-10 * time.Minute)
+	running := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive, StartedAt: &began}
+	service := accessFixture(people{participant: running, starts: &starts}, contestStore{contest: contest})
+
+	got, err := service.StartOnRead(t.Context(), contest, running)
+	if err != nil {
+		t.Fatalf("StartOnRead() = %v", err)
+	}
+	if starts != 0 {
+		t.Fatalf("Start called %d times for a participant already started, want 0", starts)
+	}
+	if got.StartedAt == nil || !got.StartedAt.Equal(began) {
+		t.Fatalf("StartedAt = %v, want %v unchanged", got.StartedAt, began)
+	}
+}
+
+// Fixed timing has one clock for everybody, and nothing a participant reads
+// starts anything.
+func TestStartOnReadNeverStartsAFixedTimingClock(t *testing.T) {
+	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
+	starts := 0
+	p := contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}
+	service := accessFixture(people{participant: p, starts: &starts}, contestStore{contest: contest})
+
+	if _, err := service.StartOnRead(t.Context(), contest, p); err != nil {
+		t.Fatalf("StartOnRead() = %v", err)
+	}
+	if starts != 0 {
+		t.Fatalf("Start called %d times under fixed timing, want 0", starts)
+	}
+}
+
+// Outside the contest's own window there is no clock to start: the read is
+// refused the way Run refuses a first query there, and nothing is written.
+func TestStartOnReadOutsideTheWindowStartsNoClock(t *testing.T) {
+	for name, shift := range map[string]func(*contests.Contest){
+		"before starts_at": func(c *contests.Contest) { later := time.Now().Add(time.Hour); c.StartsAt = &later },
+		"after ends_at":    func(c *contests.Contest) { earlier := time.Now().Add(-time.Minute); c.EndsAt = &earlier },
+		"not running":      func(c *contests.Contest) { c.Status = contests.StatusFinished },
+	} {
+		t.Run(name, func(t *testing.T) {
+			contest := individualContest()
+			shift(&contest)
+			starts := 0
+			p := contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}
+			service := accessFixture(people{participant: p, starts: &starts}, contestStore{contest: contest})
+
+			if _, err := service.StartOnRead(t.Context(), contest, p); !errors.Is(err, queryproxy.ErrContestNotRunning) {
+				t.Fatalf("StartOnRead() = %v, want ErrContestNotRunning", err)
+			}
+			if starts != 0 {
+				t.Fatalf("Start called %d times outside the window, want 0", starts)
+			}
+		})
+	}
+}
+
+// The write failing is ours, not a refusal of the participant.
+func TestStartOnReadMarksAFailureToStartAsOurs(t *testing.T) {
+	contest := individualContest()
+	p := contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}
+	service := accessFixture(people{participant: p, startErr: errors.New("connection reset")}, contestStore{contest: contest})
+
+	if _, err := service.StartOnRead(t.Context(), contest, p); !errors.Is(err, queryproxy.ErrUnavailable) {
+		t.Fatalf("StartOnRead() = %v, want ErrUnavailable", err)
+	}
+}
+
+// Holding the events channel open shows a waiting participant their clock; it
+// is not reading the contest, and must never be what starts it.
+func TestAccessForEventsNeverStartsTheClock(t *testing.T) {
+	contest := individualContest()
+	starts := 0
+	p := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered}
+	service := accessFixture(people{participant: p, starts: &starts}, contestStore{contest: contest})
+
+	participant, _, err := service.AccessForEvents(t.Context(), contest.ID, uuid.New(), netip.Addr{})
+	if err != nil {
+		t.Fatalf("AccessForEvents() = %v", err)
+	}
+	if starts != 0 || participant.StartedAt != nil {
+		t.Fatalf("Start called %d times by the events channel, want 0", starts)
 	}
 }
 

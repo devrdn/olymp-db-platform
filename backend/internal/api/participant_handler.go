@@ -24,7 +24,11 @@ import (
 
 // The endpoints a participant of a running contest uses to work on it: three
 // read-only ones — the story, the visible questions, and this participant's
-// own query log — and one that writes, answering a question.
+// own query log — and one that writes, answering a question. Read-only as far
+// as the contest goes: under individual timing, a successful read of the
+// story or the questions starts the participant's own clock
+// (queryproxy.Service.StartOnRead), because reading the contest is taking part
+// in it.
 //
 // What may never reach a response here, under any parameter, in any
 // language, in any error message: a reference answer, a hidden question
@@ -55,10 +59,16 @@ type ParticipantAccess interface {
 	// lookups. See queryproxy.Service.AdmitRead for why the key (userID) is
 	// bounded and why it is checked ahead of everything else.
 	AdmitRead(userID uuid.UUID) error
+	// StartOnRead starts an individual participant's clock on their first
+	// read of the contest's content (queryproxy.Service.StartOnRead). The
+	// story and question endpoints call it once their content has been read,
+	// before it is sent; nothing else here does.
+	StartOnRead(ctx context.Context, contest contests.Contest, participant contests.Participant) (contests.Participant, error)
 	// Schema describes the contest's game, for the console's schema panel. It
 	// applies Access's own admission itself and then the one rule that is its
 	// own: a contest that closed its catalogues does not show its shape here
-	// either (queryproxy.ErrSchemaHidden).
+	// either (queryproxy.ErrSchemaHidden). A successful read starts the clock
+	// the same way the story and the questions do.
 	Schema(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (provisioning.Schema, error)
 }
 
@@ -256,6 +266,19 @@ func (h *ParticipantHandler) admit(w http.ResponseWriter, r *http.Request) (cont
 	return participant, contest, true
 }
 
+// startOnRead starts an individual participant's clock once a read of the
+// contest's content has succeeded and before the content is sent, and answers
+// the refusal itself when it cannot. After the read, so a read refused for any
+// reason starts nothing; before the response, so content is never sent to a
+// participant whose clock could not be started.
+func (h *ParticipantHandler) startOnRead(w http.ResponseWriter, r *http.Request, contest contests.Contest, participant contests.Participant) bool {
+	if _, err := h.access.StartOnRead(r.Context(), contest, participant); err != nil {
+		h.fail(w, r, err)
+		return false
+	}
+	return true
+}
+
 // languageFor resolves which language to answer contest in, by the one
 // resolution order every language-dependent endpoint uses (§6.2): the
 // request's own preference, then the contest's default, then the
@@ -271,7 +294,7 @@ type storyResponse struct {
 }
 
 func (h *ParticipantHandler) story(w http.ResponseWriter, r *http.Request) {
-	_, contest, ok := h.admit(w, r)
+	participant, contest, ok := h.admit(w, r)
 	if !ok {
 		return
 	}
@@ -280,6 +303,9 @@ func (h *ParticipantHandler) story(w http.ResponseWriter, r *http.Request) {
 	body, err := h.reader.Story(r.Context(), contest.ID, lang)
 	if err != nil {
 		h.fail(w, r, err)
+		return
+	}
+	if !h.startOnRead(w, r, contest, participant) {
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, storyResponse{Lang: lang, BodyMD: body})
@@ -358,6 +384,9 @@ func (h *ParticipantHandler) questions(w http.ResponseWriter, r *http.Request) {
 	found, err := h.reader.Questions(r.Context(), contest.ID, participant.ID, lang, contest.SequentialActive())
 	if err != nil {
 		h.fail(w, r, err)
+		return
+	}
+	if !h.startOnRead(w, r, contest, participant) {
 		return
 	}
 

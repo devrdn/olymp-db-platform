@@ -42,16 +42,17 @@ func (s *Service) WithSchemas(schemas Schemas) *Service {
 //
 // The same admission every other participant-facing read requires (Access):
 // registered and not disqualified or finished, the contest open to them,
-// their address allowed. Their own clock is not started by asking — Access
-// never starts one, and opening a screen is not the deliberate action §8
-// means by starting.
+// their address allowed. The schema is contest content like the story and the
+// questions, so under individual timing a successful read starts the
+// participant's clock (StartOnRead) — only once it has been read, so a refused
+// read, a hidden schema included, starts nothing.
 //
 // The catalogue flag is checked before the database is provisioned, and
 // before anything is read: a contest that hides its schema must not be able
 // to be told apart from one whose game is simply slow to answer, and the
 // refusal must not cost the cluster a connection either.
 func (s *Service) Schema(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (provisioning.Schema, error) {
-	participant, _, err := s.Access(ctx, contestID, userID, addr)
+	participant, contest, err := s.Access(ctx, contestID, userID, addr)
 	if err != nil {
 		return provisioning.Schema{}, err
 	}
@@ -90,6 +91,9 @@ func (s *Service) Schema(ctx context.Context, contestID, userID uuid.UUID, addr 
 	schema, err := s.schemas.Schema(ctx, game, database)
 	if err != nil {
 		return provisioning.Schema{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	if _, err := s.StartOnRead(ctx, contest, participant); err != nil {
+		return provisioning.Schema{}, err
 	}
 	return schema, nil
 }

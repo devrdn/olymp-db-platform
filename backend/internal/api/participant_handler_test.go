@@ -67,6 +67,20 @@ type fakeAccess struct {
 	schema      provisioning.Schema
 	schemaErr   error
 	schemaAsked uuid.UUID
+	// startedOnRead records the registrations StartOnRead was asked to start,
+	// and startOnReadErr is what it answers with.
+	startedOnRead  []uuid.UUID
+	startOnReadErr error
+}
+
+func (a *fakeAccess) StartOnRead(_ context.Context, _ contests.Contest, participant contests.Participant) (contests.Participant, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.startedOnRead = append(a.startedOnRead, participant.ID)
+	if a.startOnReadErr != nil {
+		return contests.Participant{}, a.startOnReadErr
+	}
+	return participant, nil
 }
 
 func (a *fakeAccess) Schema(_ context.Context, contestID, _ uuid.UUID, _ netip.Addr) (provisioning.Schema, error) {
@@ -352,6 +366,109 @@ func (f *participantFixture) post(path, body string) *httptest.ResponseRecorder 
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, req)
 	return rec
+}
+
+// playContest stages a running contest with one visible question and a story
+// in English, and returns its identifier.
+func (f *participantFixture) playContest(t *testing.T) uuid.UUID {
+	t.Helper()
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{
+		ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingIndividual,
+		Languages: []contests.ContestLanguage{{Code: "en", IsDefault: true}},
+	}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.questions.Put(contests.Question{
+		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
+		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}},
+	})
+	if _, err := f.stories.Save(context.Background(), contestID, map[string]string{"en": "A body in the stacks."}); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+	return contestID
+}
+
+// Reading the story or the question list is reading the contest, and under
+// individual timing that is where the participant's clock starts: each read
+// hands the registration admission resolved to StartOnRead.
+func TestReadingTheStoryOrTheQuestionsStartsTheClock(t *testing.T) {
+	for _, path := range []string{"/play/story", "/play/questions"} {
+		t.Run(path, func(t *testing.T) {
+			f := newParticipantFixture(t)
+			contestID := f.playContest(t)
+
+			rec := f.get("/contests/" + contestID.String() + path)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+			}
+			if len(f.access.startedOnRead) != 1 || f.access.startedOnRead[0] != f.access.participant.ID {
+				t.Fatalf("StartOnRead asked for %v, want exactly the resolved registration", f.access.startedOnRead)
+			}
+		})
+	}
+}
+
+// A read that is refused showed nothing, so it starts nothing: over the rate,
+// from an address the contest does not allow, or a story that does not exist.
+func TestARefusedContentReadStartsNoClock(t *testing.T) {
+	for name, given := range map[string]struct {
+		path  string
+		stage func(f *participantFixture)
+		want  int
+	}{
+		"questions over the rate":           {"/play/questions", func(f *participantFixture) { f.access.admitReadErr = queryrunner.ErrTooManyQueries }, http.StatusTooManyRequests},
+		"story from an address not allowed": {"/play/story", func(f *participantFixture) { f.access.err = queryproxy.ErrAddressNotAllowed }, http.StatusForbidden},
+		"a story that does not exist": {"/play/story", func(f *participantFixture) {
+			_ = f.stories.Delete(context.Background(), f.access.contest.ID)
+		}, http.StatusNotFound},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newParticipantFixture(t)
+			contestID := f.playContest(t)
+			given.stage(f)
+
+			rec := f.get("/contests/" + contestID.String() + given.path)
+			if rec.Code != given.want {
+				t.Fatalf("status = %d, want %d (body: %s)", rec.Code, given.want, rec.Body.String())
+			}
+			if len(f.access.startedOnRead) != 0 {
+				t.Fatalf("StartOnRead was reached by a refused read")
+			}
+		})
+	}
+}
+
+// When the clock cannot be started — the window closed between admission and
+// the read — the content read is refused, and the content is not sent.
+func TestAContentReadWhoseClockCannotStartIsRefused(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := f.playContest(t)
+	f.access.startOnReadErr = queryproxy.ErrContestNotRunning
+
+	rec := f.get("/contests/" + contestID.String() + "/play/questions")
+	if rec.Code != http.StatusConflict || errorCode(t, rec) != "contest_not_running" {
+		t.Fatalf("status = %d, body %s; want 409 contest_not_running", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "Who did it?") {
+		t.Fatal("the question was sent although the clock could not start")
+	}
+}
+
+// The query log is the participant's own record, not the contest, and an
+// answer starts the clock inside Submit: neither asks StartOnRead.
+func TestTheQueryLogAndAnswersDoNotStartTheClockOnRead(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := f.playContest(t)
+
+	if rec := f.get("/contests/" + contestID.String() + "/play/log"); rec.Code != http.StatusOK {
+		t.Fatalf("log: status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if rec := f.post("/contests/"+contestID.String()+"/questions/"+uuid.New().String()+"/answer", `{"value":"x"}`); rec.Code != http.StatusOK {
+		t.Fatalf("answer: status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if len(f.access.startedOnRead) != 0 {
+		t.Fatalf("StartOnRead asked for %v, want nothing", f.access.startedOnRead)
+	}
 }
 
 // TestAHiddenQuestionIsAbsentFromTheParticipantsList is the requirement
