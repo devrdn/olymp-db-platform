@@ -167,6 +167,11 @@ func LoadRunner() (Runner, error) {
 		return Runner{}, err
 	}
 	cfg.GameDBWriterDSN = os.Getenv("GAME_DB_WRITER_DSN")
+	for name, value := range map[string]string{"GAME_DB_DSN": cfg.GameDBDSN, "GAME_DB_WRITER_DSN": cfg.GameDBWriterDSN} {
+		if err := refusePlaceholder(cfg.Env, name, value); err != nil {
+			return Runner{}, err
+		}
+	}
 	if !slices.Contains(validLogLevels, cfg.LogLevel) {
 		return Runner{}, fmt.Errorf("LOG_LEVEL: unknown level %q, want one of %v", cfg.LogLevel, validLogLevels)
 	}

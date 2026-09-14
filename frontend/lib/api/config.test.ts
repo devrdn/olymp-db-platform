@@ -72,6 +72,29 @@ describe("ingressSecret", () => {
     expect(said).not.toContain("short-and-secret");
   });
 
+  test("refuses the example file's placeholder in production, without repeating it", async () => {
+    // deploy/.env.example marks values an operator must choose with "change-me";
+    // a secret everybody who read the repository knows vouches for nobody.
+    vi.resetModules();
+    const fresh = await import("./config");
+    const placeholder = "CHANGE-ME-to-the-output-of-openssl-rand-hex-32";
+    vi.stubEnv("INGRESS_SECRET", placeholder);
+    vi.stubEnv("NODE_ENV", "production");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect(fresh.ingressSecret()).toBeNull();
+    const said = error.mock.calls.flat().join(" ");
+    expect(said).toMatch(/INGRESS_SECRET/);
+    expect(said.toLowerCase()).not.toContain("change-me");
+  });
+
+  test("lets development keep the placeholder", () => {
+    vi.stubEnv("INGRESS_SECRET", "change-me-to-the-output-of-openssl-rand-hex-32");
+    vi.stubEnv("NODE_ENV", "development");
+
+    expect(ingressSecret()).toBe("change-me-to-the-output-of-openssl-rand-hex-32");
+  });
+
   test("keeps quiet in development", () => {
     vi.stubEnv("INGRESS_SECRET", "");
     vi.stubEnv("NODE_ENV", "development");
