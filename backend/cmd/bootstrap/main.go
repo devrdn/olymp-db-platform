@@ -22,6 +22,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
+	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/users"
@@ -60,6 +61,9 @@ func run() error {
 		postgres.NewUsers(pool),
 		audit.New(postgres.NewAuditSink(pool)),
 		storage.NewUnitOfWork(pool),
+		// A one-shot command hashing one password: its own hasher with the
+		// defaults, since there is no server process to share one with.
+		password.NewHasher(password.HasherConfig{}),
 	)
 
 	result, err := service.BootstrapAdmin(ctx, *login, *fullName)

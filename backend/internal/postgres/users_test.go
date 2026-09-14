@@ -13,6 +13,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/platform/password/passwordtest"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
 	"github.com/devrdn/db-contest/backend/internal/users"
@@ -359,7 +360,7 @@ func TestByLoginBreaksATieAmongSeveralDeletedRowsByRecency(t *testing.T) {
 func TestRestoreIsRefusedByAReclaimedLogin(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
-		service := users.NewService(repo, audit.New(NewAuditSink(testPool)), storage.NewUnitOfWork(testPool))
+		service := users.NewService(repo, audit.New(NewAuditSink(testPool)), storage.NewUnitOfWork(testPool), passwordtest.NewHasher())
 
 		admin := makeUser(t, ctx, "reclaimed-login-admin")
 		gone := makeUser(t, ctx, "reclaimed-login-ivanov")

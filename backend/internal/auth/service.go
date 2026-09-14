@@ -95,6 +95,10 @@ type ServiceConfig struct {
 	Audit    *audit.Recorder
 	Limiter  *Limiter
 	Logger   *slog.Logger
+	// Passwords is the process's one password hasher, shared with account
+	// management. Its bound on concurrent hashing only holds if every caller
+	// goes through the same one.
+	Passwords *password.Hasher
 	// MaxAttemptsPerAddress caps sign-in attempts from one address in a
 	// window. Zero takes DefaultMaxLoginAttemptsPerAddress; a site whose
 	// participants share one NAT address raises it.
@@ -107,12 +111,16 @@ type Service struct {
 	sessions      *SessionStore
 	audit         *audit.Recorder
 	limiter       *Limiter
+	passwords     *password.Hasher
 	log           *slog.Logger
 	maxPerAddress int
 }
 
 // NewService assembles the authentication service.
 func NewService(cfg ServiceConfig) *Service {
+	if cfg.Passwords == nil {
+		panic("auth: NewService needs the shared password hasher")
+	}
 	perAddress := cfg.MaxAttemptsPerAddress
 	if perAddress <= 0 {
 		perAddress = DefaultMaxLoginAttemptsPerAddress
@@ -122,6 +130,7 @@ func NewService(cfg ServiceConfig) *Service {
 		sessions:      cfg.Sessions,
 		audit:         cfg.Audit,
 		limiter:       cfg.Limiter,
+		passwords:     cfg.Passwords,
 		log:           cfg.Logger,
 		maxPerAddress: perAddress,
 	}
@@ -150,6 +159,10 @@ type LoginResult struct {
 // The order of the steps is deliberate: throttling first, then a password
 // comparison that always runs, then the account's state. Anything that returns
 // earlier for one kind of failure than another becomes an oracle.
+//
+// Besides the errors declared above, it returns password.ErrBusy when the
+// process is already running as many password computations as it will: the
+// attempt was counted but not evaluated.
 func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, error) {
 	if err := s.checkThrottle(ctx, cmd); err != nil {
 		return LoginResult{}, err
@@ -168,7 +181,15 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 	if found {
 		hash = user.PasswordHash
 	}
-	matched, verifyErr := password.Verify(hash, cmd.Password)
+	matched, verifyErr := s.passwords.Verify(ctx, hash, cmd.Password)
+	if errors.Is(verifyErr, password.ErrBusy) {
+		// No slot came free: the password was never evaluated, so this is
+		// neither a failure to record nor a verdict to give. The attempt has
+		// already been counted by checkThrottle, which is what keeps a refusal
+		// from being free to retry. Both a known and an unknown login reach
+		// this point the same way, so it says nothing about which one it was.
+		return LoginResult{}, verifyErr
+	}
 	if verifyErr != nil {
 		// A malformed stored digest is a data problem, not a reason to admit
 		// anyone. Log it for operators and reject the attempt.
@@ -333,7 +354,7 @@ func (s *Service) ClearPasswordChangeThrottle(ctx context.Context, userID uuid.U
 // upgradeHash replaces a digest made with weaker parameters. A failure here
 // costs nothing: the session is valid either way and the next login retries.
 func (s *Service) upgradeHash(ctx context.Context, user users.User, plaintext string) {
-	hash, err := password.Hash(plaintext)
+	hash, err := s.passwords.Hash(ctx, plaintext)
 	if err != nil {
 		s.log.WarnContext(ctx, "could not re-hash password", "user_id", user.ID, "error", err)
 		return
@@ -371,8 +392,11 @@ func accountSubject(login string) string { return "login:" + normalizeLogin(logi
 
 func passwordChangeSubject(userID uuid.UUID) string { return "pwchange:" + userID.String() }
 
+// mustHash builds dummyHash once at start-up, on a hasher of its own: it runs
+// before any service exists, exactly once, and nothing else is hashing yet.
 func mustHash(plaintext string) string {
-	hash, err := password.Hash(plaintext)
+	hasher := password.NewHasher(password.HasherConfig{Concurrency: 1})
+	hash, err := hasher.Hash(context.Background(), plaintext)
 	if err != nil {
 		panic("auth: cannot build the timing-equalising hash: " + err.Error())
 	}

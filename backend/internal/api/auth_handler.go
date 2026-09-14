@@ -9,6 +9,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
+	"github.com/devrdn/db-contest/backend/internal/platform/password"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -108,6 +109,9 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, auth.ErrTooManyAttempts):
 		httpx.Error(w, r, http.StatusTooManyRequests, codeTooManyAttempts,
 			"Too many attempts. Try again in a few minutes.")
+		return
+	case errors.Is(err, password.ErrBusy):
+		busy(w, r)
 		return
 	default:
 		h.log.ErrorContext(r.Context(), "login failed", "error", err)
@@ -238,6 +242,9 @@ func (h *AuthHandler) changePassword(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, users.ErrSamePassword):
 		httpx.Error(w, r, http.StatusBadRequest, codeSamePassword, "Choose a password different from the current one")
 		return
+	case errors.Is(err, password.ErrBusy):
+		busy(w, r)
+		return
 	default:
 		h.log.ErrorContext(r.Context(), "password change failed", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
@@ -248,4 +255,14 @@ func (h *AuthHandler) changePassword(w http.ResponseWriter, r *http.Request) {
 	// the cookie is cleared and the user signs in with the new password.
 	h.cookies.Clear(w)
 	httpx.NoContent(w, r)
+}
+
+// busy answers a request whose password work found every hashing slot taken.
+// 503 rather than 429: the caller did nothing wrong and is not being limited,
+// the process is. Retry-After tells a client roughly when a slot is likely
+// to be free.
+func busy(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Retry-After", "1")
+	httpx.Error(w, r, http.StatusServiceUnavailable, codeSignInBusy,
+		"The service is busy checking passwords. Try again in a moment.")
 }

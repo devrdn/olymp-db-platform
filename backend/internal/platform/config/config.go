@@ -16,12 +16,18 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/devrdn/db-contest/backend/internal/platform/password"
 )
 
 // DefaultInternalAddr is where metrics and health probes listen when
 // INTERNAL_ADDR is not set. Exported so the container self-check derives its
 // probe URL from the same constant and cannot drift from it.
 const DefaultInternalAddr = ":9090"
+
+// maxPasswordHashWait bounds PASSWORD_HASH_MAX_WAIT. Past this, a flood of
+// sign-in attempts is a flood of parked requests rather than of answers.
+const maxPasswordHashWait = 30 * time.Second
 
 // validLogLevels mirrors the levels understood by the logging package.
 var validLogLevels = []string{"debug", "info", "warn", "error"}
@@ -156,6 +162,15 @@ type Config struct {
 	// only guesses: a hall of students behind one NAT address is one address
 	// here. Raise it where the whole cohort shares an address.
 	MaxLoginAttemptsPerAddress int
+	// PasswordHashConcurrency is how many argon2id computations the process
+	// runs at once, across sign-in, password changes and account management.
+	// Each holds 64 MiB, so this is a memory figure: the deployment's memory
+	// limit is sized from it. Zero leaves it to the password package's
+	// default (one per CPU, at least two).
+	PasswordHashConcurrency int
+	// PasswordHashMaxWait is how long a sign-in or password change waits for
+	// a hashing slot before it is answered "busy".
+	PasswordHashMaxWait time.Duration
 	// QueryPerMinute is how often a participant with no contest-specific rate
 	// may ask, for the console's own pre-check ahead of the query journal.
 	// The number is a rule about the SQL console's load, so it belongs to
@@ -276,6 +291,23 @@ func Load() (Config, error) {
 	if cfg.MaxLoginAttemptsPerAddress, err = intEnv("MAX_LOGIN_ATTEMPTS_PER_ADDRESS", 0); err != nil {
 		return Config{}, err
 	}
+	// Both bounded: the concurrency is 64 MiB a slot, and the wait is how long
+	// each request of a burst keeps a goroutine parked.
+	if cfg.PasswordHashConcurrency, err = intEnv("PASSWORD_HASH_CONCURRENCY", 0); err != nil {
+		return Config{}, err
+	}
+	if cfg.PasswordHashConcurrency > password.MaxConcurrency {
+		return Config{}, fmt.Errorf("PASSWORD_HASH_CONCURRENCY: %d is above the ceiling of %d",
+			cfg.PasswordHashConcurrency, password.MaxConcurrency)
+	}
+	if cfg.PasswordHashMaxWait, err = durationEnv("PASSWORD_HASH_MAX_WAIT", password.DefaultMaxWait); err != nil {
+		return Config{}, err
+	}
+	if cfg.PasswordHashMaxWait <= 0 || cfg.PasswordHashMaxWait > maxPasswordHashWait {
+		return Config{}, fmt.Errorf("PASSWORD_HASH_MAX_WAIT: %s is outside (0, %s]",
+			cfg.PasswordHashMaxWait, maxPasswordHashWait)
+	}
+
 	// 30 unset, matching the Query Runner's own default for the same
 	// variable (LoadRunner's QUERY_PER_MINUTE) — see the field's doc comment
 	// for why the two must agree, including what zero means once it is set.

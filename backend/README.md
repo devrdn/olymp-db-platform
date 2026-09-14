@@ -130,6 +130,8 @@ Read from the environment at startup; a missing required value aborts the boot.
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn`, `error` |
 | `SHUTDOWN_TIMEOUT` | no | `15s` | drain period on SIGTERM |
 | `SESSION_TTL` | no | `12h` | idle lifetime of a session; slides on activity |
+| `PASSWORD_HASH_CONCURRENCY` | no | one per CPU, at least 2 | argon2id computations run at once (1-64); 64 MiB each, so size the memory limit from it |
+| `PASSWORD_HASH_MAX_WAIT` | no | `2s` | how long a sign-in or password change waits for a hashing slot before a 503 `sign_in_busy` (at most `30s`) |
 | `TRUSTED_PROXIES` | no | — | CIDRs whose `X-Forwarded-For` is believed for client IPs |
 | `DEFAULT_LOCALE` | no | `en` | language of last resort; must exist in the `languages` table |
 | `COOKIE_SECURE` | no | true outside `development` | mark the session cookie Secure |

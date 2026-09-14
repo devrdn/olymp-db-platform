@@ -246,6 +246,8 @@ var (
 		"The account exists and the password was right, but it is blocked. Only ever sent after a correct password: the owner may know, a guesser may not.")
 	codeTooManyAttempts = httpx.NewCode("too_many_attempts",
 		"Too many attempts at a password: sign-ins for this login or from this address, or password changes by this account. Try again later.")
+	codeSignInBusy = httpx.NewCode("sign_in_busy",
+		"The service is already checking as many passwords as it will at once, and none came free in time. The password was not evaluated — neither accepted nor judged wrong, though a sign-in attempt still counts against the attempt limits — so retrying in a moment is the right response. Also answered when issuing or changing a password meets the same limit.")
 	codeWrongPassword = httpx.NewCode("wrong_password",
 		"The current password given while changing it is not correct.")
 	codeWeakPassword = httpx.NewCode("weak_password",
