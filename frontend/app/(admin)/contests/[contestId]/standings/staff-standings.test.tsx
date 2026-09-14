@@ -6,13 +6,20 @@ import type { StaffStandings } from "@/lib/api/leaderboard";
 import { formatTime } from "@/lib/format/datetime";
 import { getDictionary, type Dictionary } from "@/lib/i18n/dictionary";
 
-const { fetchStaffStandingsAction } = vi.hoisted(() => ({
-  fetchStaffStandingsAction: vi.fn(),
-}));
+// The router object is created once, here, and handed back the same way on
+// every call — real Next.js hands out a stable reference across renders, and
+// this component depends on that (it names `router` in an effect's own
+// dependencies); a mock that built a fresh object per call would churn that
+// effect on every render for a reason production never has.
+const { fetchStaffStandingsAction, routerRefresh, router } = vi.hoisted(() => {
+  const routerRefresh = vi.fn();
+  return { fetchStaffStandingsAction: vi.fn(), routerRefresh, router: { refresh: routerRefresh } };
+});
 vi.mock("./actions", () => ({
   revealStandingsAction: vi.fn(async () => ({ revealedAt: "2026-09-20T13:00:00Z" })),
   fetchStaffStandingsAction,
 }));
+vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
 import { STAFF_REFRESH_MS, StaffStandingsView } from "./staff-standings";
 
@@ -26,6 +33,7 @@ const ID = "3f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6";
 function board(overrides: Partial<StaffStandings> = {}): StaffStandings {
   return {
     shown: { state: "frozen", frozenAt: "2026-09-20T11:30:00Z" },
+    status: "running",
     scoring: "points",
     freezeMin: 30,
     names: "login",
@@ -188,6 +196,7 @@ describe("the staff table's own poll", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     fetchStaffStandingsAction.mockReset();
+    routerRefresh.mockReset();
   });
   afterEach(() => vi.useRealTimers());
 
@@ -225,5 +234,87 @@ describe("the staff table's own poll", () => {
 
     expect(screen.getByText("30")).toBeInTheDocument();
     expect(screen.getByText(dict.leaderboard.failed)).toBeInTheDocument();
+  });
+
+  // The scheduler can finish a contest with nobody's tab open to notice, and
+  // `status` is a server prop this poll otherwise never touches — so a
+  // frozen table's shown.state would sit on "frozen" straight through the
+  // transition and the reveal button would never appear.
+  test("asks the layout to refresh once the contest's own status has moved on, and stops its own chain", async () => {
+    fetchStaffStandingsAction.mockResolvedValue({
+      kind: "ok",
+      standings: board({ status: "finished" }),
+    });
+    show(board(), "running");
+
+    await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS));
+    expect(routerRefresh).toHaveBeenCalledTimes(1);
+    expect(fetchStaffStandingsAction).toHaveBeenCalledTimes(1);
+
+    // Still mounted with the old "running" prop (a unit test cannot bring
+    // the real navigation a router.refresh() would); this component's own
+    // chain must not have scheduled another poll behind it regardless.
+    await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS * 3));
+    expect(fetchStaffStandingsAction).toHaveBeenCalledTimes(1);
+  });
+
+  // An ordinary freeze reached mid-contest also moves shown.state, but it is
+  // not "moved on" the way a reveal is: the poll shows it like any other
+  // change, without asking for a whole-layout refresh.
+  test("does not refresh for an ordinary freeze reached mid-contest", async () => {
+    fetchStaffStandingsAction.mockResolvedValue({
+      kind: "ok",
+      standings: board({ shown: { state: "frozen", frozenAt: "2026-09-20T11:30:00Z" } }),
+    });
+    show(board({ shown: { state: "live", frozenAt: undefined } }), "running");
+
+    await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS));
+
+    expect(routerRefresh).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS));
+    expect(fetchStaffStandingsAction).toHaveBeenCalledTimes(2);
+  });
+
+  test("refreshes instead of showing a failure banner when a poll is unauthenticated", async () => {
+    fetchStaffStandingsAction.mockResolvedValue({ kind: "refused", code: "unauthenticated" });
+    show(board(), "running");
+
+    await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS));
+
+    expect(routerRefresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(dict.leaderboard.failed)).not.toBeInTheDocument();
+  });
+
+  test("never overlaps polls and ignores a response older than the one already applied", async () => {
+    let resolveFirst!: (value: { kind: "ok"; standings: StaffStandings }) => void;
+    const first = new Promise<{ kind: "ok"; standings: StaffStandings }>((resolve) => {
+      resolveFirst = resolve;
+    });
+    fetchStaffStandingsAction.mockReturnValueOnce(first);
+    fetchStaffStandingsAction.mockResolvedValue({
+      kind: "ok",
+      standings: board({ rows: [{ ...board().rows[0], points: 55 }] }),
+    });
+    show(board(), "running");
+
+    await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS));
+    expect(fetchStaffStandingsAction).toHaveBeenCalledTimes(1);
+
+    // The first request is still pending; the chain must not have started a
+    // second one behind it just because an interval would have fired again.
+    await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS * 2));
+    expect(fetchStaffStandingsAction).toHaveBeenCalledTimes(1);
+
+    // Once it resolves late, with a stale row count, it must not overwrite
+    // whatever a newer poll already applied — there is none yet here, so it
+    // is simply the copy shown, and the chain resumes from it.
+    await act(async () => {
+      resolveFirst({ kind: "ok", standings: board({ rows: [{ ...board().rows[0], points: 99 }] }) });
+    });
+    expect(screen.getByText("99")).toBeInTheDocument();
+
+    await act(async () => vi.advanceTimersByTimeAsync(STAFF_REFRESH_MS));
+    expect(fetchStaffStandingsAction).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("55")).toBeInTheDocument();
   });
 });
