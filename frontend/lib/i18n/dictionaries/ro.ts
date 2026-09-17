@@ -1015,6 +1015,17 @@ const ro = {
           editor: "Înălțimea editorului",
           detail: "Înălțimea tabelului cu rezultatul",
         },
+        panels: {
+          schema: "Panoul schemei",
+          side: "Panoul întrebărilor",
+          bottom: "Panoul rezultatului",
+          shortcut: "{name} ({keys})",
+          keys: {
+            schema: "Ctrl/⌘+B",
+            side: "Ctrl/⌘+Alt+B",
+            bottom: "Ctrl/⌘+J",
+          },
+        },
         row: {
           heading: "Rândul {n}",
           region: "Rândul {n} al rezultatului",

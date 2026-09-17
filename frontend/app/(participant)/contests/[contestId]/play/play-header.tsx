@@ -8,6 +8,7 @@ import type { PlayDictionary } from "./dictionary";
 import { cn } from "@/lib/utils";
 
 import { useContentLoaded } from "./content-loaded";
+import { PanelToggles } from "./panel-toggles";
 import { useContestEvents } from "./use-contest-events";
 
 /**
@@ -94,13 +95,24 @@ export function PlayHeader({
         <h1 className="truncate text-row text-ink max-narrow:whitespace-normal">{title}</h1>
         {phase === "finished" ? <Tag tone="mute">{t.finishedTag}</Tag> : null}
       </div>
-      <PlayClock
-        offsetRef={offsetRef}
-        deadlineRef={deadlineRef}
-        phase={phase}
-        contentLoaded={contentLoaded}
-        dict={dict}
-      />
+      {/* The clock and, beside it, §8's three panel toggles — the right end
+          of the bar, which is where VS Code puts its own. They are one flex
+          row of their own so `justify-between` above still has exactly two
+          things to push apart, and so the toggles stay with the clock rather
+          than wrapping away from it on a phone. `PanelToggles` draws nothing
+          at all unless there is a workspace below this bar (panel-toggles.tsx
+          for why that is a provider and not a prop), so the waiting room's
+          own header is unchanged. */}
+      <div className="flex shrink-0 items-center gap-3">
+        <PlayClock
+          offsetRef={offsetRef}
+          deadlineRef={deadlineRef}
+          phase={phase}
+          contentLoaded={contentLoaded}
+          dict={dict}
+        />
+        <PanelToggles dict={dict} />
+      </div>
       {/* Finding 1: the channel this clock runs on can fail outright (a
           connection limit, a rate limit, this account losing access) and, per
           the SSE spec, the browser then never retries on its own — see

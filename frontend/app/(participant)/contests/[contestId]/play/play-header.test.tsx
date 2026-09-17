@@ -24,6 +24,7 @@ const events = vi.hoisted(() => ({
 vi.mock("./use-contest-events", () => ({ useContestEvents: () => events.current }));
 
 import { ContentLoadedProvider, ContentLoadedSignal } from "./content-loaded";
+import { PanelVisibilityProvider } from "./panel-toggles";
 import { PlayHeader } from "./play-header";
 
 beforeEach(() => {
@@ -257,5 +258,38 @@ describe("PlayHeader", () => {
       const matches = screen.getAllByText(en.participant.play.clock.timeUp);
       expect(matches.some((el) => el.getAttribute("aria-live") === "polite")).toBe(true);
     });
+  });
+});
+
+/**
+ * §8's three toggles live at the right end of this bar. They belong to the
+ * workspace below it, which is a sibling behind a `<Suspense>` boundary, so
+ * what the header actually renders is `PanelToggles` — a component that
+ * draws nothing until there is a provider around the pair (panel-toggles.tsx
+ * and its own tests).
+ */
+describe("the panel toggles", () => {
+  const t = en.participant.play.workspace.panels;
+
+  test("are in the bar when the workspace is below it", () => {
+    events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" };
+    render(
+      <PanelVisibilityProvider contestId="c1">
+        <PlayHeader contestId="c1" title="X" waitingForStart={false} dict={en} />
+      </PanelVisibilityProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: t.schema })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t.side })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t.bottom })).toBeInTheDocument();
+  });
+
+  // The waiting room draws this same bar with no workspace under it, and a
+  // control for a panel that is not on the screen is a control for nothing.
+  test("are absent in the waiting room", () => {
+    events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting" };
+    render(<PlayHeader contestId="c1" title="X" waitingForStart dict={en} />);
+
+    expect(screen.queryByRole("button", { name: t.bottom })).not.toBeInTheDocument();
   });
 });
