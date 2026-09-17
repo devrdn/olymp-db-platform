@@ -27,6 +27,10 @@ import (
 // on registrations, so the registration row — which the clock and the
 // scoring update — is never held by a workspace write. Editing one tab's text
 // or title changes no set and takes no lock.
+//
+// The table has no unique constraint on (registration_id, position): that
+// positions stay unique and dense (0..n-1) rests on this lock. Every path
+// that changes the set or the positions takes it, and a new one must too.
 type Workspace struct {
 	pool *pgxpool.Pool
 	uow  *storage.PgxUnitOfWork
