@@ -298,6 +298,24 @@ describe("a save that fails", () => {
     expect(save).toHaveBeenCalledTimes(2);
   });
 
+  // Every refusal counts against the budget, so a zero wait must not turn
+  // into a loop of them.
+  test("waits at least the first pause when a 429 said to wait zero seconds", async () => {
+    const save = vi
+      .fn<SaveFn>()
+      .mockRejectedValueOnce(new ApiError("workspace_too_often", 429, "slow", undefined, undefined, undefined, 0))
+      .mockResolvedValue("v1");
+    const hook = mount({ save });
+
+    type(hook, "a");
+    await wait(1500);
+    await wait(1999);
+    expect(save).toHaveBeenCalledTimes(1);
+
+    await wait(1);
+    expect(save).toHaveBeenCalledTimes(2);
+  });
+
   test("falls back to the pause when a 429 named no wait", async () => {
     const save = vi
       .fn<SaveFn>()

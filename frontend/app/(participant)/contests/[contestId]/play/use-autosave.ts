@@ -342,7 +342,12 @@ export class AutosaveEngine {
     }
 
     if (error instanceof ApiError && error.status === 429) {
-      const wait = error.retryAfterSeconds !== undefined ? error.retryAfterSeconds * 1000 : this.pause();
+      // Never shorter than the first pause: every refused save counts
+      // against the same budget, so a zero wait must not become a loop.
+      const wait =
+        error.retryAfterSeconds !== undefined
+          ? Math.max(error.retryAfterSeconds * 1000, AUTOSAVE_RETRY_FIRST_MS)
+          : this.pause();
       this.retryLater(wait);
     } else if (error instanceof ApiError && isRefusalOfText(error.status)) {
       this.rejected = { text, code: error.code };
