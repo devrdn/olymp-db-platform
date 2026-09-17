@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
 
@@ -27,6 +27,29 @@ vi.mock("./actions", () => ({
 function freshInitialLog() {
   return { items: [], total: 0, failed: false };
 }
+
+// The notes and the SQL tabs save themselves straight to the API, so this
+// screen reaches for `fetch` on its own the moment anything is typed. None
+// of the tests here are about saving — `use-sql-tabs.test.tsx` and
+// `notes-panel.test.tsx` are — so it answers, and answers successfully, so a
+// retry does not keep a timer running past the test that started it.
+beforeEach(() => {
+  window.localStorage.clear();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify({ updated_at: "v1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    ),
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 // The events channel belongs to `PlayHeader`, which `page.tsx` now renders
 // above this component's own Suspense boundary (finding 2) — so nothing here
@@ -235,7 +258,9 @@ describe("the play workspace", () => {
     const before = logCalls.count;
 
     await runQuery();
-    await waitFor(() => expect(screen.getByRole("status")).toBeInTheDocument());
+    // The refusal itself, rather than "some live region": the SQL tabs put
+    // their own save status on the screen now, and it is a live region too.
+    await waitFor(() => expect(screen.getByText(en.errors.query_too_often)).toBeInTheDocument());
 
     expect(logCalls.count).toBe(before);
   });

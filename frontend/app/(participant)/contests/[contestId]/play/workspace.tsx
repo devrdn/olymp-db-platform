@@ -134,6 +134,11 @@ export function Workspace({
   // form and its useActionState never move; only this mirror of its result
   // does, which is what keeps a run from remounting the textarea.
   const [lastResult, setLastResult] = useState<ConsoleState>({ kind: "idle" });
+  // Which SQL tab that result was run from. Kept beside the result rather
+  // than read from the console: the participant goes on typing in another
+  // tab while reading an answer, and the answer still belongs to the tab it
+  // came from (§5).
+  const [resultFrom, setResultFrom] = useState<string | null>(null);
   // Which tab of the bottom panel is showing. Controlled, rather than left to
   // Tabs' own uncontrolled state, so a completed run can switch to "Result"
   // by itself — the same reason a build's own output panel opens itself in
@@ -284,6 +289,9 @@ export function Workspace({
               <ConsoleEditor
                 contestId={contestId}
                 dict={dict}
+                // The same array on every render, so the memoised panels
+                // around it are not disturbed by it.
+                tabs={workspace?.tabs ?? null}
                 actions={
                   // The design's toolbar carries the query log as a button
                   // rather than a tab strip over the result
@@ -306,7 +314,7 @@ export function Workspace({
                     </ToolbarButton>
                   </>
                 }
-                onResult={(state) => {
+                onResult={(state, source) => {
                   setLastResult(state);
                   // Finding 3: this used to also bump a token that made
                   // QueryLogPanel refetch on every completed run. AdmitRead
@@ -317,6 +325,7 @@ export function Workspace({
                   // refreshes itself off the `active` prop below, only on the
                   // transition into actually being shown.
                   if (state.kind !== "idle") {
+                    if (source) setResultFrom(source.tabTitle);
                     setBottomTab("result");
                   }
                 }}
@@ -349,7 +358,7 @@ export function Workspace({
                   bottomTab === "result" ? "flex flex-col" : "hidden",
                 )}
               >
-                <MemoResultPanel state={lastResult} dict={dict} />
+                <MemoResultPanel state={lastResult} sourceTitle={resultFrom} dict={dict} />
               </div>
               <div
                 className={cn(
