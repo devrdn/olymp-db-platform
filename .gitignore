@@ -18,3 +18,8 @@ coverage.out
 deploy/backups/
 # Dumps uploaded to an API running on the host (make run).
 deploy/game-uploads/
+
+# Working notes of an agent session: plans, reviews, fix lists. Each of these
+# directories carries a .gitignore of its own, which only helps once the
+# directory exists.
+.superpowers/
