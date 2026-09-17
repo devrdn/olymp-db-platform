@@ -22,10 +22,18 @@ import { z } from "zod";
  * `id` is what a client names back at GET .../play/log/{entryId} to open a
  * row the page cut. Required rather than optional: every row the server
  * sends carries it, on both routes.
+ *
+ * It is query_log.id, the row's own bigserial primary key, sent as a JSON
+ * number — not a uuid, and not a string. A JSON number is an IEEE double,
+ * safe as an integer only up to 2^53 - 1 (Number.MAX_SAFE_INTEGER); an
+ * int64 column can in principle outrange that, so the bound below is a
+ * defensive ceiling on the wire shape, not a limit anybody expects this
+ * column to reach — a contest logging at this installation's default rate
+ * budget without a single pause would need decades to get there.
  */
 export const queryLogEntrySchema = z
   .object({
-    id: z.string(),
+    id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     sql: z.string(),
     sql_truncated: z.boolean().nullish(),
     status: z.string(),
