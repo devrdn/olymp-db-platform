@@ -25,6 +25,12 @@ const TWO_TABS: WorkspaceTab[] = [
   { id: "t2", title: "Suspects", body: "", position: 1, updatedAt: "v0" },
 ];
 
+/** Two tabs that already hold different text, so a mix-up between them shows. */
+const TWO_WRITTEN_TABS: WorkspaceTab[] = [
+  { id: "t1", title: "Query 1", body: "SELECT * FROM suspects", position: 0, updatedAt: "v0" },
+  { id: "t2", title: "Suspects", body: "SELECT * FROM alibis", position: 1, updatedAt: "v0" },
+];
+
 /** Every save and every tab request; the editor's own behaviour is what these tests are about. */
 beforeEach(() => {
   window.localStorage.clear();
@@ -395,14 +401,40 @@ describe("the editor's tabs", () => {
     );
   });
 
-  test("opens the tab that was open last time", async () => {
+  // The ordinary way onto this screen is a client-side navigation from /my,
+  // where there is no hydration at all: the remembered tab is the one the
+  // very first render opens. Everything that carries the text has to open on
+  // that tab too — the visible editor, and the hidden field a run is built
+  // from. Getting this wrong showed the first tab's text under the second
+  // tab's name, ran it, and then saved it over the second tab's own work.
+  test("opens the tab that was open last time, text and all", async () => {
     window.localStorage.setItem(activeTabStorageKey("c1"), "t2");
     const { container } = render(
-      <ConsoleEditor contestId="c1" dict={en} tabs={TWO_TABS} onResult={vi.fn()} />,
+      <ConsoleEditor contestId="c1" dict={en} tabs={TWO_WRITTEN_TABS} onResult={vi.fn()} />,
     );
     await waitForRealEditor(container);
 
     expect(tab("Suspects")).toHaveAttribute("aria-selected", "true");
+    expect(mirror(container).value).toBe("SELECT * FROM alibis");
+    expect(screen.getByRole("textbox", { name: en.participant.console.label })).toHaveTextContent(
+      "SELECT * FROM alibis",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: en.participant.console.run }));
+
+    await waitFor(() => expect(submitted.current?.get("sql")).toBe("SELECT * FROM alibis"));
+  });
+
+  // The same, before CodeMirror's own chunk has arrived: the fallback field
+  // is what a participant types into in that window, and it has to be the
+  // remembered tab's text rather than the first tab's.
+  test("opens the remembered tab in the fallback field too, before CodeMirror loads", () => {
+    window.localStorage.setItem(activeTabStorageKey("c1"), "t2");
+    render(<ConsoleEditor contestId="c1" dict={en} tabs={TWO_WRITTEN_TABS} onResult={vi.fn()} />);
+
+    expect(screen.getByRole("textbox", { name: en.participant.console.label })).toHaveValue(
+      "SELECT * FROM alibis",
+    );
   });
 
   // Mirrors the notes panel: a workspace the page could not read does not

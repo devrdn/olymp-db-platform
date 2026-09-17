@@ -137,6 +137,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("the participant's SQL tabs", () => {
@@ -174,6 +175,21 @@ describe("the participant's SQL tabs", () => {
     fireEvent.click(tab("Suspects"));
 
     expect(window.localStorage.getItem(activeTabStorageKey("c1"))).toBe("t2");
+    expect(editor()).toHaveValue("SELECT 2");
+  });
+
+  // §1 of the design: a private window or a policy that blocks storage
+  // costs the draft, never the function. Remembering which tab was open is
+  // storage's job; being able to switch tabs is not.
+  test("switch tabs even where the browser refuses to remember which one", () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("the quota is exceeded", "QuotaExceededError");
+    });
+    show();
+
+    fireEvent.click(tab("Suspects"));
+
+    expect(tab("Suspects")).toHaveAttribute("aria-selected", "true");
     expect(editor()).toHaveValue("SELECT 2");
   });
 

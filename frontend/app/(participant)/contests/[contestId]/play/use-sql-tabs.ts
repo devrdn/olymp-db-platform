@@ -48,9 +48,13 @@ import { AutosaveEngine, attachEngine, type ClosedCode } from "./use-autosave";
  * # What is not on the server
  *
  * Which tab is open is a property of this computer, not of the work (§1), so
- * it lives in `localStorage` beside the pane widths. A remembered id that no
- * longer names a tab — closed from another window, or a contest reset — falls
- * back to the first tab rather than to nothing.
+ * it is remembered in `localStorage` beside the pane widths. Remembered, not
+ * held there: the open tab is React state, and storage is only how it
+ * survives a visit. A browser that refuses storage — a private window, a
+ * policy, a full quota — then costs exactly what §1 says it may cost, which
+ * is the memory across visits and never the ability to switch tabs. An id
+ * that no longer names a tab (closed from another window, a contest reset)
+ * falls back to the first.
  */
 
 /** Where the open tab is remembered. Per contest, like the pane widths. */
@@ -176,8 +180,23 @@ export function useSqlTabs({
     confirmRef.current = confirmClose;
   });
 
+  // Read on the client only: the server has no storage, so it renders the
+  // first tab and hydration matches it. Once anything on this screen has
+  // chosen a tab, that choice is the truth and the stored id is only its
+  // echo.
   const remembered = useSyncExternalStore(subscribeActive, () => readActive(contestId), noActive);
-  const activeId = tabs.some((tab) => tab.id === remembered) ? (remembered as string) : tabs[0].id;
+  const [chosen, setChosen] = useState<string | null>(null);
+  const wanted = chosen ?? remembered;
+  const activeId = tabs.some((tab) => tab.id === wanted) ? (wanted as string) : tabs[0].id;
+
+  /** Opens a tab, and remembers it for the next visit if the browser lets us. */
+  const choose = useCallback(
+    (id: string) => {
+      setChosen(id);
+      writeActive(contestId, id);
+    },
+    [contestId],
+  );
 
   const open = useCallback(
     (tab: { id: string; body: string; updatedAt: string | null }) => {
@@ -233,12 +252,7 @@ export function useSqlTabs({
     setError(failure instanceof ApiError ? failure.code : "unreachable");
   }, []);
 
-  const select = useCallback(
-    (id: string) => {
-      writeActive(contestId, id);
-    },
-    [contestId],
-  );
+  const select = choose;
 
   const create = useCallback(() => {
     if (!stored || closed !== null || busy.current || tabs.length >= MAX_TABS) return;
@@ -248,11 +262,11 @@ export function useSqlTabs({
       open(tab);
       setTabs((previous) => [...previous, { id: tab.id, title: tab.title }]);
       setError(null);
-      writeActive(contestId, tab.id);
+      choose(tab.id);
     }, report).finally(() => {
       busy.current = false;
     });
-  }, [closed, contestId, open, report, stored, tabs.length, texts]);
+  }, [choose, closed, contestId, open, report, stored, tabs.length, texts]);
 
   const rename = useCallback(
     (id: string, title: string) => {
@@ -296,7 +310,7 @@ export function useSqlTabs({
         const rest = tabs.filter((tab) => tab.id !== id);
         setTabs(rest);
         setError(null);
-        if (activeId === id) writeActive(contestId, rest[Math.min(index, rest.length - 1)].id);
+        if (activeId === id) choose(rest[Math.min(index, rest.length - 1)].id);
       };
 
       if (!stored) {
@@ -305,7 +319,7 @@ export function useSqlTabs({
       }
       deleteTab(contestId, id).then(forget, report);
     },
-    [activeId, closed, contestId, engines, report, stored, tabs, texts],
+    [activeId, choose, closed, contestId, engines, report, stored, tabs, texts],
   );
 
   const move = useCallback(
