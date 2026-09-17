@@ -169,7 +169,19 @@ const errorField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
-export type { EditorView };
+export type { EditorState, EditorView };
+
+/**
+ * The extensions each view was built with, so another document can be built
+ * with the same ones.
+ *
+ * A `WeakMap` keyed by the view: the extensions are only ever wanted while
+ * that view exists, and a destroyed view takes them with it. Keeping the
+ * array rather than rebuilding it per document also keeps the two states
+ * genuinely alike — the same keymap, the same update listener, the same
+ * theme — which is what lets one be swapped for the other.
+ */
+const documentExtensions = new WeakMap<EditorView, Extension[]>();
 
 /**
  * Builds the editor and attaches it to `host`, which must already be in the
@@ -234,10 +246,44 @@ export function mountEditor(
     }),
   ];
 
-  return new EditorView({
+  const view = new EditorView({
     state: EditorState.create({ doc: opts.doc, extensions }),
     parent: host,
   });
+  documentExtensions.set(view, extensions);
+  return view;
+}
+
+/**
+ * A second (third, tenth) document for a view that already exists — one SQL
+ * tab's own text, with its own undo history and its own caret.
+ */
+export function newDocument(view: EditorView, doc: string): EditorState {
+  return EditorState.create({ doc, extensions: documentExtensions.get(view) ?? [] });
+}
+
+/**
+ * Shows `next` and hands back the state that was showing, for the caller to
+ * keep aside until that document is asked for again.
+ *
+ * `setState` rather than replacing the whole document with a transaction:
+ * a transaction would put the other tab's text into *this* tab's undo
+ * history, and one Ctrl+Z would then bring back a query the participant is
+ * no longer looking at.
+ */
+export function swapDocument(view: EditorView, next: EditorState): EditorState {
+  const previous = view.state;
+  view.setState(next);
+  return previous;
+}
+
+/**
+ * Replaces the showing document's text — a draft recovered from the last
+ * visit, which the participant's own editing of that tab is expected to
+ * continue from.
+ */
+export function setDocumentText(view: EditorView, text: string): void {
+  view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
 }
 
 /**
