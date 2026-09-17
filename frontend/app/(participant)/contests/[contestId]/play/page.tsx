@@ -11,6 +11,7 @@ import { queryLogResponseSchema, type QueryLogEntry } from "@/lib/api/querylog";
 import { QUERY_LOG_PAGE_SIZE } from "@/lib/api/querylog-terms";
 import { gameSchemaSchema, type GameSchema } from "@/lib/api/schema";
 import { serverRequest } from "@/lib/api/server";
+import { workspaceSchema, type WorkspaceSnapshot } from "@/lib/api/workspace";
 import { authRecoveryRedirect } from "@/lib/auth/guard";
 import { fetchIdentity } from "@/lib/auth/session";
 import { formatDay, formatMoment } from "@/lib/format/datetime";
@@ -220,12 +221,18 @@ async function PlayPanels({
   // participant's clock: the API starts it on the first successful read of the
   // story, the questions or the schema, so the countdown covers the time spent
   // reading the contest and not only the time spent typing. Any of the three
-  // may be the one that starts it; the server starts it once.
-  const [storyResult, questionsResult, logResult, schemaResult] = await Promise.allSettled([
+  // may be the one that starts it; the server starts it once. The
+  // workspace read (notes and SQL tabs) never starts it: keeping notes is
+  // not reading the contest.
+  //
+  // `lang` on the workspace read names the first SQL tab the server creates
+  // for a participant who has none yet.
+  const [storyResult, questionsResult, logResult, schemaResult, workspaceResult] = await Promise.allSettled([
     serverRequest(`/contests/${contestId}/play/story?lang=${locale}`),
     serverRequest(`/contests/${contestId}/play/questions?lang=${locale}`),
     serverRequest(`/contests/${contestId}/play/log?limit=${QUERY_LOG_PAGE_SIZE}&offset=0`),
     serverRequest(`/contests/${contestId}/play/schema`),
+    serverRequest(`/contests/${contestId}/play/workspace?lang=${locale}`),
   ]);
 
   if (questionsResult.status === "rejected") {
@@ -300,6 +307,17 @@ async function PlayPanels({
   let schema: GameSchema | null = null;
   if (schemaResult.status === "fulfilled") {
     schema = gameSchemaSchema.parse(schemaResult.value);
+  }
+
+  // The participant's notes and SQL tabs. No refusal of this read, and no
+  // answer this build cannot parse, takes the screen down: the notes say they
+  // could not be loaded, and the rest works as before. A refusal that is
+  // about the whole screen has already been answered above by the requests
+  // that share its admission gate.
+  let workspace: WorkspaceSnapshot | null = null;
+  if (workspaceResult.status === "fulfilled") {
+    const parsed = workspaceSchema.safeParse(workspaceResult.value);
+    workspace = parsed.success ? parsed.data : null;
   }
 
   // Rendered here, once, on the server: `StoryText` runs `react-markdown`, a
@@ -377,6 +395,7 @@ async function PlayPanels({
         icpcPenaltyMin={icpcPenaltyMin}
         schema={schema}
         initialLog={initialLog}
+        workspace={workspace}
         locale={locale}
         dict={dict}
       />

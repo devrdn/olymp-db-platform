@@ -999,6 +999,7 @@ const ro = {
           log: "Jurnal de interogări",
           story: "Povestea",
           questions: "Întrebări",
+          notes: "Notițe",
         },
         download: "Descărcați CSV",
         story: {
@@ -1013,6 +1014,18 @@ const ro = {
           side: "Lățimea panoului întrebărilor",
         },
         resultEmpty: "Executați o interogare pentru a vedea rezultatul aici.",
+        notes: {
+          label: "Notițele dvs.",
+          placeholder: "Suspecți, nume de tabele, idei neterminate. Se salvează pe măsură ce scrieți.",
+          failed: "Notițele nu au putut fi încărcate. Reîncărcați pagina pentru a încerca din nou.",
+          counter: "{n} din {max} caractere",
+          status: {
+            saved: "Salvat",
+            saving: "Se salvează…",
+            retrying: "Nesalvat încă. Reîncercăm în curând.",
+            closed: "Olimpiada s-a încheiat, așa că notițele nu se mai salvează. Ultimul text scris rămâne în acest browser.",
+          },
+        },
         log: {
           empty: "Nu ați executat încă nicio interogare.",
           loadMore: "Încărcați mai vechi",

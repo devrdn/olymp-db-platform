@@ -8,6 +8,7 @@ import type { QueryLogEntry } from "@/lib/api/querylog";
 import type { PlayDictionary } from "./dictionary";
 import type { GameSchema } from "@/lib/api/schema";
 import type { Scoring } from "@/lib/api/contests";
+import type { WorkspaceSnapshot } from "@/lib/api/workspace";
 import type { Locale } from "@/lib/i18n/config";
 
 import type { ConsoleState } from "./actions";
@@ -100,6 +101,7 @@ export function Workspace({
   icpcPenaltyMin = 20,
   schema,
   initialLog,
+  workspace,
   locale,
   dict,
 }: {
@@ -116,6 +118,12 @@ export function Workspace({
   /** The game's shape, or null in a contest that hides it — see SchemaPanel. */
   schema: GameSchema | null;
   initialLog: { items: QueryLogEntry[]; total: number; failed: boolean };
+  /**
+   * The participant's notes and SQL tabs as the page read them, or null when
+   * that read failed — the screen still works, and the notes say they could
+   * not be loaded.
+   */
+  workspace: WorkspaceSnapshot | null;
   locale: Locale;
   dict: PlayDictionary;
 }) {
@@ -386,6 +394,9 @@ export function Workspace({
               storyUnavailable={storyUnavailable}
               contestId={contestId}
               questionEntries={questionEntries}
+              // The same object on every render, so the memoised panel is
+              // not disturbed by it.
+              initialNotes={workspace?.notes ?? null}
               scoring={scoring}
               icpcPenaltyMin={icpcPenaltyMin}
               dict={dict}
