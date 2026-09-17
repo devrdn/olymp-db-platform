@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
 import type { GameSchema } from "@/lib/api/schema";
@@ -163,6 +163,29 @@ describe("the schema panel", () => {
 
     document.body.focus();
     await user.keyboard("{Meta>}k{/Meta}");
+
+    expect(screen.getByLabelText(en.participant.play.schema.searchLabel)).toHaveFocus();
+  });
+
+  // §8 lets the participant collapse this panel entirely, and the shortcut
+  // that opens its search is no use pointed at something nobody can see —
+  // the same reasoning by which a completed run opens a collapsed result
+  // panel. The panel asks its owner to bring it back and focuses once it is
+  // actually visible: `focus()` inside a `display:none` subtree is a
+  // documented no-op, so focusing before the owner has re-rendered would
+  // move focus to nothing.
+  test("⌘K asks to be shown again when it is collapsed, and takes the cursor once it is", async () => {
+    const user = userEvent.setup();
+    const onReveal = vi.fn();
+    const { rerender } = render(
+      <SchemaPanel schema={schema()} hidden onReveal={onReveal} dict={en} />,
+    );
+
+    document.body.focus();
+    await user.keyboard("{Meta>}k{/Meta}");
+    expect(onReveal).toHaveBeenCalledTimes(1);
+
+    rerender(<SchemaPanel schema={schema()} hidden={false} onReveal={onReveal} dict={en} />);
 
     expect(screen.getByLabelText(en.participant.play.schema.searchLabel)).toHaveFocus();
   });

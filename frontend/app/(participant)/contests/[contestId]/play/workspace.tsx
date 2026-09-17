@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 
 import { cn } from "@/lib/utils";
 import type { QuestionEntry } from "./questions-panel";
@@ -191,6 +191,12 @@ export function Workspace({
     [toggle],
   );
 
+  /**
+   * Brings the schema panel back, for ⌘K — the shortcut that focuses its
+   * search field. Stable, so the memoised panel is not disturbed by it.
+   */
+  const revealSchema = useCallback(() => expand("schema"), [expand]);
+
   /** Shows a bottom tab, bringing the panel back if it was collapsed — a control for a panel nobody can see is a control for nothing. */
   const showBottomTab = (tab: string) => {
     setBottomTab(tab);
@@ -277,7 +283,7 @@ export function Workspace({
             "narrow:grid-cols-[var(--cols-narrow)] wide:grid-cols-[var(--cols-wide)]",
           )}
         >
-          {showSchema ? (
+          {schema !== null ? (
             // Source order is the wide layout's own order, so the tab order a
             // participant walks matches what they see. Below the breakpoint
             // that would put a reference panel above the thing they came to
@@ -307,8 +313,22 @@ export function Workspace({
             // second row underneath, so it has to be placed *last* (order 4) —
             // a full-width span placed earlier would break the row it was
             // meant to sit under.
-            <div className="flex min-h-0 flex-col border-line max-wide:col-span-full max-wide:max-h-80 max-wide:border-t max-narrow:order-2 narrow:max-wide:order-4">
-              <MemoSchemaPanel schema={schema} dict={dict} />
+            <div
+              data-panel="schema"
+              hidden={!showSchema}
+              className={cn(
+                "min-h-0 border-line max-wide:col-span-full max-wide:max-h-80 max-wide:border-t max-narrow:order-2 narrow:max-wide:order-4",
+                // Conditional, not left for the `hidden` attribute to fight:
+                // see the bottom pane's own comment below.
+                showSchema && "flex flex-col",
+              )}
+            >
+              <MemoSchemaPanel
+                schema={schema}
+                hidden={!showSchema}
+                onReveal={revealSchema}
+                dict={dict}
+              />
             </div>
           ) : null}
           {showSchema ? (
@@ -441,16 +461,24 @@ export function Workspace({
               `dvh` so a phone's disappearing URL bar does not resize the
               box under a finger that is scrolling it.
 
-              Collapsed, this whole pane is absent rather than hidden (§8):
-              the result table and the log keep their scroll positions across
-              a tab switch, which is what the two classes above are for, but a
-              panel the participant has put away is not "the other tab" — it
-              is a thousand rows of table that no longer have to be
-              reconciled, and its state is exactly the state a fresh run is
-              about to replace anyway. */}
-            {showBottom ? (
-              <div className="flex min-h-0 flex-col max-narrow:max-h-[60svh]">
-                <div
+              Collapsed, this pane is hidden and not unmounted, and the two
+              are not interchangeable: `display: none` takes it out of the
+              grid — which is the whole point, the track goes with it — while
+              leaving the log's loaded pages and the table on screen exactly
+              as the participant left them. Unmounting would put the log back
+              to the page a server render fetched an hour ago, silently.
+
+              The display utility is therefore conditional rather than left
+              for the `hidden` attribute to fight: `[hidden] { display: none }`
+              comes from the browser's own stylesheet, and any author
+              `display` beats it — a `flex` class here would simply win and
+              the pane would stay on screen. */}
+            <div
+              data-panel="bottom"
+              hidden={!showBottom}
+              className={cn("min-h-0", showBottom && "flex flex-col max-narrow:max-h-[60svh]")}
+            >
+              <div
                   className={cn(
                     "min-h-0 flex-1 overflow-hidden",
                     bottomTab === "result" ? "flex flex-col" : "hidden",
@@ -472,13 +500,16 @@ export function Workspace({
                   <MemoQueryLogPanel
                     contestId={contestId}
                     initial={initialLog}
-                    active={bottomTab === "log"}
+                    // Collapsed is not "showing the other tab": the log
+                    // refreshes itself on the transition into being shown,
+                    // and coming back to a panel that was put away is such a
+                    // transition however the participant left it.
+                    active={showBottom && bottomTab === "log"}
                     locale={locale}
                     dict={dict}
                   />
                 </div>
-              </div>
-            ) : null}
+            </div>
           </div>
 
           {showSide ? (
@@ -505,29 +536,34 @@ export function Workspace({
             half-typed answer survives a resize the same way it survives a
             tab switch.
 
-            Collapsed, it leaves the tree with its divider, on the narrow
-            fallback as much as beside the console: the sections there are
-            the same elements in one track, so the toggle that hides a column
-            hides a section (§8). What that costs is the half-typed answer
-            this comment just promised — which is why nothing here collapses
-            a panel by itself. */}
-          {showSide ? (
-            <div className="min-h-0 max-wide:order-3 max-narrow:min-h-100 max-narrow:border-t max-narrow:border-line">
-              <MemoSidePanel
-                storyBody={storyBody}
-                storyUnavailable={storyUnavailable}
-                contestId={contestId}
-                questionEntries={questionEntries}
-                // The same object on every render, so the memoised panel is
-                // not disturbed by it.
-                initialNotes={workspace?.notes ?? null}
-                scoring={scoring}
-                icpcPenaltyMin={icpcPenaltyMin}
-                dict={dict}
-                locale={locale}
-              />
-            </div>
-          ) : null}
+            And the same way it survives being collapsed. A question's answer
+            field is plain component state — no draft, nothing saved — and
+            the verdict beside it lives in `useActionState`, so unmounting
+            this pane would throw away a typed, unsubmitted answer in a
+            graded contest for one keystroke. On a Windows layout AltGr
+            arrives as Ctrl+Alt, so it need not even be a keystroke the
+            participant meant. `display: none` takes the pane out of the grid
+            — the track goes with it, which is all the collapse was ever for
+            — and leaves what is in it alone. */}
+          <div
+            data-panel="side"
+            hidden={!showSide}
+            className="min-h-0 max-wide:order-3 max-narrow:min-h-100 max-narrow:border-t max-narrow:border-line"
+          >
+            <MemoSidePanel
+              storyBody={storyBody}
+              storyUnavailable={storyUnavailable}
+              contestId={contestId}
+              questionEntries={questionEntries}
+              // The same object on every render, so the memoised panel is
+              // not disturbed by it.
+              initialNotes={workspace?.notes ?? null}
+              scoring={scoring}
+              icpcPenaltyMin={icpcPenaltyMin}
+              dict={dict}
+              locale={locale}
+            />
+          </div>
         </div>
       </div>
     </>
