@@ -34,6 +34,19 @@ export type RequestOptions = {
    * every server-side caller, which never has anyone to cancel on behalf of.
    */
   signal?: AbortSignal;
+  /**
+   * Lets the request outlive the page that sent it. The participant's
+   * autosave sends its last save this way as the tab is hidden or closed
+   * (app/(participant)/contests/[contestId]/play/use-autosave.ts); a request
+   * without it is cancelled with the document.
+   */
+  keepalive?: boolean;
+  /**
+   * Which cookies a browser-side request carries. Named by the browser-side
+   * callers that rely on the session cookie; the server wrapper passes the
+   * session as a header instead and leaves this unset.
+   */
+  credentials?: RequestCredentials;
   fetchImpl?: typeof fetch;
 };
 
@@ -85,6 +98,12 @@ export class ApiError extends Error {
    * position, not an absent one.
    */
   readonly position?: number;
+  /**
+   * How many seconds a refusal said to wait before asking again (the
+   * `Retry-After` header of a 429), when it said so in whole seconds — the
+   * only form this API sends. `undefined` when it did not.
+   */
+  readonly retryAfterSeconds?: number;
 
   constructor(
     code: string,
@@ -93,6 +112,7 @@ export class ApiError extends Error {
     requestId?: string,
     subject?: string,
     position?: number,
+    retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "ApiError";
@@ -101,6 +121,7 @@ export class ApiError extends Error {
     this.requestId = requestId;
     this.subject = subject;
     this.position = position;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -113,9 +134,14 @@ type ErrorEnvelope = {
 };
 
 export async function request(path: string, options: RequestOptions = {}): Promise<unknown> {
-  const { method, body, rawBody, origin = "", headers = {}, signal, fetchImpl = fetch } = options;
+  const { method, body, rawBody, origin = "", headers = {}, signal, keepalive, credentials, fetchImpl = fetch } =
+    options;
 
   const init: RequestInit = { method, headers, signal };
+  // Set only when asked for, so a server-side call's init stays exactly what
+  // it was before browser-side callers existed.
+  if (keepalive !== undefined) init.keepalive = keepalive;
+  if (credentials !== undefined) init.credentials = credentials;
   if (body !== undefined) {
     init.headers = { ...headers, "content-type": "application/json" };
     init.body = JSON.stringify(body);
@@ -155,6 +181,7 @@ async function toApiError(response: Response): Promise<ApiError> {
         body.error.request_id,
         typeof body.subject === "string" ? body.subject : undefined,
         typeof body.position === "number" ? body.position : undefined,
+        retryAfter(response),
       );
     }
   } catch {
@@ -166,6 +193,17 @@ async function toApiError(response: Response): Promise<ApiError> {
     response.status,
     `Unparseable response from ${path(response)}`,
   );
+}
+
+/**
+ * The `Retry-After` header as whole seconds. The header may also be an HTTP
+ * date; this API never sends one, and a value this cannot read is treated as
+ * absent rather than guessed at.
+ */
+function retryAfter(response: Response): number | undefined {
+  const raw = response.headers.get("retry-after")?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return undefined;
+  return Number(raw);
 }
 
 function path(response: Response): string {
