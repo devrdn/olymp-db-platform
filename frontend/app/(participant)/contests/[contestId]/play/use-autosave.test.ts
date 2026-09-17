@@ -3,7 +3,14 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/client";
 
-import { draftStorageKey, textFingerprint, useAutosave, type AutosaveOptions } from "./use-autosave";
+import {
+  attachEngine,
+  AutosaveEngine,
+  draftStorageKey,
+  textFingerprint,
+  useAutosave,
+  type AutosaveOptions,
+} from "./use-autosave";
 
 type SaveFn = AutosaveOptions["save"];
 
@@ -20,7 +27,7 @@ function deferred<T>() {
 
 const KEY = draftStorageKey("c1", "notes");
 
-function readDraft(): { text: string; base: string | null; sent?: string } | null {
+function readDraft(): { text: string; base: string | null; sent?: string[] } | null {
   const raw = window.localStorage.getItem(KEY);
   return raw === null ? null : JSON.parse(raw);
 }
@@ -377,11 +384,114 @@ describe("a save that fails", () => {
   });
 });
 
+describe("two saves that overlap", () => {
+  /**
+   * The page being hidden sends the newest text while an ordinary save is
+   * still running, so two requests for one document are in flight. Nothing
+   * says which of them the database commits last, so neither answer proves
+   * what the server now holds: the engine confirms neither, and sends the
+   * current text once more as soon as both have answered.
+   */
+  test("confirm nothing on their own, and are followed by one more save", async () => {
+    const first = deferred<string>();
+    const second = deferred<string>();
+    const save = vi.fn<SaveFn>().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise).mockResolvedValue("v3");
+    const hook = mount({ save });
+
+    type(hook, "a");
+    await wait(1500);
+    type(hook, "ab");
+    await act(async () => window.dispatchEvent(new Event("pagehide")));
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenLastCalledWith("ab", { keepalive: true });
+
+    // In reverse order: the newer text answers first, the older one after.
+    await act(async () => second.resolve("v2"));
+    expect(hook.result.current.status).toEqual({ kind: "saving" });
+    await act(async () => first.resolve("v1"));
+
+    expect(save).toHaveBeenCalledTimes(3);
+    expect(save).toHaveBeenLastCalledWith("ab", { keepalive: false });
+    expect(hook.result.current.status).toEqual({ kind: "saved" });
+    expect(readDraft()).toBeNull();
+  });
+
+  test("keep the draft, naming both texts, until one of them is confirmed alone", async () => {
+    const first = deferred<string>();
+    const second = deferred<string>();
+    const save = vi
+      .fn<SaveFn>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockReturnValue(new Promise(() => {}));
+    const hook = mount({ save });
+
+    type(hook, "a");
+    await wait(1500);
+    type(hook, "ab");
+    await act(async () => window.dispatchEvent(new Event("pagehide")));
+    await act(async () => second.resolve("v2"));
+    await act(async () => first.resolve("v1"));
+    await wait(300);
+
+    expect(readDraft()).toMatchObject({
+      text: "ab",
+      sent: [textFingerprint("a"), textFingerprint("ab")],
+    });
+  });
+});
+
+describe("leaving the page", () => {
+  test("does not send the same text twice", async () => {
+    const save = vi.fn<SaveFn>().mockReturnValue(new Promise(() => {}));
+    const hook = mount({ save });
+
+    type(hook, "a");
+    await wait(1500);
+    type(hook, "ab");
+    await act(async () => window.dispatchEvent(new Event("pagehide")));
+    await act(async () => window.dispatchEvent(new Event("pagehide")));
+    setVisibility("hidden");
+    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+
+    expect(save).toHaveBeenCalledTimes(2);
+  });
+
+  // Every refused write counts against the shared 60-a-minute budget, so a
+  // tab that is merely hidden waits its turn like everything else.
+  test("waits out a pending retry when the tab is only hidden", async () => {
+    const save = vi.fn<SaveFn>().mockRejectedValueOnce(new TypeError("offline")).mockResolvedValue("v1");
+    const hook = mount({ save });
+
+    type(hook, "a");
+    await wait(1500);
+    expect(save).toHaveBeenCalledTimes(1);
+
+    setVisibility("hidden");
+    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  test("sends anyway when the page itself is going away", async () => {
+    const save = vi.fn<SaveFn>().mockRejectedValueOnce(new TypeError("offline")).mockResolvedValue("v1");
+    const hook = mount({ save });
+
+    type(hook, "a");
+    await wait(1500);
+    await act(async () => window.dispatchEvent(new Event("pagehide")));
+
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenLastCalledWith("a", { keepalive: true });
+  });
+});
+
 describe("the draft", () => {
-  test("is written as the text changes, against the version it edits", () => {
+  test("is written as the text changes, against the version it edits", async () => {
     const hook = mount();
 
     type(hook, "a");
+    await wait(300);
 
     expect(readDraft()).toMatchObject({ text: "a", base: "v0" });
   });
@@ -404,6 +514,7 @@ describe("the draft", () => {
     await wait(1500);
     type(hook, "ab");
     await act(async () => first.resolve("v1"));
+    await wait(300);
 
     expect(readDraft()).toMatchObject({ text: "ab", base: "v1" });
   });
@@ -415,8 +526,9 @@ describe("the draft", () => {
     type(hook, "a");
     await wait(1500);
     type(hook, "ab");
+    await wait(300);
 
-    expect(readDraft()).toEqual({ text: "ab", base: "v0", sent: textFingerprint("a") });
+    expect(readDraft()).toEqual({ text: "ab", base: "v0", sent: [textFingerprint("a")] });
   });
 
   test("newer than the server copy is shown and saved at once", async () => {
@@ -432,7 +544,7 @@ describe("the draft", () => {
   test("still wins when the server holds the save that was in flight when the page went away", async () => {
     window.localStorage.setItem(
       KEY,
-      JSON.stringify({ text: "the later text", base: "v0", sent: textFingerprint("server") }),
+      JSON.stringify({ text: "the later text", base: "v0", sent: [textFingerprint("server")] }),
     );
     const hook = mount({ initialVersion: "v9" });
 
@@ -488,6 +600,60 @@ describe("the draft", () => {
 
     expect(hook.save).not.toHaveBeenCalled();
     expect(readDraft()).toBeNull();
+  });
+});
+
+describe("writing the draft", () => {
+  // A SQL tab holds up to 64 KiB; stringifying that on every keystroke is
+  // work nobody asked for.
+  test("costs one storage write for a burst of typing, not one per keystroke", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    const hook = mount();
+
+    for (const text of ["a", "ab", "abc", "abcd"]) type(hook, text);
+    expect(setItem).not.toHaveBeenCalled();
+
+    await wait(300);
+    expect(setItem).toHaveBeenCalledTimes(1);
+    expect(readDraft()).toMatchObject({ text: "abcd" });
+  });
+
+  test("happens at once when the page is going away, before the save leaves", () => {
+    const save = vi.fn<SaveFn>().mockReturnValue(new Promise(() => {}));
+    const hook = mount({ save });
+
+    type(hook, "a");
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(readDraft()).toMatchObject({ text: "a" });
+  });
+});
+
+describe("an engine attached without the hook", () => {
+  // Task 4 keeps one engine per SQL tab, which no hook can do; the wiring
+  // it needs is this one helper.
+  test("saves on pagehide while attached, and nothing once detached", async () => {
+    const save = vi.fn<SaveFn>(async () => "v1");
+    const engine = new AutosaveEngine({
+      contestId: "c1",
+      documentKey: "tab:1",
+      initialText: "SELECT 1",
+      initialVersion: "v0",
+      save,
+    });
+
+    const detach = attachEngine(engine);
+    engine.setValue("SELECT 2");
+    await act(async () => window.dispatchEvent(new Event("pagehide")));
+    expect(save).toHaveBeenCalledTimes(1);
+
+    detach();
+    engine.setValue("SELECT 3");
+    await act(async () => window.dispatchEvent(new Event("pagehide")));
+    await wait(15_000);
+
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith("SELECT 2", { keepalive: true });
   });
 });
 
