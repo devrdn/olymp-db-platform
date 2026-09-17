@@ -196,6 +196,22 @@ describe("the shortcuts", () => {
     expect(screen.getByRole("button", { name: t.side })).toHaveAttribute("aria-pressed", "true");
   });
 
+  // A contest that closed its catalogues draws no schema panel and offers no
+  // toggle for one, so the key has nothing to collapse. Flipping the stored
+  // flag anyway is a press that does nothing visible and changes what the
+  // next visit restores; the key is still claimed, because Ctrl+B belongs to
+  // this screen (it opens the bookmarks in Firefox) even where it is inert.
+  test("Ctrl+B changes nothing in a contest that hides its schema", () => {
+    const contestId = aContest();
+    show(contestId, { schema: false });
+
+    press("b");
+
+    expect(window.localStorage.getItem(`dbcontest.console.collapsed.${contestId}`)).toBeNull();
+    expect(screen.getByRole("button", { name: t.side })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: t.bottom })).toHaveAttribute("aria-pressed", "true");
+  });
+
   test("Ctrl+Alt+B collapses the side panel", () => {
     show(aContest());
 

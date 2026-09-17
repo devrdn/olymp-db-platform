@@ -775,6 +775,23 @@ describe("collapsing a panel", () => {
     expect(editor()).toHaveTextContent("SELECT 1");
   });
 
+  // The same key in a contest that closed its catalogues: there is no schema
+  // panel to collapse and no toggle for one, so the press has nothing to do.
+  // The editor still claims the key — an unclaimed Ctrl+B in a
+  // contenteditable is "bold" — and what must not happen is the flag being
+  // flipped anyway, invisibly, for the next visit to restore.
+  test("Ctrl+B in the editor does nothing in a contest that hides its schema", async () => {
+    const { container, contestId } = showWithToggles(null);
+    await waitForRealEditor(container);
+    await userEvent.click(editor());
+    await userEvent.keyboard("SELECT 1");
+
+    await userEvent.keyboard("{Control>}b{/Control}");
+
+    expect(window.localStorage.getItem(`dbcontest.console.collapsed.${contestId}`)).toBeNull();
+    expect(editor()).toHaveTextContent("SELECT 1");
+  });
+
   // Two things at once, and neither is visible in the rendered output.
   //
   // The editor claims the key — `preventDefault`, which is what stops a
