@@ -56,15 +56,15 @@ const MemoSchemaPanel = memo(SchemaPanel);
  * the data, exactly the reasoning §5 already gives the content column its
  * own width. `page.tsx` renders this outside `Band` for exactly that reason.
  *
- * Proportions are fixed, not draggable. A resizable split was in scope for
- * this task — nobody asked for the opposite — and was set aside on purpose:
- * dragging a divider smoothly needs its own pointer-event plumbing
- * (`requestAnimationFrame`-throttled resize, a persisted width, a keyboard
- * equivalent for the same accessibility reasons `Tabs` cares about), and none
- * of that touches what the plan actually asks to be smooth — switching a tab,
- * and the clock. A fixed layout has zero chance of jank because there is
- * nothing to compute, and the console — the thing being typed into — keeps
- * the larger share of the width either way.
+ * Every edge between two panes is draggable and every size is remembered —
+ * the two between the columns and the one between the editor and the panel
+ * below it. That was set aside when this screen was first built, on the
+ * reasoning that a fixed layout has zero chance of jank because there is
+ * nothing to compute; what changed the answer is that none of these
+ * proportions are the product's to pick. How much room the questions need is
+ * a property of the contest, and how much of the column the answer needs is
+ * the participant's. `pane-splitter.tsx` is where the plumbing lives, and its
+ * own doc carries why a drag never goes through React.
  *
  * It also carries the print-only copy of the story (`PrintView`, reused
  * unchanged from what the old `.../play/print` route rendered — see
