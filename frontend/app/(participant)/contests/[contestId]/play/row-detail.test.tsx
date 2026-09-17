@@ -137,6 +137,18 @@ describe("taking a value out of the page", () => {
     expect(writeText).toHaveBeenCalledWith("id,alibi\r\n7,at the lighthouse\r\n");
   });
 
+  // A live region only announces what changes inside it: one created together
+  // with its own text is a region the reader never had, and a refused copy —
+  // the message that matters most — goes unsaid.
+  test("keeps the line that reports a copy on the page before there is one to report", () => {
+    show();
+
+    const status = screen.getByRole("status");
+    expect(status).toBeEmptyDOMElement();
+    // And costs nothing while it is empty.
+    expect(status.className).not.toMatch(/(^|\s)py-1(\s|$)/);
+  });
+
   // Not every browser this runs in has the async clipboard on an insecure
   // origin, and a classroom's own machine is exactly where that bites.
   test("falls back to a selection when there is no clipboard API", async () => {
@@ -174,5 +186,20 @@ describe("taking a value out of the page", () => {
     await user.click(screen.getByRole("button", { name: t.copyRow }));
 
     expect(screen.getByRole("status")).toHaveTextContent(t.copyFailed);
+  });
+
+  // The fallback selects a textarea to copy from, and a selection takes the
+  // focus with it. Left there, the row's own Esc and arrows stop working —
+  // on exactly the plain-HTTP machines the fallback exists for.
+  test("gives the focus back to whatever had it before the selection", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("navigator", { ...navigator, clipboard: undefined });
+    stubExecCommand(() => true);
+    show();
+
+    const button = screen.getByRole("button", { name: t.copyRow });
+    await user.click(button);
+
+    expect(button).toHaveFocus();
   });
 });

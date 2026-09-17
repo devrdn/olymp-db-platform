@@ -564,12 +564,14 @@ describe("opening one row of the result", () => {
   });
 
   // The bottom panel is bounded by a `max-height` on the narrow fallback
-  // rather than given a height, and a percentage row track against an
-  // indefinite height resolves as `auto` — the whole answer at its natural
-  // height with the open row pushed out of the clipped box under it. jsdom
-  // has no media queries, so what is held here is that the fallback track and
-  // the hidden handle are still declared.
-  test("states a height rather than a share where the pane has no height of its own", async () => {
+  // rather than given a height, and a share of a height nothing has resolves
+  // as `auto`: the table at its natural height, the open row pushed out of
+  // the clipped box under it, and no scrollbar anywhere — which is the 375px
+  // screen §7 exists for. So below the breakpoint the two stop being a grid
+  // and become the flex column that already worked there, each taking half
+  // and scrolling inside itself. jsdom has no media queries, so what is held
+  // here is that both arrangements are declared.
+  test("falls back to a bounded column where the pane has no height of its own", async () => {
     const user = userEvent.setup();
     show(answer(5));
 
@@ -577,9 +579,40 @@ describe("opening one row of the result", () => {
     const split = screen.getByRole("table").closest("[style*='--pane-detail']") as HTMLElement;
 
     expect(split.className).toContain("grid-rows-[minmax(0,var(--pane-detail))_auto_minmax(0,1fr)]");
-    expect(split.className).toContain("max-narrow:grid-rows-[minmax(0,20rem)_auto_auto]");
+    expect(split.className).toMatch(/(^|\s)max-narrow:flex(\s|$)/);
+    expect(split.className).toMatch(/(^|\s)max-narrow:flex-col(\s|$)/);
+
+    // Both panes take a share of that column and bound themselves, so each
+    // one scrolls rather than pushing the other out of the box.
+    const scroller = screen.getByRole("table").parentElement as HTMLElement;
+    expect(scroller.className).toMatch(/(^|\s)flex-1(\s|$)/);
+    expect(scroller.className).toMatch(/(^|\s)min-h-0(\s|$)/);
+
+    const panel = screen.getByRole("region", { name: t.region.replace("{n}", "3") });
+    expect(panel.className).toMatch(/(^|\s)max-narrow:flex-1(\s|$)/);
+    expect(panel.className).toMatch(/(^|\s)min-h-0(\s|$)/);
+    expect((panel.querySelector("dl") as HTMLElement).className).toMatch(/(^|\s)overflow-auto(\s|$)/);
+
+    // Nothing to divide there: neither pane is a share of anything.
     expect(
       screen.getByRole("separator", { name: en.participant.play.workspace.panes.detail }).className,
     ).toMatch(/(^|\s)max-narrow:hidden(\s|$)/);
+  });
+
+  // The tab stop and the keyboard have to be on the same row, or tabbing out
+  // of the table and back lands at the top of the window rather than where
+  // the participant left off.
+  test("the tab stop follows the arrows even with no row open", async () => {
+    const user = userEvent.setup();
+    show(answer(20));
+
+    rowOf(0).focus();
+    await user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}");
+
+    // Nothing was opened — the arrows are ordinary table navigation here.
+    expect(screen.queryByRole("region", { name: /Row \d+ of the result/ })).not.toBeInTheDocument();
+    expect(rowOf(3)).toHaveFocus();
+    expect(rowOf(3)).toHaveAttribute("tabindex", "0");
+    expect(rowOf(0)).toHaveAttribute("tabindex", "-1");
   });
 });

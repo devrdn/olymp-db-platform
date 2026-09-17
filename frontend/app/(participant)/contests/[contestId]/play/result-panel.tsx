@@ -152,6 +152,12 @@ function ResultBody({
 /** How the table and the row open under it move as one, and which row that is. */
 type Selection = {
   selected: number | null;
+  /**
+   * The row the keyboard is on, open or not. It holds the table's one tab
+   * stop, so that tabbing out of the table and back returns to where the
+   * participant left off rather than to the top of the window.
+   */
+  cursor: number;
   onSelect: (index: number) => void;
   onRowKeyDown: (event: React.KeyboardEvent, index: number) => void;
 };
@@ -184,6 +190,9 @@ function SelectableRows({
   dict: PlayDictionary;
 }) {
   const [selected, setSelected] = useState<number | null>(null);
+  // Where the keyboard is, which is not the same question as what is open:
+  // the arrows walk the table without opening anything until a row is.
+  const [cursor, setCursor] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   // The row a keyboard walk asked to be taken to, until it has been. A click
   // never sets it: a click is already on the row it selected.
@@ -201,6 +210,7 @@ function SelectableRows({
   if (answer !== rows) {
     setAnswer(rows);
     setSelected(null);
+    setCursor(0);
   }
 
   // Defensive as well as derived: a shorter answer arriving under the same
@@ -259,14 +269,21 @@ function SelectableRows({
   // render but the one or two after an arrow key.
   useLayoutEffect(revealNow);
 
+  const select = useCallback((index: number) => {
+    setSelected(index);
+    setCursor(index);
+  }, []);
+
   const step = useCallback(
     (from: number, delta: number) => {
       const next = Math.min(rows.length - 1, Math.max(0, from + delta));
       // With a row open the arrows move the *selection*, which is what §7
       // asks for; with none open they are ordinary table navigation and move
       // only the keyboard, so arrowing through an answer does not open
-      // something nobody asked to open.
+      // something nobody asked to open. Either way the cursor follows, so the
+      // tab stop is on the row the participant is actually on.
       if (open !== null) setSelected(next);
+      setCursor(next);
       reveal(next);
     },
     [open, rows.length, reveal],
@@ -283,7 +300,7 @@ function SelectableRows({
     (event: React.KeyboardEvent, index: number) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        setSelected(index);
+        select(index);
       } else if (event.key === "ArrowDown") {
         event.preventDefault();
         step(index, 1);
@@ -294,14 +311,12 @@ function SelectableRows({
         close();
       }
     },
-    [step, close],
+    [step, close, select],
   );
 
   const onPanelKeyDown = useCallback(
     (event: React.KeyboardEvent) => {
-      // The divider's own arrows come through here too, and it has already
-      // said what it wanted them for.
-      if (event.defaultPrevented || open === null) return;
+      if (open === null) return;
       if (event.key === "ArrowDown") {
         event.preventDefault();
         step(open, 1);
@@ -316,8 +331,8 @@ function SelectableRows({
   );
 
   const selection = useMemo<Selection>(
-    () => ({ selected: open, onSelect: setSelected, onRowKeyDown }),
-    [open, onRowKeyDown],
+    () => ({ selected: open, cursor, onSelect: select, onRowKeyDown }),
+    [open, cursor, select, onRowKeyDown],
   );
 
   return (
@@ -325,16 +340,18 @@ function SelectableRows({
       ref={containerRef}
       style={{ "--pane-detail": `${sizes.table}%` } as React.CSSProperties}
       className={cn(
-        "grid min-h-0 flex-1 grid-cols-1",
+        // Below the breakpoint this stops being a grid at all. The bottom
+        // panel is bounded by a `max-height` there rather than given a
+        // height, and a grid track stated as a share of a height nothing has
+        // resolves as `auto`: the table at its natural height, the open row
+        // pushed out of the clipped box under it, and no scrollbar anywhere
+        // — the 375px screen §7 exists for. A flex column is what already
+        // worked in that pane, so that is what it falls back to: each half
+        // takes a share of a bounded column and scrolls inside itself.
+        "grid min-h-0 flex-1 grid-cols-1 max-narrow:flex max-narrow:flex-col",
         open === null
           ? "grid-rows-1"
-          : // A share of this pane's height, and below the breakpoint a
-            // length instead: the bottom panel is bounded by a `max-height`
-            // there rather than given one, and a percentage track against an
-            // indefinite height resolves as `auto` — which is the whole
-            // answer laid out at its natural height with the open row pushed
-            // out of the clipped box underneath it.
-            "grid-rows-[minmax(0,var(--pane-detail))_auto_minmax(0,1fr)] max-narrow:grid-rows-[minmax(0,20rem)_auto_auto]",
+          : "grid-rows-[minmax(0,var(--pane-detail))_auto_minmax(0,1fr)]",
       )}
     >
       <ResultTable
@@ -371,6 +388,9 @@ function SelectableRows({
             dict={dict}
             onClose={close}
             onKeyDown={onPanelKeyDown}
+            // Inert inside the grid above the breakpoint, where the track is
+            // what sizes it; below it, its half of the flex column.
+            className="max-narrow:flex-1"
           />
         </>
       )}
@@ -603,13 +623,18 @@ function ResultTable({
   const start = Math.min(rowWindow.start, Math.max(0, total));
   const end = Math.max(start, Math.min(rowWindow.end, total));
 
-  // The one row in the tab order: the selected one while it is on screen,
-  // and otherwise the first one that is.
-  const { selected } = selection;
-  const tabRow = selected !== null && selected >= start && selected < end ? selected : start;
+  // The one row in the tab order: the one the keyboard is on while it is on
+  // screen, and otherwise the first one that is. The cursor rather than the
+  // selection, because the arrows walk the table with nothing open too, and a
+  // tab stop left behind at the top of the window is a participant returning
+  // to a row they have already read.
+  const anchor = selection.selected ?? selection.cursor;
+  const tabRow = anchor >= start && anchor < end ? anchor : start;
 
   return (
-    <div ref={scrollRef} onScroll={measure} className="min-h-0 overflow-auto">
+    // `flex-1` is inert in the grid above and is what gives this its share of
+    // the column below the breakpoint — see the split's own comment.
+    <div ref={scrollRef} onScroll={measure} className="min-h-0 flex-1 overflow-auto">
       {/* `table-fixed` is what makes every row a known height, which is what
           the window is computed from (see `columnWidths`), and `font-mono` on
           the table itself is what lets those widths be stated in `ch`: a `ch`
