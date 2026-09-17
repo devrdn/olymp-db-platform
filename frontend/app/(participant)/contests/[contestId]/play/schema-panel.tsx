@@ -1,6 +1,6 @@
 "use client";
 
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 import type { GameSchema, GameTable } from "@/lib/api/schema";
@@ -19,7 +19,24 @@ import type { PlayDictionary } from "./dictionary";
  * catalogues: `page.tsx` never passes a schema in that case, because
  * discovering the shape is the puzzle there (queryproxy.ErrSchemaHidden).
  */
-export function SchemaPanel({ schema, dict }: { schema: GameSchema; dict: PlayDictionary }) {
+export function SchemaPanel({
+  schema,
+  hidden = false,
+  onReveal,
+  dict,
+}: {
+  schema: GameSchema;
+  /**
+   * The participant has collapsed this panel (§8). The panel is still
+   * mounted — its search text and which tables are open are theirs, not
+   * something a keystroke should discard — and what changes here is only
+   * what ⌘K has to do first.
+   */
+  hidden?: boolean;
+  /** Asks the screen to show this panel again. Called by ⌘K while collapsed. */
+  onReveal?: () => void;
+  dict: PlayDictionary;
+}) {
   const t = dict.participant.play.schema;
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -33,19 +50,50 @@ export function SchemaPanel({ schema, dict }: { schema: GameSchema; dict: PlayDi
 
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => initiallyCollapsed(schema.tables));
 
+  /** ⌘K arrived while the panel was collapsed: focus the field once it is on screen again. */
+  const focusWhenShown = useRef(false);
+
+  // Read through refs rather than captured, so the document listener below
+  // is bound once and still sees the panel as it is now.
+  const hiddenRef = useRef(hidden);
+  const onRevealRef = useRef(onReveal);
+  useEffect(() => {
+    hiddenRef.current = hidden;
+    onRevealRef.current = onReveal;
+  });
+
   // ⌘K, the shortcut the design draws inside the search field. Bound on the
   // document rather than the panel: the participant's hands are in the
   // editor, which is where the shortcut has to work from.
+  //
+  // Collapsed, the panel asks to be shown first (§8). Focusing straight away
+  // would be focusing inside a `display:none` subtree, which is a documented
+  // no-op — the same defect the code editor's own mount path records — so
+  // the intent is remembered and spent in the layout effect below, after the
+  // owner's re-render has actually put the panel back on screen.
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key.toLowerCase() !== "k" || !(event.metaKey || event.ctrlKey)) return;
       event.preventDefault();
+      if (hiddenRef.current) {
+        focusWhenShown.current = true;
+        onRevealRef.current?.();
+        return;
+      }
       searchRef.current?.focus();
       searchRef.current?.select();
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, []);
+
+
+  useLayoutEffect(() => {
+    if (hidden || !focusWhenShown.current) return;
+    focusWhenShown.current = false;
+    searchRef.current?.focus();
+    searchRef.current?.select();
+  }, [hidden]);
 
   const matches = useMemo(() => filterTables(schema.tables, deferred), [schema.tables, deferred]);
 
