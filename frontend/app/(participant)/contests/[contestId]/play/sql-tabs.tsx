@@ -69,6 +69,8 @@ export function SqlTabStrip({
   const elements = useRef(new Map<string, HTMLElement | null>());
   const dragged = useRef<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
+  /** The tab a drag is hovering over, and which side of it the drop lands on. */
+  const [dropAt, setDropAt] = useState<{ id: string; before: boolean } | null>(null);
   /** Set while Esc is taking a rename back, so the blur it causes does not save it. */
   const cancelled = useRef(false);
 
@@ -92,6 +94,19 @@ export function SqlTabStrip({
     // An unchanged name is not a write. Every write counts against the
     // participant's per-minute budget, refused or not.
     if (value !== tab.title) onRename(tab.id, value);
+  };
+
+  /**
+   * Which side of a tab the pointer is on. The half it is over is what
+   * decides where the drop lands, the way every list that can be dragged
+   * decides it: an index taken from the target alone cannot say whether a
+   * tab dropped on the third tab belongs before or after it, and dragging
+   * rightwards is where the difference shows — the dragged tab has left its
+   * own place by the time it is put back.
+   */
+  const onLeftHalf = (event: React.DragEvent<HTMLElement>): boolean => {
+    const box = event.currentTarget.getBoundingClientRect();
+    return box.width > 0 && event.clientX < box.left + box.width / 2;
   };
 
   const onTabKeyDown = (event: React.KeyboardEvent, tab: SqlTabView, index: number) => {
@@ -168,22 +183,33 @@ export function SqlTabStrip({
                 dragged.current = tab.id;
               }}
               onDragOver={(event) => {
-                if (dragged.current !== null) event.preventDefault();
+                if (dragged.current === null || dragged.current === tab.id) return;
+                event.preventDefault();
+                const before = onLeftHalf(event);
+                setDropAt((previous) =>
+                  previous?.id === tab.id && previous.before === before
+                    ? previous
+                    : { id: tab.id, before },
+                );
               }}
               onDrop={(event) => {
                 event.preventDefault();
                 const from = dragged.current;
                 dragged.current = null;
-                if (from !== null && from !== tab.id) onMove(from, index);
+                setDropAt(null);
+                if (from === null || from === tab.id) return;
+                onMove(from, landingIndex(tabs, from, index, onLeftHalf(event)));
               }}
               onDragEnd={() => {
                 dragged.current = null;
+                setDropAt(null);
               }}
+              data-drop={dropAt?.id === tab.id ? (dropAt.before ? "before" : "after") : undefined}
               onClick={() => onSelect(tab.id)}
               onDoubleClick={() => startRename(tab.id)}
               onKeyDown={(event) => onTabKeyDown(event, tab, index)}
               className={cn(
-                "flex min-w-0 shrink-0 cursor-pointer items-center gap-1.5 border-r border-line px-3 py-1.5",
+                "relative flex min-w-0 shrink-0 cursor-pointer items-center gap-1.5 border-r border-line px-3 py-1.5",
                 "text-control-sm transition-colors duration-(--t-input) ease-standard",
                 // No focus style of its own: the stylesheet gives anything
                 // focusable the same accent ring (`:focus-visible` in
@@ -229,6 +255,15 @@ export function SqlTabStrip({
               ) : (
                 <span className="truncate">{tab.title}</span>
               )}
+              {dropAt?.id === tab.id ? (
+                // Where the tab being dragged will land. A drop is otherwise
+                // a guess until it has happened, and undoing it means
+                // dragging again.
+                <span
+                  aria-hidden="true"
+                  className={cn("absolute inset-y-0 w-0.5 bg-accent", dropAt.before ? "left-0" : "right-0")}
+                />
+              ) : null}
               {closable ? (
                 <button
                   type="button"
@@ -320,7 +355,12 @@ export function SqlTabStatus({
       <p
         data-testid="sql-tabs-status"
         aria-hidden="true"
-        className={cn("shrink-0 truncate text-small", toneOf(status, error, stored))}
+        title={message}
+        // Bounded and able to shrink, so a whole sentence — the contest
+        // ending says one — gives way to the tabs instead of squeezing
+        // them. The reader who needs it in full has the title above and the
+        // live region below.
+        className={cn("min-w-0 max-w-48 truncate text-small", toneOf(status, error, stored))}
       >
         {message}
       </p>
@@ -381,4 +421,25 @@ function noSubscribe() {
 
 function noStatus(): AutosaveStatus | null {
   return null;
+}
+
+/**
+ * Where a tab dropped on the tab at `targetIndex` lands, as an index of the
+ * strip the move will make.
+ *
+ * The arithmetic is only interesting in one direction. A tab dragged
+ * rightwards leaves its own place before it is put back, so every tab after
+ * it has already shifted one to the left by the time the target's index is
+ * used — which is how a drop past the middle of the third tab ends up one
+ * position further right than the pointer said.
+ */
+export function landingIndex(
+  tabs: readonly SqlTabView[],
+  draggedId: string,
+  targetIndex: number,
+  before: boolean,
+): number {
+  const from = tabs.findIndex((tab) => tab.id === draggedId);
+  const target = targetIndex - (from < targetIndex ? 1 : 0);
+  return target + (before ? 0 : 1);
 }
