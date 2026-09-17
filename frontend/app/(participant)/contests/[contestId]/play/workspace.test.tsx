@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
 
+import { PanelToggles, PanelVisibilityProvider } from "./panel-toggles";
 import { PrintView } from "./print-view";
 import { Workspace } from "./workspace";
 import type { AnswerState, ConsoleState, QuestionsRefreshResult, QueryLogRefreshResult } from "./actions";
@@ -555,5 +556,208 @@ describe("what Workspace pulls into the client bundle", () => {
   test("page.tsx still renders the print copy, on the server, where the parser is free", () => {
     expect(packagesReachableFrom("page.tsx").has("react-markdown")).toBe(true);
     expect(readFileSync(path.resolve(__dirname, "page.tsx"), "utf8")).toContain("<PrintView");
+  });
+});
+
+/**
+ * §8: a collapsed panel leaves the grid entirely, together with the divider
+ * beside it, so the editor takes the room it was in. Hiding it in place
+ * would leave its column standing and buy the participant nothing, which is
+ * the whole reason the design asks for VS Code's behaviour by name.
+ *
+ * The toggles themselves live in the header (`panel-toggles.tsx`), so these
+ * render the pair the way `page.tsx` does: one provider around the controls
+ * and the panels they control.
+ */
+describe("collapsing a panel", () => {
+  const p = en.participant.play.workspace.panels;
+  const panes = en.participant.play.workspace.panes;
+
+  /** A contest of its own per test: what is collapsed is remembered per contest, and two tests that shared one would share that. */
+  let contests = 0;
+  function showWithToggles(schema: typeof A_SCHEMA | null = A_SCHEMA) {
+    contests += 1;
+    const contestId = `collapse-${contests}`;
+    const view = render(
+      <PanelVisibilityProvider contestId={contestId}>
+        <PanelToggles dict={en} />
+        <Workspace
+          contestId={contestId}
+          storyBody={<p>A body in the stacks.</p>}
+          printView={null}
+          storyUnavailable={null}
+          questionEntries={[]}
+          schema={schema}
+          initialLog={freshInitialLog()}
+          workspace={A_WORKSPACE}
+          locale="en"
+          dict={en}
+        />
+      </PanelVisibilityProvider>,
+    );
+    return { ...view, contestId };
+  }
+
+  function schemaPanel() {
+    return screen.queryByRole("region", { name: en.participant.play.schema.heading });
+  }
+  function sidePanel() {
+    return screen.queryByRole("tab", { name: en.participant.play.workspace.tabs.story });
+  }
+  function bottomPanel() {
+    return screen.queryByText(en.participant.play.workspace.resultEmpty);
+  }
+  /** The editor by name: the schema panel beside it has a search field, so "the textbox" is ambiguous here. */
+  function editor() {
+    return screen.getByRole("textbox", { name: en.participant.console.label });
+  }
+
+  test("the schema panel and its divider both leave, and both come back", async () => {
+    showWithToggles();
+    expect(schemaPanel()).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: panes.schema })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: p.schema }));
+
+    expect(schemaPanel()).not.toBeInTheDocument();
+    expect(screen.queryByRole("separator", { name: panes.schema })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: p.schema }));
+
+    expect(schemaPanel()).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: panes.schema })).toBeInTheDocument();
+  });
+
+  test("the side panel and its divider both leave", async () => {
+    showWithToggles();
+
+    await userEvent.click(screen.getByRole("button", { name: p.side }));
+
+    expect(sidePanel()).not.toBeInTheDocument();
+    expect(screen.queryByRole("separator", { name: panes.side })).not.toBeInTheDocument();
+    // The console is untouched: this is the panel beside it that left.
+    expect(editor()).toBeInTheDocument();
+  });
+
+  test("the bottom panel and the edge above it both leave", async () => {
+    showWithToggles();
+
+    await userEvent.click(screen.getByRole("button", { name: p.bottom }));
+
+    expect(bottomPanel()).not.toBeInTheDocument();
+    expect(screen.queryByRole("separator", { name: panes.editor })).not.toBeInTheDocument();
+  });
+
+  // "Если свернуть всё, на экране остаются только вкладки и редактор."
+  test("collapsing all three leaves the tab strip and the editor", async () => {
+    showWithToggles();
+
+    await userEvent.click(screen.getByRole("button", { name: p.schema }));
+    await userEvent.click(screen.getByRole("button", { name: p.side }));
+    await userEvent.click(screen.getByRole("button", { name: p.bottom }));
+
+    expect(schemaPanel()).not.toBeInTheDocument();
+    expect(sidePanel()).not.toBeInTheDocument();
+    expect(bottomPanel()).not.toBeInTheDocument();
+    expect(screen.getByRole("tablist", { name: en.participant.play.workspace.editor.tablist })).toBeInTheDocument();
+    expect(editor()).toBeInTheDocument();
+  });
+
+  // jsdom lays nothing out, so what is asserted is the template the widths
+  // come out of: a column that is not there must not keep a track, or the
+  // editor gains nothing by the panel leaving.
+  test("the grid drops the track of a collapsed column", async () => {
+    const { container } = showWithToggles();
+    const grid = container.querySelector<HTMLElement>('[style*="--pane-schema"]')!;
+
+    expect(grid.style.getPropertyValue("--cols-wide")).toContain("var(--pane-schema)");
+
+    await userEvent.click(screen.getByRole("button", { name: p.schema }));
+
+    expect(grid.style.getPropertyValue("--cols-wide")).not.toContain("var(--pane-schema)");
+    expect(grid.style.getPropertyValue("--cols-wide")).toContain("var(--pane-side)");
+
+    await userEvent.click(screen.getByRole("button", { name: p.side }));
+
+    expect(grid.style.getPropertyValue("--cols-wide")).not.toContain("var(--pane-side)");
+    expect(grid.style.getPropertyValue("--cols-narrow")).not.toContain("var(--pane-side)");
+  });
+
+  // A panel that comes back comes back the size the participant left it, not
+  // the size the design ships: the two records are independent, and
+  // collapsing is not a reason to forget a drag.
+  test("a width the participant set survives a collapse and an expand", async () => {
+    const { container, contestId } = showWithToggles();
+    const grid = container.querySelector<HTMLElement>('[style*="--pane-side"]')!;
+    const before = grid.style.getPropertyValue("--pane-side");
+
+    // The divider moves with the arrow keys as well as with a pointer, which
+    // is the half of it jsdom can actually drive.
+    fireEvent.keyDown(screen.getByRole("separator", { name: panes.side }), { key: "ArrowLeft" });
+    const widened = grid.style.getPropertyValue("--pane-side");
+    expect(widened).not.toBe(before);
+
+    await userEvent.click(screen.getByRole("button", { name: p.side }));
+    await userEvent.click(screen.getByRole("button", { name: p.side }));
+
+    expect(grid.style.getPropertyValue("--pane-side")).toBe(widened);
+    expect(window.localStorage.getItem(`dbcontest.console.panes.${contestId}`)).toContain(
+      String(parseFloat(widened)),
+    );
+  });
+
+  // The result is the point of running: a collapsed bottom panel opens
+  // itself, the same reasoning that already switches the bottom tab to
+  // "Result" when a run settles.
+  test("a completed run brings a collapsed bottom panel back", async () => {
+    runResult.current = {
+      kind: "answer",
+      result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 },
+    };
+    showWithToggles(null);
+    await userEvent.click(screen.getByRole("button", { name: p.bottom }));
+    expect(bottomPanel()).not.toBeInTheDocument();
+
+    await runQuery();
+
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: p.bottom })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  // The toolbar's own two buttons choose which tab the bottom panel shows.
+  // With the panel collapsed they would otherwise be controls for nothing.
+  test("choosing a bottom tab brings a collapsed bottom panel back", async () => {
+    showWithToggles();
+    await userEvent.click(screen.getByRole("button", { name: p.bottom }));
+
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.log }));
+
+    expect(screen.getByRole("button", { name: p.bottom })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  // Below 760px the panels are stacked sections rather than columns, and the
+  // same toggles hide those sections — there is one tree, so a panel that
+  // left the grid left the stack with it. What can still go wrong there is
+  // the ordering rule the panes carry: every pane laid out in a range names
+  // its own place, and a single silent `order: 0` reorders the whole row
+  // (see the pane grid's own tests above).
+  test("the panes left after a collapse still each declare their own order", async () => {
+    const { container } = showWithToggles();
+    await userEvent.click(screen.getByRole("button", { name: p.schema }));
+    const grid = container.querySelector<HTMLElement>('[style*="--pane-side"]')!;
+
+    const placed = [...grid.children].filter((child) => !child.classList.contains("max-narrow:hidden"));
+    const orders = placed.map((pane) => {
+      for (const prefix of ["max-narrow:", "max-wide:"]) {
+        for (const cls of pane.classList) {
+          const match = new RegExp(`^${prefix}order-(\\d+)$`).exec(cls);
+          if (match) return Number(match[1]);
+        }
+      }
+      return null;
+    });
+
+    expect(orders).not.toContain(null);
+    expect(new Set(orders).size).toBe(orders.length);
   });
 });
