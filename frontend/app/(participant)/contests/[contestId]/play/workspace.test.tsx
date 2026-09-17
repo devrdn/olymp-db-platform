@@ -784,6 +784,19 @@ describe("collapsing a panel", () => {
     expect(bottomPanel()).not.toBeInTheDocument();
   });
 
+  // The memoised panels stay memoised. Collapsing the bottom panel moves
+  // nothing about the side panel's own props, and this screen holds a
+  // thousand-row table and every question card — the same reasoning the
+  // bottom-tab test above records.
+  test("collapsing one panel does not re-render the panel beside it", async () => {
+    showWithToggles();
+    const sideRendersBefore = renderCounts.side;
+
+    await userEvent.click(screen.getByRole("button", { name: p.bottom }));
+
+    expect(renderCounts.side).toBe(sideRendersBefore);
+  });
+
   // Below 760px the panels are stacked sections rather than columns, and the
   // same toggles hide those sections — there is one tree, so a panel that
   // left the grid left the stack with it. What can still go wrong there is
