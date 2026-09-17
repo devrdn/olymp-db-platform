@@ -21,7 +21,11 @@ export type CodeEditorHandle = {
    * state was already built from the server's copy.
    */
   setDocumentValue: (id: string, text: string) => void;
-  /** Forgets a document for good — a tab that was closed. */
+  /**
+   * Forgets a document for good — a tab that was closed. The one showing may
+   * be dropped too: the owner then points the editor at another document,
+   * and the state left behind is discarded rather than kept aside.
+   */
   dropDocument: (id: string) => void;
 };
 
@@ -190,6 +194,8 @@ export function CodeEditor({
   const asideRef = useRef(new Map<string, EditorState>());
   const openIdRef = useRef(documentId);
   const documentIdRef = useRef(documentId);
+  /** A showing document its owner has dropped: the next swap leaves it behind rather than keeping it. */
+  const droppedRef = useRef<string | undefined>(undefined);
   const getDocumentValueRef = useRef(getDocumentValue);
   /**
    * Set while this component itself is writing into CodeMirror, so a swap or
@@ -250,6 +256,13 @@ export function CodeEditor({
       },
       dropDocument: (id) => {
         asideRef.current.delete(id);
+        // The showing document is not in the map at all — it is in the view
+        // — and dropping it is the ordinary case: closing the tab that is
+        // open. The swap the owner makes next would otherwise put its state
+        // back under this id, which nothing will ever ask for again and
+        // nothing will ever free. Remembered rather than acted on, because
+        // the view still has to show something until that swap arrives.
+        if (id === openIdRef.current) droppedRef.current = id;
       },
     }),
     // Every path above reads through a ref; nothing here is rebuilt.
@@ -275,8 +288,12 @@ export function CodeEditor({
     asideRef.current.delete(documentId);
     writing(() => {
       const previous = core.swapDocument(view, next);
-      if (leaving !== undefined) asideRef.current.set(leaving, previous);
+      // A document whose owner has dropped it is not kept: see `dropDocument`.
+      if (leaving !== undefined && leaving !== droppedRef.current) {
+        asideRef.current.set(leaving, previous);
+      }
     });
+    if (leaving === droppedRef.current) droppedRef.current = undefined;
     openIdRef.current = documentId;
   }, [documentId]);
 
