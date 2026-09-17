@@ -1126,6 +1126,7 @@ const en = {
             retrying: "Not saved yet. Trying again shortly.",
             closed: "The contest is over, so your notes are no longer saved. What you typed last is kept in this browser.",
           },
+          limitReached: "Your notes have reached the 20,000-character limit.",
         },
         log: {
           empty: "You have not run a query yet.",
