@@ -1586,8 +1586,6 @@ const en = {
     invalid_tab_id: "Wrong tab identifier.",
     workspace_too_often:
       "Your notes and tabs are being saved too often. Saving will resume in a moment.",
-    workspace_read_only:
-      "The contest is not open to you right now, so your notes and tabs can only be read.",
     workspace_tab_limit: "You already have as many tabs as allowed. Close one to open another.",
     workspace_last_tab: "This is your only tab, so it cannot be closed.",
     workspace_tab_not_found: "That tab no longer exists. Reload the page to see your current tabs.",

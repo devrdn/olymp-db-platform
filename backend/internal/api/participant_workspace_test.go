@@ -44,8 +44,7 @@ type workspaceBody struct {
 		Body      string  `json:"body"`
 		UpdatedAt *string `json:"updated_at"`
 	} `json:"notes"`
-	Tabs     []workspaceTabBody `json:"tabs"`
-	ReadOnly *bool              `json:"read_only"`
+	Tabs []workspaceTabBody `json:"tabs"`
 }
 
 type updatedBody struct {
@@ -111,8 +110,14 @@ func TestTheWorkspaceStartsWithOneTabNamedInTheRequestsLanguage(t *testing.T) {
 	if got.Notes.Body != "" || got.Notes.UpdatedAt != nil {
 		t.Fatalf("notes = %+v, want empty and never saved", got.Notes)
 	}
-	if got.ReadOnly == nil || *got.ReadOnly {
-		t.Fatalf("read_only = %v, want present and false", got.ReadOnly)
+	// The workspace closes with the contest (admit refuses it), so there is
+	// no read-only mode to report.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, present := raw["read_only"]; present {
+		t.Fatalf("the response carries read_only: %s", rec.Body.String())
 	}
 }
 
@@ -135,30 +140,6 @@ func TestReadingTheWorkspaceStartsNoClockAndSpendsTheReadBudget(t *testing.T) {
 	expectStatus(t, f.get(play+"/workspace"), http.StatusTooManyRequests, "query_too_often")
 	if f.access.accessCalled {
 		t.Fatal("Access ran after the read budget refused")
-	}
-}
-
-// read_only says what a write would be told: the same admission the console
-// asks before it takes a query.
-func TestTheWorkspaceIsReadOnlyWhenTheContestWouldNotTakeAWrite(t *testing.T) {
-	f := newParticipantFixture(t)
-	play := f.workspaceContest(t)
-	tab := f.loadWorkspace(t, play).Tabs[0]
-	f.access.admittedErr = queryproxy.ErrContestNotRunning
-
-	got := f.loadWorkspace(t, play)
-	if got.ReadOnly == nil || !*got.ReadOnly {
-		t.Fatalf("read_only = %v, want true", got.ReadOnly)
-	}
-
-	for name, rec := range map[string]*httptest.ResponseRecorder{
-		"notes":   f.send(http.MethodPut, play+"/notes", `{"body":"x"}`),
-		"create":  f.send(http.MethodPost, play+"/tabs", `{}`),
-		"update":  f.send(http.MethodPatch, play+"/tabs/"+tab.ID, `{"body":"x"}`),
-		"delete":  f.send(http.MethodDelete, play+"/tabs/"+tab.ID, ""),
-		"reorder": f.send(http.MethodPut, play+"/tabs/order", `{"ids":["`+tab.ID+`"]}`),
-	} {
-		t.Run(name, func(t *testing.T) { expectStatus(t, rec, http.StatusConflict, "workspace_read_only") })
 	}
 }
 
@@ -322,7 +303,9 @@ func TestAWriteStartsNoClock(t *testing.T) {
 	}
 }
 
-// The workspace is admitted exactly as the rest of /play is.
+// The workspace is admitted exactly as the rest of /play is: once the
+// contest has ended for the participant, every workspace route — the read and
+// each write — answers as /play/story does.
 func TestWorkspaceAccessRefusalsAreTheParticipantRoutesOwn(t *testing.T) {
 	for _, tc := range []struct {
 		err    error
@@ -337,9 +320,27 @@ func TestWorkspaceAccessRefusalsAreTheParticipantRoutesOwn(t *testing.T) {
 		t.Run(tc.code, func(t *testing.T) {
 			f := newParticipantFixture(t)
 			play := f.workspaceContest(t)
+			tab := f.loadWorkspace(t, play).Tabs[0]
 			f.access.err = tc.err
-			expectStatus(t, f.get(play+"/workspace"), tc.status, tc.code)
-			expectStatus(t, f.send(http.MethodPut, play+"/notes", `{"body":"x"}`), tc.status, tc.code)
+			before := f.workspaceStore.Calls()
+
+			for _, route := range []struct{ method, path, body string }{
+				{http.MethodGet, "/story", ""},
+				{http.MethodGet, "/workspace", ""},
+				{http.MethodPut, "/notes", `{"body":"x"}`},
+				{http.MethodPost, "/tabs", `{}`},
+				{http.MethodPatch, "/tabs/" + tab.ID, `{"body":"x"}`},
+				{http.MethodDelete, "/tabs/" + tab.ID, ""},
+				{http.MethodPut, "/tabs/order", `{"ids":["` + tab.ID + `"]}`},
+			} {
+				rec := f.send(route.method, play+route.path, route.body)
+				if rec.Code != tc.status || errorCode(t, rec) != tc.code {
+					t.Fatalf("%s %s: %d %s, want %d %s", route.method, route.path, rec.Code, rec.Body.String(), tc.status, tc.code)
+				}
+			}
+			if f.workspaceStore.Calls() != before {
+				t.Fatal("a refused participant reached the workspace store")
+			}
 		})
 	}
 

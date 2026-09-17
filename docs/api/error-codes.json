@@ -558,10 +558,6 @@
       "meaning": "A new tab order must name every tab of the participant's workspace exactly once, and nothing else. Reload the tabs and try again."
     },
     {
-      "code": "workspace_read_only",
-      "meaning": "The contest is not open to this participant right now, so their notes and tabs cannot be changed. Nothing was saved; what is stored stays readable."
-    },
-    {
       "code": "workspace_tab_limit",
       "meaning": "The participant already has as many SQL tabs as one workspace may hold. Close one before opening another."
     },

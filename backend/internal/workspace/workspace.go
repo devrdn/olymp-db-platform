@@ -9,8 +9,9 @@
 // once.
 //
 // It does not decide whether the participant may read or write at all — that
-// is queryproxy's admission, asked by the HTTP layer and handed in as a
-// Session — and it never runs the SQL a tab holds: a tab is text, and running
+// is queryproxy's admission, asked by the HTTP layer before a Session exists,
+// and the workspace closes with the contest like the rest of the play screen
+// — and it never runs the SQL a tab holds: a tab is text, and running
 // it is the console's business. Nobody but the participant reads it: there is
 // no staff view of a workspace. Storage is declared here as Repository and
 // implemented in internal/postgres.
@@ -72,9 +73,6 @@ var (
 	// workspace exactly once.
 	ErrOrderMismatch = errors.New("the order must name every tab exactly once")
 	ErrTooOften      = errors.New("too many workspace writes this minute")
-	// ErrReadOnly is a write while the contest is not open to this
-	// participant: what they wrote stays readable, and nothing changes it.
-	ErrReadOnly = errors.New("the workspace is read-only now")
 )
 
 // Notes is the participant's free text. UpdatedAt is nil until it is first
@@ -104,17 +102,13 @@ type Workspace struct {
 	Notes Notes
 	// Tabs are in position order, and never empty.
 	Tabs []Tab
-	// ReadOnly says writes are refused right now (ErrReadOnly), so the screen
-	// can say so instead of failing every autosave.
-	ReadOnly bool
 }
 
-// Session is who is asking and what the caller's admission decided: whose
-// workspace, whether the contest is open to them for writing, and which
-// language a tab the server names should be named in.
+// Session is whose workspace a call works in, once the caller's admission
+// has let the participant in, and which language a tab the server names
+// should be named in.
 type Session struct {
 	Registration uuid.UUID
-	Writable     bool
 	Lang         string
 }
 
@@ -172,14 +166,11 @@ func (s *Service) Get(ctx context.Context, session Session) (Workspace, error) {
 	if err != nil {
 		return Workspace{}, fmt.Errorf("load the workspace: %w", err)
 	}
-	return Workspace{Notes: notes, Tabs: tabs, ReadOnly: !session.Writable}, nil
+	return Workspace{Notes: notes, Tabs: tabs}, nil
 }
 
 // SaveNotes replaces the notes.
 func (s *Service) SaveNotes(ctx context.Context, session Session, body string) (time.Time, error) {
-	if err := checkWritable(session); err != nil {
-		return time.Time{}, err
-	}
 	if err := checkText(body); err != nil {
 		return time.Time{}, err
 	}
@@ -196,9 +187,6 @@ func (s *Service) SaveNotes(ctx context.Context, session Session, body string) (
 // CreateTab appends an empty tab. A nil title names it after the smallest
 // number no tab of the workspace is already named after.
 func (s *Service) CreateTab(ctx context.Context, session Session, title *string) (Tab, error) {
-	if err := checkWritable(session); err != nil {
-		return Tab{}, err
-	}
 	name := func(taken []string) string { return freeTitle(session.Lang, taken) }
 	if title != nil {
 		clean, err := cleanTitle(*title)
@@ -219,9 +207,6 @@ func (s *Service) CreateTab(ctx context.Context, session Session, title *string)
 
 // UpdateTab renames a tab, replaces its text, or both.
 func (s *Service) UpdateTab(ctx context.Context, session Session, id uuid.UUID, patch TabPatch) (time.Time, error) {
-	if err := checkWritable(session); err != nil {
-		return time.Time{}, err
-	}
 	if patch.Title == nil && patch.Body == nil {
 		return time.Time{}, ErrNothingToChange
 	}
@@ -252,9 +237,6 @@ func (s *Service) UpdateTab(ctx context.Context, session Session, id uuid.UUID, 
 
 // DeleteTab removes a tab, unless it is the last one.
 func (s *Service) DeleteTab(ctx context.Context, session Session, id uuid.UUID) error {
-	if err := checkWritable(session); err != nil {
-		return err
-	}
 	if err := s.repo.DeleteTab(ctx, session.Registration, id); err != nil {
 		if errors.Is(err, ErrTabNotFound) || errors.Is(err, ErrLastTab) {
 			return err
@@ -267,9 +249,6 @@ func (s *Service) DeleteTab(ctx context.Context, session Session, id uuid.UUID) 
 // ReorderTabs puts the tabs in the order ids names them. ids must be the
 // workspace's tabs, each exactly once.
 func (s *Service) ReorderTabs(ctx context.Context, session Session, ids []uuid.UUID) error {
-	if err := checkWritable(session); err != nil {
-		return err
-	}
 	// The shape is checked here, before a transaction is opened for it; the
 	// set itself can only be compared under the repository's lock.
 	if len(ids) == 0 || len(ids) > MaxTabs {
@@ -315,16 +294,6 @@ func (s *Service) AdmitWrite(ctx context.Context, account uuid.UUID) error {
 	}
 	if !allowed {
 		return ErrTooOften
-	}
-	return nil
-}
-
-// checkWritable refuses a write from a session the contest is closed to. It
-// is a comparison of a value in hand, so it comes before any validation or
-// storage work.
-func checkWritable(session Session) error {
-	if !session.Writable {
-		return ErrReadOnly
 	}
 	return nil
 }

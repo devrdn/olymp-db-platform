@@ -73,15 +73,6 @@ type fakeAccess struct {
 	// and startOnReadErr is what it answers with.
 	startedOnRead  []uuid.UUID
 	startOnReadErr error
-	// admittedErr is what Admitted answers: whether the contest would take a
-	// write from this participant right now.
-	admittedErr error
-}
-
-func (a *fakeAccess) Admitted(contests.Contest, contests.Participant, netip.Addr) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.admittedErr
 }
 
 func (a *fakeAccess) StartOnRead(_ context.Context, _ contests.Contest, participant contests.Participant) (contests.Participant, error) {

@@ -1477,8 +1477,6 @@ const ro = {
     invalid_tab_id: "Identificator de filă greșit.",
     workspace_too_often:
       "Notițele și filele se salvează prea des. Salvarea va continua într-o clipă.",
-    workspace_read_only:
-      "Concursul nu vă este deschis acum, așa că notițele și filele pot fi doar citite.",
     workspace_tab_limit: "Aveți deja numărul maxim de file. Închideți una pentru a deschide alta.",
     workspace_last_tab: "Aceasta este singura dumneavoastră filă, deci nu poate fi închisă.",
     workspace_tab_not_found:
