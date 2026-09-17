@@ -349,12 +349,11 @@ var (
 	//
 	// One code per workspace.Service refusal (CLAUDE.md rule 1). The
 	// interface autosaves, so each of these decides what it does next: wait
-	// and retry, stop and say the contest is closed, or tell the participant
-	// what to shorten.
+	// and retry, or tell the participant what to shorten. A contest that has
+	// ended is not one of them: the workspace answers contest_not_running or
+	// contest_finished like the rest of /play.
 	codeWorkspaceTooOften = httpx.NewCode("workspace_too_often",
 		"This participant has saved their notes and tabs more often this minute than the installation allows, refused saves included. Nothing was saved; `Retry-After` says how long to wait at most.")
-	codeWorkspaceReadOnly = httpx.NewCode("workspace_read_only",
-		"The contest is not open to this participant right now, so their notes and tabs cannot be changed. Nothing was saved; what is stored stays readable.")
 	codeWorkspaceTabLimit = httpx.NewCode("workspace_tab_limit",
 		"The participant already has as many SQL tabs as one workspace may hold. Close one before opening another.")
 	codeWorkspaceLastTab = httpx.NewCode("workspace_last_tab",
