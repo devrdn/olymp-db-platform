@@ -30,7 +30,8 @@ import { fetchQueryLogAction } from "./actions";
  * zero hides "load more" too. This is what lets the panel show the
  * dictionary's own failure string instead, with a button to try again.
  *
- * `active` is whether the "Query log" tab is the one currently showing
+ * `active` is whether the "Query log" tab is the one chosen in the panel
+ * below the console — the tab, not whether that panel is collapsed
  * (finding 3). This panel stays mounted the whole time — never unmounted by
  * a tab switch, `TabsContent`'s own doc — so it refreshes itself on the
  * transition into being shown rather than once per completed query, which is
@@ -59,7 +60,7 @@ export function QueryLogPanel({
 }: {
   contestId: string;
   initial: { items: QueryLogEntry[]; total: number; failed: boolean };
-  /** Whether the "Query log" tab is the one currently showing — see this component's own doc. */
+  /** Whether the "Query log" tab is the one chosen below the console — see this component's own doc. */
   active: boolean;
   locale: Locale;
   dict: PlayDictionary;
