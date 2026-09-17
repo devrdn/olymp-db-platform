@@ -310,6 +310,10 @@
       "meaning": "The request body could not be understood, or a field in it is not acceptable. The message names what."
     },
     {
+      "code": "invalid_tab_id",
+      "meaning": "A workspace tab identifier in the path or body is not a valid UUID."
+    },
+    {
       "code": "invalid_transition",
       "meaning": "The contest cannot move to that status from the one it is in."
     },
@@ -540,6 +544,46 @@
     {
       "code": "weak_password",
       "meaning": "The new password does not meet the policy. The message says which rule."
+    },
+    {
+      "code": "workspace_last_tab",
+      "meaning": "This is the participant's only SQL tab, and the editor always keeps one."
+    },
+    {
+      "code": "workspace_notes_too_long",
+      "meaning": "The notes are longer than a workspace may hold. The message names the limit in characters."
+    },
+    {
+      "code": "workspace_order_mismatch",
+      "meaning": "A new tab order must name every tab of the participant's workspace exactly once, and nothing else. Reload the tabs and try again."
+    },
+    {
+      "code": "workspace_read_only",
+      "meaning": "The contest is not open to this participant right now, so their notes and tabs cannot be changed. Nothing was saved; what is stored stays readable."
+    },
+    {
+      "code": "workspace_tab_limit",
+      "meaning": "The participant already has as many SQL tabs as one workspace may hold. Close one before opening another."
+    },
+    {
+      "code": "workspace_tab_not_found",
+      "meaning": "This participant has no tab by that identifier. Also the answer for another participant's tab: that it exists is not the caller's business."
+    },
+    {
+      "code": "workspace_tab_too_long",
+      "meaning": "The tab's text is longer than a query may be. The message names the limit in bytes."
+    },
+    {
+      "code": "workspace_text_invalid",
+      "meaning": "The notes or the tab's text contain a NUL character or bytes that are not UTF-8, which cannot be stored."
+    },
+    {
+      "code": "workspace_title_invalid",
+      "meaning": "A tab title must have 1 to 40 characters after trimming, and no control characters."
+    },
+    {
+      "code": "workspace_too_often",
+      "meaning": "This participant has saved their notes and tabs more often this minute than the installation allows, refused saves included. Nothing was saved; `Retry-After` says how long to wait at most."
     },
     {
       "code": "wrong_password",

@@ -27,6 +27,8 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/users/userstest"
+	"github.com/devrdn/db-contest/backend/internal/workspace"
+	"github.com/devrdn/db-contest/backend/internal/workspace/workspacetest"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
@@ -71,6 +73,15 @@ type fakeAccess struct {
 	// and startOnReadErr is what it answers with.
 	startedOnRead  []uuid.UUID
 	startOnReadErr error
+	// admittedErr is what Admitted answers: whether the contest would take a
+	// write from this participant right now.
+	admittedErr error
+}
+
+func (a *fakeAccess) Admitted(contests.Contest, contests.Participant, netip.Addr) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.admittedErr
 }
 
 func (a *fakeAccess) StartOnRead(_ context.Context, _ contests.Contest, participant contests.Participant) (contests.Participant, error) {
@@ -307,7 +318,9 @@ type participantFixture struct {
 	stories   *conteststest.Stories
 	questions *conteststest.Questions
 	attempts  *conteststest.Attempts
-	cookie    *http.Cookie
+	// workspaceStore is the in-memory store behind the workspace endpoints.
+	workspaceStore *failingWorkspace
+	cookie         *http.Cookie
 }
 
 func newParticipantFixture(t *testing.T) *participantFixture {
@@ -341,13 +354,19 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 	history := &fakeHistory{}
 	submitter := &fakeSubmitter{}
 
+	workspaceStore := &failingWorkspace{Repository: workspacetest.NewRepository()}
+	workspaces := workspace.NewService(workspaceStore, auth.NewLimiter(c))
+
 	router := chi.NewRouter()
-	api.NewParticipantHandler(access, reader, history, submitter, answerRate(c, fixtureAnswersPerMinute), mw, log, "en").Mount(router)
+	api.NewParticipantHandler(access, reader, history, submitter, answerRate(c, fixtureAnswersPerMinute), mw, log, "en").
+		WithWorkspace(workspaces).
+		Mount(router)
 
 	return &participantFixture{
 		router: router, access: access, history: history, submitter: submitter,
 		stories: stories, questions: questions, attempts: attempts,
-		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		workspaceStore: workspaceStore,
+		cookie:         &http.Cookie{Name: auth.SessionCookieName, Value: token},
 	}
 }
 
