@@ -436,6 +436,24 @@ describe("opening one row of the result", () => {
     expect(screen.getByRole("region", { name: t.region.replace("{n}", "4") })).toBeInTheDocument();
   });
 
+  // Opening a row was silent for anyone not watching the screen:
+  // `aria-selected` on a `tr` of an ordinary table is not announced, and the
+  // panel appearing below the table is not either. Taking the keyboard into
+  // the region is both the announcement — its own name is what gets read —
+  // and what puts "Copy row" and the arrows where the participant now is.
+  // The round trip is the point: closing hands the focus back to the row.
+  test("opening a row takes the keyboard into the panel, and closing gives it back", async () => {
+    const user = userEvent.setup();
+    show(answer(5));
+
+    await user.click(rowOf(2));
+
+    expect(screen.getByRole("region", { name: t.region.replace("{n}", "3") })).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(rowOf(2)).toHaveFocus();
+  });
+
   test("the arrows walk to the neighbouring row without closing the panel", async () => {
     const user = userEvent.setup();
     show(answer(10));
