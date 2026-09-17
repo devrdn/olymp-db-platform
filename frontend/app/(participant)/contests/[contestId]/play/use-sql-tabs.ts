@@ -13,7 +13,7 @@ import {
 } from "@/lib/api/workspace";
 
 import type { SqlTabView } from "./sql-tabs";
-import { AutosaveEngine, attachEngine, type AutosaveStatus, type ClosedCode } from "./use-autosave";
+import { AutosaveEngine, attachEngine, type ClosedCode } from "./use-autosave";
 
 /**
  * Everything the SQL tabs are, apart from how they are drawn (§5 of the
@@ -117,8 +117,13 @@ export type SqlTabsOptions = {
 export type SqlTabs = {
   tabs: SqlTabView[];
   activeId: string;
-  /** The open tab's save status, or null when nothing here is saved at all. */
-  status: AutosaveStatus | null;
+  /**
+   * The engine saving the open tab, or null when nothing here is saved at
+   * all. Handed out rather than its status: whoever shows the status
+   * subscribes to it directly, so a save does not re-render the editor's
+   * own tree on the first keystroke after every pause.
+   */
+  activeEngine: AutosaveEngine | null;
   /** Set once a write is refused because the contest has ended for this participant. */
   closed: ClosedCode | null;
   /** Whether these tabs are on the server — false when the workspace could not be read. */
@@ -153,10 +158,11 @@ export function useSqlTabs({
   const [closed, setClosed] = useState<ClosedCode | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Neither of these is rendered, so neither is state: the text of every tab
-  // (the editor is what shows it) and the engine saving it.
+  // The text of every tab is not rendered — the editor is what shows it —
+  // so it is a plain map rather than state. The engines are state: which
+  // one is saving the open tab is something the status line renders from.
   const [texts] = useState(() => new Map<string, string>((initial ?? []).map((tab) => [tab.id, tab.body])));
-  const [engines] = useState(() => new Map<string, Entry>());
+  const [engines, setEngines] = useState<ReadonlyMap<string, Entry>>(() => new Map());
   /** One deliberate write at a time: a doubled click must not open two tabs. */
   const busy = useRef(false);
 
@@ -193,19 +199,25 @@ export function useSqlTabs({
         // hearing it: the refusal is about the contest, not the tab.
         if (status.kind === "closed") setClosed(status.code);
       });
-      engines.set(tab.id, { engine, detach: attachEngine(engine) });
+      const entry = { engine, detach: attachEngine(engine) };
+      setEngines((previous) => new Map(previous).set(tab.id, entry));
     },
-    [contestId, engines, texts],
+    [contestId, texts],
   );
 
+  // The same map, reachable from outside a render: the editor reports a
+  // keystroke through `edited`, and the unmount below detaches whatever is
+  // open at that moment rather than what the last render saw.
+  const openEngines = useRef<ReadonlyMap<string, Entry>>(engines);
   useEffect(() => {
-    if (initial === null) return;
-    for (const tab of initial) {
-      if (!engines.has(tab.id)) open(tab);
-    }
+    openEngines.current = engines;
+  }, [engines]);
+
+  useEffect(() => {
+    for (const tab of initial ?? []) open(tab);
     return () => {
-      for (const entry of engines.values()) entry.detach();
-      engines.clear();
+      for (const entry of openEngines.current.values()) entry.detach();
+      setEngines(new Map());
     };
     // Once, for the tabs the page read. Tabs opened later attach as they are
     // created, and this cleanup — which reads the map as it is at unmount —
@@ -274,7 +286,11 @@ export function useSqlTabs({
         // tab the server has already deleted.
         entry?.engine.discard();
         entry?.detach();
-        engines.delete(id);
+        setEngines((previous) => {
+          const rest = new Map(previous);
+          rest.delete(id);
+          return rest;
+        });
         texts.delete(id);
         onDropRef.current(id);
         const rest = tabs.filter((tab) => tab.id !== id);
@@ -322,22 +338,18 @@ export function useSqlTabs({
   const edited = useCallback(
     (id: string, text: string) => {
       texts.set(id, text);
-      engines.get(id)?.engine.setValue(text);
+      // Read through the ref, not through the captured map: this is called
+      // from the editor on every keystroke, and a tab opened since the last
+      // render must not miss one.
+      openEngines.current.get(id)?.engine.setValue(text);
     },
-    [engines, texts],
-  );
-
-  const entry = engines.get(activeId);
-  const status = useSyncExternalStore(
-    entry?.engine.subscribe ?? noSubscribe,
-    entry?.engine.getStatus ?? noStatus,
-    noStatus,
+    [texts],
   );
 
   return {
     tabs,
     activeId,
-    status,
+    activeEngine: engines.get(activeId)?.engine ?? null,
     closed,
     stored,
     error,
@@ -349,13 +361,4 @@ export function useSqlTabs({
     textOf,
     edited,
   };
-}
-
-/** For a tab with no engine — the one local tab of a workspace that failed to load. */
-function noSubscribe() {
-  return () => {};
-}
-
-function noStatus(): AutosaveStatus | null {
-  return null;
 }

@@ -1,12 +1,12 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useId, useRef, useState, useSyncExternalStore } from "react";
 
 import { MAX_TABS, TAB_TITLE_MAX_CHARS } from "@/lib/api/workspace";
 import { cn } from "@/lib/utils";
 
 import type { PlayDictionary } from "./dictionary";
-import type { AutosaveStatus } from "./use-autosave";
+import type { AutosaveEngine, AutosaveStatus } from "./use-autosave";
 
 /** One tab, as the strip needs it: what it is called and which document it is. */
 export type SqlTabView = { id: string; title: string };
@@ -285,19 +285,28 @@ export function SqlTabStrip({
  * contest closing are.
  */
 export function SqlTabStatus({
-  status,
+  engine,
   error,
   stored,
   dict,
 }: {
-  /** The open tab's autosave status, or null when nothing here is saved. */
-  status: AutosaveStatus | null;
+  /**
+   * The engine saving the open tab, or null when nothing here is saved.
+   * Subscribed to here rather than higher up: a save must re-render this
+   * line and nothing else, least of all the editor beside it.
+   */
+  engine: AutosaveEngine | null;
   /** The code of the last refused action on the strip itself. */
   error: string | null;
   /** Whether these tabs are on the server at all. */
   stored: boolean;
   dict: PlayDictionary;
 }) {
+  const status = useSyncExternalStore(
+    engine?.subscribe ?? noSubscribe,
+    engine?.getStatus ?? noStatus,
+    noStatus,
+  );
   const message = messageFor(status, error, stored, dict);
   const settledNow = status === null || (status.kind !== "saving" && status.kind !== "pending");
   const [settled, setSettled] = useState(settledNow ? message : "");
@@ -360,4 +369,13 @@ function toneOf(status: AutosaveStatus | null, error: string | null, stored: boo
     default:
       return "text-ink-3";
   }
+}
+
+/** A tab with no engine — the one local tab of a workspace that failed to load. */
+function noSubscribe() {
+  return () => {};
+}
+
+function noStatus(): AutosaveStatus | null {
+  return null;
 }
