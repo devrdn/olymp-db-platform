@@ -55,6 +55,12 @@
       "value": "",
       "type": "string",
       "description": "Populated automatically by Contest content ▸ Add question."
+    },
+    {
+      "key": "tabId",
+      "value": "",
+      "type": "string",
+      "description": "Populated automatically by Participant workspace ▸ Get the workspace (its first tab) and ▸ Open a tab."
     }
   ],
   "event": [
@@ -1377,6 +1383,223 @@
               ]
             },
             "description": "A student signing themselves up. Needs no staff permission: whether it is allowed is the contest's own decision.\n\nRefused unless the contest is `open`, published, and past neither its start nor its enrollment deadline. A running contest still accepts signups when the timing is `individual` — each participant's clock starts on their own start, so a latecomer takes nothing from anybody.\n\nThe network restriction is checked here, against the address resolved through `TRUSTED_PROXIES` — never a header read from the request. Every refusal is written to `audit_log`: the entry that proves the rule works is the same signal that somebody tried from an outside device.\n\nResponses: 201 `ParticipantResponse` · 403 `address_not_allowed` · 409 `enrollment_closed` / `already_enrolled` · 404"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Participant workspace",
+      "description": "The signed-in participant's own notes and SQL editor tabs on the play screen, stored per registration and autosaved by the interface. Sign in as a participant of `{{contestId}}` first; nobody else can read or change a workspace, staff included.\n\nEvery route is admitted like the rest of `/play`: `403 not_a_participant` / `address_not_allowed`, `409 contest_not_running` / `contest_finished`. None of them starts an individual participant's clock.\n\nWrites (everything but GET) share one budget of 60 a minute per participant, refused writes included, spent before anything is looked up: past it `429 workspace_too_often` with `Retry-After`. They do not spend the read budget the SQL console shares. A write while the contest is not open to the participant is `409 workspace_read_only`.\n\nLimits: notes 20000 characters, 10 tabs, titles 1-40 characters without control characters, a tab body as long as a query (64 KiB).",
+      "item": [
+        {
+          "name": "Get the workspace",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/play/workspace",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "play",
+                "workspace"
+              ]
+            },
+            "description": "Notes, tabs in order, and `read_only`. A participant with no tab yet gets one created, named in the request's language (`?lang=` or `Accept-Language`, within the contest's languages): \"Query 1\", \"Запрос 1\", \"Interogare 1\". `notes.updated_at` is null until the notes are first saved.\n\nSpends the participant's read budget (`429 query_too_often`), not the write budget.\n\nResponses: 200 · 400 `invalid_contest_id` · 403 · 409 · 429"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.collectionVariables.set('tabId', pm.response.json().tabs[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Save the notes",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/play/notes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "play",
+                "notes"
+              ]
+            },
+            "description": "Replaces the notes; the last write wins. `body` is required.\n\nResponses: 200 `{updated_at}` · 400 `workspace_notes_too_long` / `workspace_text_invalid` / `invalid_request` · 409 `workspace_read_only` · 429 `workspace_too_often`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"body\": \"The butler had a key to the library.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Open a tab",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/play/tabs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "play",
+                "tabs"
+              ]
+            },
+            "description": "Appends an empty tab. Without `title` the server names it \"Query N\" (in the request's language) with the smallest N no tab uses. Send `{}` for a server-named tab.\n\nResponses: 201 `{id, title, body, position, updated_at}` · 400 `workspace_title_invalid` · 409 `workspace_tab_limit` / `workspace_read_only` · 429",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"suspects\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set('tabId', pm.response.json().id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Edit a tab",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/play/tabs/{{tabId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "play",
+                "tabs",
+                "{{tabId}}"
+              ]
+            },
+            "description": "Renames the tab, replaces its text, or both; an absent field is left as it is, and at least one is required. Another participant's tab is a 404 like one that does not exist.\n\nResponses: 200 `{updated_at}` · 400 `invalid_tab_id` / `workspace_title_invalid` / `workspace_tab_too_long` / `workspace_text_invalid` / `invalid_request` · 404 `workspace_tab_not_found` · 409 `workspace_read_only` · 429",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"suspects\",\n  \"body\": \"SELECT * FROM suspects;\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Close a tab",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/play/tabs/{{tabId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "play",
+                "tabs",
+                "{{tabId}}"
+              ]
+            },
+            "description": "Removes the tab and closes the gap in positions. The only tab cannot be removed.\n\nResponses: 204 · 400 `invalid_tab_id` · 404 `workspace_tab_not_found` · 409 `workspace_last_tab` / `workspace_read_only` · 429"
+          },
+          "response": []
+        },
+        {
+          "name": "Reorder tabs",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/play/tabs/order",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "play",
+                "tabs",
+                "order"
+              ]
+            },
+            "description": "The order after dragging. Must name **every** tab of the workspace exactly once; positions are rewritten 0..n-1 in one transaction.\n\nResponses: 204 · 400 `workspace_order_mismatch` / `invalid_tab_id` · 409 `workspace_read_only` · 429",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ids\": [\n    \"{{tabId}}\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
           },
           "response": []
         }
