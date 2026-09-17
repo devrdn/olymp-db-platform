@@ -412,6 +412,115 @@ func TestHistoryCountsEveryRowEvenOnAPageThatLandsPastTheEnd(t *testing.T) {
 	})
 }
 
+// History's own rows now carry the request id they were opened with, because
+// that is the identifier Entry is looked up by (queryrunner.HistoryEntry.ID's
+// own doc). Without this, GET .../play/log could show a row the panel can
+// never actually open in full.
+func TestHistoryCarriesTheRequestIDEachRowWasOpenedWith(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+		requestID := uuid.New()
+
+		completeRowWithRequestID(t, ctx, log, registration, requestID, "SELECT 1", queryrunner.StatusOK, 1, 1)
+
+		found, _, err := log.History(ctx, registration, 0, 0)
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+		if len(found) != 1 || found[0].ID != requestID {
+			t.Fatalf("found[0].ID = %v, want the request id the row was opened with (%v)", found, requestID)
+		}
+	})
+}
+
+// Entry is the read behind GET .../play/log/{entryId}: this registration's
+// own row, in full, found by the request id History's own page just proved
+// it carries.
+func TestEntryReturnsThisRegistrationsOwnRowInFull(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+		requestID := uuid.New()
+
+		completeRowWithRequestID(t, ctx, log, registration, requestID, "SELECT * FROM suspects", queryrunner.StatusOK, 12, 250)
+
+		entry, err := log.Entry(ctx, registration, requestID)
+		if err != nil {
+			t.Fatalf("Entry: %v", err)
+		}
+		if entry.SQL != "SELECT * FROM suspects" || entry.SQLTruncated {
+			t.Fatalf("entry = %+v, want the whole statement, unflagged", entry)
+		}
+		if entry.Status != queryrunner.StatusOK || entry.DurationMs == nil || *entry.DurationMs != 250 ||
+			entry.RowCount == nil || *entry.RowCount != 12 {
+			t.Fatalf("entry = %+v, want the outcome Complete recorded for it", entry)
+		}
+	})
+}
+
+// A request id that was never logged, and one that belongs to another
+// registration entirely, answer identically: ErrHistoryEntryNotFound. This
+// is the whole of what makes the single-entry route safe to expose at all —
+// a participant must not be able to tell "no such entry" from "that entry is
+// somebody else's".
+func TestEntryOfAnotherRegistrationIsNotFound(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		mine := someRegistration(t, ctx)
+		someoneElses := someRegistration(t, ctx)
+		theirRequestID := uuid.New()
+
+		completeRowWithRequestID(t, ctx, log, someoneElses, theirRequestID, "SELECT * FROM secrets", queryrunner.StatusOK, 1, 1)
+
+		if _, err := log.Entry(ctx, mine, theirRequestID); !errors.Is(err, queryrunner.ErrHistoryEntryNotFound) {
+			t.Fatalf("Entry(mine, their request id) = %v, want ErrHistoryEntryNotFound", err)
+		}
+		if _, err := log.Entry(ctx, mine, uuid.New()); !errors.Is(err, queryrunner.ErrHistoryEntryNotFound) {
+			t.Fatalf("Entry(mine, an unknown request id) = %v, want ErrHistoryEntryNotFound", err)
+		}
+	})
+}
+
+// Entry is never bound by MaxHistorySQLChars — that bound is the page's own,
+// and the whole point of the single-entry route is to hand back what the
+// page had to cut. A statement past the page's character bound still comes
+// back whole here, unflagged.
+func TestEntryCarriesAStatementPastThePagesOwnBoundWhole(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		registration := someRegistration(t, ctx)
+		requestID := uuid.New()
+
+		long := "SELECT '" + strings.Repeat("e", queryrunner.MaxHistorySQLChars*2) + "'"
+		completeRowWithRequestID(t, ctx, log, registration, requestID, long, queryrunner.StatusOK, 1, 1)
+
+		entry, err := log.Entry(ctx, registration, requestID)
+		if err != nil {
+			t.Fatalf("Entry: %v", err)
+		}
+		if entry.SQL != long || entry.SQLTruncated {
+			t.Fatalf("Entry cut a statement well inside sqlpolicy.MaxQueryBytes, or flagged one it did not cut: %+v", entry)
+		}
+	})
+}
+
+// completeRowWithRequestID is completeRow with a caller-chosen request id,
+// for the tests above that need to look the row back up by it.
+func completeRowWithRequestID(t *testing.T, ctx context.Context, log *QueryLog, registration, requestID uuid.UUID, sql string, status queryrunner.Status, rows, durationMs int) {
+	t.Helper()
+
+	id, err := log.Begin(ctx, queryrunner.Entry{Registration: registration, RequestID: requestID, SQL: sql})
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := log.Complete(ctx, id, queryrunner.Outcome{
+		Status: status, Rows: rows, Duration: time.Duration(durationMs) * time.Millisecond,
+	}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+}
+
 // completeRow opens and closes one row in a single call, for tests that only
 // care about the finished result.
 func completeRow(t *testing.T, ctx context.Context, log *QueryLog, registration uuid.UUID, sql string, status queryrunner.Status, rows, durationMs int) {
