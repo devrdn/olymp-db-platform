@@ -159,6 +159,43 @@ func TestNotesAreSavedAndReadBack(t *testing.T) {
 	}
 }
 
+// The interface compares updated_at for equality to decide whether a draft
+// was written against the copy the server still holds, so the version has to
+// keep every digit the database stores, not just whole seconds.
+func TestWorkspaceVersionsKeepSubsecondPrecision(t *testing.T) {
+	f := newParticipantFixture(t)
+	play := f.workspaceContest(t)
+	f.workspaceStore.SetNow(time.Date(2026, 9, 17, 10, 0, 0, 123456000, time.UTC))
+	const want = "2026-09-17T10:00:00.123456Z"
+
+	rec := f.send(http.MethodPut, play+"/notes", `{"body":"x"}`)
+	expectStatus(t, rec, http.StatusOK, "")
+	if got := decodeBody[updatedBody](t, rec).UpdatedAt; got != want {
+		t.Fatalf("PUT notes updated_at = %q, want %q", got, want)
+	}
+
+	rec = f.send(http.MethodPost, play+"/tabs", `{}`)
+	expectStatus(t, rec, http.StatusCreated, "")
+	tab := decodeBody[workspaceTabBody](t, rec)
+	if tab.UpdatedAt != want {
+		t.Fatalf("POST tabs updated_at = %q, want %q", tab.UpdatedAt, want)
+	}
+
+	rec = f.send(http.MethodPatch, play+"/tabs/"+tab.ID, `{"body":"SELECT 1"}`)
+	expectStatus(t, rec, http.StatusOK, "")
+	if got := decodeBody[updatedBody](t, rec).UpdatedAt; got != want {
+		t.Fatalf("PATCH tab updated_at = %q, want %q", got, want)
+	}
+
+	got := f.loadWorkspace(t, play)
+	if got.Notes.UpdatedAt == nil || *got.Notes.UpdatedAt != want {
+		t.Fatalf("GET notes.updated_at = %v, want %q", got.Notes.UpdatedAt, want)
+	}
+	if got.Tabs[len(got.Tabs)-1].UpdatedAt != want {
+		t.Fatalf("GET tab updated_at = %q, want %q", got.Tabs[len(got.Tabs)-1].UpdatedAt, want)
+	}
+}
+
 func TestTabsAreCreatedRenamedEditedReorderedAndDeleted(t *testing.T) {
 	f := newParticipantFixture(t)
 	play := f.workspaceContest(t)
