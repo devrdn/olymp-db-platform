@@ -1474,6 +1474,25 @@ const ro = {
     invalid_cidr: "Format greșit pentru intervalul IP. Exemplu: 10.24.0.0/16",
     invalid_contest_id: "Identificator de olimpiadă greșit.",
     invalid_question_id: "Identificator de întrebare greșit.",
+    invalid_tab_id: "Identificator de filă greșit.",
+    workspace_too_often:
+      "Notițele și filele se salvează prea des. Salvarea va continua într-o clipă.",
+    workspace_read_only:
+      "Concursul nu vă este deschis acum, așa că notițele și filele pot fi doar citite.",
+    workspace_tab_limit: "Aveți deja numărul maxim de file. Închideți una pentru a deschide alta.",
+    workspace_last_tab: "Aceasta este singura dumneavoastră filă, deci nu poate fi închisă.",
+    workspace_tab_not_found:
+      "Această filă nu mai există. Reîncărcați pagina pentru a vedea filele curente.",
+    workspace_notes_too_long:
+      "Notițele sunt prea lungi. Scurtați-le la 20.000 de caractere pentru a le salva.",
+    workspace_tab_too_long:
+      "Textul filei este mai lung decât poate fi o interogare. Scurtați-l pentru a-l salva.",
+    workspace_title_invalid:
+      "Numele unei file trebuie să aibă între 1 și 40 de caractere, fără rânduri noi.",
+    workspace_text_invalid:
+      "Textul conține un caracter care nu poate fi salvat. Eliminați-l și încercați din nou.",
+    workspace_order_mismatch:
+      "Filele s-au schimbat în timp ce le mutați. Reîncărcați pagina și încercați din nou.",
     invalid_user_id: "Identificator de utilizator greșit.",
     cross_origin: "Cererea nu a venit de pe acest site. Reîncărcați pagina și încercați din nou.",
     method_not_allowed: "Acțiunea nu este disponibilă pentru această resursă.",

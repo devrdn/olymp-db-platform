@@ -64,6 +64,10 @@ type ParticipantAccess interface {
 	// story and question endpoints call it once their content has been read,
 	// before it is sent; nothing else here does.
 	StartOnRead(ctx context.Context, contest contests.Contest, participant contests.Participant) (contests.Participant, error)
+	// Admitted says whether the contest would take a query from participant
+	// right now, without starting anything (queryproxy.Service.Admitted). The
+	// workspace endpoints ask it to decide whether a write is taken.
+	Admitted(contest contests.Contest, participant contests.Participant, addr netip.Addr) error
 	// Schema describes the contest's game, for the console's schema panel. It
 	// applies Access's own admission itself and then the one rule that is its
 	// own: a contest that closed its catalogues does not show its shape here
@@ -141,6 +145,9 @@ type ParticipantHandler struct {
 	// exports keeps one account to one CSV download at a time. See
 	// queryLogCSV, and inFlightExports for why a rate limit is not this.
 	exports inFlightExports
+	// workspaces serves the participant's notes and tabs
+	// (participant_workspace.go); nil leaves those routes unmounted.
+	workspaces Workspaces
 }
 
 // inFlightExports is the set of registrations with a CSV download open.
@@ -231,6 +238,7 @@ func (h *ParticipantHandler) Mount(r chi.Router) {
 		r.Get("/contests/{"+contestIDParam+"}/play/log.csv", h.queryLogCSV)
 		r.Get("/contests/{"+contestIDParam+"}/play/schema", h.schema)
 		r.Post("/contests/{"+contestIDParam+"}/questions/{"+questionIDParam+"}/answer", h.answer)
+		h.mountWorkspace(r)
 	})
 }
 

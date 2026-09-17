@@ -1583,6 +1583,22 @@ const en = {
     invalid_cidr: "Wrong IP range format. Example: 10.24.0.0/16",
     invalid_contest_id: "Wrong contest identifier.",
     invalid_question_id: "Wrong question identifier.",
+    invalid_tab_id: "Wrong tab identifier.",
+    workspace_too_often:
+      "Your notes and tabs are being saved too often. Saving will resume in a moment.",
+    workspace_read_only:
+      "The contest is not open to you right now, so your notes and tabs can only be read.",
+    workspace_tab_limit: "You already have as many tabs as allowed. Close one to open another.",
+    workspace_last_tab: "This is your only tab, so it cannot be closed.",
+    workspace_tab_not_found: "That tab no longer exists. Reload the page to see your current tabs.",
+    workspace_notes_too_long:
+      "Your notes are too long. Shorten them to 20,000 characters to save them.",
+    workspace_tab_too_long: "This tab's text is longer than a query may be. Shorten it to save it.",
+    workspace_title_invalid: "A tab name must have 1 to 40 characters and no line breaks.",
+    workspace_text_invalid:
+      "The text contains a character that cannot be saved. Remove it and try again.",
+    workspace_order_mismatch:
+      "The tabs changed while you were moving them. Reload the page and try again.",
     invalid_user_id: "Wrong user identifier.",
     cross_origin: "The request did not come from this site. Reload the page and try again.",
     method_not_allowed: "That action is unavailable for this resource.",

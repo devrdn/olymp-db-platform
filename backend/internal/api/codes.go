@@ -22,6 +22,8 @@ var (
 		"A user identifier in the path or body is not a valid UUID.")
 	codeInvalidQuestionID = httpx.NewCode("invalid_question_id",
 		"A question identifier in the path or body is not a valid UUID.")
+	codeInvalidTabID = httpx.NewCode("invalid_tab_id",
+		"A workspace tab identifier in the path or body is not a valid UUID.")
 	codeInvalidCIDR = httpx.NewCode("invalid_cidr",
 		"A network was not written in CIDR notation, for example 10.20.0.0/16.")
 
@@ -342,4 +344,31 @@ var (
 		"Too many submissions to this exact question arrived at the same moment for the retry to resolve. Nothing was recorded; submitting again is the right response.")
 	codeQuestionNotOpen = httpx.NewCode("question_not_open",
 		"The contest answers questions in sequence and a question ordered before this one is not closed yet — not answered correctly, and not out of attempts. Answer the earlier one first.")
+
+	// --- The participant's workspace ----------------------------------------
+	//
+	// One code per workspace.Service refusal (CLAUDE.md rule 1). The
+	// interface autosaves, so each of these decides what it does next: wait
+	// and retry, stop and say the contest is closed, or tell the participant
+	// what to shorten.
+	codeWorkspaceTooOften = httpx.NewCode("workspace_too_often",
+		"This participant has saved their notes and tabs more often this minute than the installation allows, refused saves included. Nothing was saved; `Retry-After` says how long to wait at most.")
+	codeWorkspaceReadOnly = httpx.NewCode("workspace_read_only",
+		"The contest is not open to this participant right now, so their notes and tabs cannot be changed. Nothing was saved; what is stored stays readable.")
+	codeWorkspaceTabLimit = httpx.NewCode("workspace_tab_limit",
+		"The participant already has as many SQL tabs as one workspace may hold. Close one before opening another.")
+	codeWorkspaceLastTab = httpx.NewCode("workspace_last_tab",
+		"This is the participant's only SQL tab, and the editor always keeps one.")
+	codeWorkspaceTabNotFound = httpx.NewCode("workspace_tab_not_found",
+		"This participant has no tab by that identifier. Also the answer for another participant's tab: that it exists is not the caller's business.")
+	codeWorkspaceNotesTooLong = httpx.NewCode("workspace_notes_too_long",
+		"The notes are longer than a workspace may hold. The message names the limit in characters.")
+	codeWorkspaceTabTooLong = httpx.NewCode("workspace_tab_too_long",
+		"The tab's text is longer than a query may be. The message names the limit in bytes.")
+	codeWorkspaceTitleInvalid = httpx.NewCode("workspace_title_invalid",
+		"A tab title must have 1 to 40 characters after trimming, and no control characters.")
+	codeWorkspaceTextInvalid = httpx.NewCode("workspace_text_invalid",
+		"The notes or the tab's text contain a NUL character or bytes that are not UTF-8, which cannot be stored.")
+	codeWorkspaceOrderMismatch = httpx.NewCode("workspace_order_mismatch",
+		"A new tab order must name every tab of the participant's workspace exactly once, and nothing else. Reload the tabs and try again.")
 )
