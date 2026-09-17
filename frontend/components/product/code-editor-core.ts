@@ -217,9 +217,12 @@ export function mountEditor(
      * listener above that this press has been dealt with.
      *
      * Read once. Each `run` must therefore reach through to whatever the
-     * owner has now, not close over what it had at mount.
+     * owner has now, not close over what it had at mount — and say so:
+     * `false` means the owner no longer claims this key, and CodeMirror
+     * should go on treating it as it would any other, rather than the editor
+     * swallowing a combination whose handler has gone.
      */
-    shortcuts?: readonly { key: string; run: () => void }[];
+    shortcuts?: readonly { key: string; run: () => boolean }[];
   },
 ): EditorView {
   const extensions: Extension[] = [
@@ -242,19 +245,7 @@ export function mountEditor(
     // Before the defaults too: whatever the screen has claimed is claimed,
     // and on a Mac `Ctrl-b` keeps its own meaning there (move back one
     // character) because `Mod` is ⌘ and not Ctrl.
-    ...(opts.shortcuts?.length
-      ? [
-          keymap.of(
-            opts.shortcuts.map(({ key, run }) => ({
-              key,
-              run: () => {
-                run();
-                return true;
-              },
-            })),
-          ),
-        ]
-      : []),
+    ...(opts.shortcuts?.length ? [keymap.of(opts.shortcuts.map(({ key, run }) => ({ key, run })))] : []),
     // `indentWithTab` after the defaults, because it is a fallback rather
     // than an override: Tab keeps its ordinary meaning wherever CodeMirror
     // already has one, and indents otherwise.
