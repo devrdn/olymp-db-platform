@@ -24,6 +24,8 @@ var (
 		"A question identifier in the path or body is not a valid UUID.")
 	codeInvalidTabID = httpx.NewCode("invalid_tab_id",
 		"A workspace tab identifier in the path or body is not a valid UUID.")
+	codeInvalidQueryLogEntryID = httpx.NewCode("invalid_query_log_entry_id",
+		"A query log entry identifier in the path is not a valid UUID.")
 	codeInvalidCIDR = httpx.NewCode("invalid_cidr",
 		"A network was not written in CIDR notation, for example 10.20.0.0/16.")
 
@@ -344,6 +346,11 @@ var (
 		"Too many submissions to this exact question arrived at the same moment for the retry to resolve. Nothing was recorded; submitting again is the right response.")
 	codeQuestionNotOpen = httpx.NewCode("question_not_open",
 		"The contest answers questions in sequence and a question ordered before this one is not closed yet — not answered correctly, and not out of attempts. Answer the earlier one first.")
+
+	// --- The participant's query log -----------------------------------------
+
+	codeQueryLogEntryNotFound = httpx.NewCode("query_log_entry_not_found",
+		"No such entry in this participant's own query log. Also the answer for another participant's entry: that it exists at all is not the caller's business.")
 
 	// --- The participant's workspace ----------------------------------------
 	//

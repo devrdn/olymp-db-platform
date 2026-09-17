@@ -198,6 +198,22 @@ type fakeHistory struct {
 	// The mutex guards every field above that two goroutines touch.
 	mu     sync.Mutex
 	inside int
+	// entry, entryErr are what Entry answers, and gotEntryRegistration,
+	// gotEntryID record what it was asked — the single-entry read beside the
+	// paged one above, for the same reason: a test can prove the
+	// registration came from Access and the entry id from the URL.
+	entry                queryrunner.HistoryEntry
+	entryErr             error
+	gotEntryRegistration uuid.UUID
+	gotEntryID           uuid.UUID
+	entryCalled          bool
+}
+
+func (h *fakeHistory) Entry(_ context.Context, registrationID, entryID uuid.UUID) (queryrunner.HistoryEntry, error) {
+	h.entryCalled = true
+	h.gotEntryRegistration = registrationID
+	h.gotEntryID = entryID
+	return h.entry, h.entryErr
 }
 
 func (h *fakeHistory) ExportHistory(ctx context.Context, registrationID uuid.UUID, yield func(queryrunner.HistoryEntry) error) (bool, error) {
@@ -472,6 +488,11 @@ func TestTheQueryLogAndAnswersDoNotStartTheClockOnRead(t *testing.T) {
 
 	if rec := f.get("/contests/" + contestID.String() + "/play/log"); rec.Code != http.StatusOK {
 		t.Fatalf("log: status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	// One entry of the log goes through the very same admission as the page
+	// beside it (§7's own resolution): no clock.
+	if rec := f.get("/contests/" + contestID.String() + "/play/log/" + uuid.New().String()); rec.Code != http.StatusOK {
+		t.Fatalf("log entry: status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
 	if rec := f.post("/contests/"+contestID.String()+"/questions/"+uuid.New().String()+"/answer", `{"value":"x"}`); rec.Code != http.StatusOK {
 		t.Fatalf("answer: status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
@@ -1473,6 +1494,117 @@ func TestQueryLogReadFailureIsA500(t *testing.T) {
 	f.history.err = errors.New("connection reset")
 
 	rec := f.get("/contests/" + contestID.String() + "/play/log")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// One entry of the log (§7): the same admission as the page beside it, and
+// the entry id comes from the URL, not from anything the request otherwise
+// carries.
+func TestQueryLogEntryAsksForTheResolvedRegistrationAndTheURLsEntryID(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	registrationID := uuid.New()
+	entryID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: registrationID}
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log/" + entryID.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if !f.history.entryCalled {
+		t.Fatal("Entry was never called")
+	}
+	if f.history.gotEntryRegistration != registrationID {
+		t.Fatalf("registration = %s, want %s (from Access, never the request)", f.history.gotEntryRegistration, registrationID)
+	}
+	if f.history.gotEntryID != entryID {
+		t.Fatalf("entry id = %s, want %s (from the URL)", f.history.gotEntryID, entryID)
+	}
+}
+
+// The response carries the row whole, in the query log's own vocabulary,
+// with the id a client would use to ask for this same row again.
+func TestQueryLogEntryResponseCarriesTheWholeRow(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+
+	entryID := uuid.New()
+	duration, rows := 42, 7
+	f.history.entry = queryrunner.HistoryEntry{
+		ID: entryID, SQL: "SELECT * FROM suspects", Status: queryrunner.StatusOK,
+		DurationMs: &duration, RowCount: &rows, ExecutedAt: time.Now(),
+	}
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log/" + entryID.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		ID         string `json:"id"`
+		SQL        string `json:"sql"`
+		Truncated  *bool  `json:"sql_truncated"`
+		Status     string `json:"status"`
+		DurationMs *int   `json:"duration_ms"`
+		RowCount   *int   `json:"row_count"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if payload.ID != entryID.String() || payload.SQL != "SELECT * FROM suspects" || payload.Status != "ok" ||
+		payload.Truncated != nil || payload.DurationMs == nil || *payload.DurationMs != 42 ||
+		payload.RowCount == nil || *payload.RowCount != 7 {
+		t.Fatalf("payload = %+v, want the staged entry whole and unflagged", payload)
+	}
+}
+
+// Not found and another participant's entry answer identically: the whole
+// point of asking Entry rather than trusting the caller's own claim about
+// whose row this is.
+func TestQueryLogEntryNotFoundIs404(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.history.entryErr = queryrunner.ErrHistoryEntryNotFound
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log/" + uuid.New().String())
+	if rec.Code != http.StatusNotFound || errorCode(t, rec) != "query_log_entry_not_found" {
+		t.Fatalf("status = %d, body %s; want 404 query_log_entry_not_found", rec.Code, rec.Body.String())
+	}
+}
+
+// A malformed entry id is refused before Entry is ever asked — the same
+// shape of refusal a bad tab id gets.
+func TestQueryLogEntryWithAMalformedIDIs400(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log/not-a-uuid")
+	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_query_log_entry_id" {
+		t.Fatalf("status = %d, body %s; want 400 invalid_query_log_entry_id", rec.Code, rec.Body.String())
+	}
+	if f.history.entryCalled {
+		t.Fatal("Entry was reached with an id that never parsed")
+	}
+}
+
+// A failure to read one entry is ours, not the participant's — the same
+// treatment TestQueryLogReadFailureIsA500 gives the page beside it.
+func TestQueryLogEntryReadFailureIsA500(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.history.entryErr = errors.New("connection reset")
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log/" + uuid.New().String())
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 (body: %s)", rec.Code, rec.Body.String())
 	}
