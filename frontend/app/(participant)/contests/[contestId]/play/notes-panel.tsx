@@ -36,37 +36,34 @@ export function NotesPanel({
   contestId,
   initial,
   dict,
-  locale,
 }: {
   contestId: string;
   initial: WorkspaceNotes | null;
   dict: PlayDictionary;
-  locale: string;
 }) {
   const t = dict.participant.play.workspace.notes;
 
   if (initial === null) {
     return <p className="p-4 text-body text-ink-2">{t.failed}</p>;
   }
-  return <NotesEditor contestId={contestId} initial={initial} dict={dict} locale={locale} />;
+  return <NotesEditor contestId={contestId} initial={initial} dict={dict} />;
 }
 
 function NotesEditor({
   contestId,
   initial,
   dict,
-  locale,
 }: {
   contestId: string;
   initial: WorkspaceNotes;
   dict: PlayDictionary;
-  locale: string;
 }) {
   const t = dict.participant.play.workspace.notes;
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const fieldId = useId();
   const statusId = useId();
   const counterId = useId();
+  const limitId = useId();
 
   // Null below the threshold, so an edit there sets the same value again and
   // React skips the render.
@@ -100,6 +97,7 @@ function NotesEditor({
   }
 
   const closed = status.kind === "closed";
+  const full = count !== null && count >= NOTES_MAX_CHARS;
   const describedBy = count !== null ? `${statusId} ${counterId}` : statusId;
 
   return (
@@ -141,26 +139,35 @@ function NotesEditor({
           <p
             id={counterId}
             data-testid="notes-counter"
-            className={`shrink-0 text-small tabular-nums ${count >= NOTES_MAX_CHARS ? "text-bad" : "text-ink-2"}`}
+            className={`shrink-0 text-small tabular-nums ${full ? "text-bad" : "text-ink-2"}`}
           >
-            {t.counter
-              .replace("{n}", formatCount(count, locale))
-              .replace("{max}", formatCount(NOTES_MAX_CHARS, locale))}
+            {t.counter.replace("{n}", String(count)).replace("{max}", String(NOTES_MAX_CHARS))}
           </p>
         ) : null}
       </div>
+      {/* The field simply stops accepting text at the limit, which is
+          invisible to a screen reader. Said once, when the limit is
+          reached: the text only changes when the state does, so staying at
+          the limit is not repeated. Its own region rather than the status
+          line above, which is about the save and would be re-read for
+          this. */}
+      <p id={limitId} data-testid="notes-limit" aria-live="polite" className="sr-only">
+        {full ? t.limitReached : ""}
+      </p>
     </div>
   );
 }
 
+/**
+ * The counter is plain digits with no locale grouping. It renders on the
+ * server as well as in the browser, and `Intl` groups by whichever ICU data
+ * each side has: a separator that differs between the two is a hydration
+ * mismatch on a screen that must not flicker.
+ */
 function countFor(text: string): number | null {
   // UTF-16 code units, the same measure `maxLength` enforces; never more
   // characters than the server counts, so the field stops before it refuses.
   return text.length >= NOTES_COUNTER_FROM ? text.length : null;
-}
-
-function formatCount(n: number, locale: string): string {
-  return new Intl.NumberFormat(locale).format(n);
 }
 
 function messageFor(status: AutosaveStatus, dict: PlayDictionary): string {

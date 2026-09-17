@@ -1025,6 +1025,7 @@ const ro = {
             retrying: "Nesalvat încă. Reîncercăm în curând.",
             closed: "Olimpiada s-a încheiat, așa că notițele nu se mai salvează. Ultimul text scris rămâne în acest browser.",
           },
+          limitReached: "Notițele au atins limita de 20.000 de caractere.",
         },
         log: {
           empty: "Nu ați executat încă nicio interogare.",

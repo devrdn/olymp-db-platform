@@ -184,7 +184,7 @@ export function SidePanel({
           status line is partly `sr-only`, and a panel shorter than the
           field's minimum height has to scroll rather than spill. */}
       <TabsContent value="notes" className="relative overflow-y-auto">
-        <NotesPanel contestId={contestId} initial={initialNotes} dict={dict} locale={locale} />
+        <NotesPanel contestId={contestId} initial={initialNotes} dict={dict} />
       </TabsContent>
       <TabsContent value="leaderboard" fill={false} className="relative overflow-y-auto p-4">
         <LeaderboardTab contestId={contestId} active={tab === "leaderboard"} dict={dict} locale={locale} />
