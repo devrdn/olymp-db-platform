@@ -13,6 +13,7 @@ import type { Locale } from "@/lib/i18n/config";
 
 import type { ConsoleState } from "./actions";
 import { ConsoleEditor } from "./console";
+import { usePanelVisibility, useSchemaPanel } from "./panel-toggles";
 import { QueryLogPanel } from "./query-log-panel";
 import { ResultPanel } from "./result-panel";
 import { PaneHandle, SHARE_BOUNDS, WIDTH_BOUNDS, useConsoleRows, usePaneWidths } from "./pane-splitter";
@@ -151,6 +152,37 @@ export function Workspace({
   // that learns a new split should not have to migrate the widths.
   const { containerRef: columnRef, sizes: rows, commit: commitRows } = useConsoleRows(contestId);
 
+  // Which panels the participant has collapsed, from the toggles in the
+  // header above this (§8, panel-toggles.tsx). A collapsed pane is not
+  // rendered at all — neither it nor the divider beside it — so the tracks
+  // below are computed rather than declared: the grid has to stop reserving
+  // a column that has nothing in it, or the editor gains nothing by the
+  // panel leaving.
+  const { collapsed, expand } = usePanelVisibility();
+  // The header cannot see the schema, which arrives behind the Suspense
+  // boundary between the two; without this it would offer a control for a
+  // panel a closed-catalogue contest never draws.
+  useSchemaPanel(schema !== null);
+
+  const showSchema = schema !== null && !collapsed.schema;
+  const showSide = !collapsed.side;
+  const showBottom = !collapsed.bottom;
+
+  // From `narrow` (>=760px) the schema is not beside the console yet — it
+  // spans a row of its own underneath — so only the side panel has a track
+  // up here. From `wide` (>=1024px) all three are columns.
+  const narrowColumns = `minmax(0,1fr)${showSide ? " 1px var(--pane-side)" : ""}`;
+  const wideColumns = `${showSchema ? "var(--pane-schema) 1px " : ""}${narrowColumns}`;
+  // The console column's own rows: the editor, the edge, the panel below it
+  // — or the editor alone, taking the whole column.
+  const consoleRows = showBottom ? "minmax(0,var(--pane-editor)) auto minmax(0,1fr)" : "minmax(0,1fr)";
+
+  /** Shows a bottom tab, bringing the panel back if it was collapsed — a control for a panel nobody can see is a control for nothing. */
+  const showBottomTab = (tab: string) => {
+    setBottomTab(tab);
+    expand("bottom");
+  };
+
   return (
     <>
       {/* Print-only: on screen this is `display: none` (`hidden`), so it
@@ -208,6 +240,8 @@ export function Workspace({
             {
               "--pane-schema": `${widths.schema}rem`,
               "--pane-side": `${widths.side}rem`,
+              "--cols-narrow": narrowColumns,
+              "--cols-wide": wideColumns,
             } as React.CSSProperties
           }
           className={cn(
@@ -219,12 +253,17 @@ export function Workspace({
             // result table 302px between them, which is a result table that
             // scrolls sideways on every query. The schema stacks below the
             // console until there is room for it beside.
-            "narrow:grid-cols-[minmax(0,1fr)_1px_var(--pane-side)]",
-            schema !== null &&
-              "wide:grid-cols-[var(--pane-schema)_1px_minmax(0,1fr)_1px_var(--pane-side)]",
+            //
+            // Both templates are computed above rather than written here,
+            // because which tracks exist depends on what the participant has
+            // collapsed — and a track for a pane that is not rendered is a
+            // strip of empty screen. The class names stay literal (Tailwind
+            // reads the source, not the values) and only what the two custom
+            // properties hold moves.
+            "narrow:grid-cols-[var(--cols-narrow)] wide:grid-cols-[var(--cols-wide)]",
           )}
         >
-          {schema !== null ? (
+          {showSchema ? (
             // Source order is the wide layout's own order, so the tab order a
             // participant walks matches what they see. Below the breakpoint
             // that would put a reference panel above the thing they came to
@@ -258,7 +297,7 @@ export function Workspace({
               <MemoSchemaPanel schema={schema} dict={dict} />
             </div>
           ) : null}
-          {schema !== null ? (
+          {showSchema ? (
             <PaneHandle
               label={t.panes.schema}
               property="--pane-schema"
@@ -292,8 +331,8 @@ export function Workspace({
             the result table's own scroll box where it belongs. */}
           <div
             ref={columnRef}
-            style={{ "--pane-editor": `${rows.editor}%` } as React.CSSProperties}
-            className="grid min-h-0 grid-cols-1 grid-rows-[minmax(0,var(--pane-editor))_auto_minmax(0,1fr)] border-line max-wide:order-1 max-narrow:grid-rows-none max-narrow:border-b"
+            style={{ "--pane-editor": `${rows.editor}%`, "--console-rows": consoleRows } as React.CSSProperties}
+            className="grid min-h-0 grid-cols-1 grid-rows-[var(--console-rows)] border-line max-wide:order-1 max-narrow:grid-rows-none max-narrow:border-b"
           >
             {/* A flex column, not a block: the console's form claims the cell
               with flex-1, and flex-1 is inert inside a block parent — which
@@ -314,14 +353,14 @@ export function Workspace({
                   // typed, the other is a record of what already happened.
                   <>
                     <ToolbarButton
-                      active={bottomTab === "result"}
-                      onClick={() => setBottomTab("result")}
+                      active={showBottom && bottomTab === "result"}
+                      onClick={() => showBottomTab("result")}
                     >
                       {t.tabs.result}
                     </ToolbarButton>
                     <ToolbarButton
-                      active={bottomTab === "log"}
-                      onClick={() => setBottomTab("log")}
+                      active={showBottom && bottomTab === "log"}
+                      onClick={() => showBottomTab("log")}
                     >
                       {t.tabs.log}
                     </ToolbarButton>
@@ -339,7 +378,10 @@ export function Workspace({
                   // transition into actually being shown.
                   if (state.kind !== "idle") {
                     if (source) setResultFrom(source.tabTitle);
-                    setBottomTab("result");
+                    // And open the panel if it was collapsed: seeing what a
+                    // query did is the point of running it, which is the same
+                    // reasoning that switches the tab (§8).
+                    showBottomTab("result");
                   }
                 }}
               />
@@ -349,18 +391,20 @@ export function Workspace({
               nothing to drag past. Hidden below the breakpoint, where the
               column's height is its content and a share of it is meaningless
               — the panes there carry their own minimum and maximum instead. */}
-            <PaneHandle
-              label={t.panes.editor}
-              property="--pane-editor"
-              value={rows.editor}
-              axis="y"
-              unit="%"
-              bounds={SHARE_BOUNDS}
-              direction={1}
-              containerRef={columnRef}
-              onResize={(share) => commitRows({ editor: share })}
-              className="max-narrow:hidden"
-            />
+            {showBottom ? (
+              <PaneHandle
+                label={t.panes.editor}
+                property="--pane-editor"
+                value={rows.editor}
+                axis="y"
+                unit="%"
+                bounds={SHARE_BOUNDS}
+                direction={1}
+                containerRef={columnRef}
+                onResize={(share) => commitRows({ editor: share })}
+                className="max-narrow:hidden"
+              />
+            ) : null}
 
             {/* Both stay mounted: switching to the log and back must not lose
               the result that is on screen, nor the log's own scroll position.
@@ -380,74 +424,95 @@ export function Workspace({
               ("collapse to one track, keep every panel"): every panel is
               still there, in one track, in the same order. `svh` rather than
               `dvh` so a phone's disappearing URL bar does not resize the
-              box under a finger that is scrolling it. */}
-            <div className="flex min-h-0 flex-col max-narrow:max-h-[60svh]">
-              <div
-                className={cn(
-                  "min-h-0 flex-1 overflow-hidden",
-                  bottomTab === "result" ? "flex flex-col" : "hidden",
-                )}
-              >
-                <MemoResultPanel
-                  contestId={contestId}
-                  state={lastResult}
-                  sourceTitle={resultFrom}
-                  dict={dict}
-                />
+              box under a finger that is scrolling it.
+
+              Collapsed, this whole pane is absent rather than hidden (§8):
+              the result table and the log keep their scroll positions across
+              a tab switch, which is what the two classes above are for, but a
+              panel the participant has put away is not "the other tab" — it
+              is a thousand rows of table that no longer have to be
+              reconciled, and its state is exactly the state a fresh run is
+              about to replace anyway. */}
+            {showBottom ? (
+              <div className="flex min-h-0 flex-col max-narrow:max-h-[60svh]">
+                <div
+                  className={cn(
+                    "min-h-0 flex-1 overflow-hidden",
+                    bottomTab === "result" ? "flex flex-col" : "hidden",
+                  )}
+                >
+                  <MemoResultPanel
+                    contestId={contestId}
+                    state={lastResult}
+                    sourceTitle={resultFrom}
+                    dict={dict}
+                  />
+                </div>
+                <div
+                  className={cn(
+                    "min-h-0 flex-1 overflow-hidden",
+                    bottomTab === "log" ? "flex flex-col" : "hidden",
+                  )}
+                >
+                  <MemoQueryLogPanel
+                    contestId={contestId}
+                    initial={initialLog}
+                    active={bottomTab === "log"}
+                    locale={locale}
+                    dict={dict}
+                  />
+                </div>
               </div>
-              <div
-                className={cn(
-                  "min-h-0 flex-1 overflow-hidden",
-                  bottomTab === "log" ? "flex flex-col" : "hidden",
-                )}
-              >
-                <MemoQueryLogPanel
-                  contestId={contestId}
-                  initial={initialLog}
-                  active={bottomTab === "log"}
-                  locale={locale}
-                  dict={dict}
-                />
-              </div>
-            </div>
+            ) : null}
           </div>
 
-          <PaneHandle
-            label={t.panes.side}
-            property="--pane-side"
-            value={widths.side}
-            bounds={WIDTH_BOUNDS}
-            direction={-1}
-            containerRef={containerRef}
-            onResize={(rem) => commit({ ...widths, side: rem })}
-            // `order-2`, not the default: this handle is a child of the pane
-            // grid like any other, and a child with no order is placed ahead of
-            // every child that has one. See the schema pane's own comment for
-            // what that cost between 760px and 1024px.
-            className="max-narrow:hidden max-wide:order-2"
-          />
+          {showSide ? (
+            <PaneHandle
+              label={t.panes.side}
+              property="--pane-side"
+              value={widths.side}
+              bounds={WIDTH_BOUNDS}
+              direction={-1}
+              containerRef={containerRef}
+              onResize={(rem) => commit({ ...widths, side: rem })}
+              // `order-2`, not the default: this handle is a child of the pane
+              // grid like any other, and a child with no order is placed ahead of
+              // every child that has one. See the schema pane's own comment for
+              // what that cost between 760px and 1024px.
+              className="max-narrow:hidden max-wide:order-2"
+            />
+          ) : null}
 
           {/* The story/questions side: below the console column on a narrow
             screen rather than beside it — the same "collapse to one track,
             keep every panel" reset the rest of the direction uses
             (SPEC.md §5's own mobile reset) — one instance, one state, so a
             half-typed answer survives a resize the same way it survives a
-            tab switch. */}
-          <div className="min-h-0 max-wide:order-3 max-narrow:min-h-100 max-narrow:border-t max-narrow:border-line">
-            <MemoSidePanel
-              storyBody={storyBody}
-              storyUnavailable={storyUnavailable}
-              contestId={contestId}
-              questionEntries={questionEntries}
-              // The same object on every render, so the memoised panel is
-              // not disturbed by it.
-              initialNotes={workspace?.notes ?? null}
-              scoring={scoring}
-              icpcPenaltyMin={icpcPenaltyMin}
-              dict={dict}
-              locale={locale}
-            />
-          </div>
+            tab switch.
+
+            Collapsed, it leaves the tree with its divider, on the narrow
+            fallback as much as beside the console: the sections there are
+            the same elements in one track, so the toggle that hides a column
+            hides a section (§8). What that costs is the half-typed answer
+            this comment just promised — which is why nothing here collapses
+            a panel by itself. */}
+          {showSide ? (
+            <div className="min-h-0 max-wide:order-3 max-narrow:min-h-100 max-narrow:border-t max-narrow:border-line">
+              <MemoSidePanel
+                storyBody={storyBody}
+                storyUnavailable={storyUnavailable}
+                contestId={contestId}
+                questionEntries={questionEntries}
+                // The same object on every render, so the memoised panel is
+                // not disturbed by it.
+                initialNotes={workspace?.notes ?? null}
+                scoring={scoring}
+                icpcPenaltyMin={icpcPenaltyMin}
+                dict={dict}
+                locale={locale}
+              />
+            </div>
+          ) : null}
         </div>
       </div>
     </>
