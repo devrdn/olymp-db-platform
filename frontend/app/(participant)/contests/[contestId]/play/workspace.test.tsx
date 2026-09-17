@@ -735,6 +735,55 @@ describe("collapsing a panel", () => {
     expect(screen.getByRole("button", { name: p.bottom })).toHaveAttribute("aria-pressed", "true");
   });
 
+  /**
+   * The keys have to work where a participant actually is, which for two
+   * hours of an olympiad is the middle of a query. The editor's own keymap
+   * is the only place that can serve that: CodeMirror sees the keydown in
+   * its content first, and an unclaimed Ctrl+B in a contenteditable is the
+   * browser's "bold".
+   */
+  test("Ctrl+B with the caret in the editor collapses the schema panel and types nothing", async () => {
+    const { container } = showWithToggles();
+    await waitForRealEditor(container);
+    await userEvent.click(editor());
+    await userEvent.keyboard("SELECT 1");
+
+    await userEvent.keyboard("{Control>}b{/Control}");
+
+    expect(schemaPanel()).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: p.schema })).toHaveAttribute("aria-pressed", "false");
+    expect(editor()).toHaveTextContent("SELECT 1");
+  });
+
+  // Two things at once, and neither is visible in the rendered output.
+  //
+  // The editor claims the key — `preventDefault`, which is what stops a
+  // browser from reading Ctrl+B in a contenteditable as "bold" and what
+  // keeps ⌘B on a Mac from being confused with Ctrl+B, which CodeMirror
+  // binds there to moving back a character. And it is handled once: the
+  // window listener above stands aside for a key whose default is already
+  // prevented, instead of toggling the panel straight back.
+  test("the editor claims the combination, and nothing above it acts on the same press", async () => {
+    const { container } = showWithToggles();
+    await waitForRealEditor(container);
+    const content = container.querySelector(".cm-content")!;
+    // Read on the editor's own element rather than from what `fireEvent`
+    // reports: by the time the event has finished bubbling the window
+    // listener has had its turn too, and its own `preventDefault` would make
+    // an editor that bound nothing look exactly like one that did. A
+    // listener added here runs after CodeMirror's, which is registered on
+    // this same node when the view is built.
+    let claimedByTheEditor: boolean | null = null;
+    content.addEventListener("keydown", (event) => {
+      claimedByTheEditor = event.defaultPrevented;
+    });
+
+    fireEvent.keyDown(content, { key: "j", code: "KeyJ", ctrlKey: true });
+
+    expect(claimedByTheEditor).toBe(true);
+    expect(bottomPanel()).not.toBeInTheDocument();
+  });
+
   // Below 760px the panels are stacked sections rather than columns, and the
   // same toggles hide those sections — there is one tree, so a panel that
   // left the grid left the stack with it. What can still go wrong there is
