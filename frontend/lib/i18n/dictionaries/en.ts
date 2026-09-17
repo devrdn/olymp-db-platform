@@ -1114,6 +1114,22 @@ const en = {
           editor: "Height of the editor",
           detail: "Height of the result table",
         },
+        // The three panels a participant can collapse the way VS Code does
+        // (§8): the schema on the left, the questions on the right, the
+        // result below. The name is what a screen reader says and stays put
+        // while `aria-pressed` carries the state; the shortcut rides in the
+        // tooltip instead, so the keys are not read out after every panel.
+        panels: {
+          schema: "Schema panel",
+          side: "Questions panel",
+          bottom: "Result panel",
+          shortcut: "{name} ({keys})",
+          keys: {
+            schema: "Ctrl/⌘+B",
+            side: "Ctrl/⌘+Alt+B",
+            bottom: "Ctrl/⌘+J",
+          },
+        },
         // One row of the result, open in full under the table (§7). The
         // table clips a cell at its column's width, and a witness statement
         // is not something a `title` attribute is a way to read.

@@ -20,6 +20,7 @@ import type { Locale } from "@/lib/i18n/config";
 
 import { ContentLoadedProvider, ContentLoadedSignal } from "./content-loaded";
 import { playDictionary, type PlayDictionary } from "./dictionary";
+import { PanelVisibilityProvider } from "./panel-toggles";
 import { PlayHeader } from "./play-header";
 import { PrintView } from "./print-view";
 import type { QuestionEntry } from "./questions-panel";
@@ -152,21 +153,28 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
   // copy of the story `Workspace` carries would be clipped at one screen.
   return (
     <div className="flex min-h-0 flex-col print:contents narrow:h-[calc(100dvh-3rem-1px)]">
-      {/* The provider carries one fact across the Suspense boundary: the
+      {/* Two providers, both of them carrying something across the Suspense
+          boundary between the header and the workspace, in opposite
+          directions. `ContentLoadedProvider` carries one fact upward: the
           workspace's content reads succeeded, which under individual timing
-          means the participant's clock has started (content-loaded.tsx). */}
+          means the participant's clock has started (content-loaded.tsx).
+          `PanelVisibilityProvider` holds what the header's own toggles do to
+          the panels below them (§8, panel-toggles.tsx) — state that belongs
+          to neither sibling on its own. */}
       <ContentLoadedProvider>
-        <PlayHeader contestId={contestId} title={contest.title} waitingForStart={false} dict={dict} />
-        <Suspense fallback={<WorkspaceSkeleton dict={dict} />}>
-          <PlayPanels
-            contestId={contestId}
-            contestTitle={contest.title}
-            scoring={contest.scoring}
-            icpcPenaltyMin={contest.icpcPenaltyMin}
-            locale={locale}
-            dict={dict}
-          />
-        </Suspense>
+        <PanelVisibilityProvider contestId={contestId}>
+          <PlayHeader contestId={contestId} title={contest.title} waitingForStart={false} dict={dict} />
+          <Suspense fallback={<WorkspaceSkeleton dict={dict} />}>
+            <PlayPanels
+              contestId={contestId}
+              contestTitle={contest.title}
+              scoring={contest.scoring}
+              icpcPenaltyMin={contest.icpcPenaltyMin}
+              locale={locale}
+              dict={dict}
+            />
+          </Suspense>
+        </PanelVisibilityProvider>
       </ContentLoadedProvider>
     </div>
   );

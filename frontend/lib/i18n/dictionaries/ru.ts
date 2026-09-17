@@ -1013,6 +1013,17 @@ const ru = {
           editor: "Высота редактора",
           detail: "Высота таблицы результата",
         },
+        panels: {
+          schema: "Панель схемы",
+          side: "Панель вопросов",
+          bottom: "Панель результата",
+          shortcut: "{name} ({keys})",
+          keys: {
+            schema: "Ctrl/⌘+B",
+            side: "Ctrl/⌘+Alt+B",
+            bottom: "Ctrl/⌘+J",
+          },
+        },
         row: {
           heading: "Строка {n}",
           region: "Строка {n} результата",
