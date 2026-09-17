@@ -161,3 +161,66 @@ describe("what an error is about", () => {
     });
   });
 });
+
+describe("a request the page may not outlive", () => {
+  // The browser-side autosave's last save goes out as the page is being
+  // closed, which only a keepalive request survives; and it names the
+  // session cookie explicitly rather than relying on the default.
+  test("carries keepalive and credentials through to fetch", async () => {
+    let seen: RequestInit | undefined;
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      seen = init;
+      return new Response(null, { status: 204 });
+    };
+
+    await request("/x", { method: "PUT", body: {}, fetchImpl, keepalive: true, credentials: "same-origin" });
+
+    expect(seen?.keepalive).toBe(true);
+    expect(seen?.credentials).toBe("same-origin");
+  });
+
+  test("leaves both unset when the caller named neither", async () => {
+    let seen: RequestInit | undefined;
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      seen = init;
+      return new Response(null, { status: 204 });
+    };
+
+    await request("/x", { fetchImpl });
+
+    expect(seen).not.toHaveProperty("keepalive");
+    expect(seen).not.toHaveProperty("credentials");
+  });
+});
+
+describe("when to ask again", () => {
+  function refusedWith(retryAfter: string | null): typeof fetch {
+    return async () => {
+      const headers = new Headers({ "content-type": "application/json" });
+      if (retryAfter !== null) headers.set("Retry-After", retryAfter);
+      return new Response(JSON.stringify({ error: { code: "workspace_too_often", message: "slow down" } }), {
+        status: 429,
+        headers,
+      });
+    };
+  }
+
+  test("carries the seconds a 429 said to wait", async () => {
+    await expect(request("/x", { fetchImpl: refusedWith("17") })).rejects.toMatchObject({
+      code: "workspace_too_often",
+      retryAfterSeconds: 17,
+    });
+  });
+
+  test("leaves the wait undefined when the server named none", async () => {
+    await expect(request("/x", { fetchImpl: refusedWith(null) })).rejects.toMatchObject({
+      retryAfterSeconds: undefined,
+    });
+  });
+
+  test("ignores a wait that is not a whole number of seconds", async () => {
+    await expect(request("/x", { fetchImpl: refusedWith("soon") })).rejects.toMatchObject({
+      retryAfterSeconds: undefined,
+    });
+  });
+});
