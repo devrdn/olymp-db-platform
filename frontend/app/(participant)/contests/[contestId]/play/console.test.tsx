@@ -3,18 +3,59 @@ import { hydrateRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
+import type { WorkspaceTab } from "@/lib/api/workspace";
 import en from "@/lib/i18n/dictionaries/en";
 
 import { ConsoleEditor } from "./console";
+import { activeTabStorageKey } from "./use-sql-tabs";
 import type { ConsoleState } from "./actions";
+
+/** Every run reports which tab it came from; these fixtures only ever have one open. */
+const FROM_THE_ONE_TAB = { tabTitle: "Query 1" };
+
+/** The tabs the page read. One, which is what the server creates on a first visit. */
+const ONE_TAB: WorkspaceTab[] = [
+  { id: "t1", title: "Query 1", body: "", position: 0, updatedAt: "v0" },
+];
+
+const TWO_TABS: WorkspaceTab[] = [
+  ...ONE_TAB,
+  { id: "t2", title: "Suspects", body: "", position: 1, updatedAt: "v0" },
+];
+
+/** Every save and every tab request; the editor's own behaviour is what these tests are about. */
+beforeEach(() => {
+  window.localStorage.clear();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify({ updated_at: "v1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    ),
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 // The action is the boundary: what it returns is what this component has to
 // report through onResult, and what a caller does with it (ResultPanel,
 // the query log's own refresh) is tested where that lives.
 const answer = vi.hoisted(() => ({ current: { kind: "idle" } as ConsoleState }));
-const runQueryAction = vi.hoisted(() => vi.fn(async () => answer.current));
+/** What the browser's own FormData carried into the last run. */
+const submitted = vi.hoisted(() => ({ current: null as FormData | null }));
+const runQueryAction = vi.hoisted(() =>
+  vi.fn(async (_state: ConsoleState, form: FormData) => {
+    submitted.current = form;
+    return answer.current;
+  }),
+);
 
 vi.mock("./actions", () => ({ runQueryAction }));
 
@@ -38,7 +79,7 @@ async function waitForRealEditor(container: HTMLElement) {
 }
 
 async function run(onResult: (state: ConsoleState) => void) {
-  render(<ConsoleEditor contestId="c1" dict={en} onResult={onResult} />);
+  render(<ConsoleEditor contestId="c1" dict={en} tabs={ONE_TAB} onResult={onResult} />);
   await userEvent.click(screen.getByRole("textbox"));
   await userEvent.keyboard("SELECT 1");
   await userEvent.click(screen.getByRole("button", { name: en.participant.console.run }));
@@ -58,7 +99,7 @@ describe("the SQL editor", () => {
     // action settles on a later microtask than `userEvent.click` awaits.
     // Asserting immediately passed on an idle machine and failed under a
     // full-suite run, which is a flaky test rather than a caught bug.
-    await waitFor(() => expect(onResult).toHaveBeenLastCalledWith(answer.current));
+    await waitFor(() => expect(onResult).toHaveBeenLastCalledWith(answer.current, FROM_THE_ONE_TAB));
   });
 
   test("reports a refusal the same way it reports an answer", async () => {
@@ -66,7 +107,7 @@ describe("the SQL editor", () => {
     const onResult = vi.fn();
     await run(onResult);
 
-    await waitFor(() => expect(onResult).toHaveBeenLastCalledWith(answer.current));
+    await waitFor(() => expect(onResult).toHaveBeenLastCalledWith(answer.current, FROM_THE_ONE_TAB));
   });
 
   test("shows nothing about the previous result — that lives in ResultPanel now", async () => {
@@ -82,7 +123,7 @@ describe("the SQL editor", () => {
   test("disables the run button while a query is in flight", async () => {
     let resolve: (value: ConsoleState) => void = () => {};
     runQueryAction.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
-    render(<ConsoleEditor contestId="c1" dict={en} onResult={vi.fn()} />);
+    render(<ConsoleEditor contestId="c1" dict={en} tabs={ONE_TAB} onResult={vi.fn()} />);
     await userEvent.click(screen.getByRole("textbox"));
     await userEvent.keyboard("SELECT 1");
     await userEvent.click(screen.getByRole("button", { name: en.participant.console.run }));
@@ -105,7 +146,7 @@ describe("the SQL editor", () => {
   test("a run does not clear what the participant was typing, even on a refusal", async () => {
     answer.current = { kind: "refused", code: "query_syntax_error" };
     const onResult = vi.fn();
-    const { container } = render(<ConsoleEditor contestId="c1" dict={en} onResult={onResult} />);
+    const { container } = render(<ConsoleEditor contestId="c1" dict={en} tabs={ONE_TAB} onResult={onResult} />);
     await waitForRealEditor(container);
     const editor = screen.getByRole("textbox");
 
@@ -113,7 +154,7 @@ describe("the SQL editor", () => {
     await userEvent.keyboard("SELECT * FROM suspects WHERE");
     await userEvent.click(screen.getByRole("button", { name: en.participant.console.run }));
 
-    await waitFor(() => expect(onResult).toHaveBeenLastCalledWith(answer.current));
+    await waitFor(() => expect(onResult).toHaveBeenLastCalledWith(answer.current, FROM_THE_ONE_TAB));
     expect(editor).toHaveTextContent("SELECT * FROM suspects WHERE");
   });
 
@@ -126,14 +167,14 @@ describe("the SQL editor", () => {
   test("the hidden field FormData reads from is restored after a refusal, so a second run without retyping still sends the query", async () => {
     answer.current = { kind: "refused", code: "query_syntax_error" };
     const onResult = vi.fn();
-    const { container } = render(<ConsoleEditor contestId="c1" dict={en} onResult={onResult} />);
+    const { container } = render(<ConsoleEditor contestId="c1" dict={en} tabs={ONE_TAB} onResult={onResult} />);
     await waitForRealEditor(container);
 
     await userEvent.click(screen.getByRole("textbox"));
     await userEvent.keyboard("SELECT * FROM suspects WHERE");
     await userEvent.click(screen.getByRole("button", { name: en.participant.console.run }));
 
-    await waitFor(() => expect(onResult).toHaveBeenLastCalledWith(answer.current));
+    await waitFor(() => expect(onResult).toHaveBeenLastCalledWith(answer.current, FROM_THE_ONE_TAB));
     expect(mirror(container).value).toBe("SELECT * FROM suspects WHERE");
   });
 
@@ -149,7 +190,7 @@ describe("the SQL editor", () => {
   // document, it proves the restored text actually reaches what the
   // participant sees, not only the hidden field behind it.
   test("a browser-restored value on the server-rendered node survives hydration and reaches the visible editor", async () => {
-    const html = renderToString(<ConsoleEditor contestId="c1" dict={en} onResult={vi.fn()} />);
+    const html = renderToString(<ConsoleEditor contestId="c1" dict={en} tabs={ONE_TAB} onResult={vi.fn()} />);
     const container = document.createElement("div");
     container.innerHTML = html;
     document.body.appendChild(container);
@@ -162,7 +203,7 @@ describe("the SQL editor", () => {
 
     let root: ReturnType<typeof hydrateRoot> | undefined;
     act(() => {
-      root = hydrateRoot(container, <ConsoleEditor contestId="c1" dict={en} onResult={vi.fn()} />);
+      root = hydrateRoot(container, <ConsoleEditor contestId="c1" dict={en} tabs={ONE_TAB} onResult={vi.fn()} />);
     });
 
     expect((textarea as HTMLTextAreaElement).value).toBe("SELECT * FROM suspects");
@@ -188,19 +229,25 @@ describe("the SQL editor", () => {
   // actual commit, so no call while typing is direct proof no re-render
   // happened — not just that the DOM node survived, which reconciliation
   // would preserve either way.
+  // The one commit typing may now cause is the save status settling — the
+  // first keystroke after a pause turns "Saved" into "Saving…", once per
+  // pause rather than once per keystroke, exactly as the notes field does.
+  // Everything after that keystroke has to be free, which is what this
+  // measures: the first character is typed before the counter is cleared.
   test("typing still triggers no re-render of the editor", async () => {
     const onRender = vi.fn();
     const { container } = render(
       <Profiler id="editor" onRender={onRender}>
-        <ConsoleEditor contestId="c1" dict={en} onResult={vi.fn()} />
+        <ConsoleEditor contestId="c1" dict={en} tabs={ONE_TAB} onResult={vi.fn()} />
       </Profiler>,
     );
     await waitForRealEditor(container);
     const editor = screen.getByRole("textbox");
     await userEvent.click(editor);
-    onRender.mockClear(); // drop the mount commit, the fallback→CodeMirror swap and the click; only typing matters here
+    await userEvent.keyboard("S");
+    onRender.mockClear(); // drop the mount commit, the fallback→CodeMirror swap, the click and the save starting
 
-    await userEvent.keyboard("SELECT * FROM suspects WHERE motive IS NOT NULL");
+    await userEvent.keyboard("ELECT * FROM suspects WHERE motive IS NOT NULL");
 
     expect(onRender).not.toHaveBeenCalled();
   });
@@ -211,7 +258,7 @@ describe("the SQL editor", () => {
   // `code-editor.test.tsx` covers what the mark does once it gets there.
   test("a syntax error's position reaches the editor as a mark", async () => {
     answer.current = { kind: "refused", code: "query_parse_error", position: 12 };
-    const { container } = render(<ConsoleEditor contestId="c1" dict={en} onResult={vi.fn()} />);
+    const { container } = render(<ConsoleEditor contestId="c1" dict={en} tabs={ONE_TAB} onResult={vi.fn()} />);
     await waitForRealEditor(container);
 
     await userEvent.click(screen.getByRole("textbox"));
@@ -237,7 +284,7 @@ describe("⌘↵", () => {
       result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 },
     };
     const onResult = vi.fn();
-    const { container } = render(<ConsoleEditor contestId="c1" dict={en} onResult={onResult} />);
+    const { container } = render(<ConsoleEditor contestId="c1" dict={en} tabs={ONE_TAB} onResult={onResult} />);
     await waitForRealEditor(container);
 
     runQueryAction.mockClear();
@@ -256,8 +303,123 @@ describe("the SQL editor's one rule", () => {
   // A second statement is refused (`query_not_one_statement`), so the rule is
   // kept in sight on the toolbar rather than behind a "?".
   test("says one statement at a time, on screen", () => {
-    render(<ConsoleEditor contestId="c1" dict={en} onResult={vi.fn()} />);
+    render(<ConsoleEditor contestId="c1" dict={en} tabs={ONE_TAB} onResult={vi.fn()} />);
 
     expect(screen.getByText(en.participant.console.hint)).toBeVisible();
+  });
+});
+
+/**
+ * The tabs the editor holds (§5 of the workspace design). What the strip
+ * itself does is `sql-tabs.test.tsx`, and what keeps each tab's history is
+ * `code-editor.test.tsx`; this is the wiring between them and the form —
+ * above all which text a run actually sends.
+ */
+describe("the editor's tabs", () => {
+  const te = en.participant.play.workspace.editor;
+
+  function tab(name: string) {
+    return screen.getByRole("tab", { name });
+  }
+
+  async function typeInto(name: string, text: string) {
+    await userEvent.click(tab(name));
+    await userEvent.click(screen.getByRole("textbox", { name: en.participant.console.label }));
+    await userEvent.keyboard(text);
+  }
+
+  test("puts a strip of tabs above the editor, and the editor is the open tab's panel", async () => {
+    const { container } = render(
+      <ConsoleEditor contestId="c1" dict={en} tabs={TWO_TABS} onResult={vi.fn()} />,
+    );
+    await waitForRealEditor(container);
+
+    expect(screen.getByRole("tablist", { name: te.tablist })).toBeInTheDocument();
+    const panel = screen.getByRole("tabpanel");
+    expect(panel).toContainElement(screen.getByRole("textbox", { name: en.participant.console.label }));
+    expect(tab("Query 1").getAttribute("aria-controls")).toBe(panel.id);
+  });
+
+  test("runs the text of the tab that is open", async () => {
+    answer.current = { kind: "idle" };
+    const { container } = render(
+      <ConsoleEditor contestId="c1" dict={en} tabs={TWO_TABS} onResult={vi.fn()} />,
+    );
+    await waitForRealEditor(container);
+
+    await typeInto("Query 1", "SELECT * FROM suspects");
+    await typeInto("Suspects", "SELECT * FROM alibis");
+    await userEvent.click(screen.getByRole("button", { name: en.participant.console.run }));
+
+    await waitFor(() => expect(submitted.current?.get("sql")).toBe("SELECT * FROM alibis"));
+
+    await userEvent.click(tab("Query 1"));
+    await userEvent.click(screen.getByRole("button", { name: en.participant.console.run }));
+
+    await waitFor(() => expect(submitted.current?.get("sql")).toBe("SELECT * FROM suspects"));
+  });
+
+  test("keeps what was typed in a tab that is not the one showing", async () => {
+    const { container } = render(
+      <ConsoleEditor contestId="c1" dict={en} tabs={TWO_TABS} onResult={vi.fn()} />,
+    );
+    await waitForRealEditor(container);
+
+    await typeInto("Query 1", "SELECT * FROM suspects");
+    await userEvent.click(tab("Suspects"));
+    await userEvent.click(tab("Query 1"));
+
+    expect(screen.getByRole("textbox", { name: en.participant.console.label })).toHaveTextContent(
+      "SELECT * FROM suspects",
+    );
+  });
+
+  // The result stays on screen while another tab is typed in, so it has to
+  // say which tab it came from (§5).
+  test("says which tab a run came from", async () => {
+    answer.current = {
+      kind: "answer",
+      result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 },
+    };
+    const onResult = vi.fn();
+    const { container } = render(
+      <ConsoleEditor contestId="c1" dict={en} tabs={TWO_TABS} onResult={onResult} />,
+    );
+    await waitForRealEditor(container);
+
+    await typeInto("Suspects", "SELECT 1");
+    await userEvent.click(screen.getByRole("button", { name: en.participant.console.run }));
+
+    await waitFor(() =>
+      expect(onResult).toHaveBeenLastCalledWith(answer.current, { tabTitle: "Suspects" }),
+    );
+  });
+
+  test("opens the tab that was open last time", async () => {
+    window.localStorage.setItem(activeTabStorageKey("c1"), "t2");
+    const { container } = render(
+      <ConsoleEditor contestId="c1" dict={en} tabs={TWO_TABS} onResult={vi.fn()} />,
+    );
+    await waitForRealEditor(container);
+
+    expect(tab("Suspects")).toHaveAttribute("aria-selected", "true");
+  });
+
+  // Mirrors the notes panel: a workspace the page could not read does not
+  // take the editor away, it only stops promising to keep what is typed.
+  test("still edits, and says nothing is saved, when the workspace could not be read", async () => {
+    const { container } = render(
+      <ConsoleEditor contestId="c1" dict={en} tabs={null} onResult={vi.fn()} />,
+    );
+    await waitForRealEditor(container);
+
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+    expect(screen.getByTestId("sql-tabs-status")).toHaveTextContent(te.unsaved);
+
+    await userEvent.click(screen.getByRole("textbox", { name: en.participant.console.label }));
+    await userEvent.keyboard("SELECT 1");
+    await userEvent.click(screen.getByRole("button", { name: en.participant.console.run }));
+
+    await waitFor(() => expect(submitted.current?.get("sql")).toBe("SELECT 1"));
   });
 });

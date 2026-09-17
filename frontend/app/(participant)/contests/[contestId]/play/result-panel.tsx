@@ -22,14 +22,47 @@ import type { ConsoleState } from "./actions";
  * unmounting when "Query log" is the one showing, while `ConsoleEditor`
  * itself stays outside every tab.
  */
-export function ResultPanel({ state, dict }: { state: ConsoleState; dict: PlayDictionary }) {
-  const t = dict.participant.console;
-
+export function ResultPanel({
+  state,
+  sourceTitle = null,
+  dict,
+}: {
+  state: ConsoleState;
+  /**
+   * The name of the SQL tab the run came from, or null before anything has
+   * been run. The result stays while the participant types in another tab,
+   * so the answer on screen has to say what it is the answer to (§5).
+   */
+  sourceTitle?: string | null;
+  dict: PlayDictionary;
+}) {
   if (state.kind === "idle") {
     return (
       <p className="p-4 text-body text-ink-2">{dict.participant.play.workspace.resultEmpty}</p>
     );
   }
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {sourceTitle === null ? null : (
+        <p className="shrink-0 truncate border-b border-line px-3 py-1 text-small text-ink-3">
+          {dict.participant.play.workspace.resultFrom.replace("{tab}", sourceTitle)}
+        </p>
+      )}
+      <ResultBody state={state} dict={dict} />
+    </div>
+  );
+}
+
+/** The answer itself — a table, a count, or why the query did not run. */
+function ResultBody({
+  state,
+  dict,
+}: {
+  state: Exclude<ConsoleState, { kind: "idle" }>;
+  dict: PlayDictionary;
+}) {
+  const t = dict.participant.console;
+
   if (state.kind === "refused") {
     return (
       <div className="p-4">

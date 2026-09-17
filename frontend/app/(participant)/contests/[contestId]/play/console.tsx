@@ -1,13 +1,16 @@
 "use client";
 
-import { useActionState, useEffect, useLayoutEffect, useRef } from "react";
+import { useActionState, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
-import { CodeEditor } from "@/components/product/code-editor";
+import { CodeEditor, type CodeEditorHandle } from "@/components/product/code-editor";
 import { buttonVariants } from "@/components/ui/button";
+import type { WorkspaceTab } from "@/lib/api/workspace";
 import type { PlayDictionary } from "./dictionary";
 import { cn } from "@/lib/utils";
 
 import { runQueryAction, type ConsoleState } from "./actions";
+import { SqlTabStatus, SqlTabStrip } from "./sql-tabs";
+import { useSqlTabs } from "./use-sql-tabs";
 
 /**
  * The SQL editor — the thing a participant types in, always visible, never
@@ -25,15 +28,35 @@ import { runQueryAction, type ConsoleState } from "./actions";
  * The button is disabled while a query is in flight, and that is not polish:
  * a participant may have one query running at a time, so a second press earns
  * them a refusal they did nothing to deserve and cannot interpret.
+ *
+ * # The tabs
+ *
+ * Above the editor is a strip of tabs, one document each, saved on the
+ * server as the participant types (§5 of the workspace design). This
+ * component is where the three parts meet: `use-sql-tabs.ts` holds what the
+ * tabs are and saves them, `sql-tabs.tsx` draws the strip, and `CodeEditor`
+ * shows whichever document the strip says is open.
+ *
+ * Which of them a run uses is the whole point of the arrangement: the hidden
+ * `sql` field below always carries the open tab's text, so "Run" and ⌘↵ send
+ * what is on screen — and, because a result outlives the tab it came from,
+ * the title of that tab goes out with the result through `onResult`.
  */
 export function ConsoleEditor({
   contestId,
   dict,
+  tabs: initialTabs,
   onResult,
   actions,
 }: {
   contestId: string;
   dict: PlayDictionary;
+  /**
+   * The participant's SQL tabs as the page read them, or null when that read
+   * failed — the editor then works on one tab of its own and says that
+   * nothing here is saved, the way the notes field does.
+   */
+  tabs: WorkspaceTab[] | null;
   /**
    * Controls the surrounding screen wants at the right end of the console's
    * toolbar — the query log and the CSV download. They belong to the
@@ -48,15 +71,22 @@ export function ConsoleEditor({
    * pending), so this effect fires exactly once per run rather than once per
    * render.
    */
-  onResult: (state: ConsoleState) => void;
+  onResult: (state: ConsoleState, source?: RunSource) => void;
 }) {
   const t = dict.participant.console;
+  const te = dict.participant.play.workspace.editor;
   const [state, run, running] = useActionState<ConsoleState, FormData>(runQueryAction, {
     kind: "idle",
   });
+  /**
+   * The name of the tab the running query was started from — read as the run
+   * starts, because a participant reading an answer often goes on typing in
+   * another tab, and the result belongs to the tab it was run from.
+   */
+  const [runFrom, setRunFrom] = useState<string | null>(null);
 
   useEffect(() => {
-    onResult(state);
+    onResult(state, runFrom === null ? undefined : { tabTitle: runFrom });
     // onResult is an inline closure the workspace passes down, recreated
     // every one of its own renders — not actually stable, whatever an
     // earlier version of this comment claimed (finding 7). It does not need
@@ -83,6 +113,45 @@ export function ConsoleEditor({
   const formRef = useRef<HTMLFormElement>(null);
   const mirrorRef = useRef<HTMLTextAreaElement>(null);
   const lastTyped = useRef("");
+  const editorRef = useRef<CodeEditorHandle>(null);
+  /** The tab the editor is showing, for the callbacks that run outside a render. */
+  const openRef = useRef<string | null>(null);
+  const panelId = useId();
+  const tabPrefix = useId();
+
+  const tabs = useSqlTabs({
+    contestId,
+    initial: initialTabs,
+    localTitle: te.local,
+    confirmClose: (title) => window.confirm(te.closeConfirm.replace("{tab}", title)),
+    // A draft that beat the server's copy: it belongs in that tab's
+    // document, and — when it is the tab on screen — in the field a run is
+    // built from.
+    onRestore: (id, text) => {
+      editorRef.current?.setDocumentValue(id, text);
+      if (id !== openRef.current) return;
+      lastTyped.current = text;
+      if (mirrorRef.current) mirrorRef.current.value = text;
+    },
+    onDrop: (id) => editorRef.current?.dropDocument(id),
+  });
+
+  // What a run sends, kept in step with the tab that is open. Skipped on the
+  // first run of this effect: what the mirror holds then is the
+  // server-rendered text, or whatever the browser restored over it across a
+  // soft reload, and neither is this effect's to overwrite.
+  const { activeId, textOf } = tabs;
+  useLayoutEffect(() => {
+    if (openRef.current === null) {
+      openRef.current = activeId;
+      return;
+    }
+    if (openRef.current === activeId) return;
+    openRef.current = activeId;
+    const text = textOf(activeId);
+    lastTyped.current = text;
+    if (mirrorRef.current) mirrorRef.current.value = text;
+  }, [activeId, textOf]);
 
   useLayoutEffect(() => {
     const el = mirrorRef.current;
@@ -101,7 +170,19 @@ export function ConsoleEditor({
   });
 
   return (
-    <form ref={formRef} action={run} className="flex min-h-0 flex-1 flex-col">
+    <form
+      ref={formRef}
+      action={run}
+      // Read as the run starts rather than when it settles: a participant
+      // reading an answer often goes on typing in another tab, and the
+      // result belongs to the tab it was run from. The submit event is where
+      // "now" is — React calls this before the action itself, and ⌘↵ inside
+      // the editor arrives here too (`requestSubmit`).
+      onSubmit={() => {
+        setRunFrom(tabs.tabs.find((tab) => tab.id === tabs.activeId)?.title ?? "");
+      }}
+      className="flex min-h-0 flex-1 flex-col"
+    >
       <input type="hidden" name="contestId" value={contestId} />
       {/*
        * The real form field: what the browser restores across a soft reload
@@ -119,7 +200,11 @@ export function ConsoleEditor({
       <textarea
         ref={mirrorRef}
         name="sql"
-        defaultValue=""
+        // The first tab's text, which is what the strip opens with on the
+        // server and during hydration; a tab remembered from last time is
+        // swapped in by the effect above, once the browser's own storage has
+        // been read.
+        defaultValue={initialTabs?.[0]?.body ?? ""}
         aria-hidden="true"
         tabIndex={-1}
         className="sr-only"
@@ -151,16 +236,49 @@ export function ConsoleEditor({
         {actions}
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col">
+      <SqlTabStrip
+        tabs={tabs.tabs}
+        activeId={tabs.activeId}
+        idPrefix={tabPrefix}
+        panelId={panelId}
+        closed={tabs.closed !== null}
+        dict={dict}
+        status={
+          <SqlTabStatus
+            engine={tabs.activeEngine}
+            error={tabs.error}
+            stored={tabs.stored}
+            dict={dict}
+          />
+        }
+        onSelect={tabs.select}
+        onCreate={tabs.create}
+        onRename={tabs.rename}
+        onClose={tabs.close}
+        onMove={tabs.move}
+      />
+
+      <div
+        id={panelId}
+        role="tabpanel"
+        aria-labelledby={`${tabPrefix}${tabs.activeId}`}
+        className="flex min-h-0 flex-1 flex-col"
+      >
         <CodeEditor
+          ref={editorRef}
           className="min-h-0 flex-1"
           onSubmit={() => formRef.current?.requestSubmit()}
           ariaLabel={t.label}
           placeholder={t.placeholder}
+          documentId={tabs.activeId}
+          getDocumentValue={tabs.textOf}
           getInitialValue={() => mirrorRef.current?.value ?? ""}
           onChange={(text) => {
             lastTyped.current = text;
             if (mirrorRef.current) mirrorRef.current.value = text;
+            // Outside React's own data flow on purpose: this is the typing
+            // path, and it must not render anything (CodeEditor's contract).
+            tabs.edited(openRef.current ?? tabs.activeId, text);
           }}
           errorPosition={state.kind === "refused" ? state.position : undefined}
           // A fresh `state` object every settled run, even a refusal at the
@@ -174,3 +292,6 @@ export function ConsoleEditor({
     </form>
   );
 }
+
+/** Which tab a completed run was started from, for the result's own heading. */
+export type RunSource = { tabTitle: string };
