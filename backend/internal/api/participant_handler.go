@@ -92,7 +92,7 @@ type QueryHistory interface {
 	// for a row that does not exist or belongs to another registration,
 	// identically: see queryrunner.HistoryEntry.ID's own doc for what entryID
 	// actually is and why the two cases cannot be told apart here.
-	Entry(ctx context.Context, registrationID, entryID uuid.UUID) (queryrunner.HistoryEntry, error)
+	Entry(ctx context.Context, registrationID uuid.UUID, entryID int64) (queryrunner.HistoryEntry, error)
 	// ExportHistory streams every one of that registration's rows, oldest
 	// first, for the CSV download beside the paged read. Two methods on one
 	// interface rather than two interfaces, because they are two reads of one
@@ -416,8 +416,37 @@ func (h *ParticipantHandler) questions(w http.ResponseWriter, r *http.Request) {
 
 // logEntryIDParam names one query log entry in the URL — see
 // queryrunner.HistoryEntry.ID for what the identifier actually is
-// (query_log.request_id) and why reusing it needs no migration of its own.
+// (query_log's own bigserial id) and why it is that column rather than a
+// uuid one.
 const logEntryIDParam = "entryId"
+
+// parseLogEntryID reads entryId as the positive, in-range integer it has to
+// be to name a query_log.id at all — never a uuid.Parse the way tabID and
+// questionID work, because the identifier itself is a different shape here
+// (queryrunner.HistoryEntry.ID's own doc).
+//
+// Rejected explicitly rather than left to strconv.ParseInt's own leniency:
+// a leading '+' or '-' is not a digit, so the character scan below refuses
+// both before ParseInt ever sees them; "0" and a negative parse are refused
+// by the id <= 0 check; and anything wider than an int64 — query_log.id's
+// own column type — is refused by ParseInt's own range error from the
+// bitSize argument. Every one of those is a 400, not a 404: a caller must
+// not learn "no such row" from a string that could never have named one.
+func parseLogEntryID(raw string) (int64, bool) {
+	if raw == "" {
+		return 0, false
+	}
+	for _, c := range raw {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
+}
 
 // queryLogEntryResponse is one row of the participant's own query log —
 // never another participant's, and nothing this endpoint could leak beyond
@@ -431,8 +460,13 @@ const logEntryIDParam = "entryId"
 // it for the single-entry response without a second schema.
 type queryLogEntryResponse struct {
 	// ID is what a client names back at GET .../play/log/{entryId} to open
-	// this row in full.
-	ID  string `json:"id"`
+	// this row in full — query_log's own bigserial id, sent as a JSON
+	// number. Safe as one: int64 can outrange a float64's 53 bits of
+	// integer precision in principle, but this column's real values are
+	// nowhere near it (a contest running at the installation's default rate
+	// budget for a decade would not reach 2^53), so this is the domain's
+	// own id used as a JSON number, not a value laundered through one.
+	ID  int64  `json:"id"`
 	SQL string `json:"sql"`
 	// SQLTruncated says sql is the beginning of the statement and not the
 	// whole of it — the page is bounded in bytes as well as in rows
@@ -457,7 +491,7 @@ type queryLogEntryResponse struct {
 // withhold the same ones (participantSafeError).
 func toQueryLogEntryResponse(entry queryrunner.HistoryEntry) queryLogEntryResponse {
 	return queryLogEntryResponse{
-		ID:           entry.ID.String(),
+		ID:           entry.ID,
 		SQL:          entry.SQL,
 		SQLTruncated: entry.SQLTruncated,
 		Status:       string(entry.Status),
@@ -517,8 +551,8 @@ func (h *ParticipantHandler) queryLogEntry(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	entryID, err := uuid.Parse(chi.URLParam(r, logEntryIDParam))
-	if err != nil {
+	entryID, ok := parseLogEntryID(chi.URLParam(r, logEntryIDParam))
+	if !ok {
 		httpx.Error(w, r, http.StatusBadRequest, codeInvalidQueryLogEntryID, "Query log entry identifier is not valid")
 		return
 	}
