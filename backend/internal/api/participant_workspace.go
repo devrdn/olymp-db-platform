@@ -44,6 +44,13 @@ type Workspaces interface {
 	ReorderTabs(ctx context.Context, session workspace.Session, ids []uuid.UUID) error
 }
 
+// versionLayout formats a workspace document's updated_at. Unlike the rest of
+// the API it keeps the fractional seconds: the interface compares this value
+// for equality to tell whether a local draft was written against the copy
+// the server still holds, and two saves within one second must not look
+// like the same version.
+const versionLayout = time.RFC3339Nano
+
 // tabIDParam names the tab in the URL.
 const tabIDParam = "tabId"
 
@@ -131,7 +138,7 @@ func toWorkspaceTabResponse(tab workspace.Tab) workspaceTabResponse {
 		Title:     tab.Title,
 		Body:      tab.Body,
 		Position:  tab.Position,
-		UpdatedAt: tab.UpdatedAt.UTC().Format(timeLayout),
+		UpdatedAt: tab.UpdatedAt.UTC().Format(versionLayout),
 	}
 }
 
@@ -147,7 +154,7 @@ type updatedResponse struct {
 }
 
 func updated(at time.Time) updatedResponse {
-	return updatedResponse{UpdatedAt: at.UTC().Format(timeLayout)}
+	return updatedResponse{UpdatedAt: at.UTC().Format(versionLayout)}
 }
 
 // getWorkspace serves GET .../play/workspace, creating the first tab when the
@@ -168,7 +175,7 @@ func (h *ParticipantHandler) getWorkspace(w http.ResponseWriter, r *http.Request
 		Tabs:  make([]workspaceTabResponse, 0, len(found.Tabs)),
 	}
 	if found.Notes.UpdatedAt != nil {
-		at := found.Notes.UpdatedAt.UTC().Format(timeLayout)
+		at := found.Notes.UpdatedAt.UTC().Format(versionLayout)
 		answer.Notes.UpdatedAt = &at
 	}
 	for _, tab := range found.Tabs {

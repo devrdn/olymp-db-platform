@@ -39,6 +39,13 @@ func NewRepository() *Repository {
 	}
 }
 
+// SetNow sets the time every later write is stamped with.
+func (m *Repository) SetNow(now time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.now = now
+}
+
 // Load implements workspace.Repository.
 func (m *Repository) Load(_ context.Context, registration uuid.UUID, firstTitle string) (workspace.Notes, []workspace.Tab, error) {
 	m.mu.Lock()

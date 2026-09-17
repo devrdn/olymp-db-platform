@@ -1415,7 +1415,7 @@
                 "workspace"
               ]
             },
-            "description": "Notes and tabs in order. A participant with no tab yet gets one created, named in the request's language (`?lang=` or `Accept-Language`, within the contest's languages): \"Query 1\", \"Запрос 1\", \"Interogare 1\". `notes.updated_at` is null until the notes are first saved.\n\nSpends the participant's read budget (`429 query_too_often`), not the write budget.\n\nResponses: 200 · 400 `invalid_contest_id` · 403 · 409 · 429"
+            "description": "Notes and tabs in order. A participant with no tab yet gets one created, named in the request's language (`?lang=` or `Accept-Language`, within the contest's languages): \"Query 1\", \"Запрос 1\", \"Interogare 1\". `notes.updated_at` is null until the notes are first saved. Every `updated_at` on the workspace routes is RFC 3339 with the fractional seconds the database keeps (e.g. `2026-09-17T10:00:00.123456Z`): clients compare it for equality as the document's version.\n\nSpends the participant's read budget (`429 query_too_often`), not the write budget.\n\nResponses: 200 · 400 `invalid_contest_id` · 403 · 409 · 429"
           },
           "response": [],
           "event": [
