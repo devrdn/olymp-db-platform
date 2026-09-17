@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { toCsv } from "@/lib/format/csv";
@@ -108,6 +108,26 @@ export function RowDetail({
 }) {
   const t = dict.participant.play.workspace.row;
   const [notice, setNotice] = useState<Notice>(null);
+  const regionRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Takes the keyboard when the row opens.
+   *
+   * Without it, opening a row is silent for anybody not looking at the
+   * screen: `aria-selected` on a `tr` of an ordinary table is not announced,
+   * and a panel appearing somewhere below the table announces nothing of
+   * itself either. Moving the focus here is the announcement — the region's
+   * own name, "Row 3 of the result", is what gets read — and it is also what
+   * puts "Copy row", "Close" and the arrows where the participant now is.
+   *
+   * On mount, which is exactly when the row opens: the panel is not rendered
+   * at all while nothing is open, and arrowing to a neighbouring row keeps
+   * this same region. Closing hands the focus back to the row it came from
+   * (`SelectableRows.close`), so the round trip ends where it started.
+   */
+  useEffect(() => {
+    regionRef.current?.focus({ preventScroll: true });
+  }, []);
 
   // A notice belongs to the row it was shown on: arrowing to the next row
   // must not leave "Copied" standing over a value nobody copied. Cleared
@@ -128,8 +148,13 @@ export function RowDetail({
 
   return (
     <div
+      ref={regionRef}
       role="region"
       aria-label={t.region.replace("{n}", number)}
+      // Focusable by script, never a stop in the tab order: the participant
+      // tabs through the table and this panel's own controls, not through
+      // the box around them. See the effect above for what focuses it.
+      tabIndex={-1}
       onKeyDown={onKeyDown}
       className={cn("flex min-h-0 flex-col overflow-hidden", className)}
     >

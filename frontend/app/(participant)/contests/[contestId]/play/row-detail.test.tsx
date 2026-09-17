@@ -96,6 +96,19 @@ describe("the open row", () => {
     expect(screen.getByText(t.heading.replace("{n}", "42"))).toBeInTheDocument();
   });
 
+  // The panel is rendered only while a row is open, so opening one is this
+  // component mounting. Nothing else on the screen says it happened: a `tr`
+  // marked `aria-selected` in an ordinary table is not announced, and
+  // neither is a panel that simply appears. The focus landing on the region
+  // reads its name, which is the row number.
+  test("takes the keyboard when it opens, without joining the tab order", () => {
+    show({ index: 2 });
+
+    const region = screen.getByRole("region", { name: t.region.replace("{n}", "3") });
+    expect(region).toHaveFocus();
+    expect(region).toHaveAttribute("tabindex", "-1");
+  });
+
   test("closes on the button", async () => {
     const user = userEvent.setup();
     const { onClose } = show();
