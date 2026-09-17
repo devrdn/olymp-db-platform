@@ -562,4 +562,24 @@ describe("opening one row of the result", () => {
       screen.queryByRole("separator", { name: en.participant.play.workspace.panes.detail }),
     ).not.toBeInTheDocument();
   });
+
+  // The bottom panel is bounded by a `max-height` on the narrow fallback
+  // rather than given a height, and a percentage row track against an
+  // indefinite height resolves as `auto` — the whole answer at its natural
+  // height with the open row pushed out of the clipped box under it. jsdom
+  // has no media queries, so what is held here is that the fallback track and
+  // the hidden handle are still declared.
+  test("states a height rather than a share where the pane has no height of its own", async () => {
+    const user = userEvent.setup();
+    show(answer(5));
+
+    await user.click(rowOf(2));
+    const split = screen.getByRole("table").closest("[style*='--pane-detail']") as HTMLElement;
+
+    expect(split.className).toContain("grid-rows-[minmax(0,var(--pane-detail))_auto_minmax(0,1fr)]");
+    expect(split.className).toContain("max-narrow:grid-rows-[minmax(0,20rem)_auto_auto]");
+    expect(
+      screen.getByRole("separator", { name: en.participant.play.workspace.panes.detail }).className,
+    ).toMatch(/(^|\s)max-narrow:hidden(\s|$)/);
+  });
 });
