@@ -1,11 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, test, vi, type Mock } from "vitest";
+import { afterEach, describe, expect, test, vi, type Mock } from "vitest";
 
 import { MAX_TABS } from "@/lib/api/workspace";
 import en from "@/lib/i18n/dictionaries/en";
 
-import { SqlTabStrip, type SqlTabView } from "./sql-tabs";
+import { SqlTabStatus, SqlTabStrip, type SqlTabView } from "./sql-tabs";
 
 const t = en.participant.play.workspace.editor;
 
@@ -24,7 +24,12 @@ type Handlers = {
 };
 
 function show(
-  overrides: { tabs?: SqlTabView[]; activeId?: string; closed?: boolean } = {},
+  overrides: {
+    tabs?: SqlTabView[];
+    activeId?: string;
+    closed?: boolean;
+    status?: React.ReactNode;
+  } = {},
 ): Handlers {
   const handlers: Handlers = {
     onSelect: vi.fn<(id: string) => void>(),
@@ -40,6 +45,7 @@ function show(
       idPrefix="sqltab-"
       panelId="editor-panel"
       closed={overrides.closed ?? false}
+      status={overrides.status}
       dict={en}
       {...handlers}
     />,
@@ -50,6 +56,43 @@ function show(
 function tab(name: string) {
   return screen.getByRole("tab", { name });
 }
+
+/**
+ * Which half of a tab the pointer is over decides which side of it a
+ * dragged tab lands on, and jsdom lays nothing out — every rectangle it
+ * reports is empty. So the tab being dropped on is given one.
+ */
+function measured(name: string): HTMLElement {
+  const element = tab(name);
+  vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+    left: 100,
+    right: 180,
+    width: 80,
+    top: 0,
+    bottom: 30,
+    height: 30,
+    x: 100,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect);
+  return element;
+}
+
+const LEFT_HALF = 120;
+const RIGHT_HALF = 160;
+
+/**
+ * jsdom has no `DragEvent`, and `fireEvent`'s own drag events therefore
+ * carry no pointer position — which is the one thing these need. A
+ * `MouseEvent` of the same name is what React's own listener sees anyway.
+ */
+function dragTo(element: HTMLElement, type: "dragover" | "drop", clientX: number) {
+  element.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }));
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("the SQL tab strip", () => {
   test("is a tablist with one tab per document, the active one selected", () => {
@@ -114,6 +157,18 @@ describe("the SQL tab strip", () => {
     await userEvent.click(screen.getByRole("button", { name: t.newTab }));
 
     expect(onCreate).toHaveBeenCalled();
+  });
+
+  // A long sentence — "The contest is over, so this tab is no longer
+  // saved…" — must give way to the tabs rather than squeeze them. jsdom
+  // lays nothing out, so what is checkable is the rule itself.
+  test("lets the status line give way to the tabs", () => {
+    show({ status: <SqlTabStatus engine={null} error={null} stored={false} dict={en} /> });
+
+    const line = screen.getByTestId("sql-tabs-status");
+    expect(line.className).toContain("min-w-0");
+    expect(line.className).toMatch(/max-w-/);
+    expect(line.className).not.toContain("shrink-0");
   });
 
   test("refuses an eleventh tab, and says why", () => {
@@ -197,14 +252,56 @@ describe("renaming a tab", () => {
 });
 
 describe("reordering the tabs", () => {
-  test("drops a dragged tab where it was dropped", () => {
+  test("drops a dragged tab on the side of the target the pointer is on", () => {
     const { onMove } = show();
+    const target = measured("Query 1");
 
     fireEvent.dragStart(tab("Alibis"));
-    fireEvent.dragOver(tab("Query 1"));
-    fireEvent.drop(tab("Query 1"));
+    dragTo(target, "dragover", LEFT_HALF);
+    dragTo(target, "drop", LEFT_HALF);
 
     expect(onMove).toHaveBeenCalledWith("t3", 0);
+  });
+
+  // Dragging rightwards is where an index taken straight from the target is
+  // wrong: the dragged tab has left its own place by the time it is put
+  // back, so "the third tab" is not the third position any more.
+  test("drops a tab dragged rightwards where the pointer says, on either side of the target", () => {
+    const first = show();
+    let target = measured("Alibis");
+
+    fireEvent.dragStart(tab("Query 1"));
+    dragTo(target, "dragover", RIGHT_HALF);
+    dragTo(target, "drop", RIGHT_HALF);
+    // Past the middle of the last tab: Query 1 goes after it, ending the
+    // strip — Suspects, Alibis, Query 1.
+    expect(first.onMove).toHaveBeenCalledWith("t1", 2);
+
+    cleanup();
+    const second = show();
+    target = measured("Alibis");
+
+    fireEvent.dragStart(tab("Query 1"));
+    dragTo(target, "dragover", LEFT_HALF);
+    dragTo(target, "drop", LEFT_HALF);
+    // Before the middle: Query 1 takes Alibis' place and Alibis moves on —
+    // Suspects, Query 1, Alibis.
+    expect(second.onMove).toHaveBeenCalledWith("t1", 1);
+  });
+
+  test("shows which side of a tab the drop will land on", () => {
+    show();
+    const target = measured("Alibis");
+
+    fireEvent.dragStart(tab("Query 1"));
+    act(() => dragTo(target, "dragover", LEFT_HALF));
+    expect(target).toHaveAttribute("data-drop", "before");
+
+    act(() => dragTo(target, "dragover", RIGHT_HALF));
+    expect(target).toHaveAttribute("data-drop", "after");
+
+    fireEvent.dragEnd(tab("Query 1"));
+    expect(target).not.toHaveAttribute("data-drop");
   });
 
   // The same reordering without a pointer: a strip that can only be arranged

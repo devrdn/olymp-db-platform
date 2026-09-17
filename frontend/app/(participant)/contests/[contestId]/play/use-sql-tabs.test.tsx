@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi, type Mock } from "vitest";
 
-import type { WorkspaceTab } from "@/lib/api/workspace";
+import { TAB_BODY_MAX_BYTES, type WorkspaceTab } from "@/lib/api/workspace";
 import en from "@/lib/i18n/dictionaries/en";
 
 import { SqlTabStatus, SqlTabStrip } from "./sql-tabs";
@@ -97,6 +97,31 @@ function type(text: string) {
 
 function tab(name: string) {
   return screen.getByRole("tab", { name });
+}
+
+/**
+ * Drags one tab onto the left half of another. jsdom lays nothing out and
+ * has no `DragEvent`, so the target is given a rectangle and the pointer
+ * arrives on a `MouseEvent` of the same name — see `sql-tabs.test.tsx`,
+ * which covers what the halves mean.
+ */
+function dragOnto(dragged: string, target: string) {
+  const onto = tab(target);
+  vi.spyOn(onto, "getBoundingClientRect").mockReturnValue({
+    left: 100,
+    right: 180,
+    width: 80,
+    top: 0,
+    bottom: 30,
+    height: 30,
+    x: 100,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect);
+  fireEvent.dragStart(tab(dragged));
+  for (const type of ["dragover", "drop"] as const) {
+    onto.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: 120 }));
+  }
 }
 
 async function wait(ms: number) {
@@ -251,6 +276,41 @@ describe("the participant's SQL tabs", () => {
     expect(status()).toBe(en.errors.workspace_title_invalid);
     expect(tab("Witnesses")).toBeInTheDocument();
   });
+
+  // A refusal is news for as long as it is true. Once a save has landed
+  // again the workspace is plainly answering, and a sentence about a name
+  // refused a minute ago is only in the way of the save status.
+  test("take a refusal back once a save lands again", async () => {
+    show();
+    answer = () => refusal(400, "workspace_title_invalid");
+
+    fireEvent.doubleClick(tab("Suspects"));
+    const field = screen.getByRole("textbox", { name: t.rename.replace("{tab}", "Suspects") });
+    fireEvent.change(field, { target: { value: "" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    await settle();
+    expect(status()).toBe(en.errors.workspace_title_invalid);
+
+    answer = served;
+    type("SELECT * FROM alibis");
+    await wait(1500);
+
+    expect(status()).toBe(t.status.saved);
+  });
+
+  // The server refuses a tab longer than a query may be
+  // (`workspace_tab_too_long`, 64 KiB). Sending it to hear that costs the
+  // participant one of their sixty writes a minute and 64 KiB of upload on a
+  // classroom connection, and the answer is knowable here.
+  test("refuse a body longer than a query may be without sending it", async () => {
+    show();
+
+    type("x".repeat(TAB_BODY_MAX_BYTES + 1));
+    await wait(30_000);
+
+    expect(requests("PATCH")).toHaveLength(0);
+    expect(status()).toBe(en.errors.workspace_tab_too_long);
+  });
 });
 
 describe("closing a tab", () => {
@@ -306,8 +366,7 @@ describe("reordering the tabs", () => {
   test("sends the new order", async () => {
     show();
 
-    fireEvent.dragStart(tab("Suspects"));
-    fireEvent.drop(tab("Query 1"));
+    dragOnto("Suspects", "Query 1");
     await settle();
 
     const order = requests("PUT");
@@ -323,8 +382,7 @@ describe("reordering the tabs", () => {
     show();
     answer = () => refusal(409, "workspace_order_mismatch");
 
-    fireEvent.dragStart(tab("Suspects"));
-    fireEvent.drop(tab("Query 1"));
+    dragOnto("Suspects", "Query 1");
     await settle();
 
     expect(screen.getAllByRole("tab").map((el) => el.getAttribute("aria-label"))).toEqual([

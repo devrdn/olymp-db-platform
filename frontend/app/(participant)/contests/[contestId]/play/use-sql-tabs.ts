@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { ApiError } from "@/lib/api/client";
 import {
   MAX_TABS,
+  TAB_BODY_MAX_BYTES,
   createTab,
   deleteTab,
   reorderTabs,
@@ -206,7 +207,15 @@ export function useSqlTabs({
         initialText: tab.body,
         initialVersion: tab.updatedAt,
         save: (text, options) =>
-          updateTab(contestId, tab.id, { body: text }, options).then((answer) => answer.updatedAt),
+          // Refused here rather than by the server: the answer is knowable
+          // without spending one of the participant's sixty writes a minute
+          // — and 64 KiB of a classroom's upload — to hear it. The code is
+          // the server's own, so the status line says the same sentence it
+          // would have said (`isRefusalOfText` keeps the engine from
+          // retrying until the text changes).
+          tooLong(text)
+            ? Promise.reject(new ApiError("workspace_tab_too_long", 400, "tab body too long"))
+            : updateTab(contestId, tab.id, { body: text }, options).then((answer) => answer.updatedAt),
         onRestore: (text) => {
           texts.set(tab.id, text);
           onRestoreRef.current(tab.id, text);
@@ -217,6 +226,11 @@ export function useSqlTabs({
         // Any tab hearing that the contest is over is the whole strip
         // hearing it: the refusal is about the contest, not the tab.
         if (status.kind === "closed") setClosed(status.code);
+        // A save that landed says the workspace is answering again, so a
+        // refusal from a moment ago is no longer the news — and the status
+        // line is one line, which the older sentence would otherwise hold
+        // until the next deliberate write.
+        else if (status.kind === "saved") setError(null);
       });
       const entry = { engine, detach: attachEngine(engine) };
       setEngines((previous) => new Map(previous).set(tab.id, entry));
@@ -375,4 +389,19 @@ export function useSqlTabs({
     textOf,
     edited,
   };
+}
+
+/**
+ * Whether a tab's text is past what a query may be
+ * (`sqlpolicy.MaxQueryBytes`, counted in UTF-8 bytes like the server).
+ *
+ * Measured only where it could be: a UTF-8 byte per code unit is the floor
+ * and three is the ceiling for anything outside the astral planes (where a
+ * character is four bytes but two code units), so the two comparisons
+ * either side settle every ordinary SQL text without encoding it at all.
+ */
+function tooLong(text: string): boolean {
+  if (text.length > TAB_BODY_MAX_BYTES) return true;
+  if (text.length * 3 <= TAB_BODY_MAX_BYTES) return false;
+  return new TextEncoder().encode(text).length > TAB_BODY_MAX_BYTES;
 }
