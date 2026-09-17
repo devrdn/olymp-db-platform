@@ -1112,6 +1112,28 @@ const en = {
           side: "Width of the questions panel",
         },
         resultEmpty: "Run a query to see its result here.",
+        /** Which tab the result on screen came from — it stays while another tab is being typed in. */
+        resultFrom: "From {tab}",
+        // The SQL editor's own tabs (§5 of the workspace design): a strip
+        // above the editor, each tab a document of its own that saves
+        // itself. `local` names the single tab the editor falls back to
+        // when the workspace could not be read, and `unsaved` says what
+        // that costs.
+        editor: {
+          tablist: "SQL tabs",
+          newTab: "New tab",
+          close: "Close {tab}",
+          closeConfirm: "Close “{tab}”? What you typed in it is lost.",
+          rename: "Rename {tab}",
+          local: "Query",
+          unsaved: "Your tabs could not be loaded, so nothing typed here is saved. Reload the page to try again.",
+          status: {
+            saved: "Saved",
+            saving: "Saving…",
+            retrying: "Not saved yet. Trying again shortly.",
+            closed: "The contest is over, so this tab is no longer saved. What you typed last is kept in this browser.",
+          },
+        },
         // The notes tab (§6 of the workspace design): a plain field that
         // saves itself. `status` is the line under the field; `closed` is
         // shown once the contest has ended and nothing more is saved.

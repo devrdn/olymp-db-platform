@@ -1014,6 +1014,27 @@ const ro = {
           side: "Lățimea panoului întrebărilor",
         },
         resultEmpty: "Executați o interogare pentru a vedea rezultatul aici.",
+        /** Din ce filă vine rezultatul de pe ecran — el rămâne cât timp se scrie în altă filă. */
+        resultFrom: "Din fila „{tab}”",
+        // Filele editorului SQL (secțiunea 5 a designului): o bandă deasupra
+        // editorului, fiecare filă un document propriu care se salvează
+        // singur. `local` numește singura filă rămasă când spațiul de lucru
+        // nu a putut fi citit, iar `unsaved` spune ce costă asta.
+        editor: {
+          tablist: "File SQL",
+          newTab: "Filă nouă",
+          close: "Închide „{tab}”",
+          closeConfirm: "Închideți „{tab}”? Textul scris în ea se pierde.",
+          rename: "Redenumește „{tab}”",
+          local: "Interogare",
+          unsaved: "Filele nu au putut fi încărcate, așa că nimic din ce scrieți aici nu se salvează. Reîncărcați pagina pentru a încerca din nou.",
+          status: {
+            saved: "Salvat",
+            saving: "Se salvează…",
+            retrying: "Nesalvat încă. Reîncercăm în curând.",
+            closed: "Olimpiada s-a încheiat, așa că fila nu se mai salvează. Ultimul text scris rămâne în acest browser.",
+          },
+        },
         notes: {
           label: "Notițele dvs.",
           placeholder: "Suspecți, nume de tabele, idei neterminate. Se salvează pe măsură ce scrieți.",
