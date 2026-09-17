@@ -164,6 +164,12 @@ describe("the edge between the editor and the panel below it", () => {
     const handle = screen.getByRole("separator", { name: t.editor });
     expect(handle).toHaveAttribute("aria-orientation", "horizontal");
     expect(handle).toHaveAttribute("aria-valuenow", String(DEFAULT_EDITOR_PCT));
+    // Its grab area widens above and below rather than left and right, and
+    // it is absent below the breakpoint, where the column's height is its own
+    // content and a share of it means nothing.
+    expect(handle.className).toMatch(/(^|\s)after:-top-1(\s|$)/);
+    expect(handle.className).toMatch(/(^|\s)pointer-coarse:after:-bottom-3(\s|$)/);
+    expect(handle.className).toMatch(/(^|\s)max-narrow:hidden(\s|$)/);
   });
 
   test("moves with the arrow keys, and drives the column's own track", async () => {
