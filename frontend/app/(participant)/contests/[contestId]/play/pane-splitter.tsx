@@ -278,6 +278,13 @@ export function PaneHandle({
 
   const pointAt = (event: React.PointerEvent) => (vertical ? event.clientX : event.clientY);
 
+  /** Ends a drag that was interrupted, putting the pane back on the size in force. */
+  const cancelDrag = () => {
+    const had = dragging.current;
+    dragging.current = null;
+    if (had) containerRef.current?.style.setProperty(property, `${had.startValue}${unit}`);
+  };
+
   const movedTo = (event: React.PointerEvent) => {
     const drag = dragging.current;
     if (!drag) return value;
@@ -353,6 +360,18 @@ export function PaneHandle({
         dragging.current = null;
         if (had && containerRef.current) onResize(next);
       }}
+      // A touch drag ends in ways a mouse drag does not: a second finger, a
+      // browser deciding the gesture was a scroll after all, a call
+      // arriving. The pointer then never comes up, and left alone the handle
+      // stays in a drag nothing will ever end — the next pointer to cross it
+      // moves the edge with nothing pressed — while the pane keeps a size
+      // nobody committed. Both events, because a cancelled pointer loses its
+      // capture too and either may be the one that arrives; after an
+      // ordinary release there is no drag left to undo, which is what keeps
+      // the implicit loss of capture from taking back what `onPointerUp`
+      // just committed.
+      onPointerCancel={cancelDrag}
+      onLostPointerCapture={cancelDrag}
     />
   );
 }
