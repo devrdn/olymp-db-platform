@@ -1,10 +1,7 @@
 import { z } from "zod";
 
 /**
- * The wire shape of a participant's own query log — GET .../play/log, and
- * of one entry of it in full — GET .../play/log/{entryId} (§7). Both read
- * the same row through the same field names, so one schema serves both:
- * the single-entry response is exactly this shape with `sql` never cut.
+ * The wire shape of a participant's own query log — GET .../play/log.
  *
  * A row's status is a free-form server string (queryrunner.Status is a Go
  * string type, not an enum a client generator narrowed), so it is kept as
@@ -17,23 +14,10 @@ import { z } from "zod";
  * whenever `sql_truncated` says so: one page is bounded in bytes as well as
  * in rows, because two hundred rows of a 64 KiB statement each would
  * otherwise be a twelve-megabyte response. The whole statement is always in
- * the CSV export beside the panel, and in the single-entry response above.
- *
- * `id` is what a client names back at GET .../play/log/{entryId} to open a
- * row the page cut. Required rather than optional: every row the server
- * sends carries it, on both routes.
- *
- * It is query_log.id, the row's own bigserial primary key, sent as a JSON
- * number — not a uuid, and not a string. A JSON number is an IEEE double,
- * safe as an integer only up to 2^53 - 1 (Number.MAX_SAFE_INTEGER); an
- * int64 column can in principle outrange that, so the bound below is a
- * defensive ceiling on the wire shape, not a limit anybody expects this
- * column to reach — a contest logging at this installation's default rate
- * budget without a single pause would need decades to get there.
+ * the CSV export beside the panel.
  */
 export const queryLogEntrySchema = z
   .object({
-    id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     sql: z.string(),
     sql_truncated: z.boolean().nullish(),
     status: z.string(),
@@ -43,7 +27,6 @@ export const queryLogEntrySchema = z
     executed_at: z.string(),
   })
   .transform((raw) => ({
-    id: raw.id,
     sql: raw.sql,
     // Omitted by the server for a row it did not cut, so absent means whole.
     // Normalised to a boolean here rather than left as `undefined` for the
@@ -65,10 +48,3 @@ export const queryLogResponseSchema = z.object({
 });
 
 export type QueryLogResponse = z.infer<typeof queryLogResponseSchema>;
-
-/**
- * GET .../play/log/{entryId}'s own response: one row, in full — the same
- * shape queryLogEntrySchema already parses, so fetching one entry needs no
- * schema of its own, only this name for the endpoint that returns it.
- */
-export const queryLogEntryDetailSchema = queryLogEntrySchema;

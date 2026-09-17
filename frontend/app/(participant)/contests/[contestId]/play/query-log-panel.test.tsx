@@ -14,7 +14,6 @@ vi.mock("./actions", () => ({ fetchQueryLogAction }));
 
 function entry(sql: string, overrides: Partial<QueryLogEntry> = {}): QueryLogEntry {
   return {
-    id: 1,
     sql,
     sqlTruncated: false,
     status: "ok",

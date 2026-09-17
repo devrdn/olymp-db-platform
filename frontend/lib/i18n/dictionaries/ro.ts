@@ -1510,9 +1510,6 @@ const ro = {
     invalid_contest_id: "Identificator de olimpiadă greșit.",
     invalid_question_id: "Identificator de întrebare greșit.",
     invalid_tab_id: "Identificator de filă greșit.",
-    invalid_query_log_entry_id: "Identificator de intrare din jurnal greșit.",
-    query_log_entry_not_found:
-      "Această intrare din jurnal nu mai există. Reîncărcați pagina pentru a vedea jurnalul curent.",
     workspace_too_often:
       "Notițele și filele se salvează prea des. Salvarea va continua într-o clipă.",
     workspace_tab_limit: "Aveți deja numărul maxim de file. Închideți una pentru a deschide alta.",
