@@ -218,10 +218,35 @@ export function PanelVisibilityProvider({
   const [hasSchema, setHasSchema] = useState(true);
   const reportSchema = useCallback((present: boolean) => setHasSchema(present), []);
 
+  const toggleRefs = useRef<Partial<Record<PanelKey, HTMLButtonElement | null>>>({});
+  const registerToggle = useCallback((panel: PanelKey, node: HTMLButtonElement | null) => {
+    toggleRefs.current[panel] = node;
+  }, []);
+
   const toggle = useCallback(
     (panel: PanelKey) => {
       const current = snapshot(contestId);
-      commit(contestId, { ...current, [panel]: !current[panel] });
+      const collapsing = !current[panel];
+      // Hiding the panel the participant is standing in has to put them
+      // somewhere that will still be there. Left alone, focus falls to
+      // `<body>`: the next Tab starts at the top of the document and a
+      // screen reader is told nothing about what just happened. The toggle
+      // is the nearest control to where they were and the one that undoes
+      // it — and moving the focus there is itself the announcement.
+      //
+      // Here rather than in the key handler, because a press needs it just
+      // as much: on macOS, Safari and Firefox do not focus a `<button>` when
+      // it is clicked, so a participant who was typing an answer and reached
+      // for the toggle with the mouse still has the caret in the field that
+      // is about to disappear.
+      //
+      // Only when the focus really is inside that panel. A participant
+      // typing a query and collapsing the schema beside it must keep their
+      // caret exactly where it was.
+      if (collapsing && document.activeElement?.closest(`[data-panel="${panel}"]`)) {
+        toggleRefs.current[panel]?.focus();
+      }
+      commit(contestId, { ...current, [panel]: collapsing });
     },
     [contestId],
   );
@@ -235,10 +260,6 @@ export function PanelVisibilityProvider({
     [contestId],
   );
 
-  const toggleRefs = useRef<Partial<Record<PanelKey, HTMLButtonElement | null>>>({});
-  const registerToggle = useCallback((panel: PanelKey, node: HTMLButtonElement | null) => {
-    toggleRefs.current[panel] = node;
-  }, []);
 
   // The keys, from anywhere on the screen that is not the editor. The editor
   // carries the same three in its own keymap (`code-editor-core.ts`), because
@@ -251,25 +272,13 @@ export function PanelVisibilityProvider({
       const panel = shortcutFor(event);
       if (!panel) return;
       event.preventDefault();
-      // A press that hides the panel the participant is standing in has to
-      // put them somewhere that will still be there. Left alone, focus falls
-      // to `<body>`: the next Tab starts at the top of the document and a
-      // screen reader is told nothing about what just happened. The toggle
-      // is the nearest control to where they were and the one that undoes
-      // it — and moving the focus there is itself the announcement.
-      //
-      // Only when the focus really is inside that panel. A participant
-      // typing a query and collapsing the schema beside it must keep their
-      // caret exactly where it was.
-      const collapsing = !snapshot(contestId)[panel];
-      if (collapsing && document.activeElement?.closest(`[data-panel="${panel}"]`)) {
-        toggleRefs.current[panel]?.focus();
-      }
+      // `toggle` itself carries the focus hand-off, so a press and a press
+      // of a key are answered the same way.
       toggle(panel);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [toggle, contestId]);
+  }, [toggle]);
 
   const value = useMemo(
     () => ({ collapsed, toggle, expand, hasSchema, reportSchema, present: true, registerToggle }),
@@ -338,6 +347,13 @@ function shortcutFor(event: KeyboardEvent): PanelKey | null {
 export function PanelToggles({ dict }: { dict: PlayDictionary }) {
   const { collapsed, toggle, hasSchema, present, registerToggle } = usePanelVisibility();
   const t = dict.participant.play.workspace.panels;
+  // One stable callback each, rather than an arrow written at the call site:
+  // a ref callback with a new identity is detached and re-attached on every
+  // render of this component, which is a needless DOM write on a screen that
+  // re-renders whenever a panel moves.
+  const refSchema = useCallback((node: HTMLButtonElement | null) => registerToggle("schema", node), [registerToggle]);
+  const refSide = useCallback((node: HTMLButtonElement | null) => registerToggle("side", node), [registerToggle]);
+  const refBottom = useCallback((node: HTMLButtonElement | null) => registerToggle("bottom", node), [registerToggle]);
   if (!present) return null;
 
   return (
@@ -347,7 +363,7 @@ export function PanelToggles({ dict }: { dict: PlayDictionary }) {
           name={t.schema}
           tooltip={t.shortcut.replace("{name}", t.schema).replace("{keys}", t.keys.schema)}
           showing={!collapsed.schema}
-          buttonRef={(node) => registerToggle("schema", node)}
+          buttonRef={refSchema}
           onClick={() => toggle("schema")}
         >
           <PanelLeft aria-hidden="true" className="size-4" />
@@ -357,7 +373,7 @@ export function PanelToggles({ dict }: { dict: PlayDictionary }) {
         name={t.side}
         tooltip={t.shortcut.replace("{name}", t.side).replace("{keys}", t.keys.side)}
         showing={!collapsed.side}
-        buttonRef={(node) => registerToggle("side", node)}
+        buttonRef={refSide}
         onClick={() => toggle("side")}
       >
         <PanelRight aria-hidden="true" className="size-4" />
@@ -366,7 +382,7 @@ export function PanelToggles({ dict }: { dict: PlayDictionary }) {
         name={t.bottom}
         tooltip={t.shortcut.replace("{name}", t.bottom).replace("{keys}", t.keys.bottom)}
         showing={!collapsed.bottom}
-        buttonRef={(node) => registerToggle("bottom", node)}
+        buttonRef={refBottom}
         onClick={() => toggle("bottom")}
       >
         <PanelBottom aria-hidden="true" className="size-4" />
