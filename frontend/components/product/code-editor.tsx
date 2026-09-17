@@ -1,10 +1,29 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
-import type { EditorView } from "./code-editor-core";
+import type { EditorState, EditorView } from "./code-editor-core";
+
+/** The module behind the editor, kept once it has been imported. */
+type Core = typeof import("./code-editor-core");
+
+/**
+ * What an owner of several documents can ask of the editor from outside
+ * React's own data flow — both cases are about a document the editor is
+ * holding, which nothing else can reach.
+ */
+export type CodeEditorHandle = {
+  /**
+   * Replaces a document's text: the one showing, or one kept aside. A
+   * recovered draft is the reason this exists — it arrives after the tab's
+   * state was already built from the server's copy.
+   */
+  setDocumentValue: (id: string, text: string) => void;
+  /** Forgets a document for good — a tab that was closed. */
+  dropDocument: (id: string) => void;
+};
 
 export type CodeEditorProps = {
   /** The editor's accessible name. */
@@ -60,6 +79,23 @@ export type CodeEditorProps = {
    * settled" from "nothing happened" — its value is never read.
    */
   errorToken?: unknown;
+  /**
+   * Which document the editor is showing, for an owner that has more than
+   * one (the participant's SQL tabs). Changing it puts the current document
+   * aside — its text, its undo history and its caret — and shows the named
+   * one, without remounting anything and without reporting an edit.
+   *
+   * Omitted by every owner of a single document, which is the rest of the
+   * product: there is then one document and nothing to switch to.
+   */
+  documentId?: string;
+  /**
+   * The text of a document the editor has not opened yet. Read once per
+   * document, when it is first shown; from then on the editor's own state is
+   * the text, until the owner replaces it through `setDocumentValue`.
+   */
+  getDocumentValue?: (id: string) => string;
+  ref?: React.Ref<CodeEditorHandle>;
   className?: string;
 };
 
@@ -118,12 +154,30 @@ export function CodeEditor({
   errorPosition,
   errorToken,
   onSubmit,
+  documentId,
+  getDocumentValue,
+  ref,
   className,
 }: CodeEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const fallbackRef = useRef<HTMLTextAreaElement>(null);
   const [ready, setReady] = useState(false);
+
+  // The documents that are not showing, and the one that is. Refs rather
+  // than state: none of this is rendered, and a swap must not be a render of
+  // the tree the editor sits in.
+  const coreRef = useRef<Core | null>(null);
+  const asideRef = useRef(new Map<string, EditorState>());
+  const openIdRef = useRef(documentId);
+  const documentIdRef = useRef(documentId);
+  const getDocumentValueRef = useRef(getDocumentValue);
+  /**
+   * Set while this component itself is writing into CodeMirror, so a swap or
+   * a recovered draft is not reported back as something the participant
+   * typed — which would hand one tab's text to another tab's autosave.
+   */
+  const writingRef = useRef(false);
 
   // Read fresh from wherever it is called, rather than captured once:
   // `onChange` is an inline closure recreated on every render of whatever
@@ -137,7 +191,73 @@ export function CodeEditor({
   useEffect(() => {
     onChangeRef.current = onChange;
     onSubmitRef.current = onSubmit;
+    getDocumentValueRef.current = getDocumentValue;
   });
+
+  /** Reports an edit, unless this component is the one that made it. */
+  const report = (text: string) => {
+    if (!writingRef.current) onChangeRef.current(text);
+  };
+
+  /** Runs `write` with edits attributed to this component rather than the participant. */
+  const writing = (write: () => void) => {
+    writingRef.current = true;
+    try {
+      write();
+    } finally {
+      writingRef.current = false;
+    }
+  };
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      setDocumentValue: (id, text) => {
+        const core = coreRef.current;
+        const view = viewRef.current;
+        if (id === openIdRef.current) {
+          if (core && view) writing(() => core.setDocumentText(view, text));
+          else if (fallbackRef.current) fallbackRef.current.value = text;
+          return;
+        }
+        // A document the editor has never opened has no state to replace:
+        // it is built from `getDocumentValue` when it is first shown, and
+        // the owner has already changed what that reports.
+        if (core && view && asideRef.current.has(id)) {
+          asideRef.current.set(id, core.newDocument(view, text));
+        }
+      },
+      dropDocument: (id) => {
+        asideRef.current.delete(id);
+      },
+    }),
+    // Every path above reads through a ref; nothing here is rebuilt.
+    [],
+  );
+
+  // Shows the document the owner asks for, keeping the one leaving. Before
+  // the real editor exists there is nothing to swap, and the always-typable
+  // fallback field is what has to carry the text instead.
+  useLayoutEffect(() => {
+    documentIdRef.current = documentId;
+    if (documentId === undefined || openIdRef.current === documentId) return;
+    const core = coreRef.current;
+    const view = viewRef.current;
+    const text = getDocumentValueRef.current?.(documentId) ?? "";
+    if (!core || !view) {
+      if (fallbackRef.current) fallbackRef.current.value = text;
+      openIdRef.current = documentId;
+      return;
+    }
+    const leaving = openIdRef.current;
+    const next = asideRef.current.get(documentId) ?? core.newDocument(view, text);
+    asideRef.current.delete(documentId);
+    writing(() => {
+      const previous = core.swapDocument(view, next);
+      if (leaving !== undefined) asideRef.current.set(leaving, previous);
+    });
+    openIdRef.current = documentId;
+  }, [documentId]);
 
   // Seeds the fallback field with whatever `getInitialValue` reports — a
   // browser-restored value across a soft reload, most importantly — the
@@ -188,11 +308,16 @@ export function CodeEditor({
       // Read before the swap below can possibly move focus anywhere else.
       const fallback = fallbackRef.current;
       const hadFocus = fallback != null && document.activeElement === fallback;
+      coreRef.current = core;
+      // Whichever document the owner is pointing at by now: the switch may
+      // have happened while this chunk was still on its way, and the
+      // fallback field has been carrying that document's text since.
+      openIdRef.current = documentIdRef.current;
       const view = core.mountEditor(host, {
         doc: fallback?.value ?? getInitialValue(),
         ariaLabel,
         placeholder: placeholderText,
-        onChange: (text) => onChangeRef.current(text),
+        onChange: report,
         // Read fresh through the ref for the same reason `onChange` is: the
         // editor is built once and the callback is an inline closure that is
         // recreated on every render of whatever owns this component.
@@ -211,10 +336,13 @@ export function CodeEditor({
       setReady(true);
     });
 
+    const aside = asideRef.current;
     return () => {
       live = false;
       viewRef.current?.destroy();
       viewRef.current = null;
+      coreRef.current = null;
+      aside.clear();
     };
     // Built once. ariaLabel/placeholderText are fixed strings from the
     // dictionary for the lifetime of this route (the locale that changes them
@@ -266,7 +394,7 @@ export function CodeEditor({
           aria-label={ariaLabel}
           placeholder={placeholderText}
           spellCheck={false}
-          onInput={(event) => onChangeRef.current(event.currentTarget.value)}
+          onInput={(event) => report(event.currentTarget.value)}
           className="absolute inset-0 h-full w-full resize-none border border-edge bg-sunk p-3 font-mono text-body text-ink outline-none"
         />
       )}

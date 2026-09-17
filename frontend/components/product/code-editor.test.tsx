@@ -1,9 +1,9 @@
-import { Profiler, useState } from "react";
+import { act, Profiler, useRef, useState } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 
-import { CodeEditor } from "./code-editor";
+import { CodeEditor, type CodeEditorHandle } from "./code-editor";
 
 /**
  * CodeMirror itself arrives through a dynamic `import()` (see code-editor.tsx
@@ -274,5 +274,160 @@ describe("the editor's own affordances", () => {
 
     expect(text).not.toBe("");
     expect(text.length).toBeGreaterThan("SELECT".length);
+  });
+});
+
+/**
+ * One view, several documents — what the participant's SQL tabs are built on
+ * (the workspace design, §5). Each document keeps its own `EditorState`, so
+ * its undo history and its caret survive being switched away from, and
+ * switching is not an edit: nothing is reported through `onChange`.
+ */
+describe("several documents in one editor", () => {
+  function Documents({
+    onChange = () => {},
+    handle,
+    texts = new Map([
+      ["a", "SELECT a"],
+      ["b", "SELECT b"],
+    ]),
+  }: {
+    onChange?: (id: string, text: string) => void;
+    handle?: React.Ref<CodeEditorHandle>;
+    texts?: Map<string, string>;
+  }) {
+    const [id, setId] = useState("a");
+    const open = useRef(id);
+    open.current = id;
+    const held = useRef(texts);
+    return (
+      <>
+        <button type="button" onClick={() => setId(open.current === "a" ? "b" : "a")}>
+          switch
+        </button>
+        <CodeEditor
+          ref={handle}
+          ariaLabel="Your query"
+          placeholder=""
+          documentId={id}
+          getDocumentValue={(key) => held.current.get(key) ?? ""}
+          getInitialValue={() => held.current.get(open.current) ?? ""}
+          onChange={(text) => {
+            held.current.set(open.current, text);
+            onChange(open.current, text);
+          }}
+        />
+      </>
+    );
+  }
+
+  async function switchDocument() {
+    await userEvent.click(screen.getByRole("button", { name: "switch" }));
+  }
+
+  test("shows the document it is pointed at, and the other one after a switch", async () => {
+    const { container } = render(<Documents />);
+    await waitForRealEditor(container);
+    expect(screen.getByRole("textbox")).toHaveTextContent("SELECT a");
+
+    await switchDocument();
+
+    expect(screen.getByRole("textbox")).toHaveTextContent("SELECT b");
+  });
+
+  test("keeps what was typed in a document while another one was showing", async () => {
+    // Read back through `onChange` rather than written out here: where a
+    // click lands the caret in this environment is not the point, and
+    // spelling the result out would make this a test about that instead.
+    let typed = "";
+    const { container } = render(<Documents onChange={(id, text) => (typed = id === "a" ? text : typed)} />);
+    await waitForRealEditor(container);
+    await userEvent.click(screen.getByRole("textbox"));
+    await userEvent.keyboard("X");
+    expect(typed).not.toBe("SELECT a");
+
+    await switchDocument();
+    await switchDocument();
+
+    expect(screen.getByRole("textbox")).toHaveTextContent(typed);
+  });
+
+  // The reason each document is a whole `EditorState` rather than a string:
+  // undo has to mean "what I did in this tab", not "what I last did
+  // anywhere".
+  test("keeps each document's own undo history across a switch", async () => {
+    const { container } = render(<Documents />);
+    await waitForRealEditor(container);
+    await userEvent.click(screen.getByRole("textbox"));
+    // One character, so the whole edit is one entry in the history however
+    // slowly the keystrokes are delivered.
+    await userEvent.keyboard("X");
+
+    await switchDocument();
+    await switchDocument();
+    await userEvent.click(screen.getByRole("textbox"));
+    await userEvent.keyboard("{Control>}z{/Control}");
+
+    expect(screen.getByRole("textbox")).toHaveTextContent("SELECT a");
+  });
+
+  // Switching is not an edit. If it were reported, every switch would hand
+  // one tab's text to the other tab's autosave.
+  test("reports nothing through onChange when the document is swapped", async () => {
+    const onChange = vi.fn();
+    const { container } = render(<Documents onChange={onChange} />);
+    await waitForRealEditor(container);
+    onChange.mockClear();
+
+    await switchDocument();
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  test("takes a text for a document that is not the one showing", async () => {
+    const handle = { current: null as CodeEditorHandle | null };
+    const { container } = render(<Documents handle={handle} />);
+    await waitForRealEditor(container);
+    // Open "b" once, so it is a document the editor is holding rather than
+    // one it would read afresh — a draft recovered after a tab has been
+    // looked at has to reach the state, not only the owner's own copy.
+    await switchDocument();
+    await switchDocument();
+
+    handle.current?.setDocumentValue("b", "SELECT recovered");
+    await switchDocument();
+
+    expect(screen.getByRole("textbox")).toHaveTextContent("SELECT recovered");
+  });
+
+  test("takes a text for the document that is showing", async () => {
+    const handle = { current: null as CodeEditorHandle | null };
+    const { container } = render(<Documents handle={handle} />);
+    await waitForRealEditor(container);
+
+    act(() => handle.current?.setDocumentValue("a", "SELECT recovered"));
+
+    expect(screen.getByRole("textbox")).toHaveTextContent("SELECT recovered");
+  });
+
+  // A closed tab's state must not be kept: it is the largest thing a tab
+  // owns, and an id the server reused would otherwise open somebody's
+  // discarded text.
+  test("forgets a document that was dropped", async () => {
+    const texts = new Map([
+      ["a", "SELECT a"],
+      ["b", "SELECT b"],
+    ]);
+    const handle = { current: null as CodeEditorHandle | null };
+    const { container } = render(<Documents handle={handle} texts={texts} />);
+    await waitForRealEditor(container);
+    await switchDocument();
+    await switchDocument();
+
+    handle.current?.dropDocument("b");
+    texts.set("b", "SELECT fresh");
+    await switchDocument();
+
+    expect(screen.getByRole("textbox")).toHaveTextContent("SELECT fresh");
   });
 });
