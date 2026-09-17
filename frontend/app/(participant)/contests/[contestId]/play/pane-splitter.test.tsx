@@ -237,4 +237,54 @@ describe("the edge between the editor and the panel below it", () => {
     fireEvent.pointerUp(handle, { pointerId: 1, clientX: 0, clientY: 240 });
     expect(handle).toHaveAttribute("aria-valuenow", String(DEFAULT_EDITOR_PCT + 10));
   });
+
+  // A touch drag ends in ways a mouse drag does not: a second finger, the
+  // browser taking the gesture over as a scroll, a call arriving. The
+  // pointer then never comes up. Left alone, the handle stays in a drag
+  // nothing will ever end — the next pointer to cross it moves the edge
+  // with nothing pressed — and the column keeps a size nobody committed.
+  test("an interrupted drag ends, and leaves the column where it started", () => {
+    const { container } = show();
+    const handle = screen.getByRole("separator", { name: t.editor });
+    const column = container.querySelector<HTMLElement>("[style*='--pane-editor']") as HTMLElement;
+    column.getBoundingClientRect = () => ({ height: 400, width: 800, top: 0, left: 0, right: 800, bottom: 400, x: 0, y: 0, toJSON: () => ({}) });
+
+    handle.setPointerCapture = () => {};
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 0, clientY: 200 });
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 0, clientY: 240 });
+    fireEvent.pointerCancel(handle, { pointerId: 1 });
+
+    expect(column.style.getPropertyValue("--pane-editor")).toBe(`${DEFAULT_EDITOR_PCT}%`);
+    expect(handle).toHaveAttribute("aria-valuenow", String(DEFAULT_EDITOR_PCT));
+
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 0, clientY: 320 });
+    expect(column.style.getPropertyValue("--pane-editor")).toBe(`${DEFAULT_EDITOR_PCT}%`);
+  });
+
+  // The capture can be lost on its own — an element removed, a browser that
+  // decides the gesture belongs to it — and that is the same interruption
+  // by another name. After an ordinary release there is no drag left for it
+  // to undo, which is what keeps it from taking back a size just committed.
+  test("a lost pointer capture ends the drag too, and never undoes a release", () => {
+    const { container } = show();
+    const handle = screen.getByRole("separator", { name: t.editor });
+    const column = container.querySelector<HTMLElement>("[style*='--pane-editor']") as HTMLElement;
+    column.getBoundingClientRect = () => ({ height: 400, width: 800, top: 0, left: 0, right: 800, bottom: 400, x: 0, y: 0, toJSON: () => ({}) });
+
+    handle.setPointerCapture = () => {};
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 0, clientY: 200 });
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 0, clientY: 240 });
+    fireEvent.lostPointerCapture(handle, { pointerId: 1 });
+
+    expect(column.style.getPropertyValue("--pane-editor")).toBe(`${DEFAULT_EDITOR_PCT}%`);
+
+    // The release order a browser really uses: pointerup, then the implicit
+    // loss of the capture. The share committed on the way up stands.
+    fireEvent.pointerDown(handle, { pointerId: 2, clientX: 0, clientY: 200 });
+    fireEvent.pointerMove(handle, { pointerId: 2, clientX: 0, clientY: 240 });
+    fireEvent.pointerUp(handle, { pointerId: 2, clientX: 0, clientY: 240 });
+    fireEvent.lostPointerCapture(handle, { pointerId: 2 });
+
+    expect(handle).toHaveAttribute("aria-valuenow", String(DEFAULT_EDITOR_PCT + 10));
+  });
 });
