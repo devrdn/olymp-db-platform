@@ -1110,6 +1110,8 @@ const en = {
         panes: {
           schema: "Width of the schema panel",
           side: "Width of the questions panel",
+          /** The two horizontal edges (§7): a share of a column's height rather than a width. */
+          editor: "Height of the editor",
         },
         resultEmpty: "Run a query to see its result here.",
         /** Which tab the result on screen came from — it stays while another tab is being typed in. */

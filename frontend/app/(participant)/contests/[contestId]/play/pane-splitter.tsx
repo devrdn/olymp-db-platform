@@ -5,98 +5,135 @@ import { useCallback, useRef, useSyncExternalStore } from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * The console's three panes, with the two edges between them draggable and
- * the widths remembered — SPEC.md §11's `ConsoleShell`.
+ * The console's draggable edges and the sizes they leave behind — SPEC.md
+ * §11's `ConsoleShell`, and §7 of the workspace design for the two horizontal
+ * ones.
  *
  * A fixed layout was shipped first and the reason it did not last is the one
  * §11 anticipated: how much room the questions need is a property of the
  * contest, not of the product. An olympiad whose questions are two lines and
  * one whose questions are a paragraph want different columns, and neither
- * number is mine to pick.
+ * number is mine to pick. The same argument decides the horizontal edges:
+ * reading a forty-column row and writing a fifteen-line query want opposite
+ * splits of the console's own height.
  *
- * The drag does not go through React. A pointermove writes the two widths
- * straight onto the container as custom properties, which is one style
- * recalculation; putting them in state would be a render of the editor, the
- * result table and every question card per pointer event, and SPEC.md §6 asks
- * this screen to react within 120ms. State is written once, on release, and
- * that is also when the sizes are stored.
+ * One store and one handle serve all of them. What varies is stated as data
+ * rather than as a second copy of the file: which axis the pointer moves
+ * along, what unit the number is in, and what it may be clamped to.
+ *
+ * The drag does not go through React. A pointermove writes the size straight
+ * onto the container as a custom property, which is one style recalculation;
+ * putting it in state would be a render of the editor, the result table and
+ * every question card per pointer event, and SPEC.md §6 asks this screen to
+ * react within 120ms. State is written once, on release, and that is also
+ * when the size is stored.
  */
 
-/** Where the widths live between visits. Per contest is deliberate: a wide-question olympiad and a narrow one are different screens. */
-function storageKey(contestId: string) {
-  return `dbcontest.console.panes.${contestId}`;
+/**
+ * Where a group of sizes lives between visits. Per contest is deliberate: a
+ * wide-question olympiad and a narrow one are different screens.
+ *
+ * The group is part of the key so the widths and the shares are separate
+ * records — a build that learns a new split does not have to migrate the one
+ * already stored, and a stored value it cannot read falls back on its own.
+ */
+function storageKey(group: string, contestId: string) {
+  return `dbcontest.console.${group}.${contestId}`;
 }
+
+/** What a size may be clamped to, in that size's own unit. */
+export type PaneBounds = { min: number; max: number };
 
 /** The design's own starting widths (docs/design/preview.html): 212px and 252px. */
 export const DEFAULT_SCHEMA_REM = 13.25;
 export const DEFAULT_SIDE_REM = 15.75;
 
 /**
- * What a pane may be narrowed to before it stops being a pane.
+ * What a column may be narrowed to before it stops being a pane.
  *
  * A hard floor rather than a percentage: below this the schema tree shows no
  * column names and the questions wrap every second word, and a participant
  * who dragged too far in a hurry should not have to drag back to read
  * anything.
  */
-const MIN_REM = 8;
-const MAX_REM = 32;
+export const WIDTH_BOUNDS: PaneBounds = { min: 8, max: 32 };
 
-type Widths = { schema: number; side: number };
+/**
+ * The editor's share of the console column, as a percentage — the 11:9 the
+ * layout used to state as grid fractions, now a number somebody can move.
+ *
+ * A share rather than a length, because this column is as tall as the
+ * viewport: a stored `rem` would mean a different split on every machine the
+ * contest is sat in front of, and the classroom's screens are not one size.
+ */
+export const DEFAULT_EDITOR_PCT = 55;
 
-function clamp(rem: number): number {
-  return Math.min(MAX_REM, Math.max(MIN_REM, rem));
+/**
+ * Neither of the two panes may be squeezed out of existence: below a fifth of
+ * the column the editor holds about two lines of SQL, and the result below it
+ * holds a header and nothing under it.
+ */
+export const SHARE_BOUNDS: PaneBounds = { min: 20, max: 80 };
+
+type Sizes<K extends string> = Record<K, number>;
+
+function clampTo(value: number, bounds: PaneBounds): number {
+  return Math.min(bounds.max, Math.max(bounds.min, value));
 }
 
-/** One stored pair, or the defaults — a stored value this build cannot read is not a reason to fail. */
-function parse(raw: string | null): Widths {
-  if (!raw) return { schema: DEFAULT_SCHEMA_REM, side: DEFAULT_SIDE_REM };
+/** One stored group, or the defaults — a stored value this build cannot read is not a reason to fail. */
+function parse<K extends string>(raw: string | null, defaults: Sizes<K>, bounds: PaneBounds): Sizes<K> {
+  const value = { ...defaults };
+  if (!raw) return value;
   try {
-    const parsed = JSON.parse(raw) as Partial<Widths>;
-    return {
-      schema: typeof parsed.schema === "number" ? clamp(parsed.schema) : DEFAULT_SCHEMA_REM,
-      side: typeof parsed.side === "number" ? clamp(parsed.side) : DEFAULT_SIDE_REM,
-    };
+    const parsed = JSON.parse(raw) as Partial<Record<K, unknown>>;
+    for (const key of Object.keys(defaults) as K[]) {
+      const stored = parsed[key];
+      if (typeof stored === "number" && Number.isFinite(stored)) {
+        value[key] = clampTo(stored, bounds);
+      }
+    }
   } catch {
-    return { schema: DEFAULT_SCHEMA_REM, side: DEFAULT_SIDE_REM };
+    return { ...defaults };
   }
+  return value;
 }
 
 /**
- * The stored widths, as an external store.
+ * The stored sizes, as an external store.
  *
  * `useSyncExternalStore` rather than an effect that writes state: the server
- * has no localStorage, so a width read during render would be a hydration
+ * has no localStorage, so a size read during render would be a hydration
  * mismatch — and reading it in an effect is a second render of the whole
  * console on every visit, which React's own lint rule refuses for exactly
  * that reason. The server snapshot is the design's defaults, the client
  * snapshot is what was stored, and React reconciles the two once.
  *
  * The snapshot has to be referentially stable or React re-renders forever, so
- * the parsed pair is cached against the raw string it came from.
+ * the parsed group is cached against the raw string it came from.
  */
-const cache = new Map<string, { raw: string | null; value: Widths }>();
+const cache = new Map<string, { raw: string | null; value: Sizes<string> }>();
 
-function snapshot(contestId: string): Widths {
+function snapshot<K extends string>(
+  group: string,
+  contestId: string,
+  defaults: Sizes<K>,
+  bounds: PaneBounds,
+): Sizes<K> {
   let raw: string | null = null;
   try {
-    raw = window.localStorage.getItem(storageKey(contestId));
+    raw = window.localStorage.getItem(storageKey(group, contestId));
   } catch {
     raw = null;
   }
 
-  const cached = cache.get(contestId);
-  if (cached && cached.raw === raw) return cached.value;
+  const id = `${group}:${contestId}`;
+  const cached = cache.get(id);
+  if (cached && cached.raw === raw) return cached.value as Sizes<K>;
 
-  const value = parse(raw);
-  cache.set(contestId, { raw, value });
+  const value = parse(raw, defaults, bounds);
+  cache.set(id, { raw, value });
   return value;
-}
-
-const DEFAULTS: Widths = { schema: DEFAULT_SCHEMA_REM, side: DEFAULT_SIDE_REM };
-
-function serverSnapshot(): Widths {
-  return DEFAULTS;
 }
 
 /** Listeners, so a commit in this tab re-renders without a round trip through storage events. */
@@ -115,30 +152,61 @@ function subscribe(listener: () => void) {
   };
 }
 
-export function usePaneWidths(contestId: string) {
+/**
+ * One group of remembered sizes and the container they are written on.
+ *
+ * `defaults` and `bounds` are read on every render and must therefore be the
+ * same objects every time — module constants, not literals written at the
+ * call site. React compares the store's snapshot by identity, and a fresh
+ * defaults object would be a fresh snapshot on a server render.
+ */
+export function usePaneSizes<K extends string>(
+  contestId: string,
+  group: string,
+  defaults: Sizes<K>,
+  bounds: PaneBounds,
+) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const widths = useSyncExternalStore(
+  const sizes = useSyncExternalStore(
     subscribe,
-    () => snapshot(contestId),
-    serverSnapshot,
+    () => snapshot(group, contestId, defaults, bounds),
+    () => defaults,
   );
 
   const commit = useCallback(
-    (next: Widths) => {
+    (next: Sizes<K>) => {
+      const raw = JSON.stringify(next);
       try {
-        window.localStorage.setItem(storageKey(contestId), JSON.stringify(next));
+        window.localStorage.setItem(storageKey(group, contestId), raw);
       } catch {
         // A browser refusing storage costs the participant nothing this
         // session: the drag has already happened, and the container still
-        // carries the width the pointer left it at.
+        // carries the size the pointer left it at.
       }
-      cache.set(contestId, { raw: JSON.stringify(next), value: next });
+      cache.set(`${group}:${contestId}`, { raw, value: next });
       for (const listener of listeners) listener();
     },
-    [contestId],
+    [group, contestId],
   );
 
-  return { containerRef, widths, commit };
+  return { containerRef, sizes, commit };
+}
+
+const PANE_WIDTHS: Sizes<"schema" | "side"> = {
+  schema: DEFAULT_SCHEMA_REM,
+  side: DEFAULT_SIDE_REM,
+};
+
+/** The two column widths, in rem — the oldest group, and the one whose storage key predates the others. */
+export function usePaneWidths(contestId: string) {
+  return usePaneSizes(contestId, "panes", PANE_WIDTHS, WIDTH_BOUNDS);
+}
+
+const CONSOLE_ROWS: Sizes<"editor"> = { editor: DEFAULT_EDITOR_PCT };
+
+/** The editor's share of the console column, as a percentage. */
+export function useConsoleRows(contestId: string) {
+  return usePaneSizes(contestId, "rows", CONSOLE_ROWS, SHARE_BOUNDS);
 }
 
 /**
@@ -146,12 +214,20 @@ export function usePaneWidths(contestId: string) {
  *
  * `role="separator"` with `aria-valuenow` and arrow keys, because a divider
  * that can only be moved with a mouse is a divider half the room cannot move
- * — and this one decides how much of the screen the questions get.
+ * — and these ones decide how much of the screen the questions and the answer
+ * get.
+ *
+ * `axis` is which way the pointer travels, so the separator *line* is the
+ * other way round: an edge between two columns is dragged along `x` and reads
+ * as a vertical rule, which is what `aria-orientation` names.
  */
 export function PaneHandle({
   label,
   property,
-  rem,
+  value,
+  axis = "x",
+  unit = "rem",
+  bounds,
   direction,
   containerRef,
   onResize,
@@ -160,85 +236,109 @@ export function PaneHandle({
   /** The accessible name, in the participant's language. */
   label: string;
   /** The custom property this handle drives — never derived from the label, which is translated. */
-  property: "--pane-schema" | "--pane-side";
-  rem: number;
-  /** Which way the pointer moves to make this pane wider. */
+  property: string;
+  value: number;
+  /** Which way the pointer travels to move this edge. */
+  axis?: "x" | "y";
+  /** What `value` is measured in, and what is written onto the container. */
+  unit?: "rem" | "%";
+  bounds: PaneBounds;
+  /** Which way the pointer moves to make the pane this handle sizes larger. */
   direction: 1 | -1;
   containerRef: React.RefObject<HTMLDivElement | null>;
-  onResize: (rem: number) => void;
+  onResize: (value: number) => void;
   className?: string;
 }) {
-  const dragging = useRef<{ startX: number; startRem: number } | null>(null);
+  const dragging = useRef<{ start: number; startValue: number } | null>(null);
 
-  // Read once, when the drag starts, not on every pointer event.
-  // `getComputedStyle` is a synchronous style read, and reading on the next
-  // event flushes the write from the previous one — a forced recalculation of
-  // a grid whose middle column may hold a thousand-row table, per pointer
-  // event. The root font size cannot change mid-drag.
-  const remRef = useRef(16);
+  // How many pixels one unit is, read once when the drag starts rather than
+  // on every pointer event. `getComputedStyle` and `getBoundingClientRect`
+  // are both synchronous style reads, and reading on the next event flushes
+  // the write from the previous one — a forced recalculation of a grid whose
+  // middle column may hold a thousand-row table, per pointer event. Neither
+  // the root font size nor the container's own size changes mid-drag.
+  const scaleRef = useRef(16);
+
+  const vertical = axis === "x";
+  const decrease = vertical ? "ArrowLeft" : "ArrowUp";
+  const increase = vertical ? "ArrowRight" : "ArrowDown";
+
+  const pointAt = (event: React.PointerEvent) => (vertical ? event.clientX : event.clientY);
+
+  const movedTo = (event: React.PointerEvent) => {
+    const drag = dragging.current;
+    if (!drag) return value;
+    const moved = ((pointAt(event) - drag.start) / scaleRef.current) * direction;
+    return clampTo(drag.startValue + moved, bounds);
+  };
 
   return (
     <div
       role="separator"
       aria-label={label}
-      aria-orientation="vertical"
-      aria-valuenow={Math.round(rem)}
-      aria-valuemin={MIN_REM}
-      aria-valuemax={MAX_REM}
+      aria-orientation={vertical ? "vertical" : "horizontal"}
+      aria-valuenow={Math.round(value)}
+      aria-valuemin={bounds.min}
+      aria-valuemax={bounds.max}
       tabIndex={0}
       className={cn(
         // A hairline that widens to a grab area without taking layout space:
-        // the column it separates is the thing, not the handle.
-        "relative w-px shrink-0 cursor-col-resize bg-line",
+        // the pane it separates is the thing, not the handle.
+        "relative shrink-0 bg-line",
+        vertical ? "w-px cursor-col-resize" : "h-px cursor-row-resize",
         // Nine pixels for a mouse, twenty-five for a finger. Measured, the
         // handle is 1px wide and its grab area was 9px at every size — fine
         // for a pointer that lands where it is aimed, and not a target a
-        // thumb can find on the tablets these two dividers are visible on
+        // thumb can find on the tablets these dividers are visible on
         // from 760px up. The wider area is behind `pointer-coarse` rather
         // than applied to both, because it is not free: it is twelve pixels
         // of the pane on either side that stop taking a click of their own,
         // which is a real cost next to a result table's first column and the
         // questions' own text. A finger already loses that much to its own
         // contact patch; a mouse should not have to.
-        "after:absolute after:inset-y-0 after:-left-1 after:-right-1 after:content-['']",
-        "pointer-coarse:after:-left-3 pointer-coarse:after:-right-3",
+        "after:absolute after:content-['']",
+        vertical
+          ? "after:inset-y-0 after:-left-1 after:-right-1 pointer-coarse:after:-left-3 pointer-coarse:after:-right-3"
+          : "after:inset-x-0 after:-top-1 after:-bottom-1 pointer-coarse:after:-top-3 pointer-coarse:after:-bottom-3",
         "hover:bg-line-2 focus-visible:bg-accent focus-visible:outline-none",
         className,
       )}
       onKeyDown={(event) => {
         const step = event.shiftKey ? 4 : 1;
-        if (event.key === "ArrowLeft") {
+        if (event.key === decrease) {
           event.preventDefault();
-          onResize(clamp(rem - step * direction));
-        } else if (event.key === "ArrowRight") {
+          onResize(clampTo(value - step * direction, bounds));
+        } else if (event.key === increase) {
           event.preventDefault();
-          onResize(clamp(rem + step * direction));
+          onResize(clampTo(value + step * direction, bounds));
         }
       }}
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture(event.pointerId);
-        remRef.current = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-        dragging.current = { startX: event.clientX, startRem: rem };
+        if (unit === "rem") {
+          scaleRef.current = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+        } else {
+          // A point of share is a hundredth of the container it is a share
+          // of, so the same arithmetic serves both units.
+          const box = containerRef.current?.getBoundingClientRect();
+          const span = (vertical ? box?.width : box?.height) ?? 0;
+          scaleRef.current = Math.max(1, span / 100);
+        }
+        dragging.current = { start: pointAt(event), startValue: value };
       }}
       onPointerMove={(event) => {
-        const drag = dragging.current;
         const container = containerRef.current;
-        if (!drag || !container) return;
+        if (!dragging.current || !container) return;
 
-        const moved = ((event.clientX - drag.startX) / remRef.current) * direction;
-        const next = clamp(drag.startRem + moved);
         // Straight onto the DOM: see this file's own doc for why this does not
         // go through state until the pointer is released.
-        container.style.setProperty(property, `${next}rem`);
+        container.style.setProperty(property, `${movedTo(event)}${unit}`);
       }}
       onPointerUp={(event) => {
-        const drag = dragging.current;
-        const container = containerRef.current;
+        const next = movedTo(event);
+        const had = dragging.current;
         dragging.current = null;
-        if (!drag || !container) return;
-
-        const moved = ((event.clientX - drag.startX) / remRef.current) * direction;
-        onResize(clamp(drag.startRem + moved));
+        if (had && containerRef.current) onResize(next);
       }}
     />
   );

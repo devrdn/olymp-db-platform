@@ -1012,6 +1012,7 @@ const ro = {
         panes: {
           schema: "Lățimea panoului schemei",
           side: "Lățimea panoului întrebărilor",
+          editor: "Înălțimea editorului",
         },
         resultEmpty: "Executați o interogare pentru a vedea rezultatul aici.",
         /** Din ce filă vine rezultatul de pe ecran — el rămâne cât timp se scrie în altă filă. */

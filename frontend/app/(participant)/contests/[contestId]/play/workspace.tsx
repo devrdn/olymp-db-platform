@@ -15,7 +15,7 @@ import type { ConsoleState } from "./actions";
 import { ConsoleEditor } from "./console";
 import { QueryLogPanel } from "./query-log-panel";
 import { ResultPanel } from "./result-panel";
-import { PaneHandle, usePaneWidths } from "./pane-splitter";
+import { PaneHandle, SHARE_BOUNDS, WIDTH_BOUNDS, useConsoleRows, usePaneWidths } from "./pane-splitter";
 import { SchemaPanel } from "./schema-panel";
 import { SidePanel } from "./side-panel";
 
@@ -145,7 +145,11 @@ export function Workspace({
   // an editor: seeing what a query just did is the point of running it, and
   // a participant should not have to go looking for the tab that shows it.
   const [bottomTab, setBottomTab] = useState("result");
-  const { containerRef, widths, commit } = usePaneWidths(contestId);
+  const { containerRef, sizes: widths, commit } = usePaneWidths(contestId);
+  // The console column's own split. A second group rather than a third and
+  // fourth key in the first: it is stored in a different unit, and a build
+  // that learns a new split should not have to migrate the widths.
+  const { containerRef: columnRef, sizes: rows, commit: commitRows } = useConsoleRows(contestId);
 
   return (
     <>
@@ -258,7 +262,8 @@ export function Workspace({
             <PaneHandle
               label={t.panes.schema}
               property="--pane-schema"
-              rem={widths.schema}
+              value={widths.schema}
+              bounds={WIDTH_BOUNDS}
               direction={1}
               containerRef={containerRef}
               onResize={(rem) => commit({ ...widths, schema: rem })}
@@ -266,10 +271,14 @@ export function Workspace({
             />
           ) : null}
           {/* The console side: the editor on top, always visible, and the
-            result/log tabs below it, sized 55/45 of this column's height —
-            fixed on a workspace-height screen; on the narrow fallback each
-            gets a comfortable minimum instead of a share of a height that no
-            longer applies. */}
+            result/log tabs below it. The editor's share of this column's
+            height starts at the 55/45 the design draws and is then the
+            participant's own (§7) — reading a forty-column row and writing a
+            fifteen-line query want opposite splits. On the narrow fallback
+            each pane gets a comfortable minimum instead of a share of a
+            height that no longer applies, and the edge between them is not
+            draggable there: a percentage of a column whose height is its own
+            content means nothing. */}
           {/* `grid-cols-1` is load-bearing, not decoration. Without an explicit
             column this grid gets one implicit `auto` track, and an auto track
             is floored at its content's *max-content* width — which here is
@@ -281,11 +290,15 @@ export function Workspace({
             `repeat(1, minmax(0, 1fr))` — a track that may not exceed its
             container, which is what puts the sideways scrolling back inside
             the result table's own scroll box where it belongs. */}
-          <div className="grid min-h-0 grid-cols-1 grid-rows-[minmax(0,11fr)_minmax(0,9fr)] border-line max-wide:order-1 max-narrow:grid-rows-none max-narrow:border-b">
+          <div
+            ref={columnRef}
+            style={{ "--pane-editor": `${rows.editor}%` } as React.CSSProperties}
+            className="grid min-h-0 grid-cols-1 grid-rows-[minmax(0,var(--pane-editor))_auto_minmax(0,1fr)] border-line max-wide:order-1 max-narrow:grid-rows-none max-narrow:border-b"
+          >
             {/* A flex column, not a block: the console's form claims the cell
               with flex-1, and flex-1 is inert inside a block parent — which
               left the editor with no height at all. */}
-            <div className="flex min-h-0 flex-col border-b border-line max-narrow:min-h-80">
+            <div className="flex min-h-0 flex-col max-narrow:min-h-80 max-narrow:border-b max-narrow:border-line">
               <ConsoleEditor
                 contestId={contestId}
                 dict={dict}
@@ -331,6 +344,23 @@ export function Workspace({
                 }}
               />
             </div>
+
+            {/* The hairline between the two is the handle itself, so there is
+              nothing to drag past. Hidden below the breakpoint, where the
+              column's height is its content and a share of it is meaningless
+              — the panes there carry their own minimum and maximum instead. */}
+            <PaneHandle
+              label={t.panes.editor}
+              property="--pane-editor"
+              value={rows.editor}
+              axis="y"
+              unit="%"
+              bounds={SHARE_BOUNDS}
+              direction={1}
+              containerRef={columnRef}
+              onResize={(share) => commitRows({ editor: share })}
+              className="max-narrow:hidden"
+            />
 
             {/* Both stay mounted: switching to the log and back must not lose
               the result that is on screen, nor the log's own scroll position.
@@ -380,7 +410,8 @@ export function Workspace({
           <PaneHandle
             label={t.panes.side}
             property="--pane-side"
-            rem={widths.side}
+            value={widths.side}
+            bounds={WIDTH_BOUNDS}
             direction={-1}
             containerRef={containerRef}
             onResize={(rem) => commit({ ...widths, side: rem })}
