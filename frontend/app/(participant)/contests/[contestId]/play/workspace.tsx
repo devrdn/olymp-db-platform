@@ -479,36 +479,36 @@ export function Workspace({
               className={cn("min-h-0", showBottom && "flex flex-col max-narrow:max-h-[60svh]")}
             >
               <div
-                  className={cn(
-                    "min-h-0 flex-1 overflow-hidden",
-                    bottomTab === "result" ? "flex flex-col" : "hidden",
-                  )}
-                >
-                  <MemoResultPanel
-                    contestId={contestId}
-                    state={lastResult}
-                    sourceTitle={resultFrom}
-                    dict={dict}
-                  />
-                </div>
-                <div
-                  className={cn(
-                    "min-h-0 flex-1 overflow-hidden",
-                    bottomTab === "log" ? "flex flex-col" : "hidden",
-                  )}
-                >
-                  <MemoQueryLogPanel
-                    contestId={contestId}
-                    initial={initialLog}
-                    // Collapsed is not "showing the other tab": the log
-                    // refreshes itself on the transition into being shown,
-                    // and coming back to a panel that was put away is such a
-                    // transition however the participant left it.
-                    active={showBottom && bottomTab === "log"}
-                    locale={locale}
-                    dict={dict}
-                  />
-                </div>
+                className={cn(
+                  "min-h-0 flex-1 overflow-hidden",
+                  bottomTab === "result" ? "flex flex-col" : "hidden",
+                )}
+              >
+                <MemoResultPanel
+                  contestId={contestId}
+                  state={lastResult}
+                  sourceTitle={resultFrom}
+                  dict={dict}
+                />
+              </div>
+              <div
+                className={cn(
+                  "min-h-0 flex-1 overflow-hidden",
+                  bottomTab === "log" ? "flex flex-col" : "hidden",
+                )}
+              >
+                <MemoQueryLogPanel
+                  contestId={contestId}
+                  initial={initialLog}
+                  // Collapsed is not "showing the other tab": the log
+                  // refreshes itself on the transition into being shown,
+                  // and coming back to a panel that was put away is such a
+                  // transition however the participant left it.
+                  active={showBottom && bottomTab === "log"}
+                  locale={locale}
+                  dict={dict}
+                />
+              </div>
             </div>
           </div>
 
