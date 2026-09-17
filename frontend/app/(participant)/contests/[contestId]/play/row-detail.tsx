@@ -48,6 +48,11 @@ async function copyText(text: string): Promise<boolean> {
     // without a gesture it did not see. The selection below may still work.
   }
 
+  // Selecting a textarea takes the focus with it, and the focus is what the
+  // row's own Esc and arrows are attached to — left on `<body>`, the panel
+  // stops answering the keyboard on exactly the plain-HTTP machines this
+  // branch exists for. So: remember what had it, and give it back.
+  const focused = document.activeElement as HTMLElement | null;
   const area = document.createElement("textarea");
   try {
     area.value = text;
@@ -59,12 +64,17 @@ async function copyText(text: string): Promise<boolean> {
     area.style.top = "0";
     area.style.opacity = "0";
     document.body.appendChild(area);
+    // Focused as well as selected: some browsers copy nothing from a
+    // selection in an unfocused field, and doing it explicitly is also what
+    // makes the focus this steals something the `finally` below can give back.
+    area.focus({ preventScroll: true });
     area.select();
     return document.execCommand("copy");
   } catch {
     return false;
   } finally {
     area.remove();
+    if (focused?.isConnected) focused.focus({ preventScroll: true });
   }
 }
 
@@ -80,6 +90,7 @@ export function RowDetail({
   dict,
   onClose,
   onKeyDown,
+  className,
 }: {
   columns: readonly string[];
   columnTypes?: readonly string[];
@@ -92,6 +103,8 @@ export function RowDetail({
   onClose: () => void;
   /** The arrows and Esc, handled by whoever owns the selection. */
   onKeyDown?: (event: React.KeyboardEvent) => void;
+  /** How the pane above sizes this — see the result split's own comment. */
+  className?: string;
 }) {
   const t = dict.participant.play.workspace.row;
   const [notice, setNotice] = useState<Notice>(null);
@@ -118,7 +131,7 @@ export function RowDetail({
       role="region"
       aria-label={t.region.replace("{n}", number)}
       onKeyDown={onKeyDown}
-      className="flex min-h-0 flex-col overflow-hidden"
+      className={cn("flex min-h-0 flex-col overflow-hidden", className)}
     >
       <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5">
         <span className="font-mono text-label text-ink-3 uppercase">
@@ -135,17 +148,21 @@ export function RowDetail({
         </Button>
       </div>
 
-      {notice === null ? null : (
-        <p
-          role="status"
-          className={cn(
-            "shrink-0 px-3 py-1 text-small",
-            notice === "copied" ? "text-ink-3" : "text-warn",
-          )}
-        >
-          {notice === "copied" ? t.copied : t.copyFailed}
-        </p>
-      )}
+      {/* On the page from the start, empty. A live region only announces what
+          changes *inside* it: one created together with its own text is a
+          region the reader never had, and a refused copy — the one message
+          that matters — would go unsaid. Empty it draws no line box, so it
+          costs nothing until there is something to say. */}
+      <p
+        role="status"
+        className={cn(
+          "shrink-0 px-3 text-small",
+          notice === null ? null : "py-1",
+          notice === "failed" ? "text-warn" : "text-ink-3",
+        )}
+      >
+        {notice === null ? "" : notice === "copied" ? t.copied : t.copyFailed}
+      </p>
 
       <dl className="min-h-0 flex-1 overflow-auto px-3 py-1 text-body">
         {columns.map((column, c) => {
