@@ -195,7 +195,10 @@ export function ConsoleEditor({
       // "now" is — React calls this before the action itself, and ⌘↵ inside
       // the editor arrives here too (`requestSubmit`).
       onSubmit={() => {
-        setRunFrom(tabs.tabs.find((tab) => tab.id === tabs.activeId)?.title ?? "");
+        // Null, not the empty string, when there is no tab to name: an empty
+        // name is still a name as far as the result's heading is concerned,
+        // and it would be drawn as "From " with nothing after it.
+        setRunFrom(tabs.tabs.find((tab) => tab.id === tabs.activeId)?.title ?? null);
       }}
       className="flex min-h-0 flex-1 flex-col"
     >

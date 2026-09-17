@@ -37,6 +37,9 @@ export function ResultPanel({
    * The name of the SQL tab the run came from, or null before anything has
    * been run. The result stays while the participant types in another tab,
    * so the answer on screen has to say what it is the answer to (§5).
+   *
+   * A name that is there but empty counts as no name: the heading is a
+   * sentence built around it, and two languages put it in quotation marks.
    */
   sourceTitle?: string | null;
   dict: PlayDictionary;
@@ -48,7 +51,7 @@ export function ResultPanel({
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {sourceTitle === null ? null : (
+      {!sourceTitle ? null : (
         <p className="shrink-0 truncate border-b border-line px-3 py-1 text-small text-ink-3">
           {dict.participant.play.workspace.resultFrom.replace("{tab}", sourceTitle)}
         </p>
