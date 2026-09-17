@@ -148,7 +148,7 @@ func (l *QueryLog) History(ctx context.Context, registrationID uuid.UUID, limit,
 	}
 
 	rows, err := querier.Query(ctx, `
-		SELECT request_id, left(sql_text, $4), char_length(sql_text) > $4,
+		SELECT id, left(sql_text, $4), char_length(sql_text) > $4,
 		       status, COALESCE(error_text, ''), duration_ms, row_count, executed_at
 		FROM query_log
 		WHERE registration_id = $1
@@ -183,13 +183,16 @@ func (l *QueryLog) History(ctx context.Context, registrationID uuid.UUID, limit,
 // entry" read behind GET .../play/log/{entryId}, the panel's fallback for a
 // row the page cut at MaxHistorySQLChars.
 //
-// entryID is the row's request_id (see queryrunner.HistoryEntry.ID's own
-// doc), matched together with registration_id in the same WHERE clause
-// History uses: exactly this participant's own row, and queryrunner.
-// ErrHistoryEntryNotFound for anything else, including a request id that
-// belongs to another registration entirely — the same one answer for "never
-// logged" and "not yours" that a workspace tab's own lookup gives (CLAUDE.md:
-// a refusal must not confirm that something exists for somebody else).
+// entryID is the row's own id — query_log's bigserial primary key, not
+// request_id (see queryrunner.HistoryEntry.ID's own doc for why) — matched
+// together with registration_id in the same WHERE clause History uses:
+// exactly this participant's own row, and queryrunner.ErrHistoryEntryNotFound
+// for anything else, including an id that belongs to another registration
+// entirely — the same one answer for "never logged" and "not yours" that a
+// workspace tab's own lookup gives (CLAUDE.md: a refusal must not confirm
+// that something exists for somebody else). Scoping every lookup to
+// registration_id as well as id is what makes a guessed or enumerated id
+// safe: it can only ever produce this caller's own rows, or nothing.
 //
 // The statement is bounded the same way a page row is (CLAUDE.md rule 12),
 // just against sqlpolicy.MaxQueryBytes rather than MaxHistorySQLChars: the
@@ -197,25 +200,26 @@ func (l *QueryLog) History(ctx context.Context, registrationID uuid.UUID, limit,
 // query before it is ever journalled, so this cut is a defensive ceiling
 // rather than one any real row reaches, and sql_truncated stays false unless
 // it somehow does.
-func (l *QueryLog) Entry(ctx context.Context, registrationID, entryID uuid.UUID) (queryrunner.HistoryEntry, error) {
+func (l *QueryLog) Entry(ctx context.Context, registrationID uuid.UUID, entryID int64) (queryrunner.HistoryEntry, error) {
 	var (
 		entry  queryrunner.HistoryEntry
 		status string
 	)
 	err := l.querier(ctx).QueryRow(ctx, `
-		SELECT request_id, left(sql_text, $3), char_length(sql_text) > $3,
+		SELECT left(sql_text, $3), char_length(sql_text) > $3,
 		       status, COALESCE(error_text, ''), duration_ms, row_count, executed_at
 		FROM query_log
-		WHERE registration_id = $1 AND request_id = $2`,
+		WHERE id = $2 AND registration_id = $1`,
 		registrationID, entryID, sqlpolicy.MaxQueryBytes).
-		Scan(&entry.ID, &entry.SQL, &entry.SQLTruncated, &status, &entry.Error,
+		Scan(&entry.SQL, &entry.SQLTruncated, &status, &entry.Error,
 			&entry.DurationMs, &entry.RowCount, &entry.ExecutedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return queryrunner.HistoryEntry{}, queryrunner.ErrHistoryEntryNotFound
 	}
 	if err != nil {
-		return queryrunner.HistoryEntry{}, fmt.Errorf("read query log entry %s for registration %s: %w", entryID, registrationID, err)
+		return queryrunner.HistoryEntry{}, fmt.Errorf("read query log entry %d for registration %s: %w", entryID, registrationID, err)
 	}
+	entry.ID = entryID
 	entry.Status = queryrunner.Status(status)
 	return entry, nil
 }

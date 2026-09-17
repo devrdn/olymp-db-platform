@@ -3,8 +3,6 @@ package queryrunner
 import (
 	"errors"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // HistoryEntry is one row of a participant's own query log, read back rather
@@ -12,25 +10,21 @@ import (
 // direction. It carries exactly what the log already records for this
 // purpose: the statement, how it ended, and when.
 type HistoryEntry struct {
-	// ID is query_log.request_id, the row's only uuid column, reused as the
-	// public identifier a client names in GET .../play/log/{entryId}
-	// (§7). query_log's own primary key is a bigserial, added long before
-	// any row needed a public identifier at all (migration 000004), and
-	// giving it a surrogate uuid would be a migration this feature does not
-	// otherwise call for.
+	// ID is query_log.id, the row's own bigserial primary key — the public
+	// identifier a client names in GET .../play/log/{entryId} (§7).
 	//
-	// Reusing request_id relies on it actually being one row's own: every
-	// row Begin opens carries the identifier of the HTTP request that ran
-	// it (Entry.RequestID, from httpx.RequestID), and this installation's
-	// own browser client never sends the header that lets a caller choose
-	// it, so in practice it is always a fresh server-generated uuid and
-	// distinct from every other row's. A participant who deliberately
-	// replayed the same X-Request-Id on several of their own queries could
-	// make their own history ambiguous by this identifier — Entry answers
-	// with whichever of theirs matches first — but never another
-	// participant's, since every lookup is also scoped to the caller's own
-	// registration_id.
-	ID  uuid.UUID
+	// Not request_id: that column is a uuid, but its uniqueness rests on
+	// client behaviour rather than on the database — the middleware that
+	// stamps it (httpx.RequestID) only ever reuses a caller-supplied
+	// X-Request-Id header, and nothing stops a request from outside this
+	// installation's own frontend from sending one. A lookup keyed by it
+	// could then match more than one of a participant's own rows. id has no
+	// such dependency: it is the table's own primary key, assigned by
+	// Postgres and never chosen by a caller. Every lookup by it is still
+	// scoped to the caller's own registration_id (Entry's own doc), so a
+	// guessed or enumerated id only ever yields that participant's own rows,
+	// or ErrHistoryEntryNotFound.
+	ID  int64
 	SQL string
 	// SQLTruncated says SQL is the beginning of the statement rather than the
 	// whole of it — see MaxHistorySQLChars. A flag rather than a silent cut,
@@ -55,10 +49,9 @@ type HistoryEntry struct {
 }
 
 // ErrHistoryEntryNotFound is Entry's refusal: no row of the caller's own
-// registration has that request id. The same answer for a request id that
-// was never logged at all and for one that belongs to another participant's
-// row — telling those apart would confirm which request ids exist for
-// somebody else's session.
+// registration has that id. The same answer for an id that was never logged
+// at all and for one that belongs to another participant's row — telling
+// those apart would confirm which ids exist for somebody else's session.
 var ErrHistoryEntryNotFound = errors.New("no such query log entry")
 
 // DefaultHistoryLimit and MaxHistoryLimit bound one page of a participant's
