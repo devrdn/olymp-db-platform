@@ -1656,6 +1656,7 @@ const en = {
     invalid_contest_id: "Wrong contest identifier.",
     invalid_question_id: "Wrong question identifier.",
     invalid_tab_id: "Wrong tab identifier.",
+    invalid_user_id: "Wrong user identifier.",
     workspace_too_often:
       "Your notes and tabs are being saved too often. Saving will resume in a moment.",
     workspace_tab_limit: "You already have as many tabs as allowed. Close one to open another.",
@@ -1669,7 +1670,6 @@ const en = {
       "The text contains a character that cannot be saved. Remove it and try again.",
     workspace_order_mismatch:
       "The tabs changed while you were moving them. Reload the page and try again.",
-    invalid_user_id: "Wrong user identifier.",
     cross_origin: "The request did not come from this site. Reload the page and try again.",
     method_not_allowed: "That action is unavailable for this resource.",
     internal_error: "The server could not process the request.",
