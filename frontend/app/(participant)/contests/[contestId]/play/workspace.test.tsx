@@ -9,6 +9,7 @@ import en from "@/lib/i18n/dictionaries/en";
 
 import { PanelToggles, PanelVisibilityProvider } from "./panel-toggles";
 import { PrintView } from "./print-view";
+import type { QuestionEntry } from "./questions-panel";
 import { Workspace } from "./workspace";
 import type { AnswerState, ConsoleState, QuestionsRefreshResult, QueryLogRefreshResult } from "./actions";
 
@@ -23,6 +24,17 @@ vi.mock("./actions", () => ({
     logCalls.count++;
     return { kind: "ok", items: [], total: 0 };
   },
+}));
+
+// The query log refuses to refetch within three seconds of its last refresh,
+// so that a participant idly toggling Result and Log does not spend the
+// `AdmitRead` budget their next query needs. That gate belongs to the log
+// panel and is tested there (querylog-terms.ts carries the reasoning); here
+// it would only mean that a collapse and an expand one keystroke apart prove
+// nothing about whether the panel was told it had been left.
+vi.mock("@/lib/api/querylog-terms", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api/querylog-terms")>()),
+  QUERY_LOG_REFRESH_MIN_INTERVAL_MS: 0,
 }));
 
 function freshInitialLog() {
@@ -575,7 +587,10 @@ describe("collapsing a panel", () => {
 
   /** A contest of its own per test: what is collapsed is remembered per contest, and two tests that shared one would share that. */
   let contests = 0;
-  function showWithToggles(schema: typeof A_SCHEMA | null = A_SCHEMA) {
+  function showWithToggles(
+    schema: typeof A_SCHEMA | null = A_SCHEMA,
+    questionEntries: QuestionEntry[] = [],
+  ) {
     contests += 1;
     const contestId = `collapse-${contests}`;
     const view = render(
@@ -586,7 +601,7 @@ describe("collapsing a panel", () => {
           storyBody={<p>A body in the stacks.</p>}
           printView={null}
           storyUnavailable={null}
-          questionEntries={[]}
+          questionEntries={questionEntries}
           schema={schema}
           initialLog={freshInitialLog()}
           workspace={A_WORKSPACE}
@@ -598,14 +613,18 @@ describe("collapsing a panel", () => {
     return { ...view, contestId };
   }
 
+  // A collapsed panel is hidden rather than unmounted — it holds a
+  // participant's half-typed answer, the log's loaded pages, a search — so
+  // these ask what is *visible*, not what is in the tree, and pass
+  // `hidden: true` to find the element at all.
   function schemaPanel() {
-    return screen.queryByRole("region", { name: en.participant.play.schema.heading });
+    return screen.getByRole("region", { name: en.participant.play.schema.heading, hidden: true });
   }
   function sidePanel() {
-    return screen.queryByRole("tab", { name: en.participant.play.workspace.tabs.story });
+    return screen.getByRole("tab", { name: en.participant.play.workspace.tabs.story, hidden: true });
   }
   function bottomPanel() {
-    return screen.queryByText(en.participant.play.workspace.resultEmpty);
+    return screen.getByText(en.participant.play.workspace.resultEmpty);
   }
   /** The editor by name: the schema panel beside it has a search field, so "the textbox" is ambiguous here. */
   function editor() {
@@ -614,17 +633,17 @@ describe("collapsing a panel", () => {
 
   test("the schema panel and its divider both leave, and both come back", async () => {
     showWithToggles();
-    expect(schemaPanel()).toBeInTheDocument();
+    expect(schemaPanel()).toBeVisible();
     expect(screen.getByRole("separator", { name: panes.schema })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: p.schema }));
 
-    expect(schemaPanel()).not.toBeInTheDocument();
+    expect(schemaPanel()).not.toBeVisible();
     expect(screen.queryByRole("separator", { name: panes.schema })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: p.schema }));
 
-    expect(schemaPanel()).toBeInTheDocument();
+    expect(schemaPanel()).toBeVisible();
     expect(screen.getByRole("separator", { name: panes.schema })).toBeInTheDocument();
   });
 
@@ -633,10 +652,10 @@ describe("collapsing a panel", () => {
 
     await userEvent.click(screen.getByRole("button", { name: p.side }));
 
-    expect(sidePanel()).not.toBeInTheDocument();
+    expect(sidePanel()).not.toBeVisible();
     expect(screen.queryByRole("separator", { name: panes.side })).not.toBeInTheDocument();
     // The console is untouched: this is the panel beside it that left.
-    expect(editor()).toBeInTheDocument();
+    expect(editor()).toBeVisible();
   });
 
   test("the bottom panel and the edge above it both leave", async () => {
@@ -644,11 +663,12 @@ describe("collapsing a panel", () => {
 
     await userEvent.click(screen.getByRole("button", { name: p.bottom }));
 
-    expect(bottomPanel()).not.toBeInTheDocument();
+    expect(bottomPanel()).not.toBeVisible();
     expect(screen.queryByRole("separator", { name: panes.editor })).not.toBeInTheDocument();
   });
 
-  // "Если свернуть всё, на экране остаются только вкладки и редактор."
+  // §8: collapse all three and what is left on the screen is the tab strip
+  // and the editor.
   test("collapsing all three leaves the tab strip and the editor", async () => {
     showWithToggles();
 
@@ -656,11 +676,11 @@ describe("collapsing a panel", () => {
     await userEvent.click(screen.getByRole("button", { name: p.side }));
     await userEvent.click(screen.getByRole("button", { name: p.bottom }));
 
-    expect(schemaPanel()).not.toBeInTheDocument();
-    expect(sidePanel()).not.toBeInTheDocument();
-    expect(bottomPanel()).not.toBeInTheDocument();
-    expect(screen.getByRole("tablist", { name: en.participant.play.workspace.editor.tablist })).toBeInTheDocument();
-    expect(editor()).toBeInTheDocument();
+    expect(schemaPanel()).not.toBeVisible();
+    expect(sidePanel()).not.toBeVisible();
+    expect(bottomPanel()).not.toBeVisible();
+    expect(screen.getByRole("tablist", { name: en.participant.play.workspace.editor.tablist })).toBeVisible();
+    expect(editor()).toBeVisible();
   });
 
   // jsdom lays nothing out, so what is asserted is the template the widths
@@ -716,7 +736,7 @@ describe("collapsing a panel", () => {
     };
     showWithToggles(null);
     await userEvent.click(screen.getByRole("button", { name: p.bottom }));
-    expect(bottomPanel()).not.toBeInTheDocument();
+    expect(bottomPanel()).not.toBeVisible();
 
     await runQuery();
 
@@ -750,7 +770,7 @@ describe("collapsing a panel", () => {
 
     await userEvent.keyboard("{Control>}b{/Control}");
 
-    expect(schemaPanel()).not.toBeInTheDocument();
+    expect(schemaPanel()).not.toBeVisible();
     expect(screen.getByRole("button", { name: p.schema })).toHaveAttribute("aria-pressed", "false");
     expect(editor()).toHaveTextContent("SELECT 1");
   });
@@ -781,7 +801,76 @@ describe("collapsing a panel", () => {
     fireEvent.keyDown(content, { key: "j", code: "KeyJ", ctrlKey: true });
 
     expect(claimedByTheEditor).toBe(true);
-    expect(bottomPanel()).not.toBeInTheDocument();
+    expect(bottomPanel()).not.toBeVisible();
+  });
+
+  /**
+   * The reason a collapsed panel is hidden and not unmounted.
+   *
+   * A question's answer field is plain component state — no draft, nothing
+   * saved — and the verdict beside it lives in `useActionState`. Unmounting
+   * the panel would throw away a typed, unsubmitted answer during a graded
+   * contest, and the participant would have pressed one key to do it. On a
+   * Windows layout AltGr reports as Ctrl+Alt, so they need not even have
+   * meant to press it.
+   */
+  test("a typed answer survives a collapse and an expand", async () => {
+    const q = {
+      id: "q1",
+      kind: "text" as const,
+      points: 10,
+      choiceIds: [],
+      bodyMd: "Who was in the greenhouse?",
+      choices: {},
+      attemptsRemaining: 3,
+      closed: false,
+      canAnswer: true,
+      correct: false,
+      pointsAwarded: 0,
+    };
+    showWithToggles(null, [{ question: q, index: 1, body: <span>{q.bodyMd}</span> }]);
+    await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.questions }));
+    const field = screen.getByRole("textbox", { name: en.participant.play.questions.answerLabel });
+    await userEvent.type(field, "the gardener");
+
+    await userEvent.click(screen.getByRole("button", { name: p.side }));
+    await userEvent.click(screen.getByRole("button", { name: p.side }));
+
+    expect(
+      screen.getByRole("textbox", { name: en.participant.play.questions.answerLabel }),
+    ).toHaveValue("the gardener");
+  });
+
+  // The query log holds pages it loaded and a list it refreshed. Unmounting
+  // the pane put all of that back to the snapshot the server render shipped
+  // — an hour old by the middle of an olympiad — with nothing on screen to
+  // say so, and took every "load older" page with it.
+  test("collapsing the bottom panel does not remount the query log", async () => {
+    showWithToggles(null);
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.log }));
+    const empty = screen.getByText(en.participant.play.workspace.log.empty);
+
+    await userEvent.click(screen.getByRole("button", { name: p.bottom }));
+    await userEvent.click(screen.getByRole("button", { name: p.bottom }));
+
+    expect(screen.getByText(en.participant.play.workspace.log.empty)).toBe(empty);
+  });
+
+  // And it still has to catch up when the participant comes back to it:
+  // collapsing the panel is leaving the tab, so expanding into it is
+  // arriving. The three-second gate on that refresh is the log panel's own
+  // and is tested there; it is stubbed out at the top of this file so what
+  // is asserted here is the transition and not the clock.
+  test("expanding back into the log refreshes it", async () => {
+    showWithToggles(null);
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.log }));
+    await waitFor(() => expect(logCalls.count).toBeGreaterThan(0));
+    await userEvent.click(screen.getByRole("button", { name: p.bottom }));
+    const before = logCalls.count;
+
+    await userEvent.click(screen.getByRole("button", { name: p.bottom }));
+
+    await waitFor(() => expect(logCalls.count).toBeGreaterThan(before));
   });
 
   // The memoised panels stay memoised. Collapsing the bottom panel moves
@@ -808,7 +897,9 @@ describe("collapsing a panel", () => {
     await userEvent.click(screen.getByRole("button", { name: p.schema }));
     const grid = container.querySelector<HTMLElement>('[style*="--pane-side"]')!;
 
-    const placed = [...grid.children].filter((child) => !child.classList.contains("max-narrow:hidden"));
+    const placed = [...grid.children].filter(
+      (child) => !child.classList.contains("max-narrow:hidden") && !child.hasAttribute("hidden"),
+    );
     const orders = placed.map((pane) => {
       for (const prefix of ["max-narrow:", "max-wide:"]) {
         for (const cls of pane.classList) {
