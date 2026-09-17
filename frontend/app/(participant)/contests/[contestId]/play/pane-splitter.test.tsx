@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -19,7 +19,7 @@ vi.mock("./use-contest-events", () => ({
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
 import { Workspace } from "./workspace";
-import { DEFAULT_SCHEMA_REM, DEFAULT_SIDE_REM } from "./pane-splitter";
+import { DEFAULT_EDITOR_PCT, DEFAULT_SCHEMA_REM, DEFAULT_SIDE_REM } from "./pane-splitter";
 
 const A_SCHEMA = {
   truncated: false,
@@ -140,5 +140,95 @@ describe("the console's panes", () => {
       "aria-valuenow",
       String(Math.round(DEFAULT_SCHEMA_REM)),
     );
+  });
+});
+
+/**
+ * §7: the edge between the editor and the panel below it is draggable too.
+ * It used to be a fixed 11:9, which is a share of the screen the product
+ * picked — and how much of it a participant wants for the answer is theirs,
+ * not ours: reading a forty-column row and writing a fifteen-line query want
+ * opposite splits.
+ *
+ * The same handle as the two vertical edges, turned a quarter: a share of the
+ * column's height rather than a width in rem, because the column's height is
+ * the viewport's and a stored rem would mean something different on every
+ * screen the contest is sat in front of.
+ */
+describe("the edge between the editor and the panel below it", () => {
+  const t = en.participant.play.workspace.panes;
+
+  test("is a horizontal separator that starts from the design's own share", () => {
+    show();
+
+    const handle = screen.getByRole("separator", { name: t.editor });
+    expect(handle).toHaveAttribute("aria-orientation", "horizontal");
+    expect(handle).toHaveAttribute("aria-valuenow", String(DEFAULT_EDITOR_PCT));
+  });
+
+  test("moves with the arrow keys, and drives the column's own track", async () => {
+    const user = userEvent.setup();
+    const { container } = show();
+
+    const handle = screen.getByRole("separator", { name: t.editor });
+    handle.focus();
+    await user.keyboard("{ArrowDown}");
+
+    expect(handle).toHaveAttribute("aria-valuenow", String(DEFAULT_EDITOR_PCT + 1));
+    expect(
+      container.querySelector<HTMLElement>("[style*='--pane-editor']")?.style.getPropertyValue("--pane-editor"),
+    ).toBe(`${DEFAULT_EDITOR_PCT + 1}%`);
+  });
+
+  test("remembers its share across a visit, per contest", async () => {
+    const user = userEvent.setup();
+    const first = show("c1");
+
+    screen.getByRole("separator", { name: t.editor }).focus();
+    await user.keyboard("{Shift>}{ArrowUp}{/Shift}");
+    first.unmount();
+
+    show("c1");
+    expect(screen.getByRole("separator", { name: t.editor })).toHaveAttribute(
+      "aria-valuenow",
+      String(DEFAULT_EDITOR_PCT - 4),
+    );
+  });
+
+  test("leaves both panes something to be, however far it is pushed", async () => {
+    const user = userEvent.setup();
+    show();
+
+    const handle = screen.getByRole("separator", { name: t.editor });
+    handle.focus();
+    for (let i = 0; i < 120; i++) await user.keyboard("{ArrowUp}");
+
+    expect(Number(handle.getAttribute("aria-valuenow"))).toBe(
+      Number(handle.getAttribute("aria-valuemin")),
+    );
+    expect(Number(handle.getAttribute("aria-valuemin"))).toBeGreaterThan(0);
+  });
+
+  // A pointer drag never goes through React (see the module's own doc): it
+  // writes the share straight onto the column, and state is written once on
+  // release. What makes that work on this axis is that the share is read
+  // against the column's measured height, not against a font size.
+  test("a drag reads the column's own height, and commits once on release", () => {
+    const { container } = show();
+    const handle = screen.getByRole("separator", { name: t.editor });
+    const column = container.querySelector<HTMLElement>("[style*='--pane-editor']") as HTMLElement;
+    column.getBoundingClientRect = () => ({ height: 400, width: 800, top: 0, left: 0, right: 800, bottom: 400, x: 0, y: 0, toJSON: () => ({}) });
+
+    handle.setPointerCapture = () => {};
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 0, clientY: 200 });
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 0, clientY: 240 });
+
+    // Forty pixels of a four-hundred-pixel column is ten points of share, and
+    // it is on the element rather than in state.
+    expect(column.style.getPropertyValue("--pane-editor")).toBe(`${DEFAULT_EDITOR_PCT + 10}%`);
+    expect(handle).toHaveAttribute("aria-valuenow", String(DEFAULT_EDITOR_PCT));
+
+    fireEvent.pointerUp(handle, { pointerId: 1, clientX: 0, clientY: 240 });
+    expect(handle).toHaveAttribute("aria-valuenow", String(DEFAULT_EDITOR_PCT + 10));
   });
 });
