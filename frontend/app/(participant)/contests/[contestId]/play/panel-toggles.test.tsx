@@ -122,6 +122,47 @@ describe("the panel toggles", () => {
     expect(screen.getByRole("button", { name: t.bottom })).toBeInTheDocument();
   });
 
+  /**
+   * A press on the toggle is the other way to collapse a panel, and it needs
+   * the same hand-off as the shortcut.
+   *
+   * On macOS, Safari and Firefox do not focus a `<button>` when it is
+   * clicked — the platform convention, and a real participant's browser.
+   * `fireEvent.click` is that browser: the press happens and the focus does
+   * not move, which is exactly the case where a hand-off that lived in the
+   * key handler alone left the focus in a field that was about to be
+   * hidden, and then on `<body>`.
+   */
+  test("a press takes the focus out of the panel it hides, in a browser that does not focus buttons", async () => {
+    show(aContest());
+    await userEvent.click(screen.getByRole("textbox", { name: "your answer" }));
+
+    fireEvent.click(screen.getByRole("button", { name: t.side }));
+
+    expect(screen.getByRole("button", { name: t.side })).toHaveFocus();
+  });
+
+  test("a press leaves a caret that is not in the panel where it is", async () => {
+    show(aContest());
+    const query = screen.getByRole("textbox", { name: "your query" });
+    await userEvent.click(query);
+
+    fireEvent.click(screen.getByRole("button", { name: t.schema }));
+
+    expect(query).toHaveFocus();
+  });
+
+  test("a press that shows a panel again does not move the focus", async () => {
+    show(aContest());
+    fireEvent.click(screen.getByRole("button", { name: t.bottom }));
+    const query = screen.getByRole("textbox", { name: "your query" });
+    await userEvent.click(query);
+
+    fireEvent.click(screen.getByRole("button", { name: t.bottom }));
+
+    expect(query).toHaveFocus();
+  });
+
   // The same header draws the waiting room, where there are no panels yet.
   test("nothing is drawn outside a provider", () => {
     render(<PanelToggles dict={en} />);
