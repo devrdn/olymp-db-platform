@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 
 import { runQueryAction, type ConsoleState } from "./actions";
 import { SqlTabStatus, SqlTabStrip } from "./sql-tabs";
-import { useSqlTabs } from "./use-sql-tabs";
+import { LOCAL_TAB_ID, useSqlTabs } from "./use-sql-tabs";
 
 /**
  * The SQL editor — the thing a participant types in, always visible, never
@@ -114,8 +114,19 @@ export function ConsoleEditor({
   const mirrorRef = useRef<HTMLTextAreaElement>(null);
   const lastTyped = useRef("");
   const editorRef = useRef<CodeEditorHandle>(null);
-  /** The tab the editor is showing, for the callbacks that run outside a render. */
-  const openRef = useRef<string | null>(null);
+  /**
+   * The tab the field below holds the text of — the callbacks that run
+   * outside a render read it, and the effect that keeps the field in step
+   * compares against it.
+   *
+   * Seeded with the tab the field is rendered from, not with null. A page
+   * that was server-rendered opens on that same tab during hydration, so the
+   * effect still skips its first run and leaves a browser-restored value
+   * alone; a client-side navigation (the ordinary way onto this screen, from
+   * /my) renders the remembered tab straight away, and there the first run
+   * is exactly what puts that tab's text where a run reads it.
+   */
+  const openRef = useRef<string>(initialTabs?.[0]?.id ?? LOCAL_TAB_ID);
   const panelId = useId();
   const tabPrefix = useId();
 
@@ -136,16 +147,13 @@ export function ConsoleEditor({
     onDrop: (id) => editorRef.current?.dropDocument(id),
   });
 
-  // What a run sends, kept in step with the tab that is open. Skipped on the
-  // first run of this effect: what the mirror holds then is the
-  // server-rendered text, or whatever the browser restored over it across a
-  // soft reload, and neither is this effect's to overwrite.
+  // What a run sends, kept in step with the tab that is open. It does
+  // nothing while the field already holds that tab's text, which is the
+  // server-rendered case — where what the field holds may be a value the
+  // browser restored across a soft reload, and not this effect's to
+  // overwrite.
   const { activeId, textOf } = tabs;
   useLayoutEffect(() => {
-    if (openRef.current === null) {
-      openRef.current = activeId;
-      return;
-    }
     if (openRef.current === activeId) return;
     openRef.current = activeId;
     const text = textOf(activeId);
@@ -200,11 +208,12 @@ export function ConsoleEditor({
       <textarea
         ref={mirrorRef}
         name="sql"
-        // The first tab's text, which is what the strip opens with on the
-        // server and during hydration; a tab remembered from last time is
-        // swapped in by the effect above, once the browser's own storage has
-        // been read.
-        defaultValue={initialTabs?.[0]?.body ?? ""}
+        // The open tab's text. On the server, and so during hydration, that
+        // is the first tab — storage has not been read yet; on a client-side
+        // navigation it is the remembered one from the first render, which
+        // is what makes a run send the text on screen rather than the first
+        // tab's (the effect above catches the hydrating case).
+        defaultValue={textOf(activeId)}
         aria-hidden="true"
         tabIndex={-1}
         className="sr-only"
