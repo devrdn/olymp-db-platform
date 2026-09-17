@@ -412,42 +412,44 @@ func TestHistoryCountsEveryRowEvenOnAPageThatLandsPastTheEnd(t *testing.T) {
 	})
 }
 
-// History's own rows now carry the request id they were opened with, because
-// that is the identifier Entry is looked up by (queryrunner.HistoryEntry.ID's
-// own doc). Without this, GET .../play/log could show a row the panel can
-// never actually open in full.
-func TestHistoryCarriesTheRequestIDEachRowWasOpenedWith(t *testing.T) {
+// History's own rows now carry their own id — query_log's bigserial primary
+// key, not request_id (queryrunner.HistoryEntry.ID's own doc says why) —
+// because that is the identifier Entry is looked up by. Without this,
+// GET .../play/log could show a row the panel can never actually open in
+// full.
+func TestHistoryCarriesEachRowsOwnID(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
 		registration := someRegistration(t, ctx)
-		requestID := uuid.New()
 
-		completeRowWithRequestID(t, ctx, log, registration, requestID, "SELECT 1", queryrunner.StatusOK, 1, 1)
+		id := completeRowReturningID(t, ctx, log, registration, "SELECT 1", queryrunner.StatusOK, 1, 1)
 
 		found, _, err := log.History(ctx, registration, 0, 0)
 		if err != nil {
 			t.Fatalf("History: %v", err)
 		}
-		if len(found) != 1 || found[0].ID != requestID {
-			t.Fatalf("found[0].ID = %v, want the request id the row was opened with (%v)", found, requestID)
+		if len(found) != 1 || found[0].ID != id {
+			t.Fatalf("found[0].ID = %v, want the id the row was opened with (%v)", found, id)
 		}
 	})
 }
 
 // Entry is the read behind GET .../play/log/{entryId}: this registration's
-// own row, in full, found by the request id History's own page just proved
-// it carries.
+// own row, in full, found by the id History's own page just proved it
+// carries.
 func TestEntryReturnsThisRegistrationsOwnRowInFull(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
 		registration := someRegistration(t, ctx)
-		requestID := uuid.New()
 
-		completeRowWithRequestID(t, ctx, log, registration, requestID, "SELECT * FROM suspects", queryrunner.StatusOK, 12, 250)
+		id := completeRowReturningID(t, ctx, log, registration, "SELECT * FROM suspects", queryrunner.StatusOK, 12, 250)
 
-		entry, err := log.Entry(ctx, registration, requestID)
+		entry, err := log.Entry(ctx, registration, id)
 		if err != nil {
 			t.Fatalf("Entry: %v", err)
+		}
+		if entry.ID != id {
+			t.Fatalf("entry.ID = %d, want %d", entry.ID, id)
 		}
 		if entry.SQL != "SELECT * FROM suspects" || entry.SQLTruncated {
 			t.Fatalf("entry = %+v, want the whole statement, unflagged", entry)
@@ -459,25 +461,29 @@ func TestEntryReturnsThisRegistrationsOwnRowInFull(t *testing.T) {
 	})
 }
 
-// A request id that was never logged, and one that belongs to another
-// registration entirely, answer identically: ErrHistoryEntryNotFound. This
-// is the whole of what makes the single-entry route safe to expose at all —
-// a participant must not be able to tell "no such entry" from "that entry is
-// somebody else's".
+// An id that was never logged, and one that belongs to another registration
+// entirely, answer identically: ErrHistoryEntryNotFound. This is the whole
+// of what makes the single-entry route safe to expose at all — a
+// participant must not be able to tell "no such entry" from "that entry is
+// somebody else's", not even by guessing a neighbouring id.
 func TestEntryOfAnotherRegistrationIsNotFound(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
 		mine := someRegistration(t, ctx)
 		someoneElses := someRegistration(t, ctx)
-		theirRequestID := uuid.New()
 
-		completeRowWithRequestID(t, ctx, log, someoneElses, theirRequestID, "SELECT * FROM secrets", queryrunner.StatusOK, 1, 1)
+		theirID := completeRowReturningID(t, ctx, log, someoneElses, "SELECT * FROM secrets", queryrunner.StatusOK, 1, 1)
 
-		if _, err := log.Entry(ctx, mine, theirRequestID); !errors.Is(err, queryrunner.ErrHistoryEntryNotFound) {
-			t.Fatalf("Entry(mine, their request id) = %v, want ErrHistoryEntryNotFound", err)
+		if _, err := log.Entry(ctx, mine, theirID); !errors.Is(err, queryrunner.ErrHistoryEntryNotFound) {
+			t.Fatalf("Entry(mine, their id) = %v, want ErrHistoryEntryNotFound", err)
 		}
-		if _, err := log.Entry(ctx, mine, uuid.New()); !errors.Is(err, queryrunner.ErrHistoryEntryNotFound) {
-			t.Fatalf("Entry(mine, an unknown request id) = %v, want ErrHistoryEntryNotFound", err)
+		// An id one past theirs is still nobody's own row of "mine"'s
+		// registration, whether or not it exists at all — the same answer
+		// either way, which is the point: an id is a small dense integer, and
+		// a lookup that told "unused" apart from "somebody else's" would be
+		// an oracle for exactly how many rows the log holds.
+		if _, err := log.Entry(ctx, mine, theirID+1); !errors.Is(err, queryrunner.ErrHistoryEntryNotFound) {
+			t.Fatalf("Entry(mine, an unknown id) = %v, want ErrHistoryEntryNotFound", err)
 		}
 	})
 }
@@ -490,12 +496,11 @@ func TestEntryCarriesAStatementPastThePagesOwnBoundWhole(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
 		registration := someRegistration(t, ctx)
-		requestID := uuid.New()
 
 		long := "SELECT '" + strings.Repeat("e", queryrunner.MaxHistorySQLChars*2) + "'"
-		completeRowWithRequestID(t, ctx, log, registration, requestID, long, queryrunner.StatusOK, 1, 1)
+		id := completeRowReturningID(t, ctx, log, registration, long, queryrunner.StatusOK, 1, 1)
 
-		entry, err := log.Entry(ctx, registration, requestID)
+		entry, err := log.Entry(ctx, registration, id)
 		if err != nil {
 			t.Fatalf("Entry: %v", err)
 		}
@@ -505,12 +510,12 @@ func TestEntryCarriesAStatementPastThePagesOwnBoundWhole(t *testing.T) {
 	})
 }
 
-// completeRowWithRequestID is completeRow with a caller-chosen request id,
-// for the tests above that need to look the row back up by it.
-func completeRowWithRequestID(t *testing.T, ctx context.Context, log *QueryLog, registration, requestID uuid.UUID, sql string, status queryrunner.Status, rows, durationMs int) {
+// completeRowReturningID is completeRow that also hands back the row's own
+// id, for the tests above that need to look the row back up by it.
+func completeRowReturningID(t *testing.T, ctx context.Context, log *QueryLog, registration uuid.UUID, sql string, status queryrunner.Status, rows, durationMs int) int64 {
 	t.Helper()
 
-	id, err := log.Begin(ctx, queryrunner.Entry{Registration: registration, RequestID: requestID, SQL: sql})
+	id, err := log.Begin(ctx, queryrunner.Entry{Registration: registration, RequestID: uuid.New(), SQL: sql})
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -519,6 +524,7 @@ func completeRowWithRequestID(t *testing.T, ctx context.Context, log *QueryLog, 
 	}); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
+	return id
 }
 
 // completeRow opens and closes one row in a single call, for tests that only
