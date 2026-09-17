@@ -61,6 +61,12 @@
       "value": "",
       "type": "string",
       "description": "Populated automatically by Participant workspace ▸ Get the workspace (its first tab) and ▸ Open a tab."
+    },
+    {
+      "key": "entryId",
+      "value": "",
+      "type": "string",
+      "description": "A query log entry's own `id`, from GET .../play/log. Set manually — nothing in this collection runs a query or lists the log yet."
     }
   ],
   "event": [
@@ -1600,6 +1606,33 @@
                 }
               }
             }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Participant query log",
+      "item": [
+        {
+          "name": "Get one query log entry",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/play/log/{{entryId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "play",
+                "log",
+                "{{entryId}}"
+              ]
+            },
+            "description": "One entry of the participant's own query log, in full (§7) — the detail panel's fallback once GET .../play/log shows `sql_truncated` on a row. `entryId` is that row's own `id`, copied from the page.\n\nNot found and another participant's entry answer identically: 404 `query_log_entry_not_found`, without saying which. Admitted exactly like GET .../play/log — the same read budget, and no clock is started.\n\nResponses: 200 · 400 `invalid_query_log_entry_id` · 403 · 404 `query_log_entry_not_found` · 409 · 429"
           },
           "response": []
         }
