@@ -168,7 +168,18 @@ export function useSqlTabs({
   // one is saving the open tab is something the status line renders from.
   const [texts] = useState(() => new Map<string, string>((initial ?? []).map((tab) => [tab.id, tab.body])));
   const [engines, setEngines] = useState<ReadonlyMap<string, Entry>>(() => new Map());
-  /** One deliberate write at a time: a doubled click must not open two tabs. */
+  /**
+   * One deliberate write at a time — creating, renaming, closing or
+   * reordering. A doubled click must not open two tabs, and two orders in
+   * flight at once is worse than wasteful: a move shows its new strip at
+   * once and puts the old one back if the server disagrees, so a refusal
+   * arriving after a second drop would restore a strip that second drop is
+   * not in, undoing an order the server accepted.
+   *
+   * The autosaves are not part of this. Each document has its own engine
+   * with its own in-flight rule, and a save of one tab's text has nothing to
+   * take back.
+   */
   const busy = useRef(false);
 
   // Read fresh: both reach into the editor, which the caller owns.
@@ -284,7 +295,7 @@ export function useSqlTabs({
 
   const rename = useCallback(
     (id: string, title: string) => {
-      if (closed !== null) return;
+      if (closed !== null || busy.current) return;
       const applied = () => {
         setTabs((previous) => previous.map((tab) => (tab.id === id ? { ...tab, title } : tab)));
         setError(null);
@@ -296,7 +307,12 @@ export function useSqlTabs({
       // Not applied before the answer: the server is the one that decides
       // whether a name is a name, and a strip that showed an empty title
       // for a moment would be showing something that does not exist.
-      updateTab(contestId, id, { title }).then(applied, report);
+      busy.current = true;
+      updateTab(contestId, id, { title })
+        .then(applied, report)
+        .finally(() => {
+          busy.current = false;
+        });
     },
     [closed, contestId, report, stored],
   );
@@ -304,7 +320,9 @@ export function useSqlTabs({
   const close = useCallback(
     (id: string) => {
       const index = tabs.findIndex((tab) => tab.id === id);
-      if (index < 0 || tabs.length <= 1 || closed !== null) return;
+      if (index < 0 || tabs.length <= 1 || closed !== null || busy.current) return;
+      // After the guard: a question whose answer is going to be ignored is
+      // worse than no question.
       if ((texts.get(id) ?? "") !== "" && !confirmRef.current(tabs[index].title)) return;
 
       const forget = () => {
@@ -331,14 +349,19 @@ export function useSqlTabs({
         forget();
         return;
       }
-      deleteTab(contestId, id).then(forget, report);
+      busy.current = true;
+      deleteTab(contestId, id)
+        .then(forget, report)
+        .finally(() => {
+          busy.current = false;
+        });
     },
     [activeId, choose, closed, contestId, engines, report, stored, tabs, texts],
   );
 
   const move = useCallback(
     (id: string, to: number) => {
-      if (closed !== null) return;
+      if (closed !== null || busy.current) return;
       const from = tabs.findIndex((tab) => tab.id === id);
       if (from < 0 || from === to || to < 0 || to >= tabs.length) return;
       const next = [...tabs];
@@ -347,16 +370,24 @@ export function useSqlTabs({
       // like a drag — and put back if the server disagrees.
       setTabs(next);
       if (!stored) return;
+      busy.current = true;
       reorderTabs(
         contestId,
         next.map((tab) => tab.id),
-      ).then(
-        () => setError(null),
-        (failure: unknown) => {
-          setTabs(tabs);
-          report(failure);
-        },
-      );
+      )
+        .then(
+          () => setError(null),
+          (failure: unknown) => {
+            // The strip as it was when this move started. Nothing else can
+            // have moved it in the meantime: the guard above holds every
+            // other deliberate write until this one has answered.
+            setTabs(tabs);
+            report(failure);
+          },
+        )
+        .finally(() => {
+          busy.current = false;
+        });
     },
     [closed, contestId, report, stored, tabs],
   );

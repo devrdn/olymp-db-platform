@@ -12,7 +12,7 @@ const t = en.participant.play.workspace.editor;
 
 type Call = { url: string; init: RequestInit };
 let calls: Call[] = [];
-let answer: (url: string, init: RequestInit) => Response;
+let answer: (url: string, init: RequestInit) => Response | Promise<Response>;
 let confirmClose: Mock<(title: string) => boolean>;
 let restored: [string, string][];
 let dropped: string[];
@@ -376,6 +376,42 @@ describe("reordering the tabs", () => {
       "Suspects",
       "Query 1",
     ]);
+  });
+
+  /**
+   * One deliberate write at a time, which `create` already kept to. Two
+   * orders in flight at once is how a move's rollback comes to undo a drop
+   * the server accepted: the refusal of the first one puts back the strip as
+   * it was when that move started, and the second move is not in it.
+   */
+  test("sends one order at a time", async () => {
+    show();
+    let land: () => void = () => {};
+    answer = () =>
+      new Promise<Response>((resolve) => {
+        land = () => resolve(new Response(null, { status: 204 }));
+      });
+
+    dragOnto("Suspects", "Query 1");
+    await settle();
+    // A second drop, and a close, while the first order is still in flight.
+    dragOnto("Query 1", "Suspects");
+    fireEvent.click(screen.getByRole("button", { name: t.close.replace("{tab}", "Query 1") }));
+    await settle();
+
+    expect(requests("PUT")).toHaveLength(1);
+    expect(requests("DELETE")).toHaveLength(0);
+    expect(screen.getAllByRole("tab").map((el) => el.getAttribute("aria-label"))).toEqual([
+      "Suspects",
+      "Query 1",
+    ]);
+
+    land();
+    await settle();
+    // And the strip is writable again once the answer is in.
+    dragOnto("Query 1", "Suspects");
+    await settle();
+    expect(requests("PUT")).toHaveLength(2);
   });
 
   test("puts the strip back when the server refuses the new order", async () => {
