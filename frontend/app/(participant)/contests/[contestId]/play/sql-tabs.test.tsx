@@ -86,8 +86,25 @@ const RIGHT_HALF = 160;
  * carry no pointer position — which is the one thing these need. A
  * `MouseEvent` of the same name is what React's own listener sees anyway.
  */
-function dragTo(element: HTMLElement, type: "dragover" | "drop", clientX: number) {
-  element.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX }));
+function dragTo(
+  element: HTMLElement,
+  type: "dragover" | "drop",
+  clientX: number,
+  dataTransfer?: object,
+) {
+  const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX });
+  if (dataTransfer) Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+  element.dispatchEvent(event);
+}
+
+/**
+ * A `DataTransfer` this environment does not have. jsdom implements neither
+ * it nor `DragEvent`, so what the strip writes onto the drag session — the
+ * one thing a real browser needs and a synthesised event does not — is only
+ * observable on a stand-in.
+ */
+function transfer() {
+  return { setData: vi.fn<(format: string, data: string) => void>(), effectAllowed: "", dropEffect: "" };
 }
 
 afterEach(() => {
@@ -252,6 +269,24 @@ describe("renaming a tab", () => {
 });
 
 describe("reordering the tabs", () => {
+  // The one part of a drag a synthesised event does not exercise, and the
+  // part a real browser refuses to start without: Firefox cancels a drag
+  // whose `DataTransfer` was never written to, and Safari is unreliable
+  // about it. Every other test here passes with an empty transfer, so
+  // nothing but this one would notice that "drag to reorder" (§5) never
+  // starts outside Chrome.
+  test("hands the drag session the tab it is carrying, as a move", () => {
+    show();
+    const dataTransfer = transfer();
+
+    fireEvent.dragStart(tab("Alibis"), { dataTransfer });
+    expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", "t3");
+    expect(dataTransfer.effectAllowed).toBe("move");
+
+    dragTo(measured("Query 1"), "dragover", LEFT_HALF, dataTransfer);
+    expect(dataTransfer.dropEffect).toBe("move");
+  });
+
   test("drops a dragged tab on the side of the target the pointer is on", () => {
     const { onMove } = show();
     const target = measured("Query 1");
