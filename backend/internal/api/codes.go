@@ -25,7 +25,7 @@ var (
 	codeInvalidTabID = httpx.NewCode("invalid_tab_id",
 		"A workspace tab identifier in the path or body is not a valid UUID.")
 	codeInvalidQueryLogEntryID = httpx.NewCode("invalid_query_log_entry_id",
-		"A query log entry identifier in the path is not a valid UUID.")
+		"A query log entry identifier in the path is not a positive integer that fits the column it names, or is written with a sign or a character other than a digit.")
 	codeInvalidCIDR = httpx.NewCode("invalid_cidr",
 		"A network was not written in CIDR notation, for example 10.20.0.0/16.")
 

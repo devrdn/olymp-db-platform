@@ -205,11 +205,11 @@ type fakeHistory struct {
 	entry                queryrunner.HistoryEntry
 	entryErr             error
 	gotEntryRegistration uuid.UUID
-	gotEntryID           uuid.UUID
+	gotEntryID           int64
 	entryCalled          bool
 }
 
-func (h *fakeHistory) Entry(_ context.Context, registrationID, entryID uuid.UUID) (queryrunner.HistoryEntry, error) {
+func (h *fakeHistory) Entry(_ context.Context, registrationID uuid.UUID, entryID int64) (queryrunner.HistoryEntry, error) {
 	h.entryCalled = true
 	h.gotEntryRegistration = registrationID
 	h.gotEntryID = entryID
@@ -491,7 +491,7 @@ func TestTheQueryLogAndAnswersDoNotStartTheClockOnRead(t *testing.T) {
 	}
 	// One entry of the log goes through the very same admission as the page
 	// beside it (§7's own resolution): no clock.
-	if rec := f.get("/contests/" + contestID.String() + "/play/log/" + uuid.New().String()); rec.Code != http.StatusOK {
+	if rec := f.get("/contests/" + contestID.String() + "/play/log/42"); rec.Code != http.StatusOK {
 		t.Fatalf("log entry: status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
 	if rec := f.post("/contests/"+contestID.String()+"/questions/"+uuid.New().String()+"/answer", `{"value":"x"}`); rec.Code != http.StatusOK {
@@ -1506,11 +1506,11 @@ func TestQueryLogEntryAsksForTheResolvedRegistrationAndTheURLsEntryID(t *testing
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
 	registrationID := uuid.New()
-	entryID := uuid.New()
+	var entryID int64 = 91827
 	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
 	f.access.participant = contests.Participant{ID: registrationID}
 
-	rec := f.get("/contests/" + contestID.String() + "/play/log/" + entryID.String())
+	rec := f.get("/contests/" + contestID.String() + "/play/log/" + strconv.FormatInt(entryID, 10))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
@@ -1521,31 +1521,32 @@ func TestQueryLogEntryAsksForTheResolvedRegistrationAndTheURLsEntryID(t *testing
 		t.Fatalf("registration = %s, want %s (from Access, never the request)", f.history.gotEntryRegistration, registrationID)
 	}
 	if f.history.gotEntryID != entryID {
-		t.Fatalf("entry id = %s, want %s (from the URL)", f.history.gotEntryID, entryID)
+		t.Fatalf("entry id = %d, want %d (from the URL)", f.history.gotEntryID, entryID)
 	}
 }
 
 // The response carries the row whole, in the query log's own vocabulary,
-// with the id a client would use to ask for this same row again.
+// with the id a client would use to ask for this same row again — a JSON
+// number, query_log.id's own type, not a string.
 func TestQueryLogEntryResponseCarriesTheWholeRow(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()
 	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
 	f.access.participant = contests.Participant{ID: uuid.New()}
 
-	entryID := uuid.New()
+	var entryID int64 = 91827
 	duration, rows := 42, 7
 	f.history.entry = queryrunner.HistoryEntry{
 		ID: entryID, SQL: "SELECT * FROM suspects", Status: queryrunner.StatusOK,
 		DurationMs: &duration, RowCount: &rows, ExecutedAt: time.Now(),
 	}
 
-	rec := f.get("/contests/" + contestID.String() + "/play/log/" + entryID.String())
+	rec := f.get("/contests/" + contestID.String() + "/play/log/" + strconv.FormatInt(entryID, 10))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
 	var payload struct {
-		ID         string `json:"id"`
+		ID         int64  `json:"id"`
 		SQL        string `json:"sql"`
 		Truncated  *bool  `json:"sql_truncated"`
 		Status     string `json:"status"`
@@ -1555,7 +1556,7 @@ func TestQueryLogEntryResponseCarriesTheWholeRow(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if payload.ID != entryID.String() || payload.SQL != "SELECT * FROM suspects" || payload.Status != "ok" ||
+	if payload.ID != entryID || payload.SQL != "SELECT * FROM suspects" || payload.Status != "ok" ||
 		payload.Truncated != nil || payload.DurationMs == nil || *payload.DurationMs != 42 ||
 		payload.RowCount == nil || *payload.RowCount != 7 {
 		t.Fatalf("payload = %+v, want the staged entry whole and unflagged", payload)
@@ -1572,26 +1573,41 @@ func TestQueryLogEntryNotFoundIs404(t *testing.T) {
 	f.access.participant = contests.Participant{ID: uuid.New()}
 	f.history.entryErr = queryrunner.ErrHistoryEntryNotFound
 
-	rec := f.get("/contests/" + contestID.String() + "/play/log/" + uuid.New().String())
+	rec := f.get("/contests/" + contestID.String() + "/play/log/404404")
 	if rec.Code != http.StatusNotFound || errorCode(t, rec) != "query_log_entry_not_found" {
 		t.Fatalf("status = %d, body %s; want 404 query_log_entry_not_found", rec.Code, rec.Body.String())
 	}
 }
 
-// A malformed entry id is refused before Entry is ever asked — the same
-// shape of refusal a bad tab id gets.
+// entryId has to be a positive integer that fits query_log.id's own type —
+// not a uuid, and not merely "parses with strconv.ParseInt's own rules".
+// Every one of these is refused before Entry is ever asked.
 func TestQueryLogEntryWithAMalformedIDIs400(t *testing.T) {
-	f := newParticipantFixture(t)
-	contestID := uuid.New()
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
-	f.access.participant = contests.Participant{ID: uuid.New()}
+	for name, raw := range map[string]string{
+		"not a number at all":   "not-a-number",
+		"a uuid":                "3fbb6a2a-59c3-4d1a-9c60-1c1c5b6e9a10",
+		"a leading plus sign":   "+5",
+		"a leading minus sign":  "-5",
+		"zero":                  "0",
+		"past int64":            "99999999999999999999",
+		"a fraction":            "1.5",
+		"trailing whitespace":   "5%20",
+		"a thousands separator": "1,000",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newParticipantFixture(t)
+			contestID := uuid.New()
+			f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+			f.access.participant = contests.Participant{ID: uuid.New()}
 
-	rec := f.get("/contests/" + contestID.String() + "/play/log/not-a-uuid")
-	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_query_log_entry_id" {
-		t.Fatalf("status = %d, body %s; want 400 invalid_query_log_entry_id", rec.Code, rec.Body.String())
-	}
-	if f.history.entryCalled {
-		t.Fatal("Entry was reached with an id that never parsed")
+			rec := f.get("/contests/" + contestID.String() + "/play/log/" + raw)
+			if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_query_log_entry_id" {
+				t.Fatalf("status = %d, body %s; want 400 invalid_query_log_entry_id", rec.Code, rec.Body.String())
+			}
+			if f.history.entryCalled {
+				t.Fatal("Entry was reached with an id that never parsed")
+			}
+		})
 	}
 }
 
@@ -1604,7 +1620,7 @@ func TestQueryLogEntryReadFailureIsA500(t *testing.T) {
 	f.access.participant = contests.Participant{ID: uuid.New()}
 	f.history.entryErr = errors.New("connection reset")
 
-	rec := f.get("/contests/" + contestID.String() + "/play/log/" + uuid.New().String())
+	rec := f.get("/contests/" + contestID.String() + "/play/log/404404")
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 (body: %s)", rec.Code, rec.Body.String())
 	}
