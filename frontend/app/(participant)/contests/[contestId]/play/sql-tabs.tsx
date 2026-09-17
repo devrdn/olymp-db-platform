@@ -179,12 +179,29 @@ export function SqlTabStrip({
               aria-controls={panelId}
               tabIndex={active ? 0 : -1}
               draggable={!closed && renaming !== tab.id}
-              onDragStart={() => {
+              onDragStart={(event) => {
                 dragged.current = tab.id;
+                // What is being dragged, written onto the drag session
+                // itself. Not bookkeeping: Firefox cancels a drag whose
+                // `DataTransfer` carries nothing at all and Safari is
+                // unreliable about it, so without this "drag to reorder"
+                // (§5) never starts outside Chrome. `effectAllowed` and the
+                // `dropEffect` below are what make the pointer say "move"
+                // rather than "copy" on the way.
+                //
+                // Guarded, and typed as it really is: a browser always hands
+                // a drag event one of these, and an event synthesised in a
+                // test — jsdom implements neither `DragEvent` nor
+                // `DataTransfer` — does not.
+                const carried = event.dataTransfer as DataTransfer | undefined;
+                carried?.setData("text/plain", tab.id);
+                if (carried) carried.effectAllowed = "move";
               }}
               onDragOver={(event) => {
                 if (dragged.current === null || dragged.current === tab.id) return;
                 event.preventDefault();
+                const carried = event.dataTransfer as DataTransfer | undefined;
+                if (carried) carried.dropEffect = "move";
                 const before = onLeftHalf(event);
                 setDropAt((previous) =>
                   previous?.id === tab.id && previous.before === before
