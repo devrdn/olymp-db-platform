@@ -19,6 +19,7 @@ function show() {
       storyUnavailable={null}
       contestId="c1"
       questionEntries={[]}
+      initialNotes={{ body: "the butler did it", updatedAt: "2026-09-17T10:00:00Z" }}
       dict={en}
       locale="en"
     />,
@@ -31,6 +32,31 @@ describe("the side panel", () => {
 
     expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.story })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.questions })).toBeInTheDocument();
+  });
+
+  // The workspace design (§6): notes are the tab right after the questions.
+  test("offers the notes as the tab right after the questions", () => {
+    show();
+
+    const names = screen.getAllByRole("tab").map((tab) => tab.textContent);
+    const questions = names.indexOf(en.participant.play.workspace.tabs.questions);
+    expect(names[questions + 1]).toBe(en.participant.play.workspace.tabs.notes);
+  });
+
+  test("keeps the notes mounted behind the other tabs, so their autosave keeps running", () => {
+    show();
+
+    expect(
+      screen.getByRole("textbox", { name: en.participant.play.workspace.notes.label, hidden: true }),
+    ).toHaveValue("the butler did it");
+  });
+
+  test("shows the notes field once its tab is chosen", async () => {
+    show();
+
+    await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.notes }));
+
+    expect(screen.getByRole("textbox", { name: en.participant.play.workspace.notes.label })).toBeVisible();
   });
 
   // Task 3's own requirement: switching a tab must not remount what is
@@ -59,6 +85,7 @@ describe("the side panel", () => {
         storyUnavailable="This contest has no story yet"
         contestId="c1"
         questionEntries={[]}
+        initialNotes={null}
         dict={en}
         locale="en"
       />,
@@ -190,6 +217,7 @@ describe("the side panel", () => {
         storyUnavailable="This contest has no story yet"
         contestId="c1"
         questionEntries={[]}
+        initialNotes={null}
         dict={en}
         locale="en"
       />,
@@ -220,6 +248,7 @@ test("each scrolling panel is the containing block for the hidden labels inside 
       storyUnavailable={null}
       contestId="c1"
       questionEntries={[]}
+      initialNotes={{ body: "", updatedAt: null }}
       dict={en}
       locale="en"
     />,
