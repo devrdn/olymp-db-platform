@@ -45,8 +45,8 @@ const (
 	// MaxTabBodyBytes is how much SQL one tab may hold: exactly what the
 	// console would accept as a query, so any tab can be run as it stands.
 	MaxTabBodyBytes = sqlpolicy.MaxQueryBytes
-	// WritesPerMinute is how many writes one registration may make a minute,
-	// notes and tabs together, refused ones included. Autosave at a pause of
+	// WritesPerMinute is how many writes one participant may make a minute,
+	// notes and tabs together, refused ones included (AdmitWrite). Autosave at a pause of
 	// a second and a half stays under forty even during continuous typing.
 	WritesPerMinute = 60
 )
@@ -148,6 +148,10 @@ type Limiter interface {
 }
 
 // Service applies the workspace's rules over a Repository.
+//
+// Every write method assumes its caller has already spent the write through
+// AdmitWrite: the throttle has to run before the caller's own lookups, which
+// happen before a Session exists to hand to a write.
 type Service struct {
 	repo    Repository
 	limiter Limiter
@@ -173,7 +177,7 @@ func (s *Service) Get(ctx context.Context, session Session) (Workspace, error) {
 
 // SaveNotes replaces the notes.
 func (s *Service) SaveNotes(ctx context.Context, session Session, body string) (time.Time, error) {
-	if err := s.admitWrite(ctx, session); err != nil {
+	if err := checkWritable(session); err != nil {
 		return time.Time{}, err
 	}
 	if err := checkText(body); err != nil {
@@ -192,7 +196,7 @@ func (s *Service) SaveNotes(ctx context.Context, session Session, body string) (
 // CreateTab appends an empty tab. A nil title names it after the smallest
 // number no tab of the workspace is already named after.
 func (s *Service) CreateTab(ctx context.Context, session Session, title *string) (Tab, error) {
-	if err := s.admitWrite(ctx, session); err != nil {
+	if err := checkWritable(session); err != nil {
 		return Tab{}, err
 	}
 	name := func(taken []string) string { return freeTitle(session.Lang, taken) }
@@ -215,7 +219,7 @@ func (s *Service) CreateTab(ctx context.Context, session Session, title *string)
 
 // UpdateTab renames a tab, replaces its text, or both.
 func (s *Service) UpdateTab(ctx context.Context, session Session, id uuid.UUID, patch TabPatch) (time.Time, error) {
-	if err := s.admitWrite(ctx, session); err != nil {
+	if err := checkWritable(session); err != nil {
 		return time.Time{}, err
 	}
 	if patch.Title == nil && patch.Body == nil {
@@ -248,7 +252,7 @@ func (s *Service) UpdateTab(ctx context.Context, session Session, id uuid.UUID, 
 
 // DeleteTab removes a tab, unless it is the last one.
 func (s *Service) DeleteTab(ctx context.Context, session Session, id uuid.UUID) error {
-	if err := s.admitWrite(ctx, session); err != nil {
+	if err := checkWritable(session); err != nil {
 		return err
 	}
 	if err := s.repo.DeleteTab(ctx, session.Registration, id); err != nil {
@@ -263,7 +267,7 @@ func (s *Service) DeleteTab(ctx context.Context, session Session, id uuid.UUID) 
 // ReorderTabs puts the tabs in the order ids names them. ids must be the
 // workspace's tabs, each exactly once.
 func (s *Service) ReorderTabs(ctx context.Context, session Session, ids []uuid.UUID) error {
-	if err := s.admitWrite(ctx, session); err != nil {
+	if err := checkWritable(session); err != nil {
 		return err
 	}
 	// The shape is checked here, before a transaction is opened for it; the
@@ -287,17 +291,23 @@ func (s *Service) ReorderTabs(ctx context.Context, session Session, ids []uuid.U
 	return nil
 }
 
-// admitWrite spends one write of the registration's budget and then refuses a
-// session that may not write.
+// AdmitWrite spends one write of the account's budget, and refuses with
+// ErrTooOften once the budget for this minute is spent. The caller asks it
+// before anything else about a write — before the participant and the
+// contest are looked up, before the body is read — so every attempt is
+// counted, a refused one included (CLAUDE.md rule 13).
 //
-// The rate comes first and counts every attempt (CLAUDE.md rule 13): a
-// refused write — read-only, malformed, too long — still reached the server,
-// and a limit that only counted the successful ones would leave a way to
-// hammer it for free. The key is the registration, one per enrolment and
-// never anything the request names, so the key space is bounded by the
-// roster (CLAUDE.md rule 5).
-func (s *Service) admitWrite(ctx context.Context, session Session) error {
-	allowed, err := s.limiter.Allow(ctx, "workspace:reg:"+session.Registration.String(), WritesPerMinute, writeWindow)
+// Its own budget, not the read budget queryproxy.Service.AdmitRead spends:
+// that one is shared with the SQL console, and autosave during continuous
+// typing would otherwise take the participant's queries away from them.
+//
+// Keyed by the account rather than the registration, because the account is
+// what is known before those lookups; it is just as bounded — one key per
+// account, assigned at sign-in and never named by the request (CLAUDE.md
+// rule 5). A person taking part in two running contests at once would share
+// one budget between them, which is not a case an olympiad has.
+func (s *Service) AdmitWrite(ctx context.Context, account uuid.UUID) error {
+	allowed, err := s.limiter.Allow(ctx, "workspace:user:"+account.String(), WritesPerMinute, writeWindow)
 	if err != nil {
 		// A counter that cannot be kept refuses: writing unthrottled is what
 		// this exists to prevent. Not ErrTooOften — nobody asked too often.
@@ -306,6 +316,13 @@ func (s *Service) admitWrite(ctx context.Context, session Session) error {
 	if !allowed {
 		return ErrTooOften
 	}
+	return nil
+}
+
+// checkWritable refuses a write from a session the contest is closed to. It
+// is a comparison of a value in hand, so it comes before any validation or
+// storage work.
+func checkWritable(session Session) error {
 	if !session.Writable {
 		return ErrReadOnly
 	}

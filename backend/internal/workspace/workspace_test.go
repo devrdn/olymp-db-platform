@@ -434,68 +434,37 @@ func TestAReadOnlySessionWritesNothing(t *testing.T) {
 	}
 }
 
-// Sixty writes a minute per registration, notes and tabs together, and a
-// refused write — for any reason — spends the budget too (CLAUDE.md rule 13).
-func TestWritesPastTheRateAreRefusedAndRefusalsCount(t *testing.T) {
+// Sixty writes a minute per participant, notes and tabs together.
+func TestWritesPastTheRateAreRefused(t *testing.T) {
 	f := newFixture(t)
-	f.load(t)
-
-	// Half the budget on refusals: an invalid title and an overlong note are
-	// refused, and still counted.
-	for i := 0; i < workspace.WritesPerMinute/2; i++ {
-		if _, err := f.service.CreateTab(t.Context(), f.session, ptr("")); !errors.Is(err, workspace.ErrTitleInvalid) {
-			t.Fatalf("CreateTab(blank) = %v, want ErrTitleInvalid", err)
-		}
-	}
-	for i := 0; i < workspace.WritesPerMinute/2; i++ {
-		if _, err := f.service.SaveNotes(t.Context(), f.session, "note"); err != nil {
-			t.Fatalf("SaveNotes() #%d = %v", i, err)
-		}
-	}
-	before := f.repo.callCount()
-	if _, err := f.service.SaveNotes(t.Context(), f.session, "note"); !errors.Is(err, workspace.ErrTooOften) {
-		t.Fatalf("write #%d = %v, want ErrTooOften", workspace.WritesPerMinute+1, err)
-	}
-	if f.repo.callCount() != before {
-		t.Fatal("a write refused for its rate still reached the repository")
-	}
-
-	// A read-only refusal counts as well: a closed contest is not a place to
-	// spend requests for free.
-	g := newFixture(t)
-	g.session.Writable = false
+	account := uuid.New()
 	for i := 0; i < workspace.WritesPerMinute; i++ {
-		if _, err := g.service.SaveNotes(t.Context(), g.session, "x"); !errors.Is(err, workspace.ErrReadOnly) {
-			t.Fatalf("SaveNotes() = %v, want ErrReadOnly", err)
+		if err := f.service.AdmitWrite(t.Context(), account); err != nil {
+			t.Fatalf("AdmitWrite() #%d = %v", i+1, err)
 		}
 	}
-	if _, err := g.service.SaveNotes(t.Context(), g.session, "x"); !errors.Is(err, workspace.ErrTooOften) {
-		t.Fatalf("SaveNotes() past the rate = %v, want ErrTooOften", err)
+	if err := f.service.AdmitWrite(t.Context(), account); !errors.Is(err, workspace.ErrTooOften) {
+		t.Fatalf("AdmitWrite() #%d = %v, want ErrTooOften", workspace.WritesPerMinute+1, err)
 	}
-}
+	if f.repo.callCount() != 0 {
+		t.Fatal("admitting a write reached the repository")
+	}
 
-func TestTheRateIsKeptPerRegistration(t *testing.T) {
-	f := newFixture(t)
-	for i := 0; i < workspace.WritesPerMinute; i++ {
-		if _, err := f.service.SaveNotes(t.Context(), f.session, "x"); err != nil {
-			t.Fatalf("SaveNotes() = %v", err)
-		}
-	}
-	other := f.session
-	other.Registration = uuid.New()
-	if _, err := f.service.SaveNotes(t.Context(), other, "x"); err != nil {
-		t.Fatalf("another registration's write = %v, want it admitted", err)
+	// Another participant has a budget of their own.
+	if err := f.service.AdmitWrite(t.Context(), uuid.New()); err != nil {
+		t.Fatalf("another account's AdmitWrite() = %v, want it admitted", err)
 	}
 }
 
 // Reading is not a write, and spends nothing of the write budget.
 func TestReadingSpendsNoWriteBudget(t *testing.T) {
 	f := newFixture(t)
+	account := uuid.New()
 	for i := 0; i < workspace.WritesPerMinute+5; i++ {
 		f.load(t)
 	}
-	if _, err := f.service.SaveNotes(t.Context(), f.session, "x"); err != nil {
-		t.Fatalf("SaveNotes() after many reads = %v", err)
+	if err := f.service.AdmitWrite(t.Context(), account); err != nil {
+		t.Fatalf("AdmitWrite() after many reads = %v", err)
 	}
 }
 
@@ -508,13 +477,9 @@ func (failingLimiter) Allow(context.Context, string, int, time.Duration) (bool, 
 // A counter that cannot be kept refuses (auth.Limiter's own rule), and the
 // refusal is not a rate refusal: nobody asked too often.
 func TestAWriteIsRefusedWhenItsRateCannotBeCounted(t *testing.T) {
-	repo := newMemoryRepository()
-	service := workspace.NewService(repo, failingLimiter{})
-	_, err := service.SaveNotes(t.Context(), workspace.Session{Registration: uuid.New(), Writable: true}, "x")
+	service := workspace.NewService(newMemoryRepository(), failingLimiter{})
+	err := service.AdmitWrite(t.Context(), uuid.New())
 	if err == nil || errors.Is(err, workspace.ErrTooOften) {
-		t.Fatalf("SaveNotes() = %v, want an internal error", err)
-	}
-	if repo.callCount() != 0 {
-		t.Fatal("a write whose rate could not be counted reached the repository")
+		t.Fatalf("AdmitWrite() = %v, want an internal error", err)
 	}
 }
