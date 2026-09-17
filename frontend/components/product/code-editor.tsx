@@ -347,7 +347,13 @@ export function CodeEditor({
         // looked up by that key on every press, for the reason above.
         shortcuts: shortcuts?.map(({ key }) => ({
           key,
-          run: () => shortcutsRef.current?.find((shortcut) => shortcut.key === key)?.run(),
+          run: () => {
+            const claimed = shortcutsRef.current?.find((shortcut) => shortcut.key === key);
+            // Not claimed any more: hand the key back rather than swallow it.
+            if (!claimed) return false;
+            claimed.run();
+            return true;
+          },
         })),
       });
       viewRef.current = view;

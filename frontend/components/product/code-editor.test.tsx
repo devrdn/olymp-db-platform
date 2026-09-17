@@ -502,6 +502,38 @@ describe("the keys the owner reserves", () => {
     expect(second).toHaveBeenCalledTimes(1);
   });
 
+  // A key whose handler has gone is not a key this editor has claimed. The
+  // owner stops passing it — the panel it toggled is not on this screen any
+  // more, say — and swallowing it would leave the participant with a
+  // combination that does nothing at all, rather than whatever CodeMirror or
+  // the page would have made of it.
+  test("leaves a combination alone once its handler is gone", async () => {
+    const { container, rerender } = render(
+      <CodeEditor
+        ariaLabel="Your query"
+        placeholder=""
+        getInitialValue={() => ""}
+        onChange={vi.fn()}
+        shortcuts={[{ key: "Mod-b", run: vi.fn() }]}
+      />,
+    );
+    await waitForRealEditor(container);
+    rerender(
+      <CodeEditor
+        ariaLabel="Your query"
+        placeholder=""
+        getInitialValue={() => ""}
+        onChange={vi.fn()}
+        shortcuts={[]}
+      />,
+    );
+
+    const content = container.querySelector(".cm-content")!;
+    const notPrevented = fireEvent.keyDown(content, { key: "b", code: "KeyB", ctrlKey: true });
+
+    expect(notPrevented).toBe(true);
+  });
+
   // What the window listener above this reads to know the key has been dealt
   // with (panel-toggles.tsx): without it the combination would be handled
   // twice and the panel would end up where it started.
