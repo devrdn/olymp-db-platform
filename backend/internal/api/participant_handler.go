@@ -86,6 +86,13 @@ type Submitter interface {
 // implements this too.
 type QueryHistory interface {
 	History(ctx context.Context, registrationID uuid.UUID, limit, offset int) ([]queryrunner.HistoryEntry, int, error)
+	// Entry returns one row of registrationID's own log, in full — the read
+	// behind GET .../play/log/{entryId} (§7), for a row the page had to cut
+	// at queryrunner.MaxHistorySQLChars. queryrunner.ErrHistoryEntryNotFound
+	// for a row that does not exist or belongs to another registration,
+	// identically: see queryrunner.HistoryEntry.ID's own doc for what entryID
+	// actually is and why the two cases cannot be told apart here.
+	Entry(ctx context.Context, registrationID, entryID uuid.UUID) (queryrunner.HistoryEntry, error)
 	// ExportHistory streams every one of that registration's rows, oldest
 	// first, for the CSV download beside the paged read. Two methods on one
 	// interface rather than two interfaces, because they are two reads of one
@@ -226,6 +233,12 @@ func (h *ParticipantHandler) Mount(r chi.Router) {
 		r.Get("/contests/{"+contestIDParam+"}/play/story", h.story)
 		r.Get("/contests/{"+contestIDParam+"}/play/questions", h.questions)
 		r.Get("/contests/{"+contestIDParam+"}/play/log", h.queryLog)
+		// One entry of the log, in full (§7). A path segment under /play/log
+		// rather than a query parameter on it: the page and one entry are two
+		// different reads (Reader and Entry), and chi routes the static
+		// "log.csv" beneath ahead of this pattern regardless of registration
+		// order, so the two never contend for the same request.
+		r.Get("/contests/{"+contestIDParam+"}/play/log/{"+logEntryIDParam+"}", h.queryLogEntry)
 		// The same log as a file (§9.1). A distinct last segment rather than
 		// a ?format= on the route above: what the two return differs in more
 		// than encoding — one is a page and the other is the whole session —
@@ -401,18 +414,33 @@ func (h *ParticipantHandler) questions(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, participantQuestionListResponse{Lang: lang, Items: items})
 }
 
+// logEntryIDParam names one query log entry in the URL — see
+// queryrunner.HistoryEntry.ID for what the identifier actually is
+// (query_log.request_id) and why reusing it needs no migration of its own.
+const logEntryIDParam = "entryId"
+
 // queryLogEntryResponse is one row of the participant's own query log —
 // never another participant's, and nothing this endpoint could leak beyond
 // what query_log already carries for exactly this: the statement, how it
 // ended, and when.
+//
+// The same shape serves both GET .../play/log (one page, sql cut at
+// queryrunner.MaxHistorySQLChars) and GET .../play/log/{entryId} (one row,
+// sql whole): the panel's own detail view reads the very fields the page
+// already renders, and a client parsing the page's own item type can reuse
+// it for the single-entry response without a second schema.
 type queryLogEntryResponse struct {
+	// ID is what a client names back at GET .../play/log/{entryId} to open
+	// this row in full.
+	ID  string `json:"id"`
 	SQL string `json:"sql"`
 	// SQLTruncated says sql is the beginning of the statement and not the
 	// whole of it — the page is bounded in bytes as well as in rows
 	// (queryrunner.MaxHistorySQLChars), and a participant handed a shortened
 	// copy of their own query has to be told that is what it is. Omitted when
 	// there is nothing to report, like every other optional field here; the
-	// whole statement is in the CSV download beside the panel.
+	// whole statement is in the CSV download beside the panel, and in the
+	// single-entry response below, whose own bound is far larger.
 	SQLTruncated bool   `json:"sql_truncated,omitempty"`
 	Status       string `json:"status"`
 	// Error is omitted for a query that did not fail.
@@ -422,6 +450,22 @@ type queryLogEntryResponse struct {
 	DurationMs *int   `json:"duration_ms,omitempty"`
 	RowCount   *int   `json:"row_count,omitempty"`
 	ExecutedAt string `json:"executed_at"`
+}
+
+// toQueryLogEntryResponse renders one row of the log, page or single-entry
+// read alike: both ask queryrunner.HistoryEntry for the same facts and
+// withhold the same ones (participantSafeError).
+func toQueryLogEntryResponse(entry queryrunner.HistoryEntry) queryLogEntryResponse {
+	return queryLogEntryResponse{
+		ID:           entry.ID.String(),
+		SQL:          entry.SQL,
+		SQLTruncated: entry.SQLTruncated,
+		Status:       string(entry.Status),
+		Error:        participantSafeError(entry.Status, entry.Error),
+		DurationMs:   entry.DurationMs,
+		RowCount:     entry.RowCount,
+		ExecutedAt:   entry.ExecutedAt.UTC().Format(timeLayout),
+	}
 }
 
 // queryLogResponse is one page of the log, newest first, with the total
@@ -453,17 +497,43 @@ func (h *ParticipantHandler) queryLog(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]queryLogEntryResponse, 0, len(found))
 	for _, entry := range found {
-		items = append(items, queryLogEntryResponse{
-			SQL:          entry.SQL,
-			SQLTruncated: entry.SQLTruncated,
-			Status:       string(entry.Status),
-			Error:        participantSafeError(entry.Status, entry.Error),
-			DurationMs:   entry.DurationMs,
-			RowCount:     entry.RowCount,
-			ExecutedAt:   entry.ExecutedAt.UTC().Format(timeLayout),
-		})
+		items = append(items, toQueryLogEntryResponse(entry))
 	}
 	httpx.JSON(w, r, http.StatusOK, queryLogResponse{Items: items, Total: total})
+}
+
+// queryLogEntry serves GET .../play/log/{entryId}: one row of this
+// participant's own query log, in full (§7) — the panel's fallback once it
+// finds sql_truncated on a page row.
+//
+// Admitted exactly like queryLog and nothing more: the same h.admit, so the
+// same read budget and the same access refusals, and no call to
+// startOnRead — opening a row of one's own history is not reading the
+// contest, and TestTheQueryLogAndAnswersDoNotStartTheClockOnRead already
+// covers /play/log for the same reason.
+func (h *ParticipantHandler) queryLogEntry(w http.ResponseWriter, r *http.Request) {
+	participant, _, ok := h.admit(w, r)
+	if !ok {
+		return
+	}
+
+	entryID, err := uuid.Parse(chi.URLParam(r, logEntryIDParam))
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidQueryLogEntryID, "Query log entry identifier is not valid")
+		return
+	}
+
+	entry, err := h.history.Entry(r.Context(), participant.ID, entryID)
+	if err != nil {
+		// Not found and another participant's entry answer identically
+		// through fail's own mapping (queryrunner.ErrHistoryEntryNotFound's
+		// doc): nothing here confirms that any given identifier was ever
+		// logged by anyone. Anything else reaching fail's default case is
+		// ours, and an internal error.
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, toQueryLogEntryResponse(entry))
 }
 
 // queryLogCSVColumns is the file's header row, and the order of every row
@@ -766,6 +836,8 @@ func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err er
 	case errors.Is(err, queryproxy.ErrAddressNotAllowed):
 		httpx.Error(w, r, http.StatusForbidden, codeAddressNotAllowed,
 			"This contest is only available from the university network")
+	case errors.Is(err, queryrunner.ErrHistoryEntryNotFound):
+		httpx.Error(w, r, http.StatusNotFound, codeQueryLogEntryNotFound, "No such query log entry")
 	case errors.Is(err, contests.ErrStoryNotFound):
 		httpx.Error(w, r, http.StatusNotFound, codeStoryNotFound, "This contest has no story yet")
 	case errors.Is(err, contests.ErrQuestionNotFound):
