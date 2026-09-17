@@ -185,7 +185,10 @@ export function SqlTabStrip({
               className={cn(
                 "flex min-w-0 shrink-0 cursor-pointer items-center gap-1.5 border-r border-line px-3 py-1.5",
                 "text-control-sm transition-colors duration-(--t-input) ease-standard",
-                "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-ink",
+                // No focus style of its own: the stylesheet gives anything
+                // focusable the same accent ring (`:focus-visible` in
+                // globals.css), and a second one here would be a second
+                // answer to the same question.
                 active ? "bg-sunk text-ink" : "text-ink-2 hover:text-ink",
               )}
             >

@@ -315,3 +315,38 @@ describe("a large result", () => {
     expect(table.className).toContain("table-fixed");
   });
 });
+
+/**
+ * A result outlives the tab it came from: the participant runs a query, then
+ * goes on typing in another tab while reading the answer. The heading says
+ * which tab that answer belongs to (§5 of the workspace design).
+ */
+describe("which tab the result came from", () => {
+  test("names the tab above the answer", () => {
+    render(
+      <ResultPanel
+        state={{ kind: "answer", result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 } }}
+        sourceTitle="Suspects"
+        dict={en}
+      />,
+    );
+
+    expect(
+      screen.getByText(en.participant.play.workspace.resultFrom.replace("{tab}", "Suspects")),
+    ).toBeInTheDocument();
+  });
+
+  test("names it above a refusal too", () => {
+    render(<ResultPanel state={{ kind: "refused", code: "query_syntax_error" }} sourceTitle="Suspects" dict={en} />);
+
+    expect(
+      screen.getByText(en.participant.play.workspace.resultFrom.replace("{tab}", "Suspects")),
+    ).toBeInTheDocument();
+  });
+
+  test("says nothing about a tab before anything has been run", () => {
+    render(<ResultPanel state={{ kind: "idle" }} sourceTitle={null} dict={en} />);
+
+    expect(screen.queryByText(/^From /)).not.toBeInTheDocument();
+  });
+});
