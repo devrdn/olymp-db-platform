@@ -303,7 +303,7 @@
     },
     {
       "code": "invalid_query_log_entry_id",
-      "meaning": "A query log entry identifier in the path is not a valid UUID."
+      "meaning": "A query log entry identifier in the path is not a positive integer that fits the column it names, or is written with a sign or a character other than a digit."
     },
     {
       "code": "invalid_question_id",
