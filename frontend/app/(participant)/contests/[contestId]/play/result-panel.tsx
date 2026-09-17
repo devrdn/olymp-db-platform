@@ -328,7 +328,13 @@ function SelectableRows({
         "grid min-h-0 flex-1 grid-cols-1",
         open === null
           ? "grid-rows-1"
-          : "grid-rows-[minmax(0,var(--pane-detail))_auto_minmax(0,1fr)]",
+          : // A share of this pane's height, and below the breakpoint a
+            // length instead: the bottom panel is bounded by a `max-height`
+            // there rather than given one, and a percentage track against an
+            // indefinite height resolves as `auto` — which is the whole
+            // answer laid out at its natural height with the open row pushed
+            // out of the clipped box underneath it.
+            "grid-rows-[minmax(0,var(--pane-detail))_auto_minmax(0,1fr)] max-narrow:grid-rows-[minmax(0,20rem)_auto_auto]",
       )}
     >
       <ResultTable
@@ -352,6 +358,9 @@ function SelectableRows({
             direction={1}
             containerRef={containerRef}
             onResize={(share) => commit({ table: share })}
+            // Nothing to divide below the breakpoint: the two are stacked at
+            // stated heights there, not at a share of one.
+            className="max-narrow:hidden"
           />
           <RowDetail
             columns={columns}
