@@ -29,7 +29,7 @@ function refused(status: number, code: string) {
 }
 
 function show(initial: { body: string; updatedAt: string | null } | null = { body: "the butler", updatedAt: "v0" }) {
-  return render(<NotesPanel contestId="c1" initial={initial} dict={en} locale="en" />);
+  return render(<NotesPanel contestId="c1" initial={initial} dict={en} />);
 }
 
 async function wait(ms: number) {
@@ -161,13 +161,15 @@ describe("the notes panel", () => {
 
     edit("x".repeat(NOTES_COUNTER_FROM));
 
-    expect(screen.getByTestId("notes-counter")).toHaveTextContent("18,000 of 20,000 characters");
+    // Plain digits, with no locale grouping: this is rendered on the server
+    // as well, and Node and the browser do not always group alike.
+    expect(screen.getByTestId("notes-counter")).toHaveTextContent("18000 of 20000 characters");
   });
 
   test("shows the counter for notes that arrive already long", () => {
     show({ body: "x".repeat(19_500), updatedAt: "v0" });
 
-    expect(screen.getByTestId("notes-counter")).toHaveTextContent("19,500 of 20,000 characters");
+    expect(screen.getByTestId("notes-counter")).toHaveTextContent("19500 of 20000 characters");
   });
 
   test("hides the counter again once the notes are shortened", () => {
@@ -177,6 +179,29 @@ describe("the notes panel", () => {
     edit("short");
 
     expect(screen.queryByTestId("notes-counter")).not.toBeInTheDocument();
+  });
+
+  // The field stops accepting text at the limit, and a field that silently
+  // stops is exactly what a screen reader user cannot see.
+  test("announces once when the notes reach the limit", () => {
+    show();
+    const live = screen.getByTestId("notes-limit");
+
+    edit("x".repeat(NOTES_MAX_CHARS - 1));
+    expect(live).toHaveTextContent("");
+
+    edit("x".repeat(NOTES_MAX_CHARS));
+    expect(live).toHaveTextContent(t.limitReached);
+    expect(live).toHaveAttribute("aria-live", "polite");
+  });
+
+  test("takes the announcement back once there is room again", () => {
+    show();
+
+    edit("x".repeat(NOTES_MAX_CHARS));
+    edit("x".repeat(NOTES_MAX_CHARS - 1));
+
+    expect(screen.getByTestId("notes-limit")).toHaveTextContent("");
   });
 
   test("shows a draft that is newer than the server copy, and saves it", async () => {
