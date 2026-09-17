@@ -20,12 +20,17 @@ import (
 // (docs/superpowers/specs/2026-09-17-play-workspace-design.md).
 //
 // Admitted like the rest of /play (admit, and queryproxy.Service.Access
-// behind it), with two differences that are the point of this file. Nothing
-// here starts an individual participant's clock: keeping notes is not reading
-// the contest. And a write does not spend the read budget admit charges,
-// which the SQL console shares — autosave during continuous typing would
-// otherwise take a participant's queries away from them. A write spends the
-// workspace's own budget instead (workspace.Service.AdmitWrite), before
+// behind it): once the contest has ended for the participant, every route
+// here answers contest_not_running or contest_finished exactly as /play/story
+// does. There is no read-only mode, because the play screen itself is closed
+// by then.
+//
+// Two differences from the other /play routes are the point of this file.
+// Nothing here starts an individual participant's clock: keeping notes is not
+// reading the contest. And a write does not spend the read budget admit
+// charges, which the SQL console shares — autosave during continuous typing
+// would otherwise take a participant's queries away from them. A write spends
+// the workspace's own budget instead (workspace.Service.AdmitWrite), before
 // anything is looked up.
 
 // Workspaces is the slice of workspace.Service these endpoints need.
@@ -66,20 +71,11 @@ func (h *ParticipantHandler) mountWorkspace(r chi.Router) {
 }
 
 // workspaceSession turns an admitted request into the session the workspace
-// service works in: whose workspace, the language a server-named tab takes,
-// and whether a write would be taken.
-//
-// Writable is the console's own admission (queryproxy.Service.Admitted): the
-// contest is running for this participant — their own clock started, or
-// startable for an individual participant who has not started — and their
-// address is allowed. Asked here without starting anything, so a read of the
-// workspace and a write to it never move the clock.
+// service works in: whose workspace, and the language a server-named tab
+// takes. Whether the participant may use the workspace at all was decided by
+// Access, which also closes it with the contest.
 func (h *ParticipantHandler) workspaceSession(r *http.Request, participant contests.Participant, contest contests.Contest) workspace.Session {
-	return workspace.Session{
-		Registration: participant.ID,
-		Writable:     h.access.Admitted(contest, participant, clientAddress(r)) == nil,
-		Lang:         h.languageFor(r, contest),
-	}
+	return workspace.Session{Registration: participant.ID, Lang: h.languageFor(r, contest)}
 }
 
 // admitWorkspaceWrite spends a write of the caller's workspace budget, then
@@ -139,12 +135,10 @@ func toWorkspaceTabResponse(tab workspace.Tab) workspaceTabResponse {
 	}
 }
 
-// workspaceResponse is everything the play screen restores. read_only says a
-// write would be refused with workspace_read_only right now.
+// workspaceResponse is everything the play screen restores.
 type workspaceResponse struct {
-	Notes    workspaceNotesResponse `json:"notes"`
-	Tabs     []workspaceTabResponse `json:"tabs"`
-	ReadOnly bool                   `json:"read_only"`
+	Notes workspaceNotesResponse `json:"notes"`
+	Tabs  []workspaceTabResponse `json:"tabs"`
 }
 
 // updatedResponse answers a write that changed one document.
@@ -170,9 +164,8 @@ func (h *ParticipantHandler) getWorkspace(w http.ResponseWriter, r *http.Request
 	}
 
 	answer := workspaceResponse{
-		Notes:    workspaceNotesResponse{Body: found.Notes.Body},
-		Tabs:     make([]workspaceTabResponse, 0, len(found.Tabs)),
-		ReadOnly: found.ReadOnly,
+		Notes: workspaceNotesResponse{Body: found.Notes.Body},
+		Tabs:  make([]workspaceTabResponse, 0, len(found.Tabs)),
 	}
 	if found.Notes.UpdatedAt != nil {
 		at := found.Notes.UpdatedAt.UTC().Format(timeLayout)
@@ -328,9 +321,6 @@ func (h *ParticipantHandler) failWorkspace(w http.ResponseWriter, r *http.Reques
 		w.Header().Set("Retry-After", strconv.Itoa(int(workspace.RetryAfter()/time.Second)))
 		httpx.Error(w, r, http.StatusTooManyRequests, codeWorkspaceTooOften,
 			"Too many workspace saves this minute; wait before saving again")
-	case errors.Is(err, workspace.ErrReadOnly):
-		httpx.Error(w, r, http.StatusConflict, codeWorkspaceReadOnly,
-			"The contest is not open to this participant, so the workspace cannot be changed")
 	case errors.Is(err, workspace.ErrTooManyTabs):
 		httpx.Error(w, r, http.StatusConflict, codeWorkspaceTabLimit, err.Error())
 	case errors.Is(err, workspace.ErrLastTab):

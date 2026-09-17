@@ -32,7 +32,7 @@ func newFixture(t *testing.T) *fixture {
 	return &fixture{
 		repo:    repo,
 		service: workspace.NewService(repo, auth.NewLimiter(c)),
-		session: workspace.Session{Registration: uuid.New(), Writable: true, Lang: "en"},
+		session: workspace.Session{Registration: uuid.New(), Lang: "en"},
 	}
 }
 
@@ -66,17 +66,6 @@ func TestTheFirstReadGivesTheWorkspaceATabTitledInTheRequestsLanguage(t *testing
 				t.Fatalf("tabs = %+v, want one titled %q", got.Tabs, want)
 			}
 		})
-	}
-}
-
-func TestReadOnlyFollowsTheSession(t *testing.T) {
-	f := newFixture(t)
-	if f.load(t).ReadOnly {
-		t.Fatal("a writable session was reported read-only")
-	}
-	f.session.Writable = false
-	if !f.load(t).ReadOnly {
-		t.Fatal("a session that may not write was not reported read-only")
 	}
 }
 
@@ -277,33 +266,6 @@ func TestReorderingMustNameEveryTabExactlyOnce(t *testing.T) {
 	got := f.load(t).Tabs
 	if got[0].ID != second.ID || got[1].ID != first.ID {
 		t.Fatalf("order after swap = %v, %v", got[0].ID, got[1].ID)
-	}
-}
-
-// Every write is refused while the contest is not open for this participant,
-// and refused before any storage work.
-func TestAReadOnlySessionWritesNothing(t *testing.T) {
-	f := newFixture(t)
-	tab := f.load(t).Tabs[0]
-	f.session.Writable = false
-	before := f.repo.Calls()
-
-	for name, write := range map[string]func() error{
-		"notes":  func() error { _, err := f.service.SaveNotes(t.Context(), f.session, "x"); return err },
-		"create": func() error { _, err := f.service.CreateTab(t.Context(), f.session, nil); return err },
-		"update": func() error {
-			_, err := f.service.UpdateTab(t.Context(), f.session, tab.ID, workspace.TabPatch{Body: ptr("x")})
-			return err
-		},
-		"delete":  func() error { return f.service.DeleteTab(t.Context(), f.session, tab.ID) },
-		"reorder": func() error { return f.service.ReorderTabs(t.Context(), f.session, []uuid.UUID{tab.ID}) },
-	} {
-		if err := write(); !errors.Is(err, workspace.ErrReadOnly) {
-			t.Fatalf("%s: %v, want ErrReadOnly", name, err)
-		}
-	}
-	if f.repo.Calls() != before {
-		t.Fatalf("a read-only session reached the repository %d times", f.repo.Calls()-before)
 	}
 }
 
