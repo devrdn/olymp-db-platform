@@ -3,9 +3,7 @@ package workspace_test
 import (
 	"context"
 	"errors"
-	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -13,140 +11,15 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/devrdn/db-contest/backend/internal/workspace"
+	"github.com/devrdn/db-contest/backend/internal/workspace/workspacetest"
 	"github.com/google/uuid"
 )
-
-// memoryRepository is the service's storage in memory: enough of the
-// repository's contract (one workspace per registration, tabs scoped to it,
-// the tab limit checked under the same lock that assigns positions) to test
-// the service's own rules. The SQL that keeps the same contract is proven in
-// internal/postgres against a real database.
-type memoryRepository struct {
-	mu    sync.Mutex
-	notes map[uuid.UUID]workspace.Notes
-	tabs  map[uuid.UUID][]workspace.Tab
-	now   time.Time
-	// calls counts every repository call, so a test can prove a refusal
-	// happened before any storage work.
-	calls int
-	// firstTitles records the title Load was asked to give a first tab.
-	firstTitles []string
-}
-
-func newMemoryRepository() *memoryRepository {
-	return &memoryRepository{
-		notes: map[uuid.UUID]workspace.Notes{},
-		tabs:  map[uuid.UUID][]workspace.Tab{},
-		now:   time.Date(2026, 9, 17, 10, 0, 0, 0, time.UTC),
-	}
-}
-
-func (m *memoryRepository) Load(_ context.Context, registration uuid.UUID, firstTitle string) (workspace.Notes, []workspace.Tab, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.calls++
-	m.firstTitles = append(m.firstTitles, firstTitle)
-	if len(m.tabs[registration]) == 0 {
-		m.tabs[registration] = []workspace.Tab{{ID: uuid.New(), Title: firstTitle, UpdatedAt: m.now}}
-	}
-	return m.notes[registration], slices.Clone(m.tabs[registration]), nil
-}
-
-func (m *memoryRepository) SaveNotes(_ context.Context, registration uuid.UUID, body string) (time.Time, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.calls++
-	at := m.now
-	m.notes[registration] = workspace.Notes{Body: body, UpdatedAt: &at}
-	return at, nil
-}
-
-func (m *memoryRepository) CreateTab(_ context.Context, registration uuid.UUID, limit int, title func(taken []string) string) (workspace.Tab, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.calls++
-	existing := m.tabs[registration]
-	if len(existing) >= limit {
-		return workspace.Tab{}, workspace.ErrTooManyTabs
-	}
-	taken := make([]string, 0, len(existing))
-	for _, tab := range existing {
-		taken = append(taken, tab.Title)
-	}
-	tab := workspace.Tab{ID: uuid.New(), Title: title(taken), Position: len(existing), UpdatedAt: m.now}
-	m.tabs[registration] = append(existing, tab)
-	return tab, nil
-}
-
-func (m *memoryRepository) UpdateTab(_ context.Context, registration, id uuid.UUID, patch workspace.TabPatch) (time.Time, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.calls++
-	for i, tab := range m.tabs[registration] {
-		if tab.ID != id {
-			continue
-		}
-		if patch.Title != nil {
-			tab.Title = *patch.Title
-		}
-		if patch.Body != nil {
-			tab.Body = *patch.Body
-		}
-		m.tabs[registration][i] = tab
-		return m.now, nil
-	}
-	return time.Time{}, workspace.ErrTabNotFound
-}
-
-func (m *memoryRepository) DeleteTab(_ context.Context, registration, id uuid.UUID) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.calls++
-	tabs := m.tabs[registration]
-	at := slices.IndexFunc(tabs, func(tab workspace.Tab) bool { return tab.ID == id })
-	if at < 0 {
-		return workspace.ErrTabNotFound
-	}
-	if len(tabs) == 1 {
-		return workspace.ErrLastTab
-	}
-	m.tabs[registration] = slices.Delete(tabs, at, at+1)
-	return nil
-}
-
-func (m *memoryRepository) ReorderTabs(_ context.Context, registration uuid.UUID, ids []uuid.UUID) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.calls++
-	tabs := m.tabs[registration]
-	if len(tabs) != len(ids) {
-		return workspace.ErrOrderMismatch
-	}
-	ordered := make([]workspace.Tab, 0, len(ids))
-	for i, id := range ids {
-		at := slices.IndexFunc(tabs, func(tab workspace.Tab) bool { return tab.ID == id })
-		if at < 0 {
-			return workspace.ErrOrderMismatch
-		}
-		tab := tabs[at]
-		tab.Position = i
-		ordered = append(ordered, tab)
-	}
-	m.tabs[registration] = ordered
-	return nil
-}
-
-func (m *memoryRepository) callCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.calls
-}
 
 // fixture is a service over the in-memory repository and the real
 // fixed-window limiter over an in-process cache, so what is counted is what
 // the deployment counts.
 type fixture struct {
-	repo    *memoryRepository
+	repo    *workspacetest.Repository
 	service *workspace.Service
 	session workspace.Session
 }
@@ -155,7 +28,7 @@ func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	c := cache.NewMemory(1000)
 	t.Cleanup(func() { _ = c.Close() })
-	repo := newMemoryRepository()
+	repo := workspacetest.NewRepository()
 	return &fixture{
 		repo:    repo,
 		service: workspace.NewService(repo, auth.NewLimiter(c)),
@@ -413,7 +286,7 @@ func TestAReadOnlySessionWritesNothing(t *testing.T) {
 	f := newFixture(t)
 	tab := f.load(t).Tabs[0]
 	f.session.Writable = false
-	before := f.repo.callCount()
+	before := f.repo.Calls()
 
 	for name, write := range map[string]func() error{
 		"notes":  func() error { _, err := f.service.SaveNotes(t.Context(), f.session, "x"); return err },
@@ -429,8 +302,8 @@ func TestAReadOnlySessionWritesNothing(t *testing.T) {
 			t.Fatalf("%s: %v, want ErrReadOnly", name, err)
 		}
 	}
-	if f.repo.callCount() != before {
-		t.Fatalf("a read-only session reached the repository %d times", f.repo.callCount()-before)
+	if f.repo.Calls() != before {
+		t.Fatalf("a read-only session reached the repository %d times", f.repo.Calls()-before)
 	}
 }
 
@@ -446,7 +319,7 @@ func TestWritesPastTheRateAreRefused(t *testing.T) {
 	if err := f.service.AdmitWrite(t.Context(), account); !errors.Is(err, workspace.ErrTooOften) {
 		t.Fatalf("AdmitWrite() #%d = %v, want ErrTooOften", workspace.WritesPerMinute+1, err)
 	}
-	if f.repo.callCount() != 0 {
+	if f.repo.Calls() != 0 {
 		t.Fatal("admitting a write reached the repository")
 	}
 
@@ -477,7 +350,7 @@ func (failingLimiter) Allow(context.Context, string, int, time.Duration) (bool, 
 // A counter that cannot be kept refuses (auth.Limiter's own rule), and the
 // refusal is not a rate refusal: nobody asked too often.
 func TestAWriteIsRefusedWhenItsRateCannotBeCounted(t *testing.T) {
-	service := workspace.NewService(newMemoryRepository(), failingLimiter{})
+	service := workspace.NewService(workspacetest.NewRepository(), failingLimiter{})
 	err := service.AdmitWrite(t.Context(), uuid.New())
 	if err == nil || errors.Is(err, workspace.ErrTooOften) {
 		t.Fatalf("AdmitWrite() = %v, want an internal error", err)
