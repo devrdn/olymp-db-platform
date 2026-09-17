@@ -1584,6 +1584,8 @@ const en = {
     invalid_contest_id: "Wrong contest identifier.",
     invalid_question_id: "Wrong question identifier.",
     invalid_tab_id: "Wrong tab identifier.",
+    invalid_query_log_entry_id: "Wrong query log entry identifier.",
+    query_log_entry_not_found: "That log entry no longer exists. Reload the page to see your current log.",
     workspace_too_often:
       "Your notes and tabs are being saved too often. Saving will resume in a moment.",
     workspace_tab_limit: "You already have as many tabs as allowed. Close one to open another.",
