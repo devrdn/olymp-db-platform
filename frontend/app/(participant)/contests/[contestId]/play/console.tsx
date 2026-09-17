@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
-import { CodeEditor, type CodeEditorHandle } from "@/components/product/code-editor";
+import { CodeEditor, type CodeEditorHandle, type EditorShortcut } from "@/components/product/code-editor";
 import { buttonVariants } from "@/components/ui/button";
 import type { WorkspaceTab } from "@/lib/api/workspace";
 import type { PlayDictionary } from "./dictionary";
@@ -48,6 +48,7 @@ export function ConsoleEditor({
   tabs: initialTabs,
   onResult,
   actions,
+  shortcuts,
 }: {
   contestId: string;
   dict: PlayDictionary;
@@ -64,6 +65,13 @@ export function ConsoleEditor({
    * component about one thing: the query, and running it.
    */
   actions?: React.ReactNode;
+  /**
+   * Keys the surrounding screen owns and the editor must not swallow — the
+   * workspace's panel toggles (§8). Passed straight through for the same
+   * reason `actions` is: they belong to the screen, not to the query, and
+   * this component stays about one thing.
+   */
+  shortcuts?: readonly EditorShortcut[];
   /**
    * Called once per completed run — including a refusal — never while one is
    * still in flight. `useActionState`'s own `state` only changes value when
@@ -277,6 +285,7 @@ export function ConsoleEditor({
           ref={editorRef}
           className="min-h-0 flex-1"
           onSubmit={() => formRef.current?.requestSubmit()}
+          shortcuts={shortcuts}
           ariaLabel={t.label}
           placeholder={t.placeholder}
           documentId={tabs.activeId}

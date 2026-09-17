@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 
 import { cn } from "@/lib/utils";
 import type { QuestionEntry } from "./questions-panel";
@@ -158,7 +158,7 @@ export function Workspace({
   // below are computed rather than declared: the grid has to stop reserving
   // a column that has nothing in it, or the editor gains nothing by the
   // panel leaving.
-  const { collapsed, expand } = usePanelVisibility();
+  const { collapsed, toggle, expand } = usePanelVisibility();
   // The header cannot see the schema, which arrives behind the Suspense
   // boundary between the two; without this it would offer a control for a
   // panel a closed-catalogue contest never draws.
@@ -176,6 +176,20 @@ export function Workspace({
   // The console column's own rows: the editor, the edge, the panel below it
   // — or the editor alone, taking the whole column.
   const consoleRows = showBottom ? "minmax(0,var(--pane-editor)) auto minmax(0,1fr)" : "minmax(0,1fr)";
+
+  // The same three combinations, inside the editor's own keymap. The window
+  // listener in `panel-toggles.tsx` cannot serve the caret: CodeMirror sees
+  // a keydown in its content first, and an unclaimed Ctrl+B in a
+  // contenteditable is the browser's "bold". A binding that runs also marks
+  // the key handled, which is what keeps the two from toggling in turn.
+  const editorShortcuts = useMemo(
+    () => [
+      { key: "Mod-b", run: () => toggle("schema") },
+      { key: "Mod-Alt-b", run: () => toggle("side") },
+      { key: "Mod-j", run: () => toggle("bottom") },
+    ],
+    [toggle],
+  );
 
   /** Shows a bottom tab, bringing the panel back if it was collapsed — a control for a panel nobody can see is a control for nothing. */
   const showBottomTab = (tab: string) => {
@@ -341,6 +355,7 @@ export function Workspace({
               <ConsoleEditor
                 contestId={contestId}
                 dict={dict}
+                shortcuts={editorShortcuts}
                 // The same array on every render, so the memoised panels
                 // around it are not disturbed by it.
                 tabs={workspace?.tabs ?? null}
