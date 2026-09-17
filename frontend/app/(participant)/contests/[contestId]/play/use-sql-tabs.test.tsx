@@ -64,7 +64,7 @@ function Harness({ initial }: { initial: WorkspaceTab[] | null }) {
         closed={tabs.closed !== null}
         dict={en}
         status={
-          <SqlTabStatus status={tabs.status} error={tabs.error} stored={tabs.stored} dict={en} />
+          <SqlTabStatus engine={tabs.activeEngine} error={tabs.error} stored={tabs.stored} dict={en} />
         }
         onSelect={tabs.select}
         onCreate={tabs.create}
