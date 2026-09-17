@@ -257,6 +257,54 @@ both of which are ordinary content pages and keep `Band` like everything
 else. See `frontend/app/(participant)/contests/[contestId]/play/workspace.tsx`
 for the layout itself.
 
+**Inside that grid, three panels collapse like VS Code's.** The schema tree
+on the left, the side panel on the right (history, questions, notes, table —
+in that order) and the bottom panel (result, query log) each carry a toggle
+in the play header, with `aria-pressed` and the shortcut in its `title`:
+Ctrl/⌘+B for the left panel, Ctrl/⌘+Alt+B for the right, Ctrl/⌘+J for the
+bottom, all three bound in the editor's own CodeMirror keymap too, ahead of
+the window listener, so a shortcut works with the caret sitting in the
+editor rather than typing "b" or turning text bold. A collapsed panel does
+not sit empty in its track — it and the divider beside it leave the grid
+entirely, and the editor takes the freed width. Collapsing all three leaves
+only the tab strip and the editor on the screen. A finished run reopens a
+collapsed bottom panel on its own, the same reasoning that already switches
+its tab to Result: the participant is meant to see what the query did.
+Below 760 px the same panels are stacked sections rather than columns, and
+the same toggles hide the same sections. What is collapsed is remembered in
+`localStorage` per contest, beside the pane widths (section 12's directory
+note on `lib/`).
+
+**The editor carries its SQL as a strip of tabs, VS Code's own shape:** a
+name, a close cross, and a trailing "+", double-click or F2 to rename (Enter
+commits, Esc cancels), drag to reorder, arrow keys to move between them as a
+`tablist`. Each tab keeps its own CodeMirror document — its own undo
+history, its own cursor — so switching tabs swaps state rather than text,
+and typing still repaints nothing above the editor. Running (the button or
+⌘↵) always runs the active tab's text, and the result names the tab it came
+from, because a result outlives the tab switch that follows it.
+
+**A result row opens in full underneath the table, not beside it.** The
+result table's columns are capped in width, which is exactly what makes a
+long value in one of them unreadable; clicking a row (or pressing Enter on
+one — rows are focusable) opens a detail panel below the table with every
+column spelled out, long values wrapped, monospace for numbers and dates,
+the same `NULL` glyph the table uses. "Copy value" sits beside each column,
+"Copy row" copies it the way the CSV export would, and the up/down arrows
+move to the neighbouring row without closing the panel. A new run closes it;
+the query log is untouched by this — its rows do not expand, because a log
+line is a record of what ran, not a place to re-read one value.
+
+**Both split points in the console — table/detail-panel and
+editor/bottom-panel — are dragged, not fixed.** Each is `PaneHandle` on the
+vertical axis: `aria-orientation="horizontal"`, arrow keys move it, a
+pointer drag writes the size straight onto the container without going
+through React, and the size is remembered per contest exactly as the
+horizontal pane widths already were (`usePaneWidths`'s own module,
+generalised to a group of stored sizes rather than copied for a second
+axis). The editor/bottom-panel split defaults to 55/45, the same 11:9 ratio
+the grid shipped with when it was still fixed.
+
 **The content column is up to 1760 px, the fields are
 `clamp(24px, 4.5vw, 140px)`.** The former fixed 1136 px came from the Tailwind
 CSS documentation, where a column holds prose. Here it holds a register, a query
