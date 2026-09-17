@@ -388,7 +388,12 @@ export function Workspace({
                   bottomTab === "result" ? "flex flex-col" : "hidden",
                 )}
               >
-                <MemoResultPanel state={lastResult} sourceTitle={resultFrom} dict={dict} />
+                <MemoResultPanel
+                  contestId={contestId}
+                  state={lastResult}
+                  sourceTitle={resultFrom}
+                  dict={dict}
+                />
               </div>
               <div
                 className={cn(

@@ -1112,6 +1112,21 @@ const en = {
           side: "Width of the questions panel",
           /** The two horizontal edges (§7): a share of a column's height rather than a width. */
           editor: "Height of the editor",
+          detail: "Height of the result table",
+        },
+        // One row of the result, open in full under the table (§7). The
+        // table clips a cell at its column's width, and a witness statement
+        // is not something a `title` attribute is a way to read.
+        row: {
+          heading: "Row {n}",
+          region: "Row {n} of the result",
+          copyValue: "Copy value",
+          /** What a screen reader hears, so fifteen buttons do not all read the same. */
+          copyValueNamed: "Copy value: {column}",
+          copyRow: "Copy row",
+          close: "Close",
+          copied: "Copied to the clipboard",
+          copyFailed: "Could not copy. Select the text and copy it yourself.",
         },
         resultEmpty: "Run a query to see its result here.",
         /** Which tab the result on screen came from — it stays while another tab is being typed in. */
