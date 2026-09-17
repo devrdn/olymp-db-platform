@@ -95,6 +95,8 @@ export const AUTOSAVE_DEBOUNCE_MS = 1500;
 export const AUTOSAVE_MAX_WAIT_MS = 10_000;
 export const AUTOSAVE_RETRY_FIRST_MS = 2000;
 export const AUTOSAVE_RETRY_MAX_MS = 30_000;
+/** How long the draft waits for typing to pause before it is written. */
+export const AUTOSAVE_DRAFT_WRITE_MS = 300;
 
 const CLOSED_CODES: ReadonlySet<string> = new Set<ClosedCode>(["contest_finished", "contest_not_running"]);
 
@@ -117,7 +119,17 @@ export function textFingerprint(text: string): string {
   return `${text.length}:${(hash >>> 0).toString(16)}`;
 }
 
-type Draft = { text: string; base: string | null; sent?: string };
+type Draft = {
+  text: string;
+  /** The server version this text was edited on top of. */
+  base: string | null;
+  /**
+   * Fingerprints of the texts sent but not yet confirmed. The server
+   * holding one of them means the save landed and the edits after it did
+   * not, so this draft is still the newer text.
+   */
+  sent?: string[];
+};
 
 function parseDraft(raw: string | null): Draft | null {
   if (raw === null) return null;
@@ -127,8 +139,8 @@ function parseDraft(raw: string | null): Draft | null {
     const { text, base, sent } = value as Record<string, unknown>;
     if (typeof text !== "string") return null;
     if (base !== null && typeof base !== "string") return null;
-    if (sent !== undefined && typeof sent !== "string") return null;
-    return { text, base, sent };
+    if (sent !== undefined && !(Array.isArray(sent) && sent.every((one) => typeof one === "string"))) return null;
+    return { text, base, sent: sent as string[] | undefined };
   } catch {
     return null;
   }
@@ -161,11 +173,21 @@ export class AutosaveEngine {
 
   /** What the editor holds. */
   private text: string;
-  /** What the server last confirmed, and its version. */
-  private saved: string;
+  /**
+   * What the server is known to hold, and the version it answered with.
+   * Null means "not known": two requests overlapped and neither answer
+   * proves which of them the database committed last.
+   */
+  private saved: string | null;
   private version: string | null;
-  /** The text of the ordinary request in flight, if any. */
-  private inFlight: string | null = null;
+  /** The texts of the requests in flight, oldest first. */
+  private readonly flights: { text: string }[] = [];
+  /** Two requests for this document were in flight at the same time. */
+  private overlapped = false;
+  /** Fingerprints of texts sent whose effect on the server is unconfirmed. */
+  private unconfirmed: string[] = [];
+  /** The last text sent as a keepalive request, so leaving twice sends once. */
+  private lastKeepalive: string | null = null;
   /** A save came due while a request was in flight. */
   private sendWhenIdle = false;
   /** The text the server refused, and why. */
@@ -181,6 +203,7 @@ export class AutosaveEngine {
   private debounceTimer: Timer | undefined;
   private maxWaitTimer: Timer | undefined;
   private retryTimer: Timer | undefined;
+  private draftTimer: Timer | undefined;
 
   private status: AutosaveStatus = SAVED;
   private readonly listeners = new Set<() => void>();
@@ -220,7 +243,7 @@ export class AutosaveEngine {
 
   /** Unmounted: send what is unsaved on the way out, and stop every timer. */
   suspend = () => {
-    this.hide();
+    this.leave();
     this.suspended = true;
     this.clearTimers();
   };
@@ -235,7 +258,7 @@ export class AutosaveEngine {
       clearTimeout(this.debounceTimer);
       clearTimeout(this.maxWaitTimer);
       this.debounceTimer = this.maxWaitTimer = undefined;
-      if (text === this.saved && this.inFlight === null) {
+      if (text === this.saved && this.flights.length === 0) {
         clearTimeout(this.retryTimer);
         this.retryTimer = undefined;
         this.attempt = 0;
@@ -251,12 +274,27 @@ export class AutosaveEngine {
   };
 
   flush = () => {
-    this.send(false);
+    this.send({ keepalive: false, bypassWait: false });
   };
 
-  /** The tab was hidden or the page is going away: send now, in a request that outlives it. */
+  /**
+   * The browser tab was hidden. The page is still there, so a pause the
+   * server asked for is still honoured: every refused write counts against
+   * the same per-minute budget as a real one.
+   */
   hide = () => {
-    this.send(true);
+    this.storeDraft(true);
+    this.send({ keepalive: true, bypassWait: false });
+  };
+
+  /**
+   * The page itself is going away (`pagehide`, or the editor unmounting).
+   * This is the last chance to send, so a waiting retry is no reason to
+   * stay silent.
+   */
+  leave = () => {
+    this.storeDraft(true);
+    this.send({ keepalive: true, bypassWait: true });
   };
 
   discard = () => {
@@ -266,44 +304,50 @@ export class AutosaveEngine {
   };
 
   private due = () => {
-    this.send(false);
+    this.send({ keepalive: false, bypassWait: false });
   };
 
-  private send(keepalive: boolean) {
+  private send({ keepalive, bypassWait }: { keepalive: boolean; bypassWait: boolean }) {
     clearTimeout(this.debounceTimer);
     clearTimeout(this.maxWaitTimer);
     this.debounceTimer = this.maxWaitTimer = undefined;
     if (this.discarded || this.suspended || this.closedCode !== null) return;
 
     const text = this.text;
-    if (this.inFlight !== null) {
-      // The page may be going away, and the request in flight carries older
-      // text: waiting for it would lose the rest. Otherwise the next save
-      // leaves when this one answers. Should the older request land last,
-      // the text it confirms differs from the editor's, and the engine sends
-      // the newer text again — which also corrects the server.
-      if (keepalive && text !== this.inFlight && text !== this.rejected?.text) {
-        this.run(text, true);
-      } else {
-        this.sendWhenIdle = true;
-      }
-      return;
-    }
     if (text === this.saved || text === this.rejected?.text) {
       this.emit();
       return;
     }
-    // An explicit flush respects a waiting retry; leaving the page does not.
-    if (this.retryTimer !== undefined && !keepalive) return;
+    // A pause the server asked for, or one a failure earned, is waited out
+    // by everything except the page going away for good.
+    if (this.retryTimer !== undefined && !bypassWait) return;
+
+    if (this.flights.length > 0) {
+      // Already on its way, in this very text: nothing to add.
+      if (this.flights.some((flight) => flight.text === text)) return;
+      // An ordinary save waits for the answer and leaves after it. A page
+      // that is going away cannot wait, so it sends in parallel — and
+      // because nothing then says which request the database commits last,
+      // neither answer is taken as proof (see `settleFlight`).
+      if (!keepalive) {
+        this.sendWhenIdle = true;
+        return;
+      }
+    }
+    if (keepalive && text === this.lastKeepalive) return;
     this.run(text, keepalive);
   }
 
   private run(text: string, keepalive: boolean) {
     clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
-    const owner = this.inFlight === null;
-    if (owner) this.inFlight = text;
-    this.storeDraft();
+    if (this.flights.length > 0) this.overlapped = true;
+    const flight = { text };
+    this.flights.push(flight);
+    if (keepalive) this.lastKeepalive = text;
+    const print = textFingerprint(text);
+    if (!this.unconfirmed.includes(print)) this.unconfirmed.push(print);
+    this.storeDraft(keepalive);
     this.emit();
 
     let request: Promise<string>;
@@ -313,30 +357,58 @@ export class AutosaveEngine {
       request = Promise.reject(error);
     }
     request.then(
-      (version) => this.succeeded(text, version, owner),
-      (error: unknown) => this.failed(text, error, owner),
+      (version) => this.succeeded(text, version, flight),
+      (error: unknown) => this.failed(text, error, flight, keepalive),
     );
   }
 
-  private succeeded(text: string, version: string, owner: boolean) {
-    if (owner) this.inFlight = null;
+  /**
+   * Takes one request out of flight and reports whether its answer may be
+   * believed. It may not while another request for the same document
+   * overlapped it: the two were committed in an order this side cannot see,
+   * so what the server holds is unknown until one more save settles it.
+   */
+  private settleFlight(flight: { text: string }): boolean {
+    const at = this.flights.indexOf(flight);
+    if (at >= 0) this.flights.splice(at, 1);
+    if (!this.overlapped) return true;
+    if (this.flights.length === 0) {
+      // Both have answered: nothing is confirmed, and the current text goes
+      // out once more to make the server's copy known again.
+      this.overlapped = false;
+      this.saved = null;
+      this.sendWhenIdle = true;
+    }
+    return false;
+  }
+
+  private succeeded(text: string, version: string, flight: { text: string }) {
+    const believable = this.settleFlight(flight);
     if (this.discarded) return;
-    this.saved = text;
-    this.version = version;
     this.attempt = 0;
+    // The version is worth keeping either way: it is the draft's base, and a
+    // later one is closer to the truth than an older one.
+    this.version = version;
+    if (believable) {
+      this.saved = text;
+      this.unconfirmed = [];
+    }
     this.storeDraft();
     this.settle();
   }
 
-  private failed(text: string, error: unknown, owner: boolean) {
-    if (owner) this.inFlight = null;
+  private failed(text: string, error: unknown, flight: { text: string }, keepalive: boolean) {
+    this.settleFlight(flight);
+    // A keepalive save that failed did not reach the server, so leaving
+    // again may send this text again.
+    if (keepalive && this.lastKeepalive === text) this.lastKeepalive = null;
     if (this.discarded) return;
 
     if (error instanceof ApiError && CLOSED_CODES.has(error.code)) {
       this.closedCode = error.code as ClosedCode;
       this.clearTimers();
       this.sendWhenIdle = false;
-      this.storeDraft();
+      this.storeDraft(true);
       this.emit();
       return;
     }
@@ -361,12 +433,12 @@ export class AutosaveEngine {
 
   /** After a request answered: send what came due meanwhile, then report. */
   private settle() {
-    if (this.inFlight === null && this.closedCode === null) {
+    if (this.flights.length === 0 && this.closedCode === null) {
       if (this.retryTimer !== undefined) {
         this.sendWhenIdle = false;
       } else if (this.sendWhenIdle) {
         this.sendWhenIdle = false;
-        this.send(false);
+        this.send({ keepalive: false, bypassWait: false });
       } else {
         this.scheduleIfDirty();
       }
@@ -387,14 +459,14 @@ export class AutosaveEngine {
     if (this.suspended) return;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined;
-      this.send(false);
+      this.send({ keepalive: false, bypassWait: false });
     }, wait);
   }
 
   /** Unsaved text with nothing on the way to send it gets the ordinary wait. */
   private scheduleIfDirty() {
     if (this.suspended || this.discarded || this.closedCode !== null) return;
-    if (this.inFlight !== null || this.retryTimer !== undefined || this.debounceTimer !== undefined) return;
+    if (this.flights.length > 0 || this.retryTimer !== undefined || this.debounceTimer !== undefined) return;
     if (this.text === this.saved || this.text === this.rejected?.text) return;
     this.debounceTimer = setTimeout(this.due, AUTOSAVE_DEBOUNCE_MS);
     this.maxWaitTimer ??= setTimeout(this.due, AUTOSAVE_MAX_WAIT_MS);
@@ -409,26 +481,27 @@ export class AutosaveEngine {
       return;
     }
     const newer =
-      draft.base === initialVersion || (draft.sent !== undefined && draft.sent === textFingerprint(initialText));
+      draft.base === initialVersion || (draft.sent?.includes(textFingerprint(initialText)) ?? false);
     if (!newer) {
       this.removeDraft();
       return;
     }
     this.text = draft.text;
     this.options.onRestore?.(draft.text);
-    this.send(false);
+    this.send({ keepalive: false, bypassWait: false });
   }
 
   private clearTimers() {
     clearTimeout(this.debounceTimer);
     clearTimeout(this.maxWaitTimer);
     clearTimeout(this.retryTimer);
-    this.debounceTimer = this.maxWaitTimer = this.retryTimer = undefined;
+    clearTimeout(this.draftTimer);
+    this.debounceTimer = this.maxWaitTimer = this.retryTimer = this.draftTimer = undefined;
   }
 
   private computeStatus(): AutosaveStatus {
     if (this.closedCode !== null) return { kind: "closed", code: this.closedCode };
-    if (this.inFlight !== null) return SAVING;
+    if (this.flights.length > 0) return SAVING;
     if (this.text === this.saved) return SAVED;
     if (this.rejected !== null && this.text === this.rejected.text) return { kind: "rejected", code: this.rejected.code };
     if (this.retryTimer !== undefined) return RETRYING;
@@ -446,15 +519,38 @@ export class AutosaveEngine {
     for (const listener of this.listeners) listener();
   }
 
-  /** Keeps the draft in step: removed when the server holds the text, written otherwise. */
-  private storeDraft() {
+  /**
+   * Keeps the draft in step: removed when the server holds the text,
+   * written otherwise.
+   *
+   * Written after a short pause by default rather than on every keystroke:
+   * a SQL tab holds up to 64 KiB, and serialising that per character is
+   * work for nothing. `now` is for the moments when there may be no later:
+   * the tab being hidden, the page going away, the contest closing.
+   */
+  private storeDraft(now = false) {
     if (this.discarded) return;
-    if (this.text === this.saved && this.inFlight === null) {
+    if (this.text === this.saved && this.flights.length === 0) {
+      clearTimeout(this.draftTimer);
+      this.draftTimer = undefined;
       this.removeDraft();
       return;
     }
+    if (now) {
+      clearTimeout(this.draftTimer);
+      this.draftTimer = undefined;
+      this.writeDraft();
+      return;
+    }
+    this.draftTimer ??= setTimeout(() => {
+      this.draftTimer = undefined;
+      this.storeDraft(true);
+    }, AUTOSAVE_DRAFT_WRITE_MS);
+  }
+
+  private writeDraft() {
     const draft: Draft = { text: this.text, base: this.version };
-    if (this.inFlight !== null) draft.sent = textFingerprint(this.inFlight);
+    if (this.unconfirmed.length > 0) draft.sent = [...this.unconfirmed];
     try {
       storage()?.setItem(this.key, JSON.stringify(draft));
     } catch {
@@ -494,6 +590,29 @@ function serverStatus(): AutosaveStatus {
 }
 
 /**
+ * Starts an engine and wires it to the two events that mean "save now, the
+ * page may not be here in a moment". Returns the cleanup, which detaches
+ * the listeners and sends what is still unsaved.
+ *
+ * Exported because Task 4 keeps one engine per SQL tab, which no hook can
+ * do: this is the whole lifecycle, in one call, rather than a copy of it
+ * beside every editor.
+ */
+export function attachEngine(engine: AutosaveEngine): () => void {
+  const onVisibility = () => {
+    if (document.visibilityState === "hidden") engine.hide();
+  };
+  engine.start();
+  document.addEventListener("visibilitychange", onVisibility);
+  window.addEventListener("pagehide", engine.leave);
+  return () => {
+    document.removeEventListener("visibilitychange", onVisibility);
+    window.removeEventListener("pagehide", engine.leave);
+    engine.suspend();
+  };
+}
+
+/**
  * One autosaved document, for a component that holds exactly one (the
  * notes). The editor stays uncontrolled: call `setValue` on every edit and
  * apply `onRestore`'s text to it when a draft wins.
@@ -506,19 +625,7 @@ export function useAutosave(options: AutosaveOptions): Autosave {
     engine.setCallbacks({ save, onRestore });
   }, [engine, save, onRestore]);
 
-  useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState === "hidden") engine.hide();
-    };
-    engine.start();
-    document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("pagehide", engine.hide);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("pagehide", engine.hide);
-      engine.suspend();
-    };
-  }, [engine]);
+  useEffect(() => attachEngine(engine), [engine]);
 
   const status = useSyncExternalStore(engine.subscribe, engine.getStatus, serverStatus);
 
