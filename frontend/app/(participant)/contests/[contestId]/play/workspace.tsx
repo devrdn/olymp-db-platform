@@ -412,7 +412,11 @@ export function Workspace({
                   // refreshes itself off the `active` prop below, only on the
                   // transition into actually being shown.
                   if (state.kind !== "idle") {
-                    if (source) setResultFrom(source.tabTitle);
+                    // Every completed run sets this, including one the
+                    // console could not name a tab for: the heading belongs
+                    // to the answer on screen, and leaving the last run's
+                    // tab name over a new answer would be a lie.
+                    setResultFrom(source?.tabTitle ?? null);
                     // And open the panel if it was collapsed: seeing what a
                     // query did is the point of running it, which is the same
                     // reasoning that switches the tab (§8).

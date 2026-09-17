@@ -365,6 +365,28 @@ describe("which tab the result came from", () => {
 
     expect(screen.queryByText(/^From /)).not.toBeInTheDocument();
   });
+
+  // A name nobody can read is not a name. The console has no way to run a
+  // query from a tab that is not there, but the heading is one line of text
+  // built from what it was handed, and "From " followed by nothing is worse
+  // than no heading at all.
+  test("draws no heading for a run whose tab has no name", () => {
+    render(
+      <ResultPanel
+        contestId="c1"
+        state={{
+          kind: "answer",
+          result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 },
+        }}
+        sourceTitle=""
+        dict={en}
+      />,
+    );
+
+    // "From" with the name missing in English; in Russian and Romanian the
+    // template quotes the name, so it comes out as a pair of empty quotes.
+    expect(screen.queryByText("From")).not.toBeInTheDocument();
+  });
 });
 
 /**
