@@ -192,8 +192,15 @@ describe("the SQL tab strip", () => {
     const tabs = Array.from({ length: MAX_TABS }, (_, i) => ({ id: `t${i}`, title: `Query ${i + 1}` }));
     show({ tabs, activeId: "t0" });
 
-    expect(screen.getByRole("button", { name: t.newTab })).toBeDisabled();
+    const plus = screen.getByRole("button", { name: t.newTab });
+    expect(plus).toBeDisabled();
     expect(screen.getByText(en.errors.workspace_tab_limit)).toBeInTheDocument();
+    // A disabled control fires no pointer events, so its own `title` never
+    // becomes a tooltip in Chrome or Firefox: the mouse user's answer has to
+    // hang on something that is not disabled. The reader's answer is the
+    // `aria-describedby` region above, which needs no pointer at all.
+    expect(plus.parentElement).toHaveAttribute("title", en.errors.workspace_tab_limit);
+    expect(plus).toHaveAttribute("aria-describedby");
   });
 
   test("closes a tab from its ✕", async () => {
