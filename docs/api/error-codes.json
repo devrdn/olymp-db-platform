@@ -302,10 +302,6 @@
       "meaning": "The password is not acceptable. The message says why."
     },
     {
-      "code": "invalid_query_log_entry_id",
-      "meaning": "A query log entry identifier in the path is not a positive integer that fits the column it names, or is written with a sign or a character other than a digit."
-    },
-    {
       "code": "invalid_question_id",
       "meaning": "A question identifier in the path or body is not a valid UUID."
     },
@@ -440,10 +436,6 @@
     {
       "code": "query_function_not_supported",
       "meaning": "The query calls a function that is not on the allow-list. The details name it, which is what an operator needs to decide whether it belongs there."
-    },
-    {
-      "code": "query_log_entry_not_found",
-      "meaning": "No such entry in this participant's own query log. Also the answer for another participant's entry: that it exists at all is not the caller's business."
     },
     {
       "code": "query_not_one_statement",

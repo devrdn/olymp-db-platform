@@ -1,7 +1,6 @@
 package queryrunner
 
 import (
-	"errors"
 	"time"
 )
 
@@ -10,21 +9,6 @@ import (
 // direction. It carries exactly what the log already records for this
 // purpose: the statement, how it ended, and when.
 type HistoryEntry struct {
-	// ID is query_log.id, the row's own bigserial primary key — the public
-	// identifier a client names in GET .../play/log/{entryId} (§7).
-	//
-	// Not request_id: that column is a uuid, but its uniqueness rests on
-	// client behaviour rather than on the database — the middleware that
-	// stamps it (httpx.RequestID) only ever reuses a caller-supplied
-	// X-Request-Id header, and nothing stops a request from outside this
-	// installation's own frontend from sending one. A lookup keyed by it
-	// could then match more than one of a participant's own rows. id has no
-	// such dependency: it is the table's own primary key, assigned by
-	// Postgres and never chosen by a caller. Every lookup by it is still
-	// scoped to the caller's own registration_id (Entry's own doc), so a
-	// guessed or enumerated id only ever yields that participant's own rows,
-	// or ErrHistoryEntryNotFound.
-	ID  int64
 	SQL string
 	// SQLTruncated says SQL is the beginning of the statement rather than the
 	// whole of it — see MaxHistorySQLChars. A flag rather than a silent cut,
@@ -33,7 +17,6 @@ type HistoryEntry struct {
 	// answer, and this is the participant's own text being shortened.
 	//
 	// Never set by a streamed export, which carries every statement whole.
-	// Entry sets it too, but only defensively: see its own doc.
 	SQLTruncated bool
 	Status       Status
 	// Error is empty for a query that did not fail.
@@ -47,12 +30,6 @@ type HistoryEntry struct {
 	RowCount   *int
 	ExecutedAt time.Time
 }
-
-// ErrHistoryEntryNotFound is Entry's refusal: no row of the caller's own
-// registration has that id. The same answer for an id that was never logged
-// at all and for one that belongs to another participant's row — telling
-// those apart would confirm which ids exist for somebody else's session.
-var ErrHistoryEntryNotFound = errors.New("no such query log entry")
 
 // DefaultHistoryLimit and MaxHistoryLimit bound one page of a participant's
 // own query log.
