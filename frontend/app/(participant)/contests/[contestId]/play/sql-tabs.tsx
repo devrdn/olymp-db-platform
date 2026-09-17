@@ -304,17 +304,27 @@ export function SqlTabStrip({
       </div>
 
       {closed ? null : (
-        <button
-          type="button"
-          onClick={onCreate}
-          disabled={full}
-          aria-label={t.newTab}
-          title={full ? dict.errors.workspace_tab_limit : t.newTab}
-          aria-describedby={full ? limitId : undefined}
-          className="shrink-0 px-2 py-1 text-control-sm text-ink-2 hover:text-ink disabled:cursor-not-allowed disabled:text-ink-3"
+        // The tooltip hangs on the span, not on the button, once the button
+        // is disabled: a disabled control fires no pointer events, so Chrome
+        // and Firefox never show a `title` written on it, and the mouse user
+        // is left with a + that does nothing and says nothing. The reader's
+        // answer is the described-by region below, which needs no pointer.
+        <span
+          title={full ? dict.errors.workspace_tab_limit : undefined}
+          className="flex shrink-0 items-center"
         >
-          <span aria-hidden="true">+</span>
-        </button>
+          <button
+            type="button"
+            onClick={onCreate}
+            disabled={full}
+            aria-label={t.newTab}
+            title={full ? undefined : t.newTab}
+            aria-describedby={full ? limitId : undefined}
+            className="px-2 py-1 text-control-sm text-ink-2 hover:text-ink disabled:cursor-not-allowed disabled:text-ink-3"
+          >
+            <span aria-hidden="true">+</span>
+          </button>
+        </span>
       )}
       {/* Why the + cannot be pressed. A disabled control announces nothing of
           its own, and the limit is the one thing a participant reaching for
