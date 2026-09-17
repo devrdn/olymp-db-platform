@@ -258,7 +258,7 @@ else. See `frontend/app/(participant)/contests/[contestId]/play/workspace.tsx`
 for the layout itself.
 
 **Inside that grid, three panels collapse like VS Code's.** The schema tree
-on the left, the side panel on the right (history, questions, notes, table —
+on the left, the side panel on the right (story, questions, notes, table —
 in that order) and the bottom panel (result, query log) each carry a toggle
 in the play header, with `aria-pressed` and the shortcut in its `title`:
 Ctrl/⌘+B for the left panel, Ctrl/⌘+Alt+B for the right, Ctrl/⌘+J for the
