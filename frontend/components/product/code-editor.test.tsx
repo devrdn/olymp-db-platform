@@ -430,6 +430,28 @@ describe("several documents in one editor", () => {
 
     expect(screen.getByRole("textbox")).toHaveTextContent("SELECT fresh");
   });
+
+  // And the ordinary case, which is the one that leaked: the tab being
+  // closed is the tab that is open. The showing document's state is not in
+  // the map — it is in the view — so the swap to the next tab put it back
+  // under the dropped id, where nothing would ever ask for it again and
+  // nothing would ever free it.
+  test("forgets a document dropped while it was the one showing", async () => {
+    const texts = new Map([
+      ["a", "SELECT a"],
+      ["b", "SELECT b"],
+    ]);
+    const handle = { current: null as CodeEditorHandle | null };
+    const { container } = render(<Documents handle={handle} texts={texts} />);
+    await waitForRealEditor(container);
+
+    handle.current?.dropDocument("a");
+    await switchDocument();
+    texts.set("a", "SELECT fresh");
+    await switchDocument();
+
+    expect(screen.getByRole("textbox")).toHaveTextContent("SELECT fresh");
+  });
 });
 
 /**
