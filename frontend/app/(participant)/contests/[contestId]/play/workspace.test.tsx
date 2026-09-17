@@ -873,12 +873,16 @@ describe("collapsing a panel", () => {
     expect(screen.getByText(en.participant.play.workspace.log.empty)).toBe(empty);
   });
 
-  // And it still has to catch up when the participant comes back to it:
-  // collapsing the panel is leaving the tab, so expanding into it is
-  // arriving. The three-second gate on that refresh is the log panel's own
-  // and is tested there; it is stubbed out at the top of this file so what
-  // is asserted here is the transition and not the clock.
-  test("expanding back into the log refreshes it", async () => {
+  // Putting the panel away and bringing it back is not leaving the log and
+  // arriving at it: the tab underneath never changed. It matters because the
+  // refresh spends one of the participant's `AdmitRead` units — the budget
+  // the SQL console shares with it — and ⌘J is one keystroke, so a
+  // participant folding the panel away to read a question would be paying
+  // for it out of their own queries. Going to another tab and back is the
+  // deliberate act, and that still refreshes. The three-second gate on top
+  // of that belongs to the log panel and is stubbed out at the top of this
+  // file, so what is asserted here is the transition and not the clock.
+  test("expanding the panel is not an arrival at the log; returning to its tab is", async () => {
     showWithToggles(null);
     await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.log }));
     await waitFor(() => expect(logCalls.count).toBeGreaterThan(0));
@@ -886,6 +890,10 @@ describe("collapsing a panel", () => {
     const before = logCalls.count;
 
     await userEvent.click(screen.getByRole("button", { name: p.bottom }));
+    expect(logCalls.count).toBe(before);
+
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.result }));
+    await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.log }));
 
     await waitFor(() => expect(logCalls.count).toBeGreaterThan(before));
   });
