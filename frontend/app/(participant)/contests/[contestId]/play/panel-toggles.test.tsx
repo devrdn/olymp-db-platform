@@ -32,10 +32,27 @@ function show(contestId: string, { schema = true }: { schema?: boolean } = {}) {
   );
 }
 
-/** Stands in for `Workspace`: the one thing it tells the header is whether this contest has a schema panel at all. */
+/**
+ * Stands in for `Workspace`: it tells the header whether this contest has a
+ * schema panel at all, and it marks its panes the way the real one does —
+ * `data-panel` is how a shortcut knows the focus it is about to hide.
+ */
 function AWorkspace({ schema }: { schema: boolean }) {
   useSchemaPanel(schema);
-  return null;
+  return (
+    <>
+      <div data-panel="schema">
+        <input aria-label="search the schema" />
+      </div>
+      <div data-panel="side">
+        <input aria-label="your answer" />
+      </div>
+      <div data-panel="bottom">
+        <input aria-label="a cell of the result" />
+      </div>
+      <input aria-label="your query" />
+    </>
+  );
 }
 
 beforeEach(() => {
@@ -175,6 +192,45 @@ describe("the shortcuts", () => {
     expect(screen.getByRole("button", { name: t.schema })).toHaveAttribute("aria-pressed", "true");
   });
 
+  /**
+   * Collapsing a panel the participant is standing in has to put them
+   * somewhere. Left alone, focus falls to `<body>`: the next Tab starts from
+   * the top of the document, and a screen reader is told nothing at all
+   * about what just happened. The toggle is both the nearest thing to where
+   * they were and the control that undoes it.
+   */
+  test("collapsing by shortcut takes the focus with it, onto the toggle", async () => {
+    show(aContest());
+    await userEvent.click(screen.getByRole("textbox", { name: "your answer" }));
+
+    press("b", { alt: true });
+
+    expect(screen.getByRole("button", { name: t.side })).toHaveFocus();
+  });
+
+  // The ordinary case: the participant is typing a query, and a shortcut
+  // that yanked the caret out of the editor would be worse than no shortcut.
+  test("the caret stays where it is when the panel being collapsed is not the one holding it", async () => {
+    show(aContest());
+    const query = screen.getByRole("textbox", { name: "your query" });
+    await userEvent.click(query);
+
+    press("b");
+
+    expect(query).toHaveFocus();
+  });
+
+  test("expanding a panel does not move the focus", async () => {
+    show(aContest());
+    press("j");
+    const query = screen.getByRole("textbox", { name: "your query" });
+    await userEvent.click(query);
+
+    press("j");
+
+    expect(query).toHaveFocus();
+  });
+
   test("a bare letter types rather than collapsing anything", () => {
     show(aContest());
 
@@ -223,6 +279,36 @@ describe("what is remembered", () => {
     await userEvent.click(screen.getByRole("button", { name: t.bottom }));
 
     expect(screen.getByRole("button", { name: t.bottom })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  /**
+   * The realistic refusal is not a browser that has switched storage off; it
+   * is `QuotaExceededError` on a machine whose storage is full, where
+   * reading still works and still answers with whatever was stored last
+   * time. Believing that older record would quietly put the panel back and
+   * undo what the participant just did.
+   */
+  test("a refused write is not undone by an older record storage can still read", async () => {
+    const contestId = aContest();
+    window.localStorage.setItem(
+      `dbcontest.console.collapsed.${contestId}`,
+      JSON.stringify({ schema: true, side: false, bottom: false }),
+    );
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("the quota is exceeded");
+    });
+    show(contestId);
+    const schema = screen.getByRole("button", { name: t.schema });
+    expect(schema).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(schema);
+    expect(schema).toHaveAttribute("aria-pressed", "true");
+
+    // Anything else that re-renders the screen reads the store again, which
+    // is where the older record used to win.
+    await userEvent.click(screen.getByRole("button", { name: t.bottom }));
+
+    expect(screen.getByRole("button", { name: t.schema })).toHaveAttribute("aria-pressed", "true");
   });
 
   test("a stored value this build cannot read is not a reason to fail", () => {

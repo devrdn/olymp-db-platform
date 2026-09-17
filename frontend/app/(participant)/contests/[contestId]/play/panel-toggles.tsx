@@ -7,6 +7,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -66,18 +67,22 @@ function storageKey(contestId: string) {
 }
 
 /**
- * What one contest's record holds: the value in force, the raw string storage
- * held when it was read, and whether storage actually took the last write.
+ * What one contest's record holds: the value in force, and the raw string
+ * storage was seen to hold when that value was settled on.
  *
- * That last flag is the whole point of keeping a record at all. A browser can
- * refuse `setItem` — a private window, a locked-down machine in a computer
- * class — and if the value were read back out of storage afterwards the
- * panel would spring open again the moment anything else re-rendered, which
- * is precisely the defect Task 4 met with the notes draft. So: what is in
- * force is what this module holds, storage is a mirror, and storage is
- * believed again only when it can be seen to have taken the write.
+ * Keeping the raw string is the whole point. A browser can refuse `setItem`
+ * — a private window, a machine in a computer class whose storage is full —
+ * and if the value were then read back out of storage the panel would spring
+ * open again the moment anything else re-rendered, which is precisely the
+ * defect Task 4 met with the notes draft. So what is in force is what this
+ * module holds; storage is a mirror, and it is believed again only once what
+ * it holds has actually changed.
+ *
+ * A refused write therefore records the string storage *really* has — the
+ * older record it kept, not the one it refused — so that record can no
+ * longer look like news.
  */
-type Remembered = { raw: string | null; value: CollapsedPanels; stored: boolean };
+type Remembered = { raw: string | null; value: CollapsedPanels };
 
 const held = new Map<string, Remembered>();
 
@@ -118,25 +123,28 @@ function parse(raw: string | null): CollapsedPanels {
 function snapshot(contestId: string): CollapsedPanels {
   const raw = readRaw(contestId);
   const record = held.get(contestId);
-  // Storage still says what it said when this was read: nothing has changed.
+  // Storage still holds what it held when this value was settled on, so it
+  // has nothing new to say — whether that is because it took the write or
+  // because it refused one.
   if (record && record.raw === raw) return record.value;
-  // Storage refused the last write and has nothing of its own to offer. What
-  // this module holds is the only copy there is, and it stands.
-  if (record && !record.stored && raw === null) return record.value;
   const value = parse(raw);
-  held.set(contestId, { raw, value, stored: true });
+  held.set(contestId, { raw, value });
   return value;
 }
 
 function commit(contestId: string, value: CollapsedPanels) {
   const raw = JSON.stringify(value);
-  let stored = true;
+  let observed: string | null = raw;
   try {
     window.localStorage.setItem(storageKey(contestId), raw);
   } catch {
-    stored = false;
+    // Refused. What storage holds is whatever it held before — possibly an
+    // older record it can still read perfectly well — and remembering that
+    // string is what keeps the next snapshot from mistaking it for a change
+    // made somewhere else.
+    observed = readRaw(contestId);
   }
-  held.set(contestId, { raw: stored ? raw : null, value, stored });
+  held.set(contestId, { raw: observed, value });
   for (const listener of listeners) listener();
 }
 
@@ -169,6 +177,13 @@ type PanelVisibility = {
   reportSchema: (present: boolean) => void;
   /** Whether a provider is above at all. The waiting room's header has none. */
   present: boolean;
+  /**
+   * Hands the provider one of the toggle buttons, so a shortcut that hides
+   * the panel the focus is in can put the focus somewhere that still exists.
+   * Called by `PanelToggles` as a ref callback; stable, and it renders
+   * nothing.
+   */
+  registerToggle: (panel: PanelKey, node: HTMLButtonElement | null) => void;
 };
 
 const OUTSIDE: PanelVisibility = {
@@ -178,6 +193,7 @@ const OUTSIDE: PanelVisibility = {
   hasSchema: false,
   reportSchema: () => {},
   present: false,
+  registerToggle: () => {},
 };
 
 const PanelVisibilityContext = createContext<PanelVisibility>(OUTSIDE);
@@ -219,6 +235,11 @@ export function PanelVisibilityProvider({
     [contestId],
   );
 
+  const toggleRefs = useRef<Partial<Record<PanelKey, HTMLButtonElement | null>>>({});
+  const registerToggle = useCallback((panel: PanelKey, node: HTMLButtonElement | null) => {
+    toggleRefs.current[panel] = node;
+  }, []);
+
   // The keys, from anywhere on the screen that is not the editor. The editor
   // carries the same three in its own keymap (`code-editor-core.ts`), because
   // CodeMirror would otherwise take them first — and a binding that runs
@@ -230,15 +251,29 @@ export function PanelVisibilityProvider({
       const panel = shortcutFor(event);
       if (!panel) return;
       event.preventDefault();
+      // A press that hides the panel the participant is standing in has to
+      // put them somewhere that will still be there. Left alone, focus falls
+      // to `<body>`: the next Tab starts at the top of the document and a
+      // screen reader is told nothing about what just happened. The toggle
+      // is the nearest control to where they were and the one that undoes
+      // it — and moving the focus there is itself the announcement.
+      //
+      // Only when the focus really is inside that panel. A participant
+      // typing a query and collapsing the schema beside it must keep their
+      // caret exactly where it was.
+      const collapsing = !snapshot(contestId)[panel];
+      if (collapsing && document.activeElement?.closest(`[data-panel="${panel}"]`)) {
+        toggleRefs.current[panel]?.focus();
+      }
       toggle(panel);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [toggle]);
+  }, [toggle, contestId]);
 
   const value = useMemo(
-    () => ({ collapsed, toggle, expand, hasSchema, reportSchema, present: true }),
-    [collapsed, toggle, expand, hasSchema, reportSchema],
+    () => ({ collapsed, toggle, expand, hasSchema, reportSchema, present: true, registerToggle }),
+    [collapsed, toggle, expand, hasSchema, reportSchema, registerToggle],
   );
   return <PanelVisibilityContext.Provider value={value}>{children}</PanelVisibilityContext.Provider>;
 }
@@ -301,7 +336,7 @@ function shortcutFor(event: KeyboardEvent): PanelKey | null {
  * "control B" after every panel.
  */
 export function PanelToggles({ dict }: { dict: PlayDictionary }) {
-  const { collapsed, toggle, hasSchema, present } = usePanelVisibility();
+  const { collapsed, toggle, hasSchema, present, registerToggle } = usePanelVisibility();
   const t = dict.participant.play.workspace.panels;
   if (!present) return null;
 
@@ -312,6 +347,7 @@ export function PanelToggles({ dict }: { dict: PlayDictionary }) {
           name={t.schema}
           tooltip={t.shortcut.replace("{name}", t.schema).replace("{keys}", t.keys.schema)}
           showing={!collapsed.schema}
+          buttonRef={(node) => registerToggle("schema", node)}
           onClick={() => toggle("schema")}
         >
           <PanelLeft aria-hidden="true" className="size-4" />
@@ -321,6 +357,7 @@ export function PanelToggles({ dict }: { dict: PlayDictionary }) {
         name={t.side}
         tooltip={t.shortcut.replace("{name}", t.side).replace("{keys}", t.keys.side)}
         showing={!collapsed.side}
+        buttonRef={(node) => registerToggle("side", node)}
         onClick={() => toggle("side")}
       >
         <PanelRight aria-hidden="true" className="size-4" />
@@ -329,6 +366,7 @@ export function PanelToggles({ dict }: { dict: PlayDictionary }) {
         name={t.bottom}
         tooltip={t.shortcut.replace("{name}", t.bottom).replace("{keys}", t.keys.bottom)}
         showing={!collapsed.bottom}
+        buttonRef={(node) => registerToggle("bottom", node)}
         onClick={() => toggle("bottom")}
       >
         <PanelBottom aria-hidden="true" className="size-4" />
@@ -341,17 +379,21 @@ function Toggle({
   name,
   tooltip,
   showing,
+  buttonRef,
   onClick,
   children,
 }: {
   name: string;
   tooltip: string;
   showing: boolean;
+  /** Registers the button with the provider, which focuses it when a shortcut hides the panel the focus was in. */
+  buttonRef: (node: HTMLButtonElement | null) => void;
   onClick: () => void;
   children: React.ReactNode;
 }) {
   return (
     <button
+      ref={buttonRef}
       type="button"
       aria-label={name}
       aria-pressed={showing}
