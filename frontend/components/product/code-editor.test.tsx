@@ -431,3 +431,95 @@ describe("several documents in one editor", () => {
     expect(screen.getByRole("textbox")).toHaveTextContent("SELECT fresh");
   });
 });
+
+/**
+ * Keys the surrounding screen owns.
+ *
+ * The participant's workspace collapses its panels on Ctrl/⌘+B and friends
+ * (§8 of the workspace design), and those have to work while the caret is in
+ * a query. A listener on the window is not enough: CodeMirror sees a keydown
+ * inside its own content first, and what it does with an unclaimed
+ * combination is type it or leave it to the browser — Ctrl+B in a
+ * contenteditable is "bold". So the owner hands the keys down and they go
+ * into the editor's own keymap, which is also what makes the editor call
+ * `preventDefault` and the window listener stand aside.
+ */
+describe("the keys the owner reserves", () => {
+  test("runs the owner's handler and leaves the document alone", async () => {
+    const collapsed = vi.fn();
+    const { container } = render(
+      <CodeEditor
+        ariaLabel="Your query"
+        placeholder=""
+        getInitialValue={() => "SELECT 1"}
+        onChange={vi.fn()}
+        shortcuts={[{ key: "Mod-b", run: collapsed }]}
+      />,
+    );
+    await waitForRealEditor(container);
+    await userEvent.click(screen.getByRole("textbox"));
+
+    // Ctrl, not Cmd: CodeMirror resolves `Mod` by platform and the test
+    // environment is not a Mac. A participant on a Mac presses ⌘B and
+    // reaches the same binding.
+    await userEvent.keyboard("{Control>}b{/Control}");
+
+    expect(collapsed).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("textbox")).toHaveTextContent("SELECT 1");
+  });
+
+  // The handler is read fresh on every press. The editor is built once and
+  // never rebuilt, and the owner's closure is recreated on each of its own
+  // renders — a captured one would go stale the first time anything else on
+  // the screen moved.
+  test("runs the handler the owner has now, not the one it mounted with", async () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const { container, rerender } = render(
+      <CodeEditor
+        ariaLabel="Your query"
+        placeholder=""
+        getInitialValue={() => ""}
+        onChange={vi.fn()}
+        shortcuts={[{ key: "Mod-b", run: first }]}
+      />,
+    );
+    await waitForRealEditor(container);
+    rerender(
+      <CodeEditor
+        ariaLabel="Your query"
+        placeholder=""
+        getInitialValue={() => ""}
+        onChange={vi.fn()}
+        shortcuts={[{ key: "Mod-b", run: second }]}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("textbox"));
+    await userEvent.keyboard("{Control>}b{/Control}");
+
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  // What the window listener above this reads to know the key has been dealt
+  // with (panel-toggles.tsx): without it the combination would be handled
+  // twice and the panel would end up where it started.
+  test("marks the key as handled, so nothing above acts on it twice", async () => {
+    const { container } = render(
+      <CodeEditor
+        ariaLabel="Your query"
+        placeholder=""
+        getInitialValue={() => ""}
+        onChange={vi.fn()}
+        shortcuts={[{ key: "Mod-b", run: vi.fn() }]}
+      />,
+    );
+    await waitForRealEditor(container);
+
+    const content = container.querySelector(".cm-content")!;
+    const notPrevented = fireEvent.keyDown(content, { key: "b", code: "KeyB", ctrlKey: true });
+
+    expect(notPrevented).toBe(false);
+  });
+});

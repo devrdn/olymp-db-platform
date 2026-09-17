@@ -25,6 +25,9 @@ export type CodeEditorHandle = {
   dropDocument: (id: string) => void;
 };
 
+/** One key the screen around the editor claims for itself — see `CodeEditorProps.shortcuts`. */
+export type EditorShortcut = { key: string; run: () => void };
+
 export type CodeEditorProps = {
   /** The editor's accessible name. */
   ariaLabel: string;
@@ -59,6 +62,21 @@ export type CodeEditorProps = {
    * — the game-script editor saves with a button and no shortcut.
    */
   onSubmit?: () => void;
+  /**
+   * Keys the screen around this editor owns, in CodeMirror's own notation —
+   * the workspace's three panel toggles (§8) are what this exists for.
+   *
+   * They go into the editor's keymap rather than onto a listener somewhere
+   * above, because CodeMirror sees a keydown in its own content first and an
+   * unclaimed combination is either typed or left to the browser, which reads
+   * Ctrl+B in a contenteditable as "bold". A bound one runs the handler,
+   * inserts nothing, and is marked handled so nothing above acts on it twice.
+   *
+   * The keys are read once, when the editor is built; each `run` is read
+   * fresh on every press, so an owner that re-renders is never answered by a
+   * stale closure.
+   */
+  shortcuts?: readonly EditorShortcut[];
   /**
    * A 1-based character offset into the document — PostgreSQL's own
    * convention — or `undefined` for "nothing to point at". Changing this
@@ -154,6 +172,7 @@ export function CodeEditor({
   errorPosition,
   errorToken,
   onSubmit,
+  shortcuts,
   documentId,
   getDocumentValue,
   ref,
@@ -188,9 +207,11 @@ export function CodeEditor({
   // render can in principle run without ever committing.
   const onChangeRef = useRef(onChange);
   const onSubmitRef = useRef(onSubmit);
+  const shortcutsRef = useRef(shortcuts);
   useEffect(() => {
     onChangeRef.current = onChange;
     onSubmitRef.current = onSubmit;
+    shortcutsRef.current = shortcuts;
     getDocumentValueRef.current = getDocumentValue;
   });
 
@@ -322,6 +343,12 @@ export function CodeEditor({
         // editor is built once and the callback is an inline closure that is
         // recreated on every render of whatever owns this component.
         onSubmit: onSubmit ? () => onSubmitRef.current?.() : undefined,
+        // The keys as they are at mount; the handler behind each one is
+        // looked up by that key on every press, for the reason above.
+        shortcuts: shortcuts?.map(({ key }) => ({
+          key,
+          run: () => shortcutsRef.current?.find((shortcut) => shortcut.key === key)?.run(),
+        })),
       });
       viewRef.current = view;
       if (errorPosition != null) core.setErrorPosition(view, errorPosition);

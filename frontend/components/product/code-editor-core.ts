@@ -204,6 +204,22 @@ export function mountEditor(
      * promises `Выполнить ⌘↵`.
      */
     onSubmit?: () => void;
+    /**
+     * Keys the surrounding screen owns, in CodeMirror's own notation
+     * (`Mod-b`, `Mod-Alt-b`): the participant's workspace collapses its
+     * panels on those (§8 of the workspace design), and a shortcut that
+     * stops working the moment the caret is in a query is not a shortcut.
+     *
+     * Bound here for the same reason `onSubmit` is, and for one more: a
+     * command that runs returns true, which makes CodeMirror call
+     * `preventDefault` — both keeping the browser from acting on the key
+     * (Ctrl+B in a contenteditable is "bold") and telling the window
+     * listener above that this press has been dealt with.
+     *
+     * Read once. Each `run` must therefore reach through to whatever the
+     * owner has now, not close over what it had at mount.
+     */
+    shortcuts?: readonly { key: string; run: () => void }[];
   },
 ): EditorView {
   const extensions: Extension[] = [
@@ -221,6 +237,22 @@ export function mountEditor(
               },
             },
           ]),
+        ]
+      : []),
+    // Before the defaults too: whatever the screen has claimed is claimed,
+    // and on a Mac `Ctrl-b` keeps its own meaning there (move back one
+    // character) because `Mod` is ⌘ and not Ctrl.
+    ...(opts.shortcuts?.length
+      ? [
+          keymap.of(
+            opts.shortcuts.map(({ key, run }) => ({
+              key,
+              run: () => {
+                run();
+                return true;
+              },
+            })),
+          ),
         ]
       : []),
     // `indentWithTab` after the defaults, because it is a fallback rather
