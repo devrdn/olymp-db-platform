@@ -125,7 +125,13 @@ describe("the notes panel", () => {
     expect(live.textContent).toBe(before);
   });
 
-  test("says the contest is over when a save is refused for it, and stops taking edits", async () => {
+  // What the SQL editor beside these notes does once the contest is over:
+  // the saving stops, the draft stays, and the field goes on taking text.
+  // A participant writing down what they worked out has no reason to be
+  // treated differently from one typing a query, and taking the field away
+  // from under a hand that is mid-sentence is the one answer that loses
+  // something.
+  test("says the contest is over when a save is refused for it, and still takes what is typed", async () => {
     answer = refused(409, "contest_finished");
     show();
 
@@ -134,9 +140,19 @@ describe("the notes panel", () => {
 
     expect(visibleStatus()).toBe(t.status.closed);
     expect(screen.getByRole("status")).toHaveTextContent(t.status.closed);
-    expect(field()).toHaveAttribute("readonly");
+    expect(field()).not.toHaveAttribute("readonly");
     expect(JSON.parse(window.localStorage.getItem(draftStorageKey("c1", "notes")) ?? "null")).toMatchObject({
       text: "the gardener",
+    });
+
+    calls = [];
+    edit("the gardener, in the library");
+    await wait(30_000);
+
+    expect(calls).toHaveLength(0);
+    expect(field()).toHaveValue("the gardener, in the library");
+    expect(JSON.parse(window.localStorage.getItem(draftStorageKey("c1", "notes")) ?? "null")).toMatchObject({
+      text: "the gardener, in the library",
     });
   });
 
