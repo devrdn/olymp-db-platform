@@ -150,9 +150,12 @@ function commit(contestId: string, value: CollapsedPanels) {
 
 function subscribe(listener: () => void) {
   listeners.add(listener);
-  // Another tab of the same contest collapsing a panel is not this tab's to
-  // follow live, but a reload should not undo it either. Forgetting the
-  // record is what makes the next snapshot read storage again.
+  // Another tab of the same contest collapsing a panel: forgetting the held
+  // record is what makes the next snapshot read storage again, and telling
+  // the listeners is what makes this tab follow it there and then. Two
+  // windows of one olympiad are rare, and the alternative — the record here
+  // and the record in storage disagreeing until something else re-renders —
+  // is the state this whole arrangement exists to avoid.
   const onStorage = (event: StorageEvent) => {
     if (event.key === null) held.clear();
     else if (event.key.startsWith(STORAGE_PREFIX)) held.delete(event.key.slice(STORAGE_PREFIX.length));
@@ -271,14 +274,23 @@ export function PanelVisibilityProvider({
       if (event.defaultPrevented) return;
       const panel = shortcutFor(event);
       if (!panel) return;
+      // Claimed even where it does nothing: all three combinations belong to
+      // this screen while it is open, and an unclaimed Ctrl+B opens the
+      // bookmarks in Firefox.
       event.preventDefault();
+      // A contest that closed its catalogues draws no schema panel and
+      // offers no toggle for one. Flipping the flag for it would be a press
+      // with nothing on screen to show for it, and the change would still be
+      // there — remembered — the next time the participant opened the
+      // screen.
+      if (panel === "schema" && !hasSchema) return;
       // `toggle` itself carries the focus hand-off, so a press and a press
       // of a key are answered the same way.
       toggle(panel);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [toggle]);
+  }, [hasSchema, toggle]);
 
   const value = useMemo(
     () => ({ collapsed, toggle, expand, hasSchema, reportSchema, present: true, registerToggle }),

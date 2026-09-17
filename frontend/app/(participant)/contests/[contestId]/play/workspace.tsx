@@ -184,11 +184,21 @@ export function Workspace({
   // the key handled, which is what keeps the two from toggling in turn.
   const editorShortcuts = useMemo(
     () => [
-      { key: "Mod-b", run: () => toggle("schema") },
+      {
+        key: "Mod-b",
+        // Claimed even in a contest that hides its schema, where there is
+        // nothing to collapse: the point of binding it here is to keep the
+        // browser from reading it, and an unclaimed Ctrl+B in a
+        // contenteditable is "bold". What it must not do there is flip a
+        // flag nothing on screen reflects and the next visit restores.
+        run: () => {
+          if (schema !== null) toggle("schema");
+        },
+      },
       { key: "Mod-Alt-b", run: () => toggle("side") },
       { key: "Mod-j", run: () => toggle("bottom") },
     ],
-    [toggle],
+    [schema, toggle],
   );
 
   /**
