@@ -1,15 +1,19 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import en from "@/lib/i18n/dictionaries/en";
 
 import { ResultPanel } from "./result-panel";
 import type { ConsoleState } from "./actions";
 
-function show(state: ConsoleState) {
-  return render(<ResultPanel state={state} dict={en} />);
+function show(state: ConsoleState, contestId = "c1") {
+  return render(<ResultPanel contestId={contestId} state={state} dict={en} />);
 }
+
+afterEach(() => {
+  window.localStorage.clear();
+});
 
 describe("the result panel", () => {
   test("says nothing has run yet before the first query", () => {
@@ -144,6 +148,7 @@ describe("what the table says about itself", () => {
   test("counts the rows and says how long the statement took", () => {
     render(
       <ResultPanel
+        contestId="c1"
         state={{
           kind: "answer",
           result: {
@@ -171,6 +176,7 @@ describe("what the table says about itself", () => {
   test("says nothing about time when the answer carried no duration", () => {
     render(
       <ResultPanel
+        contestId="c1"
         state={{
           kind: "answer",
           result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 },
@@ -185,6 +191,7 @@ describe("what the table says about itself", () => {
   test("prints each column's type under its name", () => {
     render(
       <ResultPanel
+        contestId="c1"
         state={{
           kind: "answer",
           result: {
@@ -208,6 +215,7 @@ describe("what the table says about itself", () => {
   test("leaves a column bare when its type could not be named", () => {
     render(
       <ResultPanel
+        contestId="c1"
         state={{
           kind: "answer",
           result: {
@@ -325,6 +333,7 @@ describe("which tab the result came from", () => {
   test("names the tab above the answer", () => {
     render(
       <ResultPanel
+        contestId="c1"
         state={{ kind: "answer", result: { columns: ["id"], rows: [["1"]], truncated: false, rows_affected: 0 } }}
         sourceTitle="Suspects"
         dict={en}
@@ -337,7 +346,14 @@ describe("which tab the result came from", () => {
   });
 
   test("names it above a refusal too", () => {
-    render(<ResultPanel state={{ kind: "refused", code: "query_syntax_error" }} sourceTitle="Suspects" dict={en} />);
+    render(
+      <ResultPanel
+        contestId="c1"
+        state={{ kind: "refused", code: "query_syntax_error" }}
+        sourceTitle="Suspects"
+        dict={en}
+      />,
+    );
 
     expect(
       screen.getByText(en.participant.play.workspace.resultFrom.replace("{tab}", "Suspects")),
@@ -345,8 +361,205 @@ describe("which tab the result came from", () => {
   });
 
   test("says nothing about a tab before anything has been run", () => {
-    render(<ResultPanel state={{ kind: "idle" }} sourceTitle={null} dict={en} />);
+    render(<ResultPanel contestId="c1" state={{ kind: "idle" }} sourceTitle={null} dict={en} />);
 
     expect(screen.queryByText(/^From /)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * §7: a cell is clipped at its column's width, and a witness statement is not
+ * something anybody reads off a `title` attribute. A row therefore opens in
+ * full under the table.
+ *
+ * The table is virtualised, so the one thing that must never be true here is
+ * that the selection is a DOM node: a row scrolled out of the window stops
+ * existing, and a selection that lived on it would go with it.
+ */
+describe("opening one row of the result", () => {
+  const t = en.participant.play.workspace.row;
+
+  function answer(rows: number, columns = 2): ConsoleState {
+    return {
+      kind: "answer",
+      result: {
+        columns: Array.from({ length: columns }, (_, c) => `col_${c}`),
+        rows: Array.from({ length: rows }, (_, r) =>
+          Array.from({ length: columns }, (_, c) => `cell-${r}-${c}`),
+        ),
+        truncated: false,
+        rows_affected: 0,
+      },
+    };
+  }
+
+  /** The scroll box around the table, with a stated height jsdom cannot work out for itself. */
+  function scrollerOf(table: HTMLElement, height = 440): HTMLElement {
+    const scroller = table.parentElement as HTMLElement;
+    Object.defineProperty(scroller, "clientHeight", { value: height, configurable: true });
+    Object.defineProperty(scroller, "scrollTop", { value: 0, configurable: true, writable: true });
+    return scroller;
+  }
+
+  function rowOf(index: number): HTMLElement {
+    return within(screen.getByRole("table"))
+      .getByText(`cell-${index}-0`)
+      .closest("tr") as HTMLElement;
+  }
+
+  test("opens on a click, and marks the row it opened", async () => {
+    const user = userEvent.setup();
+    show(answer(5));
+
+    await user.click(rowOf(2));
+
+    expect(screen.getByRole("region", { name: t.region.replace("{n}", "3") })).toBeInTheDocument();
+    expect(rowOf(2)).toHaveAttribute("aria-selected", "true");
+    expect(rowOf(1)).toHaveAttribute("aria-selected", "false");
+  });
+
+  test("opens on Enter and on Space, from a row the keyboard can reach", async () => {
+    const user = userEvent.setup();
+    show(answer(5));
+
+    // One row of the table is in the tab order, which is what makes the rest
+    // reachable without a pointer.
+    expect(rowOf(0)).toHaveAttribute("tabindex", "0");
+
+    rowOf(1).focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("region", { name: t.region.replace("{n}", "2") })).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    rowOf(3).focus();
+    await user.keyboard(" ");
+    expect(screen.getByRole("region", { name: t.region.replace("{n}", "4") })).toBeInTheDocument();
+  });
+
+  test("the arrows walk to the neighbouring row without closing the panel", async () => {
+    const user = userEvent.setup();
+    show(answer(10));
+
+    await user.click(rowOf(4));
+    await user.keyboard("{ArrowDown}");
+
+    expect(screen.getByRole("region", { name: t.region.replace("{n}", "6") })).toBeInTheDocument();
+    expect(rowOf(5)).toHaveAttribute("aria-selected", "true");
+
+    await user.keyboard("{ArrowUp}{ArrowUp}");
+    expect(screen.getByRole("region", { name: t.region.replace("{n}", "4") })).toBeInTheDocument();
+
+    // And they stop at the ends rather than wrapping or going out of range.
+    rowOf(0).focus();
+    await user.click(rowOf(0));
+    await user.keyboard("{ArrowUp}");
+    expect(screen.getByRole("region", { name: t.region.replace("{n}", "1") })).toBeInTheDocument();
+  });
+
+  test("closes on Esc and on the button", async () => {
+    const user = userEvent.setup();
+    show(answer(5));
+
+    await user.click(rowOf(1));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("region", { name: /Row \d+ of the result/ })).not.toBeInTheDocument();
+
+    await user.click(rowOf(1));
+    await user.click(screen.getByRole("button", { name: t.close }));
+    expect(screen.queryByRole("region", { name: /Row \d+ of the result/ })).not.toBeInTheDocument();
+  });
+
+  // The panel lives only with the result it was opened on: a new run is a new
+  // answer, and row 4 of the old one means nothing in the new one.
+  test("a new run closes the panel", async () => {
+    const user = userEvent.setup();
+    const { rerender } = show(answer(10));
+
+    await user.click(rowOf(3));
+    expect(screen.getByRole("region", { name: t.region.replace("{n}", "4") })).toBeInTheDocument();
+
+    rerender(<ResultPanel contestId="c1" state={answer(10)} dict={en} />);
+    expect(screen.queryByRole("region", { name: /Row \d+ of the result/ })).not.toBeInTheDocument();
+  });
+
+  test("a refusal takes the panel with it", async () => {
+    const user = userEvent.setup();
+    const { rerender } = show(answer(10));
+
+    await user.click(rowOf(3));
+    rerender(<ResultPanel contestId="c1" state={{ kind: "refused", code: "query_syntax_error" }} dict={en} />);
+
+    expect(screen.queryByRole("region", { name: /Row \d+ of the result/ })).not.toBeInTheDocument();
+  });
+
+  // The selection is a row number, not a node. Scrolling a thousand-row
+  // answer takes the selected row out of the DOM entirely; the panel under
+  // the table still shows it, and scrolling back finds the row still marked.
+  test("survives the row scrolling out of the window", async () => {
+    const user = userEvent.setup();
+    show(answer(1000));
+    const table = screen.getByRole("table");
+    const scroller = scrollerOf(table);
+
+    await user.click(rowOf(3));
+
+    (scroller as unknown as { scrollTop: number }).scrollTop = 500 * 44;
+    fireEvent.scroll(scroller);
+
+    expect(within(table).queryByText("cell-3-0")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: t.region.replace("{n}", "4") })).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: t.region.replace("{n}", "4") })).getByText("cell-3-1")).toBeInTheDocument();
+
+    (scroller as unknown as { scrollTop: number }).scrollTop = 0;
+    fireEvent.scroll(scroller);
+    expect(rowOf(3)).toHaveAttribute("aria-selected", "true");
+  });
+
+  // Walking with the arrows past the bottom of the pane has to bring the row
+  // into view, or the selection is somewhere the participant cannot see.
+  test("scrolls the virtualised table to a row the arrows walked to", async () => {
+    const user = userEvent.setup();
+    show(answer(1000));
+    const table = screen.getByRole("table");
+    const scroller = scrollerOf(table, 440);
+
+    await user.click(rowOf(0));
+    for (let i = 0; i < 20; i++) await user.keyboard("{ArrowDown}");
+
+    expect(screen.getByRole("region", { name: t.region.replace("{n}", "21") })).toBeInTheDocument();
+    // Ten rows of 44px per hundred pixels: row 20 ends at 924px, and a 440px
+    // box showing it has to have scrolled at least to 484.
+    expect(scroller.scrollTop).toBeGreaterThanOrEqual(21 * 44 - 440);
+  });
+
+  test("the panel and the table share a draggable edge, remembered per contest", async () => {
+    const user = userEvent.setup();
+    const first = show(answer(5));
+
+    await user.click(rowOf(2));
+    const handle = screen.getByRole("separator", {
+      name: en.participant.play.workspace.panes.detail,
+    });
+    expect(handle).toHaveAttribute("aria-orientation", "horizontal");
+
+    const before = Number(handle.getAttribute("aria-valuenow"));
+    handle.focus();
+    await user.keyboard("{Shift>}{ArrowUp}{/Shift}");
+    expect(handle).toHaveAttribute("aria-valuenow", String(before - 4));
+    first.unmount();
+
+    show(answer(5));
+    await user.click(rowOf(2));
+    expect(
+      screen.getByRole("separator", { name: en.participant.play.workspace.panes.detail }),
+    ).toHaveAttribute("aria-valuenow", String(before - 4));
+  });
+
+  test("offers no edge to drag while no row is open", () => {
+    show(answer(5));
+
+    expect(
+      screen.queryByRole("separator", { name: en.participant.play.workspace.panes.detail }),
+    ).not.toBeInTheDocument();
   });
 });

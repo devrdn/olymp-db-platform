@@ -70,7 +70,10 @@ function neutralizeFormula(value: string): string {
  * column can begin with any of those four characters just as easily as a
  * value can, and the header row is opened in the same spreadsheet.
  */
-export function toCsv(columns: readonly string[], rows: readonly (string | null)[][]): string {
+export function toCsv(
+  columns: readonly string[],
+  rows: readonly (readonly (string | null)[])[],
+): string {
   const lines = [columns.map(neutralizeFormula).map(quoteIfNeeded).join(",")];
   for (const row of rows) {
     lines.push(row.map((cell) => quoteIfNeeded(neutralizeFormula(cell ?? ""))).join(","));

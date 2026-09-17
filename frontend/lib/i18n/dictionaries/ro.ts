@@ -1013,6 +1013,17 @@ const ro = {
           schema: "Lățimea panoului schemei",
           side: "Lățimea panoului întrebărilor",
           editor: "Înălțimea editorului",
+          detail: "Înălțimea tabelului cu rezultatul",
+        },
+        row: {
+          heading: "Rândul {n}",
+          region: "Rândul {n} al rezultatului",
+          copyValue: "Copiază valoarea",
+          copyValueNamed: "Copiază valoarea: {column}",
+          copyRow: "Copiază rândul",
+          close: "Închide",
+          copied: "Copiat în clipboard",
+          copyFailed: "Nu s-a putut copia. Selectați textul și copiați-l manual.",
         },
         resultEmpty: "Executați o interogare pentru a vedea rezultatul aici.",
         /** Din ce filă vine rezultatul de pe ecran — el rămâne cât timp se scrie în altă filă. */

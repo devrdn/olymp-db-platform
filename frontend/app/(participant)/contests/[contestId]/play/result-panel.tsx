@@ -8,6 +8,8 @@ import type { PlayDictionary } from "./dictionary";
 import { cn } from "@/lib/utils";
 
 import type { ConsoleState } from "./actions";
+import { PaneHandle, SHARE_BOUNDS, useResultRows } from "./pane-splitter";
+import { RowDetail } from "./row-detail";
 
 /**
  * What the last query produced, or why it did not — the "Result" tab of the
@@ -23,10 +25,13 @@ import type { ConsoleState } from "./actions";
  * itself stays outside every tab.
  */
 export function ResultPanel({
+  contestId,
   state,
   sourceTitle = null,
   dict,
 }: {
+  /** Which olympiad this is, for the remembered height of the open-row split. */
+  contestId: string;
   state: ConsoleState;
   /**
    * The name of the SQL tab the run came from, or null before anything has
@@ -48,16 +53,18 @@ export function ResultPanel({
           {dict.participant.play.workspace.resultFrom.replace("{tab}", sourceTitle)}
         </p>
       )}
-      <ResultBody state={state} dict={dict} />
+      <ResultBody contestId={contestId} state={state} dict={dict} />
     </div>
   );
 }
 
 /** The answer itself — a table, a count, or why the query did not run. */
 function ResultBody({
+  contestId,
   state,
   dict,
 }: {
+  contestId: string;
   state: Exclude<ConsoleState, { kind: "idle" }>;
   dict: PlayDictionary;
 }) {
@@ -126,17 +133,238 @@ function ResultBody({
 
         {/* No box: the rows carry their own rules, and the pane is already
             bounded by the ones between the panes (preview.html, `table.dt`). */}
-        <ResultTable
+        <SelectableRows
+          contestId={contestId}
           columns={result.columns}
           columnTypes={result.column_types}
           rows={result.rows}
-          nullLabel={t.null}
+          dict={dict}
         />
 
         {result.rows.length === 0 ? (
           <p className="shrink-0 text-small text-ink-2">{t.noRows}</p>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/** How the table and the row open under it move as one, and which row that is. */
+type Selection = {
+  selected: number | null;
+  onSelect: (index: number) => void;
+  onRowKeyDown: (event: React.KeyboardEvent, index: number) => void;
+};
+
+/**
+ * The table, the row open under it, and the edge between them (§7).
+ *
+ * The selection is a row *number*. That is not a detail: the table below only
+ * keeps the rows the pane can show in the DOM, so a selected row scrolls out
+ * of existence — a selection held on a node would go with it, and so would
+ * the panel showing that row. A number survives, and the panel reads the row
+ * out of the answer rather than out of the page.
+ *
+ * It lives here rather than in `ResultPanel` so that opening a row re-renders
+ * this subtree alone. `Workspace` keeps `ResultPanel` memoised precisely so
+ * that what happens in the panel below does not reach the editor being typed
+ * in (finding 5), and state put any higher would undo that.
+ */
+function SelectableRows({
+  contestId,
+  columns,
+  columnTypes,
+  rows,
+  dict,
+}: {
+  contestId: string;
+  columns: readonly string[];
+  columnTypes?: readonly string[];
+  rows: readonly (string | null)[][];
+  dict: PlayDictionary;
+}) {
+  const [selected, setSelected] = useState<number | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // The row a keyboard walk asked to be taken to, until it has been. A click
+  // never sets it: a click is already on the row it selected.
+  const pending = useRef<number | null>(null);
+  // The table's own window recomputation, borrowed — see `revealNow`.
+  const measureRef = useRef<(() => void) | null>(null);
+  const { containerRef, sizes, commit } = useResultRows(contestId);
+
+  // A new answer is a new array, and row 4 of the old one means nothing in
+  // the new one — so a run closes the panel. Adjusted during the render that
+  // brings the answer in rather than in an effect afterwards, which is
+  // React's own "reset state when a prop changes" pattern and what the table
+  // below already does with its own window.
+  const [answer, setAnswer] = useState(rows);
+  if (answer !== rows) {
+    setAnswer(rows);
+    setSelected(null);
+  }
+
+  // Defensive as well as derived: a shorter answer arriving under the same
+  // array identity would otherwise leave the panel reading past its end.
+  const open = selected !== null && selected < rows.length ? selected : null;
+
+  /**
+   * Scrolls to the row the keyboard asked for and puts the focus on it, if it
+   * is there to be focused yet.
+   *
+   * Walking off the bottom of the window is where this earns its keep. The
+   * row does not exist in the DOM until the window has followed the scroll,
+   * and the browser's own scroll event arrives a frame later — which, without
+   * the borrowed `measure`, left the walk stuck at the edge of the window
+   * with nothing focused and the next arrow key going nowhere. So: move the
+   * scroll, recompute the window at once, and take the focus if the row has
+   * arrived. If it has not, the render that `measure` just scheduled runs
+   * this again.
+   */
+  const revealNow = useCallback(() => {
+    const index = pending.current;
+    const scroller = scrollRef.current;
+    if (index === null) return;
+    if (!scroller) {
+      pending.current = null;
+      return;
+    }
+
+    const height = rowHeightPx();
+    const top = index * height;
+    if (top < scroller.scrollTop) {
+      scroller.scrollTop = top;
+    } else if (top + height > scroller.scrollTop + scroller.clientHeight) {
+      scroller.scrollTop = top + height - scroller.clientHeight;
+    }
+    measureRef.current?.();
+
+    const row = scroller.querySelector<HTMLElement>(`tbody tr[aria-rowindex="${index + 2}"]`);
+    if (row) {
+      pending.current = null;
+      row.focus();
+    }
+  }, [scrollRef]);
+
+  const reveal = useCallback(
+    (index: number) => {
+      pending.current = index;
+      revealNow();
+    },
+    [revealNow],
+  );
+
+  // Deliberately without a dependency list: what this is waiting for is the
+  // row appearing, and that is a property of the render rather than of any
+  // one value. It returns immediately when nothing is pending, which is every
+  // render but the one or two after an arrow key.
+  useLayoutEffect(revealNow);
+
+  const step = useCallback(
+    (from: number, delta: number) => {
+      const next = Math.min(rows.length - 1, Math.max(0, from + delta));
+      // With a row open the arrows move the *selection*, which is what §7
+      // asks for; with none open they are ordinary table navigation and move
+      // only the keyboard, so arrowing through an answer does not open
+      // something nobody asked to open.
+      if (open !== null) setSelected(next);
+      reveal(next);
+    },
+    [open, rows.length, reveal],
+  );
+
+  const close = useCallback(() => {
+    // Focus goes back where it came from rather than to the top of the
+    // document: the row is what the participant was on.
+    if (open !== null) reveal(open);
+    setSelected(null);
+  }, [open, reveal]);
+
+  const onRowKeyDown = useCallback(
+    (event: React.KeyboardEvent, index: number) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        setSelected(index);
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        step(index, 1);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        step(index, -1);
+      } else if (event.key === "Escape") {
+        close();
+      }
+    },
+    [step, close],
+  );
+
+  const onPanelKeyDown = useCallback(
+    (event: React.KeyboardEvent) => {
+      // The divider's own arrows come through here too, and it has already
+      // said what it wanted them for.
+      if (event.defaultPrevented || open === null) return;
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        step(open, 1);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        step(open, -1);
+      } else if (event.key === "Escape") {
+        close();
+      }
+    },
+    [open, step, close],
+  );
+
+  const selection = useMemo<Selection>(
+    () => ({ selected: open, onSelect: setSelected, onRowKeyDown }),
+    [open, onRowKeyDown],
+  );
+
+  return (
+    <div
+      ref={containerRef}
+      style={{ "--pane-detail": `${sizes.table}%` } as React.CSSProperties}
+      className={cn(
+        "grid min-h-0 flex-1 grid-cols-1",
+        open === null
+          ? "grid-rows-1"
+          : "grid-rows-[minmax(0,var(--pane-detail))_auto_minmax(0,1fr)]",
+      )}
+    >
+      <ResultTable
+        columns={columns}
+        columnTypes={columnTypes}
+        rows={rows}
+        nullLabel={dict.participant.console.null}
+        scrollRef={scrollRef}
+        measureRef={measureRef}
+        selection={selection}
+      />
+      {open === null ? null : (
+        <>
+          <PaneHandle
+            label={dict.participant.play.workspace.panes.detail}
+            property="--pane-detail"
+            value={sizes.table}
+            axis="y"
+            unit="%"
+            bounds={SHARE_BOUNDS}
+            direction={1}
+            containerRef={containerRef}
+            onResize={(share) => commit({ table: share })}
+          />
+          <RowDetail
+            columns={columns}
+            columnTypes={columnTypes}
+            row={rows[open]}
+            index={open}
+            nullLabel={dict.participant.console.null}
+            dict={dict}
+            onClose={close}
+            onKeyDown={onPanelKeyDown}
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -155,6 +383,18 @@ function ResultBody({
  * query's result.
  */
 const ROW_REM = 2.75;
+
+/**
+ * That height in pixels, read from the root font size.
+ *
+ * Both the window below and the "bring this row into view" of a keyboard walk
+ * need it, and both read it at the moment they need it rather than keeping it
+ * — `getComputedStyle` is a synchronous style flush, and neither of those is
+ * a per-pointer-event path.
+ */
+function rowHeightPx(): number {
+  return ROW_REM * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);
+}
 
 /**
  * Rows kept rendered above and below the ones actually on screen, so a flick
@@ -267,13 +507,20 @@ function ResultTable({
   columnTypes,
   rows,
   nullLabel,
+  scrollRef,
+  measureRef,
+  selection,
 }: {
   columns: readonly string[];
   columnTypes?: readonly string[];
   rows: readonly (string | null)[][];
   nullLabel: string;
+  /** The scroll box, owned above so a keyboard walk can scroll to its row. */
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  /** Lends this table's window recomputation to that same walk — see `revealNow`. */
+  measureRef: React.RefObject<(() => void) | null>;
+  selection: Selection;
 }) {
-  const scrollRef = useRef<HTMLDivElement>(null);
   const rowHeightRef = useRef(ROW_REM * 16);
   const [rowWindow, setRowWindow] = useState<RowWindow>({
     start: 0,
@@ -295,7 +542,9 @@ function ResultTable({
     // Same pair, same render: this is what makes a scroll event that stayed
     // inside one row cost nothing at all.
     setRowWindow((previous) => (previous.start === start && previous.end === end ? previous : { start, end }));
-  }, [total]);
+    // `scrollRef` is the same object for this table's life — named only
+    // because it arrives as a prop, where the rule cannot see that.
+  }, [total, scrollRef]);
 
   // A new answer is read from its first row, so the window goes back to the
   // top the moment `rows` is a different array. Adjusted during the render
@@ -308,9 +557,17 @@ function ResultTable({
     setRowWindow({ start: 0, end: Math.min(rows.length, UNMEASURED_ROWS) });
   }
 
+  // A child's layout effect runs before its parent's, so the walk above finds
+  // this here by the time it looks.
   useLayoutEffect(() => {
-    rowHeightRef.current =
-      ROW_REM * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);
+    measureRef.current = measure;
+    return () => {
+      measureRef.current = null;
+    };
+  }, [measure, measureRef]);
+
+  useLayoutEffect(() => {
+    rowHeightRef.current = rowHeightPx();
 
     // The scroll offset is the browser's, not React's, and it survives a new
     // answer: without this a shorter result opens somewhere in the middle of
@@ -329,7 +586,7 @@ function ResultTable({
     // `measure` changes identity with the row count, so a new answer re-runs
     // this on its own — `rows` is named too because the scroll reset is about
     // the array, not about how long it is.
-  }, [rows, measure]);
+  }, [rows, measure, scrollRef]);
 
   const widths = useMemo(() => columnWidths(columns, rows), [columns, rows]);
   const tableWidth = widths.reduce((sum, width) => sum + width, 0);
@@ -337,8 +594,13 @@ function ResultTable({
   const start = Math.min(rowWindow.start, Math.max(0, total));
   const end = Math.max(start, Math.min(rowWindow.end, total));
 
+  // The one row in the tab order: the selected one while it is on screen,
+  // and otherwise the first one that is.
+  const { selected } = selection;
+  const tabRow = selected !== null && selected >= start && selected < end ? selected : start;
+
   return (
-    <div ref={scrollRef} onScroll={measure} className="min-h-0 flex-1 overflow-auto">
+    <div ref={scrollRef} onScroll={measure} className="min-h-0 overflow-auto">
       {/* `table-fixed` is what makes every row a known height, which is what
           the window is computed from (see `columnWidths`), and `font-mono` on
           the table itself is what lets those widths be stated in `ch`: a `ch`
@@ -393,16 +655,36 @@ function ResultTable({
               <td colSpan={columns.length} />
             </tr>
           ) : null}
-          {rows.slice(start, end).map((row, i) => (
+          {rows.slice(start, end).map((row, i) => {
+            const index = start + i;
+            return (
             <tr
-              key={start + i}
-              aria-rowindex={start + i + 2}
+              key={index}
+              aria-rowindex={index + 2}
+              // A row of a table may be selected (ARIA 1.2's own `row`
+              // role), which is what lets this stay an ordinary `table` —
+              // and keeps every reader, and the CSV beside it, reading the
+              // same thing a grid would have broken.
+              aria-selected={selection.selected === index}
+              // Exactly one row is in the tab order, so Tab reaches the table
+              // once rather than once per row, and the arrows take it from
+              // there. Which row that is falls back to the first one in the
+              // window, because a selected row scrolled out of the DOM cannot
+              // hold the tab stop.
+              tabIndex={index === tabRow ? 0 : -1}
+              onClick={() => selection.onSelect(index)}
+              onKeyDown={(event) => selection.onRowKeyDown(event, index)}
               // The height is the contract the window is computed from, not a
               // decoration: a row that grew to fit its content would put every
               // row after it at an offset this arithmetic does not know about.
               // That is why the cells clip rather than wrap.
               style={{ height: `${ROW_REM}rem` }}
-              className="border-b border-edge"
+              className={cn(
+                "border-b border-edge outline-none",
+                selection.selected === index
+                  ? "bg-accent-wash"
+                  : "hover:bg-sunk focus-visible:bg-sunk",
+              )}
             >
               {columns.map((_, c) => {
                 const cell = row[c] ?? null;
@@ -421,7 +703,8 @@ function ResultTable({
                 );
               })}
             </tr>
-          ))}
+            );
+          })}
           {end < total ? (
             <tr aria-hidden="true" style={{ height: `${(total - end) * ROW_REM}rem` }}>
               <td colSpan={columns.length} />
