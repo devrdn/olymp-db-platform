@@ -63,7 +63,6 @@ function NotesEditor({
   const fieldId = useId();
   const statusId = useId();
   const counterId = useId();
-  const limitId = useId();
 
   // Null below the threshold, so an edit there sets the same value again and
   // React skips the render.
@@ -96,7 +95,6 @@ function NotesEditor({
     setSettled(status);
   }
 
-  const closed = status.kind === "closed";
   const full = count !== null && count >= NOTES_MAX_CHARS;
   const describedBy = count !== null ? `${statusId} ${counterId}` : statusId;
 
@@ -110,7 +108,12 @@ function NotesEditor({
         id={fieldId}
         defaultValue={initial.body}
         maxLength={NOTES_MAX_CHARS}
-        readOnly={closed}
+        // Not made read-only when the contest ends, which is what the SQL
+        // editor beside it already decided (§5): the saving stops, the draft
+        // stays, and the field goes on taking text. A field that turns to
+        // stone under a hand mid-sentence is the one answer that loses
+        // something, and the status line below says why nothing is being
+        // saved.
         placeholder={t.placeholder}
         spellCheck={false}
         aria-describedby={describedBy}
@@ -124,8 +127,7 @@ function NotesEditor({
           "min-h-40 w-full flex-1 resize-none rounded-none border border-edge bg-transparent px-3 py-2.5 " +
           "font-sans text-body text-ink placeholder:text-ink-3 " +
           "transition-colors duration-(--t-input) ease-standard " +
-          "hover:border-ink-2 focus-visible:border-ink focus-visible:outline-none " +
-          "read-only:bg-sunk read-only:text-ink-2"
+          "hover:border-ink-2 focus-visible:border-ink focus-visible:outline-none"
         }
       />
       <div className="flex items-start justify-between gap-3">
@@ -151,7 +153,7 @@ function NotesEditor({
           the limit is not repeated. Its own region rather than the status
           line above, which is about the save and would be re-read for
           this. */}
-      <p id={limitId} data-testid="notes-limit" aria-live="polite" className="sr-only">
+      <p data-testid="notes-limit" aria-live="polite" className="sr-only">
         {full ? t.limitReached : ""}
       </p>
     </div>
