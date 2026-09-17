@@ -7,9 +7,11 @@ import { StandingsView } from "@/components/product/standings";
 import { useStandings } from "@/components/product/use-standings";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Scoring } from "@/lib/api/contests";
+import type { WorkspaceNotes } from "@/lib/api/workspace";
 import { fetchStandingsAction } from "./actions";
 import type { PlayDictionary } from "./dictionary";
 
+import { NotesPanel } from "./notes-panel";
 import { QuestionsPanel, type QuestionEntry } from "./questions-panel";
 
 /**
@@ -80,12 +82,19 @@ function printStory(contestId: string) {
  *   fragile. `printStory` below is also what makes the file the dialog
  *   offers to save come out named `story-{contestId}`, since that is read
  *   from `document.title` and nothing else names it.
+ *
+ * The notes tab, right after the questions, is the participant's own
+ * autosaved field (`NotesPanel`). It keeps its state to itself, so typing
+ * there never re-renders this panel or the tabs beside it; and like every
+ * tab here it stays mounted while hidden, so a save due when the
+ * participant switches away still leaves.
  */
 export function SidePanel({
   storyBody,
   storyUnavailable,
   contestId,
   questionEntries,
+  initialNotes,
   scoring = "points",
   icpcPenaltyMin = 20,
   dict,
@@ -95,6 +104,8 @@ export function SidePanel({
   storyUnavailable: string | null;
   contestId: string;
   questionEntries: QuestionEntry[];
+  /** The notes as the page read them, or null when that read failed. */
+  initialNotes: WorkspaceNotes | null;
   scoring?: Scoring;
   icpcPenaltyMin?: number;
   dict: PlayDictionary;
@@ -109,6 +120,7 @@ export function SidePanel({
       <TabsList>
         <TabsTrigger value="story">{t.story}</TabsTrigger>
         <TabsTrigger value="questions">{t.questions}</TabsTrigger>
+        <TabsTrigger value="notes">{t.notes}</TabsTrigger>
         <TabsTrigger value="leaderboard">{dict.leaderboard.tab}</TabsTrigger>
       </TabsList>
       {/* Neither tab has a child that needs to fill the panel's height —
@@ -165,6 +177,14 @@ export function SidePanel({
           icpcPenaltyMin={icpcPenaltyMin}
           dict={dict}
         />
+      </TabsContent>
+      {/* The one tab here whose child fills the height: the field grows to
+          the panel and scrolls inside itself. The tab still scrolls, and is
+          still a containing block, for the same reason as the others: its
+          status line is partly `sr-only`, and a panel shorter than the
+          field's minimum height has to scroll rather than spill. */}
+      <TabsContent value="notes" className="relative overflow-y-auto">
+        <NotesPanel contestId={contestId} initial={initialNotes} dict={dict} locale={locale} />
       </TabsContent>
       <TabsContent value="leaderboard" fill={false} className="relative overflow-y-auto p-4">
         <LeaderboardTab contestId={contestId} active={tab === "leaderboard"} dict={dict} locale={locale} />

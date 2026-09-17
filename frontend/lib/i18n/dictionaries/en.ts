@@ -1091,6 +1091,7 @@ const en = {
           log: "Query log",
           story: "Story",
           questions: "Questions",
+          notes: "Notes",
         },
         download: "Download CSV",
         // The story tab's own two ways to take it away — the last export the
@@ -1111,6 +1112,21 @@ const en = {
           side: "Width of the questions panel",
         },
         resultEmpty: "Run a query to see its result here.",
+        // The notes tab (§6 of the workspace design): a plain field that
+        // saves itself. `status` is the line under the field; `closed` is
+        // shown once the contest has ended and nothing more is saved.
+        notes: {
+          label: "Your notes",
+          placeholder: "Suspects, table names, half-finished ideas. Saved as you type.",
+          failed: "Could not load your notes. Reload the page to try again.",
+          counter: "{n} of {max} characters",
+          status: {
+            saved: "Saved",
+            saving: "Saving…",
+            retrying: "Not saved yet. Trying again shortly.",
+            closed: "The contest is over, so your notes are no longer saved. What you typed last is kept in this browser.",
+          },
+        },
         log: {
           empty: "You have not run a query yet.",
           loadMore: "Load older",

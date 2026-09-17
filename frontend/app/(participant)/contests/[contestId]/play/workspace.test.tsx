@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 
@@ -77,7 +77,11 @@ const A_SCHEMA = {
 // class jsdom does not apply) — a false green either way a mismatch went.
 function show(
   schema: typeof A_SCHEMA | null = null,
-  overrides: { storyMarkdown?: string | null; storyUnavailable?: string | null } = {},
+  overrides: {
+    storyMarkdown?: string | null;
+    storyUnavailable?: string | null;
+    workspace?: typeof A_WORKSPACE | null;
+  } = {},
 ) {
   return render(
     <Workspace
@@ -88,11 +92,17 @@ function show(
       questionEntries={[]}
       schema={schema}
       initialLog={freshInitialLog()}
+      workspace={"workspace" in overrides ? (overrides.workspace ?? null) : A_WORKSPACE}
       locale="en"
       dict={en}
     />,
   );
 }
+
+const A_WORKSPACE = {
+  notes: { body: "the gardener lied", updatedAt: "2026-09-17T10:00:00Z" },
+  tabs: [{ id: "t1", title: "Query 1", body: "", position: 0, updatedAt: "2026-09-17T10:00:00Z" }],
+};
 
 /**
  * What `page.tsx` hands `Workspace` as `printView`: the print copy, already
@@ -254,6 +264,36 @@ describe("the play workspace", () => {
     await userEvent.click(screen.getByRole("button", { name: en.participant.play.workspace.tabs.result }));
 
     expect(renderCounts.result).toBe(resultRendersBefore);
+    expect(renderCounts.side).toBe(sideRendersBefore);
+  });
+});
+
+describe("the notes", () => {
+  test("open with what the page read", () => {
+    show();
+
+    expect(
+      screen.getByRole("textbox", { name: en.participant.play.workspace.notes.label, hidden: true }),
+    ).toHaveValue("the gardener lied");
+  });
+
+  test("say they could not be loaded when the page could not read them", () => {
+    show(null, { workspace: null });
+
+    expect(screen.getByText(en.participant.play.workspace.notes.failed)).toBeInTheDocument();
+  });
+
+  // Typing is the hot path: the field is uncontrolled and its status lives
+  // in the notes panel, so nothing above it may render per keystroke.
+  test("typing in them does not re-render the side panel", async () => {
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.notes }));
+    const field = screen.getByRole("textbox", { name: en.participant.play.workspace.notes.label });
+    const sideRendersBefore = renderCounts.side;
+
+    fireEvent.change(field, { target: { value: "the gardener lied twice" } });
+    fireEvent.change(field, { target: { value: "the gardener lied three times" } });
+
     expect(renderCounts.side).toBe(sideRendersBefore);
   });
 });
