@@ -210,6 +210,19 @@ export function useConsoleRows(contestId: string) {
 }
 
 /**
+ * The table's share of the result pane, once a row is open under it — two
+ * thirds, because the table is what a participant navigates and the panel
+ * under it is what they read one row in.
+ */
+export const DEFAULT_RESULT_TABLE_PCT = 65;
+
+const RESULT_ROWS: Sizes<"table"> = { table: DEFAULT_RESULT_TABLE_PCT };
+
+export function useResultRows(contestId: string) {
+  return usePaneSizes(contestId, "result", RESULT_ROWS, SHARE_BOUNDS);
+}
+
+/**
  * One draggable edge.
  *
  * `role="separator"` with `aria-valuenow` and arrow keys, because a divider
