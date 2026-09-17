@@ -28,7 +28,10 @@ const (
 	memberIDParam   = "userID"
 )
 
-// timeLayout is the one timestamp format the API speaks.
+// timeLayout is the timestamp format the API speaks. The one exception is a
+// workspace document's updated_at, which keeps its fractional seconds because
+// the interface compares it for equality — see versionLayout in
+// participant_workspace.go.
 const timeLayout = "2006-01-02T15:04:05Z"
 
 // ContestsHandler serves the contest constructor: the contest itself, its
