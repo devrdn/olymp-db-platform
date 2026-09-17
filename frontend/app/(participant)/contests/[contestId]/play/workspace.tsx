@@ -514,17 +514,16 @@ export function Workspace({
                 <MemoQueryLogPanel
                   contestId={contestId}
                   initial={initialLog}
-                  // Which tab is chosen, and deliberately not whether the
-                  // panel is showing. The log refreshes itself on the
-                  // transition into being shown, and that refresh spends one
-                  // of the participant's `AdmitRead` units — the budget Run
-                  // shares with it. Collapsing the panel does not change
-                  // which tab is underneath, and ⌘J is one keystroke: a
-                  // participant folding the panel away to read a question
-                  // and bringing it back would be paying for that habit out
-                  // of their own queries. Going to the Result tab and back
-                  // is the deliberate act, and it still refreshes.
-                  active={bottomTab === "log"}
+                  // Collapsed is not "showing the other tab": the log
+                  // refreshes itself on the transition into being shown,
+                  // and coming back to a panel that was put away is such a
+                  // transition however the participant left it. What bounds
+                  // the cost of that is the panel's own three-second gate
+                  // (`QUERY_LOG_REFRESH_MIN_INTERVAL_MS`): even a participant
+                  // holding ⌘J down cannot spend more than twenty reads a
+                  // minute on it, and a stale log after an expand is the
+                  // ordinary case, not that one.
+                  active={showBottom && bottomTab === "log"}
                   locale={locale}
                   dict={dict}
                 />
