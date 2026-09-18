@@ -634,3 +634,63 @@ func TestASaveWhoseRevisionFailsIsNotSaved(t *testing.T) {
 		t.Fatalf("events = %+v, want only the first tab's creation", got)
 	}
 }
+
+// A rename that commits while a delete of the same tab waits for its row
+// records the title the tab really had when it was deleted, not the one the
+// delete read before it waited.
+func TestADeletedTabIsRecordedUnderTheTitleItWasDeletedWith(t *testing.T) {
+	ctx, registration := committedRegistration(t)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	repo := NewWorkspace(testPool)
+
+	if _, _, err := repo.Load(ctx, registration, "Query 1"); err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	doomed, err := repo.CreateTab(ctx, registration, 10, numbered)
+	if err != nil {
+		t.Fatalf("CreateTab() = %v", err)
+	}
+
+	// The rename holds the tab's row, uncommitted, while the delete runs.
+	rename, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin the rename: %v", err)
+	}
+	defer func() { _ = rename.Rollback(ctx) }()
+	if _, err := rename.Exec(ctx, `UPDATE participant_sql_tabs SET title = 'renamed' WHERE id = $1`, doomed.ID); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	deleted := make(chan error, 1)
+	go func() { deleted <- repo.DeleteTab(ctx, registration, doomed.ID) }()
+
+	// Wait until the delete is blocked on the rename's row lock.
+	for {
+		var waiting bool
+		if err := testPool.QueryRow(ctx, `
+			SELECT EXISTS (SELECT 1 FROM pg_locks WHERE NOT granted AND locktype = 'transactionid')`).Scan(&waiting); err != nil {
+			t.Fatalf("read the locks: %v", err)
+		}
+		if waiting {
+			break
+		}
+		select {
+		case err := <-deleted:
+			t.Fatalf("the delete did not wait for the rename: %v", err)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if err := rename.Commit(ctx); err != nil {
+		t.Fatalf("commit the rename: %v", err)
+	}
+	if err := <-deleted; err != nil {
+		t.Fatalf("DeleteTab() = %v", err)
+	}
+
+	events := storedEvents(t, ctx, registration)
+	last := events[len(events)-1]
+	if last.kind != "tab_deleted" || last.payload["title"] != "renamed" {
+		t.Fatalf("the last event is %s %v, want tab_deleted titled %q", last.kind, last.payload, "renamed")
+	}
+}
