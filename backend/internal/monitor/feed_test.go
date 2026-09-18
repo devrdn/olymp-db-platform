@@ -122,18 +122,33 @@ func TestACursorOutsideTheClockIsRefused(t *testing.T) {
 // pagedSources holds each source's items, oldest first, and serves them a
 // page past a cursor at a time, counting the reads.
 type pagedSources struct {
-	items map[Source][]FeedItem
-	reads int
-	fail  int // fail the read with this number, when set
+	items         map[Source][]FeedItem
+	registrations []uuid.UUID
+	reads         int
+	fail          int // fail the read with this number, when set
+	queries       []FeedQuery
+	sources       []Source
+}
+
+func (p *pagedSources) FeedRegistrations(context.Context, uuid.UUID) ([]uuid.UUID, error) {
+	return p.registrations, nil
 }
 
 func (p *pagedSources) FeedSource(_ context.Context, q FeedQuery, source Source) ([]FeedItem, error) {
 	p.reads++
+	p.queries = append(p.queries, q)
+	p.sources = append(p.sources, source)
 	if p.fail != 0 && p.reads == p.fail {
 		return nil, errors.New("the database went away")
 	}
 	var out []FeedItem
 	for _, item := range p.items[source] {
+		if q.Registration != uuid.Nil && item.Registration != q.Registration {
+			continue
+		}
+		if !q.Until.IsZero() && !item.At.Before(q.Until) {
+			continue
+		}
 		if item.Cursor().Compare(*q.After) > 0 && len(out) <= q.Limit {
 			out = append(out, item)
 		}
@@ -143,6 +158,7 @@ func (p *pagedSources) FeedSource(_ context.Context, q FeedQuery, source Source)
 
 func TestStreamFeedMergesEverySourceOnceInOrder(t *testing.T) {
 	at := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+	reg := uuid.New()
 	sources := &pagedSources{items: map[Source][]FeedItem{}}
 	total := 0
 	for i := range 1000 {
@@ -153,11 +169,11 @@ func TestStreamFeedMergesEverySourceOnceInOrder(t *testing.T) {
 		}
 		// Every third item shares its second with the one before.
 		sources.items[source] = append(sources.items[source],
-			FeedItem{Source: source, ID: id, At: at.Add(time.Duration(i/3*2+i%2) * time.Second)})
+			FeedItem{Source: source, ID: id, At: at.Add(time.Duration(i/3*2+i%2) * time.Second), Registration: reg})
 		total++
 	}
 	var got []FeedItem
-	if err := StreamFeed(t.Context(), sources, FeedQuery{}, func(item FeedItem) error {
+	if err := StreamFeed(t.Context(), sources, FeedQuery{Registration: reg}, time.Now(), func(item FeedItem) error {
 		got = append(got, item)
 		return nil
 	}); err != nil {
@@ -180,8 +196,59 @@ func TestStreamFeedMergesEverySourceOnceInOrder(t *testing.T) {
 func TestStreamFeedStopsOnAFailedRead(t *testing.T) {
 	at := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
 	sources := &pagedSources{items: map[Source][]FeedItem{SourceQuery: {{Source: SourceQuery, ID: "1", At: at}}}, fail: 2}
-	err := StreamFeed(t.Context(), sources, FeedQuery{}, func(FeedItem) error { return nil })
+	err := StreamFeed(t.Context(), sources, FeedQuery{}, time.Now(), func(FeedItem) error { return nil })
 	if err == nil {
 		t.Error("a failed read ended the stream as if it were complete")
+	}
+}
+
+func TestAContestStreamReadsEachRegistrationsQueriesOnItsOwn(t *testing.T) {
+	at := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+	a, b := uuid.New(), uuid.New()
+	sources := &pagedSources{registrations: []uuid.UUID{a, b}, items: map[Source][]FeedItem{}}
+	for i := range 300 {
+		reg := []uuid.UUID{a, b}[i%2]
+		sources.items[SourceQuery] = append(sources.items[SourceQuery],
+			FeedItem{Source: SourceQuery, ID: strconv.Itoa(i + 1), At: at.Add(time.Duration(i) * time.Second), Registration: reg})
+	}
+	streamed := 0
+	if err := StreamFeed(t.Context(), sources, FeedQuery{Contest: uuid.New()}, at.Add(time.Hour), func(FeedItem) error {
+		streamed++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if streamed != 300 {
+		t.Fatalf("streamed %d, want 300", streamed)
+	}
+	for i, q := range sources.queries {
+		if perRegistration[sources.sources[i]] && (q.Registration == uuid.Nil || q.Limit != streamPage) {
+			t.Errorf("source %d was read for the whole contest or by a large page: %+v", sources.sources[i], q)
+		}
+	}
+}
+
+func TestAStreamEndsAtOneInstantForEverySource(t *testing.T) {
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	reg := uuid.New()
+	sources := &pagedSources{items: map[Source][]FeedItem{
+		SourceQuery: {{Source: SourceQuery, ID: "1", At: now.Add(-FeedSettle - time.Second), Registration: reg},
+			{Source: SourceQuery, ID: "2", At: now.Add(-FeedSettle / 2), Registration: reg}},
+		SourceEvent: {{Source: SourceEvent, ID: "3", At: now.Add(-time.Millisecond), Registration: reg}},
+	}}
+	var got []string
+	if err := StreamFeed(t.Context(), sources, FeedQuery{Registration: reg}, now, func(item FeedItem) error {
+		got = append(got, item.ID)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "1" {
+		t.Errorf("streamed %v, want only what is older than the settle window", got)
+	}
+	for _, q := range sources.queries {
+		if !q.Until.Equal(now.Add(-FeedSettle)) {
+			t.Errorf("a source was read up to %v, want %v", q.Until, now.Add(-FeedSettle))
+		}
 	}
 }
