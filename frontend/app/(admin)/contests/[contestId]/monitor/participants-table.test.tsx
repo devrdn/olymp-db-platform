@@ -81,7 +81,7 @@ describe("the participants table", () => {
     expect(within(row).queryByText(dict.workspace.monitor.flags.parallelSessions.label)).not.toBeInTheDocument();
   });
 
-  test("explains the flags, and that they are not proof, beside the column heading", () => {
+  test("explains the flags, and that they are not proof, beside the table", () => {
     renderTable();
     const tooltip = screen.getByRole("tooltip", { hidden: true });
 
