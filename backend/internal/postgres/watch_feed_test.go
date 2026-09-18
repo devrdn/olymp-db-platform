@@ -357,10 +357,18 @@ func journalRowsRead(t *testing.T, ctx context.Context, table string) int64 {
 
 // A contest-wide export reads each journal row about once, however many
 // pages the file runs to: the cost grows with the contest, not its square.
+// Each participant has a dozen pages of queries, so a read that fetched a
+// registration's whole remaining range for every page — a bitmap scan cannot
+// return rows in order, and sorts what it fetched — would read about six
+// times the rows here.
 func TestAContestExportReadsEachJournalRowOnce(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newWatchFixture(t, ctx)
-		loadOlympiad(t, f, 7, 40) // 12,000 queries, 1,200 answers, 2,400 sign-ins
+		const participants, queries = 40, 600 // 24,000 queries, 2,400 answers, 2,400 sign-ins
+		loadOlympiadQueries(t, f, 7, participants, queries)
+		// The rest of a year beside it, so the journals are not this
+		// contest alone and a whole-table read is not the cheap plan.
+		loadOlympiad(t, newWatchFixture(t, ctx), 98, 400)
 		for _, table := range []string{"users", "registrations", "query_log", "submissions", "audit_log", "participant_events"} {
 			f.exec("ANALYZE " + table)
 		}
@@ -374,16 +382,14 @@ func TestAContestExportReadsEachJournalRowOnce(t *testing.T) {
 			func(monitor.FeedItem) error { streamed++; return nil }); err != nil {
 			t.Fatal(err)
 		}
-		if streamed < 12_000 {
+		if streamed < participants*queries {
 			t.Fatalf("streamed %d items, want the whole contest", streamed)
 		}
-		for table, rows := range map[string]int64{"query_log": 12_000, "submissions": 1_200, "audit_log": 2_400} {
+		for table, rows := range map[string]int64{"query_log": participants * queries, "submissions": 2_400, "audit_log": 2_400} {
 			read := journalRowsRead(t, ctx, table) - before[table]
-			// Linear with room for the planner's choices (a bitmap scan may
-			// fetch a page's rows again); the quadratic read this replaced
-			// was twenty-seven times the rows here, and grows with them.
-			if read > 4*rows {
-				t.Errorf("%s: %d rows read for %d rows exported, want at most four times as many", table, read, rows)
+			t.Logf("%s: %d rows read for %d exported (%.2fx)", table, read, rows, float64(read)/float64(rows))
+			if float64(read) > 1.3*float64(rows) {
+				t.Errorf("%s: %d rows read for %d rows exported, want at most 1.3 times as many", table, read, rows)
 			}
 		}
 	})
