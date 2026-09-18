@@ -6,8 +6,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/devrdn/db-contest/backend/internal/workspace"
@@ -316,5 +318,26 @@ func TestAWriteIsRefusedWhenItsRateCannotBeCounted(t *testing.T) {
 	err := service.AdmitWrite(t.Context(), uuid.New())
 	if err == nil || errors.Is(err, workspace.ErrTooOften) {
 		t.Fatalf("AdmitWrite() = %v, want an internal error", err)
+	}
+}
+
+// Every save is also a revision, and every tab change an event, stored under
+// monitor's bounds in the same transaction. A workspace bound grown past one
+// of those would make autosave fail on its own history, so each is checked
+// against the other here, where both are in view.
+func TestEveryWorkspaceBoundFitsTheHistorysBounds(t *testing.T) {
+	if workspace.MaxTitleRunes > monitor.MaxTabTitleRunes {
+		t.Errorf("a tab title may be %d characters, a revision's or an event's only %d",
+			workspace.MaxTitleRunes, monitor.MaxTabTitleRunes)
+	}
+	if notes := workspace.MaxNotesRunes * utf8.UTFMax; notes > monitor.MaxRevisionBodyBytes {
+		t.Errorf("the notes may take %d bytes, a revision's body only %d", notes, monitor.MaxRevisionBodyBytes)
+	}
+	if workspace.MaxTabBodyBytes > monitor.MaxRevisionBodyBytes {
+		t.Errorf("a tab may hold %d bytes, a revision's body only %d", workspace.MaxTabBodyBytes, monitor.MaxRevisionBodyBytes)
+	}
+	if sqlpolicy.MaxQueryBytes > monitor.MaxRevisionBodyBytes {
+		t.Errorf("a tab is sized to the console's %d bytes, a revision's body only %d",
+			sqlpolicy.MaxQueryBytes, monitor.MaxRevisionBodyBytes)
 	}
 }
