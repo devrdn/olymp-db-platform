@@ -46,6 +46,31 @@ func TestDecodeRejectsAnOversizedBody(t *testing.T) {
 	}
 }
 
+// An endpoint whose bodies are small by nature takes a tighter bound, and
+// can tell a body refused for its size from one refused for its shape.
+func TestDecodeWithinATighterLimitNamesAnOversizedBody(t *testing.T) {
+	const limit = 64
+	var got payload
+
+	fits := `{"login":"` + strings.Repeat("a", limit-20) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(fits))
+	if err := DecodeJSONWithin(httptest.NewRecorder(), req, &got, limit); err != nil {
+		t.Fatalf("a body under the limit: %v", err)
+	}
+
+	over := `{"login":"` + strings.Repeat("a", limit) + `"}`
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(over))
+	err := DecodeJSONWithin(httptest.NewRecorder(), req, &got, limit)
+	if !errors.Is(err, ErrBodyTooLarge) || !errors.Is(err, ErrBadRequest) {
+		t.Fatalf("a body over the limit: err = %v, want ErrBodyTooLarge and ErrBadRequest", err)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"login":`))
+	if err := DecodeJSONWithin(httptest.NewRecorder(), req, &got, limit); errors.Is(err, ErrBodyTooLarge) || !errors.Is(err, ErrBadRequest) {
+		t.Fatalf("a malformed body: err = %v, want ErrBadRequest only", err)
+	}
+}
+
 func TestDecodeRejectsAnUnknownField(t *testing.T) {
 	// A client sending "new_pasword" must be told, not silently left with an
 	// unchanged password.

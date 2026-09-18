@@ -15,18 +15,36 @@ const maxBodyBytes = 1 << 20 // 1 MiB
 // ErrBadRequest reports a body the handler could not use.
 var ErrBadRequest = errors.New("request body is not valid")
 
+// ErrBodyTooLarge reports a body over the limit it was read within. It always
+// comes wrapped together with ErrBadRequest, so a handler that does not care
+// why a body was refused need not ask.
+var ErrBodyTooLarge = errors.New("body is too large")
+
 // DecodeJSON reads a JSON body into v, refusing anything oversized or
 // unexpected.
 //
 // Unknown fields are an error rather than being ignored: a client sending
 // "new_pasword" should be told, not silently left with an unchanged password.
 func DecodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	return DecodeJSONWithin(w, r, v, maxBodyBytes)
+}
+
+// DecodeJSONWithin is DecodeJSON with a tighter bound than the default, for
+// an endpoint whose bodies are small by nature: the bytes are refused as they
+// arrive, before anything is decoded (CLAUDE.md rule 12). A body over limit
+// is refused with ErrBodyTooLarge as well as ErrBadRequest. A limit above the
+// default is lowered to it.
+func DecodeJSONWithin(w http.ResponseWriter, r *http.Request, v any, limit int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, min(limit, maxBodyBytes))
 
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 
 	if err := decoder.Decode(v); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return fmt.Errorf("%w: %w", ErrBadRequest, ErrBodyTooLarge)
+		}
 		return fmt.Errorf("%w: %s", ErrBadRequest, decodeMessage(err))
 	}
 
@@ -44,11 +62,8 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 func decodeMessage(err error) string {
 	var syntax *json.SyntaxError
 	var typeErr *json.UnmarshalTypeError
-	var tooLarge *http.MaxBytesError
 
 	switch {
-	case errors.As(err, &tooLarge):
-		return "body is too large"
 	case errors.As(err, &syntax):
 		return fmt.Sprintf("malformed JSON at position %d", syntax.Offset)
 	case errors.As(err, &typeErr):
