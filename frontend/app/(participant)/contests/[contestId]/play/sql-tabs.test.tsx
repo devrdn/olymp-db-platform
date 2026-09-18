@@ -255,6 +255,51 @@ describe("renaming a tab", () => {
     expect(onRename).toHaveBeenCalledWith("t2", "Witnesses");
   });
 
+  // The defect a real browser pass turned up: the caret landed at the end of
+  // the name with nothing selected (`value: "Query 2"`,
+  // `selectionStart === selectionEnd === 7`), so typing a new name produced
+  // "Query 2Suspects" instead of replacing it — VS Code, by contrast, selects
+  // the whole name so the first keystroke of a rename wipes it.
+  test("selects the whole name when rename opens on a double click", async () => {
+    show();
+
+    await userEvent.dblClick(tab("Suspects"));
+    const input = field("Suspects") as HTMLInputElement;
+
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
+  });
+
+  test("selects the whole name when rename opens on F2", async () => {
+    show({ activeId: "t2" });
+    tab("Suspects").focus();
+
+    await userEvent.keyboard("{F2}");
+    const input = field("Suspects") as HTMLInputElement;
+
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
+  });
+
+  test("typing right after a double click replaces the name instead of appending to it", async () => {
+    const { onRename } = show();
+
+    await userEvent.dblClick(tab("Suspects"));
+    await userEvent.keyboard("Witnesses{Enter}");
+
+    expect(onRename).toHaveBeenCalledWith("t2", "Witnesses");
+  });
+
+  test("typing right after F2 replaces the name instead of appending to it", async () => {
+    const { onRename } = show({ activeId: "t2" });
+    tab("Suspects").focus();
+
+    await userEvent.keyboard("{F2}");
+    await userEvent.keyboard("Witnesses{Enter}");
+
+    expect(onRename).toHaveBeenCalledWith("t2", "Witnesses");
+  });
+
   test("Esc leaves the name as it was", async () => {
     const { onRename } = show();
 
