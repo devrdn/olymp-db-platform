@@ -1606,6 +1606,47 @@
       ]
     },
     {
+      "name": "Participant signals",
+      "description": "What the play screen reports about its own participant's browser (design §2.2): leaving the page (the tab hidden or the window unfocused) and pasting into the SQL editor, an answer or the notes. The organiser sees them as signals, not proof: the browser may lie or stay silent.\n\nAdmitted like the rest of `/play`: `403 not_a_participant` / `address_not_allowed`, `409 contest_not_running` / `contest_finished`. Its own budget of 12 batches a minute per account, refused batches included, spent before anything is looked up: past it `429 signals_too_often` with `Retry-After`. It spends neither the read budget nor the workspace's.",
+      "item": [
+        {
+          "name": "Report browser signals",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/play/signals",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "play",
+                "signals"
+              ]
+            },
+            "description": "A batch of at most 50 events, in a body of at most 256 KiB. Each event is `{kind, client_at, ...payload}`:\n\n- `page_left`: `away_ms`, from 1 s (shorter absences are not recorded) to 24 h (longer ones are capped);\n- `paste`: `target` (`editor`, `answer` or `notes`), `chars`, `text` (its first 500 characters are kept).\n\nThe server stamps its own time; `client_at` (RFC 3339) is kept only as the browser's claim, and ignored when more than 24 h from the server's clock. An event that cannot be read, of another kind, or out of bounds is dropped and the rest of the batch is still stored: `X-Signals-Kept` says how many were.\n\nResponses: 204 · 400 `signals_batch_too_large` / `invalid_request` / `invalid_contest_id` · 403 · 409 · 429 `signals_too_often`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"events\": [\n    {\n      \"kind\": \"page_left\",\n      \"client_at\": \"2026-09-18T10:00:05.000Z\",\n      \"away_ms\": 12500\n    },\n    {\n      \"kind\": \"paste\",\n      \"client_at\": \"2026-09-18T10:00:09.000Z\",\n      \"target\": \"editor\",\n      \"chars\": 23,\n      \"text\": \"SELECT * FROM suspects;\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
       "name": "Audit trail",
       "description": "Who did what, from where and when — the record required by the specification (§13) and kept for a year.\n\nWritten in the same transaction as the action it describes, so an action and its entry land together or neither does. Append-only: there is no route here that writes, and entries never arrive over HTTP.\n\nBehind `audit.view` and nothing else. The trail names who blocked whom and from which address, so reading it is a privilege rather than a side effect of being signed in.",
       "item": [

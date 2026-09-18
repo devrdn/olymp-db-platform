@@ -148,6 +148,9 @@ type ParticipantHandler struct {
 	// watcher hears of every request admission lets through; nil watches
 	// nothing. See WithWatcher.
 	watcher Watcher
+	// signals takes the browser's signal batches
+	// (participant_signals.go); nil leaves that route unmounted.
+	signals SignalRecorder
 }
 
 // Watcher hears of every admitted participant request, to detect a
@@ -265,6 +268,7 @@ func (h *ParticipantHandler) Mount(r chi.Router) {
 		r.Get("/contests/{"+contestIDParam+"}/play/schema", h.schema)
 		r.Post("/contests/{"+contestIDParam+"}/questions/{"+questionIDParam+"}/answer", h.answer)
 		h.mountWorkspace(r)
+		h.mountSignals(r)
 	})
 }
 

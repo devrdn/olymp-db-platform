@@ -588,9 +588,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// The participant's own notes and SQL tabs, throttled by the same shared
 	// limiter under their own "workspace:" namespace.
 	workspaces := workspace.NewService(postgres.NewWorkspace(pool), limiter)
+	// The browser's own signals (design §2.2), throttled by the same shared
+	// limiter under their own "signals:" namespace and stored beside the
+	// server's signals in participant_events.
+	signals := monitor.NewSignals(limiter, postgres.NewMonitor(pool))
 	modules = append(modules, api.NewParticipantHandler(participantAccess, reader, history, contestService, answers, authMiddleware, log, cfg.DefaultLocale).
 		WithWorkspace(workspaces).
-		WithWatcher(participantTracker))
+		WithWatcher(participantTracker).
+		WithSignals(signals))
 	// The SSE channel (§8) shares participantAccess with the endpoints above
 	// for the same reason: one Access, one AdmitRead budget, not a second
 	// admission decision that could drift from the first. ctx.Done() is the
