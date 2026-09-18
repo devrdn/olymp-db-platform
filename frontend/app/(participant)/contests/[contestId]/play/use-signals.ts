@@ -22,7 +22,8 @@ export type { PasteTarget, Signal };
  *   window loses focus (`blur`), whichever comes first, and ends on the first
  *   return (visible again, or focused again); a hide and a blur that overlap
  *   are one absence. It is recorded on the return, and only when it lasted a
- *   second or more;
+ *   second or more — or, when the page goes away (`pagehide`) without the
+ *   participant coming back, then, with the time away so far;
  * - a paste is recorded where it lands inside an element marked with
  *   `data-paste-target` (`editor`, `answer` or `notes`), with its length and
  *   its first 500 characters. One listener on the document, in the capture
@@ -30,16 +31,22 @@ export type { PasteTarget, Signal };
  *   never changes what the paste does;
  * - signals wait in memory and leave in batches of at most 50: every 10 s
  *   when there is something to send, and at once — as a `keepalive` request —
- *   when the page is hidden or goes away (`pagehide`);
+ *   when the page is hidden or goes away (`pagehide`). A hide less than 5 s
+ *   after the last batch left sends nothing of its own: switching tabs
+ *   quickly would otherwise spend the twelve batches a minute on hides and
+ *   silence the organiser's live view for a minute; the timer and
+ *   `pagehide` still send;
  * - a batch lost on the network, refused for the rate (429, after its
- *   `Retry-After`) or by a server error goes back to the front of the buffer
- *   and leaves again later. The buffer holds at most 200 signals; past that
+ *   `Retry-After`) or by a server error goes back into the buffer, in the
+ *   order the signals happened, and leaves again later. The buffer holds at most 200 signals; past that
  *   the oldest go first, so an unreachable server never costs more memory
  *   than that;
  * - a batch refused as such (another 4xx) is dropped: sending it again would
  *   be refused again;
  * - once the contest has closed for the participant (409
- *   `contest_not_running` or `contest_finished`) the collector stops for good.
+ *   `contest_not_running` or `contest_finished`), or the participant is not
+ *   admitted to it at all (403 `not_a_participant` or `address_not_allowed`),
+ *   the collector stops for good: every later batch would be refused alike.
  *
  * Nothing here is React state: a signal never re-renders the screen.
  */
@@ -57,17 +64,27 @@ export const SIGNAL_PASTE_TEXT_MAX = 500;
 /**
  * The largest body a `keepalive` batch may have. Browsers allow 64 KiB of
  * `keepalive` bodies in flight per page, shared with the autosave's own last
- * save on the way out, which matters more; a quarter of it is left to the
- * signals, and whatever does not fit waits for the next send.
+ * save on the way out, which matters more. Keeping the signals to a quarter
+ * of it is a best-effort share, not a reserve: whichever `pagehide` listener
+ * runs first takes the quota first, and nothing here decides that order.
+ * Whatever does not fit waits for the next send.
  */
 export const SIGNAL_KEEPALIVE_BYTES = 16 * 1024;
+/** A hide this soon after the last batch left does not send one of its own. */
+export const SIGNAL_HIDE_FLUSH_GAP_MS = 5000;
 /** Marks the element whose pastes are watched, and names which it is. */
 export const PASTE_TARGET_ATTRIBUTE = "data-paste-target";
 
 /** Sends one batch; rejects with the failure. */
 export type SendSignals = (events: Signal[], options: { keepalive: boolean }) => Promise<void>;
 
-const CLOSED_CODES: ReadonlySet<string> = new Set(["contest_finished", "contest_not_running"]);
+/** Refusals every later batch would get too: the collector stops on them. */
+const FINAL_CODES: ReadonlySet<string> = new Set([
+  "contest_finished",
+  "contest_not_running",
+  "not_a_participant",
+  "address_not_allowed",
+]);
 const PASTE_TARGETS: ReadonlySet<string> = new Set<PasteTarget>(["editor", "answer", "notes"]);
 
 /** The watched field a paste landed in, or null when it is none of them. */
@@ -96,6 +113,8 @@ export class SignalCollector {
   /** No ordinary send leaves before this time (a 429's Retry-After). */
   private quietUntil = 0;
   private inFlight = false;
+  /** When the last batch left, or -Infinity before the first. */
+  private lastSentAt = Number.NEGATIVE_INFINITY;
   private stopped = false;
   private detachListeners: (() => void) | null = null;
 
@@ -115,14 +134,19 @@ export class SignalCollector {
     const onVisibility = () => {
       if (document.visibilityState === "hidden") {
         this.leave();
-        this.flush(true);
+        if (Date.now() - this.lastSentAt >= SIGNAL_HIDE_FLUSH_GAP_MS) this.flush(true);
       } else {
         this.back();
       }
     };
     const onBlur = () => this.leave();
     const onFocus = () => this.back();
-    const onPageHide = () => this.flush(true);
+    // The page going away ends an open absence: often the most telling one,
+    // a participant who hid the tab and never came back to it.
+    const onPageHide = () => {
+      this.back();
+      this.flush(true);
+    };
     const onPaste = (event: Event) => this.paste(event as ClipboardEvent);
     const timer = setInterval(() => this.flush(false), SIGNAL_FLUSH_MS);
 
@@ -219,6 +243,7 @@ export class SignalCollector {
     if (this.inFlight && !keepalive) return;
 
     const batch = this.take(keepalive);
+    this.lastSentAt = Date.now();
     if (!keepalive) this.inFlight = true;
     this.send(batch, { keepalive })
       .catch((error: unknown) => this.failed(batch, error))
@@ -230,7 +255,7 @@ export class SignalCollector {
   private failed(batch: Signal[], error: unknown) {
     if (this.stopped) return;
     if (error instanceof ApiError) {
-      if (CLOSED_CODES.has(error.code)) {
+      if (FINAL_CODES.has(error.code)) {
         this.stop();
         return;
       }
@@ -241,8 +266,12 @@ export class SignalCollector {
         return;
       }
     }
-    // Lost or deferred: back to the front, ahead of what came in meanwhile.
+    // Lost or deferred: back into the buffer in the order the signals
+    // happened. Two batches in flight can fail in either order, so putting
+    // this one at the front is not enough; a stable sort by the browser's own
+    // time (ISO strings compare as times) restores it.
     this.buffer.unshift(...batch);
+    this.buffer.sort((a, b) => (a.client_at < b.client_at ? -1 : a.client_at > b.client_at ? 1 : 0));
     this.trim();
   }
 }
