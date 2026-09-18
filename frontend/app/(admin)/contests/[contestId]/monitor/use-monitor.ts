@@ -102,7 +102,8 @@ export function useMonitor({
   // Pages read in a row that said there was more, and the items they held.
   const catchUpRef = useRef({ pages: 0, items: 0 });
   // Every read is made under this, and it is aborted when the screen goes.
-  const abortRef = useRef<AbortController>(new AbortController());
+  // Filled by the polling effect, which owns its lifetime; null before it runs.
+  const abortRef = useRef<AbortController | null>(null);
 
   const setFeed = useCallback((next: FeedState) => {
     feedRef.current = next;
@@ -143,7 +144,7 @@ export function useMonitor({
   const failed = useCallback(
     (error: unknown): number | null => {
       // The screen went away mid-read; there is nobody to tell.
-      if (abortRef.current.signal.aborted) return null;
+      if (abortRef.current?.signal.aborted) return null;
       if (error instanceof ApiError) {
         if (error.status === 429) {
           const seconds = error.retryAfterSeconds ?? MONITOR_POLL_MS / 1000;
@@ -178,7 +179,7 @@ export function useMonitor({
       const page = await fetchFeed(
         contestId,
         { kinds: nextKinds, limit: MAX_FEED_PAGE },
-        { signal: abortRef.current.signal },
+        { signal: abortRef.current?.signal },
       );
       if (generation !== generationRef.current) return;
       triedRef.current.clear();
@@ -199,7 +200,7 @@ export function useMonitor({
   const poll = useCallback(async (): Promise<number | null> => {
     const generation = generationRef.current;
     const kindsNow = kindsRef.current;
-    const signal = abortRef.current.signal;
+    const signal = abortRef.current?.signal;
     const catchingUp = catchUpRef.current.pages > 0;
     try {
       const feedRead = fetchFeed(
@@ -366,7 +367,7 @@ export function useMonitor({
       const page = await fetchFeed(
         contestId,
         { before: current.items[0].cursor, kinds: kindsRef.current, limit: MAX_FEED_PAGE },
-        { signal: abortRef.current.signal },
+        { signal: abortRef.current?.signal },
       );
       if (generation === generationRef.current) setFeed(prependOlder(feedRef.current, page));
     } catch (error: unknown) {
