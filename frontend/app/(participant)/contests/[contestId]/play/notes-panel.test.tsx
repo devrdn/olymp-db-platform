@@ -245,3 +245,10 @@ test("a paste into the notes is watched as one into the notes", () => {
   show();
   expect(pasteTargetOf(field())).toBe("notes");
 });
+
+// Design §8: the notes are not private, and the field says so.
+test("say under the field that the organiser can see them", () => {
+  show();
+  expect(t.observed).toBe("The organiser can see your notes.");
+  expect(screen.getByText(t.observed)).toBeInTheDocument();
+});
