@@ -178,6 +178,11 @@ type ContestResponse struct {
 	Translations   map[string]TranslationResponse `json:"translations"`
 	CreatedAt      string                         `json:"created_at"`
 	UpdatedAt      string                         `json:"updated_at"`
+	// MayMonitor says whether the caller holds contest.monitor on this
+	// contest, decided by rbac as the monitoring routes decide it, so the
+	// workspace offers its monitoring tab without restating the rule. Sent
+	// only by GET /contests/{id}; the writes answer without it.
+	MayMonitor *bool `json:"may_monitor,omitempty"`
 }
 
 // LeaderboardSettingsResponse is how the contest's table is shown.
@@ -535,9 +540,17 @@ func (h *ContestsHandler) byID(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
+	may, err := h.mw.MayOnContest(r, rbac.PermissionContestMonitor, id)
+	if err != nil {
+		h.log.ErrorContext(r.Context(), "could not decide whether the caller may monitor the contest", "error", err)
+		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+		return
+	}
 	// Every translation, not the negotiated one: staff are authoring them, and
 	// showing only one would make the others invisible in the editor.
-	httpx.JSON(w, r, http.StatusOK, toContestResponse(c))
+	out := toContestResponse(c)
+	out.MayMonitor = &may
+	httpx.JSON(w, r, http.StatusOK, out)
 }
 
 func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {

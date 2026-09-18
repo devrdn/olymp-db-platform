@@ -280,6 +280,26 @@ func (m *Middleware) RequireContestPermission(permission string) func(http.Handl
 	})
 }
 
+// MayOnContest reports whether the request's identity holds the permission
+// on the contest, by the same decision RequireContestPermission makes — for a
+// response that tells the interface which doors to offer, not for a gate. An
+// anonymous request may nothing; an error is a decision that could not be
+// made, never a yes.
+func (m *Middleware) MayOnContest(r *http.Request, permission string, contestID uuid.UUID) (bool, error) {
+	identity, ok := IdentityFrom(r.Context())
+	if !ok {
+		return false, nil
+	}
+	switch err := m.authz.Authorize(r.Context(), identity, permission, contestID); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, rbac.ErrForbidden):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
 // require builds a permission gate over a scope extracted from the request.
 func (m *Middleware) require(permission string, scope func(*http.Request) (uuid.UUID, error)) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
