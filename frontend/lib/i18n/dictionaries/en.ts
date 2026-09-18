@@ -244,7 +244,7 @@ const en = {
         start: "This is the beginning.",
         newItems: "{n} new",
         toLatest: "Back to the latest",
-        gap: "{n}+ events arrived while this page was not being watched and were skipped rather than read. The table counts them all; each participant's page and the CSV have them.",
+        gap: "At least {n} events were not kept while this page was not being watched. The table counts them all; each participant's page and the CSV have them.",
         kind: {
           query: "query",
           answer: "answer",

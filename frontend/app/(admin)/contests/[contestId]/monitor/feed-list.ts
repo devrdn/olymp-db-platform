@@ -92,6 +92,8 @@ export function prependOlder(state: FeedState, page: FeedPage): FeedState {
     items: overflow > 0 ? joined.slice(0, FEED_LIMIT) : joined,
     olderAvailable: page.more,
     detached: state.detached || overflow > 0,
+    // Reading back into the skipped stretch makes a count of it stale.
+    gap: 0,
   };
 }
 
