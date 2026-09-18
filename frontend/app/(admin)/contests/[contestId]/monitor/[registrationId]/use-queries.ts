@@ -212,6 +212,7 @@ export function useQueries({
           }
         }
         if (outcome.size > 0) setItems(itemsRef.current.map((q) => outcome.get(q.id) ?? q));
+        setProblem(null);
       } catch (error: unknown) {
         if (!cancelled) failed(error);
       } finally {

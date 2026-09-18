@@ -141,6 +141,19 @@ describe("running queries", () => {
     expect(fetchTimeline).toHaveBeenCalledTimes(1);
   });
 
+  test("a refresh that answers clears the failure the one before it showed", async () => {
+    const running = loggedQuery(5, { status: "running", executedAt: at });
+    fetchTimeline.mockRejectedValueOnce(new Error("network")).mockResolvedValue({ items: [], more: false });
+    const { result } = mount({ items: [running], more: false });
+
+    await act(() => vi.advanceTimersByTimeAsync(MONITOR_POLL_MS));
+    expect(result.current.problem).toEqual({ kind: "failed" });
+
+    await act(() => vi.advanceTimersByTimeAsync(MONITOR_POLL_MS));
+    expect(fetchTimeline).toHaveBeenCalledTimes(2);
+    expect(result.current.problem).toBeNull();
+  });
+
   test("nothing is asked while the tab is hidden, nor when nothing runs", async () => {
     mount();
     await act(() => vi.advanceTimersByTimeAsync(MONITOR_POLL_MS * 3));
