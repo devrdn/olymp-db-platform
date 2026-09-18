@@ -317,3 +317,27 @@ func TestSignInsOutsideTheContestAreNotInItsFeed(t *testing.T) {
 		}
 	})
 }
+
+// One participant's disqualification is found however many of the others'
+// come after it: the limit applies to theirs alone.
+func TestATimelineFindsItsDisqualificationAmongOthers(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newWatchFixture(t, ctx)
+		mine, myUser := f.participant("mine")
+		disqualify := func(user uuid.UUID, at time.Time) {
+			f.exec(`INSERT INTO audit_log (action, entity, entity_id, payload, created_at)
+			        VALUES ('participant.disqualify', 'contest', $1::uuid::text, jsonb_build_object('user_id', $2::uuid::text), $3)`,
+				f.contest, user, at)
+		}
+		disqualify(myUser, f.at(time.Minute))
+		for i := range 5 {
+			_, other := f.participant("other")
+			disqualify(other, f.at(time.Duration(2+i)*time.Minute))
+		}
+		items := readFeed(t, ctx, monitor.FeedQuery{Contest: f.contest, Registration: mine,
+			Kinds: []string{monitor.FeedDisqualified}, Limit: 1}).Items
+		if len(items) != 1 || items[0].Registration != mine {
+			t.Errorf("the timeline's disqualification: %+v", items)
+		}
+	})
+}
