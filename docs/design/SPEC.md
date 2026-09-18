@@ -375,6 +375,114 @@ form column come out the same width, the lede breaks after the third word, and
 the page looks like two narrow strips instead of a composition. Below 1280 the
 form goes under the heading, where it has the whole column.
 
+### 5.1 The monitoring screens
+
+Two screens let a contest's staff watch what its participants did
+(architecture §9.4): the contest's own monitoring page and one page per
+participant. Both live in the contest workspace and use the `compact`
+vocabulary of section 5's density note: registers and feeds, mono labels,
+tabular figures.
+
+**The "Monitoring" item sits in the setup group, after the leaderboard, and
+only for whoever may use it.** It is read while the contest runs and after,
+like the leaderboard beside it. The item appears when `GET /contests/{id}`
+says `may_monitor`, which is the server's own permission decision; the
+screen never works out the rule for itself, so the item and the page cannot
+disagree. Anybody else does not see the item, and the page answers them
+with the 404 page, not a "forbidden" one.
+
+**The contest page is a register beside a feed, not a dashboard.** The
+participants table on the left, the live feed of the whole contest on the
+right. The split follows the column, not the window (`@container`): side
+by side (`minmax(0,1fr) 21rem`) only when the workspace column is at least
+54rem wide, which it is at 1440 px; at 1024 and below the feed goes under
+the table. There are no metric cards and no charts. The table already
+holds the counts, and a card would repeat one of them in larger type.
+
+- **The table scrolls inside its own box** (at most 42rem, or 70vh below
+  the mobile reset) on both axes, with a sticky header and a sticky name
+  column, so the page never scrolls sideways at 375 px. Every counter is a
+  sortable column with `aria-sort`. The table opens sorted by name; a text
+  column sorts ascending on its first press and a counter descending,
+  because whoever sorts by a counter is looking for the largest. Filters
+  above the table: flagged only, status, and a search over name and login.
+- **Flags are badges, not colours on the row.** One warn-wash pill per
+  raised flag. The label is `aria-hidden`, the explanation is `sr-only`
+  text, and a `title` gives the same explanation to a pointer. A "?"
+  tooltip above the table explains all six flags and says that browser
+  signals are not proof. It sits outside the table's scroll box so the box
+  edge cannot clip it. The flags are hints for a person to look into, and
+  the screen presents them that way: nothing on it acts on a flag.
+- **A row lights when its participant does something.** A new feed item
+  washes the whole `<tr>` in `accent-wash` for 3 s. This is section 3's
+  "what is happening now", which is what the accent is for. Rows are
+  memoised, and a poll that changed nothing re-renders no row.
+- **The feed reads down, newest at the bottom, and follows while you are
+  at the bottom.** Rows are a fixed 3.5rem and windowed (with
+  `aria-setsize`/`aria-posinset`), so a thousand lines keep a few dozen in
+  the DOM. Scrolling up pauses the follow and keeps the reader's place;
+  arrivals are counted in an "N new" button that jumps back. The list keeps
+  at most 1000 lines. "Load older" pages back, and a list pushed off its
+  newest end says so and offers "Back to the latest" rather than
+  pretending to be live. Kind chips filter it: queries, answers, absences,
+  pastes, network, sign-ins, tabs, clock. The server's own tab lines
+  (`tab_created` and the rest) are set in muted ink, not faded: opacity
+  would fail the contrast check.
+- **Polling is quiet.** Every 5 s while the tab is visible, none while it
+  is hidden, and one immediate poll on return. A 429 waits out its
+  `Retry-After`, and other failures back off from 5 s to 60 s. The status
+  line under the heading is a `role="status"` region that is always
+  rendered, with only its text changing, so a screen reader hears a
+  problem when it appears. The help text says the feed runs about two
+  seconds behind by design.
+
+**The participant page is one heading and five linkable tabs.** The heading
+carries the name, login, status, clock start and finish, and the flag
+badges. When the roster was truncated and holds no row for this
+participant, the heading says nothing about flags rather than "none". It
+also carries the CSV link and the way back to the contest page. The tabs are
+links (`?tab=` in the URL, `aria-current` on the active one), so a tab can
+be sent to a colleague. On a phone the strip scrolls sideways inside itself:
+timeline, SQL queries, answers, workspace, sign-ins and networks.
+
+- **Timeline:** the same feed component, without the participant's name on
+  every line, plus a from/until range read in the contest's time zone.
+- **SQL queries are a tab of their own**, because they are what the
+  olympiad is about. Each row shows time, status, duration, rows, the
+  address ("no address" for rows journalled before addresses were kept)
+  and the error. Expanded, a row shows the full statement, read-only and
+  highlighted with the editor's own colour tokens by a small lossless
+  tokenizer rather than a second CodeMirror, which is an editor of about
+  140 KiB. A copy button reports success or failure in a live region.
+  Search waits 300 ms and stops at 200 characters. Rows use
+  `content-visibility: auto`, because their heights vary.
+- **Answers:** questions in order, attempts with value, verdict, points and
+  time. Each attempt expands to the queries that led to it, and the text
+  says so when the server kept only the first hundred.
+- **Workspace:** the notes and tabs as they are now, and their history
+  grouped by document (notes, open tabs in order, then closed tabs under
+  their last title). Choosing a revision shows it as a line diff against
+  the previous revision of the same document, with three lines of context
+  and 400 rows at a time. Each changed line tells a screen reader "added,
+  line n" or "removed, line n", not only a coloured sign. Notes are prose
+  and are set in the text face even inside the `pre` that keeps their line
+  breaks.
+- **Sign-ins and networks:** sign-ins, sign-outs, failed sign-ins, address
+  changes and parallel sessions, newest first, with every address seen
+  listed once.
+
+**Both pages hold the page-width rule of section 5.** They were checked at
+1440, 1024, 768 and 375 px. Long SQL, IPv6 addresses, the tab strip, the
+diff and the tables scroll inside their own boxes, and `scrollWidth` equals
+`clientWidth` at every width.
+
+**What a participant is told is part of this design, not a footnote.** The
+play screen carries one line under its header, "The organiser sees your
+queries, answers, notes and actions on this page", in the waiting room too.
+The notes panel says "The organiser can see your notes." Both are set in small
+secondary ink (`text-small`, `ink-2`) rather than a warning colour: they
+state a fact, they do not raise an alarm.
+
 ## 6. Motion
 
 Three durations: 120 ms for a reaction to input, 180 ms for a change of state,
@@ -596,10 +704,12 @@ which is not built. Today each surface offers exactly one format, so each
 renders a list of one — not a disclosure widget concealing a single item, which
 is a click charged for nothing.
 
-**Two surfaces carry it.** On the contest overview, one JSON link: the whole
+**Four surfaces carry it.** On the contest overview, one JSON link: the whole
 contest as a file to author again next year. On the participant's query-log
 panel, one CSV link: their own session as a file, offered only once there is a
-row in it. Nothing else does; a screen that has no data worth taking away does
+row in it. On the contest's monitoring page and on a participant's monitoring
+page (section 5.1), one CSV link each: the whole feed of the contest or of that
+participant, streamed and audited by the server. Nothing else does; a screen that has no data worth taking away does
 not get an empty group heading, because a screen reader announces one all the
 same.
 
