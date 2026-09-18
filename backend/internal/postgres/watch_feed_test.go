@@ -217,3 +217,33 @@ func TestTheFeedFilters(t *testing.T) {
 		}
 	})
 }
+
+// An item stamped before one already delivered, but written after it — two
+// transactions committing out of the order of their clocks — still reaches a
+// feed polled forwards: the newest FeedSettle of the journals is held back
+// until it can no longer change.
+func TestPollingForwardsLosesNoItemCommittedLate(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newWatchFixture(t, ctx)
+		reg, _ := f.participant("late")
+		origin := monitor.Cursor{At: monitor.EarliestCursorTime, Source: monitor.SourceAudit, ID: "0"}
+		insert := func(ago time.Duration) {
+			f.exec(`INSERT INTO participant_events (contest_id, registration_id, kind, payload, created_at)
+			        VALUES ($1, $2, 'page_left', '{"away_ms": 2000}', clock_timestamp() - $3::interval)`,
+				f.contest, reg, ago.String())
+		}
+		poll := func() []monitor.FeedItem {
+			return readFeed(t, ctx, monitor.FeedQuery{Contest: f.contest, After: &origin, Limit: 10}).Items
+		}
+
+		insert(monitor.FeedSettle / 4)
+		if got := poll(); len(got) != 0 {
+			t.Fatalf("an item younger than the settle window was delivered: %v", kindsOf(got))
+		}
+		insert(monitor.FeedSettle / 2) // stamped earlier, written later
+		time.Sleep(monitor.FeedSettle + 100*time.Millisecond)
+		if got := poll(); len(got) != 2 {
+			t.Fatalf("after the settle window: %d items, want both", len(got))
+		}
+	})
+}
