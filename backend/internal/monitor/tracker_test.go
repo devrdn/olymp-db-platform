@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/monitor"
+	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/google/uuid"
 )
 
@@ -402,5 +403,31 @@ func TestTheSessionTagIsAHashNotTheToken(t *testing.T) {
 	}
 	if monitor.SessionTag("") != "" {
 		t.Fatal("no token must give no tag")
+	}
+}
+
+// BenchmarkObserveUnchanged is what tracking adds to every console query in
+// the common case — same session, same address — over the in-process cache:
+// one read and one decode, no write.
+func BenchmarkObserveUnchanged(b *testing.B) {
+	store := cache.NewMemory(0)
+	b.Cleanup(func() { _ = store.Close() })
+	events := &eventLog{}
+	now := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+	tracker := monitor.NewTracker(store, events, slog.New(slog.NewTextHandler(io.Discard, nil))).
+		WithClock(func() time.Time { return now })
+	visit := monitor.Visit{
+		Contest: uuid.New(), Registration: uuid.New(),
+		Address: netip.MustParseAddr("10.0.0.1"), Session: monitor.SessionTag("token"), UserAgent: "Firefox",
+	}
+	ctx := context.Background()
+	tracker.Observe(ctx, visit)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		tracker.Observe(ctx, visit)
+	}
+	if events.inserts != 0 {
+		b.Fatalf("an unchanged visit inserted events")
 	}
 }
