@@ -141,6 +141,7 @@ const en = {
       game: "Database",
       databases: "Databases",
       leaderboard: "Leaderboard",
+      monitor: "Monitoring",
     },
     game: {
       heading: "Game database",

@@ -3,7 +3,10 @@ import { ContestWindow } from "@/components/product/contest-window";
 import { Tag } from "@/components/ui/tag";
 import { questionListSchema, untranslated } from "@/lib/api/content";
 import { contentEditable, publishCheckSchema, titleIn, type ContestStatus } from "@/lib/api/contests";
+import { mayMonitor } from "@/lib/api/monitor";
+import { managerListSchema } from "@/lib/api/people";
 import { PUBLISH_PROBLEMS } from "@/lib/api/publish-gate";
+import { fetchIdentity } from "@/lib/auth/session";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 import { ContestCrumbs } from "./contest-crumbs";
@@ -60,16 +63,34 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
   // needed to. The overview page (`page.tsx`) asks the same gate endpoint
   // again; `fetch`'s own request memoisation collapses that into the one
   // call already in flight from here, same pass, same request.
-  const [contest, check] = await Promise.all([
+  //
+  // The identity and the staff list decide one thing, whether the monitoring
+  // tab is offered (`mayMonitor`), and are just as independent. Either one
+  // failing hides the tab and nothing else: the monitoring page does its own
+  // check against the API, so a tab missing for a moment costs a click, and a
+  // workspace that failed whole over it would cost every section.
+  const [contest, check, identity, managers] = await Promise.all([
     loadContest(contestId),
     loadContestResource(contestId, "/publish-check", (payload) =>
       publishCheckSchema.parse(payload),
     ).catch(() => null),
+    fetchIdentity().catch(() => null),
+    loadContestResource(contestId, "/managers", (payload) => managerListSchema.parse(payload)).catch(
+      () => null,
+    ),
   ]);
   const t = dict.workspace;
   const base = `/contests/${contest.id}`;
+  const monitor = mayMonitor(identity, managers?.items ?? null);
 
-  const groups = await navigation(contestId, base, contest.languages.map((l) => l.code), dict, check);
+  const groups = await navigation(
+    contestId,
+    base,
+    contest.languages.map((l) => l.code),
+    dict,
+    check,
+    monitor,
+  );
 
   return (
     <>
@@ -90,6 +111,7 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
             game: t.tabs.game,
             databases: t.tabs.databases,
             standings: t.tabs.leaderboard,
+            monitor: t.tabs.monitor,
           }}
         />
 
@@ -163,6 +185,7 @@ async function navigation(
   languages: string[],
   dict: Awaited<ReturnType<typeof activeDictionary>>,
   check: ReturnType<typeof publishCheckSchema.parse> | null,
+  monitor: boolean,
 ): Promise<NavGroup[]> {
   const t = dict.workspace;
 
@@ -214,6 +237,11 @@ async function navigation(
         // Beside the databases, for the same reason they are here: it is read
         // while the contest is running and after, not while it is written.
         { href: `${base}/standings`, label: t.tabs.leaderboard },
+        // Beside the leaderboard, for the same reason: it is read while the
+        // contest runs and after. Offered only to whoever holds
+        // contest.monitor here — what the organiser sees there is what the
+        // participants did, and the tab is not a door to show anybody else.
+        ...(monitor ? [{ href: `${base}/monitor`, label: t.tabs.monitor }] : []),
       ],
     },
   ];
