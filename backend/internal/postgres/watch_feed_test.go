@@ -385,3 +385,18 @@ func TestAContestExportReadsEachJournalRowOnce(t *testing.T) {
 		}
 	})
 }
+
+// The newest page holds back the settle window too: the cursor a live screen
+// starts polling from must not already be past an item still committing.
+func TestTheNewestPageHoldsBackTheSettleWindow(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newWatchFixture(t, ctx)
+		reg, _ := f.participant("fresh")
+		f.exec(`INSERT INTO participant_events (contest_id, registration_id, kind, payload, created_at)
+		        VALUES ($1, $2, 'page_left', '{"away_ms": 2000}', clock_timestamp() - $3::interval)`,
+			f.contest, reg, (monitor.FeedSettle / 4).String())
+		if got := readFeed(t, ctx, monitor.FeedQuery{Contest: f.contest}).Items; len(got) != 0 {
+			t.Errorf("the newest page carries an item younger than the settle window: %v", kindsOf(got))
+		}
+	})
+}
