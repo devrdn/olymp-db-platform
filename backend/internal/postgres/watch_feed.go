@@ -322,9 +322,16 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 	// A participant's own sign-ins, sign-outs and failed sign-ins count from
 	// their registration to monitor.SignInGrace past their finish, or the
 	// contest's end; with neither known, up to now.
-	until := ` AND (COALESCE(r.finished_at, c.ends_at) IS NULL
+	// Built on first use: a parameter no branch names cannot be typed.
+	var untilSQL string
+	until := func() string {
+		if untilSQL == "" {
+			untilSQL = ` AND (COALESCE(r.finished_at, c.ends_at) IS NULL
 		      OR a.created_at < COALESCE(r.finished_at, c.ends_at) + make_interval(secs => ` +
-		a.add(monitor.SignInGrace.Seconds()) + `))`
+				a.add(monitor.SignInGrace.Seconds()) + `))`
+		}
+		return untilSQL
+	}
 	// Each branch is its own index range with its own LIMIT, and the union
 	// is cut once more.
 	var branches []string
@@ -343,7 +350,7 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 		CROSS JOIN LATERAL (
 		    SELECT a.* FROM audit_log a
 		    WHERE a.actor_id = r.user_id AND a.action = ANY(`+a.add(sessionActions)+`::text[])
-		      AND a.created_at >= r.created_at`+until+bounds+`
+		      AND a.created_at >= r.created_at`+until()+bounds+`
 		    ORDER BY a.created_at `+dir+`, a.id `+dir+`
 		    LIMIT `+limit+`
 		) a
@@ -359,19 +366,26 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 		    SELECT a.* FROM audit_log a
 		    WHERE a.action = '`+audit.ActionAuthLoginFailed+`'
 		      AND lower(a.payload->>'login') = lower(u.login)
-		      AND a.created_at >= r.created_at`+until+bounds+`
+		      AND a.created_at >= r.created_at`+until()+bounds+`
 		    ORDER BY a.created_at `+dir+`, a.id `+dir+`
 		    LIMIT `+limit+`
 		) a
 		WHERE `+scope)
 	}
 	if all || wanted[monitor.FeedDisqualified] {
+		// One participant's timeline narrows the contest's disqualifications
+		// to theirs before the limit, or the others' could fill it.
+		whose := ""
+		if q.Registration != uuid.Nil {
+			whose = ` AND a.payload->>'user_id' = (SELECT user_id::text FROM registrations WHERE id = ` +
+				a.add(q.Registration) + `)`
+		}
 		branches = append(branches, `
 		SELECT a.id, r.id AS registration_id, a.created_at, a.action, host(a.ip), a.user_agent, a.payload
 		FROM (
 		    SELECT a.* FROM audit_log a
 		    WHERE a.entity = 'contest' AND a.entity_id = `+a.add(q.Contest.String())+`
-		      AND a.action = '`+audit.ActionParticipantDisqualify+`'`+bounds+`
+		      AND a.action = '`+audit.ActionParticipantDisqualify+`'`+whose+bounds+`
 		    ORDER BY a.created_at `+dir+`, a.id `+dir+`
 		    LIMIT `+limit+`
 		) a
