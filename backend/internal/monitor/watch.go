@@ -30,6 +30,18 @@ const rosterComputeTimeout = 20 * time.Second
 type WatchStore interface {
 	// Roster computes the participants table, at most limit rows.
 	Roster(ctx context.Context, contest uuid.UUID, limit int) (Roster, error)
+	// Participant finds a registration of the contest, or
+	// ErrParticipantNotFound.
+	Participant(ctx context.Context, contest, registration uuid.UUID) (Participant, error)
+	Feed(ctx context.Context, q FeedQuery) (FeedPage, error)
+	Queries(ctx context.Context, q QueriesQuery) (QueriesPage, error)
+	// Answers reads every attempt with at most perAttempt of the queries
+	// that led to it.
+	Answers(ctx context.Context, contest, registration uuid.UUID, perAttempt int) (Answers, error)
+	Workspace(ctx context.Context, registration uuid.UUID) (Workspace, error)
+	// Revision reads one revision of the registration, or
+	// ErrRevisionNotFound.
+	Revision(ctx context.Context, registration uuid.UUID, id int64) (RevisionBody, error)
 }
 
 // WatchConfig assembles a WatchService.
@@ -146,4 +158,62 @@ func (s *WatchService) computeOnce(ctx context.Context, key string, fn func(ctx 
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// Participant finds a registration of the contest: another contest's is
+// ErrParticipantNotFound, the same as one that does not exist. Every
+// per-participant read below asks it first.
+func (s *WatchService) Participant(ctx context.Context, contest, registration uuid.UUID) (Participant, error) {
+	return s.store.Participant(ctx, contest, registration)
+}
+
+// Feed reads one page of the contest's feed, or of one participant's
+// timeline when q names a registration — which must be the contest's.
+func (s *WatchService) Feed(ctx context.Context, q FeedQuery) (FeedPage, error) {
+	q, err := q.Normalize()
+	if err != nil {
+		return FeedPage{}, err
+	}
+	if q.Registration != uuid.Nil {
+		if _, err := s.store.Participant(ctx, q.Contest, q.Registration); err != nil {
+			return FeedPage{}, err
+		}
+	}
+	return s.store.Feed(ctx, q)
+}
+
+// Queries reads one page of a participant's queries.
+func (s *WatchService) Queries(ctx context.Context, q QueriesQuery) (QueriesPage, error) {
+	q, err := q.Normalize()
+	if err != nil {
+		return QueriesPage{}, err
+	}
+	if _, err := s.store.Participant(ctx, q.Contest, q.Registration); err != nil {
+		return QueriesPage{}, err
+	}
+	return s.store.Queries(ctx, q)
+}
+
+// Answers reads a participant's attempts with the queries that led to each.
+func (s *WatchService) Answers(ctx context.Context, contest, registration uuid.UUID) (Answers, error) {
+	if _, err := s.store.Participant(ctx, contest, registration); err != nil {
+		return Answers{}, err
+	}
+	return s.store.Answers(ctx, contest, registration, MaxAttemptQueries)
+}
+
+// Workspace reads a participant's notes and tabs and their revision list.
+func (s *WatchService) Workspace(ctx context.Context, contest, registration uuid.UUID) (Workspace, error) {
+	if _, err := s.store.Participant(ctx, contest, registration); err != nil {
+		return Workspace{}, err
+	}
+	return s.store.Workspace(ctx, registration)
+}
+
+// Revision reads one revision of a participant, whole.
+func (s *WatchService) Revision(ctx context.Context, contest, registration uuid.UUID, id int64) (RevisionBody, error) {
+	if _, err := s.store.Participant(ctx, contest, registration); err != nil {
+		return RevisionBody{}, err
+	}
+	return s.store.Revision(ctx, registration, id)
 }
