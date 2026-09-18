@@ -36,6 +36,7 @@ type WatchStore interface {
 	// ErrParticipantNotFound.
 	Participant(ctx context.Context, contest, registration uuid.UUID) (Participant, error)
 	Feed(ctx context.Context, q FeedQuery) (FeedPage, error)
+	FeedSourceReader
 	Queries(ctx context.Context, q QueriesQuery) (QueriesPage, error)
 	// Answers reads every attempt with at most perAttempt of the queries
 	// that led to it.
@@ -203,6 +204,17 @@ func (s *WatchService) Feed(ctx context.Context, q FeedQuery) (FeedPage, error) 
 		}
 	}
 	return s.store.Feed(ctx, q)
+}
+
+// StreamFeed hands the whole feed of the contest, or of one of its
+// participants, to yield, oldest first (monitor.StreamFeed).
+func (s *WatchService) StreamFeed(ctx context.Context, q FeedQuery, yield func(FeedItem) error) error {
+	if q.Registration != uuid.Nil {
+		if _, err := s.store.Participant(ctx, q.Contest, q.Registration); err != nil {
+			return err
+		}
+	}
+	return StreamFeed(ctx, s.store, q, yield)
 }
 
 // Queries reads one page of a participant's queries.

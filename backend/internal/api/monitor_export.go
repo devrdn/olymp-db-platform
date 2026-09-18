@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -18,30 +20,45 @@ import (
 // The monitoring CSV exports (design §4): the whole feed of one participant,
 // or of the whole contest, as a file, oldest first.
 //
-// Streamed the way the participant's own query log is (queryLogCSV), and
-// bounded the same three ways: rows (maxMonitorExportRows, with a last line
-// saying so when it binds), time (exportDeadline), and one download at a
-// time per account (inFlightExports). The file is read page by page through
-// the feed's own keyset — each page a set of index ranges with a limit, no
-// transaction held between them — so memory holds one page and no
-// connection is pinned for the length of the download.
+// Streamed like the participant's own query log (queryLogCSV), and read as a
+// k-way merge of every source's own forward range (monitor.StreamFeed): each
+// source a page at a time in its own index order, each row read once, one
+// page per source in memory and no transaction held between pages.
+//
+// Bounded four ways: rows (maxMonitorExportRows) and bytes
+// (maxMonitorExportBytes, counted as rows are written — CLAUDE.md rule 12),
+// each ending the file with a line saying so; time (exportDeadline); and one
+// download at a time per account (inFlightExports). A file that stops for
+// any other reason — the deadline, a failed read — ends with a line saying it
+// is incomplete: the status line said 200 long before, and a file that
+// quietly stops reads as a complete record.
 //
 // Every export is recorded (contest.monitor_export) before the first byte
 // leaves; an export the trail cannot record is refused.
 
-// maxMonitorExportRows bounds one export. A contest-wide feed of a busy
-// three-hour olympiad is tens of thousands of items; a participant's is a
-// few thousand. Each row's statement is already cut to
-// queryrunner.MaxHistorySQLChars by the feed, so rows bound bytes too.
-const maxMonitorExportRows = 200_000
+// maxMonitorExportRows and maxMonitorExportBytes bound one export. A
+// contest-wide feed of a busy three-hour olympiad is tens of thousands of
+// items, a few megabytes; a participant's is a few thousand.
+const (
+	maxMonitorExportRows  = 200_000
+	maxMonitorExportBytes = 64 << 20
+)
 
 // monitorCSVColumns is the header row. data is the item's details as JSON,
 // the same object the feed's response carries.
 var monitorCSVColumns = []string{"at", "kind", "login", "full_name", "registration_id", "data"}
 
-// monitorCSVTruncatedNotice is the last line of a file the row bound cut.
+// monitorCSVTruncatedNotice is the last line of a file a bound cut.
 var monitorCSVTruncatedNotice = []string{"", "truncated", "", "", "",
-	"This file stops at the most rows one download may carry; narrow it to one participant or read the rest on the screen."}
+	"This file stops at the most one download may carry; narrow it to one participant or read the rest on the screen."}
+
+// monitorCSVIncompleteNotice is the last line of a file that stopped
+// because the download ran out of time or a read failed.
+var monitorCSVIncompleteNotice = []string{"", "incomplete", "", "", "",
+	"This file stopped early: the download ran out of time or a read failed. Download it again."}
+
+// errExportBound stops the stream when a bound is reached.
+var errExportBound = errors.New("the export reached its bound")
 
 // contestCSV is GET /contests/{id}/monitor/export.csv.
 func (h *MonitorHandler) contestCSV(w http.ResponseWriter, r *http.Request) {
@@ -85,49 +102,65 @@ func (h *MonitorHandler) exportCSV(w http.ResponseWriter, r *http.Request, regis
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	w.WriteHeader(http.StatusOK)
-	writer := csv.NewWriter(w)
+	counter := &countingWriter{w: w}
+	writer := csv.NewWriter(counter)
 	if err := writer.Write(monitorCSVColumns); err != nil {
 		h.log.ErrorContext(r.Context(), "could not write the monitoring export header", "error", err)
 		return
 	}
 
-	// From before anything, forwards, a page at a time.
-	cursor := monitor.Cursor{At: monitor.EarliestCursorTime, Source: monitor.SourceAudit, ID: "0"}
-	written, truncated := 0, false
-	for {
-		page, err := h.watch.Feed(ctx, monitor.FeedQuery{Contest: contest, Registration: registration,
-			After: &cursor, Limit: monitor.MaxFeedPage})
-		if err != nil {
-			// The status line already said 200; the log is where a file that
-			// stops early is explained.
-			h.log.ErrorContext(r.Context(), "the monitoring export stopped early", "error", err)
-			break
-		}
-		for _, item := range page.Items {
-			if written == maxMonitorExportRows {
-				truncated = true
-				break
+	rows := 0
+	err := h.watch.StreamFeed(ctx, monitor.FeedQuery{Contest: contest, Registration: registration},
+		func(item monitor.FeedItem) error {
+			record := monitorCSVRow(item)
+			if rows == h.exportRows || counter.n+recordSize(record) > int64(h.exportBytes) {
+				return errExportBound
 			}
-			if err := writer.Write(monitorCSVRow(item)); err != nil {
-				h.log.ErrorContext(r.Context(), "the monitoring export stopped early", "error", err)
-				return
+			rows++
+			if err := writer.Write(record); err != nil {
+				return err
 			}
-			written++
-		}
-		if truncated || !page.More || len(page.Items) == 0 {
-			break
-		}
-		cursor = page.Items[len(page.Items)-1].Cursor()
+			// Flushed as it goes, so the byte count is what really left.
+			writer.Flush()
+			return writer.Error()
+		})
+	switch {
+	case err == nil:
+	case errors.Is(err, errExportBound):
+		err = writer.Write(monitorCSVTruncatedNotice)
+	default:
+		h.log.ErrorContext(r.Context(), "the monitoring export stopped early", "error", err)
+		err = writer.Write(monitorCSVIncompleteNotice)
 	}
-	if truncated {
-		if err := writer.Write(monitorCSVTruncatedNotice); err != nil {
-			h.log.ErrorContext(r.Context(), "could not write the monitoring export notice", "error", err)
-		}
+	if err != nil {
+		h.log.ErrorContext(r.Context(), "could not write the monitoring export's last line", "error", err)
 	}
 	writer.Flush()
 	if err := writer.Error(); err != nil {
 		h.log.ErrorContext(r.Context(), "could not finish the monitoring export", "error", err)
 	}
+}
+
+// countingWriter counts the bytes written through it.
+type countingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// recordSize is a record's size on the wire, near enough: its cells, a
+// separator each, and room for quoting.
+func recordSize(record []string) int64 {
+	size := 0
+	for _, cell := range record {
+		size += len(cell) + 3
+	}
+	return int64(size)
 }
 
 // monitorCSVRow is one item as a row. Every cell a participant or an

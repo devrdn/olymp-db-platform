@@ -247,3 +247,34 @@ func TestPollingForwardsLosesNoItemCommittedLate(t *testing.T) {
 		}
 	})
 }
+
+func TestAStreamedFeedIsTheWholeFeedOnce(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newFeedFixture(t, ctx)
+		whole := readFeed(t, ctx, monitor.FeedQuery{Contest: f.contest, Limit: monitor.MaxFeedPage}).Items
+		for _, reg := range []uuid.UUID{uuid.Nil, f.bob} {
+			var got []monitor.FeedItem
+			if err := monitor.StreamFeed(ctx, NewWatch(testPool), monitor.FeedQuery{Contest: f.contest, Registration: reg},
+				func(item monitor.FeedItem) error { got = append(got, item); return nil }); err != nil {
+				t.Fatal(err)
+			}
+			want := whole
+			if reg != uuid.Nil {
+				want = nil
+				for _, item := range whole {
+					if item.Registration == reg {
+						want = append(want, item)
+					}
+				}
+			}
+			if len(got) != len(want) {
+				t.Fatalf("registration %s: streamed %v, want %v", reg, kindsOf(got), kindsOf(want))
+			}
+			for i := range want {
+				if got[i].Cursor().Compare(want[i].Cursor()) != 0 || got[i].Login == "" {
+					t.Fatalf("item %d: %+v, want %+v", i, got[i], want[i])
+				}
+			}
+		}
+	})
+}
