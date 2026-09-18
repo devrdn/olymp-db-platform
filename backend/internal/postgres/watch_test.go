@@ -377,6 +377,12 @@ func (q explainingQuerier) explain(ctx context.Context, sql string, args ...any)
 		if journals[n.Relation] && !rangeReads[n.NodeType] {
 			*q.scans = append(*q.scans, n.NodeType+" of "+n.Relation+" in:\n"+sql+"\nplan: "+string(raw))
 		}
+		// A time bound on the query log belongs in the index condition: left
+		// as a filter, the scan reads the registration's whole history on
+		// that side and throws most of it away.
+		if (n.Relation == "query_log" || strings.HasPrefix(n.Index, "query_log_")) && strings.Contains(n.Filter, "executed_at") {
+			*q.scans = append(*q.scans, n.NodeType+" filters query_log by time in:\n"+sql+"\nplan: "+string(raw))
+		}
 		if journalIndex(n.Index) && n.IndexCond == "" {
 			*q.scans = append(*q.scans, n.NodeType+" of "+n.Index+" without a condition in:\n"+sql+"\nplan: "+string(raw))
 		}
@@ -414,6 +420,7 @@ type planNode struct {
 	Relation  string     `json:"Relation Name"`
 	Index     string     `json:"Index Name"`
 	IndexCond string     `json:"Index Cond"`
+	Filter    string     `json:"Filter"`
 	Plans     []planNode `json:"Plans"`
 }
 
