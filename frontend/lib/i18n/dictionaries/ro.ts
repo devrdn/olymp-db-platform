@@ -326,7 +326,7 @@ const ro = {
           points: "{n} p.",
           queriesToggle: "Interogări înainte de încercare: {n}",
           noQueries: "Nicio interogare de la încercarea precedentă.",
-          moreQueries: "Alte {n} interogări mai vechi din acest interval nu sunt afișate; le găsiți în fila interogărilor și în CSV.",
+          moreQueries: "Alte {n} interogări mai noi din acest interval, cele mai apropiate de încercare, nu sunt afișate; le găsiți în fila interogărilor și în CSV.",
           window: "Interogările de după încercarea precedentă, la orice întrebare, și dinaintea acesteia.",
         },
         workspace: {
