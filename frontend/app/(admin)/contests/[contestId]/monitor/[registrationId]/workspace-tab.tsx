@@ -143,7 +143,7 @@ export function WorkspaceTab({
             {workspace.notes.body === "" ? (
               <p className="text-body text-ink-3">{t.emptyNotes}</p>
             ) : (
-              <pre className="max-h-96 min-w-0 overflow-auto bg-sunk p-3 text-body break-words whitespace-pre-wrap text-ink">
+              <pre className="max-h-96 min-w-0 overflow-auto bg-sunk p-3 font-sans text-body break-words whitespace-pre-wrap text-ink">
                 {workspace.notes.body}
               </pre>
             )}
