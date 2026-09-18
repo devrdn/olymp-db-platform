@@ -76,7 +76,7 @@ export function ParticipantsTable({
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
-        <div className="flex min-w-0 flex-1 basis-48 flex-col gap-1.5">
+        <div className="flex min-w-0 grow basis-48 flex-col gap-1.5">
           <label htmlFor={`${ids}-search`} className="font-mono text-label text-ink-3 uppercase">
             {t.table.filters.search}
           </label>
@@ -89,7 +89,7 @@ export function ParticipantsTable({
             className={cn(CONTROL, "w-full min-w-0 placeholder:text-ink-3")}
           />
         </div>
-        <div className="flex min-w-0 basis-40 flex-col gap-1.5 max-narrow:flex-1">
+        <div className="flex min-w-0 grow basis-40 flex-col gap-1.5">
           <label htmlFor={`${ids}-status`} className="font-mono text-label text-ink-3 uppercase">
             {t.table.filters.status}
           </label>
@@ -116,10 +116,17 @@ export function ParticipantsTable({
         </label>
       </div>
 
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="font-mono text-data text-ink-3">
           {t.table.count.replace("{shown}", String(shown.length)).replace("{total}", String(rows.length))}
         </p>
+        {/* Above the table rather than in the flags heading: the heading
+            sits inside the table's own scroll box, which would clip the
+            explanation at its edge. */}
+        <span className="inline-flex items-center gap-1 text-small text-ink-3">
+          <span aria-hidden>{t.flags.help}</span>
+          <FlagsHelp t={t} />
+        </span>
         {truncated ? (
           <p className="text-small text-warn">{t.table.truncated.replace("{n}", String(rows.length))}</p>
         ) : null}
@@ -153,7 +160,7 @@ export function ParticipantsTable({
                         index === 0 && "left-0 z-2",
                       )}
                     >
-                      <span className={cn("inline-flex items-center gap-1", numeric && key !== "flags" && "justify-end")}>
+                      <span className={cn("inline-flex items-center", numeric && key !== "flags" && "justify-end")}>
                         <button
                           type="button"
                           onClick={() => sortBy(key, numeric)}
@@ -167,7 +174,6 @@ export function ParticipantsTable({
                           {label(key)}
                           {sorted ? <span aria-hidden>{order.dir === "asc" ? " ↑" : " ↓"}</span> : null}
                         </button>
-                        {key === "flags" ? <FlagsHelp t={t} /> : null}
                       </span>
                     </th>
                   );

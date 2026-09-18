@@ -341,10 +341,9 @@ const FeedLine = memo(function FeedLine({
       aria-setsize={total}
       aria-posinset={index + 1}
       data-quiet={quiet || undefined}
-      className={cn(
-        "absolute inset-x-0 flex flex-col justify-center gap-0.5 overflow-hidden border-b border-line px-3",
-        quiet && "opacity-70",
-      )}
+      // Quiet lines are muted by their text colour alone, never by opacity:
+      // the muted ink is the quietest the contrast check still passes.
+      className="absolute inset-x-0 flex flex-col justify-center gap-0.5 overflow-hidden border-b border-line px-3"
       style={{ top: `${index * FEED_ROW_REM}rem`, height: `${FEED_ROW_REM}rem` }}
     >
       <div className="flex min-w-0 items-baseline gap-2">
