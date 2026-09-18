@@ -361,8 +361,13 @@ func (q explainingQuerier) explain(ctx context.Context, sql string, args ...any)
 	}
 	var walk func(n planNode)
 	walk = func(n planNode) {
-		if n.NodeType == "Seq Scan" && journals[n.Relation] {
-			*q.scans = append(*q.scans, n.Relation+" in:\n"+sql+"\nplan: "+string(raw))
+		// A journal is read only through an index, and only as a range of
+		// it: an index scan without a condition walks the whole index.
+		if journals[n.Relation] && !rangeReads[n.NodeType] {
+			*q.scans = append(*q.scans, n.NodeType+" of "+n.Relation+" in:\n"+sql+"\nplan: "+string(raw))
+		}
+		if journalIndex(n.Index) && n.IndexCond == "" {
+			*q.scans = append(*q.scans, n.NodeType+" of "+n.Index+" without a condition in:\n"+sql+"\nplan: "+string(raw))
 		}
 		for _, child := range n.Plans {
 			walk(child)
@@ -373,10 +378,25 @@ func (q explainingQuerier) explain(ctx context.Context, sql string, args ...any)
 	}
 }
 
+// rangeReads are the plan nodes that read a table through an index.
+var rangeReads = map[string]bool{"Index Scan": true, "Index Only Scan": true, "Bitmap Heap Scan": true}
+
+// journalIndex reports whether an index is one of a journal's.
+func journalIndex(name string) bool {
+	for table := range journals {
+		if strings.HasPrefix(name, table+"_") {
+			return true
+		}
+	}
+	return false
+}
+
 type planNode struct {
-	NodeType string     `json:"Node Type"`
-	Relation string     `json:"Relation Name"`
-	Plans    []planNode `json:"Plans"`
+	NodeType  string     `json:"Node Type"`
+	Relation  string     `json:"Relation Name"`
+	Index     string     `json:"Index Name"`
+	IndexCond string     `json:"Index Cond"`
+	Plans     []planNode `json:"Plans"`
 }
 
 func (q explainingQuerier) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
@@ -393,8 +413,10 @@ func (q explainingQuerier) QueryRow(ctx context.Context, sql string, args ...any
 // holding a representative olympiad — three contests of forty participants,
 // each with a few hundred queries, events, answers and sign-ins, beside
 // everything else the test database holds — and EXPLAINs each statement
-// exactly as the read sends it: none may plan a sequential scan of
-// query_log, participant_events, submissions or audit_log (design §9).
+// exactly as the read sends it: every node that reads query_log,
+// participant_events, submissions or audit_log must be an index scan with an
+// index condition — a range — never a sequential scan or a walk of a whole
+// index (design §9).
 //
 // The planner is left free, not forced off sequential scans: with the
 // statistics ANALYZE gathers on this data, a plan that falls back to a scan
