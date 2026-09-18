@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,6 +46,15 @@ func newContestFixture(t *testing.T, permissions ...string) *contestFixture {
 // reports the difference needs a test that can make it.
 func newContestFixtureDenying(t *testing.T, denied string, permissions ...string) *contestFixture {
 	t.Helper()
+	return newContestFixtureAuthz(t, func(inner auth.Authorizer) auth.Authorizer {
+		return denying{inner: inner, denied: denied}
+	}, permissions...)
+}
+
+// newContestFixtureAuthz is newContestFixture with the real authoriser
+// wrapped by wrap.
+func newContestFixtureAuthz(t *testing.T, wrap func(auth.Authorizer) auth.Authorizer, permissions ...string) *contestFixture {
+	t.Helper()
 
 	stores := conteststest.NewFixture()
 	stores.Users.GrantRole("staff", permissions...)
@@ -64,7 +74,7 @@ func newContestFixtureDenying(t *testing.T, denied string, permissions ...string
 
 	mw := auth.NewMiddleware(auth.MiddlewareConfig{
 		Sessions: sessions, Users: stores.Users,
-		Authorizer: denying{inner: rbac.New(contestRoles{stores}), denied: denied},
+		Authorizer: wrap(rbac.New(contestRoles{stores})),
 		Cookies:    auth.NewCookieWriter(false), Logger: log,
 	})
 
@@ -92,6 +102,19 @@ func (d denying) Authorize(ctx context.Context, id rbac.Identity, permission str
 		return rbac.ErrForbidden
 	}
 	return d.inner.Authorize(ctx, id, permission, contestID)
+}
+
+// failing cannot decide one permission: the role lookup behind it failed.
+type failing struct {
+	inner      auth.Authorizer
+	permission string
+}
+
+func (f failing) Authorize(ctx context.Context, id rbac.Identity, permission string, contestID uuid.UUID) error {
+	if permission == f.permission {
+		return errors.New("role lookup failed")
+	}
+	return f.inner.Authorize(ctx, id, permission, contestID)
 }
 
 // contestRoles resolves a contest role out of the in-memory staff store, so
@@ -247,6 +270,24 @@ func TestReadingAContestSaysWhetherTheViewerMayMonitorIt(t *testing.T) {
 
 		if got := decode(t, rec)["may_monitor"]; got != true {
 			t.Errorf("may_monitor = %v, want true", got)
+		}
+	})
+
+	// The field decides one tab; a failure to decide it must not cost the
+	// whole contest page.
+	t.Run("a decision that could not be made is a no, not a 500", func(t *testing.T) {
+		f := newContestFixtureAuthz(t, func(inner auth.Authorizer) auth.Authorizer {
+			return failing{inner: inner, permission: rbac.PermissionContestMonitor}
+		})
+		c := f.ownedContest(t, contests.StatusDraft)
+
+		rec := f.do(http.MethodGet, "/contests/"+c.ID.String(), "")
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+		}
+		if got, ok := decode(t, rec)["may_monitor"]; !ok || got != false {
+			t.Errorf("may_monitor = %v (present %v), want false", got, ok)
 		}
 	})
 
