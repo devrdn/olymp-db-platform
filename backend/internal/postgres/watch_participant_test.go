@@ -65,8 +65,26 @@ func TestWatchQueriesPagesFiltersAndSearches(t *testing.T) {
 			newest.DurationMs == nil || *newest.DurationMs != 7 {
 			t.Errorf("the newest query is not whole: %+v", newest.QueryData)
 		}
-		if all.Items[2].Error != "boom" || all.Items[3].IP != "192.0.2.1" {
+		if all.Items[2].Error != "ERROR: boom (SQLSTATE 42703)" || all.Items[3].IP != "192.0.2.1" {
 			t.Errorf("error or address missing: %+v / %+v", all.Items[2].QueryData, all.Items[3].QueryData)
+		}
+
+		// A failure of ours, not of their SQL, names the cluster; staff do
+		// not see it.
+		infra := f.query(neighbour, "select 6", "error", "", f.at(6*time.Minute))
+		f.exec(`UPDATE query_log SET error_text = 'failed to connect to host=10.0.0.5 user=game_p1 database=game_c1' WHERE id = $1`, infra)
+		neighbours, err := watch.Queries(ctx, monitor.QueriesQuery{Contest: f.contest, Registration: neighbour, Status: "error"})
+		if err != nil || len(neighbours.Items) != 1 || neighbours.Items[0].Error != "" {
+			t.Errorf("an infrastructure error reached the organiser: %+v, %v", neighbours.Items, err)
+		}
+		feed, err := watch.Feed(ctx, monitor.FeedQuery{Contest: f.contest, Registration: neighbour, Kinds: []string{monitor.FeedKindQuery}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range feed.Items {
+			if item.Data.(monitor.QueryData).Error != "" {
+				t.Errorf("the feed shows an infrastructure error: %+v", item.Data)
+			}
 		}
 
 		// Two by two, newest first, without a gap or a repeat.

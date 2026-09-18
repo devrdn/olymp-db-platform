@@ -76,7 +76,7 @@ func (f *watchFixture) query(reg uuid.UUID, sql, status, ip string, at time.Time
 		INSERT INTO query_log (registration_id, request_id, sql_text, status, ip, sql_fingerprint,
 		                       duration_ms, row_count, executed_at, completed_at, error_text)
 		VALUES ($1, gen_random_uuid(), $2, $3, $4::inet, $5, 7, 3, $6, $6,
-		        CASE WHEN $3 IN ('error', 'rejected') THEN 'boom' END)
+		        CASE $3 WHEN 'error' THEN 'ERROR: boom (SQLSTATE 42703)' WHEN 'rejected' THEN 'boom' END)
 		RETURNING id`,
 		reg, sql, status, address, monitor.Fingerprint(sql), at).Scan(&id); err != nil {
 		f.t.Fatalf("journal a query: %v", err)
