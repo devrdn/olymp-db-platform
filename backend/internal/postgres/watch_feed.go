@@ -318,6 +318,12 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 	scope := registrationScope(&a, q)
 	bounds, dir := feedBounds(&a, q, monitor.SourceAudit, "a.created_at", "a.id", "bigint")
 	limit := a.add(q.Limit + 1)
+	// A participant's own sign-ins, sign-outs and failed sign-ins count from
+	// their registration to monitor.SignInGrace past their finish, or the
+	// contest's end; with neither known, up to now.
+	until := ` AND (COALESCE(r.finished_at, c.ends_at) IS NULL
+		      OR a.created_at < COALESCE(r.finished_at, c.ends_at) + make_interval(secs => ` +
+		a.add(monitor.SignInGrace.Seconds()) + `))`
 	// Each branch is its own index range with its own LIMIT, and the union
 	// is cut once more.
 	var branches []string
@@ -332,10 +338,11 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 		branches = append(branches, `
 		SELECT a.id, r.id AS registration_id, a.created_at, a.action, host(a.ip), a.user_agent, a.payload
 		FROM registrations r
+		JOIN contests c ON c.id = r.contest_id
 		CROSS JOIN LATERAL (
 		    SELECT a.* FROM audit_log a
 		    WHERE a.actor_id = r.user_id AND a.action = ANY(`+a.add(sessionActions)+`::text[])
-		      AND a.created_at >= r.created_at`+bounds+`
+		      AND a.created_at >= r.created_at`+until+bounds+`
 		    ORDER BY a.created_at `+dir+`, a.id `+dir+`
 		    LIMIT `+limit+`
 		) a
@@ -345,12 +352,13 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 		branches = append(branches, `
 		SELECT a.id, r.id AS registration_id, a.created_at, a.action, host(a.ip), a.user_agent, a.payload
 		FROM registrations r
+		JOIN contests c ON c.id = r.contest_id
 		JOIN users u ON u.id = r.user_id
 		CROSS JOIN LATERAL (
 		    SELECT a.* FROM audit_log a
 		    WHERE a.action = '`+audit.ActionAuthLoginFailed+`'
 		      AND lower(a.payload->>'login') = lower(u.login)
-		      AND a.created_at >= r.created_at`+bounds+`
+		      AND a.created_at >= r.created_at`+until+bounds+`
 		    ORDER BY a.created_at `+dir+`, a.id `+dir+`
 		    LIMIT `+limit+`
 		) a
