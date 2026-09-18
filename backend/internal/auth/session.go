@@ -202,6 +202,67 @@ func (s *SessionStore) Get(ctx context.Context, token string) (Session, error) {
 	return session, nil
 }
 
+// SessionAlive reports whether the session whose digest is tracked could
+// still be in use beside the session whose digest is current: its record is
+// there, within its maximum lifetime, and not retired by a newer sign-in of
+// the same account. It answers the monitoring trail (monitor.Tracker), which
+// names sessions by the same digest this store keys them by and asks only
+// when a registration's requests switch sessions — so a participant who
+// signed out and back in, or whose session ended, is not reported as using a
+// second device.
+//
+// A digest is not a credential and cannot authenticate anything; a value
+// that is not one names no session. Retirement is judged from the two
+// records alone: a session of the same account with a newer generation means
+// "sign out everywhere" or a password change retired the older one. Blocking
+// an account is not seen here, and does not need to be: a blocked account
+// makes no second request.
+func (s *SessionStore) SessionAlive(ctx context.Context, tracked, current string) (bool, error) {
+	if !isDigest(tracked) {
+		return false, nil
+	}
+	old, found, err := s.byDigest(ctx, tracked)
+	if err != nil || !found {
+		return false, err
+	}
+	if s.remaining(old, time.Now()) <= 0 {
+		return false, nil
+	}
+	if isDigest(current) {
+		now, found, err := s.byDigest(ctx, current)
+		if err != nil {
+			return false, err
+		}
+		if found && now.UserID == old.UserID && now.Generation > old.Generation {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// byDigest reads a session record by the digest of its token.
+func (s *SessionStore) byDigest(ctx context.Context, digest string) (Session, bool, error) {
+	raw, found, err := s.cache.Get(ctx, sessionKeyPrefix+digest)
+	if err != nil || !found {
+		return Session{}, false, err
+	}
+	var session Session
+	if err := json.Unmarshal(raw, &session); err != nil {
+		return Session{}, false, fmt.Errorf("decode session: %w", err)
+	}
+	return session, true, nil
+}
+
+// isDigest reports whether value is a token digest as sessionKey writes it:
+// 64 lower-case hexadecimal characters.
+func isDigest(value string) bool {
+	if len(value) != 2*sha256.Size {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil && strings.ToLower(value) == value
+}
+
 // remaining is how long the session has left before its maximum lifetime.
 func (s *SessionStore) remaining(session Session, now time.Time) time.Duration {
 	if session.IssuedAt.IsZero() {
