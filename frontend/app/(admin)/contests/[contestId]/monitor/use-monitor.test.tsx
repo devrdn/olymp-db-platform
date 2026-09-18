@@ -4,15 +4,17 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ApiError } from "@/lib/api/client";
 import type { FeedItem, FeedPage, Roster } from "@/lib/api/monitor";
 
-const { fetchRoster, fetchFeed, refresh } = vi.hoisted(() => ({
+const { fetchRoster, fetchFeed, fetchTimeline, refresh } = vi.hoisted(() => ({
   fetchRoster: vi.fn(),
   fetchFeed: vi.fn(),
+  fetchTimeline: vi.fn(),
   refresh: vi.fn(),
 }));
 vi.mock("@/lib/api/monitor", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/monitor")>()),
   fetchRoster,
   fetchFeed,
+  fetchTimeline,
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 
@@ -43,6 +45,7 @@ beforeEach(() => {
   setVisibility("visible");
   fetchRoster.mockImplementation(async () => ({ ...roster, rows: [rosterRow("a"), rosterRow("b")] }));
   fetchFeed.mockImplementation(async () => page([]));
+  fetchTimeline.mockImplementation(async () => page([]));
 });
 
 afterEach(() => {
@@ -364,4 +367,100 @@ test("abandons reads still in flight when the screen goes away", async () => {
 
   unmount();
   expect(signal?.aborted).toBe(true);
+});
+
+/**
+ * The same live state for one participant's page: the timeline instead of
+ * the contest's feed, no table, and a time range beside the kinds.
+ */
+describe("one participant's timeline", () => {
+  const REG = "9a1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6";
+
+  function mountOne(initial: FeedPage = page([feedItem("c1")]), kinds?: string[]) {
+    return renderHook(() => useMonitor({ contestId: CONTEST, participant: REG, feed: initial, kinds }));
+  }
+
+  test("polls the timeline after the newest item, and never the table or the contest's feed", async () => {
+    const { result } = mountOne();
+
+    await act(() => vi.advanceTimersByTimeAsync(MONITOR_POLL_MS));
+    expect(fetchTimeline).toHaveBeenCalledWith(CONTEST, REG, expect.objectContaining({ after: "c1" }), expect.anything());
+    expect(fetchRoster).not.toHaveBeenCalled();
+    expect(fetchFeed).not.toHaveBeenCalled();
+    expect(result.current.rows).toEqual([]);
+  });
+
+  test("stops while the tab is hidden", async () => {
+    mountOne();
+    await act(async () => setVisibility("hidden"));
+    await act(() => vi.advanceTimersByTimeAsync(MONITOR_POLL_MS * 6));
+    expect(fetchTimeline).not.toHaveBeenCalled();
+
+    await act(async () => setVisibility("visible"));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(fetchTimeline).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps the kinds it was opened with", async () => {
+    mountOne(page([feedItem("c1")]), ["sign_in", "ip_changed"]);
+
+    await act(() => vi.advanceTimersByTimeAsync(MONITOR_POLL_MS));
+    expect(fetchTimeline).toHaveBeenCalledWith(
+      CONTEST,
+      REG,
+      expect.objectContaining({ after: "c1", kinds: ["sign_in", "ip_changed"] }),
+      expect.anything(),
+    );
+  });
+
+  test("a time range reads that stretch afresh, and every later read keeps it", async () => {
+    const from = "2026-09-20T09:00:00.000Z";
+    const until = "2026-09-20T10:00:00.000Z";
+    fetchTimeline.mockResolvedValueOnce(page([feedItem("r1")], true));
+    const { result } = mountOne();
+
+    await act(() => result.current.setRange({ from, until }));
+    expect(fetchTimeline).toHaveBeenLastCalledWith(CONTEST, REG, { kinds: [], from, until, limit: 200 }, expect.anything());
+    expect(result.current.range).toEqual({ from, until });
+    expect(result.current.feed.items.map((i) => i.cursor)).toEqual(["r1"]);
+
+    await act(() => result.current.loadOlder());
+    expect(fetchTimeline).toHaveBeenLastCalledWith(
+      CONTEST,
+      REG,
+      { before: "r1", kinds: [], from, until, limit: 200 },
+      expect.anything(),
+    );
+
+    await act(() => vi.advanceTimersByTimeAsync(MONITOR_POLL_MS));
+    expect(fetchTimeline).toHaveBeenLastCalledWith(
+      CONTEST,
+      REG,
+      expect.objectContaining({ after: "r1", from, until }),
+      expect.anything(),
+    );
+  });
+
+  test("refreshes a running query through the timeline", async () => {
+    const at = "2026-09-20T10:00:01.100Z";
+    const runningItem = feedItem("c2", { registrationId: REG, at });
+    const running: FeedItem = {
+      ...runningItem,
+      detail: { ...(runningItem.detail as Extract<FeedItem["detail"], { type: "query" }>), status: "running" },
+    };
+    const done = feedItem("c2", { registrationId: REG, at });
+    fetchTimeline.mockImplementation(async (_contest: string, _reg: string, params: { from?: string }) =>
+      params.from ? page([done]) : page([]),
+    );
+    const { result } = mountOne(page([running]));
+
+    await act(() => vi.advanceTimersByTimeAsync(MONITOR_POLL_MS));
+    expect(fetchTimeline).toHaveBeenCalledWith(
+      CONTEST,
+      REG,
+      expect.objectContaining({ kinds: ["query"], from: at, until: "2026-09-20T10:00:01.101Z" }),
+      expect.anything(),
+    );
+    expect(result.current.feed.items[0]).toBe(done);
+  });
 });
