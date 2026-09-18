@@ -12,6 +12,7 @@ import (
 
 // fakeWatchStore counts the computations and can hold them until released.
 type fakeWatchStore struct {
+	WatchStore
 	rosters atomic.Int32
 	hold    chan struct{}
 }

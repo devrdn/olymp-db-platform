@@ -346,6 +346,26 @@
       "meaning": "The path exists but not for this HTTP method."
     },
     {
+      "code": "monitor_invalid_cursor",
+      "meaning": "The cursor is not one this service issued. Start again from the newest page."
+    },
+    {
+      "code": "monitor_invalid_filter",
+      "meaning": "A monitoring filter is not acceptable: an unknown event kind or query status, a search longer than 200 characters, a time that is not RFC 3339, a range that ends before it starts, or after and before together. The message names which."
+    },
+    {
+      "code": "monitor_participant_not_found",
+      "meaning": "No such participant in this contest. The same answer whether the registration does not exist or belongs to another contest."
+    },
+    {
+      "code": "monitor_revision_not_found",
+      "meaning": "No such revision of this participant's notes or SQL tabs."
+    },
+    {
+      "code": "monitor_too_often",
+      "meaning": "This account has made more monitoring reads this minute than the installation allows, refused reads included. Wait `Retry-After` seconds and ask again."
+    },
+    {
       "code": "no_game_yet",
       "meaning": "The contest's game database has not been built. Nobody's mistake and nothing to do with the query."
     },
