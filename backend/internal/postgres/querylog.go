@@ -57,8 +57,8 @@ func (l *QueryLog) querier(ctx context.Context) storage.Querier {
 // exactly the queries worth knowing about.
 //
 // The same insert records where the query came from and its fingerprint
-// (monitor.Fingerprint), so watching a participant costs the console no
-// second write. An address that could not be worked out is stored as NULL.
+// (monitor.ComparableFingerprint: none for a statement too short to compare),
+// so watching a participant costs the console no second write. An address that could not be worked out is stored as NULL.
 func (l *QueryLog) Begin(ctx context.Context, entry queryrunner.Entry) (int64, error) {
 	var address *netip.Addr
 	if entry.Address.IsValid() {
@@ -69,7 +69,7 @@ func (l *QueryLog) Begin(ctx context.Context, entry queryrunner.Entry) (int64, e
 		INSERT INTO query_log (registration_id, request_id, sql_text, status, ip, sql_fingerprint)
 		VALUES ($1, $2, $3, 'running', $4, $5)
 		RETURNING id`,
-		entry.Registration, entry.RequestID, entry.SQL, address, monitor.Fingerprint(entry.SQL)).Scan(&id)
+		entry.Registration, entry.RequestID, entry.SQL, address, monitor.ComparableFingerprint(entry.SQL)).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("open a query log row: %w", err)
 	}
