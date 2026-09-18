@@ -103,7 +103,8 @@ func (m *Monitor) InsertEvents(ctx context.Context, events []monitor.Event) erro
 //   - a body equal to the latest revision's writes nothing;
 //   - a save while the latest revision is younger than monitor.RevisionWindow
 //     (monitor.Extends) rewrites that revision in place — its body, its title
-//     and its updated_at;
+//     and its updated_at, which only ever moves forward, so a clock that
+//     stepped back never leaves it before started_at;
 //   - anything else starts a new revision.
 //
 // The latest revision is read FOR UPDATE, so two saves of the same document
@@ -121,30 +122,33 @@ func (m *Monitor) RecordRevision(ctx context.Context, revision monitor.Revision)
 	return m.uow.Do(ctx, func(ctx context.Context) error {
 		querier := m.querier(ctx)
 
+		// The comparison is made by the database: the body is up to 64 KiB
+		// and autosave may ask forty times a minute, so reading it back only
+		// to compare would move every byte twice for a yes or a no.
 		var (
 			latest    int64
-			body      string
+			unchanged bool
 			startedAt time.Time
 		)
 		err := querier.QueryRow(ctx, `
-			SELECT id, body, started_at
+			SELECT id, body = $3, started_at
 			FROM workspace_revisions
 			WHERE registration_id = $1 AND document = $2
 			ORDER BY id DESC
 			LIMIT 1
 			FOR UPDATE`,
-			revision.Registration, revision.Document).Scan(&latest, &body, &startedAt)
+			revision.Registration, revision.Document, revision.Body).Scan(&latest, &unchanged, &startedAt)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
 			return m.insertRevision(ctx, querier, revision)
 		case err != nil:
 			return fmt.Errorf("read the latest revision of %s: %w", revision.Document, err)
-		case body == revision.Body:
+		case unchanged:
 			return nil
 		case monitor.Extends(startedAt, revision.At):
 			if _, err := querier.Exec(ctx, `
 				UPDATE workspace_revisions
-				SET body = $2, title = nullif($3, ''), updated_at = $4
+				SET body = $2, title = nullif($3, ''), updated_at = greatest(updated_at, $4)
 				WHERE id = $1`,
 				latest, revision.Body, revision.Title, revision.At); err != nil {
 				return fmt.Errorf("extend revision %d: %w", latest, err)
