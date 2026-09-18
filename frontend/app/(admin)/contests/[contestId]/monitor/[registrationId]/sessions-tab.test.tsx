@@ -84,6 +84,14 @@ describe("the sign-ins and networks tab", () => {
     expect(rows[3]).toHaveTextContent("Firefox 130");
   });
 
+  /** Up to a thousand rows: the browser skips laying out and painting those out of view. */
+  test("lets the browser skip rows out of view", () => {
+    renderTab();
+    for (const row of within(screen.getByRole("table")).getAllByRole("row").slice(1)) {
+      expect(row.className).toContain("[content-visibility:auto]");
+    }
+  });
+
   test("names every address seen, once", () => {
     renderTab();
     const addresses = screen.getByRole("list", { name: t().addresses });

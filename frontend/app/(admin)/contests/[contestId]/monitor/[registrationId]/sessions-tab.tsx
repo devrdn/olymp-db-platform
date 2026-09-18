@@ -129,7 +129,9 @@ const SessionRow = memo(function SessionRow({ item, t, locale }: { item: FeedIte
   const warn = item.kind === "sign_in_failed" || item.kind === "parallel_session" || item.kind === "ip_changed";
 
   return (
-    <tr>
+    // Up to a thousand rows (the feed's bound): the browser skips laying out
+    // and painting those out of view, as the queries list does.
+    <tr className="[contain-intrinsic-size:auto_2.5rem] [content-visibility:auto]">
       <td className={cn(CELL, "font-mono text-label whitespace-nowrap text-ink-2 tabular-nums")}>
         <time dateTime={item.at}>{formatMoment(item.at, { locale })}</time>
       </td>
