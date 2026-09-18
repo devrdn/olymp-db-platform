@@ -345,7 +345,18 @@ type explainingQuerier struct {
 	storage.Querier
 	t     *testing.T
 	scans *[]string
+	// ordered, when it points at true, also refuses a sort over the query
+	// log: a keyset page must come out of its index in order, or every page
+	// sorts the rest of the registration's range again.
+	ordered *bool
 }
+
+// keysetJournals are the journals whose keyset pages must be ordered index
+// scans. The query log is the one a participant fills by the thousand; the
+// answers of one registration are bounded by questions times attempts, a
+// page or two, which a bitmap scan and a sort read whole at no cost that
+// grows (and the export test counts their rows all the same).
+var keysetJournals = map[string]bool{"query_log": true}
 
 func (q explainingQuerier) explain(ctx context.Context, sql string, args ...any) {
 	q.t.Helper()
@@ -368,6 +379,13 @@ func (q explainingQuerier) explain(ctx context.Context, sql string, args ...any)
 		}
 		if journalIndex(n.Index) && n.IndexCond == "" {
 			*q.scans = append(*q.scans, n.NodeType+" of "+n.Index+" without a condition in:\n"+sql+"\nplan: "+string(raw))
+		}
+		if q.ordered != nil && *q.ordered && (n.NodeType == "Sort" || n.NodeType == "Incremental Sort") {
+			for _, child := range n.Plans {
+				if keysetJournals[child.Relation] {
+					*q.scans = append(*q.scans, n.NodeType+" over "+child.Relation+" in:\n"+sql+"\nplan: "+string(raw))
+				}
+			}
 		}
 		for _, child := range n.Plans {
 			walk(child)
@@ -448,10 +466,19 @@ func TestWatchReadsScanNoJournal(t *testing.T) {
 			t.Fatal(err)
 		}
 		var scans []string
+		ordered := false
 		watch := NewWatch(testPool)
 		watch.wrap = func(inner storage.Querier) storage.Querier {
-			return explainingQuerier{Querier: inner, t: t, scans: &scans}
+			return explainingQuerier{Querier: inner, t: t, scans: &scans, ordered: &ordered}
 		}
+		// The keyset reads: their query log must come out of the index in
+		// order.
+		//
+		// Only where the range is longer than the page: a page that takes a
+		// registration's whole remaining range is rightly a bitmap scan and a
+		// sort, and so is a page filtered so narrowly that the planner
+		// expects to read the range to fill it.
+		keyset := map[string]bool{"export sources": true}
 		middle := monitor.Cursor{At: f.at(20 * time.Minute), Source: monitor.SourceQuery, ID: "1"}
 		reads := map[string]func() error{
 			"roster": func() error { _, err := watch.Roster(ctx, f.contest, monitor.MaxRosterRows); return err },
@@ -479,7 +506,17 @@ func TestWatchReadsScanNoJournal(t *testing.T) {
 					Status: "error", Search: "suspects", Before: &middle})
 				return err
 			},
-			"answers":   func() error { _, err := watch.Answers(ctx, f.contest, reg, monitor.MaxAttemptQueries); return err },
+			"answers": func() error { _, err := watch.Answers(ctx, f.contest, reg, monitor.MaxAttemptQueries); return err },
+			"export sources": func() error {
+				for _, source := range []monitor.Source{monitor.SourceQuery, monitor.SourceAnswer} {
+					start := monitor.Cursor{At: monitor.EarliestCursorTime, Source: monitor.SourceAudit, ID: "0"}
+					if _, err := watch.FeedSource(ctx, monitor.FeedQuery{Contest: f.contest, Registration: reg,
+						After: &start, Until: time.Now(), Limit: 50}, source); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
 			"workspace": func() error { _, err := watch.Workspace(ctx, reg); return err },
 			"revision": func() error {
 				_, err := watch.Revision(ctx, reg, 1)
@@ -490,22 +527,28 @@ func TestWatchReadsScanNoJournal(t *testing.T) {
 			},
 		}
 		for name, read := range reads {
-			scans = scans[:0]
+			scans, ordered = scans[:0], keyset[name]
 			if err := read(); err != nil {
 				t.Fatalf("%s: %v", name, err)
 			}
 			for _, scan := range scans {
-				t.Errorf("%s scans a journal whole: %s", name, scan)
+				t.Errorf("%s reads a journal out of a range or out of order: %s", name, scan)
 			}
 		}
 	})
 }
 
 // loadOlympiad enrols participants in f's contest and gives each three
-// hundred queries, a hundred events, thirty answers, fifty sign-ins, ten
+// hundred queries, a hundred events, sixty answers, fifty sign-ins, ten
 // failed ones and twenty revisions — written in time order across the
 // participants, as a real olympiad interleaves them on disk.
 func loadOlympiad(t *testing.T, f *watchFixture, tag, participants int) {
+	t.Helper()
+	loadOlympiadQueries(t, f, tag, participants, 300)
+}
+
+// loadOlympiadQueries is loadOlympiad with queries queries per participant.
+func loadOlympiadQueries(t *testing.T, f *watchFixture, tag, participants, queries int) {
 	t.Helper()
 	f.exec(`
 		WITH people AS (
@@ -522,9 +565,9 @@ func loadOlympiad(t *testing.T, f *watchFixture, tag, participants int) {
 		       'select * from suspects where id = ' || n || ' and name like ''%' || md5(n::text) || '%''',
 		       (ARRAY['ok','ok','ok','error','rejected'])[1 + n % 5], '192.0.2.1', n % 50,
 		       $2::timestamptz + n * interval '10 seconds'
-		FROM registrations r CROSS JOIN generate_series(1, 300) n
+		FROM registrations r CROSS JOIN generate_series(1, $3::int) n
 		WHERE r.contest_id = $1
-		ORDER BY n, r.id`, f.contest, f.base)
+		ORDER BY n, r.id`, f.contest, f.base, queries)
 	f.exec(`
 		INSERT INTO participant_events (contest_id, registration_id, kind, payload, created_at)
 		SELECT $1, r.id, CASE WHEN n % 2 = 0 THEN 'page_left' ELSE 'paste' END,
@@ -536,8 +579,8 @@ func loadOlympiad(t *testing.T, f *watchFixture, tag, participants int) {
 		ORDER BY n, r.id`, f.contest, f.base)
 	f.exec(`
 		INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct, submitted_at)
-		SELECT r.id, $2, n, 'v', n = 30, $3::timestamptz + n * interval '5 minutes'
-		FROM registrations r CROSS JOIN generate_series(1, 30) n
+		SELECT r.id, $2, n, 'v', n = 60, $3::timestamptz + n * interval '150 seconds'
+		FROM registrations r CROSS JOIN generate_series(1, 60) n
 		WHERE r.contest_id = $1
 		ORDER BY n, r.id`, f.contest, f.question, f.base)
 	f.exec(`

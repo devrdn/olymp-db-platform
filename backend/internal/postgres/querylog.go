@@ -108,10 +108,10 @@ func (l *QueryLog) Complete(ctx context.Context, id int64, outcome queryrunner.O
 // and nothing a caller otherwise controls, the same guarantee Access itself
 // gives the story and the questions endpoints.
 //
-// Backed by query_log_registration_executed_idx (migration 000004), already
-// built for exactly this — its own comment names both this and the admin
-// journal panel that will one day share it — so this endpoint needs no
-// migration of its own (CLAUDE.md rule 7).
+// Backed by query_log_registration_executed_idx (migration 000004, and since
+// 000033 (registration_id, executed_at, id), which this ORDER BY reads
+// backwards exactly), so this endpoint needs no migration of its own
+// (CLAUDE.md rule 7).
 //
 // # Two statements, and why the count is not part of the page
 //
@@ -231,6 +231,13 @@ const (
 // a column bounded only by sqlpolicy.MaxQueryBytes at 64 KiB a row — before
 // the first row could reach the socket.
 //
+// (Migration 000033 has since put the id in that index, replacing it rather
+// than adding one — for the organiser's keyset pages, which read a page at a
+// time and stop at a LIMIT, where an index in (time, id) order is what keeps
+// a page from sorting the rest of the range. What follows was measured
+// before it, and still holds for this read: the ordering below needs no
+// id.)
+//
 // The id is gone rather than added to the index. Adding it was measured too
 // and changes nothing: with (registration_id, executed_at, id) in place the
 // planner still chose `Sort -> Bitmap Heap Scan` at the same 3,615 rows,
@@ -255,7 +262,7 @@ const (
 // query_log_registration_executed_idx`, no sort node at all; with the id
 // tiebreak still in it, the same cursor plans `Incremental Sort` on top. So:
 // no id, and a cursor. Still no migration of its own (CLAUDE.md rule 7) —
-// the index that serves it is migration 000004's, unchanged.
+// the index that serves it is migration 000004's, read by its prefix.
 //
 // Memory is bounded on both sides. PostgreSQL holds one FETCH, this process
 // holds one row: pgx hands the rows of a batch over one at a time and yield
