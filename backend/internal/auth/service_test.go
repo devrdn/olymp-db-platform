@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/platform/password"
@@ -1456,5 +1459,88 @@ func TestOneAddressCannotFillTheQueueForAHashingSlot(t *testing.T) {
 		if err := <-done; !errors.Is(err, ErrInvalidCredentials) {
 			t.Errorf("a waiting attempt = %v, want ErrInvalidCredentials once it got a slot", err)
 		}
+	}
+}
+
+// Signing in again from a browser that is already signed in — opening the
+// sign-in page and submitting it — replaces that browser's session rather
+// than leaving it alive beside the new one.
+func TestLoginEndsTheSessionTheBrowserAlreadyHad(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	first, err := f.service.Login(ctx, loginCmd(testPassword))
+	if err != nil {
+		t.Fatalf("Login() = %v", err)
+	}
+
+	again := loginCmd(testPassword)
+	again.PreviousToken = first.Token
+	second, err := f.service.Login(ctx, again)
+	if err != nil {
+		t.Fatalf("Login() again = %v", err)
+	}
+	if _, err := f.service.Sessions().Get(ctx, first.Token); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("the replaced session still resolves: %v", err)
+	}
+	if _, err := f.service.Sessions().Get(ctx, second.Token); err != nil {
+		t.Fatalf("the new session does not resolve: %v", err)
+	}
+}
+
+// A refused sign-in signs nobody out, and a cookie that names no session is
+// simply ignored.
+func TestLoginKeepsThePreviousSessionUnlessItSucceeds(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	first, err := f.service.Login(ctx, loginCmd(testPassword))
+	if err != nil {
+		t.Fatalf("Login() = %v", err)
+	}
+
+	wrong := loginCmd("not the password")
+	wrong.PreviousToken = first.Token
+	if _, err := f.service.Login(ctx, wrong); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("Login(wrong) = %v, want ErrInvalidCredentials", err)
+	}
+	if _, err := f.service.Sessions().Get(ctx, first.Token); err != nil {
+		t.Fatalf("a refused sign-in ended the session: %v", err)
+	}
+
+	garbled := loginCmd(testPassword)
+	garbled.PreviousToken = "not-a-session"
+	if _, err := f.service.Login(ctx, garbled); err != nil {
+		t.Fatalf("Login() with a stale cookie = %v", err)
+	}
+}
+
+// The monitoring trail sees the replaced session as ended: signing in again
+// from the same browser is not a second device.
+func TestSigningInAgainIsNotAParallelSession(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	trail := cache.NewMemory(100)
+	t.Cleanup(func() { _ = trail.Close() })
+	events := &countingEvents{}
+	tracker := monitor.NewTracker(trail, events, f.service.Sessions(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	visit := monitor.Visit{Contest: uuid.New(), Registration: uuid.New(), Address: netip.MustParseAddr("10.0.0.1")}
+
+	first, err := f.service.Login(ctx, loginCmd(testPassword))
+	if err != nil {
+		t.Fatalf("Login() = %v", err)
+	}
+	visit.Session = monitor.SessionTag(first.Token)
+	tracker.Observe(ctx, visit)
+
+	again := loginCmd(testPassword)
+	again.PreviousToken = first.Token
+	second, err := f.service.Login(ctx, again)
+	if err != nil {
+		t.Fatalf("Login() again = %v", err)
+	}
+	visit.Session = monitor.SessionTag(second.Token)
+	tracker.Observe(ctx, visit)
+
+	if events.count != 0 {
+		t.Fatalf("signing in again wrote %d events, want none", events.count)
 	}
 }
