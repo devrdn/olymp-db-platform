@@ -127,12 +127,12 @@ func (w *Watch) Answers(ctx context.Context, contest, registration uuid.UUID, pe
 		CROSS JOIN LATERAL (
 		    SELECT count(*) AS total FROM query_log q
 		    WHERE q.registration_id = $1 AND q.executed_at < a.submitted_at
-		      AND (a.previous IS NULL OR q.executed_at >= a.previous)
+		      AND q.executed_at >= COALESCE(a.previous, '-infinity')
 		) n
 		LEFT JOIN LATERAL (
 		    SELECT q.* FROM query_log q
 		    WHERE q.registration_id = $1 AND q.executed_at < a.submitted_at
-		      AND (a.previous IS NULL OR q.executed_at >= a.previous)
+		      AND q.executed_at >= COALESCE(a.previous, '-infinity')
 		    ORDER BY q.executed_at, q.id
 		    LIMIT $4
 		) q ON true
