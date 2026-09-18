@@ -941,6 +941,7 @@ const ro = {
         retry: "Încearcă din nou",
       },
       finishedTag: "încheiată",
+      observed: "Organizatorul vede interogările, răspunsurile, notițele și acțiunile dvs. pe această pagină.",
       clock: {
         waiting: "Nu a început încă",
         notStarted: "Cronometrul pornește imediat ce olimpiada se deschide pentru dumneavoastră",
@@ -1070,6 +1071,7 @@ const ro = {
             closed: "Olimpiada s-a încheiat, așa că notițele nu se mai salvează. Ultimul text scris rămâne în acest browser.",
           },
           limitReached: "Notițele au atins limita de 20.000 de caractere.",
+          observed: "Organizatorul vă poate vedea notițele.",
         },
         log: {
           empty: "Nu ați executat încă nicio interogare.",

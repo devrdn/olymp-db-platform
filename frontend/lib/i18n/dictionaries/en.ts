@@ -1012,6 +1012,7 @@ const en = {
         retry: "Try again",
       },
       finishedTag: "finished",
+      observed: "The organiser sees your queries, answers, notes and actions on this page.",
       clock: {
         waiting: "Not started yet",
         notStarted: "Your countdown starts as soon as the contest opens for you",
@@ -1182,6 +1183,7 @@ const en = {
             closed: "The contest is over, so your notes are no longer saved. What you typed last is kept in this browser.",
           },
           limitReached: "Your notes have reached the 20,000-character limit.",
+          observed: "The organiser can see your notes.",
         },
         log: {
           empty: "You have not run a query yet.",

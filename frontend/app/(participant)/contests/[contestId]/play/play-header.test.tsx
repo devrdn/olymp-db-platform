@@ -53,6 +53,18 @@ describe("PlayHeader", () => {
     expect(title.className).toMatch(/(^|\s)max-narrow:whitespace-normal(\s|$)/);
   });
 
+  // Design §8: the participant is told, on the screen itself, that the
+  // organiser sees what they do here.
+  test("says under the title that the organiser sees this page", () => {
+    events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "running" };
+    render(<PlayHeader contestId="c1" title="The Greenhouse Case" waitingForStart={false} dict={en} />);
+
+    expect(en.participant.play.observed).toBe(
+      "The organiser sees your queries, answers, notes and actions on this page.",
+    );
+    expect(screen.getByText(en.participant.play.observed)).toBeInTheDocument();
+  });
+
   test("shows a waiting clock before the contest has started", () => {
     events.current = { offsetRef: { current: 0 }, deadlineRef: { current: null }, phase: "waiting" };
     render(<PlayHeader contestId="c1" title="X" waitingForStart dict={en} />);
