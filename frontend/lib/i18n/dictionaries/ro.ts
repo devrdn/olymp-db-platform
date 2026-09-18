@@ -218,7 +218,7 @@ const ro = {
         start: "Acesta este începutul.",
         newItems: "{n} noi",
         toLatest: "Înapoi la cele mai noi",
-        gap: "Cât timp pagina nu a fost urmărită au sosit {n}+ evenimente, sărite în loc să fie citite. Tabelul le numără pe toate; pagina fiecărui participant și CSV-ul le conțin.",
+        gap: "Cât timp pagina nu a fost urmărită, cel puțin {n} evenimente nu au fost păstrate. Tabelul le numără pe toate; pagina fiecărui participant și CSV-ul le conțin.",
         kind: {
           query: "interogare",
           answer: "răspuns",

@@ -103,6 +103,15 @@ describe("loading older items", () => {
   });
 
   /**
+   * The notice about a skipped backlog stops being true once the organiser
+   * reads back into it.
+   */
+  test("clears the note about skipped items once older ones are read", () => {
+    const first = initialFeed(page(items(5, 6), true), 1200);
+    expect(prependOlder(first, page(items(3, 4), true)).gap).toBe(0);
+  });
+
+  /**
    * Scrolling back past the bound drops the newest end instead. The list is
    * then no longer the live tail, so new items are counted rather than added
    * until the organiser jumps back to the latest.
