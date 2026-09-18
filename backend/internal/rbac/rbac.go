@@ -35,7 +35,9 @@ const (
 	// participants did: their queries, answers, notes, tabs and the signals
 	// their browsers and sessions left. Granted wherever contest.view is — by
 	// migration 000033 to the global roles, and through managerPermissions
-	// below to a contest's owner and managers.
+	// below to a contest's owner and managers. It is only ever checked with a
+	// contest id: the global grant to organizers must never gate an
+	// installation-wide view of every contest's participants.
 	PermissionContestMonitor = "contest.monitor"
 
 	// PermissionContestAdminAll lifts the contest scope: its holder acts on
