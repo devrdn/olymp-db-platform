@@ -11,19 +11,28 @@
 -- registrations. Every payload field is bounded by internal/monitor before it
 -- reaches this table; client_at is only what a browser claimed and is set for
 -- browser signals alone.
+--
+-- The contest is named twice, directly and through the registration, and the
+-- composite foreign key holds the two to agree (registrations_id_contest_key,
+-- migration 000012): a caller's mix-up can never file one participant's
+-- pastes and addresses in another contest's feed. The same key carries the
+-- cascade from registrations, and through them from contests.
 CREATE TABLE participant_events (
     id              bigserial PRIMARY KEY,
-    contest_id      uuid NOT NULL REFERENCES contests ON DELETE CASCADE,
-    registration_id uuid NOT NULL REFERENCES registrations ON DELETE CASCADE,
+    contest_id      uuid NOT NULL,
+    registration_id uuid NOT NULL,
     kind            text NOT NULL,
     payload         jsonb NOT NULL DEFAULT '{}',
     client_at       timestamptz,
-    created_at      timestamptz NOT NULL DEFAULT now()
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT participant_events_registration_contest_fkey
+        FOREIGN KEY (registration_id, contest_id)
+        REFERENCES registrations (id, contest_id) ON DELETE CASCADE
 );
 
 -- One participant's timeline, and the cascade from registrations.
 CREATE INDEX participant_events_registration_idx ON participant_events (registration_id, id);
--- The live feed of a whole contest, and the cascade from contests.
+-- The live feed of a whole contest.
 CREATE INDEX participant_events_contest_idx ON participant_events (contest_id, id);
 
 -- The history of a participant's notes and SQL tabs. document is 'notes' or a
