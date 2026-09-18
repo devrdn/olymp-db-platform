@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -367,4 +368,84 @@ func MergeFeed(q FeedQuery, items []FeedItem) FeedPage {
 // encodeRaw encodes an arbitrary cursor text, for tests of ParseCursor.
 func (Cursor) encodeRaw(raw string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// FeedSourceReader reads one source of the feed forwards: the items of that
+// source after q.After, oldest first, at most q.Limit+1 of them, named.
+// Implemented by internal/postgres.Watch.
+type FeedSourceReader interface {
+	FeedSource(ctx context.Context, q FeedQuery, source Source) ([]FeedItem, error)
+}
+
+// StreamFeed hands every item of the feed after q.After (or from the
+// beginning) to yield, oldest first, until the feed ends or yield refuses.
+//
+// A k-way merge: each source is read forwards from its own position, a page
+// at a time in its own index order, and the oldest head among them is handed
+// over next. Every row of every source is read once, so a long export costs
+// what it carries — where paging the merged feed would re-read every
+// source's next page for every page it hands over. What is held in memory is
+// one page per source.
+func StreamFeed(ctx context.Context, r FeedSourceReader, q FeedQuery, yield func(FeedItem) error) error {
+	q, err := q.Normalize()
+	if err != nil {
+		return err
+	}
+	start := Cursor{At: EarliestCursorTime, Source: SourceAudit, ID: "0"}
+	if q.After != nil {
+		start = *q.After
+	}
+	q.Before, q.Limit = nil, MaxFeedPage
+
+	type stream struct {
+		source Source
+		cursor Cursor
+		buf    []FeedItem
+		done   bool
+	}
+	var streams []*stream
+	for source := range sourceCount {
+		if q.Reads(source) {
+			streams = append(streams, &stream{source: source, cursor: start})
+		}
+	}
+	fill := func(s *stream) error {
+		if len(s.buf) > 0 || s.done {
+			return nil
+		}
+		page := q
+		page.After = &s.cursor
+		items, err := r.FeedSource(ctx, page, s.source)
+		if err != nil {
+			return err
+		}
+		kept := items[:0]
+		for _, item := range items {
+			if item.Cursor().Compare(s.cursor) > 0 {
+				kept = append(kept, item)
+			}
+		}
+		slices.SortFunc(kept, func(a, b FeedItem) int { return a.Cursor().Compare(b.Cursor()) })
+		s.buf, s.done = kept, len(kept) == 0
+		return nil
+	}
+	for {
+		var next *stream
+		for _, s := range streams {
+			if err := fill(s); err != nil {
+				return err
+			}
+			if len(s.buf) > 0 && (next == nil || s.buf[0].Cursor().Compare(next.buf[0].Cursor()) < 0) {
+				next = s
+			}
+		}
+		if next == nil {
+			return nil
+		}
+		item := next.buf[0]
+		next.buf, next.cursor = next.buf[1:], item.Cursor()
+		if err := yield(item); err != nil {
+			return err
+		}
+	}
 }

@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"testing"
@@ -115,5 +116,72 @@ func TestACursorOutsideTheClockIsRefused(t *testing.T) {
 		if _, err := ParseCursor(Cursor{At: at, Source: SourceQuery, ID: "1"}.Encode()); err != nil {
 			t.Errorf("cursor at the bound %v: %v", at, err)
 		}
+	}
+}
+
+// pagedSources holds each source's items, oldest first, and serves them a
+// page past a cursor at a time, counting the reads.
+type pagedSources struct {
+	items map[Source][]FeedItem
+	reads int
+	fail  int // fail the read with this number, when set
+}
+
+func (p *pagedSources) FeedSource(_ context.Context, q FeedQuery, source Source) ([]FeedItem, error) {
+	p.reads++
+	if p.fail != 0 && p.reads == p.fail {
+		return nil, errors.New("the database went away")
+	}
+	var out []FeedItem
+	for _, item := range p.items[source] {
+		if item.Cursor().Compare(*q.After) > 0 && len(out) <= q.Limit {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+func TestStreamFeedMergesEverySourceOnceInOrder(t *testing.T) {
+	at := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+	sources := &pagedSources{items: map[Source][]FeedItem{}}
+	total := 0
+	for i := range 1000 {
+		source := []Source{SourceQuery, SourceEvent, SourceAnswer}[i%3]
+		id := strconv.Itoa(i)
+		if source == SourceAnswer {
+			id = uuid.NewString()
+		}
+		// Every third item shares its second with the one before.
+		sources.items[source] = append(sources.items[source],
+			FeedItem{Source: source, ID: id, At: at.Add(time.Duration(i/3*2+i%2) * time.Second)})
+		total++
+	}
+	var got []FeedItem
+	if err := StreamFeed(t.Context(), sources, FeedQuery{}, func(item FeedItem) error {
+		got = append(got, item)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != total {
+		t.Fatalf("streamed %d items, want %d", len(got), total)
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i-1].Cursor().Compare(got[i].Cursor()) >= 0 {
+			t.Fatalf("items %d and %d out of order", i-1, i)
+		}
+	}
+	// Each source's pages once, and one empty read at its end: linear.
+	if limit := 3*(1000/3/MaxFeedPage+2) + 3; sources.reads > limit {
+		t.Errorf("reads = %d, want at most %d", sources.reads, limit)
+	}
+}
+
+func TestStreamFeedStopsOnAFailedRead(t *testing.T) {
+	at := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+	sources := &pagedSources{items: map[Source][]FeedItem{SourceQuery: {{Source: SourceQuery, ID: "1", At: at}}}, fail: 2}
+	err := StreamFeed(t.Context(), sources, FeedQuery{}, func(FeedItem) error { return nil })
+	if err == nil {
+		t.Error("a failed read ended the stream as if it were complete")
 	}
 }

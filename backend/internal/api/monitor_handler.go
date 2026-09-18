@@ -56,6 +56,7 @@ type MonitorReader interface {
 	Roster(ctx context.Context, contest uuid.UUID) (monitor.Roster, error)
 	Participant(ctx context.Context, contest, registration uuid.UUID) (monitor.Participant, error)
 	Feed(ctx context.Context, q monitor.FeedQuery) (monitor.FeedPage, error)
+	StreamFeed(ctx context.Context, q monitor.FeedQuery, yield func(monitor.FeedItem) error) error
 	Queries(ctx context.Context, q monitor.QueriesQuery) (monitor.QueriesPage, error)
 	Answers(ctx context.Context, contest, registration uuid.UUID) (monitor.Answers, error)
 	Workspace(ctx context.Context, contest, registration uuid.UUID) (monitor.Workspace, error)
@@ -80,11 +81,22 @@ type MonitorHandler struct {
 	// exports keeps one account to one CSV download at a time, for the
 	// reason the participant's own export does (inFlightExports).
 	exports inFlightExports
+	// exportRows and exportBytes bound one CSV download (monitor_export.go).
+	exportRows  int
+	exportBytes int
 }
 
 // NewMonitorHandler returns the handler.
 func NewMonitorHandler(watch MonitorReader, limiter MonitorLimiter, mw *auth.Middleware, log *slog.Logger) *MonitorHandler {
-	return &MonitorHandler{watch: watch, limiter: limiter, mw: mw, log: log}
+	return &MonitorHandler{watch: watch, limiter: limiter, mw: mw, log: log,
+		exportRows: maxMonitorExportRows, exportBytes: maxMonitorExportBytes}
+}
+
+// WithExportLimits replaces the bounds of one CSV download, in rows and in
+// bytes; for tests, which cannot write two hundred thousand rows to see one.
+func (h *MonitorHandler) WithExportLimits(rows, bytes int) *MonitorHandler {
+	h.exportRows, h.exportBytes = rows, bytes
+	return h
 }
 
 // Mount registers the routes.
