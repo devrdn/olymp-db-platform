@@ -165,14 +165,15 @@ export function LiveFeed({
     return () => observer.disconnect();
   }, [measure]);
 
+  // What arrived since the organiser scrolled up. A detached list no longer
+  // ends at the live tail — its newest end, the line last seen among it, was
+  // dropped to make room for older ones — so it counts nothing here; what
+  // arrives meanwhile is `feed.missed`, counted as it comes.
   const seenIndex = seen === undefined ? -1 : items.findIndex((item) => item.cursor === seen);
-  const unseen = following ? 0 : seen === undefined ? 0 : seenIndex < 0 ? total : total - 1 - seenIndex;
-  const pending = unseen + (feed.detached ? feed.missed : 0);
+  const unseen =
+    feed.detached || following || seen === undefined ? 0 : seenIndex < 0 ? total : total - 1 - seenIndex;
 
   const jump = () => {
-    if (feed.detached) {
-      onToLatest();
-    }
     setFollowing(true);
     setSeen(undefined);
     toBottom();
@@ -217,6 +218,10 @@ export function LiveFeed({
         ) : null}
       </div>
 
+      {feed.gap > 0 ? (
+        <p className="text-small text-warn">{t.feed.gap.replace("{n}", String(feed.gap))}</p>
+      ) : null}
+
       <div className="relative">
         <div
           ref={scrollRef}
@@ -247,22 +252,39 @@ export function LiveFeed({
           )}
         </div>
 
-        {pending > 0 ? (
+        {/* Detached, the way back to the latest is always offered: the
+            newest lines were dropped, and scrolling down cannot reach them.
+            What arrived meanwhile is said beside it, and only that. */}
+        {feed.detached ? (
           <button
             type="button"
-            onClick={jump}
-            className={cn(
-              buttonVariants({ variant: "secondary", size: "sm" }),
-              "absolute bottom-3 left-1/2 -translate-x-1/2 bg-bg",
-            )}
+            onClick={() => {
+              onToLatest();
+              jump();
+            }}
+            className={cn(JUMP, "gap-2")}
           >
-            {t.feed.newItems.replace("{n}", String(pending))}
+            {t.feed.toLatest}{" "}
+            {feed.missed > 0 ? (
+              <span className="font-mono text-label text-accent">
+                {t.feed.newItems.replace("{n}", String(feed.missed))}
+              </span>
+            ) : null}
+          </button>
+        ) : unseen > 0 ? (
+          <button type="button" onClick={jump} className={JUMP}>
+            {t.feed.newItems.replace("{n}", String(unseen))}
           </button>
         ) : null}
       </div>
     </div>
   );
 }
+
+const JUMP = cn(
+  buttonVariants({ variant: "secondary", size: "sm" }),
+  "absolute bottom-3 left-1/2 -translate-x-1/2 bg-bg whitespace-nowrap",
+);
 
 function FilterChip({
   pressed,

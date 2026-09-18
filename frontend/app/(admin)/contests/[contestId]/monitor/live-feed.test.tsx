@@ -19,7 +19,7 @@ beforeAll(async () => {
 });
 
 function state(items: FeedItem[], overrides: Partial<FeedState> = {}): FeedState {
-  return { items, newest: items.at(-1)?.cursor, olderAvailable: false, detached: false, missed: 0, ...overrides };
+  return { items, newest: items.at(-1)?.cursor, olderAvailable: false, detached: false, missed: 0, gap: 0, ...overrides };
 }
 
 function many(from: number, to: number): FeedItem[] {
@@ -180,12 +180,47 @@ describe("following the newest item", () => {
     expect(box.scrollTop).toBe(100 * ROW_PX);
   });
 
-  test("after reading far back, the way to the latest reads it afresh", async () => {
+  test("after reading far back, the way to the latest reads it afresh and says what arrived", async () => {
     const onToLatest = vi.fn();
     renderFeed(state(many(1, 20), { detached: true, missed: 7 }), { onToLatest });
+    const t = dict.workspace.monitor.feed;
 
-    await userEvent.click(screen.getByRole("button", { name: dict.workspace.monitor.feed.newItems.replace("{n}", "7") }));
+    const back = screen.getByRole("button", { name: new RegExp(t.toLatest) });
+    expect(back).toHaveTextContent(t.newItems.replace("{n}", "7"));
+    await userEvent.click(back);
     expect(onToLatest).toHaveBeenCalled();
+  });
+
+  /**
+   * The newest end was dropped to make room for older lines. Nothing new
+   * arrived, and the organiser is at the bottom of what is held — the way
+   * back to the dropped lines must still be there, and must not claim news.
+   */
+  test("detached, nothing missed, scrolled to the bottom: the way back is still offered", () => {
+    renderFeed(state(many(1, 20), { detached: true, missed: 0 }));
+    const box = scroller();
+    scrollTo(box, 20 * ROW_PX - VIEW_PX);
+    const t = dict.workspace.monitor.feed;
+
+    expect(screen.getByRole("button", { name: t.toLatest })).toBeInTheDocument();
+    expect(screen.queryByText(/new/)).not.toBeInTheDocument();
+  });
+
+  test("counts only what arrived, not what was dropped to load older lines", () => {
+    const { rerenderWith } = renderFeed(state(many(101, 120), { olderAvailable: true }));
+    const box = scroller();
+    scrollTo(box, 0);
+
+    // Older lines came in and the newest end, c120 among it, was dropped.
+    rerenderWith({ feed: state(many(1, 110), { detached: true }) });
+
+    expect(screen.queryByText(/new/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: dict.workspace.monitor.feed.toLatest })).toBeInTheDocument();
+  });
+
+  test("says how much was skipped after a long absence", () => {
+    renderFeed(state(many(1, 3), { gap: 1200 }));
+    expect(screen.getByText(dict.workspace.monitor.feed.gap.replace("{n}", "1200"))).toBeInTheDocument();
   });
 });
 
