@@ -99,12 +99,20 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 		deviceToken = cookie.Value
 	}
 
+	// The session cookie, when the browser is already signed in: a
+	// successful sign-in replaces that session instead of leaving it alive.
+	var previousToken string
+	if cookie, err := r.Cookie(auth.SessionCookieName); err == nil {
+		previousToken = cookie.Value
+	}
+
 	result, err := h.service.Login(r.Context(), auth.LoginCommand{
-		Login:       req.Login,
-		Password:    req.Password,
-		IP:          httpx.ClientIP(r),
-		UserAgent:   r.UserAgent(),
-		DeviceToken: deviceToken,
+		Login:         req.Login,
+		Password:      req.Password,
+		IP:            httpx.ClientIP(r),
+		UserAgent:     r.UserAgent(),
+		DeviceToken:   deviceToken,
+		PreviousToken: previousToken,
 	})
 	switch {
 	case err == nil:

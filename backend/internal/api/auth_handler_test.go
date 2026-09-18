@@ -536,3 +536,39 @@ func TestTheOwnersBrowserSignsInThroughALockoutAtItsOwnAddress(t *testing.T) {
 		t.Errorf("with the device cookie: status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
 }
+
+// Signing in again from a browser that is already signed in replaces its
+// session: the cookie it came with stops working, and a cookie that names no
+// session does not stand in the way of signing in.
+func TestSigningInAgainEndsTheBrowsersPreviousSession(t *testing.T) {
+	f := newHandlerFixture(t)
+	first := f.login(t)
+
+	rec := f.post("/auth/login", `{"login":"ivanov","password":"`+testPassword+`"}`, first)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("second login status = %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	second := responseCookie(rec, auth.SessionCookieName)
+	if second == nil || second.Value == first.Value {
+		t.Fatal("the second login issued no new session cookie")
+	}
+
+	me := func(cookie *http.Cookie) int {
+		req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+		req.AddCookie(cookie)
+		out := httptest.NewRecorder()
+		f.router.ServeHTTP(out, req)
+		return out.Code
+	}
+	if code := me(first); code != http.StatusUnauthorized {
+		t.Errorf("the replaced session still authenticates: status = %d", code)
+	}
+	if code := me(second); code != http.StatusOK {
+		t.Errorf("the new session does not authenticate: status = %d", code)
+	}
+
+	stale := &http.Cookie{Name: auth.SessionCookieName, Value: "garbled"}
+	if rec := f.post("/auth/login", `{"login":"ivanov","password":"`+testPassword+`"}`, stale); rec.Code != http.StatusOK {
+		t.Errorf("a login carrying a stale cookie = %d, want 200", rec.Code)
+	}
+}
