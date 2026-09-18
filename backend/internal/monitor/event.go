@@ -5,7 +5,9 @@
 // fingerprint that tells two participants' identical queries apart from
 // merely similar ones (§5). Its Tracker detects the two signals the server
 // sees for itself (§2.3): a registration's address changing, and a second
-// session using it while the first is live.
+// session using it while the first is live. Its Signals throttles and cleans
+// the batches the browser reports (§2.2): one bad signal is dropped rather
+// than costing the batch it came in.
 //
 // It deliberately does not store anything itself (internal/postgres stores
 // events and revisions, and the Tracker keeps its per-registration trail in
