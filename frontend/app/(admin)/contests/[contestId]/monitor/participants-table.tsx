@@ -244,7 +244,12 @@ const ParticipantRow = memo(function ParticipantRow({
   );
 
   return (
-    <tr data-fresh={fresh || undefined} className="group">
+    // Lit whole: the row's own fill shows through the transparent cells, and
+    // the name cell, opaque so the counters scroll under it, takes the same.
+    <tr
+      data-fresh={fresh || undefined}
+      className="group transition-colors duration-(--t-state) ease-standard data-fresh:bg-accent-wash"
+    >
       <td
         className={cn(
           CELL,
@@ -271,7 +276,9 @@ const ParticipantRow = memo(function ParticipantRow({
               title={t.flags[flag].explain}
               className="rounded-full bg-warn-wash px-1.5 font-mono text-label whitespace-nowrap text-warn uppercase"
             >
-              {t.flags[flag].label}
+              <span aria-hidden>{t.flags[flag].label}</span>
+              {/* The title is for a pointer; this is for everybody else. */}
+              <span className="sr-only">{t.flags[flag].explain}</span>
             </span>
           ))}
         </span>

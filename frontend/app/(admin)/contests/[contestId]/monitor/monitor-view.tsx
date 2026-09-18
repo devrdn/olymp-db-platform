@@ -90,16 +90,24 @@ export function MonitorView({
   );
 }
 
+/**
+ * The live region for what went wrong. Always in the document, with only its
+ * text changing: a region inserted together with its message is not announced
+ * by every screen reader.
+ */
 function Problem({ problem, t }: { problem: MonitorProblem; t: Dictionary["workspace"]["monitor"] }) {
-  if (!problem) return null;
-  const text =
-    problem.kind === "forbidden"
+  const text = !problem
+    ? ""
+    : problem.kind === "forbidden"
       ? t.problems.forbidden
       : problem.kind === "tooOften"
         ? t.problems.tooOften.replace("{seconds}", String(problem.seconds))
         : t.problems.failed;
   return (
-    <p role="status" className="text-small text-warn">
+    // Empty, it takes back the column's gap above it rather than being
+    // hidden: a hidden region is out of the accessibility tree, which is
+    // what keeping it in the document is for.
+    <p role="status" className="text-small text-warn empty:-mt-8">
       {text}
     </p>
   );
