@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/workspace"
 	"github.com/google/uuid"
@@ -28,19 +29,43 @@ import (
 // scoring update — is never held by a workspace write. Editing one tab's text
 // or title changes no set and takes no lock.
 //
+// Every write also records its history (design §2.4) in the same
+// transaction, through Monitor: a save of the notes or of a tab's text folds
+// into the document's revisions, and creating, renaming and deleting a tab
+// each writes a participant event. A history that cannot be written takes
+// the write back with it, so what an organiser reads is never behind what the
+// participant saved. Saving the notes or one tab is a transaction of its own
+// for that reason, serialised by the row it updates rather than by the lock.
+//
 // The table has no unique constraint on (registration_id, position): that
 // positions stay unique and dense (0..n-1) rests on this lock. Every path
 // that changes the set or the positions takes it, and a new one must too.
 type Workspace struct {
-	pool *pgxpool.Pool
-	uow  *storage.PgxUnitOfWork
+	pool    *pgxpool.Pool
+	uow     *storage.PgxUnitOfWork
+	history *Monitor
 }
 
 var _ workspace.Repository = (*Workspace)(nil)
 
 // NewWorkspace returns the workspace store over pool.
 func NewWorkspace(pool *pgxpool.Pool) *Workspace {
-	return &Workspace{pool: pool, uow: storage.NewUnitOfWork(pool)}
+	return &Workspace{pool: pool, uow: storage.NewUnitOfWork(pool), history: NewMonitor(pool)}
+}
+
+// recordTab writes one event in the life of a tab, filed under the contest of
+// the registration. Called inside the transaction of the change it records.
+// The contest is read here rather than carried by every caller: a tab is
+// created, renamed or deleted a handful of times in an olympiad, and a
+// primary-key read on those is cheaper than widening the repository's
+// contract for them.
+func (w *Workspace) recordTab(ctx context.Context, registration uuid.UUID, payload monitor.Payload) error {
+	var contest uuid.UUID
+	if err := w.querier(ctx).QueryRow(ctx,
+		`SELECT contest_id FROM registrations WHERE id = $1`, registration).Scan(&contest); err != nil {
+		return fmt.Errorf("read the registration's contest: %w", err)
+	}
+	return w.history.InsertEvents(ctx, []monitor.Event{{Contest: contest, Registration: registration, Payload: payload}})
 }
 
 func (w *Workspace) querier(ctx context.Context) storage.Querier {
@@ -130,7 +155,7 @@ func (w *Workspace) Load(ctx context.Context, registration uuid.UUID, firstTitle
 			return fmt.Errorf("create the first tab: %w", err)
 		}
 		tabs = []workspace.Tab{first}
-		return nil
+		return w.recordTab(ctx, registration, monitor.TabCreated{TabID: first.ID, Title: first.Title})
 	})
 	if err != nil {
 		return workspace.Notes{}, nil, err
@@ -138,19 +163,26 @@ func (w *Workspace) Load(ctx context.Context, registration uuid.UUID, firstTitle
 	return notes, tabs, nil
 }
 
-// SaveNotes writes the notes in one statement, whether or not they existed.
-// The last write wins: the same participant typing in two windows at once is
-// rare enough not to merge.
+// SaveNotes writes the notes, whether or not they existed, and their
+// revision with them. The last write wins: the same participant typing in two
+// windows at once is rare enough not to merge.
 func (w *Workspace) SaveNotes(ctx context.Context, registration uuid.UUID, body string) (time.Time, error) {
 	var at time.Time
-	err := w.querier(ctx).QueryRow(ctx, `
-		INSERT INTO participant_notes (registration_id, body)
-		VALUES ($1, $2)
-		ON CONFLICT (registration_id) DO UPDATE
-		SET body = excluded.body, updated_at = now()
-		RETURNING updated_at`, registration, body).Scan(&at)
+	err := w.uow.Do(ctx, func(ctx context.Context) error {
+		if err := w.querier(ctx).QueryRow(ctx, `
+			INSERT INTO participant_notes (registration_id, body)
+			VALUES ($1, $2)
+			ON CONFLICT (registration_id) DO UPDATE
+			SET body = excluded.body, updated_at = now()
+			RETURNING updated_at`, registration, body).Scan(&at); err != nil {
+			return fmt.Errorf("save the notes: %w", err)
+		}
+		return w.history.RecordRevision(ctx, monitor.Revision{
+			Registration: registration, Document: monitor.DocumentNotes, Body: body, At: at,
+		})
+	})
 	if err != nil {
-		return time.Time{}, fmt.Errorf("save the notes: %w", err)
+		return time.Time{}, err
 	}
 	return at, nil
 }
@@ -182,7 +214,7 @@ func (w *Workspace) CreateTab(ctx context.Context, registration uuid.UUID, limit
 		if err != nil {
 			return fmt.Errorf("create a tab: %w", err)
 		}
-		return nil
+		return w.recordTab(ctx, registration, monitor.TabCreated{TabID: created.ID, Title: created.Title})
 	})
 	if err != nil {
 		return workspace.Tab{}, err
@@ -193,20 +225,49 @@ func (w *Workspace) CreateTab(ctx context.Context, registration uuid.UUID, limit
 // UpdateTab changes one tab of this registration. A tab of another
 // registration matches nothing, which is ErrTabNotFound — the same answer as
 // a tab that never existed.
+//
+// A new title is a tab_renamed event when it differs from the old one; new
+// text is a revision of the tab, under the title it has after the change.
+// A title-only change writes no revision: the text did not change.
 func (w *Workspace) UpdateTab(ctx context.Context, registration, id uuid.UUID, patch workspace.TabPatch) (time.Time, error) {
 	var at time.Time
-	err := w.querier(ctx).QueryRow(ctx, `
-		UPDATE participant_sql_tabs
-		SET title      = coalesce($3, title),
-		    body       = coalesce($4, body),
-		    updated_at = now()
-		WHERE id = $1 AND registration_id = $2
-		RETURNING updated_at`, id, registration, patch.Title, patch.Body).Scan(&at)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return time.Time{}, workspace.ErrTabNotFound
-	}
+	err := w.uow.Do(ctx, func(ctx context.Context) error {
+		// The old title comes from the row as it was locked for this update,
+		// so two renames racing each other each report what they replaced.
+		var oldTitle, title, body string
+		err := w.querier(ctx).QueryRow(ctx, `
+			UPDATE participant_sql_tabs AS t
+			SET title      = coalesce($3, t.title),
+			    body       = coalesce($4, t.body),
+			    updated_at = now()
+			FROM (
+				SELECT id, title FROM participant_sql_tabs
+				WHERE id = $1 AND registration_id = $2
+				FOR UPDATE
+			) AS old
+			WHERE t.id = old.id
+			RETURNING old.title, t.title, t.body, t.updated_at`,
+			id, registration, patch.Title, patch.Body).Scan(&oldTitle, &title, &body, &at)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return workspace.ErrTabNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("update a tab: %w", err)
+		}
+		if title != oldTitle {
+			if err := w.recordTab(ctx, registration, monitor.TabRenamed{TabID: id, From: oldTitle, To: title}); err != nil {
+				return err
+			}
+		}
+		if patch.Body == nil {
+			return nil
+		}
+		return w.history.RecordRevision(ctx, monitor.Revision{
+			Registration: registration, Document: monitor.TabDocument(id), Title: title, Body: body, At: at,
+		})
+	})
 	if err != nil {
-		return time.Time{}, fmt.Errorf("update a tab: %w", err)
+		return time.Time{}, err
 	}
 	return at, nil
 }
@@ -240,7 +301,8 @@ func (w *Workspace) DeleteTab(ctx context.Context, registration, id uuid.UUID) e
 			WHERE registration_id = $1 AND position > $2`, registration, existing[at].Position); err != nil {
 			return fmt.Errorf("close the gap after a deleted tab: %w", err)
 		}
-		return nil
+		// Its revisions stay: they belong to the registration, not the tab.
+		return w.recordTab(ctx, registration, monitor.TabDeleted{TabID: id, Title: existing[at].Title})
 	})
 }
 
