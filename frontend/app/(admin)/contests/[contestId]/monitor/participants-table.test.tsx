@@ -76,7 +76,10 @@ describe("the participants table", () => {
     const row = screen.getByRole("row", { name: /Ivan Ivanov/ });
 
     const paste = within(row).getByText(dict.workspace.monitor.flags.largePaste.label);
-    expect(paste).toHaveAttribute("title", dict.workspace.monitor.flags.largePaste.explain);
+    expect(paste.closest("[title]")).toHaveAttribute("title", dict.workspace.monitor.flags.largePaste.explain);
+    // Not only a hover title, which a screen reader or a finger never reaches:
+    // the explanation is part of the badge's own text.
+    expect(within(row).getByText(dict.workspace.monitor.flags.largePaste.explain)).toBeInTheDocument();
     expect(within(row).getByText(dict.workspace.monitor.flags.multipleIps.label)).toBeInTheDocument();
     expect(within(row).queryByText(dict.workspace.monitor.flags.parallelSessions.label)).not.toBeInTheDocument();
   });
@@ -92,8 +95,11 @@ describe("the participants table", () => {
   test("lights the row of a participant with something new", () => {
     renderTable({ fresh: new Set(["r-petrova"]) });
 
-    expect(screen.getByRole("row", { name: /Anna Petrova/ })).toHaveAttribute("data-fresh", "true");
+    const lit = screen.getByRole("row", { name: /Anna Petrova/ });
+    expect(lit).toHaveAttribute("data-fresh", "true");
     expect(screen.getByRole("row", { name: /Ivan Ivanov/ })).not.toHaveAttribute("data-fresh");
+    // The whole row, not only the name held at its left edge.
+    expect(lit).toHaveClass("data-fresh:bg-accent-wash");
   });
 });
 
