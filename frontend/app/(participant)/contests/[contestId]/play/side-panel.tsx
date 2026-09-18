@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ExportMenu } from "@/components/product/export-menu";
 import { StandingsView } from "@/components/product/standings";
@@ -114,15 +114,36 @@ export function SidePanel({
   const t = dict.participant.play.workspace.tabs;
   const storyT = dict.participant.play.workspace.story;
   const [tab, setTab] = useState("questions");
+  const tabListWrapRef = useRef<HTMLDivElement>(null);
+
+  // The strip can be scrolled past the selected tab (the point of
+  // `overflow-x-auto` below) — bring it back into view whenever the
+  // selection changes, whether that came from a click or the keyboard.
+  useEffect(() => {
+    const selected = tabListWrapRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    selected?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [tab]);
 
   return (
     <Tabs value={tab} onValueChange={setTab} className="h-full min-h-0">
-      <TabsList>
-        <TabsTrigger value="story">{t.story}</TabsTrigger>
-        <TabsTrigger value="questions">{t.questions}</TabsTrigger>
-        <TabsTrigger value="notes">{t.notes}</TabsTrigger>
-        <TabsTrigger value="leaderboard">{dict.leaderboard.tab}</TabsTrigger>
-      </TabsList>
+      {/* Four tabs — five with the leaderboard's own label, longer still in
+          Russian — do not fit the panel's own width at every point the
+          divider can be dragged to (`--pane-side`, clamped 8-32rem in
+          pane-splitter.tsx); measured at 1440, 1024 and 768px, the strip ran
+          54px past the panel and took the whole page's scrollbar with it.
+          `overflow-x-auto` on the list keeps that overflow inside the strip
+          instead, and `min-w-0` on the div wrapping it gives up flexbox's
+          own floor on a flex item's width — its *automatic* minimum, absent
+          this, is the content's min-content size, which is exactly what the
+          four labels exceeded. */}
+      <div ref={tabListWrapRef} className="min-w-0">
+        <TabsList className="overflow-x-auto">
+          <TabsTrigger value="story" className="px-2">{t.story}</TabsTrigger>
+          <TabsTrigger value="questions" className="px-2">{t.questions}</TabsTrigger>
+          <TabsTrigger value="notes" className="px-2">{t.notes}</TabsTrigger>
+          <TabsTrigger value="leaderboard" className="px-2">{dict.leaderboard.tab}</TabsTrigger>
+        </TabsList>
+      </div>
       {/* Neither tab has a child that needs to fill the panel's height —
           the story is prose and the questions are a form, both laid out
           and scrolled the ordinary block way — so `fill={false}` keeps
