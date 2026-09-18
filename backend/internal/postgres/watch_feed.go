@@ -342,14 +342,21 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 	bounds, dir := feedBounds(&a, q, monitor.SourceAudit, "a.created_at", "a.id", "bigint")
 	limit := a.add(q.Limit + 1)
 	// A participant's own sign-ins, sign-outs and failed sign-ins count from
-	// their registration to monitor.SignInGrace past their finish, or the
-	// contest's end; with neither known, up to now.
+	// their registration to monitor.SignInGrace past the end of their part in
+	// the contest: their finish; else their own deadline under individual
+	// timing — the start plus the duration, or the contest's end when that
+	// comes first, contests.Deadline's formula — else the contest's end.
+	// With none of them known, up to now.
+	const participantEnd = `COALESCE(r.finished_at,
+		      CASE WHEN c.timing = 'individual'
+		           THEN LEAST(r.started_at + make_interval(mins => c.duration_min), c.ends_at) END,
+		      c.ends_at)`
 	// Built on first use: a parameter no branch names cannot be typed.
 	var untilSQL string
 	until := func() string {
 		if untilSQL == "" {
-			untilSQL = ` AND (COALESCE(r.finished_at, c.ends_at) IS NULL
-		      OR a.created_at < COALESCE(r.finished_at, c.ends_at) + make_interval(secs => ` +
+			untilSQL = ` AND (` + participantEnd + ` IS NULL
+		      OR a.created_at < ` + participantEnd + ` + make_interval(secs => ` +
 				a.add(monitor.SignInGrace.Seconds()) + `))`
 		}
 		return untilSQL

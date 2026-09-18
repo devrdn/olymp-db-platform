@@ -400,3 +400,37 @@ func TestTheNewestPageHoldsBackTheSettleWindow(t *testing.T) {
 		}
 	})
 }
+
+// Under individual timing a participant who started but never finished is
+// bounded by their own deadline (contests.Deadline): the start plus the
+// duration, or the contest's end when that comes first.
+func TestAnIndividualParticipantsSignInsEndWithTheirDeadline(t *testing.T) {
+	for name, endsAt := range map[string]*time.Duration{"no end": nil, "a distant end": ptrDuration(10 * time.Hour)} {
+		t.Run(name, func(t *testing.T) {
+			withTx(t, func(ctx context.Context) {
+				f := newWatchFixture(t, ctx)
+				reg, user := f.participant("solo")
+				f.exec(`UPDATE contests SET timing = 'individual', duration_min = 60, starts_at = $2 WHERE id = $1`, f.contest, f.at(-time.Hour))
+				if endsAt != nil {
+					f.exec(`UPDATE contests SET ends_at = $2 WHERE id = $1`, f.contest, f.at(*endsAt))
+				}
+				f.exec(`UPDATE registrations SET created_at = $2, started_at = $3, status = 'active' WHERE id = $1`,
+					reg, f.at(-time.Hour), f.at(0))
+				for _, at := range []time.Duration{90 * time.Minute, 2*time.Hour + time.Minute} {
+					f.exec(`INSERT INTO audit_log (actor_id, action, entity, entity_id, created_at)
+					        VALUES ($1::uuid, 'auth.login', 'user', $1::uuid::text, $2)`, user, f.at(at))
+				}
+				items := readFeed(t, ctx, monitor.FeedQuery{Contest: f.contest, Kinds: []string{monitor.FeedSignIn}}).Items
+				if len(items) != 1 || !items[0].At.Equal(f.at(90*time.Minute)) {
+					var at []time.Time
+					for _, item := range items {
+						at = append(at, item.At)
+					}
+					t.Errorf("sign-ins shown at %v, want only the one within an hour of the deadline", at)
+				}
+			})
+		})
+	}
+}
+
+func ptrDuration(d time.Duration) *time.Duration { return &d }
