@@ -7,6 +7,7 @@ import type { PlayQuestion } from "@/lib/api/play";
 
 import { QuestionsPanel, type QuestionEntry } from "./questions-panel";
 import type { AnswerState, QuestionsRefreshResult } from "./actions";
+import { pasteTargetOf } from "./use-signals";
 
 // The two actions are the boundary: what they return is what the panel has
 // to render, and everything behind them (the server action itself, the API
@@ -538,4 +539,9 @@ describe("the questions panel, ICPC scoring", () => {
     expect(screen.getByRole("status")).toHaveTextContent(en.participant.play.questions.correctIcpc);
     expect(screen.getByRole("status")).not.toHaveTextContent("points");
   });
+});
+
+test("a paste into an answer is watched as one into the answer", () => {
+  render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
+  expect(pasteTargetOf(screen.getByRole("textbox", { name: en.participant.play.questions.answerLabel }))).toBe("answer");
 });

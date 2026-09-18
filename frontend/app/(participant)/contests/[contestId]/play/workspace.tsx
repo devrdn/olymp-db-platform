@@ -19,6 +19,7 @@ import { ResultPanel } from "./result-panel";
 import { PaneHandle, SHARE_BOUNDS, WIDTH_BOUNDS, useConsoleRows, usePaneWidths } from "./pane-splitter";
 import { SchemaPanel } from "./schema-panel";
 import { SidePanel } from "./side-panel";
+import { useSignals } from "./use-signals";
 
 // Finding 5: a bottom-tab click sets state only in Workspace, but every
 // child under it would still re-render on that state change unless it is
@@ -129,6 +130,11 @@ export function Workspace({
   dict: PlayDictionary;
 }) {
   const t = dict.participant.play.workspace;
+
+  // What this browser reports to the organiser: leaving the page and pasting
+  // (use-signals.ts). Mounted with the workspace, which exists only while the
+  // contest runs for this participant; it holds no React state.
+  useSignals(contestId);
 
   // The latest run, lifted out of ConsoleEditor so ResultPanel — which lives
   // in a different subtree, inside a tab — can show it. ConsoleEditor's own
