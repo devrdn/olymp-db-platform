@@ -338,3 +338,32 @@ func TestAnEventCannotBeFiledUnderAnotherContest(t *testing.T) {
 		}
 	})
 }
+
+// A clock that stepped back extends the open revision, and must not move its
+// updated_at back before the save it already recorded — nor before its start.
+func TestARevisionsUpdatedAtNeverMovesBack(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		store := NewMonitor(testPool)
+		f := newMonitorFixture(t, ctx)
+		start := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+
+		if err := store.RecordRevision(ctx, monitor.Revision{
+			Registration: f.registration, Document: monitor.DocumentNotes, Body: "a", At: start,
+		}); err != nil {
+			t.Fatalf("first save: %v", err)
+		}
+		if err := store.RecordRevision(ctx, monitor.Revision{
+			Registration: f.registration, Document: monitor.DocumentNotes, Body: "ab", At: start.Add(-5 * time.Second),
+		}); err != nil {
+			t.Fatalf("save from a clock that stepped back: %v", err)
+		}
+
+		got := storedRevisions(t, ctx, f.registration, monitor.DocumentNotes)
+		if len(got) != 1 || got[0].body != "ab" {
+			t.Fatalf("revisions = %+v, want the open one extended", got)
+		}
+		if !got[0].updatedAt.Equal(start) || got[0].updatedAt.Before(got[0].startedAt) {
+			t.Fatalf("updated_at = %v, started_at = %v; want updated_at left at %v", got[0].updatedAt, got[0].startedAt, start)
+		}
+	})
+}
