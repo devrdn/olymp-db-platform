@@ -13,6 +13,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // monitorFixture is one participant of one contest.
@@ -315,6 +316,25 @@ func TestMonitoringGoesWithTheRegistrationAndTheContest(t *testing.T) {
 		}
 		if got := storedRevisions(t, ctx, other.registration, monitor.DocumentNotes); len(got) != 0 {
 			t.Fatalf("%d revisions outlived their contest", len(got))
+		}
+	})
+}
+
+// An event names its contest twice — directly, for the contest-wide feed, and
+// through its registration — and the schema holds the two to agree, so a
+// caller's mix-up can never file one participant's pastes and addresses in
+// another contest's feed.
+func TestAnEventCannotBeFiledUnderAnotherContest(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		store := NewMonitor(testPool)
+		f := newMonitorFixture(t, ctx)
+		other := newMonitorFixture(t, ctx)
+
+		mixed := monitor.Event{Contest: other.contest, Registration: f.registration, Payload: monitor.PageLeft{AwayMs: 2000}}
+		err := store.InsertEvents(ctx, []monitor.Event{mixed})
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23503" {
+			t.Fatalf("an event under another contest: err = %v, want a foreign key violation", err)
 		}
 	})
 }
