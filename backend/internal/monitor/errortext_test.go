@@ -1,6 +1,10 @@
 package monitor
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/devrdn/db-contest/backend/internal/queryrunner"
+)
 
 func TestStaffSeeTheParticipantsSQLFeedbackAndNotOurInfrastructure(t *testing.T) {
 	shown := []struct{ status, text string }{
@@ -27,5 +31,18 @@ func TestStaffSeeTheParticipantsSQLFeedbackAndNotOurInfrastructure(t *testing.T)
 		if got := StaffErrorText(c.status, c.text); got != "" {
 			t.Errorf("%s %q: shown as %q, want it withheld", c.status, c.text, got)
 		}
+	}
+}
+
+func TestStaffSeeTheRunnersOwnVerdicts(t *testing.T) {
+	for _, err := range []error{queryrunner.ErrResultTooLarge, queryrunner.ErrCanceled, queryrunner.ErrTimeout} {
+		for _, text := range []string{err.Error(), "run the query: " + err.Error()} {
+			if got := StaffErrorText("error", text); got != text {
+				t.Errorf("%q: shown as %q, want it whole", text, got)
+			}
+		}
+	}
+	if got := StaffErrorText("error", "the result is too large to read, host=10.0.0.5"); got != "" {
+		t.Errorf("a verdict followed by our infrastructure: %q, want it withheld", got)
 	}
 }

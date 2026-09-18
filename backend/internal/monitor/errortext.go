@@ -3,6 +3,8 @@ package monitor
 import (
 	"regexp"
 	"strings"
+
+	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 )
 
 // StaffErrorText is what a contest's staff are shown of a journalled query's
@@ -20,15 +22,23 @@ import (
 // installation's business, and it says nothing about the participant.
 //
 // The journal keeps only the text, so the rule reads the text: a refusal or a
-// timeout is shown whole; an error is shown only when it carries PostgreSQL's
-// own SQLSTATE of a class about a statement, and nothing marking a
+// timeout is shown whole; an error is shown when it is one of the runner's
+// own verdicts about the query (its result was too large to read, the caller
+// stopped waiting, it ran out of time), or when it carries PostgreSQL's own
+// SQLSTATE of a class about a statement; either only with nothing marking a
 // connection. Everything else is withheld, as it is from the participant.
+//
+// A PostgreSQL error raised while the runner prepared the participant's
+// session — setting its role or its limits, say — carries a statement-class
+// SQLSTATE too and is shown. It names nothing of the installation's that the
+// connection markers would catch, and telling it apart from the
+// participant's own would need the journal to record the failure's kind.
 func StaffErrorText(status, text string) string {
 	switch status {
 	case "rejected", "timeout":
 		return text
 	case "error":
-		if statementError(text) {
+		if (runnerVerdict(text) || statementError(text)) && !mentionsConnection(text) {
 			return text
 		}
 	}
@@ -48,16 +58,30 @@ var infrastructureClasses = map[string]bool{"08": true, "28": true, "3D": true, 
 var connectionMarkers = []string{"failed to connect", "dial tcp", "host=", "user=", "database=",
 	"connection refused", "could not answer", "server closed the connection", "no such host"}
 
+// runnerVerdicts are the runner's own words about a query that ran into one
+// of its limits, recorded as errors.
+var runnerVerdicts = []error{queryrunner.ErrResultTooLarge, queryrunner.ErrCanceled, queryrunner.ErrTimeout}
+
+func runnerVerdict(text string) bool {
+	for _, verdict := range runnerVerdicts {
+		if text == verdict.Error() || strings.HasSuffix(text, ": "+verdict.Error()) {
+			return true
+		}
+	}
+	return false
+}
+
 func statementError(text string) bool {
 	match := sqlState.FindStringSubmatch(text)
-	if match == nil || infrastructureClasses[match[1][:2]] {
-		return false
-	}
+	return match != nil && !infrastructureClasses[match[1][:2]]
+}
+
+func mentionsConnection(text string) bool {
 	lower := strings.ToLower(text)
 	for _, marker := range connectionMarkers {
 		if strings.Contains(lower, marker) {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }
