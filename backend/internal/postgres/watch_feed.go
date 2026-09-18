@@ -357,6 +357,14 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 		WHERE `+scope)
 	}
 	if all || wanted[monitor.FeedSignInFailed] {
+		// Matched by the login the attempt typed against the account's login
+		// now, since a failed sign-in records no account. Two consequences
+		// follow and are accepted. Anybody mistyping a participant's login is
+		// shown as that participant's failed sign-in, which is what an
+		// organiser watching for a guessed password wants to see. And an
+		// account whose login was changed loses the failed sign-ins typed
+		// under its old one: the trail does not say the two logins were the
+		// same account, and guessing would attribute strangers' attempts.
 		branches = append(branches, `
 		SELECT a.id, r.id AS registration_id, a.created_at, a.action, host(a.ip), a.user_agent, a.payload
 		FROM registrations r
