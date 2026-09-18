@@ -238,6 +238,14 @@ export function SqlTabStrip({
               {renaming === tab.id ? (
                 <input
                   autoFocus
+                  // Selects the whole name the moment rename opens, on both
+                  // the F2 and the double-click path — both just set
+                  // `renaming`, and `autoFocus` mounts this input focused,
+                  // so one `onFocus` covers both. Without it the caret lands
+                  // at the end with nothing selected, and the first
+                  // keystroke of a rename appends instead of replacing, the
+                  // way VS Code's own rename field never does.
+                  onFocus={(event) => event.currentTarget.select()}
                   aria-label={t.rename.replace("{tab}", tab.title)}
                   defaultValue={tab.title}
                   // The server's own bound on a title, so the ordinary
