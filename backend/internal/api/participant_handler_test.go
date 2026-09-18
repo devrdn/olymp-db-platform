@@ -19,6 +19,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
@@ -311,7 +312,30 @@ type participantFixture struct {
 	attempts  *conteststest.Attempts
 	// workspaceStore is the in-memory store behind the workspace endpoints.
 	workspaceStore *failingWorkspace
-	cookie         *http.Cookie
+	// watcher records every visit admission reported.
+	watcher *recordingWatcher
+	cookie  *http.Cookie
+}
+
+// fixtureUserAgent is the browser every fixture request claims to be.
+const fixtureUserAgent = "fixture-browser/1.0"
+
+// recordingWatcher keeps every visit it is told about.
+type recordingWatcher struct {
+	mu     sync.Mutex
+	visits []monitor.Visit
+}
+
+func (w *recordingWatcher) Observe(_ context.Context, visit monitor.Visit) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.visits = append(w.visits, visit)
+}
+
+func (w *recordingWatcher) seen() []monitor.Visit {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]monitor.Visit(nil), w.visits...)
 }
 
 func newParticipantFixture(t *testing.T) *participantFixture {
@@ -347,22 +371,26 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 
 	workspaceStore := &failingWorkspace{Repository: workspacetest.NewRepository()}
 	workspaces := workspace.NewService(workspaceStore, auth.NewLimiter(c))
+	watcher := &recordingWatcher{}
 
 	router := chi.NewRouter()
 	api.NewParticipantHandler(access, reader, history, submitter, answerRate(c, fixtureAnswersPerMinute), mw, log, "en").
 		WithWorkspace(workspaces).
+		WithWatcher(watcher).
 		Mount(router)
 
 	return &participantFixture{
 		router: router, access: access, history: history, submitter: submitter,
 		stories: stories, questions: questions, attempts: attempts,
 		workspaceStore: workspaceStore,
+		watcher:        watcher,
 		cookie:         &http.Cookie{Name: auth.SessionCookieName, Value: token},
 	}
 }
 
 func (f *participantFixture) get(path string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("User-Agent", fixtureUserAgent)
 	req.AddCookie(f.cookie)
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, req)
@@ -1783,5 +1811,46 @@ func TestASecondQueryLogDownloadWhileOneIsStillRunningIsRefused(t *testing.T) {
 	f.history.exportGate = nil
 	if again := f.get("/contests/" + contestID.String() + "/play/log.csv"); again.Code != http.StatusOK {
 		t.Fatalf("a download after the first finished answered %d, want 200: %s", again.Code, again.Body.String())
+	}
+}
+
+// An admitted /play request is a request of the registration: the tracker
+// of address changes and parallel sessions hears of it, with the session
+// named by a hash of its token and never the token (design §2.3).
+func TestAnAdmittedPlayRequestIsObserved(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := f.playContest(t)
+
+	if rec := f.get("/contests/" + contestID.String() + "/play/story"); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	visits := f.watcher.seen()
+	if len(visits) != 1 {
+		t.Fatalf("the request was observed %d times, want once", len(visits))
+	}
+	got := visits[0]
+	if got.Contest != contestID || got.Registration != f.access.participant.ID {
+		t.Fatalf("visit filed under %v/%v, want %v/%v", got.Contest, got.Registration, contestID, f.access.participant.ID)
+	}
+	if got.Session != monitor.SessionTag(f.cookie.Value) || got.Session == f.cookie.Value {
+		t.Fatalf("session = %q, want the tag of the token", got.Session)
+	}
+	if got.UserAgent != fixtureUserAgent || !got.Address.IsValid() {
+		t.Fatalf("visit = %+v, want the request's browser and address", got)
+	}
+}
+
+// A request admission refuses is not the registration's: nothing is
+// observed.
+func TestARefusedPlayRequestIsNotObserved(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := f.playContest(t)
+	f.access.err = queryproxy.ErrContestNotRunning
+
+	if rec := f.get("/contests/" + contestID.String() + "/play/story"); rec.Code == http.StatusOK {
+		t.Fatalf("status = %d, want a refusal", rec.Code)
+	}
+	if visits := f.watcher.seen(); len(visits) != 0 {
+		t.Fatalf("a refused request was observed: %+v", visits)
 	}
 }

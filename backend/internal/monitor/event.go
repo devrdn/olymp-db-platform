@@ -10,11 +10,12 @@
 // It deliberately does not store anything itself (internal/postgres stores
 // events and revisions, and the Tracker keeps its per-registration trail in
 // the platform cache, each through an interface its consumer declares),
-// decide when a request is a participant's (queryproxy's admission does, and
-// hands the Tracker only admitted requests), serve anything over HTTP (internal/api
-// does), decide who may watch (rbac.PermissionContestMonitor does), or judge
-// a participant: a browser signal is what the participant's own browser
-// chose to report, and nothing here treats it as proof.
+// decide when a request is a participant's (participant admission does, in
+// queryproxy and the /play handlers, and hands the Tracker only admitted
+// requests), serve anything over HTTP (internal/api does), decide who may
+// watch (rbac.PermissionContestMonitor does), or judge a participant: a
+// browser signal is what the participant's own browser chose to report, and
+// nothing here treats it as proof.
 package monitor
 
 import (
