@@ -661,15 +661,22 @@ func TestADeletedTabIsRecordedUnderTheTitleItWasDeletedWith(t *testing.T) {
 	if _, err := rename.Exec(ctx, `UPDATE participant_sql_tabs SET title = 'renamed' WHERE id = $1`, doomed.ID); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
+	var renamePID int
+	if err := rename.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&renamePID); err != nil {
+		t.Fatalf("read the rename's backend: %v", err)
+	}
 
 	deleted := make(chan error, 1)
 	go func() { deleted <- repo.DeleteTab(ctx, registration, doomed.ID) }()
 
-	// Wait until the delete is blocked on the rename's row lock.
+	// Wait until a backend is blocked by the rename itself — only the delete
+	// can be, since nothing else touches this tab — so a lock wait anywhere
+	// else in the shared test database cannot end the wait early.
 	for {
 		var waiting bool
 		if err := testPool.QueryRow(ctx, `
-			SELECT EXISTS (SELECT 1 FROM pg_locks WHERE NOT granted AND locktype = 'transactionid')`).Scan(&waiting); err != nil {
+			SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY (pg_blocking_pids(pid)))`,
+			renamePID).Scan(&waiting); err != nil {
 			t.Fatalf("read the locks: %v", err)
 		}
 		if waiting {
