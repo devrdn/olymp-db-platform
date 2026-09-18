@@ -1737,7 +1737,7 @@
                 }
               ]
             },
-            "description": "Everything the contest's participants did, merged in time order: `query`, `answer`, `sign_in`, `sign_out`, `sign_in_failed`, `disqualified`, `started`, `finished`, `page_left`, `paste`, `ip_changed`, `parallel_session`, `tab_created`, `tab_renamed`, `tab_deleted`. Items come oldest first on every page.\n\n- no cursor: the newest page;\n- `after=<cursor>`: what came after it — the live screen polls with the page's `newest`;\n- `before=<cursor>`: what came before it — scroll back with the page's `oldest`.\n\n`more` says there is more in the direction read. `kinds` (comma-separated), `participant` (a registration of this contest), `from` and `until` (RFC 3339, `[from, until)`), `limit` (at most 200).\n\nResponses: 200 · 400 `monitor_invalid_cursor` / `monitor_invalid_filter` · 404 `monitor_participant_not_found` (another contest's registration, or none) · 401 · 403 · 429 `monitor_too_often`"
+            "description": "Everything the contest's participants did, merged in time order: `query`, `answer`, `sign_in`, `sign_out`, `sign_in_failed`, `disqualified`, `started`, `finished`, `page_left`, `paste`, `ip_changed`, `parallel_session`, `tab_created`, `tab_renamed`, `tab_deleted`. Items come oldest first on every page.\n\n- no cursor: the newest page;\n- `after=<cursor>`: what came after it — the live screen polls with the page's `newest`; the newest 2 seconds are held back until the next poll, so an item written late with an earlier time is not skipped;\n- `before=<cursor>`: what came before it — scroll back with the page's `oldest`.\n\n`more` says there is more in the direction read. `kinds` (comma-separated), `participant` (a registration of this contest), `from` and `until` (RFC 3339, `[from, until)`), `limit` (at most 200). A cursor names a time between 2000 and 2200. Sign-ins count from the registration to an hour past the participant's finish or the contest's end.\n\nResponses: 200 · 400 `monitor_invalid_cursor` / `monitor_invalid_filter` · 404 `monitor_participant_not_found` (another contest's registration, or none) · 401 · 403 · 429 `monitor_too_often`"
           },
           "response": []
         },
@@ -1859,7 +1859,7 @@
                 }
               ]
             },
-            "description": "The participant's SQL queries, newest first, each whole: the statement, status, error, duration, rows, time and the address it came from. `status` (`ok`, `error`, `timeout`, `rejected`, `running`), `q` (a substring, without case; at most 200 characters; `%` and `_` are text), `cursor` (the last item's, for the next page), `limit` (at most 50).\n\nResponses: 200 · 400 `monitor_invalid_cursor` / `monitor_invalid_filter` · 404 `monitor_participant_not_found` (another contest's registration, or none) · 401 · 403 · 429 `monitor_too_often`"
+            "description": "The participant's SQL queries, newest first, each whole: the statement, status, error (PostgreSQL's own words and the policy's refusals; a failure of the platform itself is withheld), duration, rows, time and the address it came from. `status` (`ok`, `error`, `timeout`, `rejected`, `running`), `q` (a substring, without case; at most 200 characters; `%` and `_` are text), `cursor` (the last item's, for the next page), `limit` (at most 50).\n\nResponses: 200 · 400 `monitor_invalid_cursor` / `monitor_invalid_filter` · 404 `monitor_participant_not_found` (another contest's registration, or none) · 401 · 403 · 429 `monitor_too_often`"
           },
           "response": []
         },
@@ -1951,7 +1951,7 @@
                 "export.csv"
               ]
             },
-            "description": "The feed as a file, oldest first: `at, kind, login, full_name, registration_id, data` (the item's details as JSON). Streamed a page at a time; at most 200,000 rows, with a last `truncated` line when that binds, and at most a minute. One export at a time per account. Every export is recorded in the audit trail (`contest.monitor_export`) before the file starts. A cell that would start a spreadsheet formula is prefixed with an apostrophe.\n\nResponses: 200 · 401 · 403 · 429 `monitor_too_often` (the budget, or an export already running)"
+            "description": "The feed as a file, oldest first: `at, kind, login, full_name, registration_id, data` (the item's details as JSON). Streamed as a merge of every source read once; at most 200,000 rows and 64 MiB, with a last `truncated` line when either binds, and at most a minute. A file that stops for any other reason ends with an `incomplete` line. One export at a time per account. Every export is recorded in the audit trail (`contest.monitor_export`) before the file starts. A cell that would start a spreadsheet formula is prefixed with an apostrophe.\n\nResponses: 200 · 401 · 403 · 429 `monitor_too_often` (the budget, or an export already running)"
           },
           "response": []
         },
@@ -1974,7 +1974,7 @@
                 "export.csv"
               ]
             },
-            "description": "The feed as a file, oldest first: `at, kind, login, full_name, registration_id, data` (the item's details as JSON). Streamed a page at a time; at most 200,000 rows, with a last `truncated` line when that binds, and at most a minute. One export at a time per account. Every export is recorded in the audit trail (`contest.monitor_export`) before the file starts. A cell that would start a spreadsheet formula is prefixed with an apostrophe.\n\nResponses: 200 · 404 `monitor_participant_not_found` · 401 · 403 · 429 `monitor_too_often` (the budget, or an export already running)"
+            "description": "The feed as a file, oldest first: `at, kind, login, full_name, registration_id, data` (the item's details as JSON). Streamed as a merge of every source read once; at most 200,000 rows and 64 MiB, with a last `truncated` line when either binds, and at most a minute. A file that stops for any other reason ends with an `incomplete` line. One export at a time per account. Every export is recorded in the audit trail (`contest.monitor_export`) before the file starts. A cell that would start a spreadsheet formula is prefixed with an apostrophe.\n\nResponses: 200 · 404 `monitor_participant_not_found` · 401 · 403 · 429 `monitor_too_often` (the budget, or an export already running)"
           },
           "response": []
         }
