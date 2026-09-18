@@ -148,10 +148,11 @@ func feedBounds(a *args, q monitor.FeedQuery, source monitor.Source, timeCol, id
 			parts = append(parts, fmt.Sprintf("%s %s %s", timeCol, op, t))
 		}
 	}
-	if ascending {
-		// Read forwards, the newest monitor.FeedSettle is left for the next
-		// read: rows stamped inside it may still be joined by older stamps
-		// that commit later.
+	if ascending || cursor == nil {
+		// Read forwards, or as the newest page a live screen starts polling
+		// from, the newest monitor.FeedSettle is left for the next read:
+		// rows stamped inside it may still be joined by older stamps that
+		// commit later, and a cursor past them would never see those.
 		parts = append(parts, fmt.Sprintf("%s < statement_timestamp() - make_interval(secs => %s)",
 			timeCol, a.add(monitor.FeedSettle.Seconds())))
 	}
