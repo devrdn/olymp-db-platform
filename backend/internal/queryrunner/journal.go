@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net/netip"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
@@ -30,6 +31,22 @@ type Entry struct {
 	// is what makes "the participant says it failed at 14:02" answerable.
 	RequestID uuid.UUID
 	SQL       string
+	// Address is where the query came from (Origin.Address); the zero value
+	// is recorded as no address.
+	Address netip.Addr
+}
+
+// Origin is what the Core API knows about the request that carried a query
+// and the Query Runner has no use for: it travels beside the Request into the
+// journal and never crosses the gRPC contract, because the journal is written
+// on this side of it (Journalled wraps the service client).
+type Origin struct {
+	// RequestID is the request's identifier in the technical logs.
+	RequestID uuid.UUID
+	// Address is the exact client address, as httpx.ClientIP resolves it —
+	// not the rate limiter's grouped subject. The zero value means it could
+	// not be worked out.
+	Address netip.Addr
 }
 
 // ErrJournalUnavailable wraps a failure to open the journal row itself — the
@@ -107,11 +124,12 @@ func NewJournalled(runner Executor, journal Journal, log *slog.Logger) *Journall
 // A query that cannot be *closed* is different: it has already run, and the
 // participant is owed the answer. The failure is logged and the row is left
 // for the sweeper.
-func (j *Journalled) Run(ctx context.Context, req Request, requestID uuid.UUID) (*Result, error) {
+func (j *Journalled) Run(ctx context.Context, req Request, origin Origin) (*Result, error) {
 	id, err := j.journal.Begin(ctx, Entry{
 		Registration: req.Registration,
-		RequestID:    requestID,
+		RequestID:    origin.RequestID,
 		SQL:          req.SQL,
+		Address:      origin.Address,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrJournalUnavailable, err)

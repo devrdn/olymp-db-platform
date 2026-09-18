@@ -3,6 +3,8 @@ package queryproxy_test
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"net/netip"
 	"strings"
 	"sync"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
@@ -461,7 +464,7 @@ func (p panicCluster) DropIdle(context.Context, string) (bool, error) {
 // trip, so it is faked out rather than measured.
 type noOpExecutor struct{}
 
-func (noOpExecutor) Run(context.Context, queryrunner.Request, uuid.UUID) (*queryrunner.Result, error) {
+func (noOpExecutor) Run(context.Context, queryrunner.Request, queryrunner.Origin) (*queryrunner.Result, error) {
 	return &queryrunner.Result{Columns: []string{"a"}}, nil
 }
 
@@ -555,5 +558,69 @@ func TestRunsCoreRoundTripsAreMeasured(t *testing.T) {
 	// round trips the lookup collapsed changes this number.
 	if got != 3 {
 		t.Errorf("core round trips = %d, want 3 (one combined lookup, one AnswerableLeft, one Ensure)", got)
+	}
+}
+
+// answeringRunner stands in for the Query Runner service behind the journal:
+// it answers without a game database, which is not what this test is about.
+type answeringRunner struct{}
+
+func (answeringRunner) Run(context.Context, queryrunner.Request) (*queryrunner.Result, error) {
+	return &queryrunner.Result{Columns: []string{"a"}}, nil
+}
+
+// TestAQueryRowRecordsTheClientAddressAndTheFingerprint follows the address a
+// console query came from across every boundary it has to cross to reach its
+// journal row (CLAUDE.md rule 11) — the façade's command, the journal wrapped
+// around the runner as the composition root wraps it, and the real query_log
+// insert — and checks the fingerprint written by the same insert.
+func TestAQueryRowRecordsTheClientAddressAndTheFingerprint(t *testing.T) {
+	pool := integrationPool(t)
+	ctx := context.Background()
+
+	author := makeIntegrationUser(t, ctx, pool, "author-"+uuid.NewString()[:8])
+	student := makeIntegrationUser(t, ctx, pool, "student-"+uuid.NewString()[:8])
+	contestID := makeRunningFixedContest(t, ctx, pool, author, time.Now().Add(24*time.Hour))
+	t.Cleanup(func() {
+		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = pool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contestID)
+	})
+
+	registrations := postgres.NewRegistrations(pool)
+	registration, err := registrations.Add(ctx, contestID, student)
+	if err != nil {
+		t.Fatalf("Add() = %v", err)
+	}
+	journalled := queryrunner.NewJournalled(answeringRunner{}, postgres.NewQueryLog(pool),
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service := queryproxy.New(
+		registrations,
+		postgres.NewContests(pool),
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"},
+		journalled,
+	)
+
+	address := netip.MustParseAddr("203.0.113.9")
+	if _, err := service.Run(ctx, queryproxy.Command{
+		ContestID: contestID, UserID: student, SQL: "SELECT *\n\tFROM Evidence",
+		Address: address, RequestID: uuid.New(),
+	}); err != nil {
+		t.Fatalf("Run() = %v", err)
+	}
+
+	var ip *netip.Addr
+	var fingerprint *int64
+	if err := pool.QueryRow(ctx,
+		`SELECT ip, sql_fingerprint FROM query_log WHERE registration_id = $1`, registration.ID).
+		Scan(&ip, &fingerprint); err != nil {
+		t.Fatalf("read the journal row: %v", err)
+	}
+	if ip == nil || *ip != address {
+		t.Fatalf("ip = %v, want %v", ip, address)
+	}
+	if fingerprint == nil || *fingerprint != monitor.Fingerprint("select * from evidence") {
+		t.Fatalf("sql_fingerprint = %v, want the fingerprint of the normalised statement", fingerprint)
 	}
 }

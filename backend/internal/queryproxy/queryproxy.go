@@ -162,7 +162,7 @@ type Answerable interface {
 // Executor runs the query and journals it. In a deployment that is a client of
 // the Query Runner service wrapped in the query log; in a test it is neither.
 type Executor interface {
-	Run(ctx context.Context, req queryrunner.Request, requestID uuid.UUID) (*queryrunner.Result, error)
+	Run(ctx context.Context, req queryrunner.Request, origin queryrunner.Origin) (*queryrunner.Result, error)
 }
 
 // Command is one participant asking one question.
@@ -174,7 +174,9 @@ type Command struct {
 	SQL       string
 	// Address is where the query came from, resolved by the HTTP layer. The
 	// contest may be held on one network, and a participant who enrolled in
-	// the lab must not be able to carry on from home.
+	// the lab must not be able to carry on from home. It is also written into
+	// the query's journal row, so an organiser sees where each query came
+	// from.
 	Address netip.Addr
 	// RequestID ties the journal row to the same request in the technical
 	// logs, which is what makes "it failed at 14:02" answerable.
@@ -544,7 +546,7 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		SQL:            cmd.SQL,
 		Policy:         game.Policy,
 		DiskQuotaBytes: quota,
-	}, cmd.RequestID)
+	}, queryrunner.Origin{RequestID: cmd.RequestID, Address: cmd.Address})
 
 	// A refusal and the runner's own outcomes go back untouched: each carries
 	// a code the interface turns into a sentence in the participant's own

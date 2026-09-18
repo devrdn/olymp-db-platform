@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/google/uuid"
@@ -65,6 +67,55 @@ func TestQueryLogRecordsAQueryInTwoPhases(t *testing.T) {
 		// journal panel filters on "has an error", and "" is not one.
 		if errorText != nil {
 			t.Fatalf("error_text = %q, want NULL", *errorText)
+		}
+	})
+}
+
+// The row says where the query came from and what it was, normalised, in
+// the same insert that opens it (design §2.3 and §5): the organiser's query
+// tab shows the address, and "the same query as another participant" is
+// counted on the fingerprint.
+func TestQueryLogRecordsWhereAQueryCameFromAndItsFingerprint(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		log := NewQueryLog(testPool)
+		sql := "SELECT name\n  FROM Suspects"
+		id, err := log.Begin(ctx, queryrunner.Entry{
+			Registration: someRegistration(t, ctx),
+			RequestID:    uuid.New(),
+			SQL:          sql,
+			Address:      netip.MustParseAddr("2001:db8::42"),
+		})
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+
+		var ip *netip.Addr
+		var fingerprint *int64
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+			`SELECT ip, sql_fingerprint FROM query_log WHERE id = $1`, id).Scan(&ip, &fingerprint); err != nil {
+			t.Fatalf("read back: %v", err)
+		}
+		if ip == nil || *ip != netip.MustParseAddr("2001:db8::42") {
+			t.Fatalf("ip = %v, want 2001:db8::42", ip)
+		}
+		if fingerprint == nil || *fingerprint != monitor.Fingerprint(`select name from suspects`) {
+			t.Fatalf("sql_fingerprint = %v, want the fingerprint of the normalised text", fingerprint)
+		}
+	})
+}
+
+// An address that could not be worked out is no address, not 0.0.0.0.
+func TestQueryLogStoresNoAddressWhenThereIsNone(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		id := openRow(t, ctx, NewQueryLog(testPool))
+
+		var ip *netip.Addr
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+			`SELECT ip FROM query_log WHERE id = $1`, id).Scan(&ip); err != nil {
+			t.Fatalf("read back: %v", err)
+		}
+		if ip != nil {
+			t.Fatalf("ip = %v, want NULL", *ip)
 		}
 	})
 }
