@@ -334,7 +334,6 @@ describe("sending", () => {
     ["contest_finished", 409],
     ["contest_not_running", 409],
     ["not_a_participant", 403],
-    ["address_not_allowed", 403],
   ])("%s stops the collector for good", async (code, status) => {
     const { send } = recorder(async () => {
       throw new ApiError(code, status, "closed");
@@ -453,6 +452,45 @@ describe("the edges of leaving and sending", () => {
       "first",
       "second",
     ]);
+  });
+});
+
+describe("refusals that may pass and pages that come back", () => {
+  // A laptop briefly on a hotspot is outside the contest's network for a
+  // moment; stopping would silence monitoring until a reload.
+  test("address_not_allowed drops the batch and keeps collecting", async () => {
+    let refuse = true;
+    const { send, sent } = recorder(async () => {
+      if (refuse) throw new ApiError("address_not_allowed", 403, "not from here");
+    });
+    const collector = start(send);
+    const notes = field("notes");
+
+    pasteInto(notes, "one");
+    await vi.advanceTimersByTimeAsync(SIGNAL_FLUSH_MS);
+    expect(collector.pending()).toEqual([]);
+
+    refuse = false;
+    pasteInto(notes, "two");
+    await vi.advanceTimersByTimeAsync(SIGNAL_FLUSH_MS);
+    expect(sent).toHaveLength(2);
+    expect(sent[1].events).toMatchObject([{ kind: "paste", text: "two" }]);
+  });
+
+  test("a page restored from the back/forward cache records the time it was gone", () => {
+    const { send } = recorder();
+    const collector = start(send);
+    const transition = (type: string) => {
+      const event = new Event(type);
+      Object.defineProperty(event, "persisted", { value: true });
+      window.dispatchEvent(event);
+    };
+
+    transition("pagehide");
+    vi.advanceTimersByTime(5000);
+    transition("pageshow");
+
+    expect(collector.pending()).toMatchObject([{ kind: "page_left", away_ms: 5000 }]);
   });
 });
 
