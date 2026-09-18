@@ -330,9 +330,14 @@ describe("sending", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  test.each(["contest_finished", "contest_not_running"])("%s stops the collector for good", async (code) => {
+  test.each([
+    ["contest_finished", 409],
+    ["contest_not_running", 409],
+    ["not_a_participant", 403],
+    ["address_not_allowed", 403],
+  ])("%s stops the collector for good", async (code, status) => {
     const { send } = recorder(async () => {
-      throw new ApiError(code, 409, "closed");
+      throw new ApiError(code, status, "closed");
     });
     const collector = start(send);
     const notes = field("notes");
@@ -362,6 +367,92 @@ describe("sending", () => {
 
     expect(collector.pending()).toEqual([]);
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("the edges of leaving and sending", () => {
+  test("an absence the page never comes back from is recorded when the page goes away", async () => {
+    const { send, sent } = recorder();
+    start(send);
+
+    setVisibility("hidden");
+    vi.advanceTimersByTime(7000);
+    window.dispatchEvent(new Event("pagehide"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sent.at(-1)).toEqual({
+      keepalive: true,
+      events: [{ kind: "page_left", away_ms: 7000, client_at: "2026-09-18T10:00:07.000Z" }],
+    });
+  });
+
+  test("an absence shorter than a second is not recorded when the page goes away either", async () => {
+    const { send } = recorder();
+    const collector = start(send);
+
+    blur();
+    vi.advanceTimersByTime(400);
+    window.dispatchEvent(new Event("pagehide"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(send).not.toHaveBeenCalled();
+    expect(collector.pending()).toEqual([]);
+  });
+
+  test("switching tabs quickly does not spend a batch on every hide", async () => {
+    const { send, sent } = recorder();
+    const collector = start(send);
+    const notes = field("notes");
+
+    pasteInto(notes, "one");
+    setVisibility("hidden");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent).toHaveLength(1);
+
+    // Back after 2 s, and away again 1 s later: that hide is too soon after
+    // the last batch to send one of its own.
+    vi.advanceTimersByTime(2000);
+    setVisibility("visible");
+    vi.advanceTimersByTime(1000);
+    setVisibility("hidden");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent).toHaveLength(1);
+    expect(collector.pending()).toMatchObject([{ kind: "page_left", away_ms: 2000 }]);
+
+    // The timer still sends it.
+    await vi.advanceTimersByTimeAsync(SIGNAL_FLUSH_MS);
+    expect(sent).toHaveLength(2);
+  });
+
+  test("two batches that fail together go back in the order they happened", async () => {
+    const pending: Array<(error: unknown) => void> = [];
+    const send = vi.fn<SendSignals>(
+      () =>
+        new Promise<void>((_, reject) => {
+          pending.push(reject);
+        }),
+    );
+    const collector = start(send);
+    const notes = field("notes");
+
+    pasteInto(notes, "first");
+    await vi.advanceTimersByTimeAsync(SIGNAL_FLUSH_MS);
+    vi.advanceTimersByTime(1000);
+    pasteInto(notes, "second");
+    window.dispatchEvent(new Event("pagehide"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(send).toHaveBeenCalledTimes(2);
+
+    // The older batch fails first, the newer one after it.
+    pending[0](new TypeError("Failed to fetch"));
+    await vi.advanceTimersByTimeAsync(0);
+    pending[1](new TypeError("Failed to fetch"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect((collector.pending() as Extract<Signal, { kind: "paste" }>[]).map((s) => s.text)).toEqual([
+      "first",
+      "second",
+    ]);
   });
 });
 
