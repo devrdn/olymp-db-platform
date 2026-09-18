@@ -252,3 +252,31 @@ func TestAStreamEndsAtOneInstantForEverySource(t *testing.T) {
 		}
 	}
 }
+
+// A stream whose page comes back short is finished: nothing more is asked
+// of that source, since the stream's end is fixed.
+func TestAShortPageEndsAStreamWithoutAnotherRead(t *testing.T) {
+	at := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+	reg := uuid.New()
+	sources := &pagedSources{items: map[Source][]FeedItem{}}
+	for i := range MaxFeedPage + 5 { // one full page and a short one
+		sources.items[SourceEvent] = append(sources.items[SourceEvent],
+			FeedItem{Source: SourceEvent, ID: strconv.Itoa(i + 1), At: at.Add(time.Duration(i) * time.Second), Registration: reg})
+	}
+	if err := StreamFeed(t.Context(), sources, FeedQuery{Registration: reg}, at.Add(time.Hour),
+		func(FeedItem) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	reads := map[Source]int{}
+	for _, source := range sources.sources {
+		reads[source]++
+	}
+	if reads[SourceEvent] != 2 {
+		t.Errorf("event source read %d times, want 2 (a full page, then a short one)", reads[SourceEvent])
+	}
+	for source, n := range reads {
+		if source != SourceEvent && n != 1 {
+			t.Errorf("empty source %d read %d times, want once", source, n)
+		}
+	}
+}

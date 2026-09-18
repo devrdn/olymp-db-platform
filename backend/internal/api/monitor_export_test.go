@@ -139,7 +139,7 @@ func lastLine(t *testing.T, body string) []string {
 func TestAnExportThatFailsMidwaySaysItIsIncomplete(t *testing.T) {
 	f := newMonitorFixture(t)
 	f.store.events = manyEvents(500, f.reg)
-	f.store.failReads = 8 // the first pages of every source, then a failure
+	f.store.failReads = 6 // the first page of every source, then a failure
 	rec := f.get(f.base()+"/export.csv", &f.organizer)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("export: %d", rec.Code)

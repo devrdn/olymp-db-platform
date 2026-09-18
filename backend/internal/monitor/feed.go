@@ -465,6 +465,9 @@ func StreamFeed(ctx context.Context, r FeedSourceReader, q FeedQuery, now time.T
 		if err != nil {
 			return err
 		}
+		// A page shorter than it could have been is the source's last: the
+		// stream's end (q.Until) is fixed, so nothing can join it later.
+		last := len(items) <= page.Limit
 		kept := items[:0]
 		for _, item := range items {
 			if item.Cursor().Compare(s.cursor) > 0 {
@@ -472,7 +475,7 @@ func StreamFeed(ctx context.Context, r FeedSourceReader, q FeedQuery, now time.T
 			}
 		}
 		slices.SortFunc(kept, func(a, b FeedItem) int { return a.Cursor().Compare(b.Cursor()) })
-		s.buf, s.done = kept, len(kept) == 0
+		s.buf, s.done = kept, last || len(kept) == 0
 		return nil
 	}
 	for {
