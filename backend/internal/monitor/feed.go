@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"container/heap"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -428,13 +429,6 @@ func StreamFeed(ctx context.Context, r FeedSourceReader, q FeedQuery, now time.T
 	}
 	q.Before, q.Limit = nil, MaxFeedPage
 
-	type stream struct {
-		source Source
-		query  FeedQuery
-		cursor Cursor
-		buf    []FeedItem
-		done   bool
-	}
 	var registrations []uuid.UUID
 	if q.Registration == uuid.Nil {
 		found, err := r.FeedRegistrations(ctx, q.Contest)
@@ -481,23 +475,62 @@ func StreamFeed(ctx context.Context, r FeedSourceReader, q FeedQuery, now time.T
 		s.buf, s.done = kept, last || len(kept) == 0
 		return nil
 	}
-	for {
-		var next *stream
-		for _, s := range streams {
-			if err := fill(s); err != nil {
-				return err
-			}
-			if len(s.buf) > 0 && (next == nil || s.buf[0].Cursor().Compare(next.buf[0].Cursor()) < 0) {
-				next = s
-			}
+	// The streams with an item in hand, ordered by that item: the next item
+	// of the feed is always the top one's head.
+	ready := &streamHeap{}
+	for _, s := range streams {
+		if err := fill(s); err != nil {
+			return err
 		}
-		if next == nil {
-			return nil
+		if len(s.buf) > 0 {
+			ready.items = append(ready.items, s)
 		}
+	}
+	ready.head = func(s *stream) Cursor { return s.buf[0].Cursor() }
+	heap.Init(ready)
+	for ready.Len() > 0 {
+		next := ready.items[0]
 		item := next.buf[0]
 		next.buf, next.cursor = next.buf[1:], item.Cursor()
 		if err := yield(item); err != nil {
 			return err
 		}
+		if err := fill(next); err != nil {
+			return err
+		}
+		if len(next.buf) > 0 {
+			heap.Fix(ready, 0)
+		} else {
+			heap.Pop(ready)
+		}
 	}
+	return nil
+}
+
+// stream is one source (of one registration, or of the contest) that
+// StreamFeed reads forwards a page at a time.
+type stream struct {
+	source Source
+	query  FeedQuery
+	cursor Cursor
+	buf    []FeedItem
+	done   bool
+}
+
+// streamHeap orders streams by the item each has in hand (container/heap):
+// picking the next item of a contest-wide export among thousands of streams
+// is a logarithm, not a scan of them all.
+type streamHeap struct {
+	items []*stream
+	head  func(*stream) Cursor
+}
+
+func (h *streamHeap) Len() int           { return len(h.items) }
+func (h *streamHeap) Less(i, j int) bool { return h.head(h.items[i]).Compare(h.head(h.items[j])) < 0 }
+func (h *streamHeap) Swap(i, j int)      { h.items[i], h.items[j] = h.items[j], h.items[i] }
+func (h *streamHeap) Push(x any)         { h.items = append(h.items, x.(*stream)) }
+func (h *streamHeap) Pop() any {
+	last := h.items[len(h.items)-1]
+	h.items = h.items[:len(h.items)-1]
+	return last
 }
