@@ -119,9 +119,12 @@ describe("the monitoring screen", () => {
     const { ApiError } = await import("@/lib/api/client");
     fetchRoster.mockRejectedValueOnce(new ApiError("forbidden", 403, "no"));
     renderView();
+    // The live region is there, empty, before anything goes wrong: a region
+    // that appears together with its text is not announced by every reader.
+    expect(screen.getByRole("status")).toHaveTextContent(/^$/);
 
     await act(() => vi.advanceTimersByTimeAsync(MONITOR_POLL_MS));
-    expect(screen.getByText(dict.workspace.monitor.problems.forbidden)).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(dict.workspace.monitor.problems.forbidden);
   });
 
   test("says how long it will wait after too many reads", async () => {
