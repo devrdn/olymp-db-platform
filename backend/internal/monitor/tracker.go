@@ -182,10 +182,15 @@ func (t *Tracker) Observe(ctx context.Context, visit Visit) {
 
 	var current trail
 	if found && json.Unmarshal(raw, &current) == nil && current.Session != "" {
-		// Only on the rare switch of sessions inside the window: is the
-		// tracked one still alive, or did it end and this one replace it?
+		// Only on the rare switch of sessions inside the window, and only
+		// when the pair is due to be reported: is the tracked one still
+		// alive, or did it end and this one replace it? A pair reported in
+		// the last ParallelReportEvery would write nothing either way, so a
+		// genuine second device does not pay for the question on every
+		// request.
 		trackedLive := true
-		if visit.Session != current.Session && now.Sub(current.Seen) < ParallelWindow {
+		if visit.Session != current.Session && now.Sub(current.Seen) < ParallelWindow &&
+			current.due(pairKey("session", current.Session, visit.Session), now) {
 			alive, err := t.sessions.SessionAlive(ctx, current.Session, visit.Session)
 			if err != nil {
 				// Not knowing, report nothing and move nothing: a guess either
@@ -261,6 +266,13 @@ func (tr *trail) follow(visit Visit, now time.Time, trackedLive bool) ([]Event, 
 		changed = true
 	}
 	return events, changed
+}
+
+// due reports whether pair would be reported at now, without noting it.
+func (tr *trail) due(pair string, now time.Time) bool {
+	return !slices.ContainsFunc(tr.Reported, func(r reported) bool {
+		return r.Pair == pair && now.Sub(r.At) < ParallelReportEvery && !now.Before(r.At)
+	})
 }
 
 // remember reports whether pair is due to be reported at now, and if so
