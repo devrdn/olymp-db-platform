@@ -102,6 +102,15 @@ var (
 	ErrInvalidFeedFilter = errors.New("the feed filter is not valid")
 )
 
+// The range of times a cursor may name. A cursor is the client's to send
+// back, and a time PostgreSQL cannot hold (or one pgx wraps on the way) would
+// otherwise reach the database as a 500 rather than a refusal. Nothing the
+// feed shows is older than the first bound or newer than the second.
+var (
+	EarliestCursorTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	LatestCursorTime   = time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC)
+)
+
 // Cursor is one position in the merged feed: the time, the source and the
 // id of an item.
 type Cursor struct {
@@ -131,7 +140,7 @@ func ParseCursor(text string) (Cursor, error) {
 		return Cursor{}, ErrInvalidCursor
 	}
 	micros, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
+	if err != nil || micros < EarliestCursorTime.UnixMicro() || micros > LatestCursorTime.UnixMicro() {
 		return Cursor{}, ErrInvalidCursor
 	}
 	source := slices.Index(sourceCodes[:], parts[1])
