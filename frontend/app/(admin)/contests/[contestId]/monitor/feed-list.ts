@@ -30,16 +30,24 @@ export type FeedState = {
    * the latest reads the newest page afresh.
    */
   detached: boolean;
+  /** New items that arrived while detached. */
   missed: number;
+  /**
+   * How many items, at least, were skipped rather than read: the screen fell
+   * so far behind (a tab hidden for an hour) that it read the newest page
+   * afresh instead of paging through the gap. Zero when nothing was skipped.
+   */
+  gap: number;
 };
 
-export function initialFeed(page: FeedPage): FeedState {
+export function initialFeed(page: FeedPage, gap = 0): FeedState {
   return {
     items: page.items.slice(-FEED_LIMIT),
     newest: page.newest,
     olderAvailable: page.more || page.items.length > FEED_LIMIT,
     detached: false,
     missed: 0,
+    gap,
   };
 }
 
