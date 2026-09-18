@@ -6,7 +6,6 @@ import {
   feedSchema,
   fetchFeed,
   fetchRoster,
-  mayMonitor,
   monitorCsvHref,
   rosterSchema,
 } from "./monitor";
@@ -199,34 +198,5 @@ describe("reading from the browser", () => {
 
     expect(failure).toBeInstanceOf(ApiError);
     expect(failure).toMatchObject({ code: "monitor_too_often", status: 429, retryAfterSeconds: 60 });
-  });
-});
-
-/**
- * Whether the tab is offered. The API names no per-contest permission, so the
- * rule is the one `rbac.Authorize` applies to contest.monitor: an
- * installation-wide contest.admin_all, or being the owner or a manager of
- * this contest, both of which grant it.
- */
-describe("who is offered the monitoring tab", () => {
-  const managers = [
-    { userId: "owner-id", role: "owner" as const },
-    { userId: "manager-id", role: "manager" as const },
-  ];
-
-  test("offers it to the contest's owner and its managers", () => {
-    expect(mayMonitor({ id: "owner-id", permissions: [] }, managers)).toBe(true);
-    expect(mayMonitor({ id: "manager-id", permissions: ["contest.create"] }, managers)).toBe(true);
-  });
-
-  test("offers it to an administrator of every contest", () => {
-    expect(mayMonitor({ id: "admin-id", permissions: ["contest.admin_all"] }, [])).toBe(true);
-    expect(mayMonitor({ id: "admin-id", permissions: ["contest.admin_all"] }, null)).toBe(true);
-  });
-
-  test("does not offer it to anybody else", () => {
-    expect(mayMonitor({ id: "stranger", permissions: ["contest.view", "contest.monitor"] }, managers)).toBe(false);
-    expect(mayMonitor(null, managers)).toBe(false);
-    expect(mayMonitor({ id: "owner-id", permissions: [] }, null)).toBe(false);
   });
 });

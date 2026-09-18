@@ -165,6 +165,11 @@ export const contestSchema = z
     translations: z.record(z.string(), translationSchema),
     created_at: z.string(),
     updated_at: z.string(),
+    // Whether the caller holds contest.monitor here, decided by the server's
+    // authoriser. Sent only by the read of one contest; the answer to a
+    // write omits it, and that reads as "no" — the tab it decides is simply
+    // not offered from a stale copy.
+    may_monitor: z.boolean().default(false),
   })
   .transform((raw) => ({
     id: raw.id,
@@ -189,6 +194,7 @@ export const contestSchema = z
     translations: raw.translations,
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
+    mayMonitor: raw.may_monitor,
   }));
 
 export type Contest = z.infer<typeof contestSchema>;

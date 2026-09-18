@@ -2,17 +2,14 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { Contest } from "@/lib/api/contests";
-import type { CurrentIdentity } from "@/lib/auth/session";
 
 // The layout is a Server Component: everything it reads through the request
-// (the session, the locale, the API) is faked here, and what is under test is
-// what it decides from those answers — which sections it offers.
-const { fetchIdentity, loadContest, loadContestResource } = vi.hoisted(() => ({
-  fetchIdentity: vi.fn(),
+// (the locale, the API) is faked here, and what is under test is what it
+// decides from those answers — which sections it offers.
+const { loadContest, loadContestResource } = vi.hoisted(() => ({
   loadContest: vi.fn(),
   loadContestResource: vi.fn(),
 }));
-vi.mock("@/lib/auth/session", () => ({ fetchIdentity }));
 vi.mock("./contest", () => ({ loadContest, loadContestResource }));
 vi.mock("@/lib/i18n/server", async () => {
   const { getDictionary } = await import("@/lib/i18n/dictionary");
@@ -46,10 +43,6 @@ const contest = {
   updatedAt: "2026-08-31T17:00:00Z",
 } as unknown as Contest;
 
-function identity(id: string, permissions: string[] = []): CurrentIdentity {
-  return { id, login: id, fullName: id, roles: [], permissions };
-}
-
 async function renderLayout() {
   render(
     await ContestLayout({
@@ -61,22 +54,17 @@ async function renderLayout() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  loadContest.mockResolvedValue(contest);
-  loadContestResource.mockImplementation(async (_id: string, path: string) => {
-    if (path === "/managers") {
-      return { items: [{ userId: "owner-1", login: "o", fullName: "O", role: "owner", grantedAt: "x" }] };
-    }
-    return null;
-  });
+  loadContestResource.mockResolvedValue(null);
 });
 
 /**
- * The monitoring tab is offered to whoever holds contest.monitor on this
- * contest, and to nobody else — see `mayMonitor` for how that is read.
+ * The monitoring tab is offered exactly when the API says the viewer holds
+ * contest.monitor on this contest (`may_monitor`); the layout restates no
+ * permission rule of its own.
  */
 describe("the monitoring tab", () => {
-  test("is offered to the contest's owner", async () => {
-    fetchIdentity.mockResolvedValue(identity("owner-1"));
+  test("is offered when the API says the viewer may monitor", async () => {
+    loadContest.mockResolvedValue({ ...contest, mayMonitor: true });
     await renderLayout();
 
     expect(screen.getByRole("link", { name: "Monitoring" })).toHaveAttribute(
@@ -85,15 +73,8 @@ describe("the monitoring tab", () => {
     );
   });
 
-  test("is offered to an administrator of every contest", async () => {
-    fetchIdentity.mockResolvedValue(identity("admin-1", ["contest.admin_all"]));
-    await renderLayout();
-
-    expect(screen.getByRole("link", { name: "Monitoring" })).toBeInTheDocument();
-  });
-
-  test("is not offered to somebody without the permission on this contest", async () => {
-    fetchIdentity.mockResolvedValue(identity("stranger", ["contest.view"]));
+  test("is not offered otherwise", async () => {
+    loadContest.mockResolvedValue({ ...contest, mayMonitor: false });
     await renderLayout();
 
     expect(screen.queryByRole("link", { name: "Monitoring" })).not.toBeInTheDocument();
@@ -101,10 +82,10 @@ describe("the monitoring tab", () => {
     expect(screen.getByRole("link", { name: "Leaderboard" })).toBeInTheDocument();
   });
 
-  test("is not offered when the identity cannot be read", async () => {
-    fetchIdentity.mockRejectedValue(new Error("down"));
+  test("reads no staff list to decide it", async () => {
+    loadContest.mockResolvedValue({ ...contest, mayMonitor: true });
     await renderLayout();
 
-    expect(screen.queryByRole("link", { name: "Monitoring" })).not.toBeInTheDocument();
+    expect(loadContestResource).not.toHaveBeenCalledWith(CONTEST_ID, "/managers", expect.anything());
   });
 });

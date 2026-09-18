@@ -12,7 +12,7 @@ import { MonitorView } from "./monitor-view";
  * The monitoring routes answer 403 to anybody without contest.monitor on this
  * contest, and `loadContestResource` answers that as a 404 page — the same
  * as for a contest the viewer may not see at all. The navigation hides the
- * tab from them too (`mayMonitor`), but this is the check that holds.
+ * tab from them too (`may_monitor`), but this is the check that holds.
  */
 export default async function MonitorPage(props: PageProps<"/contests/[contestId]/monitor">) {
   const [{ contestId }, locale, dict] = await Promise.all([props.params, activeLocale(), activeDictionary()]);

@@ -3,10 +3,7 @@ import { ContestWindow } from "@/components/product/contest-window";
 import { Tag } from "@/components/ui/tag";
 import { questionListSchema, untranslated } from "@/lib/api/content";
 import { contentEditable, publishCheckSchema, titleIn, type ContestStatus } from "@/lib/api/contests";
-import { mayMonitor } from "@/lib/api/monitor";
-import { managerListSchema } from "@/lib/api/people";
 import { PUBLISH_PROBLEMS } from "@/lib/api/publish-gate";
-import { fetchIdentity } from "@/lib/auth/session";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 import { ContestCrumbs } from "./contest-crumbs";
@@ -63,25 +60,17 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
   // needed to. The overview page (`page.tsx`) asks the same gate endpoint
   // again; `fetch`'s own request memoisation collapses that into the one
   // call already in flight from here, same pass, same request.
-  //
-  // The identity and the staff list decide one thing, whether the monitoring
-  // tab is offered (`mayMonitor`), and are just as independent. Either one
-  // failing hides the tab and nothing else: the monitoring page does its own
-  // check against the API, so a tab missing for a moment costs a click, and a
-  // workspace that failed whole over it would cost every section.
-  const [contest, check, identity, managers] = await Promise.all([
+  const [contest, check] = await Promise.all([
     loadContest(contestId),
     loadContestResource(contestId, "/publish-check", (payload) =>
       publishCheckSchema.parse(payload),
     ).catch(() => null),
-    fetchIdentity().catch(() => null),
-    loadContestResource(contestId, "/managers", (payload) => managerListSchema.parse(payload)).catch(
-      () => null,
-    ),
   ]);
   const t = dict.workspace;
   const base = `/contests/${contest.id}`;
-  const monitor = mayMonitor(identity, managers?.items ?? null);
+  // The server decides whether the viewer holds contest.monitor here, with
+  // the same authoriser the monitoring routes use; nothing is restated.
+  const monitor = contest.mayMonitor;
 
   const groups = await navigation(
     contestId,
