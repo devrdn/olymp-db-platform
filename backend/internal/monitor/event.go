@@ -3,10 +3,15 @@
 // (design §2.1) with the bound on every field of each, the rule that folds
 // frequent saves of the notes and SQL tabs into revisions (§2.4), and the
 // fingerprint that tells two participants' identical queries apart from
-// merely similar ones (§5).
+// merely similar ones (§5). Its Tracker detects the two signals the server
+// sees for itself (§2.3): a registration's address changing, and a second
+// session using it while the first is live.
 //
-// It deliberately does not store anything (internal/postgres does, through
-// interfaces its consumers declare), serve anything over HTTP (internal/api
+// It deliberately does not store anything itself (internal/postgres stores
+// events and revisions, and the Tracker keeps its per-registration trail in
+// the platform cache, each through an interface its consumer declares),
+// decide when a request is a participant's (queryproxy's admission does, and
+// hands the Tracker only admitted requests), serve anything over HTTP (internal/api
 // does), decide who may watch (rbac.PermissionContestMonitor does), or judge
 // a participant: a browser signal is what the participant's own browser
 // chose to report, and nothing here treats it as proof.
