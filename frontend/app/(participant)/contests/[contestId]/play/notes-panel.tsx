@@ -117,6 +117,8 @@ function NotesEditor({
         placeholder={t.placeholder}
         spellCheck={false}
         aria-describedby={describedBy}
+        // Pastes here are reported to the organiser (use-signals.ts).
+        data-paste-target="notes"
         onChange={(event) => {
           const text = event.currentTarget.value;
           setValue(text);

@@ -319,6 +319,8 @@ function QuestionCard({
               disabled={pending || locked}
               aria-label={t.answerLabel}
               autoComplete="off"
+              // Pastes here are reported to the organiser (use-signals.ts).
+              data-paste-target="answer"
             />
           )}
 
