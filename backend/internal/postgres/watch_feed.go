@@ -316,7 +316,7 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 	}
 	if all || wanted[monitor.FeedSignInFailed] {
 		branches = append(branches, `
-		SELECT a.id, r.id, a.created_at, a.action, host(a.ip), a.user_agent, a.payload
+		SELECT a.id, r.id AS registration_id, a.created_at, a.action, host(a.ip), a.user_agent, a.payload
 		FROM registrations r
 		JOIN users u ON u.id = r.user_id
 		CROSS JOIN LATERAL (
@@ -331,7 +331,7 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 	}
 	if all || wanted[monitor.FeedDisqualified] {
 		branches = append(branches, `
-		SELECT a.id, r.id, a.created_at, a.action, host(a.ip), a.user_agent, a.payload
+		SELECT a.id, r.id AS registration_id, a.created_at, a.action, host(a.ip), a.user_agent, a.payload
 		FROM (
 		    SELECT a.* FROM audit_log a
 		    WHERE a.entity = 'contest' AND a.entity_id = `+a.add(q.Contest.String())+`

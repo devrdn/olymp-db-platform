@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/netip"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // watchFixture is one contest with its participants, and helpers that write
@@ -333,3 +335,206 @@ func TestWatchRosterRaisesEachFlagAtItsThreshold(t *testing.T) {
 }
 
 func mustAddr(s string) netip.Addr { return netip.MustParseAddr(s) }
+
+// journals are the tables no organiser's read may scan whole.
+var journals = map[string]bool{"query_log": true, "participant_events": true, "submissions": true, "audit_log": true}
+
+// explainingQuerier EXPLAINs every statement before running it, and keeps
+// each plan's sequential scans of a journal.
+type explainingQuerier struct {
+	storage.Querier
+	t     *testing.T
+	scans *[]string
+}
+
+func (q explainingQuerier) explain(ctx context.Context, sql string, args ...any) {
+	q.t.Helper()
+	var raw []byte
+	if err := q.Querier.QueryRow(ctx, "EXPLAIN (FORMAT JSON) "+sql, args...).Scan(&raw); err != nil {
+		q.t.Fatalf("EXPLAIN %s: %v", sql, err)
+	}
+	var plans []struct {
+		Plan planNode `json:"Plan"`
+	}
+	if err := json.Unmarshal(raw, &plans); err != nil {
+		q.t.Fatalf("read the plan: %v", err)
+	}
+	var walk func(n planNode)
+	walk = func(n planNode) {
+		if n.NodeType == "Seq Scan" && journals[n.Relation] {
+			*q.scans = append(*q.scans, n.Relation+" in:\n"+sql+"\nplan: "+string(raw))
+		}
+		for _, child := range n.Plans {
+			walk(child)
+		}
+	}
+	for _, p := range plans {
+		walk(p.Plan)
+	}
+}
+
+type planNode struct {
+	NodeType string     `json:"Node Type"`
+	Relation string     `json:"Relation Name"`
+	Plans    []planNode `json:"Plans"`
+}
+
+func (q explainingQuerier) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	q.explain(ctx, sql, args...)
+	return q.Querier.Query(ctx, sql, args...)
+}
+
+func (q explainingQuerier) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	q.explain(ctx, sql, args...)
+	return q.Querier.QueryRow(ctx, sql, args...)
+}
+
+// TestWatchReadsScanNoJournal runs every organiser's read against a database
+// holding a representative olympiad — three contests of forty participants,
+// each with a few hundred queries, events, answers and sign-ins, beside
+// everything else the test database holds — and EXPLAINs each statement
+// exactly as the read sends it: none may plan a sequential scan of
+// query_log, participant_events, submissions or audit_log (design §9).
+//
+// The planner is left free, not forced off sequential scans: with the
+// statistics ANALYZE gathers on this data, a plan that falls back to a scan
+// is the plan production would run.
+func TestWatchReadsScanNoJournal(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		q := storage.QuerierFrom(ctx, testPool)
+		var contests []*watchFixture
+		for range 3 {
+			contests = append(contests, newWatchFixture(t, ctx))
+		}
+		// The rest of a year: other contests' participants, ten times as
+		// many, so the contest being read is the small part of each journal
+		// it is in production.
+		history := newWatchFixture(t, ctx)
+		loadOlympiad(t, history, 99, 400)
+		for ci, f := range contests {
+			loadOlympiad(t, f, ci, 40)
+		}
+		for _, table := range []string{"users", "registrations", "query_log", "participant_events", "submissions", "audit_log", "workspace_revisions"} {
+			if _, err := q.Exec(ctx, "ANALYZE "+table); err != nil {
+				t.Fatalf("analyze %s: %v", table, err)
+			}
+		}
+
+		f := contests[1]
+		var reg uuid.UUID
+		if err := q.QueryRow(ctx, `SELECT id FROM registrations WHERE contest_id = $1 LIMIT 1`, f.contest).Scan(&reg); err != nil {
+			t.Fatal(err)
+		}
+		var scans []string
+		watch := NewWatch(testPool)
+		watch.wrap = func(inner storage.Querier) storage.Querier {
+			return explainingQuerier{Querier: inner, t: t, scans: &scans}
+		}
+		middle := monitor.Cursor{At: f.at(20 * time.Minute), Source: monitor.SourceQuery, ID: "1"}
+		reads := map[string]func() error{
+			"roster": func() error { _, err := watch.Roster(ctx, f.contest, monitor.MaxRosterRows); return err },
+			"contest feed, newest": func() error {
+				_, err := watch.Feed(ctx, monitor.FeedQuery{Contest: f.contest, Limit: monitor.MaxFeedPage})
+				return err
+			},
+			"contest feed, after": func() error {
+				_, err := watch.Feed(ctx, monitor.FeedQuery{Contest: f.contest, After: &middle, Limit: monitor.MaxFeedPage})
+				return err
+			},
+			"contest feed, before, filtered": func() error {
+				_, err := watch.Feed(ctx, monitor.FeedQuery{Contest: f.contest, Before: &middle,
+					Kinds: []string{monitor.FeedKindQuery, string(monitor.KindPaste), monitor.FeedSignInFailed},
+					From:  f.at(0), Until: f.at(time.Hour), Limit: 50})
+				return err
+			},
+			"timeline": func() error {
+				_, err := watch.Feed(ctx, monitor.FeedQuery{Contest: f.contest, Registration: reg, After: &middle, Limit: monitor.MaxFeedPage})
+				return err
+			},
+			"participant": func() error { _, err := watch.Participant(ctx, f.contest, reg); return err },
+			"queries": func() error {
+				_, err := watch.Queries(ctx, monitor.QueriesQuery{Contest: f.contest, Registration: reg,
+					Status: "error", Search: "suspects", Before: &middle})
+				return err
+			},
+			"answers":   func() error { _, err := watch.Answers(ctx, f.contest, reg, monitor.MaxAttemptQueries); return err },
+			"workspace": func() error { _, err := watch.Workspace(ctx, reg); return err },
+			"revision": func() error {
+				_, err := watch.Revision(ctx, reg, 1)
+				if errors.Is(err, monitor.ErrRevisionNotFound) {
+					return nil
+				}
+				return err
+			},
+		}
+		for name, read := range reads {
+			scans = scans[:0]
+			if err := read(); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			for _, scan := range scans {
+				t.Errorf("%s scans a journal whole: %s", name, scan)
+			}
+		}
+	})
+}
+
+// loadOlympiad enrols participants in f's contest and gives each three
+// hundred queries, a hundred events, thirty answers, fifty sign-ins, ten
+// failed ones and twenty revisions — written in time order across the
+// participants, as a real olympiad interleaves them on disk.
+func loadOlympiad(t *testing.T, f *watchFixture, tag, participants int) {
+	t.Helper()
+	f.exec(`
+		WITH people AS (
+		    INSERT INTO users (login, full_name, status, password_hash)
+		    SELECT 'load-' || $2::int || '-' || n || '-' || substr(md5(random()::text), 1, 8), 'Load ' || n, 'active', 'x'
+		    FROM generate_series(1, $4::int) n
+		    RETURNING id
+		)
+		INSERT INTO registrations (contest_id, user_id, started_at, created_at)
+		SELECT $1, id, $3::timestamptz, $3::timestamptz - interval '1 hour' FROM people`, f.contest, tag, f.base, participants)
+	f.exec(`
+		INSERT INTO query_log (registration_id, request_id, sql_text, status, ip, sql_fingerprint, executed_at)
+		SELECT r.id, gen_random_uuid(),
+		       'select * from suspects where id = ' || n || ' and name like ''%' || md5(n::text) || '%''',
+		       (ARRAY['ok','ok','ok','error','rejected'])[1 + n % 5], '192.0.2.1', n % 50,
+		       $2::timestamptz + n * interval '10 seconds'
+		FROM registrations r CROSS JOIN generate_series(1, 300) n
+		WHERE r.contest_id = $1
+		ORDER BY n, r.id`, f.contest, f.base)
+	f.exec(`
+		INSERT INTO participant_events (contest_id, registration_id, kind, payload, created_at)
+		SELECT $1, r.id, CASE WHEN n % 2 = 0 THEN 'page_left' ELSE 'paste' END,
+		       CASE WHEN n % 2 = 0 THEN '{"away_ms": 4000}'::jsonb
+		            ELSE '{"target": "editor", "chars": 300, "text": "x"}'::jsonb END,
+		       $2::timestamptz + n * interval '30 seconds'
+		FROM registrations r CROSS JOIN generate_series(1, 100) n
+		WHERE r.contest_id = $1
+		ORDER BY n, r.id`, f.contest, f.base)
+	f.exec(`
+		INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct, submitted_at)
+		SELECT r.id, $2, n, 'v', n = 30, $3::timestamptz + n * interval '5 minutes'
+		FROM registrations r CROSS JOIN generate_series(1, 30) n
+		WHERE r.contest_id = $1
+		ORDER BY n, r.id`, f.contest, f.question, f.base)
+	f.exec(`
+		INSERT INTO audit_log (actor_id, action, entity, entity_id, ip, created_at)
+		SELECT r.user_id, 'auth.login', 'user', r.user_id::text, '192.0.2.1', $2::timestamptz + n * interval '20 minutes'
+		FROM registrations r CROSS JOIN generate_series(1, 50) n
+		WHERE r.contest_id = $1
+		ORDER BY n, r.id`, f.contest, f.base)
+	f.exec(`
+		INSERT INTO audit_log (action, entity, payload, created_at)
+		SELECT 'auth.login_failed', 'user', jsonb_build_object('login', u.login, 'reason', 'wrong_password'),
+		       $2::timestamptz + n * interval '20 minutes'
+		FROM registrations r JOIN users u ON u.id = r.user_id CROSS JOIN generate_series(1, 10) n
+		WHERE r.contest_id = $1
+		ORDER BY n, r.id`, f.contest, f.base)
+	f.exec(`
+		INSERT INTO workspace_revisions (registration_id, document, body, started_at, updated_at)
+		SELECT r.id, 'notes', repeat('n', 200), $2::timestamptz + n * interval '1 minute', $2::timestamptz + n * interval '1 minute'
+		FROM registrations r CROSS JOIN generate_series(1, 20) n
+		WHERE r.contest_id = $1
+		ORDER BY n, r.id`, f.contest, f.base)
+}
