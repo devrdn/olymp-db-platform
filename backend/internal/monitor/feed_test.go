@@ -104,3 +104,16 @@ func TestMergeFeedTakesTheFirstItemsPastTheCursorInOrder(t *testing.T) {
 		t.Errorf("newest: %+v", page)
 	}
 }
+
+func TestACursorOutsideTheClockIsRefused(t *testing.T) {
+	for _, at := range []time.Time{EarliestCursorTime.Add(-time.Microsecond), LatestCursorTime.Add(time.Microsecond)} {
+		if _, err := ParseCursor(Cursor{At: at, Source: SourceQuery, ID: "1"}.Encode()); !errors.Is(err, ErrInvalidCursor) {
+			t.Errorf("cursor at %v: %v, want ErrInvalidCursor", at, err)
+		}
+	}
+	for _, at := range []time.Time{EarliestCursorTime, LatestCursorTime} {
+		if _, err := ParseCursor(Cursor{At: at, Source: SourceQuery, ID: "1"}.Encode()); err != nil {
+			t.Errorf("cursor at the bound %v: %v", at, err)
+		}
+	}
+}

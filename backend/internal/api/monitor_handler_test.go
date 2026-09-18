@@ -367,3 +367,18 @@ func TestTheOrganisersReadsAreBudgeted(t *testing.T) {
 		t.Errorf("a participant: %d, want 403 before any budget", rec.Code)
 	}
 }
+
+func TestACursorOutsideAnyClockIsRefused(t *testing.T) {
+	f := newMonitorFixture(t)
+	for _, at := range []time.Time{time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC),
+		time.UnixMicro(-1 << 62), time.UnixMicro(1 << 62)} {
+		c := monitor.Cursor{At: at, Source: monitor.SourceQuery, ID: "1"}.Encode()
+		for _, path := range []string{f.base() + "/feed?after=" + c, f.one(f.reg) + "/timeline?before=" + c,
+			f.one(f.reg) + "/queries?cursor=" + c} {
+			rec := f.get(path, &f.organizer)
+			if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "monitor_invalid_cursor" {
+				t.Errorf("%s: %d %s, want 400 monitor_invalid_cursor", path, rec.Code, rec.Body.String())
+			}
+		}
+	}
+}

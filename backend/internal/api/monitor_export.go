@@ -92,7 +92,7 @@ func (h *MonitorHandler) exportCSV(w http.ResponseWriter, r *http.Request, regis
 	}
 
 	// From before anything, forwards, a page at a time.
-	cursor := monitor.Cursor{Source: monitor.SourceAudit, ID: "0"}
+	cursor := monitor.Cursor{At: monitor.EarliestCursorTime, Source: monitor.SourceAudit, ID: "0"}
 	written, truncated := 0, false
 	for {
 		page, err := h.watch.Feed(ctx, monitor.FeedQuery{Contest: contest, Registration: registration,
