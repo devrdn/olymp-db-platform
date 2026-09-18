@@ -91,6 +91,7 @@ func scanLoggedQuery(row pgx.CollectableRow) (monitor.LoggedQuery, error) {
 	var item monitor.LoggedQuery
 	err := row.Scan(&item.ID, &item.At, &item.SQL, &item.SQLTruncated, &item.Status, &item.Error,
 		&item.DurationMs, &item.RowCount, &item.IP)
+	item.Error = monitor.StaffErrorText(item.Status, item.Error)
 	return item, err
 }
 
@@ -171,7 +172,8 @@ func (w *Watch) Answers(ctx context.Context, contest, registration uuid.UUID, pe
 		if id == nil {
 			continue
 		}
-		q.ID, q.At, q.SQL, q.SQLTruncated, q.Status, q.Error, q.IP = *id, *at, *sql, *truncated, *status, *errText, *ip
+		q.ID, q.At, q.SQL, q.SQLTruncated, q.Status, q.IP = *id, *at, *sql, *truncated, *status, *ip
+		q.Error = monitor.StaffErrorText(q.Status, *errText)
 		last := &attempts[len(attempts)-1]
 		last.Queries = append(last.Queries, q)
 		last.MoreQueries--

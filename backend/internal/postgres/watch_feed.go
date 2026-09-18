@@ -192,6 +192,7 @@ func (w *Watch) feedQueries(ctx context.Context, q monitor.FeedQuery) ([]monitor
 			&data.Error, &data.DurationMs, &data.RowCount, &data.IP); err != nil {
 			return item, fmt.Errorf("scan a feed query: %w", err)
 		}
+		data.Error = monitor.StaffErrorText(data.Status, data.Error)
 		item.Source, item.ID, item.Kind, item.Data = monitor.SourceQuery, strconv.FormatInt(data.ID, 10), monitor.FeedKindQuery, data
 		return item, nil
 	})
