@@ -298,6 +298,7 @@ const en = {
         back: "All participants",
         csvLabel: "Download everything this participant did, as CSV",
         status: "Status",
+        clock: "Clock",
         started: "Started {time}",
         notStarted: "Has not started",
         finished: "Finished {time}",
