@@ -353,7 +353,7 @@ const en = {
           points: "{n} pts",
           queriesToggle: "Queries that led to it: {n}",
           noQueries: "No queries since the previous attempt.",
-          moreQueries: "{n} earlier queries of this stretch are not shown; the queries tab and the CSV have them.",
+          moreQueries: "{n} later queries of this stretch, the ones closest to the attempt, are not shown; the queries tab and the CSV have them.",
           window: "Queries after the previous attempt, on any question, and before this one.",
         },
         workspace: {
