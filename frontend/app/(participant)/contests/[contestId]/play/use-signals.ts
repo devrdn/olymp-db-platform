@@ -45,8 +45,13 @@ export type { PasteTarget, Signal };
  *   be refused again;
  * - once the contest has closed for the participant (409
  *   `contest_not_running` or `contest_finished`), or the participant is not
- *   admitted to it at all (403 `not_a_participant` or `address_not_allowed`),
- *   the collector stops for good: every later batch would be refused alike.
+ *   on its roster (403 `not_a_participant`), the collector stops for good:
+ *   every later batch would be refused alike. `address_not_allowed` is not
+ *   final — a laptop briefly on a hotspot is outside the network for a
+ *   moment — so that batch is dropped like any other refusal and collecting
+ *   goes on, at one refused request per 10 s at most;
+ * - a page restored from the back/forward cache (`pageshow` with
+ *   `persisted`) records the time since its `pagehide` as an absence.
  *
  * Nothing here is React state: a signal never re-renders the screen.
  */
@@ -83,7 +88,6 @@ const FINAL_CODES: ReadonlySet<string> = new Set([
   "contest_finished",
   "contest_not_running",
   "not_a_participant",
-  "address_not_allowed",
 ]);
 const PASTE_TARGETS: ReadonlySet<string> = new Set<PasteTarget>(["editor", "answer", "notes"]);
 
@@ -143,9 +147,15 @@ export class SignalCollector {
     const onFocus = () => this.back();
     // The page going away ends an open absence: often the most telling one,
     // a participant who hid the tab and never came back to it.
-    const onPageHide = () => {
+    const onPageHide = (event: PageTransitionEvent) => {
       this.back();
       this.flush(true);
+      // Kept in the back/forward cache: the page may come back, and the
+      // time until it does is an absence like any other.
+      if (event.persisted) this.leave();
+    };
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) this.back();
     };
     const onPaste = (event: Event) => this.paste(event as ClipboardEvent);
     const timer = setInterval(() => this.flush(false), SIGNAL_FLUSH_MS);
@@ -154,6 +164,7 @@ export class SignalCollector {
     window.addEventListener("blur", onBlur);
     window.addEventListener("focus", onFocus);
     window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("pageshow", onPageShow);
     document.addEventListener("paste", onPaste, { capture: true, passive: true });
 
     this.detachListeners = () => {
@@ -162,6 +173,7 @@ export class SignalCollector {
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("pageshow", onPageShow);
       document.removeEventListener("paste", onPaste, { capture: true });
     };
     return () => this.detach();
