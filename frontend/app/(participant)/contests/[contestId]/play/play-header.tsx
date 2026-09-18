@@ -92,8 +92,18 @@ export function PlayHeader({
             with the text wrapping there is nothing for `text-ellipsis` to
             apply to and nothing for `overflow-hidden` to cut, since the box
             has no fixed height. */}
-        <h1 className="truncate text-row text-ink max-narrow:whitespace-normal">{title}</h1>
-        {phase === "finished" ? <Tag tone="mute">{t.finishedTag}</Tag> : null}
+        <div className="flex min-w-0 flex-col">
+          <div className="flex min-w-0 items-center gap-3">
+            <h1 className="truncate text-row text-ink max-narrow:whitespace-normal">{title}</h1>
+            {phase === "finished" ? <Tag tone="mute">{t.finishedTag}</Tag> : null}
+          </div>
+          {/* Design §8: the participant is told, on this screen, that the
+              organiser sees what they do here — the queries, the answers,
+              the notes, and the signals this page reports (use-signals.ts).
+              Under the title rather than in a dismissible banner: it is a
+              standing fact about the screen, not news. */}
+          <p className="text-small text-ink-2">{t.observed}</p>
+        </div>
       </div>
       {/* The clock and, beside it, §8's three panel toggles — the right end
           of the bar, which is where VS Code puts its own. They are one flex

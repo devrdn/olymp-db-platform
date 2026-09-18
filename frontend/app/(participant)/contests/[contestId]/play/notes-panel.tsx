@@ -132,6 +132,9 @@ function NotesEditor({
           "hover:border-ink-2 focus-visible:border-ink focus-visible:outline-none"
         }
       />
+      {/* Design §8: the notes are not private — the organiser sees them and
+          their history — and the field says so where it is used. */}
+      <p className="text-small text-ink-2">{t.observed}</p>
       <div className="flex items-start justify-between gap-3">
         <p data-testid="notes-status" aria-hidden="true" className={`text-small ${toneOf(status)}`}>
           {messageFor(status, dict)}
