@@ -346,7 +346,11 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 	// the contest: their finish; else their own deadline under individual
 	// timing — the start plus the duration, or the contest's end when that
 	// comes first, contests.Deadline's formula — else the contest's end.
-	// With none of them known, up to now.
+	// With none of them known, up to now. That leaves one case unbounded:
+	// individual timing, a participant who never started, and a contest with
+	// no end. They have no deadline to measure from — and, never having
+	// started, nothing of theirs in the contest but these sign-ins, which is
+	// what an organiser asking why they never began wants to see.
 	const participantEnd = `COALESCE(r.finished_at,
 		      CASE WHEN c.timing = 'individual'
 		           THEN LEAST(r.started_at + make_interval(mins => c.duration_min), c.ends_at) END,
