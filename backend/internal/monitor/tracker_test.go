@@ -615,3 +615,20 @@ func BenchmarkObserveUnchangedOverANetwork(b *testing.B) {
 	}
 	b.ReportMetric(float64(slow.calls)/float64(b.N), "cache-calls/op")
 }
+
+// A genuine parallel session already reported does not pay for liveness on
+// every request after: the pair is not due, so nobody asks.
+func TestAReportedPairIsNotAskedAboutAgainUntilItIsDue(t *testing.T) {
+	rig := newTrackerRig(t)
+	rig.observe(rig.from("10.0.0.1", "session-a"))
+	for range 5 {
+		rig.now = rig.now.Add(5 * time.Second)
+		rig.observe(rig.from("10.0.0.9", "session-b"))
+	}
+	if got := rig.kinds(); len(got) != 1 {
+		t.Fatalf("events = %v, want one parallel_session", got)
+	}
+	if rig.sessions.asked != 1 {
+		t.Fatalf("liveness asked %d times for one reported pair, want 1", rig.sessions.asked)
+	}
+}
