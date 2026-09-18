@@ -1670,6 +1670,8 @@ const en = {
       "The text contains a character that cannot be saved. Remove it and try again.",
     workspace_order_mismatch:
       "The tabs changed while you were moving them. Reload the page and try again.",
+    signals_too_often: "Your page activity is being reported too often. It will be sent in a moment.",
+    signals_batch_too_large: "Too much page activity was sent at once. It will be sent in smaller parts.",
     cross_origin: "The request did not come from this site. Reload the page and try again.",
     method_not_allowed: "That action is unavailable for this resource.",
     internal_error: "The server could not process the request.",

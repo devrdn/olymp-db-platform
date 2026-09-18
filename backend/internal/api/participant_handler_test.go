@@ -314,7 +314,9 @@ type participantFixture struct {
 	workspaceStore *failingWorkspace
 	// watcher records every visit admission reported.
 	watcher *recordingWatcher
-	cookie  *http.Cookie
+	// signalStore records every batch of browser signals stored.
+	signalStore *signalStore
+	cookie      *http.Cookie
 }
 
 // fixtureUserAgent is the browser every fixture request claims to be.
@@ -372,11 +374,13 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 	workspaceStore := &failingWorkspace{Repository: workspacetest.NewRepository()}
 	workspaces := workspace.NewService(workspaceStore, auth.NewLimiter(c))
 	watcher := &recordingWatcher{}
+	signals := &signalStore{}
 
 	router := chi.NewRouter()
 	api.NewParticipantHandler(access, reader, history, submitter, answerRate(c, fixtureAnswersPerMinute), mw, log, "en").
 		WithWorkspace(workspaces).
 		WithWatcher(watcher).
+		WithSignals(monitor.NewSignals(auth.NewLimiter(c), signals)).
 		Mount(router)
 
 	return &participantFixture{
@@ -384,6 +388,7 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 		stories: stories, questions: questions, attempts: attempts,
 		workspaceStore: workspaceStore,
 		watcher:        watcher,
+		signalStore:    signals,
 		cookie:         &http.Cookie{Name: auth.SessionCookieName, Value: token},
 	}
 }
