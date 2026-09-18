@@ -114,6 +114,16 @@ describe("contestSchema", () => {
     ).toEqual({ freezeMin: null, names: "login", revealedAt: undefined });
   });
 
+  /**
+   * Whether the viewer may monitor the contest is the server's decision,
+   * sent only with the read of one contest; a write's answer, which omits
+   * it, reads as "no" rather than failing.
+   */
+  test("reads whether the viewer may monitor the contest", () => {
+    expect(contestSchema.parse({ ...detail, may_monitor: true }).mayMonitor).toBe(true);
+    expect(contestSchema.parse(detail).mayMonitor).toBe(false);
+  });
+
   test("reads a null duration as an absent one", () => {
     const parsed = contestSchema.parse({ ...detail, timing: "fixed", duration_min: null });
 

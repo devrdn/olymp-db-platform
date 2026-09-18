@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import { API_PREFIX, request } from "./client";
-import type { ManagerRole } from "./people";
 
 /**
  * The wire shapes of the organiser's monitoring routes
@@ -317,27 +316,4 @@ export async function fetchRoster(contestId: string, options: ReadOptions = {}):
 export async function fetchFeed(contestId: string, params: FeedParams, options: ReadOptions = {}): Promise<FeedPage> {
   const payload = await request(feedPath(contestId, params), { credentials: "same-origin", signal: options.signal });
   return feedSchema.parse(payload);
-}
-
-/**
- * Whether the viewer holds contest.monitor on this contest.
- *
- * The API reports installation-wide permissions (`/auth/me`) and each
- * contest's staff (`/managers`), not a per-contest permission list, so this is
- * `rbac.Authorize`'s own rule for a contest-scoped permission, restated:
- * contest.admin_all lifts the contest scope, and otherwise the viewer's role
- * on this contest decides — owner and manager both carry contest.monitor
- * (`managerPermissions`). An installation-wide contest.monitor grants nothing
- * on a contest by itself, exactly as on the server.
- *
- * The page itself does not rely on this: its own read of the monitoring API
- * answers 403 to anybody this is wrong about, and that is a 404 page.
- */
-export function mayMonitor(
-  identity: { id: string; permissions: readonly string[] } | null,
-  managers: readonly { userId: string; role: ManagerRole }[] | null,
-): boolean {
-  if (!identity) return false;
-  if (identity.permissions.includes("contest.admin_all")) return true;
-  return (managers ?? []).some((m) => m.userId === identity.id && (m.role === "owner" || m.role === "manager"));
 }
