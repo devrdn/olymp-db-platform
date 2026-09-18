@@ -31,6 +31,13 @@ const (
 	PermissionAuditView         = "audit.view"
 	PermissionSettingsManage    = "settings.manage"
 
+	// PermissionContestMonitor lets its holder watch everything a contest's
+	// participants did: their queries, answers, notes, tabs and the signals
+	// their browsers and sessions left. Granted wherever contest.view is — by
+	// migration 000033 to the global roles, and through managerPermissions
+	// below to a contest's owner and managers.
+	PermissionContestMonitor = "contest.monitor"
+
 	// PermissionContestAdminAll lifts the contest scope: its holder acts on
 	// every contest without being listed as a manager. It is a permission
 	// rather than a hard-coded "is admin" check, so a new role (a dean's
@@ -59,6 +66,7 @@ var ErrForbidden = errors.New("forbidden")
 // managerPermissions are the contest-scoped abilities of a manager.
 var managerPermissions = map[string]struct{}{
 	PermissionContestView:       {},
+	PermissionContestMonitor:    {},
 	PermissionContestEdit:       {},
 	PermissionContestPublish:    {},
 	PermissionParticipantManage: {},

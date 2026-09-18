@@ -199,3 +199,20 @@ func TestHasReportsGlobalPermissions(t *testing.T) {
 		t.Error("Has() reported a permission that was never granted")
 	}
 }
+
+// Whoever may look at a contest as staff may watch its participants: the
+// owner and the managers hold contest.view, so they hold contest.monitor too,
+// and on their own contest only.
+func TestContestStaffMayMonitorTheirOwnContestOnly(t *testing.T) {
+	for _, role := range []ContestRole{RoleOwner, RoleManager} {
+		auth := New(&fakeRoles{roles: map[uuid.UUID]ContestRole{contestA: role}})
+		ctx := context.Background()
+
+		if err := auth.Authorize(ctx, identity(), PermissionContestMonitor, contestA); err != nil {
+			t.Errorf("%s was denied contest.monitor on their contest: %v", role, err)
+		}
+		if err := auth.Authorize(ctx, identity(), PermissionContestMonitor, contestB); !errors.Is(err, ErrForbidden) {
+			t.Errorf("%s on somebody else's contest: err = %v, want ErrForbidden", role, err)
+		}
+	}
+}
