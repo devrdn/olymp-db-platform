@@ -24,7 +24,7 @@ import (
 // (registration_id, submitted_at) with its own LIMIT: neither table carries
 // the contest, and a range per registration is what keeps an old contest's
 // feed from walking every query anybody ran since. participant_events carries
-// the contest and is one range of its own index (migration 000034).
+// the contest and is one range of its own index (migration 000033).
 //
 // Sign-ins and sign-outs are the participant's account's own audit entries
 // (audit_log (actor_id, created_at)), failed sign-ins the entries naming its
