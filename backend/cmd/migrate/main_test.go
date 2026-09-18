@@ -168,3 +168,56 @@ func TestTheMonitoringMigrationRollsBackAndForward(t *testing.T) {
 			"want the same roles as contest.view, and not none", up.grants, up.mismatched)
 	}
 }
+
+// monitorReadIndexes reports which of the indexes the organiser's reads rely
+// on (000034) exist, and whether 000033's id-ordered ones do.
+func monitorReadIndexes(t *testing.T, dsn string) (timeOrdered, idOrdered, failedLogin bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect to the scratch database: %v", err)
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	if err := storagetest.Guard(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(ctx, `
+		SELECT to_regclass('participant_events_contest_time_idx') IS NOT NULL
+		       AND to_regclass('participant_events_registration_time_idx') IS NOT NULL,
+		       to_regclass('participant_events_contest_idx') IS NOT NULL
+		       AND to_regclass('participant_events_registration_idx') IS NOT NULL,
+		       to_regclass('audit_log_failed_login_idx') IS NOT NULL`).
+		Scan(&timeOrdered, &idOrdered, &failedLogin); err != nil {
+		t.Fatalf("read the indexes: %v", err)
+	}
+	return timeOrdered, idOrdered, failedLogin
+}
+
+// TestTheMonitorReadIndexesRollBackAndForward proves 000034's down file puts
+// back exactly what its up file replaced.
+func TestTheMonitorReadIndexesRollBackAndForward(t *testing.T) {
+	dsn := scratchDatabase(t)
+	m, closeFn, err := newMigrator(dsn)
+	if err != nil {
+		t.Fatalf("newMigrator: %v", err)
+	}
+	defer closeFn()
+
+	if err := m.Migrate(34); err != nil {
+		t.Fatalf("migrate to 34: %v", err)
+	}
+	if timeOrdered, idOrdered, failedLogin := monitorReadIndexes(t, dsn); !timeOrdered || idOrdered || !failedLogin {
+		t.Fatalf("at 34: time-ordered %v, id-ordered %v, failed sign-ins %v", timeOrdered, idOrdered, failedLogin)
+	}
+	if err := m.Migrate(33); err != nil {
+		t.Fatalf("migrate to 33: %v", err)
+	}
+	if timeOrdered, idOrdered, failedLogin := monitorReadIndexes(t, dsn); timeOrdered || !idOrdered || failedLogin {
+		t.Fatalf("at 33: time-ordered %v, id-ordered %v, failed sign-ins %v", timeOrdered, idOrdered, failedLogin)
+	}
+	if err := m.Migrate(34); err != nil {
+		t.Fatalf("migrate to 34 again: %v", err)
+	}
+}
