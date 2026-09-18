@@ -35,6 +35,8 @@ export function MonitorView({
   const monitor = useMonitor({ contestId, roster, feed: initialFeed });
 
   return (
+    // The gap here is cancelled by the empty status line's `empty:-mt-8`
+    // (Problem, below): change one and the other changes with it.
     <div className="@container flex min-w-0 flex-col gap-8">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
         <div className="flex max-w-body min-w-0 flex-col gap-3">
@@ -104,7 +106,8 @@ function Problem({ problem, t }: { problem: MonitorProblem; t: Dictionary["works
         ? t.problems.tooOften.replace("{seconds}", String(problem.seconds))
         : t.problems.failed;
   return (
-    // Empty, it takes back the column's gap above it rather than being
+    // Empty, it takes back the column's gap above it (`gap-8` on the view's
+    // root — keep the two equal) rather than being
     // hidden: a hidden region is out of the accessibility tree, which is
     // what keeping it in the document is for.
     <p role="status" className="text-small text-warn empty:-mt-8">
