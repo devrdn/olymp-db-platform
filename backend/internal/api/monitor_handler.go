@@ -60,6 +60,10 @@ type MonitorReader interface {
 	Answers(ctx context.Context, contest, registration uuid.UUID) (monitor.Answers, error)
 	Workspace(ctx context.Context, contest, registration uuid.UUID) (monitor.Workspace, error)
 	Revision(ctx context.Context, contest, registration uuid.UUID, id int64) (monitor.RevisionBody, error)
+	// RecordView and RecordExport write the audit trail of watching
+	// (design §7); registration is uuid.Nil for the contest-wide views.
+	RecordView(ctx context.Context, viewer, contest, registration uuid.UUID) error
+	RecordExport(ctx context.Context, viewer, contest, registration uuid.UUID) error
 }
 
 // MonitorLimiter is the slice of auth.Limiter the read budget needs.
@@ -73,6 +77,9 @@ type MonitorHandler struct {
 	limiter MonitorLimiter
 	mw      *auth.Middleware
 	log     *slog.Logger
+	// exports keeps one account to one CSV download at a time, for the
+	// reason the participant's own export does (inFlightExports).
+	exports inFlightExports
 }
 
 // NewMonitorHandler returns the handler.
@@ -94,6 +101,8 @@ func (h *MonitorHandler) Mount(r chi.Router) {
 		r.Get(one+"/answers", h.answers)
 		r.Get(one+"/workspace", h.workspace)
 		r.Get(one+"/workspace/revisions/{"+revisionIDParam+"}", h.revision)
+		r.Get(base+"/export.csv", h.contestCSV)
+		r.Get(one+"/export.csv", h.participantCSV)
 	})
 }
 
@@ -134,6 +143,18 @@ func (h *MonitorHandler) registration(w http.ResponseWriter, r *http.Request) (u
 		return uuid.Nil, false
 	}
 	return id, true
+}
+
+// viewed records the organiser's view before the answer is sent (design
+// §7), and answers the refusal itself when the trail cannot take it: a view
+// the trail does not show is the one thing this must not allow.
+func (h *MonitorHandler) viewed(w http.ResponseWriter, r *http.Request, registration uuid.UUID) bool {
+	identity, _ := auth.IdentityFrom(r.Context())
+	if err := h.watch.RecordView(r.Context(), identity.UserID, monitorContest(r), registration); err != nil {
+		h.fail(w, r, err)
+		return false
+	}
+	return true
 }
 
 func monitorTime(t time.Time) string { return t.UTC().Format(monitorTimeLayout) }
@@ -195,6 +216,9 @@ func (h *MonitorHandler) participants(w http.ResponseWriter, r *http.Request) {
 			LastActivity: monitorOptionalTime(row.LastActivity), Flags: row.Flags(),
 		})
 	}
+	if !h.viewed(w, r, uuid.Nil) {
+		return
+	}
 	httpx.JSON(w, r, http.StatusOK, out)
 }
 
@@ -216,6 +240,9 @@ func (h *MonitorHandler) participant(w http.ResponseWriter, r *http.Request) {
 	p, err := h.watch.Participant(r.Context(), monitorContest(r), registration)
 	if err != nil {
 		h.fail(w, r, err)
+		return
+	}
+	if !h.viewed(w, r, registration) {
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, monitorParticipantResponse{
@@ -328,6 +355,9 @@ func (h *MonitorHandler) serveFeed(w http.ResponseWriter, r *http.Request, q mon
 	if n := len(page.Items); n > 0 {
 		out.Oldest, out.Newest = out.Items[0].Cursor, out.Items[n-1].Cursor
 	}
+	if !h.viewed(w, r, q.Registration) {
+		return
+	}
 	httpx.JSON(w, r, http.StatusOK, out)
 }
 
@@ -383,6 +413,9 @@ func (h *MonitorHandler) queries(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
+	if !h.viewed(w, r, registration) {
+		return
+	}
 	httpx.JSON(w, r, http.StatusOK, monitorQueriesResponse{Items: toMonitorQueries(page.Items), More: page.More})
 }
 
@@ -424,6 +457,9 @@ func (h *MonitorHandler) answers(w http.ResponseWriter, r *http.Request) {
 				SubmittedAt: monitorTime(a.At), Queries: toMonitorQueries(a.Queries), MoreQueries: a.MoreQueries})
 		}
 		out.Questions = append(out.Questions, group)
+	}
+	if !h.viewed(w, r, registration) {
+		return
 	}
 	httpx.JSON(w, r, http.StatusOK, out)
 }
@@ -483,6 +519,9 @@ func (h *MonitorHandler) workspace(w http.ResponseWriter, r *http.Request) {
 	for _, rev := range ws.Revisions {
 		out.Revisions = append(out.Revisions, toMonitorRevision(rev))
 	}
+	if !h.viewed(w, r, registration) {
+		return
+	}
 	httpx.JSON(w, r, http.StatusOK, out)
 }
 
@@ -505,6 +544,9 @@ func (h *MonitorHandler) revision(w http.ResponseWriter, r *http.Request) {
 	rev, err := h.watch.Revision(r.Context(), monitorContest(r), registration, id)
 	if err != nil {
 		h.fail(w, r, err)
+		return
+	}
+	if !h.viewed(w, r, registration) {
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, monitorRevisionBody{monitorRevision: toMonitorRevision(rev.RevisionInfo), Body: rev.Body})
