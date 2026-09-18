@@ -379,8 +379,11 @@ func TestAContestExportReadsEachJournalRowOnce(t *testing.T) {
 		}
 		for table, rows := range map[string]int64{"query_log": 12_000, "submissions": 1_200, "audit_log": 2_400} {
 			read := journalRowsRead(t, ctx, table) - before[table]
-			if read > 2*rows {
-				t.Errorf("%s: %d rows read for %d rows exported, want at most twice as many", table, read, rows)
+			// Linear with room for the planner's choices (a bitmap scan may
+			// fetch a page's rows again); the quadratic read this replaced
+			// was twenty-seven times the rows here, and grows with them.
+			if read > 4*rows {
+				t.Errorf("%s: %d rows read for %d rows exported, want at most four times as many", table, read, rows)
 			}
 		}
 	})
