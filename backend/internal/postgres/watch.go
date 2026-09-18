@@ -97,7 +97,7 @@ WITH regs AS (
                    WHERE q.registration_id = regs.id
                      AND q.status = 'ok'
                      AND q.executed_at < a.submitted_at
-                     AND (a.previous IS NULL OR q.executed_at >= a.previous))) AS blind,
+                     AND q.executed_at >= COALESCE(a.previous, '-infinity'))) AS blind,
                max(a.submitted_at) AS last_at
         FROM (
             SELECT s.is_correct, s.submitted_at,
