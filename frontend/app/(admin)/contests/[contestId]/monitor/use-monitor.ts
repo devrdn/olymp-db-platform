@@ -14,6 +14,7 @@ import {
   refreshItems,
   runningWindow,
   type FeedState,
+  type RunningTries,
 } from "./feed-list";
 import { mergeRoster } from "./roster";
 
@@ -74,7 +75,7 @@ export function useMonitor({
   // Bumped whenever the feed is replaced whole (a new filter, a jump back to
   // the latest): a read begun before that answers for a list that is gone.
   const generationRef = useRef(0);
-  const triedRef = useRef(new Map<string, number>());
+  const triedRef = useRef<RunningTries>(new Map());
   const freshTokens = useRef(new Map<string, number>());
   const freshCounter = useRef(0);
   const freshTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
