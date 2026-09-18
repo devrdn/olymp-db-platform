@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
@@ -1972,5 +1973,58 @@ func TestASingleLookupsMissingGameIsStillCheckedAtItsUsualPoint(t *testing.T) {
 	service = queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}).WithLookup(lookup)
 	if _, err := service.Run(t.Context(), fromRoom); !errors.Is(err, queryproxy.ErrNoGameYet) {
 		t.Fatalf("error = %v, want ErrNoGameYet", err)
+	}
+}
+
+// watcher is the fake behind queryproxy.Watcher: every visit Run reported.
+type watcher struct{ visits []monitor.Visit }
+
+func (w *watcher) Observe(_ context.Context, visit monitor.Visit) { w.visits = append(w.visits, visit) }
+
+// An admitted query is a request of the registration, and the tracker of
+// address changes and parallel sessions hears of it (design §2.3), with
+// where it came from and from which session.
+func TestAnAdmittedQueryIsObserved(t *testing.T) {
+	service, _, run := fixture(t)
+	seen := &watcher{}
+	service = service.WithWatcher(seen)
+	cmd := command()
+	cmd.Address = netip.MustParseAddr("192.0.2.44")
+	cmd.Session = monitor.SessionTag("token")
+	cmd.UserAgent = "Firefox"
+
+	if _, err := service.Run(t.Context(), cmd); err != nil {
+		t.Fatalf("running: %v", err)
+	}
+	if len(seen.visits) != 1 {
+		t.Fatalf("the query was observed %d times, want once", len(seen.visits))
+	}
+	got := seen.visits[0]
+	if got.Registration != run.got.Registration || got.Contest == uuid.Nil ||
+		got.Address != cmd.Address || got.Session != cmd.Session || got.UserAgent != cmd.UserAgent {
+		t.Fatalf("visit = %+v, want the registration %v, the command's address, session and browser", got, run.got.Registration)
+	}
+}
+
+// A query refused at admission is not the registration's request: an
+// address the contest does not allow, or a contest that is over, observes
+// nothing.
+func TestARefusedQueryIsNotObserved(t *testing.T) {
+	seen := &watcher{}
+	service := queryproxy.New(
+		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+		contestStore{contest: contests.Contest{Status: contests.StatusFinished}},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
+	).WithWatcher(seen)
+	cmd := command()
+	cmd.Address = netip.MustParseAddr("192.0.2.44")
+	cmd.Session = monitor.SessionTag("token")
+
+	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, queryproxy.ErrContestNotRunning) {
+		t.Fatalf("error = %v, want ErrContestNotRunning", err)
+	}
+	if len(seen.visits) != 0 {
+		t.Fatalf("a refused query was observed: %+v", seen.visits)
 	}
 }

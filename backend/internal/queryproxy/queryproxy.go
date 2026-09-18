@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
@@ -181,6 +182,20 @@ type Command struct {
 	// RequestID ties the journal row to the same request in the technical
 	// logs, which is what makes "it failed at 14:02" answerable.
 	RequestID uuid.UUID
+	// Session names the caller's session (monitor.SessionTag, never the
+	// token) and UserAgent their browser, for the Watcher: a second session
+	// using the registration is reported with the browser it came from.
+	Session   string
+	UserAgent string
+}
+
+// Watcher hears of every request admission lets through, to detect a
+// registration's address changing or a second session using it
+// (monitor.Tracker). It never refuses: what it detects is recorded, not
+// enforced, and a watcher that cannot keep up gives up on its own within a
+// bounded time.
+type Watcher interface {
+	Observe(ctx context.Context, visit monitor.Visit)
 }
 
 // Service answers queries.
@@ -229,6 +244,9 @@ type Service struct {
 	// lookup answers everything LookupResult carries. See defaultLookup for
 	// what New sets it to, and WithLookup for replacing it.
 	lookup Lookup
+	// watcher hears of every admitted query. Set by WithWatcher; nil watches
+	// nothing.
+	watcher Watcher
 }
 
 // defaultGrace is the network-latency allowance a deployment gets unless
@@ -333,6 +351,15 @@ func (s *Service) WithPerMinuteDefault(perMinute int) *Service {
 // state anything breaks in.
 func (s *Service) WithAnswerable(answerable Answerable) *Service {
 	s.answerable = answerable
+	return s
+}
+
+// WithWatcher reports every query admission lets through to watcher. One
+// call per query, after admission and before anything else is spent on it,
+// so a query refused for its length or its content still counts as the
+// registration being used from where it was used.
+func (s *Service) WithWatcher(watcher Watcher) *Service {
+	s.watcher = watcher
 	return s
 }
 
@@ -483,6 +510,12 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 	// read of the story never costs a rate check at all.
 	if err := s.Admitted(contest, participant, cmd.Address); err != nil {
 		return nil, err
+	}
+	if s.watcher != nil {
+		s.watcher.Observe(ctx, monitor.Visit{
+			Contest: contest.ID, Registration: participant.ID,
+			Address: cmd.Address, Session: cmd.Session, UserAgent: cmd.UserAgent,
+		})
 	}
 
 	if len(cmd.SQL) > sqlpolicy.MaxQueryBytes {
