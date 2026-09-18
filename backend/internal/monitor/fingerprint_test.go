@@ -1,6 +1,7 @@
 package monitor_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/monitor"
@@ -41,5 +42,21 @@ func TestFingerprintIsStable(t *testing.T) {
 	const want = int64(214897735614764786)
 	if got := monitor.Fingerprint("SELECT 1"); got != want {
 		t.Fatalf("Fingerprint(\"SELECT 1\") = %d, want %d", got, want)
+	}
+}
+
+func TestOnlyALongEnoughStatementIsComparable(t *testing.T) {
+	exactly := strings.Repeat("a", monitor.IdenticalQueryMinChars-len("select "))
+	long := "SELECT   " + strings.ToUpper(exactly) + "\n"
+	if got := monitor.ComparableFingerprint(long); got == nil || *got != monitor.Fingerprint("select "+exactly) {
+		t.Errorf("a statement of exactly %d normalised characters: %v, want its fingerprint", monitor.IdenticalQueryMinChars, got)
+	}
+	// Padded past the bound with spacing that normalising removes.
+	short := "SELECT \t\n\n   " + exactly[1:] + strings.Repeat(" ", 100)
+	if got := monitor.ComparableFingerprint(short); got != nil {
+		t.Errorf("a statement one normalised character short: %v, want none", *got)
+	}
+	if got := monitor.ComparableFingerprint(""); got != nil {
+		t.Errorf("an empty statement: %v, want none", *got)
 	}
 }

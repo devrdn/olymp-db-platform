@@ -604,7 +604,7 @@ func TestAQueryRowRecordsTheClientAddressAndTheFingerprint(t *testing.T) {
 
 	address := netip.MustParseAddr("203.0.113.9")
 	if _, err := service.Run(ctx, queryproxy.Command{
-		ContestID: contestID, UserID: student, SQL: "SELECT *\n\tFROM Evidence",
+		ContestID: contestID, UserID: student, SQL: "SELECT kind, found_at\n\tFROM Evidence\n WHERE room = 'library' ORDER BY found_at",
 		Address: address, RequestID: uuid.New(),
 	}); err != nil {
 		t.Fatalf("Run() = %v", err)
@@ -620,7 +620,7 @@ func TestAQueryRowRecordsTheClientAddressAndTheFingerprint(t *testing.T) {
 	if ip == nil || *ip != address {
 		t.Fatalf("ip = %v, want %v", ip, address)
 	}
-	if fingerprint == nil || *fingerprint != monitor.Fingerprint("select * from evidence") {
+	if fingerprint == nil || *fingerprint != monitor.Fingerprint("select kind, found_at from evidence where room = 'library' order by found_at") {
 		t.Fatalf("sql_fingerprint = %v, want the fingerprint of the normalised statement", fingerprint)
 	}
 }

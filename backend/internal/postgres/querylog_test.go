@@ -78,7 +78,7 @@ func TestQueryLogRecordsAQueryInTwoPhases(t *testing.T) {
 func TestQueryLogRecordsWhereAQueryCameFromAndItsFingerprint(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		log := NewQueryLog(testPool)
-		sql := "SELECT name\n  FROM Suspects"
+		sql := "SELECT name, alibi\n  FROM Suspects\n WHERE city = 'Chisinau'  ORDER BY name"
 		id, err := log.Begin(ctx, queryrunner.Entry{
 			Registration: someRegistration(t, ctx),
 			RequestID:    uuid.New(),
@@ -98,8 +98,23 @@ func TestQueryLogRecordsWhereAQueryCameFromAndItsFingerprint(t *testing.T) {
 		if ip == nil || *ip != netip.MustParseAddr("2001:db8::42") {
 			t.Fatalf("ip = %v, want 2001:db8::42", ip)
 		}
-		if fingerprint == nil || *fingerprint != monitor.Fingerprint(`select name from suspects`) {
+		if fingerprint == nil || *fingerprint != monitor.Fingerprint(`select name, alibi from suspects where city = 'chisinau' order by name`) {
 			t.Fatalf("sql_fingerprint = %v, want the fingerprint of the normalised text", fingerprint)
+		}
+
+		// A statement too short to compare with another participant's has no
+		// fingerprint: what everybody types is not a sign of copying.
+		short, err := log.Begin(ctx, queryrunner.Entry{Registration: someRegistration(t, ctx), RequestID: uuid.New(),
+			SQL: "SELECT name FROM suspects" + strings.Repeat(" ", 100)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+			`SELECT sql_fingerprint FROM query_log WHERE id = $1`, short).Scan(&fingerprint); err != nil {
+			t.Fatal(err)
+		}
+		if fingerprint != nil {
+			t.Errorf("a short statement has fingerprint %d, want none", *fingerprint)
 		}
 	})
 }

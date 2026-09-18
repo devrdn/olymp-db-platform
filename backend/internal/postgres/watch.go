@@ -53,12 +53,11 @@ func (w *Watch) querier(ctx context.Context) storage.Querier {
 // plain join the planner may turn into a hash join over the whole journal.
 //
 // The identical-queries count rides on the same pass over the query log:
-// each registration's distinct fingerprints of successful queries whose
-// normalised text is at least $3 characters (the raw length is checked
-// first, as a cheap bound on the normalised one, which can only be shorter),
-// then the fingerprints more than one registration has. Two statements with
-// the same fingerprint have the same normalised text, so the length need not
-// be checked on both sides.
+// each registration's distinct fingerprints of successful queries, then the
+// fingerprints more than one registration has. Only a statement of at least
+// monitor.IdenticalQueryMinChars normalised characters has a fingerprint at
+// all (monitor.ComparableFingerprint, applied as the row is written), so no
+// text is measured here.
 //
 // A correct answer is "blind" when no successful query of the same
 // participant ran between their previous answer to any question (or the
@@ -84,10 +83,7 @@ WITH regs AS (
                count(*) FILTER (WHERE status = 'rejected') AS rejected,
                count(DISTINCT ip) AS addresses,
                COALESCE(array_agg(DISTINCT sql_fingerprint) FILTER (
-                   WHERE status = 'ok'
-                     AND sql_fingerprint IS NOT NULL
-                     AND char_length(sql_text) >= $3
-                     AND char_length(regexp_replace(btrim(sql_text), '\s+', ' ', 'g')) >= $3),
+                   WHERE status = 'ok' AND sql_fingerprint IS NOT NULL),
                    '{}') AS fingerprints,
                max(executed_at) AS last_at
         FROM query_log
@@ -116,7 +112,7 @@ WITH regs AS (
                count(*) FILTER (WHERE kind = 'paste') AS pastes,
                count(*) FILTER (WHERE kind = 'paste'
                                   AND payload->>'target' IN ('editor', 'answer')
-                                  AND (payload->>'chars')::bigint > $4) AS large_pastes,
+                                  AND (payload->>'chars')::bigint > $3) AS large_pastes,
                count(*) FILTER (WHERE kind = 'ip_changed') AS ip_changes,
                count(*) FILTER (WHERE kind = 'parallel_session') AS parallel,
                max(created_at) AS last_at
@@ -143,7 +139,7 @@ ORDER BY login, id`
 // in login order, and whether there were more.
 func (w *Watch) Roster(ctx context.Context, contest uuid.UUID, limit int) (monitor.Roster, error) {
 	rows, err := w.querier(ctx).Query(ctx, rosterSQL,
-		contest, limit+1, monitor.IdenticalQueryMinChars, monitor.LargePasteChars)
+		contest, limit+1, monitor.LargePasteChars)
 	if err != nil {
 		return monitor.Roster{}, fmt.Errorf("compute the participants table of %s: %w", contest, err)
 	}
