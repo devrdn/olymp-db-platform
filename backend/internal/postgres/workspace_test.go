@@ -5,10 +5,12 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/workspace"
 	"github.com/google/uuid"
@@ -424,5 +426,211 @@ func TestWorkspaceWritesWorkWithNoTransactionAroundThem(t *testing.T) {
 	}
 	if len(after) != 1 || after[0].ID != second.ID || after[0].Position != 0 {
 		t.Fatalf("tabs = %+v, want only the second at 0", after)
+	}
+}
+
+// ageRevisions moves every revision of the registration back by age, so the
+// next save of a document starts a new one rather than folding into it: the
+// revision time is the transaction's own, and a test transaction does not
+// get thirty seconds older by waiting.
+func ageRevisions(t *testing.T, ctx context.Context, registration uuid.UUID, age time.Duration) {
+	t.Helper()
+	if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx, `
+		UPDATE workspace_revisions
+		SET started_at = started_at - $2::interval, updated_at = updated_at - $2::interval
+		WHERE registration_id = $1`, registration, age.String()); err != nil {
+		t.Fatalf("age the revisions: %v", err)
+	}
+}
+
+func TestSavingTheNotesWritesTheirRevision(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewWorkspace(testPool)
+		registration := workspaceRegistration(t, ctx)
+
+		at, err := repo.SaveNotes(ctx, registration, "suspect: the gardener")
+		if err != nil {
+			t.Fatalf("SaveNotes() = %v", err)
+		}
+		got := storedRevisions(t, ctx, registration, monitor.DocumentNotes)
+		if len(got) != 1 || got[0].body != "suspect: the gardener" || !got[0].startedAt.Equal(at) || got[0].title != nil {
+			t.Fatalf("revisions after the first save = %+v, want one with the body at %v", got, at)
+		}
+
+		// Within thirty seconds: the same revision, rewritten.
+		if _, err := repo.SaveNotes(ctx, registration, "suspect: the butler"); err != nil {
+			t.Fatalf("SaveNotes() = %v", err)
+		}
+		got = storedRevisions(t, ctx, registration, monitor.DocumentNotes)
+		if len(got) != 1 || got[0].body != "suspect: the butler" {
+			t.Fatalf("revisions after a second save = %+v, want the one rewritten", got)
+		}
+
+		// Past thirty seconds: a new one, the old kept.
+		ageRevisions(t, ctx, registration, monitor.RevisionWindow)
+		if _, err := repo.SaveNotes(ctx, registration, "suspect: nobody"); err != nil {
+			t.Fatalf("SaveNotes() = %v", err)
+		}
+		got = storedRevisions(t, ctx, registration, monitor.DocumentNotes)
+		if len(got) != 2 || got[0].body != "suspect: the butler" || got[1].body != "suspect: nobody" {
+			t.Fatalf("revisions after an old one = %+v, want the old and a new one", got)
+		}
+	})
+}
+
+func TestSavingATabsTextWritesItsRevisionWithItsTitle(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewWorkspace(testPool)
+		registration := workspaceRegistration(t, ctx)
+		_, tabs, err := repo.Load(ctx, registration, "Query 1")
+		if err != nil {
+			t.Fatalf("Load() = %v", err)
+		}
+		id := tabs[0].ID
+		document := monitor.TabDocument(id)
+
+		body := "SELECT * FROM suspects"
+		if _, err := repo.UpdateTab(ctx, registration, id, workspace.TabPatch{Body: &body}); err != nil {
+			t.Fatalf("UpdateTab(body) = %v", err)
+		}
+		got := storedRevisions(t, ctx, registration, document)
+		if len(got) != 1 || got[0].body != body || got[0].title == nil || *got[0].title != "Query 1" {
+			t.Fatalf("revisions = %+v, want the body under the tab's title", got)
+		}
+
+		// A rename alone is an event, not a revision: the text did not change.
+		ageRevisions(t, ctx, registration, monitor.RevisionWindow)
+		title := "suspects"
+		if _, err := repo.UpdateTab(ctx, registration, id, workspace.TabPatch{Title: &title}); err != nil {
+			t.Fatalf("UpdateTab(title) = %v", err)
+		}
+		if got := storedRevisions(t, ctx, registration, document); len(got) != 1 {
+			t.Fatalf("a rename made %d revisions, want the one there was", len(got))
+		}
+
+		// Title and text together: the revision carries the new title.
+		both := "SELECT name FROM suspects"
+		renamed := "names"
+		if _, err := repo.UpdateTab(ctx, registration, id, workspace.TabPatch{Title: &renamed, Body: &both}); err != nil {
+			t.Fatalf("UpdateTab(both) = %v", err)
+		}
+		got = storedRevisions(t, ctx, registration, document)
+		if len(got) != 2 || got[1].body != both || got[1].title == nil || *got[1].title != renamed {
+			t.Fatalf("revisions = %+v, want a second one titled %q", got, renamed)
+		}
+	})
+}
+
+func TestTheLifeOfATabIsRecordedAsEvents(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewWorkspace(testPool)
+		registration := workspaceRegistration(t, ctx)
+		var contest uuid.UUID
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+			`SELECT contest_id FROM registrations WHERE id = $1`, registration).Scan(&contest); err != nil {
+			t.Fatalf("read the contest: %v", err)
+		}
+
+		_, tabs, err := repo.Load(ctx, registration, "Query 1")
+		if err != nil {
+			t.Fatalf("Load() = %v", err)
+		}
+		// A plain load of a workspace that has its tabs records nothing.
+		if _, _, err := repo.Load(ctx, registration, "unused"); err != nil {
+			t.Fatalf("Load() = %v", err)
+		}
+		second, err := repo.CreateTab(ctx, registration, 10, numbered)
+		if err != nil {
+			t.Fatalf("CreateTab() = %v", err)
+		}
+		title := "joins"
+		if _, err := repo.UpdateTab(ctx, registration, second.ID, workspace.TabPatch{Title: &title}); err != nil {
+			t.Fatalf("UpdateTab(title) = %v", err)
+		}
+		// The same title again, and a text-only save: no rename.
+		if _, err := repo.UpdateTab(ctx, registration, second.ID, workspace.TabPatch{Title: &title}); err != nil {
+			t.Fatalf("UpdateTab(same title) = %v", err)
+		}
+		body := "SELECT 1"
+		if _, err := repo.UpdateTab(ctx, registration, second.ID, workspace.TabPatch{Body: &body}); err != nil {
+			t.Fatalf("UpdateTab(body) = %v", err)
+		}
+		// Reordering is not a change in any tab's life.
+		if err := repo.ReorderTabs(ctx, registration, []uuid.UUID{second.ID, tabs[0].ID}); err != nil {
+			t.Fatalf("ReorderTabs() = %v", err)
+		}
+		if err := repo.DeleteTab(ctx, registration, second.ID); err != nil {
+			t.Fatalf("DeleteTab() = %v", err)
+		}
+		// Refusals record nothing.
+		if err := repo.DeleteTab(ctx, registration, tabs[0].ID); !errors.Is(err, workspace.ErrLastTab) {
+			t.Fatalf("DeleteTab(last) = %v, want ErrLastTab", err)
+		}
+
+		want := []struct {
+			kind    string
+			payload map[string]any
+		}{
+			{"tab_created", map[string]any{"tab_id": tabs[0].ID.String(), "title": "Query 1"}},
+			{"tab_created", map[string]any{"tab_id": second.ID.String(), "title": second.Title}},
+			{"tab_renamed", map[string]any{"tab_id": second.ID.String(), "from": second.Title, "to": "joins"}},
+			{"tab_deleted", map[string]any{"tab_id": second.ID.String(), "title": "joins"}},
+		}
+		got := storedEvents(t, ctx, registration)
+		if len(got) != len(want) {
+			t.Fatalf("events = %+v, want %d", got, len(want))
+		}
+		for i, event := range got {
+			if event.kind != want[i].kind || event.contest != contest {
+				t.Errorf("event %d = %s under %v, want %s under %v", i, event.kind, event.contest, want[i].kind, contest)
+			}
+			for field, value := range want[i].payload {
+				if event.payload[field] != value {
+					t.Errorf("event %d (%s) %s = %v, want %v", i, event.kind, field, event.payload[field], value)
+				}
+			}
+		}
+		// The deleted tab's history stays.
+		if revisions := storedRevisions(t, ctx, registration, monitor.TabDocument(second.ID)); len(revisions) != 1 {
+			t.Fatalf("the deleted tab has %d revisions, want its one kept", len(revisions))
+		}
+	})
+}
+
+// The save and its revision are one transaction on the path the deployment
+// uses (no transaction around the call, CLAUDE.md rule 10): a revision that
+// cannot be stored takes the save back with it.
+func TestASaveWhoseRevisionFailsIsNotSaved(t *testing.T) {
+	ctx, registration := committedRegistration(t)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	repo := NewWorkspace(testPool)
+
+	if _, err := repo.SaveNotes(ctx, registration, "kept"); err != nil {
+		t.Fatalf("SaveNotes() = %v", err)
+	}
+	tooLong := strings.Repeat("x", monitor.MaxRevisionBodyBytes+1)
+	if _, err := repo.SaveNotes(ctx, registration, tooLong); !errors.Is(err, monitor.ErrRevisionInvalid) {
+		t.Fatalf("SaveNotes(past the revision bound) = %v, want ErrRevisionInvalid", err)
+	}
+	notes, tabs, err := repo.Load(ctx, registration, "Query 1")
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if notes.Body != "kept" {
+		t.Fatalf("the notes are %d bytes, want the save before the refused one", len(notes.Body))
+	}
+
+	if _, err := repo.UpdateTab(ctx, registration, tabs[0].ID, workspace.TabPatch{Body: &tooLong}); !errors.Is(err, monitor.ErrRevisionInvalid) {
+		t.Fatalf("UpdateTab(past the revision bound) = %v, want ErrRevisionInvalid", err)
+	}
+	if _, tabs, err = repo.Load(ctx, registration, "unused"); err != nil || tabs[0].Body != "" {
+		t.Fatalf("the tab holds %d bytes (err %v), want nothing saved", len(tabs[0].Body), err)
+	}
+	if got := storedRevisions(t, ctx, registration, monitor.DocumentNotes); len(got) != 1 || got[0].body != "kept" {
+		t.Fatalf("notes revisions = %+v, want the one kept save", got)
+	}
+	if got := storedEvents(t, ctx, registration); len(got) != 1 || got[0].kind != "tab_created" {
+		t.Fatalf("events = %+v, want only the first tab's creation", got)
 	}
 }

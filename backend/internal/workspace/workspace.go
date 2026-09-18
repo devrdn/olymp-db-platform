@@ -12,9 +12,11 @@
 // is queryproxy's admission, asked by the HTTP layer before a Session exists,
 // and the workspace closes with the contest like the rest of the play screen
 // — and it never runs the SQL a tab holds: a tab is text, and running
-// it is the console's business. Nobody but the participant reads it: there is
-// no staff view of a workspace. Storage is declared here as Repository and
-// implemented in internal/postgres.
+// it is the console's business. It is not private: the contest's organisers
+// see it and its history (the monitoring design, §2.4), which the repository
+// records with every write — a revision per save, an event per change in a
+// tab's life — and the participant is told so on the play screen. Storage is
+// declared here as Repository and implemented in internal/postgres.
 package workspace
 
 import (
@@ -118,17 +120,24 @@ type Repository interface {
 	// Load returns the workspace, first creating a tab titled firstTitle if it
 	// has none. Two concurrent first loads create one tab, not two.
 	Load(ctx context.Context, registration uuid.UUID, firstTitle string) (Notes, []Tab, error)
-	// SaveNotes replaces the notes and returns when they were saved.
+	// SaveNotes replaces the notes and returns when they were saved, recording
+	// the save in the notes' revisions in the same transaction.
 	SaveNotes(ctx context.Context, registration uuid.UUID, body string) (time.Time, error)
 	// CreateTab appends a tab, refusing with ErrTooManyTabs when the
 	// workspace already holds limit of them. title is called with the titles
-	// already taken, under the same lock that counts them.
+	// already taken, under the same lock that counts them. The creation is
+	// recorded as a tab_created event in the same transaction, as is the
+	// first tab Load creates.
 	CreateTab(ctx context.Context, registration uuid.UUID, limit int, title func(taken []string) string) (Tab, error)
 	// UpdateTab applies patch and returns when it was applied, or
-	// ErrTabNotFound for a tab that is not this registration's.
+	// ErrTabNotFound for a tab that is not this registration's. A changed
+	// title is recorded as a tab_renamed event and new text as a revision of
+	// the tab, in the same transaction.
 	UpdateTab(ctx context.Context, registration, id uuid.UUID, patch TabPatch) (time.Time, error)
 	// DeleteTab removes a tab and closes the gap in positions. ErrTabNotFound
 	// for a tab that is not this registration's, ErrLastTab for the only one.
+	// The deletion is recorded as a tab_deleted event; the tab's revisions
+	// stay.
 	DeleteTab(ctx context.Context, registration, id uuid.UUID) error
 	// ReorderTabs gives each tab its index in ids as its position, in one
 	// transaction, or refuses with ErrOrderMismatch when ids is not exactly
