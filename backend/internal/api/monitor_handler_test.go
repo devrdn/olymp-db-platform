@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/devrdn/db-contest/backend/internal/api"
+	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
@@ -65,7 +66,7 @@ func (s *watchStore) Feed(_ context.Context, q monitor.FeedQuery) (monitor.FeedP
 	s.mu.Unlock()
 	return monitor.FeedPage{Items: []monitor.FeedItem{{
 		Source: monitor.SourceEvent, ID: "7", At: conteststest.FixtureNow, Kind: string(monitor.KindPaste),
-		Registration: q.Registration, Login: "student", Data: json.RawMessage(`{"target":"editor","chars":3,"text":"abc"}`),
+		Registration: q.Registration, Login: "student", FullName: "=HYPERLINK(\"http://x\")", Data: json.RawMessage(`{"target":"editor","chars":3,"text":"abc"}`),
 	}}}, nil
 }
 
@@ -100,6 +101,7 @@ func (s *watchStore) Revision(_ context.Context, _ uuid.UUID, id int64) (monitor
 type monitorFixture struct {
 	router    http.Handler
 	store     *watchStore
+	sink      *conteststest.Sink
 	organizer users.User
 	student   users.User
 	rival     users.User // owns another contest
@@ -113,7 +115,7 @@ func newMonitorFixture(t *testing.T) *monitorFixture {
 	t.Helper()
 	stores := conteststest.NewFixture()
 	f := &monitorFixture{cookies: map[uuid.UUID]*http.Cookie{},
-		store: &watchStore{registrations: map[uuid.UUID]uuid.UUID{}}}
+		store: &watchStore{registrations: map[uuid.UUID]uuid.UUID{}}, sink: conteststest.NewSink()}
 	f.organizer = stores.Users.Add(users.User{Login: "organizer", FullName: "Olga", Status: users.StatusActive})
 	f.student = stores.Users.Add(users.User{Login: "student", FullName: "Sasha", Status: users.StatusActive})
 	f.rival = stores.Users.Add(users.User{Login: "rival", FullName: "Roma", Status: users.StatusActive})
@@ -152,7 +154,8 @@ func newMonitorFixture(t *testing.T) *monitorFixture {
 		Cookies: auth.NewCookieWriter(false), Logger: log,
 	})
 	router := chi.NewRouter()
-	api.NewMonitorHandler(monitor.NewWatchService(monitor.WatchConfig{Store: f.store}), auth.NewLimiter(c), mw, log).Mount(router)
+	watch := monitor.NewWatchService(monitor.WatchConfig{Store: f.store, Audit: audit.New(f.sink), Marks: c})
+	api.NewMonitorHandler(watch, auth.NewLimiter(c), mw, log).Mount(router)
 	f.router = router
 	return f
 }
@@ -179,6 +182,7 @@ func (f *monitorFixture) routes() []string {
 	return []string{
 		f.base() + "/participants", f.base() + "/feed", one, one + "/timeline", one + "/queries",
 		one + "/answers", one + "/workspace", one + "/workspace/revisions/5",
+		f.base() + "/export.csv", one + "/export.csv",
 	}
 }
 
@@ -206,7 +210,8 @@ func TestAnotherContestsRegistrationIsNotFound(t *testing.T) {
 	for _, reg := range []string{f.otherReg.String(), uuid.NewString(), "not-a-uuid"} {
 		one := f.base() + "/participants/" + reg
 		for _, path := range []string{one, one + "/timeline", one + "/queries", one + "/answers",
-			one + "/workspace", one + "/workspace/revisions/5", f.base() + "/feed?participant=" + reg} {
+			one + "/workspace", one + "/workspace/revisions/5", one + "/export.csv",
+			f.base() + "/feed?participant=" + reg} {
 			rec := f.get(path, &f.organizer)
 			if rec.Code != http.StatusNotFound || errorCode(t, rec) != "monitor_participant_not_found" {
 				t.Errorf("%s: %d %s, want 404 monitor_participant_not_found", path, rec.Code, rec.Body.String())

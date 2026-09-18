@@ -8,6 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/sync/singleflight"
+
+	"github.com/devrdn/db-contest/backend/internal/audit"
 )
 
 // The organiser's read side (design §4): what a contest's staff are shown of
@@ -44,9 +46,28 @@ type WatchStore interface {
 	Revision(ctx context.Context, registration uuid.UUID, id int64) (RevisionBody, error)
 }
 
+// ViewAuditEvery is how often one viewer's looking at one participant (or
+// at one contest's table and feed) is recorded at most (design §7): a screen
+// polling every five seconds would otherwise write the trail full of it.
+const ViewAuditEvery = 15 * time.Minute
+
+// viewKeyPrefix namespaces the marks of recorded views in the shared cache.
+const viewKeyPrefix = "monitor:viewed:"
+
+// ViewMarks is the slice of the platform cache the view audit needs: the
+// mark that a view of a pair was recorded within ViewAuditEvery.
+type ViewMarks interface {
+	Get(ctx context.Context, key string) (value []byte, found bool, err error)
+	Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
+}
+
 // WatchConfig assembles a WatchService.
 type WatchConfig struct {
 	Store WatchStore
+	// Audit records views and exports; Marks remembers which views were
+	// recorded lately. Both are required for RecordView and RecordExport.
+	Audit *audit.Recorder
+	Marks ViewMarks
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 	// RosterTTL defaults to RosterCacheTTL.
@@ -56,6 +77,8 @@ type WatchConfig struct {
 // WatchService answers the organiser's reads.
 type WatchService struct {
 	store     WatchStore
+	audit     *audit.Recorder
+	marks     ViewMarks
 	now       func() time.Time
 	rosterTTL time.Duration
 
@@ -71,7 +94,7 @@ type cachedRoster struct {
 
 // NewWatchService returns the organiser's read side.
 func NewWatchService(cfg WatchConfig) *WatchService {
-	s := &WatchService{store: cfg.Store, now: cfg.Now, rosterTTL: cfg.RosterTTL,
+	s := &WatchService{store: cfg.Store, audit: cfg.Audit, marks: cfg.Marks, now: cfg.Now, rosterTTL: cfg.RosterTTL,
 		rosters: make(map[uuid.UUID]cachedRoster)}
 	if s.now == nil {
 		s.now = time.Now
@@ -216,4 +239,54 @@ func (s *WatchService) Revision(ctx context.Context, contest, registration uuid.
 		return RevisionBody{}, err
 	}
 	return s.store.Revision(ctx, registration, id)
+}
+
+// RecordView records that viewer looked at a participant of the contest —
+// or, with registration uuid.Nil, at the contest's table or feed — unless
+// the same view was recorded within ViewAuditEvery (design §7).
+//
+// One cache read per request, and a write only when a view is recorded
+// (CLAUDE.md rule 6). The mark is set after the entry is written, so a
+// failed write is retried by the next view instead of being forgotten; a
+// cache that cannot be read counts as no mark, which records more rather
+// than less. Two views racing past an empty mark may both be recorded — a
+// duplicate line, never a missing one.
+func (s *WatchService) RecordView(ctx context.Context, viewer, contest, registration uuid.UUID) error {
+	subject := contest.String()
+	if registration != uuid.Nil {
+		subject = registration.String()
+	}
+	key := viewKeyPrefix + viewer.String() + ":" + subject
+	if _, found, err := s.marks.Get(ctx, key); err == nil && found {
+		return nil
+	}
+	if err := s.record(ctx, audit.ActionContestMonitorView, viewer, contest, registration); err != nil {
+		return err
+	}
+	// A mark that cannot be set costs a second entry for the next view, not
+	// a view without one.
+	_ = s.marks.Set(ctx, key, []byte{1}, ViewAuditEvery)
+	return nil
+}
+
+// RecordExport records a CSV export of a participant's feed, or with
+// registration uuid.Nil of the contest's, every time (design §7).
+func (s *WatchService) RecordExport(ctx context.Context, viewer, contest, registration uuid.UUID) error {
+	return s.record(ctx, audit.ActionContestMonitorExport, viewer, contest, registration)
+}
+
+// record writes one entry about the contest; the participant, when there
+// is one, is in the payload, so the contest's own trail lists it.
+func (s *WatchService) record(ctx context.Context, action string, viewer, contest, registration uuid.UUID) error {
+	payload := map[string]any{}
+	if registration != uuid.Nil {
+		payload["registration_id"] = registration.String()
+	}
+	actor := viewer
+	if err := s.audit.Record(ctx, audit.Entry{
+		ActorID: &actor, Action: action, Entity: "contest", EntityID: contest.String(), Payload: payload,
+	}); err != nil {
+		return fmt.Errorf("record %s: %w", action, err)
+	}
+	return nil
 }

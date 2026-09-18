@@ -34,6 +34,8 @@
     "contest.manager_revoke",
     "contest.package_export",
     "contest.leaderboard_reveal",
+    "contest.monitor_view",
+    "contest.monitor_export",
     "participant.add",
     "participant.remove",
     "participant.disqualify",

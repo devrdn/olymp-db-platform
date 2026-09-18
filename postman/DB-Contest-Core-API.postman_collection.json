@@ -1933,6 +1933,50 @@
             "description": "One revision of the notes or a tab, whole.\n\nResponses: 200 · 404 `monitor_revision_not_found` · 404 `monitor_participant_not_found` (another contest's registration, or none) · 401 · 403 · 429 `monitor_too_often`"
           },
           "response": []
+        },
+        {
+          "name": "Export the contest feed",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/monitor/export.csv",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "monitor",
+                "export.csv"
+              ]
+            },
+            "description": "The feed as a file, oldest first: `at, kind, login, full_name, registration_id, data` (the item's details as JSON). Streamed a page at a time; at most 200,000 rows, with a last `truncated` line when that binds, and at most a minute. One export at a time per account. Every export is recorded in the audit trail (`contest.monitor_export`) before the file starts. A cell that would start a spreadsheet formula is prefixed with an apostrophe.\n\nResponses: 200 · 401 · 403 · 429 `monitor_too_often` (the budget, or an export already running)"
+          },
+          "response": []
+        },
+        {
+          "name": "Export a participant's feed",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/monitor/participants/{{registrationId}}/export.csv",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "monitor",
+                "participants",
+                "{{registrationId}}",
+                "export.csv"
+              ]
+            },
+            "description": "The feed as a file, oldest first: `at, kind, login, full_name, registration_id, data` (the item's details as JSON). Streamed a page at a time; at most 200,000 rows, with a last `truncated` line when that binds, and at most a minute. One export at a time per account. Every export is recorded in the audit trail (`contest.monitor_export`) before the file starts. A cell that would start a spreadsheet formula is prefixed with an apostrophe.\n\nResponses: 200 · 404 `monitor_participant_not_found` · 401 · 403 · 429 `monitor_too_often` (the budget, or an export already running)"
+          },
+          "response": []
         }
       ]
     },

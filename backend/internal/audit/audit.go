@@ -85,6 +85,16 @@ const (
 	// table's final state. Irreversible, and the moment everybody sees who
 	// won, which is exactly what somebody later asks "who pressed it, when".
 	ActionContestLeaderboardReveal = "contest.leaderboard_reveal"
+	// ActionContestMonitorView records a member of a contest's staff looking
+	// at what its participants did (the monitoring screens): a participant's
+	// feed, queries, answers or notes, or the contest-wide table and feed.
+	// Watching is itself watched, because notes a participant wrote are
+	// being read. At most once per 15 minutes per viewer and participant (or
+	// contest), or a screen polling every five seconds would bury the trail.
+	ActionContestMonitorView = "contest.monitor_view"
+	// ActionContestMonitorExport records a monitoring CSV leaving the
+	// installation — every time: a file is a copy nobody can take back.
+	ActionContestMonitorExport = "contest.monitor_export"
 
 	ActionParticipantAdd        = "participant.add"
 	ActionParticipantRemove     = "participant.remove"
@@ -183,6 +193,7 @@ var actions = []string{
 	ActionQuestionUpdate, ActionQuestionDelete, ActionQuestionReorder,
 	ActionAnswersChange, ActionManagerGrant, ActionManagerRevoke,
 	ActionContestPackageExport, ActionContestLeaderboardReveal,
+	ActionContestMonitorView, ActionContestMonitorExport,
 
 	ActionParticipantAdd, ActionParticipantRemove, ActionParticipantDisqualify,
 	ActionParticipantEnroll, ActionContestAccessDenied, ActionContestStartBlocked,

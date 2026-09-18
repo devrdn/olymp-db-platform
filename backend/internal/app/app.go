@@ -520,8 +520,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		// What a contest's participants did, for its staff (design §4):
 		// behind contest.monitor, with its own read budget on the shared
 		// limiter under the "monitor:" namespace.
-		api.NewMonitorHandler(monitor.NewWatchService(monitor.WatchConfig{Store: postgres.NewWatch(pool)}),
-			limiter, authMiddleware, log),
+		// Every view is audited through the shared cache's marks (design §7).
+		api.NewMonitorHandler(monitor.NewWatchService(monitor.WatchConfig{
+			Store: postgres.NewWatch(pool), Audit: auditRecorder, Marks: cacheBackend,
+		}), limiter, authMiddleware, log),
 	}
 	if console != nil {
 		modules = append(modules, api.NewConsoleHandler(console, authMiddleware, log))

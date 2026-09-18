@@ -1343,6 +1343,8 @@ const en = {
       "contest.answers_change": "Changed the reference answers",
       "contest.package_export": "Exported the contest package",
       "contest.leaderboard_reveal": "Revealed the final standings",
+      "contest.monitor_view": "Viewed participants' activity",
+      "contest.monitor_export": "Exported participants' activity",
       "contest.manager_grant": "Appointed a manager",
       "contest.manager_revoke": "Removed a manager",
       "participant.add": "Added a participant",

@@ -1224,6 +1224,8 @@ const ro = {
       "contest.answers_change": "A schimbat răspunsurile de referință",
       "contest.package_export": "A exportat pachetul olimpiadei",
       "contest.leaderboard_reveal": "A dezvăluit clasamentul final",
+      "contest.monitor_view": "A vizualizat activitatea participanților",
+      "contest.monitor_export": "A exportat activitatea participanților",
       "contest.manager_grant": "A numit un manager",
       "contest.manager_revoke": "A retras un manager",
       "participant.add": "A adăugat un participant",
