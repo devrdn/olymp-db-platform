@@ -244,6 +244,10 @@ type LoginCommand struct {
 	UserAgent string
 	// DeviceToken is the device cookie the browser sent, if any.
 	DeviceToken string
+	// PreviousToken is the session cookie the browser sent, if any: a browser
+	// signing in again while signed in. A successful sign-in ends that
+	// session, so it is replaced rather than left alive beside the new one.
+	PreviousToken string
 }
 
 // LoginResult is what the handler needs to answer a successful attempt.
@@ -412,6 +416,18 @@ func (s *Service) Login(ctx context.Context, cmd LoginCommand) (LoginResult, err
 	})
 	if err != nil {
 		return LoginResult{}, err
+	}
+
+	// The browser's previous session, if it sent one, ends now that it has a
+	// new one: left alive it would be an orphan nobody holds, and to the
+	// monitoring trail a second device. Only after the new session exists,
+	// so a sign-in that fails signs nobody out. Best-effort: a cookie naming
+	// no session is nothing to end, and a store that cannot delete it leaves
+	// it to expire on its own.
+	if cmd.PreviousToken != "" && cmd.PreviousToken != token {
+		if err := s.sessions.Delete(ctx, cmd.PreviousToken); err != nil {
+			s.log.WarnContext(ctx, "could not end the replaced session", "error", err)
+		}
 	}
 
 	now := time.Now().UTC()
