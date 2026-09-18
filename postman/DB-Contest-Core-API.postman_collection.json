@@ -61,6 +61,18 @@
       "value": "",
       "type": "string",
       "description": "Populated automatically by Participant workspace ▸ Get the workspace (its first tab) and ▸ Open a tab."
+    },
+    {
+      "key": "registrationId",
+      "value": "",
+      "type": "string",
+      "description": "A registration of {{contestId}}: the registration_id of a row of Participant monitoring ▸ Participants table."
+    },
+    {
+      "key": "revisionId",
+      "value": "",
+      "type": "string",
+      "description": "The id of a revision from Participant monitoring ▸ Participant workspace."
     }
   ],
   "event": [
@@ -1641,6 +1653,284 @@
                 }
               }
             }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Participant monitoring",
+      "description": "What a contest's participants did, for its staff (design `docs/superpowers/specs/2026-09-18-participant-monitoring-design.md` §4). Behind `contest.monitor` on the contest in the URL — the owner, the managers and installation administrators — and a read budget of 240 a minute per account, refused reads included: past it `429 monitor_too_often` with `Retry-After`. A registration in the URL must belong to this contest; another contest's is the same `404 monitor_participant_not_found` as one that does not exist.\n\nViewing a participant's feed, queries or workspace is itself recorded in the audit trail (`contest.monitor_view`, at most once per 15 minutes per organiser and participant), and every CSV export always is (`contest.monitor_export`).",
+      "item": [
+        {
+          "name": "Participants table",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/monitor/participants",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "monitor",
+                "participants"
+              ]
+            },
+            "description": "Every participant of the contest with their counters — queries (all, failed, rejected, from how many addresses), answers (correct, wrong), absences (how many, for how long), pastes, address changes, parallel sessions, last activity — and the six flags of design §5: `multiple_ips` (more than one address), `parallel_sessions` (at least one), `long_absence` (more than 5 minutes away in total or more than 10 absences), `answer_without_queries` (a correct answer with no successful query since the previous answer), `large_paste` (more than 200 characters into the editor or an answer), `identical_queries` (a successful query of at least 60 normalised characters another participant also ran). Hints, not verdicts.\n\nOne computation serves every organiser for 3 seconds. At most 2000 rows; `truncated` says there were more.\n\nResponses: 200 · 401 · 403 · 429 `monitor_too_often`"
+          },
+          "response": []
+        },
+        {
+          "name": "Contest feed",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/monitor/feed?after=&before=&kinds=query,answer,paste&participant={{registrationId}}&from=2026-09-18T09:00:00Z&until=2026-09-18T12:00:00Z&limit=200",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "monitor",
+                "feed"
+              ],
+              "query": [
+                {
+                  "key": "after",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "before",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "kinds",
+                  "value": "query,answer,paste",
+                  "disabled": true
+                },
+                {
+                  "key": "participant",
+                  "value": "{{registrationId}}",
+                  "disabled": true
+                },
+                {
+                  "key": "from",
+                  "value": "2026-09-18T09:00:00Z",
+                  "disabled": true
+                },
+                {
+                  "key": "until",
+                  "value": "2026-09-18T12:00:00Z",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "200",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Everything the contest's participants did, merged in time order: `query`, `answer`, `sign_in`, `sign_out`, `sign_in_failed`, `disqualified`, `started`, `finished`, `page_left`, `paste`, `ip_changed`, `parallel_session`, `tab_created`, `tab_renamed`, `tab_deleted`. Items come oldest first on every page.\n\n- no cursor: the newest page;\n- `after=<cursor>`: what came after it — the live screen polls with the page's `newest`;\n- `before=<cursor>`: what came before it — scroll back with the page's `oldest`.\n\n`more` says there is more in the direction read. `kinds` (comma-separated), `participant` (a registration of this contest), `from` and `until` (RFC 3339, `[from, until)`), `limit` (at most 200).\n\nResponses: 200 · 400 `monitor_invalid_cursor` / `monitor_invalid_filter` · 404 `monitor_participant_not_found` (another contest's registration, or none) · 401 · 403 · 429 `monitor_too_often`"
+          },
+          "response": []
+        },
+        {
+          "name": "Participant",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/monitor/participants/{{registrationId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "monitor",
+                "participants",
+                "{{registrationId}}"
+              ]
+            },
+            "description": "Who the participant is: login, name, status, when their clock started and finished.\n\nResponses: 200 · 404 `monitor_participant_not_found` (another contest's registration, or none) · 401 · 403 · 429 `monitor_too_often`"
+          },
+          "response": []
+        },
+        {
+          "name": "Participant timeline",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/monitor/participants/{{registrationId}}/timeline?after=&before=&kinds=&from=&until=&limit=",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "monitor",
+                "participants",
+                "{{registrationId}}",
+                "timeline"
+              ],
+              "query": [
+                {
+                  "key": "after",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "before",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "kinds",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "from",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "until",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "The feed of one participant, with the same parameters as the contest feed (`participant` aside).\n\nResponses: 200 · 400 `monitor_invalid_cursor` / `monitor_invalid_filter` · 404 `monitor_participant_not_found` (another contest's registration, or none) · 401 · 403 · 429 `monitor_too_often`"
+          },
+          "response": []
+        },
+        {
+          "name": "Participant queries",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/monitor/participants/{{registrationId}}/queries?status=error&q=suspects&cursor=&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "monitor",
+                "participants",
+                "{{registrationId}}",
+                "queries"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "error",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "suspects",
+                  "disabled": true
+                },
+                {
+                  "key": "cursor",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "The participant's SQL queries, newest first, each whole: the statement, status, error, duration, rows, time and the address it came from. `status` (`ok`, `error`, `timeout`, `rejected`, `running`), `q` (a substring, without case; at most 200 characters; `%` and `_` are text), `cursor` (the last item's, for the next page), `limit` (at most 50).\n\nResponses: 200 · 400 `monitor_invalid_cursor` / `monitor_invalid_filter` · 404 `monitor_participant_not_found` (another contest's registration, or none) · 401 · 403 · 429 `monitor_too_often`"
+          },
+          "response": []
+        },
+        {
+          "name": "Participant answers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/monitor/participants/{{registrationId}}/answers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "monitor",
+                "participants",
+                "{{registrationId}}",
+                "answers"
+              ]
+            },
+            "description": "Every attempt, grouped by question, with the queries that led to it: those after the participant's previous answer to any question (or from the beginning) and before this one. At most 100 queries per attempt, each cut to 1000 characters; `more_queries` counts the rest.\n\nResponses: 200 · 404 `monitor_participant_not_found` (another contest's registration, or none) · 401 · 403 · 429 `monitor_too_often`"
+          },
+          "response": []
+        },
+        {
+          "name": "Participant workspace",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/monitor/participants/{{registrationId}}/workspace",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "monitor",
+                "participants",
+                "{{registrationId}}",
+                "workspace"
+              ]
+            },
+            "description": "The notes and SQL tabs as they are now, and the list of their revisions (newest first, without bodies: id, document — `notes` or a tab's id — title, first and last save, size). Looking creates nothing.\n\nResponses: 200 · 404 `monitor_participant_not_found` (another contest's registration, or none) · 401 · 403 · 429 `monitor_too_often`"
+          },
+          "response": []
+        },
+        {
+          "name": "Workspace revision",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/contests/{{contestId}}/monitor/participants/{{registrationId}}/workspace/revisions/{{revisionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "contests",
+                "{{contestId}}",
+                "monitor",
+                "participants",
+                "{{registrationId}}",
+                "workspace",
+                "revisions",
+                "{{revisionId}}"
+              ]
+            },
+            "description": "One revision of the notes or a tab, whole.\n\nResponses: 200 · 404 `monitor_revision_not_found` · 404 `monitor_participant_not_found` (another contest's registration, or none) · 401 · 403 · 429 `monitor_too_often`"
           },
           "response": []
         }

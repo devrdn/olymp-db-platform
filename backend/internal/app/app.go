@@ -517,6 +517,11 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		// The trail is written by every module above; this is the only way
 		// to read it back, and it is behind its own permission.
 		api.NewAuditHandler(auditTrail, authMiddleware, log),
+		// What a contest's participants did, for its staff (design §4):
+		// behind contest.monitor, with its own read budget on the shared
+		// limiter under the "monitor:" namespace.
+		api.NewMonitorHandler(monitor.NewWatchService(monitor.WatchConfig{Store: postgres.NewWatch(pool)}),
+			limiter, authMiddleware, log),
 	}
 	if console != nil {
 		modules = append(modules, api.NewConsoleHandler(console, authMiddleware, log))

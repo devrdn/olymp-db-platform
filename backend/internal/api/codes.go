@@ -380,4 +380,19 @@ var (
 		"This participant's browser has sent more signal batches this minute than the installation allows, refused batches included. Nothing was stored; keep the batch and send it again after `Retry-After`.")
 	codeSignalsBatchTooLarge = httpx.NewCode("signals_batch_too_large",
 		"A signal batch carries at most 50 events, in a body of at most 256 KiB. Nothing was stored; send the events in smaller batches.")
+
+	// --- Watching participants -------------------------------------------------
+	//
+	// One code per monitor.WatchService refusal (CLAUDE.md rule 1), and the
+	// organiser's read budget.
+	codeMonitorTooOften = httpx.NewCode("monitor_too_often",
+		"This account has made more monitoring reads this minute than the installation allows, refused reads included. Wait `Retry-After` seconds and ask again.")
+	codeMonitorParticipantNotFound = httpx.NewCode("monitor_participant_not_found",
+		"No such participant in this contest. The same answer whether the registration does not exist or belongs to another contest.")
+	codeMonitorRevisionNotFound = httpx.NewCode("monitor_revision_not_found",
+		"No such revision of this participant's notes or SQL tabs.")
+	codeMonitorInvalidCursor = httpx.NewCode("monitor_invalid_cursor",
+		"The cursor is not one this service issued. Start again from the newest page.")
+	codeMonitorInvalidFilter = httpx.NewCode("monitor_invalid_filter",
+		"A monitoring filter is not acceptable: an unknown event kind or query status, a search longer than 200 characters, a time that is not RFC 3339, a range that ends before it starts, or after and before together. The message names which.")
 )
