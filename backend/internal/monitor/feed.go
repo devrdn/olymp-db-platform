@@ -114,6 +114,9 @@ const SignInGrace = time.Hour
 var (
 	// ErrInvalidCursor: a cursor this service did not issue.
 	ErrInvalidCursor = errors.New("the feed cursor is not valid")
+	// ErrExportTooWide: a contest with more registrations than a
+	// contest-wide stream reads one at a time (MaxRosterRows).
+	ErrExportTooWide = fmt.Errorf("a contest of more than %d registrations is too large to export whole", MaxRosterRows)
 	// ErrInvalidFeedFilter: an unknown kind, too many kinds, a time range
 	// that ends before it starts, or both directions at once.
 	ErrInvalidFeedFilter = errors.New("the feed filter is not valid")

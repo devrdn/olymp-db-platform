@@ -42,11 +42,16 @@ type watchStore struct {
 	events    []monitor.FeedItem
 	failReads int
 	reads     int
+	// tooWide makes the contest too large to stream whole.
+	tooWide bool
 }
 
 func (s *watchStore) FeedRegistrations(_ context.Context, contest uuid.UUID) ([]uuid.UUID, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.tooWide {
+		return nil, monitor.ErrExportTooWide
+	}
 	var out []uuid.UUID
 	for reg, c := range s.registrations {
 		if c == contest {

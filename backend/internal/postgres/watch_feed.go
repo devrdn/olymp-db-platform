@@ -89,7 +89,7 @@ func (w *Watch) FeedRegistrations(ctx context.Context, contest uuid.UUID) ([]uui
 		return nil, fmt.Errorf("list the registrations of %s: %w", contest, err)
 	}
 	if len(ids) > monitor.MaxRosterRows {
-		return nil, fmt.Errorf("contest %s has more than %d registrations to stream", contest, monitor.MaxRosterRows)
+		return nil, fmt.Errorf("contest %s: %w", contest, monitor.ErrExportTooWide)
 	}
 	return ids, nil
 }

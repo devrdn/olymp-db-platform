@@ -188,3 +188,12 @@ func TestAWholeExportEndsWithItsLastRow(t *testing.T) {
 		t.Errorf("rows = %d, last = %v, want a header and every event", len(rows), rows[len(rows)-1])
 	}
 }
+
+func TestAContestTooLargeToExportWholeSaysSo(t *testing.T) {
+	f := newMonitorFixture(t)
+	f.store.tooWide = true
+	rec := f.get(f.base()+"/export.csv", &f.organizer)
+	if last := lastLine(t, rec.Body.String()); last[1] != "too_large" || !strings.Contains(last[5], "one at a time") {
+		t.Errorf("last line = %v, want the too-large notice", last)
+	}
+}
