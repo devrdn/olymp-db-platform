@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/google/uuid"
 )
@@ -372,4 +376,138 @@ func TestTheCookieLivesNoLongerThanTheSessionCan(t *testing.T) {
 	if got := NewSessionStore(c, time.Hour).WithMaxLifetime(12 * time.Hour).CookieLifetime(); got != time.Hour {
 		t.Errorf("CookieLifetime() = %v, want the 1h idle timeout below a 12h maximum lifetime", got)
 	}
+}
+
+// newAliveStore is a session store over a fresh in-process cache.
+func newAliveStore(t *testing.T) (*SessionStore, cache.Cache) {
+	t.Helper()
+	c := cache.NewMemory(100)
+	t.Cleanup(func() { _ = c.Close() })
+	return NewSessionStore(c, time.Hour).WithMaxLifetime(12 * time.Hour), c
+}
+
+func createSession(t *testing.T, store *SessionStore, p Principal) string {
+	t.Helper()
+	token, err := store.Create(context.Background(), p)
+	if err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
+	return token
+}
+
+// SessionAlive answers the monitoring trail in its own terms: the tag it
+// keeps is monitor.SessionTag of the token, which must name the same record
+// this store keeps.
+func TestSessionAliveAnswersForTheMonitoringTag(t *testing.T) {
+	ctx := context.Background()
+	retired := testPrincipal()
+	retired.Generation++
+
+	for name, given := range map[string]struct {
+		end  func(t *testing.T, store *SessionStore, c cache.Cache, tracked string)
+		next Principal
+		want bool
+	}{
+		"a live session": {
+			end: func(*testing.T, *SessionStore, cache.Cache, string) {}, next: testPrincipal(), want: true,
+		},
+		"a session signed out": {
+			end: func(t *testing.T, store *SessionStore, _ cache.Cache, tracked string) {
+				if err := store.Delete(ctx, tracked); err != nil {
+					t.Fatalf("Delete() = %v", err)
+				}
+			},
+			next: testPrincipal(), want: false,
+		},
+		"a session past its maximum lifetime": {
+			end: func(t *testing.T, _ *SessionStore, c cache.Cache, tracked string) {
+				ageSession(t, c, tracked, 12*time.Hour+time.Minute)
+			},
+			next: testPrincipal(), want: false,
+		},
+		// A password change or "sign out everywhere" retires every older
+		// session without deleting its record; the new sign-in carries the
+		// newer generation.
+		"a session retired by a newer generation": {
+			end: func(*testing.T, *SessionStore, cache.Cache, string) {}, next: retired, want: false,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, c := newAliveStore(t)
+			tracked := createSession(t, store, testPrincipal())
+			current := createSession(t, store, given.next)
+			given.end(t, store, c, tracked)
+
+			alive, err := store.SessionAlive(ctx, monitor.SessionTag(tracked), monitor.SessionTag(current))
+			if err != nil || alive != given.want {
+				t.Fatalf("SessionAlive() = %t, %v, want %t", alive, err, given.want)
+			}
+		})
+	}
+}
+
+// A tag that is not a digest names nothing: it is never used to build a key.
+func TestSessionAliveRefusesWhatIsNotADigest(t *testing.T) {
+	store, _ := newAliveStore(t)
+	token := createSession(t, store, testPrincipal())
+	for _, tag := range []string{"", token, "sess:" + monitor.SessionTag(token), strings.Repeat("z", 64)} {
+		if alive, err := store.SessionAlive(context.Background(), tag, monitor.SessionTag(token)); alive || err != nil {
+			t.Errorf("SessionAlive(%q) = %t, %v, want false", tag, alive, err)
+		}
+	}
+}
+
+// The whole signal over the real store: an honest participant who signs out
+// and back in, or whose session reached its end, is not reported as using a
+// second device; one whose first session is still live is.
+func TestANewSignInIsAParallelSessionOnlyWhileTheOldOneLives(t *testing.T) {
+	for name, given := range map[string]struct {
+		end  func(t *testing.T, store *SessionStore, c cache.Cache, tracked string)
+		want int
+	}{
+		"signed out, then in again": {
+			end: func(t *testing.T, store *SessionStore, _ cache.Cache, tracked string) {
+				if err := store.Delete(context.Background(), tracked); err != nil {
+					t.Fatalf("Delete() = %v", err)
+				}
+			},
+		},
+		"past its maximum lifetime": {
+			end: func(t *testing.T, _ *SessionStore, c cache.Cache, tracked string) {
+				ageSession(t, c, tracked, 12*time.Hour+time.Minute)
+			},
+		},
+		"still alive": {end: func(*testing.T, *SessionStore, cache.Cache, string) {}, want: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			store, c := newAliveStore(t)
+			events := &countingEvents{}
+			tracker := monitor.NewTracker(c, events, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			visit := monitor.Visit{
+				Contest: uuid.New(), Registration: uuid.New(), Address: netip.MustParseAddr("10.0.0.1"),
+			}
+
+			first := createSession(t, store, testPrincipal())
+			visit.Session = monitor.SessionTag(first)
+			tracker.Observe(ctx, visit)
+
+			given.end(t, store, c, first)
+			second := createSession(t, store, testPrincipal())
+			visit.Session = monitor.SessionTag(second)
+			tracker.Observe(ctx, visit)
+
+			if events.count != given.want {
+				t.Fatalf("the second sign-in wrote %d events, want %d", events.count, given.want)
+			}
+		})
+	}
+}
+
+// countingEvents counts the events the tracker wrote.
+type countingEvents struct{ count int }
+
+func (e *countingEvents) InsertEvents(_ context.Context, events []monitor.Event) error {
+	e.count += len(events)
+	return nil
 }

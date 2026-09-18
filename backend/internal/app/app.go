@@ -133,7 +133,12 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// registration in the shared cache, told of every request participant
 	// admission lets through — the console's queries below and the /play
 	// endpoints further down — so both feed one trail.
-	participantTracker := monitor.NewTracker(cacheBackend, postgres.NewMonitor(pool), log)
+	//
+	// The session store is built here, ahead of its other users below,
+	// because the tracker asks it whether a registration's previous session
+	// still lives before calling a new one a second device.
+	sessions := auth.NewSessionStore(cacheBackend, cfg.SessionTTL).WithMaxLifetime(cfg.SessionMaxLifetime)
+	participantTracker := monitor.NewTracker(cacheBackend, postgres.NewMonitor(pool), sessions, log)
 
 	// The SQL console, when there is a game cluster and a runner to reach.
 	var console *queryproxy.Service
@@ -345,7 +350,6 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// down: both read the same table through the same narrow type, and there
 	// is no reason to pay for two.
 	auditTrail := postgres.NewAuditTrail(pool)
-	sessions := auth.NewSessionStore(cacheBackend, cfg.SessionTTL).WithMaxLifetime(cfg.SessionMaxLifetime)
 	cookies := auth.NewCookieWriter(cfg.CookieSecure)
 
 	// One instance, shared with GameHandler's own BeginUpload throttle

@@ -92,20 +92,50 @@ func (l *eventLog) all() []monitor.Event {
 	return append([]monitor.Event(nil), l.events...)
 }
 
+// sessionBook answers whether a tracked session is still live beside the
+// current one: live unless a test ended it.
+type sessionBook struct {
+	mu    sync.Mutex
+	ended map[string]bool
+	asked int
+	fail  error
+}
+
+func (b *sessionBook) SessionAlive(_ context.Context, tracked, _ string) (bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.asked++
+	if b.fail != nil {
+		return false, b.fail
+	}
+	return !b.ended[tracked], nil
+}
+
+func (b *sessionBook) end(tag string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.ended == nil {
+		b.ended = map[string]bool{}
+	}
+	b.ended[tag] = true
+}
+
 type trackerRig struct {
-	tracker *monitor.Tracker
-	cache   *trailCache
-	events  *eventLog
-	now     time.Time
-	visit   monitor.Visit
+	tracker  *monitor.Tracker
+	cache    *trailCache
+	events   *eventLog
+	sessions *sessionBook
+	now      time.Time
+	visit    monitor.Visit
 }
 
 func newTrackerRig(t *testing.T) *trackerRig {
 	t.Helper()
 	rig := &trackerRig{
-		cache:  newTrailCache(),
-		events: &eventLog{},
-		now:    time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC),
+		cache:    newTrailCache(),
+		events:   &eventLog{},
+		sessions: &sessionBook{},
+		now:      time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC),
 		visit: monitor.Visit{
 			Contest:      uuid.New(),
 			Registration: uuid.New(),
@@ -114,7 +144,7 @@ func newTrackerRig(t *testing.T) *trackerRig {
 			UserAgent:    "Firefox",
 		},
 	}
-	rig.tracker = monitor.NewTracker(rig.cache, rig.events, slog.New(slog.NewTextHandler(io.Discard, nil))).
+	rig.tracker = monitor.NewTracker(rig.cache, rig.events, rig.sessions, slog.New(slog.NewTextHandler(io.Discard, nil))).
 		WithClock(func() time.Time { return rig.now })
 	return rig
 }
@@ -331,7 +361,7 @@ func TestAHangingCacheCostsAtMostTheTimeout(t *testing.T) {
 	rig.cache.block = true
 	started := time.Now()
 	rig.observe(rig.visit)
-	if took := time.Since(started); took > monitor.ObserveTimeout+time.Second {
+	if took := time.Since(started); took > 2*monitor.ObserveTimeout {
 		t.Fatalf("Observe took %s against a hanging cache, want about %s", took, monitor.ObserveTimeout)
 	}
 }
@@ -414,7 +444,7 @@ func BenchmarkObserveUnchanged(b *testing.B) {
 	b.Cleanup(func() { _ = store.Close() })
 	events := &eventLog{}
 	now := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
-	tracker := monitor.NewTracker(store, events, slog.New(slog.NewTextHandler(io.Discard, nil))).
+	tracker := monitor.NewTracker(store, events, &sessionBook{}, slog.New(slog.NewTextHandler(io.Discard, nil))).
 		WithClock(func() time.Time { return now })
 	visit := monitor.Visit{
 		Contest: uuid.New(), Registration: uuid.New(),
@@ -430,4 +460,158 @@ func BenchmarkObserveUnchanged(b *testing.B) {
 	if events.inserts != 0 {
 		b.Fatalf("an unchanged visit inserted events")
 	}
+}
+
+// A session that ended — signed out, past its lifetime, retired — is not a
+// second device: the next session takes over silently, even inside the
+// window. A false "second device" on an honest participant is the costliest
+// mistake this signal can make.
+func TestASessionThatEndedIsNotAParallelOne(t *testing.T) {
+	rig := newTrackerRig(t)
+	rig.observe(rig.from("10.0.0.1", "session-a"))
+	rig.sessions.end(monitor.SessionTag("session-a"))
+	rig.now = rig.now.Add(30 * time.Second)
+	rig.observe(rig.from("10.0.0.1", "session-b"))
+	if got := rig.kinds(); len(got) != 0 {
+		t.Fatalf("a new session after the old one ended wrote %v, want nothing", got)
+	}
+	// And the new one is tracked now: a third session while it is live is
+	// the parallel one.
+	rig.now = rig.now.Add(time.Second)
+	rig.observe(rig.from("10.0.0.3", "session-c"))
+	if got := rig.kinds(); len(got) != 1 || got[0] != monitor.KindParallelSession {
+		t.Fatalf("events = %v, want one parallel_session", got)
+	}
+}
+
+// Whether the tracked session is alive is asked only when the sessions
+// differ: the common request costs one cache read and nothing more.
+func TestLivenessIsAskedOnlyWhenTheSessionsDiffer(t *testing.T) {
+	rig := newTrackerRig(t)
+	for range 5 {
+		rig.now = rig.now.Add(time.Second)
+		rig.observe(rig.visit)
+	}
+	if rig.sessions.asked != 0 {
+		t.Fatalf("an unchanged session asked about liveness %d times", rig.sessions.asked)
+	}
+	rig.observe(rig.from("10.0.0.1", "session-b"))
+	if rig.sessions.asked != 1 {
+		t.Fatalf("a different session asked %d times, want 1", rig.sessions.asked)
+	}
+}
+
+// Past the window nobody asks: the old session went quiet either way.
+func TestLivenessIsNotAskedPastTheWindow(t *testing.T) {
+	rig := newTrackerRig(t)
+	rig.observe(rig.from("10.0.0.1", "session-a"))
+	rig.now = rig.now.Add(monitor.ParallelWindow)
+	rig.observe(rig.from("10.0.0.1", "session-b"))
+	if rig.sessions.asked != 0 {
+		t.Fatalf("liveness asked %d times past the window", rig.sessions.asked)
+	}
+}
+
+// When liveness cannot be answered, nothing is reported and nothing moves:
+// a guess either way would be wrong half the time.
+func TestAnUnanswerableLivenessReportsNothing(t *testing.T) {
+	rig := newTrackerRig(t)
+	rig.observe(rig.from("10.0.0.1", "session-a"))
+	_, sets := rig.cache.counts()
+	rig.sessions.fail = errors.New("redis is down")
+	rig.now = rig.now.Add(time.Second)
+	rig.observe(rig.from("10.0.0.9", "session-b"))
+	if got := rig.kinds(); len(got) != 0 {
+		t.Fatalf("events = %v, want nothing", got)
+	}
+	if _, after := rig.cache.counts(); after != sets {
+		t.Fatalf("the trail was written %d times", after-sets)
+	}
+}
+
+// A dual-stack browser or a NAT with several exits flips between addresses
+// on every request. The same pair of addresses is reported at most once in
+// ParallelReportEvery, and the tracked address still follows the requests.
+func TestAnAddressFlippingBackAndForthIsReportedOncePerPair(t *testing.T) {
+	rig := newTrackerRig(t)
+	v4, v6 := "10.0.0.1", "2001:db8::1"
+	start := rig.now
+	rig.observe(rig.from(v4, "session-a"))
+	for i := 1; i <= 40; i++ {
+		rig.now = start.Add(time.Duration(i) * 10 * time.Second)
+		address := v6
+		if i%2 == 0 {
+			address = v4
+		}
+		rig.observe(rig.from(address, "session-a"))
+	}
+	if got := rig.kinds(); len(got) != 1 {
+		t.Fatalf("40 flips within %s wrote %d events, want 1", 400*time.Second, len(got))
+	}
+
+	// The tracked address followed: a third address is reported from the
+	// last one seen (v4), and at once, being a new pair.
+	rig.now = rig.now.Add(time.Second)
+	rig.observe(rig.from("10.0.0.7", "session-a"))
+	events := rig.events.all()
+	if len(events) != 2 {
+		t.Fatalf("a new address wrote %d events in all, want 2", len(events))
+	}
+	if got := events[1].Payload.(monitor.IPChanged); got.From != netip.MustParseAddr(v4) {
+		t.Fatalf("ip_changed from %v, want the last address seen (%s)", got.From, v4)
+	}
+
+	// After ten minutes the first pair is due again; the pair just
+	// reported (v4 and the third address) is not.
+	rig.now = start.Add(monitor.ParallelReportEvery + time.Minute)
+	rig.observe(rig.from(v4, "session-a"))
+	rig.now = rig.now.Add(time.Second)
+	rig.observe(rig.from(v6, "session-a"))
+	if got := rig.kinds(); len(got) != 3 || got[2] != monitor.KindIPChanged {
+		t.Fatalf("after ten minutes the events are %v, want a third ip_changed only", got)
+	}
+}
+
+// slowCache stands in for Redis across a network: every call costs a round
+// trip before the in-process store answers it.
+type slowCache struct {
+	monitor.TrailCache
+	rtt   time.Duration
+	calls int
+}
+
+func (c *slowCache) Get(ctx context.Context, key string) ([]byte, bool, error) {
+	c.calls++
+	time.Sleep(c.rtt)
+	return c.TrailCache.Get(ctx, key)
+}
+
+func (c *slowCache) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+	c.calls++
+	time.Sleep(c.rtt)
+	return c.TrailCache.Set(ctx, key, value, ttl)
+}
+
+// BenchmarkObserveUnchangedOverANetwork is the same request against a cache
+// a round trip away (250 µs, a loaded local network): the added cost is one
+// round trip, because the unchanged path makes exactly one call.
+func BenchmarkObserveUnchangedOverANetwork(b *testing.B) {
+	store := cache.NewMemory(0)
+	b.Cleanup(func() { _ = store.Close() })
+	slow := &slowCache{TrailCache: store, rtt: 250 * time.Microsecond}
+	now := time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC)
+	tracker := monitor.NewTracker(slow, &eventLog{}, &sessionBook{}, slog.New(slog.NewTextHandler(io.Discard, nil))).
+		WithClock(func() time.Time { return now })
+	visit := monitor.Visit{
+		Contest: uuid.New(), Registration: uuid.New(),
+		Address: netip.MustParseAddr("10.0.0.1"), Session: monitor.SessionTag("token"),
+	}
+	ctx := context.Background()
+	tracker.Observe(ctx, visit)
+	slow.calls = 0
+
+	for b.Loop() {
+		tracker.Observe(ctx, visit)
+	}
+	b.ReportMetric(float64(slow.calls)/float64(b.N), "cache-calls/op")
 }
