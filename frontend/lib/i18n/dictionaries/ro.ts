@@ -271,6 +271,7 @@ const ro = {
         back: "Toți participanții",
         csvLabel: "Descarcă tot ce a făcut acest participant, în CSV",
         status: "Stare",
+        clock: "Ceas",
         started: "A început la {time}",
         notStarted: "Nu a început",
         finished: "A terminat la {time}",

@@ -271,6 +271,7 @@ const ru = {
         back: "Все участники",
         csvLabel: "Скачать всё, что делал этот участник, в CSV",
         status: "Статус",
+        clock: "Часы",
         started: "Начал {time}",
         notStarted: "Ещё не начал",
         finished: "Закончил {time}",
