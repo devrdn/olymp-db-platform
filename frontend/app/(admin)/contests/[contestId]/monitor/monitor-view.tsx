@@ -3,6 +3,7 @@
 import { ExportMenu } from "@/components/product/export-menu";
 import { monitorCsvHref, type FeedPage, type Roster } from "@/lib/api/monitor";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { cn } from "@/lib/utils";
 
 import { LiveFeed } from "./live-feed";
 import { ParticipantsTable } from "./participants-table";
@@ -98,7 +99,16 @@ export function MonitorView({
  * by every screen reader. Shared with one participant's page, whose column
  * keeps the same `gap-8` its empty state takes back.
  */
-export function Problem({ problem, t }: { problem: MonitorProblem; t: Dictionary["workspace"]["monitor"] }) {
+export function Problem({
+  problem,
+  t,
+  className = "empty:-mt-8",
+}: {
+  problem: MonitorProblem;
+  t: Dictionary["workspace"]["monitor"];
+  /** What the empty line does to the gap above it; the default takes back a `gap-8`. */
+  className?: string;
+}) {
   const text = !problem
     ? ""
     : problem.kind === "forbidden"
@@ -111,7 +121,7 @@ export function Problem({ problem, t }: { problem: MonitorProblem; t: Dictionary
     // root — keep the two equal) rather than being
     // hidden: a hidden region is out of the accessibility tree, which is
     // what keeping it in the document is for.
-    <p role="status" className="text-small text-warn empty:-mt-8">
+    <p role="status" className={cn("text-small text-warn", className)}>
       {text}
     </p>
   );
