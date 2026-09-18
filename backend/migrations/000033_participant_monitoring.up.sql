@@ -7,7 +7,7 @@
 -- Signals from the participant's browser (leaving the page, pasting) and from
 -- the server (a new address, a second session, a tab's life). Append-only.
 -- contest_id is denormalised on purpose: the live feed of a whole contest
--- reads `contest_id = $1 AND id > $cursor` off its own index with no join to
+-- reads a range of its own index past a cursor with no join to
 -- registrations. Every payload field is bounded by internal/monitor before it
 -- reaches this table; client_at is only what a browser claimed and is set for
 -- browser signals alone.
@@ -30,10 +30,17 @@ CREATE TABLE participant_events (
         REFERENCES registrations (id, contest_id) ON DELETE CASCADE
 );
 
+-- The feed is ordered by time, not by id: it is merged with the query log,
+-- the answers and the sign-ins, which share no ids with this table. A page
+-- after a cursor and the organiser's from/until are ranges of time, so each
+-- index leads with its scope and then the time, with the id last as the
+-- keyset's tiebreak.
 -- One participant's timeline, and the cascade from registrations.
-CREATE INDEX participant_events_registration_idx ON participant_events (registration_id, id);
+CREATE INDEX participant_events_registration_time_idx
+    ON participant_events (registration_id, created_at, id);
 -- The live feed of a whole contest.
-CREATE INDEX participant_events_contest_idx ON participant_events (contest_id, id);
+CREATE INDEX participant_events_contest_time_idx
+    ON participant_events (contest_id, created_at, id);
 
 -- The history of a participant's notes and SQL tabs. document is 'notes' or a
 -- tab's id; it is not a foreign key, so a deleted tab keeps its history.
@@ -64,6 +71,15 @@ ALTER TABLE query_log
 
 -- "The same query as another participant": fingerprints per registration.
 CREATE INDEX query_log_registration_fingerprint_idx ON query_log (registration_id, sql_fingerprint);
+
+-- A participant's failed sign-ins, for the organiser's feed. A failed
+-- sign-in has no actor — the account was not proven — and names only the
+-- login that was typed (internal/auth recordFailure), so that is the only key
+-- it can be found by. Partial, so it costs nothing on the rest of the trail;
+-- lower(), because sign-in matches logins without case.
+CREATE INDEX audit_log_failed_login_idx
+    ON audit_log (lower(payload->>'login'), created_at)
+    WHERE action = 'auth.login_failed';
 
 INSERT INTO permissions (code, name) VALUES
     ('contest.monitor', 'Watch what participants of a contest did');

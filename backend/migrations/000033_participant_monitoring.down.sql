@@ -5,6 +5,8 @@ WHERE permission_id = (SELECT id FROM permissions WHERE code = 'contest.monitor'
 
 DELETE FROM permissions WHERE code = 'contest.monitor';
 
+DROP INDEX IF EXISTS audit_log_failed_login_idx;
+
 DROP INDEX IF EXISTS query_log_registration_fingerprint_idx;
 
 ALTER TABLE query_log

@@ -73,8 +73,8 @@ func scratchDatabase(t *testing.T) string {
 // the two tables, the two query_log columns, their index, and the
 // contest.monitor permission with its grants.
 type monitoringSchema struct {
-	events, revisions, ip, fingerprint, fingerprintIndex bool
-	permission                                           bool
+	events, revisions, ip, fingerprint, fingerprintIndex, failedLoginIndex bool
+	permission                                                             bool
 	// grants is how many roles hold contest.monitor.
 	grants int
 	// mismatched is how many roles hold exactly one of contest.view and
@@ -103,7 +103,11 @@ func readMonitoringSchema(t *testing.T, dsn string) monitoringSchema {
 		               WHERE table_name = 'query_log' AND column_name = 'ip' AND data_type = 'inet'),
 		       EXISTS (SELECT 1 FROM information_schema.columns
 		               WHERE table_name = 'query_log' AND column_name = 'sql_fingerprint' AND data_type = 'bigint'),
-		       to_regclass('query_log_registration_fingerprint_idx') IS NOT NULL,
+		       to_regclass('query_log_registration_fingerprint_idx') IS NOT NULL
+		       AND to_regclass('participant_events_contest_time_idx') IS NOT NULL
+		       AND to_regclass('participant_events_registration_time_idx') IS NOT NULL
+		       AND to_regclass('participant_events_contest_idx') IS NULL,
+		       to_regclass('audit_log_failed_login_idx') IS NOT NULL,
 		       EXISTS (SELECT 1 FROM permissions WHERE code = 'contest.monitor'),
 		       (SELECT count(*) FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id
 		        WHERE p.code = 'contest.monitor'),
@@ -119,7 +123,7 @@ func readMonitoringSchema(t *testing.T, dsn string) monitoringSchema {
 		             EXCEPT
 		             SELECT rp.role_id FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id
 		             WHERE p.code = 'contest.view')) AS differ)`).
-		Scan(&s.events, &s.revisions, &s.ip, &s.fingerprint, &s.fingerprintIndex, &s.permission, &s.grants, &s.mismatched)
+		Scan(&s.events, &s.revisions, &s.ip, &s.fingerprint, &s.fingerprintIndex, &s.failedLoginIndex, &s.permission, &s.grants, &s.mismatched)
 	if err != nil {
 		t.Fatalf("read the schema: %v", err)
 	}
@@ -151,7 +155,7 @@ func TestTheMonitoringMigrationRollsBackAndForward(t *testing.T) {
 		t.Fatalf("migrate to 32: %v", err)
 	}
 	down := readMonitoringSchema(t, dsn)
-	if down.events || down.revisions || down.ip || down.fingerprint || down.fingerprintIndex || down.permission || down.grants != 0 {
+	if down.events || down.revisions || down.ip || down.fingerprint || down.fingerprintIndex || down.failedLoginIndex || down.permission || down.grants != 0 {
 		t.Fatalf("after rolling back 000033 something is left: %+v", down)
 	}
 
@@ -159,65 +163,12 @@ func TestTheMonitoringMigrationRollsBackAndForward(t *testing.T) {
 		t.Fatalf("migrate to 33: %v", err)
 	}
 	up := readMonitoringSchema(t, dsn)
-	if !up.events || !up.revisions || !up.ip || !up.fingerprint || !up.fingerprintIndex || !up.permission {
+	if !up.events || !up.revisions || !up.ip || !up.fingerprint || !up.fingerprintIndex || !up.failedLoginIndex || !up.permission {
 		t.Fatalf("after applying 000033 something is missing: %+v", up)
 	}
 	// contest.monitor is held by exactly the roles that hold contest.view.
 	if up.grants == 0 || up.mismatched != 0 {
 		t.Fatalf("contest.monitor is granted to %d roles, %d roles hold only one of it and contest.view; "+
 			"want the same roles as contest.view, and not none", up.grants, up.mismatched)
-	}
-}
-
-// monitorReadIndexes reports which of the indexes the organiser's reads rely
-// on (000034) exist, and whether 000033's id-ordered ones do.
-func monitorReadIndexes(t *testing.T, dsn string) (timeOrdered, idOrdered, failedLogin bool) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect to the scratch database: %v", err)
-	}
-	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
-	if err := storagetest.Guard(ctx, conn); err != nil {
-		t.Fatal(err)
-	}
-	if err := conn.QueryRow(ctx, `
-		SELECT to_regclass('participant_events_contest_time_idx') IS NOT NULL
-		       AND to_regclass('participant_events_registration_time_idx') IS NOT NULL,
-		       to_regclass('participant_events_contest_idx') IS NOT NULL
-		       AND to_regclass('participant_events_registration_idx') IS NOT NULL,
-		       to_regclass('audit_log_failed_login_idx') IS NOT NULL`).
-		Scan(&timeOrdered, &idOrdered, &failedLogin); err != nil {
-		t.Fatalf("read the indexes: %v", err)
-	}
-	return timeOrdered, idOrdered, failedLogin
-}
-
-// TestTheMonitorReadIndexesRollBackAndForward proves 000034's down file puts
-// back exactly what its up file replaced.
-func TestTheMonitorReadIndexesRollBackAndForward(t *testing.T) {
-	dsn := scratchDatabase(t)
-	m, closeFn, err := newMigrator(dsn)
-	if err != nil {
-		t.Fatalf("newMigrator: %v", err)
-	}
-	defer closeFn()
-
-	if err := m.Migrate(34); err != nil {
-		t.Fatalf("migrate to 34: %v", err)
-	}
-	if timeOrdered, idOrdered, failedLogin := monitorReadIndexes(t, dsn); !timeOrdered || idOrdered || !failedLogin {
-		t.Fatalf("at 34: time-ordered %v, id-ordered %v, failed sign-ins %v", timeOrdered, idOrdered, failedLogin)
-	}
-	if err := m.Migrate(33); err != nil {
-		t.Fatalf("migrate to 33: %v", err)
-	}
-	if timeOrdered, idOrdered, failedLogin := monitorReadIndexes(t, dsn); timeOrdered || !idOrdered || failedLogin {
-		t.Fatalf("at 33: time-ordered %v, id-ordered %v, failed sign-ins %v", timeOrdered, idOrdered, failedLogin)
-	}
-	if err := m.Migrate(34); err != nil {
-		t.Fatalf("migrate to 34 again: %v", err)
 	}
 }
