@@ -57,6 +57,11 @@ var monitorCSVTruncatedNotice = []string{"", "truncated", "", "", "",
 var monitorCSVIncompleteNotice = []string{"", "incomplete", "", "", "",
 	"This file stopped early: the download ran out of time or a read failed. Download it again."}
 
+// monitorCSVTooLargeNotice is the whole of a contest export's body when the
+// contest has more participants than one export reads (monitor.ErrExportTooWide).
+var monitorCSVTooLargeNotice = []string{"", "too_large", "", "", "",
+	"This contest is too large to export whole; export its participants one at a time."}
+
 // errExportBound stops the stream when a bound is reached.
 var errExportBound = errors.New("the export reached its bound")
 
@@ -128,6 +133,8 @@ func (h *MonitorHandler) exportCSV(w http.ResponseWriter, r *http.Request, regis
 	case err == nil:
 	case errors.Is(err, errExportBound):
 		err = writer.Write(monitorCSVTruncatedNotice)
+	case errors.Is(err, monitor.ErrExportTooWide):
+		err = writer.Write(monitorCSVTooLargeNotice)
 	default:
 		h.log.ErrorContext(r.Context(), "the monitoring export stopped early", "error", err)
 		err = writer.Write(monitorCSVIncompleteNotice)
