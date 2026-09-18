@@ -6,6 +6,7 @@ import en from "@/lib/i18n/dictionaries/en";
 
 import { NotesPanel } from "./notes-panel";
 import { draftStorageKey } from "./use-autosave";
+import { pasteTargetOf } from "./use-signals";
 
 const t = en.participant.play.workspace.notes;
 
@@ -238,4 +239,9 @@ describe("the notes panel", () => {
     expect(screen.getByText(t.failed)).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
+});
+
+test("a paste into the notes is watched as one into the notes", () => {
+  show();
+  expect(pasteTargetOf(field())).toBe("notes");
 });

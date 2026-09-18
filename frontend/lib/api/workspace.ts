@@ -157,3 +157,32 @@ export async function deleteTab(contestId: string, tabId: string): Promise<void>
 export async function reorderTabs(contestId: string, ids: string[]): Promise<void> {
   await browserRequest(playPath(contestId, "tabs/order"), { method: "PUT", body: { ids } });
 }
+
+/**
+ * One signal the play screen reports about its own participant's browser
+ * (design §2.2; `monitor.KindPageLeft` and `monitor.KindPaste`). `client_at`
+ * is the browser's own clock, which the server keeps only as a claim.
+ */
+export type Signal =
+  | { kind: "page_left"; client_at: string; away_ms: number }
+  | { kind: "paste"; client_at: string; target: PasteTarget; chars: number; text: string };
+
+/** Where a paste is watched (`monitor.PasteTarget`). */
+export type PasteTarget = "editor" | "answer" | "notes";
+
+/**
+ * POST .../play/signals: a batch of at most 50 signals. Answers 204 even when
+ * the server dropped some of them. Refused with 429 `signals_too_often` (with
+ * `Retry-After`) past twelve batches a minute, 400 `signals_batch_too_large`,
+ * and 409 `contest_not_running` / `contest_finished` once the contest has
+ * closed for this participant. Sent through the same browser request builder
+ * as the workspace's writes, and with `keepalive` on the way out for the same
+ * reason.
+ */
+export async function sendSignals(contestId: string, events: Signal[], options: WriteOptions = {}): Promise<void> {
+  await browserRequest(playPath(contestId, "signals"), {
+    method: "POST",
+    body: { events },
+    keepalive: options.keepalive ?? false,
+  });
+}

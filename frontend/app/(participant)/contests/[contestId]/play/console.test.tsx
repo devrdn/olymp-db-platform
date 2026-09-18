@@ -11,6 +11,7 @@ import en from "@/lib/i18n/dictionaries/en";
 import { ConsoleEditor } from "./console";
 import { activeTabStorageKey } from "./use-sql-tabs";
 import type { ConsoleState } from "./actions";
+import { pasteTargetOf } from "./use-signals";
 
 /** Every run reports which tab it came from; these fixtures only ever have one open. */
 const FROM_THE_ONE_TAB = { tabTitle: "Query 1" };
@@ -454,4 +455,15 @@ describe("the editor's tabs", () => {
 
     await waitFor(() => expect(submitted.current?.get("sql")).toBe("SELECT 1"));
   });
+});
+
+test("a paste into the SQL editor is watched as one into the editor", async () => {
+  const { container } = render(<ConsoleEditor contestId="c1" dict={en} tabs={ONE_TAB} onResult={vi.fn()} />);
+  // CodeMirror mounts after the first render.
+  const content = await waitFor(() => {
+    const found = container.querySelector(".cm-content");
+    expect(found).not.toBeNull();
+    return found;
+  });
+  expect(pasteTargetOf(content)).toBe("editor");
 });

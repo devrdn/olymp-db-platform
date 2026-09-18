@@ -306,6 +306,27 @@ describe("the play workspace", () => {
   });
 });
 
+// The screen reports its participant's pastes and absences (use-signals.ts);
+// this proves the collector is mounted with the screen, not what it does.
+describe("the browser signals", () => {
+  test("a paste into the notes is sent for this contest, re-rendering nothing", async () => {
+    show();
+    const field = screen.getByRole("textbox", { name: en.participant.play.workspace.notes.label, hidden: true });
+    const sideRendersBefore = renderCounts.side;
+
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, "clipboardData", { value: { getData: () => "the key" } });
+    field.dispatchEvent(paste);
+    window.dispatchEvent(new Event("pagehide"));
+
+    const fetchMock = vi.mocked(fetch);
+    const signal = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/contests/c1/play/signals"));
+    expect(signal).toBeDefined();
+    expect(JSON.parse(String(signal?.[1]?.body)).events).toMatchObject([{ kind: "paste", target: "notes", text: "the key" }]);
+    expect(renderCounts.side).toBe(sideRendersBefore);
+  });
+});
+
 describe("the notes", () => {
   test("open with what the page read", () => {
     show();

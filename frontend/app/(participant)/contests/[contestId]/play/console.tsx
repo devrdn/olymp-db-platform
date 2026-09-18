@@ -283,6 +283,10 @@ export function ConsoleEditor({
         role="tabpanel"
         aria-labelledby={`${tabPrefix}${tabs.activeId}`}
         className="flex min-h-0 flex-1 flex-col"
+        // Pastes into the editor inside are reported to the organiser
+        // (use-signals.ts). On the wrapper, because CodeMirror owns the
+        // element that takes the text.
+        data-paste-target="editor"
       >
         <CodeEditor
           ref={editorRef}
