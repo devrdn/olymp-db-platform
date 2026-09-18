@@ -352,8 +352,8 @@ const ro = {
           notExact: "Prea multe modificări pentru o comparație rând cu rând; partea modificată este afișată întreagă.",
           unchanged: "{n} rânduri neschimbate",
           showMore: "Arată mai mult",
-          added: "adăugat",
-          removed: "eliminat",
+          added: "adăugat, rândul {n}",
+          removed: "eliminat, rândul {n}",
         },
         sessions: {
           addresses: "Adrese văzute",
