@@ -8,6 +8,7 @@ import (
 	"net/netip"
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
@@ -115,6 +116,9 @@ func (h *ConsoleHandler) run(w http.ResponseWriter, r *http.Request) {
 		// The same identifier the technical log carries, so a participant
 		// saying "it failed at two o'clock" can be answered.
 		RequestID: requestUUID(r.Context()),
+		// For the tracker of parallel sessions (design §2.3).
+		Session:   sessionTag(r),
+		UserAgent: r.UserAgent(),
 	})
 	if err != nil {
 		h.fail(w, r, err)
@@ -156,6 +160,18 @@ func clientAddress(r *http.Request) netip.Addr {
 		return netip.Addr{}
 	}
 	return addr
+}
+
+// sessionTag names the request's session for the monitoring trail: a hash of
+// the session token (monitor.SessionTag), so the token itself never leaves
+// the authentication layer's own store. Empty without a session cookie, which
+// an authenticated route never sees.
+func sessionTag(r *http.Request) string {
+	cookie, err := r.Cookie(auth.SessionCookieName)
+	if err != nil {
+		return ""
+	}
+	return monitor.SessionTag(cookie.Value)
 }
 
 // requestUUID is the request's own identifier, as the journal's column needs

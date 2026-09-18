@@ -14,6 +14,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/api"
 	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
@@ -465,5 +466,28 @@ func TestTheConsoleHandsOnTheExactClientAddress(t *testing.T) {
 	}
 	if want := netip.MustParseAddr("2001:db8::7"); got.Address != want {
 		t.Fatalf("address = %v, want %v", got.Address, want)
+	}
+}
+
+// The console hands the façade what the tracker of parallel sessions needs:
+// the session, named by a hash of its token, and the browser.
+func TestTheConsoleCarriesTheSessionAndTheBrowser(t *testing.T) {
+	var got queryproxy.Command
+	fixture := newConsoleFixture(t, recordingConsole{got: &got})
+	req := httptest.NewRequest(http.MethodPost,
+		"/contests/"+uuid.New().String()+"/query", strings.NewReader(`{"sql":"SELECT 1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "console-browser")
+	req.AddCookie(fixture.cookie)
+	rec := httptest.NewRecorder()
+	fixture.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	if got.Session != monitor.SessionTag(fixture.cookie.Value) || got.Session == "" {
+		t.Fatalf("session = %q, want the tag of the token", got.Session)
+	}
+	if got.UserAgent != "console-browser" {
+		t.Fatalf("user agent = %q", got.UserAgent)
 	}
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/gamefile"
 	"github.com/devrdn/db-contest/backend/internal/health"
 	"github.com/devrdn/db-contest/backend/internal/leaderboard"
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
@@ -127,6 +128,12 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// this trail what removed it, and the recorder needs to exist before
 	// anything can be handed it.
 	auditRecorder := audit.New(postgres.NewAuditSink(pool))
+
+	// The server's own monitoring signals (design §2.3): one trail per
+	// registration in the shared cache, told of every request participant
+	// admission lets through — the console's queries below and the /play
+	// endpoints further down — so both feed one trail.
+	participantTracker := monitor.NewTracker(cacheBackend, postgres.NewMonitor(pool), log)
 
 	// The SQL console, when there is a game cluster and a runner to reach.
 	var console *queryproxy.Service
@@ -327,7 +334,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 				// share this Service and are deliberately left open, so a
 				// participant with nothing left to answer still has their
 				// story, their results and their timer.
-				WithAnswerable(postgres.NewAnswerable(pool))
+				WithAnswerable(postgres.NewAnswerable(pool)).
+				WithWatcher(participantTracker)
 		}
 	}
 
@@ -577,7 +585,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// limiter under their own "workspace:" namespace.
 	workspaces := workspace.NewService(postgres.NewWorkspace(pool), limiter)
 	modules = append(modules, api.NewParticipantHandler(participantAccess, reader, history, contestService, answers, authMiddleware, log, cfg.DefaultLocale).
-		WithWorkspace(workspaces))
+		WithWorkspace(workspaces).
+		WithWatcher(participantTracker))
 	// The SSE channel (§8) shares participantAccess with the endpoints above
 	// for the same reason: one Access, one AdmitRead budget, not a second
 	// admission decision that could drift from the first. ctx.Done() is the
