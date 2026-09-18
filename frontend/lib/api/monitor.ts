@@ -282,18 +282,40 @@ function monitorBase(contestId: string): string {
   return `/contests/${encodeURIComponent(contestId)}/monitor`;
 }
 
-/** The feed's path with the parameters that were given, in a fixed order. */
-export function feedPath(contestId: string, params: FeedParams): string {
+function withQuery(path: string, query: URLSearchParams): string {
+  const text = query.toString();
+  return text ? `${path}?${text}` : path;
+}
+
+/** A feed read's parameters, in a fixed order; `participant` only where the route takes one. */
+function feedQuery(params: FeedParams, withParticipant: boolean): URLSearchParams {
   const query = new URLSearchParams();
   if (params.after) query.set("after", params.after);
   if (params.before) query.set("before", params.before);
   if (params.kinds && params.kinds.length > 0) query.set("kinds", params.kinds.join(","));
-  if (params.participant) query.set("participant", params.participant);
+  if (withParticipant && params.participant) query.set("participant", params.participant);
   if (params.from) query.set("from", params.from);
   if (params.until) query.set("until", params.until);
   if (params.limit) query.set("limit", String(params.limit));
-  const text = query.toString();
-  return `${monitorBase(contestId)}/feed${text ? `?${text}` : ""}`;
+  return query;
+}
+
+/** The feed's path with the parameters that were given, in a fixed order. */
+export function feedPath(contestId: string, params: FeedParams): string {
+  return withQuery(`${monitorBase(contestId)}/feed`, feedQuery(params, true));
+}
+
+/** One participant's routes: `…/monitor/participants/{registrationId}`. */
+export function participantBase(contestId: string, registrationId: string): string {
+  return `${monitorBase(contestId)}/participants/${encodeURIComponent(registrationId)}`;
+}
+
+/**
+ * One participant's timeline: the feed's parameters, less `participant` —
+ * the route names the participant itself.
+ */
+export function timelinePath(contestId: string, registrationId: string, params: FeedParams): string {
+  return withQuery(`${participantBase(contestId, registrationId)}/timeline`, feedQuery(params, false));
 }
 
 /** The contest-wide CSV, as a link the browser downloads (see ExportMenu). */
@@ -301,7 +323,7 @@ export function monitorCsvHref(contestId: string): string {
   return `${API_PREFIX}${monitorBase(contestId)}/export.csv`;
 }
 
-type ReadOptions = { signal?: AbortSignal };
+export type ReadOptions = { signal?: AbortSignal };
 
 /** GET …/monitor/participants, from the browser. */
 export async function fetchRoster(contestId: string, options: ReadOptions = {}): Promise<Roster> {
@@ -316,4 +338,227 @@ export async function fetchRoster(contestId: string, options: ReadOptions = {}):
 export async function fetchFeed(contestId: string, params: FeedParams, options: ReadOptions = {}): Promise<FeedPage> {
   const payload = await request(feedPath(contestId, params), { credentials: "same-origin", signal: options.signal });
   return feedSchema.parse(payload);
+}
+
+/** GET …/monitor/participants/{id}/timeline, from the browser. */
+export async function fetchTimeline(
+  contestId: string,
+  registrationId: string,
+  params: FeedParams,
+  options: ReadOptions = {},
+): Promise<FeedPage> {
+  const payload = await request(timelinePath(contestId, registrationId, params), {
+    credentials: "same-origin",
+    signal: options.signal,
+  });
+  return feedSchema.parse(payload);
+}
+
+/** One participant's CSV, as a link the browser downloads. */
+export function participantCsvHref(contestId: string, registrationId: string): string {
+  return `${API_PREFIX}${participantBase(contestId, registrationId)}/export.csv`;
+}
+
+/** Who one participant is, for the heading of their page. */
+export const participantSchema = z
+  .object({
+    registration_id: z.string(),
+    login: z.string(),
+    full_name: z.string(),
+    status: z.string(),
+    started_at: z.string().nullable(),
+    finished_at: z.string().nullable(),
+  })
+  .transform((raw) => ({
+    registrationId: raw.registration_id,
+    login: raw.login,
+    fullName: raw.full_name,
+    status: raw.status,
+    startedAt: raw.started_at,
+    finishedAt: raw.finished_at,
+  }));
+
+export type Participant = z.infer<typeof participantSchema>;
+
+/** Every status a query may have, and the only ones the queries filter takes (monitor.queryStatuses). */
+export const QUERY_STATUSES = ["running", "ok", "error", "rejected", "timeout"] as const;
+
+/** The most queries one page carries (monitor.MaxQueriesPage). */
+export const MAX_QUERIES_PAGE = 50;
+
+/** The longest text the queries search takes, in characters (monitor.MaxQuerySearchRunes). */
+export const MAX_QUERY_SEARCH = 200;
+
+/** One query of the queries tab, whole. */
+export const loggedQuerySchema = z
+  .object({
+    cursor: z.string(),
+    executed_at: z.string(),
+    id: z.number(),
+    sql: z.string(),
+    sql_truncated: z.boolean().optional(),
+    status: z.string(),
+    error: z.string().optional(),
+    duration_ms: z.number().nullable().optional(),
+    row_count: z.number().nullable().optional(),
+    ip: z.string().optional(),
+  })
+  .transform((raw) => ({
+    cursor: raw.cursor,
+    executedAt: raw.executed_at,
+    id: raw.id,
+    sql: raw.sql,
+    sqlTruncated: raw.sql_truncated ?? false,
+    status: raw.status,
+    error: raw.error,
+    durationMs: raw.duration_ms ?? null,
+    rowCount: raw.row_count ?? null,
+    ip: raw.ip,
+  }));
+
+export type LoggedQuery = z.infer<typeof loggedQuerySchema>;
+
+/** One page of the queries tab, newest first; `more` says there is an older page. */
+export const queriesSchema = z.object({ items: z.array(loggedQuerySchema), more: z.boolean() });
+
+export type QueriesPage = z.infer<typeof queriesSchema>;
+
+export type QueriesParams = { status?: string; q?: string; cursor?: string; limit?: number };
+
+export function queriesPath(contestId: string, registrationId: string, params: QueriesParams): string {
+  const query = new URLSearchParams();
+  if (params.status) query.set("status", params.status);
+  if (params.q) query.set("q", params.q);
+  if (params.cursor) query.set("cursor", params.cursor);
+  if (params.limit) query.set("limit", String(params.limit));
+  return withQuery(`${participantBase(contestId, registrationId)}/queries`, query);
+}
+
+/** GET …/monitor/participants/{id}/queries, from the browser. */
+export async function fetchQueries(
+  contestId: string,
+  registrationId: string,
+  params: QueriesParams,
+  options: ReadOptions = {},
+): Promise<QueriesPage> {
+  const payload = await request(queriesPath(contestId, registrationId, params), {
+    credentials: "same-origin",
+    signal: options.signal,
+  });
+  return queriesSchema.parse(payload);
+}
+
+const attemptSchema = z
+  .object({
+    id: z.string(),
+    question_ord: z.number(),
+    attempt_no: z.number(),
+    value: z.string(),
+    correct: z.boolean(),
+    points_awarded: z.number(),
+    submitted_at: z.string(),
+    queries: z.array(loggedQuerySchema),
+    more_queries: z.number(),
+  })
+  .transform((raw) => ({
+    id: raw.id,
+    questionOrd: raw.question_ord,
+    attemptNo: raw.attempt_no,
+    value: raw.value,
+    correct: raw.correct,
+    points: raw.points_awarded,
+    submittedAt: raw.submitted_at,
+    /** The queries that led to the attempt, oldest first (design §3). */
+    queries: raw.queries,
+    /** How many more queries led to it than `queries` carries. */
+    moreQueries: raw.more_queries,
+  }));
+
+export type Attempt = z.infer<typeof attemptSchema>;
+
+/** The answers tab: every attempt, by question in order, each with the queries that led to it. */
+export const answersSchema = z
+  .object({
+    questions: z.array(
+      z
+        .object({ question_id: z.string(), question_ord: z.number(), attempts: z.array(attemptSchema) })
+        .transform((raw) => ({ questionId: raw.question_id, questionOrd: raw.question_ord, attempts: raw.attempts })),
+    ),
+    truncated: z.boolean(),
+  })
+  .transform((raw) => ({ questions: raw.questions, truncated: raw.truncated }));
+
+export type Answers = z.infer<typeof answersSchema>;
+
+/** The document a notes revision belongs to; any other document is a tab's id. */
+export const NOTES_DOCUMENT = "notes";
+
+const revisionFields = {
+  id: z.number(),
+  document: z.string(),
+  title: z.string(),
+  started_at: z.string(),
+  updated_at: z.string(),
+  size: z.number(),
+};
+
+type WireRevision = { id: number; document: string; title: string; started_at: string; updated_at: string; size: number };
+
+function readRevision(raw: WireRevision) {
+  return {
+    id: raw.id,
+    document: raw.document,
+    title: raw.title,
+    startedAt: raw.started_at,
+    updatedAt: raw.updated_at,
+    /** The body's length in bytes. */
+    size: raw.size,
+  };
+}
+
+export type RevisionInfo = ReturnType<typeof readRevision>;
+
+/** The notes and tabs now, and every revision without its body, newest first. */
+export const workspaceSchema = z
+  .object({
+    notes: z.object({ body: z.string(), updated_at: z.string().nullable() }),
+    tabs: z.array(
+      z.object({ id: z.string(), title: z.string(), position: z.number(), body: z.string(), updated_at: z.string() }),
+    ),
+    revisions: z.array(z.object(revisionFields)),
+    truncated: z.boolean(),
+  })
+  .transform((raw) => ({
+    notes: { body: raw.notes.body, updatedAt: raw.notes.updated_at },
+    tabs: raw.tabs.map((tab) => ({
+      id: tab.id,
+      title: tab.title,
+      position: tab.position,
+      body: tab.body,
+      updatedAt: tab.updated_at,
+    })),
+    revisions: raw.revisions.map(readRevision),
+    truncated: raw.truncated,
+  }));
+
+export type Workspace = z.infer<typeof workspaceSchema>;
+
+export const revisionSchema = z
+  .object({ ...revisionFields, body: z.string() })
+  .transform((raw) => ({ ...readRevision(raw), body: raw.body }));
+
+export type Revision = z.infer<typeof revisionSchema>;
+
+/** GET …/monitor/participants/{id}/workspace/revisions/{revisionId}, from the browser. */
+export async function fetchRevision(
+  contestId: string,
+  registrationId: string,
+  revisionId: number,
+  options: ReadOptions = {},
+): Promise<Revision> {
+  const payload = await request(
+    `${participantBase(contestId, registrationId)}/workspace/revisions/${encodeURIComponent(String(revisionId))}`,
+    { credentials: "same-origin", signal: options.signal },
+  );
+  return revisionSchema.parse(payload);
 }

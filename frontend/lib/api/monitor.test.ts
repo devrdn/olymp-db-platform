@@ -2,12 +2,22 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { ApiError } from "./client";
 import {
+  answersSchema,
   feedPath,
   feedSchema,
   fetchFeed,
+  fetchQueries,
+  fetchRevision,
   fetchRoster,
+  fetchTimeline,
   monitorCsvHref,
+  participantCsvHref,
+  participantSchema,
+  queriesPath,
+  queriesSchema,
   rosterSchema,
+  timelinePath,
+  workspaceSchema,
 } from "./monitor";
 
 const CONTEST = "3f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6";
@@ -198,5 +208,198 @@ describe("reading from the browser", () => {
 
     expect(failure).toBeInstanceOf(ApiError);
     expect(failure).toMatchObject({ code: "monitor_too_often", status: 429, retryAfterSeconds: 60 });
+  });
+});
+
+const wireQuery = (id: number, overrides: Record<string, unknown> = {}) => ({
+  cursor: `q${id}`,
+  executed_at: "2026-09-20T10:14:03.120Z",
+  id,
+  sql: `SELECT ${id}`,
+  sql_truncated: false,
+  status: "ok",
+  duration_ms: 12,
+  row_count: 3,
+  ip: "10.0.0.1",
+  ...overrides,
+});
+
+describe("one participant as the API sends it", () => {
+  test("reads who the participant is", () => {
+    expect(
+      participantSchema.parse({
+        registration_id: REG,
+        login: "ivanov",
+        full_name: "Ivan Ivanov",
+        status: "finished",
+        started_at: "2026-09-20T09:00:00.000Z",
+        finished_at: null,
+      }),
+    ).toEqual({
+      registrationId: REG,
+      login: "ivanov",
+      fullName: "Ivan Ivanov",
+      status: "finished",
+      startedAt: "2026-09-20T09:00:00.000Z",
+      finishedAt: null,
+    });
+  });
+
+  test("reads a page of queries, a failed one with its error and none of the optional fields", () => {
+    const parsed = queriesSchema.parse({
+      items: [
+        wireQuery(9),
+        { ...wireQuery(8, { status: "error", error: "division by zero", duration_ms: null, row_count: null }), ip: undefined },
+      ],
+      more: true,
+    });
+
+    expect(parsed.more).toBe(true);
+    expect(parsed.items[0]).toEqual({
+      cursor: "q9",
+      executedAt: "2026-09-20T10:14:03.120Z",
+      id: 9,
+      sql: "SELECT 9",
+      sqlTruncated: false,
+      status: "ok",
+      error: undefined,
+      durationMs: 12,
+      rowCount: 3,
+      ip: "10.0.0.1",
+    });
+    expect(parsed.items[1]).toMatchObject({ status: "error", error: "division by zero", durationMs: null, ip: undefined });
+  });
+
+  test("reads the answers with the queries that led to each attempt", () => {
+    const parsed = answersSchema.parse({
+      truncated: false,
+      questions: [
+        {
+          question_id: REG,
+          question_ord: 2,
+          attempts: [
+            {
+              id: REG,
+              question_id: REG,
+              question_ord: 2,
+              attempt_no: 1,
+              value: "42",
+              correct: false,
+              points_awarded: 0,
+              submitted_at: "2026-09-20T10:20:00.000Z",
+              queries: [wireQuery(1)],
+              more_queries: 4,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(parsed.questions[0].questionOrd).toBe(2);
+    expect(parsed.questions[0].attempts[0]).toMatchObject({
+      attemptNo: 1,
+      value: "42",
+      correct: false,
+      points: 0,
+      submittedAt: "2026-09-20T10:20:00.000Z",
+      moreQueries: 4,
+    });
+    expect(parsed.questions[0].attempts[0].queries[0]).toMatchObject({ id: 1, sql: "SELECT 1" });
+  });
+
+  test("reads the workspace and its revisions", () => {
+    const parsed = workspaceSchema.parse({
+      notes: { body: "suspects: 3", updated_at: null },
+      tabs: [{ id: REG, title: "Query 1", position: 0, body: "SELECT 1", updated_at: "2026-09-20T10:00:00.000Z" }],
+      revisions: [
+        {
+          id: 5,
+          document: "notes",
+          title: "",
+          started_at: "2026-09-20T10:00:00.000Z",
+          updated_at: "2026-09-20T10:00:20.000Z",
+          size: 11,
+        },
+      ],
+      truncated: false,
+    });
+
+    expect(parsed.notes).toEqual({ body: "suspects: 3", updatedAt: null });
+    expect(parsed.tabs[0]).toMatchObject({ id: REG, title: "Query 1", body: "SELECT 1" });
+    expect(parsed.revisions[0]).toEqual({
+      id: 5,
+      document: "notes",
+      title: "",
+      startedAt: "2026-09-20T10:00:00.000Z",
+      updatedAt: "2026-09-20T10:00:20.000Z",
+      size: 11,
+    });
+  });
+});
+
+describe("the addresses of one participant", () => {
+  test("the timeline takes the feed's parameters but never a participant of its own", () => {
+    expect(timelinePath(CONTEST, REG, {})).toBe(`/contests/${CONTEST}/monitor/participants/${REG}/timeline`);
+    expect(timelinePath(CONTEST, REG, { after: "abc", kinds: ["sign_in"], participant: "other", limit: 200 })).toBe(
+      `/contests/${CONTEST}/monitor/participants/${REG}/timeline?after=abc&kinds=sign_in&limit=200`,
+    );
+  });
+
+  test("the queries name only the filters that were given", () => {
+    expect(queriesPath(CONTEST, REG, {})).toBe(`/contests/${CONTEST}/monitor/participants/${REG}/queries`);
+    expect(queriesPath(CONTEST, REG, { status: "error", q: "50%", cursor: "q9" })).toBe(
+      `/contests/${CONTEST}/monitor/participants/${REG}/queries?status=error&q=50%25&cursor=q9`,
+    );
+  });
+
+  test("offers the participant's CSV as an API path on this origin", () => {
+    expect(participantCsvHref(CONTEST, REG)).toBe(`/api/v1/contests/${CONTEST}/monitor/participants/${REG}/export.csv`);
+  });
+});
+
+describe("reading one participant from the browser", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function answering(body: unknown) {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(body), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  test("asks the timeline", async () => {
+    const fetchMock = answering({ items: [], more: false });
+    await fetchTimeline(CONTEST, REG, { kinds: ["query"] });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/contests/${CONTEST}/monitor/participants/${REG}/timeline?kinds=query`,
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
+  test("asks the queries", async () => {
+    const fetchMock = answering({ items: [wireQuery(1)], more: false });
+    const page = await fetchQueries(CONTEST, REG, { status: "ok" });
+    expect(page.items[0].id).toBe(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/contests/${CONTEST}/monitor/participants/${REG}/queries?status=ok`,
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
+  test("asks one revision whole", async () => {
+    const fetchMock = answering({
+      id: 5,
+      document: "notes",
+      title: "",
+      started_at: "2026-09-20T10:00:00.000Z",
+      updated_at: "2026-09-20T10:00:20.000Z",
+      size: 3,
+      body: "abc",
+    });
+    const revision = await fetchRevision(CONTEST, REG, 5);
+    expect(revision).toMatchObject({ id: 5, body: "abc" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/contests/${CONTEST}/monitor/participants/${REG}/workspace/revisions/5`,
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
   });
 });
