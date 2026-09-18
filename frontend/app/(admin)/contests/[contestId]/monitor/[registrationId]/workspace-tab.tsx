@@ -398,7 +398,13 @@ const RevisionDiff = memo(function RevisionDiff({
               <span aria-hidden className={cn("shrink-0 select-none", row.type === "same" ? "text-ink-3" : "text-ink")}>
                 {SIGN[row.type]}
               </span>
-              {row.type === "same" ? null : <span className="sr-only">{row.type === "added" ? t.added : t.removed}</span>}
+              {row.type === "same" ? null : (
+                <span className="sr-only">
+                  {row.type === "added"
+                    ? t.added.replace("{n}", String(row.after))
+                    : t.removed.replace("{n}", String(row.before))}
+                </span>
+              )}
               <span data-text>{row.text}</span>
             </li>
           ),

@@ -379,8 +379,8 @@ const en = {
           notExact: "Too much changed to compare line by line; the changed part is shown whole.",
           unchanged: "{n} unchanged lines",
           showMore: "Show more",
-          added: "added",
-          removed: "removed",
+          added: "added, line {n}",
+          removed: "removed, line {n}",
         },
         sessions: {
           addresses: "Addresses seen",
