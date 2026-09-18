@@ -105,6 +105,7 @@ func (h *ParticipantHandler) admitWorkspaceWrite(w http.ResponseWriter, r *http.
 		h.fail(w, r, err)
 		return workspace.Session{}, false
 	}
+	h.observe(r, participant, contest)
 	return h.workspaceSession(r, participant, contest), true
 }
 

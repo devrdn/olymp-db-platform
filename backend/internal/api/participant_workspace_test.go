@@ -22,6 +22,7 @@ import (
 // send makes a request with a JSON body (or none, for an empty body).
 func (f *participantFixture) send(method, path, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("User-Agent", fixtureUserAgent)
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -415,4 +416,19 @@ func TestAWorkspaceStorageFailureIsA500(t *testing.T) {
 
 	expectStatus(t, f.get(play+"/workspace"), http.StatusInternalServerError, "internal_error")
 	expectStatus(t, f.send(http.MethodPut, play+"/notes", `{"body":"x"}`), http.StatusInternalServerError, "internal_error")
+}
+
+// A workspace write is admitted apart from the reads, and is observed like
+// them: autosave is the participant using the registration too.
+func TestAWorkspaceWriteIsObserved(t *testing.T) {
+	f := newParticipantFixture(t)
+	play := f.workspaceContest(t)
+
+	if rec := f.send(http.MethodPut, play+"/notes", `{"body":"the butler"}`); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	visits := f.watcher.seen()
+	if len(visits) != 1 || visits[0].Registration != f.access.participant.ID || visits[0].UserAgent != fixtureUserAgent {
+		t.Fatalf("visits = %+v, want the write observed once", visits)
+	}
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
@@ -144,6 +145,35 @@ type ParticipantHandler struct {
 	// workspaces serves the participant's notes and tabs
 	// (participant_workspace.go); nil leaves those routes unmounted.
 	workspaces Workspaces
+	// watcher hears of every request admission lets through; nil watches
+	// nothing. See WithWatcher.
+	watcher Watcher
+}
+
+// Watcher hears of every admitted participant request, to detect a
+// registration's address changing or a second session using it
+// (monitor.Tracker). It never refuses and bounds its own time.
+type Watcher interface {
+	Observe(ctx context.Context, visit monitor.Visit)
+}
+
+// WithWatcher reports every request these endpoints admit to watcher — the
+// same watcher the console's façade reports its queries to, so the play
+// screen and the console are one trail per registration.
+func (h *ParticipantHandler) WithWatcher(watcher Watcher) *ParticipantHandler {
+	h.watcher = watcher
+	return h
+}
+
+// observe reports an admitted request to the watcher.
+func (h *ParticipantHandler) observe(r *http.Request, participant contests.Participant, contest contests.Contest) {
+	if h.watcher == nil {
+		return
+	}
+	h.watcher.Observe(r.Context(), monitor.Visit{
+		Contest: contest.ID, Registration: participant.ID,
+		Address: clientAddress(r), Session: sessionTag(r), UserAgent: r.UserAgent(),
+	})
 }
 
 // inFlightExports is the set of registrations with a CSV download open.
@@ -267,6 +297,7 @@ func (h *ParticipantHandler) admit(w http.ResponseWriter, r *http.Request) (cont
 		h.fail(w, r, err)
 		return contests.Participant{}, contests.Contest{}, false
 	}
+	h.observe(r, participant, contest)
 	return participant, contest, true
 }
 
