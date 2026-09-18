@@ -153,9 +153,11 @@ test-race: ## Run the tests with the race detector
 # before every run: nothing a previous run left behind survives into this
 # one, and nothing this run does reaches the product's database.
 # internal/platform/storage is in the list for storagetest's own proof that
-# it refuses a database that is not a test database.
+# it refuses a database that is not a test database, and cmd/migrate for its
+# round trip of a migration, which runs on a scratch database of its own
+# because rolling back drops tables the other packages are using.
 test-db: require-env test-db-reset ## Run the repository tests against a fresh test database
-	cd $(BACKEND) && CORE_DB_DSN="$(CORE_TEST_DB_DSN)" go test -count=1 ./internal/platform/storage/... ./internal/postgres/... ./internal/provisioning/... ./internal/queryproxy/...
+	cd $(BACKEND) && CORE_DB_DSN="$(CORE_TEST_DB_DSN)" go test -count=1 ./cmd/migrate/... ./internal/platform/storage/... ./internal/postgres/... ./internal/provisioning/... ./internal/queryproxy/...
 
 # Once per run and before any test binary starts: `go test` runs packages in
 # parallel, and they share this database. The migrations are applied by the
