@@ -24,6 +24,21 @@ export const MONITOR_POLL_MS = 5_000;
 /** How soon to ask again when a poll's page said there is more past it. */
 const CATCH_UP_MS = 1_000;
 
+/**
+ * How many pages past the first a poll reads to catch up before it gives the
+ * gap up and reads the newest page instead. A tab hidden for an hour can be
+ * thousands of items behind; paging through them spends the read budget on a
+ * list that keeps only the last thousand anyway. What was skipped is in the
+ * participants' own pages and the CSV, and the table counts it all.
+ */
+export const MAX_CATCH_UP_PAGES = 5;
+
+/** The longest wait between polls while the server keeps failing. */
+export const MAX_FAILURE_WAIT_MS = 60_000;
+
+/** A tab turning visible this soon after a poll finished waits for the cadence. */
+const FRESH_ENOUGH_MS = 2_000;
+
 /** How long a participant's row stays lit after a new item of theirs. */
 export const HIGHLIGHT_MS = 3_000;
 
@@ -79,6 +94,15 @@ export function useMonitor({
   const freshTokens = useRef(new Map<string, number>());
   const freshCounter = useRef(0);
   const freshTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
+  // A 429's wait, whichever read was refused; every read respects it, and a
+  // tab turning visible does not cut it short.
+  const quietUntilRef = useRef(0);
+  // Consecutive failures, for the back-off; reset by a poll that succeeds.
+  const failuresRef = useRef(0);
+  // Pages read in a row that said there was more, and the items they held.
+  const catchUpRef = useRef({ pages: 0, items: 0 });
+  // Every read is made under this, and it is aborted when the screen goes.
+  const abortRef = useRef<AbortController>(new AbortController());
 
   const setFeed = useCallback((next: FeedState) => {
     feedRef.current = next;
@@ -118,9 +142,12 @@ export function useMonitor({
   /** What a failed read means for the chain: the wait before the next, or null to stop. */
   const failed = useCallback(
     (error: unknown): number | null => {
+      // The screen went away mid-read; there is nobody to tell.
+      if (abortRef.current.signal.aborted) return null;
       if (error instanceof ApiError) {
         if (error.status === 429) {
           const seconds = error.retryAfterSeconds ?? MONITOR_POLL_MS / 1000;
+          quietUntilRef.current = Date.now() + seconds * 1000;
           setProblem({ kind: "tooOften", seconds });
           return seconds * 1000;
         }
@@ -134,49 +161,108 @@ export function useMonitor({
           return MONITOR_POLL_MS;
         }
       }
+      // A server that is down is not helped by forty tabs asking every five
+      // seconds: the wait doubles with each failure in a row, to a ceiling.
+      failuresRef.current += 1;
       setProblem({ kind: "failed" });
-      return MONITOR_POLL_MS;
+      return Math.min(MAX_FAILURE_WAIT_MS, MONITOR_POLL_MS * 2 ** (failuresRef.current - 1));
     },
     [router],
   );
 
-  /** One poll; answers the wait before the next, or null to stop. */
+  /** Reads the newest page afresh; `gap` counts what is skipped by doing so. */
+  const reload = useCallback(
+    async (nextKinds: string[], gap = 0) => {
+      const generation = ++generationRef.current;
+      catchUpRef.current = { pages: 0, items: 0 };
+      const page = await fetchFeed(
+        contestId,
+        { kinds: nextKinds, limit: MAX_FEED_PAGE },
+        { signal: abortRef.current.signal },
+      );
+      if (generation !== generationRef.current) return;
+      triedRef.current.clear();
+      setFeed(initialFeed(page, gap));
+    },
+    [contestId, setFeed],
+  );
+
+  /**
+   * One poll; answers the wait before the next, or null to stop.
+   *
+   * An ordinary poll reads the table and the feed together, lights the rows
+   * of whoever has something new, and refreshes running queries. A page that
+   * says there is more starts a catch-up: the next ticks read only the feed,
+   * a second apart, light nothing (what they bring is old news), and after
+   * `MAX_CATCH_UP_PAGES` more pages give the rest up for the newest page.
+   */
   const poll = useCallback(async (): Promise<number | null> => {
     const generation = generationRef.current;
     const kindsNow = kindsRef.current;
+    const signal = abortRef.current.signal;
+    const catchingUp = catchUpRef.current.pages > 0;
     try {
-      const [roster, page] = await Promise.all([
-        fetchRoster(contestId),
-        fetchFeed(contestId, { after: feedRef.current.newest, kinds: kindsNow, limit: MAX_FEED_PAGE }),
-      ]);
-      setRows((current) => mergeRoster(current, roster.rows));
-      setTruncated(roster.truncated);
+      const feedRead = fetchFeed(
+        contestId,
+        { after: feedRef.current.newest, kinds: kindsNow, limit: MAX_FEED_PAGE },
+        { signal },
+      );
+      if (!catchingUp) {
+        const [roster] = await Promise.all([fetchRoster(contestId, { signal }), feedRead]);
+        setRows((current) => mergeRoster(current, roster.rows));
+        setTruncated(roster.truncated);
+      }
+      const page = await feedRead;
+
       if (generation === generationRef.current) {
         const { state, added } = appendNewer(feedRef.current, page);
         if (state !== feedRef.current) setFeed(state);
-        light([...new Set(added.map((item) => item.registrationId))]);
-      }
-
-      const window = runningWindow(feedRef.current.items, triedRef.current, Date.now());
-      if (window) {
-        const refreshed = await fetchFeed(contestId, {
-          participant: window.participant,
-          kinds: ["query"],
-          from: window.from,
-          until: window.until,
-          limit: MAX_FEED_PAGE,
-        });
-        if (generation === generationRef.current) {
-          const state = refreshItems(feedRef.current, refreshed.items);
-          if (state !== feedRef.current) setFeed(state);
+        if (!catchingUp && !page.more) light([...new Set(added.map((item) => item.registrationId))]);
+        if (page.more) {
+          catchUpRef.current = {
+            pages: catchUpRef.current.pages + 1,
+            items: catchUpRef.current.items + page.items.length,
+          };
         }
       }
+
+      if (page.more && catchUpRef.current.pages > MAX_CATCH_UP_PAGES) {
+        await reload(kindsNow, catchUpRef.current.items);
+      } else if (page.more) {
+        failuresRef.current = 0;
+        setProblem(null);
+        return CATCH_UP_MS;
+      } else {
+        catchUpRef.current = { pages: 0, items: 0 };
+      }
+
+      if (!catchingUp) {
+        const window = runningWindow(feedRef.current.items, triedRef.current, Date.now());
+        if (window) {
+          const refreshed = await fetchFeed(
+            contestId,
+            {
+              participant: window.participant,
+              kinds: ["query"],
+              from: window.from,
+              until: window.until,
+              limit: MAX_FEED_PAGE,
+            },
+            { signal },
+          );
+          if (generation === generationRef.current) {
+            const state = refreshItems(feedRef.current, refreshed.items);
+            if (state !== feedRef.current) setFeed(state);
+          }
+        }
+      }
+      failuresRef.current = 0;
       setProblem(null);
-      return page.more ? CATCH_UP_MS : MONITOR_POLL_MS;
+      return MONITOR_POLL_MS;
     } catch (error: unknown) {
       return failed(error);
     }
-  }, [contestId, failed, light, setFeed]);
+  }, [contestId, failed, light, reload, setFeed]);
 
   // The chain below reads the poll through a ref, so that nothing a render
   // brings — a new router object, a new callback — restarts it: a restarted
@@ -191,8 +277,9 @@ export function useMonitor({
     let stopped = false;
     let inFlight = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    // A 429's wait, which a tab turning visible does not cut short.
-    let quietUntil = 0;
+    let lastFinished = 0;
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     const visible = () => document.visibilityState !== "hidden";
 
@@ -204,15 +291,22 @@ export function useMonitor({
     const tick = async () => {
       timer = undefined;
       if (cancelled || stopped || inFlight || !visible()) return;
+      // A refusal elsewhere (loading older, a new filter) may have asked for
+      // quiet since this tick was scheduled.
+      const quiet = quietUntilRef.current - Date.now();
+      if (quiet > 0) {
+        schedule(quiet);
+        return;
+      }
       inFlight = true;
       const wait = await pollRef.current();
       inFlight = false;
+      lastFinished = Date.now();
       if (cancelled) return;
       if (wait === null) {
         stopped = true;
         return;
       }
-      if (wait > MONITOR_POLL_MS) quietUntil = Date.now() + wait;
       if (visible()) schedule(wait);
     };
 
@@ -223,13 +317,18 @@ export function useMonitor({
         return;
       }
       if (stopped || inFlight) return;
-      schedule(Math.max(0, quietUntil - Date.now()));
+      // Back from a glance at another tab, the last poll is still fresh: the
+      // cadence goes on rather than a second read on top of it.
+      const sinceLast = Date.now() - lastFinished;
+      const wait = sinceLast < FRESH_ENOUGH_MS ? MONITOR_POLL_MS - sinceLast : 0;
+      schedule(Math.max(wait, quietUntilRef.current - Date.now()));
     };
 
     document.addEventListener("visibilitychange", onVisibility);
     schedule(MONITOR_POLL_MS);
     return () => {
       cancelled = true;
+      controller.abort();
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
@@ -238,17 +337,13 @@ export function useMonitor({
   /** Reads the newest page afresh, for a new filter or a jump back to the latest. */
   const restart = useCallback(
     async (nextKinds: string[]) => {
-      const generation = ++generationRef.current;
       try {
-        const page = await fetchFeed(contestId, { kinds: nextKinds, limit: MAX_FEED_PAGE });
-        if (generation !== generationRef.current) return;
-        triedRef.current.clear();
-        setFeed(initialFeed(page));
+        await reload(nextKinds);
       } catch (error: unknown) {
         failed(error);
       }
     },
-    [contestId, failed, setFeed],
+    [failed, reload],
   );
 
   const setKinds = useCallback(
@@ -268,11 +363,11 @@ export function useMonitor({
     const generation = generationRef.current;
     setLoadingOlder(true);
     try {
-      const page = await fetchFeed(contestId, {
-        before: current.items[0].cursor,
-        kinds: kindsRef.current,
-        limit: MAX_FEED_PAGE,
-      });
+      const page = await fetchFeed(
+        contestId,
+        { before: current.items[0].cursor, kinds: kindsRef.current, limit: MAX_FEED_PAGE },
+        { signal: abortRef.current.signal },
+      );
       if (generation === generationRef.current) setFeed(prependOlder(feedRef.current, page));
     } catch (error: unknown) {
       failed(error);
