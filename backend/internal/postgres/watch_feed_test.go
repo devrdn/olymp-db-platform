@@ -1,0 +1,219 @@
+package postgres
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/devrdn/db-contest/backend/internal/monitor"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/google/uuid"
+)
+
+// feedFixture is a contest whose two participants did one of everything,
+// several of it in the very same instant across sources and within one, and
+// a participant of another contest whose history must never show.
+type feedFixture struct {
+	*watchFixture
+	alice, bob uuid.UUID
+}
+
+func newFeedFixture(t *testing.T, ctx context.Context) feedFixture {
+	t.Helper()
+	f := newWatchFixture(t, ctx)
+	alice, aliceUser := f.participant("alice")
+	bob, bobUser := f.participant("bob")
+	// Registered an hour before the base time, so their sign-ins count.
+	f.exec(`UPDATE registrations SET created_at = $2 WHERE contest_id = $1`, f.contest, f.at(-time.Hour))
+
+	same := f.at(10 * time.Minute)
+	f.exec(`UPDATE registrations SET started_at = $2 WHERE id = $1`, alice, f.at(time.Minute))
+	f.exec(`UPDATE registrations SET started_at = $2, finished_at = $3, status = 'finished' WHERE id = $1`,
+		bob, f.at(time.Minute), same)
+	f.exec(`INSERT INTO audit_log (actor_id, action, entity, entity_id, ip, user_agent, created_at)
+	        VALUES ($1::uuid, 'auth.login', 'user', $1::uuid::text, '192.0.2.1', 'Firefox', $2),
+	               ($3::uuid, 'auth.login', 'user', $3::uuid::text, '192.0.2.2', 'Chrome', $4),
+	               ($1::uuid, 'auth.logout', 'user', $1::uuid::text, NULL, NULL, $5),
+	               ($1::uuid, 'auth.login', 'user', $1::uuid::text, NULL, NULL, $6)`,
+		aliceUser, f.at(0), bobUser, same, f.at(20*time.Minute), f.at(-2*time.Hour))
+	var login string
+	if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT login FROM users WHERE id = $1`, aliceUser).Scan(&login); err != nil {
+		t.Fatal(err)
+	}
+	f.exec(`INSERT INTO audit_log (action, entity, payload, ip, created_at)
+	        VALUES ('auth.login_failed', 'user', jsonb_build_object('login', upper($1::text), 'reason', 'wrong_password'), '192.0.2.9', $2)`,
+		login, f.at(30*time.Second))
+	f.exec(`INSERT INTO audit_log (actor_id, action, entity, entity_id, payload, created_at)
+	        VALUES ($1, 'participant.disqualify', 'contest', $2::uuid::text, jsonb_build_object('user_id', $3::uuid::text), $4)`,
+		aliceUser, f.contest, bobUser, f.at(25*time.Minute))
+
+	f.query(alice, "select 1", "ok", "192.0.2.1", f.at(2*time.Minute))
+	f.query(alice, "select 2", "ok", "192.0.2.1", same)
+	f.query(bob, "select 3", "error", "192.0.2.2", same)
+	f.query(bob, "select 4", "ok", "192.0.2.2", same)
+	f.answer(alice, f.question, 1, false, same)
+	f.answer(bob, f.question, 1, true, same)
+	f.event(alice, monitor.PageLeft{AwayMs: 5000}, same)
+	f.event(bob, monitor.Paste{Target: monitor.PasteEditor, Chars: 3, Text: "abc"}, same)
+	f.event(alice, monitor.TabCreated{TabID: uuid.New(), Title: "Query 2"}, f.at(15*time.Minute))
+
+	// Another contest, the same instant: never in this contest's feed.
+	other := newWatchFixture(t, ctx)
+	stranger, _ := other.participant("stranger")
+	other.query(stranger, "select 5", "ok", "", same)
+	other.event(stranger, monitor.PageLeft{AwayMs: 5000}, same)
+	return feedFixture{watchFixture: f, alice: alice, bob: bob}
+}
+
+func readFeed(t *testing.T, ctx context.Context, q monitor.FeedQuery) monitor.FeedPage {
+	t.Helper()
+	page, err := NewWatch(testPool).Feed(ctx, q)
+	if err != nil {
+		t.Fatalf("feed %+v: %v", q, err)
+	}
+	return page
+}
+
+func kindsOf(items []monitor.FeedItem) []string {
+	kinds := make([]string, len(items))
+	for i, item := range items {
+		kinds[i] = item.Kind
+	}
+	return kinds
+}
+
+func TestTheFeedMergesEverySourceInTimeOrder(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newFeedFixture(t, ctx)
+		page := readFeed(t, ctx, monitor.FeedQuery{Contest: f.contest, Limit: monitor.MaxFeedPage})
+		if page.More {
+			t.Error("the whole feed fits a page, but More is set")
+		}
+		want := []string{
+			monitor.FeedSignIn, monitor.FeedSignInFailed, monitor.FeedStarted, monitor.FeedStarted, monitor.FeedKindQuery,
+			// The same instant: audit, then events, queries, answers, finish.
+			monitor.FeedSignIn, string(monitor.KindPageLeft), string(monitor.KindPaste),
+			monitor.FeedKindQuery, monitor.FeedKindQuery, monitor.FeedKindQuery,
+			monitor.FeedKindAnswer, monitor.FeedKindAnswer, monitor.FeedFinished,
+			string(monitor.KindTabCreated), monitor.FeedSignOut, monitor.FeedDisqualified,
+		}
+		got := kindsOf(page.Items)
+		if len(got) != len(want) {
+			t.Fatalf("kinds = %v,\nwant %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("kinds = %v,\nwant %v", got, want)
+			}
+		}
+		for i := 1; i < len(page.Items); i++ {
+			if page.Items[i-1].Cursor().Compare(page.Items[i].Cursor()) >= 0 {
+				t.Errorf("items %d and %d are out of order", i-1, i)
+			}
+		}
+		for _, item := range page.Items {
+			if item.Login == "" {
+				t.Errorf("item %s of %s has no login", item.Kind, item.Registration)
+			}
+		}
+		failed := page.Items[1].Data.(monitor.AuditData)
+		if failed.Reason != "wrong_password" || failed.IP != "192.0.2.9" || page.Items[1].Registration != f.alice {
+			t.Errorf("failed sign-in = %+v for %s", failed, page.Items[1].Registration)
+		}
+		if page.Items[len(page.Items)-1].Registration != f.bob {
+			t.Error("the disqualification is not attributed to the disqualified participant")
+		}
+	})
+}
+
+// Paging through the feed a few items at a time, forwards and backwards,
+// meets every item exactly once, whatever falls on a page boundary.
+func TestTheFeedPagesWithoutGapsOrRepeats(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newFeedFixture(t, ctx)
+		whole := readFeed(t, ctx, monitor.FeedQuery{Contest: f.contest, Limit: monitor.MaxFeedPage}).Items
+
+		for _, size := range []int{1, 2, 3, 5} {
+			// Forwards from before everything.
+			var forwards []monitor.FeedItem
+			cursor := monitor.Cursor{At: f.at(-24 * time.Hour), Source: monitor.SourceAudit, ID: "0"}
+			for range 100 {
+				page := readFeed(t, ctx, monitor.FeedQuery{Contest: f.contest, After: &cursor, Limit: size})
+				forwards = append(forwards, page.Items...)
+				if len(page.Items) == 0 {
+					break
+				}
+				cursor = page.Items[len(page.Items)-1].Cursor()
+				if !page.More {
+					break
+				}
+			}
+			// Backwards from the newest page.
+			var backwards []monitor.FeedItem
+			page := readFeed(t, ctx, monitor.FeedQuery{Contest: f.contest, Limit: size})
+			for range 100 {
+				backwards = append(append([]monitor.FeedItem{}, page.Items...), backwards...)
+				if !page.More {
+					break
+				}
+				before := page.Items[0].Cursor()
+				page = readFeed(t, ctx, monitor.FeedQuery{Contest: f.contest, Before: &before, Limit: size})
+			}
+			for name, got := range map[string][]monitor.FeedItem{"forwards": forwards, "backwards": backwards} {
+				if len(got) != len(whole) {
+					t.Fatalf("page size %d %s: %d items, want %d", size, name, len(got), len(whole))
+				}
+				for i := range whole {
+					if got[i].Cursor().Compare(whole[i].Cursor()) != 0 {
+						t.Fatalf("page size %d %s: item %d is %s, want %s", size, name, i, got[i].Kind, whole[i].Kind)
+					}
+				}
+			}
+		}
+	})
+}
+
+func TestTheFeedFilters(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newFeedFixture(t, ctx)
+		all := func(q monitor.FeedQuery) []monitor.FeedItem {
+			q.Contest, q.Limit = f.contest, monitor.MaxFeedPage
+			return readFeed(t, ctx, q).Items
+		}
+
+		queries := all(monitor.FeedQuery{Kinds: []string{monitor.FeedKindQuery}})
+		if len(queries) != 4 {
+			t.Errorf("queries only: %v", kindsOf(queries))
+		}
+		mixed := all(monitor.FeedQuery{Kinds: []string{monitor.FeedSignOut, string(monitor.KindPaste)}})
+		if len(mixed) != 2 || mixed[0].Kind != string(monitor.KindPaste) || mixed[1].Kind != monitor.FeedSignOut {
+			t.Errorf("paste and sign-out: %v", kindsOf(mixed))
+		}
+
+		bobs := all(monitor.FeedQuery{Registration: f.bob})
+		for _, item := range bobs {
+			if item.Registration != f.bob {
+				t.Errorf("bob's feed carries %s of %s", item.Kind, item.Registration)
+			}
+		}
+		if len(bobs) != 8 {
+			t.Errorf("bob's feed: %v", kindsOf(bobs))
+		}
+
+		ranged := all(monitor.FeedQuery{From: f.at(10 * time.Minute), Until: f.at(20 * time.Minute)})
+		for _, item := range ranged {
+			if item.At.Before(f.at(10*time.Minute)) || !item.At.Before(f.at(20*time.Minute)) {
+				t.Errorf("%s at %v is outside the range", item.Kind, item.At)
+			}
+		}
+		if len(ranged) != 10 {
+			t.Errorf("ranged: %v", kindsOf(ranged))
+		}
+
+		// Another contest's registration is nobody here.
+		strangers := all(monitor.FeedQuery{Registration: uuid.New()})
+		if len(strangers) != 0 {
+			t.Errorf("an unknown registration's feed: %v", kindsOf(strangers))
+		}
+	})
+}
