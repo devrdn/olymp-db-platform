@@ -72,6 +72,28 @@ ALTER TABLE query_log
 -- "The same query as another participant": fingerprints per registration.
 CREATE INDEX query_log_registration_fingerprint_idx ON query_log (registration_id, sql_fingerprint);
 
+-- The organiser's pages of one participant's queries and answers are keyset
+-- pages on (time, id): the feed, the timeline, the queries tab, and the
+-- export, which reads every participant's range a page at a time. With the
+-- id outside the index, each page sorts what it fetched, and a bitmap plan —
+-- which any turn of the statistics can produce — fetches the rest of the
+-- registration's range for every page, a read that grows with its square.
+-- With the whole keyset in the index the page is an ordered index scan that
+-- stops at its LIMIT.
+--
+-- Replaced rather than added, under the same names, so neither table takes
+-- another index write. Every other reader keeps what it had: the
+-- participant's own log (History) reads (executed_at DESC, id DESC), which
+-- this index serves backwards exactly; its CSV and the answers window read
+-- by executed_at, a prefix; the counts and the leaderboard read the
+-- registration's range, and the answers' INCLUDE columns stay.
+DROP INDEX query_log_registration_executed_idx;
+CREATE INDEX query_log_registration_executed_idx ON query_log (registration_id, executed_at, id);
+DROP INDEX submissions_registration_submitted_idx;
+CREATE INDEX submissions_registration_submitted_idx
+    ON submissions (registration_id, submitted_at, id)
+    INCLUDE (question_id, is_correct, points_awarded);
+
 -- A participant's failed sign-ins, for the organiser's feed. A failed
 -- sign-in has no actor — the account was not proven — and names only the
 -- login that was typed (internal/auth recordFailure), so that is the only key
