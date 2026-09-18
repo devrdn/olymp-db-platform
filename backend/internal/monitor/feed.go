@@ -377,22 +377,41 @@ func (Cursor) encodeRaw(raw string) string {
 }
 
 // FeedSourceReader reads one source of the feed forwards: the items of that
-// source after q.After, oldest first, at most q.Limit+1 of them, named.
-// Implemented by internal/postgres.Watch.
+// source after q.After, oldest first, at most q.Limit+1 of them, named. And
+// the registrations of a contest, which a contest-wide stream reads its
+// per-registration sources by. Implemented by internal/postgres.Watch.
 type FeedSourceReader interface {
 	FeedSource(ctx context.Context, q FeedQuery, source Source) ([]FeedItem, error)
+	FeedRegistrations(ctx context.Context, contest uuid.UUID) ([]uuid.UUID, error)
 }
+
+// streamPage is the page one stream of StreamFeed reads at a time from a
+// source of one registration. Small, because a contest-wide stream holds one
+// page of each of its registrations' sources at once.
+const streamPage = 50
+
+// perRegistration are the sources a contest-wide stream reads one
+// registration at a time. They are the ones stored per registration and
+// read as a range per registration (query_log, submissions, and the
+// participant's own trail in audit_log); read for the whole contest, each
+// page would re-read every registration's range up to the page's limit.
+var perRegistration = map[Source]bool{SourceAudit: true, SourceQuery: true, SourceAnswer: true}
 
 // StreamFeed hands every item of the feed after q.After (or from the
 // beginning) to yield, oldest first, until the feed ends or yield refuses.
 //
-// A k-way merge: each source is read forwards from its own position, a page
+// A k-way merge: every stream is read forwards from its own position, a page
 // at a time in its own index order, and the oldest head among them is handed
-// over next. Every row of every source is read once, so a long export costs
-// what it carries — where paging the merged feed would re-read every
-// source's next page for every page it hands over. What is held in memory is
-// one page per source.
-func StreamFeed(ctx context.Context, r FeedSourceReader, q FeedQuery, yield func(FeedItem) error) error {
+// over next, so every row is read once and the cost grows with what is
+// exported, never with its square. For the whole contest, the sources stored
+// per registration are one stream per registration (perRegistration), each
+// its own index range; the others are one stream for the contest. What is
+// held in memory is one page per stream: at most registrations ×
+// streamPage × 3 items for a contest.
+//
+// The stream ends at now − FeedSettle, fixed once when it starts, so every
+// source ends at the same instant and nothing still settling is exported.
+func StreamFeed(ctx context.Context, r FeedSourceReader, q FeedQuery, now time.Time, yield func(FeedItem) error) error {
 	q, err := q.Normalize()
 	if err != nil {
 		return err
@@ -401,25 +420,46 @@ func StreamFeed(ctx context.Context, r FeedSourceReader, q FeedQuery, yield func
 	if q.After != nil {
 		start = *q.After
 	}
+	if end := now.Add(-FeedSettle); q.Until.IsZero() || end.Before(q.Until) {
+		q.Until = end
+	}
 	q.Before, q.Limit = nil, MaxFeedPage
 
 	type stream struct {
 		source Source
+		query  FeedQuery
 		cursor Cursor
 		buf    []FeedItem
 		done   bool
 	}
+	var registrations []uuid.UUID
+	if q.Registration == uuid.Nil {
+		found, err := r.FeedRegistrations(ctx, q.Contest)
+		if err != nil {
+			return err
+		}
+		registrations = found
+	}
 	var streams []*stream
 	for source := range sourceCount {
-		if q.Reads(source) {
-			streams = append(streams, &stream{source: source, cursor: start})
+		if !q.Reads(source) {
+			continue
+		}
+		if q.Registration != uuid.Nil || !perRegistration[source] {
+			streams = append(streams, &stream{source: source, query: q, cursor: start})
+			continue
+		}
+		for _, registration := range registrations {
+			one := q
+			one.Registration, one.Limit = registration, streamPage
+			streams = append(streams, &stream{source: source, query: one, cursor: start})
 		}
 	}
 	fill := func(s *stream) error {
 		if len(s.buf) > 0 || s.done {
 			return nil
 		}
-		page := q
+		page := s.query
 		page.After = &s.cursor
 		items, err := r.FeedSource(ctx, page, s.source)
 		if err != nil {

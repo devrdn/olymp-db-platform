@@ -44,6 +44,18 @@ type watchStore struct {
 	reads     int
 }
 
+func (s *watchStore) FeedRegistrations(_ context.Context, contest uuid.UUID) ([]uuid.UUID, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []uuid.UUID
+	for reg, c := range s.registrations {
+		if c == contest {
+			out = append(out, reg)
+		}
+	}
+	return out, nil
+}
+
 func (s *watchStore) FeedSource(_ context.Context, q monitor.FeedQuery, source monitor.Source) ([]monitor.FeedItem, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
