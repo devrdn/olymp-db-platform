@@ -1222,6 +1222,8 @@ const ru = {
       "contest.answers_change": "Изменил эталонные ответы",
       "contest.package_export": "Выгрузил пакет олимпиады",
       "contest.leaderboard_reveal": "Открыл итоговую таблицу",
+      "contest.monitor_view": "Просмотрел действия участников",
+      "contest.monitor_export": "Выгрузил действия участников",
       "contest.manager_grant": "Назначил менеджера",
       "contest.manager_revoke": "Снял менеджера",
       "participant.add": "Добавил участника",
