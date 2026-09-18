@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -71,7 +72,7 @@ func journalled(t *testing.T, limits queryrunner.Limits, checker *checker.Checke
 func TestTheRowIsWrittenBeforeTheQueryRuns(t *testing.T) {
 	runner, rec, database := journalled(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
-	if _, err := runner.Run(t.Context(), request(database, `SELECT 1`), uuid.New()); err != nil {
+	if _, err := runner.Run(t.Context(), request(database, `SELECT 1`), queryrunner.Origin{RequestID: uuid.New()}); err != nil {
 		t.Fatalf("running: %v", err)
 	}
 
@@ -105,7 +106,7 @@ func TestHowEachEndingIsRecorded(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			runner, rec, database := journalled(t, limits, checker.NewChecker("pg_sleep"))
 
-			_, _ = runner.Run(t.Context(), request(database, given.sql), uuid.New())
+			_, _ = runner.Run(t.Context(), request(database, given.sql), queryrunner.Origin{RequestID: uuid.New()})
 
 			if got := rec.outcomes[1].Status; got != given.want {
 				t.Fatalf("status = %q, want %q (error was %q)", got, given.want, rec.outcomes[1].Error)
@@ -124,7 +125,7 @@ func TestAQueryThatCannotBeRecordedDoesNotRun(t *testing.T) {
 	runner, rec, database := journalled(t, queryrunner.DefaultLimits(), checker.NewChecker())
 	rec.beginErr = errors.New("the core database is unreachable")
 
-	_, err := runner.Run(t.Context(), request(database, `SELECT 1`), uuid.New())
+	_, err := runner.Run(t.Context(), request(database, `SELECT 1`), queryrunner.Origin{RequestID: uuid.New()})
 	if err == nil {
 		t.Fatal("the query ran without being recorded")
 	}
@@ -147,7 +148,7 @@ func TestAnAnswerSurvivesAJournalThatCannotBeClosed(t *testing.T) {
 	runner, rec, database := journalled(t, queryrunner.DefaultLimits(), checker.NewChecker())
 	rec.finishErr = errors.New("the core database went away")
 
-	result, err := runner.Run(t.Context(), request(database, `SELECT 1`), uuid.New())
+	result, err := runner.Run(t.Context(), request(database, `SELECT 1`), queryrunner.Origin{RequestID: uuid.New()})
 	if err != nil {
 		t.Fatalf("the answer was lost with the journal: %v", err)
 	}
@@ -163,7 +164,7 @@ func TestTheRowIsClosedEvenWhenTheCallerHasGoneAway(t *testing.T) {
 	runner, rec, database := journalled(t, queryrunner.DefaultLimits(), checker.NewChecker())
 
 	ctx, cancel := context.WithCancel(t.Context())
-	_, _ = runner.Run(ctx, request(database, `SELECT 1`), uuid.New())
+	_, _ = runner.Run(ctx, request(database, `SELECT 1`), queryrunner.Origin{RequestID: uuid.New()})
 	cancel()
 
 	if _, closed := rec.outcomes[1]; !closed {
@@ -184,11 +185,41 @@ func TestACancelledRequestIsNotJournalledAsATimeout(t *testing.T) {
 		cancel()
 	}()
 
-	_, _ = runner.Run(ctx, request(database, `SELECT pg_sleep(30)`), uuid.New())
+	_, _ = runner.Run(ctx, request(database, `SELECT pg_sleep(30)`), queryrunner.Origin{RequestID: uuid.New()})
 
 	if got := rec.outcomes[1].Status; got == queryrunner.StatusTimeout {
 		t.Fatal("a cancelled request was journalled as a timeout")
 	} else if got != queryrunner.StatusError {
 		t.Fatalf("status = %q, want %q", got, queryrunner.StatusError)
+	}
+}
+
+// answering is an Executor that answers without a database, for the tests
+// here that are about what the journal is told rather than about a query.
+type answering struct{}
+
+func (answering) Run(context.Context, queryrunner.Request) (*queryrunner.Result, error) {
+	return &queryrunner.Result{}, nil
+}
+
+// Where the query came from and which request carried it reach the journal
+// row: the address is the Core API's to know and the Query Runner's to never
+// see, so it travels beside the request rather than inside it (design §2.3,
+// CLAUDE.md rule 11).
+func TestTheRowCarriesTheOriginOfTheQuery(t *testing.T) {
+	rec := newRecorder()
+	journalled := queryrunner.NewJournalled(answering{}, rec, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	origin := queryrunner.Origin{RequestID: uuid.New(), Address: netip.MustParseAddr("198.51.100.7")}
+
+	if _, err := journalled.Run(t.Context(), queryrunner.Request{Registration: uuid.New(), SQL: `SELECT 1`}, origin); err != nil {
+		t.Fatalf("running: %v", err)
+	}
+
+	if len(rec.entries) != 1 {
+		t.Fatalf("journalled %d rows, want 1", len(rec.entries))
+	}
+	entry := rec.entries[0]
+	if entry.RequestID != origin.RequestID || entry.Address != origin.Address {
+		t.Fatalf("entry = %+v, want request %s from %v", entry, origin.RequestID, origin.Address)
 	}
 }

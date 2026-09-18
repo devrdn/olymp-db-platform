@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net/netip"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/google/uuid"
@@ -53,13 +55,21 @@ func (l *QueryLog) querier(ctx context.Context) storage.Querier {
 // The row lands at `running`, which is what makes a crash mid-query visible
 // rather than silent: the alternative — writing one row afterwards — loses
 // exactly the queries worth knowing about.
+//
+// The same insert records where the query came from and its fingerprint
+// (monitor.Fingerprint), so watching a participant costs the console no
+// second write. An address that could not be worked out is stored as NULL.
 func (l *QueryLog) Begin(ctx context.Context, entry queryrunner.Entry) (int64, error) {
+	var address *netip.Addr
+	if entry.Address.IsValid() {
+		address = &entry.Address
+	}
 	var id int64
 	err := l.querier(ctx).QueryRow(ctx, `
-		INSERT INTO query_log (registration_id, request_id, sql_text, status)
-		VALUES ($1, $2, $3, 'running')
+		INSERT INTO query_log (registration_id, request_id, sql_text, status, ip, sql_fingerprint)
+		VALUES ($1, $2, $3, 'running', $4, $5)
 		RETURNING id`,
-		entry.Registration, entry.RequestID, entry.SQL).Scan(&id)
+		entry.Registration, entry.RequestID, entry.SQL, address, monitor.Fingerprint(entry.SQL)).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("open a query log row: %w", err)
 	}

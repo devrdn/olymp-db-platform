@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,14 @@ type fakeConsole struct {
 
 func (c fakeConsole) Run(context.Context, queryproxy.Command) (*queryrunner.Result, error) {
 	return c.result, c.err
+}
+
+// recordingConsole keeps the command it was handed.
+type recordingConsole struct{ got *queryproxy.Command }
+
+func (c recordingConsole) Run(_ context.Context, cmd queryproxy.Command) (*queryrunner.Result, error) {
+	*c.got = cmd
+	return &queryrunner.Result{}, nil
 }
 
 // consoleFixture mounts the console endpoint behind a session for one
@@ -433,5 +442,28 @@ func TestADatabaseRefusalHasItsOwnCodeAndNamesTheReasonAsItsSubject(t *testing.T
 	}
 	if subject, _ := decode(t, rec)["subject"].(string); subject != reason {
 		t.Fatalf("subject = %q, want the database's own words %q", subject, reason)
+	}
+}
+
+// The address a query came from is written into its journal row (design
+// §2.3), and this is where it enters: the exact client address, the one
+// httpx.ClientIP resolves, not the rate limiter's grouped subject.
+func TestTheConsoleHandsOnTheExactClientAddress(t *testing.T) {
+	var got queryproxy.Command
+	fixture := newConsoleFixture(t, recordingConsole{got: &got})
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/contests/"+uuid.New().String()+"/query", strings.NewReader(`{"sql":"SELECT 1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "[2001:db8::7]:5555"
+	req.AddCookie(fixture.cookie)
+	rec := httptest.NewRecorder()
+	fixture.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if want := netip.MustParseAddr("2001:db8::7"); got.Address != want {
+		t.Fatalf("address = %v, want %v", got.Address, want)
 	}
 }

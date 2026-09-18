@@ -163,7 +163,7 @@ func (d *databases) Quota(context.Context, provisioning.Contest) (int64, error) 
 type runner struct {
 	quotaSink *int64
 	got       queryrunner.Request
-	gotID     uuid.UUID
+	gotOrigin queryrunner.Origin
 	result    *queryrunner.Result
 	err       error
 	// calls counts how often Run was reached, so a test can prove a check
@@ -172,9 +172,9 @@ type runner struct {
 	calls int
 }
 
-func (r *runner) Run(_ context.Context, req queryrunner.Request, id uuid.UUID) (*queryrunner.Result, error) {
+func (r *runner) Run(_ context.Context, req queryrunner.Request, origin queryrunner.Origin) (*queryrunner.Result, error) {
 	r.calls++
-	r.got, r.gotID = req, id
+	r.got, r.gotOrigin = req, origin
 	if r.quotaSink != nil {
 		*r.quotaSink = req.DiskQuotaBytes
 	}
@@ -241,6 +241,7 @@ func TestTheDatabaseComesFromTheRegistrationAndNeverFromTheRequest(t *testing.T)
 func TestTheRequestIdentifierIsCarriedThrough(t *testing.T) {
 	service, _, run := fixture(t)
 	cmd := command()
+	cmd.Address = netip.MustParseAddr("192.0.2.44")
 
 	if _, err := service.Run(t.Context(), cmd); err != nil {
 		t.Fatalf("running: %v", err)
@@ -248,8 +249,13 @@ func TestTheRequestIdentifierIsCarriedThrough(t *testing.T) {
 
 	// The journal ties a row to the same request in the technical logs, which
 	// is what makes "the participant says it failed at 14:02" answerable.
-	if run.gotID != cmd.RequestID {
-		t.Fatalf("request id = %s, want %s", run.gotID, cmd.RequestID)
+	if run.gotOrigin.RequestID != cmd.RequestID {
+		t.Fatalf("request id = %s, want %s", run.gotOrigin.RequestID, cmd.RequestID)
+	}
+	// And so is where it came from, for the journal row's ip column
+	// (design §2.3; CLAUDE.md rule 11).
+	if run.gotOrigin.Address != cmd.Address {
+		t.Fatalf("address = %v, want %v", run.gotOrigin.Address, cmd.Address)
 	}
 	if run.got.Registration == uuid.Nil {
 		t.Fatal("the query was journalled against no registration")
