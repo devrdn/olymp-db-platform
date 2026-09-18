@@ -1550,6 +1550,8 @@ const ro = {
       "Textul conține un caracter care nu poate fi salvat. Eliminați-l și încercați din nou.",
     workspace_order_mismatch:
       "Filele s-au schimbat în timp ce le mutați. Reîncărcați pagina și încercați din nou.",
+    signals_too_often: "Acțiunile de pe pagină sunt trimise prea des. Vor fi trimise în curând.",
+    signals_batch_too_large: "Au fost trimise prea multe acțiuni de pe pagină deodată. Vor fi trimise pe părți.",
     cross_origin: "Cererea nu a venit de pe acest site. Reîncărcați pagina și încercați din nou.",
     method_not_allowed: "Acțiunea nu este disponibilă pentru această resursă.",
     internal_error: "Serverul nu a putut procesa cererea.",
