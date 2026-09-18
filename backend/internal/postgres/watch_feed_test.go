@@ -278,3 +278,42 @@ func TestAStreamedFeedIsTheWholeFeedOnce(t *testing.T) {
 		}
 	})
 }
+
+// A participant's sign-ins belong to the contest only while it could
+// concern them: from their registration to an hour past the contest's end,
+// or past their own finish.
+func TestSignInsOutsideTheContestAreNotInItsFeed(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newWatchFixture(t, ctx)
+		early, earlyUser := f.participant("early")
+		_, lateUser := f.participant("late")
+		f.exec(`UPDATE registrations SET created_at = $2 WHERE contest_id = $1`, f.contest, f.at(-time.Hour))
+		f.exec(`UPDATE contests SET starts_at = $2, ends_at = $3 WHERE id = $1`, f.contest, f.at(0), f.at(3*time.Hour))
+		f.exec(`UPDATE registrations SET started_at = $2, finished_at = $3, status = 'finished' WHERE id = $1`,
+			early, f.at(0), f.at(time.Hour))
+		var login string
+		if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT login FROM users WHERE id = $1`, lateUser).Scan(&login); err != nil {
+			t.Fatal(err)
+		}
+		signIn := func(user uuid.UUID, at time.Time) {
+			f.exec(`INSERT INTO audit_log (actor_id, action, entity, entity_id, created_at)
+			        VALUES ($1::uuid, 'auth.login', 'user', $1::uuid::text, $2)`, user, at)
+		}
+		signIn(earlyUser, f.at(90*time.Minute))            // within an hour of their own finish
+		signIn(earlyUser, f.at(2*time.Hour+time.Minute))   // past it, though the contest runs
+		signIn(lateUser, f.at(3*time.Hour+30*time.Minute)) // within an hour of the end
+		signIn(lateUser, f.at(5*time.Hour))                // hours after
+		f.exec(`INSERT INTO audit_log (action, entity, payload, created_at)
+		        VALUES ('auth.login_failed', 'user', jsonb_build_object('login', $1::text), $2)`, login, f.at(6*time.Hour))
+
+		items := readFeed(t, ctx, monitor.FeedQuery{Contest: f.contest, Limit: monitor.MaxFeedPage,
+			Kinds: []string{monitor.FeedSignIn, monitor.FeedSignInFailed}}).Items
+		var at []time.Time
+		for _, item := range items {
+			at = append(at, item.At)
+		}
+		if len(items) != 2 || !at[0].Equal(f.at(90*time.Minute)) || !at[1].Equal(f.at(3*time.Hour+30*time.Minute)) {
+			t.Errorf("sign-ins shown at %v, want only the two inside the window", at)
+		}
+	})
+}
