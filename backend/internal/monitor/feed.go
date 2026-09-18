@@ -93,6 +93,16 @@ const (
 	maxCursorLength = 128
 )
 
+// FeedSettle is how much of the newest time a forward read (FeedQuery.After)
+// leaves for the next one. Every journal stamps its rows with the time their
+// transaction started, and transactions do not commit in that order: a query
+// journalled at 10:00:00.9 can become visible after an event stamped
+// 10:00:01.0 was already delivered, and a poll that had moved its cursor past
+// 10:00:01.0 would never see it. Two seconds is far past how long a
+// journalling transaction stays open, and costs the live screen two seconds
+// of delay.
+const FeedSettle = 2 * time.Second
+
 // The feed's refusals (CLAUDE.md rule 1).
 var (
 	// ErrInvalidCursor: a cursor this service did not issue.
