@@ -38,13 +38,16 @@ const (
 	TrailTTL = 24 * time.Hour
 	// ObserveTimeout bounds what tracking may add to a participant's request:
 	// the cache read, and on a change the event insert and the cache write.
-	// The signal is best-effort, the request is not.
-	ObserveTimeout = 500 * time.Millisecond
-	// maxReportedPairs bounds the pairs a trail remembers for the ten-minute
-	// rule, so the one key per registration stays small whatever a caller
-	// does. A participant cycling through more sessions than this inside ten
-	// minutes gets a pair reported again, which is not a cost worth more.
-	maxReportedPairs = 8
+	// One cache read is well inside it; a cache that is degraded but still
+	// answering must not add more than this to every console run. The signal
+	// is best-effort, the request is not.
+	ObserveTimeout = 150 * time.Millisecond
+	// maxReportedPairs bounds the pairs — of sessions and of addresses — a
+	// trail remembers for the ten-minute rule, so the one key per
+	// registration stays small whatever a caller does. A participant cycling
+	// through more pairs than this inside ten minutes gets one reported
+	// again, which is not a cost worth more.
+	maxReportedPairs = 16
 )
 
 // trailKeyPrefix namespaces the trails inside the shared cache.
@@ -61,6 +64,14 @@ type EventWriter interface {
 	InsertEvents(ctx context.Context, events []Event) error
 }
 
+// SessionLiveness answers whether the tracked session could still be in use
+// beside the current one — not signed out, not past its lifetime, not
+// retired by a newer sign-in. Implemented by auth.SessionStore, which keys
+// sessions by the same digest SessionTag gives.
+type SessionLiveness interface {
+	SessionAlive(ctx context.Context, tracked, current string) (bool, error)
+}
+
 // Visit is one admitted request of a participant: whose, from where, and
 // from which session.
 type Visit struct {
@@ -74,14 +85,16 @@ type Visit struct {
 	UserAgent string
 }
 
-// SessionTag is how a session is named in a trail: a hash of its token, so
-// the cache never holds a credential it could leak. Empty for no token.
+// SessionTag is how a session is named in a trail: the SHA-256 digest of its
+// token in hex — the same digest the session store keys the session by, so
+// the trail can ask that store whether a session still lives, and never
+// holds a credential it could leak. Empty for no token.
 func SessionTag(token string) string {
 	if token == "" {
 		return ""
 	}
 	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:16])
+	return hex.EncodeToString(sum[:])
 }
 
 // trail is what the cache holds per registration: the address and the
@@ -94,7 +107,8 @@ type trail struct {
 	Reported []reported `json:"r,omitempty"`
 }
 
-// reported is a pair of sessions and when it was last reported.
+// reported is a pair — of sessions or of addresses, as pairKey names it —
+// and when it was last reported.
 type reported struct {
 	Pair string    `json:"p"`
 	At   time.Time `json:"t"`
@@ -107,25 +121,37 @@ type reported struct {
 // One cache read per request, keyed by the registration (one bounded key
 // each, CLAUDE.md rule 5); a cache write only when the trail changed or its
 // sighting went stale; an event insert only when there is something to
-// report. It never refuses or fails a request: an unreadable cache or an
-// event that cannot be stored is logged and the request goes on, within
-// ObserveTimeout.
+// report. When a request comes from another session inside ParallelWindow,
+// one more read asks the session store whether the tracked session still
+// lives: a participant who signed out and in again, or whose session ended,
+// is not using a second device. It never refuses or fails a request: an
+// unreadable cache or an event that cannot be stored is logged and the
+// request goes on, within ObserveTimeout.
+//
+// Both signals are damped the same way: the same pair — of sessions, or of
+// addresses — is reported at most once per ParallelReportEvery. A browser
+// flipping between its IPv4 and IPv6 address, or a campus NAT with several
+// exits, would otherwise write an event on every request.
 //
 // Requests racing each other read the same trail and the later write wins,
 // so two concurrent requests from a new address can report the change twice.
 // A lock or a compare-and-swap on every request is not worth a duplicate
 // line in a feed.
 type Tracker struct {
-	cache  TrailCache
-	events EventWriter
-	log    *slog.Logger
-	now    func() time.Time
+	cache    TrailCache
+	events   EventWriter
+	sessions SessionLiveness
+	log      *slog.Logger
+	now      func() time.Time
 }
 
-// NewTracker returns a tracker keeping trails in cache and writing events to
-// events.
-func NewTracker(cache TrailCache, events EventWriter, log *slog.Logger) *Tracker {
-	return &Tracker{cache: cache, events: events, log: log, now: func() time.Time { return time.Now().UTC() }}
+// NewTracker returns a tracker keeping trails in cache, asking sessions
+// whether a tracked session still lives, and writing events to events.
+func NewTracker(cache TrailCache, events EventWriter, sessions SessionLiveness, log *slog.Logger) *Tracker {
+	return &Tracker{
+		cache: cache, events: events, sessions: sessions, log: log,
+		now: func() time.Time { return time.Now().UTC() },
+	}
 }
 
 // WithClock replaces the wall clock, for tests.
@@ -156,7 +182,20 @@ func (t *Tracker) Observe(ctx context.Context, visit Visit) {
 
 	var current trail
 	if found && json.Unmarshal(raw, &current) == nil && current.Session != "" {
-		events, changed := current.follow(visit, now)
+		// Only on the rare switch of sessions inside the window: is the
+		// tracked one still alive, or did it end and this one replace it?
+		trackedLive := true
+		if visit.Session != current.Session && now.Sub(current.Seen) < ParallelWindow {
+			alive, err := t.sessions.SessionAlive(ctx, current.Session, visit.Session)
+			if err != nil {
+				// Not knowing, report nothing and move nothing: a guess either
+				// way is wrong half the time, and the next request asks again.
+				t.log.WarnContext(ctx, "could not tell whether a participant's session lives", "registration", visit.Registration, "error", err)
+				return
+			}
+			trackedLive = alive
+		}
+		events, changed := current.follow(visit, now, trackedLive)
 		if len(events) > 0 {
 			if err := t.events.InsertEvents(ctx, events); err != nil {
 				// Not retried: the trail below moves on regardless, or every
@@ -184,8 +223,9 @@ func (t *Tracker) Observe(ctx context.Context, visit Visit) {
 }
 
 // follow applies one visit to the trail and returns the events it reports
-// and whether the trail changed.
-func (tr *trail) follow(visit Visit, now time.Time) ([]Event, bool) {
+// and whether the trail changed. trackedLive says whether the tracked
+// session could still be in use; it is only consulted inside the window.
+func (tr *trail) follow(visit Visit, now time.Time, trackedLive bool) ([]Event, bool) {
 	var events []Event
 	changed := false
 	event := func(payload Payload) {
@@ -193,17 +233,17 @@ func (tr *trail) follow(visit Visit, now time.Time) ([]Event, bool) {
 	}
 
 	if visit.Session != tr.Session {
-		if now.Sub(tr.Seen) < ParallelWindow {
+		if now.Sub(tr.Seen) < ParallelWindow && trackedLive {
 			// Another session while the tracked one is live. The tracked one
 			// stays tracked, and so does its address: this is reported as a
 			// parallel session, not also as the address moving.
-			if tr.remember(pairOf(tr.Session, visit.Session), now) {
+			if tr.remember(pairKey("session", tr.Session, visit.Session), now) {
 				event(ParallelSession{OtherIP: visit.Address, UserAgent: visit.UserAgent})
 				return events, true
 			}
 			return nil, false
 		}
-		// The tracked session went quiet: this one takes over.
+		// The tracked session went quiet or ended: this one takes over.
 		tr.Session, tr.Seen = visit.Session, now
 		changed = true
 	} else if now.Sub(tr.Seen) >= SeenRefresh {
@@ -212,7 +252,11 @@ func (tr *trail) follow(visit Visit, now time.Time) ([]Event, bool) {
 	}
 
 	if visit.Address != tr.Address {
-		event(IPChanged{From: tr.Address, To: visit.Address})
+		// The tracked address always follows, so the next change is reported
+		// from where the requests really were; the event is damped per pair.
+		if tr.remember(pairKey("address", tr.Address.String(), visit.Address.String()), now) {
+			event(IPChanged{From: tr.Address, To: visit.Address})
+		}
 		tr.Address = visit.Address
 		changed = true
 	}
@@ -236,10 +280,14 @@ func (tr *trail) remember(pair string, now time.Time) bool {
 	return true
 }
 
-// pairOf names a pair of sessions the same whichever is tracked.
-func pairOf(a, b string) string {
+// pairKey names an unordered pair of one kind — the same whichever member
+// is tracked — compactly: a short hash rather than the two members, so
+// maxReportedPairs of them keep the trail small. A collision between two
+// pairs of one registration inside ten minutes only damps one report.
+func pairKey(kind, a, b string) string {
 	if a > b {
 		a, b = b, a
 	}
-	return strings.Join([]string{a, b}, "|")
+	sum := sha256.Sum256([]byte(strings.Join([]string{kind, a, b}, "|")))
+	return hex.EncodeToString(sum[:8])
 }
