@@ -214,7 +214,7 @@ func (s *WatchService) StreamFeed(ctx context.Context, q FeedQuery, yield func(F
 			return err
 		}
 	}
-	return StreamFeed(ctx, s.store, q, yield)
+	return StreamFeed(ctx, s.store, q, s.now(), yield)
 }
 
 // Queries reads one page of a participant's queries.

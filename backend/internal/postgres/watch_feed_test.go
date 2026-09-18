@@ -254,7 +254,7 @@ func TestAStreamedFeedIsTheWholeFeedOnce(t *testing.T) {
 		whole := readFeed(t, ctx, monitor.FeedQuery{Contest: f.contest, Limit: monitor.MaxFeedPage}).Items
 		for _, reg := range []uuid.UUID{uuid.Nil, f.bob} {
 			var got []monitor.FeedItem
-			if err := monitor.StreamFeed(ctx, NewWatch(testPool), monitor.FeedQuery{Contest: f.contest, Registration: reg},
+			if err := monitor.StreamFeed(ctx, NewWatch(testPool), monitor.FeedQuery{Contest: f.contest, Registration: reg}, time.Now(),
 				func(item monitor.FeedItem) error { got = append(got, item); return nil }); err != nil {
 				t.Fatal(err)
 			}
@@ -338,6 +338,50 @@ func TestATimelineFindsItsDisqualificationAmongOthers(t *testing.T) {
 			Kinds: []string{monitor.FeedDisqualified}, Limit: 1}).Items
 		if len(items) != 1 || items[0].Registration != mine {
 			t.Errorf("the timeline's disqualification: %+v", items)
+		}
+	})
+}
+
+// journalRowsRead is how many rows this transaction has read from a table so
+// far, by index or by scan.
+func journalRowsRead(t *testing.T, ctx context.Context, table string) int64 {
+	t.Helper()
+	var n int64
+	if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `
+		SELECT COALESCE(idx_tup_fetch, 0) + COALESCE(seq_tup_read, 0)
+		FROM pg_stat_xact_user_tables WHERE relname = $1`, table).Scan(&n); err != nil {
+		t.Fatalf("read the statistics of %s: %v", table, err)
+	}
+	return n
+}
+
+// A contest-wide export reads each journal row about once, however many
+// pages the file runs to: the cost grows with the contest, not its square.
+func TestAContestExportReadsEachJournalRowOnce(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newWatchFixture(t, ctx)
+		loadOlympiad(t, f, 7, 40) // 12,000 queries, 1,200 answers, 2,400 sign-ins
+		for _, table := range []string{"users", "registrations", "query_log", "submissions", "audit_log", "participant_events"} {
+			f.exec("ANALYZE " + table)
+		}
+		tables := []string{"query_log", "submissions", "audit_log"}
+		before := map[string]int64{}
+		for _, table := range tables {
+			before[table] = journalRowsRead(t, ctx, table)
+		}
+		streamed := 0
+		if err := monitor.StreamFeed(ctx, NewWatch(testPool), monitor.FeedQuery{Contest: f.contest}, time.Now(),
+			func(monitor.FeedItem) error { streamed++; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if streamed < 12_000 {
+			t.Fatalf("streamed %d items, want the whole contest", streamed)
+		}
+		for table, rows := range map[string]int64{"query_log": 12_000, "submissions": 1_200, "audit_log": 2_400} {
+			read := journalRowsRead(t, ctx, table) - before[table]
+			if read > 2*rows {
+				t.Errorf("%s: %d rows read for %d rows exported, want at most twice as many", table, read, rows)
+			}
 		}
 	})
 }

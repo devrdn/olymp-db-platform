@@ -73,6 +73,27 @@ func (w *Watch) FeedSource(ctx context.Context, q monitor.FeedQuery, source moni
 	return items, nil
 }
 
+// FeedRegistrations lists the contest's registrations, for a contest-wide
+// stream to read its per-registration sources by. Bounded like the
+// participants table: a contest past monitor.MaxRosterRows is refused rather
+// than streamed with some of its participants missing.
+func (w *Watch) FeedRegistrations(ctx context.Context, contest uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := w.querier(ctx).Query(ctx, `
+		SELECT id FROM registrations WHERE contest_id = $1 ORDER BY id LIMIT $2`,
+		contest, monitor.MaxRosterRows+1)
+	if err != nil {
+		return nil, fmt.Errorf("list the registrations of %s: %w", contest, err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return nil, fmt.Errorf("list the registrations of %s: %w", contest, err)
+	}
+	if len(ids) > monitor.MaxRosterRows {
+		return nil, fmt.Errorf("contest %s has more than %d registrations to stream", contest, monitor.MaxRosterRows)
+	}
+	return ids, nil
+}
+
 // readSource reads one source's range.
 func (w *Watch) readSource(ctx context.Context, q monitor.FeedQuery, source monitor.Source) ([]monitor.FeedItem, error) {
 	switch source {
