@@ -1,0 +1,232 @@
+import { afterEach, describe, expect, test, vi } from "vitest";
+
+import { ApiError } from "./client";
+import {
+  feedPath,
+  feedSchema,
+  fetchFeed,
+  fetchRoster,
+  mayMonitor,
+  monitorCsvHref,
+  rosterSchema,
+} from "./monitor";
+
+const CONTEST = "3f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6";
+const REG = "9a1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6";
+
+const flags = {
+  multiple_ips: true,
+  parallel_sessions: false,
+  long_absence: false,
+  answer_without_queries: false,
+  large_paste: true,
+  identical_queries: false,
+};
+
+const rosterRow = {
+  registration_id: REG,
+  login: "ivanov",
+  full_name: "Ivan Ivanov",
+  status: "active",
+  started_at: "2026-09-20T09:00:00.000Z",
+  finished_at: null,
+  queries: 120,
+  query_errors: 7,
+  query_rejected: 2,
+  addresses: 2,
+  correct: 3,
+  wrong: 1,
+  page_left: 4,
+  away_ms: 95_000,
+  pastes: 5,
+  ip_changes: 1,
+  parallel_sessions: 0,
+  last_activity: "2026-09-20T10:14:03.120Z",
+  flags,
+};
+
+describe("the participants table as the API sends it", () => {
+  test("reads a row into the interface's names", () => {
+    const parsed = rosterSchema.parse({
+      generated_at: "2026-09-20T10:14:05.000Z",
+      truncated: false,
+      rows: [rosterRow],
+    });
+
+    expect(parsed.truncated).toBe(false);
+    expect(parsed.rows[0]).toMatchObject({
+      registrationId: REG,
+      fullName: "Ivan Ivanov",
+      status: "active",
+      queries: 120,
+      queryErrors: 7,
+      queryRejected: 2,
+      pageLeft: 4,
+      awayMs: 95_000,
+      ipChanges: 1,
+      parallelSessions: 0,
+      lastActivity: "2026-09-20T10:14:03.120Z",
+      flags: {
+        multipleIps: true,
+        parallelSessions: false,
+        longAbsence: false,
+        answerWithoutQueries: false,
+        largePaste: true,
+        identicalQueries: false,
+      },
+    });
+  });
+});
+
+describe("the feed as the API sends it", () => {
+  const item = (kind: string, data: unknown, cursor = "c1") => ({
+    cursor,
+    at: "2026-09-20T10:14:03.120Z",
+    kind,
+    registration_id: REG,
+    login: "ivanov",
+    full_name: "Ivan Ivanov",
+    data,
+  });
+
+  test("reads each kind's data into its own shape", () => {
+    const parsed = feedSchema.parse({
+      items: [
+        item("query", { id: 7, sql: "SELECT 1", sql_truncated: false, status: "running", duration_ms: null, row_count: null }, "a"),
+        item("answer", { id: REG, question_id: REG, question_ord: 2, attempt_no: 3, value: "42", correct: true, points_awarded: 5 }, "b"),
+        item("page_left", { away_ms: 61_000 }, "c"),
+        item("paste", { target: "editor", chars: 812, text: "SELECT *" }, "d"),
+        item("ip_changed", { from: "10.0.0.1", to: "10.0.0.2" }, "e"),
+        item("parallel_session", { other_ip: "10.0.0.9", user_agent: "Firefox" }, "f"),
+        item("tab_renamed", { tab_id: REG, from: "Query 1", to: "Suspects" }, "g"),
+        item("sign_in", { ip: "10.0.0.1", user_agent: "Chrome" }, "h"),
+        item("started", {}, "i"),
+      ],
+      more: true,
+      newest: "i",
+      oldest: "a",
+    });
+
+    expect(parsed.more).toBe(true);
+    expect(parsed.newest).toBe("i");
+    expect(parsed.items.map((i) => i.detail.type)).toEqual([
+      "query",
+      "answer",
+      "page_left",
+      "paste",
+      "ip_changed",
+      "parallel_session",
+      "tab",
+      "audit",
+      "none",
+    ]);
+    expect(parsed.items[0].detail).toMatchObject({ type: "query", id: 7, status: "running", durationMs: null });
+    expect(parsed.items[1].detail).toMatchObject({ type: "answer", questionOrd: 2, correct: true });
+    expect(parsed.items[5].detail).toMatchObject({ otherIp: "10.0.0.9", userAgent: "Firefox" });
+    expect(parsed.items[6].detail).toMatchObject({ from: "Query 1", to: "Suspects" });
+  });
+
+  /**
+   * A kind this build does not know yet, or a payload it cannot read, must
+   * not take the whole feed down with it: the row still says who and when.
+   */
+  test("keeps an item whose kind or data it cannot read", () => {
+    const parsed = feedSchema.parse({
+      items: [item("teleported", { where: "moon" }), item("page_left", { away_ms: "long" }, "c2")],
+      more: false,
+    });
+
+    expect(parsed.items.map((i) => i.detail.type)).toEqual(["none", "none"]);
+    expect(parsed.items[0].kind).toBe("teleported");
+    expect(parsed.newest).toBeUndefined();
+  });
+});
+
+describe("the addresses the screen asks", () => {
+  test("names every feed parameter it was given and nothing else", () => {
+    expect(feedPath(CONTEST, {})).toBe(`/contests/${CONTEST}/monitor/feed`);
+    expect(
+      feedPath(CONTEST, {
+        after: "abc",
+        kinds: ["query", "answer"],
+        participant: REG,
+        from: "2026-09-20T10:14:03.120Z",
+        until: "2026-09-20T10:14:03.121Z",
+        limit: 200,
+      }),
+    ).toBe(
+      `/contests/${CONTEST}/monitor/feed?after=abc&kinds=query%2Canswer&participant=${REG}` +
+        "&from=2026-09-20T10%3A14%3A03.120Z&until=2026-09-20T10%3A14%3A03.121Z&limit=200",
+    );
+    expect(feedPath(CONTEST, { before: "xyz", kinds: [] })).toBe(`/contests/${CONTEST}/monitor/feed?before=xyz`);
+  });
+
+  test("offers the contest's CSV as an API path on this origin", () => {
+    expect(monitorCsvHref(CONTEST)).toBe(`/api/v1/contests/${CONTEST}/monitor/export.csv`);
+  });
+});
+
+describe("reading from the browser", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  test("asks the roster with the session cookie and parses it", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ generated_at: "x", truncated: false, rows: [rosterRow] }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const roster = await fetchRoster(CONTEST);
+
+    expect(roster.rows).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/contests/${CONTEST}/monitor/participants`,
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
+  test("hands a refusal on with the wait it named", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ error: { code: "monitor_too_often", message: "slow down" } }), {
+          status: 429,
+          headers: { "retry-after": "60" },
+        }),
+      ),
+    );
+
+    const failure = await fetchFeed(CONTEST, { after: "abc" }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ApiError);
+    expect(failure).toMatchObject({ code: "monitor_too_often", status: 429, retryAfterSeconds: 60 });
+  });
+});
+
+/**
+ * Whether the tab is offered. The API names no per-contest permission, so the
+ * rule is the one `rbac.Authorize` applies to contest.monitor: an
+ * installation-wide contest.admin_all, or being the owner or a manager of
+ * this contest, both of which grant it.
+ */
+describe("who is offered the monitoring tab", () => {
+  const managers = [
+    { userId: "owner-id", role: "owner" as const },
+    { userId: "manager-id", role: "manager" as const },
+  ];
+
+  test("offers it to the contest's owner and its managers", () => {
+    expect(mayMonitor({ id: "owner-id", permissions: [] }, managers)).toBe(true);
+    expect(mayMonitor({ id: "manager-id", permissions: ["contest.create"] }, managers)).toBe(true);
+  });
+
+  test("offers it to an administrator of every contest", () => {
+    expect(mayMonitor({ id: "admin-id", permissions: ["contest.admin_all"] }, [])).toBe(true);
+    expect(mayMonitor({ id: "admin-id", permissions: ["contest.admin_all"] }, null)).toBe(true);
+  });
+
+  test("does not offer it to anybody else", () => {
+    expect(mayMonitor({ id: "stranger", permissions: ["contest.view", "contest.monitor"] }, managers)).toBe(false);
+    expect(mayMonitor(null, managers)).toBe(false);
+    expect(mayMonitor({ id: "owner-id", permissions: [] }, null)).toBe(false);
+  });
+});
