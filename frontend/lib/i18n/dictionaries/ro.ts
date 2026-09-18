@@ -120,6 +120,7 @@ const ro = {
       game: "Bază",
       databases: "Baze",
       leaderboard: "Clasament",
+      monitor: "Monitorizare",
     },
     game: {
       heading: "Baza de joc",

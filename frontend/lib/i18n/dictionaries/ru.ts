@@ -120,6 +120,7 @@ const ru = {
       game: "База",
       databases: "Базы",
       leaderboard: "Лидерборд",
+      monitor: "Наблюдение",
     },
     game: {
       heading: "Игровая база",
