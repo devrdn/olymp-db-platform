@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -36,6 +37,37 @@ type watchStore struct {
 	registrations map[uuid.UUID]uuid.UUID // registration → contest
 	lastFeed      monitor.FeedQuery
 	lastQueries   monitor.QueriesQuery
+	// events is what FeedSource serves as the event source, oldest first;
+	// nil is one paste. failReads fails every source read after that many.
+	events    []monitor.FeedItem
+	failReads int
+	reads     int
+}
+
+func (s *watchStore) FeedSource(_ context.Context, q monitor.FeedQuery, source monitor.Source) ([]monitor.FeedItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastFeed = q
+	s.reads++
+	if s.failReads > 0 && s.reads > s.failReads {
+		return nil, errors.New("the database went away")
+	}
+	if source != monitor.SourceEvent {
+		return nil, nil
+	}
+	events := s.events
+	if events == nil {
+		events = []monitor.FeedItem{{Source: monitor.SourceEvent, ID: "7", At: conteststest.FixtureNow,
+			Kind: string(monitor.KindPaste), Registration: q.Registration, Login: "student",
+			FullName: "=HYPERLINK(\"http://x\")", Data: json.RawMessage(`{"target":"editor","chars":3,"text":"abc"}`)}}
+	}
+	var out []monitor.FeedItem
+	for _, item := range events {
+		if item.Cursor().Compare(*q.After) > 0 && len(out) <= q.Limit {
+			out = append(out, item)
+		}
+	}
+	return out, nil
 }
 
 func (s *watchStore) Roster(_ context.Context, contest uuid.UUID, _ int) (monitor.Roster, error) {
@@ -100,6 +132,7 @@ func (s *watchStore) Revision(_ context.Context, _ uuid.UUID, id int64) (monitor
 
 type monitorFixture struct {
 	router    http.Handler
+	handler   *api.MonitorHandler
 	store     *watchStore
 	sink      *conteststest.Sink
 	organizer users.User
@@ -155,7 +188,8 @@ func newMonitorFixture(t *testing.T) *monitorFixture {
 	})
 	router := chi.NewRouter()
 	watch := monitor.NewWatchService(monitor.WatchConfig{Store: f.store, Audit: audit.New(f.sink), Marks: c})
-	api.NewMonitorHandler(watch, auth.NewLimiter(c), mw, log).Mount(router)
+	f.handler = api.NewMonitorHandler(watch, auth.NewLimiter(c), mw, log)
+	f.handler.Mount(router)
 	f.router = router
 	return f
 }

@@ -37,27 +37,12 @@ func (w *Watch) Feed(ctx context.Context, q monitor.FeedQuery) (monitor.FeedPage
 	if err != nil {
 		return monitor.FeedPage{}, err
 	}
-	readers := []struct {
-		source monitor.Source
-		read   func(context.Context, monitor.FeedQuery) ([]monitor.FeedItem, error)
-	}{
-		{monitor.SourceAudit, w.feedAudit},
-		{monitor.SourceStart, func(ctx context.Context, q monitor.FeedQuery) ([]monitor.FeedItem, error) {
-			return w.feedClock(ctx, q, monitor.SourceStart)
-		}},
-		{monitor.SourceEvent, w.feedEvents},
-		{monitor.SourceQuery, w.feedQueries},
-		{monitor.SourceAnswer, w.feedAnswers},
-		{monitor.SourceFinish, func(ctx context.Context, q monitor.FeedQuery) ([]monitor.FeedItem, error) {
-			return w.feedClock(ctx, q, monitor.SourceFinish)
-		}},
-	}
 	var items []monitor.FeedItem
-	for _, reader := range readers {
-		if !q.Reads(reader.source) {
+	for source := monitor.SourceAudit; source <= monitor.SourceFinish; source++ {
+		if !q.Reads(source) {
 			continue
 		}
-		found, err := reader.read(ctx, q)
+		found, err := w.readSource(ctx, q, source)
 		if err != nil {
 			return monitor.FeedPage{}, err
 		}
@@ -68,6 +53,41 @@ func (w *Watch) Feed(ctx context.Context, q monitor.FeedQuery) (monitor.FeedPage
 		return monitor.FeedPage{}, err
 	}
 	return page, nil
+}
+
+// FeedSource reads one source of the feed past q's cursor, in q's
+// direction, at most q.Limit+1 items, named: what monitor.StreamFeed merges
+// an export from, one source at a time.
+func (w *Watch) FeedSource(ctx context.Context, q monitor.FeedQuery, source monitor.Source) ([]monitor.FeedItem, error) {
+	q, err := q.Normalize()
+	if err != nil {
+		return nil, err
+	}
+	items, err := w.readSource(ctx, q, source)
+	if err != nil {
+		return nil, err
+	}
+	if err := w.name(ctx, q.Contest, items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+// readSource reads one source's range.
+func (w *Watch) readSource(ctx context.Context, q monitor.FeedQuery, source monitor.Source) ([]monitor.FeedItem, error) {
+	switch source {
+	case monitor.SourceAudit:
+		return w.feedAudit(ctx, q)
+	case monitor.SourceStart, monitor.SourceFinish:
+		return w.feedClock(ctx, q, source)
+	case monitor.SourceEvent:
+		return w.feedEvents(ctx, q)
+	case monitor.SourceQuery:
+		return w.feedQueries(ctx, q)
+	case monitor.SourceAnswer:
+		return w.feedAnswers(ctx, q)
+	}
+	return nil, fmt.Errorf("no feed source %d", source)
 }
 
 // args collects the positional parameters of one statement.
