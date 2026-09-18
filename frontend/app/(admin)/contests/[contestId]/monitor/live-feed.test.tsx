@@ -254,3 +254,19 @@ test("renders only the lines in view of a long feed", () => {
   expect(lines[0]).toHaveAttribute("aria-setsize", String(FEED_LIMIT));
   expect(screen.getByText("SELECT 501")).toBeInTheDocument();
 });
+
+/** On one participant's page every line is theirs: the name would only repeat the heading. */
+describe("on one participant's page", () => {
+  test("names nobody", () => {
+    renderFeed(state([withDetail("a", "page_left", { type: "page_left", awayMs: 5_000 })]), { showParticipant: false });
+
+    expect(screen.queryByRole("link", { name: "Ivan Ivanov" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Away from the page/)).toBeInTheDocument();
+  });
+
+  test("names whoever it was on the contest's feed", () => {
+    renderFeed(state([withDetail("a", "page_left", { type: "page_left", awayMs: 5_000 })]));
+
+    expect(screen.getByRole("link", { name: "Ivan Ivanov" })).toBeInTheDocument();
+  });
+});

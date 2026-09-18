@@ -6,7 +6,7 @@ import Link from "next/link";
 
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip } from "@/components/ui/tooltip";
-import { MONITOR_FLAGS, type RosterRow } from "@/lib/api/monitor";
+import { MONITOR_FLAGS, type MonitorFlags, type RosterRow } from "@/lib/api/monitor";
 import { REGISTRATION_STATUSES } from "@/lib/api/people";
 import { readableDuration } from "@/lib/format/bytes";
 import { formatMoment, formatTime } from "@/lib/format/datetime";
@@ -215,6 +215,25 @@ function FlagsHelp({ t }: { t: MonitorDict }) {
   );
 }
 
+/** A participant's raised flags as badges; the table's rows and a participant's page both show them. */
+export function FlagBadges({ flags, t }: { flags: MonitorFlags; t: MonitorDict }) {
+  return (
+    <span className="flex flex-wrap gap-1">
+      {MONITOR_FLAGS.filter((flag) => flags[flag]).map((flag) => (
+        <span
+          key={flag}
+          title={t.flags[flag].explain}
+          className="rounded-full bg-warn-wash px-1.5 font-mono text-label whitespace-nowrap text-warn uppercase"
+        >
+          <span aria-hidden>{t.flags[flag].label}</span>
+          {/* The title is for a pointer; this is for everybody else. */}
+          <span className="sr-only">{t.flags[flag].explain}</span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
 const CELL = "border-b border-line px-2 py-1.5";
 const NUMBER = "text-right font-mono text-data tabular-nums";
 
@@ -269,19 +288,7 @@ const ParticipantRow = memo(function ParticipantRow({
       </td>
       <td className={cn(CELL, "text-small whitespace-nowrap text-ink-2")}>{statuses[row.status] ?? row.status}</td>
       <td className={cn(CELL, "min-w-28")}>
-        <span className="flex flex-wrap gap-1">
-          {MONITOR_FLAGS.filter((flag) => row.flags[flag]).map((flag) => (
-            <span
-              key={flag}
-              title={t.flags[flag].explain}
-              className="rounded-full bg-warn-wash px-1.5 font-mono text-label whitespace-nowrap text-warn uppercase"
-            >
-              <span aria-hidden>{t.flags[flag].label}</span>
-              {/* The title is for a pointer; this is for everybody else. */}
-              <span className="sr-only">{t.flags[flag].explain}</span>
-            </span>
-          ))}
-        </span>
+        <FlagBadges flags={row.flags} t={t} />
       </td>
       {COUNTER_KEYS.map(count)}
       <td className={cn(CELL, NUMBER, "whitespace-nowrap text-ink-2")}>
