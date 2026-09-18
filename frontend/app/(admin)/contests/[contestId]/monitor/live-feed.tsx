@@ -317,7 +317,7 @@ function FilterChip({
 const clockFormatters = new Map<string, Intl.DateTimeFormat>();
 
 /** The time of day to the second: the feed orders things inside one minute. */
-function clock(iso: string, locale: string): string {
+export function clock(iso: string, locale: string): string {
   let formatter = clockFormatters.get(locale);
   if (!formatter) {
     formatter = new Intl.DateTimeFormat(locale, {
@@ -335,7 +335,7 @@ function clock(iso: string, locale: string): string {
 const QUIET_KINDS = new Set(["tab_created", "tab_renamed", "tab_deleted"]);
 
 /** The status of a query in the colour of what it means; running is the one live thing. */
-const QUERY_TONE: Record<string, string> = {
+export const QUERY_TONE: Record<string, string> = {
   running: "text-accent",
   ok: "text-good",
   error: "text-bad",
