@@ -73,6 +73,7 @@ export function LiveFeed({
   onLoadOlder,
   loadingOlder,
   onToLatest,
+  showParticipant = true,
   dict,
   locale,
 }: {
@@ -83,6 +84,8 @@ export function LiveFeed({
   onLoadOlder: () => void;
   loadingOlder: boolean;
   onToLatest: () => void;
+  /** Whether each line names its participant; one participant's own page does not. */
+  showParticipant?: boolean;
   dict: Dictionary;
   locale: string;
 }) {
@@ -244,6 +247,7 @@ export function LiveFeed({
                   index={start + i}
                   total={total}
                   contestId={contestId}
+                  showParticipant={showParticipant}
                   t={t}
                   locale={locale}
                 />
@@ -345,6 +349,7 @@ const FeedLine = memo(function FeedLine({
   index,
   total,
   contestId,
+  showParticipant,
   t,
   locale,
 }: {
@@ -352,6 +357,7 @@ const FeedLine = memo(function FeedLine({
   index: number;
   total: number;
   contestId: string;
+  showParticipant: boolean;
   t: MonitorDict;
   locale: string;
 }) {
@@ -376,12 +382,17 @@ const FeedLine = memo(function FeedLine({
         >
           {clock(item.at, locale)}
         </time>
-        <Link
-          href={`/contests/${contestId}/monitor/${item.registrationId}`}
-          className={cn("min-w-0 truncate text-small underline-offset-4 hover:underline", quiet ? "text-ink-3" : "text-ink")}
-        >
-          {item.fullName || item.login}
-        </Link>
+        {showParticipant ? (
+          <Link
+            href={`/contests/${contestId}/monitor/${item.registrationId}`}
+            className={cn(
+              "min-w-0 truncate text-small underline-offset-4 hover:underline",
+              quiet ? "text-ink-3" : "text-ink",
+            )}
+          >
+            {item.fullName || item.login}
+          </Link>
+        ) : null}
         <span className="ml-auto shrink-0 font-mono text-label text-ink-3 uppercase">{kindLabel}</span>
       </div>
       <Detail item={item} t={t} quiet={quiet} />

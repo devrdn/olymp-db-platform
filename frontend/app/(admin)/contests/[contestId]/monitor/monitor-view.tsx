@@ -95,9 +95,10 @@ export function MonitorView({
 /**
  * The live region for what went wrong. Always in the document, with only its
  * text changing: a region inserted together with its message is not announced
- * by every screen reader.
+ * by every screen reader. Shared with one participant's page, whose column
+ * keeps the same `gap-8` its empty state takes back.
  */
-function Problem({ problem, t }: { problem: MonitorProblem; t: Dictionary["workspace"]["monitor"] }) {
+export function Problem({ problem, t }: { problem: MonitorProblem; t: Dictionary["workspace"]["monitor"] }) {
   const text = !problem
     ? ""
     : problem.kind === "forbidden"
