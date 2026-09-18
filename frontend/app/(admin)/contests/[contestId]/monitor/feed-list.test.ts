@@ -2,7 +2,16 @@ import { describe, expect, test } from "vitest";
 
 import type { FeedItem, FeedPage } from "@/lib/api/monitor";
 
-import { appendNewer, FEED_LIMIT, initialFeed, prependOlder, refreshItems, runningWindow } from "./feed-list";
+import {
+  appendNewer,
+  FEED_LIMIT,
+  initialFeed,
+  MAX_RUNNING_TRIES,
+  prependOlder,
+  refreshItems,
+  runningWindow,
+  type RunningTries,
+} from "./feed-list";
 import { feedItem } from "./test-fixtures";
 
 function page(items: FeedItem[], more = false): FeedPage {
@@ -129,7 +138,7 @@ describe("queries still running", () => {
         running("c4", "p1", "2026-09-20T10:00:03.500Z"),
       ]),
     );
-    const tried = new Map<string, number>();
+    const tried: RunningTries = new Map();
 
     const window = runningWindow(state.items, tried, 1000);
     expect(window).toEqual({
@@ -142,6 +151,19 @@ describe("queries still running", () => {
     // for a minute does not starve everybody else's.
     expect(runningWindow(state.items, tried, 2000)).toMatchObject({ participant: "p2" });
     expect(runningWindow(state.items, tried, 3000)).toMatchObject({ participant: "p1" });
+  });
+
+  /**
+   * A query the journal never completed (its runner died mid-statement)
+   * stays `running` for ever. It is asked about for a while, then left as it
+   * is, rather than costing a read every five seconds for the rest of the day.
+   */
+  test("gives up on a query that never ends", () => {
+    const items = [running("c1", "p1", "2026-09-20T10:00:01.100Z")];
+    const tried: RunningTries = new Map();
+
+    for (let i = 0; i < MAX_RUNNING_TRIES; i += 1) expect(runningWindow(items, tried, i)).not.toBeNull();
+    expect(runningWindow(items, tried, MAX_RUNNING_TRIES)).toBeNull();
   });
 
   test("asks nothing when nothing is running", () => {

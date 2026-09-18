@@ -115,6 +115,17 @@ export function refreshItems(state: FeedState, fresh: readonly FeedItem[]): Feed
 
 export type RunningWindow = { participant: string; from: string; until: string };
 
+/** When each running query was last asked about, and how many times. */
+export type RunningTries = Map<string, { at: number; count: number }>;
+
+/**
+ * How many times a running query is asked about before the screen leaves it
+ * as it is: five minutes at the poll's cadence, far past any statement
+ * timeout. A query whose journal row was never completed (its runner died
+ * mid-statement) would otherwise cost a read every five seconds all day.
+ */
+export const MAX_RUNNING_TRIES = 60;
+
 /**
  * Which running queries to ask about next, as one feed read: one
  * participant's, from the first of them to just past the last.
@@ -130,16 +141,14 @@ export type RunningWindow = { participant: string; from: string; until: string }
  * (`tried`, updated here), so a query running for a minute does not starve
  * everybody else's.
  */
-export function runningWindow(
-  items: readonly FeedItem[],
-  tried: Map<string, number>,
-  now: number,
-): RunningWindow | null {
+export function runningWindow(items: readonly FeedItem[], tried: RunningTries, now: number): RunningWindow | null {
+  const live = (item: FeedItem) => isRunning(item) && (tried.get(item.cursor)?.count ?? 0) < MAX_RUNNING_TRIES;
+
   let pick: FeedItem | undefined;
   let pickTried = Infinity;
   for (const item of items) {
-    if (!isRunning(item)) continue;
-    const last = tried.get(item.cursor) ?? -Infinity;
+    if (!live(item)) continue;
+    const last = tried.get(item.cursor)?.at ?? -Infinity;
     if (last < pickTried) {
       pick = item;
       pickTried = last;
@@ -150,8 +159,8 @@ export function runningWindow(
   let from = pick.at;
   let until = pick.at;
   for (const item of items) {
-    if (item.registrationId !== pick.registrationId || !isRunning(item)) continue;
-    tried.set(item.cursor, now);
+    if (item.registrationId !== pick.registrationId || !live(item)) continue;
+    tried.set(item.cursor, { at: now, count: (tried.get(item.cursor)?.count ?? 0) + 1 });
     if (item.at < from) from = item.at;
     if (item.at > until) until = item.at;
   }
