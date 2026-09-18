@@ -110,6 +110,16 @@ describe("the history", () => {
     expect(screen.getByText("+1 −1")).toBeInTheDocument();
   });
 
+  /** The numbers the eye reads in the margin are hidden from a screen reader; a changed line says its own. */
+  test("a changed line tells a screen reader which line it is", async () => {
+    renderTab();
+    await pick(t().notes, 0);
+
+    expect(screen.getByText(t().removed.replace("{n}", "2"))).toHaveClass("sr-only");
+    expect(screen.getByText(t().added.replace("{n}", "2"))).toHaveClass("sr-only");
+    expect(t().added).toContain("{n}");
+  });
+
   test("the first revision of a document is all new", async () => {
     renderTab();
     await pick(t().notes, 1);
