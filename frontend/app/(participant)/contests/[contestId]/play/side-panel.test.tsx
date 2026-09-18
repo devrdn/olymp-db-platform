@@ -260,6 +260,63 @@ test("each scrolling panel is the containing block for the hidden labels inside 
   }
 });
 
+/**
+ * jsdom lays nothing out, so this cannot measure the 54px of page scroll a
+ * real browser pass found at 1440, 1024 and 768px — the Notes tab pushed the
+ * strip past the panel's own width (`--pane-side`, clamped 8-32rem in
+ * pane-splitter.tsx), and with nothing to contain it that overflow bubbled
+ * up into the whole page's own scrollbar. What this proves is the two CSS
+ * facts that stop it regardless of how narrow the panel or how long the
+ * labels get:
+ *
+ * - the tablist itself scrolls horizontally rather than growing past its
+ *   box (`overflow-x-auto`) instead of spilling into whatever is outside it;
+ * - the element that contains it gives up flexbox's own floor on a flex
+ *   item's width (`min-w-0`) — without it, a flex item's *automatic* minimum
+ *   width is its content's min-content size, which four tab labels (longer
+ *   still in Russian) exceed at every width the divider can be dragged to.
+ */
+test("keeps the tab strip from widening the page at any pane width", () => {
+  render(
+    <SidePanel
+      storyBody={<p>A body in the stacks.</p>}
+      storyUnavailable={null}
+      contestId="c1"
+      questionEntries={[]}
+      initialNotes={{ body: "", updatedAt: null }}
+      dict={en}
+      locale="en"
+    />,
+  );
+
+  const tablist = screen.getByRole("tablist");
+  expect(tablist.className).toMatch(/(^|\s)overflow-x-auto(\s|$)/);
+  expect(tablist.parentElement?.className).toMatch(/(^|\s)min-w-0(\s|$)/);
+});
+
+// The active tab can be scrolled out of the strip's own view (the point of
+// the fix above) — selecting one, by pointer or by keyboard, has to bring it
+// back rather than leaving the participant looking at whichever tabs
+// happened to fit.
+test("scrolls the newly selected tab into view, since the strip may be scrolled past it", async () => {
+  // jsdom does not implement `scrollIntoView` at all — not even as a no-op —
+  // so there is nothing here for `vi.spyOn` to wrap; the mock has to be the
+  // property itself, put back afterward so no later test in this file sees it.
+  const scrollIntoView = vi.fn();
+  const original = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = scrollIntoView;
+  try {
+    show();
+
+    await userEvent.click(screen.getByRole("tab", { name: en.participant.play.workspace.tabs.notes }));
+
+    const notesTab = screen.getByRole("tab", { name: en.participant.play.workspace.tabs.notes });
+    expect(scrollIntoView.mock.instances).toContain(notesTab);
+  } finally {
+    HTMLElement.prototype.scrollIntoView = original;
+  }
+});
+
 describe("the side panel's table", () => {
   test("is read only once its tab is chosen, and shows whose row is whose", async () => {
     vi.mocked(fetchStandingsAction).mockResolvedValue({
