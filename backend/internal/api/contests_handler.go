@@ -540,11 +540,15 @@ func (h *ContestsHandler) byID(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
+	// A second authorisation after the one that admitted the request: the
+	// middleware keeps no decision to reuse, and the lookup is one indexed
+	// row. It only decides whether a tab is offered, so a failure to decide
+	// is logged and answered as "no" rather than costing the whole page —
+	// the monitoring routes make their own decision anyway.
 	may, err := h.mw.MayOnContest(r, rbac.PermissionContestMonitor, id)
 	if err != nil {
-		h.log.ErrorContext(r.Context(), "could not decide whether the caller may monitor the contest", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
-		return
+		h.log.WarnContext(r.Context(), "could not decide whether the caller may monitor the contest", "error", err)
+		may = false
 	}
 	// Every translation, not the negotiated one: staff are authoring them, and
 	// showing only one would make the others invisible in the editor.
