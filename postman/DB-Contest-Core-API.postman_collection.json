@@ -602,7 +602,7 @@
                 "{{contestId}}"
               ]
             },
-            "description": "The staff view: **every** translation, not the negotiated one — they are authoring them, and showing only one would make the others invisible in the editor.\n\nResponses: 200 `ContestResponse` · 403 `forbidden` (not staff on this contest) · 404 `not_found`"
+            "description": "The staff view: **every** translation, not the negotiated one — they are authoring them, and showing only one would make the others invisible in the editor.\n\n`may_monitor` (only here, not on the writes): whether the caller holds `contest.monitor` on this contest, decided as the `/monitor` routes decide it — the workspace offers its monitoring tab from it.\n\nResponses: 200 `ContestResponse` · 403 `forbidden` (not staff on this contest) · 404 `not_found`"
           },
           "response": []
         },

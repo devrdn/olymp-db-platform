@@ -36,6 +36,15 @@ type contestFixture struct {
 
 func newContestFixture(t *testing.T, permissions ...string) *contestFixture {
 	t.Helper()
+	return newContestFixtureDenying(t, "", permissions...)
+}
+
+// newContestFixtureDenying is newContestFixture with one permission refused
+// on every contest, whatever the role: the real authoriser cannot express a
+// contest role that sees a contest but may not monitor it, and a field that
+// reports the difference needs a test that can make it.
+func newContestFixtureDenying(t *testing.T, denied string, permissions ...string) *contestFixture {
+	t.Helper()
 
 	stores := conteststest.NewFixture()
 	stores.Users.GrantRole("staff", permissions...)
@@ -55,7 +64,7 @@ func newContestFixture(t *testing.T, permissions ...string) *contestFixture {
 
 	mw := auth.NewMiddleware(auth.MiddlewareConfig{
 		Sessions: sessions, Users: stores.Users,
-		Authorizer: rbac.New(contestRoles{stores}),
+		Authorizer: denying{inner: rbac.New(contestRoles{stores}), denied: denied},
 		Cookies:    auth.NewCookieWriter(false), Logger: log,
 	})
 
@@ -70,6 +79,19 @@ func newContestFixture(t *testing.T, permissions ...string) *contestFixture {
 		actor:    actor,
 		cookie:   &http.Cookie{Name: auth.SessionCookieName, Value: token},
 	}
+}
+
+// denying refuses one permission on every contest and asks inner about the rest.
+type denying struct {
+	inner  auth.Authorizer
+	denied string
+}
+
+func (d denying) Authorize(ctx context.Context, id rbac.Identity, permission string, contestID uuid.UUID) error {
+	if permission == d.denied {
+		return rbac.ErrForbidden
+	}
+	return d.inner.Authorize(ctx, id, permission, contestID)
 }
 
 // contestRoles resolves a contest role out of the in-memory staff store, so
@@ -198,6 +220,49 @@ func TestStaffSeeEveryTranslationOfTheirContest(t *testing.T) {
 	if !ok || len(translations) != 2 {
 		t.Errorf("translations = %v, want both languages", translations)
 	}
+}
+
+// The workspace offers its monitoring tab from this field: it is the one
+// authority on whether the viewer holds contest.monitor on this contest.
+func TestReadingAContestSaysWhetherTheViewerMayMonitorIt(t *testing.T) {
+	t.Run("the owner may", func(t *testing.T) {
+		f := newContestFixture(t)
+		c := f.ownedContest(t, contests.StatusDraft)
+
+		rec := f.do(http.MethodGet, "/contests/"+c.ID.String(), "")
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+		}
+		if got := decode(t, rec)["may_monitor"]; got != true {
+			t.Errorf("may_monitor = %v, want true", got)
+		}
+	})
+
+	t.Run("an administrator of every contest may", func(t *testing.T) {
+		f := newContestFixture(t, rbac.PermissionContestAdminAll)
+		c := f.stores.SeedContest(contests.StatusDraft)
+
+		rec := f.do(http.MethodGet, "/contests/"+c.ID.String(), "")
+
+		if got := decode(t, rec)["may_monitor"]; got != true {
+			t.Errorf("may_monitor = %v, want true", got)
+		}
+	})
+
+	t.Run("staff without the permission may not", func(t *testing.T) {
+		f := newContestFixtureDenying(t, rbac.PermissionContestMonitor)
+		c := f.ownedContest(t, contests.StatusDraft)
+
+		rec := f.do(http.MethodGet, "/contests/"+c.ID.String(), "")
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+		}
+		if got, ok := decode(t, rec)["may_monitor"]; !ok || got != false {
+			t.Errorf("may_monitor = %v (present %v), want false", got, ok)
+		}
+	})
 }
 
 func TestListingAnswersInTheRequestedLanguage(t *testing.T) {
