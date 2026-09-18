@@ -5,7 +5,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { ApiError } from "@/lib/api/client";
-import { fetchFeed, fetchRoster, MAX_FEED_PAGE, type FeedPage, type Roster } from "@/lib/api/monitor";
+import {
+  fetchFeed,
+  fetchRoster,
+  fetchTimeline,
+  MAX_FEED_PAGE,
+  type FeedPage,
+  type FeedParams,
+  type ReadOptions,
+  type Roster,
+} from "@/lib/api/monitor";
 
 import {
   appendNewer,
@@ -46,9 +55,27 @@ export type MonitorProblem = { kind: "forbidden" } | { kind: "tooOften"; seconds
 
 const NOBODY: ReadonlySet<string> = new Set();
 
+/** A stretch of time the feed is narrowed to: `from` inclusive, `until` exclusive, either open. */
+export type FeedRange = { from?: string; until?: string };
+
+const NO_KINDS: string[] = [];
+
+/** The range as read parameters, naming only the ends that are set. */
+function rangeParams(range: FeedRange): FeedRange {
+  return {
+    ...(range.from ? { from: range.from } : {}),
+    ...(range.until ? { until: range.until } : {}),
+  };
+}
+
 /**
  * The monitoring screen's live state: the participants table and the feed,
  * both asked again every five seconds while the tab is visible.
+ *
+ * One participant's page uses the same state with `participant` set: the
+ * feed is that participant's timeline, and without a `roster` there is no
+ * table to ask. `kinds` is the filter it opens with, and `setRange` narrows
+ * every read to a stretch of time.
  *
  * - **Hidden, nothing.** A hidden tab asks nothing; becoming visible asks at
  *   once, then keeps the cadence. Forty organisers' tabs in the background
@@ -67,18 +94,25 @@ const NOBODY: ReadonlySet<string> = new Set();
  */
 export function useMonitor({
   contestId,
+  participant,
   roster: initialRoster,
   feed: initialPage,
+  kinds: initialKinds = NO_KINDS,
 }: {
   contestId: string;
-  roster: Roster;
+  /** One participant's registration: the feed is their timeline. */
+  participant?: string;
+  /** The table to keep current; absent, no table is asked. */
+  roster?: Roster;
   feed: FeedPage;
+  kinds?: string[];
 }) {
   const router = useRouter();
-  const [rows, setRows] = useState(initialRoster.rows);
-  const [truncated, setTruncated] = useState(initialRoster.truncated);
+  const [rows, setRows] = useState(initialRoster?.rows ?? []);
+  const [truncated, setTruncated] = useState(initialRoster?.truncated ?? false);
   const [feed, setFeedState] = useState<FeedState>(() => initialFeed(initialPage));
-  const [kinds, setKindsState] = useState<string[]>([]);
+  const [kinds, setKindsState] = useState<string[]>(initialKinds);
+  const [range, setRangeState] = useState<FeedRange>({});
   const [problem, setProblem] = useState<MonitorProblem>(null);
   const [fresh, setFresh] = useState<ReadonlySet<string>>(NOBODY);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -87,6 +121,9 @@ export function useMonitor({
   // the effect that started them ran.
   const feedRef = useRef(feed);
   const kindsRef = useRef(kinds);
+  const rangeRef = useRef(range);
+  // Whether there is a table at all; fixed for the screen's life.
+  const withRoster = useRef(initialRoster !== undefined).current;
   // Bumped whenever the feed is replaced whole (a new filter, a jump back to
   // the latest): a read begun before that answers for a list that is gone.
   const generationRef = useRef(0);
@@ -104,6 +141,15 @@ export function useMonitor({
   // Every read is made under this, and it is aborted when the screen goes.
   // Filled by the polling effect, which owns its lifetime; null before it runs.
   const abortRef = useRef<AbortController | null>(null);
+
+  /** One read of the feed this screen shows: the contest's, or one participant's timeline. */
+  const read = useCallback(
+    (params: FeedParams, options: ReadOptions) =>
+      participant
+        ? fetchTimeline(contestId, participant, params, options)
+        : fetchFeed(contestId, params, options),
+    [contestId, participant],
+  );
 
   const setFeed = useCallback((next: FeedState) => {
     feedRef.current = next;
@@ -176,16 +222,15 @@ export function useMonitor({
     async (nextKinds: string[], gap = 0) => {
       const generation = ++generationRef.current;
       catchUpRef.current = { pages: 0, items: 0 };
-      const page = await fetchFeed(
-        contestId,
-        { kinds: nextKinds, limit: MAX_FEED_PAGE },
+      const page = await read(
+        { kinds: nextKinds, ...rangeParams(rangeRef.current), limit: MAX_FEED_PAGE },
         { signal: abortRef.current?.signal },
       );
       if (generation !== generationRef.current) return;
       triedRef.current.clear();
       setFeed(initialFeed(page, gap));
     },
-    [contestId, setFeed],
+    [read, setFeed],
   );
 
   /**
@@ -203,12 +248,11 @@ export function useMonitor({
     const signal = abortRef.current?.signal;
     const catchingUp = catchUpRef.current.pages > 0;
     try {
-      const feedRead = fetchFeed(
-        contestId,
-        { after: feedRef.current.newest, kinds: kindsNow, limit: MAX_FEED_PAGE },
+      const feedRead = read(
+        { after: feedRef.current.newest, kinds: kindsNow, ...rangeParams(rangeRef.current), limit: MAX_FEED_PAGE },
         { signal },
       );
-      if (!catchingUp) {
+      if (!catchingUp && withRoster) {
         const [roster] = await Promise.all([fetchRoster(contestId, { signal }), feedRead]);
         setRows((current) => mergeRoster(current, roster.rows));
         setTruncated(roster.truncated);
@@ -240,8 +284,7 @@ export function useMonitor({
       if (!catchingUp) {
         const window = runningWindow(feedRef.current.items, triedRef.current, Date.now());
         if (window) {
-          const refreshed = await fetchFeed(
-            contestId,
+          const refreshed = await read(
             {
               participant: window.participant,
               kinds: ["query"],
@@ -263,7 +306,7 @@ export function useMonitor({
     } catch (error: unknown) {
       return failed(error);
     }
-  }, [contestId, failed, light, reload, setFeed]);
+  }, [contestId, failed, light, read, reload, setFeed, withRoster]);
 
   // The chain below reads the poll through a ref, so that nothing a render
   // brings — a new router object, a new callback — restarts it: a restarted
@@ -333,7 +376,7 @@ export function useMonitor({
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [contestId]);
+  }, [contestId, participant]);
 
   /** Reads the newest page afresh, for a new filter or a jump back to the latest. */
   const restart = useCallback(
@@ -356,6 +399,16 @@ export function useMonitor({
     [restart],
   );
 
+  /** Narrows every read to a stretch of time, and reads its newest page afresh. */
+  const setRange = useCallback(
+    async (next: FeedRange) => {
+      rangeRef.current = next;
+      setRangeState(next);
+      await restart(kindsRef.current);
+    },
+    [restart],
+  );
+
   const toLatest = useCallback(() => restart(kindsRef.current), [restart]);
 
   const loadOlder = useCallback(async () => {
@@ -364,9 +417,13 @@ export function useMonitor({
     const generation = generationRef.current;
     setLoadingOlder(true);
     try {
-      const page = await fetchFeed(
-        contestId,
-        { before: current.items[0].cursor, kinds: kindsRef.current, limit: MAX_FEED_PAGE },
+      const page = await read(
+        {
+          before: current.items[0].cursor,
+          kinds: kindsRef.current,
+          ...rangeParams(rangeRef.current),
+          limit: MAX_FEED_PAGE,
+        },
         { signal: abortRef.current?.signal },
       );
       if (generation === generationRef.current) setFeed(prependOlder(feedRef.current, page));
@@ -375,7 +432,20 @@ export function useMonitor({
     } finally {
       setLoadingOlder(false);
     }
-  }, [contestId, failed, setFeed]);
+  }, [failed, read, setFeed]);
 
-  return { rows, truncated, feed, fresh, problem, kinds, setKinds, loadOlder, loadingOlder, toLatest };
+  return {
+    rows,
+    truncated,
+    feed,
+    fresh,
+    problem,
+    kinds,
+    setKinds,
+    range,
+    setRange,
+    loadOlder,
+    loadingOlder,
+    toLatest,
+  };
 }
