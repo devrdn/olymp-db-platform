@@ -291,9 +291,18 @@ func (w *Workspace) DeleteTab(ctx context.Context, registration, id uuid.UUID) e
 			return workspace.ErrLastTab
 		}
 
+		// The title comes from the row as it is deleted: a rename takes no
+		// workspace lock, so one committed while this waited for the row
+		// would make the title read above stale.
 		q := w.querier(ctx)
-		if _, err := q.Exec(ctx,
-			`DELETE FROM participant_sql_tabs WHERE id = $1 AND registration_id = $2`, id, registration); err != nil {
+		var title string
+		err = q.QueryRow(ctx,
+			`DELETE FROM participant_sql_tabs WHERE id = $1 AND registration_id = $2 RETURNING title`,
+			id, registration).Scan(&title)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return workspace.ErrTabNotFound
+		}
+		if err != nil {
 			return fmt.Errorf("delete a tab: %w", err)
 		}
 		if _, err := q.Exec(ctx, `
@@ -302,7 +311,7 @@ func (w *Workspace) DeleteTab(ctx context.Context, registration, id uuid.UUID) e
 			return fmt.Errorf("close the gap after a deleted tab: %w", err)
 		}
 		// Its revisions stay: they belong to the registration, not the tab.
-		return w.recordTab(ctx, registration, monitor.TabDeleted{TabID: id, Title: existing[at].Title})
+		return w.recordTab(ctx, registration, monitor.TabDeleted{TabID: id, Title: title})
 	})
 }
 
