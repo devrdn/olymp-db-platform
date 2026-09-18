@@ -9,6 +9,14 @@ vi.mock("@/lib/api/monitor", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api/monitor")>()),
   fetchRevision,
 }));
+// Every revision row formats its size once per render, so counting the calls
+// counts the rows that rendered.
+const { readableBytes } = vi.hoisted(() => ({ readableBytes: vi.fn() }));
+vi.mock("@/lib/format/bytes", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/format/bytes")>();
+  readableBytes.mockImplementation(actual.readableBytes);
+  return { ...actual, readableBytes };
+});
 
 import { CONTEST, REG } from "./test-fixtures";
 import { WorkspaceTab } from "./workspace-tab";
@@ -138,5 +146,24 @@ describe("the history", () => {
   test("says when nothing was saved yet", () => {
     renderTab({ ...workspace, revisions: [] });
     expect(screen.getByText(t().noHistory)).toBeInTheDocument();
+  });
+});
+
+describe("choosing among many revisions", () => {
+  /**
+   * The list can hold two thousand revisions; choosing one, or switching
+   * between the diff and the text, must not lay every row out again.
+   */
+  test("re-renders only the rows whose selection changed", async () => {
+    renderTab();
+    await pick(t().notes, 0);
+    readableBytes.mockClear();
+
+    await pick("Guests", 1);
+    expect(readableBytes).toHaveBeenCalledTimes(2);
+
+    readableBytes.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: t().body }));
+    expect(readableBytes).not.toHaveBeenCalled();
   });
 });

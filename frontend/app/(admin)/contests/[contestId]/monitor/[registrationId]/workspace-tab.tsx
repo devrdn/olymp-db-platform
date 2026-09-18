@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useId, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { ApiError } from "@/lib/api/client";
@@ -112,9 +112,18 @@ export function WorkspaceTab({
     return revision.body;
   };
 
-  const choose = async (group: DocumentHistory, index: number) => {
-    const revision = group.revisions[index];
-    const before = group.revisions[index + 1];
+  // Where each revision stands: its document's history and its place in it.
+  const positions = useMemo(() => {
+    const out = new Map<number, { group: DocumentHistory; index: number }>();
+    for (const group of history) group.revisions.forEach((revision, index) => out.set(revision.id, { group, index }));
+    return out;
+  }, [history]);
+
+  const choose = async (id: number) => {
+    const position = positions.get(id);
+    if (!position) return;
+    const revision = position.group.revisions[position.index];
+    const before = position.group.revisions[position.index + 1];
     latest.current = revision.id;
     setSelected({ id: revision.id, state: "loading" });
     try {
@@ -130,6 +139,15 @@ export function WorkspaceTab({
       setSelected({ id: revision.id, state: "failed", tooOften });
     }
   };
+
+  // The rows get one callback for the tab's life, reading the latest
+  // `choose` through a ref: a new callback per render would render every
+  // row of a list that can hold two thousand.
+  const chooseRef = useRef(choose);
+  useEffect(() => {
+    chooseRef.current = choose;
+  });
+  const onChoose = useCallback((id: number) => void chooseRef.current(id), []);
 
   return (
     <div className="flex min-w-0 flex-col gap-10">
@@ -181,7 +199,7 @@ export function WorkspaceTab({
                   key={group.document}
                   group={group}
                   selectedId={selected?.id}
-                  onChoose={choose}
+                  onChoose={onChoose}
                   t={t}
                   locale={locale}
                 />
@@ -240,11 +258,14 @@ export function WorkspaceTab({
       </section>
     </div>
   );
-
 }
 
-/** One document's revisions, newest first, each a button that chooses it. */
-function RevisionList({
+/**
+ * One document's revisions, newest first. Memoised, and each row with it:
+ * choosing a revision renders the row that was chosen and the row that no
+ * longer is, not the whole list.
+ */
+const RevisionList = memo(function RevisionList({
   group,
   selectedId,
   onChoose,
@@ -253,7 +274,7 @@ function RevisionList({
 }: {
   group: DocumentHistory;
   selectedId: number | undefined;
-  onChoose: (group: DocumentHistory, index: number) => void;
+  onChoose: (id: number) => void;
   t: WorkspaceDict;
   locale: string;
 }) {
@@ -263,31 +284,54 @@ function RevisionList({
         {group.label}
       </span>
       <ol className="flex flex-col">
-        {group.revisions.map((revision, index) => (
-          <li key={revision.id}>
-            <button
-              type="button"
-              aria-current={revision.id === selectedId ? "true" : undefined}
-              onClick={() => onChoose(group, index)}
-              title={`${formatMoment(revision.startedAt, { locale })} – ${formatMoment(revision.updatedAt, { locale })}`}
-              className={cn(
-                "w-full border-l-2 px-2 py-1 text-left font-mono text-label tabular-nums transition-colors duration-(--t-input) ease-standard",
-                revision.id === selectedId
-                  ? "border-ink text-ink"
-                  : "border-transparent text-ink-2 hover:border-line-2 hover:text-ink",
-              )}
-            >
-              {t.revision
-                .replace("{from}", formatTime(revision.startedAt, { locale }))
-                .replace("{to}", formatTime(revision.updatedAt, { locale }))
-                .replace("{size}", readableBytes(revision.size))}
-            </button>
-          </li>
+        {group.revisions.map((revision) => (
+          <RevisionRow
+            key={revision.id}
+            revision={revision}
+            selected={revision.id === selectedId}
+            onChoose={onChoose}
+            t={t}
+            locale={locale}
+          />
         ))}
       </ol>
     </div>
   );
-}
+});
+
+const RevisionRow = memo(function RevisionRow({
+  revision,
+  selected,
+  onChoose,
+  t,
+  locale,
+}: {
+  revision: RevisionInfo;
+  selected: boolean;
+  onChoose: (id: number) => void;
+  t: WorkspaceDict;
+  locale: string;
+}) {
+  return (
+    <li>
+      <button
+        type="button"
+        aria-current={selected ? "true" : undefined}
+        onClick={() => onChoose(revision.id)}
+        title={`${formatMoment(revision.startedAt, { locale })} – ${formatMoment(revision.updatedAt, { locale })}`}
+        className={cn(
+          "w-full border-l-2 px-2 py-1 text-left font-mono text-label tabular-nums transition-colors duration-(--t-input) ease-standard",
+          selected ? "border-ink text-ink" : "border-transparent text-ink-2 hover:border-line-2 hover:text-ink",
+        )}
+      >
+        {t.revision
+          .replace("{from}", formatTime(revision.startedAt, { locale }))
+          .replace("{to}", formatTime(revision.updatedAt, { locale }))
+          .replace("{size}", readableBytes(revision.size))}
+      </button>
+    </li>
+  );
+});
 
 /** Each diff line's mark, in words for a screen reader and as a sign for the eye. */
 const SIGN = { same: " ", added: "+", removed: "−" } as const;
