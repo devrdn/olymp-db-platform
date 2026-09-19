@@ -248,6 +248,7 @@ const ru = {
           answerWrong: "Вопрос {n}, попытка {attempt}: неверно",
           pageLeft: "Вне страницы {duration}",
           paste: "Вставка, символов: {chars}, куда: {target}",
+          pasteRepeated: "Вставка, символов: {chars}, куда: {target}, подряд раз: {count}",
           pasteTarget: { editor: "редактор SQL", answer: "поле ответа", notes: "заметки" },
           ipChanged: "Адрес сменился: {from} → {to}",
           parallelSession: "Вторая сессия с адреса {ip}",

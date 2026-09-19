@@ -142,7 +142,8 @@ export type FeedDetail =
   | { type: "answer"; questionOrd: number; attemptNo: number; value: string; correct: boolean; points: number }
   | { type: "audit"; ip?: string; userAgent?: string; reason?: string }
   | { type: "page_left"; awayMs: number }
-  | { type: "paste"; target: string; chars: number; text: string }
+  /** `count` is how many identical pastes in a row the line stands for: 1 for a single one. */
+  | { type: "paste"; target: string; chars: number; text: string; count: number }
   | { type: "ip_changed"; from: string; to: string }
   | { type: "parallel_session"; otherIp: string; userAgent: string }
   | { type: "tab"; title?: string; from?: string; to?: string }
@@ -212,8 +213,17 @@ const DATA_BY_KIND: Record<string, z.ZodType<FeedDetail, unknown>> = {
     .object({ away_ms: z.number() })
     .transform((raw): FeedDetail => ({ type: "page_left", awayMs: raw.away_ms })),
   paste: z
-    .object({ target: z.string(), chars: z.number(), text: z.string() })
-    .transform((raw): FeedDetail => ({ type: "paste", target: raw.target, chars: raw.chars, text: raw.text })),
+    .object({ target: z.string(), chars: z.number(), text: z.string(), count: z.number().optional() })
+    .transform(
+      (raw): FeedDetail => ({
+        type: "paste",
+        target: raw.target,
+        chars: raw.chars,
+        text: raw.text,
+        // The server folds identical pastes in a row into one and omits the count for a single paste.
+        count: Math.max(1, raw.count ?? 1),
+      }),
+    ),
   ip_changed: z
     .object({ from: z.string(), to: z.string() })
     .transform((raw): FeedDetail => ({ type: "ip_changed", from: raw.from, to: raw.to })),

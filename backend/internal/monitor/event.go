@@ -86,6 +86,13 @@ const (
 	MaxTabTitleRunes = 40
 	// MaxBatchEvents is the most events one batch from a browser may carry.
 	MaxBatchEvents = 50
+	// MaxBatchPastes is the most paste events one batch stores, after
+	// identical pastes in a row are folded into one (CleanBatch). Not the
+	// design's number: fifty pastes of 500 characters from each of a few
+	// participants every ten seconds would push the organiser's live feed
+	// past what one poll catches up on, and hide everybody else's lines. A
+	// person pastes a handful of different things in ten seconds, not ten.
+	MaxBatchPastes = 10
 )
 
 // The refusals. Each is a sentinel so an HTTP layer can name it
@@ -209,6 +216,10 @@ type Paste struct {
 	Chars int `json:"chars"`
 	// Text is the beginning of what was pasted, at most MaxPasteTextRunes.
 	Text string `json:"text"`
+	// Count is how many identical pastes in a row this one stands for, when
+	// CleanBatch folded more than one into it; zero (and absent from the
+	// JSON) for a single paste. Never taken from a browser.
+	Count int `json:"count,omitempty"`
 }
 
 // Kind implements Payload.
@@ -222,6 +233,11 @@ func (p Paste) normalize() (Payload, error) {
 	}
 	p.Chars = max(0, min(p.Chars, MaxPasteChars))
 	p.Text = clip(p.Text, MaxPasteTextRunes)
+	// A batch folds at most its own events into one.
+	p.Count = min(p.Count, MaxBatchEvents)
+	if p.Count < 2 {
+		p.Count = 0
+	}
 	return p, nil
 }
 

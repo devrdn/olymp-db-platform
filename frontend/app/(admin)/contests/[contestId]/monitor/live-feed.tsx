@@ -434,7 +434,9 @@ function Detail({ item, t, quiet }: { item: FeedItem; t: MonitorDict; quiet: boo
       const target = (d.pasteTarget as Record<string, string>)[detail.target] ?? detail.target;
       return (
         <p className={line} title={detail.text}>
-          {fill(d.paste, { chars: detail.chars, target })}
+          {detail.count > 1
+            ? fill(d.pasteRepeated, { chars: detail.chars, target, count: detail.count })
+            : fill(d.paste, { chars: detail.chars, target })}
         </p>
       );
     }

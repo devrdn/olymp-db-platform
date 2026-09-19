@@ -110,6 +110,7 @@ describe("the feed as the API sends it", () => {
         item("tab_renamed", { tab_id: REG, from: "Query 1", to: "Suspects" }, "g"),
         item("sign_in", { ip: "10.0.0.1", user_agent: "Chrome" }, "h"),
         item("started", {}, "i"),
+        item("paste", { target: "notes", chars: 3, text: "abc", count: 4 }, "j"),
       ],
       more: true,
       newest: "i",
@@ -128,7 +129,10 @@ describe("the feed as the API sends it", () => {
       "tab",
       "audit",
       "none",
+      "paste",
     ]);
+    expect(parsed.items[3].detail).toMatchObject({ type: "paste", chars: 812, count: 1 });
+    expect(parsed.items[9].detail).toMatchObject({ type: "paste", target: "notes", count: 4 });
     expect(parsed.items[0].detail).toMatchObject({ type: "query", id: 7, status: "running", durationMs: null });
     expect(parsed.items[1].detail).toMatchObject({ type: "answer", questionOrd: 2, correct: true });
     expect(parsed.items[5].detail).toMatchObject({ otherIp: "10.0.0.9", userAgent: "Firefox" });
