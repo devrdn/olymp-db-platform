@@ -1236,7 +1236,6 @@ const en = {
   participant: {
     console: {
       heading: "SQL console",
-      lede: "Your own copy of the contest's database. Nobody else sees what you do here.",
       label: "Your query",
       placeholder: "SELECT * FROM suspects",
       run: "Run",
