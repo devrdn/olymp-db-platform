@@ -334,6 +334,9 @@ describe("sending", () => {
     ["contest_finished", 409],
     ["contest_not_running", 409],
     ["not_a_participant", 403],
+    // The session ended: signed out, expired or revoked. Every later batch
+    // would be refused alike, and the screen is on its way to the sign-in page.
+    ["unauthenticated", 401],
   ])("%s stops the collector for good", async (code, status) => {
     const { send } = recorder(async () => {
       throw new ApiError(code, status, "closed");
