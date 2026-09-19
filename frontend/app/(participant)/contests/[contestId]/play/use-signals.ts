@@ -44,8 +44,9 @@ export type { PasteTarget, Signal };
  * - a batch refused as such (another 4xx) is dropped: sending it again would
  *   be refused again;
  * - once the contest has closed for the participant (409
- *   `contest_not_running` or `contest_finished`), or the participant is not
- *   on its roster (403 `not_a_participant`), the collector stops for good:
+ *   `contest_not_running` or `contest_finished`), the participant is not
+ *   on its roster (403 `not_a_participant`), or the session has ended (any
+ *   401), the collector stops for good:
  *   every later batch would be refused alike. `address_not_allowed` is not
  *   final — a laptop briefly on a hotspot is outside the network for a
  *   moment — so that batch is dropped like any other refusal and collecting
@@ -267,13 +268,15 @@ export class SignalCollector {
   private failed(batch: Signal[], error: unknown) {
     if (this.stopped) return;
     if (error instanceof ApiError) {
-      if (FINAL_CODES.has(error.code)) {
+      // A 401 is final too, whatever its code: the session has ended, and
+      // retrying would hold the batch and send it every ten seconds forever.
+      if (FINAL_CODES.has(error.code) || error.status === 401) {
         this.stop();
         return;
       }
       if (error.status === 429) {
         this.quietUntil = Date.now() + (error.retryAfterSeconds ?? SIGNAL_FLUSH_MS / 1000) * 1000;
-      } else if (error.status < 500 && error.status !== 401 && error.status !== 408) {
+      } else if (error.status < 500 && error.status !== 408) {
         // Refused as such: the same batch would be refused again.
         return;
       }
