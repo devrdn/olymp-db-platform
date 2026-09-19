@@ -7,8 +7,6 @@ DELETE FROM permissions WHERE code = 'contest.monitor';
 
 DROP INDEX IF EXISTS audit_log_failed_login_idx;
 
-DROP INDEX IF EXISTS query_log_registration_fingerprint_idx;
-
 -- The keyset indexes back to what migrations 000004 and 000030 made.
 DROP INDEX IF EXISTS submissions_registration_submitted_idx;
 CREATE INDEX submissions_registration_submitted_idx

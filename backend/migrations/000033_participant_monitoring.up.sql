@@ -65,12 +65,15 @@ CREATE INDEX workspace_revisions_document_idx ON workspace_revisions (registrati
 -- normalised away (internal/monitor.Fingerprint), both written by the same
 -- insert that journals the query. Rows written before this migration keep
 -- NULL in both.
+--
+-- The fingerprint has no index of its own. Its one reader, the roster's
+-- "the same query as another participant", reads each registration's whole
+-- range, which query_log_registration_executed_idx already serves; an index
+-- nobody reads would cost a write on every console insert and on every
+-- update of the row that is not HOT.
 ALTER TABLE query_log
     ADD COLUMN ip inet,
     ADD COLUMN sql_fingerprint bigint;
-
--- "The same query as another participant": fingerprints per registration.
-CREATE INDEX query_log_registration_fingerprint_idx ON query_log (registration_id, sql_fingerprint);
 
 -- The organiser's pages of one participant's queries and answers are keyset
 -- pages on (time, id): the feed, the timeline, the queries tab, and the
