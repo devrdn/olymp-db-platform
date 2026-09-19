@@ -3,6 +3,7 @@ package monitor_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,6 +93,78 @@ func TestCleanBatchIgnoresAClaimedTimeFarFromTheServers(t *testing.T) {
 	}
 	if kept[1].ClientAt != nil || kept[2].ClientAt != nil {
 		t.Fatalf("claims more than a day away were kept: %v, %v", kept[1].ClientAt, kept[2].ClientAt)
+	}
+}
+
+// A participant holding down paste stores one line with a count, not fifty:
+// consecutive pastes of the same text into the same place fold into the
+// first. A different paste, or anything else, between them ends the run.
+func TestCleanBatchFoldsRepeatedPastes(t *testing.T) {
+	contest, registration := uuid.New(), uuid.New()
+	at := func(p monitor.Payload) monitor.Event {
+		return monitor.Event{Contest: contest, Registration: registration, Payload: p}
+	}
+	a := monitor.Paste{Target: monitor.PasteEditor, Chars: 3, Text: "abc"}
+	b := monitor.Paste{Target: monitor.PasteAnswer, Chars: 3, Text: "abc"}
+	batch := []monitor.Event{
+		at(a), at(a), at(a), at(a),
+		at(b),
+		at(a),
+		at(monitor.PageLeft{AwayMs: 5000}),
+		at(a), at(a),
+		at(monitor.Paste{Target: monitor.PasteEditor, Chars: 300, Text: "abc"}), // longer, same beginning
+	}
+	kept, dropped, err := monitor.CleanBatch(batch, signalsNow)
+	if err != nil {
+		t.Fatalf("CleanBatch() = %v", err)
+	}
+	if dropped != 0 {
+		t.Errorf("dropped = %d, want 0: a folded paste is kept as a count", dropped)
+	}
+	counts := []int{4, 0, 0, -1, 2, 0}
+	if len(kept) != len(counts) {
+		t.Fatalf("kept %v, want %d events", kinds(kept), len(counts))
+	}
+	for i, want := range counts {
+		paste, ok := kept[i].Payload.(monitor.Paste)
+		if want < 0 {
+			if ok {
+				t.Errorf("event %d is a paste, want the absence", i)
+			}
+			continue
+		}
+		if !ok || paste.Count != want {
+			t.Errorf("event %d = %+v, want a paste counted %d", i, kept[i].Payload, want)
+		}
+	}
+}
+
+// However the pastes differ, a batch stores at most MaxBatchPastes of them;
+// the rest are dropped, and the other kinds beside them are kept.
+func TestCleanBatchKeepsAtMostTenPastes(t *testing.T) {
+	contest, registration := uuid.New(), uuid.New()
+	batch := make([]monitor.Event, 0, 21)
+	for i := range 20 {
+		batch = append(batch, monitor.Event{Contest: contest, Registration: registration,
+			Payload: monitor.Paste{Target: monitor.PasteEditor, Chars: i + 1, Text: strings.Repeat("x", i+1)}})
+	}
+	batch = append(batch, monitor.Event{Contest: contest, Registration: registration, Payload: monitor.PageLeft{AwayMs: 5000}})
+	kept, dropped, err := monitor.CleanBatch(batch, signalsNow)
+	if err != nil {
+		t.Fatalf("CleanBatch() = %v", err)
+	}
+	pastes := 0
+	for _, e := range kept {
+		if e.Kind() == monitor.KindPaste {
+			pastes++
+		}
+	}
+	if pastes != monitor.MaxBatchPastes || dropped != 20-monitor.MaxBatchPastes || kept[len(kept)-1].Kind() != monitor.KindPageLeft {
+		t.Errorf("kept %v (%d pastes), dropped %d; want the first %d pastes and the absence",
+			kinds(kept), pastes, dropped, monitor.MaxBatchPastes)
+	}
+	if first := kept[0].Payload.(monitor.Paste); first.Chars != 1 {
+		t.Errorf("the first paste kept is %+v, want the batch's first", first)
 	}
 }
 

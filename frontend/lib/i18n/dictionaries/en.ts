@@ -274,6 +274,7 @@ const en = {
           answerWrong: "Question {n}, attempt {attempt}: wrong",
           pageLeft: "Away from the page for {duration}",
           paste: "Pasted {chars} characters into {target}",
+          pasteRepeated: "Pasted {chars} characters into {target}, {count} times in a row",
           pasteTarget: { editor: "the SQL editor", answer: "an answer", notes: "the notes" },
           ipChanged: "Address changed: {from} → {to}",
           parallelSession: "A second session from {ip}",

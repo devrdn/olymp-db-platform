@@ -46,6 +46,12 @@ func SignalRetryAfter() time.Duration { return signalWindow }
 // The kept events come out normalised (Event.Normalize), in the order given,
 // with a claimed time more than MaxClaimSkew away from now removed.
 //
+// Pastes are bounded once more, so that one participant cannot fill the
+// organiser's feed: a paste identical to the one kept just before it — the
+// same target, text and length — is folded into that one as its Count rather
+// than stored again, and past MaxBatchPastes kept pastes the rest are
+// dropped. Folded pastes are not counted as dropped; they are still there.
+//
 // The one refusal is the batch's size, checked before any event is looked
 // at: ErrBatchTooLarge.
 func CleanBatch(events []Event, now time.Time) (kept []Event, dropped int, err error) {
@@ -53,6 +59,7 @@ func CleanBatch(events []Event, now time.Time) (kept []Event, dropped int, err e
 		return nil, 0, err
 	}
 	kept = make([]Event, 0, len(events))
+	pastes := 0
 	for _, event := range events {
 		if !event.Kind().FromBrowser() {
 			dropped++
@@ -66,9 +73,35 @@ func CleanBatch(events []Event, now time.Time) (kept []Event, dropped int, err e
 		if clean.ClientAt != nil && clean.ClientAt.Sub(now).Abs() > MaxClaimSkew {
 			clean.ClientAt = nil
 		}
+		if paste, ok := clean.Payload.(Paste); ok {
+			if foldPaste(kept, paste) {
+				continue
+			}
+			if pastes == MaxBatchPastes {
+				dropped++
+				continue
+			}
+			pastes++
+		}
 		kept = append(kept, clean)
 	}
 	return kept, dropped, nil
+}
+
+// foldPaste counts paste into the last kept event when that is the same
+// paste, and reports whether it did. The count starts at zero for a single
+// paste (Paste.Count), so the first fold makes it two.
+func foldPaste(kept []Event, paste Paste) bool {
+	if len(kept) == 0 {
+		return false
+	}
+	last, ok := kept[len(kept)-1].Payload.(Paste)
+	if !ok || last.Target != paste.Target || last.Text != paste.Text || last.Chars != paste.Chars {
+		return false
+	}
+	last.Count = max(last.Count, 1) + 1
+	kept[len(kept)-1].Payload = last
+	return true
 }
 
 // Limiter is the slice of auth.Limiter the batch throttle needs.

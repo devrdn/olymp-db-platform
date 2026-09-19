@@ -109,7 +109,9 @@ WITH regs AS (
     CROSS JOIN LATERAL (
         SELECT count(*) FILTER (WHERE kind = 'page_left') AS page_left,
                COALESCE(sum((payload->>'away_ms')::bigint) FILTER (WHERE kind = 'page_left'), 0) AS away_ms,
-               count(*) FILTER (WHERE kind = 'paste') AS pastes,
+               -- A paste folded from identical ones in a row (monitor.CleanBatch)
+               -- counts as all of them.
+               COALESCE(sum(COALESCE((payload->>'count')::bigint, 1)) FILTER (WHERE kind = 'paste'), 0) AS pastes,
                count(*) FILTER (WHERE kind = 'paste'
                                   AND payload->>'target' IN ('editor', 'answer')
                                   AND (payload->>'chars')::bigint > $3) AS large_pastes,
