@@ -1157,7 +1157,6 @@ const ru = {
   participant: {
     console: {
       heading: "SQL-консоль",
-      lede: "Ваша собственная копия базы олимпиады. Что вы здесь делаете, не видит никто.",
       label: "Ваш запрос",
       placeholder: "SELECT * FROM suspects",
       run: "Выполнить",

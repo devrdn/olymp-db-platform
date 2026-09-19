@@ -1159,7 +1159,6 @@ const ro = {
   participant: {
     console: {
       heading: "Consolă SQL",
-      lede: "Copia dumneavoastră a bazei olimpiadei. Nimeni altcineva nu vede ce faceți aici.",
       label: "Interogarea dumneavoastră",
       placeholder: "SELECT * FROM suspects",
       run: "Executați",
