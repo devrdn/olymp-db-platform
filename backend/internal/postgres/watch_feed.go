@@ -28,9 +28,10 @@ import (
 //
 // Sign-ins and sign-outs are the participant's account's own audit entries
 // (audit_log (actor_id, created_at)), failed sign-ins the entries naming its
-// login (audit_log_failed_login_idx), both only since the registration was
-// created: an account's sign-ins before it joined the contest are not the
-// contest's business. Disqualifications are the contest's own entries
+// login (audit_log_failed_login_idx), both only within the participant's
+// part in the contest, give or take monitor.SignInGrace, and never before
+// they registered: an account's sign-ins outside it are not the contest's
+// business. Disqualifications are the contest's own entries
 // (audit_log_entity_idx).
 func (w *Watch) Feed(ctx context.Context, q monitor.FeedQuery) (monitor.FeedPage, error) {
 	q, err := q.Normalize()
@@ -342,8 +343,17 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 	bounds, dir := feedBounds(&a, q, monitor.SourceAudit, "a.created_at", "a.id", "bigint")
 	limit := a.add(q.Limit + 1)
 	// A participant's own sign-ins, sign-outs and failed sign-ins count from
-	// their registration to monitor.SignInGrace past the end of their part in
-	// the contest: their finish; else their own deadline under individual
+	// monitor.SignInGrace before the start of their part in the contest to
+	// monitor.SignInGrace past its end.
+	//
+	// The start is their own start under individual timing, else the
+	// contest's start, and never earlier than their registration. An
+	// invite-only contest can enrol a student weeks ahead, and those weeks
+	// of sign-ins, addresses and browsers — failed sign-ins carrying
+	// strangers' addresses among them — are not the contest's business. With
+	// no start known, the registration alone is the lower bound.
+	//
+	// The end is their finish; else their own deadline under individual
 	// timing — the start plus the duration, or the contest's end when that
 	// comes first, contests.Deadline's formula — else the contest's end.
 	// With none of them known, up to now. That leaves one case unbounded:
@@ -351,19 +361,26 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 	// no end. They have no deadline to measure from — and, never having
 	// started, nothing of theirs in the contest but these sign-ins, which is
 	// what an organiser asking why they never began wants to see.
+	const participantStart = `CASE WHEN c.timing = 'individual'
+		      THEN COALESCE(r.started_at, c.starts_at) ELSE c.starts_at END`
 	const participantEnd = `COALESCE(r.finished_at,
 		      CASE WHEN c.timing = 'individual'
 		           THEN LEAST(r.started_at + make_interval(mins => c.duration_min), c.ends_at) END,
 		      c.ends_at)`
 	// Built on first use: a parameter no branch names cannot be typed.
-	var untilSQL string
-	until := func() string {
-		if untilSQL == "" {
-			untilSQL = ` AND (` + participantEnd + ` IS NULL
-		      OR a.created_at < ` + participantEnd + ` + make_interval(secs => ` +
-				a.add(monitor.SignInGrace.Seconds()) + `))`
+	// GREATEST skips a NULL, so a contest with no start leaves the
+	// registration as the bound.
+	var windowSQL string
+	window := func() string {
+		if windowSQL == "" {
+			grace := a.add(monitor.SignInGrace.Seconds())
+			windowSQL = `
+		      AND a.created_at >= GREATEST(r.created_at,
+		          ` + participantStart + ` - make_interval(secs => ` + grace + `))
+		      AND (` + participantEnd + ` IS NULL
+		      OR a.created_at < ` + participantEnd + ` + make_interval(secs => ` + grace + `))`
 		}
-		return untilSQL
+		return windowSQL
 	}
 	// Each branch is its own index range with its own LIMIT, and the union
 	// is cut once more.
@@ -382,8 +399,7 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 		JOIN contests c ON c.id = r.contest_id
 		CROSS JOIN LATERAL (
 		    SELECT a.* FROM audit_log a
-		    WHERE a.actor_id = r.user_id AND a.action = ANY(`+a.add(sessionActions)+`::text[])
-		      AND a.created_at >= r.created_at`+until()+bounds+`
+		    WHERE a.actor_id = r.user_id AND a.action = ANY(`+a.add(sessionActions)+`::text[])`+window()+bounds+`
 		    ORDER BY a.created_at `+dir+`, a.id `+dir+`
 		    LIMIT `+limit+`
 		) a
@@ -406,8 +422,7 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 		CROSS JOIN LATERAL (
 		    SELECT a.* FROM audit_log a
 		    WHERE a.action = '`+audit.ActionAuthLoginFailed+`'
-		      AND lower(a.payload->>'login') = lower(u.login)
-		      AND a.created_at >= r.created_at`+until()+bounds+`
+		      AND lower(a.payload->>'login') = lower(u.login)`+window()+bounds+`
 		    ORDER BY a.created_at `+dir+`, a.id `+dir+`
 		    LIMIT `+limit+`
 		) a

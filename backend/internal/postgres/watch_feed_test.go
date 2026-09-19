@@ -318,6 +318,70 @@ func TestSignInsOutsideTheContestAreNotInItsFeed(t *testing.T) {
 	})
 }
 
+// Registering weeks ahead does not open the weeks before the contest: a
+// participant's sign-ins count from monitor.SignInGrace before its start (or
+// their own start under individual timing), and only from their registration
+// when the contest has no start at all.
+func TestSignInsBeforeTheContestAreNotInItsFeed(t *testing.T) {
+	cases := map[string]struct {
+		timing    string
+		startsAt  *time.Duration
+		startedAt *time.Duration
+		shown     []time.Duration
+	}{
+		"a fixed contest": {timing: "fixed", startsAt: ptrDuration(0),
+			shown: []time.Duration{-30 * time.Minute, -10 * time.Minute, time.Minute}},
+		"an individual participant who started": {timing: "individual", startsAt: ptrDuration(-5 * time.Hour),
+			startedAt: ptrDuration(0), shown: []time.Duration{-30 * time.Minute, -10 * time.Minute, time.Minute}},
+		"an individual participant who never started": {timing: "individual", startsAt: ptrDuration(0),
+			shown: []time.Duration{-30 * time.Minute, -10 * time.Minute, time.Minute}},
+		"a contest with no start": {timing: "fixed",
+			shown: []time.Duration{-20 * 24 * time.Hour, -10 * 24 * time.Hour, -2 * time.Hour, -30 * time.Minute, -10 * time.Minute, time.Minute}},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			withTx(t, func(ctx context.Context) {
+				f := newWatchFixture(t, ctx)
+				reg, user := f.participant("ahead")
+				f.exec(`UPDATE contests SET timing = $2, duration_min = CASE WHEN $2 = 'individual' THEN 180 END WHERE id = $1`,
+					f.contest, c.timing)
+				if c.startsAt != nil {
+					f.exec(`UPDATE contests SET starts_at = $2 WHERE id = $1`, f.contest, f.at(*c.startsAt))
+				}
+				f.exec(`UPDATE registrations SET created_at = $2 WHERE id = $1`, reg, f.at(-30*24*time.Hour))
+				if c.startedAt != nil {
+					f.exec(`UPDATE registrations SET started_at = $2, status = 'active' WHERE id = $1`, reg, f.at(*c.startedAt))
+				}
+				var login string
+				if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT login FROM users WHERE id = $1`, user).Scan(&login); err != nil {
+					t.Fatal(err)
+				}
+				for _, at := range []time.Duration{-20 * 24 * time.Hour, -2 * time.Hour, -30 * time.Minute, time.Minute} {
+					f.exec(`INSERT INTO audit_log (actor_id, action, entity, entity_id, ip, created_at)
+					        VALUES ($1::uuid, 'auth.login', 'user', $1::uuid::text, '192.0.2.1', $2)`, user, f.at(at))
+				}
+				for _, at := range []time.Duration{-10 * 24 * time.Hour, -10 * time.Minute} {
+					f.exec(`INSERT INTO audit_log (action, entity, payload, ip, created_at)
+					        VALUES ('auth.login_failed', 'user', jsonb_build_object('login', $1::text), '198.51.100.7', $2)`, login, f.at(at))
+				}
+				items := readFeed(t, ctx, monitor.FeedQuery{Contest: f.contest, Limit: monitor.MaxFeedPage,
+					Kinds: []string{monitor.FeedSignIn, monitor.FeedSignInFailed}}).Items
+				var at []time.Time
+				for _, item := range items {
+					at = append(at, item.At)
+				}
+				ok := len(at) == len(c.shown)
+				for i := 0; ok && i < len(at); i++ {
+					ok = at[i].Equal(f.at(c.shown[i]))
+				}
+				if !ok {
+					t.Errorf("sign-ins shown at %v, want at %v past the base", at, c.shown)
+				}
+			})
+		})
+	}
+}
+
 // One participant's disqualification is found however many of the others'
 // come after it: the limit applies to theirs alone.
 func TestATimelineFindsItsDisqualificationAmongOthers(t *testing.T) {
