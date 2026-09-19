@@ -203,8 +203,10 @@ CREATE INDEX workspace_revisions_document_idx ON workspace_revisions (registrati
   регистра), как у другого участника этой олимпиады, со статусом `ok`, и не
   короче 60 символов.
   - Считается по хешу нормализованного текста.
-  - Новая колонка `query_log.sql_fingerprint bigint` с индексом
-    `(registration_id, sql_fingerprint)`, пишется при вставке.
+  - Новая колонка `query_log.sql_fingerprint bigint`, пишется при вставке.
+    Своего индекса у неё нет: отметка читает весь диапазон регистрации по
+    `query_log (registration_id, executed_at, id)`, а лишний индекс стоил бы
+    записи на каждую вставку консоли.
 
 Пороги — константы в коде с комментарием, не настройки.
 
@@ -258,8 +260,7 @@ CREATE INDEX workspace_revisions_document_idx ON workspace_revisions (registrati
 - **Индексы** добавляются в той же миграции, что и таблицы (правило 7):
   - `participant_events (registration_id, id)`;
   - `participant_events (contest_id, id)`;
-  - `workspace_revisions (registration_id, document, id)`;
-  - `query_log (registration_id, sql_fingerprint)`.
+  - `workspace_revisions (registration_id, document, id)`.
 - **Проверка.** Нагрузочная проверка на `cmd/consoleload` с 40 участниками:
   время запроса консоли не должно заметно вырасти.
 

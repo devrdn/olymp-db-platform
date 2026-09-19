@@ -70,11 +70,11 @@ func scratchDatabase(t *testing.T) string {
 }
 
 // monitoringSchema is which of the monitoring objects exist in a database:
-// the two tables, the two query_log columns, their index, and the
+// the two tables and their indexes, the two query_log columns, and the
 // contest.monitor permission with its grants.
 type monitoringSchema struct {
-	events, revisions, ip, fingerprint, fingerprintIndex, failedLoginIndex, keysetIndexes bool
-	permission                                                                            bool
+	events, revisions, ip, fingerprint, eventIndexes, failedLoginIndex, keysetIndexes bool
+	permission                                                                        bool
 	// grants is how many roles hold contest.monitor.
 	grants int
 	// mismatched is how many roles hold exactly one of contest.view and
@@ -103,7 +103,10 @@ func readMonitoringSchema(t *testing.T, dsn string) monitoringSchema {
 		               WHERE table_name = 'query_log' AND column_name = 'ip' AND data_type = 'inet'),
 		       EXISTS (SELECT 1 FROM information_schema.columns
 		               WHERE table_name = 'query_log' AND column_name = 'sql_fingerprint' AND data_type = 'bigint'),
-		       to_regclass('query_log_registration_fingerprint_idx') IS NOT NULL
+		       -- No index on query_log's fingerprint: its one reader reads a
+		       -- registration's whole range, and every console insert would pay
+		       -- for it.
+		       to_regclass('query_log_registration_fingerprint_idx') IS NULL
 		       AND to_regclass('participant_events_contest_time_idx') IS NOT NULL
 		       AND to_regclass('participant_events_registration_time_idx') IS NOT NULL
 		       AND to_regclass('participant_events_contest_idx') IS NULL,
@@ -125,7 +128,7 @@ func readMonitoringSchema(t *testing.T, dsn string) monitoringSchema {
 		             EXCEPT
 		             SELECT rp.role_id FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id
 		             WHERE p.code = 'contest.view')) AS differ)`).
-		Scan(&s.events, &s.revisions, &s.ip, &s.fingerprint, &s.fingerprintIndex, &s.failedLoginIndex, &s.keysetIndexes, &s.permission, &s.grants, &s.mismatched)
+		Scan(&s.events, &s.revisions, &s.ip, &s.fingerprint, &s.eventIndexes, &s.failedLoginIndex, &s.keysetIndexes, &s.permission, &s.grants, &s.mismatched)
 	if err != nil {
 		t.Fatalf("read the schema: %v", err)
 	}
@@ -157,7 +160,7 @@ func TestTheMonitoringMigrationRollsBackAndForward(t *testing.T) {
 		t.Fatalf("migrate to 32: %v", err)
 	}
 	down := readMonitoringSchema(t, dsn)
-	if down.events || down.revisions || down.ip || down.fingerprint || down.fingerprintIndex || down.failedLoginIndex || down.keysetIndexes || down.permission || down.grants != 0 {
+	if down.events || down.revisions || down.ip || down.fingerprint || down.eventIndexes || down.failedLoginIndex || down.keysetIndexes || down.permission || down.grants != 0 {
 		t.Fatalf("after rolling back 000033 something is left: %+v", down)
 	}
 
@@ -165,7 +168,7 @@ func TestTheMonitoringMigrationRollsBackAndForward(t *testing.T) {
 		t.Fatalf("migrate to 33: %v", err)
 	}
 	up := readMonitoringSchema(t, dsn)
-	if !up.events || !up.revisions || !up.ip || !up.fingerprint || !up.fingerprintIndex || !up.failedLoginIndex || !up.keysetIndexes || !up.permission {
+	if !up.events || !up.revisions || !up.ip || !up.fingerprint || !up.eventIndexes || !up.failedLoginIndex || !up.keysetIndexes || !up.permission {
 		t.Fatalf("after applying 000033 something is missing: %+v", up)
 	}
 	// contest.monitor is held by exactly the roles that hold contest.view.
