@@ -145,6 +145,8 @@ func TestWatchRosterCountsWhatEachParticipantDid(t *testing.T) {
 		f.answer(busy, f.question, 2, true, f.at(6*time.Minute))
 		f.event(busy, monitor.PageLeft{AwayMs: 1500}, f.at(7*time.Minute))
 		f.event(busy, monitor.PageLeft{AwayMs: 2500}, f.at(8*time.Minute))
+		// Three identical pastes in a row, folded into one event, count as three.
+		f.event(busy, monitor.Paste{Target: monitor.PasteNotes, Chars: 2, Text: "hi", Count: 3}, f.at(8*time.Minute+30*time.Second))
 		f.event(busy, monitor.Paste{Target: monitor.PasteNotes, Chars: 5, Text: "hello"}, f.at(9*time.Minute))
 
 		roster, err := NewWatch(testPool).Roster(ctx, f.contest, 10)
@@ -162,8 +164,8 @@ func TestWatchRosterCountsWhatEachParticipantDid(t *testing.T) {
 		if got.Correct != 1 || got.Wrong != 1 {
 			t.Errorf("answers = %d correct, %d wrong, want 1 and 1", got.Correct, got.Wrong)
 		}
-		if got.PageLeft != 2 || got.AwayMs != 4000 || got.Pastes != 1 {
-			t.Errorf("absences = %d for %d ms, pastes = %d, want 2, 4000, 1", got.PageLeft, got.AwayMs, got.Pastes)
+		if got.PageLeft != 2 || got.AwayMs != 4000 || got.Pastes != 4 {
+			t.Errorf("absences = %d for %d ms, pastes = %d, want 2, 4000, 4", got.PageLeft, got.AwayMs, got.Pastes)
 		}
 		if got.LastActivity == nil || !got.LastActivity.Equal(f.at(9*time.Minute)) {
 			t.Errorf("last activity = %v, want the paste's time", got.LastActivity)

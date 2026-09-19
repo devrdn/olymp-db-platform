@@ -71,7 +71,7 @@ describe("what each line says", () => {
         withDetail("a", "query", { type: "query", id: 1, sql: "SELECT *\nFROM guests", sqlTruncated: false, status: "error", error: "no such table", durationMs: 4, rowCount: null }),
         withDetail("b", "answer", { type: "answer", questionOrd: 2, attemptNo: 3, value: "42", correct: true, points: 5 }),
         withDetail("c", "page_left", { type: "page_left", awayMs: 95_000 }),
-        withDetail("d", "paste", { type: "paste", target: "editor", chars: 812, text: "SELECT" }),
+        withDetail("d", "paste", { type: "paste", target: "editor", chars: 812, text: "SELECT", count: 1 }),
         withDetail("e", "ip_changed", { type: "ip_changed", from: "10.0.0.1", to: "10.0.0.2" }),
         withDetail("f", "parallel_session", { type: "parallel_session", otherIp: "10.0.0.9", userAgent: "Firefox" }),
         withDetail("g", "sign_in", { type: "audit", ip: "10.0.0.1" }),
@@ -94,6 +94,19 @@ describe("what each line says", () => {
       "href",
       `/contests/${CONTEST}/monitor/a`,
     );
+  });
+
+  /** Identical pastes in a row arrive folded into one line; the line says how many they were. */
+  test("says how many times a folded paste was repeated", () => {
+    const d = dict.workspace.monitor.feed.describe;
+    renderFeed(state([withDetail("a", "paste", { type: "paste", target: "notes", chars: 3, text: "abc", count: 4 })]));
+    const list = screen.getByRole("list", { name: dict.workspace.monitor.feed.heading });
+
+    expect(
+      within(list).getByText(
+        d.pasteRepeated.replace("{chars}", "3").replace("{target}", d.pasteTarget.notes).replace("{count}", "4"),
+      ),
+    ).toBeInTheDocument();
   });
 
   /** The server creates every participant's first SQL tab; that line is noise beside the rest. */

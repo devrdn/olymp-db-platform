@@ -248,6 +248,7 @@ const ro = {
           answerWrong: "Întrebarea {n}, încercarea {attempt}: greșit",
           pageLeft: "În afara paginii {duration}",
           paste: "Lipire de {chars} caractere în {target}",
+          pasteRepeated: "Lipire de {chars} caractere în {target}, de {count} ori la rând",
           pasteTarget: { editor: "editorul SQL", answer: "un răspuns", notes: "notițe" },
           ipChanged: "Adresa s-a schimbat: {from} → {to}",
           parallelSession: "A doua sesiune de la {ip}",

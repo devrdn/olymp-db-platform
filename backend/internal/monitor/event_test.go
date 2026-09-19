@@ -198,10 +198,22 @@ func TestOnlyABrowserSignalKeepsTheTimeTheBrowserClaimed(t *testing.T) {
 	}
 }
 
+// A paste's repeat count is at most a batch's worth, and a count of one is
+// no count at all.
+func TestAPasteRepeatCountIsBounded(t *testing.T) {
+	for given, want := range map[int]int{-3: 0, 1: 0, 2: 2, monitor.MaxBatchEvents + 1: monitor.MaxBatchEvents} {
+		got := normalized(t, event(monitor.Paste{Target: monitor.PasteEditor, Count: given}))
+		if count := got.Payload.(monitor.Paste).Count; count != want {
+			t.Errorf("a repeat count of %d became %d, want %d", given, count, want)
+		}
+	}
+}
+
 func TestPayloadsMarshalToTheDesignedFields(t *testing.T) {
 	for want, payload := range map[string]monitor.Payload{
 		`{"away_ms":5000}`:                                                      monitor.PageLeft{AwayMs: 5000},
 		`{"target":"answer","chars":3,"text":"abc"}`:                            monitor.Paste{Target: monitor.PasteAnswer, Chars: 3, Text: "abc"},
+		`{"target":"editor","chars":3,"text":"abc","count":4}`:                  monitor.Paste{Target: monitor.PasteEditor, Chars: 3, Text: "abc", Count: 4},
 		`{"from":"192.0.2.1","to":"2001:db8::1"}`:                               monitor.IPChanged{From: netip.MustParseAddr("192.0.2.1"), To: netip.MustParseAddr("2001:db8::1")},
 		`{"other_ip":"192.0.2.9","user_agent":"Firefox"}`:                       monitor.ParallelSession{OtherIP: netip.MustParseAddr("192.0.2.9"), UserAgent: "Firefox"},
 		`{"tab_id":"00000000-0000-0000-0000-000000000001","title":"a"}`:         monitor.TabCreated{TabID: uuid.MustParse("00000000-0000-0000-0000-000000000001"), Title: "a"},
