@@ -109,8 +109,8 @@ const FeedSettle = 2 * time.Second
 // own finish, when they finished first — their sign-ins are still the
 // contest's business: signing back in to read a result belongs to it, the
 // next week's lecture does not. It bounds them from below the same way:
-// from this long before the contest's start (or the participant's own, under
-// individual timing), and never before their registration — signing in to
+// from this long before the contest's start (or, when the contest has none,
+// the participant's own), and never before their registration — signing in to
 // check the machine works belongs to the contest, the weeks between an
 // early enrolment and the day do not.
 const SignInGrace = time.Hour
