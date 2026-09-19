@@ -346,12 +346,14 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 	// monitor.SignInGrace before the start of their part in the contest to
 	// monitor.SignInGrace past its end.
 	//
-	// The start is their own start under individual timing, else the
-	// contest's start, and never earlier than their registration. An
+	// The start is the contest's own start whenever it has one, in either
+	// timing: under individual timing a participant who starts late signed
+	// in after the window opened for a reason the organiser may want to see.
+	// Without a contest start it is their own start, else their
+	// registration, and it is never earlier than the registration. An
 	// invite-only contest can enrol a student weeks ahead, and those weeks
 	// of sign-ins, addresses and browsers — failed sign-ins carrying
-	// strangers' addresses among them — are not the contest's business. With
-	// no start known, the registration alone is the lower bound.
+	// strangers' addresses among them — are not the contest's business.
 	//
 	// The end is their finish; else their own deadline under individual
 	// timing — the start plus the duration, or the contest's end when that
@@ -361,15 +363,12 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 	// no end. They have no deadline to measure from — and, never having
 	// started, nothing of theirs in the contest but these sign-ins, which is
 	// what an organiser asking why they never began wants to see.
-	const participantStart = `CASE WHEN c.timing = 'individual'
-		      THEN COALESCE(r.started_at, c.starts_at) ELSE c.starts_at END`
+	const participantStart = `COALESCE(c.starts_at, r.started_at, r.created_at)`
 	const participantEnd = `COALESCE(r.finished_at,
 		      CASE WHEN c.timing = 'individual'
 		           THEN LEAST(r.started_at + make_interval(mins => c.duration_min), c.ends_at) END,
 		      c.ends_at)`
 	// Built on first use: a parameter no branch names cannot be typed.
-	// GREATEST skips a NULL, so a contest with no start leaves the
-	// registration as the bound.
 	var windowSQL string
 	window := func() string {
 		if windowSQL == "" {

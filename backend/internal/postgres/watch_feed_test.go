@@ -319,9 +319,10 @@ func TestSignInsOutsideTheContestAreNotInItsFeed(t *testing.T) {
 }
 
 // Registering weeks ahead does not open the weeks before the contest: a
-// participant's sign-ins count from monitor.SignInGrace before its start (or
-// their own start under individual timing), and only from their registration
-// when the contest has no start at all.
+// participant's sign-ins count from monitor.SignInGrace before the contest's
+// start, in either timing, so a late individual start still shows what they
+// did once the window opened. Only without a contest start does their own
+// start, and then their registration, bound them.
 func TestSignInsBeforeTheContestAreNotInItsFeed(t *testing.T) {
 	cases := map[string]struct {
 		timing    string
@@ -331,12 +332,14 @@ func TestSignInsBeforeTheContestAreNotInItsFeed(t *testing.T) {
 	}{
 		"a fixed contest": {timing: "fixed", startsAt: ptrDuration(0),
 			shown: []time.Duration{-30 * time.Minute, -10 * time.Minute, time.Minute}},
-		"an individual participant who started": {timing: "individual", startsAt: ptrDuration(-5 * time.Hour),
-			startedAt: ptrDuration(0), shown: []time.Duration{-30 * time.Minute, -10 * time.Minute, time.Minute}},
+		// The window opened five hours before they started: a sign-in after it
+		// opened is the contest's, one hours before it is not.
+		"an individual participant who started late": {timing: "individual", startsAt: ptrDuration(-5 * time.Hour),
+			startedAt: ptrDuration(0), shown: []time.Duration{-2 * time.Hour, -30 * time.Minute, -10 * time.Minute, time.Minute}},
 		"an individual participant who never started": {timing: "individual", startsAt: ptrDuration(0),
 			shown: []time.Duration{-30 * time.Minute, -10 * time.Minute, time.Minute}},
 		"a contest with no start": {timing: "fixed",
-			shown: []time.Duration{-20 * 24 * time.Hour, -10 * 24 * time.Hour, -2 * time.Hour, -30 * time.Minute, -10 * time.Minute, time.Minute}},
+			shown: []time.Duration{-20 * 24 * time.Hour, -10 * 24 * time.Hour, -7 * time.Hour, -2 * time.Hour, -30 * time.Minute, -10 * time.Minute, time.Minute}},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -356,7 +359,7 @@ func TestSignInsBeforeTheContestAreNotInItsFeed(t *testing.T) {
 				if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT login FROM users WHERE id = $1`, user).Scan(&login); err != nil {
 					t.Fatal(err)
 				}
-				for _, at := range []time.Duration{-20 * 24 * time.Hour, -2 * time.Hour, -30 * time.Minute, time.Minute} {
+				for _, at := range []time.Duration{-20 * 24 * time.Hour, -7 * time.Hour, -2 * time.Hour, -30 * time.Minute, time.Minute} {
 					f.exec(`INSERT INTO audit_log (actor_id, action, entity, entity_id, ip, created_at)
 					        VALUES ($1::uuid, 'auth.login', 'user', $1::uuid::text, '192.0.2.1', $2)`, user, f.at(at))
 				}
