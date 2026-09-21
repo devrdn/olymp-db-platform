@@ -121,6 +121,7 @@ const ro = {
       solved: "rezolvate",
       penalty: "penalizare",
       placePending: "Locul apare după ce organizatorul deschide clasamentul.",
+      placeNotStarted: "Olimpiada nu a început încă, așa că nu există un clasament pe care să aveți un loc.",
     },
     report: {
       back: "← Profilul dumneavoastră",
@@ -147,6 +148,7 @@ const ro = {
         place: "Loc",
         placeOf: "din {n}",
         placePending: "Locul apare după ce organizatorul deschide clasamentul.",
+        placeNotStarted: "Olimpiada nu a început încă, așa că nu există un clasament pe care să aveți un loc.",
         unplaced: "La această olimpiadă doar câștigătorul are un loc.",
         winner: "Ați câștigat această olimpiadă.",
         truncated: "Numărat printre primele {n} rânduri ale clasamentului.",

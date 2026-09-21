@@ -104,6 +104,33 @@ describe("a contest that has ended", () => {
     expect(screen.getByText(en.profile.contests.placePending)).toBeInTheDocument();
   });
 
+  // A contest that never opened is not a frozen one, and the sentence a
+  // frozen row gets would promise a table an organiser is about to reveal.
+  // Somebody disqualified before the window opened is finished with the
+  // contest, so this is the row they are shown: their own nothing, and a
+  // plain explanation.
+  test("says the table has not opened when the contest never started", () => {
+    render_(
+      list([
+        finished({
+          status: "published",
+          registrationStatus: "disqualified",
+          result: {
+            scoring: "points",
+            points: 0,
+            solved: 0,
+            penalty: undefined,
+            state: "not_started",
+            placeOpen: false,
+          },
+        }),
+      ]),
+    );
+
+    expect(screen.getByText(en.profile.contests.placeNotStarted)).toBeInTheDocument();
+    expect(screen.queryByText(en.profile.contests.placePending)).not.toBeInTheDocument();
+  });
+
   test("keeps quiet about the place once the table is open", () => {
     render_(list([finished()]));
 
