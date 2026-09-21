@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +21,61 @@ import (
 // after it has ended for them. One implementation, because the bounds below
 // are the interesting part and a second copy of them is a second place they
 // could drift.
+
+// ExportGate is the set of registrations with a CSV download open.
+//
+// It exists because a rate limit and a concurrency limit are different bounds,
+// and only one of them was in place. AdmitRead lets an account start thirty
+// reads a minute; the export is the one read that then *holds* a core-pool
+// connection while the client reads it, so thirty starts a minute against ten
+// connections is a way to stop everybody else signing in — with a budget that
+// never refuses anything, because nothing was asked for too often.
+//
+// The key is whatever the route hands it, and the two kinds of export claim
+// different things. A participant's own log is claimed by the registration —
+// one slot per person per contest, so an account on two contests may take both
+// logs at once, and what is refused is the same log twice over. The
+// organiser's contest feed is claimed by the account, because that file is a
+// whole contest and one of them at a time is the point.
+//
+// The registration's two routes — the play screen's log and the same log on
+// the profile afterwards — share one gate, handed to both handlers by
+// internal/app (WithExports). Sharing it is what makes that bound structural:
+// on their own the two routes never admit the same registration at the same
+// moment, and a guarantee that rests on two admission rules agreeing is a
+// guarantee that ends the day one of them changes.
+//
+// In this process only, which is all there is: the deployment is one API on
+// one machine (docs/ARCHITECTURE.md §2.3), and a second replica would each get
+// its own gate rather than none — a weaker bound, never a broken one. Nothing
+// is persisted, so a restart forgets a download that a restart already ended.
+type ExportGate struct {
+	mu      sync.Mutex
+	holders map[uuid.UUID]struct{}
+}
+
+// NewExportGate returns a gate holding no downloads.
+func NewExportGate() *ExportGate { return &ExportGate{} }
+
+// enter claims the one slot this registration has, and returns the release for
+// it. free is false when a download of theirs is already running.
+func (e *ExportGate) enter(registration uuid.UUID) (release func(), free bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, busy := e.holders[registration]; busy {
+		return func() {}, false
+	}
+	if e.holders == nil {
+		e.holders = map[uuid.UUID]struct{}{}
+	}
+	e.holders[registration] = struct{}{}
+
+	return func() {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		delete(e.holders, registration)
+	}, true
+}
 
 // queryLogCSVColumns is the file's header row, and the order of every row
 // under it. The same facts the panel shows, plus the error text — a
@@ -56,9 +112,9 @@ const exportDeadline = time.Minute
 // queryLogCSVExport streams one registration's query log to a response.
 type queryLogCSVExport struct {
 	history QueryHistory
-	// exports keeps one account to one download at a time; see
-	// inFlightExports.
-	exports *inFlightExports
+	// exports keeps one registration to one download at a time; see
+	// ExportGate.
+	exports *ExportGate
 	log     *slog.Logger
 }
 
@@ -82,8 +138,8 @@ type queryLogCSVExport struct {
 // MaxExportBytes, both far past anything a contest can produce, with a final
 // line in the file when either binds. How long the connection may be held is
 // exportDeadline, because the amount of data does not bound a reader who is
-// slow on purpose. And how many of these one account may have open at a time
-// is one — see inFlightExports: a bound per request is not a bound in
+// slow on purpose. And how many of these one registration may have open at a
+// time is one — see ExportGate: a bound per request is not a bound in
 // aggregate when the rate budget allows a download to be started many times a
 // minute and the pool has ten connections.
 func (e queryLogCSVExport) serve(w http.ResponseWriter, r *http.Request, registration, contest uuid.UUID, busy func()) {
