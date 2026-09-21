@@ -79,8 +79,10 @@ type MonitorHandler struct {
 	mw      *auth.Middleware
 	log     *slog.Logger
 	// exports keeps one account to one CSV download at a time, for the
-	// reason the participant's own export does (inFlightExports).
-	exports inFlightExports
+	// reason the participant's own export does (ExportGate). Its own, not
+	// the one the two participant routes share: this file is a whole
+	// contest's feed and is claimed by the account, not by a registration.
+	exports ExportGate
 	// exportRows and exportBytes bound one CSV download (monitor_export.go).
 	exportRows  int
 	exportBytes int

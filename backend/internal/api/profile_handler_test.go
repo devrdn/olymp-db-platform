@@ -109,6 +109,12 @@ func (w *profileWatch) Workspace(context.Context, uuid.UUID, uuid.UUID) (monitor
 // profileHistory is the query log the CSV download streams.
 type profileHistory struct {
 	rows []queryrunner.HistoryEntry
+	// started is closed when an export reaches the first row, and hold blocks
+	// it there until a test closes it. Together they let a second request
+	// arrive while the first download is genuinely open, which is the only
+	// state the export gate has an opinion about.
+	started chan struct{}
+	hold    chan struct{}
 }
 
 func (h *profileHistory) History(context.Context, uuid.UUID, int, int) ([]queryrunner.HistoryEntry, int, error) {
@@ -116,6 +122,10 @@ func (h *profileHistory) History(context.Context, uuid.UUID, int, int) ([]queryr
 }
 
 func (h *profileHistory) ExportHistory(_ context.Context, _ uuid.UUID, yield func(queryrunner.HistoryEntry) error) (bool, error) {
+	if h.hold != nil {
+		close(h.started)
+		<-h.hold
+	}
 	for _, row := range h.rows {
 		if err := yield(row); err != nil {
 			return false, err
@@ -125,7 +135,11 @@ func (h *profileHistory) ExportHistory(_ context.Context, _ uuid.UUID, yield fun
 }
 
 type profileFixture struct {
-	router  http.Handler
+	router http.Handler
+	// exports is the gate every handler this fixture mounts is given, and
+	// mount builds another handler over it.
+	exports *api.ExportGate
+	mount   func() http.Handler
 	store   *profileStore
 	results *profileResults
 	watch   *profileWatch
@@ -197,9 +211,18 @@ func newProfileFixture(t *testing.T) *profileFixture {
 		Store: f.store, Contests: stores.Contests, Participants: stores.Registrations,
 		Results: f.results, Attempts: f.watch, Now: func() time.Time { return f.now },
 	})
-	router := chi.NewRouter()
-	api.NewProfileHandler(service, f.watch, f.history, auth.NewLimiter(c), mw, log, "en").Mount(router)
-	f.router = router
+	// One gate, and a factory for as many handlers over it as a test wants:
+	// the deployment hands the same gate to this handler and to the play
+	// screen's (app.go), and only a second handler can show that the bound
+	// crosses them.
+	f.exports = api.NewExportGate()
+	f.mount = func() http.Handler {
+		router := chi.NewRouter()
+		api.NewProfileHandler(service, f.watch, f.history, auth.NewLimiter(c), mw, log, "en").
+			WithExports(f.exports).Mount(router)
+		return router
+	}
+	f.router = f.mount()
 	return f
 }
 
@@ -586,6 +609,52 @@ func TestTheLogIsDownloadedAsCSVAfterTheContest(t *testing.T) {
 	}
 	if !strings.Contains(body, "select 1") || strings.Contains(body, "does not exist") {
 		t.Errorf("the file is wrong: %s", body)
+	}
+}
+
+// One registration has one CSV download open at a time, and the bound is the
+// gate rather than the handler holding it.
+//
+// The deployment hands one api.ExportGate to this handler and to the play
+// screen's, which serves the same file during the contest (app.go). Two gates
+// would bound each route on its own and leave the pair resting on admission —
+// the two routes never letting the same registration through at the same
+// moment — which is a guarantee about two other rules, not about downloads.
+// Here the second request reaches a different handler over the same gate, and
+// is refused while the first is still streaming.
+func TestOneRegistrationHasOneLogDownloadAcrossHandlersSharingTheGate(t *testing.T) {
+	f := newProfileFixture(t)
+	f.history.rows = []queryrunner.HistoryEntry{{SQL: "select 1", Status: queryrunner.StatusOK,
+		ExecutedAt: conteststest.FixtureNow}}
+	f.history.started, f.history.hold = make(chan struct{}), make(chan struct{})
+	path := "/me/contests/" + f.finished.ID.String() + "/log.csv"
+
+	first := make(chan *httptest.ResponseRecorder, 1)
+	go func() { first <- f.get(path, &f.student) }()
+	<-f.history.started
+
+	// A second handler, its own router, the same gate.
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.AddCookie(f.cookies[f.student.ID])
+	second := httptest.NewRecorder()
+	f.mount().ServeHTTP(second, req)
+	if second.Code != http.StatusTooManyRequests || errorCode(t, second) != "profile_too_often" {
+		t.Errorf("the second download: %d %s, want 429 profile_too_often", second.Code, second.Body.String())
+	}
+	if second.Header().Get("Retry-After") == "" {
+		t.Errorf("the refusal carries no Retry-After")
+	}
+
+	close(f.history.hold)
+	if done := <-first; done.Code != http.StatusOK {
+		t.Fatalf("the first download: %d %s", done.Code, done.Body.String())
+	}
+
+	// And the slot is given back: once the first has finished, the next
+	// download is served.
+	f.history.started, f.history.hold = nil, nil
+	if again := f.get(path, &f.student); again.Code != http.StatusOK {
+		t.Errorf("the download after the first finished: %d %s", again.Code, again.Body.String())
 	}
 }
 

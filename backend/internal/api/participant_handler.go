@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
@@ -138,9 +137,10 @@ type ParticipantHandler struct {
 	// defaultLocale answers when a request expresses no usable preference and
 	// the contest narrows nothing down (§6.2).
 	defaultLocale string
-	// exports keeps one account to one CSV download at a time. See
-	// queryLogCSV, and inFlightExports for why a rate limit is not this.
-	exports inFlightExports
+	// exports keeps one registration to one CSV download at a time, shared
+	// with the profile's copy of the same route (WithExports). See
+	// queryLogCSVExport, and ExportGate for why a rate limit is not this.
+	exports *ExportGate
 	// workspaces serves the participant's notes and tabs
 	// (participant_workspace.go); nil leaves those routes unmounted.
 	workspaces Workspaces
@@ -178,44 +178,6 @@ func (h *ParticipantHandler) observe(r *http.Request, participant contests.Parti
 	})
 }
 
-// inFlightExports is the set of registrations with a CSV download open.
-//
-// It exists because a rate limit and a concurrency limit are different bounds,
-// and only one of them was in place. AdmitRead lets an account start thirty
-// reads a minute; the export is the one read that then *holds* a core-pool
-// connection while the client reads it, so thirty starts a minute against ten
-// connections is a way to stop everybody else signing in — with a budget that
-// never refuses anything, because nothing was asked for too often.
-//
-// In this process only, which is all there is: the deployment is one API on
-// one machine (docs/ARCHITECTURE.md §2.3), and a second replica would each get
-// its own gate rather than none — a weaker bound, never a broken one. Nothing
-// is persisted, so a restart forgets a download that a restart already ended.
-type inFlightExports struct {
-	mu      sync.Mutex
-	holders map[uuid.UUID]struct{}
-}
-
-// enter claims the one slot this registration has, and returns the release for
-// it. free is false when a download of theirs is already running.
-func (e *inFlightExports) enter(registration uuid.UUID) (release func(), free bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if _, busy := e.holders[registration]; busy {
-		return func() {}, false
-	}
-	if e.holders == nil {
-		e.holders = map[uuid.UUID]struct{}{}
-	}
-	e.holders[registration] = struct{}{}
-
-	return func() {
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		delete(e.holders, registration)
-	}, true
-}
-
 // NewParticipantHandler assembles the endpoints.
 //
 // Panics without an answer throttle: config.Load never produces a rate below
@@ -228,7 +190,24 @@ func NewParticipantHandler(access ParticipantAccess, reader *contests.Reader, hi
 	if defaultLocale == "" {
 		defaultLocale = "en"
 	}
-	return &ParticipantHandler{access: access, reader: reader, history: history, submitter: submitter, answers: answers, mw: mw, log: log, defaultLocale: defaultLocale}
+	return &ParticipantHandler{access: access, reader: reader, history: history, submitter: submitter,
+		answers: answers, mw: mw, log: log, defaultLocale: defaultLocale, exports: NewExportGate()}
+}
+
+// WithExports gives this handler the gate that decides how many CSV downloads
+// of one registration may be open at once.
+//
+// internal/app hands the same gate to the profile's handler, which serves the
+// same file after the contest: one registration, one download, whichever of
+// the two routes it was asked from. Without this the handler keeps a gate of
+// its own, so the bound holds inside the route either way — what the shared
+// gate adds is that it holds across both of them, instead of resting on the
+// two admission rules never letting the same registration through at once.
+func (h *ParticipantHandler) WithExports(gate *ExportGate) *ParticipantHandler {
+	if gate != nil {
+		h.exports = gate
+	}
+	return h
 }
 
 // Mount registers the routes.
@@ -522,7 +501,7 @@ func (h *ParticipantHandler) queryLogCSV(w http.ResponseWriter, r *http.Request)
 	// A second download of a file the first one is still writing is asking
 	// faster than the installation allows, and is refused as the rate refusal
 	// it really is.
-	queryLogCSVExport{history: h.history, exports: &h.exports, log: h.log}.
+	queryLogCSVExport{history: h.history, exports: h.exports, log: h.log}.
 		serve(w, r, participant.ID, contest.ID, func() { h.fail(w, r, queryrunner.ErrTooManyQueries) })
 }
 
