@@ -108,6 +108,32 @@ func TestCellStateFollowsWhatTheCellHolds(t *testing.T) {
 	}
 }
 
+// What one cell costs its row: the minute it was solved on plus the
+// contest's penalty for every wrong attempt before that. An unsolved
+// question costs nothing at all — not its wrong attempts, not its waiting
+// ones — which is the whole of the ICPC rule, and the reason a row's
+// penalty is a sum over the solved cells alone.
+func TestACellCostsItsSolvingMinuteAndItsWrongAttempts(t *testing.T) {
+	cases := []struct {
+		name string
+		cell leaderboard.Cell
+		want int
+	}{
+		{"solved clean", leaderboard.Cell{SolvedAt: at(12), Minute: 30}, 30},
+		{"solved after two wrong", leaderboard.Cell{SolvedAt: at(12), Minute: 30, Wrong: 2}, 70},
+		{"never solved", leaderboard.Cell{Wrong: 5}, 0},
+		{"waiting since the freeze", leaderboard.Cell{Pending: 3}, 0},
+		{"nothing", leaderboard.Cell{}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cell.Penalty(20); got != tc.want {
+				t.Errorf("Penalty(20) = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 // A question on the grid is named by its position among the visible ones,
 // never by an identifier, and the names do not run out after Z.
 func TestQuestionLetterNamesAQuestionByItsPosition(t *testing.T) {

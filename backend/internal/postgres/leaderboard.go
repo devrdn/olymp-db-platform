@@ -185,7 +185,7 @@ func (r *Leaderboard) ICPCStandings(ctx context.Context, q leaderboard.Query) ([
 			WHERE $5::timestamptz IS NOT NULL
 			GROUP BY s.registration_id, s.question_id
 		), cell AS (
-			SELECT e.id AS registration_id, v.pos, t.solved_at,
+			SELECT e.id AS registration_id, v.pos, v.id AS question_id, t.solved_at,
 			       CASE WHEN t.solved_at IS NULL THEN 0
 			            ELSE GREATEST(0, COALESCE(floor(extract(epoch FROM t.solved_at - e.start_at) / 60), 0))
 			       END::int                                                     AS minute,
@@ -201,6 +201,7 @@ func (r *Leaderboard) ICPCStandings(ctx context.Context, q leaderboard.Query) ([
 			       COALESCE(SUM(c.minute + k.icpc_penalty_min * c.wrong)
 			                    FILTER (WHERE c.solved_at IS NOT NULL), 0)::int               AS penalty,
 			       MAX(c.solved_at)                                                          AS last_solved_at,
+			       COALESCE(array_agg(c.question_id ORDER BY c.pos) FILTER (WHERE c.pos IS NOT NULL), '{}') AS question_ids,
 			       COALESCE(array_agg(c.solved_at ORDER BY c.pos) FILTER (WHERE c.pos IS NOT NULL), '{}') AS solved_ats,
 			       COALESCE(array_agg(c.minute ORDER BY c.pos) FILTER (WHERE c.pos IS NOT NULL), '{}')    AS minutes,
 			       COALESCE(array_agg(c.wrong ORDER BY c.pos) FILTER (WHERE c.pos IS NOT NULL), '{}')     AS wrongs,
@@ -222,7 +223,7 @@ func (r *Leaderboard) ICPCStandings(ctx context.Context, q leaderboard.Query) ([
 		)
 		SELECT g.width, CASE WHEN p.n IS NULL OR p.n = 1 THEN g.first_solves END,
 		       p.id, p.login, p.full_name, p.account_deleted, p.disqualified, p.solved, p.penalty, p.last_solved_at,
-		       p.solved_ats, p.minutes, p.wrongs, p.pendings
+		       p.question_ids, p.solved_ats, p.minutes, p.wrongs, p.pendings
 		FROM grid g
 		LEFT JOIN page p ON true
 		ORDER BY p.n`,
@@ -246,10 +247,11 @@ func (r *Leaderboard) ICPCStandings(ctx context.Context, q leaderboard.Query) ([
 			deleted, disqualified    *bool
 			solved, penalty          *int
 			lastSolvedAt             *time.Time
+			questionIDs              []uuid.UUID
 			minutes, wrongs, pending []int
 		)
 		if err := rows.Scan(&width, &firstSolves, &id, &login, &fullName, &deleted, &disqualified,
-			&solved, &penalty, &lastSolvedAt, &solvedAts, &minutes, &wrongs, &pending); err != nil {
+			&solved, &penalty, &lastSolvedAt, &questionIDs, &solvedAts, &minutes, &wrongs, &pending); err != nil {
 			return nil, leaderboard.Grid{}, fmt.Errorf("scan icpc standings: %w", err)
 		}
 		if first {
@@ -266,7 +268,8 @@ func (r *Leaderboard) ICPCStandings(ctx context.Context, q leaderboard.Query) ([
 			Cells: make([]leaderboard.Cell, len(solvedAts)),
 		}
 		for i := range solvedAts {
-			e.Cells[i] = leaderboard.Cell{SolvedAt: solvedAts[i], Minute: minutes[i], Wrong: wrongs[i], Pending: pending[i]}
+			e.Cells[i] = leaderboard.Cell{QuestionID: questionIDs[i], SolvedAt: solvedAts[i],
+				Minute: minutes[i], Wrong: wrongs[i], Pending: pending[i]}
 		}
 		entries = append(entries, e)
 	}
