@@ -169,7 +169,11 @@ function Questions({
                     <Cell numeric>
                       {question.solvedAt ? formatTime(question.solvedAt, { locale }) : t.questions.never}
                     </Cell>
-                    <Cell numeric>{question.points}</Cell>
+                    {/* The column's own number: minutes where the mode
+                        charges them, points where it awards them. ICPC
+                        awards none, so printing points there would be a
+                        column of noughts under a real total. */}
+                    <Cell numeric>{icpc ? question.penalty : question.points}</Cell>
                   </tr>
                 ))}
               </tbody>
@@ -177,7 +181,13 @@ function Questions({
           </div>
           {truncated ? (
             <p className="max-w-body text-small text-warn">
-              {t.questions.truncated.replace("{n}", String(questions.length))}
+              {/* The attempts counted, not the questions: the bound the
+                  report was cut at is a number of attempts, and two
+                  questions holding fifty of them are not "two". */}
+              {t.questions.truncated.replace(
+                "{n}",
+                String(questions.reduce((sum, question) => sum + question.attempts, 0)),
+              )}
             </p>
           ) : null}
         </>

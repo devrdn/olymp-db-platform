@@ -162,6 +162,7 @@ const reportQuestionSchema = z
     solved: z.boolean(),
     solved_at: z.string().optional(),
     points: z.number(),
+    penalty: z.number().optional(),
   })
   .transform((raw) => ({
     questionId: raw.question_id,
@@ -169,8 +170,15 @@ const reportQuestionSchema = z
     attempts: raw.attempts,
     solved: raw.solved,
     solvedAt: raw.solved_at,
-    /** Points earned in a points contest; penalty minutes in an ICPC one. */
+    /** What the question earned. Always nought in ICPC scoring, which awards none. */
     points: raw.points,
+    /**
+     * What the question cost, in minutes: its solving minute plus the
+     * contest's penalty for each wrong attempt before the solve. ICPC's, and
+     * nought in every other mode, where nothing charges minutes.
+     * `result.scoring` says which of the two a reader is shown.
+     */
+    penalty: raw.penalty ?? 0,
   }));
 
 export type ProfileReportQuestion = z.infer<typeof reportQuestionSchema>;

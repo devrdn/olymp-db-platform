@@ -127,8 +127,8 @@ describe("the report wire shape", () => {
     successful_queries: 98,
     worked_ms: 5_400_000,
     questions: [
-      { question_id: CONTEST, ord: 1, attempts: 2, solved: true, solved_at: "2026-05-14T08:00:00Z", points: 20 },
-      { question_id: CONTEST, ord: 2, attempts: 3, solved: false, points: 0 },
+      { question_id: CONTEST, ord: 1, attempts: 2, solved: true, solved_at: "2026-05-14T08:00:00Z", points: 20, penalty: 0 },
+      { question_id: CONTEST, ord: 2, attempts: 3, solved: false, points: 0, penalty: 0 },
     ],
   };
 
@@ -164,6 +164,25 @@ describe("the report wire shape", () => {
     expect(loser.result.placeOpen).toBe(true);
     expect(loser.result.place).toBeNull();
     expect(loser.result.winner).toBe(false);
+  });
+
+  /**
+   * ICPC awards no points, so a question's own number there is the minutes it
+   * cost. An older server that sends none is read as nought rather than as
+   * undefined three components later.
+   */
+  it("reads what a question cost in ICPC minutes, and nought where none was sent", () => {
+    const parsed = profileReportSchema.parse({
+      ...report,
+      result: { scoring: "icpc", points: 0, solved: 1, penalty: 47, state: "final", place_open: true, place: 2, participants: 9 },
+      questions: [
+        { question_id: CONTEST, ord: 1, attempts: 2, solved: true, solved_at: "2026-05-14T08:00:00Z", points: 0, penalty: 47 },
+        { question_id: CONTEST, ord: 2, attempts: 1, solved: false, points: 0 },
+      ],
+    });
+
+    expect(parsed.questions[0].penalty).toBe(47);
+    expect(parsed.questions[1].penalty).toBe(0);
   });
 
   it("says a participant was disqualified, and nothing about why", () => {
