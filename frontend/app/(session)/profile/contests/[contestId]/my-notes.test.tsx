@@ -51,6 +51,19 @@ describe("my notes", () => {
     expect(screen.getByText(t().noTabs)).toBeInTheDocument();
   });
 
+  /**
+   * The two columns split on the page's own breakpoint, not on a container
+   * query: nothing in this screen's tree declares `@container`, so a
+   * `@min-[…]` class here would never apply at any width.
+   */
+  test("splits on the breakpoint the rest of the screen uses", () => {
+    renderTab({ notes: { body: "suspects: 3", updatedAt: null }, tabs: [] });
+
+    const columns = document.querySelector("[data-columns]") as HTMLElement;
+    expect(columns).toHaveClass("max-narrow:grid-cols-1");
+    expect(columns.className).not.toMatch(/@/);
+  });
+
   test("says so when there is neither a note nor a tab", () => {
     renderTab({ notes: { body: "", updatedAt: null }, tabs: [] });
 

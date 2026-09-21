@@ -28,7 +28,11 @@ export function MyNotes({ workspace, t }: { workspace: ProfileWorkspace; t: Repo
     <div className="flex min-w-0 flex-col gap-8">
       <p className="max-w-body text-small text-ink-3">{t.notes.asLeft}</p>
 
-      <div className="grid min-w-0 gap-8 @min-[54rem]:grid-cols-2">
+      {/* Two columns down to the page's one breakpoint, one below it. The
+          page's own breakpoint rather than a container query: nothing in
+          this screen declares `@container`, and a `@min-[…]` class without
+          one is a rule that never matches at any width. */}
+      <div data-columns className="grid min-w-0 grid-cols-2 gap-8 max-narrow:grid-cols-1">
         <section aria-labelledby="report-notes" className="flex min-w-0 flex-col gap-3">
           <h2 id="report-notes" className="font-mono text-label text-ink-3 uppercase">
             {t.notes.notes}
