@@ -158,6 +158,31 @@ describe("a contest that has ended", () => {
     ).toBeInTheDocument();
   });
 
+  /**
+   * The live tag belongs to a contest the reader can walk back into. On a row
+   * that is over for them — their timer ran out, or they were disqualified —
+   * it is an accent pointing at a door that is shut, beside a link to their
+   * finished report. The contest is still running for everybody else, which
+   * is not this reader's row to say.
+   */
+  test("drops the live tag once the contest is over for this reader", () => {
+    render_(list([finished({ title: "Cut short", status: "running", over: true })]));
+
+    const row = screen.getByRole("listitem");
+    expect(within(row).queryByText(en.contests.status.running)).not.toBeInTheDocument();
+    expect(
+      within(row).getByRole("link", {
+        name: en.profile.contests.report.replace("{title}", "Cut short"),
+      }),
+    ).toBeInTheDocument();
+  });
+
+  test("keeps the status of a contest that ended for everybody", () => {
+    render_(list([finished()]));
+
+    expect(within(screen.getByRole("listitem")).getByText(en.contests.status.finished)).toBeInTheDocument();
+  });
+
   test("marks a disqualified registration", () => {
     render_(list([finished({ registrationStatus: "disqualified" })]));
 
@@ -181,6 +206,9 @@ describe("a contest that is running", () => {
     const row = screen.getByRole("listitem");
     const link = within(row).getByRole("link", { name: en.profile.contests.enter });
     expect(link).toHaveAttribute("href", "/contests/6f1b7d2e-3a4c-4f8b-9c1d-2e5a7b8c9d02/play");
+    // The tag stays here: this contest is running for this reader, and the
+    // accent is pointing at a door they can walk through.
+    expect(within(row).getByText(en.contests.status.running)).toBeInTheDocument();
 
     // Nothing about what is happening inside it: no result, no report. What a
     // participant needs mid-contest is on the contest's own screen, under

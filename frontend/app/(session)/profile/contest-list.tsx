@@ -135,7 +135,15 @@ function Row({
         )}
 
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          <Tag tone={STATUS_TONE[contest.status]}>{shared.status[contest.status]}</Tag>
+          {/* A running contest that is over for this reader gets no tag. The
+              accent belongs to a door they can walk through, and theirs is
+              shut — their own timer ran out, or they were disqualified —
+              while the contest runs on for everybody else. The row already
+              says what it has to say: their result, and a link to the
+              report. */}
+          {done && contest.status === "running" ? null : (
+            <Tag tone={STATUS_TONE[contest.status]}>{shared.status[contest.status]}</Tag>
+          )}
           {contest.registrationStatus === "disqualified" ? (
             <Tag tone="bad">{t.disqualified}</Tag>
           ) : null}
