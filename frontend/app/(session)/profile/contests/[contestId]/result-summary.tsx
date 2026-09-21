@@ -101,7 +101,14 @@ function Place({ result, t }: { result: ProfileReportResult; t: ReportDict }) {
 
 /** The line under the strip: why there is a place, or why there is not. */
 function Standing({ result, t }: { result: ProfileReportResult; t: ReportDict }) {
-  if (!result.placeOpen) return <p className="max-w-body text-body text-ink-3">{t.result.placePending}</p>;
+  // A shut table has two reasons, and each gets its own sentence. A freeze is
+  // a result an organiser is about to reveal; a contest that never opened has
+  // no table to reveal at all, which is the report somebody disqualified
+  // before the start is left with.
+  if (!result.placeOpen) {
+    const said = result.state === "not_started" ? t.result.placeNotStarted : t.result.placePending;
+    return <p className="max-w-body text-body text-ink-3">{said}</p>;
+  }
   if (result.winner) return <p className="max-w-body text-body text-good">{t.result.winner}</p>;
   if (result.place === null) return <p className="max-w-body text-body text-ink-3">{t.result.unplaced}</p>;
   if (result.truncated) {

@@ -19,8 +19,16 @@ import { queriesSchema, type QueriesPage, type QueriesParams, type ReadOptions }
  * the monitoring routes serve too: one record, one reader.
  */
 
-/** The table's own state, as `leaderboard.Decide` names it. */
-export const TABLE_STATES = ["live", "frozen", "final"] as const;
+/**
+ * The table's own state, as `leaderboard.Decide` names it.
+ *
+ * `not_started` is here because it reaches a real reader, not for symmetry: a
+ * participant disqualified from a published contest is finished with it
+ * (`profile.Over`), so their row and their report carry a result — of a table
+ * whose contest never opened. The server says so rather than rounding the
+ * state up to a running one, and the screen has a sentence of its own for it.
+ */
+export const TABLE_STATES = ["not_started", "live", "frozen", "final"] as const;
 export type TableState = (typeof TABLE_STATES)[number];
 
 export const profileSummarySchema = z.object({

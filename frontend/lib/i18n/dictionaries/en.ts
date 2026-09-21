@@ -142,6 +142,13 @@ const en = {
        * missing result, it is a result that is not public yet.
        */
       placePending: "Your place appears once the organiser opens the table.",
+      /**
+       * A different thing from a frozen table, and it needs a different
+       * sentence: nothing is about to be revealed, because the contest never
+       * opened. It is what somebody disqualified before the start is left
+       * with, and the row still shows them their own work.
+       */
+      placeNotStarted: "This contest has not opened yet, so there is no table to place you on.",
     },
     /**
      * The report of one finished contest (design §2.2): four tabs in the
@@ -181,6 +188,7 @@ const en = {
         place: "Place",
         placeOf: "of {n}",
         placePending: "Your place appears once the organiser opens the table.",
+        placeNotStarted: "This contest has not opened yet, so there is no table to place you on.",
         unplaced: "This contest gives a place to its winner and to nobody else.",
         winner: "You won this contest.",
         truncated: "Counted among the first {n} rows of the table.",
