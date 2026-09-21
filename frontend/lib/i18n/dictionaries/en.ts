@@ -110,6 +110,39 @@ const en = {
       title: "Could not load your account",
       body: "The server did not answer. Your session is still good — this is not a sign-out.",
     },
+    /** The four numbers, and what to say when they alone did not arrive. */
+    summary: {
+      heading: "Your record",
+      contests: "Contests",
+      finished: "Finished",
+      queries: "Queries run",
+      solved: "Questions solved",
+      failed: "Your numbers could not be loaded. Everything else on this page is unaffected.",
+    },
+    contests: {
+      heading: "Your contests",
+      failed: "Your contests could not be loaded. Reload the page to try again.",
+      empty: {
+        title: "You have not taken part yet",
+        body: "A contest appears here as soon as you enrol in one, with your own result once it has ended.",
+        action: "Find a contest",
+      },
+      truncated: "Showing your {count} most recent contests.",
+      /** The one thing a running contest offers: the way back into it. */
+      enter: "Enter the contest",
+      starts: "Starts {when}",
+      report: "Open your report on {title}",
+      disqualified: "Disqualified",
+      points: "points",
+      solved: "solved",
+      penalty: "penalty",
+      /**
+       * Said rather than left as a gap. The place is in the report, and the
+       * report has one only once the table is open — a frozen table is not a
+       * missing result, it is a result that is not public yet.
+       */
+      placePending: "Your place appears once the organiser opens the table.",
+    },
   },
   workspace: {
     backToRegister: "← All contests",
