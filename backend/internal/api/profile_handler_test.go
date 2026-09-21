@@ -411,6 +411,7 @@ func TestTheReportCarriesTheResultTheActivityAndTheQuestions(t *testing.T) {
 			Solved     bool      `json:"solved"`
 			SolvedAt   string    `json:"solved_at"`
 			Points     int       `json:"points"`
+			Penalty    int       `json:"penalty"`
 		} `json:"questions"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
@@ -426,8 +427,51 @@ func TestTheReportCarriesTheResultTheActivityAndTheQuestions(t *testing.T) {
 		body.Questions[0].Points != 10 || body.Questions[0].SolvedAt == "" {
 		t.Errorf("questions: %s", rec.Body.String())
 	}
+	if body.Questions[0].Penalty != 0 {
+		t.Errorf("a points contest charges no minutes: %s", rec.Body.String())
+	}
 	if !strings.Contains(rec.Body.String(), `"worked_ms":2400000`) {
 		t.Errorf("the time worked is missing or wrong: %s", rec.Body.String())
+	}
+}
+
+// In ICPC scoring a question carries the minutes it cost, not points: the
+// server writes points_awarded = 0 on every ICPC submission, so a report
+// without this field could only ever show nought.
+func TestTheICPCReportCarriesEachQuestionsPenaltyMinutes(t *testing.T) {
+	f := newProfileFixture(t)
+	contest := f.finished
+	contest.Scoring, contest.ICPCPenaltyMin = contests.ScoringICPC, 20
+	f.stores.Contests.Put(contest)
+	solvedAt := conteststest.FixtureNow
+	f.results.own[contest.ID] = leaderboard.Own{
+		State: leaderboard.StateFinal, Open: true, Scoring: contests.ScoringICPC, Place: 2, Participants: 9,
+		Questions: 1,
+		Row: leaderboard.Row{Entry: leaderboard.Entry{Solved: 1, Penalty: 50, Cells: []leaderboard.Cell{
+			{SolvedAt: &solvedAt, Minute: 30, Wrong: 1},
+		}}},
+	}
+
+	rec := f.get("/me/contests/"+contest.ID.String()+"/report", &f.student)
+	var body struct {
+		Result struct {
+			Scoring string `json:"scoring"`
+			Points  int    `json:"points"`
+			Penalty *int   `json:"penalty"`
+		} `json:"result"`
+		Questions []struct {
+			Points  int `json:"points"`
+			Penalty int `json:"penalty"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("%v: %s", err, rec.Body.String())
+	}
+	if body.Result.Scoring != contests.ScoringICPC || body.Result.Penalty == nil || *body.Result.Penalty != 50 {
+		t.Fatalf("result: %s", rec.Body.String())
+	}
+	if len(body.Questions) != 1 || body.Questions[0].Penalty != 50 || body.Questions[0].Points != 10 {
+		t.Errorf("questions: %s", rec.Body.String())
 	}
 }
 
