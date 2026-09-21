@@ -178,6 +178,33 @@ describe("a table that is not open", () => {
     expect(screen.getByText(t().result.placePending)).toBeInTheDocument();
     expect(within(strip()).queryByText(t().result.place)).not.toBeInTheDocument();
   });
+
+  /**
+   * A contest that never opened is not a frozen one, and the freeze's
+   * sentence would promise a table somebody is about to reveal. It is the
+   * report a participant disqualified before the window opened is left with,
+   * so it says the plain thing instead.
+   */
+  test("says the contest never opened rather than promising a reveal", () => {
+    renderSummary(
+      report({
+        status: "published",
+        disqualified: true,
+        result: {
+          ...report().result,
+          points: 0,
+          solved: 0,
+          state: "not_started",
+          placeOpen: false,
+          place: null,
+          participants: null,
+        },
+      }),
+    );
+
+    expect(screen.getByText(t().result.placeNotStarted)).toBeInTheDocument();
+    expect(screen.queryByText(t().result.placePending)).not.toBeInTheDocument();
+  });
 });
 
 describe("a contest with one winner", () => {

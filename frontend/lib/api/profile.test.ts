@@ -111,6 +111,33 @@ describe("the profile contest list wire shape", () => {
     expect(list.items[0].result?.placeOpen).toBe(false);
     expect(list.items[0].result?.state).toBe("frozen");
   });
+
+  /**
+   * A published contest whose window never opened has a table state of its
+   * own, and it reaches a real reader: a participant disqualified from a
+   * contest before it started is finished with it, so the row carries a
+   * result — of a table the server calls `not_started`. A schema that knew
+   * only the three running states threw here, and the section showed its
+   * failure line to somebody whose own work it was meant to show.
+   */
+  it("reads a table that has not opened yet", () => {
+    const list = profileContestsSchema.parse({
+      truncated: false,
+      items: [
+        {
+          contest_id: "6f1b7d2e-3a4c-4f8b-9c1d-2e5a7b8c9d05",
+          title: "Never began",
+          status: "published",
+          registration_status: "disqualified",
+          over: true,
+          result: { scoring: "points", points: 0, solved: 0, state: "not_started", place_open: false },
+        },
+      ],
+    });
+
+    expect(list.items[0].result?.state).toBe("not_started");
+    expect(list.items[0].result?.placeOpen).toBe(false);
+  });
 });
 
 /** The report's own reads: the tab the screen opens on, and its notes. */
@@ -183,6 +210,32 @@ describe("the report wire shape", () => {
 
     expect(parsed.questions[0].penalty).toBe(47);
     expect(parsed.questions[1].penalty).toBe(0);
+  });
+
+  /**
+   * The report of a contest that never started, which is what a participant
+   * disqualified before the window opened is left with. The state is true and
+   * the screen has a sentence for it; a schema that refused it turned the
+   * whole report into an error page.
+   */
+  it("reads a report whose table has not opened yet", () => {
+    const parsed = profileReportSchema.parse({
+      ...report,
+      status: "published",
+      disqualified: true,
+      result: {
+        scoring: "points",
+        points: 0,
+        solved: 0,
+        state: "not_started",
+        place_open: false,
+        place: null,
+        participants: null,
+      },
+    });
+
+    expect(parsed.result.state).toBe("not_started");
+    expect(parsed.result.placeOpen).toBe(false);
   });
 
   it("says a participant was disqualified, and nothing about why", () => {

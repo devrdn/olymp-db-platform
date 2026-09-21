@@ -691,6 +691,60 @@ func TestTheReportSaysNothingOfAFrozenWinnerModeTable(t *testing.T) {
 	}
 }
 
+// A published contest whose window has never opened has a table state of its
+// own, and the profile carries it rather than dressing it up as something
+// else.
+//
+// The combination is reachable: DisqualifyParticipant allows a published
+// contest, and a disqualified registration is over for its participant
+// (profile.Over), so the row is shown with a result — of a table
+// leaderboard.Decide calls not_started. Normalising it here would have the
+// API say the table is live or frozen when it is neither; what the interface
+// needs is the true state and a sentence of its own for it.
+func TestAContestThatNeverStartedSaysSoOnTheListAndTheReport(t *testing.T) {
+	f := newProfileFixture(t)
+	c := f.stores.SeedContest(contests.StatusPublished)
+	starts := f.now.Add(24 * time.Hour)
+	ends := starts.Add(2 * time.Hour)
+	c.StartsAt, c.EndsAt = &starts, &ends
+	f.stores.Contests.Put(c)
+	p, err := f.stores.Registrations.Add(t.Context(), c.ID, f.student.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Status = contests.RegistrationDisqualified
+	f.stores.Registrations.Put(p)
+	f.store.enrolments = []profile.Enrolment{{Contest: c, Participant: p,
+		Result: profile.Result{Scoring: contests.ScoringPoints}}}
+
+	body := f.list(t)
+	if len(body.Items) != 1 {
+		t.Fatalf("the list has %d items, want the one contest: %+v", len(body.Items), body)
+	}
+	row := body.Items[0]
+	if !row.Over || row.Result == nil {
+		t.Fatalf("the disqualified row reads %+v, want it over with a result", row)
+	}
+	if row.Result.State != leaderboard.StateNotStarted || row.Result.PlaceOpen {
+		t.Errorf("the row's table reads %+v, want %s and shut", row.Result, leaderboard.StateNotStarted)
+	}
+
+	f.results.own[c.ID] = leaderboard.Own{State: leaderboard.StateNotStarted, Scoring: contests.ScoringPoints}
+	rec := f.get("/me/contests/"+c.ID.String()+"/report", &f.student)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report: %d %s", rec.Code, rec.Body.String())
+	}
+	var report struct {
+		Result map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Result["state"] != leaderboard.StateNotStarted || report.Result["place_open"] != false {
+		t.Errorf("the report's result reads %+v, want %s and shut", report.Result, leaderboard.StateNotStarted)
+	}
+}
+
 // Nothing under /me is for a search engine: it is one account's own record
 // of what it did.
 func TestNoProfileRouteIsIndexed(t *testing.T) {

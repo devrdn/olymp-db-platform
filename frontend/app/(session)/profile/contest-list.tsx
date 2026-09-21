@@ -161,7 +161,14 @@ function Row({
           <>
             <Result result={contest.result} dict={dict} />
             {contest.result.placeOpen ? null : (
-              <p className="max-w-body font-mono text-data text-ink-3">{t.placePending}</p>
+              <p className="max-w-body font-mono text-data text-ink-3">
+                {/* Two reasons for a shut table, and they are not the same
+                    sentence. A freeze is a result about to be revealed; a
+                    contest that never opened has no table to reveal, and
+                    promising one would be a promise nobody is going to
+                    keep. */}
+                {contest.result.state === "not_started" ? t.placeNotStarted : t.placePending}
+              </p>
             )}
           </>
         ) : done ? null : contest.status === "running" ? (
