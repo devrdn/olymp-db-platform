@@ -147,6 +147,10 @@ const (
 
 // Cell is one registration's record on one visible question.
 type Cell struct {
+	// QuestionID is the visible question this cell stands for. The grid is
+	// read by position and names its columns by letter, so nothing on the
+	// table needs this; a report that has to say what one question cost does.
+	QuestionID uuid.UUID
 	// SolvedAt is the first correct answer before the cutoff.
 	SolvedAt *time.Time
 	// Minute is the whole minutes, rounded down, from the registration's start
@@ -187,6 +191,24 @@ func (c Cell) State() string {
 // attempt before the first correct one was wrong.
 func (c Cell) SolvedOnAttempt() int {
 	return c.Wrong + 1
+}
+
+// Penalty is what this cell costs its row, in minutes: the minute it was
+// solved on plus perWrong for every wrong attempt before the solve. A
+// question that was never solved costs nothing — neither its wrong attempts
+// nor the ones waiting behind a freeze — which is why a row's Penalty sums
+// the solved cells and no others.
+//
+// The same arithmetic the standings statement performs
+// (`SUM(minute + icpc_penalty_min * wrong) FILTER (WHERE solved_at IS NOT
+// NULL)`), written once here so a screen that needs one question's share can
+// ask for it instead of deriving a second version of the rule.
+// TestICPCCellPenaltiesAddUpToTheRowsOwn holds the two to each other.
+func (c Cell) Penalty(perWrong int) int {
+	if c.SolvedAt == nil {
+		return 0
+	}
+	return c.Minute + perWrong*c.Wrong
 }
 
 // QuestionLetter names a visible question by its zero-based position among
