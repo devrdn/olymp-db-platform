@@ -143,6 +143,112 @@ const en = {
        */
       placePending: "Your place appears once the organiser opens the table.",
     },
+    /**
+     * The report of one finished contest (design §2.2): four tabs in the
+     * address, and the words each of them is written in.
+     *
+     * The queries and the answers say the same things the organiser's own
+     * screens say, in the second person and without the address column: this
+     * is a student reading what they themselves did, not staff reading what
+     * somebody else did.
+     */
+    report: {
+      back: "← Your profile",
+      tabsLabel: "What you did in this contest",
+      tabs: {
+        summary: "Result",
+        queries: "My queries",
+        answers: "My answers",
+        notes: "My notes",
+      },
+      csv: "CSV",
+      csvHeading: "Download",
+      csvLabel: "Download everything you ran in this contest, as CSV",
+      /**
+       * Said plainly and without the reason. The reason is the organiser's
+       * note in the audit trail, which has access rules of its own.
+       */
+      disqualified: "You were disqualified from this contest. What you did is still yours to read.",
+      failed: "This part of your report could not be loaded. Reload the page to try again.",
+      result: {
+        heading: "Your result",
+        points: "Points",
+        solved: "Solved",
+        penalty: "Penalty",
+        worked: "Time worked",
+        noWorked: "not recorded",
+        queries: "Queries",
+        successful: "Successful",
+        place: "Place",
+        placeOf: "of {n}",
+        placePending: "Your place appears once the organiser opens the table.",
+        unplaced: "This contest gives a place to its winner and to nobody else.",
+        winner: "You won this contest.",
+        truncated: "Counted among the first {n} rows of the table.",
+        notStarted: "You never started the clock in this contest.",
+      },
+      questions: {
+        heading: "By question",
+        empty: "This contest had no questions.",
+        truncated: "You made more attempts than this report carries; the first {n} are counted here.",
+        columns: {
+          question: "Question",
+          verdict: "Result",
+          attempts: "Attempts",
+          firstSolved: "First solved",
+          points: "Points",
+          penalty: "Penalty",
+        },
+        solved: "solved",
+        unsolved: "not solved",
+        never: "—",
+      },
+      queries: {
+        status: "Status",
+        anyStatus: "Any status",
+        search: "Search your SQL",
+        searchPlaceholder: "Text in the query",
+        searchTooLong: "A search is at most {n} characters.",
+        empty: "You ran no queries in this contest.",
+        noMatch: "No query of yours matches these filters.",
+        loadMore: "Load more",
+        loading: "Loading…",
+        durationMs: "{n} ms",
+        rows: "{n} rows",
+        show: "Show the query",
+        hide: "Hide the query",
+        copy: "Copy",
+        copied: "Copied",
+        copyFailed: "Could not copy",
+        shortened: "The statement is shortened; the CSV has it whole.",
+      },
+      answers: {
+        empty: "You answered nothing in this contest.",
+        truncated: "Only your first {n} attempts are shown.",
+        question: "Question {n}",
+        attempt: "Attempt {n}",
+        correct: "correct",
+        wrong: "wrong",
+        points: "{n} pts",
+        queriesToggle: "Queries that led to it: {n}",
+        noQueries: "No queries since your previous attempt.",
+        moreQueries: "{n} later queries of this stretch are not shown; “My queries” and the CSV have them.",
+        window: "Your queries after the previous attempt, on any question, and before this one.",
+      },
+      notes: {
+        notes: "Notes",
+        emptyNotes: "You left no notes.",
+        tabs: "SQL tabs",
+        noTabs: "You left no SQL tabs.",
+        empty: "You left no notes and no SQL tabs in this contest.",
+        asLeft: "Shown as you left them at the end. Nothing here is saved any more.",
+      },
+      problems: {
+        forbidden: "This report is no longer yours to read.",
+        tooOften: "Too many reads. Try again in {seconds} s.",
+        failed: "Could not load. Try again.",
+      },
+    },
   },
   workspace: {
     backToRegister: "← All contests",
