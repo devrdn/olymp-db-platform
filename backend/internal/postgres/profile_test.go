@@ -160,16 +160,29 @@ func TestProfileEnrolmentsReadTheCallersOwnContestsNewestFirst(t *testing.T) {
 	})
 }
 
-func TestProfileEnrolmentsStopAtTheLimit(t *testing.T) {
+// The page is picked before anything is counted, so a limit cuts the rows
+// the newest-first order puts at the top and the result columns are computed
+// for those rows only.
+func TestProfileEnrolmentsStopAtTheLimitAtTheTopOfTheOrder(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newProfileFixture(t, ctx)
-		for i := range 3 {
-			f.contest(contests.StatusFinished, -time.Duration(i+1)*time.Hour)
+		var newest []uuid.UUID
+		for i := range 5 {
+			// The first is the newest; each one after it started an hour
+			// earlier.
+			contest, _ := f.contest(contests.StatusFinished, -time.Duration(i+1)*time.Hour)
+			if i < 2 {
+				newest = append(newest, contest)
+			}
 		}
 
 		rows, err := NewProfile(testPool).Enrolments(ctx, f.user, 2)
 		if err != nil || len(rows) != 2 {
 			t.Fatalf("Enrolments(limit 2) returned %d rows, %v", len(rows), err)
+		}
+		if rows[0].Contest.ID != newest[0] || rows[1].Contest.ID != newest[1] {
+			t.Errorf("the page is %s, %s; want the two newest %s, %s",
+				rows[0].Contest.ID, rows[1].Contest.ID, newest[0], newest[1])
 		}
 	})
 }
@@ -259,6 +272,58 @@ func TestProfileEnrolmentsCarryTheICPCResultTheLeaderboardAgreesWith(t *testing.
 		if got.Scoring != contests.ScoringICPC || got.Solved != 2 || got.Penalty != 60 {
 			t.Fatalf("result = %+v, want 2 solved and 60 penalty minutes", got)
 		}
+		// An ICPC contest has no points: Submit writes points_awarded = 0 in
+		// that mode, and the table reports none, so the list must not add up
+		// whatever a contest switched out of icpc left behind.
+		if got.Points != 0 {
+			t.Errorf("result = %+v, want no points in icpc scoring", got)
+		}
+
+		entries, _, err := NewLeaderboard(testPool).ICPCStandings(ctx, leaderboard.Query{
+			ContestID: contest, Cutoff: time.Now().Add(time.Hour), Scoring: contests.ScoringICPC, Limit: 10,
+		})
+		if err != nil {
+			t.Fatalf("ICPCStandings() = %v", err)
+		}
+		for _, entry := range entries {
+			if entry.Registration != mine {
+				continue
+			}
+			if entry.Solved != got.Solved || entry.Penalty != got.Penalty || entry.Points != got.Points {
+				t.Errorf("the table says %d solved, %d penalty and %d points; the list says %d, %d and %d",
+					entry.Solved, entry.Penalty, entry.Points, got.Solved, got.Penalty, got.Points)
+			}
+			return
+		}
+		t.Fatal("the caller is not on the table at all")
+	})
+}
+
+// Under an individual timer a solve's minute is counted from the
+// participant's own start, not the contest's — the branch of the penalty
+// arithmetic most likely to drift between the two statements that carry it.
+func TestProfileEnrolmentsCarryTheICPCResultUnderAnIndividualTimer(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newProfileFixture(t, ctx)
+		contest, mine := f.contest(contests.StatusFinished, 0)
+		f.exec(`UPDATE contests SET scoring = 'icpc', icpc_penalty_min = 20,
+		        timing = 'individual', duration_min = 120 WHERE id = $1`, contest)
+		// The participant began half an hour after the contest opened, so a
+		// solve at +50 minutes is minute 20 of their own hour, not 50.
+		f.exec(`UPDATE registrations SET started_at = $2, status = 'active' WHERE id = $1`,
+			mine, f.base.Add(30*time.Minute))
+		question := f.question(contest, 1)
+		f.answer(mine, question, 1, false, f.base.Add(40*time.Minute))
+		f.answer(mine, question, 2, true, f.base.Add(50*time.Minute))
+
+		rows, err := NewProfile(testPool).Enrolments(ctx, f.user, 10)
+		if err != nil {
+			t.Fatalf("Enrolments() = %v", err)
+		}
+		got := rows[0].Result
+		if got.Solved != 1 || got.Penalty != 40 {
+			t.Fatalf("result = %+v, want 1 solved and 20 + 20 penalty minutes", got)
+		}
 
 		entries, _, err := NewLeaderboard(testPool).ICPCStandings(ctx, leaderboard.Query{
 			ContestID: contest, Cutoff: time.Now().Add(time.Hour), Scoring: contests.ScoringICPC, Limit: 10,
@@ -334,6 +399,13 @@ func TestProfileReadsScanNoJournal(t *testing.T) {
 		q := storage.QuerierFrom(ctx, testPool)
 		f := newProfileFixture(t, ctx)
 		_, mine := f.contest(contests.StatusFinished, -24*time.Hour)
+		// More registrations than one page carries, so the plan has to pick
+		// the page before it counts anything: the result columns are an
+		// aggregate per row, and paying for all of them to return fifty is
+		// what the page subquery exists to prevent.
+		for i := range 60 {
+			f.contest(contests.StatusFinished, -time.Duration(i+2)*time.Hour)
+		}
 		history := newWatchFixture(t, ctx)
 		loadOlympiad(t, history, 71, 400)
 		for _, table := range []string{"users", "registrations", "contests", "query_log", "submissions"} {

@@ -88,21 +88,28 @@ func (r *Profile) Summary(ctx context.Context, userID uuid.UUID) (profile.Summar
 // for points and solved, and the same cell arithmetic ICPCStandings uses for
 // the ICPC pair — the list cannot ask the leaderboard for them (that is a
 // whole table per contest, which is the one thing this statement exists to
-// avoid), so what keeps the two answers one answer is a pair of tests that
-// run both against the same data and compare:
-// TestProfileEnrolmentsCarryTheOwnResultTheLeaderboardAgreesWith and its
-// ICPC twin. A change to either formula fails them.
+// avoid), so what keeps the two answers one answer is a set of tests that run
+// both against the same data and compare:
+// TestProfileEnrolmentsCarryTheOwnResultTheLeaderboardAgreesWith, its ICPC
+// twin, and TestProfileEnrolmentsCarryTheICPCResultUnderAnIndividualTimer,
+// which pins the one branch of the penalty arithmetic a fixed-timing fixture
+// would never reach. A change to either formula fails them.
 //
 // Cut off at nothing. A freeze hides other people's progress; it never hides
 // a participant's own work from them once their contest has ended, which is
 // the same choice leaderboard.Service.Own makes for the report.
+//
+// Points are zero in ICPC scoring, as they are on the table: Service.Submit
+// writes points_awarded = 0 in that mode, but a contest switched out of it
+// before it ran can have rows from the mode before, and summing those would
+// have the list report a score the report and the standings both call zero.
 //
 // Both aggregates are one range of submissions_registration_submitted_idx
 // per registration. The ICPC one is joined on the contest's visible
 // questions, because a question off the grid costs and counts nothing, and
 // it is evaluated only for a contest actually scored that way.
 const ownResultColumns = `
-	COALESCE(points.points, 0)::int,
+	CASE WHEN c.scoring = 'icpc' THEN 0 ELSE COALESCE(points.points, 0) END::int,
 	CASE WHEN c.scoring = 'icpc' THEN COALESCE(icpc.solved, 0) ELSE COALESCE(points.solved, 0) END::int,
 	COALESCE(icpc.penalty, 0)::int`
 
@@ -147,18 +154,33 @@ const ownResultJoins = `
 // second round trip per row, and the row's own numbers come with it
 // (ownResultColumns) rather than from a table computed per contest.
 //
+// The page is chosen before anything is counted. The result columns are an
+// aggregate per row, and an account may be registered in far more contests
+// than one profile shows: ordering and cutting first means fifty aggregates
+// for fifty rows rather than one per registration the account ever had.
+//
 // Newest first by when the contest was meant to happen, falling back to when
 // it was created for a contest with no schedule yet, and then by the
-// registration, so the order is total and two reads agree.
+// registration, so the order is total and two reads agree. Stated twice —
+// once to pick the page, once to return it in order — because a join over
+// the page does not preserve its order.
 func (r *Profile) Enrolments(ctx context.Context, userID uuid.UUID, limit int) ([]profile.Enrolment, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
+		WITH page AS (
+		    SELECT r.id
+		    FROM registrations r
+		    JOIN contests c ON c.id = r.contest_id
+		    WHERE r.user_id = $1
+		    ORDER BY COALESCE(c.starts_at, c.created_at) DESC, r.created_at DESC, r.id
+		    LIMIT $2
+		)
 		SELECT `+contestColumns+`, `+participantColumns+`, `+ownResultColumns+`
-		FROM registrations r
+		FROM page
+		JOIN registrations r ON r.id = page.id
 		JOIN contests c ON c.id = r.contest_id
 		JOIN users u ON u.id = r.user_id`+ownResultJoins+`
-		WHERE r.user_id = $1
-		ORDER BY COALESCE(c.starts_at, c.created_at) DESC, r.created_at DESC, r.id
-		LIMIT $2`, userID, limit)
+		ORDER BY COALESCE(c.starts_at, c.created_at) DESC, r.created_at DESC, r.id`,
+		userID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list the contests of %s: %w", userID, err)
 	}
