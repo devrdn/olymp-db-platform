@@ -2,9 +2,8 @@ import { z } from "zod";
 
 import { API_PREFIX, request } from "./client";
 import {
-  answersSchema,
-  loggedQuerySchema,
   queriesSchema,
+  type QueriesPage,
   type QueriesParams,
   type ReadOptions,
 } from "./query-log";
