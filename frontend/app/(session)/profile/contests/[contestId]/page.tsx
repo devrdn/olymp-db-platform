@@ -18,9 +18,17 @@ import { MyQueries } from "./my-queries";
 import { ReportTabs, tabFromParam, type ReportTab } from "./report-tabs";
 import { ResultSummary } from "./result-summary";
 
-export async function generateMetadata() {
-  const dict = await activeDictionary();
-  return { title: dict.profile.report.tabs.summary };
+/**
+ * The tab in the address is the tab in the title. A student who opened the
+ * result, their queries and their notes in three browser tabs would
+ * otherwise have three called "Result".
+ *
+ * Not the contest's name: that would be a read of its own before the page's,
+ * and a title for a contest the caller may not be allowed to know exists.
+ */
+export async function generateMetadata(props: PageProps<"/profile/contests/[contestId]">) {
+  const [dict, search] = await Promise.all([activeDictionary(), props.searchParams]);
+  return { title: dict.profile.report.tabs[tabFromParam(search.tab)] };
 }
 
 /**

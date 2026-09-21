@@ -169,7 +169,6 @@ const en = {
        * note in the audit trail, which has access rules of its own.
        */
       disqualified: "You were disqualified from this contest. What you did is still yours to read.",
-      failed: "This part of your report could not be loaded. Reload the page to try again.",
       result: {
         heading: "Your result",
         points: "Points",
