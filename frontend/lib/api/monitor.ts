@@ -1,6 +1,13 @@
 import { z } from "zod";
 
 import { API_PREFIX, request } from "./client";
+import {
+  answersSchema,
+  loggedQuerySchema,
+  queriesSchema,
+  type QueriesParams,
+  type ReadOptions,
+} from "./query-log";
 
 /**
  * The wire shapes of the organiser's monitoring routes
@@ -333,7 +340,25 @@ export function monitorCsvHref(contestId: string): string {
   return `${API_PREFIX}${monitorBase(contestId)}/export.csv`;
 }
 
-export type ReadOptions = { signal?: AbortSignal };
+/**
+ * The shapes both audiences of the SQL log speak, re-exported so a reader of
+ * the monitoring routes finds them where the routes are. They are defined in
+ * `./query-log`, which the participant's own profile reads from too.
+ */
+export {
+  answersSchema,
+  loggedQuerySchema,
+  queriesSchema,
+  MAX_QUERIES_PAGE,
+  MAX_QUERY_SEARCH,
+  QUERY_STATUSES,
+  type Answers,
+  type Attempt,
+  type LoggedQuery,
+  type QueriesPage,
+  type QueriesParams,
+  type ReadOptions,
+} from "./query-log";
 
 /** GET …/monitor/participants, from the browser. */
 export async function fetchRoster(contestId: string, options: ReadOptions = {}): Promise<Roster> {
@@ -390,51 +415,6 @@ export const participantSchema = z
 
 export type Participant = z.infer<typeof participantSchema>;
 
-/** Every status a query may have, and the only ones the queries filter takes (monitor.queryStatuses). */
-export const QUERY_STATUSES = ["running", "ok", "error", "rejected", "timeout"] as const;
-
-/** The most queries one page carries (monitor.MaxQueriesPage). */
-export const MAX_QUERIES_PAGE = 50;
-
-/** The longest text the queries search takes, in characters (monitor.MaxQuerySearchRunes). */
-export const MAX_QUERY_SEARCH = 200;
-
-/** One query of the queries tab, whole. */
-export const loggedQuerySchema = z
-  .object({
-    cursor: z.string(),
-    executed_at: z.string(),
-    id: z.number(),
-    sql: z.string(),
-    sql_truncated: z.boolean().optional(),
-    status: z.string(),
-    error: z.string().optional(),
-    duration_ms: z.number().nullable().optional(),
-    row_count: z.number().nullable().optional(),
-    ip: z.string().optional(),
-  })
-  .transform((raw) => ({
-    cursor: raw.cursor,
-    executedAt: raw.executed_at,
-    id: raw.id,
-    sql: raw.sql,
-    sqlTruncated: raw.sql_truncated ?? false,
-    status: raw.status,
-    error: raw.error,
-    durationMs: raw.duration_ms ?? null,
-    rowCount: raw.row_count ?? null,
-    ip: raw.ip,
-  }));
-
-export type LoggedQuery = z.infer<typeof loggedQuerySchema>;
-
-/** One page of the queries tab, newest first; `more` says there is an older page. */
-export const queriesSchema = z.object({ items: z.array(loggedQuerySchema), more: z.boolean() });
-
-export type QueriesPage = z.infer<typeof queriesSchema>;
-
-export type QueriesParams = { status?: string; q?: string; cursor?: string; limit?: number };
-
 export function queriesPath(contestId: string, registrationId: string, params: QueriesParams): string {
   const query = new URLSearchParams();
   if (params.status) query.set("status", params.status);
@@ -457,48 +437,6 @@ export async function fetchQueries(
   });
   return queriesSchema.parse(payload);
 }
-
-const attemptSchema = z
-  .object({
-    id: z.string(),
-    question_ord: z.number(),
-    attempt_no: z.number(),
-    value: z.string(),
-    correct: z.boolean(),
-    points_awarded: z.number(),
-    submitted_at: z.string(),
-    queries: z.array(loggedQuerySchema),
-    more_queries: z.number(),
-  })
-  .transform((raw) => ({
-    id: raw.id,
-    questionOrd: raw.question_ord,
-    attemptNo: raw.attempt_no,
-    value: raw.value,
-    correct: raw.correct,
-    points: raw.points_awarded,
-    submittedAt: raw.submitted_at,
-    /** The queries that led to the attempt, oldest first (design §3). */
-    queries: raw.queries,
-    /** How many more queries led to it than `queries` carries. */
-    moreQueries: raw.more_queries,
-  }));
-
-export type Attempt = z.infer<typeof attemptSchema>;
-
-/** The answers tab: every attempt, by question in order, each with the queries that led to it. */
-export const answersSchema = z
-  .object({
-    questions: z.array(
-      z
-        .object({ question_id: z.string(), question_ord: z.number(), attempts: z.array(attemptSchema) })
-        .transform((raw) => ({ questionId: raw.question_id, questionOrd: raw.question_ord, attempts: raw.attempts })),
-    ),
-    truncated: z.boolean(),
-  })
-  .transform((raw) => ({ questions: raw.questions, truncated: raw.truncated }));
-
-export type Answers = z.infer<typeof answersSchema>;
 
 /** The document a notes revision belongs to; any other document is a tab's id. */
 export const NOTES_DOCUMENT = "notes";
