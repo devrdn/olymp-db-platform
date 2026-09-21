@@ -60,10 +60,22 @@ export default async function ReportPage(props: PageProps<"/profile/contests/[co
   if (!isId(contestId)) notFound();
   const tab = tabFromParam(search.tab);
 
-  const [report, panel] = await Promise.all([
+  // Both reads run together, and both are awaited to the end even when one of
+  // them throws. `notFound()` and `redirect()` work by throwing, and
+  // Promise.all rejects on whichever throws first while the other read is
+  // still in flight — so a tab that failed for its own reason could be the
+  // answer the reader gets instead of the report's 404, and the loser's
+  // rejection would be left with nobody to receive it. allSettled gives both
+  // an owner, and the report decides: it is the read the whole screen depends
+  // on, and its refusal is the one this page exists to answer with.
+  const [reported, panelled] = await Promise.allSettled([
     read(contestId, "/report", (payload) => profileReportSchema.parse(payload)),
     loadTab(tab, contestId),
   ]);
+  if (reported.status === "rejected") throw reported.reason;
+  if (panelled.status === "rejected") throw panelled.reason;
+  const report = reported.value;
+  const panel = panelled.value;
 
   const t = dict.profile.report;
   const shared = dict.contests;
