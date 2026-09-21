@@ -4,6 +4,7 @@ import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
 
 import Link from "next/link";
 
+import { QUERY_TONE } from "@/components/product/query-row";
 import { buttonVariants } from "@/components/ui/button";
 import type { FeedItem } from "@/lib/api/monitor";
 import { readableDuration } from "@/lib/format/bytes";
@@ -326,15 +327,6 @@ export function clock(iso: string, locale: string): string {
 }
 
 const QUIET_KINDS = new Set(["tab_created", "tab_renamed", "tab_deleted"]);
-
-/** The status of a query in the colour of what it means; running is the one live thing. */
-export const QUERY_TONE: Record<string, string> = {
-  running: "text-accent",
-  ok: "text-good",
-  error: "text-bad",
-  rejected: "text-warn",
-  timeout: "text-warn",
-};
 
 /** One line of the feed, positioned by its index. Memoised on the item. */
 const FeedLine = memo(function FeedLine({
