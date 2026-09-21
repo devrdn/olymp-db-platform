@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/leaderboard"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/google/uuid"
 )
@@ -170,6 +171,112 @@ func TestProfileEnrolmentsStopAtTheLimit(t *testing.T) {
 		if err != nil || len(rows) != 2 {
 			t.Fatalf("Enrolments(limit 2) returned %d rows, %v", len(rows), err)
 		}
+	})
+}
+
+// The list carries the participant's own numbers, counted from their own
+// submissions and nobody else's, and agreeing with the table the contest is
+// judged by: the same points and the same solved count postgres.Leaderboard
+// computes for the same registration. Two statements compute these numbers
+// and this is what keeps them one answer.
+func TestProfileEnrolmentsCarryTheOwnResultTheLeaderboardAgreesWith(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newProfileFixture(t, ctx)
+		contest, mine := f.contest(contests.StatusFinished, -24*time.Hour)
+		first, second, untried := f.question(contest, 1), f.question(contest, 2), f.question(contest, 3)
+		stranger := f.strangerIn(contest)
+
+		f.answer(mine, first, 1, false, f.base)
+		f.answer(mine, first, 2, true, f.base.Add(10*time.Minute))
+		f.answer(mine, second, 1, true, f.base.Add(20*time.Minute))
+		_ = untried
+		// The stranger scores more, in the same contest, on the same
+		// questions.
+		f.answer(stranger, first, 1, true, f.base)
+		f.answer(stranger, second, 1, true, f.base)
+
+		rows, err := NewProfile(testPool).Enrolments(ctx, f.user, 10)
+		if err != nil {
+			t.Fatalf("Enrolments() = %v", err)
+		}
+		got := rows[0].Result
+		if got.Scoring != contests.ScoringPoints || got.Points != 20 || got.Solved != 2 {
+			t.Fatalf("result = %+v, want 20 points and 2 solved", got)
+		}
+
+		entries, err := NewLeaderboard(testPool).Standings(ctx, leaderboard.Query{
+			// Past the registrations too: a row made after the cutoff is on no
+			// table, and these were made a moment ago.
+			ContestID: contest, Cutoff: time.Now().Add(time.Hour), Scoring: contests.ScoringPoints, Limit: 10,
+		})
+		if err != nil {
+			t.Fatalf("Standings() = %v", err)
+		}
+		for _, entry := range entries {
+			if entry.Registration != mine {
+				continue
+			}
+			if entry.Points != got.Points || entry.Solved != got.Solved {
+				t.Errorf("the table says %d points and %d solved, the list says %d and %d",
+					entry.Points, entry.Solved, got.Points, got.Solved)
+			}
+			return
+		}
+		t.Fatal("the caller is not on the table at all")
+	})
+}
+
+// The ICPC row is the one with a formula worth pinning: solved counts the
+// visible questions solved, and the penalty is each solve's minute from the
+// start plus the contest's penalty for every wrong attempt before it. Both
+// are checked against postgres.Leaderboard's own ICPC computation on the
+// same data.
+func TestProfileEnrolmentsCarryTheICPCResultTheLeaderboardAgreesWith(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newProfileFixture(t, ctx)
+		contest, mine := f.contest(contests.StatusFinished, 0)
+		f.exec(`UPDATE contests SET scoring = 'icpc', icpc_penalty_min = 20 WHERE id = $1`, contest)
+		first, second := f.question(contest, 1), f.question(contest, 2)
+		hidden := f.question(contest, 3)
+		f.exec(`UPDATE questions SET is_visible = false WHERE id = $1`, hidden)
+		stranger := f.strangerIn(contest)
+
+		// One wrong attempt then a solve 30 minutes in: 30 + 20 = 50.
+		f.answer(mine, first, 1, false, f.base.Add(5*time.Minute))
+		f.answer(mine, first, 2, true, f.base.Add(30*time.Minute))
+		// A clean solve 10 minutes in: 10.
+		f.answer(mine, second, 1, true, f.base.Add(10*time.Minute))
+		// A hidden question is on no ICPC grid, so it costs and counts
+		// nothing.
+		f.answer(mine, hidden, 1, true, f.base.Add(90*time.Minute))
+		f.answer(stranger, first, 1, true, f.base)
+
+		rows, err := NewProfile(testPool).Enrolments(ctx, f.user, 10)
+		if err != nil {
+			t.Fatalf("Enrolments() = %v", err)
+		}
+		got := rows[0].Result
+		if got.Scoring != contests.ScoringICPC || got.Solved != 2 || got.Penalty != 60 {
+			t.Fatalf("result = %+v, want 2 solved and 60 penalty minutes", got)
+		}
+
+		entries, _, err := NewLeaderboard(testPool).ICPCStandings(ctx, leaderboard.Query{
+			ContestID: contest, Cutoff: time.Now().Add(time.Hour), Scoring: contests.ScoringICPC, Limit: 10,
+		})
+		if err != nil {
+			t.Fatalf("ICPCStandings() = %v", err)
+		}
+		for _, entry := range entries {
+			if entry.Registration != mine {
+				continue
+			}
+			if entry.Solved != got.Solved || entry.Penalty != got.Penalty {
+				t.Errorf("the table says %d solved and %d penalty, the list says %d and %d",
+					entry.Solved, entry.Penalty, got.Solved, got.Penalty)
+			}
+			return
+		}
+		t.Fatal("the caller is not on the table at all")
 	})
 }
 

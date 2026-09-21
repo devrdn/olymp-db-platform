@@ -50,12 +50,15 @@ func (s *profileStore) Activity(context.Context, uuid.UUID) (profile.Activity, e
 	return s.activity, nil
 }
 
-// profileResults is the leaderboard as the profile reads it.
+// profileResults is the leaderboard as the profile reads it, counting how
+// many contests it was asked about: the list must ask about none.
 type profileResults struct {
-	own map[uuid.UUID]leaderboard.Own
+	own  map[uuid.UUID]leaderboard.Own
+	asks int
 }
 
 func (r *profileResults) Own(_ context.Context, contestID, _ uuid.UUID) (leaderboard.Own, error) {
+	r.asks++
 	own, ok := r.own[contestID]
 	if !ok {
 		return leaderboard.Own{}, leaderboard.ErrNotAParticipant
@@ -170,9 +173,11 @@ func newProfileFixture(t *testing.T) *profileFixture {
 		}
 		f.watch.registrations[p.ID] = contest.ID
 		// The store answers for the account asking, so only the student's own
-		// registrations are on their list.
+		// registrations are on their list — and it counts the row's own
+		// numbers with it.
 		if who.ID == f.student.ID {
-			f.store.enrolments = append(f.store.enrolments, profile.Enrolment{Contest: contest, Participant: p})
+			f.store.enrolments = append(f.store.enrolments, profile.Enrolment{Contest: contest, Participant: p,
+				Result: profile.Result{Scoring: contests.ScoringPoints, Points: 20, Solved: 2}})
 		}
 		return contest
 	}
@@ -279,14 +284,12 @@ type profileContestsBody struct {
 		Over      bool      `json:"over"`
 		StartsAt  string    `json:"starts_at"`
 		Result    *struct {
-			Scoring      string `json:"scoring"`
-			Points       int    `json:"points"`
-			Solved       int    `json:"solved"`
-			Penalty      *int   `json:"penalty"`
-			State        string `json:"state"`
-			PlaceOpen    bool   `json:"place_open"`
-			Place        *int   `json:"place"`
-			Participants *int   `json:"participants"`
+			Scoring   string `json:"scoring"`
+			Points    int    `json:"points"`
+			Solved    int    `json:"solved"`
+			Penalty   *int   `json:"penalty"`
+			State     string `json:"state"`
+			PlaceOpen bool   `json:"place_open"`
 		} `json:"result"`
 	} `json:"items"`
 }
@@ -315,10 +318,11 @@ func TestTheListCarriesTheResultOfAFinishedContestAndNothingOfARunningOne(t *tes
 		byID[item.ContestID] = i
 	}
 	done := body.Items[byID[f.finished.ID]]
-	if !done.Over || done.Result == nil || done.Result.Points != 20 ||
-		done.Result.Place == nil || *done.Result.Place != 2 ||
-		done.Result.Participants == nil || *done.Result.Participants != 9 {
+	if !done.Over || done.Result == nil || done.Result.Points != 20 || done.Result.Solved != 2 {
 		t.Errorf("the finished contest reads %+v", done)
+	}
+	if !done.Result.PlaceOpen || done.Result.State != leaderboard.StateFinal {
+		t.Errorf("the finished contest's table reads %+v, want final and open", done.Result)
 	}
 	if done.Title != "The Library Murder" || done.Status != contests.StatusFinished || done.StartsAt == "" {
 		t.Errorf("the finished contest is missing its own facts: %+v", done)
@@ -329,12 +333,34 @@ func TestTheListCarriesTheResultOfAFinishedContestAndNothingOfARunningOne(t *tes
 	}
 }
 
-// The freeze is not walked round: the participant's own numbers are shown,
-// the place is not.
-func TestAFrozenTableHidesThePlaceAndKeepsTheOwnResult(t *testing.T) {
+// The list names no place at all — not even on an open table — and costs no
+// standings computation to say so. What it carries is the participant's own
+// numbers and whether the report has a place to show (design §2.1).
+func TestTheListNamesNoPlaceAndAsksTheLeaderboardNothing(t *testing.T) {
 	f := newProfileFixture(t)
-	f.results.own[f.finished.ID] = leaderboard.Own{State: leaderboard.StateFrozen, Open: false,
-		Scoring: contests.ScoringPoints, Row: leaderboard.Row{Entry: leaderboard.Entry{Points: 20, Solved: 2}}}
+	rec := f.get("/me/contests", &f.student)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("contests: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, field := range []string{`"place"`, `"participants"`} {
+		if strings.Contains(rec.Body.String(), field) {
+			t.Errorf("the list carries %s: %s", field, rec.Body.String())
+		}
+	}
+	if f.results.asks != 0 {
+		t.Errorf("the leaderboard was asked %d times for a list, want none", f.results.asks)
+	}
+}
+
+// The freeze is not walked round: the participant's own numbers are shown,
+// and the row says the table is shut.
+func TestAFrozenTableIsReportedShutOnTheList(t *testing.T) {
+	f := newProfileFixture(t)
+	freeze := 30
+	c := f.finished
+	c.LeaderboardFreezeMin = &freeze
+	f.stores.Contests.Put(c)
+	f.store.enrolments[0].Contest = c
 
 	for _, item := range f.list(t).Items {
 		if item.ContestID != f.finished.ID {
@@ -343,8 +369,8 @@ func TestAFrozenTableHidesThePlaceAndKeepsTheOwnResult(t *testing.T) {
 		if item.Result == nil || item.Result.Points != 20 {
 			t.Fatalf("the frozen contest reads %+v, want the own result", item.Result)
 		}
-		if item.Result.PlaceOpen || item.Result.Place != nil || item.Result.Participants != nil {
-			t.Errorf("the frozen contest carries a place: %+v", item.Result)
+		if item.Result.PlaceOpen {
+			t.Errorf("the frozen contest says its table is open: %+v", item.Result)
 		}
 		if item.Result.State != leaderboard.StateFrozen {
 			t.Errorf("state = %s, want frozen so the interface can say why", item.Result.State)

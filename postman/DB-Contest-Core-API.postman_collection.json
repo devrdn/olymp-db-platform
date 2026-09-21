@@ -2017,7 +2017,7 @@
                 "contests"
               ]
             },
-            "description": "Every contest the signed-in account is registered in, newest first, with its title in the negotiated language, its status and window, the caller's own standing on the roster, and `over` — whether it has ended for this participant.\n\n`result` is present only for a contest that is over: `points`, `solved`, `penalty` (ICPC only), and the table's `state`. `place` and `participants` come only with `place_open`, which is true only when the table is open (final, or a freeze an organiser revealed): the profile does not walk round a freeze. A contest still running carries no result at all — during one, the profile shows nothing of what is happening inside it.\n\nAt most 50 contests; `truncated` says there were more.\n\nResponses: 200 · 401 · 429 `profile_too_often`"
+            "description": "Every contest the signed-in account is registered in, newest first, with its title in the negotiated language, its status and window, the caller's own standing on the roster, and `over` — whether it has ended for this participant.\n\n`result` is present only for a contest that is over: `points`, `solved`, `penalty` (ICPC only), the table's `state`, and `place_open`. **There is no place in the list.** Naming one means computing a whole standings table per contest to decorate an overview; the place is on the report, and `place_open` says whether there is one to read (true only for a final table, or a freeze an organiser revealed). A contest still running carries no result at all — during one, the profile shows nothing of what is happening inside it.\n\nThe whole list, its own numbers included, is one aggregating read over the account's registrations. At most 50 contests; `truncated` says there were more.\n\nResponses: 200 · 401 · 429 `profile_too_often`"
           },
           "response": []
         },
@@ -2038,7 +2038,7 @@
                 "report"
               ]
             },
-            "description": "The result of one finished contest of the caller's: their own standing (and their place, only where the table is open), when their clock started, how long they worked, how many queries they ran and how many succeeded, and question by question the attempts, whether it was solved, when, and what it earned.\n\nResponses: 200 · 401 · 404 `profile_contest_not_found` · 429 `profile_too_often`"
+            "description": "The result of one finished contest of the caller's: their own standing and, when the table is open (`place_open`), `place` and `participants` — the only route that names a place. Also when their clock started, how long they worked (`worked_ms`), how many queries they ran and how many succeeded, and question by question the attempts, whether it was solved, when, and what it earned.\n\nResponses: 200 · 401 · 404 `profile_contest_not_found` · 429 `profile_too_often`"
           },
           "response": []
         },
