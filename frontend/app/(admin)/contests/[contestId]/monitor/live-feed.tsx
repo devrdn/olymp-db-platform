@@ -7,7 +7,7 @@ import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import type { FeedItem } from "@/lib/api/monitor";
 import { readableDuration } from "@/lib/format/bytes";
-import { DEFAULT_TIME_ZONE, formatMoment } from "@/lib/format/datetime";
+import { formatMoment, formatSeconds } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
@@ -314,22 +314,15 @@ function FilterChip({
   );
 }
 
-const clockFormatters = new Map<string, Intl.DateTimeFormat>();
-
-/** The time of day to the second: the feed orders things inside one minute. */
+/**
+ * The time of day to the second: the feed orders things inside one minute.
+ *
+ * The formatter itself is `lib/format`'s, with its own cache, because the
+ * participant's own log prints the same stamp and neither side should carry
+ * a second copy of the timezone rule.
+ */
 export function clock(iso: string, locale: string): string {
-  let formatter = clockFormatters.get(locale);
-  if (!formatter) {
-    formatter = new Intl.DateTimeFormat(locale, {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hourCycle: "h23",
-      timeZone: DEFAULT_TIME_ZONE,
-    });
-    clockFormatters.set(locale, formatter);
-  }
-  return formatter.format(new Date(iso));
+  return formatSeconds(iso, { locale });
 }
 
 const QUIET_KINDS = new Set(["tab_created", "tab_renamed", "tab_deleted"]);

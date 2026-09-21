@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   formatDay,
   formatMoment,
+  formatSeconds,
   formatTime,
   instantFromWallClock,
   isSameDay,
@@ -77,6 +78,24 @@ describe("the same string in every runtime", () => {
 
   test("midnight is 00:00 and not 24:00", () => {
     expect(formatTime("2026-11-07T22:00:00Z", { locale: "en" })).toBe("00:00");
+  });
+});
+
+/**
+ * The stamp a log line carries. A query and the next one are often a few
+ * seconds apart, so the minute alone would print the same time twice over
+ * rows that are not the same moment.
+ */
+describe("formatSeconds", () => {
+  test("carries the second, in the contest's timezone and on a 24-hour clock", () => {
+    for (const locale of ["en", "ru-RU", "ro-RO"]) {
+      expect(formatSeconds("2026-11-08T10:14:03.120Z", { locale })).toBe("12:14:03");
+    }
+  });
+
+  test("is the time of the same instant, one field longer", () => {
+    const at = "2026-11-08T19:05:09Z";
+    expect(formatSeconds(at, { locale: "en" })).toBe(`${formatTime(at, { locale: "en" })}:09`);
   });
 });
 
