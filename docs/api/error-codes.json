@@ -414,6 +414,22 @@
       "meaning": "The account is still on a one-time password and must set its own before anything else."
     },
     {
+      "code": "profile_contest_not_found",
+      "meaning": "No finished contest of the caller's with that identifier. The same answer whether the contest does not exist, belongs to an olympiad they never took part in, or is still running for them: the profile shows a contest only once it has ended for this participant, and telling those cases apart would say which contests exist and who is on their rosters."
+    },
+    {
+      "code": "profile_invalid_cursor",
+      "meaning": "The cursor is not one this service issued. Start again from the newest page."
+    },
+    {
+      "code": "profile_invalid_filter",
+      "meaning": "A filter on the caller's own queries is not acceptable: an unknown query status, a search longer than 200 characters, or a cursor of another kind. The message names which."
+    },
+    {
+      "code": "profile_too_often",
+      "meaning": "This account has made more reads of its own profile this minute than the installation allows, refused reads included — or a download of the same query log is already running. Wait `Retry-After` seconds and ask again."
+    },
+    {
       "code": "query_already_running",
       "meaning": "This participant already has a query in flight. One at a time, so that ten open tabs cannot hold ten execution slots."
     },

@@ -34,6 +34,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/server"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/postgres"
+	"github.com/devrdn/db-contest/backend/internal/profile"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
@@ -496,6 +497,26 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	).WithPoolTrigger(poolTrigger)
 	a.tasks = append(a.tasks, advanceContestSchedule(log, scheduler.Advance))
 
+	// The contest's table, and with it the only source of a result there is.
+	// One service for both audiences: the leaderboard routes serve it to a
+	// contest, and the profile reads one registration's own row out of the
+	// same cached computations (leaderboard.Service.Own), so a participant's
+	// report and the table they were judged by can never disagree.
+	standings := leaderboard.NewService(leaderboard.Config{
+		Contests:     postgres.NewContests(pool),
+		Participants: postgres.NewRegistrations(pool),
+		Standings:    postgres.NewLeaderboard(pool),
+		Audit:        auditRecorder,
+		UnitOfWork:   storage.NewUnitOfWork(pool),
+	})
+	// What a contest's participants did. One WatchService, read by two
+	// handlers: the staff monitoring routes behind contest.monitor, and the
+	// participant's own profile, which asks it for its own registration only
+	// (design §1 — no second implementation of the same three reads).
+	watch := monitor.NewWatchService(monitor.WatchConfig{
+		Store: postgres.NewWatch(pool), Audit: auditRecorder, Marks: cacheBackend,
+	})
+
 	modules := []api.Module{
 		api.NewAuthHandler(authService, userService, userRepo, authMiddleware, cookies, log),
 		api.NewUsersHandler(userService, userRepo, authService, authMiddleware, log),
@@ -507,13 +528,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		// with the link. Its own service rather than a corner of
 		// contestService: it records nothing but a reveal, it caches, and
 		// one of its routes is deliberately outside authentication.
-		api.NewLeaderboardHandler(leaderboard.NewService(leaderboard.Config{
-			Contests:     postgres.NewContests(pool),
-			Participants: postgres.NewRegistrations(pool),
-			Standings:    postgres.NewLeaderboard(pool),
-			Audit:        auditRecorder,
-			UnitOfWork:   storage.NewUnitOfWork(pool),
-		}), limiter, authMiddleware, log, cfg.DefaultLocale),
+		api.NewLeaderboardHandler(standings, limiter, authMiddleware, log, cfg.DefaultLocale),
 		// The trail is written by every module above; this is the only way
 		// to read it back, and it is behind its own permission.
 		api.NewAuditHandler(auditTrail, authMiddleware, log),
@@ -521,9 +536,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		// behind contest.monitor, with its own read budget on the shared
 		// limiter under the "monitor:" namespace.
 		// Every view is audited through the shared cache's marks (design §7).
-		api.NewMonitorHandler(monitor.NewWatchService(monitor.WatchConfig{
-			Store: postgres.NewWatch(pool), Audit: auditRecorder, Marks: cacheBackend,
-		}), limiter, authMiddleware, log),
+		api.NewMonitorHandler(watch, limiter, authMiddleware, log),
 	}
 	if console != nil {
 		modules = append(modules, api.NewConsoleHandler(console, authMiddleware, log))
@@ -612,6 +625,25 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// starts one, rather than after whatever this constructor happened to do
 	// with a context of its own (see EventsHandler's own doc).
 	modules = append(modules, api.NewEventsHandler(participantAccess, authMiddleware, log, ctx.Done()))
+	// The participant's own profile (the participant profile design): their
+	// contests, and for each one that has ended for them their report, their
+	// queries, their answers, their notes and their log as a file. Behind
+	// authentication and nothing else, with its own read budget on the shared
+	// limiter under the "profile:" namespace.
+	//
+	// It is handed the same three collaborators the rest of the service
+	// already uses rather than any of its own: standings above, which is the
+	// only source of a result; watch above, which is the only implementation
+	// of the three per-registration reads; and the same postgres.QueryLog the
+	// play screen streams its CSV from. What is its own is postgres.Profile —
+	// the list, the header's four numbers and a registration's counters.
+	modules = append(modules, api.NewProfileHandler(profile.NewService(profile.Config{
+		Store:        postgres.NewProfile(pool),
+		Contests:     postgres.NewContests(pool),
+		Participants: postgres.NewRegistrations(pool),
+		Results:      standings,
+		Attempts:     watch,
+	}), watch, history, limiter, authMiddleware, log, cfg.DefaultLocale))
 
 	deps := api.Deps{
 		Logger:        log,

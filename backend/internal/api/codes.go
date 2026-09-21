@@ -395,4 +395,20 @@ var (
 		"The cursor is not one this service issued. Start again from the newest page.")
 	codeMonitorInvalidFilter = httpx.NewCode("monitor_invalid_filter",
 		"A monitoring filter is not acceptable: an unknown event kind or query status, a search longer than 200 characters, a time that is not RFC 3339, a range that ends before it starts, or after and before together. The message names which.")
+
+	// --- The participant's own profile ----------------------------------------
+	//
+	// One code per profile.Service refusal (CLAUDE.md rule 1), and the
+	// caller's own read budget. Separate from the monitoring codes beside
+	// them although two of them read alike: these reach a participant's own
+	// screen rather than an organiser's, and a message about "monitoring
+	// pages" would be the wrong sentence in the wrong place.
+	codeProfileTooOften = httpx.NewCode("profile_too_often",
+		"This account has made more reads of its own profile this minute than the installation allows, refused reads included — or a download of the same query log is already running. Wait `Retry-After` seconds and ask again.")
+	codeProfileContestNotFound = httpx.NewCode("profile_contest_not_found",
+		"No finished contest of the caller's with that identifier. The same answer whether the contest does not exist, belongs to an olympiad they never took part in, or is still running for them: the profile shows a contest only once it has ended for this participant, and telling those cases apart would say which contests exist and who is on their rosters.")
+	codeProfileInvalidCursor = httpx.NewCode("profile_invalid_cursor",
+		"The cursor is not one this service issued. Start again from the newest page.")
+	codeProfileInvalidFilter = httpx.NewCode("profile_invalid_filter",
+		"A filter on the caller's own queries is not acceptable: an unknown query status, a search longer than 200 characters, or a cursor of another kind. The message names which.")
 )
