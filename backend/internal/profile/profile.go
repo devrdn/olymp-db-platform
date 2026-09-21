@@ -210,6 +210,19 @@ func Over(c contests.Contest, p contests.Participant, now time.Time) bool {
 }
 
 // Summary is the profile's four numbers.
+//
+// Deliberately not cut at MaxContests. The list below it is a page — fifty
+// rows, newest first — while these are the account's record: how many
+// olympiads it has been on, and everything it ever ran and solved on them.
+// Cutting them to the page would make "contests" mean "contests currently on
+// this screen", which is a number nobody asked for, and would have a long
+// career report fewer queries the longer it got.
+//
+// What bounds the read is the account's own rows, which is the bound that
+// matters: one statement over one person's registrations, each counter a
+// lateral aggregate over that registration's own index range, never a scan of
+// the journals (postgres.Profile.Summary). An account cannot have more
+// registrations than the installation ran olympiads.
 func (s *Service) Summary(ctx context.Context, userID uuid.UUID) (Summary, error) {
 	summary, err := s.store.Summary(ctx, userID)
 	if err != nil {
