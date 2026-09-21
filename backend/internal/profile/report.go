@@ -84,6 +84,16 @@ type QuestionResult struct {
 	// Points is what the attempts earned, the penalty for wrong ones
 	// included: the number the contest recorded, never one derived again.
 	Points int
+	// Penalty is this question's share of an ICPC row's penalty minutes, and
+	// zero in every other mode — nothing else charges minutes. It is
+	// leaderboard.Cell.Penalty over the cell the table already computed, not
+	// arithmetic of this package's own.
+	//
+	// It is a field of its own rather than Points under another name: in ICPC
+	// scoring the server writes points_awarded = 0 on every submission, so a
+	// reader shown Points there would be told nought for a question that cost
+	// fifty minutes.
+	Penalty int
 }
 
 // Report is the result tab of one contest.
@@ -123,6 +133,7 @@ func (r Report) Worked() (time.Duration, bool) {
 func (s *Service) Report(ctx context.Context, access Access) (Report, error) {
 	report := Report{Contest: access.Contest, Participant: access.Participant}
 
+	var cells map[uuid.UUID]leaderboard.Cell
 	own, err := s.results.Own(ctx, access.Contest.ID, access.Participant.ID)
 	switch {
 	case errors.Is(err, leaderboard.ErrNotAParticipant), errors.Is(err, leaderboard.ErrNotFound):
@@ -130,6 +141,13 @@ func (s *Service) Report(ctx context.Context, access Access) (Report, error) {
 		return Report{}, fmt.Errorf("read the standing: %w", err)
 	default:
 		report.Result = resultOf(own)
+		// One cell per visible question, in ICPC scoring only. A question
+		// that is not on the grid — hidden, or since deleted — has none, and
+		// costs the row nothing, which is the same nothing it is shown.
+		cells = make(map[uuid.UUID]leaderboard.Cell, len(own.Row.Cells))
+		for _, cell := range own.Row.Cells {
+			cells[cell.QuestionID] = cell
+		}
 	}
 
 	answers, err := s.attempts.Answers(ctx, access.Contest.ID, access.Participant.ID)
@@ -140,7 +158,8 @@ func (s *Service) Report(ctx context.Context, access Access) (Report, error) {
 	report.Questions = make([]QuestionResult, 0, len(answers.Questions))
 	for _, group := range answers.Questions {
 		question := QuestionResult{QuestionID: group.QuestionID, Ord: group.QuestionOrd,
-			Attempts: len(group.Attempts)}
+			Attempts: len(group.Attempts),
+			Penalty:  cells[group.QuestionID].Penalty(access.Contest.ICPCPenaltyMin)}
 		for _, attempt := range group.Attempts {
 			question.Points += attempt.PointsAwarded
 			if !attempt.Correct || question.Solved {

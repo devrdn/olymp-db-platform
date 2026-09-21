@@ -112,3 +112,67 @@ func TestTheTimeWorkedIsAbsentWithoutAStartAndAnAnswer(t *testing.T) {
 		t.Errorf("Worked() = %v, %v, want no answer at all", worked, ok)
 	}
 }
+
+// In ICPC scoring a question's share of the penalty is what the report has
+// to show: the server writes points_awarded = 0 for every ICPC submission,
+// so a column of points would read nought on a row that cost fifty minutes.
+//
+// The number is not derived here. It is leaderboard.Cell.Penalty over the
+// cell the table already computed for that question, with the contest's own
+// icpc_penalty_min — the same arithmetic the standings statement performs
+// (TestICPCCellPenaltiesAddUpToTheRowsOwn holds the two together).
+func TestTheReportCarriesEachQuestionsShareOfTheICPCPenalty(t *testing.T) {
+	r := newRig(t)
+	solved, missed := uuid.New(), uuid.New()
+	r.attempts.answers = monitor.Answers{Questions: []monitor.QuestionAttempts{
+		answered(solved, 1, false, true),
+		answered(missed, 2, false),
+	}}
+
+	c, p := r.seed(t, contests.StatusFinished)
+	c.Scoring, c.ICPCPenaltyMin = contests.ScoringICPC, 20
+	r.contests.Put(c)
+	started := start
+	p.StartedAt = &started
+	r.people.Put(p)
+	solvedAt := start.Add(2 * time.Minute)
+	r.results.own[c.ID] = leaderboard.Own{State: leaderboard.StateFinal, Open: true,
+		Scoring: contests.ScoringICPC, Place: 2, Participants: 9, Questions: 2,
+		Row: leaderboard.Row{Entry: leaderboard.Entry{Solved: 1, Penalty: 50, Cells: []leaderboard.Cell{
+			{QuestionID: solved, SolvedAt: &solvedAt, Minute: 30, Wrong: 1},
+			{QuestionID: missed, Wrong: 1},
+		}}}}
+
+	access, err := r.service.Open(t.Context(), c.ID, r.user)
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+	report, err := r.service.Report(t.Context(), access)
+	if err != nil {
+		t.Fatalf("Report() = %v", err)
+	}
+	if len(report.Questions) != 2 {
+		t.Fatalf("Report() has %d questions", len(report.Questions))
+	}
+	// 30 minutes plus one wrong attempt at 20: the whole of the row's 50.
+	if report.Questions[0].Penalty != 50 {
+		t.Errorf("the solved question cost %d, want 50", report.Questions[0].Penalty)
+	}
+	// An unsolved question costs nothing, however many attempts it took.
+	if report.Questions[1].Penalty != 0 {
+		t.Errorf("the unsolved question cost %d, want nothing", report.Questions[1].Penalty)
+	}
+}
+
+// Outside ICPC nothing charges minutes, so no question has a penalty — and
+// the points the contest recorded are still the result.
+func TestTheReportChargesNoPenaltyOutsideICPC(t *testing.T) {
+	r := newRig(t)
+	solved := uuid.New()
+	r.attempts.answers = monitor.Answers{Questions: []monitor.QuestionAttempts{answered(solved, 1, true)}}
+
+	report := r.report(t, contests.StatusFinished)
+	if report.Questions[0].Penalty != 0 || report.Questions[0].Points != 10 {
+		t.Errorf("the question reads %+v, want 10 points and no penalty", report.Questions[0])
+	}
+}
