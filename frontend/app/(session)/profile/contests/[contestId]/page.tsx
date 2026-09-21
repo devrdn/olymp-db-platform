@@ -73,7 +73,10 @@ export default async function ReportPage(props: PageProps<"/profile/contests/[co
           </Link>
           <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-8 gap-y-3">
             <div className="flex min-w-0 flex-col gap-1.5">
-              <h1 className="max-w-head text-h2 text-ink">{report.title}</h1>
+              {/* Broken rather than truncated: a contest's name is what this
+                  page is about, and an author may well have written a long
+                  one. It wraps inside the column and never widens it. */}
+              <h1 className="max-w-head text-h2 break-words text-ink">{report.title}</h1>
               <span className="font-mono text-data text-ink-3">
                 <ContestWindow
                   startsAt={report.startsAt}
