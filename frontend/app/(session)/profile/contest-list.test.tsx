@@ -110,6 +110,27 @@ describe("a contest that has ended", () => {
     expect(screen.queryByText(en.profile.contests.placePending)).not.toBeInTheDocument();
   });
 
+  // A contest can be over for this participant — their own timer ran out, or
+  // they were disqualified — while the clock says it is still running. What
+  // such a row must never do is fall back to the sentence a contest still to
+  // come gets: "starts" on something already finished is the one reading that
+  // is certainly wrong.
+  test("stays quiet rather than announcing a start it is past", () => {
+    render_(
+      list([
+        finished({ title: "Cut short", status: "running", over: true, result: undefined }),
+      ]),
+    );
+
+    const row = screen.getByRole("listitem");
+    expect(within(row).queryByText(/Starts/)).not.toBeInTheDocument();
+    expect(
+      within(row).getByRole("link", {
+        name: en.profile.contests.report.replace("{title}", "Cut short"),
+      }),
+    ).toBeInTheDocument();
+  });
+
   test("marks a disqualified registration", () => {
     render_(list([finished({ registrationStatus: "disqualified" })]));
 
