@@ -483,6 +483,84 @@ The notes panel says "The organiser can see your notes." Both are set in small
 secondary ink (`text-small`, `ink-2`) rather than a warning colour: they
 state a fact, they do not raise an alarm.
 
+### 5.2 The profile and report screens
+
+`/profile` is the account's own screen; `/profile/contests/[contestId]`
+is the report of one contest that has ended for its reader (architecture
+§9.5). Both hold the same
+"nothing in boxes, sections divided by a rule" language as the rest of the
+product — the profile stopped being a list of account fields and became a
+screen with real content once it gained a result to show.
+
+**`/profile`** is a header, a one-line summary and a list, no tabs.
+
+- **Header:** initials in a circle, name, and login and roles below it as
+  tags — a wrapped line of labelled pairs replacing the stacked form the
+  screen used to show — plus "Change password" and "Sign out". SPEC 10.4
+  still applies here: initials, no photograph.
+- **Summary:** four numbers in a row — contests, finished, queries run,
+  questions solved — set mono with tabular figures, `grid-cols-4` collapsing
+  to two below the narrow breakpoint. A failed read costs this section one
+  line, not the page.
+- **Contest list**, newest first, rows separated by a rule rather than cards.
+  A finished contest's row shows its own result (points, or solved and
+  penalty in ICPC) and links to its report; while the table is frozen the row
+  says "Your place appears once the organiser opens the table" instead of a
+  place, because the list never asks the leaderboard for one at all
+  (architecture §9.5) — the report is where a place, when there is one,
+  lives. A running contest's row offers only "Enter the contest" and nothing
+  else: what is needed while a contest is on belongs to the contest's own
+  screen. An upcoming row says when it starts. A long contest name wraps
+  rather than widening the page.
+
+**`/profile/contests/[contestId]`** opens only once the contest is over for
+its reader; any other case — someone else's, still running, or nonexistent —
+gets the same not-found page, because the profile does not say which of the
+three it was. The header carries the way back to `/profile`, the contest's
+name and when it ran, and a "Download CSV" of everything its reader ran in
+it. Four tabs live in `?tab=` exactly as the monitoring participant page's
+do — **Result** (default), **My queries**, **My answers**, **My notes** —
+and the server reads the report plus only the one tab's data the address
+names.
+
+- **Result:** the reader's own points, or solved and penalty in ICPC; time
+  worked; queries run and how many succeeded; then a table of every question
+  — solved or not, attempts, time of the first correct answer, and points or
+  ICPC penalty, the penalty read from the same cell the standings grid
+  computes rather than derived again. Place and participant count appear only
+  when the table is open; a frozen table says so instead, and an open table
+  in winner mode says plainly that only the winner has a place, for the rows
+  that are not it. A disqualified reader is told so, without the reason.
+- **My queries, my answers, my notes:** the same rows, the same filters and
+  the same layout an organiser's participant page shows for this reader
+  (§5.1) — with no address column, no revision history, and no live refresh
+  of running queries, because a report only opens after the contest has
+  already ended for its reader.
+
+**Both screens reuse rather than restyle the monitoring screens' own
+components, not copies of them.** `components/product/tab-strip.tsx`
+(`TabStrip({label, tabs, current})`) is the one strip both the monitoring
+participant page and this report wear, each keeping its own addresses,
+words and default tab. The query list (`query-row.tsx`, `query-log.tsx`,
+`use-query-log.ts`), the answer list (`answer-attempts.tsx`) and the
+read-only SQL block (`sql-block.tsx`, `sql-tokens.ts`) are the same
+`components/product/` pieces §5.1 describes for the organiser's participant
+page, with the words, the route and the address column passed in as props
+rather than a second implementation for the second-person reading of them.
+
+**The notes' two-column layout answers to the page's own narrow breakpoint**,
+not to a `@container` query: this page's root does not declare one, so the
+report's notes tab follows the same `narrow` breakpoint the summary strip and
+everything else on the screen does.
+
+**Widths 1440, 1024, 768 and 375 px hold on both screens**: the tab strip
+scrolls sideways inside itself, the question table and the SQL blocks scroll
+inside their own boxes, and a long contest name breaks rather than pushing
+the page sideways.
+
+**No avatars.** SPEC 10.4 stands: initials derived from the login, nowhere
+in this profile.
+
 ## 6. Motion
 
 Three durations: 120 ms for a reaction to input, 180 ms for a change of state,
