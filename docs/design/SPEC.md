@@ -530,7 +530,11 @@ names.
   computes rather than derived again. Place and participant count appear only
   when the table is open; a frozen table says so instead, and an open table
   in winner mode says plainly that only the winner has a place, for the rows
-  that are not it. A disqualified reader is told so, without the reason.
+  that are not it. Two further sentences cover the rest: a contest whose
+  table has not opened at all, and a reader whose row is outside the
+  published table — which happens only past the two thousand rows a table
+  carries, and leaves the session's own figures in place. A disqualified
+  reader is told so, without the reason.
 - **My queries, my answers, my notes:** the same rows, the same filters and
   the same layout an organiser's participant page shows for this reader
   (§5.1) — with no address column, no revision history, and no live refresh
