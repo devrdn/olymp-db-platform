@@ -6,7 +6,7 @@ import {
   type QueriesPage,
   type QueriesParams,
   type ReadOptions,
-} from "./query-log";
+} from "./journal";
 
 /**
  * The wire shapes of the organiser's monitoring routes
@@ -342,7 +342,7 @@ export function monitorCsvHref(contestId: string): string {
 /**
  * The shapes both audiences of the SQL log speak, re-exported so a reader of
  * the monitoring routes finds them where the routes are. They are defined in
- * `./query-log`, which the participant's own profile reads from too.
+ * `./journal`, which the participant's own profile reads from too.
  */
 export {
   answersSchema,
@@ -357,7 +357,7 @@ export {
   type QueriesPage,
   type QueriesParams,
   type ReadOptions,
-} from "./query-log";
+} from "./journal";
 
 /** GET …/monitor/participants, from the browser. */
 export async function fetchRoster(contestId: string, options: ReadOptions = {}): Promise<Roster> {

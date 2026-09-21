@@ -2,7 +2,7 @@
 
 import { memo, useId, useState } from "react";
 
-import type { Answers, Attempt } from "@/lib/api/query-log";
+import type { Answers, Attempt } from "@/lib/api/journal";
 import { formatMoment, formatSeconds } from "@/lib/format/datetime";
 import { cn } from "@/lib/utils";
 
