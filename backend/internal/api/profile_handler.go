@@ -171,6 +171,7 @@ func (h *ProfileHandler) summary(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
+	noIndex(w)
 	httpx.JSON(w, r, http.StatusOK, profileSummaryResponse{Contests: summary.Contests,
 		Finished: summary.Finished, Queries: summary.Queries, Solved: summary.Solved})
 }
@@ -210,12 +211,20 @@ type profileListResult struct {
 
 // profileReportResult is the report's, which does carry the place — one
 // contest, one table, the same cached computation the contest's own page is
-// served from. Place and Participants are pointers so that "not open yet" is
-// absent rather than zero: a place of nought would read as a place.
+// served from.
+//
+// Place and Participants are pointers so that "no place" is null rather than
+// zero, the way the contest's own table already reports an unplaced row: a
+// place of nought reads as a place. There are two ways to have none — the
+// table is not open yet, or it is open and gives this row no place, which in
+// winner mode is everybody but the winner.
 type profileReportResult struct {
 	profileOwnNumbers
 	Place        *int `json:"place"`
 	Participants *int `json:"participants"`
+	// Winner marks the one registration that won a winner-mode contest, and
+	// is absent for every other row and every other mode.
+	Winner bool `json:"winner,omitempty"`
 	// Truncated says the table was cut at the leaderboard's row bound, so
 	// participants counts its rows rather than everybody on the contest.
 	Truncated bool `json:"truncated,omitempty"`
@@ -226,8 +235,12 @@ func toProfileListResult(result profile.Result) *profileListResult {
 }
 
 func toProfileReportResult(result profile.Result) *profileReportResult {
-	out := &profileReportResult{profileOwnNumbers: toProfileOwnNumbers(result)}
-	if result.PlaceOpen {
+	out := &profileReportResult{profileOwnNumbers: toProfileOwnNumbers(result),
+		Winner: result.Winner}
+	// Only a row the table actually placed. An open table that places nobody
+	// but its winner leaves everybody else's place null, together with the
+	// count they are not placed among.
+	if result.PlaceOpen && result.Place > 0 {
 		place, participants := result.Place, result.Participants
 		out.Place, out.Participants, out.Truncated = &place, &participants, result.Truncated
 	}

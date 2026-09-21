@@ -136,3 +136,64 @@ func TestOwnReadsTheSameTableTheContestServes(t *testing.T) {
 	}
 	t.Fatal("the caller is not on the table at all")
 }
+
+// Winner mode has exactly one place (§6.1.1), so everybody else is on the
+// table with no place at all. Own must report that as no place rather than
+// as nought, and must say which of the two the caller is.
+func TestOwnInWinnerModeReportsOnlyTheWinnersPlace(t *testing.T) {
+	r := newRig(t)
+	c := r.seed(contests.StatusFinished, nil)
+	c.Scoring = contests.ScoringWinner
+	r.contests.Put(c)
+	winner, loser := uuid.New(), uuid.New()
+	final := start.Add(30 * time.Minute)
+	scored := start.Add(time.Hour)
+	r.standings.entries = []leaderboard.Entry{
+		{Registration: loser, Login: "loser", Points: 30, Solved: 3, LastScoredAt: &scored},
+		{Registration: winner, Login: "winner", Points: 10, Solved: 1, LastScoredAt: &scored, FinalAt: &final},
+	}
+
+	won, err := r.service.Own(context.Background(), c.ID, winner)
+	if err != nil {
+		t.Fatalf("Own() = %v", err)
+	}
+	if !won.Open || won.Place != 1 || !won.Row.Winner {
+		t.Errorf("the winner reads %+v, want first place and the winner's mark", won)
+	}
+
+	lost, err := r.service.Own(context.Background(), c.ID, loser)
+	if err != nil {
+		t.Fatalf("Own() = %v", err)
+	}
+	if lost.Place != 0 || lost.Row.Winner {
+		t.Errorf("a non-winner reads %+v, want no place and no mark", lost)
+	}
+	if lost.Row.Points != 30 {
+		t.Errorf("a non-winner reads %+v, want their own numbers all the same", lost.Row)
+	}
+}
+
+// A frozen winner-mode table tells nobody they won: that is the result
+// itself, and the freeze is not walked round.
+func TestOwnInWinnerModeSaysNothingWhileTheTableIsFrozen(t *testing.T) {
+	r := newRig(t)
+	c := r.seed(contests.StatusFinished, minutes(30))
+	c.Scoring = contests.ScoringWinner
+	r.contests.Put(c)
+	winner := uuid.New()
+	final := start.Add(30 * time.Minute)
+	r.standings.entries = []leaderboard.Entry{
+		{Registration: winner, Login: "winner", Points: 10, Solved: 1, FinalAt: &final},
+	}
+
+	own, err := r.service.Own(context.Background(), c.ID, winner)
+	if err != nil {
+		t.Fatalf("Own() = %v", err)
+	}
+	if own.Open || own.Place != 0 || own.Row.Winner {
+		t.Errorf("Own() = %+v, want no place and no winner's mark while frozen", own)
+	}
+	if own.Row.Points != 10 {
+		t.Errorf("Own() = %+v, want the caller's own numbers", own.Row)
+	}
+}

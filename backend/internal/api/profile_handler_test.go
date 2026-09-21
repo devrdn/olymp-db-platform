@@ -579,3 +579,90 @@ func TestReadingOnesOwnProfileIsNotAudited(t *testing.T) {
 		t.Errorf("the trail took %d entries for a participant reading their own profile", len(entries))
 	}
 }
+
+// reportResult reads the report's result object as JSON, so a test can see
+// what is absent as well as what is there.
+func (f *profileFixture) reportResult(t *testing.T) map[string]any {
+	t.Helper()
+	rec := f.get("/me/contests/"+f.finished.ID.String()+"/report", &f.student)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report: %d %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Result map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	return body.Result
+}
+
+// Winner mode has one place. Everybody else is on the table unplaced, and
+// an unplaced row's place is null — never nought, which reads as a place
+// (the contest's own table says it the same way).
+func TestTheReportInWinnerModeNamesAPlaceOnlyForTheWinner(t *testing.T) {
+	f := newProfileFixture(t)
+	f.results.own[f.finished.ID] = leaderboard.Own{
+		State: leaderboard.StateFinal, Open: true, Scoring: contests.ScoringWinner, Place: 1, Participants: 9,
+		Row: leaderboard.Row{Entry: leaderboard.Entry{Points: 10, Solved: 1}, Place: 1, Winner: true},
+	}
+	won := f.reportResult(t)
+	if won["place"] != float64(1) || won["participants"] != float64(9) || won["winner"] != true {
+		t.Errorf("the winner's report reads %+v, want first of nine and the winner's mark", won)
+	}
+
+	f = newProfileFixture(t)
+	f.results.own[f.finished.ID] = leaderboard.Own{
+		State: leaderboard.StateFinal, Open: true, Scoring: contests.ScoringWinner, Place: 0, Participants: 9,
+		Row: leaderboard.Row{Entry: leaderboard.Entry{Points: 30, Solved: 3}},
+	}
+	lost := f.reportResult(t)
+	if lost["place"] != nil || lost["participants"] != nil {
+		t.Errorf("a non-winner's report reads %+v, want no place at all", lost)
+	}
+	if _, marked := lost["winner"]; marked {
+		t.Errorf("a non-winner's report is marked as the winner: %+v", lost)
+	}
+	if lost["points"] != float64(30) || lost["place_open"] != true {
+		t.Errorf("a non-winner's report reads %+v, want their own numbers on an open table", lost)
+	}
+}
+
+// A frozen winner-mode table says nothing about who won.
+func TestTheReportSaysNothingOfAFrozenWinnerModeTable(t *testing.T) {
+	f := newProfileFixture(t)
+	f.results.own[f.finished.ID] = leaderboard.Own{
+		State: leaderboard.StateFrozen, Open: false, Scoring: contests.ScoringWinner,
+		Row: leaderboard.Row{Entry: leaderboard.Entry{Points: 10, Solved: 1}},
+	}
+	got := f.reportResult(t)
+	if got["place"] != nil || got["participants"] != nil || got["place_open"] != false {
+		t.Errorf("the frozen report reads %+v, want no place", got)
+	}
+	if _, marked := got["winner"]; marked {
+		t.Errorf("the frozen report names a winner: %+v", got)
+	}
+	if got["state"] != leaderboard.StateFrozen || got["points"] != float64(10) {
+		t.Errorf("the frozen report reads %+v, want the caller's own numbers and the state", got)
+	}
+}
+
+// Nothing under /me is for a search engine: it is one account's own record
+// of what it did.
+func TestNoProfileRouteIsIndexed(t *testing.T) {
+	f := newProfileFixture(t)
+	for _, path := range append([]string{"/me/summary", "/me/contests"}, contestRoutes(f.finished.ID)...) {
+		rec := f.get(path, &f.student)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: %d", path, rec.Code)
+		}
+		if strings.Contains(path, ".csv") {
+			// A download is not a page a crawler indexes, and its headers
+			// are the file's.
+			continue
+		}
+		if rec.Header().Get("X-Robots-Tag") != "noindex" {
+			t.Errorf("%s: X-Robots-Tag = %q, want noindex", path, rec.Header().Get("X-Robots-Tag"))
+		}
+	}
+}
