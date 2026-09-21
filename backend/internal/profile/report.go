@@ -29,12 +29,19 @@ type Result struct {
 	// State is the table's state (leaderboard.Decide), so the interface can
 	// say why a place is missing rather than merely leaving a gap.
 	State string
-	// PlaceOpen says the table is open and Place and Participants mean
-	// something. While a freeze is in force they are both zero: the profile
-	// does not walk round it (design §1).
-	PlaceOpen    bool
+	// PlaceOpen says the table is open, so a place is a thing that exists to
+	// be shown. While a freeze is in force it is false and everything below
+	// is zero: the profile does not walk round it (design §1).
+	PlaceOpen bool
+	// Place is zero for a row the table gives no place to — which is not the
+	// same as a place of nought. In winner mode only the winner has one
+	// (leaderboard.Rank), so everybody else is on an open table, with their
+	// own numbers, unplaced.
 	Place        int
 	Participants int
+	// Winner marks the one registration that won a winner-mode contest. It
+	// is a result, so it travels only with an open table.
+	Winner bool
 	// Truncated says the table was cut at the leaderboard's row bound, so
 	// Participants counts its rows rather than everybody on the contest.
 	Truncated bool
@@ -48,6 +55,7 @@ func resultOf(own leaderboard.Own) Result {
 		Penalty: own.Row.Penalty, State: own.State}
 	if own.Open {
 		r.PlaceOpen, r.Place, r.Participants, r.Truncated = true, own.Place, own.Participants, own.Truncated
+		r.Winner = own.Row.Winner
 	}
 	return r
 }
