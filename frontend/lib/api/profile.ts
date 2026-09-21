@@ -198,7 +198,15 @@ export const profileReportSchema = z
     status: z.enum(CONTEST_STATUSES),
     starts_at: z.string().optional(),
     ends_at: z.string().optional(),
-    result: reportResultSchema,
+    /**
+     * Null for a row the published table does not carry — a participant below
+     * the table's row bound, or one disqualified before it was computed. Null
+     * rather than an object of zeroes on purpose: a zeroed one would name no
+     * scoring mode and no table state, and a reader shown it is told a result
+     * of nought under rules nobody can name. The rest of the report is still
+     * the participant's own work and still arrives.
+     */
+    result: reportResultSchema.nullable(),
     started_at: z.string().optional(),
     queries: z.number(),
     successful_queries: z.number(),

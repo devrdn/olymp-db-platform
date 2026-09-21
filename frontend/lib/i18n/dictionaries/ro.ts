@@ -149,6 +149,7 @@ const ro = {
         placeOf: "din {n}",
         placePending: "Locul apare după ce organizatorul deschide clasamentul.",
         placeNotStarted: "Olimpiada nu a început încă, așa că nu există un clasament pe care să aveți un loc.",
+        outsideTable: "Clasamentul publicat al acestei olimpiade nu conține rândul dumneavoastră, așa că nu există un rezultat de arătat. Ce ați făcut se vede mai jos.",
         unplaced: "La această olimpiadă doar câștigătorul are un loc.",
         winner: "Ați câștigat această olimpiadă.",
         truncated: "Numărat printre primele {n} rânduri ale clasamentului.",
