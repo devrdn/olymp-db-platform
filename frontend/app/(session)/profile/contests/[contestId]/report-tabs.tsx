@@ -1,7 +1,5 @@
-import Link from "next/link";
-
+import { TabStrip } from "@/components/product/tab-strip";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { cn } from "@/lib/utils";
 
 /** The words this screen is written in. */
 export type ReportDict = Dictionary["profile"]["report"];
@@ -23,13 +21,8 @@ export function tabHref(contestId: string, tab: ReportTab): string {
 }
 
 /**
- * The strip of a report's tabs.
- *
- * Links, not buttons: each tab has an address, so the server reads that tab's
- * data and only that tab's before the page arrives, and a student can keep
- * the one they were reading. Four labels do not fit a phone's width, so the
- * strip scrolls sideways inside itself — the page never does, the same fix
- * the monitoring tabs and the play screen's panels have.
+ * The strip of a report's tabs: `TabStrip`, which the monitoring page wears
+ * too, with this screen's own addresses and words.
  */
 export function ReportTabs({
   contestId,
@@ -41,24 +34,10 @@ export function ReportTabs({
   t: ReportDict;
 }) {
   return (
-    <nav
-      aria-label={t.tabsLabel}
-      className="flex min-w-0 gap-6 overflow-x-auto border-b border-line max-narrow:gap-5"
-    >
-      {REPORT_TABS.map((tab) => (
-        <Link
-          key={tab}
-          href={tabHref(contestId, tab)}
-          scroll={false}
-          aria-current={tab === current ? "page" : undefined}
-          className={cn(
-            "-mb-px shrink-0 border-b-2 py-3 text-control whitespace-nowrap transition-colors duration-(--t-input) ease-standard",
-            tab === current ? "border-ink text-ink" : "border-transparent text-ink-3 hover:border-line-2 hover:text-ink",
-          )}
-        >
-          {t.tabs[tab]}
-        </Link>
-      ))}
-    </nav>
+    <TabStrip
+      label={t.tabsLabel}
+      tabs={REPORT_TABS.map((tab) => ({ href: tabHref(contestId, tab), label: t.tabs[tab] }))}
+      current={tabHref(contestId, current)}
+    />
   );
 }
