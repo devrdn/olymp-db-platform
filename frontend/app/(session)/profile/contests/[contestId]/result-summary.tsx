@@ -31,7 +31,12 @@ export function ResultSummary({
   locale: string;
 }) {
   const result = report.result;
-  const icpc = result.scoring === "icpc";
+  // No result at all is a case of its own (see Standing): the table carries no
+  // row for this registration. The questions below then read as a points
+  // contest, which is what an unknown mode falls back to — with no standing
+  // there is no penalty to print either way, since the minutes on a question
+  // come from the table's own cells.
+  const icpc = result?.scoring === "icpc";
 
   return (
     <div className="flex min-w-0 flex-col gap-8">
@@ -45,7 +50,9 @@ export function ResultSummary({
         </h2>
 
         <dl className="grid grid-cols-4 gap-x-6 gap-y-7 max-narrow:grid-cols-2">
-          {icpc ? (
+          {/* The scored figures need a standing; the session's own three
+              below do not, and a row outside the table still gets them. */}
+          {result === null ? null : icpc ? (
             <>
               <Figure label={t.result.solved} value={String(result.solved)} />
               <Figure label={t.result.penalty} value={String(result.penalty ?? 0)} />
@@ -81,8 +88,8 @@ export function ResultSummary({
  * no figure at all rather than a dash: the sentence under the strip says
  * which of the two reasons it is.
  */
-function Place({ result, t }: { result: ProfileReportResult; t: ReportDict }) {
-  if (!result.placeOpen || result.place === null) return null;
+function Place({ result, t }: { result: ProfileReportResult | null; t: ReportDict }) {
+  if (result === null || !result.placeOpen || result.place === null) return null;
 
   return (
     <div className="flex min-w-0 flex-col-reverse gap-1">
@@ -100,7 +107,12 @@ function Place({ result, t }: { result: ProfileReportResult; t: ReportDict }) {
 }
 
 /** The line under the strip: why there is a place, or why there is not. */
-function Standing({ result, t }: { result: ProfileReportResult; t: ReportDict }) {
+function Standing({ result, t }: { result: ProfileReportResult | null; t: ReportDict }) {
+  // No standing at all, which is a third thing again: the table carries no row
+  // for this registration, so there is neither a place nor a score to explain.
+  // What is missing is their standing, not their work, and the sentence says
+  // so rather than leaving the strip looking broken.
+  if (result === null) return <p className="max-w-body text-body text-ink-3">{t.result.outsideTable}</p>;
   // A shut table has two reasons, and each gets its own sentence. A freeze is
   // a result an organiser is about to reveal; a contest that never opened has
   // no table to reveal at all, which is the report somebody disqualified

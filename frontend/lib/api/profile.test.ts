@@ -162,8 +162,8 @@ describe("the report wire shape", () => {
   it("carries the place, the count it is a place among, and the work behind it", () => {
     const parsed = profileReportSchema.parse(report);
 
-    expect(parsed.result.place).toBe(4);
-    expect(parsed.result.participants).toBe(31);
+    expect(parsed.result?.place).toBe(4);
+    expect(parsed.result?.participants).toBe(31);
     expect(parsed.workedMs).toBe(5_400_000);
     expect(parsed.successfulQueries).toBe(98);
     expect(parsed.questions[1]).toMatchObject({ ord: 2, attempts: 3, solved: false });
@@ -181,16 +181,16 @@ describe("the report wire shape", () => {
       ...report,
       result: { scoring: "points", points: 60, solved: 3, state: "frozen", place_open: false, place: null, participants: null },
     });
-    expect(frozen.result.placeOpen).toBe(false);
-    expect(frozen.result.place).toBeNull();
+    expect(frozen.result?.placeOpen).toBe(false);
+    expect(frozen.result?.place).toBeNull();
 
     const loser = profileReportSchema.parse({
       ...report,
       result: { scoring: "winner", points: 0, solved: 1, state: "final", place_open: true, place: null, participants: null },
     });
-    expect(loser.result.placeOpen).toBe(true);
-    expect(loser.result.place).toBeNull();
-    expect(loser.result.winner).toBe(false);
+    expect(loser.result?.placeOpen).toBe(true);
+    expect(loser.result?.place).toBeNull();
+    expect(loser.result?.winner).toBe(false);
   });
 
   /**
@@ -234,8 +234,23 @@ describe("the report wire shape", () => {
       },
     });
 
-    expect(parsed.result.state).toBe("not_started");
-    expect(parsed.result.placeOpen).toBe(false);
+    expect(parsed.result?.state).toBe("not_started");
+    expect(parsed.result?.placeOpen).toBe(false);
+  });
+
+  /**
+   * A row the published table does not carry has no result at all, and the
+   * server says so with null rather than an object of zeroes. The table is
+   * bounded, so this is every participant of a large contest below the cut:
+   * a schema that demanded an object read an empty scoring and an empty state
+   * as enum values and threw, turning the whole report into an error page.
+   */
+  it("reads a report whose row is outside the published table", () => {
+    const parsed = profileReportSchema.parse({ ...report, result: null });
+
+    expect(parsed.result).toBeNull();
+    expect(parsed.queries).toBe(120);
+    expect(parsed.questions).toHaveLength(2);
   });
 
   it("says a participant was disqualified, and nothing about why", () => {

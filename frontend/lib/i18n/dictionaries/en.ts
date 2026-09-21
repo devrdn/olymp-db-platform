@@ -189,6 +189,7 @@ const en = {
         placeOf: "of {n}",
         placePending: "Your place appears once the organiser opens the table.",
         placeNotStarted: "This contest has not opened yet, so there is no table to place you on.",
+        outsideTable: "This contest's published table does not carry your row, so there is no standing to show. What you did is below.",
         unplaced: "This contest gives a place to its winner and to nobody else.",
         winner: "You won this contest.",
         truncated: "Counted among the first {n} rows of the table.",

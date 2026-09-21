@@ -15,6 +15,27 @@ beforeAll(async () => {
 
 const t = () => dict.profile.report;
 
+/**
+ * A whole standing, so a test that varies one field of it spreads a complete
+ * one rather than `report().result`, which may now be null: a row the
+ * published table does not carry has no standing at all.
+ */
+function result(overrides: Partial<NonNullable<ProfileReport["result"]>> = {}): NonNullable<ProfileReport["result"]> {
+  return {
+    scoring: "points",
+    points: 60,
+    solved: 3,
+    penalty: undefined,
+    state: "final",
+    placeOpen: true,
+    place: 4,
+    participants: 31,
+    winner: false,
+    truncated: false,
+    ...overrides,
+  };
+}
+
 function report(overrides: Partial<ProfileReport> = {}): ProfileReport {
   return {
     contestId: CONTEST,
@@ -22,18 +43,7 @@ function report(overrides: Partial<ProfileReport> = {}): ProfileReport {
     status: "finished",
     startsAt: "2026-05-14T07:00:00Z",
     endsAt: "2026-05-14T10:00:00Z",
-    result: {
-      scoring: "points",
-      points: 60,
-      solved: 3,
-      penalty: undefined,
-      state: "final",
-      placeOpen: true,
-      place: 4,
-      participants: 31,
-      winner: false,
-      truncated: false,
-    },
+    result: result(),
     startedAt: "2026-05-14T07:02:00Z",
     queries: 120,
     successfulQueries: 98,
@@ -105,7 +115,7 @@ describe("a contest scored the ICPC way", () => {
   test("shows solved and penalty, and no points anywhere", () => {
     renderSummary(
       report({
-        result: { ...report().result, scoring: "icpc", points: 0, solved: 4, penalty: 87 },
+        result: result({ scoring: "icpc", points: 0, solved: 4, penalty: 87 }),
         questions: [
           // points is 0 because the server awards none in this mode; the
           // minutes are what the question cost.
@@ -132,7 +142,7 @@ describe("a contest scored the ICPC way", () => {
   test("prints the minutes a question cost, not the points it did not earn", () => {
     renderSummary(
       report({
-        result: { ...report().result, scoring: "icpc", points: 0, solved: 1, penalty: 47 },
+        result: result({ scoring: "icpc", points: 0, solved: 1, penalty: 47 }),
         questions: [
           { questionId: `${CONTEST}-1`, ord: 1, attempts: 2, solved: true, solvedAt: "2026-05-14T08:00:00Z", points: 0, penalty: 47 },
         ],
@@ -172,7 +182,7 @@ describe("a table that is not open", () => {
   /** The freeze is not worked around: with no open table there is no place. */
   test("says where the place will appear rather than leaving a gap", () => {
     renderSummary(
-      report({ result: { ...report().result, state: "frozen", placeOpen: false, place: null, participants: null } }),
+      report({ result: result({ state: "frozen", placeOpen: false, place: null, participants: null }) }),
     );
 
     expect(screen.getByText(t().result.placePending)).toBeInTheDocument();
@@ -190,15 +200,14 @@ describe("a table that is not open", () => {
       report({
         status: "published",
         disqualified: true,
-        result: {
-          ...report().result,
+        result: result({
           points: 0,
           solved: 0,
           state: "not_started",
           placeOpen: false,
           place: null,
           participants: null,
-        },
+        }),
       }),
     );
 
@@ -207,11 +216,37 @@ describe("a table that is not open", () => {
   });
 });
 
+/**
+ * The published table is bounded, so a participant below the cut — and one
+ * disqualified before it was computed — has no row on it. The server sends no
+ * result rather than one of zeroes, and the screen says which of the two
+ * things is missing: their standing, not their work.
+ */
+describe("a row the published table does not carry", () => {
+  test("says the row is outside the table and still shows the session", () => {
+    renderSummary(report({ result: null }));
+
+    expect(screen.getByText(t().result.outsideTable)).toBeInTheDocument();
+    expect(figure(t().result.queries)).toBe("120");
+    expect(figure(t().result.successful)).toBe("98");
+    expect(within(strip()).queryByText(t().result.points)).not.toBeInTheDocument();
+    expect(within(strip()).queryByText(t().result.place)).not.toBeInTheDocument();
+    expect(screen.queryByText(t().result.placePending)).not.toBeInTheDocument();
+  });
+
+  test("still names every question the participant answered", () => {
+    renderSummary(report({ result: null }));
+
+    const table = screen.getByRole("table", { name: t().questions.heading });
+    expect(within(table).getAllByRole("row").slice(1)).toHaveLength(2);
+  });
+});
+
 describe("a contest with one winner", () => {
   test("says the winner won", () => {
     renderSummary(
       report({
-        result: { ...report().result, scoring: "winner", points: 0, place: 1, participants: 12, winner: true },
+        result: result({ scoring: "winner", points: 0, place: 1, participants: 12, winner: true }),
       }),
     );
 
@@ -227,7 +262,7 @@ describe("a contest with one winner", () => {
   test("tells everybody else that this contest places only the winner", () => {
     renderSummary(
       report({
-        result: { ...report().result, scoring: "winner", points: 0, place: null, participants: null, winner: false },
+        result: result({ scoring: "winner", points: 0, place: null, participants: null, winner: false }),
       }),
     );
 
