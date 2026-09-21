@@ -303,6 +303,13 @@ type profileQuestionResponse struct {
 	Solved     bool      `json:"solved"`
 	SolvedAt   string    `json:"solved_at,omitempty"`
 	Points     int       `json:"points"`
+	// Penalty is the minutes this question cost an ICPC row, and nought in
+	// every other mode, where nothing charges minutes. Sent always and beside
+	// points rather than instead of it: which of the two a reader is shown is
+	// decided by result.scoring, the same field that decides it for the
+	// result above, and a client that had to guess from an absence would get
+	// it wrong for a contest where both are nought.
+	Penalty int `json:"penalty"`
 }
 
 type profileReportResponse struct {
@@ -359,6 +366,7 @@ func (h *ProfileHandler) report(w http.ResponseWriter, r *http.Request) {
 		out.Questions = append(out.Questions, profileQuestionResponse{
 			QuestionID: question.QuestionID, Ord: question.Ord, Attempts: question.Attempts,
 			Solved: question.Solved, SolvedAt: formatTime(question.SolvedAt), Points: question.Points,
+			Penalty: question.Penalty,
 		})
 	}
 	noIndex(w)
