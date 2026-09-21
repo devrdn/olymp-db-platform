@@ -1981,6 +1981,177 @@
       ]
     },
     {
+      "name": "My profile",
+      "item": [
+        {
+          "name": "Profile summary",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/me/summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "me",
+                "summary"
+              ]
+            },
+            "description": "The four numbers of the signed-in account's profile: how many contests it is registered in, how many of them it finished, how many queries it has ever run and how many questions it has ever answered correctly. Counted in one read.\n\nResponses: 200 · 401 · 429 `profile_too_often`"
+          },
+          "response": []
+        },
+        {
+          "name": "My contests",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/me/contests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "me",
+                "contests"
+              ]
+            },
+            "description": "Every contest the signed-in account is registered in, newest first, with its title in the negotiated language, its status and window, the caller's own standing on the roster, and `over` — whether it has ended for this participant.\n\n`result` is present only for a contest that is over: `points`, `solved`, `penalty` (ICPC only), and the table's `state`. `place` and `participants` come only with `place_open`, which is true only when the table is open (final, or a freeze an organiser revealed): the profile does not walk round a freeze. A contest still running carries no result at all — during one, the profile shows nothing of what is happening inside it.\n\nAt most 50 contests; `truncated` says there were more.\n\nResponses: 200 · 401 · 429 `profile_too_often`"
+          },
+          "response": []
+        },
+        {
+          "name": "My report",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/me/contests/{{contestId}}/report",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "me",
+                "contests",
+                "{{contestId}}",
+                "report"
+              ]
+            },
+            "description": "The result of one finished contest of the caller's: their own standing (and their place, only where the table is open), when their clock started, how long they worked, how many queries they ran and how many succeeded, and question by question the attempts, whether it was solved, when, and what it earned.\n\nResponses: 200 · 401 · 404 `profile_contest_not_found` · 429 `profile_too_often`"
+          },
+          "response": []
+        },
+        {
+          "name": "My queries",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/me/contests/{{contestId}}/queries?status=error&q=suspects&cursor=&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "me",
+                "contests",
+                "{{contestId}}",
+                "queries"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "error",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "suspects",
+                  "disabled": true
+                },
+                {
+                  "key": "cursor",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "The caller's own SQL queries in that contest, newest first, each whole: the statement, status, duration, rows and time. The address is deliberately not here — it is the participant's own and explains nothing to them — and the error text is reduced the way the play screen's own log reduces it: the SQL validator's refusals are shown, the database's own words are not.\n\n`status` (`ok`, `error`, `timeout`, `rejected`, `running`), `q` (a substring, without case; at most 200 characters; `%` and `_` are text), `cursor` (the last item's, for the next page), `limit` (at most 50).\n\nResponses: 200 · 400 `profile_invalid_cursor` / `profile_invalid_filter` · 401 · 404 `profile_contest_not_found` · 429 `profile_too_often`"
+          },
+          "response": []
+        },
+        {
+          "name": "My answers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/me/contests/{{contestId}}/answers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "me",
+                "contests",
+                "{{contestId}}",
+                "answers"
+              ]
+            },
+            "description": "Every attempt the caller made in that contest, by question, with the queries that led to each — the same read a contest's staff make of the same registration, with the queries under it reduced to what the participant's own log shows.\n\nResponses: 200 · 401 · 404 `profile_contest_not_found` · 429 `profile_too_often`"
+          },
+          "response": []
+        },
+        {
+          "name": "My notes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/me/contests/{{contestId}}/workspace",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "me",
+                "contests",
+                "{{contestId}}",
+                "workspace"
+              ]
+            },
+            "description": "The caller's notes and SQL tabs as the contest left them. Deliberately without the revision history: how somebody worked is a monitoring fact and the organiser's tool, not a record the participant is offered back.\n\nResponses: 200 · 401 · 404 `profile_contest_not_found` · 429 `profile_too_often`"
+          },
+          "response": []
+        },
+        {
+          "name": "My query log (CSV)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/me/contests/{{contestId}}/log.csv",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "me",
+                "contests",
+                "{{contestId}}",
+                "log.csv"
+              ]
+            },
+            "description": "The caller's whole query log in that contest as a file — the same file they could take during it, by the same writer and the same bounds. Streamed row by row; a file cut at a bound says so in its last line. One download per account at a time: a second while the first is running is `429 profile_too_often`.\n\nResponses: 200 `text/csv` · 401 · 404 `profile_contest_not_found` · 429 `profile_too_often`"
+          },
+          "response": []
+        }
+      ],
+      "description": "What a participant is shown of their own account (design `docs/superpowers/specs/2026-09-21-participant-profile-design.md` §3). Behind authentication and nothing else — no `contest.monitor`, no `contest.view`: taking part in a contest is a registration, and these routes answer \"what did I do\".\n\nThe registration is always resolved from the session, so no request can name anybody else's — there is no identifier for one in any of these URLs. Every route under `{{contestId}}` also requires that the contest has ended for this participant: the contest finished, their own deadline passed under an individual timer, or their registration is finished or disqualified. A contest that does not exist, one somebody else is on, and one still running for the caller are all the same `404 profile_contest_not_found`.\n\nA read budget of 120 a minute per account, refused reads included, spent before any lookup: past it `429 profile_too_often` with `Retry-After`. Reading one's own profile is not access to anybody else's data, so none of it is recorded in the audit trail."
+    },
+    {
       "name": "Audit trail",
       "description": "Who did what, from where and when — the record required by the specification (§13) and kept for a year.\n\nWritten in the same transaction as the action it describes, so an action and its entry land together or neither does. Append-only: there is no route here that writes, and entries never arrive over HTTP.\n\nBehind `audit.view` and nothing else. The trail names who blocked whom and from which address, so reading it is a privilege rather than a side effect of being signed in.",
       "item": [
