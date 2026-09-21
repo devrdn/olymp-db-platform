@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { profileContestsSchema, profileSummarySchema } from "./profile";
+import {
+  myCsvHref,
+  myQueriesPath,
+  profileContestsSchema,
+  profileReportSchema,
+  profileSummarySchema,
+  profileWorkspaceSchema,
+} from "./profile";
+
+const CONTEST = "6f1b7d2e-3a4c-4f8b-9c1d-2e5a7b8c9d09";
 
 describe("the profile summary wire shape", () => {
   it("carries the four numbers the header is written from", () => {
@@ -101,5 +110,89 @@ describe("the profile contest list wire shape", () => {
 
     expect(list.items[0].result?.placeOpen).toBe(false);
     expect(list.items[0].result?.state).toBe("frozen");
+  });
+});
+
+/** The report's own reads: the tab the screen opens on, and its notes. */
+describe("the report wire shape", () => {
+  const report = {
+    contest_id: CONTEST,
+    title: "The Greenhouse",
+    status: "finished",
+    starts_at: "2026-05-14T07:00:00Z",
+    ends_at: "2026-05-14T10:00:00Z",
+    result: { scoring: "points", points: 60, solved: 3, state: "final", place_open: true, place: 4, participants: 31 },
+    started_at: "2026-05-14T07:02:00Z",
+    queries: 120,
+    successful_queries: 98,
+    worked_ms: 5_400_000,
+    questions: [
+      { question_id: CONTEST, ord: 1, attempts: 2, solved: true, solved_at: "2026-05-14T08:00:00Z", points: 20 },
+      { question_id: CONTEST, ord: 2, attempts: 3, solved: false, points: 0 },
+    ],
+  };
+
+  it("carries the place, the count it is a place among, and the work behind it", () => {
+    const parsed = profileReportSchema.parse(report);
+
+    expect(parsed.result.place).toBe(4);
+    expect(parsed.result.participants).toBe(31);
+    expect(parsed.workedMs).toBe(5_400_000);
+    expect(parsed.successfulQueries).toBe(98);
+    expect(parsed.questions[1]).toMatchObject({ ord: 2, attempts: 3, solved: false });
+    expect(parsed.questions[1].solvedAt).toBeUndefined();
+    expect(parsed.disqualified).toBe(false);
+  });
+
+  /**
+   * Two ways to have no place, and both are null on the wire: the table is
+   * not open yet, or it is open and places nobody but its winner. A place of
+   * nought would read as a place, which is why neither is zeroed.
+   */
+  it("reads no place as no place, whichever of the two reasons it is", () => {
+    const frozen = profileReportSchema.parse({
+      ...report,
+      result: { scoring: "points", points: 60, solved: 3, state: "frozen", place_open: false, place: null, participants: null },
+    });
+    expect(frozen.result.placeOpen).toBe(false);
+    expect(frozen.result.place).toBeNull();
+
+    const loser = profileReportSchema.parse({
+      ...report,
+      result: { scoring: "winner", points: 0, solved: 1, state: "final", place_open: true, place: null, participants: null },
+    });
+    expect(loser.result.placeOpen).toBe(true);
+    expect(loser.result.place).toBeNull();
+    expect(loser.result.winner).toBe(false);
+  });
+
+  it("says a participant was disqualified, and nothing about why", () => {
+    const parsed = profileReportSchema.parse({ ...report, disqualified: true });
+
+    expect(parsed.disqualified).toBe(true);
+    expect(Object.keys(parsed)).not.toContain("reason");
+  });
+
+  it("reads the notes and the tabs as they were left", () => {
+    const parsed = profileWorkspaceSchema.parse({
+      notes: { body: "suspects: 3", updated_at: "2026-05-14T09:00:00Z" },
+      tabs: [{ id: CONTEST, title: "Query 1", position: 0, body: "SELECT 1", updated_at: "2026-05-14T09:10:00Z" }],
+    });
+
+    expect(parsed.notes.body).toBe("suspects: 3");
+    expect(parsed.tabs[0]).toMatchObject({ title: "Query 1", body: "SELECT 1" });
+  });
+});
+
+describe("the report's addresses", () => {
+  it("asks for its own queries under /me, with the filters given and no others", () => {
+    expect(myQueriesPath(CONTEST, { status: "error", q: "guests", cursor: "c1" })).toBe(
+      `/me/contests/${CONTEST}/queries?status=error&q=guests&cursor=c1`,
+    );
+    expect(myQueriesPath(CONTEST, {})).toBe(`/me/contests/${CONTEST}/queries`);
+  });
+
+  it("points the download at the API's own file, not at a blob built in the page", () => {
+    expect(myCsvHref(CONTEST)).toBe(`/api/v1/me/contests/${CONTEST}/log.csv`);
   });
 });
