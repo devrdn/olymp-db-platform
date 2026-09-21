@@ -379,6 +379,30 @@ func TestICPCCellPenaltiesAddUpToTheRowsOwn(t *testing.T) {
 			t.Errorf("cells cost %d and %d, want %d and 0",
 				e.Cells[0].Penalty(perWrong), e.Cells[1].Penalty(perWrong), 10+2*perWrong)
 		}
+
+		// The commonest cell on a real table, and the one shape the row above
+		// does not have: a question answered correctly first time, which costs
+		// its minute and nothing else. A rule that multiplied the penalty by
+		// the attempt number rather than by the wrong ones would pass
+		// everything above and fail here.
+		bob := f.participant(t, "icpc-clean", 0)
+		f.answerAt(t, bob, f.a, 1, true, boardAt(12))
+
+		clean := f.standings(t, leaderboard.Query{Cutoff: boardAt(60)})["icpc-clean"]
+		if len(clean.Cells) != 2 {
+			t.Fatalf("cells = %d, want 2", len(clean.Cells))
+		}
+		if clean.Cells[0].Wrong != 0 || clean.Cells[0].Penalty(perWrong) != 12 {
+			t.Errorf("the clean cell = %s, costing %d; want no wrong attempts and 12 minutes",
+				cellString(clean.Cells[0]), clean.Cells[0].Penalty(perWrong))
+		}
+		cleanTotal := 0
+		for _, cell := range clean.Cells {
+			cleanTotal += cell.Penalty(perWrong)
+		}
+		if cleanTotal != clean.Penalty {
+			t.Errorf("the clean row's cells add up to %d, the row says %d", cleanTotal, clean.Penalty)
+		}
 	})
 }
 
