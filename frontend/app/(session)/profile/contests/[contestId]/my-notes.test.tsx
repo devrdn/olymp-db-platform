@@ -59,8 +59,13 @@ describe("my notes", () => {
   test("splits on the breakpoint the rest of the screen uses", () => {
     renderTab({ notes: { body: "suspects: 3", updatedAt: null }, tabs: [] });
 
-    const columns = document.querySelector("[data-columns]") as HTMLElement;
-    expect(columns).toHaveClass("max-narrow:grid-cols-1");
+    // Found through the markup the screen already has — the element holding
+    // the two sections — rather than through an attribute added for the
+    // test's benefit: a hook nothing renders for is one more thing to keep
+    // alive, and one the component is free to lose without anybody noticing.
+    const columns = screen.getByRole("heading", { name: t().notes }).closest("section")
+      ?.parentElement as HTMLElement;
+    expect(columns).toHaveClass("grid", "grid-cols-2", "max-narrow:grid-cols-1");
     expect(columns.className).not.toMatch(/@/);
   });
 
