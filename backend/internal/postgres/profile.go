@@ -31,6 +31,24 @@ import (
 // itself and two counts of a registration's own journal.
 var _ profile.Store = (*Profile)(nil)
 
+// profileStatuses are the contest statuses a profile carries: published,
+// running, finished and archived.
+//
+// A draft is excluded, for the reason Contests.List excludes it from the
+// participant catalogue — a draft is nobody's business but its authors'. A
+// roster may be filled while a contest is still being written, so a
+// registration in one exists long before anybody is meant to know the contest
+// does; without this clause a member of that roster would read its title, its
+// status and its schedule here.
+//
+// Archived is kept deliberately. A profile is a history view, and archiving is
+// how a finished olympiad is put away rather than how it is taken from the
+// people who sat it.
+//
+// Spelled into both statements below, so the four numbers of the header count
+// exactly the rows the list shows.
+const profileStatuses = `c.status IN ('published', 'running', 'finished', 'archived')`
+
 // Profile reads a participant's own account.
 type Profile struct {
 	pool *pgxpool.Pool
@@ -52,9 +70,11 @@ func (r *Profile) querier(ctx context.Context) storage.Querier {
 
 // Summary counts the profile's four numbers in one statement.
 //
-// The account's registrations are the outer rows, and each counter is a
-// lateral aggregate over that one registration's own index range, the way
-// the organiser's roster counts a contest's. Solved counts distinct
+// The account's registrations are the outer rows — the ones profileStatuses
+// admits, so these numbers describe exactly the contests Enrolments lists —
+// and each counter is a lateral aggregate over that one registration's own
+// index range, the way the organiser's roster counts a contest's. Solved
+// counts distinct
 // questions, so two correct attempts at one question are one solved
 // question, and a question answered correctly in two contests counts in
 // both — this is what the account did, not how many questions exist.
@@ -66,6 +86,7 @@ func (r *Profile) Summary(ctx context.Context, userID uuid.UUID) (profile.Summar
 		       COALESCE(SUM(j.queries), 0)::int,
 		       COALESCE(SUM(a.solved), 0)::int
 		FROM registrations r
+		JOIN contests c ON c.id = r.contest_id
 		CROSS JOIN LATERAL (
 		    SELECT count(*) AS queries FROM query_log q WHERE q.registration_id = r.id
 		) j
@@ -73,7 +94,7 @@ func (r *Profile) Summary(ctx context.Context, userID uuid.UUID) (profile.Summar
 		    SELECT count(DISTINCT s.question_id) AS solved
 		    FROM submissions s WHERE s.registration_id = r.id AND s.is_correct
 		) a
-		WHERE r.user_id = $1`, userID).
+		WHERE r.user_id = $1 AND `+profileStatuses, userID).
 		Scan(&s.Contests, &s.Finished, &s.Queries, &s.Solved)
 	if err != nil {
 		return profile.Summary{}, fmt.Errorf("count the profile of %s: %w", userID, err)
@@ -147,6 +168,9 @@ const ownResultJoins = `
 // Enrolments reads the account's registrations with their contests and the
 // participant's own result in each, newest first, at most limit of them.
 //
+// Only the statuses profileStatuses names: a draft the account is already on
+// the roster of is left out, as the participant catalogue leaves it out.
+//
 // One statement over every registration of the account, never one per
 // contest (design §4): the contest arrives whole — its languages and its
 // translations included, by the same projection every other contest read
@@ -170,7 +194,7 @@ func (r *Profile) Enrolments(ctx context.Context, userID uuid.UUID, limit int) (
 		    SELECT r.id
 		    FROM registrations r
 		    JOIN contests c ON c.id = r.contest_id
-		    WHERE r.user_id = $1
+		    WHERE r.user_id = $1 AND `+profileStatuses+`
 		    ORDER BY COALESCE(c.starts_at, c.created_at) DESC, r.created_at DESC, r.id
 		    LIMIT $2
 		)
