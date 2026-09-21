@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 /**
- * The shapes of a participant's SQL log and answers, as two audiences read
- * them.
+ * The shapes of one participant's record — every SQL statement they ran and
+ * every answer they gave — as two audiences read it.
  *
  * A contest's staff read them under `/contests/{id}/monitor/participants/{id}/…`
  * (`./monitor`); the participant reads their own under `/me/contests/{id}/…`
@@ -14,6 +14,10 @@ import { z } from "zod";
  * Only the shapes live here. Each audience keeps its own paths and its own
  * browser-side reads, because those are what the two differ in: a route, a
  * permission and a refusal.
+ *
+ * Not `./querylog`, which is the live log the play screen shows a participant
+ * of the contest they are sitting in — a different route, a different page
+ * and a different moment.
  */
 
 /** Every status a query may have, and the only ones a queries filter takes (monitor.queryStatuses). */

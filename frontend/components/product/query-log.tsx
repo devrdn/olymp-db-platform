@@ -3,7 +3,7 @@
 import { useId } from "react";
 
 import { buttonVariants } from "@/components/ui/button";
-import { MAX_QUERY_SEARCH, QUERY_STATUSES } from "@/lib/api/query-log";
+import { MAX_QUERY_SEARCH, QUERY_STATUSES } from "@/lib/api/journal";
 import { cn } from "@/lib/utils";
 
 import { QueryRow, type QueryRowLabels } from "./query-row";
