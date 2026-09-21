@@ -40,8 +40,8 @@ function report(overrides: Partial<ProfileReport> = {}): ProfileReport {
     workedMs: 5_400_000,
     disqualified: false,
     questions: [
-      { questionId: `${CONTEST}-1`, ord: 1, attempts: 2, solved: true, solvedAt: "2026-05-14T08:00:00Z", points: 20 },
-      { questionId: `${CONTEST}-2`, ord: 2, attempts: 3, solved: false, solvedAt: undefined, points: 0 },
+      { questionId: `${CONTEST}-1`, ord: 1, attempts: 2, solved: true, solvedAt: "2026-05-14T08:00:00Z", points: 20, penalty: 0 },
+      { questionId: `${CONTEST}-2`, ord: 2, attempts: 3, solved: false, solvedAt: undefined, points: 0, penalty: 0 },
     ],
     truncated: false,
     ...overrides,
@@ -107,7 +107,10 @@ describe("a contest scored the ICPC way", () => {
       report({
         result: { ...report().result, scoring: "icpc", points: 0, solved: 4, penalty: 87 },
         questions: [
-          { questionId: `${CONTEST}-1`, ord: 1, attempts: 2, solved: true, solvedAt: "2026-05-14T08:00:00Z", points: 27 },
+          // points is 0 because the server awards none in this mode; the
+          // minutes are what the question cost.
+          { questionId: `${CONTEST}-1`, ord: 1, attempts: 2, solved: true, solvedAt: "2026-05-14T08:00:00Z", points: 0, penalty: 47 },
+          { questionId: `${CONTEST}-2`, ord: 2, attempts: 3, solved: false, solvedAt: undefined, points: 0, penalty: 0 },
         ],
       }),
     );
@@ -119,6 +122,49 @@ describe("a contest scored the ICPC way", () => {
     const table = screen.getByRole("table", { name: t().questions.heading });
     expect(within(table).getByText(t().questions.columns.penalty)).toBeInTheDocument();
     expect(within(table).queryByText(t().questions.columns.points)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The column says "Penalty", so it must print the minutes and not the
+   * points beside them, which the server writes as nought for every ICPC
+   * submission: a whole column of noughts under a row that cost 87 minutes.
+   */
+  test("prints the minutes a question cost, not the points it did not earn", () => {
+    renderSummary(
+      report({
+        result: { ...report().result, scoring: "icpc", points: 0, solved: 1, penalty: 47 },
+        questions: [
+          { questionId: `${CONTEST}-1`, ord: 1, attempts: 2, solved: true, solvedAt: "2026-05-14T08:00:00Z", points: 0, penalty: 47 },
+        ],
+      }),
+    );
+
+    const table = screen.getByRole("table", { name: t().questions.heading });
+    const row = within(table).getAllByRole("row")[1];
+    expect(within(row).getByText("47")).toBeInTheDocument();
+  });
+});
+
+/**
+ * The report carries only the first of a long session's attempts, and the
+ * sentence says how many were counted. That is the attempts, not the
+ * questions: two questions with fifty attempts between them would otherwise
+ * be reported as two.
+ */
+describe("a report cut at the bound", () => {
+  test("counts the attempts it carries, not the questions", () => {
+    renderSummary(report({ truncated: true }));
+
+    const questions = report().questions;
+    const attempts = questions.reduce((sum, question) => sum + question.attempts, 0);
+    expect(attempts).toBe(5);
+    expect(screen.getByText(t().questions.truncated.replace("{n}", "5"))).toBeInTheDocument();
+    expect(screen.queryByText(t().questions.truncated.replace("{n}", "2"))).not.toBeInTheDocument();
+  });
+
+  test("says nothing when the report is whole", () => {
+    renderSummary();
+    expect(screen.queryByText(/counted here/i)).not.toBeInTheDocument();
   });
 });
 
