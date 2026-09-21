@@ -1,7 +1,5 @@
-import Link from "next/link";
-
+import { TabStrip } from "@/components/product/tab-strip";
 import type { Dictionary } from "@/lib/i18n/dictionary";
-import { cn } from "@/lib/utils";
 
 /** The tabs of a participant's page, in the order they stand. */
 export const PARTICIPANT_TABS = ["timeline", "queries", "answers", "workspace", "sessions"] as const;
@@ -20,11 +18,8 @@ export function tabHref(contestId: string, registrationId: string, tab: Particip
 }
 
 /**
- * The strip of a participant's tabs: links, so each tab has an address an
- * organiser can share and the server reads that tab's data first. Five
- * labels do not fit a phone's width, so the strip scrolls sideways inside
- * itself — the page never does, the same fix the play screen's panel tabs
- * have.
+ * The strip of a participant's tabs: `TabStrip`, which a participant's own
+ * report wears too, with this screen's own addresses and words.
  */
 export function ParticipantTabs({
   contestId,
@@ -37,26 +32,12 @@ export function ParticipantTabs({
   current: ParticipantTab;
   dict: Dictionary;
 }) {
-  const names = dict.workspace.monitor.participant.tabs;
+  const t = dict.workspace.monitor.participant;
   return (
-    <nav
-      aria-label={dict.workspace.monitor.participant.tabsLabel}
-      className="flex min-w-0 gap-6 overflow-x-auto border-b border-line max-narrow:gap-5"
-    >
-      {PARTICIPANT_TABS.map((tab) => (
-        <Link
-          key={tab}
-          href={tabHref(contestId, registrationId, tab)}
-          scroll={false}
-          aria-current={tab === current ? "page" : undefined}
-          className={cn(
-            "-mb-px shrink-0 border-b-2 py-3 text-control whitespace-nowrap transition-colors duration-(--t-input) ease-standard",
-            tab === current ? "border-ink text-ink" : "border-transparent text-ink-3 hover:border-line-2 hover:text-ink",
-          )}
-        >
-          {names[tab]}
-        </Link>
-      ))}
-    </nav>
+    <TabStrip
+      label={t.tabsLabel}
+      tabs={PARTICIPANT_TABS.map((tab) => ({ href: tabHref(contestId, registrationId, tab), label: t.tabs[tab] }))}
+      current={tabHref(contestId, registrationId, current)}
+    />
   );
 }
