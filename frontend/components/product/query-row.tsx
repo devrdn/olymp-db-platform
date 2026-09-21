@@ -2,7 +2,7 @@
 
 import { memo, useId, useState } from "react";
 
-import type { LoggedQuery } from "@/lib/api/query-log";
+import type { LoggedQuery } from "@/lib/api/journal";
 import { formatMoment, formatSeconds } from "@/lib/format/datetime";
 import { cn } from "@/lib/utils";
 

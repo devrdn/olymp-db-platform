@@ -1,4 +1,4 @@
-import type { LoggedQuery } from "@/lib/api/query-log";
+import type { LoggedQuery } from "@/lib/api/journal";
 
 /** Builders shared by the tests of the query log and everything built on it. */
 
