@@ -77,9 +77,10 @@ type ProfileHandler struct {
 	// defaultLocale answers when a request expresses no usable preference and
 	// the contest narrows nothing down (§6.2).
 	defaultLocale string
-	// exports keeps one account to one CSV download at a time, for the reason
-	// the play screen's own export does (inFlightExports).
-	exports inFlightExports
+	// exports keeps one registration to one CSV download at a time, shared
+	// with the play screen's copy of the same route (WithExports), for the
+	// reason ExportGate gives.
+	exports *ExportGate
 }
 
 // NewProfileHandler returns the handler.
@@ -89,7 +90,18 @@ func NewProfileHandler(service *profile.Service, watch ProfileWatch, history Que
 		defaultLocale = "en"
 	}
 	return &ProfileHandler{profile: service, watch: watch, history: history, limiter: limiter,
-		mw: mw, log: log, defaultLocale: defaultLocale}
+		mw: mw, log: log, defaultLocale: defaultLocale, exports: NewExportGate()}
+}
+
+// WithExports gives this handler the gate that decides how many CSV downloads
+// of one registration may be open at once — the same one the play screen's
+// handler is given (ParticipantHandler.WithExports), so the bound is one gate
+// over both routes rather than two gates that happen never to meet.
+func (h *ProfileHandler) WithExports(gate *ExportGate) *ProfileHandler {
+	if gate != nil {
+		h.exports = gate
+	}
+	return h
 }
 
 // Mount registers the routes.
@@ -555,7 +567,7 @@ func (h *ProfileHandler) logCSV(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	queryLogCSVExport{history: h.history, exports: &h.exports, log: h.log}.
+	queryLogCSVExport{history: h.history, exports: h.exports, log: h.log}.
 		serve(w, r, access.Participant.ID, access.Contest.ID, func() {
 			// A second download of a file the first one is still writing is
 			// asking faster than this installation allows, which is the

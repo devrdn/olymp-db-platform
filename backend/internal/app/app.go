@@ -612,10 +612,18 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// limiter under their own "signals:" namespace and stored beside the
 	// server's signals in participant_events.
 	signals := monitor.NewSignals(limiter, postgres.NewMonitor(pool))
+	// One gate over both routes that serve a registration's query log as a
+	// file — the play screen's during the contest and the profile's after it.
+	// Two gates would hold the same bound inside each route while resting, in
+	// aggregate, on the two admission rules never admitting the same
+	// registration at the same moment; this makes it one slot per
+	// registration whichever route asks (api.ExportGate).
+	logExports := api.NewExportGate()
 	modules = append(modules, api.NewParticipantHandler(participantAccess, reader, history, contestService, answers, authMiddleware, log, cfg.DefaultLocale).
 		WithWorkspace(workspaces).
 		WithWatcher(participantTracker).
-		WithSignals(signals))
+		WithSignals(signals).
+		WithExports(logExports))
 	// The SSE channel (§8) shares participantAccess with the endpoints above
 	// for the same reason: one Access, one AdmitRead budget, not a second
 	// admission decision that could drift from the first. ctx.Done() is the
@@ -643,7 +651,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Participants: postgres.NewRegistrations(pool),
 		Results:      standings,
 		Attempts:     watch,
-	}), watch, history, limiter, authMiddleware, log, cfg.DefaultLocale))
+	}), watch, history, limiter, authMiddleware, log, cfg.DefaultLocale).
+		WithExports(logExports))
 
 	deps := api.Deps{
 		Logger:        log,

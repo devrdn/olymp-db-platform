@@ -28,7 +28,7 @@ import (
 // Bounded four ways: rows (maxMonitorExportRows) and bytes
 // (maxMonitorExportBytes, counted as rows are written — CLAUDE.md rule 12),
 // each ending the file with a line saying so; time (exportDeadline); and one
-// download at a time per account (inFlightExports). A file that stops for
+// download at a time per account (ExportGate). A file that stops for
 // any other reason — the deadline, a failed read — ends with a line saying it
 // is incomplete: the status line said 200 long before, and a file that
 // quietly stops reads as a complete record.
