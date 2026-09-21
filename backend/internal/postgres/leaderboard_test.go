@@ -336,6 +336,52 @@ func TestICPCStandingsChargeOnlyWrongAttemptsBeforeTheSolve(t *testing.T) {
 	})
 }
 
+// A cell names the question it stands for, and the cells of a row add up to
+// exactly the penalty the statement computed for that row.
+//
+// This is the guard on the two copies of the ICPC rule: the SQL sums
+// `minute + icpc_penalty_min * wrong` over the solved cells, and
+// leaderboard.Cell.Penalty performs the same arithmetic in Go so that a
+// report can say what one question cost. They must agree on every shape a
+// row can have — a clean solve, a solve after wrong attempts, an unsolved
+// question with wrong attempts, and one nobody touched.
+func TestICPCCellPenaltiesAddUpToTheRowsOwn(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		const perWrong = 7
+		f := newICPCFixture(t, ctx, perWrong)
+		alice := f.participant(t, "icpc-cells", 0)
+		// A: solved at minute 10 after two wrong attempts. B: wrong twice and
+		// never solved. The hidden question is on no grid at all.
+		f.answerAt(t, alice, f.a, 1, false, boardAt(1))
+		f.answerAt(t, alice, f.a, 2, false, boardAt(2))
+		f.answerAt(t, alice, f.a, 3, true, boardAt(10))
+		f.answerAt(t, alice, f.b, 1, false, boardAt(5))
+		f.answerAt(t, alice, f.b, 2, false, boardAt(6))
+		f.answerAt(t, alice, f.hidden, 1, true, boardAt(3))
+
+		e := f.standings(t, leaderboard.Query{Cutoff: boardAt(60)})["icpc-cells"]
+		if len(e.Cells) != 2 {
+			t.Fatalf("cells = %d, want 2", len(e.Cells))
+		}
+		if e.Cells[0].QuestionID != f.a || e.Cells[1].QuestionID != f.b {
+			t.Fatalf("cells name %v and %v, want A %v and B %v",
+				e.Cells[0].QuestionID, e.Cells[1].QuestionID, f.a, f.b)
+		}
+
+		total := 0
+		for _, cell := range e.Cells {
+			total += cell.Penalty(perWrong)
+		}
+		if total != e.Penalty {
+			t.Errorf("the cells add up to %d, the row says %d", total, e.Penalty)
+		}
+		if e.Cells[0].Penalty(perWrong) != 10+2*perWrong || e.Cells[1].Penalty(perWrong) != 0 {
+			t.Errorf("cells cost %d and %d, want %d and 0",
+				e.Cells[0].Penalty(perWrong), e.Cells[1].Penalty(perWrong), 10+2*perWrong)
+		}
+	})
+}
+
 // A hidden question is neither on the grid nor in the count, even solved.
 func TestICPCStandingsLeaveAHiddenQuestionOffTheGrid(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
