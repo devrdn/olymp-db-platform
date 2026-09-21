@@ -81,24 +81,81 @@ func (r *Profile) Summary(ctx context.Context, userID uuid.UUID) (profile.Summar
 	return s, nil
 }
 
-// Enrolments reads the account's registrations with their contests, newest
-// first, at most limit of them.
+// ownResultColumns is the participant's own result in one contest, counted
+// from their own submissions and nothing else.
+//
+// Deliberately the same two expressions postgres.Leaderboard.Standings uses
+// for points and solved, and the same cell arithmetic ICPCStandings uses for
+// the ICPC pair — the list cannot ask the leaderboard for them (that is a
+// whole table per contest, which is the one thing this statement exists to
+// avoid), so what keeps the two answers one answer is a pair of tests that
+// run both against the same data and compare:
+// TestProfileEnrolmentsCarryTheOwnResultTheLeaderboardAgreesWith and its
+// ICPC twin. A change to either formula fails them.
+//
+// Cut off at nothing. A freeze hides other people's progress; it never hides
+// a participant's own work from them once their contest has ended, which is
+// the same choice leaderboard.Service.Own makes for the report.
+//
+// Both aggregates are one range of submissions_registration_submitted_idx
+// per registration. The ICPC one is joined on the contest's visible
+// questions, because a question off the grid costs and counts nothing, and
+// it is evaluated only for a contest actually scored that way.
+const ownResultColumns = `
+	COALESCE(points.points, 0)::int,
+	CASE WHEN c.scoring = 'icpc' THEN COALESCE(icpc.solved, 0) ELSE COALESCE(points.solved, 0) END::int,
+	COALESCE(icpc.penalty, 0)::int`
+
+// ownResultJoins are the two laterals ownResultColumns reads.
+const ownResultJoins = `
+	LEFT JOIN LATERAL (
+	    SELECT COALESCE(SUM(s.points_awarded), 0)                          AS points,
+	           COUNT(DISTINCT s.question_id) FILTER (WHERE s.is_correct)   AS solved
+	    FROM submissions s WHERE s.registration_id = r.id
+	) points ON true
+	LEFT JOIN LATERAL (
+	    SELECT COUNT(*) AS solved,
+	           COALESCE(SUM(
+	               GREATEST(0, COALESCE(floor(extract(epoch FROM t.solved_at - CASE
+	                   WHEN c.timing = 'individual' THEN COALESCE(r.started_at, c.starts_at)
+	                   ELSE c.starts_at END) / 60), 0))
+	               + c.icpc_penalty_min * t.wrong), 0) AS penalty
+	    FROM (
+	        SELECT a.question_id, MIN(a.solved_at) AS solved_at,
+	               COUNT(*) FILTER (WHERE NOT a.is_correct
+	                   AND (a.solved_at IS NULL OR a.submitted_at < a.solved_at)) AS wrong
+	        FROM (
+	            SELECT s.question_id, s.submitted_at, s.is_correct,
+	                   MIN(s.submitted_at) FILTER (WHERE s.is_correct)
+	                       OVER (PARTITION BY s.question_id) AS solved_at
+	            FROM submissions s
+	            JOIN questions q ON q.id = s.question_id AND q.contest_id = c.id AND q.is_visible
+	            WHERE s.registration_id = r.id
+	        ) a
+	        GROUP BY a.question_id
+	    ) t
+	    WHERE t.solved_at IS NOT NULL
+	) icpc ON c.scoring = 'icpc'`
+
+// Enrolments reads the account's registrations with their contests and the
+// participant's own result in each, newest first, at most limit of them.
 //
 // One statement over every registration of the account, never one per
 // contest (design §4): the contest arrives whole — its languages and its
 // translations included, by the same projection every other contest read
 // uses — so the list can be shown in the caller's own language without a
-// second round trip per row.
+// second round trip per row, and the row's own numbers come with it
+// (ownResultColumns) rather than from a table computed per contest.
 //
 // Newest first by when the contest was meant to happen, falling back to when
 // it was created for a contest with no schedule yet, and then by the
 // registration, so the order is total and two reads agree.
 func (r *Profile) Enrolments(ctx context.Context, userID uuid.UUID, limit int) ([]profile.Enrolment, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
-		SELECT `+contestColumns+`, `+participantColumns+`
+		SELECT `+contestColumns+`, `+participantColumns+`, `+ownResultColumns+`
 		FROM registrations r
 		JOIN contests c ON c.id = r.contest_id
-		JOIN users u ON u.id = r.user_id
+		JOIN users u ON u.id = r.user_id`+ownResultJoins+`
 		WHERE r.user_id = $1
 		ORDER BY COALESCE(c.starts_at, c.created_at) DESC, r.created_at DESC, r.id
 		LIMIT $2`, userID, limit)
@@ -112,6 +169,7 @@ func (r *Profile) Enrolments(ctx context.Context, userID uuid.UUID, limit int) (
 		)
 		targets := contestScanTargets(&e.Contest, &settings, &languages, &translations)
 		targets = append(targets, participantScanTargets(&e.Participant)...)
+		targets = append(targets, &e.Result.Points, &e.Result.Solved, &e.Result.Penalty)
 		if err := row.Scan(targets...); err != nil {
 			return profile.Enrolment{}, fmt.Errorf("scan an enrolment: %w", err)
 		}
@@ -120,6 +178,9 @@ func (r *Profile) Enrolments(ctx context.Context, userID uuid.UUID, limit int) (
 			return profile.Enrolment{}, err
 		}
 		e.Contest = contest
+		// The mode travels with the numbers, so nothing downstream has to
+		// look the contest up again to know which of them is the result.
+		e.Result.Scoring = contest.Scoring
 		return e, nil
 	})
 	if err != nil {
