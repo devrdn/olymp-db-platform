@@ -112,6 +112,28 @@ export function formatTime(iso: string, options: Options = {}): string {
 }
 
 /**
+ * The time to the second, for a log line.
+ *
+ * `formatTime` with one more field, and here for the same reason it is: a
+ * feed and a query log print a stamp per row, and two queries a few seconds
+ * apart would otherwise carry the same time. `h23` and the installation's
+ * zone, as above — a log read beside a clock on the wall.
+ */
+export function formatSeconds(iso: string, options: Options = {}): string {
+  const { timeZone, locale } = resolve(options);
+
+  return formatter("seconds", locale, timeZone, () =>
+    new Intl.DateTimeFormat(locale, {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+      timeZone,
+    }),
+  ).format(new Date(iso));
+}
+
+/**
  * Whether two moments fall on the same calendar day **where the contest is
  * held**, not where the server or the reader happens to be.
  *
