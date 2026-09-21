@@ -16,10 +16,17 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function renderRow(query = loggedQuery(1)) {
+/** The organiser's words and the address column: the fuller of the two rows. */
+function renderRow(query = loggedQuery(1), address = true) {
   return render(
     <ol>
-      <QueryRow query={query} dict={dict} locale="en" />
+      <QueryRow
+        query={query}
+        labels={dict.workspace.monitor.participant.queries}
+        statuses={dict.workspace.monitor.feed.queryStatus}
+        locale="en"
+        address={address}
+      />
     </ol>,
   );
 }
@@ -43,6 +50,19 @@ describe("one query", () => {
     expect(screen.getByText("division by zero")).toBeInTheDocument();
     expect(screen.getByText("no address")).toBeInTheDocument();
     expect(screen.queryByText(/rows/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * A participant's own report shows the same row without the address: it is
+   * their own, it explains nothing to them, and it is in the way (design
+   * §2.2). Not even "no address" — there is no column to leave empty.
+   */
+  test("leaves the address out where it is not asked for", () => {
+    renderRow(loggedQuery(1, { ip: "10.0.0.5" }), false);
+
+    expect(screen.queryByText("10.0.0.5")).not.toBeInTheDocument();
+    expect(screen.queryByText("no address")).not.toBeInTheDocument();
+    expect(screen.getByText("ok")).toBeInTheDocument();
   });
 
   test("expands to the whole statement, highlighted and read-only", () => {

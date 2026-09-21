@@ -10,8 +10,9 @@ import { formatMoment, formatTime } from "@/lib/format/datetime";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
+import { SqlBlock } from "@/components/product/sql-block";
+
 import { collapse, lineDiff, type DiffRow } from "./line-diff";
-import { SqlBlock } from "./sql-block";
 
 type WorkspaceDict = Dictionary["workspace"]["monitor"]["participant"]["workspace"];
 
