@@ -82,6 +82,40 @@ describe("a contest that has ended", () => {
     expect(within(row).queryByText(en.profile.contests.points)).not.toBeInTheDocument();
   });
 
+  // The numbers are read down the list, not across one row, so every row is
+  // the same two columns: a column sized by its own caption puts an ICPC
+  // row's figures somewhere else than the row above it, and a row carrying
+  // the sentence about a shut table drags its numbers away from the edge.
+  test("sets every figure on the same column, whatever the mode calls it", () => {
+    render_(
+      list([
+        finished({ contestId: "1a1b7d2e-3a4c-4f8b-9c1d-2e5a7b8c9d01" }),
+        finished({
+          contestId: "2a1b7d2e-3a4c-4f8b-9c1d-2e5a7b8c9d02",
+          title: "Winter ICPC",
+          result: {
+            scoring: "icpc",
+            points: 0,
+            solved: 4,
+            penalty: 1200,
+            state: "frozen",
+            placeOpen: false,
+          },
+        }),
+      ]),
+    );
+
+    // jsdom lays nothing out, so what can be checked here is the rule that
+    // produces the alignment: one column with a width floor, set to its right
+    // edge. The widths themselves are for the browser pass.
+    const columns = ["60", "3", "4", "1200"].map(
+      (value) => screen.getByText(value).parentElement?.className,
+    );
+    expect(new Set(columns).size).toBe(1);
+    expect(columns[0]).toContain("min-w-18");
+    expect(columns[0]).toContain("text-right");
+  });
+
   // The list carries no place at all, and says so rather than leaving a gap:
   // a frozen table is not a missing result, it is a result that is not public
   // yet. The profile does not go round the freeze.
