@@ -175,36 +175,61 @@ func (h *ProfileHandler) summary(w http.ResponseWriter, r *http.Request) {
 		Finished: summary.Finished, Queries: summary.Queries, Solved: summary.Solved})
 }
 
-// profileResultResponse is the participant's own standing. Place and
-// Participants are pointers so that "not open yet" is absent rather than
-// zero — a place of nought would read as a place.
-type profileResultResponse struct {
+// profileOwnNumbers is what the participant scored, in whichever of the two
+// shapes the contest's mode makes the result.
+type profileOwnNumbers struct {
 	Scoring string `json:"scoring"`
 	Points  int    `json:"points"`
 	Solved  int    `json:"solved"`
 	// Penalty is ICPC's, and absent in every other mode.
 	Penalty *int `json:"penalty,omitempty"`
-	// State is the table's own state, so the interface can say why a place is
-	// missing instead of leaving a gap.
-	State        string `json:"state"`
-	PlaceOpen    bool   `json:"place_open"`
-	Place        *int   `json:"place"`
-	Participants *int   `json:"participants"`
+	// State is the table's own state (live, frozen, final), so the interface
+	// can say why there is no place rather than leaving a gap, and PlaceOpen
+	// whether there is a place to go and read at all.
+	State     string `json:"state"`
+	PlaceOpen bool   `json:"place_open"`
+}
+
+func toProfileOwnNumbers(result profile.Result) profileOwnNumbers {
+	out := profileOwnNumbers{Scoring: result.Scoring, Points: result.Points,
+		Solved: result.Solved, State: result.State, PlaceOpen: result.PlaceOpen}
+	if result.Scoring == contests.ScoringICPC {
+		penalty := result.Penalty
+		out.Penalty = &penalty
+	}
+	return out
+}
+
+// profileListResult is a list row's result. It deliberately has no place:
+// naming one means computing a whole standings table per contest to
+// decorate an overview (design §2.1). PlaceOpen says whether the report has
+// one to show.
+type profileListResult struct {
+	profileOwnNumbers
+}
+
+// profileReportResult is the report's, which does carry the place — one
+// contest, one table, the same cached computation the contest's own page is
+// served from. Place and Participants are pointers so that "not open yet" is
+// absent rather than zero: a place of nought would read as a place.
+type profileReportResult struct {
+	profileOwnNumbers
+	Place        *int `json:"place"`
+	Participants *int `json:"participants"`
 	// Truncated says the table was cut at the leaderboard's row bound, so
 	// participants counts its rows rather than everybody on the contest.
 	Truncated bool `json:"truncated,omitempty"`
 }
 
-func toProfileResult(result profile.Result) *profileResultResponse {
-	out := &profileResultResponse{Scoring: result.Scoring, Points: result.Points,
-		Solved: result.Solved, State: result.State}
-	if result.Scoring == contests.ScoringICPC {
-		penalty := result.Penalty
-		out.Penalty = &penalty
-	}
+func toProfileListResult(result profile.Result) *profileListResult {
+	return &profileListResult{profileOwnNumbers: toProfileOwnNumbers(result)}
+}
+
+func toProfileReportResult(result profile.Result) *profileReportResult {
+	out := &profileReportResult{profileOwnNumbers: toProfileOwnNumbers(result)}
 	if result.PlaceOpen {
 		place, participants := result.Place, result.Participants
-		out.PlaceOpen, out.Place, out.Participants, out.Truncated = true, &place, &participants, result.Truncated
+		out.Place, out.Participants, out.Truncated = &place, &participants, result.Truncated
 	}
 	return out
 }
@@ -222,8 +247,9 @@ type profileContestResponse struct {
 	// can be opened. A contest that has not is a line and a way back into it.
 	Over bool `json:"over"`
 	// Result is absent for a contest that is not over for the caller: during
-	// one, the profile shows nothing of what is happening inside it.
-	Result *profileResultResponse `json:"result,omitempty"`
+	// one, the profile shows nothing of what is happening inside it. It
+	// carries no place — the report does.
+	Result *profileListResult `json:"result,omitempty"`
 }
 
 type profileContestsResponse struct {
@@ -249,7 +275,7 @@ func (h *ProfileHandler) contests(w http.ResponseWriter, r *http.Request) {
 			StartsAt: formatTime(c.StartsAt), EndsAt: formatTime(c.EndsAt),
 			RegistrationStatus: row.Participant.Status, Over: row.Over}
 		if row.Over {
-			item.Result = toProfileResult(row.Result)
+			item.Result = toProfileListResult(row.Result)
 		}
 		out.Items = append(out.Items, item)
 	}
@@ -267,12 +293,12 @@ type profileQuestionResponse struct {
 }
 
 type profileReportResponse struct {
-	ContestID uuid.UUID              `json:"contest_id"`
-	Title     string                 `json:"title"`
-	Status    string                 `json:"status"`
-	StartsAt  string                 `json:"starts_at,omitempty"`
-	EndsAt    string                 `json:"ends_at,omitempty"`
-	Result    *profileResultResponse `json:"result"`
+	ContestID uuid.UUID            `json:"contest_id"`
+	Title     string               `json:"title"`
+	Status    string               `json:"status"`
+	StartsAt  string               `json:"starts_at,omitempty"`
+	EndsAt    string               `json:"ends_at,omitempty"`
+	Result    *profileReportResult `json:"result"`
 	// StartedAt is when the caller's own clock started, and Queries and
 	// SuccessfulQueries what their session cost.
 	StartedAt         string `json:"started_at,omitempty"`
@@ -306,7 +332,7 @@ func (h *ProfileHandler) report(w http.ResponseWriter, r *http.Request) {
 	lang := negotiateLang(r, c.LanguageCodes(), c.DefaultLanguage(), h.defaultLocale)
 	out := profileReportResponse{ContestID: c.ID, Title: c.Translations[lang].Title, Status: c.Status,
 		StartsAt: formatTime(c.StartsAt), EndsAt: formatTime(c.EndsAt),
-		Result: toProfileResult(report.Result), StartedAt: formatTime(report.Participant.StartedAt),
+		Result: toProfileReportResult(report.Result), StartedAt: formatTime(report.Participant.StartedAt),
 		Queries: report.Activity.Queries, SuccessfulQueries: report.Activity.Successful,
 		Disqualified: report.Participant.Status == contests.RegistrationDisqualified,
 		Truncated:    report.Truncated,

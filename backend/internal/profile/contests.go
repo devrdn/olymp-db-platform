@@ -2,7 +2,6 @@ package profile
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -20,29 +19,30 @@ type Enrolment struct {
 	Contest     contests.Contest
 	Participant contests.Participant
 	// Over says the contest has ended for this participant. Only then is
-	// Result filled and the contest's report reachable; a contest still
+	// Result shown and the contest's report reachable; a contest still
 	// running is a line saying so and a way back into it, nothing more.
 	Over bool
-	// Result is the participant's own standing, from the leaderboard. Its
-	// place is filled only where the table is open.
+	// Result is the participant's own numbers, as storage counted them, with
+	// State and PlaceOpen decided here. It never carries a place — see
+	// Contests.
 	Result Result
 }
 
 // Contests lists the caller's contests with their own results.
 //
-// One read of storage for the whole list, whatever it holds: the contests and
-// the registrations arrive together from a single statement over the
-// account's own registrations (Store.Enrolments), never a lookup per contest.
+// One read for the whole list, whatever it holds, and no second read for any
+// row: the contests, the registrations and the participant's own points,
+// solved and penalty all arrive from the single statement over the account's
+// own registrations that Store.Enrolments sends (design §4).
 //
-// The results are then the leaderboard's, and only for the contests that have
-// ended for this caller — a running contest is not asked about at all, so the
-// number of standings computations is bounded by the finished contests on one
-// bounded page, and each of them is the same cached computation the contest's
-// own page is served from (leaderboard.Service.Own).
-//
-// A contest the leaderboard cannot place the caller on is listed without a
-// result rather than failing the list: one missing number is not a reason to
-// answer nothing at all.
+// There is deliberately no place here. A place is a position on a table, and
+// naming one means computing that whole table — up to a bounded page of them
+// the first time a profile is opened, to decorate an overview. The place is
+// on the report, which is where somebody goes for detail and which asks the
+// leaderboard for exactly the one contest they opened. What the row does say
+// is whether the table is open at all (leaderboard.Decide, a function over
+// the contest already in hand and not a read of anything), so the interface
+// can offer the report's place or explain that a freeze is still in force.
 func (s *Service) Contests(ctx context.Context, userID uuid.UUID) ([]Enrolment, bool, error) {
 	// One past the bound, so "there are more" is a fact rather than the guess
 	// len == limit would be.
@@ -60,16 +60,18 @@ func (s *Service) Contests(ctx context.Context, userID uuid.UUID) ([]Enrolment, 
 		row := &rows[i]
 		row.Over = Over(row.Contest, row.Participant, now)
 		if !row.Over {
+			// Nothing of a contest that is still being taken, not even the
+			// state of its table: during one, the profile is a way back in.
+			row.Result = Result{}
 			continue
 		}
-		own, err := s.results.Own(ctx, row.Contest.ID, row.Participant.ID)
-		switch {
-		case errors.Is(err, leaderboard.ErrNotAParticipant), errors.Is(err, leaderboard.ErrNotFound):
-			continue
-		case err != nil:
-			return nil, false, fmt.Errorf("read the standing in %s: %w", row.Contest.ID, err)
+		// A contest whose state cannot be decided — a draft, which Over
+		// already refuses — leaves the row's own numbers and no state, rather
+		// than failing a list for one row.
+		if decision, err := leaderboard.Decide(row.Contest, now); err == nil {
+			row.Result.State = decision.State
+			row.Result.PlaceOpen = decision.State == leaderboard.StateFinal
 		}
-		row.Result = resultOf(own)
 	}
 	return rows, truncated, nil
 }

@@ -65,11 +65,16 @@ type Summary struct {
 type Store interface {
 	// Summary counts the profile's four numbers in one statement.
 	Summary(ctx context.Context, userID uuid.UUID) (Summary, error)
-	// Enrolments reads the account's registrations with their contests,
-	// newest first, at most limit of them — one statement over every
-	// registration of the account, never one per contest (design §4). The
-	// Enrolments it returns carry the contest and the registration only;
-	// the result is the leaderboard's to fill in.
+	// Enrolments reads the account's registrations with their contests and
+	// the participant's own numbers in each, newest first, at most limit of
+	// them — one statement over every registration of the account, never one
+	// per contest (design §4).
+	//
+	// The Result it fills is the row's own points, solved and penalty, cut
+	// off at nothing: what this participant did, which they may always see
+	// once their contest has ended. It carries no place and no state; the
+	// place is the report's (Service.Report, through the leaderboard), and
+	// the state Service.Contests decides from the contest itself.
 	Enrolments(ctx context.Context, userID uuid.UUID, limit int) ([]Enrolment, error)
 	// Activity counts one registration's queries and how many of them
 	// succeeded, and finds its last answer.

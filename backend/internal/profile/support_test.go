@@ -68,14 +68,6 @@ func (r *results) Own(_ context.Context, contestID, _ uuid.UUID) (leaderboard.Ow
 	return own, nil
 }
 
-// ownFunc adapts a function to the leaderboard the profile reads, for a test
-// that has to see which registration was asked about.
-type ownFunc func(contestID, registration uuid.UUID) (leaderboard.Own, error)
-
-func (f ownFunc) Own(_ context.Context, contestID, registration uuid.UUID) (leaderboard.Own, error) {
-	return f(contestID, registration)
-}
-
 // attempts is the monitoring double: the answers tab, as the report reads it.
 type attempts struct {
 	answers monitor.Answers
