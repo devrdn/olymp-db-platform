@@ -111,8 +111,10 @@ function Row({
   // `over` decides, never the status. A participant whose own timer ran out,
   // or who was disqualified, is finished with a contest the clock says is
   // still running — and their report is open while everybody else is still
-  // working.
-  const done = contest.over && contest.result !== undefined;
+  // working. The result is what such a contest carries; a row that had none
+  // is still a finished one, and falls back to saying nothing rather than to
+  // the sentence a contest still to come gets.
+  const done = contest.over;
 
   return (
     <li className="flex flex-wrap items-baseline justify-between gap-x-8 gap-y-3 border-b border-line py-5 transition-colors duration-(--t-input) ease-standard hover:bg-panel">
@@ -155,14 +157,14 @@ function Row({
       </div>
 
       <div className="flex flex-col items-start gap-2">
-        {done ? (
+        {contest.result !== undefined ? (
           <>
-            <Result result={contest.result as ProfileResult} dict={dict} />
-            {contest.result?.placeOpen ? null : (
+            <Result result={contest.result} dict={dict} />
+            {contest.result.placeOpen ? null : (
               <p className="max-w-body font-mono text-data text-ink-3">{t.placePending}</p>
             )}
           </>
-        ) : contest.status === "running" ? (
+        ) : done ? null : contest.status === "running" ? (
           <Link
             href={`/contests/${contest.contestId}/play`}
             className={cn(buttonVariants({ variant: "primary", size: "sm" }))}
