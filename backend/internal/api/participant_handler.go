@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/csv"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -501,176 +500,30 @@ func (h *ParticipantHandler) queryLog(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, queryLogResponse{Items: items, Total: total})
 }
 
-// queryLogCSVColumns is the file's header row, and the order of every row
-// under it. The same facts the panel shows, plus the error text — a
-// spreadsheet has room for it where a table column does not.
-var queryLogCSVColumns = []string{"executed_at", "status", "duration_ms", "row_count", "error", "sql"}
-
-// queryLogCSVTruncatedNotice is the last line of a file a bound cut short.
-//
-// A row in the data rather than a header, because the bound is only known once
-// the rows have been counted and the status line went out long before that —
-// and because a person opens this in a spreadsheet, where a header is
-// invisible and the last row is not. The status cell is deliberately not one
-// of queryrunner's own, so nothing reads it back as a query that happened.
-var queryLogCSVTruncatedNotice = []string{"", "truncated", "", "", "This file carries the oldest " +
-	"queries of your log up to the size one download may carry; the panel beside it shows the newest.", ""}
-
-// exportDeadline is how long one CSV download may hold its database
-// connection.
-//
-// The other half of the bound (queryrunner.MaxExportRows says how much may be
-// read; this says for how long), and the half that is not about volume at all:
-// the export streams inside a transaction, so a client reading a byte a second
-// used to pin one of the core pool's ten connections for as long as it cared
-// to — on the database every other participant's sign-in, submission and timer
-// share. Nothing about the amount of data bounds that, because the slow party
-// is the reader.
-//
-// A minute is generous against the file: a full-rate three-hour log is about a
-// megabyte, which is under a second on the local network an olympiad runs on
-// and a few seconds on a poor one. It is short against the damage: ten
-// connections held for a minute is a stall a contest recovers from by itself.
-const exportDeadline = time.Minute
-
 // queryLogCSV serves GET .../play/log.csv: this participant's whole query
 // log as a file, and only theirs.
 //
-// Streamed rather than paged — the opposite choice from the contest package
-// next door, and for the opposite reason. A log has no natural page: a
-// participant who never stops querying over a two-hour olympiad puts hundreds
-// of rows in it, and a file quietly missing most of them is not a record of
-// anything. So there is no page here (§9.1 is explicit that CSV streams row by
-// row), and what keeps memory flat is that a row is written to the socket as
-// it arrives: postgres.QueryLog.ExportHistory hands them over one at a time,
-// csv.Writer's own bufio flushes when its buffer fills, and nothing
-// accumulates a log's worth of anything.
+// The file itself, and every bound on it, is queryLogCSVExport's
+// (querylog_csv.go) — the participant's own profile serves the same download
+// after the contest, and two copies of a streamed export are two places its
+// bounds could drift.
 //
-// Streamed is not the same as unbounded, which is what it used to be. Three
-// bounds, and each answers a different question. How much may be read is
-// queryrunner.MaxExportRows and MaxExportBytes, both far past anything a
-// contest can produce, with a final line in the file when either binds. How
-// long the connection may be held is exportDeadline, because the amount of
-// data does not bound a reader who is slow on purpose. And how many of these
-// one account may have open at a time is one — see inFlightExports: a bound
-// per request is not a bound in aggregate when the rate budget allows thirty
-// requests a minute and the pool has ten connections.
+// Whose rows: participant.ID, resolved by Access from the session and the
+// contest in the URL. Nothing the request carries selects a registration.
 //
 // The rate budget comes first (admit, and CLAUDE.md rule 13): this is the
 // most expensive read this handler offers, so it is the last one that should
 // be free.
-//
-// Whose rows: participant.ID, resolved by Access from the session and the
-// contest in the URL. Nothing the request carries selects a registration, and
-// there is no staff route to this endpoint — the admin journal panel of §9.1,
-// which is the thing that would name somebody else's registration, is not
-// built yet and will not be built here.
 func (h *ParticipantHandler) queryLogCSV(w http.ResponseWriter, r *http.Request) {
 	participant, contest, ok := h.admit(w, r)
 	if !ok {
 		return
 	}
-
-	// One at a time per account. The rate budget spent above limits how often
-	// a download may be *started*, not how many may be running at once, and
-	// this is the one endpoint where those differ: it holds a connection for
-	// as long as it takes to read, so thirty starts a minute against a
-	// ten-connection pool is a stall on sign-in for everybody. Refused with
-	// the rate refusal it really is — a second download of a file the first
-	// one is still writing is asking faster than the installation allows.
-	release, free := h.exports.enter(participant.ID)
-	if !free {
-		h.fail(w, r, queryrunner.ErrTooManyQueries)
-		return
-	}
-	defer release()
-
-	// And a ceiling on how long that connection may be held, whatever the
-	// client does with the socket (exportDeadline).
-	ctx, stop := context.WithTimeout(r.Context(), exportDeadline)
-	defer stop()
-
-	// Headers cannot be set once a byte is written, and whether the read even
-	// starts is only known when the first row arrives (or the stream ends).
-	// So the response is opened by this closure, called at most once: either
-	// from the first row, or from the empty case below. A failure before it
-	// runs still has a status line to spend, and spends it on saying so.
-	writer := csv.NewWriter(w)
-	opened := false
-	open := func() error {
-		opened = true
-		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-		// The identifier, not the contest's title: a title is authored text
-		// in any script and this header is ASCII.
-		w.Header().Set("Content-Disposition",
-			fmt.Sprintf("attachment; filename=%q", "query-log-"+contest.ID.String()+".csv"))
-		w.WriteHeader(http.StatusOK)
-		return writer.Write(queryLogCSVColumns)
-	}
-
-	truncated, err := h.history.ExportHistory(ctx, participant.ID, func(entry queryrunner.HistoryEntry) error {
-		if !opened {
-			if err := open(); err != nil {
-				return err
-			}
-		}
-		return writer.Write([]string{
-			entry.ExecutedAt.UTC().Format(timeLayout),
-			string(entry.Status),
-			// Empty rather than zero for a row still running: an empty cell
-			// is how CSV says "not recorded", and a zero here would read as a
-			// query that took no time and returned nothing.
-			optionalNumber(entry.DurationMs),
-			optionalNumber(entry.RowCount),
-			// The same guard the paged read applies, not a second opinion
-			// about it: this file reads the same unsanitised column, and a
-			// download is the more convenient way round a guard than a page
-			// is, because it arrives as a document somebody keeps.
-			participantSafeError(entry.Status, entry.Error),
-			entry.SQL,
-		})
-	})
-	if err != nil {
-		if !opened {
-			h.log.ErrorContext(r.Context(), "could not read the participant's query log for export", "error", err)
-			httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
-			return
-		}
-		// The status line is already out and said 200. Logged rather than
-		// swallowed: what the participant has is a file that stops early, and
-		// the log is the only place that fact survives.
-		h.log.ErrorContext(r.Context(), "the participant's query log export stopped early", "error", err)
-	}
-
-	// A participant who ran nothing still gets a file: a header row and no
-	// rows under it. A zero-byte download is indistinguishable from a failed
-	// one.
-	if !opened {
-		if err := open(); err != nil {
-			h.log.ErrorContext(r.Context(), "could not write the query log export header", "error", err)
-			return
-		}
-	}
-	// A file that stops at a bound says so in itself. A truncation nobody can
-	// see in the file is the failure mode this whole line exists against: the
-	// participant would have a record they believe is complete.
-	if truncated {
-		if err := writer.Write(queryLogCSVTruncatedNotice); err != nil {
-			h.log.ErrorContext(r.Context(), "could not write the query log truncation notice", "error", err)
-		}
-	}
-	writer.Flush()
-	if err := writer.Error(); err != nil {
-		h.log.ErrorContext(r.Context(), "could not finish the query log export", "error", err)
-	}
-}
-
-// optionalNumber renders a count that may not have been recorded yet.
-func optionalNumber(value *int) string {
-	if value == nil {
-		return ""
-	}
-	return strconv.Itoa(*value)
+	// A second download of a file the first one is still writing is asking
+	// faster than the installation allows, and is refused as the rate refusal
+	// it really is.
+	queryLogCSVExport{history: h.history, exports: &h.exports, log: h.log}.
+		serve(w, r, participant.ID, contest.ID, func() { h.fail(w, r, queryrunner.ErrTooManyQueries) })
 }
 
 // answerRequest is the body of POST .../answer: one value, compared against
