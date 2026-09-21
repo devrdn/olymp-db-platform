@@ -164,7 +164,13 @@ function Row({
         </div>
       </div>
 
-      <div className="flex flex-col items-start gap-2">
+      {/* The right-hand side is read down, not across: a column of results
+          under one another. So it ends at the row's right edge and everything
+          in it is set to that edge — otherwise the figures start wherever the
+          widest thing under them happens to end, and a row carrying the
+          sentence about a shut table drags its numbers a third of the way
+          across the page. */}
+      <div className="flex flex-col items-end gap-2 text-right">
         {contest.result !== undefined ? (
           <>
             <Result result={contest.result} dict={dict} />
@@ -228,10 +234,18 @@ function Result({ result, dict }: { result: ProfileResult; dict: Dictionary }) {
   );
 }
 
-/** One number over its caption, the same pair the summary above is made of. */
+/**
+ * One number over its caption, the same pair the summary above is made of.
+ *
+ * The column has a floor width because the captions do not: `PENALTY` is
+ * wider than `SOLVED`, and a column that took its width from its own caption
+ * would put the numbers of an ICPC row at different places from the row above
+ * it. The floor clears the longest caption and a five-figure penalty, so
+ * every row of the list is the same two columns, and the eye runs down them.
+ */
 function Figure({ value, label }: { value: number; label: string }) {
   return (
-    <span className="flex min-w-0 flex-col-reverse gap-1">
+    <span className="flex min-w-18 flex-col-reverse gap-1 text-right">
       <span className="font-mono text-label text-ink-3 uppercase">{label}</span>
       <span className="font-mono text-h3 text-ink tabular-nums">{value}</span>
     </span>
