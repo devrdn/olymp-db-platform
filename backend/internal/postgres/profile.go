@@ -70,6 +70,15 @@ func (r *Profile) querier(ctx context.Context) storage.Querier {
 
 // Summary counts the profile's four numbers in one statement.
 //
+// There is no limit here, and that is the choice rather than an oversight.
+// Enrolments takes a page because a list is a page; these four numbers are the
+// account's record, so cutting them at profile.MaxContests would have
+// "contests" mean "contests on this screen" and would shrink a long career's
+// query count as it grew. What bounds the work instead is the account's own
+// rows — one statement over one person's registrations, each counter a lateral
+// aggregate over that registration's own index range — and an account cannot
+// be on more olympiads than the installation has run.
+//
 // The account's registrations are the outer rows — the ones profileStatuses
 // admits, so these numbers describe exactly the contests Enrolments lists —
 // and each counter is a lateral aggregate over that one registration's own
