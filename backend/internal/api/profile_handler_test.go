@@ -691,6 +691,45 @@ func TestTheReportSaysNothingOfAFrozenWinnerModeTable(t *testing.T) {
 	}
 }
 
+// A registration the table has no row for is sent result: null — never an
+// object of zeroes.
+//
+// The table is bounded (leaderboard.DefaultMaxRows), so every participant of
+// a large contest below the cut reaches this, as does one disqualified before
+// the table was computed. A zeroed object would carry scoring "" and state
+// "", neither of which any reader can name, and a client parsing them
+// strictly gets an error page instead of the report it asked for.
+func TestTheReportOfARowTheTableDoesNotCarryHasNoResult(t *testing.T) {
+	f := newProfileFixture(t)
+	delete(f.results.own, f.finished.ID)
+
+	rec := f.get("/me/contests/"+f.finished.ID.String()+"/report", &f.student)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("report: %d %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Result    map[string]any `json:"result"`
+		Queries   int            `json:"queries"`
+		Questions []struct {
+			Ord int `json:"ord"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Result != nil {
+		t.Errorf("result = %+v, want null", body.Result)
+	}
+	if !strings.Contains(rec.Body.String(), `"result":null`) {
+		t.Errorf("the report does not send a null result: %s", rec.Body.String())
+	}
+	// The report is still the participant's own work; only the standing is
+	// missing.
+	if len(body.Questions) != 1 {
+		t.Errorf("questions = %+v, want the participant's own answers", body.Questions)
+	}
+}
+
 // A published contest whose window has never opened has a table state of its
 // own, and the profile carries it rather than dressing it up as something
 // else.

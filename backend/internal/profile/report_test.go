@@ -88,6 +88,40 @@ func TestTheReportCarriesTheResultAndThePlaceOfAnOpenTable(t *testing.T) {
 	}
 }
 
+// A registration the leaderboard has no row for gets its report with no
+// result at all — nil, not a zeroed one.
+//
+// The table is bounded (leaderboard.DefaultMaxRows), and a registration below
+// the cut is on no computation of it, so this is every participant of a large
+// contest past the two thousandth row, not a corner case. A zeroed Result
+// would carry an empty scoring and an empty state, which read as a result of
+// nought in a mode nobody can name.
+func TestTheReportOfARegistrationTheTableHasNoRowFor(t *testing.T) {
+	r := newRig(t)
+	c, p := r.seed(t, contests.StatusFinished)
+	started := start
+	p.StartedAt = &started
+	r.people.Put(p)
+	r.attempts.answers = monitor.Answers{Questions: []monitor.QuestionAttempts{answered(uuid.New(), 1, true)}}
+
+	access, err := r.service.Open(t.Context(), c.ID, r.user)
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+	report, err := r.service.Report(t.Context(), access)
+	if err != nil {
+		t.Fatalf("Report() = %v", err)
+	}
+	if report.Result != nil {
+		t.Errorf("result = %+v, want none at all", report.Result)
+	}
+	// The rest of the report is still the participant's own, and still theirs
+	// to read: the standing is the only thing the table was asked for.
+	if len(report.Questions) != 1 || !report.Questions[0].Solved {
+		t.Errorf("questions = %+v, want the participant's own answers", report.Questions)
+	}
+}
+
 func TestTheReportCountsTheQueriesAndTheTimeWorked(t *testing.T) {
 	r := newRig(t)
 	last := start.Add(80 * time.Minute)

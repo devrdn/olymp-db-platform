@@ -234,8 +234,20 @@ func toProfileListResult(result profile.Result) *profileListResult {
 	return &profileListResult{profileOwnNumbers: toProfileOwnNumbers(result)}
 }
 
-func toProfileReportResult(result profile.Result) *profileReportResult {
-	out := &profileReportResult{profileOwnNumbers: toProfileOwnNumbers(result),
+// toProfileReportResult is nil for a registration the table carries no row
+// for, and the response sends result: null.
+//
+// A zeroed object would be worse than nothing: scoring and state would be
+// empty strings, which name no mode and no table, and a reader shown them is
+// told a result of nought in a contest with no rules. The table is bounded
+// (leaderboard.DefaultMaxRows), so this is every participant of a large
+// contest below the cut, not a rarity — what they get is the rest of their
+// report and a line saying their row is outside the published table.
+func toProfileReportResult(result *profile.Result) *profileReportResult {
+	if result == nil {
+		return nil
+	}
+	out := &profileReportResult{profileOwnNumbers: toProfileOwnNumbers(*result),
 		Winner: result.Winner}
 	// Only a row the table actually placed. An open table that places nobody
 	// but its winner leaves everybody else's place null, together with the
@@ -313,12 +325,15 @@ type profileQuestionResponse struct {
 }
 
 type profileReportResponse struct {
-	ContestID uuid.UUID            `json:"contest_id"`
-	Title     string               `json:"title"`
-	Status    string               `json:"status"`
-	StartsAt  string               `json:"starts_at,omitempty"`
-	EndsAt    string               `json:"ends_at,omitempty"`
-	Result    *profileReportResult `json:"result"`
+	ContestID uuid.UUID `json:"contest_id"`
+	Title     string    `json:"title"`
+	Status    string    `json:"status"`
+	StartsAt  string    `json:"starts_at,omitempty"`
+	EndsAt    string    `json:"ends_at,omitempty"`
+	// Result is null when the table carries no row for this registration; see
+	// toProfileReportResult. Everything else on the report is still the
+	// participant's own work and is still sent.
+	Result *profileReportResult `json:"result"`
 	// StartedAt is when the caller's own clock started, and Queries and
 	// SuccessfulQueries what their session cost.
 	StartedAt         string `json:"started_at,omitempty"`

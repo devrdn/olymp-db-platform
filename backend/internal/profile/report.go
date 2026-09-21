@@ -50,14 +50,14 @@ type Result struct {
 // resultOf is the leaderboard's answer as the profile carries it. The place
 // travels only with PlaceOpen, so there is one place in this package that
 // can decide to show one.
-func resultOf(own leaderboard.Own) Result {
+func resultOf(own leaderboard.Own) *Result {
 	r := Result{Scoring: own.Scoring, Points: own.Row.Points, Solved: own.Row.Solved,
 		Penalty: own.Row.Penalty, State: own.State}
 	if own.Open {
 		r.PlaceOpen, r.Place, r.Participants, r.Truncated = true, own.Place, own.Participants, own.Truncated
 		r.Winner = own.Row.Winner
 	}
-	return r
+	return &r
 }
 
 // Activity is what the journals say about one registration's session.
@@ -100,9 +100,16 @@ type QuestionResult struct {
 type Report struct {
 	Contest     contests.Contest
 	Participant contests.Participant
-	Result      Result
-	Activity    Activity
-	Questions   []QuestionResult
+	// Result is nil when the table carries no row for this registration, and
+	// is not a zeroed Result: a zeroed one has an empty scoring and an empty
+	// state, which name no mode and no table and read as a result of nought.
+	// The table is bounded (leaderboard.DefaultMaxRows), so every participant
+	// of a large contest below the cut arrives here, as does one disqualified
+	// before it was computed. What they are owed is the rest of their report
+	// and a line saying their row is outside the published table.
+	Result    *Result
+	Activity  Activity
+	Questions []QuestionResult
 	// Truncated says the participant made more attempts than one read of the
 	// answers tab carries, so the questions below describe the first of them.
 	Truncated bool
@@ -128,8 +135,8 @@ func (r Report) Worked() (time.Duration, bool) {
 // Three reads, none of them a formula of this package's own: the standing
 // from the leaderboard, the attempts from the same answers tab a contest's
 // staff read, and the counters from the journals. A caller the leaderboard
-// has no row for — disqualified before it was computed, say — still gets
-// their report, with no result on it.
+// has no row for — below the table's row bound, or disqualified before it was
+// computed — still gets their report, with Result left nil.
 func (s *Service) Report(ctx context.Context, access Access) (Report, error) {
 	report := Report{Contest: access.Contest, Participant: access.Participant}
 
