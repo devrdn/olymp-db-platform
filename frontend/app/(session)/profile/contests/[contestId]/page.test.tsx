@@ -24,7 +24,7 @@ vi.mock("@/lib/i18n/server", async () => {
   return { activeLocale: async () => "en", activeDictionary: async () => getDictionary("en") };
 });
 
-import ReportPage from "./page";
+import ReportPage, { generateMetadata } from "./page";
 
 const CONTEST = "6f1b7d2e-3a4c-4f8b-9c1d-2e5a7b8c9d01";
 const base = `/me/contests/${CONTEST}`;
@@ -90,6 +90,21 @@ describe("the heading", () => {
       `/api/v1${base}/log.csv`,
     );
     expect(screen.getByRole("link", { name: dict.profile.report.back })).toHaveAttribute("href", "/profile");
+  });
+});
+
+/**
+ * The tab is in the address, so it is in the title too: three browser tabs
+ * of one report all called "Result" are three tabs nobody can tell apart.
+ */
+describe("the title of the browser tab", () => {
+  test("names the tab the address asks for", async () => {
+    expect(await generateMetadata({ searchParams: Promise.resolve({ tab: "queries" }) } as never)).toEqual({
+      title: dict.profile.report.tabs.queries,
+    });
+    expect(await generateMetadata({ searchParams: Promise.resolve({}) } as never)).toEqual({
+      title: dict.profile.report.tabs.summary,
+    });
   });
 });
 

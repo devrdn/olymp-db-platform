@@ -135,7 +135,6 @@ const ro = {
       csvHeading: "Descărcare",
       csvLabel: "Descărcați tot ce ați rulat la această olimpiadă, în CSV",
       disqualified: "Ați fost descalificat la această olimpiadă. Ce ați făcut rămâne de citit.",
-      failed: "Această parte a raportului nu a putut fi încărcată. Reîncărcați pagina pentru a încerca din nou.",
       result: {
         heading: "Rezultatul dumneavoastră",
         points: "Puncte",
