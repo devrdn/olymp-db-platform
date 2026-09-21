@@ -171,4 +171,24 @@ describe("an address that leads nowhere", () => {
     await expect(renderPage(undefined, "not-an-id")).rejects.toThrow("NEXT_NOT_FOUND");
     expect(serverRequest).not.toHaveBeenCalled();
   });
+
+  /**
+   * The report's own answer decides the page, whichever read fails first.
+   *
+   * The two reads run together, and a tab that fails for its own reason must
+   * not be what the reader is shown when the report says the contest is not
+   * theirs: a race would answer with whichever rejection arrived first, and
+   * the loser's would be left with nobody to receive it.
+   */
+  test("answers with the report's failure even when the tab fails sooner", async () => {
+    serverRequest.mockImplementation(async (path: string) => {
+      if (path.startsWith(`${base}/queries`)) throw new Error("the tab read broke first");
+      // A tick later, so the tab's failure is certainly the first one.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      throw new ApiError("profile_contest_not_found", 404, "No finished contest of yours with that identifier");
+    });
+
+    await expect(renderPage("queries")).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(notFound).toHaveBeenCalled();
+  });
 });
