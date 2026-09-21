@@ -239,6 +239,69 @@ func TestProfileEnrolmentsCarryTheOwnResultTheLeaderboardAgreesWith(t *testing.T
 	})
 }
 
+// A draft contest is on no profile, in the list or in the four numbers.
+//
+// A roster may be filled while a contest is still being written, so a
+// registration in a draft exists long before anybody is meant to know the
+// contest does. The catalogue already refuses to show one (Contests.List: a
+// draft is nobody's business but its authors'), and the profile refuses for
+// the same reason — otherwise a member of the roster would read its title,
+// its status and its schedule here before it is published. Both reads exclude
+// it, so the header's numbers count exactly the rows the list shows.
+func TestProfileReadsLeaveADraftContestOut(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newProfileFixture(t, ctx)
+		published, _ := f.contest(contests.StatusPublished, 24*time.Hour)
+		// Newer than the published one, so an unfiltered read would put it
+		// first rather than merely include it.
+		draft, draftReg := f.contest(contests.StatusDraft, 48*time.Hour)
+		question := f.question(draft, 1)
+		f.query(draftReg, "ok", f.base)
+		f.answer(draftReg, question, 1, true, f.base)
+
+		rows, err := NewProfile(testPool).Enrolments(ctx, f.user, 10)
+		if err != nil {
+			t.Fatalf("Enrolments() = %v", err)
+		}
+		if len(rows) != 1 || rows[0].Contest.ID != published {
+			t.Fatalf("Enrolments() returned %d rows, want only the published contest %s", len(rows), published)
+		}
+
+		summary, err := NewProfile(testPool).Summary(ctx, f.user)
+		if err != nil {
+			t.Fatalf("Summary() = %v", err)
+		}
+		if summary.Contests != 1 || summary.Queries != 0 || summary.Solved != 0 {
+			t.Errorf("Summary() = %+v, want 1 contest and nothing of the draft's own work", summary)
+		}
+	})
+}
+
+// Archived contests stay: a profile is a history view, and archiving is how a
+// finished olympiad is put away, not how it is taken from the people who sat
+// it.
+func TestProfileReadsKeepAnArchivedContest(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newProfileFixture(t, ctx)
+		archived, _ := f.contest(contests.StatusArchived, -72*time.Hour)
+
+		rows, err := NewProfile(testPool).Enrolments(ctx, f.user, 10)
+		if err != nil {
+			t.Fatalf("Enrolments() = %v", err)
+		}
+		if len(rows) != 1 || rows[0].Contest.ID != archived {
+			t.Fatalf("Enrolments() returned %d rows, want the archived contest %s", len(rows), archived)
+		}
+		summary, err := NewProfile(testPool).Summary(ctx, f.user)
+		if err != nil {
+			t.Fatalf("Summary() = %v", err)
+		}
+		if summary.Contests != 1 {
+			t.Errorf("Summary() = %+v, want the archived contest counted", summary)
+		}
+	})
+}
+
 // The ICPC row is the one with a formula worth pinning: solved counts the
 // visible questions solved, and the penalty is each solve's minute from the
 // start plus the contest's penalty for every wrong attempt before it. Both
