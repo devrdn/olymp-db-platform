@@ -91,8 +91,10 @@ type publicContest struct {
 	TableOpen bool `json:"table_open"`
 }
 
+// publicContestsResponse names its list "items", as every other list this
+// API serves does.
 type publicContestsResponse struct {
-	Contests []publicContest `json:"contests"`
+	Items []publicContest `json:"items"`
 }
 
 func (h *PublicHandler) contests(w http.ResponseWriter, r *http.Request) {
@@ -104,9 +106,9 @@ func (h *PublicHandler) contests(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	out := publicContestsResponse{Contests: make([]publicContest, 0, len(list))}
+	out := publicContestsResponse{Items: make([]publicContest, 0, len(list))}
 	for _, c := range list {
-		out.Contests = append(out.Contests, publicContest{
+		out.Items = append(out.Items, publicContest{
 			ID: c.ID.String(), Title: c.Title, Status: c.Status,
 			StartsAt: formatTime(c.StartsAt), EndsAt: formatTime(c.EndsAt),
 			TableOpen: c.TableOpen,

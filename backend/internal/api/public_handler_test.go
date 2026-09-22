@@ -125,21 +125,21 @@ func TestTheContestListAnswersWithoutASession(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	var body struct {
-		Contests []struct {
+		Items []struct {
 			Title     string `json:"title"`
 			Status    string `json:"status"`
 			StartsAt  string `json:"starts_at"`
 			EndsAt    string `json:"ends_at"`
 			TableOpen bool   `json:"table_open"`
-		} `json:"contests"`
+		} `json:"items"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("body is not JSON: %v", err)
 	}
-	if len(body.Contests) != 1 {
-		t.Fatalf("body carries %d contests, want 1: %s", len(body.Contests), rec.Body.String())
+	if len(body.Items) != 1 {
+		t.Fatalf("body carries %d contests, want 1: %s", len(body.Items), rec.Body.String())
 	}
-	got := body.Contests[0]
+	got := body.Items[0]
 	if got.Title != "The Library Murder" || got.Status != contests.StatusFinished || !got.TableOpen {
 		t.Errorf("contest = %+v, want the finished contest with its table open", got)
 	}
