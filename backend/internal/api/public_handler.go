@@ -23,6 +23,16 @@ const (
 	// showcase.Service; this bounds the API.
 	PublicReadsPerMinute = 120
 	publicWindow         = time.Minute
+	// maxLangLength bounds the language preference one request states
+	// (CLAUDE.md rule 2). The value never reaches storage, but it is matched
+	// against every translation of every contest on the list, so an unbounded
+	// one is unbounded work per row on a page nobody has to sign in to load —
+	// and the request line and the header it arrives in are bounded only by
+	// the server's own header limit, which is measured in kilobytes. A
+	// well-formed BCP 47 tag does not reach thirty-five characters with a
+	// language, a script, a region and a variant in it, and nothing longer is
+	// a preference any contest could satisfy.
+	maxLangLength = 35
 )
 
 // PublicHandler serves what a visitor with no session may read: the
@@ -125,14 +135,21 @@ func (h *PublicHandler) contests(w http.ResponseWriter, r *http.Request) {
 // read: here every contest declares its own set, and the list is one shared
 // read serving every visitor at once. So the request's preference travels
 // down and the choice is made per contest (showcase.Service.Recent), with the
-// installation's default standing in for a request that states none. The
-// value is matched and never stored, so it needs no bound of its own.
+// installation's default standing in for a request that states none.
+//
+// Anything longer than maxLangLength is not a language tag and is passed over
+// rather than refused: a preference is a preference, and a visitor who states
+// an unusable one gets the page in the installation's own language instead of
+// an error about a query parameter. The header is read the same way, tag by
+// tag, so one unusable tag does not cost a caller the usable one behind it.
 func visitorLang(r *http.Request, fallback string) string {
-	if explicit := strings.TrimSpace(r.URL.Query().Get("lang")); explicit != "" {
+	if explicit := strings.TrimSpace(r.URL.Query().Get("lang")); explicit != "" && len(explicit) <= maxLangLength {
 		return explicit
 	}
-	if preferred := i18n.ParseAcceptLanguage(r.Header.Get("Accept-Language")); len(preferred) > 0 {
-		return preferred[0]
+	for _, preferred := range i18n.ParseAcceptLanguage(r.Header.Get("Accept-Language")) {
+		if len(preferred) <= maxLangLength {
+			return preferred
+		}
 	}
 	return fallback
 }
