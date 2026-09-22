@@ -2,8 +2,10 @@ import { describe, expect, test } from "vitest";
 
 import {
   contentEditable,
+  contestCoverSchema,
   contestListSchema,
   contestSchema,
+  coverHref,
   defaultLanguage,
   icpcPenaltyFromForm,
   NEXT_STATUSES,
@@ -364,5 +366,45 @@ describe("shapeFromForm", () => {
 
   test("ignores a value outside the closed set, the same as an absent field", () => {
     expect(shapeFromForm(shapeForm({ questionMode: "essay" }))).toEqual({ ok: true, value: {} });
+  });
+});
+
+describe("coverHref", () => {
+  const contestId = "f767af3b-f135-40d2-a3a6-82d368de1004";
+  const hash = "9f2c1ab4d5e6f70819a2b3c4d5e6f7081920a2b3c4d5e6f70819a2b3c4d5e6f7";
+
+  /**
+   * The path names the contest, not the file, so the hash has to travel in
+   * the query: without it the address of a replaced cover is the address of
+   * the old one, and the API answers a plain address with a minute of caching
+   * rather than the year an exact file earns.
+   */
+  test("carries the hash, so a replaced cover is a different address", () => {
+    expect(coverHref(contestId, hash)).toBe(
+      `/api/v1/public/contests/${contestId}/cover?size=800&v=${hash}`,
+    );
+  });
+
+  test("asks for the card's rendition unless the caller wants the large one", () => {
+    expect(coverHref(contestId, hash)).toContain("size=800");
+    expect(coverHref(contestId, hash, 1600)).toContain("size=1600");
+  });
+});
+
+describe("contestCoverSchema", () => {
+  test("reads what the upload answered with", () => {
+    expect(
+      contestCoverSchema.parse({
+        hash: "abc",
+        attribution: "Photo: A. Organiser, CC BY 4.0",
+        width: 1600,
+        height: 900,
+      }),
+    ).toEqual({
+      hash: "abc",
+      attribution: "Photo: A. Organiser, CC BY 4.0",
+      width: 1600,
+      height: 900,
+    });
   });
 });
