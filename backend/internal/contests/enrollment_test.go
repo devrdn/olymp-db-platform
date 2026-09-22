@@ -766,3 +766,28 @@ func TestAddParticipantsDoesNotTriggerThePoolTenderWhenNothingWasAdded(t *testin
 		t.Fatalf("triggered = %v, want none when nothing was actually added", f.PoolTrigger.Triggered)
 	}
 }
+
+// A contest on a shared clock starts for everybody at once, so nothing ever
+// writes a first action per participant: started_at stays null and the status
+// stays "registered" however much work somebody does. The guard that reads
+// those two fields was therefore blind in every fixed-timing contest — the
+// ordinary kind — and a mis-click on the roster deleted the registration with
+// the participant's queries, answers, notes and events cascading behind it.
+func TestRemovingAParticipantWhoHasWorkIsRefused(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+	student := f.AddUser("s.popescu")
+	p := f.Registrations.Put(contests.Participant{
+		ContestID: c.ID, UserID: student.ID, Status: contests.RegistrationRegistered,
+	})
+	f.Registrations.PutWork(p.ID)
+
+	err := f.Service.RemoveParticipant(context.Background(), uuid.New(), c.ID, student.ID)
+
+	if !errors.Is(err, contests.ErrParticipantStarted) {
+		t.Errorf("RemoveParticipant() = %v, want ErrParticipantStarted", err)
+	}
+	if _, err := f.Registrations.ByUser(context.Background(), c.ID, student.ID); err != nil {
+		t.Errorf("the registration was deleted anyway: %v", err)
+	}
+}
