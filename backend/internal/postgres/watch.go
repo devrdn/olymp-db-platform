@@ -136,7 +136,7 @@ func (w *Watch) Roster(ctx context.Context, contest uuid.UUID, limit int) (monit
 		if err := rows.Scan(&r.Registration, &r.User, &r.Login, &r.FullName, &r.Status, &r.StartedAt, &r.FinishedAt,
 			&r.Queries, &r.QueryErrors, &r.QueryRejected, &r.Addresses,
 			&r.Correct, &r.Wrong, &r.BlindCorrect,
-			&r.PageLeft, &r.AwayMs, &r.Pastes, &r.MaxPasteChars, &r.IPChanges, &r.ParallelSessions,
+			&r.PageLeft, &r.AwayMs, &r.Pastes, &r.LargestPasteChars, &r.IPChanges, &r.ParallelSessions,
 			&r.IdenticalQueries, &r.LastActivity); err != nil {
 			return monitor.Roster{}, fmt.Errorf("scan a participants table row: %w", err)
 		}

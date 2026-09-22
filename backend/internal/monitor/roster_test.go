@@ -9,14 +9,14 @@ func TestRosterFlagsAreRaisedOnlyPastTheirThresholds(t *testing.T) {
 		want Flags
 	}{
 		{"nothing", RosterRow{Addresses: 1, PageLeft: LongAbsenceCount, AwayMs: LongAbsenceTotal.Milliseconds(),
-			MaxPasteChars: LargePasteChars}, Flags{}},
+			LargestPasteChars: LargePasteChars}, Flags{}},
 		{"two addresses", RosterRow{Addresses: 2}, Flags{MultipleIPs: true}},
 		{"an address change", RosterRow{Addresses: 1, IPChanges: 1}, Flags{MultipleIPs: true}},
 		{"a parallel session", RosterRow{ParallelSessions: 1}, Flags{ParallelSessions: true}},
 		{"too long away", RosterRow{AwayMs: LongAbsenceTotal.Milliseconds() + 1}, Flags{LongAbsence: true}},
 		{"away too often", RosterRow{PageLeft: LongAbsenceCount + 1}, Flags{LongAbsence: true}},
 		{"a blind answer", RosterRow{BlindCorrect: 1}, Flags{AnswerWithoutQueries: true}},
-		{"a large paste", RosterRow{MaxPasteChars: LargePasteChars + 1}, Flags{LargePaste: true}},
+		{"a large paste", RosterRow{LargestPasteChars: LargePasteChars + 1}, Flags{LargePaste: true}},
 		{"a shared query", RosterRow{IdenticalQueries: 1}, Flags{IdenticalQueries: true}},
 	}
 	for _, c := range cases {

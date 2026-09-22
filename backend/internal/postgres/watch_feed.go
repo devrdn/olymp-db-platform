@@ -275,11 +275,11 @@ func (w *Watch) feedAnswers(ctx context.Context, q monitor.FeedQuery) ([]monitor
 
 func (w *Watch) feedEvents(ctx context.Context, q monitor.FeedQuery) ([]monitor.FeedItem, error) {
 	var a args
-	scope := "e.contest_id = " + a.add(q.Contest)
-	if q.Registration != uuid.Nil {
-		// The registration's own index, with the contest checked beside it.
-		scope += " AND e.registration_id = " + a.add(q.Registration)
-	}
+	// The same narrowing the other two journals get, for the same reason:
+	// participant_events carries both columns and this read is keyset-paged
+	// off participant_events_registration_time_idx exactly as they are off
+	// theirs. Only the kind filter is this source's own.
+	scope := journalScope(&a, q, "e")
 	if kinds := q.KindsOf(monitor.SourceEvent); len(kinds) > 0 {
 		scope += " AND e.kind = ANY(" + a.add(kinds) + "::text[])"
 	}

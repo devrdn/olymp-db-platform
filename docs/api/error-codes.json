@@ -407,7 +407,7 @@
     },
     {
       "code": "participant_started",
-      "meaning": "The participant has already started, so their record cannot be deleted. Disqualify them instead, which keeps everything they did."
+      "meaning": "The participant has a record in this contest — they started, or something of their own is journalled against them — so their registration cannot be deleted. Disqualify them instead, which keeps everything they did."
     },
     {
       "code": "password_change_required",

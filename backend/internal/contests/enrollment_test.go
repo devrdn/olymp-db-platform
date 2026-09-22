@@ -792,6 +792,28 @@ func TestRemovingAParticipantWhoHasWorkIsRefused(t *testing.T) {
 	}
 }
 
+// And the question is asked in the transaction that then deletes, not before
+// it. Asked outside, the answer is about a moment the write no longer
+// happens in: a participant whose first query lands in that window is
+// deleted on the strength of a reading that was already stale, and their
+// journal cascades away behind them.
+func TestRemovingAParticipantAsksAboutTheirRecordInsideTheTransaction(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusRunning)
+	student := f.AddUser("s.popescu")
+	f.Registrations.Put(contests.Participant{
+		ContestID: c.ID, UserID: student.ID, Status: contests.RegistrationRegistered,
+	})
+
+	if err := f.Service.RemoveParticipant(context.Background(), uuid.New(), c.ID, student.ID); err != nil {
+		t.Fatalf("RemoveParticipant() = %v", err)
+	}
+
+	if !f.Registrations.HasWorkInTx {
+		t.Error("the record was read outside the transaction that deleted the registration")
+	}
+}
+
 // The exclusion is about who reads the answers, and a contest's own staff
 // list is not the whole of that: an account holding contest.admin_all is
 // staff of every contest there is — it exports the question package and

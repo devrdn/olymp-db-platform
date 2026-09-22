@@ -311,7 +311,7 @@ var (
 	codeParticipantNotFound = httpx.NewCode("participant_not_found",
 		"That account does not take part in this contest.")
 	codeParticipantStarted = httpx.NewCode("participant_started",
-		"The participant has already started, so their record cannot be deleted. Disqualify them instead, which keeps everything they did.")
+		"The participant has a record in this contest — they started, or something of their own is journalled against them — so their registration cannot be deleted. Disqualify them instead, which keeps everything they did.")
 	codeAlreadyEnrolled = httpx.NewCode("already_enrolled",
 		"The account already takes part in this contest.")
 	codeEnrollmentClosed = httpx.NewCode("enrollment_closed",

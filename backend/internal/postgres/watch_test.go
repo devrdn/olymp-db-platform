@@ -475,7 +475,7 @@ func TestWatchRosterAgreesWithTheAggregateItReplaces(t *testing.T) {
 			// so the two meet at the flag rather than at the number.
 			if got.Flags().LargePaste != (w.largePastes > 0) {
 				t.Errorf("%s: large-paste flag %v on a largest paste of %d, and %d pastes past the threshold",
-					got.Login, got.Flags().LargePaste, got.MaxPasteChars, w.largePastes)
+					got.Login, got.Flags().LargePaste, got.LargestPasteChars, w.largePastes)
 			}
 			if !sameTime(got.LastActivity, w.lastActivity) {
 				t.Errorf("%s: last activity %v, want %v", got.Login, got.LastActivity, w.lastActivity)

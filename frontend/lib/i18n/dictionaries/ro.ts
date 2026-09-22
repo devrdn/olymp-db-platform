@@ -1720,7 +1720,7 @@ const ro = {
     package_too_large: "Olimpiada are mai multe întrebări decât încape într-un pachet de export.",
     enrollment_closed: "Înscrierea la această olimpiadă este închisă.",
     already_enrolled: "Sunteți deja înscris la această olimpiadă.",
-    participant_started: "Participantul a început deja și poate fi doar descalificat.",
+    participant_started: "Participantul are înregistrări în această olimpiadă și poate fi doar descalificat.",
     not_found: "Nu a fost găsit.",
     user_not_found: "Utilizatorul nu a fost găsit.",
     manager_not_found: "Managerul nu a fost găsit.",

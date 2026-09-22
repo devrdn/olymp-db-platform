@@ -458,6 +458,11 @@ type Registrations struct {
 	// work holds the registrations the store reports as having a record
 	// behind them (PutWork).
 	work map[uuid.UUID]bool
+	// HasWorkInTx records whether the last HasWork call ran inside the
+	// fixture's unit of work. A deletion that asks whether a registration has
+	// a record behind it, and then opens a transaction to delete it, decided
+	// on a state that is no longer the one it writes against.
+	HasWorkInTx bool
 	// MissLookups makes ByUser report "not found" even when the row is there,
 	// which is what a caller sees when a concurrent writer registered the same
 	// person between the lookup and the write. It exists so that path can be
@@ -491,7 +496,8 @@ func (r *Registrations) PutWork(registrationID uuid.UUID) {
 	r.work[registrationID] = true
 }
 
-func (r *Registrations) HasWork(_ context.Context, registrationID uuid.UUID) (bool, error) {
+func (r *Registrations) HasWork(ctx context.Context, registrationID uuid.UUID) (bool, error) {
+	r.HasWorkInTx = inTx(ctx)
 	return r.work[registrationID], nil
 }
 
