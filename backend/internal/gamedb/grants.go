@@ -47,8 +47,15 @@ func grantPolicy(ctx context.Context, conn Conn, policy sqlpolicy.Policy) error 
 			// identifier, which is what makes this interpolation safe — there
 			// is no way to bind an identifier, so the check has to happen
 			// before the string is built.
+			// TRUNCATE alongside the three that change rows, because the
+			// validator now permits it on exactly these tables and a
+			// privilege the template withholds would make that permission a
+			// "permission denied" instead. It grants nothing a participant
+			// did not have — DELETE already empties the same table — and it
+			// is the one statement that gives the pages back, which is how
+			// somebody at the disk quota gets out of it.
 			statements = append(statements,
-				`GRANT INSERT, UPDATE, DELETE ON `+qualify(table)+` TO `+RoleWriter)
+				`GRANT INSERT, UPDATE, DELETE, TRUNCATE ON `+qualify(table)+` TO `+RoleWriter)
 		}
 		if len(policy.WritableTables) > 0 {
 			// A table with a serial column cannot be inserted into without

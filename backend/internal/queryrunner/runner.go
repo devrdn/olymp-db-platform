@@ -46,7 +46,9 @@ var (
 	ErrTimeout  = errors.New("the query took too long")
 	ErrCanceled = errors.New("the caller stopped waiting")
 	// ErrDiskFull is a write refused because the participant's database has
-	// grown past what the contest allows it.
+	// grown past what the contest allows it. Only a write that would grow it:
+	// a statement that can only free space is admitted at the cap, which is
+	// what makes the way out this refusal points at a real one.
 	ErrDiskFull = errors.New("the database is at its size limit")
 	// ErrResultTooLarge is an answer that could not be read within the result
 	// budget at all: one row on its own outweighed the whole allowance, so
@@ -276,7 +278,20 @@ func (r *Runner) execute(ctx context.Context, req Request, statement sqlpolicy.S
 			(rolledBack == nil || errors.Is(rolledBack, pgx.ErrTxClosed)))
 	}()
 
-	if statement.Writes && req.DiskQuotaBytes > 0 {
+	// A statement that can only free space is admitted whatever the size, and
+	// that exemption is the whole difference between a limit and a trap.
+	// Refusing every write at the cap refuses the ones that would make room,
+	// so a participant who filled their database with two queries had no way
+	// out of it for the rest of the contest — while the refusal told them to
+	// free some. The checker is what says which statements those are
+	// (sqlpolicy.Statement.Frees), because it is the only thing here holding
+	// a parse tree; note that a plain DELETE is not one of them, since its
+	// pages stay allocated and pg_database_size does not move.
+	//
+	// It is not a hole in the bound. Neither TRUNCATE nor DROP has a form
+	// that allocates, so the exempted statements cannot be the ones that
+	// overrun the disk the quota is protecting.
+	if statement.Writes && !statement.Frees && req.DiskQuotaBytes > 0 {
 		if err := withinQuota(ctx, tx, req.DiskQuotaBytes); err != nil {
 			return nil, err
 		}
@@ -357,7 +372,9 @@ func (r *Runner) begin(ctx context.Context, req Request) (*session, pgx.Tx, erro
 	return sess, tx, nil
 }
 
-// withinQuota refuses a write to a database that has grown past its allowance.
+// withinQuota refuses a growing write to a database that has grown past its
+// allowance. Its caller decides which writes those are; everything here is
+// asked only about the size.
 //
 // Checked synchronously, before the statement, because afterwards is too late:
 // a participant filling a shared disk takes the contest down with them. It

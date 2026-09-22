@@ -126,6 +126,7 @@ func (c *Checker) Analyse(sql string, p sqlpolicy.Policy) (sqlpolicy.Statement, 
 		Text:    statementText(sql, raw),
 		Explain: plan.explain,
 		Writes:  plan.writes,
+		Frees:   plan.frees,
 	}, nil
 }
 
@@ -179,6 +180,9 @@ type rootPlan struct {
 	checkSelf bool
 	explain   bool
 	writes    bool
+	// frees is a write that can only make the database smaller, which is what
+	// the Query Runner admits at the disk quota (see freesSpace).
+	frees bool
 }
 
 // explainOptions are the EXPLAIN options a participant may pass: the ones
@@ -227,7 +231,7 @@ func (c *Checker) rootAllowed(root *pg.Node, p sqlpolicy.Policy) (rootPlan, erro
 		if err := c.writeAllowed(root, p); err != nil {
 			return rootPlan{}, err
 		}
-		return rootPlan{node: root, writes: true}, nil
+		return rootPlan{node: root, writes: true, frees: freesSpace(root)}, nil
 	}
 }
 

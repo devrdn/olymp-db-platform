@@ -78,6 +78,17 @@ type Statement struct {
 	// checked before one of these and not before a read, because a read cannot
 	// fill a disk and the check costs a round trip.
 	Writes bool
+	// Frees reports a write that can only make the database smaller: TRUNCATE,
+	// and DROP of something the participant made. It exists because the disk
+	// quota would otherwise be a one-way door — refusing every write at the
+	// cap refuses the ones that would make room, and a participant who filled
+	// their database would be stuck in it for the rest of the contest.
+	//
+	// Only the checker can say this, because only the checker has the parse
+	// tree: a prefix match is defeated by a leading comment, and DELETE reads
+	// like the way out while freeing nothing at all — its pages stay
+	// allocated, so pg_database_size does not move. Never true without Writes.
+	Frees bool
 }
 
 // Codes lists every refusal this package can produce.

@@ -479,6 +479,67 @@ func TestAWriteIsRefusedWhenTheDatabaseIsAtItsLimit(t *testing.T) {
 	}
 }
 
+// The size limit is a door, not a wall: at the cap the statements that can
+// only free space are still admitted, and the ones that would grow the
+// database are not.
+//
+// Refusing every write at the cap refuses the ones that make room, and a
+// participant who filled their database with two queries would have no way
+// out of it for the rest of the contest — while the refusal they are shown
+// tells them to free space. The whole round trip on a real database, because
+// the guarantee is about what PostgreSQL does with the pages and no helper of
+// ours can stand in for that: the write that would grow it is refused, the
+// TRUNCATE is not, pg_database_size actually falls, and the write that was
+// refused then goes through.
+func TestAtTheSizeLimitTheWayOutIsStillOpen(t *testing.T) {
+	runner, database := setup(t)
+	gamedbtest.Run(t, database,
+		`GRANT INSERT, UPDATE, DELETE, TRUNCATE ON evidence TO `+gamedb.RoleWriter,
+		// Enough that removing it moves pg_database_size well past the noise
+		// of a checkpoint: about four mebibytes of rows.
+		`INSERT INTO evidence SELECT g, repeat('x', 512) FROM generate_series(10, 8000) g`,
+	)
+
+	policy := sqlpolicy.ReadWrite("evidence")
+	// The cap is where the database stands now, so it is at it.
+	quota := databaseSize(t, database)
+
+	growing := request(database, `INSERT INTO evidence (id, note) VALUES (1, 'one more')`)
+	growing.Policy, growing.DiskQuotaBytes = policy, quota
+	if _, err := runner.Run(t.Context(), growing); !errors.Is(err, queryrunner.ErrDiskFull) {
+		t.Fatalf("a write that would grow the database at the cap: error = %v, want ErrDiskFull", err)
+	}
+
+	freeing := request(database, `TRUNCATE evidence`)
+	freeing.Policy, freeing.DiskQuotaBytes = policy, quota
+	if _, err := runner.Run(t.Context(), freeing); err != nil {
+		t.Fatalf("TRUNCATE at the cap was refused: %v", err)
+	}
+
+	if after := databaseSize(t, database); after >= quota {
+		t.Fatalf("the database is %d bytes after emptying it, cap %d: nothing was freed", after, quota)
+	}
+
+	// And the way out led somewhere: the write refused above now goes through.
+	if _, err := runner.Run(t.Context(), growing); err != nil {
+		t.Fatalf("a write after freeing space: %v", err)
+	}
+}
+
+// databaseSize is the same figure the quota is compared against, read from
+// outside the runner so that a test asserting the pages came back is not
+// asking the code under test whether they did.
+func databaseSize(t *testing.T, database string) int64 {
+	t.Helper()
+
+	var size int64
+	if err := gamedbtest.Admin(t).QueryRow(t.Context(),
+		`SELECT pg_database_size($1)`, database).Scan(&size); err != nil {
+		t.Fatalf("reading the size of %s: %v", database, err)
+	}
+	return size
+}
+
 // And a quota nobody set is no quota, which is what a read-only contest wants.
 func TestNoQuotaMeansNoCheck(t *testing.T) {
 	runner, database := setupWith(t, queryrunner.DefaultLimits(), checker.NewChecker())

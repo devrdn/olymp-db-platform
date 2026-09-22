@@ -1875,7 +1875,7 @@ const ro = {
     query_too_often:
       "Trimiteți interogări prea des. Așteptați puțin.",
     query_disk_full:
-      "Baza dumneavoastră a atins limita de dimensiune, nu se mai poate scrie nimic.",
+      "Baza dumneavoastră a atins limita de dimensiune. Eliberați spațiu — TRUNCATE pe un tabel pe care l-ați umplut sau DROP pe unul propriu — și continuați.",
     query_result_too_large:
       "Răspunsul este prea mare pentru a fi returnat. Restrângeți-l cu WHERE sau cu mai puține coloane.",
     contest_finished:
