@@ -852,6 +852,7 @@ const en = {
         winner_final_needs_attempt_limit: "A final question has no attempt limit while scoring is first to solve, so the contest could be won by trying candidates one after another.",
         leaderboard_freeze_exceeds_window: "The leaderboard freeze starts before the contest does, or the contest has no end to count it back from.",
         staff_registered: "A participant's account administers every contest, so it already reads this contest's reference answers and its unfrozen leaderboard. Remove them from the roster before publishing, or take the permission away from the account.",
+        cover_needs_attribution: "The uploaded cover has no line saying whose picture it is. Add one, or remove the cover and let the contest wear its drawn one.",
       },
     },
     story: {
@@ -1934,6 +1935,18 @@ const en = {
       "That picture is too heavy or too large. Up to 512 KB, and no more than 4096 pixels on a side.",
     image_not_accepted:
       "That file is not a picture this installation stores. PNG, JPEG, GIF or WebP — the format is read from the file itself, not from its name. An .ico is not needed: every current browser takes a PNG as a tab icon.",
+    cover_too_often:
+      "Covers have been uploaded from this account too often. Wait a minute and try again.",
+    cover_too_large:
+      "That file is too heavy for a cover. Up to 8 MB.",
+    cover_kind:
+      "That file is not a picture this service accepts as a cover. JPEG, PNG or WebP — the format is read from the file itself, not from its name. An SVG is not accepted whatever is inside it: it is a document that can carry scripts, and the cover is shown to every visitor.",
+    cover_dimensions:
+      "That picture has too many pixels on a side for a cover. Up to 8000 by 8000.",
+    cover_attribution_required:
+      "An uploaded cover needs a line saying whose picture it is. A contest without an uploaded cover gets a drawn one and needs none.",
+    cover_attribution_too_long:
+      "That credit line is too long. Up to 200 characters.",
     not_a_participant:
       "You are not taking part in this contest.",
     contest_not_running:

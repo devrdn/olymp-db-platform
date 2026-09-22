@@ -117,3 +117,25 @@ func (r *Covers) scanOne(ctx context.Context, sql string, contestID uuid.UUID) (
 	}
 	return cover, nil
 }
+
+// Attribution answers the publish gate's one question about a contest's
+// picture: is there an uploaded cover, and whose is it?
+//
+// Two values rather than a Cover, because the gate needs neither the hash nor
+// the size and a contest with no uploaded cover is not a failure — it wears a
+// drawn one, whose author is us. Deliberately outside covers.Repository: the
+// interface the domain's own service declares is what that service uses, and
+// a method only the contests package calls belongs to the narrow interface
+// that package declares for itself (CLAUDE.md, Go layout rule 3).
+func (r *Covers) Attribution(ctx context.Context, contestID uuid.UUID) (string, bool, error) {
+	var attribution string
+	err := r.querier(ctx).QueryRow(ctx,
+		`SELECT attribution FROM contest_covers WHERE contest_id = $1`, contestID).Scan(&attribution)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read the attribution of contest %s: %w", contestID, err)
+	}
+	return attribution, true, nil
+}
