@@ -7,6 +7,7 @@ import { SESSION_COOKIE } from "@/lib/auth/session";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
+import { ConsolePreview } from "./home/console-preview";
 import { Hero } from "./home/hero";
 import { HowItWorks } from "./home/how-it-works";
 import { Numbers } from "./home/numbers";
@@ -85,6 +86,11 @@ export default async function HomePage() {
       <Numbers stats={settled(stats, "/public/stats")} dict={dict} />
 
       <HowItWorks dict={dict} />
+
+      {/* The three points described the console; this shows it. It follows
+          them rather than preceding them, because a reader who has just been
+          told what happens here recognises what they are looking at. */}
+      <ConsolePreview dict={dict} />
 
       <RecentContests
         signedIn={signedIn}
