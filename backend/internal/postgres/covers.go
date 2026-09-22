@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/covers"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 )
@@ -34,15 +35,6 @@ func (r *Covers) querier(ctx context.Context) storage.Querier {
 // to the table is added to one list rather than to three statements that then
 // disagree.
 const coverColumns = `contest_id, hash, attribution, width, height, uploaded_at, COALESCE(uploaded_by, '00000000-0000-0000-0000-000000000000'::uuid)`
-
-// publicStatuses is the selection a visitor without a session may see.
-//
-// The same four Showcase.Recent lists and the participant's own catalogue
-// reads. Repeated as a constant rather than shared through a helper because
-// the two statements are in different packages' business; what matters is
-// that they are the same four, and a change to one is a change that has to
-// find the other.
-const publicStatuses = `('published', 'running', 'finished', 'archived')`
 
 // Save replaces whatever cover the contest had.
 //
@@ -89,7 +81,7 @@ func (r *Covers) PublicByContest(ctx context.Context, contestID uuid.UUID) (cove
 		SELECT `+coverColumns+`
 		FROM contest_covers cc
 		JOIN contests c ON c.id = cc.contest_id
-		WHERE cc.contest_id = $1 AND c.status IN `+publicStatuses, contestID)
+		WHERE cc.contest_id = $1 AND `+publicStatusFilter("c.status", 2), contestID, contests.PublicStatuses)
 }
 
 // Delete removes the row. A contest with no cover is not an error: removing
@@ -104,9 +96,9 @@ func (r *Covers) Delete(ctx context.Context, contestID uuid.UUID) error {
 // scanOne reads the one row both reads above return, and turns its absence
 // into the domain's own sentinel rather than into a driver error the HTTP
 // layer would have to know about.
-func (r *Covers) scanOne(ctx context.Context, sql string, contestID uuid.UUID) (covers.Cover, error) {
+func (r *Covers) scanOne(ctx context.Context, sql string, contestID uuid.UUID, args ...any) (covers.Cover, error) {
 	var cover covers.Cover
-	err := r.querier(ctx).QueryRow(ctx, sql, contestID).
+	err := r.querier(ctx).QueryRow(ctx, sql, append([]any{contestID}, args...)...).
 		Scan(&cover.ContestID, &cover.Hash, &cover.Attribution,
 			&cover.Width, &cover.Height, &cover.UploadedAt, &cover.UploadedBy)
 	if errors.Is(err, pgx.ErrNoRows) {
