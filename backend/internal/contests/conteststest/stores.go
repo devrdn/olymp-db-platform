@@ -446,6 +446,9 @@ type Registrations struct {
 	byID map[uuid.UUID]contests.Participant
 	// Accounts resolves the login and name carried on every participant.
 	Accounts AccountLookup
+	// work holds the registrations the store reports as having a record
+	// behind them (PutWork).
+	work map[uuid.UUID]bool
 	// MissLookups makes ByUser report "not found" even when the row is there,
 	// which is what a caller sees when a concurrent writer registered the same
 	// person between the lookup and the write. It exists so that path can be
@@ -457,7 +460,7 @@ var _ contests.RegistrationRepository = (*Registrations)(nil)
 
 // NewRegistrations returns an empty registration store.
 func NewRegistrations() *Registrations {
-	return &Registrations{byID: map[uuid.UUID]contests.Participant{}}
+	return &Registrations{byID: map[uuid.UUID]contests.Participant{}, work: map[uuid.UUID]bool{}}
 }
 
 // Put stores a participation as given, naming the account when it can, so a
@@ -471,6 +474,16 @@ func (r *Registrations) Put(p contests.Participant) contests.Participant {
 	}
 	r.byID[p.ID] = p
 	return p
+}
+
+// PutWork marks a registration as having queries, answers, notes or signals
+// behind it — what HasWork reports and what removing one would destroy.
+func (r *Registrations) PutWork(registrationID uuid.UUID) {
+	r.work[registrationID] = true
+}
+
+func (r *Registrations) HasWork(_ context.Context, registrationID uuid.UUID) (bool, error) {
+	return r.work[registrationID], nil
 }
 
 func (r *Registrations) List(_ context.Context, contestID uuid.UUID, f contests.ParticipantFilter) ([]contests.Participant, int, error) {

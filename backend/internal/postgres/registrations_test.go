@@ -299,6 +299,65 @@ func TestRemovingAParticipantTakesTheRegistrationAway(t *testing.T) {
 	})
 }
 
+// A registration is undeletable once anything of the participant's own hangs
+// off it, and in a contest on a shared clock that record is the only thing
+// that says so: nothing there ever sets started_at. Each of the five tables
+// is asked on its own, because each is a separate way to have worked.
+func TestAParticipantWithAnythingRecordedHasWork(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		put  func(t *testing.T, ctx context.Context, registration uuid.UUID)
+	}{
+		{"a query", func(t *testing.T, ctx context.Context, registration uuid.UUID) {
+			exec(t, ctx, `INSERT INTO query_log (registration_id, request_id, sql_text, status, executed_at)
+				VALUES ($1, gen_random_uuid(), 'SELECT 1', 'ok', now())`, registration)
+		}},
+		{"a note", func(t *testing.T, ctx context.Context, registration uuid.UUID) {
+			exec(t, ctx, `INSERT INTO participant_notes (registration_id, body, updated_at)
+				VALUES ($1, 'kept', now())`, registration)
+		}},
+		{"an SQL tab", func(t *testing.T, ctx context.Context, registration uuid.UUID) {
+			exec(t, ctx, `INSERT INTO participant_sql_tabs (registration_id, title, body, position, updated_at)
+				VALUES ($1, 'Tab 1', 'SELECT 1', 0, now())`, registration)
+		}},
+		{"a signal", func(t *testing.T, ctx context.Context, registration uuid.UUID) {
+			exec(t, ctx, `INSERT INTO participant_events (contest_id, registration_id, kind)
+				SELECT contest_id, id, 'page_left' FROM registrations WHERE id = $1`, registration)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withTx(t, func(ctx context.Context) {
+				repo := NewRegistrations(testPool)
+				author := makeUser(t, ctx, "author-work-"+tc.name)
+				student := makeUser(t, ctx, "student-work-"+tc.name)
+				contest := makeContest(t, ctx, author.ID)
+				p, err := repo.Add(ctx, contest, student.ID)
+				if err != nil {
+					t.Fatalf("Add() = %v", err)
+				}
+
+				clean, err := repo.HasWork(ctx, p.ID)
+				if err != nil {
+					t.Fatalf("HasWork() = %v", err)
+				}
+				if clean {
+					t.Fatal("a registration with nothing behind it reports work")
+				}
+
+				tc.put(t, ctx, p.ID)
+
+				has, err := repo.HasWork(ctx, p.ID)
+				if err != nil {
+					t.Fatalf("HasWork() = %v", err)
+				}
+				if !has {
+					t.Errorf("HasWork() = false, want true with %s recorded", tc.name)
+				}
+			})
+		})
+	}
+}
+
 // putReadyTemplate inserts a ready game_templates row directly, the same row
 // ForRun's game half and GameInstances.Game both read.
 func putReadyTemplate(t *testing.T, ctx context.Context, contest uuid.UUID, database string, version int) {

@@ -211,6 +211,16 @@ type RegistrationRepository interface {
 	// (submission.go's own doc explains why a wrong answer never calls this
 	// at all).
 	AddScore(ctx context.Context, registrationID uuid.UUID, delta int) error
+	// HasWork reports whether anything of the participant's own is recorded
+	// against this registration — a query, an answer, a note or a signal.
+	//
+	// It exists because HasStarted cannot answer the question in a contest on
+	// a shared clock: nothing there writes a first action per participant, so
+	// started_at stays null and the status stays "registered" however much
+	// work somebody does. Removing a registration cascades to everything
+	// hanging off it, so the deletion asks the record itself rather than a
+	// field that is only ever filled under individual timing.
+	HasWork(ctx context.Context, registrationID uuid.UUID) (bool, error)
 }
 
 // Why an entry of an import produced no registration.
@@ -541,6 +551,16 @@ func (s *Service) RemoveParticipant(ctx context.Context, actorID, contestID, use
 		return err
 	}
 	if p.HasStarted() {
+		return ErrParticipantStarted
+	}
+	// The same refusal for somebody a shared clock never marked as started:
+	// what makes a registration undeletable is the record behind it, and in
+	// a fixed-timing contest that record is the only thing that says so.
+	work, err := s.registrations.HasWork(ctx, p.ID)
+	if err != nil {
+		return err
+	}
+	if work {
 		return ErrParticipantStarted
 	}
 

@@ -351,6 +351,31 @@ func (r *Registrations) AddScore(ctx context.Context, registrationID uuid.UUID, 
 	return nil
 }
 
+// HasWork reports whether anything of the participant's own hangs off this
+// registration.
+//
+// Four EXISTS over four indexes, each stopping at the first row it finds:
+// every one of these tables leads its serving index with registration_id
+// (query_log_registration_executed_idx, submissions_registration_submitted_idx,
+// participant_events_registration_time_idx, participant_sql_tabs_registration_idx,
+// and the notes' own primary key), so the whole question costs four index
+// probes however long the contest has been running. It is asked once, when an
+// organiser removes somebody from a roster.
+func (r *Registrations) HasWork(ctx context.Context, registrationID uuid.UUID) (bool, error) {
+	var has bool
+	err := r.querier(ctx).QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM query_log WHERE registration_id = $1)
+		    OR EXISTS (SELECT 1 FROM submissions WHERE registration_id = $1)
+		    OR EXISTS (SELECT 1 FROM participant_events WHERE registration_id = $1)
+		    OR EXISTS (SELECT 1 FROM participant_notes WHERE registration_id = $1)
+		    OR EXISTS (SELECT 1 FROM participant_sql_tabs WHERE registration_id = $1)`,
+		registrationID).Scan(&has)
+	if err != nil {
+		return false, fmt.Errorf("look for a participant's record: %w", err)
+	}
+	return has, nil
+}
+
 // SetStatus changes a registration's status.
 func (r *Registrations) SetStatus(ctx context.Context, registrationID uuid.UUID, status string) error {
 	tag, err := r.querier(ctx).Exec(ctx,
