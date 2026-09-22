@@ -21,8 +21,9 @@ describe("the ornament band", () => {
    * The geometry is a cross-stitch grid, and a grid squeezed horizontally is
    * no longer a grid: the rhombus becomes a lozenge and the river's forty-five
    * degrees become something else. The band is cut off at the edge of the
-   * content column instead, which is what `slice` does and what `meet` — the
-   * SVG default — does not.
+   * content column instead, which is what `slice` does — `none` is what would
+   * squeeze it, and the SVG default `meet` would shrink the pattern and
+   * letterbox the band rather than fill it.
    */
   test("grows by repeating rather than by stretching one motif", () => {
     const { container } = render(<OrnamentBand repeats={12} />);
