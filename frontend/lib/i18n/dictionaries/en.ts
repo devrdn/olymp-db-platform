@@ -98,6 +98,15 @@ const en = {
       table: "Results",
       /** The same link's accessible name, which carries the contest. */
       tableOf: "Results of {title}",
+      /**
+       * The alternative text of an uploaded cover.
+       *
+       * Only the uploaded one has any: a drawn cover is decoration, and the
+       * title is printed over it either way, so naming the drawing would say
+       * to a reader using their ears exactly what the line beneath already
+       * says.
+       */
+      coverOf: "Cover of {title}",
       empty: {
         title: "Nothing to show yet",
         body: "No contest is open to the public here just now. The catalogue lists everything this installation runs.",
