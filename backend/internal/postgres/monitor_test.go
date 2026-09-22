@@ -138,6 +138,59 @@ func TestMonitorRefusesABatchItCannotStoreWhole(t *testing.T) {
 	})
 }
 
+// A participant stores at most monitor.MaxStoredEvents events: the rate they
+// arrive at is bounded, but until now nothing bounded how many of them the
+// table ends up holding (CLAUDE.md rule 2).
+func TestMonitorRefusesEventsPastWhatARegistrationStores(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		store := NewMonitor(testPool)
+		f := newMonitorFixture(t, ctx)
+
+		batch := []monitor.Event{f.event(monitor.PageLeft{AwayMs: 5000}), f.event(monitor.PageLeft{AwayMs: 6000})}
+		if err := store.InsertEvents(ctx, batch); err != nil {
+			t.Fatalf("the first batch: %v", err)
+		}
+		// The counter the refusal is decided on is the one the journal keeps,
+		// not one this test invented.
+		if stored := storedCount(t, ctx, f.registration); stored != int64(len(batch)) {
+			t.Fatalf("after %d events the registration counts %d", len(batch), stored)
+		}
+
+		// Moved to the line rather than filled up to it: twenty thousand rows
+		// to prove a comparison is seconds nobody gets back.
+		setStoredCount(t, ctx, f.registration, monitor.MaxStoredEvents-int64(len(batch)))
+		if err := store.InsertEvents(ctx, batch); err != nil {
+			t.Fatalf("the batch that reaches the line exactly: %v", err)
+		}
+
+		if err := store.InsertEvents(ctx, batch[:1]); !errors.Is(err, monitor.ErrTooManyEvents) {
+			t.Fatalf("one event past the line: err = %v, want ErrTooManyEvents", err)
+		}
+		if stored := storedCount(t, ctx, f.registration); stored != monitor.MaxStoredEvents {
+			t.Errorf("a refused batch moved the count to %d", stored)
+		}
+	})
+}
+
+func storedCount(t *testing.T, ctx context.Context, registration uuid.UUID) int64 {
+	t.Helper()
+	var stored int64
+	if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx,
+		`SELECT events FROM registration_activity WHERE registration_id = $1`, registration).Scan(&stored); err != nil {
+		t.Fatalf("read how much the registration has stored: %v", err)
+	}
+	return stored
+}
+
+func setStoredCount(t *testing.T, ctx context.Context, registration uuid.UUID, events int64) {
+	t.Helper()
+	if _, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+		`UPDATE registration_activity SET events = $2 WHERE registration_id = $1`,
+		registration, events); err != nil {
+		t.Fatalf("move the stored count: %v", err)
+	}
+}
+
 type storedRevision struct {
 	id                   int64
 	title                *string

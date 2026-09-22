@@ -1929,6 +1929,8 @@ const ro = {
       "Filele s-au schimbat în timp ce le mutați. Reîncărcați pagina și încercați din nou.",
     signals_too_often: "Acțiunile de pe pagină sunt trimise prea des. Vor fi trimise în curând.",
     signals_batch_too_large: "Au fost trimise prea multe acțiuni de pe pagină deodată. Vor fi trimise pe părți.",
+    signals_too_many_stored:
+      "S-au înregistrat atâtea acțiuni de pe pagină câte păstrează această olimpiadă. Nimic din ce ați făcut nu s-a pierdut.",
     monitor_too_often: "Paginile de monitorizare sunt reîncărcate prea des. Așteptați un minut și încercați din nou.",
     monitor_participant_not_found: "Acest participant nu este în acest concurs.",
     monitor_revision_not_found: "Această versiune a notițelor sau a filei nu mai există.",

@@ -389,6 +389,8 @@ var (
 		"This participant's browser has sent more signal batches this minute than the installation allows, refused batches included. Nothing was stored; keep the batch and send it again after `Retry-After`.")
 	codeSignalsBatchTooLarge = httpx.NewCode("signals_batch_too_large",
 		"A signal batch carries at most 50 events, in a body of at most 256 KiB. Nothing was stored; send the events in smaller batches.")
+	codeSignalsTooManyStored = httpx.NewCode("signals_too_many_stored",
+		"This participant has stored as many browser signals as the installation keeps for one registration. Nothing in this batch was stored, and nothing stored before it was lost; sending the batch again will not help.")
 
 	// --- Watching participants -------------------------------------------------
 	//
