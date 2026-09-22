@@ -2,9 +2,10 @@ import Link from "next/link";
 
 import { Band } from "@/components/layout/band";
 import { ContestWindow } from "@/components/product/contest-window";
+import { DrawnCover } from "@/components/product/drawn-cover";
 import { StateView } from "@/components/product/state-view";
 import { Tag } from "@/components/ui/tag";
-import type { ContestStatus } from "@/lib/api/contests";
+import { coverHref, type ContestStatus } from "@/lib/api/contests";
 import type { PublicContest } from "@/lib/api/showcase";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -17,13 +18,18 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
  * catalogue at `/open`, because that is behind sign-in and they would meet the
  * login form where they asked for a list. They get this instead.
  *
- * Rows on rules, the same shape as the profile's list, down to the running
- * contest's accent dot: somebody who follows one of these rows into the
- * product should find the product built out of what they were just looking at
- * (design §2.6). What is different is how little a row says — a name, a state,
- * a window, and a way to the table when the table is open. There is no result
- * and no place here, because there is nobody to have one: this list is read by
- * strangers, and everything on it is already public.
+ * Cards with pictures rather than the rows this section started as. The
+ * surfaces differ on purpose: the organiser's register is a register — a
+ * numbered row with a state and metrics, and no thumbnails (design spec §10) —
+ * while this page has one job, which is to interest somebody who has never
+ * been here. What a card says is still what a row said: a name, a state, a
+ * window, and a way to the table when the table is open. There is no result
+ * and no place, because there is nobody here to have one.
+ *
+ * Still no box. The card is a cover and the text under it, held apart by the
+ * same hairline that holds every other division on the page, because a border
+ * and a shadow around content is the wall of cards this direction was chosen
+ * to get away from.
  */
 
 /** One tone per state, and the accent spent only on what is happening now. */
@@ -36,13 +42,24 @@ const STATUS_TONE: Record<ContestStatus, "live" | "good" | "mute"> = {
 };
 
 /**
- * How many rows the page will print.
+ * How many cards the page will print.
  *
  * The API sends at most this many, and the list still counts them. A front
  * page whose whole argument is that it is short should not be able to grow a
- * screen of rows because a server-side constant moved.
+ * screen of cards because a server-side constant moved.
  */
 const MOST = 6;
+
+/**
+ * The rendition a card asks for, and the size it reserves for it.
+ *
+ * 800 × 450 is what the server stores for this surface; sending the 1600 one
+ * to a card four hundred pixels wide spends a school's Wi-Fi on detail nobody
+ * can see. The numbers are written onto the element as well as asked for in
+ * the address, because a browser that knows the aspect before the bytes
+ * arrive does not move the page under somebody's finger when they do.
+ */
+const CARD_COVER = { size: 800, height: 450 } as const;
 
 export function RecentContests({
   contests,
@@ -97,9 +114,12 @@ export function RecentContests({
           />
         </div>
       ) : (
-        <ul className="flex flex-col border-t border-line">
+        /* Three across where there is room, two on a tablet, one on a phone.
+           The section's own rule stays above them, so the grid begins where
+           the list used to. */
+        <ul className="grid grid-cols-1 gap-x-8 gap-y-10 border-t border-line pt-8 narrow:grid-cols-2 wide:grid-cols-3">
           {rows.map((contest) => (
-            <Row key={contest.id} contest={contest} dict={dict} locale={locale} />
+            <Card key={contest.id} contest={contest} dict={dict} locale={locale} />
           ))}
         </ul>
       )}
@@ -107,7 +127,7 @@ export function RecentContests({
   );
 }
 
-function Row({
+function Card({
   contest,
   dict,
   locale,
@@ -117,18 +137,64 @@ function Row({
   locale: Locale;
 }) {
   const shared = dict.contests;
+  const t = dict.home.contests;
+  /* The name of a contest with no name of its own is the product's phrase for
+     one, rather than an empty line of nothing. */
+  const title = contest.title || shared.untitled;
 
   return (
-    <li className="flex flex-wrap items-baseline justify-between gap-x-8 gap-y-3 border-b border-line py-5 transition-colors duration-(--t-input) ease-standard hover:bg-panel">
-      <div className="flex min-w-0 flex-col gap-2">
-        {/* Not a link. A stranger has no way into a contest from here: the
-            contest's own screens need a session and the table has its own
-            link on the right, so a name that navigated would navigate to the
-            sign-in form. The name of a contest with no name of its own is the
-            product's phrase for one, rather than an empty line of nothing. */}
-        <span className="max-w-head text-row text-ink">{contest.title || shared.untitled}</span>
+    /* `group` so that the two movements below answer the card rather than the
+       one element under the cursor: a title that underlined only when the
+       pointer was on the four words of it would feel like a fault. Both run
+       for --t-input, which collapses to a millisecond under a stated
+       preference for less motion — there is nothing further to declare. */
+    <li className="group flex min-w-0 flex-col gap-4">
+      <div className="relative aspect-video w-full overflow-hidden rounded-frame transition-transform duration-(--t-input) ease-standard group-hover:-translate-y-1">
+        {contest.coverHash ? (
+          /* Not next/image: these bytes come from the API behind the same
+             proxy the rest of this app talks to, already cropped, resized and
+             re-encoded by the server that stored them, and cached for a year
+             at an address that carries their hash. There is nothing left for
+             an optimiser to do except put a second cache in front of it. */
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img
+            src={coverHref(contest.id, contest.coverHash, CARD_COVER.size)}
+            alt={t.coverOf.replace("{title}", title)}
+            loading="lazy"
+            decoding="async"
+            width={CARD_COVER.size}
+            height={CARD_COVER.height}
+            className="size-full object-cover"
+          />
+        ) : (
+          /* Not an empty frame and not a grey rectangle: a cover of the same
+             family, so that a row of six in which two organisers uploaded a
+             photograph still reads as one row (design spec §2.3). */
+          <DrawnCover seed={contest.id} />
+        )}
 
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        {/* The title does not sit on the picture but on a scrim resolving to
+            the page's own ground (design spec §10.2). This is not cosmetics:
+            the organiser chooses the subject, and the system owes the title
+            its contrast whatever they chose. */}
+        <div
+          aria-hidden
+          className="absolute inset-0 bg-linear-to-t from-scrim-a from-0% via-scrim-b via-38% to-transparent to-76%"
+        />
+
+        <h3 className="absolute inset-x-0 bottom-0 px-4 pb-3 text-row text-ink">
+          {/* Not a link. A stranger has no way into a contest from here: the
+              contest's own screens need a session and the table has its own
+              link below, so a name that navigated would navigate to the
+              sign-in form. */}
+          <span className="underline decoration-transparent underline-offset-4 transition-colors duration-(--t-input) ease-standard group-hover:decoration-ink">
+            {title}
+          </span>
+        </h3>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-t border-line pt-4">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
           <Tag tone={STATUS_TONE[contest.status]}>{shared.status[contest.status]}</Tag>
           <span className="font-mono text-data text-ink-3">
             <ContestWindow
@@ -140,23 +206,30 @@ function Row({
             />
           </span>
         </div>
+
+        {/* The one thing a card can offer, and only where it exists. A frozen
+            or unopened table is a result that is not public, not a missing
+            one, and a link that had to be followed to discover that is worse
+            than no link at all. */}
+        {contest.tableOpen ? (
+          <Link
+            href={`/contests/${contest.id}/leaderboard`}
+            /* Six cards carry this link, and heard one after another
+               "Results, Results, Results" names nothing. The accessible name
+               carries the contest; the visible word stays the short one. */
+            aria-label={t.tableOf.replace("{title}", contest.title)}
+            className="text-control text-ink-2 underline decoration-line-2 underline-offset-4 transition-colors duration-(--t-input) ease-standard hover:text-ink hover:decoration-ink"
+          >
+            {t.table}
+          </Link>
+        ) : null}
       </div>
 
-      {/* The one thing a row can offer, and only where it exists. A frozen or
-          unopened table is a result that is not public, not a missing one, and
-          a link that had to be followed to discover that is worse than no
-          link at all. */}
-      {contest.tableOpen ? (
-        <Link
-          href={`/contests/${contest.id}/leaderboard`}
-          /* Six rows carry this link, and heard one after another "Results,
-             Results, Results" names nothing. The accessible name carries the
-             contest; the visible word stays the short one. */
-          aria-label={dict.home.contests.tableOf.replace("{title}", contest.title)}
-          className="text-control text-ink-2 underline decoration-line-2 underline-offset-4 transition-colors duration-(--t-input) ease-standard hover:text-ink hover:decoration-ink"
-        >
-          {dict.home.contests.table}
-        </Link>
+      {/* Somebody else's work, credited. An uploaded picture is not published
+          without the line saying whose (design spec §10.1); a drawn cover has
+          none to carry, because its author is us. */}
+      {contest.coverHash && contest.coverAttribution ? (
+        <p className="text-small text-ink-3">{contest.coverAttribution}</p>
       ) : null}
     </li>
   );

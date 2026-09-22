@@ -98,6 +98,13 @@
   --color-id-6: var(--id-6);
   --color-id-6-wash: var(--id-6-wash);
 
+  /* The scrim a title sits on when it sits over a picture (spec §10.2). Both
+     resolve to the page's own ground at an alpha, which is why the title's
+     contrast does not depend on what is in the bottom third of somebody
+     else's photograph. */
+  --color-scrim-a: var(--scrim-a);
+  --color-scrim-b: var(--scrim-b);
+
 
   /* Aliases shadcn components resolve against. */
   --color-background: var(--background);

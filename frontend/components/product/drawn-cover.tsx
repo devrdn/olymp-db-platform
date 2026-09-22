@@ -53,7 +53,7 @@ export function DrawnCover({
       <div
         className="absolute inset-0"
         style={{
-          backgroundImage: `linear-gradient(${plan.angle}deg, var(--accent-wash) 0%, var(--panel) 52%, var(--bg) 100%)`,
+          backgroundImage: `linear-gradient(${plan.angle}deg, var(--accent-wash) 0%, var(--accent-wash) 20%, var(--panel) 74%, var(--bg) 100%)`,
         }}
       />
 
@@ -78,10 +78,13 @@ export function DrawnCover({
         className="absolute inset-0 size-full"
       >
         <g transform={`rotate(${plan.tilt} ${plan.ringX} ${plan.ringY})`}>
+          {/* Long enough to leave the frame at either end whatever the tilt
+              and wherever the ring sits: a rule that stopped in mid-air would
+              read as a mistake rather than as a margin. */}
           <line
-            x1={plan.ringX - 90}
+            x1={plan.ringX - 200}
             y1={plan.ringY}
-            x2={plan.ringX + 90}
+            x2={plan.ringX + 200}
             y2={plan.ringY}
             stroke="var(--line-2)"
             strokeWidth="0.5"
