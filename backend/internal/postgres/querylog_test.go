@@ -223,7 +223,31 @@ func TestTheSweeperClosesAbandonedRowsAndLeavesFreshOnes(t *testing.T) {
 		if got := statusOf(t, ctx, fresh); got != "running" {
 			t.Fatalf("a query still in flight was marked %q", got)
 		}
+		// The sweeper moves a page of rows in one statement, and what it
+		// moved has to reach the organiser's participants table: a crash is a
+		// failed query there, not a query in flight for ever (migration
+		// 000037).
+		if got := queryErrorsOf(t, ctx, abandoned); got != 1 {
+			t.Errorf("the swept row left the failed-query counter at %d, want 1", got)
+		}
+		if got := queryErrorsOf(t, ctx, fresh); got != 0 {
+			t.Errorf("a query still in flight counts as %d failures", got)
+		}
 	})
+}
+
+// queryErrorsOf is the failed-query counter the journal keeps for the
+// registration that owns row id.
+func queryErrorsOf(t *testing.T, ctx context.Context, id int64) int64 {
+	t.Helper()
+	var failures int64
+	if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `
+		SELECT a.query_errors FROM query_log q
+		JOIN registration_activity a ON a.registration_id = q.registration_id
+		WHERE q.id = $1`, id).Scan(&failures); err != nil {
+		t.Fatalf("read the failed-query counter: %v", err)
+	}
+	return failures
 }
 
 // History is the participant's own read of the log this file otherwise only
