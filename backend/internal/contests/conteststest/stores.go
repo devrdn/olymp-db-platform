@@ -1064,3 +1064,35 @@ func maps(in map[string]string) map[string]string {
 	}
 	return out
 }
+
+// Covers is the uploaded covers of contests, in memory: the one question the
+// publish gate asks about a contest's picture.
+//
+// Deliberately not a covers.Repository — the gate's own narrow interface is
+// one method, and this fake stands for that method rather than for a store
+// the contests package has never heard of.
+type Covers struct {
+	byContest map[uuid.UUID]string
+	// Err, when set, is what Attribution returns instead of an answer: a
+	// test's way of standing for the covers table being away.
+	Err error
+}
+
+// NewCovers returns an empty cover store.
+func NewCovers() *Covers { return &Covers{byContest: map[uuid.UUID]string{}} }
+
+// Put gives the contest an uploaded cover with that credit line. An empty one
+// is exactly the state the publish gate exists to refuse.
+func (r *Covers) Put(contestID uuid.UUID, attribution string) {
+	r.byContest[contestID] = attribution
+}
+
+// Attribution answers whether the contest has an uploaded cover, and whose it
+// is.
+func (r *Covers) Attribution(_ context.Context, contestID uuid.UUID) (string, bool, error) {
+	if r.Err != nil {
+		return "", false, r.Err
+	}
+	attribution, uploaded := r.byContest[contestID]
+	return attribution, uploaded, nil
+}

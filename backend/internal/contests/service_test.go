@@ -766,6 +766,58 @@ func TestPublishAcceptsAContestWithOrdinaryParticipants(t *testing.T) {
 	}
 }
 
+// An uploaded picture belongs to somebody, and a contest that wears one
+// without saying whose does not publish (design spec §10.1). The upload route
+// refuses an empty credit line and the column carries a check of its own, so
+// this is the third lock rather than the first — and it is the one that holds
+// for a row this build did not write: a restore from an older dump, a repair
+// made by hand, or a credit line that is whitespace and so passes a length
+// check while saying nothing. Publication is the right moment, because
+// publication is when the picture starts being shown to people who never
+// agreed to anything.
+func TestPublishRefusesAnUploadedCoverWithNobodyCredited(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedPublishableContest()
+	f.Covers.Put(c.ID, "   ")
+
+	err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusPublished)
+
+	if !errors.Is(err, contests.ErrNotPublishable) {
+		t.Fatalf("Transition(published) = %v, want ErrNotPublishable", err)
+	}
+	var notReady *contests.NotPublishableError
+	if !errors.As(err, &notReady) {
+		t.Fatalf("Transition(published) = %v, want a *contests.NotPublishableError", err)
+	}
+	want := contests.PublishProblem{Code: contests.ProblemCoverNeedsAttribution}
+	if !slices.Contains(notReady.Problems, want) {
+		t.Errorf("problems = %v, want one of %v", notReady.Problems, want)
+	}
+}
+
+// And a credited cover publishes, so the check above reads the credit line
+// rather than merely the presence of a picture.
+func TestPublishAcceptsACreditedCover(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedPublishableContest()
+	f.Covers.Put(c.ID, "Photo: A. Organiser, CC BY 4.0")
+
+	if err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusPublished); err != nil {
+		t.Fatalf("Transition(published) = %v", err)
+	}
+}
+
+// A contest with no uploaded cover wears a drawn one, whose author is us, and
+// is never asked to credit anybody.
+func TestPublishAcceptsAContestWithNoUploadedCover(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedPublishableContest()
+
+	if err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusPublished); err != nil {
+		t.Fatalf("Transition(published) = %v", err)
+	}
+}
+
 // TestTransitionTriggersThePoolWhenPublishingOrStarting is the manual door
 // into the same moment Scheduler.Advance triggers the pool tender for on its
 // own tick: an organizer publishing or starting a contest by hand is exactly

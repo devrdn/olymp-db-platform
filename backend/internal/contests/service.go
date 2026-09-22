@@ -86,7 +86,14 @@ type ServiceConfig struct {
 	// contest's progression is actually sequential — a caller with nothing to
 	// do with answering questions, or an installation that never turns this
 	// on, need not supply one.
-	Sequence   SequentialGate
+	Sequence SequentialGate
+	// Covers answers the publish gate's question about a contest's uploaded
+	// picture: an uploaded cover with nobody credited does not publish
+	// (design spec §10.1, ProblemCoverNeedsAttribution). Optional at the
+	// type level in the same way Game and Submissions are — a Service
+	// assembled without one simply never asks — and internal/app always
+	// supplies one, so a deployment always does.
+	Covers     scheduleCovers
 	Audit      *audit.Recorder
 	UnitOfWork storage.UnitOfWork
 	// Now is the clock, injected so the enrollment deadline is testable.
@@ -151,6 +158,7 @@ type Service struct {
 	game            GameSource
 	submissions     SubmissionRepository
 	sequence        SequentialGate
+	covers          scheduleCovers
 	audit           *audit.Recorder
 	uow             storage.UnitOfWork
 	now             func() time.Time
@@ -190,6 +198,7 @@ func NewService(cfg ServiceConfig) *Service {
 		game:            cfg.Game,
 		submissions:     cfg.Submissions,
 		sequence:        cfg.Sequence,
+		covers:          cfg.Covers,
 		audit:           cfg.Audit,
 		uow:             cfg.UnitOfWork,
 		now:             now,
@@ -712,7 +721,7 @@ func (s *Service) CheckPublish(ctx context.Context, contestID uuid.UUID) error {
 // Scheduler shares with this method — the same question, asked from
 // Service's own wider StoryRepository and QuestionRepository.
 func (s *Service) checkPublishable(ctx context.Context, c Contest) error {
-	return checkPublishable(ctx, s.stories, s.questions, s.registrations, c)
+	return checkPublishable(ctx, s.stories, s.questions, s.registrations, s.covers, c)
 }
 
 // Transition moves a contest along its lifecycle.
