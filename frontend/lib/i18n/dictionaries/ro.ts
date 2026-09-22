@@ -1941,6 +1941,7 @@ const ro = {
     profile_contest_not_found: "Nu aveți aici niciun concurs încheiat. Un concurs apare în profil după ce s-a încheiat pentru dumneavoastră.",
     profile_invalid_cursor: "Lista nu a putut fi continuată. Reîncărcați pagina.",
     profile_invalid_filter: "Un filtru nu este valid. Verificați starea și textul căutat.",
+    public_too_often: "Pagina principală este încărcată prea des. Așteptați un minut și încercați din nou.",
     cross_origin: "Cererea nu a venit de pe acest site. Reîncărcați pagina și încercați din nou.",
     method_not_allowed: "Acțiunea nu este disponibilă pentru această resursă.",
     internal_error: "Serverul nu a putut procesa cererea.",

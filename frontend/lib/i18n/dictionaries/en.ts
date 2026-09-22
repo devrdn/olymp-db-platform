@@ -2093,6 +2093,7 @@ const en = {
     profile_contest_not_found: "You have no finished contest here. A contest appears in your profile once it has ended for you.",
     profile_invalid_cursor: "The list could not be continued. Reload the page.",
     profile_invalid_filter: "A filter is not valid. Check the status and the search text.",
+    public_too_often: "The home page is being loaded too often. Wait a minute and try again.",
     cross_origin: "The request did not come from this site. Reload the page and try again.",
     method_not_allowed: "That action is unavailable for this resource.",
     internal_error: "The server could not process the request.",
