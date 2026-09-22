@@ -32,26 +32,6 @@ import (
 // itself and two counts of a registration's own journal.
 var _ profile.Store = (*Profile)(nil)
 
-// The contest statuses a profile carries: published,
-// running, finished and archived.
-//
-// A draft is excluded, for the reason Contests.List excludes it from the
-// participant catalogue — a draft is nobody's business but its authors'. A
-// roster may be filled while a contest is still being written, so a
-// registration in one exists long before anybody is meant to know the contest
-// does; without this clause a member of that roster would read its title, its
-// status and its schedule here.
-//
-// Archived is kept deliberately. A profile is a history view, and archiving is
-// how a finished olympiad is put away rather than how it is taken from the
-// people who sat it.
-//
-// Spelled into both statements below, so the four numbers of the header count
-// exactly the rows the list shows.
-// The four statuses themselves live in the domain
-// (contests.PublicStatuses) and are bound as a parameter — see
-// publicStatusFilter for why they are not written out here.
-
 // Profile reads a participant's own account.
 type Profile struct {
 	pool *pgxpool.Pool

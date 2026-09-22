@@ -189,13 +189,21 @@ func (h *CoverHandler) remove(w http.ResponseWriter, r *http.Request) {
 
 // public serves one rendition to a visitor with no session.
 //
-// Three things about the response, each for its own reason:
+// The caching is decided by the address, and the address has two forms:
 //
-//   - a year of immutable caching, which is correct rather than merely fast
-//     because the address carries the hash of the file: a replaced cover is a
-//     different URL and no cache has ever to be told anything;
-//   - an ETag of that same hash, so a client that kept the old answer past
-//     its year revalidates in one round trip with no body;
+//   - with `v=<hash>` it names one exact file, so it is answered with a year
+//     of immutable caching — the picture at that address can never change,
+//     and a replaced cover is a different address the page links to instead.
+//     This is the form the pages use, the same way the installation's own
+//     pictures carry their hash (`imageHref`);
+//   - without it, the address is only "this contest's cover", which changes
+//     the moment an organiser replaces the picture. A minute, and an ETag to
+//     make the revalidation free. An earlier version of this handler sent a
+//     year of `immutable` here too, on a comment's word that the address
+//     carried the hash — it does not, and a replaced cover would have stayed
+//     invisible to everybody who had seen the old one.
+//
+// The ETag names the file rather than the cover, and:
 //   - `nosniff`, so a browser uses the type the store named rather than
 //     guessing. Unlike the installation's own pictures, no download
 //     disposition is set: these bytes are always a JPEG this process encoded
@@ -222,13 +230,24 @@ func (h *CoverHandler) public(w http.ResponseWriter, r *http.Request) {
 	}
 
 	size := requestedCoverSize(r)
+	// Read before any header is set. A refusal — a width nothing is stored
+	// at, or a volume that did not answer — must not be the thing that
+	// carries a year of caching, and setting the headers first is how that
+	// happens: the failure is written out with whatever was already on the
+	// response.
+	body, contentType, err := h.covers.Read(r.Context(), cover.Hash, size)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+
 	// The ETag names the exact file, which is the hash and the width
 	// together: the two renditions of one cover are one hash and two
 	// different pictures, and an ETag of the hash alone would let a cache
 	// answer a request for 1600 with the 800 it already has.
 	etag := `"` + cover.Hash + "-" + strconv.Itoa(size) + `"`
 	header := w.Header()
-	header.Set("Cache-Control", "public, max-age=31536000, immutable")
+	header.Set("Cache-Control", coverCacheControl(r, cover.Hash))
 	header.Set("ETag", etag)
 	header.Set("X-Content-Type-Options", "nosniff")
 
@@ -237,14 +256,23 @@ func (h *CoverHandler) public(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, contentType, err := h.covers.Read(r.Context(), cover.Hash, size)
-	if err != nil {
-		h.fail(w, r, err)
-		return
-	}
 	header.Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+}
+
+// coverCacheControl answers how long this address may be kept.
+//
+// An address that names the file — `v=<hash>` — can be kept forever, because
+// nothing at it will ever be different. An address that names only the
+// contest is worth a minute: it is what an organiser's replacement has to
+// travel through, and a picture nobody can refresh is worse than a picture
+// fetched again.
+func coverCacheControl(r *http.Request, hash string) string {
+	if r.URL.Query().Get("v") == hash {
+		return "public, max-age=31536000, immutable"
+	}
+	return "public, max-age=60"
 }
 
 // requestedCoverSize is the width the visitor asked for.
