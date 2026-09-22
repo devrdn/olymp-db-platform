@@ -48,6 +48,12 @@ const ro = {
       checked: "Răspunsul este verificat imediat și se vede exact ce nu a corespuns.",
       own: "Fiecare participant are propria copie a bazei și propriul timp.",
     },
+    console: {
+      heading: "Ce vede participantul",
+      lede: "O interogare scrisă pe o bază de date vie și răspunsul chiar sub ea. Acesta este acel ecran, oprit pe loc.",
+      tab: "cine nu are alibi",
+      queryLabel: "Interogarea de exemplu: toți cei fără alibi, începând cu cei văzuți cel mai recent",
+    },
     numbers: {
       contests: "Olimpiade ținute",
       participants: "Participanți",
