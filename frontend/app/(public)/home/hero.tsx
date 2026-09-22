@@ -2,7 +2,6 @@ import { ArrowRight } from "lucide-react";
 import Link from "next/link";
 
 import { Band } from "@/components/layout/band";
-import { OrnamentStar } from "@/components/product/ornament";
 import { buttonVariants } from "@/components/ui/button";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
@@ -38,18 +37,27 @@ export function Hero({
   const t = dict.home.hero;
 
   return (
-    <Band className="gap-8">
-      {/* The star sits inside the heading rather than beside it, so it is
-          measured in the heading's own em: a mark at the size of a letter,
-          which stays that size through every step of the display clamp. */}
-      <h1 className="max-w-head text-display text-balance text-ink">
-        <OrnamentStar className="mr-[0.22em]" />
-        {name}
-      </h1>
+    /* Centred, and the whole band with it.
+     *
+     * The rest of the product is a left rule and a column of data hanging off
+     * it, because that is how a table is read. A front page is not read that
+     * way: there is one sentence, and everything on the screen is pointing at
+     * it. Centring is what says "this is the whole of it" — and it is why the
+     * glow behind it can be a single soft source rather than something that
+     * has to follow a column edge.
+     */
+    <Band className="relative items-center gap-8 py-20 text-center max-narrow:py-14">
+      {/* The light behind the title, and the only gradient in the product.
+          Decorative, so it is hidden from a reader and pinned behind the
+          text; it is a token, so both themes and the contrast checker know
+          about it. */}
+      <span aria-hidden className="glow" />
 
-      <p className="max-w-lede text-lede text-ink-2">{dict.home.lede}</p>
+      <h1 className="max-w-head text-display text-balance text-ink">{name}</h1>
 
-      <div className="flex flex-wrap items-center gap-x-7 gap-y-4">
+      <p className="max-w-lede text-lede text-balance text-ink-2">{dict.home.lede}</p>
+
+      <div className="flex flex-wrap items-center justify-center gap-x-7 gap-y-4">
         <Link
           href={signedIn ? "/my" : "/login"}
           className={cn(buttonVariants({ variant: "primary", size: "lg" }))}
