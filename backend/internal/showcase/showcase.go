@@ -37,10 +37,12 @@ import (
 )
 
 const (
-	// MaxRecent bounds the list the page carries (CLAUDE.md rule 2). The
-	// design asks for at most six rows, and a bound the domain states is one
-	// the page cannot be talked out of by a repository that returns more.
-	MaxRecent = 6
+	// MaxRecent bounds the list the page carries (CLAUDE.md rule 2). Three:
+	// one row of cards, which is what the page is for — a visitor is being
+	// shown that contests happen here, not given a catalogue to read. A bound
+	// the domain states is one the page cannot be talked out of by a
+	// repository that returns more.
+	MaxRecent = 3
 	// CacheTTL is how long one read serves every visitor. A minute, because
 	// nothing on this page changes faster than that matters: a contest's
 	// status moves on the scheduler's own tick and the numbers are a running

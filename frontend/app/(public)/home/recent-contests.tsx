@@ -48,7 +48,7 @@ const STATUS_TONE: Record<ContestStatus, "live" | "good" | "mute"> = {
  * page whose whole argument is that it is short should not be able to grow a
  * screen of cards because a server-side constant moved.
  */
-const MOST = 6;
+const MOST = 3;
 
 /**
  * The rendition a card asks for, and the size it reserves for it.
