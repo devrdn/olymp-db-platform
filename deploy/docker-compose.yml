@@ -392,6 +392,13 @@ services:
       # everything else without asking pg-core (max_connections=100 above)
       # for more than this API will ever hold open at once.
       CORE_DB_POOL_MAX: ${CORE_DB_POOL_MAX:-25}
+      # And how many of those connections may be held by a CSV download at
+      # once, across every export the API serves. A download is read at the
+      # client's pace, so without this the pool above is 25 slow readers away
+      # from having nothing left for sign-in or for answers. 5 when unset —
+      # one fifth of the pool, leaving 20 for the short queries that run a
+      # contest. Raise it only alongside CORE_DB_POOL_MAX.
+      EXPORT_CONCURRENCY: ${EXPORT_CONCURRENCY:-5}
       # The stack's own Redis, unless an operator names another one. Written
       # with `-` and not `:-` on purpose: `REDIS_ADDR=` in .env is an explicit
       # choice of the in-process cache, and `:-` would override that choice

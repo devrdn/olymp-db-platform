@@ -578,6 +578,10 @@
       "meaning": "This participant already holds as many live event channels for this contest as this installation allows open at once. Close one of the others — another tab, a stale connection — and try again."
     },
     {
+      "code": "too_many_exports",
+      "meaning": "As many downloads are being written at once as this installation allows, and this one was not started: nothing was read and nothing was recorded. A statement about the service's load rather than about the caller, who is inside every budget of their own — `Retry-After` is the longest a download in progress may still run, so a client that waits it out finds a place free."
+    },
+    {
       "code": "unauthenticated",
       "meaning": "There is no valid session. Sign in and retry."
     },

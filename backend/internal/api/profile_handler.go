@@ -81,6 +81,10 @@ type ProfileHandler struct {
 	// with the play screen's copy of the same route (WithExports), for the
 	// reason ExportGate gives.
 	exports *ExportGate
+	// exportSlots keeps the whole service to as many downloads at once as the
+	// core pool can spare, shared with every other export route
+	// (WithExportSlots). See ExportSlots.
+	exportSlots *ExportSlots
 }
 
 // NewProfileHandler returns the handler.
@@ -90,7 +94,8 @@ func NewProfileHandler(service *profile.Service, watch ProfileWatch, history Que
 		defaultLocale = "en"
 	}
 	return &ProfileHandler{profile: service, watch: watch, history: history, limiter: limiter,
-		mw: mw, log: log, defaultLocale: defaultLocale, exports: NewExportGate()}
+		mw: mw, log: log, defaultLocale: defaultLocale,
+		exports: NewExportGate(), exportSlots: NewExportSlots(0)}
 }
 
 // WithExports gives this handler the gate that decides how many CSV downloads
@@ -100,6 +105,17 @@ func NewProfileHandler(service *profile.Service, watch ProfileWatch, history Que
 func (h *ProfileHandler) WithExports(gate *ExportGate) *ProfileHandler {
 	if gate != nil {
 		h.exports = gate
+	}
+	return h
+}
+
+// WithExportSlots gives this handler the service-wide count of downloads
+// holding a database connection — the same one every other export route is
+// given, for the reason ExportSlots gives. nil leaves the handler's own in
+// place.
+func (h *ProfileHandler) WithExportSlots(slots *ExportSlots) *ProfileHandler {
+	if slots != nil {
+		h.exportSlots = slots
 	}
 	return h
 }
@@ -567,7 +583,7 @@ func (h *ProfileHandler) logCSV(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	queryLogCSVExport{history: h.history, exports: h.exports, log: h.log}.
+	queryLogCSVExport{history: h.history, exports: h.exports, slots: h.exportSlots, fail: h.fail, log: h.log}.
 		serve(w, r, access.Participant.ID, access.Contest.ID, func() {
 			// A second download of a file the first one is still writing is
 			// asking faster than this installation allows, which is the
@@ -593,6 +609,8 @@ func (h *ProfileHandler) fail(w http.ResponseWriter, r *http.Request, err error)
 		httpx.Error(w, r, http.StatusBadRequest, codeProfileInvalidCursor, err.Error())
 	case errors.Is(err, monitor.ErrInvalidQueryFilter):
 		httpx.Error(w, r, http.StatusBadRequest, codeProfileInvalidFilter, err.Error())
+	case errors.Is(err, ErrExportsBusy):
+		exportsBusy(w, r)
 	default:
 		h.log.ErrorContext(r.Context(), "the profile read failed", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")

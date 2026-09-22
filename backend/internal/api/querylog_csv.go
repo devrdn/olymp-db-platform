@@ -27,9 +27,15 @@ import (
 // It exists because a rate limit and a concurrency limit are different bounds,
 // and only one of them was in place. AdmitRead lets an account start thirty
 // reads a minute; the export is the one read that then *holds* a core-pool
-// connection while the client reads it, so thirty starts a minute against ten
-// connections is a way to stop everybody else signing in — with a budget that
+// connection while the client reads it, so thirty starts a minute against a
+// pool of 25 is a way to stop everybody else signing in — with a budget that
 // never refuses anything, because nothing was asked for too often.
+//
+// It is a bound per caller, and the service needs one of its own on top of
+// it: one download each is still every connection in the pool once there are
+// 25 callers. That one is ExportSlots (export_slots.go); this one stays
+// because "not the same file twice" is a different statement from "not more
+// downloads than the pool can spare", and the second does not imply the first.
 //
 // The key is whatever the route hands it, and the two kinds of export claim
 // different things. A participant's own log is claimed by the registration —
@@ -98,15 +104,17 @@ var queryLogCSVTruncatedNotice = []string{"", "truncated", "", "", "This file ca
 // The other half of the bound (queryrunner.MaxExportRows says how much may be
 // read; this says for how long), and the half that is not about volume at all:
 // the export streams inside a transaction, so a client reading a byte a second
-// used to pin one of the core pool's ten connections for as long as it cared
+// used to pin one of the core pool's connections for as long as it cared
 // to — on the database every other participant's sign-in, submission and timer
 // share. Nothing about the amount of data bounds that, because the slow party
 // is the reader.
 //
 // A minute is generous against the file: a full-rate three-hour log is about a
 // megabyte, which is under a second on the local network an olympiad runs on
-// and a few seconds on a poor one. It is short against the damage: ten
-// connections held for a minute is a stall a contest recovers from by itself.
+// and a few seconds on a poor one. It is short against the damage: with
+// ExportSlots capping how many are held at once, a minute of them is a stall
+// a contest recovers from by itself. It is also what a refused download is
+// told to wait (exportsBusy), because it is the longest a slot can be held.
 const exportDeadline = time.Minute
 
 // queryLogCSVExport streams one registration's query log to a response.
@@ -115,7 +123,14 @@ type queryLogCSVExport struct {
 	// exports keeps one registration to one download at a time; see
 	// ExportGate.
 	exports *ExportGate
-	log     *slog.Logger
+	// slots keeps the whole service to as many downloads at once as the core
+	// pool can spare; see ExportSlots.
+	slots *ExportSlots
+	// fail is the handler's own error mapping, so a refusal this file makes
+	// is answered by the same switch every other refusal of that route goes
+	// through (CLAUDE.md rule 1).
+	fail func(http.ResponseWriter, *http.Request, error)
+	log  *slog.Logger
 }
 
 // serve writes the file for registration, naming it after contest. busy is
@@ -133,15 +148,24 @@ type queryLogCSVExport struct {
 // csv.Writer's own bufio flushes when its buffer fills, and nothing
 // accumulates a log's worth of anything.
 //
-// Streamed is not the same as unbounded. Three bounds, and each answers a
+// Streamed is not the same as unbounded. Four bounds, and each answers a
 // different question. How much may be read is queryrunner.MaxExportRows and
 // MaxExportBytes, both far past anything a contest can produce, with a final
 // line in the file when either binds. How long the connection may be held is
 // exportDeadline, because the amount of data does not bound a reader who is
-// slow on purpose. And how many of these one registration may have open at a
+// slow on purpose. How many of these one registration may have open at a
 // time is one — see ExportGate: a bound per request is not a bound in
 // aggregate when the rate budget allows a download to be started many times a
-// minute and the pool has ten connections.
+// minute and the pool has ten connections. And how many the whole service may
+// have open at once is ExportSlots, because a bound per caller is not a bound
+// on the pool either: every registration having one download is every
+// connection being held.
+//
+// The registration's own gate is asked first. Both checks are free and both
+// come before any read, so the order is only about which refusal is the more
+// useful one to send: a second download of the same file is something the
+// caller can fix by waiting for their own, and saying "the service is busy"
+// to somebody whose own download is the thing in the way would be false.
 func (e queryLogCSVExport) serve(w http.ResponseWriter, r *http.Request, registration, contest uuid.UUID, busy func()) {
 	release, free := e.exports.enter(registration)
 	if !free {
@@ -149,6 +173,15 @@ func (e queryLogCSVExport) serve(w http.ResponseWriter, r *http.Request, registr
 		return
 	}
 	defer release()
+
+	// Before the transaction below is opened, and before a connection is
+	// taken from the pool this bound is about (CLAUDE.md rule 13).
+	releaseSlot, err := e.slots.enter()
+	if err != nil {
+		e.fail(w, r, err)
+		return
+	}
+	defer releaseSlot()
 
 	// A ceiling on how long that connection may be held, whatever the client
 	// does with the socket (exportDeadline).

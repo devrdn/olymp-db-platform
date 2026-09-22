@@ -2051,6 +2051,8 @@ const en = {
       "This contest answers questions in order. Answer the earlier one first.",
     too_many_connections:
       "You already have as many live connections to this contest as this installation allows. Close another tab and try again.",
+    too_many_exports:
+      "As many downloads are being prepared at once as this installation allows. Nothing was downloaded — try again in a minute.",
     query_database_error: "The database refused that query:",
     leaderboard_too_often: "The table is being refreshed too often. It will update again in a moment.",
     leaderboard_not_revealable: "The results cannot be revealed yet: the contest has not finished, or it was never frozen.",

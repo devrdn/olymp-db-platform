@@ -328,6 +328,15 @@ var (
 	codeTooManyConnections = httpx.NewCode("too_many_connections",
 		"This participant already holds as many live event channels for this contest as this installation allows open at once. Close one of the others — another tab, a stale connection — and try again.")
 
+	// --- CSV downloads --------------------------------------------------------
+	//
+	// One code for every export this API serves — the participant's own query
+	// log from the play screen and from their profile, and the organiser's
+	// participant and contest feeds — because the thing that ran out is the
+	// same thing in all four cases, and it belongs to none of them.
+	codeTooManyExports = httpx.NewCode("too_many_exports",
+		"As many downloads are being written at once as this installation allows, and this one was not started: nothing was read and nothing was recorded. A statement about the service's load rather than about the caller, who is inside every budget of their own — `Retry-After` is the longest a download in progress may still run, so a client that waits it out finds a place free.")
+
 	// --- Answering a question ------------------------------------------------
 
 	codeAnswerTooLong = httpx.NewCode("answer_too_long",
