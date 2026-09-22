@@ -430,6 +430,10 @@
       "meaning": "This account has made more reads of its own profile this minute than the installation allows, refused reads included — or a download of the same query log is already running. Wait `Retry-After` seconds and ask again."
     },
     {
+      "code": "public_too_often",
+      "meaning": "The landing page's own reads — the installation's numbers and its recent contests — were asked for faster than one address may ask. Neither answer changes more than once a minute, so waiting costs nothing. Its own code rather than the leaderboard's: this is the page a visitor sees before signing in, and \"the table is being refreshed too often\" is the wrong sentence there."
+    },
+    {
       "code": "query_already_running",
       "meaning": "This participant already has a query in flight. One at a time, so that ten open tabs cannot hold ten execution slots."
     },

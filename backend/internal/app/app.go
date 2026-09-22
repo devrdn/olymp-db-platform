@@ -41,6 +41,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/rpc"
 	"github.com/devrdn/db-contest/backend/internal/settings"
+	"github.com/devrdn/db-contest/backend/internal/showcase"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/workspace"
 )
@@ -666,6 +667,15 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	}), watch, history, limiter, authMiddleware, log, cfg.DefaultLocale).
 		WithExports(logExports).
 		WithExportSlots(exportSlots))
+	// The landing page's two reads (the landing page design §4): the
+	// installation's numbers and its recent contests, both outside
+	// authentication beside the public leaderboard. No middleware of its own
+	// — there is no caller to authenticate — and the same shared limiter
+	// every other budget uses, here under the "public:" namespace and keyed
+	// by address, since an address is all a visitor has.
+	modules = append(modules, api.NewPublicHandler(
+		showcase.NewService(showcase.Config{Repository: postgres.NewShowcase(pool)}),
+		limiter, log, cfg.DefaultLocale))
 
 	deps := api.Deps{
 		Logger:        log,
