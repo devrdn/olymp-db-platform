@@ -101,6 +101,15 @@
   --id-6: #933c28;
   --id-6-wash: #f7e5e0;
 
+  /* The ornament sub-palette: muted natural dyes of Moldovan embroidery —
+     madder, walnut, indigo. One job, and it is decorative: these never carry
+     "good", "bad" or "live", which have tokens of their own. Madder is muted
+     deliberately — a pure red already means an error in this system, and two
+     reds on one screen are two messages in one colour. */
+  --ornament-madder: #9c4a3c;
+  --ornament-walnut: #8a6b45;
+  --ornament-indigo: #3f5a7a;
+
   --scrim-a: rgb(255 255 255 / 0.97);
   --scrim-b: rgb(255 255 255 / 0.72);
 
@@ -170,6 +179,12 @@
   --dark-id-5-wash: rgb(146 181 238 / 0.13);
   --dark-id-6: #ee9e86;
   --dark-id-6-wash: rgb(238 158 134 / 0.14);
+  /* Lightened rather than mirrored, for the reason the rules above are: a dark
+     ground swallows a dye as it swallows a hairline, and the same three
+     threads have to read as the same three threads at night. */
+  --dark-ornament-madder: #c2705f;
+  --dark-ornament-walnut: #b08f66;
+  --dark-ornament-indigo: #6d89ac;
   --dark-scrim-a: rgb(10 11 15 / 0.97);
   --dark-scrim-b: rgb(10 11 15 / 0.72);
 }
@@ -243,6 +258,9 @@
     --id-5-wash: var(--dark-id-5-wash);
     --id-6: var(--dark-id-6);
     --id-6-wash: var(--dark-id-6-wash);
+    --ornament-madder: var(--dark-ornament-madder);
+    --ornament-walnut: var(--dark-ornament-walnut);
+    --ornament-indigo: var(--dark-ornament-indigo);
     --scrim-a: var(--dark-scrim-a);
     --scrim-b: var(--dark-scrim-b);
     color-scheme: dark;
@@ -305,6 +323,9 @@
     --id-5-wash: var(--dark-id-5-wash);
     --id-6: var(--dark-id-6);
     --id-6-wash: var(--dark-id-6-wash);
+    --ornament-madder: var(--dark-ornament-madder);
+    --ornament-walnut: var(--dark-ornament-walnut);
+    --ornament-indigo: var(--dark-ornament-indigo);
     --scrim-a: var(--dark-scrim-a);
     --scrim-b: var(--dark-scrim-b);
     color-scheme: dark;

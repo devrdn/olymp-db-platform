@@ -39,9 +39,9 @@ Five rules, from which the rest follows. Each one decides something later.
 4. **A state is always explained.** No empty screen without a reason and a next
    step, no error without what to do about it.
 5. **One accent, three semantics.** Widening the palette is a change to the
-   system, not a decision taken on the spot. It has been widened twice, each
-   time as a named sub-palette with one job: SQL highlighting (section 3.1) and
-   the standings (section 3.5).
+   system, not a decision taken on the spot. It has been widened three times,
+   each time as a named sub-palette with one job: SQL highlighting (section
+   3.1), the standings (section 3.5) and the ornament (section 3.6).
 
 ## 3. The token layer
 
@@ -170,6 +170,48 @@ Rules that keep it a palette rather than decoration:
   rests on colour or on a bare symbol.
 - The section 15 boundaries still hold: no purple, no glow, no gradient text, no
   emoji. A medal is a tinted disc with a number in it, not a trophy picture.
+
+### 3.6 The ornament sub-palette
+
+The landing page carries Moldovan embroidery geometry — the rhombus, the
+zig-zag the weavers call *râuri* ("rivers"), the eight-pointed star. It enters
+as geometry rather than as a photograph because those motifs are counted on the
+square grid of a cross stitch, which is the same nature as an interface made
+entirely of hairlines: the ornament is drawn in the stroke width the rules
+already use (`components/product/ornament.tsx`).
+
+Its colours are the muted tones of the natural dyes those threads were dyed
+with, and they are the third sub-palette this system has — one job, named,
+declared in `tokens.css` beside the other two, redefined by the dark theme at
+the semantic level like everything else.
+
+| Token | Light | Dark | Job |
+|---|---|---|---|
+| `--ornament-madder` | `#9c4a3c` | `#c2705f` | the star in the hero |
+| `--ornament-walnut` | `#8a6b45` | `#b08f66` | the band in the footer |
+| `--ornament-indigo` | `#3f5a7a` | `#6d89ac` | the band under the hero |
+
+Rules that keep it a palette rather than decoration:
+
+- **The three dyes work in the ornament and nowhere else**, and they carry
+  none of the meanings the product already has: "good", "bad" and "live" have
+  tokens of their own. Madder is muted on purpose — a pure red already means an
+  error here, and two reds on one screen are two messages in one colour.
+- **One ornament, one colour.** A band takes a single dye; three of them mixed
+  along one band is not a pattern but a motley. The colour is set once on the
+  element and the strokes follow it through `currentColor`, so switching the
+  theme repaints nothing path by path.
+- **The ornament is the frame of the landing page, not its content.** A band
+  under the hero, a narrow band in the footer, a star beside the installation's
+  name. It does not spread onto the working screens.
+- **It says nothing, and it is `aria-hidden`.** That is why it is the one
+  colour family here the contrast script does not check: a reader who never
+  sees it has lost no information. The same fact is what forbids laying it
+  under text, where it would cost some.
+- **A band repeats its tile; it never stretches one.** The width is taken by
+  cutting the pattern off at the edge of the content column, the way a woven
+  border is cut off at the edge of the cloth. A cross-stitch grid squeezed
+  along one axis stops being a cross-stitch grid.
 
 ## 4. Typography
 
