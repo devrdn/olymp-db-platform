@@ -48,6 +48,34 @@ const en = {
       note: "Changing it signs this account out everywhere. You will sign in again with the new password.",
     },
   },
+  /**
+   * The front page, which is the first thing a visitor handed a link sees.
+   *
+   * It is the one screen written for somebody who does not yet know what this
+   * is, so its words explain rather than instruct. The installation's own name
+   * and contact are not here: they come from its settings and are not
+   * translated.
+   */
+  home: {
+    /** The heading when the installation has not yet named itself. */
+    defaultName: "Olymp Database System",
+    lede: "A place to hold SQL olympiads. A real database, a real question, and an answer checked the moment it is sent — for a university course and for a school round alike.",
+    hero: {
+      signIn: "Sign in",
+      mine: "My contests",
+      browse: "See the contests",
+    },
+    how: {
+      heading: "How it works",
+      live: "A query is written against a live database, not against a description of one.",
+      checked: "The answer is checked at once, and what did not match is named.",
+      own: "Every participant gets their own copy of the database and their own clock.",
+    },
+    organisers: {
+      line: "Teaching a course, or running a round of your own?",
+      link: "Sign in to organise",
+    },
+  },
   contests: {
     heading: "Contests",
     countLabel: "in the register",
