@@ -224,8 +224,15 @@ func (e queryLogCSVExport) serve(w http.ResponseWriter, r *http.Request, registr
 			// about it: this file reads the same unsanitised column, and a
 			// download is the more convenient way round a guard than a page
 			// is, because it arrives as a document somebody keeps.
-			participantSafeError(entry.Status, entry.Error),
-			entry.SQL,
+			//
+			// Both text cells are defused for spreadsheets, the way the
+			// organiser's export defuses its own (spreadsheetSafe). The SQL
+			// is the participant's to write, and `=1+1` is a statement to
+			// type into a console and a formula to whoever opens the file —
+			// which, for a log a participant downloads and sends on, is
+			// often not the participant.
+			spreadsheetSafe(participantSafeError(entry.Status, entry.Error)),
+			spreadsheetSafe(entry.SQL),
 		})
 	})
 	if err != nil {
