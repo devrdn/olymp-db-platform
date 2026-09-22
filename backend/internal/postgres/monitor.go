@@ -59,6 +59,9 @@ func (m *Monitor) InsertEvents(ctx context.Context, events []monitor.Event) erro
 	if len(events) == 0 {
 		return nil
 	}
+	if err := m.checkStored(ctx, events); err != nil {
+		return err
+	}
 
 	var (
 		contests      = make([]uuid.UUID, len(events))
@@ -93,6 +96,55 @@ func (m *Monitor) InsertEvents(ctx context.Context, events []monitor.Event) erro
 		ORDER BY position`,
 		contests, registrations, kinds, payloads, claimed); err != nil {
 		return fmt.Errorf("store %d participant events: %w", len(events), err)
+	}
+	return nil
+}
+
+// checkStored refuses a batch that would take a registration past
+// monitor.MaxStoredEvents stored events.
+//
+// One statement whatever the batch size, and it asks registration_activity —
+// a primary key per registration in the batch — rather than counting
+// participant_events, which is the table the limit exists to bound. A
+// registration with no summary row has stored nothing.
+//
+// The count and the insert are two statements, so two batches racing can put
+// a registration one batch past the line. That is the right side to err on:
+// the limit exists to bound a table over a contest, not to be exact to the
+// event, and a lock held across the insert would cost every batch to catch a
+// case the next batch refuses anyway.
+func (m *Monitor) checkStored(ctx context.Context, events []monitor.Event) error {
+	arriving := make(map[uuid.UUID]int, len(events))
+	for _, event := range events {
+		arriving[event.Registration]++
+	}
+	registrations := make([]uuid.UUID, 0, len(arriving))
+	for registration := range arriving {
+		registrations = append(registrations, registration)
+	}
+
+	rows, err := m.querier(ctx).Query(ctx, `
+		SELECT registration_id, events FROM registration_activity
+		WHERE registration_id = ANY($1::uuid[])`, registrations)
+	if err != nil {
+		return fmt.Errorf("read how much %d registrations have stored: %w", len(registrations), err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			registration uuid.UUID
+			stored       int64
+		)
+		if err := rows.Scan(&registration, &stored); err != nil {
+			return fmt.Errorf("read how much a registration has stored: %w", err)
+		}
+		if stored+int64(arriving[registration]) > monitor.MaxStoredEvents {
+			return fmt.Errorf("registration %s has stored %d events: %w",
+				registration, stored, monitor.ErrTooManyEvents)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read how much %d registrations have stored: %w", len(registrations), err)
 	}
 	return nil
 }

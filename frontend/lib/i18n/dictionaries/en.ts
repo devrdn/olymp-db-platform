@@ -2081,6 +2081,8 @@ const en = {
       "The tabs changed while you were moving them. Reload the page and try again.",
     signals_too_often: "Your page activity is being reported too often. It will be sent in a moment.",
     signals_batch_too_large: "Too much page activity was sent at once. It will be sent in smaller parts.",
+    signals_too_many_stored:
+      "As much of your page activity has been recorded as this contest keeps. Nothing you have done is lost.",
     monitor_too_often: "You are refreshing the monitoring pages too often. Wait a minute and try again.",
     monitor_participant_not_found: "This participant is not in this contest.",
     monitor_revision_not_found: "This version of the notes or tab no longer exists.",
