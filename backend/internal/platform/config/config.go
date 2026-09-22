@@ -154,6 +154,16 @@ const maxLoginAttemptsCeiling = 100_000
 // typo away.
 const maxCoreDBPoolMax = 100
 
+// maxExportConcurrency bounds EXPORT_CONCURRENCY (see
+// Config.ExportConcurrency).
+//
+// Ten, against a default pool of 25: two fifths of it held by readers who may
+// be slow on purpose is already as far as the arithmetic stretches, and a
+// deployment that wants more raises CORE_DB_POOL_MAX and this ceiling
+// together, as a deliberate change, rather than discovering at the start of a
+// contest that sign-in is queueing behind downloads.
+const maxExportConcurrency = 10
+
 // validLogLevels mirrors the levels understood by the logging package.
 var validLogLevels = []string{"debug", "info", "warn", "error"}
 
@@ -178,6 +188,15 @@ type Config struct {
 	// allows once migrations, bootstrap and an operator's own psql are
 	// counted too (see deploy/docker-compose.yml).
 	CoreDBPoolMax int
+	// ExportConcurrency is how many CSV downloads may hold a connection from
+	// that pool at the same moment, across every export route the API serves.
+	// A download holds its connection for as long as the client takes to read
+	// it, so this is the one setting that decides how much of the pool can be
+	// held by slow readers rather than by queries. Zero leaves it to the api
+	// package's default (api.DefaultExportConcurrency, one fifth of the
+	// pool); bounded by maxExportConcurrency, because past that the two
+	// numbers stop leaving room for the traffic that runs a contest.
+	ExportConcurrency int
 	// RedisAddr is optional. Empty selects the in-process cache, which is
 	// correct for a single instance and wrong for several (see the cache
 	// package).
@@ -455,6 +474,17 @@ func Load() (Config, error) {
 	}
 	if cfg.CoreDBPoolMax < 0 || cfg.CoreDBPoolMax > maxCoreDBPoolMax {
 		return Config{}, fmt.Errorf("CORE_DB_POOL_MAX: %d is outside [0, %d]", cfg.CoreDBPoolMax, maxCoreDBPoolMax)
+	}
+	// Zero leaves it to the api package's own default, the way the pool size
+	// above leaves its own to storage. Bounded because this number is a share
+	// of that pool: past the ceiling, downloads and the queries that run a
+	// contest stop fitting in it together.
+	if cfg.ExportConcurrency, err = intEnv("EXPORT_CONCURRENCY", 0); err != nil {
+		return Config{}, err
+	}
+	if cfg.ExportConcurrency < 0 || cfg.ExportConcurrency > maxExportConcurrency {
+		return Config{}, fmt.Errorf("EXPORT_CONCURRENCY: %d is outside [0, %d]",
+			cfg.ExportConcurrency, maxExportConcurrency)
 	}
 	cfg.RedisAddr = os.Getenv("REDIS_ADDR")
 	cfg.MetricsBackend = envOrDefault("METRICS_BACKEND", "prometheus")

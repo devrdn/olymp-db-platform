@@ -83,6 +83,11 @@ type MonitorHandler struct {
 	// the one the two participant routes share: this file is a whole
 	// contest's feed and is claimed by the account, not by a registration.
 	exports ExportGate
+	// exportSlots keeps the whole service to as many downloads at once as the
+	// core pool can spare (ExportSlots). Shared with the participants' own
+	// routes, unlike the gate above: this file's connections come from the
+	// same pool theirs do.
+	exportSlots *ExportSlots
 	// exportRows and exportBytes bound one CSV download (monitor_export.go).
 	exportRows  int
 	exportBytes int
@@ -91,7 +96,18 @@ type MonitorHandler struct {
 // NewMonitorHandler returns the handler.
 func NewMonitorHandler(watch MonitorReader, limiter MonitorLimiter, mw *auth.Middleware, log *slog.Logger) *MonitorHandler {
 	return &MonitorHandler{watch: watch, limiter: limiter, mw: mw, log: log,
-		exportRows: maxMonitorExportRows, exportBytes: maxMonitorExportBytes}
+		exportSlots: NewExportSlots(0), exportRows: maxMonitorExportRows, exportBytes: maxMonitorExportBytes}
+}
+
+// WithExportSlots gives this handler the service-wide count of downloads
+// holding a database connection — the same one the participants' own export
+// routes are given, for the reason ExportSlots gives. nil leaves the
+// handler's own in place.
+func (h *MonitorHandler) WithExportSlots(slots *ExportSlots) *MonitorHandler {
+	if slots != nil {
+		h.exportSlots = slots
+	}
+	return h
 }
 
 // WithExportLimits replaces the bounds of one CSV download, in rows and in
@@ -577,6 +593,8 @@ func (h *MonitorHandler) fail(w http.ResponseWriter, r *http.Request, err error)
 		httpx.Error(w, r, http.StatusBadRequest, codeMonitorInvalidCursor, err.Error())
 	case errors.Is(err, monitor.ErrInvalidFeedFilter), errors.Is(err, monitor.ErrInvalidQueryFilter):
 		httpx.Error(w, r, http.StatusBadRequest, codeMonitorInvalidFilter, err.Error())
+	case errors.Is(err, ErrExportsBusy):
+		exportsBusy(w, r)
 	default:
 		h.log.ErrorContext(r.Context(), "the monitoring read failed", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")

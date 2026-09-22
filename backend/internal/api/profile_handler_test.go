@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -109,12 +110,17 @@ func (w *profileWatch) Workspace(context.Context, uuid.UUID, uuid.UUID) (monitor
 // profileHistory is the query log the CSV download streams.
 type profileHistory struct {
 	rows []queryrunner.HistoryEntry
-	// started is closed when an export reaches the first row, and hold blocks
-	// it there until a test closes it. Together they let a second request
-	// arrive while the first download is genuinely open, which is the only
-	// state the export gate has an opinion about.
+	// started takes one value per export that has reached the first row, and
+	// hold blocks every one of them there until a test closes it. Together
+	// they let further requests arrive while downloads are genuinely open,
+	// which is the only state either export bound has an opinion about — one
+	// value rather than a close, so a test can hold several at once and count
+	// them.
 	started chan struct{}
 	hold    chan struct{}
+	// calls counts the reads of the log this fake was asked for, so a test
+	// can tell a refusal that cost a read from one that cost nothing.
+	calls atomic.Int64
 }
 
 func (h *profileHistory) History(context.Context, uuid.UUID, int, int) ([]queryrunner.HistoryEntry, int, error) {
@@ -122,8 +128,9 @@ func (h *profileHistory) History(context.Context, uuid.UUID, int, int) ([]queryr
 }
 
 func (h *profileHistory) ExportHistory(_ context.Context, _ uuid.UUID, yield func(queryrunner.HistoryEntry) error) (bool, error) {
+	h.calls.Add(1)
 	if h.hold != nil {
-		close(h.started)
+		h.started <- struct{}{}
 		<-h.hold
 	}
 	for _, row := range h.rows {
@@ -139,6 +146,10 @@ type profileFixture struct {
 	// exports is the gate every handler this fixture mounts is given, and
 	// mount builds another handler over it.
 	exports *api.ExportGate
+	// slots is the service-wide export bound every handler this fixture
+	// mounts is given. Nil leaves each handler the bound it builds itself; a
+	// test that wants a smaller one sets this and calls mount again.
+	slots   *api.ExportSlots
 	mount   func() http.Handler
 	store   *profileStore
 	results *profileResults
@@ -219,11 +230,27 @@ func newProfileFixture(t *testing.T) *profileFixture {
 	f.mount = func() http.Handler {
 		router := chi.NewRouter()
 		api.NewProfileHandler(service, f.watch, f.history, auth.NewLimiter(c), mw, log, "en").
-			WithExports(f.exports).Mount(router)
+			WithExports(f.exports).WithExportSlots(f.slots).Mount(router)
 		return router
 	}
 	f.router = f.mount()
 	return f
+}
+
+// finishedContest enrols the student in one more contest that has ended for
+// them, and answers it. A test that needs several downloads open at once uses
+// it so that each one is a different registration: the per-registration gate
+// then has no opinion about any of them, and what refuses a download is the
+// bound the test is actually about.
+func (f *profileFixture) finishedContest(t *testing.T) contests.Contest {
+	t.Helper()
+	contest := f.stores.SeedContest(contests.StatusFinished)
+	p, err := f.stores.Registrations.Add(t.Context(), contest.ID, f.student.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.watch.registrations[p.ID] = contest.ID
+	return contest
 }
 
 func (f *profileFixture) get(path string, who *users.User) *httptest.ResponseRecorder {

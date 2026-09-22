@@ -1896,6 +1896,8 @@ const ro = {
       "Această olimpiadă răspunde la întrebări în ordine. Răspundeți mai întâi la cea anterioară.",
     too_many_connections:
       "Aveți deja atâtea conexiuni active la această olimpiadă câte permite această instalare. Închideți altă filă și încercați din nou.",
+    too_many_exports:
+      "Se pregătesc simultan atâtea descărcări câte permite această instalare. Nu s-a descărcat nimic — încercați peste un minut.",
     query_database_error: "Baza de date a refuzat interogarea:",
     leaderboard_too_often: "Tabelul este reîmprospătat prea des. Se va actualiza într-o clipă.",
     leaderboard_not_revealable: "Rezultatele nu pot fi încă dezvăluite: olimpiada nu s-a încheiat sau tabelul nu a fost înghețat.",
