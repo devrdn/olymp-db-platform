@@ -57,10 +57,12 @@ const ro = {
     contests: {
       heading: "Olimpiade apropiate și recente",
       table: "Rezultate",
+      tableOf: "Rezultatele olimpiadei {title}",
       empty: {
         title: "Deocamdată nu este nimic de arătat",
         body: "Aici nu este deschisă publicului nicio olimpiadă în acest moment. Catalogul cuprinde tot ce organizează această instalare.",
         action: "Deschideți catalogul",
+        actionSignedOut: "Autentificați-vă pentru a vedea catalogul",
       },
     },
     organisers: {
