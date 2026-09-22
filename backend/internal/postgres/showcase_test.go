@@ -173,6 +173,72 @@ func TestNumbersCountTheSummaryTableAndNotTheQueryJournal(t *testing.T) {
 	})
 }
 
+// Solved is the answer counter registration_activity keeps, for the reason
+// queries is the query counter: the answers journal grows with every attempt
+// anybody makes and carries no index that serves this, and the page asking
+// for it is one nobody has to sign in to load.
+//
+// The two are the same number — the counter is maintained by the trigger that
+// sees every insert, and both the counter's row and the answers cascade
+// together when a registration is deleted — so the test proves both halves:
+// an ordinary answer moves the read, and a counter raised with no answer
+// behind it moves it too, which only a read of the summary can do.
+func TestSolvedCountsTheAnswerCounterAndNotTheAnswersJournal(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewShowcase(testPool)
+		before, err := repo.Numbers(ctx)
+		if err != nil {
+			t.Fatalf("Numbers() = %v", err)
+		}
+		countedBefore := correctCounter(t, ctx)
+
+		author := makeUser(t, ctx, "author-showcase-solved")
+		contest := makeContest(t, ctx, author.ID)
+		exec(t, ctx, `UPDATE contests SET status = 'finished' WHERE id = $1`, contest)
+		question := makeShowcaseQuestion(t, ctx, contest)
+
+		// The ordinary path: the answers are written and the trigger folds
+		// them into the counter. Two of the three are correct.
+		answered := makeRegistration(t, ctx, contest, author.ID)
+		exec(t, ctx, `
+			INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct, submitted_at)
+			VALUES ($1, $2, 1, 'no', false, now()),
+			       ($1, $2, 2, 'yes', true, now()),
+			       ($1, $2, 3, 'yes again', true, now())`, answered, question)
+
+		// A counter with answers the journal no longer has to hold. Nothing
+		// writes this in production; here it is what tells the two readings
+		// apart, the way the queries fixture does above.
+		other := makeUser(t, ctx, "participant-showcase-solved")
+		bare := makeRegistration(t, ctx, contest, other.ID)
+		exec(t, ctx, `INSERT INTO registration_activity (registration_id, correct) VALUES ($1, 5)`, bare)
+
+		after, err := repo.Numbers(ctx)
+		if err != nil {
+			t.Fatalf("Numbers() = %v", err)
+		}
+		if got := after.Solved - before.Solved; got != 7 {
+			t.Errorf("solved rose by %d, want the 7 the counters hold", got)
+		}
+		if got, want := after.Solved-before.Solved, correctCounter(t, ctx)-countedBefore; got != want {
+			t.Errorf("solved rose by %d, want the counter's own rise of %d", got, want)
+		}
+	})
+}
+
+// correctCounter is what registration_activity holds for correct answers right
+// now, which is what Numbers has to report.
+func correctCounter(t *testing.T, ctx context.Context) int64 {
+	t.Helper()
+	var total int64
+	err := storage.QuerierFrom(ctx, testPool).
+		QueryRow(ctx, `SELECT COALESCE(sum(correct), 0) FROM registration_activity`).Scan(&total)
+	if err != nil {
+		t.Fatalf("read the answer counter: %v", err)
+	}
+	return total
+}
+
 func byID(list []showcase.Contest, id uuid.UUID) (showcase.Contest, bool) {
 	for _, c := range list {
 		if c.ID == id {

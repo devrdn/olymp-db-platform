@@ -20,12 +20,13 @@ var _ showcase.Repository = (*Showcase)(nil)
 // Both statements are aggregates over whole tables, which is only acceptable
 // because of what they aggregate. Recent reads contests, whose row count is
 // how many olympiads the installation has ever run — hundreds, not millions —
-// so its selection and its ordering need no index of their own. Numbers never
-// touches query_log: the queries figure is a sum over registration_activity,
-// the summary migration 000037 keeps by trigger, which holds one row per
-// registration rather than one per query. Counting the journal here would put
-// a scan of the largest table in the installation behind a page that anybody
-// may load, from anywhere, without an account.
+// so its selection and its ordering need no index of their own. Numbers
+// touches neither journal: both the queries figure and the solved figure are
+// sums over registration_activity, the summary migration 000037 keeps by
+// trigger, which holds one row per registration rather than one per query and
+// one per answer. Counting a journal here would put a scan of the two largest
+// tables in the installation behind a page that anybody may load, from
+// anywhere, without an account.
 type Showcase struct {
 	pool *pgxpool.Pool
 }
@@ -40,17 +41,21 @@ func (r *Showcase) querier(ctx context.Context) storage.Querier {
 // Numbers counts the installation's four numbers in one statement.
 //
 // Contests are the ones that were actually held — finished and archived — so
-// the figure cannot be raised by publishing something nobody sat. Queries is
-// the sum of the summary counters, never count(*) over query_log (see the
-// type's own doc). Solved counts correct submissions, which is what the
-// participant's own profile counts for one account.
+// the figure cannot be raised by publishing something nobody sat. Queries and
+// Solved are both sums of the summary counters, never count(*) over query_log
+// or submissions (see the type's own doc), and both come off the same single
+// pass over registration_activity.
 func (r *Showcase) Numbers(ctx context.Context) (showcase.Numbers, error) {
 	var n showcase.Numbers
 	err := r.querier(ctx).QueryRow(ctx, `
 		SELECT (SELECT count(*) FROM contests WHERE status IN ('finished', 'archived')),
 		       (SELECT count(*) FROM registrations),
-		       (SELECT COALESCE(sum(queries), 0) FROM registration_activity),
-		       (SELECT count(*) FROM submissions WHERE is_correct)`).
+		       a.queries, a.correct
+		FROM (
+		    SELECT COALESCE(sum(queries), 0) AS queries,
+		           COALESCE(sum(correct), 0) AS correct
+		    FROM registration_activity
+		) a`).
 		Scan(&n.Contests, &n.Participants, &n.Queries, &n.Solved)
 	if err != nil {
 		return showcase.Numbers{}, fmt.Errorf("count the showcase numbers: %w", err)
