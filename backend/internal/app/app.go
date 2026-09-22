@@ -27,6 +27,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/config"
+	"github.com/devrdn/db-contest/backend/internal/platform/filestore"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
 	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
@@ -677,6 +678,27 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		showcase.NewService(showcase.Config{Repository: postgres.NewShowcase(pool)}),
 		limiter, log, cfg.DefaultLocale))
 
+	// Where a contest's uploaded cover picture lives (the contest covers
+	// design §1): a directory on a volume, behind a port narrow enough that
+	// moving the pictures to shared storage the day a second replica exists
+	// is one new implementation and no change in the domain.
+	//
+	// Not optional the way the upload directory above is. Every installation
+	// has a front page and every front page shows covers — a contest with no
+	// uploaded picture gets a drawn one, which touches no file at all — so
+	// there is no "covers are off" state to fall back to, and a directory
+	// this process cannot write to is a failed start rather than a failed
+	// upload on the morning of an olympiad. New creates the directory and
+	// proves it is writable by writing; the same probe answers /readyz below,
+	// because a volume that comes back read-only after the process started is
+	// exactly the failure a start-up check cannot see.
+	covers, err := filestore.New(cfg.CoverDir)
+	if err != nil {
+		a.close()
+		return nil, fmt.Errorf("open the cover directory: %w", err)
+	}
+	log.Info("cover storage ready", "dir", covers.Dir())
+
 	deps := api.Deps{
 		Logger:        log,
 		Metrics:       recorder,
@@ -687,6 +709,11 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Checkers: []health.Checker{
 			storage.NewChecker("core-db", pool),
 			storage.NewChecker("cache", cacheBackend),
+			// The covers volume, probed the same way the database and the
+			// cache are. A remount as read-only, or a full disk, is a
+			// failure this instance cannot serve uploads through, and it
+			// happens long after the start-up check has passed.
+			storage.NewChecker("covers", covers),
 		},
 		Modules: modules,
 	}
