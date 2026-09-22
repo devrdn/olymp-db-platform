@@ -21,6 +21,9 @@ type countingRepo struct {
 	contests []showcase.Contest
 	// fail, when set, is what every read answers instead.
 	fail error
+	// during, when set, runs inside every read: what a test does to the world
+	// while the repository is busy, such as moving the clock on.
+	during func()
 
 	numberReads  atomic.Int64
 	contestReads atomic.Int64
@@ -30,6 +33,9 @@ type countingRepo struct {
 
 func (r *countingRepo) Numbers(context.Context) (showcase.Numbers, error) {
 	r.numberReads.Add(1)
+	if r.during != nil {
+		r.during()
+	}
 	if r.fail != nil {
 		return showcase.Numbers{}, r.fail
 	}
@@ -39,6 +45,9 @@ func (r *countingRepo) Numbers(context.Context) (showcase.Numbers, error) {
 func (r *countingRepo) Recent(_ context.Context, limit int) ([]showcase.Contest, error) {
 	r.contestReads.Add(1)
 	r.limit.Store(int64(limit))
+	if r.during != nil {
+		r.during()
+	}
 	if r.fail != nil {
 		return nil, r.fail
 	}
@@ -108,6 +117,36 @@ func TestAReadPastTheCacheAsksAgain(t *testing.T) {
 	}
 	if fresh.Queries != 2 {
 		t.Errorf("queries = %d, want the fresh 2 once the minute is up", fresh.Queries)
+	}
+}
+
+// An entry expires a minute after the read was decided on, not a minute after
+// it came back.
+//
+// Two things follow, and the second is why it matters. A read that took a
+// while is never presented as fresher than it is; and the entries of two
+// overlapping reads can be ordered by when each was asked for, which is what
+// keeps a waiter whose read started first from overwriting the newer answer
+// another caller has already cached and stamping it with a whole fresh
+// minute.
+func TestACachedAnswerExpiresFromWhenItWasAskedFor(t *testing.T) {
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	repo := &countingRepo{numbers: showcase.Numbers{Queries: 1}}
+	// The read itself takes half of the cache's own minute.
+	repo.during = func() { now = now.Add(showcase.CacheTTL / 2) }
+	service := newService(repo, &now)
+
+	if _, err := service.Numbers(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// A minute and a second after the read was asked for, however long it
+	// took to answer.
+	now = now.Add(showcase.CacheTTL/2 + time.Second)
+	if _, err := service.Numbers(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if reads := repo.numberReads.Load(); reads != 2 {
+		t.Errorf("the repository was read %d times, want a second read once the entry's own minute is up", reads)
 	}
 }
 

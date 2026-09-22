@@ -150,16 +150,38 @@ type Service struct {
 	flight singleflight.Group
 }
 
-type cachedNumbers struct {
-	value   Numbers
+// stamp is what both cached entries carry: whether anything is here at all,
+// and the moment the value stops being fresh.
+//
+// The moment is the cache's span past the point the read was *asked for*,
+// never past the point it came back. A read that took a while is then never
+// presented as fresher than it is, and — the reason it is written this way —
+// the entries of two overlapping reads can be ordered by it. Without that
+// order a waiter from an in-flight read that started first can come back
+// after a later read has already cached a newer answer, overwrite it with the
+// older value, and stamp that with a whole fresh span.
+type stamp struct {
 	present bool
 	expires time.Time
 }
 
+// fresh reports whether the entry is here and still inside its span.
+func (s stamp) fresh(now time.Time) bool { return s.present && now.Before(s.expires) }
+
+// newerThan reports whether this entry's read was asked for later than the
+// one already cached, which is the test a write has to pass.
+func (s stamp) newerThan(cached stamp) bool {
+	return !cached.present || s.expires.After(cached.expires)
+}
+
+type cachedNumbers struct {
+	stamp
+	value Numbers
+}
+
 type cachedContests struct {
-	value   []Contest
-	present bool
-	expires time.Time
+	stamp
+	value []Contest
 }
 
 // NewService returns the service.
@@ -186,7 +208,7 @@ func (s *Service) Numbers(ctx context.Context) (Numbers, error) {
 	s.mu.Lock()
 	entry := s.numbers
 	s.mu.Unlock()
-	if entry.present && now.Before(entry.expires) {
+	if entry.fresh(now) {
 		return entry.value, nil
 	}
 
@@ -201,8 +223,11 @@ func (s *Service) Numbers(ctx context.Context) (Numbers, error) {
 	}
 	numbers := result.(Numbers)
 
+	fresh := cachedNumbers{stamp: stamp{present: true, expires: now.Add(s.ttl)}, value: numbers}
 	s.mu.Lock()
-	s.numbers = cachedNumbers{value: numbers, present: true, expires: s.now().Add(s.ttl)}
+	if fresh.newerThan(s.numbers.stamp) {
+		s.numbers = fresh
+	}
 	s.mu.Unlock()
 	return numbers, nil
 }
@@ -223,7 +248,7 @@ func (s *Service) Recent(ctx context.Context, lang string) ([]Contest, error) {
 	s.mu.Lock()
 	entry := s.contests
 	s.mu.Unlock()
-	if entry.present && now.Before(entry.expires) {
+	if entry.fresh(now) {
 		return title(entry.value, lang), nil
 	}
 
@@ -239,8 +264,11 @@ func (s *Service) Recent(ctx context.Context, lang string) ([]Contest, error) {
 	}
 	list := result.([]Contest)
 
+	fresh := cachedContests{stamp: stamp{present: true, expires: now.Add(s.ttl)}, value: list}
 	s.mu.Lock()
-	s.contests = cachedContests{value: list, present: true, expires: s.now().Add(s.ttl)}
+	if fresh.newerThan(s.contests.stamp) {
+		s.contests = fresh
+	}
 	s.mu.Unlock()
 	return title(list, lang), nil
 }
