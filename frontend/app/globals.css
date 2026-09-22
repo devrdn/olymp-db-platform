@@ -98,6 +98,14 @@
   --color-id-6: var(--id-6);
   --color-id-6-wash: var(--id-6-wash);
 
+  /* The ornament sub-palette. Exposed as text colours because the ornament is
+     drawn in `currentColor`: the colour is chosen once on the element and the
+     strokes inside it follow, so a band never has to be repainted path by
+     path. */
+  --color-ornament-madder: var(--ornament-madder);
+  --color-ornament-walnut: var(--ornament-walnut);
+  --color-ornament-indigo: var(--ornament-indigo);
+
   /* Aliases shadcn components resolve against. */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
