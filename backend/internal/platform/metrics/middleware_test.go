@@ -89,6 +89,26 @@ func TestUnmatchedRouteIsLabelledAsUnknown(t *testing.T) {
 	}
 }
 
+// The method is as much a client's invention as the path above: HTTP allows
+// any token there, so a series per method is a series per string an
+// unauthenticated caller makes up.
+func TestAnInventedMethodIsLabelledAsOther(t *testing.T) {
+	m := NewPrometheus()
+	router := chi.NewRouter()
+	router.Use(Middleware(m))
+	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {})
+
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("WHATEVER-42", "/healthz", nil))
+
+	body := scrape(t, m)
+	if strings.Contains(body, `method="WHATEVER-42"`) {
+		t.Errorf("an invented method leaked into labels, letting clients create series:\n%s", body)
+	}
+	if !strings.Contains(body, `method="other"`) {
+		t.Errorf("an invented method is not grouped under a fixed label:\n%s", body)
+	}
+}
+
 // scrape renders the current metrics exposition.
 func scrape(t *testing.T, m *Prometheus) string {
 	t.Helper()
