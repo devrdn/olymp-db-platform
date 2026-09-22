@@ -198,7 +198,10 @@ func TestADraftsCoverIsNotServedToAVisitorWithNoSession(t *testing.T) {
 	}
 }
 
-func TestAPublishedContestsCoverIsServedWithAYearOfCaching(t *testing.T) {
+// The address that names the file may be kept forever; the address that names
+// only the contest may not, because that is the one a replacement has to
+// travel through.
+func TestTheAddressThatNamesTheFileIsTheOneCachedForever(t *testing.T) {
 	f := newCoverFixture(t, rbac.PermissionContestAdminAll)
 	contest := uuid.New()
 	upload := f.upload(t, contest, coverJPEG(t, 1600, 900), "Photo: A. Organiser")
@@ -207,7 +210,9 @@ func TestAPublishedContestsCoverIsServedWithAYearOfCaching(t *testing.T) {
 	}
 	f.repo.published[contest] = true
 
-	rec := f.do(t, http.MethodGet, "/public/contests/"+contest.String()+"/cover?size=800", "", nil)
+	hash, _ := decode(t, upload)["hash"].(string)
+	rec := f.do(t, http.MethodGet,
+		"/public/contests/"+contest.String()+"/cover?size=800&v="+hash, "", nil)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
@@ -222,7 +227,6 @@ func TestAPublishedContestsCoverIsServedWithAYearOfCaching(t *testing.T) {
 	if header.Get("X-Content-Type-Options") != "nosniff" {
 		t.Errorf("X-Content-Type-Options = %q, want nosniff", header.Get("X-Content-Type-Options"))
 	}
-	hash, _ := decode(t, upload)["hash"].(string)
 	if want := `"` + hash + `-800"`; header.Get("ETag") != want {
 		t.Errorf("ETag = %q, want %q", header.Get("ETag"), want)
 	}
@@ -487,4 +491,49 @@ func coverPNGHeaderClaiming(t *testing.T, width, height int) []byte {
 	chunk = binary.BigEndian.AppendUint32(chunk, crc32.ChecksumIEEE(chunk[4:]))
 
 	return append([]byte("\x89PNG\r\n\x1a\n"), chunk...)
+}
+
+// Without the hash the address is "this contest's cover", and that changes
+// the day an organiser replaces the picture. A year of immutable caching
+// there would make the replacement invisible to everybody who had seen the
+// old one — for a year, with no way to ask again.
+func TestTheAddressWithoutTheHashIsNotCachedForever(t *testing.T) {
+	f := newCoverFixture(t, rbac.PermissionContestAdminAll)
+	contest := uuid.New()
+	if rec := f.upload(t, contest, coverJPEG(t, 1600, 900), "Photo: A. Organiser"); rec.Code != http.StatusOK {
+		t.Fatalf("upload: status = %d (%s)", rec.Code, rec.Body.String())
+	}
+	f.repo.published[contest] = true
+
+	rec := f.do(t, http.MethodGet, "/public/contests/"+contest.String()+"/cover?size=800", "", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Cache-Control"); strings.Contains(got, "immutable") {
+		t.Errorf("Cache-Control = %q: this address is not immutable", got)
+	}
+	if rec.Header().Get("ETag") == "" {
+		t.Error("no ETag: without one the short cache costs a body on every revalidation")
+	}
+}
+
+// A refusal must not be the thing that carries a year of caching: the headers
+// belong to the answer, and until the file has been read there is no answer.
+func TestARefusedSizeCarriesNoCachingOfItsOwn(t *testing.T) {
+	f := newCoverFixture(t, rbac.PermissionContestAdminAll)
+	contest := uuid.New()
+	if rec := f.upload(t, contest, coverJPEG(t, 1600, 900), "Photo: A. Organiser"); rec.Code != http.StatusOK {
+		t.Fatalf("upload: status = %d (%s)", rec.Code, rec.Body.String())
+	}
+	f.repo.published[contest] = true
+
+	rec := f.do(t, http.MethodGet, "/public/contests/"+contest.String()+"/cover?size=999", "", nil)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); strings.Contains(got, "31536000") {
+		t.Errorf("Cache-Control = %q on a refusal", got)
+	}
 }
