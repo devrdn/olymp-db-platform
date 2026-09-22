@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 
+import { DrawnCover } from "@/components/product/drawn-cover";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -42,25 +43,6 @@ function choose(file: File): Choice {
     file,
     preview: typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : null,
   };
-}
-
-/**
- * The cover drawn for a contest that has not uploaded one.
- *
- * **This is a seam, not the component.** The real one is
- * `components/product/drawn-cover.tsx`, built in the task that turns the
- * showcase's rows into cards: deterministic in the contest's identifier, so
- * one olympiad always wears the same cover, and made of the accent, its wash
- * and the hatch this placeholder already borrows. Replace what is inside the
- * frame with it; the frame, the caption and the alternative text below stay.
- *
- * What it must not become is a second drawn cover. Design spec §2.3 is
- * explicit that the drawn cover is a cover rather than an "image missing"
- * placeholder — an organiser who sees one thing here and another on the front
- * page learns that neither is real.
- */
-function DrawnCoverSeam({ label }: { label: string }) {
-  return <div role="img" aria-label={label} className="hatched size-full bg-accent-wash" />;
 }
 
 /**
@@ -199,7 +181,11 @@ export function CoverPanel({
                 className="size-full object-cover"
               />
             ) : (
-              <DrawnCoverSeam label={t.drawnAlt} />
+              /* The same drawing the front page puts on this contest's card,
+                 not a second one of its own: an organiser who saw one cover
+                 here and another out there would learn that neither is
+                 real (design spec §2.3). */
+              <DrawnCover seed={contestId} label={t.drawnAlt} />
             )}
           </div>
 
