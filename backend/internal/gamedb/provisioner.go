@@ -597,7 +597,7 @@ func (p *Provisioner) CreateInstance(ctx context.Context, template, instance str
 	}
 	_, err := p.admin.Exec(ctx, create)
 	if err == nil {
-		return settleInstance(ctx, p.admin, instance, policy)
+		return p.settleInstance(ctx, instance, policy)
 	}
 
 	// `source database is being accessed by other users`. Nothing should be
@@ -616,7 +616,7 @@ func (p *Provisioner) CreateInstance(ctx context.Context, template, instance str
 	if _, err := p.admin.Exec(ctx, create); err != nil {
 		return fmt.Errorf("copy the template: %w", err)
 	}
-	return settleInstance(ctx, p.admin, instance, policy)
+	return p.settleInstance(ctx, instance, policy)
 }
 
 // ResetInstance gives a participant their starting database back.

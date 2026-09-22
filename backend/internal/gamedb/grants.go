@@ -42,28 +42,7 @@ func grantPolicy(ctx context.Context, conn Conn, policy sqlpolicy.Policy) error 
 			statements = append(statements,
 				`GRANT CREATE ON SCHEMA `+sqlpolicy.QuoteIdentifier(workSchema)+` TO `+RoleWriter)
 		}
-		for _, table := range policy.WritableTables {
-			// The policy has already refused any name that is not a plain
-			// identifier, which is what makes this interpolation safe — there
-			// is no way to bind an identifier, so the check has to happen
-			// before the string is built.
-			// TRUNCATE alongside the three that change rows, because the
-			// validator now permits it on exactly these tables and a
-			// privilege the template withholds would make that permission a
-			// "permission denied" instead. It grants nothing a participant
-			// did not have — DELETE already empties the same table — and it
-			// is the one statement that gives the pages back, which is how
-			// somebody at the disk quota gets out of it.
-			statements = append(statements,
-				`GRANT INSERT, UPDATE, DELETE, TRUNCATE ON `+qualify(table)+` TO `+RoleWriter)
-		}
-		if len(policy.WritableTables) > 0 {
-			// A table with a serial column cannot be inserted into without
-			// its sequence. Granting per table would mean naming sequences the
-			// author chose, which the policy does not describe.
-			statements = append(statements,
-				`GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO `+RoleWriter)
-		}
+		statements = append(statements, writableTableGrants(policy)...)
 	}
 
 	for _, statement := range statements {
@@ -72,6 +51,45 @@ func grantPolicy(ctx context.Context, conn Conn, policy sqlpolicy.Policy) error 
 		}
 	}
 	return nil
+}
+
+// writableTableGrants is what a contest that permits writing hands the writer
+// role on the tables its policy names.
+//
+// Its own function because two callers apply it: grantPolicy, inside the
+// template, and settleInstance, on every copy made from one. Written once so
+// the two can never come to mean different things — a participant's
+// privileges must not depend on which of the two paths last touched their
+// database.
+//
+// Empty for a policy with no writable tables, which is what keeps a read-only
+// contest untouched by either caller.
+func writableTableGrants(policy sqlpolicy.Policy) []string {
+	if len(policy.WritableTables) == 0 {
+		return nil
+	}
+
+	statements := make([]string, 0, len(policy.WritableTables)+1)
+	for _, table := range policy.WritableTables {
+		// The policy has already refused any name that is not a plain
+		// identifier, which is what makes this interpolation safe — there is
+		// no way to bind an identifier, so the check has to happen before the
+		// string is built.
+		// TRUNCATE alongside the three that change rows, because the
+		// validator now permits it on exactly these tables and a privilege
+		// the database withholds would make that permission a "permission
+		// denied" instead. It grants nothing a participant did not have —
+		// DELETE already empties the same table — and it is the one statement
+		// that gives the pages back, which is how somebody at the disk quota
+		// gets out of it.
+		statements = append(statements,
+			`GRANT INSERT, UPDATE, DELETE, TRUNCATE ON `+qualify(table)+` TO `+RoleWriter)
+	}
+	// A table with a serial column cannot be inserted into without its
+	// sequence. Granting per table would mean naming sequences the author
+	// chose, which the policy does not describe.
+	return append(statements,
+		`GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO `+RoleWriter)
 }
 
 // lendTemplateToTheAuthor gives the game-script role exactly what building a
@@ -147,32 +165,75 @@ func runAll(ctx context.Context, conn Conn, statements []string) error {
 // next query that opens a connection in that moment.
 const instanceConnectionLimit = 2
 
-// settleInstance applies the privileges that belong to a database rather than
-// to its contents.
+// settleInstance applies, on one participant's own database, everything a
+// copy does not inherit from the template it was made from.
 //
-// It is separate from grantPolicy and runs per instance because PostgreSQL
-// grants TEMPORARY on a database to PUBLIC by default, and a database-level
-// privilege is not copied from a template: the ACL belongs to the pg_database
-// row, and a copy starts with a fresh one. Applied only in the template, the
-// policy's `allow_temp_tables: false` would be a setting that quietly did
-// nothing.
-func settleInstance(ctx context.Context, conn Conn, instance string, policy sqlpolicy.Policy) error {
+// Two kinds of thing, for two different reasons.
+//
+// The database-level privileges, because PostgreSQL grants TEMPORARY on a
+// database to PUBLIC by default and a database-level privilege is not copied
+// from a template: the ACL belongs to the pg_database row, and a copy starts
+// with a fresh one. Applied only in the template, the policy's
+// `allow_temp_tables: false` would be a setting that quietly did nothing.
+//
+// The writable-table grants, because a copy inherits the catalogue as the
+// template happened to hold it — so what a participant may do to a table is
+// decided by when their contest's template was last built, not by the policy
+// the service is running today. A contest whose template predates a change to
+// those grants would answer a statement the validator permits with
+// "permission denied", and the participant has no way to act on that: the
+// refusal they are shown at the disk quota tells them to empty a table.
+// Re-granting per instance makes the privileges a property of the deployment
+// instead, which is what lets that instruction be true for a contest that
+// already exists. The statements come from writableTableGrants, the same list
+// the template gets, and GRANT is idempotent — re-granting what the copy
+// already inherited writes nothing new.
+//
+// The database-level statements run on the caller's maintenance connection;
+// the table grants cannot, because a grant on a table is recorded in that
+// table's own database. That second connection is opened only when the policy
+// has writable tables at all, so a read-only contest — the common one — pays
+// nothing for this.
+func (p *Provisioner) settleInstance(ctx context.Context, instance string, policy sqlpolicy.Policy) error {
 	name := sqlpolicy.QuoteIdentifier(instance)
 
 	// Nothing should ever open a third connection to one participant's
 	// database. This is not what enforces that — the runner's own semaphore
 	// is — but it is what holds if the runner is wrong.
-	if _, err := conn.Exec(ctx, fmt.Sprintf(
+	if _, err := p.admin.Exec(ctx, fmt.Sprintf(
 		`ALTER DATABASE %s CONNECTION LIMIT %d`, name, instanceConnectionLimit)); err != nil {
 		return fmt.Errorf("limit connections to %s: %w", instance, err)
 	}
 
-	if _, err := conn.Exec(ctx, `REVOKE TEMPORARY ON DATABASE `+name+` FROM PUBLIC`); err != nil {
+	if _, err := p.admin.Exec(ctx, `REVOKE TEMPORARY ON DATABASE `+name+` FROM PUBLIC`); err != nil {
 		return fmt.Errorf("revoke temporary tables on %s: %w", instance, err)
 	}
 	if policy.Mode == sqlpolicy.ModeReadWrite && policy.AllowTempTables {
-		if _, err := conn.Exec(ctx, `GRANT TEMPORARY ON DATABASE `+name+` TO `+RoleWriter); err != nil {
+		if _, err := p.admin.Exec(ctx, `GRANT TEMPORARY ON DATABASE `+name+` TO `+RoleWriter); err != nil {
 			return fmt.Errorf("grant temporary tables on %s: %w", instance, err)
+		}
+	}
+
+	if policy.Mode != sqlpolicy.ModeReadWrite {
+		return nil
+	}
+	statements := writableTableGrants(policy)
+	if len(statements) == 0 {
+		return nil
+	}
+
+	// The connection limit set above does not stand in the way: PostgreSQL
+	// does not apply a database's CONNECTION LIMIT to a superuser, which is
+	// what the provisioning role is.
+	conn, err := p.connect(ctx, p.base.User, instance)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+
+	for _, statement := range statements {
+		if _, err := conn.Exec(ctx, statement); err != nil {
+			return fmt.Errorf("apply the policy to %s (%s): %w", instance, statement, err)
 		}
 	}
 	return nil
