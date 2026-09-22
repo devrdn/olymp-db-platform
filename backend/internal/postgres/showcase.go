@@ -75,6 +75,21 @@ func (r *Showcase) Numbers(ctx context.Context) (showcase.Numbers, error) {
 // to serve every language at once. Ordered by the window the page shows, with
 // the identifier breaking ties so that two contests starting in the same
 // second do not swap places between two reads of the same list.
+//
+// That ordering is a sort of the whole selection, and it is meant to be. No
+// existing index serves it — contests_status_starts_at_idx leads with status
+// and orders by starts_at alone, and the page orders by starts_at falling
+// back to created_at — so serving it would take an index of its own: the
+// expression, descending, partial on the four public statuses. It is not
+// worth one. The table holds one row per olympiad the installation has ever
+// run, so the sort is over hundreds of rows, and the minute of cache in
+// showcase.Service means it happens at most once a minute however many
+// visitors arrive. Against that, an index here is a write on every contest
+// an organiser creates or edits and one more thing a later change to the
+// ordering has to remember. CLAUDE.md rule 7 asks for an index behind a
+// filter the API offers, and this is neither: the selection is a fixed
+// clause no caller can widen, and the caller chooses nothing about the order.
+// Revisit it if the selection ever stops being the whole small table.
 func (r *Showcase) Recent(ctx context.Context, limit int) ([]showcase.Contest, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		SELECT c.id, c.status, c.starts_at, c.ends_at,
