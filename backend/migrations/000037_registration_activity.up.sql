@@ -50,6 +50,14 @@
 -- One row per registration, created by the first thing that registration does.
 -- A registration that has done nothing has no row, and the read left-joins:
 -- every counter then reads as the zero it is.
+-- Waiting is the dangerous half of a migration: DDL queued for a lock makes
+-- every request needing the same table queue behind it. This file gives up
+-- after five seconds rather than joining that queue — longer than any query
+-- the API is allowed to run, so a wait past it is a wait on something else.
+-- The file runs as one implicit transaction (cmd/migrate hands it over as one
+-- string), so this covers every statement below it.
+SET lock_timeout = '5s';
+
 CREATE TABLE registration_activity (
     registration_id   uuid PRIMARY KEY REFERENCES registrations ON DELETE CASCADE,
 
@@ -379,9 +387,14 @@ CREATE TRIGGER participant_events_activity_insert
 
 -- What the journals already hold. One pass over each of them, and the same
 -- aggregates the read used to do on every refresh — run once here instead of
--- twenty times a minute. Taking row locks only on submissions and none at all
--- on the journals it reads; the tables it fills are new and nothing is reading
--- them yet. Run it in a deployment window rather than during a contest.
+-- twenty times a minute.
+--
+-- Not an online operation. The whole file is one implicit transaction, so the
+-- ACCESS EXCLUSIVE that adding submissions.blind took is still held here, and
+-- the reads below hold their share of query_log until this commits. The
+-- tables being filled are new and nobody is reading them; the ones being read
+-- are the ones a contest is writing. Run it with the API stopped, not merely
+-- in a quiet moment — and not during a contest at all.
 
 INSERT INTO registration_addresses (registration_id, ip)
 SELECT DISTINCT q.registration_id, q.ip FROM query_log q WHERE q.ip IS NOT NULL;
