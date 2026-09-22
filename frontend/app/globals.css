@@ -98,16 +98,6 @@
   --color-id-6: var(--id-6);
   --color-id-6-wash: var(--id-6-wash);
 
-  /* The ornament sub-palette. Used as text colours, because the ornament is
-     drawn in `currentColor`: the colour is chosen once on the element and the
-     strokes inside it follow, so a band never has to be repainted path by
-     path. Tailwind generates the background, border, fill and stroke
-     utilities from the same tokens — nothing stops them being used, and what
-     keeps these three to the ornament is the rule in SPEC 3.6 rather than
-     anything here. */
-  --color-ornament-madder: var(--ornament-madder);
-  --color-ornament-walnut: var(--ornament-walnut);
-  --color-ornament-indigo: var(--ornament-indigo);
 
   /* Aliases shadcn components resolve against. */
   --color-background: var(--background);
@@ -384,6 +374,23 @@
       transparent 50%
     );
     background-size: var(--hatch-step) var(--hatch-step);
+  }
+
+  /**
+   * The light behind the front page's title.
+   *
+   * One soft source, above the centre of the band and wider than it is tall,
+   * fading out well before the edges: a page lit from somewhere rather than a
+   * shape drawn on it. It sits behind its band's content (`-z-10`) and is
+   * never a surface anything is read against — the title is legible on the
+   * ground alone, and the light only says where to look.
+   */
+  .glow {
+    position: absolute;
+    inset: 0;
+    z-index: -10;
+    pointer-events: none;
+    background-image: radial-gradient(58% 60% at 50% 22%, var(--glow) 0%, transparent 72%);
   }
 
   /* The dotted ground of a demonstration surface. Same family, different grain:

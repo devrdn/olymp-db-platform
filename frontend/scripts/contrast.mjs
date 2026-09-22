@@ -100,13 +100,11 @@ const PAIRS = [
  */
 const EXEMPT = [
   ["ann", "bg", "decorative annotation, never the sole carrier of information"],
-  // The ornament is aria-hidden and never sits under text: it carries no
-  // meaning a reader could need, so a text threshold would be the wrong
-  // question to ask of it (SPEC 3.6). Listed rather than left out, because an
-  // unlisted colour is an unverified one and this file is the claim.
-  ["ornament-madder", "bg", "ornament only, decorative, never under text"],
-  ["ornament-walnut", "bg", "ornament only, decorative, never under text"],
-  ["ornament-indigo", "bg", "ornament only, decorative, never under text"],
+  // The front page's light is a wash behind a title that is already legible
+  // against the ground: it lifts nothing over a threshold and is never what
+  // makes text readable. Listed rather than left out, because an unlisted
+  // colour is an unverified one and this file is the claim.
+  ["glow", "bg", "decorative light, never what makes text legible"],
 ];
 
 function parse(css) {

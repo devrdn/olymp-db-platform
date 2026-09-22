@@ -1,7 +1,6 @@
 import { Band } from "@/components/layout/band";
 import { LanguageSwitcher } from "@/components/layout/language-switcher";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
-import { OrnamentBand } from "@/components/product/ornament";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import type { Theme } from "@/lib/theme/config";
@@ -82,23 +81,7 @@ export function SiteFooter({
           </div>
         </div>
 
-        {/* The page closes on the woven edge it opened under: walnut rather
-            than indigo, because the sub-palette's rule is one colour per band,
-            and half the height, because this ends the page rather than
-            dividing it.
-
-            The height is taken by cropping the band, not by giving the band a
-            shorter box. `slice` scales the whole tile to cover its box, so a
-            12px box would draw the pattern at half size — hairlines included,
-            and a half-pixel stroke is lighter than every rule on the page. The
-            band keeps its own 24px and a window shows the middle of it, which
-            is the row of rhombi with the rivers cut off above and below: a
-            selvedge, which is what a woven border looks like where the cloth
-            was cut. */}
-        <div className="h-3 overflow-hidden">
-          <OrnamentBand className="-mt-1.5 text-ornament-walnut" />
-        </div>
-      </Band>
+              </Band>
     </footer>
   );
 }
