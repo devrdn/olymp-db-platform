@@ -60,20 +60,20 @@ describe("the contest list", () => {
   });
 
   /**
-   * Six is the API's own ceiling, but a list that trusted it would print
-   * however many rows a changed server sent onto a page whose whole argument
+   * Three is the API's own ceiling, but a list that trusted it would print
+   * however many cards a changed server sent onto a page whose whole argument
    * is that it is short.
    */
-  test("shows at most six, and the freshest of them", () => {
+  test("shows at most three, and the freshest of them", () => {
     const many = Array.from({ length: 9 }, (_, index) =>
       running({ id: `contest-${index}`, title: `Round ${index}` }),
     );
     render(<RecentContests signedIn={false} contests={many} dict={en} locale="en" />);
 
     const rows = screen.getAllByRole("listitem");
-    expect(rows).toHaveLength(6);
+    expect(rows).toHaveLength(3);
     expect(rows[0]).toHaveTextContent("Round 0");
-    expect(screen.queryByText("Round 6")).toBeNull();
+    expect(screen.queryByText("Round 3")).toBeNull();
   });
 
   test("marks the one that is on right now, and says what each state is", () => {
