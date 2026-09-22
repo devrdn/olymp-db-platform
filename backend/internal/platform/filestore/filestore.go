@@ -42,6 +42,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -243,6 +244,63 @@ func (s *Store) Delete(ctx context.Context, key string) error {
 		return fmt.Errorf("remove %s: %w", key, err)
 	}
 	return nil
+}
+
+// List reports every file in the directory that this store would serve.
+//
+// It exists for one caller: the sweep that removes files no contest refers to
+// any more. That shapes two decisions.
+//
+// It returns fs.FileInfo rather than a type of this package's own, so that a
+// domain package can declare the narrow interface it needs over a standard
+// library type and this Store satisfies it without either importing the other
+// (CLAUDE.md, Go layout rules 3 and 7). The size and the modification time
+// come with it, and the second is what tells an upload in flight apart from
+// an orphan.
+//
+// It names only what checkKey accepts, so a listing a sweep acts on cannot
+// contain something that sweep must not delete. A subdirectory, a file an
+// operator left behind under another extension, and above all this package's
+// own .tmp-* and .probe-* files are left out: a temporary file is a write in
+// progress, and handing it to a caller that deletes what it is given would
+// make the sweep the one thing able to tear a Put.
+//
+// The whole directory is read in one call. The volume holds two files per
+// uploaded cover, so this is thousands of entries on a large installation and
+// not a size that needs paging; a sweep that had to page would also have to
+// decide what a file appearing between pages means.
+func (s *Store) List(ctx context.Context) ([]fs.FileInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, fmt.Errorf("read the file directory %s: %w", s.dir, err)
+	}
+
+	files := make([]fs.FileInfo, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || checkKey(entry.Name()) != nil {
+			continue
+		}
+		info, err := entry.Info()
+		if errors.Is(err, os.ErrNotExist) {
+			// Removed between the directory read and this stat. A file that
+			// is already gone is nothing for the caller to do.
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("stat %s: %w", entry.Name(), err)
+		}
+		// Not entry.IsDir() twice over: the entry's own answer comes from the
+		// directory read, and on a file system that reports DT_UNKNOWN it is
+		// the stat above that knows.
+		if info.IsDir() {
+			continue
+		}
+		files = append(files, info)
+	}
+	return files, nil
 }
 
 // Ping reports whether the directory can still be written to.
