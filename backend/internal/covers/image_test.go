@@ -129,3 +129,16 @@ func TestAFileWhoseExtensionLiesIsJudgedByItsBytes(t *testing.T) {
 		}
 	}
 }
+
+// The side bound alone does not bound the memory: 8000 x 8000 passes it and
+// is 64 megapixels, which decodes to roughly 256 MiB — per upload, with
+// nothing making two of them wait for each other.
+func TestASourceWithinBothSidesCanStillBeTooMuchToDecode(t *testing.T) {
+	src := pngHeaderClaiming(t, 8000, 8000)
+
+	_, err := covers.Process(bytes.NewReader(src))
+
+	if !errors.Is(err, covers.ErrImageTooLarge) {
+		t.Fatalf("Process() = %v, want ErrImageTooLarge", err)
+	}
+}

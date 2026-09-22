@@ -41,6 +41,14 @@ const (
 	// attack has to make to be worth making.
 	MaxSourcePixels = 8000
 
+	// MaxSourceArea bounds the two sides together, because the side bound
+	// alone does not bound the memory: 8000 x 8000 is inside it and is
+	// 64 megapixels, which Go decodes as roughly 256 MiB of RGBA — per
+	// upload, with nothing making two of them wait for each other. Forty
+	// megapixels is past any photograph a camera hands to an organiser
+	// (a 24 MP frame is 6000 x 4000) and an eighth of the earlier ceiling.
+	MaxSourceArea = 40_000_000
+
 	// jpegQuality is what every stored rendition is written at. 82 is the
 	// usual knee of the curve for photographs: above it the file grows
 	// faster than the picture improves, below it the ringing shows on the
@@ -141,6 +149,11 @@ func Process(src io.Reader) (Processed, error) {
 	}
 	if config.Width <= 0 || config.Height <= 0 {
 		return Processed{}, fmt.Errorf("%w: it declares %dx%d", ErrImageKind, config.Width, config.Height)
+	}
+	if config.Width > 0 && config.Height > MaxSourceArea/config.Width {
+		return Processed{}, fmt.Errorf("%w: %d by %d is %d megapixels, and %d is the most this accepts",
+			ErrImageTooLarge, config.Width, config.Height,
+			config.Width*config.Height/1_000_000, MaxSourceArea/1_000_000)
 	}
 	if config.Width > MaxSourcePixels || config.Height > MaxSourcePixels {
 		return Processed{}, fmt.Errorf("%w: %dx%d, at most %d on a side",
