@@ -436,6 +436,82 @@ func (q explainingQuerier) QueryRow(ctx context.Context, sql string, args ...any
 	return q.Querier.QueryRow(ctx, sql, args...)
 }
 
+// measuringQuerier runs every statement under EXPLAIN (ANALYZE) first and
+// adds up how many journal rows it really touched, per table.
+//
+// A plan's shape says the read is a range; only the count says how long the
+// range is. A LATERAL that takes a page per registration is an index range in
+// every node and still reads three hundred pages to return one, which is
+// exactly what a plan-shape test cannot see.
+type measuringQuerier struct {
+	storage.Querier
+	t *testing.T
+	// rows is shared with the test: table name to rows touched.
+	rows map[string]int64
+}
+
+// measuredNode is a plan node as EXPLAIN ANALYZE reports it. Rows touched is
+// what the node handed up plus what its own filter threw away, times the
+// number of times it ran: an inner side of a LATERAL runs once per outer row.
+type measuredNode struct {
+	Relation string         `json:"Relation Name"`
+	Rows     float64        `json:"Actual Rows"`
+	Loops    float64        `json:"Actual Loops"`
+	Removed  float64        `json:"Rows Removed by Filter"`
+	Plans    []measuredNode `json:"Plans"`
+}
+
+func (q measuringQuerier) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	q.measure(ctx, sql, args...)
+	return q.Querier.Query(ctx, sql, args...)
+}
+
+func (q measuringQuerier) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	q.measure(ctx, sql, args...)
+	return q.Querier.QueryRow(ctx, sql, args...)
+}
+
+func (q measuringQuerier) measure(ctx context.Context, sql string, args ...any) {
+	q.t.Helper()
+	var raw []byte
+	if err := q.Querier.QueryRow(ctx, "EXPLAIN (ANALYZE, FORMAT JSON) "+sql, args...).Scan(&raw); err != nil {
+		q.t.Fatalf("EXPLAIN ANALYZE %s: %v", sql, err)
+	}
+	var plans []struct {
+		Plan measuredNode `json:"Plan"`
+	}
+	if err := json.Unmarshal(raw, &plans); err != nil {
+		q.t.Fatalf("read the plan: %v", err)
+	}
+	var walk func(n measuredNode)
+	walk = func(n measuredNode) {
+		if journals[n.Relation] {
+			q.rows[n.Relation] += int64((n.Rows + n.Removed) * max(n.Loops, 1))
+		}
+		for _, child := range n.Plans {
+			walk(child)
+		}
+	}
+	for _, p := range plans {
+		walk(p.Plan)
+	}
+}
+
+// measureJournalRows runs read with every statement measured and returns how
+// many rows of each journal it touched.
+func measureJournalRows(t *testing.T, read func(w *Watch) error) map[string]int64 {
+	t.Helper()
+	touched := map[string]int64{}
+	watch := NewWatch(testPool)
+	watch.wrap = func(inner storage.Querier) storage.Querier {
+		return measuringQuerier{Querier: inner, t: t, rows: touched}
+	}
+	if err := read(watch); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	return touched
+}
+
 // TestWatchReadsScanNoJournal runs every organiser's read against a database
 // holding a representative olympiad — three contests of forty participants,
 // each with a few hundred queries, events, answers and sign-ins, beside

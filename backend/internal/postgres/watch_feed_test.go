@@ -510,3 +510,94 @@ func TestAnIndividualParticipantsSignInsEndWithTheirDeadline(t *testing.T) {
 }
 
 func ptrDuration(d time.Duration) *time.Duration { return &d }
+
+// The contest the platform is built for: three hundred participants on one
+// monitoring screen. A hundred queries and twenty answers each is thirty
+// times a page from each source — enough for a read that takes a page per
+// participant to show it — and still loads in about a second, which is what a
+// suite that runs on every change can afford.
+const (
+	feedLoadParticipants = 300
+	feedLoadQueries      = 100
+	feedLoadAnswers      = 20
+)
+
+// loadContest fills f's contest with participants and their journals, written
+// in time order across the participants as a real olympiad interleaves them.
+func loadContest(t *testing.T, f *watchFixture, participants, queries, answers int) {
+	t.Helper()
+	f.exec(`
+		WITH people AS (
+		    INSERT INTO users (login, full_name, status, password_hash)
+		    SELECT 'feed-' || n || '-' || substr(md5(random()::text), 1, 8), 'Feed ' || n, 'active', 'x'
+		    FROM generate_series(1, $3::int) n
+		    RETURNING id
+		)
+		INSERT INTO registrations (contest_id, user_id, started_at, created_at)
+		SELECT $1, id, $2::timestamptz, $2::timestamptz - interval '1 hour' FROM people`,
+		f.contest, f.base, participants)
+	f.exec(`
+		INSERT INTO query_log (registration_id, request_id, sql_text, status, ip, sql_fingerprint, executed_at)
+		SELECT r.id, gen_random_uuid(), 'select * from suspects where id = ' || n,
+		       (ARRAY['ok','ok','ok','error','rejected'])[1 + n % 5], '192.0.2.1', n % 50,
+		       $2::timestamptz + n * interval '10 seconds'
+		FROM registrations r CROSS JOIN generate_series(1, $3::int) n
+		WHERE r.contest_id = $1
+		ORDER BY n, r.id`, f.contest, f.base, queries)
+	f.exec(`
+		INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct, submitted_at)
+		SELECT r.id, $2, n, 'v', n = $4::int, $3::timestamptz + n * interval '90 seconds'
+		FROM registrations r CROSS JOIN generate_series(1, $4::int) n
+		WHERE r.contest_id = $1
+		ORDER BY n, r.id`, f.contest, f.question, f.base, answers)
+	f.exec(`
+		INSERT INTO participant_events (contest_id, registration_id, kind, payload, created_at)
+		SELECT $1, r.id, 'paste', '{"target": "editor", "chars": 30, "text": "x"}'::jsonb,
+		       $2::timestamptz + n * interval '60 seconds'
+		FROM registrations r CROSS JOIN generate_series(1, 20) n
+		WHERE r.contest_id = $1
+		ORDER BY n, r.id`, f.contest, f.base)
+	for _, table := range []string{"registrations", "query_log", "submissions", "participant_events"} {
+		f.exec("ANALYZE " + table)
+	}
+}
+
+// TestTheFeedReadsOnePageNotOnePerParticipant holds the contest-wide feed to
+// the cost of what it returns.
+//
+// The screen polls every few seconds, so a page that reads a page's worth of
+// rows from every registration — three hundred of them — reads thirty
+// thousand rows of each journal to show a hundred items, and does it twenty
+// times a minute. Every source of a contest-wide page is one range of one
+// index: the rows it touches are the page it returns, whatever the contest's
+// size, both for the newest page and for a page past a cursor.
+func TestTheFeedReadsOnePageNotOnePerParticipant(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newWatchFixture(t, ctx)
+		loadContest(t, f, feedLoadParticipants, feedLoadQueries, feedLoadAnswers)
+
+		page := monitor.MaxFeedPage
+		middle := monitor.Cursor{At: f.at(20 * time.Minute), Source: monitor.SourceQuery, ID: "1"}
+		for name, q := range map[string]monitor.FeedQuery{
+			"newest": {Contest: f.contest, Limit: page},
+			"after":  {Contest: f.contest, After: &middle, Limit: page},
+			"before": {Contest: f.contest, Before: &middle, Limit: page},
+		} {
+			touched := measureJournalRows(t, func(w *Watch) error {
+				_, err := w.Feed(ctx, q)
+				return err
+			})
+			// A page of items plus the row that says there is another, from
+			// each source that feeds the page; twice that leaves room for a
+			// plan that reads a few rows it then discards, and is still two
+			// orders of magnitude below a page per participant.
+			bound := int64(2 * (page + 1))
+			for _, table := range []string{"query_log", "submissions"} {
+				if touched[table] > bound {
+					t.Errorf("the %s page read %d rows of %s, want at most %d: the read grows with the contest, not with the page",
+						name, touched[table], table, bound)
+				}
+			}
+		}
+	})
+}
