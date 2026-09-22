@@ -187,6 +187,59 @@ func TestTheContestListAnswersWithoutASession(t *testing.T) {
 	}
 }
 
+// The page draws cards, so the list has to say which contest has a picture
+// and whose it is.
+//
+// The hash rather than an address: the address is the frontend's to build
+// (lib/api/contests.ts), and it carries the hash so that a replaced cover is
+// a new address rather than a year of somebody's cache. A contest with no
+// uploaded picture says nothing at all — the field is absent, which is what
+// the page reads as "wear the drawn cover".
+func TestTheContestListSaysWhichContestHasAPicture(t *testing.T) {
+	f := newPublicFixture(t)
+	withCover := uuid.New()
+	f.showcase.contests = []showcase.Contest{
+		{ID: withCover, Status: contests.StatusRunning, DefaultLanguage: "en",
+			Titles:    map[string]string{"en": "The Library Murder"},
+			CoverHash: "9f86d081884c7d65", CoverAttribution: "Photo: A. Organiser, CC BY 4.0"},
+		{ID: uuid.New(), Status: contests.StatusFinished, DefaultLanguage: "en",
+			Titles: map[string]string{"en": "The Harbour Case"}},
+	}
+
+	rec := f.get("/public/contests")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Items []struct {
+			ID               string `json:"id"`
+			CoverHash        string `json:"cover_hash"`
+			CoverAttribution string `json:"cover_attribution"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if len(body.Items) != 2 {
+		t.Fatalf("body carries %d contests, want 2: %s", len(body.Items), rec.Body.String())
+	}
+	for _, got := range body.Items {
+		if got.ID == withCover.String() {
+			if got.CoverHash != "9f86d081884c7d65" {
+				t.Errorf("cover_hash = %q, want the hash the contest's cover was stored under", got.CoverHash)
+			}
+			if got.CoverAttribution != "Photo: A. Organiser, CC BY 4.0" {
+				t.Errorf("cover_attribution = %q, want the credit line the card prints", got.CoverAttribution)
+			}
+			continue
+		}
+		if got.CoverHash != "" {
+			t.Errorf("cover_hash = %q, want nothing for a contest wearing a drawn cover", got.CoverHash)
+		}
+	}
+}
+
 func TestADraftNeverReachesTheLandingPage(t *testing.T) {
 	f := newPublicFixture(t)
 	draft := uuid.New()

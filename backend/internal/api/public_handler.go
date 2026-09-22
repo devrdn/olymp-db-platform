@@ -97,8 +97,20 @@ type publicContest struct {
 	// StartsAt and EndsAt are absent for a contest with no window yet.
 	StartsAt string `json:"starts_at,omitempty"`
 	EndsAt   string `json:"ends_at,omitempty"`
-	// TableOpen says whether the row may link to the public leaderboard.
+	// TableOpen says whether the card may link to the public leaderboard.
 	TableOpen bool `json:"table_open"`
+	// CoverHash names the picture the card shows, and is absent for a contest
+	// nobody uploaded one for — which is not a gap: the page draws that
+	// contest a cover of its own from its identifier (design §2.3).
+	//
+	// The hash and not the address. The client builds the address from it
+	// (lib/api/contests.ts, coverHref) and the hash travels in it, which is
+	// what makes a replaced cover a new address rather than a year of
+	// somebody's cache holding the old picture.
+	CoverHash string `json:"cover_hash,omitempty"`
+	// CoverAttribution credits whoever made an uploaded picture; a drawn
+	// cover has none to carry, because its author is us.
+	CoverAttribution string `json:"cover_attribution,omitempty"`
 }
 
 // publicContestsResponse names its list "items", as every other list this
@@ -122,6 +134,7 @@ func (h *PublicHandler) contests(w http.ResponseWriter, r *http.Request) {
 			ID: c.ID.String(), Title: c.Title, Status: c.Status,
 			StartsAt: formatTime(c.StartsAt), EndsAt: formatTime(c.EndsAt),
 			TableOpen: c.TableOpen,
+			CoverHash: c.CoverHash, CoverAttribution: c.CoverAttribution,
 		})
 	}
 	noIndex(w)
