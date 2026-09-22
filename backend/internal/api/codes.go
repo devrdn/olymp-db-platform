@@ -226,7 +226,7 @@ var (
 	codeQueryTooOften = httpx.NewCode("query_too_often",
 		"This participant is asking faster than the contest allows.")
 	codeQueryDiskFull = httpx.NewCode("query_disk_full",
-		"The write was refused because the participant's database is at its size limit.")
+		"The write was refused because the participant's database is at its size limit. Only a write that would grow it: TRUNCATE and DROP are still admitted at the cap, so the way out the message points at is one the participant can actually take.")
 	codeQueryResultTooLarge = httpx.NewCode("query_result_too_large",
 		"The answer was larger than the console will carry, and reading it was stopped rather than finished.")
 
