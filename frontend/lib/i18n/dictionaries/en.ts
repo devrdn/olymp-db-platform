@@ -1875,7 +1875,7 @@ const en = {
     package_too_large: "The contest has more questions than one exported package holds.",
     enrollment_closed: "Enrollment for this contest is closed.",
     already_enrolled: "You are already enrolled in this contest.",
-    participant_started: "This participant has already started and can only be disqualified.",
+    participant_started: "This participant has a record in this contest and can only be disqualified.",
     not_found: "Not found.",
     user_not_found: "User not found.",
     manager_not_found: "Manager not found.",

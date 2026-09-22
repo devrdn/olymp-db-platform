@@ -32,10 +32,18 @@ var (
 	ErrEnrollmentClosed    = errors.New("this contest is not accepting signups")
 	ErrAddressNotAllowed   = errors.New("this contest is not available from your network")
 	ErrParticipantNotFound = errors.New("participant not found")
-	// ErrParticipantStarted reports an attempt to delete somebody who has
-	// already worked on the contest. Their queries and answers are part of the
-	// record; excluding them is disqualification, not deletion.
-	ErrParticipantStarted = errors.New("this participant has already started; disqualify instead of removing")
+	// ErrParticipantStarted reports an attempt to delete somebody who has a
+	// record in this contest. Their queries and answers are part of it;
+	// excluding them is disqualification, not deletion.
+	//
+	// "Started" is only half of what it refuses, and the wider half is the
+	// one a shared clock produces: nothing there ever sets started_at, so a
+	// participant who worked for an hour still reads as merely registered,
+	// and what makes their registration undeletable is the journal behind it
+	// (HasWork). The wording says so; the code it maps to
+	// (api.codeParticipantStarted) is left alone, because a published error
+	// code is a name clients match on, not a sentence.
+	ErrParticipantStarted = errors.New("this participant has a record in this contest; disqualify instead of removing")
 	// ErrStaffCannotParticipate refuses a contest's own owner or manager a
 	// registration on that same contest (self-enrollment or a staff-side
 	// add): its staff already reads the reference answers (contest.view) and
@@ -586,29 +594,41 @@ func (s *Service) recordDenied(ctx context.Context, cmd EnrollCommand) error {
 //
 // Somebody who has already started is refused: their queries and answers are
 // part of the record, and excluding them is disqualification.
+//
+// Both refusals are decided inside the transaction that then deletes, not
+// before it. Asked outside, they answer about a moment the write no longer
+// happens in — and the write here cascades: everything hanging off the
+// registration goes with it, so a participant whose first query lands in that
+// window loses it on the strength of a reading that was already stale. The
+// other order is safe without any of this: a query that starts before the
+// delete holds a KEY SHARE lock on the registration row, which the delete
+// waits behind, and once it commits that query's own write is refused by the
+// foreign key rather than quietly thrown away.
 func (s *Service) RemoveParticipant(ctx context.Context, actorID, contestID, userID uuid.UUID) error {
 	if _, err := s.mutableContest(ctx, contestID); err != nil {
 		return err
 	}
-	p, err := s.registrations.ByUser(ctx, contestID, userID)
-	if err != nil {
-		return err
-	}
-	if p.HasStarted() {
-		return ErrParticipantStarted
-	}
-	// The same refusal for somebody a shared clock never marked as started:
-	// what makes a registration undeletable is the record behind it, and in
-	// a fixed-timing contest that record is the only thing that says so.
-	work, err := s.registrations.HasWork(ctx, p.ID)
-	if err != nil {
-		return err
-	}
-	if work {
-		return ErrParticipantStarted
-	}
 
 	return s.uow.Do(ctx, func(ctx context.Context) error {
+		p, err := s.registrations.ByUser(ctx, contestID, userID)
+		if err != nil {
+			return err
+		}
+		if p.HasStarted() {
+			return ErrParticipantStarted
+		}
+		// The same refusal for somebody a shared clock never marked as
+		// started: what makes a registration undeletable is the record behind
+		// it, and in a fixed-timing contest that record is the only thing
+		// that says so.
+		work, err := s.registrations.HasWork(ctx, p.ID)
+		if err != nil {
+			return err
+		}
+		if work {
+			return ErrParticipantStarted
+		}
+
 		if err := s.registrations.Remove(ctx, contestID, userID); err != nil {
 			return err
 		}
