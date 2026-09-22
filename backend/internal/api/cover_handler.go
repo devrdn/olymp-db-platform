@@ -154,6 +154,8 @@ func (h *CoverHandler) upload(w http.ResponseWriter, r *http.Request) {
 	// 12). covers.Process bounds the picture inside the envelope as well, and
 	// this bounds the envelope.
 	r.Body = http.MaxBytesReader(w, r.Body, covers.MaxUploadBytes+coverEnvelopeSlack)
+	// #nosec G120 -- the body is bounded by the MaxBytesReader above; the
+	// scanner reads this call on its own and cannot see the line before it.
 	if err := r.ParseMultipartForm(covers.MaxUploadBytes); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
@@ -247,6 +249,10 @@ func (h *CoverHandler) staffFile(w http.ResponseWriter, r *http.Request) {
 	header.Set("X-Content-Type-Options", "nosniff")
 	header.Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)
+	// #nosec G705 -- not a document: these bytes are a JPEG this service
+	// encoded itself (covers.Process re-encodes whatever arrived), the type
+	// comes from filestore's closed set of extensions rather than from the
+	// request, and the answer carries nosniff.
 	_, _ = w.Write(body)
 }
 
@@ -321,6 +327,10 @@ func (h *CoverHandler) public(w http.ResponseWriter, r *http.Request) {
 
 	header.Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)
+	// #nosec G705 -- not a document: these bytes are a JPEG this service
+	// encoded itself (covers.Process re-encodes whatever arrived), the type
+	// comes from filestore's closed set of extensions rather than from the
+	// request, and the answer carries nosniff.
 	_, _ = w.Write(body)
 }
 
