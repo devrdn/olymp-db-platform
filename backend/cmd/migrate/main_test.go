@@ -177,3 +177,26 @@ func TestTheMonitoringMigrationRollsBackAndForward(t *testing.T) {
 			"want the same roles as contest.view, and not none", up.grants, up.mismatched)
 	}
 }
+
+// A migration runs against a database that is serving, and DDL waits for a
+// lock behind whatever is already reading. Waiting is the dangerous part: a
+// statement queued for an ACCESS EXCLUSIVE lock makes every request that
+// arrives after it queue too, so a migration that "only takes a moment" stops
+// the service for as long as one long-running reader holds on. Failing fast
+// leaves the schema where it was and the service serving.
+//
+// The build of a large index, on the other hand, is allowed to take as long
+// as it takes: what a migration must not do is wait for a lock, not work.
+func TestTheMigrationConnectionRefusesToWaitForALock(t *testing.T) {
+	cfg, err := migrationConfig("postgres://u:p@localhost:5432/db?sslmode=disable")
+	if err != nil {
+		t.Fatalf("migrationConfig() = %v", err)
+	}
+
+	if got := cfg.RuntimeParams["lock_timeout"]; got == "" || got == "0" {
+		t.Errorf("lock_timeout = %q: a migration waits for a lock for as long as it takes, and everything behind it waits too", got)
+	}
+	if got := cfg.RuntimeParams["statement_timeout"]; got != "0" {
+		t.Errorf("statement_timeout = %q, want 0: an index build is long by nature and must not be cut short", got)
+	}
+}
