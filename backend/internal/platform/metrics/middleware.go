@@ -13,6 +13,35 @@ import (
 // would let any client create unbounded time series by sending random URLs.
 const unknownRoute = "unknown"
 
+// otherMethod groups request methods that are not ones this service serves.
+//
+// HTTP allows any token as a method, so the method is a string the client
+// invents just as the path is, and a label per method is a series per
+// invention — each one retained until the process restarts, from an
+// unauthenticated caller.
+const otherMethod = "other"
+
+// knownMethods are the methods the API serves, and the only ones that reach a
+// label of their own.
+var knownMethods = map[string]struct{}{
+	http.MethodGet:     {},
+	http.MethodHead:    {},
+	http.MethodPost:    {},
+	http.MethodPut:     {},
+	http.MethodPatch:   {},
+	http.MethodDelete:  {},
+	http.MethodOptions: {},
+}
+
+// requestMethod returns the method to label a request with: its own, when the
+// service serves that method, and otherMethod for anything else.
+func requestMethod(method string) string {
+	if _, known := knownMethods[method]; known {
+		return method
+	}
+	return otherMethod
+}
+
 // Middleware instruments a handler chain with the given recorder. The
 // instrumentation is identical for every backend, so switching backends cannot
 // change what is measured — only where it goes.
@@ -34,7 +63,7 @@ func Middleware(rec Recorder) func(http.Handler) http.Handler {
 
 			next.ServeHTTP(sr, r)
 
-			rec.ObserveRequest(r.Method, routePattern(r), sr.Status(), time.Since(started), *streaming)
+			rec.ObserveRequest(requestMethod(r.Method), routePattern(r), sr.Status(), time.Since(started), *streaming)
 		})
 	}
 }
