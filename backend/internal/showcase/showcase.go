@@ -46,6 +46,19 @@ const (
 	// total. It is what keeps a page anybody may load without signing in from
 	// being a lever on the database.
 	CacheTTL = time.Minute
+	// MaxStale is how long past its minute a cached answer may still be
+	// served while the refresh keeps failing.
+	//
+	// Serving the last answer through a hiccup is what keeps a database
+	// restart from blanking the page. Serving it through an afternoon is a
+	// different thing: the numbers stop being the installation's, and a
+	// contest the page says is running finished hours ago, with nothing on
+	// the page saying so. A quarter of an hour is long enough to cover a
+	// restart or a failover — both of which the landing page should ride out
+	// without a visitor noticing — and short enough that what a visitor is
+	// shown is still today's. Past it the read fails, the page drops the row
+	// (design §2.3), and saying nothing is the honest answer.
+	MaxStale = 15 * time.Minute
 	// computeTimeout bounds one shared read once it no longer belongs to any
 	// single caller (see computeOnce). Well above what two aggregate reads
 	// take — the core pool's own statement timeout already caps each query —
@@ -168,6 +181,11 @@ type stamp struct {
 // fresh reports whether the entry is here and still inside its span.
 func (s stamp) fresh(now time.Time) bool { return s.present && now.Before(s.expires) }
 
+// servable reports whether the entry may still be handed to a visitor while
+// the refresh behind it is failing: inside its span, or inside the grace
+// MaxStale allows past it.
+func (s stamp) servable(now time.Time) bool { return s.present && now.Before(s.expires.Add(MaxStale)) }
+
 // newerThan reports whether this entry's read was asked for later than the
 // one already cached, which is the test a write has to pass.
 func (s stamp) newerThan(cached stamp) bool {
@@ -202,7 +220,10 @@ func NewService(cfg Config) *Service {
 // A failed refresh with a previous answer to hand serves that answer rather
 // than nothing: the page drops the whole row when this read fails (design
 // §2.3), and a momentary database hiccup is not a reason to tell a visitor
-// the installation has run nothing.
+// the installation has run nothing. That lasts MaxStale past the answer's own
+// minute and no longer; after it the failure is reported, because an answer
+// nothing has been able to confirm for a quarter of an hour is no longer the
+// installation's numbers.
 //
 // A caller whose own context is done is the one thing that is not a failed
 // refresh, and it comes back as ctx.Err() — context.Canceled or
@@ -226,7 +247,7 @@ func (s *Service) Numbers(ctx context.Context) (Numbers, error) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return Numbers{}, ctxErr
 		}
-		if entry.present {
+		if entry.servable(now) {
 			return entry.value, nil
 		}
 		return Numbers{}, fmt.Errorf("read the showcase numbers: %w", err)
@@ -271,8 +292,9 @@ func (s *Service) Recent(ctx context.Context, lang string) ([]Contest, error) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		// Stale rather than empty, for Numbers' own reason.
-		if entry.present {
+		// Stale rather than empty, for Numbers' own reason, and only as long
+		// as Numbers allows.
+		if entry.servable(now) {
 			return title(entry.value, lang), nil
 		}
 		return nil, fmt.Errorf("read the recent contests: %w", err)

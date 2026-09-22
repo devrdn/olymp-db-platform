@@ -172,6 +172,45 @@ func TestAFailedRefreshServesTheAnswerAlreadyRead(t *testing.T) {
 	}
 }
 
+// Stale has a ceiling. Serving the last answer through a hiccup is one thing;
+// serving it through an afternoon of outage is telling visitors an olympiad
+// is running when it finished hours ago, with nothing on the page saying the
+// figures are old.
+func TestStaleIsServedOnlyUntilItIsTooOld(t *testing.T) {
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	repo := &countingRepo{
+		numbers:  showcase.Numbers{Queries: 900},
+		contests: []showcase.Contest{{ID: uuid.New(), Status: contests.StatusFinished}},
+	}
+	service := newService(repo, &now)
+
+	if _, err := service.Numbers(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Recent(t.Context(), "en"); err != nil {
+		t.Fatal(err)
+	}
+	broken := errors.New("the database is unreachable")
+	repo.fail = broken
+
+	// The last moment the answer is still worth serving.
+	now = now.Add(showcase.CacheTTL + showcase.MaxStale - time.Second)
+	if got, err := service.Numbers(t.Context()); err != nil || got.Queries != 900 {
+		t.Errorf("Numbers() = %+v, %v; want the previous answer inside the ceiling", got, err)
+	}
+	if got, err := service.Recent(t.Context(), "en"); err != nil || len(got) != 1 {
+		t.Errorf("Recent() = %v, %v; want the previous answer inside the ceiling", got, err)
+	}
+
+	now = now.Add(2 * time.Second)
+	if _, err := service.Numbers(t.Context()); !errors.Is(err, broken) {
+		t.Errorf("Numbers() = %v, want the read's own error past the ceiling", err)
+	}
+	if _, err := service.Recent(t.Context(), "en"); !errors.Is(err, broken) {
+		t.Errorf("Recent() = %v, want the read's own error past the ceiling", err)
+	}
+}
+
 // A visitor who closed the tab is not a failed read. There is nobody left to
 // serve a stale answer to, and nothing here is broken, so the caller's own
 // cancellation comes back as itself: the handler can then tell it apart from
