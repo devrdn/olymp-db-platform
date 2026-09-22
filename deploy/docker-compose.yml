@@ -296,20 +296,36 @@ services:
       start_period: 20s
     networks: [internal]
 
-  # Optional. Start it with the "shared" profile:
-  #   docker compose --profile shared up -d
-  # Without it the API uses its in-process cache, which is correct for a single
-  # replica and wrong for several — see backend/README.md.
+  # The shared cache: sessions, rate-limit windows, the leaderboard's own
+  # cache. Part of the stack rather than an optional profile, because the API
+  # below names it by default: a service behind a profile that nothing in the
+  # deploy path starts is an address the API cannot reach, and an unreachable
+  # cache is fatal by design.
+  #
+  # The in-process store the API falls back to is for a bare process on the
+  # host (`make run`) and for development. It is also the one arrangement
+  # where a cache that fills refuses every counter, which is why the
+  # deployment does not run on it.
   redis:
     image: redis:7-alpine
-    profiles: [shared]
     restart: unless-stopped
     # Sessions and rate-limit windows must survive a restart of the cache, so
     # appendonly is on.
+    #
+    # The store is bounded and evicts rather than refusing. Unbounded, it is
+    # the container that the day's journals push into the host's swap; with
+    # `noeviction`, a full cache turns every rate-limit check into an error,
+    # and the limiter reads an error as "refuse" — which signs the whole
+    # olympiad out at once. `allkeys-lru` spends the pressure on what nobody
+    # has touched: the sessions of people who left, before the ones in use.
     command:
       - redis-server
       - --appendonly
       - "yes"
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-256mb}
+      - --maxmemory-policy
+      - allkeys-lru
       - --requirepass
       - ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
     volumes:
@@ -376,9 +392,12 @@ services:
       # everything else without asking pg-core (max_connections=100 above)
       # for more than this API will ever hold open at once.
       CORE_DB_POOL_MAX: ${CORE_DB_POOL_MAX:-25}
-      # Empty selects the in-process cache. Set it (and start the "shared"
-      # profile) as soon as more than one replica runs.
-      REDIS_ADDR: ${REDIS_ADDR:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      # The stack's own Redis, unless an operator names another one. Written
+      # with `-` and not `:-` on purpose: `REDIS_ADDR=` in .env is an explicit
+      # choice of the in-process cache, and `:-` would override that choice
+      # with this default and point the API at a cache the operator did not
+      # ask for.
+      REDIS_ADDR: ${REDIS_ADDR-redis://:${REDIS_PASSWORD}@redis:6379/0}
       METRICS_BACKEND: ${METRICS_BACKEND:-prometheus}
       # The language a request that expresses no usable preference falls back
       # to. It must name a row in the `languages` table (en, ro, ru are
@@ -574,6 +593,10 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      # An unreachable cache is fatal, so the API starts after the cache is
+      # answering rather than crash-looping until it does.
+      redis:
+        condition: service_healthy
     healthcheck:
       # Distroless carries no shell or curl, so the binary probes itself.
       test: ["CMD", "/usr/local/bin/api", "-healthcheck"]
