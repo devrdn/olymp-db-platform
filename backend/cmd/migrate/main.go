@@ -30,18 +30,29 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 )
 
-// How long a migration may wait for a lock before it gives up.
+// The timeouts a migration runs under.
 //
-// A migration runs against a database that is serving. DDL waits behind
-// whatever is already reading, and while it waits every request that needs
-// the same table queues behind it — so a migration that "only takes a moment"
-// stops the service for as long as one long-running reader holds on. Five
-// seconds is longer than any query this API is allowed to run
-// (storage.coreStatementTimeout is ten, and only a maintenance pool goes
-// above it), so a migration that cannot start in that time is waiting on
-// something it should not be waiting on: it fails, leaves the schema where it
-// was, and the service keeps serving.
-const migrationLockTimeout = "5s"
+// statement_timeout is cleared: the deployment sets one for the API's own
+// pool, and an index build is long by nature — killed halfway it leaves an
+// invalid index and a version that did not move.
+//
+// lock_timeout is deliberately NOT set here, although waiting for a lock is
+// the dangerous thing a migration does: DDL queued for an ACCESS EXCLUSIVE
+// lock makes every request needing the same table queue behind it. It is not
+// set here because it cannot be a property of the connection. `CREATE INDEX
+// CONCURRENTLY` waits for every transaction older than itself by taking that
+// transaction's virtualxid lock, and those waits go through the lock manager
+// too: a connection-wide lock_timeout aborts the build as soon as any
+// ordinary transaction of this service outlives it — an export holds one for
+// up to a minute by design — and leaves an invalid index and a dirty
+// schema_migrations behind, with the API's own start gated on the migration
+// having succeeded.
+//
+// So the timeout belongs to the migration that wants it: a file that takes a
+// heavy lock opens with `SET lock_timeout` of its own, inside the implicit
+// transaction the file already runs in, and a file that builds an index
+// concurrently holds one statement and no timeout at all. migrations_test.go
+// holds both halves of that convention.
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -96,13 +107,8 @@ func run(args []string) error {
 	}
 }
 
-// migrationConfig is the connection a migration runs on: it refuses to wait
-// for a lock, and it is not cut short once it has one.
-//
-// statement_timeout is cleared rather than inherited: the deployment sets one
-// for the API's own pool, and an index build is long by nature — being killed
-// halfway through leaves an invalid index and a schema version that did not
-// move.
+// migrationConfig is the connection a migration runs on: whatever it does is
+// not cut short by a timeout the deployment set for serving traffic.
 func migrationConfig(dsn string) (*pgx.ConnConfig, error) {
 	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
@@ -111,7 +117,6 @@ func migrationConfig(dsn string) (*pgx.ConnConfig, error) {
 	if cfg.RuntimeParams == nil {
 		cfg.RuntimeParams = map[string]string{}
 	}
-	cfg.RuntimeParams["lock_timeout"] = migrationLockTimeout
 	cfg.RuntimeParams["statement_timeout"] = "0"
 	return cfg, nil
 }

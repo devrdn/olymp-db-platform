@@ -99,3 +99,76 @@ func TestUpMigrationsAreNotEmpty(t *testing.T) {
 		}
 	}
 }
+
+// lockConventionFrom is the first version written under the convention below.
+// Everything before it was applied long ago and, on a fresh database, runs on
+// empty tables.
+const lockConventionFrom = 34
+
+// statements counts the statements in a migration, ignoring comments and the
+// dollar-quoted bodies of functions, where a semicolon is ordinary text.
+func statements(sql string) int {
+	var count int
+	var inLine, inDollar bool
+	for i := 0; i < len(sql); i++ {
+		switch {
+		case inLine:
+			if sql[i] == '\n' {
+				inLine = false
+			}
+		case inDollar:
+			if strings.HasPrefix(sql[i:], "$$") {
+				inDollar = false
+				i++
+			}
+		case strings.HasPrefix(sql[i:], "--"):
+			inLine = true
+		case strings.HasPrefix(sql[i:], "$$"):
+			inDollar = true
+			i++
+		case sql[i] == ';':
+			count++
+		}
+	}
+	return count
+}
+
+// The two halves of how a migration handles locks, which cmd/migrate cannot
+// enforce because it hands a whole file to PostgreSQL as one string.
+//
+// A file of several statements runs as one implicit transaction, and holds
+// every lock it takes until the last of them commits — so a file that takes a
+// heavy lock says for how long it is prepared to wait for one.
+//
+// `CREATE INDEX CONCURRENTLY` refuses to run inside a transaction block, so
+// such a file holds exactly one statement; and it must carry no lock timeout,
+// because it waits for every transaction older than itself through the lock
+// manager. A timeout would abort the build the moment any ordinary
+// transaction of this service — an export holds one for up to a minute —
+// outlived it, leaving an invalid index behind.
+func TestAMigrationSaysHowLongItWaitsForALock(t *testing.T) {
+	for _, name := range migrationNames(t) {
+		version, _, direction := parseName(t, name)
+		if direction != "up" || version < lockConventionFrom {
+			continue
+		}
+		body, err := fs.ReadFile(FS, name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		sql := string(body)
+		concurrent := strings.Contains(sql, "CONCURRENTLY")
+		timeout := strings.Contains(sql, "SET lock_timeout")
+
+		switch {
+		case concurrent && statements(sql) != 1:
+			t.Errorf("%s builds an index concurrently and holds %d statements: it would run inside a transaction block and fail",
+				name, statements(sql))
+		case concurrent && timeout:
+			t.Errorf("%s sets a lock timeout on a concurrent build: it waits for older transactions through the lock manager, and the timeout aborts it",
+				name)
+		case !concurrent && !timeout:
+			t.Errorf("%s takes its locks with no lock_timeout of its own: whatever it blocks, it blocks for as long as it takes", name)
+		}
+	}
+}

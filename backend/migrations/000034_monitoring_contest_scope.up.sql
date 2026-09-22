@@ -18,6 +18,14 @@
 -- NULL: the constraint costs a scan of the whole journal under a lock that
 -- blocks writers, and buys nothing the trigger does not already guarantee.
 
+-- Waiting is the dangerous half of a migration: DDL queued for a lock makes
+-- every request needing the same table queue behind it. This file gives up
+-- after five seconds rather than joining that queue — longer than any query
+-- the API is allowed to run, so a wait past it is a wait on something else.
+-- The file runs as one implicit transaction (cmd/migrate hands it over as one
+-- string), so this covers every statement below it.
+SET lock_timeout = '5s';
+
 ALTER TABLE query_log ADD COLUMN contest_id uuid;
 ALTER TABLE submissions ADD COLUMN contest_id uuid;
 
@@ -43,10 +51,15 @@ CREATE TRIGGER submissions_contest_fill
     BEFORE INSERT ON submissions
     FOR EACH ROW EXECUTE FUNCTION monitoring_fill_contest();
 
--- The rows written before the triggers existed. One pass over each journal,
--- taking row locks only: no reader waits for it, and an insert waits only on
--- the trigger creation above, which this migration commits together with the
--- backfill. Run it in a deployment window rather than during a contest.
+-- The rows written before the triggers existed. One pass over each journal.
+--
+-- Not an online operation, whatever the shape of the UPDATE suggests: the
+-- whole file is one implicit transaction, so the ACCESS EXCLUSIVE the ALTER
+-- above took on query_log is still held here and is released only when the
+-- backfill commits. For as long as a full rewrite of the journal takes, every
+-- console query, every read of a participant's log and the whole monitoring
+-- screen wait. Run it with the API stopped, not merely in a quiet moment —
+-- and not during a contest at all.
 UPDATE query_log q
 SET contest_id = r.contest_id
 FROM registrations r
