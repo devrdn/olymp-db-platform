@@ -71,6 +71,20 @@ const en = {
       checked: "The answer is checked at once, and what did not match is named.",
       own: "Every participant gets their own copy of the database and their own clock.",
     },
+    /**
+     * The words around the still of the console. The statement itself, the
+     * column names and the rows under them are the database's own content and
+     * are not translated — what a reader in any language is owed is a name for
+     * the frame and a plain sentence saying what the query asks.
+     */
+    console: {
+      heading: "What a participant sees",
+      lede: "A query written against a live database, and its answer directly beneath. This is that screen, standing still.",
+      /** The title on the editor's tab, which says what the query asks. */
+      tab: "who has no alibi",
+      /** The accessible name of the statement, for a reader who is not looking at it. */
+      queryLabel: "The example query: everyone with no alibi, most recently seen first",
+    },
     /** The four figures. Captions only: the numbers come from the API. */
     numbers: {
       contests: "Contests held",
