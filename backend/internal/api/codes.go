@@ -409,6 +409,28 @@ var (
 	codeMonitorInvalidFilter = httpx.NewCode("monitor_invalid_filter",
 		"A monitoring filter is not acceptable: an unknown event kind or query status, a search longer than 200 characters, a time that is not RFC 3339, a range that ends before it starts, or after and before together. The message names which.")
 
+	// --- A contest's cover picture --------------------------------------------
+	//
+	// One code per covers.Service refusal (CLAUDE.md rule 1), and the
+	// uploader's own budget. Five rather than one, because each names
+	// something different to change: the file is heavy, the file is not a
+	// picture we take, the picture has too many pixels, the credit line is
+	// missing, the credit line is too long. Under a single `invalid_request`
+	// an organiser is told only that something was wrong with a photograph
+	// they cannot see inside.
+	codeCoverTooOften = httpx.NewCode("cover_too_often",
+		"This account has uploaded covers more often this minute than the installation allows, refused uploads included. Nothing was stored; wait `Retry-After` seconds and try again.")
+	codeCoverTooLarge = httpx.NewCode("cover_too_large",
+		"The uploaded file is heavier than a cover may be. The message names the limit.")
+	codeCoverKind = httpx.NewCode("cover_kind",
+		"The file is not a picture this service accepts. JPEG, PNG or WebP, and the format is read from the bytes rather than from the name — an SVG is refused whatever is inside it, because it is a document that can carry script and the cover is shown to every visitor without a session.")
+	codeCoverDimensions = httpx.NewCode("cover_dimensions",
+		"The picture declares more pixels on a side than a cover may have. Refused from the file's header, before any of it is decoded. The message names the limit.")
+	codeCoverAttributionRequired = httpx.NewCode("cover_attribution_required",
+		"An uploaded cover needs a line saying whose picture it is. A contest with no uploaded cover wears a drawn one and needs none.")
+	codeCoverAttributionTooLong = httpx.NewCode("cover_attribution_too_long",
+		"The attribution is longer than a credit line may be. The message names the limit in characters.")
+
 	// --- The participant's own profile ----------------------------------------
 	//
 	// One code per profile.Service refusal (CLAUDE.md rule 1), and the

@@ -20,6 +20,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/covers"
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/gamefile"
 	"github.com/devrdn/db-contest/backend/internal/health"
@@ -499,7 +500,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		// closes a contest a tick before a late-arriving answer or query
 		// inside that grace would still be admitted.
 		cfg.DeadlineGrace,
-	).WithPoolTrigger(poolTrigger)
+	).WithPoolTrigger(poolTrigger).WithCovers(postgres.NewCovers(pool))
 	a.tasks = append(a.tasks, advanceContestSchedule(log, scheduler.Advance))
 
 	// The contest's table, and with it the only source of a result there is.
@@ -692,12 +693,26 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// proves it is writable by writing; the same probe answers /readyz below,
 	// because a volume that comes back read-only after the process started is
 	// exactly the failure a start-up check cannot see.
-	covers, err := filestore.New(cfg.CoverDir)
+	coverFiles, err := filestore.New(cfg.CoverDir)
 	if err != nil {
 		a.close()
 		return nil, fmt.Errorf("open the cover directory: %w", err)
 	}
-	log.Info("cover storage ready", "dir", covers.Dir())
+	log.Info("cover storage ready", "dir", coverFiles.Dir())
+
+	// The three routes a cover has (the contest covers design §§3 and 4): the
+	// organiser's upload and removal, and the one read a visitor with no
+	// session makes. Appended here rather than beside the other modules above
+	// because this is where the file store it needs comes into existence.
+	//
+	// The service is handed *filestore.Store directly: covers.Files is the
+	// narrow port the domain declares and this store satisfies it
+	// structurally, so neither package imports the other and the day a second
+	// replica needs shared storage is one new implementation here and no
+	// change in the domain at all.
+	modules = append(modules, api.NewCoverHandler(
+		covers.NewService(postgres.NewCovers(pool), coverFiles),
+		limiter, authMiddleware, log))
 
 	deps := api.Deps{
 		Logger:        log,
@@ -713,7 +728,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 			// cache are. A remount as read-only, or a full disk, is a
 			// failure this instance cannot serve uploads through, and it
 			// happens long after the start-up check has passed.
-			storage.NewChecker("covers", covers),
+			storage.NewChecker("covers", coverFiles),
 		},
 		Modules: modules,
 	}
