@@ -218,3 +218,34 @@ func TestSessionsStillMakeRoomForEachOther(t *testing.T) {
 		t.Errorf("Len() = %d, want the capacity to hold", c.Len())
 	}
 }
+
+// The reclaim walks a bounded number of entries, whatever the store holds.
+//
+// It runs under the one lock every session read and every rate-limit check
+// also takes, so its cost is paid by every request in flight. Walking a full
+// store — a hundred thousand entries by default — on every counter that finds
+// the store full turns one caller's flood into a stall for everybody, which is
+// the opposite of what the refusal above is for.
+func TestReclaimingWalksABoundedPartOfTheStore(t *testing.T) {
+	const capacity = reclaimScan * 4
+	c := NewMemory(capacity)
+	ctx := context.Background()
+
+	for i := range capacity {
+		if _, err := c.Incr(ctx, "rl:old-"+strconv.Itoa(i), time.Millisecond); err != nil {
+			t.Fatalf("Incr() = %v", err)
+		}
+	}
+	time.Sleep(5 * time.Millisecond)
+
+	if _, err := c.Incr(ctx, "rl:fresh", time.Minute); err != nil {
+		t.Fatalf("Incr() = %v, want the expired windows to make room", err)
+	}
+
+	// Room was made, and it was made by examining the tail rather than the
+	// whole store: what is left is everything the walk did not reach.
+	if left := c.Len(); left < capacity-reclaimScan {
+		t.Errorf("Len() = %d after reclaiming, want at least %d: the walk swept the whole store",
+			left, capacity-reclaimScan)
+	}
+}

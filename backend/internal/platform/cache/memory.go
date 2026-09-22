@@ -140,17 +140,29 @@ func (m *Memory) Incr(_ context.Context, key string, ttl time.Duration) (int64, 
 	return 1, nil
 }
 
-// reclaimExpired drops entries whose time has passed, oldest first. Callers
-// hold the lock.
+// reclaimScan bounds how many entries one reclaim examines.
 //
-// It walks from the back, where the least recently used sit, and stops at the
-// first live one: the list is ordered by use rather than by expiry, so a full
-// scan would cost the whole store on every full write, and the entries most
-// likely to have lapsed are the ones nobody has touched.
+// The list is ordered by use and not by expiry, so there is no point at which
+// a walk can stop knowing the rest is live — and a walk of the whole store
+// (a hundred thousand entries by default) happens under the one lock every
+// session read and every rate-limit check also takes. That is one caller's
+// flood becoming everybody's stall. Sixty-four is enough to keep the refusal
+// rare in practice, because the tail is where the untouched windows sit, and
+// small enough that the walk is never what makes a request slow.
+const reclaimScan = 64
+
+// reclaimExpired drops entries whose time has passed, from the least recently
+// used end. Callers hold the lock.
+//
+// It examines at most reclaimScan entries and removes every lapsed one it
+// meets, rather than stopping at the first live entry: a live entry in the
+// tail is ordinary — the list is ordered by use — and stopping there would
+// leave the expired windows behind it in place.
 func (m *Memory) reclaimExpired() {
 	now := time.Now()
 
-	for el := m.order.Back(); el != nil; {
+	el := m.order.Back()
+	for examined := 0; el != nil && examined < reclaimScan; examined++ {
 		previous := el.Prev()
 		if now.After(el.Value.(*entry).expiresAt) {
 			m.removeElement(el)
