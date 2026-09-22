@@ -61,9 +61,11 @@ type RosterRow struct {
 	PageLeft int
 	AwayMs   int64
 	Pastes   int
-	// LargePastes counts pastes of more than LargePasteChars characters into
-	// the editor or an answer.
-	LargePastes      int
+	// MaxPasteChars is the largest paste into the editor or an answer, in
+	// characters; pastes into the notes are not measured. Storage keeps the
+	// largest rather than a count of those past LargePasteChars so that the
+	// threshold is applied here and nowhere else.
+	MaxPasteChars    int64
 	IPChanges        int
 	ParallelSessions int
 	// IdenticalQueries counts this participant's distinct successful queries
@@ -92,16 +94,17 @@ func (f Flags) Any() bool {
 		f.AnswerWithoutQueries || f.LargePaste || f.IdenticalQueries
 }
 
-// Flags decides the row's flags from its counts. The counts that depend on a
-// threshold (LargePastes, IdenticalQueries) are already cut by it in storage;
-// the rest are cut here, so every threshold is applied in exactly one place.
+// Flags decides the row's flags from its counts. Every threshold is applied
+// in exactly one place: all but one of them here, and
+// IdenticalQueryMinChars where the query is journalled, because a statement
+// too short to compare is given no fingerprint to compare at all.
 func (r RosterRow) Flags() Flags {
 	return Flags{
 		MultipleIPs:          r.Addresses > 1 || r.IPChanges > 0,
 		ParallelSessions:     r.ParallelSessions > 0,
 		LongAbsence:          r.AwayMs > LongAbsenceTotal.Milliseconds() || r.PageLeft > LongAbsenceCount,
 		AnswerWithoutQueries: r.BlindCorrect > 0,
-		LargePaste:           r.LargePastes > 0,
+		LargePaste:           r.MaxPasteChars > LargePasteChars,
 		IdenticalQueries:     r.IdenticalQueries > 0,
 	}
 }

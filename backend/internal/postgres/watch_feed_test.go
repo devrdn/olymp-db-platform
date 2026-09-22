@@ -583,7 +583,7 @@ func TestTheFeedReadsOnePageNotOnePerParticipant(t *testing.T) {
 			"after":  {Contest: f.contest, After: &middle, Limit: page},
 			"before": {Contest: f.contest, Before: &middle, Limit: page},
 		} {
-			touched := measureJournalRows(t, func(w *Watch) error {
+			touched := measureRows(t, func(w *Watch) error {
 				_, err := w.Feed(ctx, q)
 				return err
 			})
