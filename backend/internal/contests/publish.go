@@ -92,6 +92,24 @@ const (
 	// checkPublishable (schedule.go), which both doors into a running contest
 	// go through.
 	ProblemStaffRegistered = "staff_registered"
+	// ProblemCoverNeedsAttribution names an uploaded cover with no line
+	// saying whose picture it is (design spec §10.1). A contest with no
+	// uploaded cover wears a drawn one, whose author is us, and is never at
+	// fault here.
+	//
+	// The upload route refuses an empty credit line already, and the column
+	// carries a check of its own, so this is the third lock rather than the
+	// first — and it is the one that holds for a row this build did not
+	// write: a restore from an older dump, a repair made by hand, or a
+	// credit line that is whitespace and therefore passes a length check
+	// while saying nothing. Publication is the right moment for it, because
+	// publication is when the picture starts being shown to people who never
+	// agreed to anything.
+	//
+	// Checked by the gate rather than by CheckPublishable below, for the
+	// same reason ProblemStaffRegistered is: it is a fact in storage, not
+	// one of the three values a caller has in hand.
+	ProblemCoverNeedsAttribution = "cover_needs_attribution"
 )
 
 // PublishProblem is one reason a contest is not ready.
