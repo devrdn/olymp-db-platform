@@ -136,6 +136,50 @@ func TestAReadOnlyTemplateGrantsNothingThatWrites(t *testing.T) {
 	}
 }
 
+// The way out of the disk quota has to work on a contest that already
+// existed, not only on one whose template was built after TRUNCATE joined the
+// policy's grants. A participant who fills their database is told, in their
+// own language, to empty a table; an instance copied from an older template
+// would answer that instruction with "permission denied" for the rest of the
+// olympiad. Revoking the privilege on the template is what an older template
+// is: everything else about it is the same.
+func TestAnInstanceMayTruncateAlthoughItsTemplateCouldNot(t *testing.T) {
+	p, template, policy := buildTemplate(t, sqlpolicy.ReadWrite("evidence"))
+	asOwner(t, template, `REVOKE TRUNCATE ON evidence FROM `+gamedb.RoleWriter)
+
+	instance := named(t, "inst")
+	if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
+		t.Fatalf("creating the instance: %v", err)
+	}
+
+	writer := connectAs(t, gamedb.RoleWriter, gamedbtest.WriterPassword(t), instance)
+	if _, err := writer.Exec(t.Context(), `TRUNCATE evidence`); err != nil {
+		t.Fatalf("the writable table could not be emptied: %v", err)
+	}
+	// And the privilege reaches no further than the policy does: settling an
+	// instance grants what the policy names, never more than the template
+	// would have.
+	refused(t, writer, `TRUNCATE suspects`)
+}
+
+// Settling an instance grants nothing at all in a contest that permits no
+// writing: the statements only run when the policy has writable tables, so a
+// read-only copy is untouched by the step above.
+func TestAReadOnlyInstanceMayNotTruncate(t *testing.T) {
+	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
+
+	instance := named(t, "inst")
+	if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
+		t.Fatalf("creating the instance: %v", err)
+	}
+
+	reader := connectAs(t, roleReader, testReaderPassword(t), instance)
+	if _, err := reader.Exec(t.Context(), `SET default_transaction_read_only = off`); err != nil {
+		t.Fatalf("could not turn the default off: %v", err)
+	}
+	refused(t, reader, `TRUNCATE evidence`)
+}
+
 // Writing is granted table by table, so the tables the policy does not name
 // stay untouchable even in a contest that permits writing.
 func TestWritingReachesOnlyTheTablesThePolicyNames(t *testing.T) {
