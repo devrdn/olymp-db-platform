@@ -34,11 +34,14 @@ export const PUBLISH_PROBLEMS = {
   // first correct guess wins for nothing. Names a question, not a language.
   winnerFinalNeedsAttemptLimit: "winner_final_needs_attempt_limit",
   leaderboardFreezeExceedsWindow: "leaderboard_freeze_exceeds_window",
-  // ICPC-only, like the sequential pair above: a choice question whose
-  // attempt limit is not below its own number of options can always be
-  // guessed through for the price of a penalty. Names a question, not a
-  // language, so it falls into the same global list.
+  // A choice question whose attempt limit is not below its own number of
+  // options can always be guessed through. Two codes because the cost
+  // differs: in ICPC scoring it is penalty time, in every other mode it is
+  // the question's points. Both name a question, not a language, so they
+  // fall into the same global list — and both belong in this list, which is
+  // what the dictionary test checks every locale against.
   icpcChoiceNeedsAttemptLimit: "icpc_choice_needs_attempt_limit",
+  choiceNeedsAttemptLimit: "choice_needs_attempt_limit",
   // Contest-wide: somebody on the roster whose account administers every
   // contest, and so already reads this one's reference answers and unfrozen
   // leaderboard. The detail is their login, because the organizer's next
