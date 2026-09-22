@@ -1446,6 +1446,7 @@ const ro = {
             label: "Descărcați povestea în format Markdown",
           },
           print: "Tipăriți sau salvați ca PDF",
+          coverOf: "Coperta olimpiadei {title}",
         },
         panes: {
           schema: "Lățimea panoului schemei",

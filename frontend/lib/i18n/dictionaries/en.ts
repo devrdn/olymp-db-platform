@@ -1604,6 +1604,11 @@ const en = {
             label: "Download the story as Markdown",
           },
           print: "Print or save as PDF",
+          // The picture above the story, named for a reader using their ears
+          // — and only when it is a photograph somebody chose. The drawn
+          // cover a contest wears instead is scenery, and the title is
+          // printed over it either way (design spec §10.3).
+          coverOf: "Cover of {title}",
         },
         panes: {
           schema: "Width of the schema panel",
