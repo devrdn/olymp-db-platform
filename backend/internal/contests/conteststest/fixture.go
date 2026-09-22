@@ -8,6 +8,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/users/userstest"
 	"github.com/google/uuid"
@@ -158,6 +159,23 @@ func inTx(ctx context.Context) bool {
 // AddUser stores an account the contest service can resolve.
 func (f *Fixture) AddUser(login string) users.User {
 	return f.Users.Add(users.User{Login: login, FullName: login, Status: users.StatusActive})
+}
+
+// AddAdministrator stores an active account holding contest.admin_all: staff
+// of every contest without being appointed to any of them.
+//
+// Through a role, because that is the only way an account has a permission —
+// the repository derives Permissions from Roles, as the real one derives them
+// from the role_permissions table.
+func (f *Fixture) AddAdministrator(login string) users.User {
+	const role = "administrator"
+	f.Users.GrantRole(role, rbac.PermissionContestAdminAll)
+	return f.Users.Add(users.User{
+		Login:    login,
+		FullName: login,
+		Status:   users.StatusActive,
+		Roles:    []string{role},
+	})
 }
 
 // SeedContest stores a contest in the given status, with a schedule and one

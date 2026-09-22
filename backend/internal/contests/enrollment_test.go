@@ -791,3 +791,56 @@ func TestRemovingAParticipantWhoHasWorkIsRefused(t *testing.T) {
 		t.Errorf("the registration was deleted anyway: %v", err)
 	}
 }
+
+// The exclusion is about who reads the answers, and a contest's own staff
+// list is not the whole of that: an account holding contest.admin_all is
+// staff of every contest there is — it exports the question package and
+// reads the unfrozen table — without being named on any contest's list.
+// Enrolling it as a participant would hand it a result nobody can trust.
+func TestAnAccountWithAdminAllCannotEnrolItself(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+	c.Enrollment = contests.EnrollmentOpen
+	f.Contests.Put(c)
+	administrator := f.AddAdministrator("a.admin")
+
+	_, err := f.Service.Enroll(context.Background(), contests.EnrollCommand{
+		UserID:    administrator.ID,
+		ContestID: c.ID,
+		Address:   netip.MustParseAddr("10.20.30.40"),
+	})
+
+	if !errors.Is(err, contests.ErrStaffCannotParticipate) {
+		t.Errorf("Enroll() = %v, want ErrStaffCannotParticipate", err)
+	}
+	if _, err := f.Registrations.ByUser(context.Background(), c.ID, administrator.ID); !errors.Is(err, contests.ErrParticipantNotFound) {
+		t.Errorf("a refused self-enrollment must not create a registration: ByUser() = %v", err)
+	}
+}
+
+// The same account on a roster somebody pastes in: a row-level skip, like
+// every other reason one entry of a bulk import cannot become a
+// registration, so the other three hundred still land.
+func TestARosterSkipsAnAccountWithAdminAll(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedContest(contests.StatusPublished)
+	student := f.AddUser("s.popescu")
+	f.AddAdministrator("a.admin")
+
+	result, err := f.Service.AddParticipants(context.Background(), contests.AddParticipantsCommand{
+		ActorID:   uuid.New(),
+		ContestID: c.ID,
+		Logins:    []string{"s.popescu", "a.admin"},
+	})
+	if err != nil {
+		t.Fatalf("AddParticipants() = %v", err)
+	}
+
+	if result.Added != 1 || len(result.Skipped) != 1 || result.Skipped[0].Reason != contests.SkipStaffMember {
+		t.Fatalf("AddParticipants() added %d, skipped %v; want one added and a.admin skipped as %q",
+			result.Added, result.Skipped, contests.SkipStaffMember)
+	}
+	if _, err := f.Registrations.ByUser(context.Background(), c.ID, student.ID); err != nil {
+		t.Errorf("the student was not registered: %v", err)
+	}
+}
