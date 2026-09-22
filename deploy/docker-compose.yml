@@ -573,6 +573,16 @@ services:
       # organiser stepping away mid-upload does not lose their place, and a
       # browser tab closed mid-upload does not hold gigabytes indefinitely.
       GAME_UPLOAD_ABANDONED_AFTER: ${GAME_UPLOAD_ABANDONED_AFTER:-24h}
+      # Where a contest's uploaded cover picture is kept: the mount point of
+      # contest-covers-data below. Unlike GAME_UPLOAD_DIR above, empty turns
+      # nothing off — the process falls back to this same path — because
+      # every installation has a front page and every front page shows
+      # covers. A contest nobody uploaded one for gets a drawn cover and
+      # needs no file at all; this directory holds only the uploaded ones.
+      # The API refuses to start when it cannot write here, which is the
+      # point: a read-only volume must be a failed deployment, not a failed
+      # upload on the morning of an olympiad.
+      COVER_DIR: ${COVER_DIR:-/var/lib/dbcontest/covers}
     # The hard ceiling: 3 GiB, generous headroom over GOMEMLIMIT's 1280 MiB,
     # not a measured peak — nobody has measured this process's peak under a
     # contest's load yet. GOMEMLIMIT is a target the collector works towards,
@@ -593,8 +603,19 @@ services:
     # fine for the pilot and wrong the day a second replica is added — fix
     # it (a shared filesystem, or routing an upload's chunks back to the
     # replica that began it) before that happens, not after.
+    #
+    # contest-covers-data is local to this host for the same reason and at the
+    # same cost: a second replica would serve a cover it does not have on its
+    # own disk. The design spec names the two ways out — a shared filesystem
+    # or an object store behind the same port — and neither is built, because
+    # there is one replica today.
+    #
+    # It is also the one volume in this file whose contents a database dump
+    # does not carry, so `make backup` copies it explicitly. Restoring the
+    # database alone gives back every contest without its cover.
     volumes:
       - game-uploads-data:${GAME_UPLOAD_DIR:-/var/lib/dbcontest/uploads}
+      - contest-covers-data:${COVER_DIR:-/var/lib/dbcontest/covers}
     depends_on:
       pg-core:
         condition: service_healthy
@@ -755,6 +776,11 @@ volumes:
   # the api service's own comment above for what that costs the day a
   # second replica is added.
   game-uploads-data:
+  # A contest's uploaded cover pictures (internal/platform/filestore), two
+  # re-encoded JPEGs per contest that has one. Not in the core database on
+  # purpose, and therefore not in its dump either: `make backup` archives this
+  # volume beside the dump, and a restore needs both.
+  contest-covers-data:
   caddy-data:
   caddy-config:
   prometheus-data:

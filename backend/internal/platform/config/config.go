@@ -459,6 +459,18 @@ type Config struct {
 	// place, short enough that a browser tab closed mid-upload does not hold
 	// gigabytes indefinitely.
 	GameUploadAbandonedAfter time.Duration
+	// CoverDir is the directory a contest's uploaded cover pictures are kept
+	// in (internal/platform/filestore) — a directory on a volume rather than
+	// a table in the database or an object store, for the reasons
+	// docs/superpowers/specs/2026-09-22-contest-covers-design.md §1 gives.
+	//
+	// Unlike GameUploadDir above, empty is not a way to turn a feature off.
+	// Every installation has a front page and every front page shows covers;
+	// the only question this variable answers is where the uploaded ones are
+	// kept, and a directory that cannot be written to is refused at start-up
+	// rather than on the day of the olympiad (internal/app). The default is
+	// the mount point deploy/docker-compose.yml gives the api service.
+	CoverDir string
 }
 
 // Load reads configuration from the environment, applying defaults for
@@ -719,6 +731,8 @@ func Load() (Config, error) {
 					"GAME_UPLOAD_CHUNK_BYTES must all be positive when GAME_UPLOAD_DIR is set")
 		}
 	}
+
+	cfg.CoverDir = envOrDefault("COVER_DIR", "/var/lib/dbcontest/covers")
 
 	cfg.DefaultLocale = envOrDefault("DEFAULT_LOCALE", "en")
 	if !languageTag.MatchString(cfg.DefaultLocale) {

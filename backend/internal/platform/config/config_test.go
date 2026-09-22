@@ -731,6 +731,37 @@ func TestGameUploadDirWithAZeroTableLimitIsRejectedAtStartup(t *testing.T) {
 	}
 }
 
+// Covers have a directory whether anybody configured one or not. Unlike
+// GAME_UPLOAD_DIR above, empty is not a way to turn the feature off: an
+// installation always has a front page, the front page always shows covers,
+// and the only question this variable answers is where the uploaded ones are
+// kept. The default is the mount point deploy/docker-compose.yml gives the
+// api service.
+func TestTheCoverDirectoryHasADefault(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.CoverDir != "/var/lib/dbcontest/covers" {
+		t.Errorf("CoverDir = %q, want /var/lib/dbcontest/covers", cfg.CoverDir)
+	}
+}
+
+func TestTheCoverDirectoryIsConfigurable(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("COVER_DIR", "/srv/dbcontest/covers")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.CoverDir != "/srv/dbcontest/covers" {
+		t.Errorf("CoverDir = %q, want /srv/dbcontest/covers", cfg.CoverDir)
+	}
+}
+
 // The variables this file reads are the whole of what an operator can
 // configure, and deploy/.env.example is where they are told so. Neither of
 // those facts reaches the running process on its own: the compose file has to

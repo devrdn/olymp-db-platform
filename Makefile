@@ -97,6 +97,19 @@ REDIS_ADDR := $(if $(REDIS_PASSWORD),redis://:$(REDIS_PASSWORD)@localhost:$(REDI
 # still wins.
 GAME_UPLOAD_DIR := $(CURDIR)/deploy/game-uploads
 
+# The same translation for the covers directory, and the same reason: the API
+# refuses to start when it cannot write there, and /var/lib belongs to root on
+# the host. Unlike the uploads above there is no "off" to fall back to — a
+# front page always shows covers — so `make run` gets a directory of its own
+# under deploy/ instead.
+#
+# CONTAINER_COVER_DIR is the other half of that translation: the path INSIDE
+# the api container, which is what `make backup` copies the volume out of. It
+# has to be captured before the line below overwrites COVER_DIR, because the
+# -include above is the only place an operator's own value comes from.
+CONTAINER_COVER_DIR := $(if $(COVER_DIR),$(COVER_DIR),/var/lib/dbcontest/covers)
+COVER_DIR := $(CURDIR)/deploy/covers
+
 # Where the *browser* is when the interface runs on the host, which is not the
 # same question as where the API is. Behind Caddy the two are one origin and
 # this is unnecessary; `make run` has no Caddy, so Next's rewrite forwards
@@ -119,7 +132,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env require-version build test test-race test-db test-game game-orphans api-contract audit-contract proto proto-check static-check backup restore restore-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
+.PHONY: help require-env require-version build test test-race test-db test-game game-orphans api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -324,6 +337,7 @@ run: require-env ## Run the API against the dev infrastructure
 		GAME_PROVISIONER_DSN="$(GAME_DB_DSN)" \
 		GAME_AUTHOR_PASSWORD="$(GAME_AUTHOR_PASSWORD)" \
 		GAME_UPLOAD_DIR="$(GAME_UPLOAD_DIR)" \
+		COVER_DIR="$(COVER_DIR)" \
 		PUBLIC_ORIGINS="$(FRONT_ORIGIN)" \
 		QUERY_RUNNER_ADDR="$(QUERY_RUNNER_ADDR)" \
 		TRUSTED_PROXIES="127.0.0.1,::1" \
@@ -399,16 +413,47 @@ front-check: front-install ## Everything CI runs for the interface
 # The dump runs inside the container, so no PostgreSQL client is needed on the
 # host, and it goes through the same credentials as everything else in this
 # file.
+#
+# The database is not all of it. A contest's cover picture is a file on the
+# contest-covers-data volume and not a row anywhere, so pg_dump cannot see it
+# (the contest covers design §1 names this as the cost of keeping the pictures
+# on a volume). Two artefacts come out of this target, sharing one timestamp:
+# the dump and a tar of that volume. Restoring only the first gives back every
+# contest without its cover, and that is found out on the day it can no longer
+# be fixed.
+#
+# The volume is copied through the api service rather than by naming the
+# volume to `docker run`: the mount point is the compose file's business, not
+# this file's, and `docker compose cp` reads a stopped container as happily as
+# a running one. It needs the container to EXIST, which on a deployed machine
+# it does; a partial backup is reported as a failure rather than written
+# quietly, because a backup nobody was told was incomplete is worse than none.
 
-backup: require-env ## Dump the core database into deploy/backups/
+backup: require-env ## Dump the core database and archive the covers volume into deploy/backups/
 	@mkdir -p $(BACKUP_DIR)
-	@file=$(BACKUP_DIR)/$(CORE_DB_NAME)-$$(date +%Y%m%d-%H%M%S).dump; \
+	@stamp=$$(date +%Y%m%d-%H%M%S); \
+		file=$(BACKUP_DIR)/$(CORE_DB_NAME)-$$stamp.dump; \
 		$(COMPOSE) exec -T pg-core \
 			pg_dump --format=custom --no-owner --username=$(CORE_DB_USER) $(CORE_DB_NAME) > $$file || \
 			{ echo "backup failed; removing the partial file"; rm -f $$file; exit 1; }; \
 		test -s $$file || { echo "the dump is empty — refusing to keep it"; rm -f $$file; exit 1; }; \
 		echo "wrote $$file ($$(du -h $$file | cut -f1))"; \
-		echo "Copy it off this machine. A backup that only exists on the host it came from is not a backup."
+		covers=$(BACKUP_DIR)/covers-$$stamp.tar.gz; \
+		staging=$$(mktemp -d); \
+		if $(COMPOSE) cp api:$(CONTAINER_COVER_DIR)/. $$staging >/dev/null; then \
+			tar -czf $$covers -C $$staging . || \
+				{ echo "the covers volume could not be archived"; rm -rf $$staging; rm -f $$covers; exit 1; }; \
+			echo "wrote $$covers ($$(du -h $$covers | cut -f1))"; \
+			rm -rf $$staging; \
+		else \
+			rm -rf $$staging; \
+			echo "the covers volume was NOT copied: no api container to read $(CONTAINER_COVER_DIR) from."; \
+			echo "The database dump above is good, but this backup is incomplete — restoring it would"; \
+			echo "bring back every contest without its cover. Create the container ('make deploy') and"; \
+			echo "run this again."; \
+			exit 1; \
+		fi; \
+		echo "Copy both off this machine. A backup that only exists on the host it came from is not a backup."
 
 # Proves the dump is loadable without touching anything real: it is restored
 # into a throwaway database that is dropped again immediately. Run it after
@@ -453,8 +498,30 @@ restore: require-env ## Replace the core database from a dump (FILE=path CONFIRM
 		if [ "$$serving" = "1" ]; then \
 			$(COMPOSE) start api || echo "the api did NOT come back up — start it by hand"; fi; \
 		if [ $$result -eq 0 ]; then echo "restored $(CORE_DB_NAME) from $(FILE)"; \
+			echo "The covers are not in this dump: restore them too, with"; \
+			echo "  make restore-covers FILE=$(BACKUP_DIR)/covers-<timestamp>.tar.gz CONFIRM=yes"; \
 		else echo "restore FAILED — the database is in an unknown state, do not run an olympiad on it"; fi; \
 		exit $$result
+
+# The other half of a restore, and the reason `make backup` writes two files.
+# A cover is named by the hash of its own content, so copying an archive over
+# a volume that already holds some of the same files replaces each with an
+# identical one — this is additive, and it is why it does not empty the
+# directory first.
+restore-covers: require-env ## Restore the covers volume from an archive (FILE=path CONFIRM=yes)
+	@test -n "$(FILE)" || { echo "usage: make restore-covers FILE=$(BACKUP_DIR)/covers-....tar.gz CONFIRM=yes"; exit 1; }
+	@test -f "$(FILE)" || { echo "no such file: $(FILE)"; exit 1; }
+	@test "$(CONFIRM)" = "yes" || { \
+		echo "This copies $(FILE) into the covers volume at $(CONTAINER_COVER_DIR)."; \
+		echo "Re-run with CONFIRM=yes when that is what you mean."; exit 1; }
+	@staging=$$(mktemp -d); \
+		tar -xzf "$(FILE)" -C $$staging || { echo "$(FILE) is not a readable archive"; rm -rf $$staging; exit 1; }; \
+		$(COMPOSE) cp $$staging/. api:$(CONTAINER_COVER_DIR) || \
+			{ echo "the covers were NOT restored: no api container to write $(CONTAINER_COVER_DIR) to"; \
+			  rm -rf $$staging; exit 1; }; \
+		rm -rf $$staging; \
+		echo "restored the covers volume from $(FILE)"; \
+		echo "Restart the api if it is running: docker compose -f deploy/docker-compose.yml restart api"
 
 # The two halves of the game circuit that are not the API.
 #
