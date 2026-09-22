@@ -429,7 +429,11 @@ front-check: front-install ## Everything CI runs for the interface
 # it does; a partial backup is reported as a failure rather than written
 # quietly, because a backup nobody was told was incomplete is worse than none.
 
-backup: require-env ## Dump the core database and archive the covers volume into deploy/backups/
+# Strict on purpose: a backup that quietly leaves the covers behind is the
+# one that is discovered to be incomplete on the day it is restored. A
+# developer who wants only the dump says so — DB_ONLY=1 — rather than reading
+# an exit code as permission.
+backup: require-env ## Dump the core database and archive the covers volume (DB_ONLY=1 for the dump alone)
 	@mkdir -p $(BACKUP_DIR)
 	@stamp=$$(date +%Y%m%d-%H%M%S); \
 		file=$(BACKUP_DIR)/$(CORE_DB_NAME)-$$stamp.dump; \
@@ -440,7 +444,10 @@ backup: require-env ## Dump the core database and archive the covers volume into
 		echo "wrote $$file ($$(du -h $$file | cut -f1))"; \
 		covers=$(BACKUP_DIR)/covers-$$stamp.tar.gz; \
 		staging=$$(mktemp -d); \
-		if $(COMPOSE) cp api:$(CONTAINER_COVER_DIR)/. $$staging >/dev/null; then \
+		if [ -n "$(DB_ONLY)" ]; then \
+			rm -rf $$staging; \
+			echo "DB_ONLY: the covers were not taken. This is a dump, not a backup of the installation."; \
+		elif $(COMPOSE) cp api:$(CONTAINER_COVER_DIR)/. $$staging >/dev/null; then \
 			tar -czf $$covers -C $$staging . || \
 				{ echo "the covers volume could not be archived"; rm -rf $$staging; rm -f $$covers; exit 1; }; \
 			echo "wrote $$covers ($$(du -h $$covers | cut -f1))"; \
@@ -450,10 +457,10 @@ backup: require-env ## Dump the core database and archive the covers volume into
 			echo "the covers volume was NOT copied: no api container to read $(CONTAINER_COVER_DIR) from."; \
 			echo "The database dump above is good, but this backup is incomplete — restoring it would"; \
 			echo "bring back every contest without its cover. Create the container ('make deploy') and"; \
-			echo "run this again."; \
+			echo "run this again, or say DB_ONLY=1 if a dump is all you meant to take."; \
 			exit 1; \
 		fi; \
-		echo "Copy both off this machine. A backup that only exists on the host it came from is not a backup."
+		echo "Copy what was written off this machine. A backup that only exists on the host it came from is not a backup."
 
 # Proves the dump is loadable without touching anything real: it is restored
 # into a throwaway database that is dropped again immediately. Run it after
