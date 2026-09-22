@@ -32,13 +32,19 @@ describe("the contest list", () => {
    * than no link: they have to follow it to find out.
    */
   test("leads to the public table only where there is one to read", () => {
-    render(<RecentContests contests={[running({ tableOpen: false })]} dict={en} locale="en" />);
-    expect(screen.queryByRole("link", { name: en.home.contests.table })).toBeNull();
+    render(<RecentContests signedIn={false} contests={[running({ tableOpen: false })]} dict={en} locale="en" />);
+    expect(
+      screen.queryByRole("link", { name: en.home.contests.tableOf.replace("{title}", "Spring round") }),
+    ).toBeNull();
   });
 
   test("leads to the public table where there is one", () => {
-    render(<RecentContests contests={[running()]} dict={en} locale="en" />);
-    expect(screen.getByRole("link", { name: en.home.contests.table })).toHaveAttribute(
+    render(<RecentContests signedIn={false} contests={[running()]} dict={en} locale="en" />);
+    // Named by the contest, not by the word: six rows carry this link, and
+    // "Results, Results, Results" read out one after another names nothing.
+    expect(
+      screen.getByRole("link", { name: en.home.contests.tableOf.replace("{title}", "Spring round") }),
+    ).toHaveAttribute(
       "href",
       `/contests/${running().id}/leaderboard`,
     );
@@ -53,7 +59,7 @@ describe("the contest list", () => {
     const many = Array.from({ length: 9 }, (_, index) =>
       running({ id: `contest-${index}`, title: `Round ${index}` }),
     );
-    render(<RecentContests contests={many} dict={en} locale="en" />);
+    render(<RecentContests signedIn={false} contests={many} dict={en} locale="en" />);
 
     const rows = screen.getAllByRole("listitem");
     expect(rows).toHaveLength(6);
@@ -64,6 +70,7 @@ describe("the contest list", () => {
   test("marks the one that is on right now, and says what each state is", () => {
     render(
       <RecentContests
+        signedIn={false}
         contests={[running(), running({ id: "b", title: "Autumn round", status: "finished" })]}
         dict={en}
         locale="en"
@@ -88,10 +95,14 @@ describe("the contest list", () => {
     ["nothing to show", [] as PublicContest[]],
     ["a failed read", null],
   ])("explains %s and names the way on, rather than ruling an empty table", (_name, contests) => {
-    render(<RecentContests contests={contests} dict={en} locale="en" />);
+    render(<RecentContests signedIn={false} contests={contests} dict={en} locale="en" />);
 
     expect(screen.getByText(en.home.contests.empty.body)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: en.home.contests.empty.action })).toHaveAttribute(
+    // Signed out, the label names the door the visitor actually meets: the
+    // catalogue is behind sign-in, and `/open` carries them through it.
+    expect(
+      screen.getByRole("link", { name: en.home.contests.empty.actionSignedOut }),
+    ).toHaveAttribute(
       "href",
       "/open",
     );
@@ -100,7 +111,19 @@ describe("the contest list", () => {
 
   /** The hero's second action points here, so the section has to be here. */
   test("carries the anchor the hero points at", () => {
-    const { container } = render(<RecentContests contests={[running()]} dict={en} locale="en" />);
+    const { container } = render(<RecentContests signedIn={false} contests={[running()]} dict={en} locale="en" />);
     expect(container.querySelector("#contests")).not.toBeNull();
   });
+});
+
+// The same empty state, read by somebody who is signed in: the catalogue is
+// a catalogue to them, and saying "sign in" to a signed-in reader is the kind
+// of sentence that makes a product look like it is not paying attention.
+test("offers a signed-in reader the catalogue by its own name", () => {
+  render(<RecentContests signedIn contests={[]} dict={en} locale="en" />);
+
+  expect(screen.getByRole("link", { name: en.home.contests.empty.action })).toHaveAttribute(
+    "href",
+    "/open",
+  );
 });

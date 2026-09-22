@@ -46,6 +46,7 @@ const MOST = 6;
 
 export function RecentContests({
   contests,
+  signedIn,
   dict,
   locale,
 }: {
@@ -53,6 +54,8 @@ export function RecentContests({
   contests: PublicContest[] | null;
   dict: Dictionary;
   locale: Locale;
+  /** Whether the visitor has a session, which decides what the empty state can honestly offer. */
+  signedIn: boolean;
 }) {
   const t = dict.home.contests;
   /**
@@ -72,17 +75,24 @@ export function RecentContests({
       {rows.length === 0 ? (
         /* `empty`, never `empty-filtered`: this list has no filters, so there
            is no control to offer and offering one would be a lie. The
-           catalogue is behind sign-in, which is the point — it takes a visitor
-           to the form and then on to the list they asked for, rather than
-           leaving them on an accurate screen with nothing to do (principle
-           4). */
+           catalogue is behind sign-in, which is the point — `/open` takes a
+           visitor to the form and then on to the list they asked for, rather
+           than leaving them on an accurate screen with nothing to do
+           (principle 4). */
         <div className="border-t border-line">
           <StateView
             state={{
               kind: "empty",
               title: t.empty.title,
               body: t.empty.body,
-              action: { label: t.empty.action, href: "/open" },
+              /* The catalogue is behind sign-in, and `/open` carries the
+                 visitor through the form and on to it (`?next=`). What the
+                 label may not do is promise a catalogue and produce a form:
+                 signed out, it says which door this is. */
+              action: {
+                label: signedIn ? t.empty.action : t.empty.actionSignedOut,
+                href: "/open",
+              },
             }}
           />
         </div>
@@ -139,6 +149,10 @@ function Row({
       {contest.tableOpen ? (
         <Link
           href={`/contests/${contest.id}/leaderboard`}
+          /* Six rows carry this link, and heard one after another "Results,
+             Results, Results" names nothing. The accessible name carries the
+             contest; the visible word stays the short one. */
+          aria-label={dict.home.contests.tableOf.replace("{title}", contest.title)}
           className="text-control text-ink-2 underline decoration-line-2 underline-offset-4 transition-colors duration-(--t-input) ease-standard hover:text-ink hover:decoration-ink"
         >
           {dict.home.contests.table}

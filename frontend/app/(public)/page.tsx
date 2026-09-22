@@ -82,11 +82,12 @@ export default async function HomePage() {
     <>
       <Hero name={name} signedIn={signedIn} dict={dict} />
 
-      <HowItWorks dict={dict} />
-
       <Numbers stats={settled(stats, "/public/stats")} dict={dict} />
 
+      <HowItWorks dict={dict} />
+
       <RecentContests
+        signedIn={signedIn}
         contests={settled(contests, "/public/contests")}
         dict={dict}
         locale={locale}

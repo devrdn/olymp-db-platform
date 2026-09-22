@@ -82,10 +82,13 @@ const en = {
       heading: "Coming up and recently run",
       /** The link to a contest's public table, on the rows that have one. */
       table: "Results",
+      /** The same link's accessible name, which carries the contest. */
+      tableOf: "Results of {title}",
       empty: {
         title: "Nothing to show yet",
         body: "No contest is open to the public here just now. The catalogue lists everything this installation runs.",
         action: "Open the catalogue",
+        actionSignedOut: "Sign in to see the catalogue",
       },
     },
     organisers: {
