@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/profile"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
@@ -31,7 +32,7 @@ import (
 // itself and two counts of a registration's own journal.
 var _ profile.Store = (*Profile)(nil)
 
-// profileStatuses are the contest statuses a profile carries: published,
+// The contest statuses a profile carries: published,
 // running, finished and archived.
 //
 // A draft is excluded, for the reason Contests.List excludes it from the
@@ -47,7 +48,9 @@ var _ profile.Store = (*Profile)(nil)
 //
 // Spelled into both statements below, so the four numbers of the header count
 // exactly the rows the list shows.
-const profileStatuses = `c.status IN ('published', 'running', 'finished', 'archived')`
+// The four statuses themselves live in the domain
+// (contests.PublicStatuses) and are bound as a parameter — see
+// publicStatusFilter for why they are not written out here.
 
 // Profile reads a participant's own account.
 type Profile struct {
@@ -79,7 +82,7 @@ func (r *Profile) querier(ctx context.Context) storage.Querier {
 // aggregate over that registration's own index range — and an account cannot
 // be on more olympiads than the installation has run.
 //
-// The account's registrations are the outer rows — the ones profileStatuses
+// The account's registrations are the outer rows — the ones the public
 // admits, so these numbers describe exactly the contests Enrolments lists —
 // and each counter is a lateral aggregate over that one registration's own
 // index range, the way the organiser's roster counts a contest's. Solved
@@ -103,7 +106,7 @@ func (r *Profile) Summary(ctx context.Context, userID uuid.UUID) (profile.Summar
 		    SELECT count(DISTINCT s.question_id) AS solved
 		    FROM submissions s WHERE s.registration_id = r.id AND s.is_correct
 		) a
-		WHERE r.user_id = $1 AND `+profileStatuses, userID).
+		WHERE r.user_id = $1 AND `+publicStatusFilter("c.status", 2), userID, contests.PublicStatuses).
 		Scan(&s.Contests, &s.Finished, &s.Queries, &s.Solved)
 	if err != nil {
 		return profile.Summary{}, fmt.Errorf("count the profile of %s: %w", userID, err)
@@ -177,7 +180,7 @@ const ownResultJoins = `
 // Enrolments reads the account's registrations with their contests and the
 // participant's own result in each, newest first, at most limit of them.
 //
-// Only the statuses profileStatuses names: a draft the account is already on
+// Only the public statuses: a draft the account is already on
 // the roster of is left out, as the participant catalogue leaves it out.
 //
 // One statement over every registration of the account, never one per
@@ -203,7 +206,7 @@ func (r *Profile) Enrolments(ctx context.Context, userID uuid.UUID, limit int) (
 		    SELECT r.id
 		    FROM registrations r
 		    JOIN contests c ON c.id = r.contest_id
-		    WHERE r.user_id = $1 AND `+profileStatuses+`
+		    WHERE r.user_id = $1 AND `+publicStatusFilter("c.status", 3)+`
 		    ORDER BY COALESCE(c.starts_at, c.created_at) DESC, r.created_at DESC, r.id
 		    LIMIT $2
 		)
@@ -213,7 +216,7 @@ func (r *Profile) Enrolments(ctx context.Context, userID uuid.UUID, limit int) (
 		JOIN contests c ON c.id = r.contest_id
 		JOIN users u ON u.id = r.user_id`+ownResultJoins+`
 		ORDER BY COALESCE(c.starts_at, c.created_at) DESC, r.created_at DESC, r.id`,
-		userID, limit)
+		userID, limit, contests.PublicStatuses)
 	if err != nil {
 		return nil, fmt.Errorf("list the contests of %s: %w", userID, err)
 	}

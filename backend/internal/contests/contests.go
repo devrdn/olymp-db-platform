@@ -31,6 +31,18 @@ const (
 	StatusArchived  = "archived"
 )
 
+// PublicStatuses are the statuses a visitor with no session may be shown: a
+// contest that has been published and everything after it.
+//
+// Every status there is, less the draft. Written that way round on purpose —
+// a new status added to the lifecycle above lands in this list by default and
+// has to be taken out deliberately, which is the safe direction for a filter
+// that decides what a stranger sees. The other direction has been spelled out
+// three times in three repositories, and nothing made the three agree; a
+// status added to two of them and forgotten in the third is a contest
+// leaking.
+var PublicStatuses = []string{StatusPublished, StatusRunning, StatusFinished, StatusArchived}
+
 // Enrollment types decide who creates the registration, and nothing else:
 // beyond that point both paths are identical.
 const (
