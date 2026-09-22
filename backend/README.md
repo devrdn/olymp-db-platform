@@ -27,6 +27,7 @@ backend/
 │   └── platform/        infrastructure, imports no domain package
 │       ├── cache/       Cache interface: Redis or in-process fallback
 │       ├── config/      environment configuration
+│       ├── filestore/   one directory on a volume, addressed by key
 │       ├── httpx/       middleware, CSRF guard, client IP, JSON responses
 │       ├── i18n/        language negotiation (Accept-Language, fallbacks)
 │       ├── logging/     slog setup and request correlation
@@ -589,15 +590,33 @@ On-premise means nobody else is backing this machine up, and what is in the
 core database — the participants' answers and the results of an olympiad —
 cannot be reconstructed by reinstalling anything.
 
+**There are two things to copy, not one.** The database is the first. The
+second is the `contest-covers-data` volume: a contest's cover picture is a
+file in `COVER_DIR` (`internal/platform/filestore`), deliberately not a row in
+any table, so `pg_dump` does not see it and a restore from the dump alone
+gives back every contest without its cover. `make backup` writes both, under
+one timestamp, and fails loudly rather than writing only the dump.
+
 ```bash
 make backup                                   # deploy/backups/<db>-<timestamp>.dump
-make restore-check FILE=deploy/backups/....dump
-make restore       FILE=deploy/backups/....dump CONFIRM=yes
+                                              # deploy/backups/covers-<timestamp>.tar.gz
+make restore-check   FILE=deploy/backups/....dump
+make restore         FILE=deploy/backups/....dump         CONFIRM=yes
+make restore-covers  FILE=deploy/backups/covers-....tar.gz CONFIRM=yes
 ```
 
 `backup` dumps from inside the container, so no PostgreSQL client is needed on
-the host, and refuses to keep an empty file. Copy the result off the machine:
-a backup that only exists on the host it came from is not a backup.
+the host, and refuses to keep an empty file. The covers come out through
+`docker compose cp` on the `api` service — the mount point is the compose
+file's business, not the Makefile's — which reads a stopped container as
+happily as a running one, but needs the container to exist. Copy both results
+off the machine: a backup that only exists on the host it came from is not a
+backup.
+
+`restore-covers` copies an archive back into the volume. It is additive and
+does not empty the directory first, which is safe because a cover is named by
+the hash of its own content: a file that is already there is replaced by an
+identical one.
 
 `restore-check` loads the dump into a throwaway database and drops it again. It
 touches nothing real, and it is the whole difference between having backups and
