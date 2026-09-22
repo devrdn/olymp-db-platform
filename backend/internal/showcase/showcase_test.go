@@ -353,3 +353,31 @@ func TestOneCallersListIsNotAnothers(t *testing.T) {
 		t.Errorf("the second caller read %q, want the cached title", second[0].Title)
 	}
 }
+
+// The slice is one caller's own, and so is every map inside it: a row of the
+// answer must share nothing with the entry the next visitor will be handed.
+func TestOneCallersTitlesAreNotAnothers(t *testing.T) {
+	repo := &countingRepo{contests: []showcase.Contest{{
+		ID: uuid.New(), Status: contests.StatusFinished, DefaultLanguage: "en",
+		Titles: map[string]string{"en": "The Olympiad"},
+	}}}
+	now := time.Now()
+	service := newService(repo, &now)
+
+	first, err := service.Recent(t.Context(), "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first[0].Titles["en"] = "rewritten by the first caller"
+
+	second, err := service.Recent(t.Context(), "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second[0].Titles["en"] != "The Olympiad" {
+		t.Errorf("the second caller read %q, want the cached title", second[0].Titles["en"])
+	}
+	if second[0].Title != "The Olympiad" {
+		t.Errorf("the second caller was titled %q, want the cached title", second[0].Title)
+	}
+}
