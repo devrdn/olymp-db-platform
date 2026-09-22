@@ -23,6 +23,7 @@ import { playDictionary, type PlayDictionary } from "./dictionary";
 import { PanelVisibilityProvider } from "./panel-toggles";
 import { PlayHeader } from "./play-header";
 import { PrintView } from "./print-view";
+import { StoryCover } from "./story-cover";
 import type { QuestionEntry } from "./questions-panel";
 import { ReloadLink } from "./reload-link";
 import { WorkspaceSkeleton } from "./skeleton";
@@ -168,6 +169,8 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
             <PlayPanels
               contestId={contestId}
               contestTitle={contest.title}
+              coverHash={contest.coverHash}
+              coverAttribution={contest.coverAttribution}
               scoring={contest.scoring}
               icpcPenaltyMin={contest.icpcPenaltyMin}
               locale={locale}
@@ -198,14 +201,20 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
 async function PlayPanels({
   contestId,
   contestTitle,
+  coverHash,
+  coverAttribution,
   scoring,
   icpcPenaltyMin,
   locale,
   dict,
 }: {
   contestId: string;
-  /** Carried only for the print copy's byline — the bar above already shows it. */
+  /** Carried for the print copy's byline and for the title on the story's own cover — the bar above shows it too. */
   contestTitle: string;
+  /** The picture this contest wears, from the same listing the title came from. Empty for a contest that wears a drawn cover. */
+  coverHash: string;
+  /** Who made that picture (design spec §10.1). Empty for a drawn cover, which has nobody to credit. */
+  coverAttribution: string;
   /** The contest's own scoring mode, from the summary this route already read — see `questions-panel.tsx` for what ICPC changes on this screen. */
   scoring: ContestSummary["scoring"];
   /** Minutes added for a wrong attempt on a question later solved, read only while `scoring` is `icpc`. */
@@ -388,6 +397,27 @@ async function PlayPanels({
       />
     ) : null;
 
+  // The picture above the story (design spec §10), rendered on this side of
+  // the wire for the same reason the story and the print copy beside it
+  // already are: `Workspace` is a Client Component, and what it is handed is
+  // serialised into this route's payload either way — but rendering it here
+  // keeps `DrawnCover`'s geometry and `coverHref` out of the client graph of
+  // the screen whose time-to-interactive matters most in the product.
+  //
+  // Null exactly when there is no story, which is what `SidePanel` mirrors
+  // in showing the reason instead: a cover heads a story, and a tab saying
+  // why there is none is not a story to head.
+  const storyCover =
+    storyBody !== null ? (
+      <StoryCover
+        contestId={contestId}
+        title={contestTitle}
+        coverHash={coverHash}
+        coverAttribution={coverAttribution}
+        dict={dict}
+      />
+    ) : null;
+
   // The signal mounts only here, on the path where the content reads
   // succeeded, and tells the header above the boundary so (content-loaded.tsx).
   return (
@@ -401,6 +431,7 @@ async function PlayPanels({
         accountId={identity?.id ?? null}
         contestId={contestId}
         storyBody={storyBody !== null ? <StoryText markdown={storyBody} /> : null}
+        storyCover={storyCover}
         printView={printView}
         storyUnavailable={storyUnavailable}
         questionEntries={questionEntries}

@@ -98,6 +98,7 @@ export function Workspace({
   accountId,
   contestId,
   storyBody,
+  storyCover,
   printView,
   storyUnavailable,
   questionEntries,
@@ -117,6 +118,8 @@ export function Workspace({
   accountId: string | null;
   contestId: string;
   storyBody: React.ReactNode;
+  /** The picture above the story (design spec §10), rendered on the server by `page.tsx` for the same reason the story itself is — see `story-cover.tsx`. It heads the story tab and deliberately never reaches `printView`. */
+  storyCover: React.ReactNode;
   /** The print-only copy of the story, rendered on the server by `page.tsx` — see this component's own doc for why it is a node and not the Markdown behind it. Null exactly when there is no story to print (mirrors `storyUnavailable`). */
   printView: React.ReactNode;
   storyUnavailable: string | null;
@@ -594,6 +597,7 @@ export function Workspace({
           >
             <MemoSidePanel
               storyBody={storyBody}
+              storyCover={storyCover}
               storyUnavailable={storyUnavailable}
               accountId={accountId}
               contestId={contestId}

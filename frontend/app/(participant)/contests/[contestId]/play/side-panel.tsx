@@ -91,6 +91,7 @@ function printStory(contestId: string) {
  */
 export function SidePanel({
   storyBody,
+  storyCover,
   storyUnavailable,
   accountId,
   contestId,
@@ -102,6 +103,8 @@ export function SidePanel({
   locale,
 }: {
   storyBody: React.ReactNode;
+  /** The picture above the story, rendered on the server by `page.tsx` — see `story-cover.tsx` for why it crosses the wire as a node rather than as a hash this component would resolve. */
+  storyCover: React.ReactNode;
   storyUnavailable: string | null;
   /** Whose screen this is; the notes draft is keyed by it. */
   accountId: string | null;
@@ -170,6 +173,12 @@ export function SidePanel({
           <p className="text-body text-ink-2">{storyUnavailable}</p>
         ) : (
           <>
+            {/* The picture first, because that is what "above the story"
+                means on this screen: design spec §10, the one surface where
+                a photograph is part of the task rather than decoration. It
+                heads the tab rather than the tab's controls, so the export
+                row below stays what it is — furniture beside the prose. */}
+            {storyCover}
             <div className="mb-4 flex items-center justify-between gap-3">
               <ExportMenu
                 heading={storyT.export.heading}
