@@ -63,7 +63,10 @@ describe("CoverPanel, what the contest is wearing", () => {
 
     const picture = screen.getByRole("img", { name: t.currentAlt });
     const src = picture.getAttribute("src") ?? "";
-    expect(src).toContain(`/public/contests/${contestId}/cover`);
+    // The staff address, not the public one: a cover is chosen while the
+    // contest is still a draft, and the public route refuses a draft.
+    expect(src).toContain(`/contests/${contestId}/cover/file`);
+    expect(src).not.toContain("/public/");
     // The address carries the hash, or a replaced cover would stay invisible
     // behind whatever the browser cached for the old one.
     expect(src).toContain(cover().hash);

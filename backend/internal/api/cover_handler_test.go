@@ -537,3 +537,53 @@ func TestARefusedSizeCarriesNoCachingOfItsOwn(t *testing.T) {
 		t.Errorf("Cache-Control = %q on a refusal", got)
 	}
 }
+
+// An organiser editing a contest has to see the picture they uploaded, and
+// for a draft the public route refuses by design — it refuses everybody,
+// which is the point of it. Without a read of their own, the panel shows the
+// drawn cover over a contest that has a real one and offers no way to remove
+// it: the organiser is editing blind.
+func TestAnOrganiserReadsTheCoverOfTheirOwnDraft(t *testing.T) {
+	f := newCoverFixture(t, rbac.PermissionContestAdminAll)
+	contest := uuid.New()
+	upload := f.upload(t, contest, coverJPEG(t, 1600, 900), "Photo: A. Organiser")
+	if upload.Code != http.StatusOK {
+		t.Fatalf("upload: status = %d (%s)", upload.Code, upload.Body.String())
+	}
+	// Deliberately not published: this is the state the panel is used in.
+	f.repo.published[contest] = false
+
+	meta := f.do(t, http.MethodGet, "/contests/"+contest.String()+"/cover", "", nil)
+	if meta.Code != http.StatusOK {
+		t.Fatalf("metadata: status = %d, want 200 (%s)", meta.Code, meta.Body.String())
+	}
+	if got, _ := decode(t, meta)["attribution"].(string); got != "Photo: A. Organiser" {
+		t.Errorf("attribution = %q", got)
+	}
+
+	file := f.do(t, http.MethodGet, "/contests/"+contest.String()+"/cover/file?size=800", "", nil)
+	if file.Code != http.StatusOK {
+		t.Fatalf("file: status = %d, want 200 (%s)", file.Code, file.Body.String())
+	}
+	if _, err := jpeg.Decode(bytes.NewReader(file.Body.Bytes())); err != nil {
+		t.Errorf("the body does not decode as a JPEG: %v", err)
+	}
+	// Behind a session, so no shared cache may keep it.
+	if got := file.Header().Get("Cache-Control"); !strings.Contains(got, "private") {
+		t.Errorf("Cache-Control = %q, want private: this answer belongs to one account", got)
+	}
+}
+
+// The same two reads, asked by somebody with no rights on that contest.
+func TestAStrangerDoesNotReadADraftsCoverThroughTheStaffRoute(t *testing.T) {
+	f := newCoverFixture(t) // no permissions at all
+	contest := uuid.New()
+	f.repo.published[contest] = false
+
+	for _, path := range []string{"/contests/" + contest.String() + "/cover", "/contests/" + contest.String() + "/cover/file"} {
+		rec := f.do(t, http.MethodGet, path, "", nil)
+		if rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
+			t.Errorf("%s: status = %d, want 403 or 404", path, rec.Code)
+		}
+	}
+}

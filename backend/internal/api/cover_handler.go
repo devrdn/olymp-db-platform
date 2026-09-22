@@ -66,11 +66,14 @@ type CoverStore interface {
 	Upload(ctx context.Context, contestID uuid.UUID, actorID uuid.UUID, src io.Reader, attribution string) (covers.Cover, error)
 	Remove(ctx context.Context, contestID uuid.UUID) error
 	Public(ctx context.Context, contestID uuid.UUID) (covers.Cover, error)
+	// ByContest is the staff's read: it answers for a draft too, which is
+	// exactly what Public refuses to do.
+	ByContest(ctx context.Context, contestID uuid.UUID) (covers.Cover, error)
 	Read(ctx context.Context, hash string, size int) ([]byte, string, error)
 }
 
-// CoverHandler serves a contest's picture: the organiser's two writes and the
-// visitor's one read.
+// CoverHandler serves a contest's picture: the organiser's writes and reads,
+// and the visitor's one read.
 type CoverHandler struct {
 	covers  CoverStore
 	limiter *auth.Limiter
@@ -97,6 +100,17 @@ func NewCoverHandler(store CoverStore, limiter *auth.Limiter, mw *auth.Middlewar
 func (h *CoverHandler) Mount(r chi.Router) {
 	r.Get("/public/contests/{"+contestIDParam+"}/cover", h.public)
 
+	// Reading is the staff's own view of a contest, which a draft has and the
+	// public route refuses — it refuses everybody, which is what it is for.
+	// An organiser without this reads their own contest blind: the panel
+	// shows the drawn cover over a contest that has a real one, and offers no
+	// way to remove what it cannot see.
+	r.Group(func(r chi.Router) {
+		r.Use(h.mw.Authenticate, h.mw.RequireContestPermission(rbac.PermissionContestView))
+		r.Get("/contests/{"+contestIDParam+"}/cover", h.staff)
+		r.Get("/contests/{"+contestIDParam+"}/cover/file", h.staffFile)
+	})
+
 	r.Group(func(r chi.Router) {
 		r.Use(h.mw.Authenticate, h.mw.RequireContestPermission(rbac.PermissionContestEdit))
 		r.Put("/contests/{"+contestIDParam+"}/cover", h.upload)
@@ -106,6 +120,13 @@ func (h *CoverHandler) Mount(r chi.Router) {
 
 // coverResponse is what an organiser gets back: enough to show the picture
 // they have just uploaded without asking for it again.
+func toCoverResponse(cover covers.Cover) coverResponse {
+	return coverResponse{
+		Hash: cover.Hash, Attribution: cover.Attribution,
+		Width: cover.Width, Height: cover.Height,
+	}
+}
+
 type coverResponse struct {
 	Hash        string `json:"hash"`
 	Attribution string `json:"attribution"`
@@ -165,10 +186,7 @@ func (h *CoverHandler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpx.JSON(w, r, http.StatusOK, coverResponse{
-		Hash: cover.Hash, Attribution: cover.Attribution,
-		Width: cover.Width, Height: cover.Height,
-	})
+	httpx.JSON(w, r, http.StatusOK, toCoverResponse(cover))
 }
 
 // remove takes a contest's cover away, leaving it the drawn one.
@@ -185,6 +203,51 @@ func (h *CoverHandler) remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.NoContent(w, r)
+}
+
+// staff answers what cover this contest has, whatever its status.
+func (h *CoverHandler) staff(w http.ResponseWriter, r *http.Request) {
+	contestID, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+	cover, err := h.covers.ByContest(r.Context(), contestID)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, toCoverResponse(cover))
+}
+
+// staffFile serves the bytes of that cover to the same reader.
+//
+// Separate from the public route rather than a flag on it: this one answers
+// for a draft, and the two differ in exactly the question they are asked.
+// `private` because the answer belongs to one account — a shared cache must
+// never hold a picture of a contest that has not been published — and a short
+// life because an organiser replacing a cover looks at the result at once.
+func (h *CoverHandler) staffFile(w http.ResponseWriter, r *http.Request) {
+	contestID, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+	cover, err := h.covers.ByContest(r.Context(), contestID)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+
+	body, contentType, err := h.covers.Read(r.Context(), cover.Hash, requestedCoverSize(r))
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	header := w.Header()
+	header.Set("Cache-Control", "private, max-age=30")
+	header.Set("X-Content-Type-Options", "nosniff")
+	header.Set("Content-Type", contentType)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }
 
 // public serves one rendition to a visitor with no session.
