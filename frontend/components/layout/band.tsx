@@ -18,16 +18,30 @@ import { cn } from "@/lib/utils";
 export function Band({
   className,
   fill,
+  rule = true,
   children,
   ...props
 }: React.ComponentProps<"section"> & {
   /** Take the remaining height, so the hatched fields run to the fold. */
   fill?: boolean;
+  /**
+   * Whether this band draws the rule that separates it from the next one.
+   * The last band on a page has nothing after it, and a hairline along the
+   * bottom of the page separates the page from the browser.
+   *
+   * A prop rather than a class, because `className` lands on the content
+   * column and the rule is drawn by the section around it: passing
+   * `border-b-0` looks like it should work, does nothing, and takes a
+   * browser to notice — which is exactly how the footer shipped with a rule
+   * under the last thing on the page.
+   */
+  rule?: boolean;
 }) {
   return (
     <section
       className={cn(
-        "grid grid-cols-[minmax(var(--gutter-min),1fr)_minmax(0,var(--container-column))_minmax(var(--gutter-min),1fr)] border-b border-line max-narrow:grid-cols-[minmax(0,1fr)]",
+        "grid grid-cols-[minmax(var(--gutter-min),1fr)_minmax(0,var(--container-column))_minmax(var(--gutter-min),1fr)] max-narrow:grid-cols-[minmax(0,1fr)]",
+        rule && "border-b border-line",
         fill && "flex-1",
       )}
       {...props}
