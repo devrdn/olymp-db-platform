@@ -197,6 +197,307 @@ func TestWatchRosterIsBoundedAndSaysSo(t *testing.T) {
 	})
 }
 
+// TestWatchRosterCostsWhatItShows holds the participants table to the size of
+// the table.
+//
+// The screen recomputes it every monitor.RosterCacheTTL for as long as an
+// organiser is looking, so what matters is not that one computation is a range
+// but that the range does not lengthen as the contest goes on. The same
+// participants are measured twice, the second time with several times the
+// history behind them: what the read touches must not have moved, and no
+// journal may be touched at all.
+func TestWatchRosterCostsWhatItShows(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newWatchFixture(t, ctx)
+		loadOlympiadQueries(t, f, 1, 40, 50)
+		analyzeForPlans(t, ctx)
+
+		roster := func(w *Watch) error {
+			_, err := w.Roster(ctx, f.contest, monitor.MaxRosterRows)
+			return err
+		}
+		early, earlyAggregate := measureRows(t, roster), measureAggregate(t, ctx, f.contest)
+
+		// The rest of the contest: the same forty participants, five more
+		// rounds of everything they do.
+		for round := 2; round <= 6; round++ {
+			moreHistory(t, f, round, 50)
+		}
+		analyzeForPlans(t, ctx)
+		late, lateAggregate := measureRows(t, roster), measureAggregate(t, ctx, f.contest)
+		t.Logf("the table read %d rows and then %d; the aggregate it replaces, %d and then %d",
+			total(early), total(late), total(earlyAggregate), total(lateAggregate))
+
+		for table := range journals {
+			if early[table] != 0 || late[table] != 0 {
+				t.Errorf("the participants table read %d rows of %s and then %d: it reads no journal",
+					early[table], table, late[table])
+			}
+		}
+		if total(late) > total(early) {
+			t.Errorf("the participants table read %d rows over 40 participants and %d after five more rounds "+
+				"of the same contest (%v then %v): its cost follows the history, not the table",
+				total(early), total(late), early, late)
+		}
+		// The aggregate is measured on the same data for the same reason the
+		// oracle above computes it: to say what was wrong with it. It read the
+		// history, so it read more of it as the contest went on.
+		if total(lateAggregate) <= total(earlyAggregate) {
+			t.Errorf("the aggregate this replaces read %d rows and then %d: the fixture does not grow enough "+
+				"to show what it cost", total(earlyAggregate), total(lateAggregate))
+		}
+	})
+}
+
+// measureAggregate runs rosterAggregateSQL under EXPLAIN (ANALYZE) and
+// returns how many rows of each relation it really touched.
+func measureAggregate(t *testing.T, ctx context.Context, contest uuid.UUID) map[string]int64 {
+	t.Helper()
+	touched := map[string]int64{}
+	measuringQuerier{Querier: storage.QuerierFrom(ctx, testPool), t: t, rows: touched}.
+		measure(ctx, rosterAggregateSQL, contest, monitor.MaxRosterRows, monitor.LargePasteChars)
+	return touched
+}
+
+// total is every row a read touched, whatever it touched.
+func total(rows map[string]int64) int64 {
+	var n int64
+	for _, touched := range rows {
+		n += touched
+	}
+	return n
+}
+
+// rosterAggregateSQL is the participants table as it was computed before
+// migration 000037: three LATERAL aggregates per registration over the whole
+// of query_log, submissions and participant_events, and the fingerprints more
+// than one of them ran.
+//
+// It is kept here, and only here, as the oracle the counters the journals now
+// keep are checked against: the numbers on the organiser's screen, and so the
+// flags raised on it, must be the same numbers on the same data.
+const rosterAggregateSQL = `
+WITH regs AS (
+    SELECT r.id, u.login
+    FROM registrations r
+    JOIN users u ON u.id = r.user_id
+    WHERE r.contest_id = $1
+    ORDER BY u.login, r.id
+    LIMIT $2
+), counted AS (
+    SELECT regs.*,
+           ql.total, ql.errors, ql.rejected, ql.addresses, ql.fingerprints,
+           sb.correct, sb.wrong, sb.blind,
+           ev.page_left, ev.away_ms, ev.pastes, ev.large_pastes, ev.ip_changes, ev.parallel,
+           greatest(ql.last_at, sb.last_at, ev.last_at) AS last_at
+    FROM regs
+    CROSS JOIN LATERAL (
+        SELECT count(*) AS total,
+               count(*) FILTER (WHERE status IN ('error', 'timeout')) AS errors,
+               count(*) FILTER (WHERE status = 'rejected') AS rejected,
+               count(DISTINCT ip) AS addresses,
+               COALESCE(array_agg(DISTINCT sql_fingerprint) FILTER (
+                   WHERE status = 'ok' AND sql_fingerprint IS NOT NULL),
+                   '{}') AS fingerprints,
+               max(executed_at) AS last_at
+        FROM query_log
+        WHERE registration_id = regs.id
+    ) ql
+    CROSS JOIN LATERAL (
+        SELECT count(*) FILTER (WHERE a.is_correct) AS correct,
+               count(*) FILTER (WHERE NOT a.is_correct) AS wrong,
+               count(*) FILTER (WHERE a.is_correct AND NOT EXISTS (
+                   SELECT 1 FROM query_log q
+                   WHERE q.registration_id = regs.id
+                     AND q.status = 'ok'
+                     AND q.executed_at < a.submitted_at
+                     AND q.executed_at >= COALESCE(a.previous, '-infinity'))) AS blind,
+               max(a.submitted_at) AS last_at
+        FROM (
+            SELECT s.is_correct, s.submitted_at,
+                   lag(s.submitted_at) OVER (ORDER BY s.submitted_at, s.id) AS previous
+            FROM submissions s
+            WHERE s.registration_id = regs.id
+        ) a
+    ) sb
+    CROSS JOIN LATERAL (
+        SELECT count(*) FILTER (WHERE kind = 'page_left') AS page_left,
+               COALESCE(sum((payload->>'away_ms')::bigint) FILTER (WHERE kind = 'page_left'), 0) AS away_ms,
+               COALESCE(sum(COALESCE((payload->>'count')::bigint, 1)) FILTER (WHERE kind = 'paste'), 0) AS pastes,
+               count(*) FILTER (WHERE kind = 'paste'
+                                  AND payload->>'target' IN ('editor', 'answer')
+                                  AND (payload->>'chars')::bigint > $3) AS large_pastes,
+               count(*) FILTER (WHERE kind = 'ip_changed') AS ip_changes,
+               count(*) FILTER (WHERE kind = 'parallel_session') AS parallel,
+               max(created_at) AS last_at
+        FROM participant_events
+        WHERE registration_id = regs.id
+    ) ev
+), shared AS (
+    SELECT fingerprint
+    FROM counted CROSS JOIN LATERAL unnest(counted.fingerprints) AS fingerprint
+    GROUP BY fingerprint
+    HAVING count(*) > 1
+)
+SELECT id,
+       total, errors, rejected, addresses,
+       correct, wrong, blind,
+       page_left, away_ms, pastes, large_pastes, ip_changes, parallel,
+       (SELECT count(*) FROM unnest(counted.fingerprints) AS own
+        WHERE own IN (SELECT fingerprint FROM shared)),
+       last_at
+FROM counted
+ORDER BY login, id`
+
+// aggregatedRow is one row of rosterAggregateSQL.
+type aggregatedRow struct {
+	registration                   uuid.UUID
+	queries, errors, rejected      int
+	addresses                      int
+	correct, wrong, blind          int
+	pageLeft                       int
+	awayMs                         int64
+	pastes, largePastes            int
+	ipChanges, parallel, identical int
+	lastActivity                   *time.Time
+}
+
+// aggregateRoster computes the participants table the way it was computed
+// before the journals kept their own counters.
+func aggregateRoster(t *testing.T, ctx context.Context, contest uuid.UUID, limit int) map[uuid.UUID]aggregatedRow {
+	t.Helper()
+	rows, err := storage.QuerierFrom(ctx, testPool).Query(ctx, rosterAggregateSQL,
+		contest, limit, monitor.LargePasteChars)
+	if err != nil {
+		t.Fatalf("the aggregate the counters replace: %v", err)
+	}
+	defer rows.Close()
+	out := map[uuid.UUID]aggregatedRow{}
+	for rows.Next() {
+		var r aggregatedRow
+		if err := rows.Scan(&r.registration, &r.queries, &r.errors, &r.rejected, &r.addresses,
+			&r.correct, &r.wrong, &r.blind, &r.pageLeft, &r.awayMs, &r.pastes, &r.largePastes,
+			&r.ipChanges, &r.parallel, &r.identical, &r.lastActivity); err != nil {
+			t.Fatalf("scan an aggregated row: %v", err)
+		}
+		out[r.registration] = r
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("the aggregate the counters replace: %v", err)
+	}
+	return out
+}
+
+// TestWatchRosterAgreesWithTheAggregateItReplaces is the contract: the table
+// the journals now count is the table the read used to compute, column for
+// column, on data holding every counter and every flag — shared fingerprints,
+// a second address, an answer with nothing behind it, a paste over the
+// threshold and one under it, and a query journalled before the answer it led
+// to and completed after it.
+func TestWatchRosterAgreesWithTheAggregateItReplaces(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newWatchFixture(t, ctx)
+		// A contest going about its business: shared fingerprints across
+		// forty participants, errors, rejections, absences and pastes.
+		loadOlympiadQueries(t, f, 1, 40, 60)
+
+		// And the corners that load does not reach.
+		long := "select name, alibi from suspects where city = 'Chisinau' order by name"
+		roaming, _ := f.participant("roaming")
+		f.query(roaming, long, "ok", "192.0.2.1", f.at(time.Minute))
+		f.query(roaming, long, "ok", "2001:db8::1", f.at(2*time.Minute))
+		f.event(roaming, monitor.IPChanged{From: mustAddr("192.0.2.1"), To: mustAddr("2001:db8::1")}, f.at(3*time.Minute))
+		f.event(roaming, monitor.ParallelSession{OtherIP: mustAddr("192.0.2.5"), UserAgent: "x"}, f.at(4*time.Minute))
+
+		guessing, _ := f.participant("guessing")
+		f.answer(guessing, f.question, 1, false, f.at(time.Minute))
+		f.answer(guessing, f.makeQuestion(2), 1, true, f.at(2*time.Minute))
+		f.event(guessing, monitor.Paste{Target: monitor.PasteAnswer, Chars: monitor.LargePasteChars + 1}, f.at(3*time.Minute))
+		f.event(guessing, monitor.Paste{Target: monitor.PasteNotes, Chars: 9000}, f.at(4*time.Minute))
+
+		// The two-phase write: the row is journalled before the query runs and
+		// completed after the answer was given. Read at any moment after it
+		// completes, that query is what stands behind the answer.
+		patient, _ := f.participant("patient")
+		id := f.query(patient, long, "running", "192.0.2.7", f.at(time.Minute))
+		f.answer(patient, f.question, 1, true, f.at(time.Minute+time.Second))
+		f.exec(`UPDATE query_log SET status = 'ok', completed_at = $2 WHERE id = $1`, id, f.at(2*time.Minute))
+
+		// Enrolled and idle: no summary row exists for them at all, and the
+		// table still has to show them with every counter at nought.
+		f.participant("idle")
+
+		roster, err := NewWatch(testPool).Roster(ctx, f.contest, monitor.MaxRosterRows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := aggregateRoster(t, ctx, f.contest, monitor.MaxRosterRows)
+		if len(roster.Rows) != len(want) || len(want) < 43 {
+			t.Fatalf("the table has %d rows and the aggregate %d", len(roster.Rows), len(want))
+		}
+
+		var sawFlag monitor.Flags
+		for _, got := range roster.Rows {
+			w, ok := want[got.Registration]
+			if !ok {
+				t.Fatalf("%s is on the table and not in the aggregate", got.Login)
+			}
+			if got.Queries != w.queries || got.QueryErrors != w.errors || got.QueryRejected != w.rejected ||
+				got.Addresses != w.addresses {
+				t.Errorf("%s: queries %d/%d/%d from %d addresses, want %d/%d/%d from %d",
+					got.Login, got.Queries, got.QueryErrors, got.QueryRejected, got.Addresses,
+					w.queries, w.errors, w.rejected, w.addresses)
+			}
+			if got.Correct != w.correct || got.Wrong != w.wrong || got.BlindCorrect != w.blind {
+				t.Errorf("%s: answers %d correct, %d wrong, %d of them blind, want %d/%d/%d",
+					got.Login, got.Correct, got.Wrong, got.BlindCorrect, w.correct, w.wrong, w.blind)
+			}
+			if got.PageLeft != w.pageLeft || got.AwayMs != w.awayMs || got.Pastes != w.pastes ||
+				got.IPChanges != w.ipChanges || got.ParallelSessions != w.parallel ||
+				got.IdenticalQueries != w.identical {
+				t.Errorf("%s: %d absences for %dms, %d pastes, %d address changes, %d parallel sessions, "+
+					"%d shared queries; want %d/%d/%d/%d/%d/%d",
+					got.Login, got.PageLeft, got.AwayMs, got.Pastes, got.IPChanges, got.ParallelSessions,
+					got.IdenticalQueries, w.pageLeft, w.awayMs, w.pastes, w.ipChanges, w.parallel, w.identical)
+			}
+			// The largest paste replaced a count of those past the threshold,
+			// so the two meet at the flag rather than at the number.
+			if got.Flags().LargePaste != (w.largePastes > 0) {
+				t.Errorf("%s: large-paste flag %v on a largest paste of %d, and %d pastes past the threshold",
+					got.Login, got.Flags().LargePaste, got.MaxPasteChars, w.largePastes)
+			}
+			if !sameTime(got.LastActivity, w.lastActivity) {
+				t.Errorf("%s: last activity %v, want %v", got.Login, got.LastActivity, w.lastActivity)
+			}
+			sawFlag = or(sawFlag, got.Flags())
+		}
+		// The data above has to raise every flag, or the agreement is only
+		// about the counters nobody looks at.
+		if sawFlag != (monitor.Flags{MultipleIPs: true, ParallelSessions: true, LongAbsence: true,
+			AnswerWithoutQueries: true, LargePaste: true, IdenticalQueries: true}) {
+			t.Errorf("the fixture raises %+v; every flag has to be exercised for this to prove anything", sawFlag)
+		}
+	})
+}
+
+func sameTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
+}
+
+func or(a, b monitor.Flags) monitor.Flags {
+	return monitor.Flags{
+		MultipleIPs:          a.MultipleIPs || b.MultipleIPs,
+		ParallelSessions:     a.ParallelSessions || b.ParallelSessions,
+		LongAbsence:          a.LongAbsence || b.LongAbsence,
+		AnswerWithoutQueries: a.AnswerWithoutQueries || b.AnswerWithoutQueries,
+		LargePaste:           a.LargePaste || b.LargePaste,
+		IdenticalQueries:     a.IdenticalQueries || b.IdenticalQueries,
+	}
+}
+
 // Each flag is raised exactly past its threshold (design §5): one participant
 // sits on the threshold and does not raise it, the next crosses it.
 func TestWatchRosterRaisesEachFlagAtItsThreshold(t *testing.T) {
@@ -437,7 +738,7 @@ func (q explainingQuerier) QueryRow(ctx context.Context, sql string, args ...any
 }
 
 // measuringQuerier runs every statement under EXPLAIN (ANALYZE) first and
-// adds up how many journal rows it really touched, per table.
+// adds up how many rows it really touched, per relation.
 //
 // A plan's shape says the read is a range; only the count says how long the
 // range is. A LATERAL that takes a page per registration is an index range in
@@ -485,7 +786,7 @@ func (q measuringQuerier) measure(ctx context.Context, sql string, args ...any) 
 	}
 	var walk func(n measuredNode)
 	walk = func(n measuredNode) {
-		if journals[n.Relation] {
+		if n.Relation != "" {
 			q.rows[n.Relation] += int64((n.Rows + n.Removed) * max(n.Loops, 1))
 		}
 		for _, child := range n.Plans {
@@ -497,9 +798,9 @@ func (q measuringQuerier) measure(ctx context.Context, sql string, args ...any) 
 	}
 }
 
-// measureJournalRows runs read with every statement measured and returns how
-// many rows of each journal it touched.
-func measureJournalRows(t *testing.T, read func(w *Watch) error) map[string]int64 {
+// measureRows runs read with every statement measured and returns how many
+// rows of each relation it touched.
+func measureRows(t *testing.T, read func(w *Watch) error) map[string]int64 {
 	t.Helper()
 	touched := map[string]int64{}
 	watch := NewWatch(testPool)
@@ -539,11 +840,7 @@ func TestWatchReadsScanNoJournal(t *testing.T) {
 		for ci, f := range contests {
 			loadOlympiad(t, f, ci, 40)
 		}
-		for _, table := range []string{"users", "registrations", "query_log", "participant_events", "submissions", "audit_log", "workspace_revisions"} {
-			if _, err := q.Exec(ctx, "ANALYZE "+table); err != nil {
-				t.Fatalf("analyze %s: %v", table, err)
-			}
-		}
+		analyzeForPlans(t, ctx)
 
 		f := contests[1]
 		var reg uuid.UUID
@@ -621,6 +918,52 @@ func TestWatchReadsScanNoJournal(t *testing.T) {
 			}
 		}
 	})
+}
+
+// analyzeForPlans gathers the statistics the planner chooses on, so that the
+// plan a test sees is the plan production would run on data of this shape.
+func analyzeForPlans(t *testing.T, ctx context.Context) {
+	t.Helper()
+	q := storage.QuerierFrom(ctx, testPool)
+	for _, table := range []string{"users", "registrations", "query_log", "participant_events",
+		"submissions", "audit_log", "workspace_revisions", "registration_activity"} {
+		if _, err := q.Exec(ctx, "ANALYZE "+table); err != nil {
+			t.Fatalf("analyze %s: %v", table, err)
+		}
+	}
+}
+
+// moreHistory gives every participant already enrolled in f's contest another
+// round of what they do: queries queries, twenty events and one answer to a
+// question of this round, all after everything already there. Rounds are an
+// hour apart, so the times of one never meet another's.
+func moreHistory(t *testing.T, f *watchFixture, round, queries int) {
+	t.Helper()
+	question := f.makeQuestion(round)
+	start := f.base.Add(time.Duration(round) * time.Hour)
+	f.exec(`
+		INSERT INTO query_log (registration_id, request_id, sql_text, status, ip, sql_fingerprint, executed_at)
+		SELECT r.id, gen_random_uuid(),
+		       'select * from suspects where id = ' || n || ' and name like ''%' || md5(n::text) || '%''',
+		       (ARRAY['ok','ok','ok','error','rejected'])[1 + n % 5], '192.0.2.1', n % 50,
+		       $2::timestamptz + n * interval '10 seconds'
+		FROM registrations r CROSS JOIN generate_series(1, $3::int) n
+		WHERE r.contest_id = $1
+		ORDER BY n, r.id`, f.contest, start, queries)
+	f.exec(`
+		INSERT INTO participant_events (contest_id, registration_id, kind, payload, created_at)
+		SELECT $1, r.id, CASE WHEN n % 2 = 0 THEN 'page_left' ELSE 'paste' END,
+		       CASE WHEN n % 2 = 0 THEN '{"away_ms": 4000}'::jsonb
+		            ELSE '{"target": "editor", "chars": 300, "text": "x"}'::jsonb END,
+		       $2::timestamptz + n * interval '30 seconds'
+		FROM registrations r CROSS JOIN generate_series(1, 20) n
+		WHERE r.contest_id = $1
+		ORDER BY n, r.id`, f.contest, start)
+	f.exec(`
+		INSERT INTO submissions (registration_id, question_id, attempt_no, value, is_correct, submitted_at)
+		SELECT r.id, $2, 1, 'v', true, $3::timestamptz + interval '30 minutes'
+		FROM registrations r
+		WHERE r.contest_id = $1`, f.contest, question, start)
 }
 
 // loadOlympiad enrols participants in f's contest and gives each three

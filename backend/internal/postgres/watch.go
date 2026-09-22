@@ -22,6 +22,14 @@ import (
 // never a scan of a journal: query_log, submissions, participant_events and audit_log are the
 // largest tables in the database.
 //
+// The participants table is the one read that touches no journal at all. A
+// range is the right shape for a page, which returns what it reads; it is the
+// wrong shape for a counter, which reads a contest's whole history to return
+// one number and is asked for it again three seconds later. Since migration
+// 000037 the journals keep those counters as they are written and Roster
+// reads the summary — see rosterSQL, and registration_activity for what is
+// kept and why each counter is kept the way it is.
+//
 // The interfaces over this type are declared by its consumer,
 // monitor.WatchService (CLAUDE.md, Go layout rule 3).
 type Watch struct {
@@ -42,106 +50,50 @@ func (w *Watch) querier(ctx context.Context) storage.Querier {
 	return q
 }
 
-// rosterSQL is the whole participants table in one statement.
+// rosterSQL is the whole participants table in one statement, and it reads no
+// journal at all.
 //
-// The registrations of the contest come first and are bounded ($2); every
-// counter is then a LATERAL aggregate over that one registration's own index
-// range — query_log (registration_id, executed_at), submissions
-// (registration_id, submitted_at), participant_events (registration_id, …) —
-// so the cost grows with what this contest's participants did and nothing
-// else. An aggregate is what keeps each LATERAL a range per registration: a
-// plain join the planner may turn into a hash join over the whole journal.
+// Every counter it shows used to be a LATERAL aggregate over one
+// registration's whole range of query_log, submissions and
+// participant_events. That is a read whose cost grows with the contest's
+// history, repeated every three seconds for as long as the screen is open
+// (monitor.RosterCacheTTL), and three of the aggregates — the distinct
+// addresses, the set of fingerprints and the blind-answer test — read columns
+// no serving index carries, so each of those passes fetched every journal row
+// from the heap on top of it.
 //
-// The identical-queries count rides on the same pass over the query log:
-// each registration's distinct fingerprints of successful queries, then the
-// fingerprints more than one registration has. Only a statement of at least
-// monitor.IdenticalQueryMinChars normalised characters has a fingerprint at
-// all (monitor.ComparableFingerprint, applied as the row is written), so no
-// text is measured here.
+// Since migration 000037 the journals keep the counters themselves, one
+// summary row per registration (registration_activity), so the table is the
+// contest's registrations and their summaries and nothing more: one range of
+// registrations_contest_score_idx, one primary-key lookup per participant,
+// and a
+// cost that is the number of participants at the start of a contest and the
+// same number at the end of it. TestWatchRosterCostsWhatItShows measures that
+// it does not move when the history behind it grows.
 //
-// A correct answer is "blind" when no successful query of the same
-// participant ran between their previous answer to any question (or the
-// beginning) and this one — design §3's window, and §5's flag.
+// A registration that has done nothing yet has no summary row — the first
+// thing it does creates one — so the join is an outer one and every counter
+// reads as the zero it is.
 const rosterSQL = `
-WITH regs AS (
-    SELECT r.id, r.user_id, u.login, u.full_name, r.status, r.started_at, r.finished_at
-    FROM registrations r
-    JOIN users u ON u.id = r.user_id
-    WHERE r.contest_id = $1
-    ORDER BY u.login, r.id
-    LIMIT $2
-), counted AS (
-    SELECT regs.*,
-           ql.total, ql.errors, ql.rejected, ql.addresses, ql.fingerprints,
-           sb.correct, sb.wrong, sb.blind,
-           ev.page_left, ev.away_ms, ev.pastes, ev.large_pastes, ev.ip_changes, ev.parallel,
-           greatest(ql.last_at, sb.last_at, ev.last_at) AS last_at
-    FROM regs
-    CROSS JOIN LATERAL (
-        SELECT count(*) AS total,
-               count(*) FILTER (WHERE status IN ('error', 'timeout')) AS errors,
-               count(*) FILTER (WHERE status = 'rejected') AS rejected,
-               count(DISTINCT ip) AS addresses,
-               COALESCE(array_agg(DISTINCT sql_fingerprint) FILTER (
-                   WHERE status = 'ok' AND sql_fingerprint IS NOT NULL),
-                   '{}') AS fingerprints,
-               max(executed_at) AS last_at
-        FROM query_log
-        WHERE registration_id = regs.id
-    ) ql
-    CROSS JOIN LATERAL (
-        SELECT count(*) FILTER (WHERE a.is_correct) AS correct,
-               count(*) FILTER (WHERE NOT a.is_correct) AS wrong,
-               count(*) FILTER (WHERE a.is_correct AND NOT EXISTS (
-                   SELECT 1 FROM query_log q
-                   WHERE q.registration_id = regs.id
-                     AND q.status = 'ok'
-                     AND q.executed_at < a.submitted_at
-                     AND q.executed_at >= COALESCE(a.previous, '-infinity'))) AS blind,
-               max(a.submitted_at) AS last_at
-        FROM (
-            SELECT s.is_correct, s.submitted_at,
-                   lag(s.submitted_at) OVER (ORDER BY s.submitted_at, s.id) AS previous
-            FROM submissions s
-            WHERE s.registration_id = regs.id
-        ) a
-    ) sb
-    CROSS JOIN LATERAL (
-        SELECT count(*) FILTER (WHERE kind = 'page_left') AS page_left,
-               COALESCE(sum((payload->>'away_ms')::bigint) FILTER (WHERE kind = 'page_left'), 0) AS away_ms,
-               -- A paste folded from identical ones in a row (monitor.CleanBatch)
-               -- counts as all of them.
-               COALESCE(sum(COALESCE((payload->>'count')::bigint, 1)) FILTER (WHERE kind = 'paste'), 0) AS pastes,
-               count(*) FILTER (WHERE kind = 'paste'
-                                  AND payload->>'target' IN ('editor', 'answer')
-                                  AND (payload->>'chars')::bigint > $3) AS large_pastes,
-               count(*) FILTER (WHERE kind = 'ip_changed') AS ip_changes,
-               count(*) FILTER (WHERE kind = 'parallel_session') AS parallel,
-               max(created_at) AS last_at
-        FROM participant_events
-        WHERE registration_id = regs.id
-    ) ev
-), shared AS (
-    SELECT fingerprint
-    FROM counted CROSS JOIN LATERAL unnest(counted.fingerprints) AS fingerprint
-    GROUP BY fingerprint
-    HAVING count(*) > 1
-)
-SELECT id, user_id, login, full_name, status, started_at, finished_at,
-       total, errors, rejected, addresses,
-       correct, wrong, blind,
-       page_left, away_ms, pastes, large_pastes, ip_changes, parallel,
-       (SELECT count(*) FROM unnest(counted.fingerprints) AS own
-        WHERE own IN (SELECT fingerprint FROM shared)),
-       last_at
-FROM counted
-ORDER BY login, id`
+SELECT r.id, r.user_id, u.login, u.full_name, r.status, r.started_at, r.finished_at,
+       COALESCE(a.queries, 0), COALESCE(a.query_errors, 0), COALESCE(a.query_rejected, 0),
+       COALESCE(a.addresses, 0),
+       COALESCE(a.correct, 0), COALESCE(a.wrong, 0), COALESCE(a.blind, 0),
+       COALESCE(a.page_left, 0), COALESCE(a.away_ms, 0), COALESCE(a.pastes, 0),
+       COALESCE(a.max_paste_chars, 0), COALESCE(a.ip_changes, 0), COALESCE(a.parallel_sessions, 0),
+       COALESCE(a.identical_queries, 0),
+       greatest(a.last_query_at, a.last_answer_at, a.last_event_at)
+FROM registrations r
+JOIN users u ON u.id = r.user_id
+LEFT JOIN registration_activity a ON a.registration_id = r.id
+WHERE r.contest_id = $1
+ORDER BY u.login, r.id
+LIMIT $2`
 
 // Roster computes the participants table of a contest, at most limit rows
 // in login order, and whether there were more.
 func (w *Watch) Roster(ctx context.Context, contest uuid.UUID, limit int) (monitor.Roster, error) {
-	rows, err := w.querier(ctx).Query(ctx, rosterSQL,
-		contest, limit+1, monitor.LargePasteChars)
+	rows, err := w.querier(ctx).Query(ctx, rosterSQL, contest, limit+1)
 	if err != nil {
 		return monitor.Roster{}, fmt.Errorf("compute the participants table of %s: %w", contest, err)
 	}
@@ -153,7 +105,7 @@ func (w *Watch) Roster(ctx context.Context, contest uuid.UUID, limit int) (monit
 		if err := rows.Scan(&r.Registration, &r.User, &r.Login, &r.FullName, &r.Status, &r.StartedAt, &r.FinishedAt,
 			&r.Queries, &r.QueryErrors, &r.QueryRejected, &r.Addresses,
 			&r.Correct, &r.Wrong, &r.BlindCorrect,
-			&r.PageLeft, &r.AwayMs, &r.Pastes, &r.LargePastes, &r.IPChanges, &r.ParallelSessions,
+			&r.PageLeft, &r.AwayMs, &r.Pastes, &r.MaxPasteChars, &r.IPChanges, &r.ParallelSessions,
 			&r.IdenticalQueries, &r.LastActivity); err != nil {
 			return monitor.Roster{}, fmt.Errorf("scan a participants table row: %w", err)
 		}
