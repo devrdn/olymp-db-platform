@@ -735,6 +735,7 @@ const ro = {
         no_reference_answer: "O întrebare nu are răspuns de referință, deci nimic nu o poate corecta.",
         no_schedule: "Olimpiada nu are început și sfârșit.",
         icpc_choice_needs_attempt_limit: "O întrebare cu variante, la punctaj ICPC, nu are o limită de încercări sau limita depășește numărul de variante minus numărul de variante corecte, așa că variantele ar putea fi încercate una câte una până la una corectă, pentru prețul unei penalizări.",
+        choice_needs_attempt_limit: "O întrebare cu variante nu are o limită de încercări sau limita depășește numărul de variante minus numărul de variante corecte, așa că variantele ar putea fi trimise una după alta până la una corectă.",
         sequential_needs_max_attempts: "O întrebare nu are limită de încercări, așa că un participant blocat pe ea în ordine secvențială nu ar putea trece mai departe.",
         sequential_hides_question: "O întrebare ascunsă în ordine secvențială are o altă întrebare după ea, care nu ar putea fi niciodată atinsă.",
         winner_needs_final: "Punctajul este pe primul care rezolvă, dar nicio întrebare nu este finală, deci nimeni nu ar putea câștiga.",
