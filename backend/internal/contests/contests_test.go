@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"slices"
 )
 
 func TestDraftMovesToPublished(t *testing.T) {
@@ -422,5 +423,32 @@ func TestValidateAcceptsAnICPCPenaltyAtItsBounds(t *testing.T) {
 		if err := c.Validate(); err != nil {
 			t.Errorf("penalty %d: Validate() = %v, want nil", penalty, err)
 		}
+	}
+}
+
+// The one filter that decides what somebody with no session may see, and the
+// test is written against the lifecycle rather than against a list: adding a
+// status to the product means deciding, here, whether a stranger sees it.
+func TestOnlyADraftIsKeptFromAStranger(t *testing.T) {
+	all := []string{
+		contests.StatusDraft,
+		contests.StatusPublished,
+		contests.StatusRunning,
+		contests.StatusFinished,
+		contests.StatusArchived,
+	}
+
+	for _, status := range all {
+		public := slices.Contains(contests.PublicStatuses, status)
+		if status == contests.StatusDraft && public {
+			t.Error("a draft is visible to a stranger")
+		}
+		if status != contests.StatusDraft && !public {
+			t.Errorf("%q is not in PublicStatuses; if that is deliberate, say so here", status)
+		}
+	}
+	if len(contests.PublicStatuses) != len(all)-1 {
+		t.Errorf("PublicStatuses has %d entries for %d statuses: a status was added without a decision",
+			len(contests.PublicStatuses), len(all))
 	}
 }

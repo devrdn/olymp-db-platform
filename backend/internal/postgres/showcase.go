@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/showcase"
 )
@@ -104,9 +105,9 @@ func (r *Showcase) Recent(ctx context.Context, limit int) ([]showcase.Contest, e
 		           ORDER BY cl.lang LIMIT 1
 		       ), '')
 		FROM contests c
-		WHERE c.status IN ('published', 'running', 'finished', 'archived')
+		WHERE `+publicStatusFilter("c.status", 2)+`
 		ORDER BY COALESCE(c.starts_at, c.created_at) DESC, c.id DESC
-		LIMIT $1`, limit)
+		LIMIT $1`, limit, contests.PublicStatuses)
 	if err != nil {
 		return nil, fmt.Errorf("read the recent contests: %w", err)
 	}
