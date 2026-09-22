@@ -1,5 +1,5 @@
-import { LanguageSwitcher } from "@/components/layout/language-switcher";
 import { Band } from "@/components/layout/band";
+import { LanguageSwitcher } from "@/components/layout/language-switcher";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { OrnamentBand } from "@/components/product/ornament";
 import type { Locale } from "@/lib/i18n/config";
