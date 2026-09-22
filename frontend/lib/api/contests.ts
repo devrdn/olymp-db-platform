@@ -252,6 +252,23 @@ export function coverHref(contestId: string, hash: string, size: 800 | 1600 = 80
 }
 
 /**
+ * The same rendition, read as the contest's staff rather than as a visitor.
+ *
+ * The public address refuses a draft — it refuses everybody, which is what it
+ * is for — and a draft is the state a cover is chosen in. So the panel that
+ * chooses one reads through this address instead: same bytes, behind the
+ * session, answered `private` so no shared cache keeps a picture of a contest
+ * nobody has published.
+ *
+ * The hash still travels, for a smaller reason: the answer is cached for
+ * half a minute, and an organiser who has just replaced a cover should see
+ * the new one rather than wait out somebody else's timer.
+ */
+export function coverStaffHref(contestId: string, hash: string, size: 800 | 1600 = 800): string {
+  return `/api/v1/contests/${contestId}/cover/file?size=${size}&v=${hash}`;
+}
+
+/**
  * Whether sequential progression (§6.1.1) actually governs this contest.
  *
  * Mirrors contests.Contest.SequentialActive on the Go side (finding 4):

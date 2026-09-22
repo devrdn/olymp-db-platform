@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Tooltip } from "@/components/ui/tooltip";
-import { coverHref, MAX_COVER_ATTRIBUTION, type ContestCover } from "@/lib/api/contests";
+import { coverStaffHref, MAX_COVER_ATTRIBUTION, type ContestCover } from "@/lib/api/contests";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import { removeCoverAction, uploadCoverAction, type SettingsState } from "./actions";
@@ -194,7 +194,7 @@ export function CoverPanel({
             {chosen?.preview ?? current ? (
               /* eslint-disable-next-line @next/next/no-img-element */
               <img
-                src={chosen?.preview ?? coverHref(contestId, current!.hash)}
+                src={chosen?.preview ?? coverStaffHref(contestId, current!.hash)}
                 alt={t.currentAlt}
                 className="size-full object-cover"
               />
