@@ -1,0 +1,113 @@
+package postgres
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/db-contest/backend/internal/showcase"
+)
+
+// Showcase implements showcase.Repository: the two reads the landing page
+// makes, which anybody can make without signing in.
+var _ showcase.Repository = (*Showcase)(nil)
+
+// Showcase reads what an installation shows about itself.
+//
+// Both statements are aggregates over whole tables, which is only acceptable
+// because of what they aggregate. Recent reads contests, whose row count is
+// how many olympiads the installation has ever run — hundreds, not millions —
+// so its selection and its ordering need no index of their own. Numbers never
+// touches query_log: the queries figure is a sum over registration_activity,
+// the summary migration 000037 keeps by trigger, which holds one row per
+// registration rather than one per query. Counting the journal here would put
+// a scan of the largest table in the installation behind a page that anybody
+// may load, from anywhere, without an account.
+type Showcase struct {
+	pool *pgxpool.Pool
+}
+
+// NewShowcase returns the landing page's read side over pool.
+func NewShowcase(pool *pgxpool.Pool) *Showcase { return &Showcase{pool: pool} }
+
+func (r *Showcase) querier(ctx context.Context) storage.Querier {
+	return storage.QuerierFrom(ctx, r.pool)
+}
+
+// Numbers counts the installation's four numbers in one statement.
+//
+// Contests are the ones that were actually held — finished and archived — so
+// the figure cannot be raised by publishing something nobody sat. Queries is
+// the sum of the summary counters, never count(*) over query_log (see the
+// type's own doc). Solved counts correct submissions, which is what the
+// participant's own profile counts for one account.
+func (r *Showcase) Numbers(ctx context.Context) (showcase.Numbers, error) {
+	var n showcase.Numbers
+	err := r.querier(ctx).QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM contests WHERE status IN ('finished', 'archived')),
+		       (SELECT count(*) FROM registrations),
+		       (SELECT COALESCE(sum(queries), 0) FROM registration_activity),
+		       (SELECT count(*) FROM submissions WHERE is_correct)`).
+		Scan(&n.Contests, &n.Participants, &n.Queries, &n.Solved)
+	if err != nil {
+		return showcase.Numbers{}, fmt.Errorf("count the showcase numbers: %w", err)
+	}
+	return n, nil
+}
+
+// Recent returns the contests a visitor may see, newest first.
+//
+// The four statuses are the same four a participant's own catalogue lists
+// (internal/postgres.Profile): a draft is nobody's business but its authors',
+// and this list is read by people who are not signed in at all.
+//
+// The titles come with the row rather than from a second read per contest —
+// the same trick the contest catalogue uses (contestColumns above) — because
+// the visitor's language is chosen above this layer and one cached read has
+// to serve every language at once. Ordered by the window the page shows, with
+// the identifier breaking ties so that two contests starting in the same
+// second do not swap places between two reads of the same list.
+func (r *Showcase) Recent(ctx context.Context, limit int) ([]showcase.Contest, error) {
+	rows, err := r.querier(ctx).Query(ctx, `
+		SELECT c.id, c.status, c.starts_at, c.ends_at,
+		       (c.status IN ('finished', 'archived') OR c.leaderboard_revealed_at IS NOT NULL) AS table_open,
+		       COALESCE((
+		           SELECT json_object_agg(ct.lang, ct.title)
+		           FROM contest_translations ct WHERE ct.contest_id = c.id
+		       ), '{}'::json),
+		       COALESCE((
+		           SELECT cl.lang FROM contest_languages cl
+		           WHERE cl.contest_id = c.id AND cl.is_default
+		           ORDER BY cl.lang LIMIT 1
+		       ), '')
+		FROM contests c
+		WHERE c.status IN ('published', 'running', 'finished', 'archived')
+		ORDER BY COALESCE(c.starts_at, c.created_at) DESC, c.id DESC
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("read the recent contests: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]showcase.Contest, 0, limit)
+	for rows.Next() {
+		var (
+			c      showcase.Contest
+			titles []byte
+		)
+		if err := rows.Scan(&c.ID, &c.Status, &c.StartsAt, &c.EndsAt, &c.TableOpen, &titles, &c.DefaultLanguage); err != nil {
+			return nil, fmt.Errorf("scan a recent contest: %w", err)
+		}
+		if err := json.Unmarshal(titles, &c.Titles); err != nil {
+			return nil, fmt.Errorf("decode the titles of contest %s: %w", c.ID, err)
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read the recent contests: %w", err)
+	}
+	return out, nil
+}
