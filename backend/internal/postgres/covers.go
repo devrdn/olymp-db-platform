@@ -110,6 +110,44 @@ func (r *Covers) scanOne(ctx context.Context, sql string, contestID uuid.UUID, a
 	return cover, nil
 }
 
+// ReferencedHashes is every picture any contest still wears, once each.
+//
+// The whole table in one read, with no contest in the question. That is the
+// point: a file is named by the hash of its content, so two contests that
+// uploaded the same picture share one file on the volume, and the sweep that
+// removes files (internal/covers.OrphanSweeper) may only remove a hash no row
+// at all names. Asking per contest would be asking a question whose answer
+// cannot decide anything.
+//
+// No WHERE clause and therefore no index to serve one (CLAUDE.md, security
+// rule 7): this is a sequential scan of one row per contest that has a cover,
+// run by hand by an operator and by nothing on a request path.
+//
+// Deliberately outside covers.Repository, which is the service's own port: a
+// method only the sweep calls belongs to the narrow interface the sweep
+// declares for itself (CLAUDE.md, Go layout rule 3), exactly as Attribution
+// below belongs to the publish gate's.
+func (r *Covers) ReferencedHashes(ctx context.Context) ([]string, error) {
+	rows, err := r.querier(ctx).Query(ctx, `SELECT DISTINCT hash FROM contest_covers`)
+	if err != nil {
+		return nil, fmt.Errorf("read the referenced cover hashes: %w", err)
+	}
+	defer rows.Close()
+
+	var hashes []string
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			return nil, fmt.Errorf("read the referenced cover hashes: %w", err)
+		}
+		hashes = append(hashes, hash)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read the referenced cover hashes: %w", err)
+	}
+	return hashes, nil
+}
+
 // Attribution answers the publish gate's one question about a contest's
 // picture: is there an uploaded cover, and whose is it?
 //
