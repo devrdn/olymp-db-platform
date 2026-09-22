@@ -1,12 +1,13 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,36 +30,74 @@ type showcaseRepo struct {
 	numbers  showcase.Numbers
 	contests []showcase.Contest
 	reads    atomic.Int64
+	// hold, when set, keeps every read from returning until it is closed, and
+	// entered is closed as the first of them begins.
+	hold    chan struct{}
+	entered chan struct{}
+	once    sync.Once
 }
 
 func (r *showcaseRepo) Numbers(context.Context) (showcase.Numbers, error) {
 	r.reads.Add(1)
+	r.wait()
 	return r.numbers, nil
 }
 
 func (r *showcaseRepo) Recent(context.Context, int) ([]showcase.Contest, error) {
 	r.reads.Add(1)
+	r.wait()
 	return r.contests, nil
+}
+
+func (r *showcaseRepo) wait() {
+	if r.entered != nil {
+		r.once.Do(func() { close(r.entered) })
+	}
+	if r.hold != nil {
+		<-r.hold
+	}
 }
 
 type publicFixture struct {
 	router   http.Handler
 	showcase *showcaseRepo
+	// logs is everything the handler wrote, so a test can say what was
+	// reported as an outage and what was not.
+	logs *lockedBuffer
 }
 
 func newPublicFixture(t *testing.T) *publicFixture {
 	t.Helper()
-	f := &publicFixture{showcase: &showcaseRepo{}}
+	f := &publicFixture{showcase: &showcaseRepo{}, logs: &lockedBuffer{}}
 
 	c := cache.NewMemory(10000)
 	t.Cleanup(func() { _ = c.Close() })
-	log := logging.New("error", io.Discard)
+	log := logging.New("debug", f.logs)
 	service := showcase.NewService(showcase.Config{Repository: f.showcase})
 
 	router := chi.NewRouter()
 	api.NewPublicHandler(service, auth.NewLimiter(c), log, "en").Mount(router)
 	f.router = router
 	return f
+}
+
+// lockedBuffer is a log sink a test may read while a request is still being
+// served; bytes.Buffer is not otherwise safe for that.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // get asks as a visitor does: no session, no cookie, one address.
@@ -179,6 +218,39 @@ func TestThePublicReadsAreNotIndexed(t *testing.T) {
 		if got := f.get(path).Header().Get("X-Robots-Tag"); got != "noindex" {
 			t.Errorf("%s: X-Robots-Tag = %q, want noindex", path, got)
 		}
+	}
+}
+
+// A visitor who closes the tab is not an outage. The read comes back as that
+// visitor's own cancellation, and the handler must neither report it as the
+// landing page having failed nor answer a connection that has gone.
+func TestAVisitorWhoLeavesIsNotReportedAsAFailure(t *testing.T) {
+	f := newPublicFixture(t)
+	f.showcase.hold = make(chan struct{})
+	f.showcase.entered = make(chan struct{})
+	defer close(f.showcase.hold)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/public/stats", strings.NewReader(""))
+	req.RemoteAddr = "203.0.113.8:5000"
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.router.ServeHTTP(rec, req)
+	}()
+	// Once the read has begun, so that the budget check the handler makes
+	// first is not the thing that fails.
+	<-f.showcase.entered
+	cancel()
+	<-done
+
+	if logs := f.logs.String(); strings.Contains(logs, `"level":"ERROR"`) {
+		t.Errorf("a visitor leaving was logged as an error: %s", logs)
+	}
+	if rec.Code == http.StatusInternalServerError {
+		t.Errorf("status = %d, want no outage reported for a caller who has gone", rec.Code)
 	}
 }
 

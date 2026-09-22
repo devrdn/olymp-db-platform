@@ -172,6 +172,42 @@ func TestAFailedRefreshServesTheAnswerAlreadyRead(t *testing.T) {
 	}
 }
 
+// A visitor who closed the tab is not a failed read. There is nobody left to
+// serve a stale answer to, and nothing here is broken, so the caller's own
+// cancellation comes back as itself: the handler can then tell it apart from
+// an outage instead of logging one and writing a page to a connection that
+// has gone.
+func TestACallerWhoGoesAwayGetsTheirOwnCancellation(t *testing.T) {
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	repo := &countingRepo{numbers: showcase.Numbers{Queries: 900}}
+	service := newService(repo, &now)
+
+	// A previous answer to hand, so that the stale branch is the one that
+	// would otherwise be taken.
+	if _, err := service.Numbers(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * showcase.CacheTTL)
+
+	// The read goes away while the repository is still busy, and the
+	// repository stays busy until the test is over: the caller must give up on
+	// its own context rather than on anything the repository did.
+	release := make(chan struct{})
+	defer close(release)
+	ctx, cancel := context.WithCancel(t.Context())
+	repo.during = func() {
+		cancel()
+		<-release
+	}
+
+	if _, err := service.Numbers(ctx); !errors.Is(err, context.Canceled) {
+		t.Errorf("Numbers() = %v, want the caller's own cancellation", err)
+	}
+	if _, err := service.Recent(ctx, "en"); !errors.Is(err, context.Canceled) {
+		t.Errorf("Recent() = %v, want the caller's own cancellation", err)
+	}
+}
+
 // With nothing read yet there is nothing to serve, and the caller is told so
 // rather than handed four zeros: a showcase with zeros is a broken system.
 func TestTheFirstFailureIsRefused(t *testing.T) {
