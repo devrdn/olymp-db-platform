@@ -1,7 +1,5 @@
 import { cookies } from "next/headers";
 
-import { Band } from "@/components/layout/band";
-import { OrnamentBand } from "@/components/product/ornament";
 import { branding } from "@/lib/api/branding";
 import { SESSION_COOKIE } from "@/lib/auth/session";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
@@ -26,7 +24,7 @@ import { SiteFooter } from "./home/site-footer";
  * and it keeps the question "what does this page ask for" answerable in one
  * place rather than in five.
  *
- * The page is composed out of `Band`s, so its sections sit on the same three
+ * Every section is a `Band` of its own, so they sit on the same three
  * grid tracks and the same hairlines as every working screen: a showcase that
  * invented its own container would read as an advertisement for the product
  * rather than as part of it.
@@ -59,22 +57,6 @@ export default async function HomePage() {
   return (
     <>
       <Hero name={name} signedIn={signedIn} dict={dict} />
-
-      {/* The woven band that separates the hero from everything below it. It
-          gets a band of its own rather than padding inside another, so it
-          spans the content column exactly as the sections above and below do.
-
-          Taller than the component's own default, and that is what makes it
-          embroidery rather than texture: `slice` scales the tile by the
-          band's height, so at the default 24px each rhombus is twelve pixels
-          across and the whole thing reads as a hairline ripple — looked at in
-          a browser, the motif simply cannot be made out. At 36 the rhombi and
-          the rivers between them are legible at arm's length, and the band is
-          still a rule rather than a panel. The footer's stays thin on
-          purpose: one statement, one echo. */}
-      <Band className="py-7 max-narrow:py-6">
-        <OrnamentBand className="h-9" />
-      </Band>
 
       <HowItWorks dict={dict} />
 
