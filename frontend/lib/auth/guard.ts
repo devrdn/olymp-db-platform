@@ -55,6 +55,18 @@ export function guardRedirect(
   hasSession: boolean,
 ): string | null {
   if (hasSession) return null;
+  // A path that begins with two slashes is never public, whatever follows.
+  //
+  // The allow-list admits a public path and everything under it, and for "/"
+  // that second half reads as "anything starting //" — so "//my" would walk
+  // in through the front page. In practice the framework normalises it first
+  // (a request for //my answers 308 to /my, which comes back here and is
+  // refused), but an access decision that rests on somebody else's
+  // normalisation is one framework upgrade away from being wrong, and this
+  // one costs a line.
+  if (pathname.startsWith("//")) {
+    return `/login?next=${encodeURIComponent(pathname + search)}`;
+  }
   if (PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`))) {
     return null;
   }

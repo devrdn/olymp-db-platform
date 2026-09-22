@@ -17,7 +17,15 @@ describe("guardRedirect", () => {
     expect(guardRedirect("/", "", false)).toBeNull();
   });
 
-  test("and it is still only the front page that is open", () => {
+  // The matcher admits a path that starts with the public one plus a slash,
+// and for "/" that reads as anything starting "//". Next normalises "//my" to
+// "/my" before it becomes a route, so the guard sees it again and refuses it
+// — but the argument is load-bearing enough to pin rather than to trust.
+test("does not let a doubled slash walk in through the front page", () => {
+  expect(guardRedirect("//my", "", false)).not.toBeNull();
+});
+
+test("and it is still only the front page that is open", () => {
     expect(guardRedirect("/my", "", false)).toBe("/login?next=%2Fmy");
   });
 

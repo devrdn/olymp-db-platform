@@ -62,9 +62,18 @@ export default async function HomePage() {
 
       {/* The woven band that separates the hero from everything below it. It
           gets a band of its own rather than padding inside another, so it
-          spans the content column exactly as the sections above and below do. */}
+          spans the content column exactly as the sections above and below do.
+
+          Taller than the component's own default, and that is what makes it
+          embroidery rather than texture: `slice` scales the tile by the
+          band's height, so at the default 24px each rhombus is twelve pixels
+          across and the whole thing reads as a hairline ripple — looked at in
+          a browser, the motif simply cannot be made out. At 36 the rhombi and
+          the rivers between them are legible at arm's length, and the band is
+          still a rule rather than a panel. The footer's stays thin on
+          purpose: one statement, one echo. */}
       <Band className="py-7 max-narrow:py-6">
-        <OrnamentBand />
+        <OrnamentBand className="h-9" />
       </Band>
 
       <HowItWorks dict={dict} />
