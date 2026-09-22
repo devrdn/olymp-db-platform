@@ -13,8 +13,7 @@
 -- Counters cannot be made cheap to recompute; they can be made unnecessary to
 -- recompute. Each journal now maintains a summary row per registration as it
 -- is written, and the table is one index range over the contest's
--- registrations joined to their summaries — a read whose cost is the number of
--- participants and nothing else.
+-- registrations joined to their summaries.
 --
 -- Maintained by triggers rather than by the code that writes the journals, for
 -- the reason migration 000034 gives for contest_id: no writer has to remember,
@@ -22,6 +21,18 @@
 -- statement-level and read their rows from transition tables, so a batch of
 -- fifty signals, or a bulk insert of a hundred thousand journal rows, costs one
 -- grouped UPDATE rather than one call per row.
+--
+-- One rule holds all of this together, and it is the reason the
+-- identical-queries figure is *not* a counter here: **a journal write touches
+-- only rows belonging to the registration whose row was written.** A counter
+-- about what two participants have in common has to be added to both of them,
+-- and every inserting transaction already holds its own row by then, so two
+-- participants running each other's statements in the same moment take the
+-- same two rows in opposite orders and one of them has their query refused
+-- with a deadlock. Ordering cannot fix it — the first row each transaction
+-- takes is its own. contest_query_fingerprints therefore records only who ran
+-- what, each row written by the registration it belongs to, and the read
+-- counts the shared ones (internal/postgres/watch.go, rosterSQL).
 
 -- One row per registration, created by the first thing that registration does.
 -- A registration that has done nothing has no row, and the read left-joins:
@@ -37,9 +48,11 @@ CREATE TABLE registration_activity (
     -- How many distinct addresses those queries came from
     -- (registration_addresses holds which).
     addresses         bigint NOT NULL DEFAULT 0,
-    -- How many of this registration's distinct comparable fingerprints another
-    -- registration of the same contest also ran successfully.
-    identical_queries bigint NOT NULL DEFAULT 0,
+    -- How many of this registration's statements another participant also ran
+    -- is NOT here: it is the one figure on the table that is about more than
+    -- one registration, so keeping it would mean one participant's query
+    -- writing another participant's row. contest_query_fingerprints holds the
+    -- set instead and the read counts over it.
 
     -- submissions.
     correct           bigint NOT NULL DEFAULT 0,
@@ -115,50 +128,29 @@ COMMENT ON COLUMN submissions.blind IS
 -- both the insert and the update trigger need them.
 CREATE FUNCTION monitoring_queries_succeeded(ids bigint[]) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
-    -- The fingerprints this registration had not run successfully before. A
-    -- fingerprint is shared the moment a second registration of the contest
-    -- holds it: the newcomers score it, and so does the participant who until
-    -- now held it alone. Everyone else already scored it when they arrived.
+    -- This registration has now run these fingerprints successfully. The row
+    -- names the registration that ran the query and nothing else: which
+    -- statements more than one participant ran is worked out when the
+    -- organiser's table is read.
     --
-    -- The arithmetic is written in terms of who held the fingerprint *before*
-    -- this statement, because that is what the statement can see: the parts of
-    -- one WITH share a snapshot, so neither the count below nor the join to
-    -- the holders sees the rows the insert is adding. They are reached through
-    -- fresh instead, which carries them out of the insert.
-    WITH fresh AS (
-        INSERT INTO contest_query_fingerprints (contest_id, fingerprint, registration_id)
-        SELECT DISTINCT q.contest_id, q.sql_fingerprint, q.registration_id
-        FROM query_log q
-        WHERE q.id = ANY(ids)
-          AND q.status = 'ok'
-          AND q.sql_fingerprint IS NOT NULL
-          AND q.contest_id IS NOT NULL
-        ON CONFLICT DO NOTHING
-        RETURNING contest_id, fingerprint, registration_id
-    ), touched AS (
-        SELECT f.contest_id, f.fingerprint, count(*) AS arrived,
-               (SELECT count(*) FROM contest_query_fingerprints o
-                WHERE o.contest_id = f.contest_id AND o.fingerprint = f.fingerprint) AS held_before
-        FROM fresh f
-        GROUP BY f.contest_id, f.fingerprint
-    ), gained AS (
-        SELECT f.registration_id
-        FROM fresh f
-        JOIN touched t ON t.contest_id = f.contest_id AND t.fingerprint = f.fingerprint
-        WHERE t.held_before + t.arrived > 1
-        UNION ALL
-        -- The sole previous holder, when this statement is what gave it
-        -- company. held_before = 1 is already company, whatever arrived.
-        SELECT o.registration_id
-        FROM touched t
-        JOIN contest_query_fingerprints o
-          ON o.contest_id = t.contest_id AND o.fingerprint = t.fingerprint
-        WHERE t.held_before = 1
-    )
-    UPDATE registration_activity a
-    SET identical_queries = a.identical_queries + t.n
-    FROM (SELECT registration_id, count(*) AS n FROM gained GROUP BY registration_id) t
-    WHERE a.registration_id = t.registration_id;
+    -- Deliberately not a counter kept here. A counter would have to be added
+    -- to the participant who until then held the fingerprint alone — a write
+    -- to another registration's row — and every inserting transaction already
+    -- holds its own row by the time it gets here. Two participants running
+    -- each other's statements in the same moment would take the same two rows
+    -- in opposite orders, and one of them would have their query refused with
+    -- a deadlock. Ordering the locks cannot help: the first row each
+    -- transaction takes is its own, and which one that is depends on who is
+    -- typing. A room of students pasting the same starter query is the
+    -- ordinary case, not a rare one.
+    INSERT INTO contest_query_fingerprints (contest_id, fingerprint, registration_id)
+    SELECT DISTINCT q.contest_id, q.sql_fingerprint, q.registration_id
+    FROM query_log q
+    WHERE q.id = ANY(ids)
+      AND q.status = 'ok'
+      AND q.sql_fingerprint IS NOT NULL
+      AND q.contest_id IS NOT NULL
+    ON CONFLICT DO NOTHING;
 
     -- An answer that was counted blind only because the query behind it had
     -- not finished when it was given. A journalled query is written before it
@@ -348,33 +340,6 @@ BEGIN
 END;
 $$;
 
-CREATE FUNCTION monitoring_fingerprints_deleted() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-    -- Removing a participant takes their fingerprints with them, and a
-    -- fingerprint left with a single holder is no longer shared: that holder
-    -- stops counting it. The floor guards the one case where the arithmetic
-    -- cannot be checked — the removed registration's own summary row is on its
-    -- way out by the same cascade, in an order nothing promises.
-    WITH groups AS (
-        SELECT DISTINCT d.contest_id, d.fingerprint FROM removed d
-    ), lonely AS (
-        -- The group has exactly one row, so the array holds exactly one
-        -- registration; there is no min() over uuid to ask for it.
-        SELECT (array_agg(o.registration_id))[1] AS registration_id
-        FROM groups g
-        JOIN contest_query_fingerprints o
-          ON o.contest_id = g.contest_id AND o.fingerprint = g.fingerprint
-        GROUP BY g.contest_id, g.fingerprint
-        HAVING count(*) = 1
-    )
-    UPDATE registration_activity a
-    SET identical_queries = greatest(0, a.identical_queries - t.n)
-    FROM (SELECT registration_id, count(*) AS n FROM lonely GROUP BY registration_id) t
-    WHERE a.registration_id = t.registration_id;
-    RETURN NULL;
-END;
-$$;
-
 CREATE TRIGGER query_log_activity_insert
     AFTER INSERT ON query_log
     REFERENCING NEW TABLE AS inserted
@@ -398,11 +363,6 @@ CREATE TRIGGER participant_events_activity_insert
     AFTER INSERT ON participant_events
     REFERENCING NEW TABLE AS inserted
     FOR EACH STATEMENT EXECUTE FUNCTION monitoring_events_inserted();
-
-CREATE TRIGGER contest_query_fingerprints_activity_delete
-    AFTER DELETE ON contest_query_fingerprints
-    REFERENCING OLD TABLE AS removed
-    FOR EACH STATEMENT EXECUTE FUNCTION monitoring_fingerprints_deleted();
 
 -- What the journals already hold. One pass over each of them, and the same
 -- aggregates the read used to do on every refresh — run once here instead of
@@ -454,16 +414,6 @@ SET addresses = t.n
 FROM (SELECT registration_id, count(*) AS n FROM registration_addresses GROUP BY registration_id) t
 WHERE a.registration_id = t.registration_id;
 
-UPDATE registration_activity a
-SET identical_queries = t.n
-FROM (SELECT f.registration_id, count(*) AS n
-      FROM contest_query_fingerprints f
-      WHERE EXISTS (SELECT 1 FROM contest_query_fingerprints o
-                    WHERE o.contest_id = f.contest_id
-                      AND o.fingerprint = f.fingerprint
-                      AND o.registration_id <> f.registration_id)
-      GROUP BY f.registration_id) t
-WHERE a.registration_id = t.registration_id;
 
 UPDATE registration_activity a
 SET correct = t.correct, wrong = t.wrong, blind = t.blind, last_answer_at = t.last_at

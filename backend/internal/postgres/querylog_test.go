@@ -819,3 +819,128 @@ func TestExportHistoryStopsAtTheByteBoundBeforeTheRowBound(t *testing.T) {
 		}
 	})
 }
+
+// committedPair is one contest with two participants, committed rather than
+// held in a test transaction: what follows is about two transactions meeting,
+// which one transaction cannot show.
+func committedPair(t *testing.T) (context.Context, uuid.UUID, uuid.UUID) {
+	t.Helper()
+	if testPool == nil {
+		t.Skip("set CORE_DB_DSN to run the database tests")
+	}
+	ctx := context.Background()
+
+	owner := makeUser(t, ctx, "pair-"+uuid.NewString()[:8])
+	contest := makeContest(t, ctx, owner.ID)
+	first := makeUser(t, ctx, "pair-a-"+uuid.NewString()[:8])
+	second := makeUser(t, ctx, "pair-b-"+uuid.NewString()[:8])
+	a := makeRegistration(t, ctx, contest, first.ID)
+	b := makeRegistration(t, ctx, contest, second.ID)
+
+	t.Cleanup(func() {
+		clean := context.Background()
+		if _, err := testPool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contest); err != nil {
+			t.Errorf("clean up the contest: %v", err)
+		}
+		if _, err := testPool.Exec(clean, `DELETE FROM users WHERE id = ANY($1::uuid[])`,
+			[]uuid.UUID{owner.ID, first.ID, second.ID}); err != nil {
+			t.Errorf("clean up the users: %v", err)
+		}
+	})
+	return ctx, a, b
+}
+
+// journalOne writes one row of the query log through q, which may be a
+// transaction of its own.
+func journalOne(ctx context.Context, q storage.Querier, registration uuid.UUID, sql, status string) error {
+	_, err := q.Exec(ctx, `
+		INSERT INTO query_log (registration_id, request_id, sql_text, status, ip, sql_fingerprint)
+		VALUES ($1, gen_random_uuid(), $2, $3, '192.0.2.1', $4)`,
+		registration, sql, status, monitor.ComparableFingerprint(sql))
+	return err
+}
+
+// Two participants running each other's statements at the same moment are two
+// ordinary journal inserts, and neither may be refused because of the other.
+//
+// The shape is the olympiad's most ordinary one: a room of students pastes the
+// same starter query within the same minute. Each has a query of their own in
+// flight — which is what makes their transaction hold their own row of the
+// counters behind the participants table — and then runs the statement the
+// other has already run. If journalling a query wrote to another
+// registration's row, these two would take the same two rows in opposite
+// orders, and PostgreSQL would refuse one of them with a deadlock whose cause
+// the participant cannot see. Ordering the locks cannot save it either: each
+// transaction's first lock is its own row, and which row that is depends on
+// who is typing.
+//
+// So nothing on this path writes a row belonging to another registration. What
+// participants have in common — which statements more than one of them ran —
+// is worked out when the organiser's table is read, not when a query is
+// journalled.
+func TestTwoParticipantsRunningEachOthersQueriesAreNotRefused(t *testing.T) {
+	ctx, a, b := committedPair(t)
+
+	// Long enough to be compared at all (monitor.IdenticalQueryMinChars), and
+	// different from each other.
+	statementOfA := "select name, alibi from suspects where city = 'Chisinau' order by name"
+	statementOfB := "select title, opened_at from cases where district = 'Botanica' order by title"
+
+	// Each is so far the only one who has run their own statement: the state
+	// in which one more holder is what makes a statement shared.
+	if err := journalOne(ctx, testPool, a, statementOfA, "ok"); err != nil {
+		t.Fatalf("A's own statement: %v", err)
+	}
+	if err := journalOne(ctx, testPool, b, statementOfB, "ok"); err != nil {
+		t.Fatalf("B's own statement: %v", err)
+	}
+
+	// PostgreSQL breaks a deadlock itself after deadlock_timeout, so this
+	// bounds a test that fails rather than one that hangs.
+	deadline, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	txA, err := testPool.Begin(deadline)
+	if err != nil {
+		t.Fatalf("begin A: %v", err)
+	}
+	defer txA.Rollback(context.Background())
+	txB, err := testPool.Begin(deadline)
+	if err != nil {
+		t.Fatalf("begin B: %v", err)
+	}
+	defer txB.Rollback(context.Background())
+
+	// Each opens a query of their own first. The console writes the row before
+	// the query runs, and that write is what takes their own counters.
+	if err := journalOne(deadline, txA, a, "select 1", "running"); err != nil {
+		t.Fatalf("A opens a query: %v", err)
+	}
+	if err := journalOne(deadline, txB, b, "select 2", "running"); err != nil {
+		t.Fatalf("B opens a query: %v", err)
+	}
+
+	// And now each runs what the other has already run.
+	crossed := make(chan error, 2)
+	go func() { crossed <- journalOne(deadline, txA, a, statementOfB, "ok") }()
+	go func() { crossed <- journalOne(deadline, txB, b, statementOfA, "ok") }()
+	for range 2 {
+		select {
+		case err := <-crossed:
+			if err != nil {
+				t.Errorf("a participant's query was refused because another ran the same statement: %v", err)
+			}
+		case <-deadline.Done():
+			t.Fatal("a journal insert never came back")
+		}
+	}
+	if t.Failed() {
+		return
+	}
+	if err := txA.Commit(deadline); err != nil {
+		t.Errorf("commit A: %v", err)
+	}
+	if err := txB.Commit(deadline); err != nil {
+		t.Errorf("commit B: %v", err)
+	}
+}

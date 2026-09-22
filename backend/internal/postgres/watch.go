@@ -51,7 +51,8 @@ func (w *Watch) querier(ctx context.Context) storage.Querier {
 }
 
 // rosterSQL is the whole participants table in one statement, and it reads no
-// journal at all.
+// journal at all — only the counters the journals keep and the set of
+// statements they have seen.
 //
 // Every counter it shows used to be a LATERAL aggregate over one
 // registration's whole range of query_log, submissions and
@@ -63,29 +64,59 @@ func (w *Watch) querier(ctx context.Context) storage.Querier {
 // from the heap on top of it.
 //
 // Since migration 000037 the journals keep the counters themselves, one
-// summary row per registration (registration_activity), so the table is the
-// contest's registrations and their summaries and nothing more: one range of
-// registrations_contest_score_idx, one primary-key lookup per participant,
-// and a
-// cost that is the number of participants at the start of a contest and the
-// same number at the end of it. TestWatchRosterCostsWhatItShows measures that
-// it does not move when the history behind it grows.
+// summary row per registration (registration_activity), so the counters cost
+// one range of registrations_contest_score_idx and one primary-key lookup per
+// participant — the number of participants at the start of a contest and the
+// same number at the end of it.
 //
 // A registration that has done nothing yet has no summary row — the first
 // thing it does creates one — so the join is an outer one and every counter
 // reads as the zero it is.
+//
+// # The one figure that is not a counter
+//
+// "The same statement as another participant" is about two registrations at
+// once, and a counter for it would have to be written by one participant's
+// query into another participant's row. Every transaction journalling a query
+// already holds its own row by then, so two participants running each other's
+// statements in the same moment would take the same two rows in opposite
+// orders and one of them would have their query refused with a deadlock —
+// which is the ordinary case, not a rare one, in a room pasting the same
+// starter query. Ordering the rows cannot help, because the first row each
+// transaction takes is its own.
+//
+// So the write side records only who ran what — contest_query_fingerprints,
+// each row written by the registration it belongs to — and shared is worked
+// out here. The contest's slice of that table is one ordered index-only scan
+// of its primary key (contest_id, fingerprint, registration_id), and because
+// it arrives ordered by fingerprint the window needs no sort of its own. The
+// set holds one row per registration per *distinct* statement it ran
+// successfully and long enough to compare, so repeating work costs it nothing
+// — which is what separates it from the journal it is derived from, and what
+// TestWatchRosterCostsWhatItShows measures.
 const rosterSQL = `
+WITH identical AS (
+    SELECT held.registration_id, count(*) AS n
+    FROM (
+        SELECT registration_id, count(*) OVER (PARTITION BY fingerprint) AS holders
+        FROM contest_query_fingerprints
+        WHERE contest_id = $1
+    ) held
+    WHERE held.holders > 1
+    GROUP BY held.registration_id
+)
 SELECT r.id, r.user_id, u.login, u.full_name, r.status, r.started_at, r.finished_at,
        COALESCE(a.queries, 0), COALESCE(a.query_errors, 0), COALESCE(a.query_rejected, 0),
        COALESCE(a.addresses, 0),
        COALESCE(a.correct, 0), COALESCE(a.wrong, 0), COALESCE(a.blind, 0),
        COALESCE(a.page_left, 0), COALESCE(a.away_ms, 0), COALESCE(a.pastes, 0),
        COALESCE(a.max_paste_chars, 0), COALESCE(a.ip_changes, 0), COALESCE(a.parallel_sessions, 0),
-       COALESCE(a.identical_queries, 0),
+       COALESCE(i.n, 0),
        greatest(a.last_query_at, a.last_answer_at, a.last_event_at)
 FROM registrations r
 JOIN users u ON u.id = r.user_id
 LEFT JOIN registration_activity a ON a.registration_id = r.id
+LEFT JOIN identical i ON i.registration_id = r.id
 WHERE r.contest_id = $1
 ORDER BY u.login, r.id
 LIMIT $2`
