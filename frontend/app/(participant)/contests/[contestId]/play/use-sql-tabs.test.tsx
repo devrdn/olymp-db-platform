@@ -46,7 +46,8 @@ const TABS: WorkspaceTab[] = [
  */
 function Harness({ initial }: { initial: WorkspaceTab[] | null }) {
   const tabs = useSqlTabs({
-    contestId: "c1",
+    accountId: "u1",
+      contestId: "c1",
     initial,
     localTitle: t.local,
     confirmClose,
@@ -348,7 +349,7 @@ describe("closing a tab", () => {
     fireEvent.click(tab("Suspects"));
     type("SELECT * FROM alibis");
     await wait(400);
-    expect(window.localStorage.getItem(draftStorageKey("c1", "tab:t2"))).not.toBeNull();
+    expect(window.localStorage.getItem(draftStorageKey("u1", "c1", "tab:t2"))).not.toBeNull();
     calls = [];
 
     fireEvent.click(screen.getByRole("button", { name: t.close.replace("{tab}", "Suspects") }));
@@ -356,7 +357,7 @@ describe("closing a tab", () => {
     await wait(30_000);
 
     expect(requests("PATCH")).toHaveLength(0);
-    expect(window.localStorage.getItem(draftStorageKey("c1", "tab:t2"))).toBeNull();
+    expect(window.localStorage.getItem(draftStorageKey("u1", "c1", "tab:t2"))).toBeNull();
     expect(dropped).toEqual(["t2"]);
     expect(tab("Query 1")).toHaveAttribute("aria-selected", "true");
   });
@@ -432,7 +433,7 @@ describe("reordering the tabs", () => {
 describe("a draft from before a reload", () => {
   test("is shown in its own tab and saved, even when that tab is not the one open", async () => {
     window.localStorage.setItem(
-      draftStorageKey("c1", "tab:t2"),
+      draftStorageKey("u1", "c1", "tab:t2"),
       JSON.stringify({ text: "SELECT typed before the reload", base: "v0" }),
     );
     show();
@@ -454,7 +455,7 @@ describe("a contest that has ended", () => {
     expect(status()).toBe(t.status.closed);
     expect(screen.queryByRole("button", { name: t.newTab })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Close/ })).not.toBeInTheDocument();
-    expect(JSON.parse(window.localStorage.getItem(draftStorageKey("c1", "tab:t1")) ?? "null")).toMatchObject({
+    expect(JSON.parse(window.localStorage.getItem(draftStorageKey("u1", "c1", "tab:t1")) ?? "null")).toMatchObject({
       text: "SELECT * FROM suspects",
     });
 

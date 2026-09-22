@@ -29,7 +29,7 @@ import { ApiError } from "@/lib/api/client";
  *   and says so; there is no read-only mode to fall back to.
  *
  * Until the server has confirmed a text, it is kept as a draft in
- * `localStorage`, keyed by contest and document, for the one case the
+ * `localStorage`, keyed by account, contest and document, for the one case the
  * server cannot cover: the page reloaded before the save left or landed.
  * The draft records the server version it was written against (`base`) and
  * a fingerprint of the text in flight (`sent`); on mount it is shown and
@@ -64,6 +64,13 @@ export type AutosaveStatus =
 export type ClosedCode = "contest_finished" | "contest_not_running";
 
 export type AutosaveOptions = {
+  /**
+   * Who is typing. `null` when the account could not be read, and then no
+   * draft is kept at all: there is no key that is safely theirs, and a draft
+   * under a shared one costs somebody their notes, while losing it costs a
+   * reload's worth of typing.
+   */
+  accountId: string | null;
   contestId: string;
   /**
    * Which document of the contest this is (`notes`, `tab:{id}`). Fixed for
@@ -100,9 +107,45 @@ export const AUTOSAVE_DRAFT_WRITE_MS = 300;
 
 const CLOSED_CODES: ReadonlySet<string> = new Set<ClosedCode>(["contest_finished", "contest_not_running"]);
 
-/** Where a document's draft is kept. One key per contest and document. */
-export function draftStorageKey(contestId: string, documentKey: string): string {
-  return `dbcontest.play.draft.${contestId}.${documentKey}`;
+/** What every draft key starts with, whoever wrote it. */
+const DRAFT_PREFIX = "dbcontest.play.draft.";
+
+/**
+ * Where a document's draft is kept: one key per account, contest and
+ * document.
+ *
+ * The account is in the key because the computers in a lab are shared and
+ * `localStorage` is not. Two accounts that have never saved their notes both
+ * stand on a null version, so a key without the account would hand the draft
+ * of whoever sat here before to the student reading the screen now — and
+ * autosave it into their account as the newer text.
+ */
+export function draftStorageKey(accountId: string, contestId: string, documentKey: string): string {
+  return `${DRAFT_PREFIX}${encodeURIComponent(accountId)}.${contestId}.${documentKey}`;
+}
+
+/**
+ * Removes every draft on this machine that belongs to another account.
+ *
+ * Keying by account stops one student from reading another's text; this is
+ * the other half, for the text already lying in the machine when they sit
+ * down. Called once as the play screen mounts. A draft of this account's own
+ * other contests is kept: it is theirs, and it is what a reload restores.
+ */
+export function purgeForeignDrafts(accountId: string): void {
+  const store = storage();
+  if (store === null) return;
+  const mine = `${DRAFT_PREFIX}${encodeURIComponent(accountId)}.`;
+  try {
+    const doomed: string[] = [];
+    for (let i = 0; i < store.length; i++) {
+      const key = store.key(i);
+      if (key !== null && key.startsWith(DRAFT_PREFIX) && !key.startsWith(mine)) doomed.push(key);
+    }
+    for (const key of doomed) store.removeItem(key);
+  } catch {
+    // A private window or a denied policy: there is nothing stored to sweep.
+  }
 }
 
 /**
@@ -169,7 +212,7 @@ const RETRYING: AutosaveStatus = { kind: "retrying" };
  */
 export class AutosaveEngine {
   private options: AutosaveOptions;
-  private readonly key: string;
+  private readonly key: string | null;
 
   /** What the editor holds. */
   private text: string;
@@ -210,7 +253,10 @@ export class AutosaveEngine {
 
   constructor(options: AutosaveOptions) {
     this.options = options;
-    this.key = draftStorageKey(options.contestId, options.documentKey);
+    this.key =
+      options.accountId === null
+        ? null
+        : draftStorageKey(options.accountId, options.contestId, options.documentKey);
     this.text = options.initialText;
     this.saved = options.initialText;
     this.version = options.initialVersion;
@@ -549,6 +595,7 @@ export class AutosaveEngine {
   }
 
   private writeDraft() {
+    if (this.key === null) return;
     const draft: Draft = { text: this.text, base: this.version };
     if (this.unconfirmed.length > 0) draft.sent = [...this.unconfirmed];
     try {
@@ -559,6 +606,7 @@ export class AutosaveEngine {
   }
 
   private readDraft(): Draft | null {
+    if (this.key === null) return null;
     try {
       return parseDraft(storage()?.getItem(this.key) ?? null);
     } catch {
@@ -567,6 +615,7 @@ export class AutosaveEngine {
   }
 
   private removeDraft() {
+    if (this.key === null) return;
     try {
       storage()?.removeItem(this.key);
     } catch {

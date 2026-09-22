@@ -121,6 +121,7 @@ function show(
 ) {
   return render(
     <Workspace
+      accountId="u1"
       contestId="c1"
       storyBody={<p>A body in the stacks.</p>}
       printView={printCopy("storyMarkdown" in overrides ? (overrides.storyMarkdown ?? null) : "The printed case notes.")}
@@ -618,6 +619,7 @@ describe("collapsing a panel", () => {
       <PanelVisibilityProvider contestId={contestId}>
         <PanelToggles dict={en} />
         <Workspace
+          accountId="u1"
           contestId={contestId}
           storyBody={<p>A body in the stacks.</p>}
           printView={null}

@@ -92,6 +92,7 @@ function printStory(contestId: string) {
 export function SidePanel({
   storyBody,
   storyUnavailable,
+  accountId,
   contestId,
   questionEntries,
   initialNotes,
@@ -102,6 +103,8 @@ export function SidePanel({
 }: {
   storyBody: React.ReactNode;
   storyUnavailable: string | null;
+  /** Whose screen this is; the notes draft is keyed by it. */
+  accountId: string | null;
   contestId: string;
   questionEntries: QuestionEntry[];
   /** The notes as the page read them, or null when that read failed. */
@@ -205,7 +208,7 @@ export function SidePanel({
           status line is partly `sr-only`, and a panel shorter than the
           field's minimum height has to scroll rather than spill. */}
       <TabsContent value="notes" className="relative overflow-y-auto">
-        <NotesPanel contestId={contestId} initial={initialNotes} dict={dict} />
+        <NotesPanel accountId={accountId} contestId={contestId} initial={initialNotes} dict={dict} />
       </TabsContent>
       <TabsContent value="leaderboard" fill={false} className="relative overflow-y-auto p-4">
         <LeaderboardTab contestId={contestId} active={tab === "leaderboard"} dict={dict} locale={locale} />

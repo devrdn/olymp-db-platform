@@ -43,6 +43,7 @@ import { LOCAL_TAB_ID, useSqlTabs } from "./use-sql-tabs";
  * the title of that tab goes out with the result through `onResult`.
  */
 export function ConsoleEditor({
+  accountId,
   contestId,
   dict,
   tabs: initialTabs,
@@ -50,6 +51,8 @@ export function ConsoleEditor({
   actions,
   shortcuts,
 }: {
+  /** Whose console this is; each tab's draft is keyed by it. */
+  accountId: string | null;
   contestId: string;
   dict: PlayDictionary;
   /**
@@ -139,6 +142,7 @@ export function ConsoleEditor({
   const tabPrefix = useId();
 
   const tabs = useSqlTabs({
+    accountId,
     contestId,
     initial: initialTabs,
     localTitle: te.local,

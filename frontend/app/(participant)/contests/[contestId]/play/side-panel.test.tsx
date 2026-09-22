@@ -15,6 +15,7 @@ vi.mock("./actions", async (importOriginal) => ({
 function show() {
   return render(
     <SidePanel
+      accountId="u1"
       storyBody={<p>A body in the stacks.</p>}
       storyUnavailable={null}
       contestId="c1"
@@ -81,6 +82,7 @@ describe("the side panel", () => {
   test("shows the reason instead of the story when it has none for this language", () => {
     render(
       <SidePanel
+        accountId="u1"
         storyBody={null}
         storyUnavailable="This contest has no story yet"
         contestId="c1"
@@ -213,6 +215,7 @@ describe("the side panel", () => {
   test("offers neither the download nor the print control when there is no story to take away", () => {
     render(
       <SidePanel
+        accountId="u1"
         storyBody={null}
         storyUnavailable="This contest has no story yet"
         contestId="c1"
@@ -244,6 +247,7 @@ describe("the side panel", () => {
 test("each scrolling panel is the containing block for the hidden labels inside it", () => {
   render(
     <SidePanel
+      accountId="u1"
       storyBody={<p>A body in the stacks.</p>}
       storyUnavailable={null}
       contestId="c1"
@@ -279,6 +283,7 @@ test("each scrolling panel is the containing block for the hidden labels inside 
 test("keeps the tab strip from widening the page at any pane width", () => {
   render(
     <SidePanel
+      accountId="u1"
       storyBody={<p>A body in the stacks.</p>}
       storyUnavailable={null}
       contestId="c1"

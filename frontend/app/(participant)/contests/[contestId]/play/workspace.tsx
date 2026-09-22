@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
 import { cn } from "@/lib/utils";
 import type { QuestionEntry } from "./questions-panel";
@@ -19,6 +19,7 @@ import { ResultPanel } from "./result-panel";
 import { PaneHandle, SHARE_BOUNDS, WIDTH_BOUNDS, useConsoleRows, usePaneWidths } from "./pane-splitter";
 import { SchemaPanel } from "./schema-panel";
 import { SidePanel } from "./side-panel";
+import { purgeForeignDrafts } from "./use-autosave";
 import { useSignals } from "./use-signals";
 
 // Finding 5: a bottom-tab click sets state only in Workspace, but every
@@ -94,6 +95,7 @@ const MemoSchemaPanel = memo(SchemaPanel);
  * the same reason (page.tsx's own comment); the print copy is now one too.
  */
 export function Workspace({
+  accountId,
   contestId,
   storyBody,
   printView,
@@ -107,6 +109,12 @@ export function Workspace({
   locale,
   dict,
 }: {
+  /**
+   * Who is sitting here, or null when the account could not be read. Drafts
+   * in this browser are keyed by it, and the drafts of every other account
+   * are swept on the way in: the machines in a lab are shared.
+   */
+  accountId: string | null;
   contestId: string;
   storyBody: React.ReactNode;
   /** The print-only copy of the story, rendered on the server by `page.tsx` — see this component's own doc for why it is a node and not the Markdown behind it. Null exactly when there is no story to print (mirrors `storyUnavailable`). */
@@ -135,6 +143,14 @@ export function Workspace({
   // (use-signals.ts). Mounted with the workspace, which exists only while the
   // contest runs for this participant; it holds no React state.
   useSignals(contestId);
+
+  // The drafts of whoever used this machine before are swept once, as the
+  // screen opens. Keying a draft by its account keeps one student from
+  // reading another's text; this keeps that text from lying in a shared
+  // computer until its author signs in on it again.
+  useEffect(() => {
+    if (accountId !== null) purgeForeignDrafts(accountId);
+  }, [accountId]);
 
   // The latest run, lifted out of ConsoleEditor so ResultPanel — which lives
   // in a different subtree, inside a tab — can show it. ConsoleEditor's own
@@ -389,6 +405,7 @@ export function Workspace({
               left the editor with no height at all. */}
             <div className="flex min-h-0 flex-col max-narrow:min-h-80 max-narrow:border-b max-narrow:border-line">
               <ConsoleEditor
+                accountId={accountId}
                 contestId={contestId}
                 dict={dict}
                 shortcuts={editorShortcuts}
@@ -578,6 +595,7 @@ export function Workspace({
             <MemoSidePanel
               storyBody={storyBody}
               storyUnavailable={storyUnavailable}
+              accountId={accountId}
               contestId={contestId}
               questionEntries={questionEntries}
               // The same object on every render, so the memoised panel is
