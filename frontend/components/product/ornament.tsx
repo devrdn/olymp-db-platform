@@ -54,10 +54,15 @@ function Motif({ x }: { x: number }) {
  *
  * The band grows by repeating the tile, not by stretching one of them:
  * `preserveAspectRatio="xMinYMid slice"` cuts the pattern off at the edge of
- * the column the way a woven border is cut off at the edge of the cloth. The
- * default — `meet` — would squeeze the tile to fit instead, and a cross-stitch
- * grid squeezed along one axis is no longer a cross-stitch grid: the rhombus
- * flattens into a lozenge and the rivers lose their forty-five degrees.
+ * the column the way a woven border is cut off at the edge of the cloth.
+ *
+ * Neither of the alternatives is that. `preserveAspectRatio="none"` is the
+ * one that squeezes, and a cross-stitch grid squeezed along one axis is no
+ * longer a cross-stitch grid: the rhombus flattens into a lozenge and the
+ * rivers lose their forty-five degrees. The SVG default, `meet`, keeps the
+ * proportions but fits the whole viewBox inside the band — it would shrink
+ * the pattern and letterbox what is left, which is a thin ornament floating
+ * in a thick empty rule.
  *
  * `repeats` therefore buys reach rather than width, and running out of tiles
  * is not a gap at the right edge — it is the moment `slice` starts zooming.
