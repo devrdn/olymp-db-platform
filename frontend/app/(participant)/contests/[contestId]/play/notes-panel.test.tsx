@@ -30,7 +30,7 @@ function refused(status: number, code: string) {
 }
 
 function show(initial: { body: string; updatedAt: string | null } | null = { body: "the butler", updatedAt: "v0" }) {
-  return render(<NotesPanel contestId="c1" initial={initial} dict={en} />);
+  return render(<NotesPanel accountId="u1" contestId="c1" initial={initial} dict={en} />);
 }
 
 async function wait(ms: number) {
@@ -142,7 +142,7 @@ describe("the notes panel", () => {
     expect(visibleStatus()).toBe(t.status.closed);
     expect(screen.getByRole("status")).toHaveTextContent(t.status.closed);
     expect(field()).not.toHaveAttribute("readonly");
-    expect(JSON.parse(window.localStorage.getItem(draftStorageKey("c1", "notes")) ?? "null")).toMatchObject({
+    expect(JSON.parse(window.localStorage.getItem(draftStorageKey("u1", "c1", "notes")) ?? "null")).toMatchObject({
       text: "the gardener",
     });
 
@@ -152,7 +152,7 @@ describe("the notes panel", () => {
 
     expect(calls).toHaveLength(0);
     expect(field()).toHaveValue("the gardener, in the library");
-    expect(JSON.parse(window.localStorage.getItem(draftStorageKey("c1", "notes")) ?? "null")).toMatchObject({
+    expect(JSON.parse(window.localStorage.getItem(draftStorageKey("u1", "c1", "notes")) ?? "null")).toMatchObject({
       text: "the gardener, in the library",
     });
   });
@@ -223,7 +223,7 @@ describe("the notes panel", () => {
 
   test("shows a draft that is newer than the server copy, and saves it", async () => {
     window.localStorage.setItem(
-      draftStorageKey("c1", "notes"),
+      draftStorageKey("u1", "c1", "notes"),
       JSON.stringify({ text: "typed before the reload", base: "v0" }),
     );
     show();
