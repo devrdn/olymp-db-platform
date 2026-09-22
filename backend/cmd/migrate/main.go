@@ -131,24 +131,35 @@ func newMigrator(dsn string) (*migrate.Migrate, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	db, err := sql.Open("pgx", stdlib.RegisterConnConfig(cfg))
+	// The registration is process-global and keyed by a name the library
+	// invents; the cleanup below gives it back, so a caller that builds
+	// several migrators in one process (the tests do) does not grow the
+	// library's map with an entry per call.
+	name := stdlib.RegisterConnConfig(cfg)
+	db, err := sql.Open("pgx", name)
 	if err != nil {
+		stdlib.UnregisterConnConfig(name)
 		return nil, nil, fmt.Errorf("open core database: %w", err)
+	}
+
+	closeDB := func() {
+		_ = db.Close()
+		stdlib.UnregisterConnConfig(name)
 	}
 
 	driver, err := postgres.WithInstance(db, &postgres.Config{})
 	if err != nil {
-		_ = db.Close()
+		closeDB()
 		return nil, nil, fmt.Errorf("initialise migration driver: %w", err)
 	}
 
 	m, err := migrate.NewWithInstance("iofs", source, "postgres", driver)
 	if err != nil {
-		_ = db.Close()
+		closeDB()
 		return nil, nil, fmt.Errorf("initialise migrator: %w", err)
 	}
 
-	return m, func() { _ = db.Close() }, nil
+	return m, closeDB, nil
 }
 
 // report treats "nothing to do" as success: re-running the job must be safe.
