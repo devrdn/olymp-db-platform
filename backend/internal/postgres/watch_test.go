@@ -206,6 +206,12 @@ func TestWatchRosterIsBoundedAndSaysSo(t *testing.T) {
 // participants are measured twice, the second time with several times the
 // history behind them: what the read touches must not have moved, and no
 // journal may be touched at all.
+//
+// The one table the read touches that is derived from a journal is
+// contest_query_fingerprints, which holds a row per registration per distinct
+// statement rather than per query. The five extra rounds below run the same
+// statements again, so they add a quarter of a million journal rows and not
+// one row there — which is the property that makes it safe to read.
 func TestWatchRosterCostsWhatItShows(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		f := newWatchFixture(t, ctx)
@@ -238,6 +244,11 @@ func TestWatchRosterCostsWhatItShows(t *testing.T) {
 			t.Errorf("the participants table read %d rows over 40 participants and %d after five more rounds "+
 				"of the same contest (%v then %v): its cost follows the history, not the table",
 				total(early), total(late), early, late)
+		}
+		const set = "contest_query_fingerprints"
+		if late[set] != early[set] {
+			t.Errorf("the set of statements read %d rows and then %d: repeating a statement has to cost it nothing, "+
+				"or it is the journal by another name", early[set], late[set])
 		}
 		// The aggregate is measured on the same data for the same reason the
 		// oracle above computes it: to say what was wrong with it. It read the
@@ -642,6 +653,13 @@ func mustAddr(s string) netip.Addr { return netip.MustParseAddr(s) }
 // journals are the tables no organiser's read may scan whole.
 var journals = map[string]bool{"query_log": true, "participant_events": true, "submissions": true, "audit_log": true}
 
+// derived are tables built from a journal and read the same way it is: a range
+// of an index, never a scan. contest_query_fingerprints holds a row per
+// registration per distinct statement across every contest the installation
+// has ever run, so a read of it not confined to one contest is the same
+// mistake as a scan of the journal behind it.
+var derived = map[string]bool{"contest_query_fingerprints": true}
+
 // explainingQuerier EXPLAINs every statement before running it, and keeps
 // each plan's sequential scans of a journal.
 type explainingQuerier struct {
@@ -675,9 +693,10 @@ func (q explainingQuerier) explain(ctx context.Context, sql string, args ...any)
 	}
 	var walk func(n planNode)
 	walk = func(n planNode) {
-		// A journal is read only through an index, and only as a range of
-		// it: an index scan without a condition walks the whole index.
-		if journals[n.Relation] && !rangeReads[n.NodeType] {
+		// A journal — and anything derived from one — is read only through an
+		// index, and only as a range of it: an index scan without a condition
+		// walks the whole index.
+		if (journals[n.Relation] || derived[n.Relation]) && !rangeReads[n.NodeType] {
 			*q.scans = append(*q.scans, n.NodeType+" of "+n.Relation+" in:\n"+sql+"\nplan: "+string(raw))
 		}
 		// A time bound on the query log belongs in the index condition: left
@@ -708,11 +727,14 @@ func (q explainingQuerier) explain(ctx context.Context, sql string, args ...any)
 // rangeReads are the plan nodes that read a table through an index.
 var rangeReads = map[string]bool{"Index Scan": true, "Index Only Scan": true, "Bitmap Heap Scan": true}
 
-// journalIndex reports whether an index is one of a journal's.
+// journalIndex reports whether an index belongs to a journal or to a table
+// derived from one.
 func journalIndex(name string) bool {
-	for table := range journals {
-		if strings.HasPrefix(name, table+"_") {
-			return true
+	for _, tables := range []map[string]bool{journals, derived} {
+		for table := range tables {
+			if strings.HasPrefix(name, table+"_") {
+				return true
+			}
 		}
 	}
 	return false
