@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/filestore"
 )
@@ -285,5 +286,111 @@ func TestGetRefusesAFileBeyondTheCeiling(t *testing.T) {
 func TestNewRefusesAnEmptyDirectory(t *testing.T) {
 	if _, err := filestore.New(""); err == nil {
 		t.Error("New(\"\") = nil, want an error")
+	}
+}
+
+// The sweep for files no contest refers to any more has to start somewhere,
+// and a directory nobody can enumerate is one whose contents only grow.
+func TestListReturnsEveryFileTheStoreHolds(t *testing.T) {
+	store := newStore(t, t.TempDir())
+
+	for _, key := range []string{"one.jpg", "two.png", "three.webp"} {
+		if err := store.Put(t.Context(), key, "image/jpeg", []byte(key)); err != nil {
+			t.Fatalf("Put(%q) = %v", key, err)
+		}
+	}
+
+	files, err := store.List(t.Context())
+	if err != nil {
+		t.Fatalf("List() = %v", err)
+	}
+
+	sizes := map[string]int64{}
+	for _, file := range files {
+		sizes[file.Name()] = file.Size()
+	}
+	for _, key := range []string{"one.jpg", "two.png", "three.webp"} {
+		size, listed := sizes[key]
+		if !listed {
+			t.Fatalf("List() does not name %q: %v", key, sizes)
+		}
+		if want := int64(len(key)); size != want {
+			t.Errorf("List() reports %q as %d bytes, want %d", key, size, want)
+		}
+	}
+}
+
+// A listing a sweep acts on may only name files that sweep is allowed to
+// remove. This store's own temporary and probe files are not: a .tmp-* is an
+// upload in flight, and offering it to a caller that deletes what it is given
+// would make the sweep the one thing that can tear a write.
+func TestListSkipsWhatIsNotAKeyOfThisStore(t *testing.T) {
+	dir := t.TempDir()
+	store := newStore(t, dir)
+
+	if err := store.Put(t.Context(), "kept.jpg", "image/jpeg", []byte("kept")); err != nil {
+		t.Fatalf("Put() = %v", err)
+	}
+	for _, name := range []string{".tmp-inflight", ".probe-12345", "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	files, err := store.List(t.Context())
+	if err != nil {
+		t.Fatalf("List() = %v", err)
+	}
+	if len(files) != 1 || files[0].Name() != "kept.jpg" {
+		var names []string
+		for _, file := range files {
+			names = append(names, file.Name())
+		}
+		t.Fatalf("List() = %v, want only kept.jpg", names)
+	}
+}
+
+// The age of a file is what tells an upload in flight apart from an orphan,
+// so a listing that loses the modification time is a listing a sweep cannot
+// be safe with.
+func TestListReportsTheModificationTime(t *testing.T) {
+	dir := t.TempDir()
+	store := newStore(t, dir)
+
+	if err := store.Put(t.Context(), "aged.jpg", "image/jpeg", []byte("aged")); err != nil {
+		t.Fatalf("Put() = %v", err)
+	}
+	long := time.Now().Add(-72 * time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(filepath.Join(dir, "aged.jpg"), long, long); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	files, err := store.List(t.Context())
+	if err != nil {
+		t.Fatalf("List() = %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("List() returned %d files, want 1", len(files))
+	}
+	if got := files[0].ModTime().UTC(); !got.Equal(long.UTC()) {
+		t.Errorf("ModTime() = %s, want %s", got, long.UTC())
+	}
+}
+
+// An empty directory is the healthy answer, not an error: a sweep run on an
+// installation where nobody has uploaded a cover yet is told there is nothing
+// to do.
+func TestListOfAnEmptyDirectoryIsEmpty(t *testing.T) {
+	store := newStore(t, t.TempDir())
+
+	files, err := store.List(t.Context())
+	if err != nil {
+		t.Fatalf("List() = %v", err)
+	}
+	if len(files) != 0 {
+		t.Errorf("List() = %v, want nothing", files)
 	}
 }
