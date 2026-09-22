@@ -13,6 +13,14 @@ describe("guardRedirect", () => {
     expect(guardRedirect("/login", "", false)).toBeNull();
   });
 
+  test("the front page is open to a visitor without a session", () => {
+    expect(guardRedirect("/", "", false)).toBeNull();
+  });
+
+  test("and it is still only the front page that is open", () => {
+    expect(guardRedirect("/my", "", false)).toBe("/login?next=%2Fmy");
+  });
+
   test("leaves a contest's public table reachable without a session", () => {
     expect(guardRedirect("/contests/3f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6/leaderboard", "", false)).toBeNull();
   });
