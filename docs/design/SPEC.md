@@ -721,9 +721,17 @@ the scene before the participant goes into the database, and that is the one
 surface of the product where atmosphere is part of the task rather than
 decoration.
 
-**There are no images in the contest listing.** It already has a number, a title,
-a state and metrics; eight thumbnails would turn the register back into the wall
-of cards this direction was chosen to get away from.
+**There are no images in the organiser's register.** It already has a number, a
+title, a state and metrics; eight thumbnails would turn it back into the wall of
+cards this direction was chosen to get away from.
+
+**The front page is the exception, and it is addressed rather than accidental.**
+That register is a working list, read down a column by somebody who already
+knows what they are looking for. The front page is read by somebody who does
+not know what this is, and its whole job is to say so; there a contest is a
+card with a picture. The rule is therefore about the register, not about every
+list of contests that will ever exist — and the two surfaces are allowed to
+differ because they answer different questions.
 
 ### 10.1 Rules for photographs
 
@@ -763,9 +771,21 @@ to guarantee legibility whatever they pick.
 
 ### 10.3 When there is no picture
 
-The header becomes a hatched plate of the same aspect with the same typography —
-not one shift in the layout. A contest without an image looks deliberate rather
-than unfinished.
+A contest with no photograph is not a hole in a grid. It wears a **drawn
+cover**: the same 16:9, the same scrim, the same title in the same place,
+built from tokens the system already has and derived from the contest's own
+identifier, so the same contest always looks the same.
+
+This is not decoration for its own sake. On the first day of an installation
+no contest has a photograph and later half of them will, and a grid where half
+the cards are pictures and half are grey plates reads as unfinished — the
+product looks broken by the organisers who did not get round to it. A drawn
+cover of the same family keeps a mixed row reading as one row.
+
+The story header, where a picture is missing, keeps its own answer: a hatched
+plate of the same aspect with the same typography — not one shift in the
+layout.
+
 
 ### 10.4 Avatars
 
