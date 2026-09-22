@@ -778,6 +778,7 @@ const ro = {
         winner_final_needs_attempt_limit: "O întrebare finală nu are o limită de încercări, iar punctajul este pe primul care rezolvă, deci olimpiada ar putea fi câștigată încercând variante una după alta.",
         leaderboard_freeze_exceeds_window: "Înghețarea clasamentului începe înaintea olimpiadei sau olimpiada nu are un final de la care să fie numărată.",
         staff_registered: "Contul unui participant administrează toate olimpiadele, deci citește deja răspunsurile de referință ale acestei olimpiade și clasamentul ei neînghețat. Scoateți-l din lista de participanți înainte de publicare sau retrageți-i dreptul contului.",
+        cover_needs_attribution: "Coperta încărcată nu are o linie care spune a cui este fotografia. Adăugați-o sau eliminați coperta, iar olimpiada va primi una desenată.",
       },
     },
     story: {
@@ -1767,6 +1768,18 @@ const ro = {
       "Imaginea este prea grea sau prea mare. Până la 512 KB și cel mult 4096 de pixeli pe latură.",
     image_not_accepted:
       "Acest fișier nu este o imagine pe care instalarea o păstrează. PNG, JPEG, GIF sau WebP — formatul este citit din fișier, nu din numele lui. Un .ico nu este necesar: orice browser actual acceptă un PNG drept pictogramă de filă.",
+    cover_too_often:
+      "Din acest cont au fost încărcate coperte prea des. Așteptați un minut și încercați din nou.",
+    cover_too_large:
+      "Fișierul este prea greu pentru o copertă. Până la 8 MB.",
+    cover_kind:
+      "Acest fișier nu este o imagine pe care serviciul o acceptă drept copertă. JPEG, PNG sau WebP — formatul este citit din fișier, nu din numele lui. Un SVG nu este acceptat sub nicio formă: este un document care poate purta scripturi, iar coperta este văzută de fiecare vizitator.",
+    cover_dimensions:
+      "Imaginea are prea mulți pixeli pe latură pentru o copertă. Până la 8000 pe 8000.",
+    cover_attribution_required:
+      "O copertă încărcată are nevoie de o linie care spune a cui este fotografia. O olimpiadă fără copertă încărcată primește una desenată și nu are nevoie de atribuire.",
+    cover_attribution_too_long:
+      "Linia de atribuire este prea lungă. Până la 200 de caractere.",
     not_a_participant:
       "Nu participați la această olimpiadă.",
     contest_not_running:

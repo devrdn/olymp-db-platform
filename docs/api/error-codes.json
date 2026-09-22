@@ -46,6 +46,30 @@
       "meaning": "The contest has not started, or has finished. Queries are taken only while it runs."
     },
     {
+      "code": "cover_attribution_required",
+      "meaning": "An uploaded cover needs a line saying whose picture it is. A contest with no uploaded cover wears a drawn one and needs none."
+    },
+    {
+      "code": "cover_attribution_too_long",
+      "meaning": "The attribution is longer than a credit line may be. The message names the limit in characters."
+    },
+    {
+      "code": "cover_dimensions",
+      "meaning": "The picture declares more pixels on a side than a cover may have. Refused from the file's header, before any of it is decoded. The message names the limit."
+    },
+    {
+      "code": "cover_kind",
+      "meaning": "The file is not a picture this service accepts. JPEG, PNG or WebP, and the format is read from the bytes rather than from the name — an SVG is refused whatever is inside it, because it is a document that can carry script and the cover is shown to every visitor without a session."
+    },
+    {
+      "code": "cover_too_large",
+      "meaning": "The uploaded file is heavier than a cover may be. The message names the limit."
+    },
+    {
+      "code": "cover_too_often",
+      "meaning": "This account has uploaded covers more often this minute than the installation allows, refused uploads included. Nothing was stored; wait `Retry-After` seconds and try again."
+    },
+    {
       "code": "cross_origin",
       "meaning": "The request carried an Origin the server does not serve. Sent for a write that a browser made from another site."
     },

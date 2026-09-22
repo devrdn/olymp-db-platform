@@ -47,6 +47,10 @@ export const PUBLISH_PROBLEMS = {
   // leaderboard. The detail is their login, because the organizer's next
   // move is to find that person in the roster.
   staffRegistered: "staff_registered",
+  // Contest-wide: an uploaded cover with nobody credited. A contest with no
+  // uploaded cover wears a drawn one, whose author is us, and never appears
+  // here.
+  coverNeedsAttribution: "cover_needs_attribution",
 } as const;
 
 export type PublishProblem = {
