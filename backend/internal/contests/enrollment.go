@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 )
@@ -446,6 +447,15 @@ func (s *Service) addOne(ctx context.Context, cmd AddParticipantsCommand, c Cont
 		result.skip(user.Login, SkipStaffMember)
 		return nil
 	}
+	// And the staff a contest's own list cannot name: an account holding
+	// contest.admin_all exports this contest's question package and reads
+	// its unfrozen table without ever being appointed to it, so registering
+	// it would not be a fair result either. The account carries its
+	// permissions with it (users.User.Permissions), so this costs no lookup.
+	if user.Has(rbac.PermissionContestAdminAll) {
+		result.skip(user.Login, SkipStaffMember)
+		return nil
+	}
 
 	if _, err := s.registrations.Add(ctx, c.ID, user.ID); err != nil {
 		if errors.Is(err, ErrAlreadyEnrolled) {
@@ -509,7 +519,17 @@ func (s *Service) Enroll(ctx context.Context, cmd EnrollCommand) (Participant, e
 		} else if !errors.Is(err, ErrManagerNotFound) {
 			return err
 		}
-		var err error
+		// The same exclusion for staff this contest's list cannot name: an
+		// account holding contest.admin_all reads every contest's answers
+		// and unfrozen table. Read inside the lock, like the line above, so
+		// the decision cannot be stale by the time the write lands.
+		self, err := s.users.ByID(ctx, cmd.UserID)
+		if err != nil {
+			return err
+		}
+		if self.Has(rbac.PermissionContestAdminAll) {
+			return ErrStaffCannotParticipate
+		}
 		if enrolled, err = s.registrations.Add(ctx, c.ID, cmd.UserID); err != nil {
 			return err
 		}
