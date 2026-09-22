@@ -21,8 +21,17 @@ function running(over: Partial<PublicContest> = {}): PublicContest {
     startsAt: "2026-03-14T08:00:00Z",
     endsAt: "2026-03-14T11:00:00Z",
     tableOpen: true,
+    // No picture unless a test says otherwise: that is the state an
+    // installation opens in, and the one the drawn cover exists for.
+    coverHash: undefined,
+    coverAttribution: undefined,
     ...over,
   };
+}
+
+/** The card of the one contest a test rendered. */
+function card(): HTMLElement {
+  return screen.getAllByRole("listitem")[0];
 }
 
 describe("the contest list", () => {
@@ -83,6 +92,90 @@ describe("the contest list", () => {
     // The accent dot belongs to what is happening now and to nothing else.
     expect(rows[0].querySelectorAll(".bg-accent")).toHaveLength(1);
     expect(rows[1].querySelectorAll(".bg-accent")).toHaveLength(0);
+  });
+
+  /**
+   * The card's rendition, at the address that carries the hash.
+   *
+   * The hash is what makes a replaced cover appear: the path names the
+   * contest rather than the file, so an address without it is the address of
+   * the old picture, and the API answers it with a year of caching.
+   */
+  test("shows the picture an organiser uploaded", () => {
+    render(
+      <RecentContests
+        signedIn={false}
+        contests={[running({ coverHash: "9f86d081884c7d65", coverAttribution: "Photo: A. Organiser, CC BY 4.0" })]}
+        dict={en}
+        locale="en"
+      />,
+    );
+
+    const picture = screen.getByRole("img", {
+      name: en.home.contests.coverOf.replace("{title}", "Spring round"),
+    });
+    expect(picture).toHaveAttribute(
+      "src",
+      `/api/v1/public/contests/${running().id}/cover?size=800&v=9f86d081884c7d65`,
+    );
+    // Against a page that jumps as six pictures arrive, and against loading
+    // six of them for a reader who never scrolls that far.
+    expect(picture).toHaveAttribute("loading", "lazy");
+    expect(picture).toHaveAttribute("width");
+    expect(picture).toHaveAttribute("height");
+  });
+
+  /**
+   * A contest nobody uploaded a picture for gets a cover of its own, not a
+   * grey rectangle. On the day an installation opens that is every contest on
+   * the page, and a grid of empty frames would be the first thing a visitor
+   * saw.
+   */
+  test("draws a cover for a contest that has no picture", () => {
+    render(<RecentContests signedIn={false} contests={[running()]} dict={en} locale="en" />);
+
+    expect(card().querySelector("img")).toBeNull();
+    // The drawn cover's own geometry. What it draws is its test's business;
+    // what matters here is that the frame is not left empty.
+    expect(card().querySelector("svg")).not.toBeNull();
+  });
+
+  /**
+   * The title is never laid on the photograph itself. It sits on a scrim that
+   * resolves to the page's ground (design spec §10.2), which is what
+   * guarantees its contrast whatever the organiser's picture happens to have
+   * in its bottom third — and the drawn cover carries the same one, so a
+   * mixed row reads as one row.
+   */
+  test.each([
+    ["an uploaded cover", { coverHash: "9f86d081884c7d65", coverAttribution: "Photo: A. Organiser" }],
+    ["a drawn cover", {}],
+  ])("puts the title of a card with %s on a scrim", (_name, over) => {
+    render(<RecentContests signedIn={false} contests={[running(over)]} dict={en} locale="en" />);
+
+    expect(card().querySelector(".from-scrim-a")).not.toBeNull();
+    expect(card()).toHaveTextContent("Spring round");
+  });
+
+  /**
+   * An uploaded picture is somebody's work and is not published without the
+   * line saying whose (design spec §10.1). A drawn cover has none to carry,
+   * because its author is us.
+   */
+  test("credits an uploaded picture, and only an uploaded one", () => {
+    const credited = render(
+      <RecentContests
+        signedIn={false}
+        contests={[running({ coverHash: "9f86d081884c7d65", coverAttribution: "Photo: A. Organiser, CC BY 4.0" })]}
+        dict={en}
+        locale="en"
+      />,
+    );
+    expect(screen.getByText("Photo: A. Organiser, CC BY 4.0")).toBeInTheDocument();
+    credited.unmount();
+
+    render(<RecentContests signedIn={false} contests={[running()]} dict={en} locale="en" />);
+    expect(screen.queryByText(/Photo:/)).toBeNull();
   });
 
   /**

@@ -39,6 +39,13 @@ export type PublicStats = z.infer<typeof publicStatsSchema>;
  *
  * `starts_at` and `ends_at` are absent on a contest with no window yet, which
  * is why they are optional and why the row has a phrase for saying so.
+ *
+ * `cover_hash` is absent on a contest nobody uploaded a picture for, and that
+ * absence is not a gap to apologise for: the card draws such a contest a cover
+ * of its own from its identifier. The hash rather than an address, because the
+ * address is built here (`coverHref`) and carries the hash in it — which is
+ * what makes a replaced cover a new address rather than a year of somebody's
+ * cache holding the old picture.
  */
 export const publicContestSchema = z
   .object({
@@ -48,6 +55,8 @@ export const publicContestSchema = z
     starts_at: z.string().optional(),
     ends_at: z.string().optional(),
     table_open: z.boolean(),
+    cover_hash: z.string().optional(),
+    cover_attribution: z.string().optional(),
   })
   .transform((raw) => ({
     id: raw.id,
@@ -56,6 +65,8 @@ export const publicContestSchema = z
     startsAt: raw.starts_at,
     endsAt: raw.ends_at,
     tableOpen: raw.table_open,
+    coverHash: raw.cover_hash,
+    coverAttribution: raw.cover_attribution,
   }));
 
 export type PublicContest = z.infer<typeof publicContestSchema>;
