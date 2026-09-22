@@ -98,10 +98,13 @@
   --color-id-6: var(--id-6);
   --color-id-6-wash: var(--id-6-wash);
 
-  /* The ornament sub-palette. Exposed as text colours because the ornament is
+  /* The ornament sub-palette. Used as text colours, because the ornament is
      drawn in `currentColor`: the colour is chosen once on the element and the
      strokes inside it follow, so a band never has to be repainted path by
-     path. */
+     path. Tailwind generates the background, border, fill and stroke
+     utilities from the same tokens — nothing stops them being used, and what
+     keeps these three to the ornament is the rule in SPEC 3.6 rather than
+     anything here. */
   --color-ornament-madder: var(--ornament-madder);
   --color-ornament-walnut: var(--ornament-walnut);
   --color-ornament-indigo: var(--ornament-indigo);

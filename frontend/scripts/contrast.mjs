@@ -98,7 +98,16 @@ const PAIRS = [
  * listed so that nobody "fixes" it, and so that its value cannot drift into
  * looking like real text.
  */
-const EXEMPT = [["ann", "bg", "decorative annotation, never the sole carrier of information"]];
+const EXEMPT = [
+  ["ann", "bg", "decorative annotation, never the sole carrier of information"],
+  // The ornament is aria-hidden and never sits under text: it carries no
+  // meaning a reader could need, so a text threshold would be the wrong
+  // question to ask of it (SPEC 3.6). Listed rather than left out, because an
+  // unlisted colour is an unverified one and this file is the claim.
+  ["ornament-madder", "bg", "ornament only, decorative, never under text"],
+  ["ornament-walnut", "bg", "ornament only, decorative, never under text"],
+  ["ornament-indigo", "bg", "ornament only, decorative, never under text"],
+];
 
 function parse(css) {
   const light = new Map();
