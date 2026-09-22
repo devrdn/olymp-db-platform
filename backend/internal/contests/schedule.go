@@ -9,6 +9,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/google/uuid"
 )
 
@@ -73,6 +74,15 @@ type scheduleQuestions interface {
 	List(ctx context.Context, contestID uuid.UUID) ([]Question, error)
 }
 
+// scheduleRoster is the third of them: the one question a contest's roster
+// answers about whether the contest is fit to open. One method rather than
+// RegistrationRepository entire, for the same reason as the two above —
+// nothing the wide interface offers (Add, Remove, AddScore, Start) has any
+// business running behind a publish gate or on a tick.
+type scheduleRoster interface {
+	RegisteredWithPermission(ctx context.Context, contestID uuid.UUID, permission string) ([]string, error)
+}
+
 // blockedContests is what Advance needs from the audit trail itself to keep
 // finding 1's guarantee — a contest's refusal recorded once, not once a tick,
 // for as long as nothing about it changes: the newest entry already on file
@@ -123,6 +133,7 @@ type Scheduler struct {
 	repo      ScheduleRepository
 	stories   scheduleStories
 	questions scheduleQuestions
+	roster    scheduleRoster
 	blocked   blockedContests
 	audit     *audit.Recorder
 	uow       storage.UnitOfWork
@@ -140,8 +151,8 @@ type Scheduler struct {
 }
 
 // NewScheduler assembles the background scheduler.
-func NewScheduler(repo ScheduleRepository, stories scheduleStories, questions scheduleQuestions, blocked blockedContests, auditRecorder *audit.Recorder, uow storage.UnitOfWork, grace time.Duration) *Scheduler {
-	return &Scheduler{repo: repo, stories: stories, questions: questions, blocked: blocked, audit: auditRecorder, uow: uow, grace: grace}
+func NewScheduler(repo ScheduleRepository, stories scheduleStories, questions scheduleQuestions, roster scheduleRoster, blocked blockedContests, auditRecorder *audit.Recorder, uow storage.UnitOfWork, grace time.Duration) *Scheduler {
+	return &Scheduler{repo: repo, stories: stories, questions: questions, roster: roster, blocked: blocked, audit: auditRecorder, uow: uow, grace: grace}
 }
 
 // WithPoolTrigger wires the trigger Advance fires for every contest it moves
@@ -153,14 +164,18 @@ func (s *Scheduler) WithPoolTrigger(trigger PoolTrigger) *Scheduler {
 	return s
 }
 
-// checkPublishable is the body behind both Service.checkPublishable and
-// Scheduler's own gate: read c's story and questions through whichever
-// narrow stores the caller holds and hand all three to CheckPublishable
-// together. A package-level function taking the two narrow interfaces rather
-// than a method on either type, because it is the same question — "is c
-// ready for participants" — asked by two callers holding different-shaped
-// storage for it.
-func checkPublishable(ctx context.Context, stories scheduleStories, questions scheduleQuestions, c Contest) error {
+// checkPublishable is the whole gate, and the body behind both
+// Service.checkPublishable and Scheduler's own: read c's story, its questions
+// and its roster through whichever narrow stores the caller holds, and report
+// everything the four together say at once. A package-level function taking
+// the narrow interfaces rather than a method on either type, because it is
+// the same question — "is c ready for participants" — asked by two callers
+// holding different-shaped storage for it.
+//
+// Every problem in one report, the way NotPublishableError's own doc asks: an
+// organizer who fixes a missing translation and is then told about a
+// registration needs as many round trips as the contest has faults.
+func checkPublishable(ctx context.Context, stories scheduleStories, questions scheduleQuestions, roster scheduleRoster, c Contest) error {
 	story, err := stories.ByContest(ctx, c.ID)
 	if err != nil && !errors.Is(err, ErrStoryNotFound) {
 		return err
@@ -169,7 +184,23 @@ func checkPublishable(ctx context.Context, stories scheduleStories, questions sc
 	if err != nil {
 		return err
 	}
-	return CheckPublishable(c, story, qs)
+	problems := publishProblems(c, story, qs)
+
+	// The half CheckPublishable cannot see: an account administering every
+	// contest that holds a registration for this one. See
+	// ProblemStaffRegistered for why publication is where this is caught.
+	staff, err := roster.RegisteredWithPermission(ctx, c.ID, rbac.PermissionContestAdminAll)
+	if err != nil {
+		return err
+	}
+	for _, login := range staff {
+		problems = append(problems, PublishProblem{Code: ProblemStaffRegistered, Detail: login})
+	}
+
+	if len(problems) > 0 {
+		return &NotPublishableError{Problems: problems}
+	}
+	return nil
 }
 
 // Advance runs one tick: try for the lock, and if it is won, move every
@@ -239,7 +270,7 @@ func (s *Scheduler) Advance(ctx context.Context) (started, finished int, err err
 
 		var entries []audit.Entry
 		for _, c := range due {
-			switch gateErr := checkPublishable(ctx, s.stories, s.questions, c); {
+			switch gateErr := checkPublishable(ctx, s.stories, s.questions, s.roster, c); {
 			case gateErr == nil:
 				// Ready — fall through to the move below.
 			case errors.Is(gateErr, ErrNotPublishable):

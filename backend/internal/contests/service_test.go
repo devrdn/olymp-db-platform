@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -718,6 +719,50 @@ func TestPublishAcceptsACompleteContest(t *testing.T) {
 	reloaded, _ := f.Service.ByID(context.Background(), c.ID)
 	if reloaded.Status != contests.StatusPublished {
 		t.Errorf("status = %q, want published", reloaded.Status)
+	}
+}
+
+// An account that administers every contest reads this one's reference
+// answers and its unfrozen leaderboard, so it cannot also compete in it. Both
+// registration paths refuse it now, but neither can undo a registration made
+// before that rule existed or one whose account was granted the permission
+// afterwards — and such a participant otherwise keeps playing and keeps
+// scoring with the answer key in reach. Publication is where it is caught,
+// because that is the last moment before anybody is let in and the organizer
+// is looking at the gate anyway.
+func TestPublishRefusesAContestAnAdministratorIsRegisteredFor(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedPublishableContest()
+	admin := f.AddAdministrator("inspector")
+	f.Registrations.Put(contests.Participant{ContestID: c.ID, UserID: admin.ID})
+
+	err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusPublished)
+
+	if !errors.Is(err, contests.ErrNotPublishable) {
+		t.Fatalf("Transition(published) = %v, want ErrNotPublishable", err)
+	}
+	var notReady *contests.NotPublishableError
+	if !errors.As(err, &notReady) {
+		t.Fatalf("Transition(published) = %v, want a *contests.NotPublishableError", err)
+	}
+	// The login, because an organizer has to know whom to take off the
+	// roster; a count would leave them searching a list of four hundred.
+	want := contests.PublishProblem{Code: contests.ProblemStaffRegistered, Detail: "inspector"}
+	if !slices.Contains(notReady.Problems, want) {
+		t.Errorf("problems = %v, want one of %v", notReady.Problems, want)
+	}
+}
+
+// And an ordinary roster publishes, so the check above reads the permission
+// rather than merely the presence of participants.
+func TestPublishAcceptsAContestWithOrdinaryParticipants(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := f.SeedPublishableContest()
+	student := f.AddUser("student")
+	f.Registrations.Put(contests.Participant{ContestID: c.ID, UserID: student.ID})
+
+	if err := f.Service.Transition(context.Background(), uuid.New(), c.ID, contests.StatusPublished); err != nil {
+		t.Fatalf("Transition(published) = %v", err)
 	}
 }
 

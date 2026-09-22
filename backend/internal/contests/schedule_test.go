@@ -3,12 +3,16 @@ package contests_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
+	"github.com/devrdn/db-contest/backend/internal/rbac"
+	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/devrdn/db-contest/backend/internal/users/userstest"
 	"github.com/google/uuid"
 )
 
@@ -25,6 +29,8 @@ type schedulerFixture struct {
 	repo        *conteststest.Schedule
 	stories     *conteststest.Stories
 	questions   *conteststest.Questions
+	roster      *conteststest.Registrations
+	users       *userstest.Repository
 	sink        *conteststest.Sink
 	uow         *conteststest.UnitOfWork
 	poolTrigger *conteststest.PoolTrigger
@@ -42,11 +48,36 @@ func newScheduler() schedulerFixture {
 	sink := conteststest.NewSink()
 	uow := &conteststest.UnitOfWork{}
 	poolTrigger := conteststest.NewPoolTrigger(uow)
+	roster, users := newRoster()
 	return schedulerFixture{
-		scheduler: contests.NewScheduler(repo, stories, questions, sink, audit.New(sink), uow, schedulerFixtureGrace).
+		scheduler: contests.NewScheduler(repo, stories, questions, roster, sink, audit.New(sink), uow, schedulerFixtureGrace).
 			WithPoolTrigger(poolTrigger),
-		repo: repo, stories: stories, questions: questions, sink: sink, uow: uow, poolTrigger: poolTrigger,
+		repo: repo, stories: stories, questions: questions, roster: roster, users: users,
+		sink: sink, uow: uow, poolTrigger: poolTrigger,
 	}
+}
+
+// newRoster is the registration store the gate reads, wired to an account
+// store the same way conteststest.NewFixture wires Service's — the permission
+// a participant holds is a fact about their account, and a roster fake that
+// invented it would let a test pass a gate the real one refuses.
+func newRoster() (*conteststest.Registrations, *userstest.Repository) {
+	roster, users := conteststest.NewRegistrations(), userstest.New()
+	roster.Accounts = func(ctx context.Context, id uuid.UUID) (string, string) {
+		user, err := users.ByID(ctx, id)
+		if err != nil {
+			return "", ""
+		}
+		return user.Login, user.FullName
+	}
+	roster.Permissions = func(ctx context.Context, id uuid.UUID) []string {
+		user, err := users.ByID(ctx, id)
+		if err != nil {
+			return nil
+		}
+		return user.Permissions
+	}
+	return roster, users
 }
 
 // duePublishable stages a contest that passes CheckPublishable, together
@@ -193,6 +224,45 @@ func TestAdvanceBlocksAContestThatFailsThePublishGate(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("problems = %v, want it to include %q", problems, contests.ProblemNoStory)
+	}
+}
+
+// The scheduler is the other door into a running contest, and it holds the
+// roster half of the gate too: a contest published before the rule existed,
+// with an account that administers every contest on its roster, must not be
+// opened by a tick just because starts_at arrived. The organizer finds out
+// from the trail, which is where a blocked start is already recorded.
+func TestAdvanceBlocksAContestAnAdministratorIsRegisteredFor(t *testing.T) {
+	f := newScheduler()
+	c := duePublishable(f)
+	const role = "administrator"
+	f.users.GrantRole(role, rbac.PermissionContestAdminAll)
+	admin := f.users.Add(users.User{
+		Login: "inspector", FullName: "inspector", Status: users.StatusActive, Roles: []string{role},
+	})
+	f.roster.Put(contests.Participant{ContestID: c.ID, UserID: admin.ID})
+	f.repo.Due = []contests.Contest{c}
+
+	started, _, err := f.scheduler.Advance(context.Background())
+	if err != nil {
+		t.Fatalf("Advance() = %v", err)
+	}
+	if started != 0 {
+		t.Errorf("started = %d, want 0 — the gate refused this contest", started)
+	}
+	if f.repo.SetStatusCalls != 0 {
+		t.Error("a contest that failed the publish gate must never reach SetStatus")
+	}
+
+	if len(f.sink.Entries) != 1 {
+		t.Fatalf("audit entries = %d, want exactly 1", len(f.sink.Entries))
+	}
+	problems, ok := f.sink.Entries[0].Payload["problems"].([]string)
+	if !ok {
+		t.Fatalf("payload problems = %v, want a []string", f.sink.Entries[0].Payload["problems"])
+	}
+	if !slices.Contains(problems, contests.ProblemStaffRegistered) {
+		t.Errorf("problems = %v, want it to include %q", problems, contests.ProblemStaffRegistered)
 	}
 }
 
@@ -503,9 +573,11 @@ func TestAdvanceWithNoPoolTriggerWiredStillWorks(t *testing.T) {
 	questions := conteststest.NewQuestions()
 	sink := conteststest.NewSink()
 	uow := &conteststest.UnitOfWork{}
-	scheduler := contests.NewScheduler(repo, stories, questions, sink, audit.New(sink), uow, schedulerFixtureGrace)
+	roster, users := newRoster()
+	scheduler := contests.NewScheduler(repo, stories, questions, roster, sink, audit.New(sink), uow, schedulerFixtureGrace)
 
-	f := schedulerFixture{scheduler: scheduler, repo: repo, stories: stories, questions: questions, sink: sink, uow: uow}
+	f := schedulerFixture{scheduler: scheduler, repo: repo, stories: stories, questions: questions,
+		roster: roster, users: users, sink: sink, uow: uow}
 	due := duePublishable(f)
 	f.repo.Due = []contests.Contest{due}
 

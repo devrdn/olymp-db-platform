@@ -741,6 +741,7 @@ const ro = {
         winner_needs_final: "Punctajul este pe primul care rezolvă, dar nicio întrebare nu este finală, deci nimeni nu ar putea câștiga.",
         winner_final_needs_attempt_limit: "O întrebare finală nu are o limită de încercări, iar punctajul este pe primul care rezolvă, deci olimpiada ar putea fi câștigată încercând variante una după alta.",
         leaderboard_freeze_exceeds_window: "Înghețarea clasamentului începe înaintea olimpiadei sau olimpiada nu are un final de la care să fie numărată.",
+        staff_registered: "Contul unui participant administrează toate olimpiadele, deci citește deja răspunsurile de referință ale acestei olimpiade și clasamentul ei neînghețat. Scoateți-l din lista de participanți înainte de publicare sau retrageți-i dreptul contului.",
       },
     },
     story: {

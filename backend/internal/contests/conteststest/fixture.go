@@ -81,6 +81,15 @@ func NewFixture() *Fixture {
 		}
 		return user.Login, user.FullName
 	}
+	// And what that account may do, which is what the publish gate reads to
+	// find a participant who administers every contest.
+	f.Registrations.Permissions = func(ctx context.Context, id uuid.UUID) []string {
+		user, err := f.Users.ByID(ctx, id)
+		if err != nil {
+			return nil
+		}
+		return user.Permissions
+	}
 	// The submission store's own clock defaults to the same fixture.Now a
 	// test already controls for the application clock — the honest default,
 	// since the two only need to differ when a test is specifically
