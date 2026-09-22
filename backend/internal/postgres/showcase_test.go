@@ -105,6 +105,55 @@ func TestRecentContestsSayWhoseTableIsOpen(t *testing.T) {
 	})
 }
 
+// The card on the showcase carries a picture, so the list that draws the
+// cards has to say which contest has one and under whose name it is shown.
+//
+// It comes off the same statement as everything else on the row. One read for
+// the page and not one per card: six covers behind a page anybody may load
+// without signing in would be six round trips a minute of cache cannot spare
+// anyone, and a contest without a picture is not a second query — it wears a
+// drawn cover, which needs nothing from storage at all.
+func TestRecentContestsCarryTheCoverTheContestWears(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		author := makeUser(t, ctx, "author-showcase-covers")
+		withCover := makeContest(t, ctx, author.ID)
+		exec(t, ctx, `UPDATE contests SET status = 'published' WHERE id = $1`, withCover)
+		cover := aCover(withCover, author.ID)
+		if err := NewCovers(testPool).Save(ctx, cover); err != nil {
+			t.Fatalf("Save() = %v", err)
+		}
+		bare := makeContest(t, ctx, author.ID)
+		exec(t, ctx, `UPDATE contests SET status = 'published' WHERE id = $1`, bare)
+
+		got, err := NewShowcase(testPool).Recent(ctx, 50)
+		if err != nil {
+			t.Fatalf("Recent() = %v", err)
+		}
+
+		found, ok := byID(got, withCover)
+		if !ok {
+			t.Fatalf("Recent() did not carry the contest with a cover %s", withCover)
+		}
+		if found.CoverHash != cover.Hash {
+			t.Errorf("CoverHash = %q, want %q", found.CoverHash, cover.Hash)
+		}
+		if found.CoverAttribution != cover.Attribution {
+			t.Errorf("CoverAttribution = %q, want %q", found.CoverAttribution, cover.Attribution)
+		}
+
+		// A contest nobody uploaded a picture for is still a row, and the
+		// absence is an empty hash rather than a missing row: the drawn cover
+		// is what it wears, and the page decides that from this field alone.
+		plain, ok := byID(got, bare)
+		if !ok {
+			t.Fatalf("Recent() did not carry the contest without a cover %s", bare)
+		}
+		if plain.CoverHash != "" {
+			t.Errorf("CoverHash = %q, want it empty for a contest with no uploaded cover", plain.CoverHash)
+		}
+	})
+}
+
 // The bound is the query's, not the caller's to hope for: the page asks for
 // six and is never handed a seventh.
 func TestRecentContestsStopAtTheLimit(t *testing.T) {

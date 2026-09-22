@@ -97,6 +97,22 @@ type Contest struct {
 	// contest is over, or its frozen result was revealed.
 	TableOpen bool
 
+	// CoverHash names the picture the contest wears, and is empty for a
+	// contest nobody uploaded one for. Empty is not a gap the page has to
+	// apologise for: a contest without an uploaded picture wears a cover
+	// drawn from its own identifier, which costs neither a column nor a read
+	// (design §2.3).
+	//
+	// The hash rather than an address, because the address belongs to the
+	// HTTP layer and to the client that builds it; what storage knows is
+	// which bytes are current.
+	CoverHash string
+	// CoverAttribution credits whoever made the uploaded picture. The publish
+	// gate refuses an uploaded cover that credits nobody (design §10.1), so a
+	// non-empty CoverHash arrives with a non-empty line here; a drawn cover
+	// needs none, because its author is us.
+	CoverAttribution string
+
 	Titles          map[string]string
 	DefaultLanguage string
 }

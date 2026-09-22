@@ -91,10 +91,18 @@ func (r *Showcase) Numbers(ctx context.Context) (showcase.Numbers, error) {
 // filter the API offers, and this is neither: the selection is a fixed
 // clause no caller can widen, and the caller chooses nothing about the order.
 // Revisit it if the selection ever stops being the whole small table.
+//
+// The cover joins rather than being asked for per row. The page draws a card
+// per contest and each card carries a picture, so the alternative is six
+// reads of contest_covers behind a page anybody may load without an account;
+// the join is over the table's own primary key and a contest without a row
+// there is not a missing cover but a drawn one, which is why it is a LEFT
+// join answering empty strings rather than a filter.
 func (r *Showcase) Recent(ctx context.Context, limit int) ([]showcase.Contest, error) {
 	rows, err := r.querier(ctx).Query(ctx, `
 		SELECT c.id, c.status, c.starts_at, c.ends_at,
 		       (c.status IN ('finished', 'archived') OR c.leaderboard_revealed_at IS NOT NULL) AS table_open,
+		       COALESCE(cc.hash, ''), COALESCE(cc.attribution, ''),
 		       COALESCE((
 		           SELECT json_object_agg(ct.lang, ct.title)
 		           FROM contest_translations ct WHERE ct.contest_id = c.id
@@ -105,6 +113,7 @@ func (r *Showcase) Recent(ctx context.Context, limit int) ([]showcase.Contest, e
 		           ORDER BY cl.lang LIMIT 1
 		       ), '')
 		FROM contests c
+		LEFT JOIN contest_covers cc ON cc.contest_id = c.id
 		WHERE `+publicStatusFilter("c.status", 2)+`
 		ORDER BY COALESCE(c.starts_at, c.created_at) DESC, c.id DESC
 		LIMIT $1`, limit, contests.PublicStatuses)
@@ -119,7 +128,8 @@ func (r *Showcase) Recent(ctx context.Context, limit int) ([]showcase.Contest, e
 			c      showcase.Contest
 			titles []byte
 		)
-		if err := rows.Scan(&c.ID, &c.Status, &c.StartsAt, &c.EndsAt, &c.TableOpen, &titles, &c.DefaultLanguage); err != nil {
+		if err := rows.Scan(&c.ID, &c.Status, &c.StartsAt, &c.EndsAt, &c.TableOpen,
+			&c.CoverHash, &c.CoverAttribution, &titles, &c.DefaultLanguage); err != nil {
 			return nil, fmt.Errorf("scan a recent contest: %w", err)
 		}
 		if err := json.Unmarshal(titles, &c.Titles); err != nil {
