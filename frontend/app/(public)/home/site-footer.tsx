@@ -55,11 +55,12 @@ export function SiteFooter({
 
   return (
     <footer>
-      {/* `border-b-0`: every other band draws a rule under itself to separate
-          it from the next one, and there is nothing after this one — a
-          hairline along the bottom of the page separates the page from the
-          browser. */}
-      <Band className="gap-8 border-b-0 py-10 max-narrow:py-8">
+      {/* `rule={false}`: every other band draws a rule under itself to
+          separate it from the next one, and there is nothing after this one —
+          a hairline along the bottom of the page separates the page from the
+          browser. A class cannot say this: `className` lands on the content
+          column, and the rule belongs to the section around it. */}
+      <Band rule={false} className="gap-8 py-10 max-narrow:py-8">
         <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-5">
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-1">
             <span className="text-control font-semibold text-ink">{name}</span>
