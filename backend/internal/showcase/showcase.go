@@ -24,6 +24,7 @@ package showcase
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -313,6 +314,12 @@ func (s *Service) Recent(ctx context.Context, lang string) ([]Contest, error) {
 // title copies the cached list into the answer one caller gets: their
 // language's title on every row, nothing a draft could ride in on, and at
 // most MaxRecent rows.
+//
+// Titles is cloned rather than carried over, because copying a Contest copies
+// the map header and not the map: without this the row a visitor is handed
+// shares its translations with the entry every later visitor will be handed,
+// and one caller writing into it would rewrite the cache. Nothing does today,
+// which is exactly the kind of thing that stops being true later.
 func title(list []Contest, lang string) []Contest {
 	out := make([]Contest, 0, min(len(list), MaxRecent))
 	for _, c := range list {
@@ -320,6 +327,7 @@ func title(list []Contest, lang string) []Contest {
 			continue
 		}
 		c.Title = c.titleIn(lang)
+		c.Titles = maps.Clone(c.Titles)
 		out = append(out, c)
 		if len(out) == MaxRecent {
 			break
