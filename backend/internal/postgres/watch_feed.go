@@ -18,13 +18,14 @@ import (
 // range past the cursor, in the page's direction, with at most Limit+1 rows,
 // merged by monitor.MergeFeed.
 //
-// The whole contest's query log and answers are read per registration
-// (LATERAL over the contest's registrations), each registration its own
-// range of query_log (registration_id, executed_at) or submissions
-// (registration_id, submitted_at) with its own LIMIT: neither table carries
-// the contest, and a range per registration is what keeps an old contest's
-// feed from walking every query anybody ran since. participant_events carries
-// the contest and is one range of its own index (migration 000033).
+// The whole contest's query log, answers and events are each one range of one
+// index, on (contest_id, time, id): every journal carries the contest it
+// belongs to, participant_events since migration 000033 and the other two
+// since 000034, so a page of a three-hundred-participant contest reads the
+// page and not a page per participant. One participant's timeline reads their
+// own range instead, on (registration_id, time, id), with the contest checked
+// on the same row — the narrower range of the two, and the same guarantee
+// that another contest's rows can never appear.
 //
 // Sign-ins and sign-outs are the participant's account's own audit entries
 // (audit_log (actor_id, created_at)), failed sign-ins the entries naming its
@@ -183,9 +184,30 @@ func registrationScope(a *args, q monitor.FeedQuery) string {
 	return scope
 }
 
+// journalScope narrows a journal that carries its own contest (query_log,
+// submissions, participant_events under the given alias) to what the feed is
+// about.
+//
+// A contest-wide page is the contest's range. One participant's timeline is
+// that registration's range, and that the registration is this contest's is
+// asked once, of registrations, rather than of every row of the range: the
+// two columns agree by construction (migration 000034), and a second
+// condition on the row would only tell the planner that the range is less
+// selective than it is — enough for it to give up the ordered index scan the
+// keyset page depends on and read the whole range into a sort.
+func journalScope(a *args, q monitor.FeedQuery, alias string) string {
+	if q.Registration != uuid.Nil {
+		registration := a.add(q.Registration)
+		return alias + ".registration_id = " + registration +
+			" AND EXISTS (SELECT 1 FROM registrations r WHERE r.id = " + registration +
+			" AND r.contest_id = " + a.add(q.Contest) + ")"
+	}
+	return alias + ".contest_id = " + a.add(q.Contest)
+}
+
 func (w *Watch) feedQueries(ctx context.Context, q monitor.FeedQuery) ([]monitor.FeedItem, error) {
 	var a args
-	scope := registrationScope(&a, q)
+	scope := journalScope(&a, q, "q")
 	bounds, dir := feedBounds(&a, q, monitor.SourceQuery, "q.executed_at", "q.id", "bigint")
 	limit := a.add(q.Limit + 1)
 	chars := a.add(queryrunner.MaxHistorySQLChars)
@@ -193,14 +215,8 @@ func (w *Watch) feedQueries(ctx context.Context, q monitor.FeedQuery) ([]monitor
 		SELECT q.id, q.registration_id, q.executed_at, left(q.sql_text, `+chars+`),
 		       char_length(q.sql_text) > `+chars+`, q.status, COALESCE(q.error_text, ''),
 		       q.duration_ms, q.row_count, COALESCE(host(q.ip), '')
-		FROM registrations r
-		CROSS JOIN LATERAL (
-		    SELECT q.* FROM query_log q
-		    WHERE q.registration_id = r.id`+bounds+`
-		    ORDER BY q.executed_at `+dir+`, q.id `+dir+`
-		    LIMIT `+limit+`
-		) q
-		WHERE `+scope+`
+		FROM query_log q
+		WHERE `+scope+bounds+`
 		ORDER BY q.executed_at `+dir+`, q.id `+dir+`
 		LIMIT `+limit, a...)
 	if err != nil {
@@ -223,21 +239,21 @@ func (w *Watch) feedQueries(ctx context.Context, q monitor.FeedQuery) ([]monitor
 
 func (w *Watch) feedAnswers(ctx context.Context, q monitor.FeedQuery) ([]monitor.FeedItem, error) {
 	var a args
-	scope := registrationScope(&a, q)
+	scope := journalScope(&a, q, "s")
 	bounds, dir := feedBounds(&a, q, monitor.SourceAnswer, "s.submitted_at", "s.id", "uuid")
 	limit := a.add(q.Limit + 1)
+	// The question is named after the page is cut, not before: the join is a
+	// lookup by primary key for the page's own rows.
 	rows, err := w.querier(ctx).Query(ctx, `
 		SELECT s.id, s.registration_id, s.submitted_at, s.question_id, COALESCE(qu.ord, 0),
 		       s.attempt_no, s.value, s.is_correct, s.points_awarded
-		FROM registrations r
-		CROSS JOIN LATERAL (
+		FROM (
 		    SELECT s.* FROM submissions s
-		    WHERE s.registration_id = r.id`+bounds+`
+		    WHERE `+scope+bounds+`
 		    ORDER BY s.submitted_at `+dir+`, s.id `+dir+`
 		    LIMIT `+limit+`
 		) s
 		LEFT JOIN questions qu ON qu.id = s.question_id
-		WHERE `+scope+`
 		ORDER BY s.submitted_at `+dir+`, s.id `+dir+`
 		LIMIT `+limit, a...)
 	if err != nil {
