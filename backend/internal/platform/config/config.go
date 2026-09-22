@@ -473,6 +473,15 @@ type Config struct {
 	CoverDir string
 }
 
+// DefaultCoverDir is where the uploaded cover pictures live when COVER_DIR
+// says nothing: the mount point deploy/docker-compose.yml gives the api
+// service.
+//
+// Named rather than written into Load because a second program reads the same
+// variable — cmd/gameorphans sweeps the same directory — and a default spelt
+// out twice is a default that will one day be two.
+const DefaultCoverDir = "/var/lib/dbcontest/covers"
+
 // Load reads configuration from the environment, applying defaults for
 // optional settings. It returns an error naming the offending variable when a
 // required value is missing or a value cannot be parsed.
@@ -732,7 +741,7 @@ func Load() (Config, error) {
 		}
 	}
 
-	cfg.CoverDir = envOrDefault("COVER_DIR", "/var/lib/dbcontest/covers")
+	cfg.CoverDir = envOrDefault("COVER_DIR", DefaultCoverDir)
 
 	cfg.DefaultLocale = envOrDefault("DEFAULT_LOCALE", "en")
 	if !languageTag.MatchString(cfg.DefaultLocale) {

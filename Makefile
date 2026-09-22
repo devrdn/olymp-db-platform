@@ -552,14 +552,21 @@ game-roles: require-env ## Create the game cluster's participant roles
 		GAME_AUTHOR_PASSWORD="$(GAME_AUTHOR_PASSWORD)" \
 		ENV=development go run ./cmd/gamedb
 
-# The repair for a database the core database has already written off while
-# the database itself is still on the cluster. Nothing in the product ever
-# reclaims one — the sweep skips a row that already says 'dropped' — so this
-# is the only thing that can. It prints what it would remove and stops;
-# `make ARGS=-apply game-orphans` is what actually drops them.
+# The repair for what the installation leaves behind: a database the core
+# database has already written off while the database itself is still on the
+# cluster, and a cover file on the volume that no contest refers to any more.
+# Nothing in the product ever collects either — the sweep skips a row that
+# already says 'dropped', and an organiser replacing a cover leaves its files
+# where they are on purpose — so this is the only thing that can. It prints
+# what it would remove and stops; `make ARGS=-apply game-orphans` is what
+# actually removes it.
+#
+# COVER_DIR is the host-side directory `make run` serves from, so running this
+# on a laptop sweeps the same volume that laptop's API writes to.
 .PHONY: game-orphans
-game-orphans: require-env ## List (ARGS=-apply to remove) databases the core database calls dropped that are still on the cluster
+game-orphans: require-env ## List (ARGS=-apply to remove) dropped databases still on the cluster and cover files nothing refers to
 	cd $(BACKEND) && CORE_DB_DSN="$(CORE_DB_DSN)" GAME_DB_ADMIN_DSN="$(GAME_DB_DSN)" \
+		COVER_DIR="$(COVER_DIR)" \
 		go run ./cmd/gameorphans $(ARGS)
 
 # The console's load test (cmd/consoleload). It measures whatever API is
