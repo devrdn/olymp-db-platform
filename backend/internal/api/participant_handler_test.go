@@ -1859,3 +1859,37 @@ func TestARefusedPlayRequestIsNotObserved(t *testing.T) {
 		t.Fatalf("a refused request was observed: %+v", visits)
 	}
 }
+
+// A spreadsheet evaluates a cell that begins with =, +, - or @, and a
+// participant's SQL is theirs to write: `=cmd|' /c calc'!A1` is a valid
+// statement to type into a console and a formula to whoever opens the file.
+// The organiser's export has always defused this; the participant's own
+// download is opened by the same people.
+func TestTheQueryLogCSVDefusesSpreadsheetFormulas(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := uuid.New()
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.history.exported = []queryrunner.HistoryEntry{{
+		SQL:        `=1+1`,
+		Status:     queryrunner.StatusRejected,
+		Error:      `@SUM(1)`,
+		ExecutedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
+	}}
+
+	rec := f.get("/contests/" + contestID.String() + "/play/log.csv")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	records, err := csv.NewReader(rec.Body).ReadAll()
+	if err != nil {
+		t.Fatalf("the body is not CSV: %v", err)
+	}
+	row := records[len(records)-1]
+	for _, cell := range row {
+		if cell != "" && strings.ContainsRune("=+-@", rune(cell[0])) {
+			t.Errorf("cell %q is read as a formula by a spreadsheet; it needs the leading apostrophe", cell)
+		}
+	}
+}
