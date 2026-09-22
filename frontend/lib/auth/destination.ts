@@ -36,8 +36,9 @@ const SIGN_IN = "/login";
  * and `/\host`, since a backslash is normalised to a slash — are rejected
  * along with everything that is not a path at all.
  *
- * `/` and `/login` are refused for a duller reason: the first has no page yet,
- * and the second is where the visitor has just come from.
+ * `/` and `/login` are refused for a duller reason: the first is the showcase,
+ * which is not what somebody signing in is asking for, and the second is where
+ * the visitor has just come from.
  */
 function resumable(next: string | undefined): string | null {
   if (!next || next[0] !== "/") return null;

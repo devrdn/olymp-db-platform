@@ -59,7 +59,7 @@ describe("destinationAfterLogin, resuming an interrupted journey", () => {
     expect(destinationAfterLogin(staff, "/login?next=%2Fcontests")).toBe("/contests");
   });
 
-  test("refuses the root, which has no page yet", () => {
+  test("refuses the root: signing in asks for work, not for the showcase", () => {
     expect(destinationAfterLogin(staff, "/")).toBe("/contests");
   });
 
