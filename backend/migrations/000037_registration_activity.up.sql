@@ -33,6 +33,19 @@
 -- takes is its own. contest_query_fingerprints therefore records only who ran
 -- what, each row written by the registration it belongs to, and the read
 -- counts the shared ones (internal/postgres/watch.go, rosterSQL).
+--
+-- What this costs the console, measured on the test database over a thousand
+-- queries opened and closed: 330 write-ahead-log bytes per query on top of
+-- 1 964, and about 0.9 ms on top of 2.1 ms. Almost all of the bytes are on the
+-- opening — one new version of the summary row — and almost all of the time is
+-- on the closing, which adds only 78 bytes. That gap is the answer to where it
+-- goes: the closing's cost is the per-statement overhead of the four
+-- statements plpgsql runs there, not index work and not durable work. The two
+-- sets are not where to look for it — an ON CONFLICT DO NOTHING that finds the
+-- row already there writes zero bytes, because the unique index is checked
+-- before any tuple is inserted, so asking first would buy nothing. The only
+-- lever left is running fewer statements on the closing path, and 0.9 ms of a
+-- console request of about 33 ms is not yet worth making these harder to read.
 
 -- One row per registration, created by the first thing that registration does.
 -- A registration that has done nothing has no row, and the read left-joins:
