@@ -200,6 +200,58 @@ export const contestSchema = z
 export type Contest = z.infer<typeof contestSchema>;
 
 /**
+ * The picture a contest wears, as the API describes it.
+ *
+ * The bytes are never part of this: a screen that needs the picture links to
+ * it, and a screen that only needs to know whether there is one reads the
+ * hash. The same shape comes back from the upload itself, which is what lets
+ * the panel show what was just stored without asking for it again.
+ */
+export const contestCoverSchema = z
+  .object({
+    hash: z.string(),
+    attribution: z.string(),
+    width: z.number(),
+    height: z.number(),
+  })
+  .transform((raw) => ({
+    hash: raw.hash,
+    attribution: raw.attribution,
+    width: raw.width,
+    height: raw.height,
+  }));
+
+export type ContestCover = z.infer<typeof contestCoverSchema>;
+
+/**
+ * The longest credit line the API stores, mirrored from
+ * `covers.MaxAttributionLen`.
+ *
+ * A second copy, with the same standing as the transition table above: the
+ * API refuses a longer one regardless, and this exists so the field can stop
+ * at the limit instead of letting somebody type past it and be refused after
+ * the fact.
+ */
+export const MAX_COVER_ATTRIBUTION = 200;
+
+/**
+ * Where one rendition of a contest's cover lives.
+ *
+ * The hash travels in `v`, and it is not decoration. The path names the
+ * contest, not the file, so without it the address of a replaced cover would
+ * be the address of the old one — the API answers a plain address with a
+ * minute of caching for exactly that reason, and an address carrying the hash
+ * with a year of it. This is the same trick `imageHref` plays for the
+ * installation's own marks.
+ *
+ * 800 is the default because it is the card's rendition; 1600 is for the
+ * picture above a story, where it is shown at something like its own size.
+ */
+export function coverHref(contestId: string, hash: string, size: 800 | 1600 = 800): string {
+  return `/api/v1/public/contests/${contestId}/cover?size=${size}&v=${hash}`;
+}
+
+/**
  * Whether sequential progression (§6.1.1) actually governs this contest.
  *
  * Mirrors contests.Contest.SequentialActive on the Go side (finding 4):
