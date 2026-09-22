@@ -400,6 +400,24 @@
     background-image: radial-gradient(58% 60% at 50% 22%, var(--glow) 0%, transparent 72%);
   }
 
+  /**
+   * A photograph, as this system shows one (design spec §10.1).
+   *
+   * The processing is the system's and not the author's: an organiser
+   * chooses the subject, and the product decides how a picture sits in it.
+   * Desaturated most of all, because the page is built from one accent and a
+   * ground, and a saturated photograph beside a contest that has only its
+   * drawn cover turns a row of cards into two different rows — the one with
+   * a picture and the one that looks unfinished. 0.45 was chosen by looking
+   * at a mixed row: at 0.74 the photographs still jumped forward, and below
+   * 0.35 an archival scan — which is already muted — went grey. Contrast and
+   * brightness are the spec's own numbers, and small on purpose: they settle
+   * a scan into the page rather than restyling somebody's photograph.
+   */
+  .photograph {
+    filter: saturate(0.45) contrast(1.06) brightness(0.99);
+  }
+
   /* The dotted ground of a demonstration surface. Same family, different grain:
      a field of points rather than of strokes. */
   .dotted {

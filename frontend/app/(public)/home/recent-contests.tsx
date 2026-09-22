@@ -164,7 +164,7 @@ function Card({
             decoding="async"
             width={CARD_COVER.size}
             height={CARD_COVER.height}
-            className="size-full object-cover"
+            className="photograph size-full object-cover"
           />
         ) : (
           /* Not an empty frame and not a grey rectangle: a cover of the same

@@ -740,7 +740,7 @@ differ because they answer different questions.
 | Licence | CC0 (preferred), public domain, CC BY with the attribution line filled in. `NC` and `ND` are not accepted |
 | Storage | the file is downloaded and kept by us; hot-linking to somebody else's host is forbidden |
 | Aspect | `16 / 9`, centre crop (`object-fit: cover`) |
-| Processing | desaturation, contrast `1.06`, brightness `0.99` — set by the system, not by the author |
+| Processing | `saturate(0.45) contrast(1.06) brightness(0.99)` — the `.photograph` utility, set by the system, not by the author |
 | Attribution | a field on the contest, rendered as a line under the picture; without it the image is not published — part of the publish gate |
 | Loading | `loading="lazy"`, `decoding="async"`, explicit `width`/`height` against layout shift |
 
