@@ -55,6 +55,65 @@ describe("contestListSchema", () => {
       icpcPenaltyMin: 20,
     });
   });
+
+  /**
+   * The cover travels with the listing, because the one screen that shows a
+   * picture above a story (design spec §10) already reads this listing and
+   * must not ask a second time for a hash — a participant's screen is under
+   * a timer.
+   */
+  test("carries the cover a contest wears", () => {
+    const payload = {
+      items: [
+        {
+          id: "3f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6",
+          status: "running",
+          enrollment: "open",
+          question_mode: "multi",
+          lang: "ru",
+          title: "Ночь в архиве",
+          scoring: "points",
+          icpc_penalty_min: 20,
+          cover_hash: "9f86d081884c7d65",
+          cover_attribution: "Photo: A. Organiser, CC BY 4.0",
+        },
+      ],
+      total: 1,
+    };
+
+    expect(contestListSchema.parse(payload).items[0]).toMatchObject({
+      coverHash: "9f86d081884c7d65",
+      coverAttribution: "Photo: A. Organiser, CC BY 4.0",
+    });
+  });
+
+  /**
+   * Absent is "no picture", not a broken listing: the fields are omitted for
+   * a contest wearing a drawn cover, and an older server omits them for
+   * every contest. Either way the screen draws a cover rather than failing.
+   */
+  test("reads a listing with no cover fields as a contest with no picture", () => {
+    const payload = {
+      items: [
+        {
+          id: "3f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6",
+          status: "running",
+          enrollment: "open",
+          question_mode: "multi",
+          lang: "ru",
+          title: "Ночь в архиве",
+          scoring: "points",
+          icpc_penalty_min: 20,
+        },
+      ],
+      total: 1,
+    };
+
+    expect(contestListSchema.parse(payload).items[0]).toMatchObject({
+      coverHash: "",
+      coverAttribution: "",
+    });
+  });
 });
 
 const detail = {

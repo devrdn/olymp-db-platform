@@ -76,6 +76,21 @@ export const contestSummarySchema = z
     // `Contest`, which a participant may not fetch.
     scoring: z.enum(SCORINGS),
     icpc_penalty_min: z.number(),
+    /**
+     * The picture this contest wears, and who made it.
+     *
+     * Carried by the listing rather than asked for on its own, because the
+     * screen that needs it most is the one that can least afford a second
+     * request: the picture above a story (design spec §10) is on the play
+     * screen, which a participant opens under a timer and three hundred of
+     * them open in the same minute. The listing is already read there.
+     *
+     * Defaulted, like `enrolled` above: an empty hash is a contest wearing
+     * its drawn cover, and a server too old to send the field reads as
+     * exactly that rather than failing the whole page.
+     */
+    cover_hash: z.string().default(""),
+    cover_attribution: z.string().default(""),
   })
   .transform((raw) => ({
     id: raw.id,
@@ -91,6 +106,8 @@ export const contestSummarySchema = z
     enrolled: raw.enrolled,
     scoring: raw.scoring,
     icpcPenaltyMin: raw.icpc_penalty_min,
+    coverHash: raw.cover_hash,
+    coverAttribution: raw.cover_attribution,
   }));
 
 export type ContestSummary = z.infer<typeof contestSummarySchema>;

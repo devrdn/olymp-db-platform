@@ -21,6 +21,10 @@ const nightInTheArchive: ContestSummary = {
   enrolled: false,
   scoring: "points",
   icpcPenaltyMin: 20,
+  // The register shows no pictures (design spec §10) and never reads these,
+  // but the listing it is handed carries them.
+  coverHash: "",
+  coverAttribution: "",
 };
 
 let en: Dictionary;

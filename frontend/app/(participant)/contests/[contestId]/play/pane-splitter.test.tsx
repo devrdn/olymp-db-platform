@@ -35,6 +35,7 @@ function show(contestId = "c1") {
       // This file is about the widths of the interactive panes; the print
       // copy is rendered on the server now (page.tsx) and has none.
       printView={null}
+      storyCover={null}
       storyUnavailable={null}
       questionEntries={[]}
       schema={A_SCHEMA}
