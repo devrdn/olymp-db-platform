@@ -181,6 +181,15 @@ type rootPlan struct {
 	writes    bool
 }
 
+// explainOptions are the EXPLAIN options a participant may pass: the ones
+// that change how the plan is printed and nothing else.
+var explainOptions = map[string]struct{}{
+	"verbose": {},
+	"costs":   {},
+	"format":  {},
+	"summary": {},
+}
+
 func (c *Checker) rootAllowed(root *pg.Node, p sqlpolicy.Policy) (rootPlan, error) {
 	switch stmt := root.Node.(type) {
 	case *pg.Node_SelectStmt:
@@ -189,9 +198,22 @@ func (c *Checker) rootAllowed(root *pg.Node, p sqlpolicy.Policy) (rootPlan, erro
 		for _, option := range stmt.ExplainStmt.Options {
 			name := strings.ToLower(option.GetDefElem().GetDefname())
 			// ANALYZE is not a plan, it is a run — on a DML it *is* the DML.
-			// The rest (VERBOSE, COSTS, FORMAT) only change the printout.
+			// Named on its own because that is the sentence worth reading.
 			if name == "analyze" {
 				return rootPlan{}, &sqlpolicy.Refusal{Code: sqlpolicy.CodeStatementNotSupported, Subject: "EXPLAIN ANALYZE"}
+			}
+			// Everything else is admitted by name and not by exclusion. What
+			// an EXPLAIN option may do is PostgreSQL's to extend: SETTINGS
+			// prints the server settings that differ from their defaults —
+			// the configuration the catalogue rules and the revoked grants
+			// keep out of a participant's reach — and a future option that
+			// executes or reports would arrive allowed under a list of one
+			// forbidden name.
+			if _, ok := explainOptions[name]; !ok {
+				return rootPlan{}, &sqlpolicy.Refusal{
+					Code:    sqlpolicy.CodeStatementNotSupported,
+					Subject: "EXPLAIN " + strings.ToUpper(name),
+				}
 			}
 		}
 		if stmt.ExplainStmt.Query == nil {
