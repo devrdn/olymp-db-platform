@@ -517,6 +517,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Store: postgres.NewWatch(pool), Audit: auditRecorder, Marks: cacheBackend,
 	})
 
+	// One count of the CSV downloads holding a connection from the pool
+	// above, shared by every handler that serves one: the participant's query
+	// log from the play screen and from their profile, and the organiser's
+	// participant and contest feeds. They draw on one pool, so the bound on
+	// them is one number and it is decided here, where the pool is
+	// (api.ExportSlots; cfg.ExportConcurrency, EXPORT_CONCURRENCY).
+	exportSlots := api.NewExportSlots(cfg.ExportConcurrency)
+
 	modules := []api.Module{
 		api.NewAuthHandler(authService, userService, userRepo, authMiddleware, cookies, log),
 		api.NewUsersHandler(userService, userRepo, authService, authMiddleware, log),
@@ -536,7 +544,7 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		// behind contest.monitor, with its own read budget on the shared
 		// limiter under the "monitor:" namespace.
 		// Every view is audited through the shared cache's marks (design §7).
-		api.NewMonitorHandler(watch, limiter, authMiddleware, log),
+		api.NewMonitorHandler(watch, limiter, authMiddleware, log).WithExportSlots(exportSlots),
 	}
 	if console != nil {
 		modules = append(modules, api.NewConsoleHandler(console, authMiddleware, log))
@@ -623,7 +631,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		WithWorkspace(workspaces).
 		WithWatcher(participantTracker).
 		WithSignals(signals).
-		WithExports(logExports))
+		WithExports(logExports).
+		WithExportSlots(exportSlots))
 	// The SSE channel (§8) shares participantAccess with the endpoints above
 	// for the same reason: one Access, one AdmitRead budget, not a second
 	// admission decision that could drift from the first. ctx.Done() is the
@@ -652,7 +661,8 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Results:      standings,
 		Attempts:     watch,
 	}), watch, history, limiter, authMiddleware, log, cfg.DefaultLocale).
-		WithExports(logExports))
+		WithExports(logExports).
+		WithExportSlots(exportSlots))
 
 	deps := api.Deps{
 		Logger:        log,

@@ -141,6 +141,10 @@ type ParticipantHandler struct {
 	// with the profile's copy of the same route (WithExports). See
 	// queryLogCSVExport, and ExportGate for why a rate limit is not this.
 	exports *ExportGate
+	// exportSlots keeps the whole service to as many downloads at once as the
+	// core pool can spare, shared with every other export route
+	// (WithExportSlots). See ExportSlots.
+	exportSlots *ExportSlots
 	// workspaces serves the participant's notes and tabs
 	// (participant_workspace.go); nil leaves those routes unmounted.
 	workspaces Workspaces
@@ -191,7 +195,8 @@ func NewParticipantHandler(access ParticipantAccess, reader *contests.Reader, hi
 		defaultLocale = "en"
 	}
 	return &ParticipantHandler{access: access, reader: reader, history: history, submitter: submitter,
-		answers: answers, mw: mw, log: log, defaultLocale: defaultLocale, exports: NewExportGate()}
+		answers: answers, mw: mw, log: log, defaultLocale: defaultLocale,
+		exports: NewExportGate(), exportSlots: NewExportSlots(0)}
 }
 
 // WithExports gives this handler the gate that decides how many CSV downloads
@@ -206,6 +211,22 @@ func NewParticipantHandler(access ParticipantAccess, reader *contests.Reader, hi
 func (h *ParticipantHandler) WithExports(gate *ExportGate) *ParticipantHandler {
 	if gate != nil {
 		h.exports = gate
+	}
+	return h
+}
+
+// WithExportSlots gives this handler the service-wide count of downloads
+// holding a database connection (ExportSlots).
+//
+// internal/app hands the same count to every handler that serves an export,
+// the organiser's included: the connections they take come from one pool, so
+// the bound on them is one number. A handler given none keeps a count of its
+// own at DefaultExportConcurrency, which bounds this route but says nothing
+// about the others — correct for a test that mounts one handler, and not what
+// a deployment wants. nil leaves the handler's own in place.
+func (h *ParticipantHandler) WithExportSlots(slots *ExportSlots) *ParticipantHandler {
+	if slots != nil {
+		h.exportSlots = slots
 	}
 	return h
 }
@@ -501,7 +522,7 @@ func (h *ParticipantHandler) queryLogCSV(w http.ResponseWriter, r *http.Request)
 	// A second download of a file the first one is still writing is asking
 	// faster than the installation allows, and is refused as the rate refusal
 	// it really is.
-	queryLogCSVExport{history: h.history, exports: h.exports, log: h.log}.
+	queryLogCSVExport{history: h.history, exports: h.exports, slots: h.exportSlots, fail: h.fail, log: h.log}.
 		serve(w, r, participant.ID, contest.ID, func() { h.fail(w, r, queryrunner.ErrTooManyQueries) })
 }
 
@@ -666,6 +687,8 @@ func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err er
 		// and codeStatusChanged, and the same honest instruction: try again.
 		httpx.Error(w, r, http.StatusConflict, codeAttemptConflict,
 			"Too many submissions to this question arrived at once; try again")
+	case errors.Is(err, ErrExportsBusy):
+		exportsBusy(w, r)
 	case errors.Is(err, queryproxy.ErrUnavailable):
 		h.log.ErrorContext(r.Context(), "could not resolve participant access", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")

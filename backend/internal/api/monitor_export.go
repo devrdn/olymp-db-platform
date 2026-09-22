@@ -25,13 +25,15 @@ import (
 // source a page at a time in its own index order, each row read once, one
 // page per source in memory and no transaction held between pages.
 //
-// Bounded four ways: rows (maxMonitorExportRows) and bytes
+// Bounded five ways: rows (maxMonitorExportRows) and bytes
 // (maxMonitorExportBytes, counted as rows are written — CLAUDE.md rule 12),
-// each ending the file with a line saying so; time (exportDeadline); and one
-// download at a time per account (ExportGate). A file that stops for
-// any other reason — the deadline, a failed read — ends with a line saying it
-// is incomplete: the status line said 200 long before, and a file that
-// quietly stops reads as a complete record.
+// each ending the file with a line saying so; time (exportDeadline); one
+// download at a time per account (ExportGate); and, across the whole service,
+// as many downloads at once as the core pool can spare (ExportSlots, shared
+// with the participants' own exports, because the connections are). A file
+// that stops for any other reason — the deadline, a failed read — ends with a
+// line saying it is incomplete: the status line said 200 long before, and a
+// file that quietly stops reads as a complete record.
 //
 // Every export is recorded (contest.monitor_export) before the first byte
 // leaves; an export the trail cannot record is refused.
@@ -95,6 +97,17 @@ func (h *MonitorHandler) exportCSV(w http.ResponseWriter, r *http.Request, regis
 	}
 	defer release()
 
+	// Before the trail is written and before the feed is read, so a refusal
+	// for load costs the pool nothing and leaves no record of an export that
+	// never happened (CLAUDE.md rule 13). The account's own read budget has
+	// already been spent for this request by the middleware above.
+	releaseSlot, err := h.exportSlots.enter()
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	defer releaseSlot()
+
 	contest := monitorContest(r)
 	if err := h.watch.RecordExport(r.Context(), identity.UserID, contest, registration); err != nil {
 		h.fail(w, r, err)
@@ -115,7 +128,7 @@ func (h *MonitorHandler) exportCSV(w http.ResponseWriter, r *http.Request, regis
 	}
 
 	rows := 0
-	err := h.watch.StreamFeed(ctx, monitor.FeedQuery{Contest: contest, Registration: registration},
+	err = h.watch.StreamFeed(ctx, monitor.FeedQuery{Contest: contest, Registration: registration},
 		func(item monitor.FeedItem) error {
 			record := monitorCSVRow(item)
 			if rows == h.exportRows || counter.n+recordSize(record) > int64(h.exportBytes) {
