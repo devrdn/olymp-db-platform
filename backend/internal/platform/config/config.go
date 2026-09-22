@@ -164,6 +164,17 @@ const maxCoreDBPoolMax = 100
 // contest that sign-in is queueing behind downloads.
 const maxExportConcurrency = 10
 
+// maxExportsForPool is the same arithmetic maxExportConcurrency is derived
+// from, applied to whatever pool size a deployment actually set: two fifths
+// of it, and no more, may be held by readers who take as long as they like.
+//
+// It exists because the two ceilings are each about one value. Ten downloads
+// is a sane number and a pool of five is a sane size, and together they are
+// twice the pool held by slow readers — which is sign-in queueing behind
+// downloads at the start of a contest, the exact thing maxExportConcurrency
+// was chosen to prevent.
+func maxExportsForPool(poolMax int) int { return poolMax * 2 / 5 }
+
 // validLogLevels mirrors the levels understood by the logging package.
 var validLogLevels = []string{"debug", "info", "warn", "error"}
 
@@ -485,6 +496,14 @@ func Load() (Config, error) {
 	if cfg.ExportConcurrency < 0 || cfg.ExportConcurrency > maxExportConcurrency {
 		return Config{}, fmt.Errorf("EXPORT_CONCURRENCY: %d is outside [0, %d]",
 			cfg.ExportConcurrency, maxExportConcurrency)
+	}
+	// And against the pool it is a share of, which neither bound above sees.
+	// Only when the pool size was actually set: left at zero it is storage's
+	// own default, which maxExportConcurrency is already sized against.
+	if cfg.CoreDBPoolMax > 0 && cfg.ExportConcurrency > maxExportsForPool(cfg.CoreDBPoolMax) {
+		return Config{}, fmt.Errorf(
+			"EXPORT_CONCURRENCY: %d is more than downloads may hold of CORE_DB_POOL_MAX=%d (at most %d); raise the pool or lower the downloads",
+			cfg.ExportConcurrency, cfg.CoreDBPoolMax, maxExportsForPool(cfg.CoreDBPoolMax))
 	}
 	cfg.RedisAddr = os.Getenv("REDIS_ADDR")
 	cfg.MetricsBackend = envOrDefault("METRICS_BACKEND", "prometheus")

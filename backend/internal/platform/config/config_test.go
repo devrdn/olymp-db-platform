@@ -1019,6 +1019,40 @@ func TestCoreDBPoolMaxIsConfigurableAndBounded(t *testing.T) {
 	}
 }
 
+// Each bound holds its own value inside a sane range, and neither notices
+// that the two together ask for more connections than exist: a download holds
+// its connection for as long as the reader takes, so ten of them against a
+// pool of five is the whole pool held by people who may be slow on purpose,
+// and sign-in queueing behind them.
+func TestExportConcurrencyIsCheckedAgainstThePoolItIsAShareOf(t *testing.T) {
+	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
+	t.Setenv("CORE_DB_POOL_MAX", "5")
+
+	t.Setenv("EXPORT_CONCURRENCY", "10")
+	if _, err := Load(); err == nil {
+		t.Error("Load() accepted EXPORT_CONCURRENCY=10 against CORE_DB_POOL_MAX=5, want error")
+	}
+
+	// Two fifths of the pool is the share the ceiling itself is derived
+	// from, and it is allowed.
+	t.Setenv("EXPORT_CONCURRENCY", "2")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.ExportConcurrency != 2 {
+		t.Errorf("ExportConcurrency = %d, want 2", cfg.ExportConcurrency)
+	}
+
+	// A pool left to its own default is the case the standing ceiling was
+	// already sized against, so the cross-check has nothing to say about it.
+	t.Setenv("CORE_DB_POOL_MAX", "")
+	t.Setenv("EXPORT_CONCURRENCY", "10")
+	if _, err := Load(); err != nil {
+		t.Errorf("Load() = %v, want the default pool to accept EXPORT_CONCURRENCY=10", err)
+	}
+}
+
 func TestSessionMaximumLifetimeDefaultsToAWorkingDay(t *testing.T) {
 	t.Setenv("CORE_DB_DSN", "postgres://user:pass@localhost:5432/core")
 
