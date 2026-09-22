@@ -47,7 +47,8 @@ CREATE TABLE registration_activity (
     blind             bigint NOT NULL DEFAULT 0,
 
     -- participant_events. events counts the whole table and is what the write
-    -- side checks its per-registration quota against (monitor.MaxEvents).
+    -- side checks its per-registration quota against
+    -- (monitor.MaxStoredEvents).
     events            bigint NOT NULL DEFAULT 0,
     page_left         bigint NOT NULL DEFAULT 0,
     away_ms           bigint NOT NULL DEFAULT 0,

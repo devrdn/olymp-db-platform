@@ -93,6 +93,17 @@ const (
 	// past what one poll catches up on, and hide everybody else's lines. A
 	// person pastes a handful of different things in ten seconds, not ten.
 	MaxBatchPastes = 10
+	// MaxStoredEvents is the most events one registration ever stores
+	// (CLAUDE.md rule 2). BatchesPerMinute bounds how fast a participant
+	// fills the table; nothing bounded how full it gets, and a table with no
+	// ceiling is one the organiser's feed, the export and the backup all pay
+	// for. A participant who leaves the page every ten seconds for three
+	// hours and pastes as often produces about two thousand events, so this
+	// is an order of magnitude above a very busy one and two below what a
+	// browser sending its full allowance for a whole contest would reach.
+	// Past it the signals are refused, not silently dropped: the screen is
+	// told, and what is already stored stays.
+	MaxStoredEvents = 20000
 )
 
 // The refusals. Each is a sentinel so an HTTP layer can name it
@@ -110,6 +121,9 @@ var (
 	ErrPasteTarget = errors.New("a paste target is editor, answer or notes")
 	// ErrBatchTooLarge: more than MaxBatchEvents events in one batch.
 	ErrBatchTooLarge = fmt.Errorf("a batch holds at most %d events", MaxBatchEvents)
+	// ErrTooManyEvents: the registration holds MaxStoredEvents events
+	// already, or this batch would take it past them.
+	ErrTooManyEvents = fmt.Errorf("a participant stores at most %d events", MaxStoredEvents)
 )
 
 // Payload is what one kind of event carries. Each kind has its own type, so
