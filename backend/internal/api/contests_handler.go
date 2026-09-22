@@ -263,6 +263,14 @@ type ContestSummary struct {
 	// catalogue cannot tell "join" from "you are already in", and offering the
 	// button anyway turns an ordinary state into an error message.
 	Enrolled bool `json:"enrolled"`
+	// CoverHash names the picture this contest wears, and is absent for one
+	// wearing a drawn cover. It travels on the listing because the screen
+	// that shows a picture above a story (design spec §10) already reads
+	// this listing and opens under a timer — see contests.Contest.CoverHash.
+	CoverHash string `json:"cover_hash,omitempty"`
+	// CoverAttribution credits whoever made that picture; a drawn cover has
+	// nobody to credit, and the field is absent there too.
+	CoverAttribution string `json:"cover_attribution,omitempty"`
 }
 
 func toContestResponse(c contests.Contest) ContestResponse {
@@ -321,6 +329,9 @@ func (h *ContestsHandler) toSummary(r *http.Request, c contests.Contest) Contest
 		Description:    translation.Description,
 		StartsAt:       formatTime(c.StartsAt),
 		EndsAt:         formatTime(c.EndsAt),
+
+		CoverHash:        c.CoverHash,
+		CoverAttribution: c.CoverAttribution,
 	}
 }
 
