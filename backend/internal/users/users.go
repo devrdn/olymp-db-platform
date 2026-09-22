@@ -9,6 +9,7 @@ package users
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -135,6 +136,15 @@ type User struct {
 
 // IsActive reports whether the account may authenticate.
 func (u User) IsActive() bool { return u.Status == StatusActive }
+
+// Has reports whether the account's roles grant a permission.
+//
+// The same question auth.Identity answers for the caller of a request, asked
+// about an account somebody else is acting on — a roster's entry, say, which
+// is not the caller and has no identity of its own here.
+func (u User) Has(permission string) bool {
+	return slices.Contains(u.Permissions, permission)
+}
 
 // StatusChange is the account of a status change: why, by whom, when.
 //
