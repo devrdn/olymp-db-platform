@@ -34,6 +34,25 @@ const ro = {
       note: "Schimbarea deconectează contul de peste tot. Vă veți autentifica din nou cu parola nouă.",
     },
   },
+  home: {
+    defaultName: "Olymp Database System",
+    lede: "O platformă pentru olimpiade de SQL. O bază de date reală, o întrebare reală și un răspuns verificat pe loc — și pentru cursul universitar, și pentru etapa școlară.",
+    hero: {
+      signIn: "Intrați",
+      mine: "Olimpiadele mele",
+      browse: "Vedeți olimpiadele",
+    },
+    how: {
+      heading: "Cum funcționează",
+      live: "Interogarea se scrie pe o bază de date vie, nu pe descrierea ei.",
+      checked: "Răspunsul este verificat imediat și se vede exact ce nu a corespuns.",
+      own: "Fiecare participant are propria copie a bazei și propriul timp.",
+    },
+    organisers: {
+      line: "Țineți un curs sau organizați o etapă proprie?",
+      link: "Intrați ca organizator",
+    },
+  },
   contests: {
     heading: "Olimpiade",
     countLabel: "în registru",
