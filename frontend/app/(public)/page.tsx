@@ -1,13 +1,17 @@
 import { cookies } from "next/headers";
 
 import { branding } from "@/lib/api/branding";
+import { serverRequest } from "@/lib/api/server";
+import { publicContestsSchema, publicStatsSchema } from "@/lib/api/showcase";
 import { SESSION_COOKIE } from "@/lib/auth/session";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 import { activeTheme } from "@/lib/theme/server";
 
 import { Hero } from "./home/hero";
 import { HowItWorks } from "./home/how-it-works";
+import { Numbers } from "./home/numbers";
 import { OrganiserLine } from "./home/organiser-line";
+import { RecentContests } from "./home/recent-contests";
 import { SiteFooter } from "./home/site-footer";
 
 /**
@@ -54,15 +58,39 @@ export default async function HomePage() {
   // footer, so the page cannot say two different things about whose it is.
   const name = brand.name.trim() || dict.home.defaultName;
 
+  /**
+   * The two public reads, settled rather than joined.
+   *
+   * `Promise.all` would reject the whole page on either one, which is the
+   * wrong trade twice over: the numbers are the cheaper half of the screen and
+   * the list is what somebody came for, and neither is worth the other. Each
+   * settles on its own, and each section already knows what to do with
+   * nothing — the strip disappears, the list explains itself.
+   *
+   * The contests read states the visitor's language, because a contest carries
+   * its own translations and the server picks per contest from what it is
+   * told.
+   */
+  const [stats, contests] = await Promise.allSettled([
+    serverRequest("/public/stats").then((payload) => publicStatsSchema.parse(payload)),
+    serverRequest(`/public/contests?lang=${locale}`).then(
+      (payload) => publicContestsSchema.parse(payload).items,
+    ),
+  ]);
+
   return (
     <>
       <Hero name={name} signedIn={signedIn} dict={dict} />
 
       <HowItWorks dict={dict} />
 
-      {/* The contests this installation has run, and the four numbers above
-          them, are a later step. The hero's second action points at
-          `#contests`, which is the anchor that section will carry. */}
+      <Numbers stats={settled(stats, "/public/stats")} dict={dict} />
+
+      <RecentContests
+        contests={settled(contests, "/public/contests")}
+        dict={dict}
+        locale={locale}
+      />
 
       <OrganiserLine dict={dict} />
 
@@ -75,4 +103,19 @@ export default async function HomePage() {
       />
     </>
   );
+}
+
+/**
+ * What a settled read gave, or `null` when it gave nothing.
+ *
+ * The reason goes to the server log, because otherwise it exists nowhere: the
+ * page will have rendered successfully, and neither section can say on screen
+ * what went wrong — a stranger who has asked for nothing is owed an answer,
+ * not an apology. This is the only place the difference between "the API is
+ * down" and "this installation is new" survives.
+ */
+function settled<T>(result: PromiseSettledResult<T>, path: string): T | null {
+  if (result.status === "fulfilled") return result.value;
+  console.error("reading %s for the front page failed", path, result.reason);
+  return null;
 }
