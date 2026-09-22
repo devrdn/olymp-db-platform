@@ -203,6 +203,13 @@ func NewService(cfg Config) *Service {
 // than nothing: the page drops the whole row when this read fails (design
 // §2.3), and a momentary database hiccup is not a reason to tell a visitor
 // the installation has run nothing.
+//
+// A caller whose own context is done is the one thing that is not a failed
+// refresh, and it comes back as ctx.Err() — context.Canceled or
+// context.DeadlineExceeded, the sentinels every caller already knows. Nothing
+// here broke and there is nobody left to serve, so neither branch above
+// applies: a stale answer would be written to a connection that has gone, and
+// an error would be logged as an outage because somebody closed a tab.
 func (s *Service) Numbers(ctx context.Context) (Numbers, error) {
 	now := s.now()
 	s.mu.Lock()
@@ -216,6 +223,9 @@ func (s *Service) Numbers(ctx context.Context) (Numbers, error) {
 		return s.repo.Numbers(ctx)
 	})
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return Numbers{}, ctxErr
+		}
 		if entry.present {
 			return entry.value, nil
 		}
@@ -243,6 +253,8 @@ func (s *Service) Numbers(ctx context.Context) (Numbers, error) {
 // to MaxRecent again: the query already does both, and this is the second
 // place a draft would have to get past to reach a page nobody signed in to
 // read.
+//
+// A caller whose own context is done gets ctx.Err(), for Numbers' own reason.
 func (s *Service) Recent(ctx context.Context, lang string) ([]Contest, error) {
 	now := s.now()
 	s.mu.Lock()
@@ -256,6 +268,9 @@ func (s *Service) Recent(ctx context.Context, lang string) ([]Contest, error) {
 		return s.repo.Recent(ctx, MaxRecent)
 	})
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		// Stale rather than empty, for Numbers' own reason.
 		if entry.present {
 			return title(entry.value, lang), nil
