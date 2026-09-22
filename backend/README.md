@@ -400,10 +400,13 @@ A configured but unreachable Redis is an error, not a reason to fall back: the
 operator named that server, and silently using a different store would hide a
 broken deployment.
 
-To turn Redis on, set `REDIS_PASSWORD` in `deploy/.env` and start the `shared`
-profile (`make dev-up`, or `docker compose --profile shared up -d redis`) —
-**leave `REDIS_ADDR` itself empty.** That single password then produces two
-different, both correct, addresses on its own:
+The compose stack runs Redis as an ordinary service: set `REDIS_PASSWORD` in
+`deploy/.env` and **leave `REDIS_ADDR` unset.** (It was behind a `shared`
+profile, which nothing in the deploy path activated while the API's default
+address already named the service — so a stock deployment pointed the API at a
+container that was never started, and an unreachable cache is fatal.) That
+single password then produces two different, both correct, addresses on its
+own:
 
 - `docker-compose.yml` builds the containerized api's address as
   `redis://:${REDIS_PASSWORD}@redis:6379/0` — `redis` is the compose service
