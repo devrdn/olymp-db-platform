@@ -797,6 +797,7 @@ const en = {
         no_reference_answer: "A question has no reference answer, so nothing could mark it.",
         no_schedule: "The contest has no start and end.",
         icpc_choice_needs_attempt_limit: "A choice question in ICPC scoring has no attempt limit, or one above its number of options minus its number of correct options, so the options could be tried one by one until a correct one comes up, for the price of a penalty.",
+        choice_needs_attempt_limit: "A choice question has no attempt limit, or one above its number of options minus its number of correct options, so the options could be sent one after another until a correct one comes up.",
         sequential_needs_max_attempts: "A question has no attempt limit, so a participant stuck on it in sequential order could never move on.",
         sequential_hides_question: "A hidden question in sequential order has another question after it, which could never be reached.",
         winner_needs_final: "Scoring is first to solve, but no question is a final one, so nobody could win.",

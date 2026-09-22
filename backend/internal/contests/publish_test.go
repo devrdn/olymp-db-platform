@@ -500,16 +500,22 @@ func TestGateAcceptsAnICPCChoiceQuestionWithALimitBelowTheChoiceCount(t *testing
 	}
 }
 
-// The same shape, in points mode, must not trigger: the gate is specific to
-// ICPC, where an unlimited choice question can be brute-forced for the mere
-// cost of penalty time.
-func TestGateIgnoresAChoiceAttemptLimitOutsideICPCMode(t *testing.T) {
+// The same shape in points mode is refused too, and says so in its own
+// words. The gate was written for ICPC, where trying the options costs
+// penalty time; outside it the options are in the participant's page just the
+// same and the prize is the question's points, so the mode it was scoped to
+// was the one where the brute force costs something.
+func TestGateRefusesAnUncappedChoiceQuestionOutsideICPCMode(t *testing.T) {
 	c, story, questions := publishable()
 	questions[0] = asChoiceQuestion(questions[0])
 	questions[0].MaxAttempts = nil
 
-	if err := contests.CheckPublishable(c, story, questions); err != nil {
-		t.Errorf("contests.CheckPublishable() = %v, want nil", err)
+	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
+	if !contains(codes, contests.ProblemChoiceNeedsAttemptLimit) {
+		t.Errorf("problems = %v, want %s", codes, contests.ProblemChoiceNeedsAttemptLimit)
+	}
+	if contains(codes, contests.ProblemICPCChoiceNeedsAttemptLimit) {
+		t.Errorf("problems = %v, want the points-mode wording, not ICPC's", codes)
 	}
 }
 
@@ -538,5 +544,44 @@ func TestGateRefusesAFreezeWithNoEndToMeasureFrom(t *testing.T) {
 	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
 	if !contains(codes, contests.ProblemLeaderboardFreezeExceedsWindow) {
 		t.Errorf("problems = %v, want %s", codes, contests.ProblemLeaderboardFreezeExceedsWindow)
+	}
+}
+
+// An individual contest needed only a moment to open, and nothing to close
+// it: its status never became "finished", so the leaderboard never froze or
+// finalised and the game databases behind it were never reclaimed. An
+// organiser publishing one on the day was told nothing.
+func TestGateRefusesAnIndividualContestWithNoEnd(t *testing.T) {
+	c, story, questions := publishable()
+	minutes := 120
+	c.Timing = contests.TimingIndividual
+	c.DurationMin = &minutes
+	c.EndsAt = nil
+
+	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
+	if !contains(codes, contests.ProblemNoSchedule) {
+		t.Errorf("problems = %v, want %s", codes, contests.ProblemNoSchedule)
+	}
+}
+
+// Outside ICPC the same arithmetic holds and costs even less: the options are
+// in the participant's own page, and an uncapped choice question is answered
+// by sending them one after another. In points scoring that is the whole
+// score, not penalty time.
+func TestGateRefusesAnUncappedChoiceQuestionInPointsScoring(t *testing.T) {
+	c, story, questions := publishable()
+	c.Scoring = contests.ScoringPoints
+	questions[0].Kind = contests.KindChoice
+	questions[0].ChoiceIDs = []string{"a", "b", "c"}
+	questions[0].MaxAttempts = nil
+	questions[0].Answers = []contests.Answer{{MatchKind: contests.MatchExact, Value: "a"}}
+	questions[0].Texts = map[string]contests.QuestionText{
+		"en": {BodyMD: "Who did it?", Choices: map[string]string{"a": "The butler", "b": "The gardener", "c": "The cook"}},
+		"ro": {BodyMD: "Cine a făcut-o?", Choices: map[string]string{"a": "Majordomul", "b": "Grădinarul", "c": "Bucătarul"}},
+	}
+
+	codes := problemCodes(t, contests.CheckPublishable(c, story, questions))
+	if !contains(codes, contests.ProblemChoiceNeedsAttemptLimit) {
+		t.Errorf("problems = %v, want %s", codes, contests.ProblemChoiceNeedsAttemptLimit)
 	}
 }

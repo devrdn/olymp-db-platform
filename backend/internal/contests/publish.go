@@ -69,6 +69,12 @@ const (
 	// option and solve the question for the mere cost of penalty time, never
 	// actually needing to know the answer.
 	ProblemICPCChoiceNeedsAttemptLimit = "icpc_choice_needs_attempt_limit"
+	// ProblemChoiceNeedsAttemptLimit names the same fault outside ICPC
+	// scoring, where it costs even less: the options are listed in the
+	// participant's own page, so an uncapped choice question is answered by
+	// sending them one after another — and there the prize is the question's
+	// points rather than penalty time.
+	ProblemChoiceNeedsAttemptLimit = "choice_needs_attempt_limit"
 )
 
 // PublishProblem is one reason a contest is not ready.
@@ -121,9 +127,13 @@ func CheckPublishable(c Contest, story Story, questions []Question) error {
 		add(PublishProblem{Code: ProblemNoLanguages})
 	}
 
-	// A fixed-window contest with no window has nothing to open it and nothing
-	// to close it; an individual one at least needs a moment to open.
-	if c.StartsAt == nil || (c.Timing == TimingFixed && c.EndsAt == nil) {
+	// A contest with no window has nothing to open it and nothing to close
+	// it. An individual one needs an end as much as a fixed one does, for a
+	// reason its own participants never see: nothing else ever moves it out
+	// of "running", so the leaderboard never freezes or finalises and the
+	// game databases behind it are never reclaimed. Each participant's own
+	// timer ends their work; ends_at is what ends the contest.
+	if c.StartsAt == nil || c.EndsAt == nil {
 		add(PublishProblem{Code: ProblemNoSchedule})
 	}
 
@@ -167,14 +177,21 @@ func CheckPublishable(c Contest, story Story, questions []Question) error {
 
 	for _, q := range questions {
 		checkQuestionPublishable(q, langs, add)
-		// Decision 3 of the design doc: in ICPC scoring a choice question
-		// must not be solvable by trying options, for nothing worse than
-		// penalty time. With n options of which k are correct, attempt
-		// n-k+1 is sure to hit a correct one, so the cap must be at most
-		// n-k. Checked only in this mode: elsewhere the attempt limit is an
-		// ordinary authoring choice, not a way around answering.
-		if c.Scoring == ScoringICPC && q.Kind == KindChoice && !icpcChoiceCapped(q) {
-			add(PublishProblem{Code: ProblemICPCChoiceNeedsAttemptLimit, QuestionID: q.ID})
+		// Decision 3 of the design doc: a choice question must not be
+		// solvable by trying options. With n options of which k are correct,
+		// attempt n-k+1 is sure to hit a correct one, so the cap must be at
+		// most n-k. The rule was written for ICPC, where the brute force
+		// costs penalty time; it holds in every mode, because the options
+		// are in the participant's own page either way and the rate limit
+		// (six answers a minute) is no obstacle to five of them. Two codes
+		// because the two say different things to an organiser: in ICPC the
+		// cost is penalty time, elsewhere it is the question's points.
+		if q.Kind == KindChoice && !choiceCapped(q) {
+			code := ProblemChoiceNeedsAttemptLimit
+			if c.Scoring == ScoringICPC {
+				code = ProblemICPCChoiceNeedsAttemptLimit
+			}
+			add(PublishProblem{Code: code, QuestionID: q.ID})
 		}
 		if c.Scoring == ScoringWinner && q.Kind == KindFinal && q.MaxAttempts == nil {
 			add(PublishProblem{Code: ProblemWinnerFinalNeedsAttemptLimit, QuestionID: q.ID})
@@ -220,7 +237,7 @@ func CheckPublishable(c Contest, story Story, questions []Question) error {
 	return nil
 }
 
-// icpcChoiceCapped reports whether a choice question's attempt limit keeps it
+// choiceCapped reports whether a choice question's attempt limit keeps it
 // from being solved by trying options.
 //
 // A question none of whose options is correct is counted as having one: it
@@ -228,7 +245,7 @@ func CheckPublishable(c Contest, story Story, questions []Question) error {
 // bound keeps the rule from loosening for an answer that is broken anyway
 // (ProblemNoReferenceAnswer covers the question with no answer at all). Every
 // option correct leaves no bound to meet: any single attempt solves it.
-func icpcChoiceCapped(q Question) bool {
+func choiceCapped(q Question) bool {
 	if q.MaxAttempts == nil {
 		return false
 	}
