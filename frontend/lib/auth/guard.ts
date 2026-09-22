@@ -10,8 +10,16 @@
 
 import { ApiError } from "@/lib/api/client";
 
-/** Reachable without a session, because they are how a session is obtained. */
-const PUBLIC_PATHS = ["/login"];
+/**
+ * Reachable without a session: the front page, and how a session is obtained.
+ *
+ * The root is here and it does not open the tree beneath it. Each entry is
+ * matched on equality or on the entry plus a slash, so `/` admits `/` and
+ * anything starting `//` — and no address the router ever serves starts with
+ * two slashes, since a pathname is normalised before it reaches this. Every
+ * real page therefore still has to name itself in this list or be guarded.
+ */
+const PUBLIC_PATHS = ["/", "/login"];
 
 /**
  * A contest's public table, open to anybody with the link
