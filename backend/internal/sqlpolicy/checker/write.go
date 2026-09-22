@@ -44,8 +44,60 @@ func (c *Checker) writeAllowed(root *pg.Node, p sqlpolicy.Policy) error {
 
 	case *pg.Node_DropStmt:
 		return dropAllowed(p, stmt.DropStmt)
+
+	case *pg.Node_TruncateStmt:
+		return truncateAllowed(p, stmt.TruncateStmt)
 	}
 	return &sqlpolicy.Refusal{Code: sqlpolicy.CodeStatementNotSupported, Subject: kindOf(root)}
+}
+
+// freesSpace reports a statement that can only make the database smaller.
+//
+// The list is short and it is decided here, on the parse tree, because the
+// Query Runner admits exactly these at the disk quota and has no other way to
+// know: the runner holds the text and the parser's verdict, and the text on
+// its own says nothing a leading comment cannot hide.
+//
+// TRUNCATE and DROP unlink the files behind a relation, and neither has any
+// form that allocates more. DELETE is deliberately absent: it removes rows
+// and leaves their pages allocated, so a database at its cap is exactly as
+// full after one as before, and admitting it would open the door onto a wall.
+//
+// Called only for a statement writeAllowed has already permitted, so it
+// decides nothing about authority — only about direction.
+func freesSpace(root *pg.Node) bool {
+	switch root.Node.(type) {
+	case *pg.Node_TruncateStmt, *pg.Node_DropStmt:
+		return true
+	}
+	return false
+}
+
+// truncateAllowed covers emptying a table the contest already opened.
+//
+// No authority a participant did not have: DELETE empties the same tables,
+// and the shape of the contest is untouched — the table, its columns and its
+// constraints are all still there. What TRUNCATE adds is that the pages go
+// back, which is what makes it the way out of a database at its size limit.
+//
+// CASCADE is refused rather than followed. It reaches every table holding a
+// foreign key to the one named — a list the policy never described and the
+// participant never wrote down — so a TRUNCATE stops at the tables it names,
+// each of them checked exactly as a DELETE's target is.
+func truncateAllowed(p sqlpolicy.Policy, stmt *pg.TruncateStmt) error {
+	if stmt.GetBehavior() == pg.DropBehavior_DROP_CASCADE {
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeNotPermitted, Subject: "TRUNCATE CASCADE"}
+	}
+	relations := stmt.GetRelations()
+	if len(relations) == 0 {
+		return &sqlpolicy.Refusal{Code: sqlpolicy.CodeStatementNotSupported, Subject: "TRUNCATE"}
+	}
+	for _, relation := range relations {
+		if err := targetAllowed(p, relation.GetRangeVar(), "TRUNCATE"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // targetAllowed checks what a write is aimed at.

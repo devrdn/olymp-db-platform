@@ -2030,7 +2030,7 @@ const en = {
     query_too_often:
       "You are sending queries too quickly. Wait a moment.",
     query_disk_full:
-      "Your database is at its size limit, so nothing more can be written to it.",
+      "Your database is at its size limit. Free some space — TRUNCATE a table you filled, or DROP one of your own — and carry on.",
     query_result_too_large:
       "The answer is too large to return. Narrow it with a WHERE or fewer columns.",
     contest_finished:

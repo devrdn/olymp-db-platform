@@ -467,7 +467,7 @@
     },
     {
       "code": "query_disk_full",
-      "meaning": "The write was refused because the participant's database is at its size limit."
+      "meaning": "The write was refused because the participant's database is at its size limit. Only a write that would grow it: TRUNCATE and DROP are still admitted at the cap, so the way out the message points at is one the participant can actually take."
     },
     {
       "code": "query_function_not_supported",

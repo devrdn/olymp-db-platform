@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy/checker"
 )
 
 // writing is a contest that permits writing to one table and nothing else.
@@ -55,7 +56,6 @@ func TestWritingNeverReachesTheShapeOfTheContest(t *testing.T) {
 	for _, sql := range []string{
 		`DROP TABLE evidence`,
 		`ALTER TABLE evidence ADD COLUMN planted text`,
-		`TRUNCATE evidence`,
 		`CREATE TABLE public.mine (x int)`,
 		`CREATE VIEW public.mine AS SELECT 1`,
 		`CREATE INDEX ON evidence (note)`,
@@ -160,4 +160,88 @@ func TestATableDefinitionIsNotAWayPastTheFunctionList(t *testing.T) {
 func TestAConstraintDoesNotWidenWhatMayBeWritten(t *testing.T) {
 	allow(t, `CREATE TABLE work.notes (id int REFERENCES suspects (id))`, notes())
 	refusal(t, `INSERT INTO suspects (name) VALUES ('x')`, notes())
+}
+
+// Emptying a table the contest already opened for writing is permitted, and
+// it is the only permitted statement that makes a database smaller rather
+// than larger.
+//
+// No new authority: DELETE already empties the same table, and the shape of
+// the contest is untouched — the table, its columns and its constraints are
+// all still there afterwards. What TRUNCATE adds is that the pages go back to
+// the database, which is what makes it a way out of a database at its size
+// limit; an ordinary DELETE leaves them allocated, so a participant who
+// filled their copy would be exactly as full afterwards.
+func TestEmptyingAWritableTableIsPermitted(t *testing.T) {
+	for _, sql := range []string{
+		`TRUNCATE evidence`,
+		`TRUNCATE TABLE evidence`,
+		`TRUNCATE public.evidence`,
+		`TRUNCATE evidence RESTART IDENTITY`,
+		`TRUNCATE work.notes`,
+	} {
+		t.Run(sql, func(t *testing.T) { allow(t, sql, notes()) })
+	}
+}
+
+// And it stops exactly where every other write does.
+func TestEmptyingStopsAtTheTablesThePolicyDoesNotName(t *testing.T) {
+	for _, sql := range []string{
+		`TRUNCATE suspects`,
+		`TRUNCATE evidence, suspects`,
+		`TRUNCATE other.evidence`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			r := refusal(t, sql, notes())
+			if r.Code != sqlpolicy.CodeTableNotWritable {
+				t.Fatalf("code = %q, want %q", r.Code, sqlpolicy.CodeTableNotWritable)
+			}
+		})
+	}
+
+	// Without the permission for their own tables, their own schema is no
+	// different from anywhere else.
+	t.Run("work without the permission", func(t *testing.T) {
+		refusal(t, `TRUNCATE work.notes`, writing())
+	})
+}
+
+// CASCADE is refused rather than followed. It reaches every table with a
+// foreign key to the one named — a list the policy never described and the
+// participant never wrote down — so a TRUNCATE stops at the table it names.
+func TestEmptyingDoesNotCascade(t *testing.T) {
+	r := refusal(t, `TRUNCATE evidence CASCADE`, notes())
+	if r.Code != sqlpolicy.CodeNotPermitted {
+		t.Fatalf("code = %q, want %q", r.Code, sqlpolicy.CodeNotPermitted)
+	}
+}
+
+// Statement.Frees is what the Query Runner turns on at the disk quota, so
+// which statements set it is worth asserting on its own: a write that can
+// only make the database smaller, and nothing else.
+func TestTheCheckerSaysWhichStatementsCanOnlyFreeSpace(t *testing.T) {
+	for sql, want := range map[string]bool{
+		`TRUNCATE evidence`:     true,
+		`TRUNCATE work.notes`:   true,
+		`DROP TABLE work.notes`: true,
+		`DROP VIEW work.clues`:  true,
+
+		`INSERT INTO evidence (note) VALUES ('x')`: false,
+		`UPDATE evidence SET note = 'x'`:           false,
+		// The one that reads like a way out and is not: the rows go, the
+		// pages stay, and pg_database_size does not move.
+		`DELETE FROM evidence`:            false,
+		`CREATE TABLE work.notes (x int)`: false,
+		`SELECT * FROM evidence`:          false,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			statement, err := checker.NewChecker().Analyse(sql, notes())
+			if err != nil {
+				t.Fatalf("refused a legitimate query: %v", err)
+			}
+			if statement.Frees != want {
+				t.Fatalf("Frees = %v, want %v", statement.Frees, want)
+			}
+		})
+	}
 }
