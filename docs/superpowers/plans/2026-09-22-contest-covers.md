@@ -3,19 +3,19 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** у олимпиады появляется обложка: организатор загружает снимок, сервер
-обрезает его до `16/9`, уменьшает, перекодирует и кладёт в объектное
-хранилище; витрина показывает карточки, а у олимпиады без снимка — рисованная
+обрезает его до `16/9`, уменьшает, перекодирует и кладёт на том; витрина показывает карточки, а у олимпиады без снимка — рисованная
 обложка, выведенная из её идентификатора.
 
 **Architecture:** доменный пакет `internal/covers` держит правила (пределы,
-кадрирование, перекодирование) и объявляет два порта — хранилище объектов и
-репозиторий. Реализация хранилища — MinIO по протоколу S3 в
-`internal/platform/objects`, реализация репозитория — в `internal/postgres`.
-Байты отдаёт API, а не хранилище: один источник для браузера и заголовки кэша
-наши.
+кадрирование, перекодирование) и объявляет два порта — хранилище файлов и
+репозиторий. Реализация хранилища — каталог на томе в
+`internal/platform/filestore`, реализация репозитория — в `internal/postgres`.
+Байты отдаёт API, а не файловый сервер: путь — деталь хранилища, а заголовки
+кэша и проверка принадлежности файла опубликованной олимпиаде — работа
+приложения.
 
-**Tech Stack:** Go (chi, pgx, `golang.org/x/image` — уже в зависимостях,
-minio-go), MinIO в docker compose, Next 16, vitest.
+**Tech Stack:** Go (chi, pgx, `golang.org/x/image` — уже в зависимостях;
+новых зависимостей не добавляется), том в docker compose, Next 16, vitest.
 
 **Spec:** `docs/superpowers/specs/2026-09-22-contest-covers-design.md` — каждая
 задача читает его целиком перед началом.
@@ -31,60 +31,56 @@ minio-go), MinIO в docker compose, Next 16, vitest.
   потребитель), английский в коде и коммитах, русский в `docs/`.
 - **Пределы — дословно:** запрос ≤ 8 МиБ; исходник ≤ 8000 × 8000 пикселей;
   типы только JPEG, PNG, WebP (определяются по байтам); выход — два JPEG
-  качества 82, `1600×900` и `800×450`; ключ объекта
-  `covers/<sha256>-<width>.jpg`.
+  качества 82, `1600×900` и `800×450`; имя файла `<sha256>-<width>.jpg`.
 - **SVG не принимается ни под каким видом.**
 - `image.DecodeConfig` вызывается **до** полного декодирования, и отказ по
   размерам происходит там.
-- Недостижимое хранилище — ошибка при старте, как недостижимый Redis.
-- Реальные данные не трогать: только `dbcontest_core_test` и тестовый бакет.
-  Никаких `make run`, `make runner`, `make dev-*` и docker-команд, которые
+- Каталог, в который нельзя писать, — ошибка при старте, а не при первой
+  загрузке в день олимпиады.
+- Реальные данные не трогать: только `dbcontest_core_test` и временный
+  каталог теста (`t.TempDir()`). Никаких `make run`, `make runner`, `make dev-*` и docker-команд, которые
   останавливают или удаляют контейнеры, которые исполнитель не создавал.
 - В индекс добавлять файлы явно по путям; `git add -A` запрещён.
 
 ---
 
-### Task 1: Хранилище объектов
+### Task 1: Хранилище файлов
 
 **Files:**
-- Create: `backend/internal/platform/objects/objects.go`
-- Create: `backend/internal/platform/objects/objects_test.go`
+- Create: `backend/internal/platform/filestore/filestore.go`
+- Create: `backend/internal/platform/filestore/filestore_test.go`
 - Modify: `backend/internal/platform/config/config.go` (+ его тест)
 - Modify: `backend/internal/app/app.go` (сборка и проверка готовности)
 - Modify: `deploy/docker-compose.yml`, `deploy/docker-compose.dev.yml`, `deploy/.env.example`
 - Modify: `Makefile` (бэкап тома), `backend/README.md`
 
 **Interfaces:**
-- Produces: `objects.Store` с методами
+- Produces: `filestore.Store` с методами
   `Put(ctx, key string, contentType string, body []byte) error`,
   `Get(ctx, key string) ([]byte, string, error)`,
   `Delete(ctx, key string) error`,
-  `Ping(ctx) error`; `objects.ErrNotFound`.
-- Consumes: `config.Config.ObjectStore{Endpoint, AccessKey, SecretKey, Bucket, UseTLS}`.
+  `Ping(ctx) error`; `filestore.ErrNotFound`.
+- Consumes: `config.Config.CoverDir string` (`COVER_DIR`).
 
-- [ ] **Step 1: Прочитать спеку и образцы**
+- [ ] **Step 1: Прочитать спеку и образец**
 
-Разделы 1 и 4 спеки. Образец инфраструктурного пакета с проверкой готовности —
-`backend/internal/platform/cache` (`NewRedis`, `Ping`, фатальность
-недостижимого сервера). Образец настроек — как читается `REDIS_ADDR` в
-`config.go`.
+Разделы 1 и 4 спеки. Образец каталога на томе, который уже есть в проекте, —
+`GAME_UPLOAD_DIR` в `internal/platform/config/config.go` и то, как он объявлен
+в `deploy/docker-compose.yml`.
 
 - [ ] **Step 2: Падающий тест порта**
 
-`objects_test.go`, против настоящего MinIO из dev-оверлея; пропускается, когда
-адрес не задан (как `storagetest` пропускает без `CORE_DB_DSN`):
+`filestore_test.go`, на `t.TempDir()` — без контейнеров и без сети:
 
 ```go
 func TestPutThenGetReturnsTheSameBytes(t *testing.T) {
-	store := testStore(t) // t.Skip when OBJECT_STORE_ENDPOINT is unset
-	key := "covers/" + t.Name() + ".jpg"
-	t.Cleanup(func() { _ = store.Delete(context.Background(), key) })
+	store := newStore(t, t.TempDir())
 
-	if err := store.Put(context.Background(), key, "image/jpeg", []byte("not really a jpeg")); err != nil {
+	if err := store.Put(t.Context(), "cover-1600.jpg", "image/jpeg", []byte("not really a jpeg")); err != nil {
 		t.Fatalf("Put() = %v", err)
 	}
 
-	body, contentType, err := store.Get(context.Background(), key)
+	body, contentType, err := store.Get(t.Context(), "cover-1600.jpg")
 	if err != nil {
 		t.Fatalf("Get() = %v", err)
 	}
@@ -94,38 +90,77 @@ func TestPutThenGetReturnsTheSameBytes(t *testing.T) {
 }
 
 func TestGettingWhatIsNotThereIsNotFound(t *testing.T) {
-	store := testStore(t)
-	if _, _, err := store.Get(context.Background(), "covers/absent"); !errors.Is(err, objects.ErrNotFound) {
+	store := newStore(t, t.TempDir())
+	if _, _, err := store.Get(t.Context(), "absent.jpg"); !errors.Is(err, filestore.ErrNotFound) {
 		t.Errorf("Get() = %v, want ErrNotFound", err)
+	}
+}
+
+// A key is a name, never a path: the caller's hash is data, and data that can
+// walk out of the directory it is written into is how an upload becomes a
+// write to /etc.
+func TestAKeyCannotClimbOutOfTheDirectory(t *testing.T) {
+	root := t.TempDir()
+	store := newStore(t, root)
+
+	for _, key := range []string{"../escape.jpg", "a/../../escape.jpg", "/absolute.jpg", "nested/deep.jpg"} {
+		if err := store.Put(t.Context(), key, "image/jpeg", []byte("x")); err == nil {
+			t.Errorf("Put(%q) was accepted", key)
+		}
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(root)); len(entries) == 0 {
+		t.Fatal("the test's own parent directory vanished, which is its own kind of news")
+	}
+}
+
+// A half-written file is worse than no file: a reader would serve a truncated
+// picture forever, because the name is a content hash and nothing ever
+// rewrites it.
+func TestPutIsAllOrNothing(t *testing.T) {
+	root := t.TempDir()
+	store := newStore(t, root)
+
+	if err := store.Put(t.Context(), "whole.jpg", "image/jpeg", bytes.Repeat([]byte("x"), 1<<20)); err != nil {
+		t.Fatalf("Put() = %v", err)
+	}
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("ReadDir() = %v", err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp") || strings.HasPrefix(e.Name(), ".") {
+			t.Errorf("a temporary file was left behind: %s", e.Name())
+		}
 	}
 }
 ```
 
 - [ ] **Step 3: Запустить, убедиться, что падает, реализовать**
 
-Run: `cd backend && go test ./internal/platform/objects/`
+Run: `cd backend && go test ./internal/platform/filestore/`
 Expected: FAIL — пакета нет.
 
-Реализация поверх `minio-go`: клиент, проверка существования бакета при
-старте (создать, если нет), `Ping` через `BucketExists`.
+Реализация: каталог из настройки; ключ проверяется как имя (никаких
+разделителей пути, никаких `..`); запись во временный файл в том же каталоге
+и `os.Rename` поверх — атомарная замена, потому что имя файла есть хеш
+содержимого и переписывать его никто никогда не будет; тип содержимого
+выводится из расширения (`.jpg` → `image/jpeg`), а не хранится рядом.
 
 - [ ] **Step 4: Настройки и старт**
 
-`OBJECT_STORE_ENDPOINT`, `OBJECT_STORE_ACCESS_KEY`, `OBJECT_STORE_SECRET_KEY`,
-`OBJECT_STORE_BUCKET` (по умолчанию `dbcontest`), `OBJECT_STORE_TLS`.
-Пустой адрес — ошибка старта, а не тихий пропуск: обложки не опциональная
-часть витрины. Проверка добавляется в `/readyz` рядом с базой и кэшем.
+`COVER_DIR` (по умолчанию `/var/lib/dbcontest/covers`). При старте каталог
+создаётся, и в него пишется и удаляется пробный файл: каталог, в который
+нельзя писать, должен отказывать при запуске, а не в день олимпиады. Та же
+проверка — в `/readyz` рядом с базой и кэшем.
 
-- [ ] **Step 5: Сервис в compose**
+- [ ] **Step 5: Том в compose и бэкап**
 
-`minio` рядом с `redis`: образ `minio/minio`, команда `server /data
---console-address :9001`, том `minio-data`, healthcheck по
-`/minio/health/live`, пароли из `.env`. API зависит от него по
-`service_healthy`. В dev-оверлее — проброс портов на `127.0.0.1`.
+Именованный том, примонтированный в `COVER_DIR` у сервиса `api` — ровно так
+же, как `game-uploads-data`. Никакого нового сервиса.
 
-**И бэкап:** `make backup` дампит базу; том MinIO обязан попасть в копию.
-Добавить в тот же таргет и описать в `backend/README.md`, иначе восстановление
-вернёт олимпиады без обложек.
+**И бэкап:** `make backup` дампит базу; том с обложками обязан попасть в
+копию. Добавить в тот же таргет и описать в `backend/README.md`.
 
 - [ ] **Step 6: Проверки и коммит**
 
@@ -133,8 +168,8 @@ Run: `cd backend && gofmt -l . && go vet ./... && go test ./internal/platform/..
 Run: `docker compose -f deploy/docker-compose.yml --env-file <временный> config` — только проверка синтаксиса, ничего не поднимать.
 
 ```bash
-git add backend/internal/platform/objects backend/internal/platform/config backend/internal/app/app.go deploy Makefile backend/README.md
-git commit -m "feat(objects): the store the covers live in"
+git add backend/internal/platform/filestore backend/internal/platform/config backend/internal/app/app.go deploy Makefile backend/README.md
+git commit -m "feat(filestore): the directory the covers live in"
 ```
 
 ---
@@ -235,7 +270,8 @@ NULL`. Файл открывается `SET lock_timeout = '5s';` — согла
 - `DELETE /contests/{id}/cover`.
 - `GET /public/contests/{id}/cover?size=800` — публичный, отдаёт байты из
   хранилища, `Cache-Control: public, max-age=31536000, immutable`, `ETag` —
-  хеш.
+  хеш. Черновик обложки не отдаёт: файл принадлежит олимпиаде, а олимпиада —
+  тому же отбору статусов, что и публичный список.
 
 Каждый отказ — по правилу 1 целиком.
 
