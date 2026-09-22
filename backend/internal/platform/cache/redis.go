@@ -34,21 +34,67 @@ func NewRedis(ctx context.Context, addr string) (*Redis, error) {
 	return &Redis{client: client}, nil
 }
 
+// How long one cache call may take before it is an error.
+//
+// A cache call sits inside an ordinary request — a session read, a rate-limit
+// check — and the caller's context may carry no deadline of its own, so the
+// bound has to be the client's. The library's defaults are three retries with
+// a three-second read timeout apiece: one slow server then holds every
+// request for a dozen seconds, and the requests queueing behind them are
+// goroutines that do not leave. A cache that cannot answer within a second is
+// not a cache; the caller treats the error the way it treats any other cache
+// failure.
+const (
+	redisDialTimeout  = 2 * time.Second
+	redisIOTimeout    = time.Second
+	redisMaxRetries   = 1
+	redisPoolWaitTime = 2 * time.Second
+)
+
 // Options accepts both the URL form ("redis://host:6379/0") and the bare
 // "host:port" form used in compose files.
+//
+// Timeouts an address names are kept: an operator who writes read_timeout
+// into the URL means it. The bounds above fill in everything it leaves unset,
+// which is the ordinary case.
 func Options(addr string) (*redis.Options, error) {
+	var opts *redis.Options
 	if strings.Contains(addr, "://") {
-		opts, err := redis.ParseURL(addr)
+		parsed, err := redis.ParseURL(addr)
 		if err != nil {
 			return nil, fmt.Errorf("parse Redis URL: %w", err)
 		}
-		return opts, nil
+		opts = parsed
+	} else {
+		if _, _, err := net.SplitHostPort(addr); err != nil {
+			return nil, fmt.Errorf("parse Redis address: %w", err)
+		}
+		opts = &redis.Options{Addr: addr}
 	}
+	bound(opts)
+	return opts, nil
+}
 
-	if _, _, err := net.SplitHostPort(addr); err != nil {
-		return nil, fmt.Errorf("parse Redis address: %w", err)
+// bound fills in the timeouts the address did not name.
+func bound(opts *redis.Options) {
+	if opts.DialTimeout == 0 {
+		opts.DialTimeout = redisDialTimeout
 	}
-	return &redis.Options{Addr: addr}, nil
+	if opts.ReadTimeout == 0 {
+		opts.ReadTimeout = redisIOTimeout
+	}
+	if opts.WriteTimeout == 0 {
+		opts.WriteTimeout = redisIOTimeout
+	}
+	if opts.PoolTimeout == 0 {
+		opts.PoolTimeout = redisPoolWaitTime
+	}
+	// Zero means the library's own three. A retry of a call that has already
+	// waited out its timeout is another second of the request spent on a
+	// server that is not answering.
+	if opts.MaxRetries == 0 {
+		opts.MaxRetries = redisMaxRetries
+	}
 }
 
 // Get returns the stored value, or found=false when the key is absent.
