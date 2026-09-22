@@ -1,8 +1,9 @@
-import { contentEditable, settingsEditable, shapeEditable } from "@/lib/api/contests";
+import { contentEditable, contestCoverSchema, settingsEditable, shapeEditable } from "@/lib/api/contests";
 import { sqlPolicySchema } from "@/lib/api/policy";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { loadContest, loadContestResource } from "../contest";
+import { CoverPanel } from "./cover-panel";
 import { ContestPanel, LanguagePanel, PolicyPanel } from "./settings-panels";
 
 /**
@@ -27,9 +28,23 @@ import { ContestPanel, LanguagePanel, PolicyPanel } from "./settings-panels";
 export default async function SettingsPage(props: PageProps<"/contests/[contestId]/settings">) {
   const [{ contestId }, dict] = await Promise.all([props.params, activeDictionary()]);
 
-  const [contest, policy] = await Promise.all([
+  const [contest, policy, cover] = await Promise.all([
     loadContest(contestId),
     loadContestResource(contestId, "/sql-policy", (payload) => sqlPolicySchema.parse(payload)),
+    // A contest with no cover is an ordinary state — the commonest one, on a
+    // draft — so "there is none" is read as an empty answer rather than as a
+    // wrong address, exactly as the story is.
+    //
+    // The read is the organiser's own, not the public one: a draft's cover is
+    // as private as its questions, and the address under /public answers
+    // nothing about a contest a visitor may not see. `covers.Service.ByContest`
+    // on the Go side is that read ("the organiser editing it has to see what
+    // they uploaded"); until a route is mounted over it, this answers 404 and
+    // the panel shows the drawn cover, which is what a contest with no
+    // uploaded picture wears anyway.
+    loadContestResource(contestId, "/cover", (payload) => contestCoverSchema.parse(payload), {
+      notFoundIsEmpty: true,
+    }),
   ]);
 
   const t = dict.workspace.settings;
@@ -51,6 +66,18 @@ export default async function SettingsPage(props: PageProps<"/contests/[contestI
       <LanguagePanel
         contest={contest}
         editable={contentEditable(contest.status)}
+        dict={dict}
+      />
+
+      {/* The picture, beside the languages rather than beside the SQL policy:
+          both are what a visitor meets before anything else about the contest.
+          It follows the settings freeze, not the content one — replacing a
+          photograph while the contest runs changes nothing anybody is
+          answering under. */}
+      <CoverPanel
+        contestId={contest.id}
+        cover={cover}
+        editable={settingsEditable(contest.status)}
         dict={dict}
       />
 
