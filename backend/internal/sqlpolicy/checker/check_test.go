@@ -183,6 +183,19 @@ func TestTheWritesDisguisedAsReads(t *testing.T) {
 		refusal(t, `EXPLAIN (ANALYZE) SELECT * FROM suspects`, sqlpolicy.ReadOnly())
 	})
 
+	t.Run("EXPLAIN carries only the options that change the printout", func(t *testing.T) {
+		// SETTINGS prints the server settings that differ from their
+		// defaults — the same configuration the catalogue rules and the
+		// revoked grants keep out of a participant's reach. The others are
+		// refused because the list of what an EXPLAIN option may do is
+		// PostgreSQL's to extend, and a new one that executes or reports
+		// would arrive allowed.
+		refusal(t, `EXPLAIN (SETTINGS) SELECT * FROM suspects`, sqlpolicy.ReadOnly())
+		refusal(t, `EXPLAIN (BUFFERS) SELECT * FROM suspects`, sqlpolicy.ReadOnly())
+		refusal(t, `EXPLAIN (WAL) SELECT * FROM suspects`, sqlpolicy.ReadOnly())
+		allow(t, `EXPLAIN (VERBOSE, COSTS false, FORMAT JSON) SELECT * FROM suspects`, sqlpolicy.ReadOnly())
+	})
+
 	t.Run("locking is a write to the transaction", func(t *testing.T) {
 		// A read-only transaction refuses it anyway; refusing it here is what
 		// turns a database error nobody can read into a sentence.
