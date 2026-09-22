@@ -41,7 +41,9 @@ const contestColumns = `
 		                                  'description', COALESCE(ct.description, ''))
 		                ORDER BY ct.lang)
 		FROM contest_translations ct WHERE ct.contest_id = c.id
-	), '[]'::json)`
+	), '[]'::json),
+	COALESCE((SELECT cc.hash FROM contest_covers cc WHERE cc.contest_id = c.id), ''),
+	COALESCE((SELECT cc.attribution FROM contest_covers cc WHERE cc.contest_id = c.id), '')`
 
 // Contests stores contests in PostgreSQL.
 type Contests struct {
@@ -71,6 +73,15 @@ type translationRow struct {
 	Description string `json:"description"`
 }
 
+// The cover rides in the projection for the same reason the languages and
+// the translations do: the listing the play screen reads is what puts a
+// picture above a story (design spec §10), and a read per row would be the
+// N+1 this projection exists to avoid. Two correlated subqueries rather than
+// a join, because contest_covers holds at most one row per contest and a
+// join would put the unique constraint in charge of the listing's row count.
+// Empty rather than NULL, because a contest with no uploaded picture is not
+// a missing answer — it wears the drawn cover, which is an ordinary state.
+
 // contestScanTargets returns pointers matching contestColumns' own column
 // order, so any query that selects it can share this one list instead of
 // repeating it — the same invariant contestColumns' own doc asks for, kept
@@ -83,6 +94,7 @@ func contestScanTargets(c *contests.Contest, settings, languages, translations *
 		&c.LeaderboardFreezeMin, &c.LeaderboardNames, &c.LeaderboardRevealedAt,
 		&c.ICPCPenaltyMin,
 		languages, translations,
+		&c.CoverHash, &c.CoverAttribution,
 	}
 }
 
@@ -213,14 +225,11 @@ func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Cont
 			languages    []byte
 			translations []byte
 		)
-		if err := rows.Scan(
-			&c.ID, &c.Status, &c.Enrollment, &c.QuestionMode, &c.Progression, &c.Scoring, &c.Timing, &c.DurationMin,
-			&c.StartsAt, &c.EndsAt, &c.AllowedCIDRs, &settings, &c.CreatedBy,
-			&c.CreatedAt, &c.UpdatedAt,
-			&c.LeaderboardFreezeMin, &c.LeaderboardNames, &c.LeaderboardRevealedAt,
-			&c.ICPCPenaltyMin,
-			&languages, &translations, &total,
-		); err != nil {
+		// The shared target list plus this query's own trailing count, rather
+		// than a second copy of the projection: the copy had already drifted
+		// once, which is the drift contestScanTargets' own doc asks for one
+		// list to prevent.
+		if err := rows.Scan(append(contestScanTargets(&c, &settings, &languages, &translations), &total)...); err != nil {
 			return nil, 0, fmt.Errorf("scan contest: %w", err)
 		}
 		hydrated, err := hydrate(c, settings, languages, translations)

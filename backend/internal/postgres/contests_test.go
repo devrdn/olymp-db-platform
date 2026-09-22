@@ -230,6 +230,46 @@ func TestListFindsAContestByItsTranslatedTitle(t *testing.T) {
 	})
 }
 
+// The picture a contest wears comes back with the contest, because the one
+// screen that shows a picture above a story (design spec §10) already reads
+// this listing and opens under a timer. A projection is the whole point: a
+// second read per row would be the N+1 the languages and translations are
+// already written to avoid.
+func TestAListingCarriesTheCoverEachContestWears(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewContests(testPool)
+		author := makeUser(t, ctx, "author-listing-cover")
+		dressed := makeContest(t, ctx, author.ID)
+		bare := makeContest(t, ctx, author.ID)
+		if err := NewCovers(testPool).Save(ctx, aCover(dressed, author.ID)); err != nil {
+			t.Fatalf("Save() = %v", err)
+		}
+
+		found, _, err := repo.List(ctx, contests.Filter{Limit: 10})
+		if err != nil {
+			t.Fatalf("List() = %v", err)
+		}
+
+		byID := map[uuid.UUID]contests.Contest{}
+		for _, c := range found {
+			byID[c.ID] = c
+		}
+		want := aCover(dressed, author.ID)
+		if got := byID[dressed]; got.CoverHash != want.Hash {
+			t.Errorf("CoverHash = %q, want %q", got.CoverHash, want.Hash)
+		}
+		if got := byID[dressed]; got.CoverAttribution != want.Attribution {
+			t.Errorf("CoverAttribution = %q, want %q", got.CoverAttribution, want.Attribution)
+		}
+		// Empty, not a failed read: a contest nobody uploaded a picture for
+		// wears the drawn cover, and that is an ordinary state.
+		if got := byID[bare]; got.CoverHash != "" || got.CoverAttribution != "" {
+			t.Errorf("a contest with no uploaded cover read back %q/%q, want both empty",
+				got.CoverHash, got.CoverAttribution)
+		}
+	})
+}
+
 func TestListLimitsAnOrganizerToTheContestsTheyStaff(t *testing.T) {
 	// This is what keeps one organizer's list their own without the repository
 	// knowing anything about permissions.
