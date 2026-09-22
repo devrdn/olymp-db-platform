@@ -3,7 +3,14 @@
 import { revalidatePath } from "next/cache";
 
 import { ApiError } from "@/lib/api/client";
-import { ENROLLMENTS, icpcPenaltyFromForm, shapeFromForm, type Enrollment } from "@/lib/api/contests";
+import {
+  contestCoverSchema,
+  ENROLLMENTS,
+  icpcPenaltyFromForm,
+  shapeFromForm,
+  type ContestCover,
+  type Enrollment,
+} from "@/lib/api/contests";
 import { isId } from "@/lib/api/ids";
 import { freezeFromForm } from "@/lib/api/leaderboard";
 import { parseTables, SQL_MODES, type SqlMode } from "@/lib/api/policy";
@@ -11,7 +18,21 @@ import { serverRequest } from "@/lib/api/server";
 import { instantFromWallClock } from "@/lib/format/datetime";
 import { LOCALES, type Locale } from "@/lib/i18n/config";
 
-export type SettingsState = { code?: string; saved?: boolean; rejected?: string[] };
+export type SettingsState = {
+  code?: string;
+  saved?: boolean;
+  rejected?: string[];
+  /**
+   * What the contest wears now, when the save was about its cover: the
+   * picture the API has just stored, or `null` once it has been taken away.
+   * Absent from every other save, which says nothing about the cover.
+   *
+   * It is carried because the upload answers with it, and because the panel
+   * would otherwise have to ask for the picture again to show what it has
+   * just sent.
+   */
+  cover?: ContestCover | null;
+};
 
 function oneOf<T extends string>(value: FormDataEntryValue | null, allowed: readonly T[]): T | null {
   return typeof value === "string" && (allowed as readonly string[]).includes(value)
@@ -31,9 +52,17 @@ async function attempt(
 
   if (failure) return { code: failure instanceof ApiError ? failure.code : "unreachable" };
 
+  refresh(contestId);
+  return { saved: true };
+}
+
+/**
+ * What a saved contest makes stale: its own workspace, and the register that
+ * lists it.
+ */
+function refresh(contestId: string): void {
   revalidatePath("/contests");
   revalidatePath(`/contests/${contestId}`, "layout");
-  return { saved: true };
 }
 
 /**
@@ -209,4 +238,79 @@ export async function savePolicyAction(
     },
     contestId,
   );
+}
+
+/**
+ * The picture the contest wears.
+ *
+ * A Server Action like every other save on this screen, and for the same two
+ * reasons: the form works with JavaScript off, and the API's origin never
+ * reaches the browser. The bytes are not inspected here — what a file says
+ * about itself is the uploader's claim, and the API decides by reading it.
+ * A check on this side would be a second opinion that can be skipped by not
+ * using this form.
+ *
+ * The one thing refused before the request is a missing credit line, and that
+ * is not a second opinion: the account's upload budget counts refusals (the
+ * work behind an upload is a decode and two resamples), so spending a place
+ * in it to be told something this side already knows is a waste of the one
+ * budget an organiser can actually run out of. The code returned is the API's
+ * own, so the panel shows one message whichever side said it.
+ */
+export async function uploadCoverAction(
+  _previous: SettingsState,
+  form: FormData,
+): Promise<SettingsState> {
+  const contestId = form.get("contestId");
+  if (!isId(contestId)) return { code: "invalid_contest_id" };
+
+  const file = form.get("file");
+  if (!(file instanceof File) || file.size === 0) return { code: "invalid_request" };
+
+  const attribution = String(form.get("attribution") ?? "").trim();
+  if (!attribution) return { code: "cover_attribution_required" };
+
+  // A form of this side's own making, carrying the two parts the endpoint
+  // names and nothing else: the submitted one also holds the contest's
+  // identifier, which belongs in the path rather than in the body.
+  const payload = new FormData();
+  payload.set("file", file);
+  payload.set("attribution", attribution);
+
+  const answer = await serverRequest(`/contests/${contestId}/cover`, {
+    method: "PUT",
+    rawBody: payload,
+  }).then(
+    (value: unknown) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+
+  if ("error" in answer) {
+    return { code: answer.error instanceof ApiError ? answer.error.code : "unreachable" };
+  }
+
+  refresh(contestId);
+  return { saved: true, cover: contestCoverSchema.parse(answer.value) };
+}
+
+/**
+ * Taking the picture away, which leaves the contest its drawn cover rather
+ * than a gap (design spec §2.3).
+ */
+export async function removeCoverAction(
+  _previous: SettingsState,
+  form: FormData,
+): Promise<SettingsState> {
+  const contestId = form.get("contestId");
+  if (!isId(contestId)) return { code: "invalid_contest_id" };
+
+  const failure = await serverRequest(`/contests/${contestId}/cover`, { method: "DELETE" }).then(
+    () => null,
+    (error: unknown) => error,
+  );
+
+  if (failure) return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+
+  refresh(contestId);
+  return { saved: true, cover: null };
 }

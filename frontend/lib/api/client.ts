@@ -21,8 +21,15 @@ export type RequestOptions = {
    * own. Forcing it through `.arrayBuffer()` first would materialise the
    * whole piece in the JS heap a copy earlier than it has to be — small for
    * one chunk, but this same call is made a few hundred times for one file.
+   *
+   * `FormData` is the third, for the one endpoint that takes a multipart form
+   * (a contest's cover: the picture and its credit line in one request).
+   * `fetch` writes the boundary into the content type itself, which is why
+   * this travels as a raw body rather than as a header this layer could
+   * spell: a boundary written here would have to match the one the runtime
+   * generated, and the two have no way to agree.
    */
-  rawBody?: ArrayBuffer | Blob;
+  rawBody?: ArrayBuffer | Blob | FormData;
   /** Absolute prefix; the server wrapper supplies one, the browser needs none. */
   origin?: string;
   /** Forwarded verbatim; the server wrapper uses this to pass the session on. */
