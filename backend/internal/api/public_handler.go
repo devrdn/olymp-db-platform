@@ -155,12 +155,20 @@ func (h *PublicHandler) admit(w http.ResponseWriter, r *http.Request) bool {
 
 // fail answers a failed read.
 //
-// There is no switch here, and that is the whole of it: showcase refuses
-// nothing (CLAUDE.md rule 1 asks for a sentinel per refusal, and these two
-// reads have none to make — they take no argument, name nobody and can only
-// fail on storage). Anything arriving here is the database, which is a 500
-// and a line in the log.
+// There is one branch here and it is not a refusal: showcase refuses nothing
+// (CLAUDE.md rule 1 asks for a sentinel per refusal, and these two reads have
+// none to make — they take no argument, name nobody and can only fail on
+// storage). The branch is the visitor who is no longer there. A landing page
+// is the one screen people open and close without waiting, so a closed tab is
+// an ordinary event: it is not an outage, nobody paged about it wants to see
+// it, and there is no longer a connection to write a body to. It is noted at
+// debug and left at that. Anything else arriving here is the database, which
+// is a 500 and a line in the log.
 func (h *PublicHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
+	if ctxErr := r.Context().Err(); ctxErr != nil {
+		h.log.DebugContext(r.Context(), "the visitor left before the landing page was served", "error", ctxErr)
+		return
+	}
 	h.log.ErrorContext(r.Context(), "the landing page could not be served", "error", err)
 	httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 }
