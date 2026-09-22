@@ -218,9 +218,21 @@ type Contest struct {
 	Languages []ContestLanguage
 	// Translations hold the title and description per language code.
 	Translations map[string]Translation
-	CreatedBy    uuid.UUID
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// CoverHash names the picture this contest wears, and is empty for one
+	// wearing the drawn cover instead (design spec §10.3). Read-only: the
+	// cover is written through covers.Service, which owns both the row and
+	// the file, and a Contest carries it only so a listing can answer with
+	// it — the play screen puts a picture above the story and may not spend
+	// a second request on one hash.
+	CoverHash string
+	// CoverAttribution credits whoever made that picture. §10.1 makes the
+	// line part of the publish gate, so a non-empty CoverHash always arrives
+	// with one; empty means there is nobody to credit, because the cover is
+	// drawn and its author is us.
+	CoverAttribution string
+	CreatedBy        uuid.UUID
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // Settings are the tunables stored as jsonb on the contest row.

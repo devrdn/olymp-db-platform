@@ -361,6 +361,55 @@ func TestListingFallsBackWhenTheRequestedLanguageIsMissing(t *testing.T) {
 	}
 }
 
+// The picture above a story rides on the listing rather than on a request of
+// its own (design spec §10). The screen that shows it is the participant's
+// play screen, which opens under a timer and already reads this listing; a
+// second round trip for one hash is one this product cannot spend there.
+func TestListingCarriesTheCoverAContestWears(t *testing.T) {
+	f := newContestFixture(t)
+	c := f.ownedContest(t, contests.StatusDraft)
+	c.CoverHash = "9f86d081884c7d65"
+	c.CoverAttribution = "Photo: A. Organiser, CC BY 4.0"
+	f.stores.Contests.Put(c)
+
+	rec := f.do(http.MethodGet, "/contests", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	items, _ := decode(t, rec)["items"].([]any)
+	if len(items) == 0 {
+		t.Fatalf("no contests listed: %s", rec.Body.String())
+	}
+	first, _ := items[0].(map[string]any)
+	if first["cover_hash"] != "9f86d081884c7d65" {
+		t.Errorf("cover_hash = %v, want the hash the cover was stored under", first["cover_hash"])
+	}
+	if first["cover_attribution"] != "Photo: A. Organiser, CC BY 4.0" {
+		t.Errorf("cover_attribution = %v, want the credit line the picture is published with",
+			first["cover_attribution"])
+	}
+}
+
+// A contest nobody uploaded a picture for wears a drawn cover, and the
+// listing says nothing rather than sending two empty strings for every row
+// of a register that shows no pictures at all (design spec §10).
+func TestListingSaysNothingAboutTheCoverOfAContestThatWearsADrawnOne(t *testing.T) {
+	f := newContestFixture(t)
+	f.ownedContest(t, contests.StatusDraft)
+
+	rec := f.do(http.MethodGet, "/contests", "")
+
+	items, _ := decode(t, rec)["items"].([]any)
+	first, _ := items[0].(map[string]any)
+	if got, ok := first["cover_hash"]; ok {
+		t.Errorf("cover_hash = %v, want it absent for a contest with no uploaded picture", got)
+	}
+	if got, ok := first["cover_attribution"]; ok {
+		t.Errorf("cover_attribution = %v, want it absent for a contest with no uploaded picture", got)
+	}
+}
+
 func TestPublishCheckListsWhatIsMissing(t *testing.T) {
 	// The constructor screen shows the remaining work rather than making an
 	// organizer discover it by being refused.
