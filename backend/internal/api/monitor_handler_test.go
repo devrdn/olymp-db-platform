@@ -95,7 +95,7 @@ func (s *watchStore) Roster(_ context.Context, contest uuid.UUID, _ int) (monito
 		if c == contest {
 			roster.Rows = append(roster.Rows, monitor.RosterRow{Registration: reg, Login: "student",
 				Status: contests.RegistrationActive, Addresses: 2,
-				MaxPasteChars: monitor.LargePasteChars + 1})
+				LargestPasteChars: monitor.LargePasteChars + 1})
 		}
 	}
 	return roster, nil

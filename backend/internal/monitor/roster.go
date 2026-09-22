@@ -61,13 +61,19 @@ type RosterRow struct {
 	PageLeft int
 	AwayMs   int64
 	Pastes   int
-	// MaxPasteChars is the largest paste into the editor or an answer, in
+	// LargestPasteChars is the largest paste into the editor or an answer, in
 	// characters; pastes into the notes are not measured. Storage keeps the
 	// largest rather than a count of those past LargePasteChars so that the
 	// threshold is applied here and nowhere else.
-	MaxPasteChars    int64
-	IPChanges        int
-	ParallelSessions int
+	//
+	// Named for what it is rather than "MaxPasteChars", which this package
+	// already spends on something else: the constant in event.go that caps
+	// the size a paste may *report*. One is a bound the package enforces,
+	// the other is a measurement it read back, and Flags below compares this
+	// one against a third number two lines from where the constant is used.
+	LargestPasteChars int64
+	IPChanges         int
+	ParallelSessions  int
 	// IdenticalQueries counts this participant's distinct successful queries
 	// of at least IdenticalQueryMinChars that another participant of the
 	// contest also ran successfully.
@@ -104,7 +110,7 @@ func (r RosterRow) Flags() Flags {
 		ParallelSessions:     r.ParallelSessions > 0,
 		LongAbsence:          r.AwayMs > LongAbsenceTotal.Milliseconds() || r.PageLeft > LongAbsenceCount,
 		AnswerWithoutQueries: r.BlindCorrect > 0,
-		LargePaste:           r.MaxPasteChars > LargePasteChars,
+		LargePaste:           r.LargestPasteChars > LargePasteChars,
 		IdenticalQueries:     r.IdenticalQueries > 0,
 	}
 }
