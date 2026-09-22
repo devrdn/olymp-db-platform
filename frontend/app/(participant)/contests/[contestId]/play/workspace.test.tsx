@@ -10,6 +10,7 @@ import en from "@/lib/i18n/dictionaries/en";
 import { PanelToggles, PanelVisibilityProvider } from "./panel-toggles";
 import { PrintView } from "./print-view";
 import type { QuestionEntry } from "./questions-panel";
+import { StoryCover } from "./story-cover";
 import { Workspace } from "./workspace";
 import type { AnswerState, ConsoleState, QuestionsRefreshResult, QueryLogRefreshResult } from "./actions";
 
@@ -124,6 +125,15 @@ function show(
       accountId="u1"
       contestId="c1"
       storyBody={<p>A body in the stacks.</p>}
+      storyCover={
+        <StoryCover
+          contestId="c1"
+          title="The Greenhouse Case"
+          coverHash="9f86d081884c7d65"
+          coverAttribution="Photo: A. Organiser, CC BY 4.0"
+          dict={en}
+        />
+      }
       printView={printCopy("storyMarkdown" in overrides ? (overrides.storyMarkdown ?? null) : "The printed case notes.")}
       storyUnavailable={overrides.storyUnavailable ?? null}
       questionEntries={[]}
@@ -385,6 +395,23 @@ describe("the print-only copy of the story", () => {
     expect(printOnly!.textContent).toBe("");
   });
 
+  /**
+   * Design spec §10: the photograph does its work above the story *on the
+   * screen*. A sheet of paper wants the text somebody asked for, not a
+   * full-bleed picture across the top of it and the prose pushed onto a
+   * second page, so `PrintView` renders the story alone and the cover lives
+   * only in the interactive tree beside it.
+   */
+  test("carries no cover: a printed story is text, not atmosphere", () => {
+    const { container } = show();
+
+    const printOnly = printOnlyContainer(container);
+    expect(printOnly!.querySelector("img")).toBeNull();
+    // Present on the screen, which is what makes the absence above a
+    // decision rather than a cover that never rendered at all.
+    expect(container.querySelector("img[alt='Cover of The Greenhouse Case']")).not.toBeNull();
+  });
+
   test("the interactive workspace is marked to disappear under print", () => {
     const { container } = show();
 
@@ -622,6 +649,7 @@ describe("collapsing a panel", () => {
           accountId="u1"
           contestId={contestId}
           storyBody={<p>A body in the stacks.</p>}
+          storyCover={null}
           printView={null}
           storyUnavailable={null}
           questionEntries={questionEntries}

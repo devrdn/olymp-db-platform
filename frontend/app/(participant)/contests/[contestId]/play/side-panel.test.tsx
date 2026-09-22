@@ -17,6 +17,7 @@ function show() {
     <SidePanel
       accountId="u1"
       storyBody={<p>A body in the stacks.</p>}
+      storyCover={null}
       storyUnavailable={null}
       contestId="c1"
       questionEntries={[]}
@@ -84,6 +85,7 @@ describe("the side panel", () => {
       <SidePanel
         accountId="u1"
         storyBody={null}
+        storyCover={null}
         storyUnavailable="This contest has no story yet"
         contestId="c1"
         questionEntries={[]}
@@ -94,6 +96,55 @@ describe("the side panel", () => {
     );
 
     expect(screen.getByText("This contest has no story yet")).toBeInTheDocument();
+  });
+
+  /**
+   * Design spec §10: the picture does its work above the story, which on
+   * this screen means at the top of the story tab — before the export row
+   * and before the prose, not somewhere down the scroll.
+   */
+  test("heads the story with the contest's cover", () => {
+    render(
+      <SidePanel
+        accountId="u1"
+        storyBody={<p>A body in the stacks.</p>}
+        storyCover={<p>The cover of The Warehouse Fire</p>}
+        storyUnavailable={null}
+        contestId="c1"
+        questionEntries={[]}
+        initialNotes={null}
+        dict={en}
+        locale="en"
+      />,
+    );
+
+    const cover = screen.getByText("The cover of The Warehouse Fire");
+    const story = screen.getByText("A body in the stacks.");
+    // Node.DOCUMENT_POSITION_FOLLOWING: the story comes after the cover.
+    expect(cover.compareDocumentPosition(story) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  /**
+   * A cover heads a story, and a tab that is saying why there is no story is
+   * not a story. The same rule the print control and the Markdown download
+   * already follow in that state.
+   */
+  test("shows no cover where there is no story for it to head", () => {
+    render(
+      <SidePanel
+        accountId="u1"
+        storyBody={null}
+        storyCover={<p>The cover of The Warehouse Fire</p>}
+        storyUnavailable="This contest has no story yet"
+        contestId="c1"
+        questionEntries={[]}
+        initialNotes={null}
+        dict={en}
+        locale="en"
+      />,
+    );
+
+    expect(screen.queryByText("The cover of The Warehouse Fire")).not.toBeInTheDocument();
   });
 
   // The last piece of export the plan asks for: the story as a file, beside
@@ -217,6 +268,7 @@ describe("the side panel", () => {
       <SidePanel
         accountId="u1"
         storyBody={null}
+        storyCover={null}
         storyUnavailable="This contest has no story yet"
         contestId="c1"
         questionEntries={[]}
@@ -249,6 +301,7 @@ test("each scrolling panel is the containing block for the hidden labels inside 
     <SidePanel
       accountId="u1"
       storyBody={<p>A body in the stacks.</p>}
+      storyCover={null}
       storyUnavailable={null}
       contestId="c1"
       questionEntries={[]}
@@ -285,6 +338,7 @@ test("keeps the tab strip from widening the page at any pane width", () => {
     <SidePanel
       accountId="u1"
       storyBody={<p>A body in the stacks.</p>}
+      storyCover={null}
       storyUnavailable={null}
       contestId="c1"
       questionEntries={[]}

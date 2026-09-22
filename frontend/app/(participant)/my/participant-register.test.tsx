@@ -33,6 +33,10 @@ const contest = (over: Partial<ContestSummary> = {}): ContestSummary => ({
   enrolled: false,
   scoring: "points",
   icpcPenaltyMin: 20,
+  // Spelled out for the same reason `description` above is: the transform
+  // produces these keys whether or not the API sent them.
+  coverHash: "",
+  coverAttribution: "",
   ...over,
 });
 
