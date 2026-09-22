@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
@@ -83,6 +84,21 @@ type scheduleRoster interface {
 	RegisteredWithPermission(ctx context.Context, contestID uuid.UUID, permission string) ([]string, error)
 }
 
+// scheduleCovers is the fourth: the one question a contest's uploaded cover
+// answers about whether the contest is fit to open.
+//
+// One method rather than covers.Repository entire, and declared here rather
+// than imported, so this package states what it needs and internal/postgres
+// satisfies it structurally (CLAUDE.md, Go layout rule 3). Nothing the wide
+// interface offers — saving a cover, removing one, reading it for a visitor
+// — has any business running behind a publish gate.
+type scheduleCovers interface {
+	// Attribution returns the credit line of the contest's uploaded cover,
+	// and false when the contest has no uploaded cover at all. A drawn cover
+	// needs no attribution: its author is us.
+	Attribution(ctx context.Context, contestID uuid.UUID) (string, bool, error)
+}
+
 // blockedContests is what Advance needs from the audit trail itself to keep
 // finding 1's guarantee — a contest's refusal recorded once, not once a tick,
 // for as long as nothing about it changes: the newest entry already on file
@@ -148,6 +164,10 @@ type Scheduler struct {
 	// until WithPoolTrigger, which is the state of every test that predates
 	// it and of an installation with no game cluster at all.
 	poolTrigger PoolTrigger
+	// covers answers the publish gate's question about a contest's uploaded
+	// picture. nil until WithCovers, in the same way and for the same
+	// reason as poolTrigger above.
+	covers scheduleCovers
 }
 
 // NewScheduler assembles the background scheduler.
@@ -164,6 +184,17 @@ func (s *Scheduler) WithPoolTrigger(trigger PoolTrigger) *Scheduler {
 	return s
 }
 
+// WithCovers gives the scheduler the cover store the publish gate reads, and
+// returns s so it can be chained onto NewScheduler.
+//
+// Optional in exactly the way WithPoolTrigger is: a Scheduler built without
+// one — every test that predates covers — simply never asks the question, and
+// internal/app always supplies one, so a deployment always does.
+func (s *Scheduler) WithCovers(store scheduleCovers) *Scheduler {
+	s.covers = store
+	return s
+}
+
 // checkPublishable is the whole gate, and the body behind both
 // Service.checkPublishable and Scheduler's own: read c's story, its questions
 // and its roster through whichever narrow stores the caller holds, and report
@@ -175,7 +206,7 @@ func (s *Scheduler) WithPoolTrigger(trigger PoolTrigger) *Scheduler {
 // Every problem in one report, the way NotPublishableError's own doc asks: an
 // organizer who fixes a missing translation and is then told about a
 // registration needs as many round trips as the contest has faults.
-func checkPublishable(ctx context.Context, stories scheduleStories, questions scheduleQuestions, roster scheduleRoster, c Contest) error {
+func checkPublishable(ctx context.Context, stories scheduleStories, questions scheduleQuestions, roster scheduleRoster, contestCovers scheduleCovers, c Contest) error {
 	story, err := stories.ByContest(ctx, c.ID)
 	if err != nil && !errors.Is(err, ErrStoryNotFound) {
 		return err
@@ -195,6 +226,20 @@ func checkPublishable(ctx context.Context, stories scheduleStories, questions sc
 	}
 	for _, login := range staff {
 		problems = append(problems, PublishProblem{Code: ProblemStaffRegistered, Detail: login})
+	}
+
+	// The other half storage answers: an uploaded cover with nobody credited
+	// (design spec §10.1). nil where no cover store was wired — every test
+	// that predates covers, and nothing in a deployment, since internal/app
+	// always supplies one.
+	if contestCovers != nil {
+		attribution, uploaded, err := contestCovers.Attribution(ctx, c.ID)
+		if err != nil {
+			return err
+		}
+		if uploaded && strings.TrimSpace(attribution) == "" {
+			problems = append(problems, PublishProblem{Code: ProblemCoverNeedsAttribution})
+		}
 	}
 
 	if len(problems) > 0 {
@@ -270,7 +315,7 @@ func (s *Scheduler) Advance(ctx context.Context) (started, finished int, err err
 
 		var entries []audit.Entry
 		for _, c := range due {
-			switch gateErr := checkPublishable(ctx, s.stories, s.questions, s.roster, c); {
+			switch gateErr := checkPublishable(ctx, s.stories, s.questions, s.roster, s.covers, c); {
 			case gateErr == nil:
 				// Ready — fall through to the move below.
 			case errors.Is(gateErr, ErrNotPublishable):
