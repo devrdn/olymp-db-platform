@@ -221,6 +221,34 @@ func TestThePublicReadsAreNotIndexed(t *testing.T) {
 	}
 }
 
+// The language preference is bounded like every other field a request
+// carries (CLAUDE.md rule 2): it is matched against each contest's own
+// translations, so an unbounded one is work per row per request on a page
+// nobody has to sign in to load.
+func TestAnOversizedLanguagePreferenceIsIgnored(t *testing.T) {
+	f := newPublicFixture(t)
+	f.showcase.contests = []showcase.Contest{{
+		ID: uuid.New(), Status: contests.StatusRunning, DefaultLanguage: "ro",
+		Titles: map[string]string{"ro": "Olimpiada", "en": "The Olympiad"},
+	}}
+
+	// Too long to be a language tag, in the parameter and in the header: the
+	// visitor is answered as one who stated no preference at all.
+	huge := strings.Repeat("e", 4096)
+	if body := f.get("/public/contests?lang=" + huge).Body.String(); !strings.Contains(body, "The Olympiad") {
+		t.Errorf("an oversized ?lang= answered %s, want the installation's default locale", body)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/public/contests", strings.NewReader(""))
+	req.RemoteAddr = "203.0.113.9:5000"
+	req.Header.Set("Accept-Language", huge)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+	if body := rec.Body.String(); !strings.Contains(body, "The Olympiad") {
+		t.Errorf("an oversized Accept-Language answered %s, want the installation's default locale", body)
+	}
+}
+
 // A visitor who closes the tab is not an outage. The read comes back as that
 // visitor's own cancellation, and the handler must neither report it as the
 // landing page having failed nor answer a connection that has gone.
