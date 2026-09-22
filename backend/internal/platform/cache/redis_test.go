@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/redis/go-redis/v9"
+	"time"
 )
 
 func TestRedisMissIsReportedAsNotFoundRatherThanError(t *testing.T) {
@@ -81,5 +82,43 @@ func TestOptionsAcceptsURLForm(t *testing.T) {
 	}
 	if opts.DB != 3 {
 		t.Errorf("DB = %d, want 3", opts.DB)
+	}
+}
+
+// A cache call sits in the middle of an ordinary request: a session read, a
+// rate-limit check. The client's own defaults retry three times with a
+// three-second read timeout apiece, so one slow server turns every request
+// into a dozen seconds of waiting and the requests behind it into goroutines
+// that never leave. The bound is the client's, because the caller's context
+// may carry no deadline of its own.
+func TestOptionsBoundHowLongACacheCallCanTake(t *testing.T) {
+	opts, err := Options("redis://localhost:6379/0")
+	if err != nil {
+		t.Fatalf("Options() = %v", err)
+	}
+
+	if opts.ReadTimeout <= 0 || opts.ReadTimeout > time.Second {
+		t.Errorf("ReadTimeout = %v, want a bound of at most a second", opts.ReadTimeout)
+	}
+	if opts.WriteTimeout <= 0 || opts.WriteTimeout > time.Second {
+		t.Errorf("WriteTimeout = %v, want a bound of at most a second", opts.WriteTimeout)
+	}
+	if opts.DialTimeout <= 0 || opts.DialTimeout > 2*time.Second {
+		t.Errorf("DialTimeout = %v, want a bound of at most two seconds", opts.DialTimeout)
+	}
+	if opts.MaxRetries > 1 {
+		t.Errorf("MaxRetries = %d, want at most one retry", opts.MaxRetries)
+	}
+}
+
+// An operator who names timeouts in the URL means them.
+func TestOptionsKeepTimeoutsTheAddressNames(t *testing.T) {
+	opts, err := Options("redis://localhost:6379/0?read_timeout=4s")
+	if err != nil {
+		t.Fatalf("Options() = %v", err)
+	}
+
+	if opts.ReadTimeout != 4*time.Second {
+		t.Errorf("ReadTimeout = %v, want the 4s the address asked for", opts.ReadTimeout)
 	}
 }
