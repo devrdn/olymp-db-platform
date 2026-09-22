@@ -475,16 +475,19 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// contests.Repository, contests.StoryRepository and
 	// contests.QuestionRepository — easiest to see when it is handed its own
 	// values instead of borrowing fields out of another component. The
-	// story and question reads are what let the scheduler hold the same
-	// publish gate Service.Transition holds before letting a contest reach
-	// running (finding 1): the scheduler is a second door into that step,
-	// and it must not open onto a contest whose story or questions vanished
-	// after publication. auditTrail is what lets it record a block once
-	// rather than once a tick: the same reader the admin handler uses below.
+	// story, question and roster reads are what let the scheduler hold the
+	// same publish gate Service.Transition holds before letting a contest
+	// reach running (finding 1): the scheduler is a second door into that
+	// step, and it must not open onto a contest whose story or questions
+	// vanished after publication, or onto one an account that administers
+	// every contest is registered for. auditTrail is what lets it record a
+	// block once rather than once a tick: the same reader the admin handler
+	// uses below.
 	scheduler := contests.NewScheduler(
 		postgres.NewContests(pool),
 		postgres.NewStories(pool),
 		postgres.NewQuestions(pool),
+		postgres.NewRegistrations(pool),
 		auditTrail,
 		auditRecorder,
 		storage.NewUnitOfWork(pool),

@@ -803,6 +803,7 @@ const en = {
         winner_needs_final: "Scoring is first to solve, but no question is a final one, so nobody could win.",
         winner_final_needs_attempt_limit: "A final question has no attempt limit while scoring is first to solve, so the contest could be won by trying candidates one after another.",
         leaderboard_freeze_exceeds_window: "The leaderboard freeze starts before the contest does, or the contest has no end to count it back from.",
+        staff_registered: "A participant's account administers every contest, so it already reads this contest's reference answers and its unfrozen leaderboard. Remove them from the roster before publishing, or take the permission away from the account.",
       },
     },
     story: {

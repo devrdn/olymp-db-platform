@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
+	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/google/uuid"
 )
@@ -295,6 +297,77 @@ func TestRemovingAParticipantTakesTheRegistrationAway(t *testing.T) {
 
 		if _, err := repo.ByUser(ctx, id, student.ID); !errors.Is(err, contests.ErrParticipantNotFound) {
 			t.Errorf("ByUser() = %v, want ErrParticipantNotFound", err)
+		}
+	})
+}
+
+// The publish gate's own question: which of this contest's participants
+// administers every contest, and so reads its reference answers and its
+// unfrozen leaderboard. Read through the roles the account holds now, not
+// through anything recorded on the registration — the case the gate exists
+// for is an account granted the permission after it registered.
+func TestRegisteredWithPermissionNamesOnlyTheAccountsThatHoldIt(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewRegistrations(testPool)
+		accounts := NewUsers(testPool)
+		author := makeUser(t, ctx, "author-perm")
+		student := makeUser(t, ctx, "student-perm")
+		inspector := makeUser(t, ctx, "inspector-perm")
+		id := makeContest(t, ctx, author.ID)
+		for _, u := range []uuid.UUID{student.ID, inspector.ID} {
+			if _, err := repo.Add(ctx, id, u); err != nil {
+				t.Fatalf("Add() = %v", err)
+			}
+		}
+
+		// Nobody holds it yet, which is the ordinary contest.
+		held, err := repo.RegisteredWithPermission(ctx, id, rbac.PermissionContestAdminAll)
+		if err != nil {
+			t.Fatalf("RegisteredWithPermission() = %v", err)
+		}
+		if len(held) != 0 {
+			t.Fatalf("logins = %v, want none", held)
+		}
+
+		// admin is the seeded role that carries contest.admin_all
+		// (migration 000006).
+		if err := accounts.ReplaceRoles(ctx, inspector.ID, []string{"admin"}); err != nil {
+			t.Fatalf("ReplaceRoles() = %v", err)
+		}
+
+		held, err = repo.RegisteredWithPermission(ctx, id, rbac.PermissionContestAdminAll)
+		if err != nil {
+			t.Fatalf("RegisteredWithPermission() = %v", err)
+		}
+		if !slices.Equal(held, []string{"inspector-perm"}) {
+			t.Errorf("logins = %v, want [inspector-perm]", held)
+		}
+	})
+}
+
+// The same account, registered for somebody else's contest, is nothing to do
+// with this one: the answer is scoped to the roster it was asked about.
+func TestRegisteredWithPermissionLooksOnlyAtItsOwnContest(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewRegistrations(testPool)
+		accounts := NewUsers(testPool)
+		author := makeUser(t, ctx, "author-perm-scope")
+		inspector := makeUser(t, ctx, "inspector-perm-scope")
+		theirs := makeContest(t, ctx, author.ID)
+		ours := makeContest(t, ctx, author.ID)
+		if _, err := repo.Add(ctx, theirs, inspector.ID); err != nil {
+			t.Fatalf("Add() = %v", err)
+		}
+		if err := accounts.ReplaceRoles(ctx, inspector.ID, []string{"admin"}); err != nil {
+			t.Fatalf("ReplaceRoles() = %v", err)
+		}
+
+		held, err := repo.RegisteredWithPermission(ctx, ours, rbac.PermissionContestAdminAll)
+		if err != nil {
+			t.Fatalf("RegisteredWithPermission() = %v", err)
+		}
+		if len(held) != 0 {
+			t.Errorf("logins = %v, want none — they are registered for another contest", held)
 		}
 	})
 }

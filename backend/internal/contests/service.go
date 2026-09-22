@@ -712,7 +712,7 @@ func (s *Service) CheckPublish(ctx context.Context, contestID uuid.UUID) error {
 // Scheduler shares with this method — the same question, asked from
 // Service's own wider StoryRepository and QuestionRepository.
 func (s *Service) checkPublishable(ctx context.Context, c Contest) error {
-	return checkPublishable(ctx, s.stories, s.questions, c)
+	return checkPublishable(ctx, s.stories, s.questions, s.registrations, c)
 }
 
 // Transition moves a contest along its lifecycle.

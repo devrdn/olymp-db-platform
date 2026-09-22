@@ -376,6 +376,46 @@ func (r *Registrations) HasWork(ctx context.Context, registrationID uuid.UUID) (
 	return has, nil
 }
 
+// RegisteredWithPermission names this contest's participants whose account
+// holds the permission, for the publish gate.
+//
+// The permission is read through the roles the account actually has, the same
+// derivation userColumns makes (users.go): the question is about an account
+// whose permissions may have changed after it registered, so anything cached
+// on the registration would answer the wrong one. EXISTS rather than a join
+// to the permission rows, so an account in three roles that all carry it
+// still produces one login and the planner can stop at the first match.
+//
+// The roster is reached by registrations_contest_id_idx and the rest is
+// primary-key work per row, so this costs a scan of one contest's roster and
+// no more; it is asked once per publish, never per request.
+func (r *Registrations) RegisteredWithPermission(ctx context.Context, contestID uuid.UUID, permission string) ([]string, error) {
+	rows, err := r.querier(ctx).Query(ctx, `
+		SELECT u.login
+		FROM registrations r
+		JOIN users u ON u.id = r.user_id
+		WHERE r.contest_id = $1
+		  AND EXISTS (
+		      SELECT 1 FROM user_roles ur
+		      JOIN role_permissions rp ON rp.role_id = ur.role_id
+		      JOIN permissions p ON p.id = rp.permission_id
+		      WHERE ur.user_id = u.id AND p.code = $2
+		  )
+		ORDER BY u.login
+		LIMIT $3`,
+		contestID, permission, contests.MaxReportedStaff)
+	if err != nil {
+		return nil, fmt.Errorf("find participants holding %s: %w", permission, err)
+	}
+	defer rows.Close()
+
+	logins, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("scan participants holding %s: %w", permission, err)
+	}
+	return logins, nil
+}
+
 // SetStatus changes a registration's status.
 func (r *Registrations) SetStatus(ctx context.Context, registrationID uuid.UUID, status string) error {
 	tag, err := r.querier(ctx).Exec(ctx,
