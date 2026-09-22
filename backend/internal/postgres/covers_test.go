@@ -215,3 +215,44 @@ func TestTheColumnRefusesACreditLineTheDomainWouldHaveRefused(t *testing.T) {
 		}
 	})
 }
+
+// What the sweep for orphaned files decides on: every hash any row names,
+// once each. Two contests wearing the same picture share one file, so the
+// hash has to come back as one answer rather than as one answer per contest
+// — the sweep asks whether anybody refers to a file, and "how many" is a
+// question it never has to ask.
+func TestTheReferencedHashesAreEveryRowsHashWithoutRepetition(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewCovers(testPool)
+		author := makeUser(t, ctx, "author-cover-hashes")
+		first := makeContest(t, ctx, author.ID)
+		second := makeContest(t, ctx, author.ID)
+		third := makeContest(t, ctx, author.ID)
+
+		shared := strings.Repeat("cd", 32)
+		alone := strings.Repeat("ef", 32)
+		for contest, hash := range map[uuid.UUID]string{first: shared, second: shared, third: alone} {
+			cover := aCover(contest, author.ID)
+			cover.Hash = hash
+			if err := repo.Save(ctx, cover); err != nil {
+				t.Fatalf("Save() = %v", err)
+			}
+		}
+
+		hashes, err := repo.ReferencedHashes(ctx)
+		if err != nil {
+			t.Fatalf("ReferencedHashes() = %v", err)
+		}
+
+		seen := map[string]int{}
+		for _, hash := range hashes {
+			seen[hash]++
+		}
+		if seen[shared] != 1 {
+			t.Errorf("the hash two contests share appears %d times, want 1: %v", seen[shared], hashes)
+		}
+		if seen[alone] != 1 {
+			t.Errorf("the hash one contest names appears %d times, want 1: %v", seen[alone], hashes)
+		}
+	})
+}
