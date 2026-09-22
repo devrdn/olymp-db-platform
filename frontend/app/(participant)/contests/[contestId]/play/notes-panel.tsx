@@ -33,10 +33,13 @@ import { useAutosave, type AutosaveStatus } from "./use-autosave";
  * while a failure, the recovery from it and the contest closing are.
  */
 export function NotesPanel({
+  accountId,
   contestId,
   initial,
   dict,
 }: {
+  /** Whose notes these are; the draft is keyed by it (`draftStorageKey`). */
+  accountId: string | null;
   contestId: string;
   initial: WorkspaceNotes | null;
   dict: PlayDictionary;
@@ -46,14 +49,16 @@ export function NotesPanel({
   if (initial === null) {
     return <p className="p-4 text-body text-ink-2">{t.failed}</p>;
   }
-  return <NotesEditor contestId={contestId} initial={initial} dict={dict} />;
+  return <NotesEditor accountId={accountId} contestId={contestId} initial={initial} dict={dict} />;
 }
 
 function NotesEditor({
+  accountId,
   contestId,
   initial,
   dict,
 }: {
+  accountId: string | null;
   contestId: string;
   initial: WorkspaceNotes;
   dict: PlayDictionary;
@@ -79,6 +84,7 @@ function NotesEditor({
   }, []);
 
   const { status, setValue, flush } = useAutosave({
+    accountId,
     contestId,
     documentKey: "notes",
     initialText: initial.body,

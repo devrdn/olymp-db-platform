@@ -29,6 +29,7 @@ const A_SCHEMA = {
 function show(contestId = "c1") {
   return render(
     <Workspace
+      accountId="u1"
       contestId={contestId}
       storyBody={<p>A body in the stacks.</p>}
       // This file is about the widths of the interactive panes; the print

@@ -106,6 +106,8 @@ const CLOSED_CODES: ReadonlySet<string> = new Set<ClosedCode>(["contest_finished
 type Entry = { engine: AutosaveEngine; detach: () => void };
 
 export type SqlTabsOptions = {
+  /** Whose tabs these are; their drafts are keyed by it (`draftStorageKey`). */
+  accountId: string | null;
   contestId: string;
   /** The tabs the page read, or null when that read failed. */
   initial: WorkspaceTab[] | null;
@@ -147,6 +149,7 @@ export type SqlTabs = {
 };
 
 export function useSqlTabs({
+  accountId,
   contestId,
   initial,
   localTitle,
@@ -213,6 +216,7 @@ export function useSqlTabs({
   const open = useCallback(
     (tab: { id: string; body: string; updatedAt: string | null }) => {
       const engine = new AutosaveEngine({
+        accountId,
         contestId,
         documentKey: `tab:${tab.id}`,
         initialText: tab.body,
@@ -246,7 +250,7 @@ export function useSqlTabs({
       const entry = { engine, detach: attachEngine(engine) };
       setEngines((previous) => new Map(previous).set(tab.id, entry));
     },
-    [contestId, texts],
+    [accountId, contestId, texts],
   );
 
   // The same map, reachable from outside a render: the editor reports a

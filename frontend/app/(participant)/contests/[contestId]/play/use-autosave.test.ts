@@ -5,8 +5,10 @@ import { ApiError } from "@/lib/api/client";
 
 import {
   attachEngine,
+  AUTOSAVE_DRAFT_WRITE_MS,
   AutosaveEngine,
   draftStorageKey,
+  purgeForeignDrafts,
   textFingerprint,
   useAutosave,
   type AutosaveOptions,
@@ -25,7 +27,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-const KEY = draftStorageKey("c1", "notes");
+const KEY = draftStorageKey("u1", "c1", "notes");
 
 function readDraft(): { text: string; base: string | null; sent?: string[] } | null {
   const raw = window.localStorage.getItem(KEY);
@@ -47,6 +49,7 @@ function mount(overrides: Partial<AutosaveOptions> = {}) {
     },
     {
       initialProps: {
+        accountId: "u1",
         contestId: "c1",
         documentKey: "notes",
         initialText: "server",
@@ -586,8 +589,61 @@ describe("the draft", () => {
   });
 
   test("belongs to one contest and one document", () => {
-    expect(draftStorageKey("c1", "notes")).not.toBe(draftStorageKey("c2", "notes"));
-    expect(draftStorageKey("c1", "notes")).not.toBe(draftStorageKey("c1", "tab:1"));
+    expect(draftStorageKey("u1", "c1", "notes")).not.toBe(draftStorageKey("u1", "c2", "notes"));
+    expect(draftStorageKey("u1", "c1", "notes")).not.toBe(draftStorageKey("u1", "c1", "tab:1"));
+  });
+
+  // The computers in a lab are shared, and two accounts that have never saved
+  // their notes both stand on a null version: the draft of the one who sat
+  // here before would pass the "is this newer than the server copy" test and
+  // be restored — and then autosaved into the account reading it. The key
+  // carries the account, so the two never meet.
+  test("belongs to one account", () => {
+    expect(draftStorageKey("u1", "c1", "notes")).not.toBe(draftStorageKey("u2", "c1", "notes"));
+  });
+
+  test("of another account is never read, even when neither has saved", async () => {
+    window.localStorage.setItem(
+      draftStorageKey("u2", "c1", "notes"),
+      JSON.stringify({ text: "their private notes", base: null }),
+    );
+    const hook = mount({ initialText: "", initialVersion: null });
+
+    await act(async () => {});
+
+    expect(hook.onRestore).not.toHaveBeenCalled();
+    expect(hook.save).not.toHaveBeenCalled();
+  });
+
+  // Leaving the text behind is a leak of its own: the next student at this
+  // machine cannot read it, but the one after them signs in as its author
+  // one day. The screen sweeps what is not its reader's on the way in.
+  test("of another account is swept when this account opens the screen", () => {
+    const mine = draftStorageKey("u1", "c1", "notes");
+    const theirs = draftStorageKey("u2", "c1", "notes");
+    window.localStorage.setItem(mine, JSON.stringify({ text: "mine", base: null }));
+    window.localStorage.setItem(theirs, JSON.stringify({ text: "theirs", base: null }));
+    window.localStorage.setItem("unrelated", "kept");
+
+    purgeForeignDrafts("u1");
+
+    expect(window.localStorage.getItem(mine)).not.toBeNull();
+    expect(window.localStorage.getItem(theirs)).toBeNull();
+    expect(window.localStorage.getItem("unrelated")).toBe("kept");
+  });
+
+  // Who is reading is unknown, so there is no key that is safely theirs.
+  // Losing the draft costs a reload's worth of typing; writing it under a
+  // key another account could read costs somebody their notes.
+  test("is not kept at all when the account is unknown", async () => {
+    const hook = mount({ accountId: null });
+
+    type(hook, "typed");
+    await wait(AUTOSAVE_DRAFT_WRITE_MS + 10);
+
+    expect(
+      Object.keys(window.localStorage).filter((key) => key.startsWith("dbcontest.play.draft.")),
+    ).toEqual([]);
   });
 
   test("is removed, and nothing more is sent, when the document is discarded", async () => {
@@ -635,6 +691,7 @@ describe("an engine attached without the hook", () => {
   test("saves on pagehide while attached, and nothing once detached", async () => {
     const save = vi.fn<SaveFn>(async () => "v1");
     const engine = new AutosaveEngine({
+      accountId: "u1",
       contestId: "c1",
       documentKey: "tab:1",
       initialText: "SELECT 1",

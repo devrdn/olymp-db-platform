@@ -394,6 +394,11 @@ async function PlayPanels({
     <>
       <ContentLoadedSignal />
       <Workspace
+        // Read above for the print byline, and React's `cache()` makes the
+        // second ask free. Null when that read failed, and then the screen
+        // keeps no drafts at all rather than keeping them where another
+        // account could read them.
+        accountId={identity?.id ?? null}
         contestId={contestId}
         storyBody={storyBody !== null ? <StoryText markdown={storyBody} /> : null}
         printView={printView}
