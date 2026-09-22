@@ -39,6 +39,11 @@ export const PUBLISH_PROBLEMS = {
   // guessed through for the price of a penalty. Names a question, not a
   // language, so it falls into the same global list.
   icpcChoiceNeedsAttemptLimit: "icpc_choice_needs_attempt_limit",
+  // Contest-wide: somebody on the roster whose account administers every
+  // contest, and so already reads this one's reference answers and unfrozen
+  // leaderboard. The detail is their login, because the organizer's next
+  // move is to find that person in the roster.
+  staffRegistered: "staff_registered",
 } as const;
 
 export type PublishProblem = {

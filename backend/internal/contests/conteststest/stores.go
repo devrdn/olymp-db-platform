@@ -441,11 +441,20 @@ func (r *Managers) Revoke(_ context.Context, contestID, userID uuid.UUID) error 
 // allowed to pass against.
 type AccountLookup func(ctx context.Context, id uuid.UUID) (login, fullName string)
 
+// PermissionLookup reports what an account may do, standing in for the join
+// the real repository makes through the role tables. Without it every account
+// reads as holding nothing, which would let a test pass a publish gate the
+// real one refuses.
+type PermissionLookup func(ctx context.Context, id uuid.UUID) []string
+
 // Registrations is an in-memory contests.RegistrationRepository.
 type Registrations struct {
 	byID map[uuid.UUID]contests.Participant
 	// Accounts resolves the login and name carried on every participant.
 	Accounts AccountLookup
+	// Permissions resolves what a participant's account may do, for
+	// RegisteredWithPermission.
+	Permissions PermissionLookup
 	// work holds the registrations the store reports as having a record
 	// behind them (PutWork).
 	work map[uuid.UUID]bool
@@ -484,6 +493,27 @@ func (r *Registrations) PutWork(registrationID uuid.UUID) {
 
 func (r *Registrations) HasWork(_ context.Context, registrationID uuid.UUID) (bool, error) {
 	return r.work[registrationID], nil
+}
+
+// RegisteredWithPermission names this contest's participants whose account
+// holds the permission, ordered by login and bounded the same way the real
+// repository bounds it.
+func (r *Registrations) RegisteredWithPermission(ctx context.Context, contestID uuid.UUID, permission string) ([]string, error) {
+	if r.Permissions == nil {
+		return nil, nil
+	}
+
+	var logins []string
+	for _, p := range r.byID {
+		if p.ContestID != contestID {
+			continue
+		}
+		if slices.Contains(r.Permissions(ctx, p.UserID), permission) {
+			logins = append(logins, p.Login)
+		}
+	}
+	slices.Sort(logins)
+	return logins[:min(len(logins), contests.MaxReportedStaff)], nil
 }
 
 func (r *Registrations) List(_ context.Context, contestID uuid.UUID, f contests.ParticipantFilter) ([]contests.Participant, int, error) {

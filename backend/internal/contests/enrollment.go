@@ -212,6 +212,21 @@ type RegistrationRepository interface {
 	// (submission.go's own doc explains why a wrong answer never calls this
 	// at all).
 	AddScore(ctx context.Context, registrationID uuid.UUID, delta int) error
+	// RegisteredWithPermission returns the logins of this contest's
+	// registered participants whose account holds permission, ordered by
+	// login.
+	//
+	// One query rather than a roster read followed by an account lookup per
+	// row: the publish gate asks this of a contest that may carry four
+	// hundred people, and the answer is ordinarily empty. Bounded by
+	// MaxReportedStaff, because the result is a list a person reads and a
+	// payload the audit trail carries — naming the first few is what makes
+	// the refusal actionable, and naming a thousand would only make it
+	// unreadable. An implementation reads the permission through whatever
+	// grants it (roles, today), never a column on the registration: the
+	// point of the check is an account whose permissions changed after it
+	// registered.
+	RegisteredWithPermission(ctx context.Context, contestID uuid.UUID, permission string) ([]string, error)
 	// HasWork reports whether anything of the participant's own is recorded
 	// against this registration — a query, an answer, a note or a signal.
 	//
@@ -258,6 +273,15 @@ const maxRosterEntries = 1000
 
 // ErrRosterTooLarge reports an import above that bound.
 var ErrRosterTooLarge = errors.New("too many entries in one roster")
+
+// MaxReportedStaff bounds RegisteredWithPermission's answer.
+//
+// The list is read by a person and carried in an audit payload, and an
+// installation has a handful of accounts that administer every contest, not a
+// thousand — so any number here is far above the honest case. It exists
+// because the query is a join whose size nothing else constrains, and because
+// a refusal naming four hundred logins is a refusal nobody can act on.
+const MaxReportedStaff = 20
 
 // AddParticipantsCommand adds people to a contest on behalf of its staff.
 //

@@ -75,6 +75,23 @@ const (
 	// sending them one after another — and there the prize is the question's
 	// points rather than penalty time.
 	ProblemChoiceNeedsAttemptLimit = "choice_needs_attempt_limit"
+	// ProblemStaffRegistered names a registered participant whose account
+	// administers every contest (rbac.PermissionContestAdminAll): it exports
+	// this contest's question package and reads its unfrozen leaderboard
+	// without ever being appointed to it, so competing in it too would not be
+	// a fair result. Both registration paths already refuse such an account
+	// (enrollment.go), but neither can do anything about a registration that
+	// was made before that rule existed, or about an account granted the
+	// permission after it registered — and that registration otherwise keeps
+	// playing and keeps scoring with the answer key in reach. Detail carries
+	// the login, because the organizer's next move is to take that person off
+	// the roster and a count would leave them searching it.
+	//
+	// Checked by the gate rather than by CheckPublishable below: it is a fact
+	// about who is registered, not about what was authored. See
+	// checkPublishable (schedule.go), which both doors into a running contest
+	// go through.
+	ProblemStaffRegistered = "staff_registered"
 )
 
 // PublishProblem is one reason a contest is not ready.
@@ -111,14 +128,31 @@ func (e *NotPublishableError) Error() string {
 // Is makes errors.Is(err, ErrNotPublishable) true for the detailed error.
 func (e *NotPublishableError) Is(target error) bool { return target == ErrNotPublishable }
 
-// CheckPublishable reports everything standing between a contest and its
-// participants.
+// CheckPublishable reports everything about a contest's own content that
+// stands between it and its participants.
 //
 // This is the gate the schema deliberately does not enforce (see §6.1): a
 // contest under construction passes through every one of these states, and a
 // constraint would fight the editor. The invariants only have to hold at the
 // moment of publication, which is here.
+//
+// Content only: the one thing the gate checks that this cannot is the roster
+// (ProblemStaffRegistered), which is a question for storage rather than for
+// three values in hand. The package's own gate — checkPublishable in
+// schedule.go, which both doors into a running contest go through — asks both
+// halves and reports them together, so a caller with a repository should call
+// that one rather than this.
 func CheckPublishable(c Contest, story Story, questions []Question) error {
+	if problems := publishProblems(c, story, questions); len(problems) > 0 {
+		return &NotPublishableError{Problems: problems}
+	}
+	return nil
+}
+
+// publishProblems is CheckPublishable's own list, returned rather than
+// wrapped, so the gate can add the roster's problems to the same report
+// instead of an organizer fixing one half and then discovering the other.
+func publishProblems(c Contest, story Story, questions []Question) []PublishProblem {
 	var problems []PublishProblem
 	add := func(p PublishProblem) { problems = append(problems, p) }
 
@@ -231,10 +265,7 @@ func CheckPublishable(c Contest, story Story, questions []Question) error {
 		add(PublishProblem{Code: ProblemLeaderboardFreezeExceedsWindow})
 	}
 
-	if len(problems) > 0 {
-		return &NotPublishableError{Problems: problems}
-	}
-	return nil
+	return problems
 }
 
 // choiceCapped reports whether a choice question's attempt limit keeps it
