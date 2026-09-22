@@ -48,6 +48,21 @@ const ro = {
       checked: "Răspunsul este verificat imediat și se vede exact ce nu a corespuns.",
       own: "Fiecare participant are propria copie a bazei și propriul timp.",
     },
+    numbers: {
+      contests: "Olimpiade ținute",
+      participants: "Participanți",
+      queries: "Interogări rulate",
+      solved: "Întrebări rezolvate",
+    },
+    contests: {
+      heading: "Olimpiade apropiate și recente",
+      table: "Rezultate",
+      empty: {
+        title: "Deocamdată nu este nimic de arătat",
+        body: "Aici nu este deschisă publicului nicio olimpiadă în acest moment. Catalogul cuprinde tot ce organizează această instalare.",
+        action: "Deschideți catalogul",
+      },
+    },
     organisers: {
       line: "Țineți un curs sau organizați o etapă proprie?",
       link: "Intrați ca organizator",

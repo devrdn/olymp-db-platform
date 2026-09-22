@@ -71,6 +71,23 @@ const en = {
       checked: "The answer is checked at once, and what did not match is named.",
       own: "Every participant gets their own copy of the database and their own clock.",
     },
+    /** The four figures. Captions only: the numbers come from the API. */
+    numbers: {
+      contests: "Contests held",
+      participants: "Participants",
+      queries: "Queries run",
+      solved: "Questions solved",
+    },
+    contests: {
+      heading: "Coming up and recently run",
+      /** The link to a contest's public table, on the rows that have one. */
+      table: "Results",
+      empty: {
+        title: "Nothing to show yet",
+        body: "No contest is open to the public here just now. The catalogue lists everything this installation runs.",
+        action: "Open the catalogue",
+      },
+    },
     organisers: {
       line: "Teaching a course, or running a round of your own?",
       link: "Sign in to organise",
