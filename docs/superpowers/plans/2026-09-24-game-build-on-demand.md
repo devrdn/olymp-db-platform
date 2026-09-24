@@ -347,15 +347,58 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Consumes: `TemplateRepository.MarkTableDataChanged`, `Template.NeedsBuild()`, the fake's honest `FinishBuild`/`ClaimBuild` from Task 1.
 - Produces: nothing new; the four call sites above now mark the template.
 
-- [ ] **Step 1: Point the existing red test at the new name**
+- [ ] **Step 1: Write the test that reproduces the defect**
 
-`backend/internal/provisioning/tabledata_test.go` already holds `TestARowAddedAfterTheGameWasBuiltLeavesTheTemplateWaitingToBeBuiltAgain` (written before this plan, currently failing). Change its assertion from `after.Building()` to `after.NeedsBuild()` and its message accordingly:
+This is the whole bug in one test. It was written and watched fail before this plan existed; it is reproduced here rather than left in the working tree so that every task before this one has a green suite to commit against.
+
+Append to `backend/internal/provisioning/tabledata_test.go`:
 
 ```go
+// TestARowAddedAfterTheGameWasBuiltLeavesTheTemplateWaitingToBeBuiltAgain is
+// the order a deployment actually runs in, which no test in this package ran
+// before (CLAUDE.md rule 10).
+//
+// The game-build job (internal/app/background.go) claims any template that is
+// 'pending' and builds it within seconds of the definition being saved. An
+// organiser cannot have typed a row before that: AppendTableRow refuses a
+// table that is not in the contest's *saved* definition, so saving — and
+// therefore building — always comes first. Every row typed afterwards
+// therefore has to mark the template out of date, or the only database
+// participants ever copy is the empty one built before the data existed.
+//
+// Against the fake store, because nothing here is a rule PostgreSQL holds:
+// the question is whether the service writes the template's own row at all
+// when a row lands, and a fake that stores one template answers it exactly.
+func TestARowAddedAfterTheGameWasBuiltLeavesTheTemplateWaitingToBeBuiltAgain(t *testing.T) {
+	t.Parallel()
+	service, store, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+	markBuilt(store)
+
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects",
+		[]string{"1", "Margot", ""}); err != nil {
+		t.Fatalf("append a row from the form: %v", err)
+	}
+
+	after, err := store.TemplateStatus(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("read the template: %v", err)
+	}
 	if !after.NeedsBuild() {
 		t.Fatalf("after a row was added the template is %q with no data mark; the row will never be built into a database",
 			after.Status)
 	}
+}
+
+// markBuilt puts the fake's template where FinishBuild leaves a real one when
+// a build succeeds — the state every builder-sourced game is in by the time
+// its screens will let anybody add a row.
+func markBuilt(store *templateStore) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.template.Status = provisioning.TemplateReady
+}
 ```
 
 - [ ] **Step 2: Write the three sibling tests**
@@ -437,7 +480,7 @@ func TestBeginningATableUploadDoesNotMarkTheGameOutOfDate(t *testing.T) {
 }
 ```
 
-`markBuilt` already exists beside the first test (added with it). Leave it where it is.
+`markBuilt` comes from Step 1 — do not declare it twice.
 
 - [ ] **Step 3: Run them and watch them fail**
 
