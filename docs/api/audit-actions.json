@@ -24,6 +24,7 @@
     "contest.game_script_set",
     "contest.game_definition_set",
     "contest.game_built",
+    "contest.game_build_requested",
     "contest.story_change",
     "contest.question_create",
     "contest.question_update",

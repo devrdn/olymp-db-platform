@@ -318,6 +318,12 @@ type TemplateRepository interface {
 	// change that rolled back leaves no request to build behind it and a
 	// change that landed never loses one.
 	MarkTableDataChanged(ctx context.Context, contestID uuid.UUID) error
+	// RequestBuild puts a ready or failed game back to pending and raises its
+	// version, the same upsert SaveScript's own does. Or ErrBuildInProgress
+	// when the row was not in a state to be asked — a build already waiting
+	// or running, which the caller's own earlier check may have missed to a
+	// second organiser pressing the same button in the same second.
+	RequestBuild(ctx context.Context, contestID uuid.UUID) (Template, error)
 	// Policy is what the contest lets participants do, which is what the
 	// build grants inside the template.
 	//
@@ -722,6 +728,67 @@ func (g *Games) SetDefinition(ctx context.Context, actorID, contestID uuid.UUID,
 			}
 		},
 	)
+}
+
+// RequestBuild asks for a contest's game to be built again from what is
+// already stored — the table builder's own missing half.
+//
+// The data an organiser fills a builder game with arrives after the build
+// that would have loaded it, and cannot arrive before it: a row may only be
+// typed into a table the saved definition already names, and saving the
+// definition is what starts the build. Without this call the rows are stored
+// and never loaded, and every participant copies an empty database.
+//
+// Refused once the contest is running, by the same gate that refuses a
+// replacement: the version rises, every copy becomes stale, and a stale copy
+// is dropped and made again. Carrying an edit into databases participants are
+// already working in is a different mechanism and not this one.
+func (g *Games) RequestBuild(ctx context.Context, actorID, contestID uuid.UUID) (Template, error) {
+	current, err := g.repo.TemplateStatus(ctx, contestID)
+	if err != nil {
+		return Template{}, err // ErrNoGame travels as itself
+	}
+	if current.Building() {
+		// Told apart from the repository's own refusal below so that "a build
+		// is already under way" does not read as "somebody beat you to the
+		// button" — they are the same sentence to the organiser, and this one
+		// costs no write.
+		return Template{}, ErrBuildInProgress
+	}
+
+	editable, err := g.author.GameEditable(ctx, contestID)
+	if err != nil {
+		return Template{}, fmt.Errorf("check whether the game may be replaced: %w", err)
+	}
+	if !editable {
+		return Template{}, ErrGameNotEditable
+	}
+
+	var asked Template
+	run := func(ctx context.Context) error {
+		var err error
+		asked, err = g.repo.RequestBuild(ctx, contestID)
+		if err != nil {
+			return err
+		}
+		if g.audit == nil {
+			return nil
+		}
+		return g.audit.Record(ctx, audit.Entry{
+			ActorID: &actorID, Action: audit.ActionGameBuildRequested,
+			Entity: "contest", EntityID: contestID.String(),
+			Payload: map[string]any{"version": asked.Version},
+		})
+	}
+	if g.uow != nil {
+		err = g.uow.Do(ctx, run)
+	} else {
+		err = run(ctx)
+	}
+	if err != nil {
+		return Template{}, err
+	}
+	return asked, nil
 }
 
 // replaceGame is the one path a contest's game is replaced through, whichever

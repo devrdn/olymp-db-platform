@@ -1077,3 +1077,81 @@ func TestABuildLeavesAMarkThatAppearedAfterTheClaim(t *testing.T) {
 		t.Fatal("the build cleared a mark it could not have seen; that row will never be built")
 	}
 }
+
+// TestRequestBuildPutsAReadyGameBackToPendingAndRaisesItsVersion is the button
+// itself: the data is in, and the organiser asks for the database to be made
+// again from it.
+//
+// The version has to rise. Every copy carries the version it was made from,
+// and only a higher one makes the existing copies stale — a rebuild that left
+// it alone would build a template nobody is ever given.
+func TestRequestBuildPutsAReadyGameBackToPendingAndRaisesItsVersion(t *testing.T) {
+	t.Parallel()
+	service, store, _ := games(true)
+	contest := uuid.New()
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+		t.Fatalf("save the definition: %v", err)
+	}
+	before, err := store.TemplateStatus(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("read the template: %v", err)
+	}
+	markBuilt(store)
+
+	asked, err := service.RequestBuild(t.Context(), uuid.New(), contest)
+	if err != nil {
+		t.Fatalf("RequestBuild: %v", err)
+	}
+	if asked.Status != provisioning.TemplatePending {
+		t.Fatalf("the game is %q after a build was asked for, want %q", asked.Status, provisioning.TemplatePending)
+	}
+	if asked.Version <= before.Version {
+		t.Fatalf("the version is %d, want more than %d: the copies made from the old one stay current",
+			asked.Version, before.Version)
+	}
+}
+
+// TestRequestBuildIsRefusedOnceTheContestIsRunning: raising the version drops
+// and remakes every participant's copy, which in a running olympiad is every
+// participant losing their database at once.
+func TestRequestBuildIsRefusedOnceTheContestIsRunning(t *testing.T) {
+	t.Parallel()
+	service, store, _ := games(false)
+	contest := uuid.New()
+	store.present = true
+	store.template = provisioning.Template{
+		ContestID: contest, Database: "game_x", Version: 3,
+		Status: provisioning.TemplateReady, Source: provisioning.SourceBuilder,
+	}
+
+	if _, err := service.RequestBuild(t.Context(), uuid.New(), contest); !errors.Is(err, provisioning.ErrGameNotEditable) {
+		t.Fatalf("RequestBuild = %v, want ErrGameNotEditable", err)
+	}
+}
+
+// TestRequestBuildIsRefusedWhileOneIsAlreadyRunning: two organisers on the
+// same screen, or one impatient double click. The second is told so rather
+// than racing CREATE DATABASE against the first.
+func TestRequestBuildIsRefusedWhileOneIsAlreadyRunning(t *testing.T) {
+	t.Parallel()
+	service, _, _ := games(true)
+	contest := uuid.New()
+	if _, err := service.SetDefinition(t.Context(), uuid.New(), contest, aDefinition()); err != nil {
+		t.Fatalf("save the definition: %v", err)
+	}
+	// SaveDefinition leaves the game 'pending': a build is already waiting.
+
+	if _, err := service.RequestBuild(t.Context(), uuid.New(), contest); !errors.Is(err, provisioning.ErrBuildInProgress) {
+		t.Fatalf("RequestBuild = %v, want ErrBuildInProgress", err)
+	}
+}
+
+// TestRequestBuildWithoutAGameSaysSo: nothing has been written to build.
+func TestRequestBuildWithoutAGameSaysSo(t *testing.T) {
+	t.Parallel()
+	service, _, _ := games(true)
+
+	if _, err := service.RequestBuild(t.Context(), uuid.New(), uuid.New()); !errors.Is(err, provisioning.ErrNoGame) {
+		t.Fatalf("RequestBuild = %v, want ErrNoGame", err)
+	}
+}

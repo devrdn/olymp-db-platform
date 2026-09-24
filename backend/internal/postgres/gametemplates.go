@@ -235,6 +235,42 @@ func (r *GameInstances) FinishBuild(
 	return nil
 }
 
+// RequestBuild puts a finished game back to pending so the build job takes it
+// again, raising the version the way SaveScript's own upsert does.
+//
+// The content is not touched. This is a request to build what is already
+// stored, not a replacement of it, so init_script, definition_json and
+// upload_id stay exactly as they are — which is also what makes it safe to
+// offer for all three sources rather than the builder alone.
+//
+// The status condition is the race arbiter, and the reason the caller's own
+// earlier check is not enough: two organisers pressing the button in the same
+// second both read 'ready', and only one of them may raise the version. The
+// other gets no row back, which the caller reads as ErrBuildInProgress.
+//
+// The cached schema goes for the reason upsertGame clears it: it describes the
+// build being replaced, and migration 22 constrains the two columns to be null
+// together.
+func (r *GameInstances) RequestBuild(ctx context.Context, contestID uuid.UUID) (provisioning.Template, error) {
+	template, err := scanTemplate(r.querier(ctx).QueryRow(ctx, `
+		UPDATE game_templates
+		SET status         = 'pending',
+		    version        = version + 1,
+		    build_error    = NULL,
+		    schema_json    = NULL,
+		    schema_version = NULL,
+		    updated_at     = now()
+		WHERE contest_id = $1 AND status IN ('ready', 'failed')
+		RETURNING `+templateColumns, contestID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return provisioning.Template{}, provisioning.ErrBuildInProgress
+	}
+	if err != nil {
+		return provisioning.Template{}, fmt.Errorf("ask for the game to be built: %w", err)
+	}
+	return template, nil
+}
+
 // Policy is what a contest lets participants do, which is what the build
 // grants inside the template.
 //
