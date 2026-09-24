@@ -738,6 +738,21 @@ func (s *templateStore) MarkTableDataChanged(_ context.Context, _ uuid.UUID) err
 	return nil
 }
 
+func (s *templateStore) RequestBuild(_ context.Context, _ uuid.UUID) (provisioning.Template, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.present {
+		return provisioning.Template{}, provisioning.ErrNoGame
+	}
+	if s.template.Status != provisioning.TemplateReady && s.template.Status != provisioning.TemplateFailed {
+		return provisioning.Template{}, provisioning.ErrBuildInProgress
+	}
+	s.template.Status = provisioning.TemplatePending
+	s.template.Version++
+	s.template.BuildError = ""
+	return s.template, nil
+}
+
 func (s *templateStore) Policy(context.Context, uuid.UUID) (sqlpolicy.Policy, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

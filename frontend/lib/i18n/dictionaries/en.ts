@@ -1830,6 +1830,7 @@ const en = {
       "contest.policy_change": "Changed the SQL policy",
       "contest.game_script_set": "Wrote the game database's SQL",
       "contest.game_built": "The game database was built",
+      "contest.game_build_requested": "Asked for the game to be built again",
       "contest.upload_complete": "Uploaded a game database dump",
       "contest.upload_abort": "Cancelled a game database upload",
       "contest.game_definition_set": "Described the game database as tables",

@@ -63,8 +63,15 @@ const (
 	// table count here, a byte count there), so folding them together would
 	// leave the trail unable to say which of the three ways built a game
 	// without opening the payload.
-	ActionGameDefinitionSet  = "contest.game_definition_set"
-	ActionGameBuilt          = "contest.game_built"
+	ActionGameDefinitionSet = "contest.game_definition_set"
+	ActionGameBuilt         = "contest.game_built"
+	// ActionGameBuildRequested records an organiser asking for the game to be
+	// built again — the button the table builder needs, because the data a
+	// game is filled with arrives after the build that would have loaded it.
+	// Apart from ActionGameBuilt, which is the build's own outcome: the two
+	// answer "who asked" and "how did it end", and a trail that only carried
+	// the second could not say whether a rebuild was anybody's decision.
+	ActionGameBuildRequested = "contest.game_build_requested"
 	ActionContestStoryChange = "contest.story_change"
 	ActionQuestionCreate     = "contest.question_create"
 	ActionQuestionUpdate     = "contest.question_update"
@@ -189,6 +196,7 @@ var actions = []string{
 	ActionContestCreate, ActionContestUpdate, ActionContestDelete,
 	ActionContestStatusChange, ActionContestLanguages, ActionContestTranslations,
 	ActionContestPolicyChange, ActionGameScriptSet, ActionGameDefinitionSet, ActionGameBuilt,
+	ActionGameBuildRequested,
 	ActionContestStoryChange, ActionQuestionCreate,
 	ActionQuestionUpdate, ActionQuestionDelete, ActionQuestionReorder,
 	ActionAnswersChange, ActionManagerGrant, ActionManagerRevoke,
