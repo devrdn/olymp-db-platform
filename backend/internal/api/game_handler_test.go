@@ -119,6 +119,15 @@ type fakeGames struct {
 	gotSetDefinition    provisioning.Definition
 	gotSetDefinitionFor uuid.UUID
 
+	// requestBuildResult and requestBuildErr back RequestBuild — the button
+	// that asks for an already-stored game to be built again. gotRequestBuildActor
+	// and gotRequestBuildContest follow gotCompleteActor's own convention: set
+	// the moment the call is made, even on the error path.
+	requestBuildResult     provisioning.Template
+	requestBuildErr        error
+	gotRequestBuildActor   uuid.UUID
+	gotRequestBuildContest uuid.UUID
+
 	beginTableErr        error
 	beginTableResult     provisioning.TableData
 	gotBeginTableContest uuid.UUID
@@ -208,6 +217,14 @@ func (g *fakeGames) SetDefinition(_ context.Context, actorID, _ uuid.UUID, defin
 		Status: provisioning.TemplatePending, Source: provisioning.SourceBuilder, Definition: definition,
 	}
 	return g.template, nil
+}
+
+func (g *fakeGames) RequestBuild(_ context.Context, actorID, contestID uuid.UUID) (provisioning.Template, error) {
+	g.gotRequestBuildActor, g.gotRequestBuildContest = actorID, contestID
+	if g.requestBuildErr != nil {
+		return provisioning.Template{}, g.requestBuildErr
+	}
+	return g.requestBuildResult, nil
 }
 
 func (g *fakeGames) BeginTableUpload(_ context.Context, contestID uuid.UUID, table string, declaredBytes int64) (provisioning.TableData, error) {
@@ -2405,5 +2422,94 @@ func TestGameTableBuilderRoutesAreMounted(t *testing.T) {
 				t.Fatalf("status %d, want %d: %s", rec.Code, tc.want, rec.Body)
 			}
 		})
+	}
+}
+
+// TestAskingForABuildAnswersTheGameItWillBuild is the button's happy path.
+// 202, because nothing is built by the time this answers, and a body the
+// polling screen can carry on from.
+func TestAskingForABuildAnswersTheGameItWillBuild(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	contest := uuid.NewString()
+	f.games.requestBuildResult = provisioning.Template{
+		Database: "game_x", Version: 4,
+		Status: provisioning.TemplatePending, Source: provisioning.SourceBuilder,
+	}
+
+	rec := f.do(http.MethodPost, "/contests/"+contest+"/game/build", "")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusAccepted, rec.Body)
+	}
+	if f.games.gotRequestBuildActor != f.actor.ID {
+		t.Fatal("the actor did not reach the service, so nothing could be recorded against them")
+	}
+
+	body := decode(t, rec)
+	if body["status"] != "pending" || body["version"] != float64(4) {
+		t.Fatalf("body = %+v, want the pending game at version 4", body)
+	}
+	if body["needs_build"] != false {
+		t.Fatal("the game still reads as needing a build after one was asked for")
+	}
+}
+
+// TestAskingForABuildWhileTheContestRunsIs409GameNotEditable: raising the
+// version takes every participant's database at once, which is why the
+// service refuses it and why the code, not the sentence, is the contract.
+func TestAskingForABuildWhileTheContestRunsIs409GameNotEditable(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.requestBuildErr = provisioning.ErrGameNotEditable
+
+	rec := f.do(http.MethodPost, "/contests/"+uuid.NewString()+"/game/build", "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d, want 409: %s", rec.Code, rec.Body)
+	}
+	if code := errorCode(t, rec); code != "game_not_editable" {
+		t.Fatalf("code %q, want %q", code, "game_not_editable")
+	}
+}
+
+// TestAskingForABuildWhileOneRunsIs409BuildInProgress: a build already
+// running or waiting loads everything stored up to the moment it started, so
+// a second request while it is in flight would only build the same thing
+// twice.
+func TestAskingForABuildWhileOneRunsIs409BuildInProgress(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.requestBuildErr = provisioning.ErrBuildInProgress
+
+	rec := f.do(http.MethodPost, "/contests/"+uuid.NewString()+"/game/build", "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d, want 409: %s", rec.Code, rec.Body)
+	}
+	if code := errorCode(t, rec); code != "build_in_progress" {
+		t.Fatalf("code %q, want %q", code, "build_in_progress")
+	}
+}
+
+// TestAskingForABuildWithNoGameIs404NoGameYet: there is nothing stored to
+// build again.
+func TestAskingForABuildWithNoGameIs404NoGameYet(t *testing.T) {
+	f := newGameFixture(t, rbac.PermissionContestAdminAll)
+	f.games.requestBuildErr = provisioning.ErrNoGame
+
+	rec := f.do(http.MethodPost, "/contests/"+uuid.NewString()+"/game/build", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status %d, want 404: %s", rec.Code, rec.Body)
+	}
+	if code := errorCode(t, rec); code != "no_game_yet" {
+		t.Fatalf("code %q, want %q", code, "no_game_yet")
+	}
+}
+
+// TestAskingForABuildIsRefusedToAnAccountThatIsNotStaffOnTheContest mirrors
+// every other write route on this handler: the button sits behind
+// contest.edit, the same permission that already guards replacing the game
+// outright.
+func TestAskingForABuildIsRefusedToAnAccountThatIsNotStaffOnTheContest(t *testing.T) {
+	f := newGameFixture(t)
+
+	rec := f.do(http.MethodPost, "/contests/"+uuid.NewString()+"/game/build", "")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d, want 403: %s", rec.Code, rec.Body)
 	}
 }

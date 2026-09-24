@@ -1830,6 +1830,7 @@ const ro = {
       "Această bază a fost deja ștearsă — de curățenia de după olimpiadă sau de altcineva cât timp pagina era deschisă. Nimic nu s-a schimbat.",
     game_not_editable:
       "Jocul acestei olimpiade nu mai poate fi înlocuit. Înlocuirea ridică versiunea șablonului, ceea ce face copiile tuturor participanților învechite — ar fi șterse și create din nou.",
+    build_in_progress: "Jocul este deja în construcție.",
     game_cluster_full:
       "Nu mai este loc pe clusterul de joc pentru încă o copie a bazei acestui concurs, așa că a dumneavoastră nu a putut fi creată. Este o limită pe care instalarea o pune pe disc, nu o greșeală a dumneavoastră — anunțați organizatorii olimpiadei.",
     game_uploads_disabled:

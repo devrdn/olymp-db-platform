@@ -34,6 +34,10 @@
       "meaning": "Too many submissions to this exact question arrived at the same moment for the retry to resolve. Nothing was recorded; submitting again is the right response."
     },
     {
+      "code": "build_in_progress",
+      "meaning": "The contest's game is already being built, or is waiting to be. The build that is running will load everything stored up to the moment it started, and a change made after that leaves the game marked out of date again, so a second request is never needed to avoid losing work — it would only build the same thing twice."
+    },
+    {
       "code": "cannot_act_on_self",
       "meaning": "The operation would lock the caller out of their own account, so it is refused on oneself."
     },

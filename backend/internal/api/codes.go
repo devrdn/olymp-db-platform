@@ -64,6 +64,8 @@ var (
 		"The game script is past the size one game may carry. A game that needs more rows than this writes them with INSERT ... SELECT generate_series, which is shorter and easier to review.")
 	codeGameNotEditable = httpx.NewCode("game_not_editable",
 		"The contest's game can no longer be replaced. Replacing it raises the template's version, which makes every participant's copy stale — and a stale copy is dropped and made again, so in a running olympiad it would take every participant's database at once.")
+	codeBuildInProgress = httpx.NewCode("build_in_progress",
+		"The contest's game is already being built, or is waiting to be. The build that is running will load everything stored up to the moment it started, and a change made after that leaves the game marked out of date again, so a second request is never needed to avoid losing work — it would only build the same thing twice.")
 	codeGameInstanceNotFound = httpx.NewCode("game_instance_not_found",
 		"This contest owns no database by that name. Also the answer when the database belongs to another contest: that it exists elsewhere is not the caller's business, and a contest-scoped permission that said otherwise would not be contest-scoped.")
 	codeGameInstanceAlreadyDropped = httpx.NewCode("game_instance_already_dropped",
