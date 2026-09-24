@@ -223,10 +223,16 @@ func (r *GameInstances) FinishBuild(
 		UPDATE game_templates
 		SET status          = CASE WHEN $3 = '' THEN 'ready' ELSE 'failed' END,
 		    build_error     = nullif($3, ''),
-		    -- Only a change this build could have seen. A row added while it
-		    -- ran moved the mark past $4, and clearing it here would lose
-		    -- that row for good: no later build would know to look.
-		    data_changed_at = CASE WHEN data_changed_at <= $4 THEN NULL ELSE data_changed_at END,
+		    -- Only a build that succeeded, and only a change it could have
+		    -- seen. A row added while the build ran moved the mark past $4,
+		    -- and clearing it here would lose that row for good: no later
+		    -- build would know to look. A build that failed clears nothing at
+		    -- all — its template is dropped, so the data never reached a
+		    -- database, and this column is the only record that it has not.
+		    data_changed_at = CASE
+		        WHEN $3 = '' AND data_changed_at <= $4 THEN NULL
+		        ELSE data_changed_at
+		    END,
 		    updated_at      = now()
 		WHERE contest_id = $1 AND version = $2 AND status = 'building'`,
 		contestID, version, buildError, claimedAt); err != nil {

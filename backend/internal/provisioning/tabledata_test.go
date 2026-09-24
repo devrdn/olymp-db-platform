@@ -1715,15 +1715,6 @@ func TestARowAddedAfterTheGameWasBuiltLeavesTheTemplateWaitingToBeBuiltAgain(t *
 	}
 }
 
-// markBuilt puts the fake's template where FinishBuild leaves a real one when
-// a build succeeds — the state every builder-sourced game is in by the time
-// its screens will let anybody add a row.
-func markBuilt(store *templateStore) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	store.template.Status = provisioning.TemplateReady
-}
-
 // TestACompletedTableUploadMarksTheGameOutOfDate is the same guarantee for the
 // other way rows arrive: a whole CSV, uploaded in chunks.
 func TestACompletedTableUploadMarksTheGameOutOfDate(t *testing.T) {
