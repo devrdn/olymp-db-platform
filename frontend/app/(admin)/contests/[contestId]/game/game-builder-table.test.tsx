@@ -7,6 +7,14 @@ import type { BuilderLimits, TableData, TableDefinition } from "@/lib/api/game";
 
 import { GameBuilderTable } from "./game-builder-table";
 
+// `router.refresh()` is what brings `GameBuild`'s own `game` prop — read by
+// `page.tsx`, a server component, at page load — back from the server after a
+// row is written. Without it the notice this whole feature exists to show can
+// only ever appear on the next reload, and an organiser who types fifty rows
+// and closes the tab is never told the game is out of date.
+const refresh = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
+
 const beginTableUploadAction = vi.hoisted(() => vi.fn());
 const currentTableUploadAction = vi.hoisted(() => vi.fn());
 const completeTableUploadAction = vi.hoisted(() => vi.fn());
@@ -133,6 +141,7 @@ beforeEach(() => {
   appendTableRowAction.mockReset();
   deleteTableRowAction.mockReset();
   request.mockReset();
+  refresh.mockClear();
   vi.spyOn(window, "confirm").mockReturnValue(true);
 
   // Every test renders a table whose tab is `active` by default, which
@@ -511,5 +520,64 @@ describe("the table builder's own data panel", () => {
     // exactly that, unlocking a table the server still refuses to let this
     // screen restructure.
     expect(onRowCountChange).not.toHaveBeenCalledWith(4);
+  });
+
+  // The sequence this whole feature exists to close: the definition is saved,
+  // the background job builds the game empty, and only then can a row be
+  // typed at all. So every row is written to a game that is already built,
+  // and the notice offering to build it again lives in a tree `page.tsx`
+  // rendered on the server before the first row existed. Nothing but a
+  // refresh brings it back — and without one an organiser fills a table,
+  // closes the tab, and is never told the rows never reached a database.
+  //
+  // Asserted on all three writes that mark the game out of date on the server
+  // (AppendTableRow, DeleteTableRow, CompleteTableUpload — tabledata.go's own
+  // three), because a refresh missing from any one of them leaves the same
+  // silence.
+  test("brings the page back from the server after a row is added, so the build notice can appear", async () => {
+    appendTableRowAction.mockResolvedValueOnce({ value: tableData({ status: "complete", activeRows: 1 }) });
+
+    show();
+    await screen.findByText(td.emptyRows);
+
+    await userEvent.type(screen.getByLabelText("full_name"), "Ada");
+    await userEvent.click(screen.getByRole("button", { name: td.addRowButton }));
+
+    await waitFor(() => expect(appendTableRowAction).toHaveBeenCalled());
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+  });
+
+  test("brings the page back from the server after a row is deleted", async () => {
+    gameTableDataWindowAction.mockResolvedValueOnce({
+      value: { fromRow: 1, rows: [{ row: 4, fields: ["Ada", "37"] }], totalRows: 1, truncated: false },
+    });
+    deleteTableRowAction.mockResolvedValueOnce({});
+
+    show({ activeRowCount: 1 });
+    await screen.findByText("Ada");
+
+    await userEvent.click(screen.getByRole("button", { name: td.deleteRow }));
+
+    await waitFor(() => expect(deleteTableRowAction).toHaveBeenCalled());
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+  });
+
+  test("brings the page back from the server after a CSV upload completes", async () => {
+    beginTableUploadAction.mockResolvedValueOnce({ value: tableData({ declaredBytes: 4 }) });
+    request.mockResolvedValueOnce({ received_bytes: 4 });
+    completeTableUploadAction.mockResolvedValueOnce({
+      value: tableData({ status: "complete", lines: 1, activeRows: 1 }),
+    });
+
+    show();
+    await screen.findByText(td.emptyRows);
+
+    await userEvent.upload(
+      screen.getByLabelText(td.pick),
+      new File(["a,b\n"], "rows.csv", { type: "text/csv" }),
+    );
+
+    await waitFor(() => expect(completeTableUploadAction).toHaveBeenCalled());
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
   });
 });

@@ -426,6 +426,14 @@ export async function completeTableUploadAction(
     return refusal(error);
   }
 
+  // A finished file is one of the three writes that marks the contest's game
+  // out of date server-side (`CompleteTableUpload`, `tabledata.go`), and
+  // `GameBuild`'s own notice is rendered from that fact by `page.tsx` — a
+  // server component whose cached output would otherwise go on saying the
+  // built game holds the current data. `saveGameDefinitionAction` and
+  // `requestGameBuildAction` revalidate the same path for the same reason.
+  revalidatePath(`/contests/${contestId}`, "layout");
+
   return { value };
 }
 
@@ -506,6 +514,11 @@ export async function appendTableRowAction(
     return refusal(error);
   }
 
+  // The row marks the contest's game out of date server-side, and the notice
+  // saying so is rendered by a server component — `completeTableUploadAction`
+  // above gives the reasoning in full.
+  revalidatePath(`/contests/${contestId}`, "layout");
+
   return { value };
 }
 
@@ -532,6 +545,11 @@ export async function deleteTableRowAction(
   );
 
   if (failure) return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+
+  // A tombstone is a change to the data a build would load, so it marks the
+  // game out of date exactly as an added row does — `completeTableUpload
+  // Action` above gives the reasoning in full.
+  revalidatePath(`/contests/${contestId}`, "layout");
 
   return {};
 }

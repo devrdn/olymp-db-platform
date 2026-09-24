@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { buttonVariants } from "@/components/ui/button";
 import { ApiError, request } from "@/lib/api/client";
@@ -158,6 +159,30 @@ export function GameBuilderTable({
   const tb = dict.workspace.game.builder;
   const td = tb.data;
   const errors = dict.errors;
+  const router = useRouter();
+
+  /**
+   * Brings the whole page back from the server after a write that changed
+   * what the server says about this game.
+   *
+   * Each of the three writes below (a typed row, a tombstone, a finished CSV)
+   * marks the contest's game out of date server-side — `tabledata.go`'s own
+   * three `MarkTableDataChanged` calls — and `GameBuild` renders that fact
+   * from a prop `page.tsx` computed on the server before any of them
+   * happened. Revalidating the path inside the Server Action is not enough on
+   * its own: a plain action call, unlike a `<form action={...}>` submit, does
+   * not refresh the tree that read it. `game-upload.tsx`'s own
+   * `router.refresh()` after `completeGameUploadAction` is the same pair for
+   * the same gap, and `GameBuild` itself already uses it after asking for a
+   * build.
+   *
+   * Nothing in this component's own state is reset by it — a refresh merges
+   * fresh server props into the existing client tree — so it is safe to call
+   * in the middle of an upload's own sequence.
+   */
+  function refreshGameState() {
+    router.refresh();
+  }
 
   // Only a chunked upload still `'receiving'` counts as something to
   // resume — `game-upload.tsx`'s own `resumable`, for a table's file
@@ -331,6 +356,7 @@ export function GameBuilderTable({
       onRowCountChange(result.value.lines);
       onActiveRowCountChange(result.value.activeRows);
     }
+    refreshGameState();
     await fetchWindow(1);
   }
 
@@ -472,6 +498,7 @@ export function GameBuilderTable({
       onRowCountChange(result.value.lines);
       onActiveRowCountChange(result.value.activeRows);
     }
+    refreshGameState();
     await fetchWindow(windowFrom);
   }
 
@@ -491,6 +518,7 @@ export function GameBuilderTable({
     // unlocked a table the server still refuses to let this screen
     // restructure.
     onActiveRowCountChange(Math.max(0, activeRowCount - 1));
+    refreshGameState();
     await fetchWindow(windowFrom);
   }
 
