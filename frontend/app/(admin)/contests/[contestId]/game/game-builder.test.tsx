@@ -7,6 +7,14 @@ import type { GameDefinition } from "@/lib/api/game";
 
 import { GameBuilder } from "./game-builder";
 
+// The data section renders a real `GameBuilderTable`, which refreshes the
+// page after every write that marks the game out of date (its own
+// `refreshGameState`). Outside Next's own router there is no app router to
+// mount, so the hook is stood in for here the same way
+// `game-builder-table.test.tsx` and `game-build.test.tsx` stand it in.
+const refresh = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
+
 const saved = vi.hoisted(() => ({ current: { saved: true } as { saved?: boolean; code?: string } }));
 const saveGameDefinitionAction = vi.hoisted(() => vi.fn(async (_prev: unknown, form: FormData) => ({
   ...saved.current,

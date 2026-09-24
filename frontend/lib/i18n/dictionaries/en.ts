@@ -649,6 +649,12 @@ const en = {
       // button around them.
       build: {
         notice: "The data has changed since this game was built",
+        // Its own sentence rather than `notice`: a game that failed to build
+        // is not out of date, it does not exist, and telling an organiser
+        // their data "has changed" would explain the wrong thing. The
+        // failure's own words are `GameEditor`'s to show; this only says why
+        // the button is here.
+        failed: "The last build failed, so no database was made from this game",
         action: "Build again",
         building: "Building…",
       },
@@ -2013,6 +2019,8 @@ const en = {
       "The contest is not running, so it takes no queries.",
     no_game_yet:
       "This contest's database has not been prepared yet. Nothing you did — try again shortly.",
+    no_game_to_build:
+      "This contest has no game stored, so there is nothing to build. Write its SQL, upload a ready-made dump, or describe its tables and save that — a build reads what is stored.",
     schema_hidden:
       "This olympiad does not show the database's structure. Finding it is part of the puzzle.",
     nothing_left_to_answer:

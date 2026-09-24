@@ -433,6 +433,11 @@ describe("completeTableUploadAction", () => {
       `/contests/${contestId}/game/tables/suspects/data/${dataId}/complete`,
       { method: "POST" },
     );
+    // One of the three writes that marks the game out of date on the server.
+    // `GameBuild`'s notice is rendered by `page.tsx`, a server component, so
+    // without this the screen goes on saying the built game holds the current
+    // data for as long as the tab stays open.
+    expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
   });
 
   test("carries the server's own refusal — fewer bytes arrived than declared", async () => {
@@ -532,6 +537,7 @@ describe("appendTableRowAction", () => {
       method: "POST",
       body: { values: ["Ada", "37"] },
     });
+    expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
   });
 
   // The message names the row and the column at fault — the brief's own
@@ -562,6 +568,7 @@ describe("deleteTableRowAction", () => {
     expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/game/tables/suspects/rows/3`, {
       method: "DELETE",
     });
+    expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
   });
 
   test("carries the server's own refusal — no such row", async () => {

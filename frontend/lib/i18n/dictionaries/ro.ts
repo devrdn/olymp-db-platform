@@ -563,6 +563,7 @@ const ro = {
       },
       build: {
         notice: "Datele s-au schimbat de la ultima construire",
+        failed: "Ultima construire a eșuat, așa că nu s-a creat nicio bază din acest joc",
         action: "Construiește din nou",
         building: "Se construiește…",
       },
@@ -1821,6 +1822,8 @@ const ro = {
       "Olimpiada nu se desfășoară, deci nu acceptă interogări.",
     no_game_yet:
       "Baza de date a acestei olimpiade nu este încă pregătită. Nu este greșeala dumneavoastră — încercați peste puțin timp.",
+    no_game_to_build:
+      "Această olimpiadă nu are un joc salvat, deci nu este nimic de construit. Scrieți SQL-ul, încărcați un dump gata făcut sau descrieți tabelele și salvați — construirea citește ce este salvat.",
     schema_hidden:
       "Această olimpiadă nu arată structura bazei de date. Descoperirea ei face parte din problemă.",
     nothing_left_to_answer:
