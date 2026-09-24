@@ -642,6 +642,16 @@ const en = {
         failed: "build failed",
         dropped: "removed",
       },
+      // Asking for the game to be built again once its data has moved on —
+      // game-build.tsx's own screen. `needs_build`'s three refusal codes
+      // (game_not_editable, build_in_progress, no_game_yet) already have
+      // their own sentences in `errors`; this is only the notice and the
+      // button around them.
+      build: {
+        notice: "The data has changed since this game was built",
+        action: "Build again",
+        building: "Building…",
+      },
       // The second way to build this contest's game: a finished dump
       // instead of a script typed into the editor above. The twelve
       // refusals this feature can hand back (game_upload_* and

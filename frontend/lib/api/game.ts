@@ -130,6 +130,10 @@ export const gameSchema = z
     max_script_bytes: z.number().default(0),
     building: z.boolean().default(false),
     updated_at: z.string().optional(),
+    // Defaulted rather than required, the reason every field here is: an
+    // older API that does not send it must not fail the whole render, and
+    // `false` reads as "the server did not say the game is stale".
+    needs_build: z.boolean().default(false),
     // Defaulted rather than required: every current build of the API sends
     // it (game_handler.go's uploadLimitsResponse), but a page that has no
     // use for the file-upload half of this screen must not fail to render
@@ -147,6 +151,7 @@ export const gameSchema = z
     maxScriptBytes: raw.max_script_bytes,
     building: raw.building,
     updatedAt: raw.updated_at ?? "",
+    needsBuild: raw.needs_build,
     uploadLimits: raw.upload_limits,
   }));
 

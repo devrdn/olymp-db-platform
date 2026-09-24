@@ -12,6 +12,7 @@ import { serverRequest } from "@/lib/api/server";
 import { activeDictionary } from "@/lib/i18n/server";
 
 import { loadContest, loadContestResource } from "../contest";
+import { GameBuild } from "./game-build";
 import { GameBuilder } from "./game-builder";
 import { GameEditor } from "./game-editor";
 import { GameUpload } from "./game-upload";
@@ -206,6 +207,12 @@ export default async function GamePage(props: PageProps<"/contests/[contestId]/g
               dict={dict}
             />
           ) : null}
+          <GameBuild
+            contestId={contestId}
+            game={game}
+            editable={contentEditable(contest.status)}
+            dict={dict}
+          />
         </>
       )}
     </div>

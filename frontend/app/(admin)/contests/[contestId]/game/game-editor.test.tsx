@@ -27,6 +27,7 @@ function game(overrides: Partial<Game> = {}): Game {
     maxScriptBytes: 512 * 1024,
     building: false,
     updatedAt: "",
+    needsBuild: false,
     uploadLimits: { enabled: false, chunkBytes: 0, maxFileBytes: 0 },
     ...overrides,
   };
