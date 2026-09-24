@@ -241,12 +241,31 @@ type Template struct {
 	// without Script.
 	ScriptBytes int
 	BuildError  string
-	UpdatedAt   time.Time
+	// DataChangedAt is when this game's table data last changed, and nil when
+	// nothing has changed since the build.
+	//
+	// The table builder's data arrives after the game is built and cannot
+	// arrive before it — the build runs seconds after the definition is
+	// saved, and AppendTableRow refuses a table that is not in the saved
+	// definition. Without this mark the rows were stored and never loaded,
+	// and every participant copied an empty database.
+	DataChangedAt *time.Time
+	UpdatedAt     time.Time
 }
 
 // Building reports whether a build is under way, which is what an interface
 // polls on.
 func (t Template) Building() bool { return t.Status == TemplateBuilding || t.Status == TemplatePending }
+
+// NeedsBuild reports a game whose built database no longer holds the data an
+// organiser has since put into it — the one state RequestBuild exists for.
+//
+// Only a game that is `ready`: a build already waiting or running will pick
+// the data up on its own, and a failed build's own error is the thing to
+// show rather than an invitation to press a button that would replace it.
+func (t Template) NeedsBuild() bool {
+	return t.Status == TemplateReady && t.DataChangedAt != nil
+}
 
 // TemplateRepository is the storage the game's own lifecycle needs, apart from
 // the pool's (Repository).
@@ -287,7 +306,18 @@ type TemplateRepository interface {
 	// FinishBuild records the outcome against the version that was built. The
 	// version is what keeps a slow build from marking a newer script ready:
 	// a script saved while the build ran has already bumped it.
-	FinishBuild(ctx context.Context, contestID uuid.UUID, version int, buildError string) error
+	//
+	// claimedAt is what ClaimBuild wrote as the row's updated_at, and it
+	// arbitrates the data mark: the build may only clear a change it
+	// actually saw, so a row an organiser added while this build ran keeps
+	// its mark and is picked up by the next one.
+	FinishBuild(ctx context.Context, contestID uuid.UUID, version int, buildError string, claimedAt time.Time) error
+	// MarkTableDataChanged records that this contest's table data no longer
+	// matches the database its game was built into. Called by the three
+	// writes that change a table's rows, inside their own transaction, so a
+	// change that rolled back leaves no request to build behind it and a
+	// change that landed never loses one.
+	MarkTableDataChanged(ctx context.Context, contestID uuid.UUID) error
 	// Policy is what the contest lets participants do, which is what the
 	// build grants inside the template.
 	//
@@ -1041,7 +1071,7 @@ func (g *Games) recordBuildOutcome(ctx context.Context, claimed Template, buildE
 	// else would be bounding one of the three.
 	buildErr = boundBuildError(buildErr)
 
-	if err := g.repo.FinishBuild(ctx, claimed.ContestID, claimed.Version, buildErr); err != nil {
+	if err := g.repo.FinishBuild(ctx, claimed.ContestID, claimed.Version, buildErr, claimed.UpdatedAt); err != nil {
 		return claimed, errors.Join(cause, fmt.Errorf("record the build's outcome: %w", err))
 	}
 

@@ -21,14 +21,14 @@ import (
 // templateColumns is the row every read below returns, in one place so the
 // three of them cannot drift.
 const templateColumns = `contest_id, template_db, version, status,
-	init_script, coalesce(build_error, ''), updated_at, source, upload_id, definition_json`
+	init_script, coalesce(build_error, ''), updated_at, source, upload_id, definition_json, data_changed_at`
 
 func scanTemplate(row pgx.Row) (provisioning.Template, error) {
 	var t provisioning.Template
 	var status, source string
 	var definitionJSON []byte
 	err := row.Scan(&t.ContestID, &t.Database, &t.Version, &status, &t.Script, &t.BuildError, &t.UpdatedAt,
-		&source, &t.UploadID, &definitionJSON)
+		&source, &t.UploadID, &definitionJSON, &t.DataChangedAt)
 	if err != nil {
 		return t, err
 	}
@@ -54,13 +54,13 @@ func scanTemplate(row pgx.Row) (provisioning.Template, error) {
 // have measured — so a caller reading ScriptBytes gets the same number either
 // way.
 const templateStatusColumns = `contest_id, template_db, version, status,
-	octet_length(init_script), coalesce(build_error, ''), updated_at, source, upload_id`
+	octet_length(init_script), coalesce(build_error, ''), updated_at, source, upload_id, data_changed_at`
 
 func scanTemplateStatus(row pgx.Row) (provisioning.Template, error) {
 	var t provisioning.Template
 	var status, source string
 	err := row.Scan(&t.ContestID, &t.Database, &t.Version, &status, &t.ScriptBytes, &t.BuildError,
-		&t.UpdatedAt, &source, &t.UploadID)
+		&t.UpdatedAt, &source, &t.UploadID, &t.DataChangedAt)
 	if err != nil {
 		return t, err
 	}
@@ -216,14 +216,20 @@ func (r *GameInstances) ClaimBuild(ctx context.Context, stale time.Duration) (pr
 // saving a script while a build runs already bumped the version, so the older
 // build's outcome matches nothing and is dropped rather than marking the new
 // script ready — or, worse, marking it failed with the old script's error.
-func (r *GameInstances) FinishBuild(ctx context.Context, contestID uuid.UUID, version int, buildError string) error {
+func (r *GameInstances) FinishBuild(
+	ctx context.Context, contestID uuid.UUID, version int, buildError string, claimedAt time.Time,
+) error {
 	if _, err := r.querier(ctx).Exec(ctx, `
 		UPDATE game_templates
-		SET status      = CASE WHEN $3 = '' THEN 'ready' ELSE 'failed' END,
-		    build_error = nullif($3, ''),
-		    updated_at  = now()
+		SET status          = CASE WHEN $3 = '' THEN 'ready' ELSE 'failed' END,
+		    build_error     = nullif($3, ''),
+		    -- Only a change this build could have seen. A row added while it
+		    -- ran moved the mark past $4, and clearing it here would lose
+		    -- that row for good: no later build would know to look.
+		    data_changed_at = CASE WHEN data_changed_at <= $4 THEN NULL ELSE data_changed_at END,
+		    updated_at      = now()
 		WHERE contest_id = $1 AND version = $2 AND status = 'building'`,
-		contestID, version, buildError); err != nil {
+		contestID, version, buildError, claimedAt); err != nil {
 		return fmt.Errorf("record the build's outcome: %w", err)
 	}
 	return nil

@@ -712,15 +712,29 @@ func (s *templateStore) ClaimBuild(context.Context, time.Duration) (provisioning
 		return provisioning.Template{}, s.claimErr
 	}
 	s.claims++
+	s.template.UpdatedAt = time.Now()
 	claimed := s.template
 	claimed.Status = provisioning.TemplateBuilding
 	return claimed, nil
 }
 
-func (s *templateStore) FinishBuild(_ context.Context, _ uuid.UUID, version int, buildError string) error {
+func (s *templateStore) FinishBuild(
+	_ context.Context, _ uuid.UUID, version int, buildError string, claimedAt time.Time,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.finished = append(s.finished, finish{version: version, err: buildError})
+	if s.template.DataChangedAt != nil && !s.template.DataChangedAt.After(claimedAt) {
+		s.template.DataChangedAt = nil
+	}
+	return nil
+}
+
+func (s *templateStore) MarkTableDataChanged(_ context.Context, _ uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	at := time.Now()
+	s.template.DataChangedAt = &at
 	return nil
 }
 

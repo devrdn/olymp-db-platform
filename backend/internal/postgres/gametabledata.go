@@ -165,6 +165,26 @@ func (r *GameInstances) CreateReadyTableData(
 	return data, nil
 }
 
+// MarkTableDataChanged records that this contest's built game no longer holds
+// the data its tables do. A contest with no game row at all is not an error:
+// the data is stored, the game will be written later, and the build that
+// writes it loads everything there is.
+//
+// clock_timestamp(), not now(): now() is transaction-start time, so a mark
+// whose transaction opened before a build claimed the template but committed
+// after the build read the row would still carry a timestamp no later than
+// the claim, and FinishBuild's own `data_changed_at <= claimedAt` would clear
+// it — losing the very row this feature exists to keep. clock_timestamp()
+// reads the moment this statement actually runs, which is always after the
+// commit that made ClaimBuild's row visible to it.
+func (r *GameInstances) MarkTableDataChanged(ctx context.Context, contestID uuid.UUID) error {
+	if _, err := r.querier(ctx).Exec(ctx,
+		`UPDATE game_templates SET data_changed_at = clock_timestamp() WHERE contest_id = $1`, contestID); err != nil {
+		return fmt.Errorf("mark the contest's table data changed: %w", err)
+	}
+	return nil
+}
+
 // AppendTableDataRow records one more row appended to an already-'complete'
 // file: its new byte length and its new row count in the one statement, so
 // the two never read as having disagreed even for an instant.

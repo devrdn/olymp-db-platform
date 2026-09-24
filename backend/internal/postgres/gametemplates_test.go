@@ -378,7 +378,7 @@ func TestFinishingABuildRecordsReadyOrTheErrorItFailedWith(t *testing.T) {
 		}
 		markBuilding(t, ctx, contest, "0 seconds")
 
-		if err := repo.FinishBuild(ctx, contest, saved.Version, `ERROR: type "nosuchtype" does not exist`); err != nil {
+		if err := repo.FinishBuild(ctx, contest, saved.Version, `ERROR: type "nosuchtype" does not exist`, time.Now()); err != nil {
 			t.Fatalf("finish: %v", err)
 		}
 		failed, err := repo.Template(ctx, contest)
@@ -410,7 +410,7 @@ func TestABuildCannotFinishAVersionThatHasAlreadyBeenReplaced(t *testing.T) {
 			t.Fatalf("second save: %v", err)
 		}
 
-		if err := repo.FinishBuild(ctx, contest, first.Version, ""); err != nil {
+		if err := repo.FinishBuild(ctx, contest, first.Version, "", time.Now()); err != nil {
 			t.Fatalf("finish: %v", err)
 		}
 		now, err := repo.Template(ctx, contest)
@@ -550,4 +550,94 @@ func TestTheStatusReadDoesNotDecodeTheBuilderDefinition(t *testing.T) {
 			t.Fatalf("the full read returned %d tables, want 1", len(full.Definition.Tables))
 		}
 	})
+}
+
+// claimBuildFor claims builds until it gets contest's own row, finishing
+// back — with the claim's own UpdatedAt, so nothing is left stuck in
+// 'building' — any foreign row it picks up along the way. ClaimBuild takes
+// the oldest pending template of any contest, so a package running its tests
+// in parallel can hand either claim in this file another test's row before
+// it hands over this one's.
+func claimBuildFor(t *testing.T, repo *GameInstances, contest uuid.UUID) provisioning.Template {
+	t.Helper()
+	ctx := t.Context()
+
+	for range 10 {
+		claimed, err := repo.ClaimBuild(ctx, time.Minute)
+		if err != nil {
+			t.Fatalf("claim a build: %v", err)
+		}
+		if claimed.ContestID == contest {
+			return claimed
+		}
+		if err := repo.FinishBuild(ctx, claimed.ContestID, claimed.Version, "", claimed.UpdatedAt); err != nil {
+			t.Fatalf("finish a foreign claim so it is not left stuck building: %v", err)
+		}
+	}
+	t.Fatalf("claimed 10 builds without reaching contest %s's own row", contest)
+	return provisioning.Template{}
+}
+
+// TestFinishBuildClearsTheDataMarkOnlyWhenNothingChangedDuringTheBuild is the
+// half of this feature that a fake cannot prove: two writers — the build
+// finishing and an organiser adding a row — meeting on one row, arbitrated by
+// a comparison PostgreSQL makes.
+func TestFinishBuildClearsTheDataMarkOnlyWhenNothingChangedDuringTheBuild(t *testing.T) {
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
+	}
+	repo := NewGameInstances(testPool)
+	contest := contestRow(t, t.Context())
+
+	saved, err := repo.SaveDefinition(t.Context(), contest, "game_"+contest.String()[:8], aDefinition())
+	if err != nil {
+		t.Fatalf("save the definition: %v", err)
+	}
+	if err := repo.MarkTableDataChanged(t.Context(), contest); err != nil {
+		t.Fatalf("mark the data changed: %v", err)
+	}
+
+	claimed := claimBuildFor(t, repo, contest)
+
+	// A row typed while the build runs: the mark moves past the claim.
+	if err := repo.MarkTableDataChanged(t.Context(), contest); err != nil {
+		t.Fatalf("mark the data changed during the build: %v", err)
+	}
+	if err := repo.FinishBuild(t.Context(), contest, saved.Version, "", claimed.UpdatedAt); err != nil {
+		t.Fatalf("finish the build: %v", err)
+	}
+
+	after, err := repo.TemplateStatus(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("read the template: %v", err)
+	}
+	if after.DataChangedAt == nil {
+		t.Fatal("the build cleared a mark left by a row added while it ran; that row will never be built")
+	}
+
+	// A second build, with nothing changing under it, does clear the mark.
+	//
+	// FinishBuild only ever leaves a game 'ready' or 'failed', never back to
+	// 'pending' — that requeue is the later task's own RequestBuild, which
+	// this task does not implement — so here it is done the same way any
+	// other edit does it: saving the definition again, exactly as an
+	// organiser queuing a rebuild would.
+	requeued, err := repo.SaveDefinition(t.Context(), contest, "game_"+contest.String()[:8], aDefinition())
+	if err != nil {
+		t.Fatalf("save the definition again to queue a second build: %v", err)
+	}
+	second := claimBuildFor(t, repo, contest)
+	if second.Version != requeued.Version {
+		t.Fatalf("claimed version %d, want the requeued version %d", second.Version, requeued.Version)
+	}
+	if err := repo.FinishBuild(t.Context(), contest, second.Version, "", second.UpdatedAt); err != nil {
+		t.Fatalf("finish the second build: %v", err)
+	}
+	settled, err := repo.TemplateStatus(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("read the template again: %v", err)
+	}
+	if settled.DataChangedAt != nil {
+		t.Fatalf("the mark survived a build that saw every change: %v", settled.DataChangedAt)
+	}
 }

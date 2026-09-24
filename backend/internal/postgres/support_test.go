@@ -117,3 +117,39 @@ func makeContest(t *testing.T, ctx context.Context, author uuid.UUID) uuid.UUID 
 	}
 	return id
 }
+
+// contestRow inserts a user and a contest committed for real, with a
+// t.Cleanup that deletes both — provisioning's own contestFor's shape
+// (support_test.go:491), for a test that cannot run inside withTx because it
+// needs its own commits visible to a second claim (ClaimBuild's SKIP LOCKED
+// only ever sees committed rows). The contest's cascade
+// (000003_game_and_registrations.up.sql) takes game_templates and
+// game_table_data with it, so nothing else needs its own cleanup.
+func contestRow(t *testing.T, ctx context.Context) uuid.UUID {
+	t.Helper()
+	if testPool == nil {
+		t.Skip("CORE_DB_DSN is not set; run `make test-db`")
+	}
+
+	var author uuid.UUID
+	err := testPool.QueryRow(ctx,
+		`INSERT INTO users (login, full_name, password_hash) VALUES ($1, 'Author', 'x')
+		 RETURNING id`, "prov-author-"+uuid.NewString()[:8]).Scan(&author)
+	if err != nil {
+		t.Fatalf("create author: %v", err)
+	}
+
+	var id uuid.UUID
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO contests (created_by) VALUES ($1) RETURNING id`, author).Scan(&id); err != nil {
+		t.Fatalf("create contest: %v", err)
+	}
+	t.Cleanup(func() {
+		clean, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = testPool.Exec(clean, `DELETE FROM contests WHERE id = $1`, id)
+		_, _ = testPool.Exec(clean, `DELETE FROM users WHERE id = $1`, author)
+	})
+
+	return id
+}
