@@ -1078,6 +1078,38 @@ func TestABuildLeavesAMarkThatAppearedAfterTheClaim(t *testing.T) {
 	}
 }
 
+// TestAFailedBuildLeavesTheDataMarkWhereItFoundIt: the data never reached a
+// database, so the record that it is unbuilt has to outlive the attempt.
+//
+// A failed build drops its half-made template (finishBuild's own teardown),
+// which is what makes this different from every other clause of FinishBuild's
+// own comparison: the timestamps agree — nothing moved while the build ran —
+// and the mark still has to stay, because there is no database holding the
+// rows it stands for. Clearing it leaves an organiser with a 'failed' game,
+// three hundred typed rows on the volume, and nothing anywhere saying the two
+// have never met.
+func TestAFailedBuildLeavesTheDataMarkWhereItFoundIt(t *testing.T) {
+	t.Parallel()
+	service, store, cluster := games(true)
+	cluster.fail = scriptRefusal{says: `the game script was refused: type "nosuchtype" does not exist (SQLSTATE 42704)`}
+	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `CREATE TABLE oops (x nosuchtype);`); err != nil {
+		t.Fatalf("setting the script: %v", err)
+	}
+	before := time.Now().Add(-time.Hour)
+	store.template.DataChangedAt = &before
+
+	built, err := service.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("building: %v", err)
+	}
+	if built.Status != provisioning.TemplateFailed {
+		t.Fatalf("finished as %q, want failed", built.Status)
+	}
+	if store.template.DataChangedAt == nil {
+		t.Fatal("a failed build cleared the data mark; the data is unbuilt and nothing records it any more")
+	}
+}
+
 // TestRequestBuildPutsAReadyGameBackToPendingAndRaisesItsVersion is the button
 // itself: the data is in, and the organiser asks for the database to be made
 // again from it.

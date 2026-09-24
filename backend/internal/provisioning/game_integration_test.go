@@ -650,9 +650,12 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 	if second.ContestID != contest.ID {
 		t.Fatalf("the second build claimed contest %s, not this test's own %s — a concurrent test's template was claimed instead", second.ContestID, contest.ID)
 	}
-	// A second Drop and not a no-op: the rebuild makes a second database, and
-	// a test that dropped only the one the first build produced would leave
-	// one behind on the cluster after every run.
+	// A second Drop that is, today, a deliberate no-op: templateName derives
+	// the name from the contest id alone, with no version in it, so the
+	// rebuild replaces the database the first build made rather than adding
+	// one and both cleanups name the same thing. It is registered anyway, and
+	// on `second` rather than on `saved`, so that a template name which ever
+	// does carry a version leaves nothing behind on the cluster.
 	t.Cleanup(func() { gamedbtest.Drop(second.Database) })
 
 	conn := gamedbtest.Connect(t, user, password, second.Database)

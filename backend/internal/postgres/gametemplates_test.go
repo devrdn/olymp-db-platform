@@ -765,26 +765,43 @@ func TestTheStatusReadDoesNotDecodeTheBuilderDefinition(t *testing.T) {
 	})
 }
 
-// claimBuildFor claims builds until it gets contest's own row, finishing
-// back — with the claim's own UpdatedAt, so nothing is left stuck in
-// 'building' — any foreign row it picks up along the way. ClaimBuild takes
-// the oldest pending template of any contest, so a package running its tests
-// in parallel can hand either claim in this file another test's row before
-// it hands over this one's.
+// claimBuildFor claims builds until it gets contest's own row, putting back
+// any foreign row it picks up along the way. ClaimBuild takes the oldest
+// pending template of any contest, so a package running its tests in parallel
+// — and `make test-db` runs this package and internal/provisioning against
+// one database in a single `go test` — can hand a claim in this file another
+// test's row before it hands over this one's.
+//
+// A foreign row is put back to 'pending', never finished. FinishBuild is how
+// this used to release one, and finishing somebody else's claim as a success
+// set their template 'ready' and cleared their data_changed_at: this helper
+// decided another test's build had succeeded, which is a write to rows it
+// does not own and exactly the kind of damage that makes a concurrent suite
+// fail somewhere else entirely.
+//
+// The stale window is an hour rather than ClaimBuild's production minute so
+// that only a 'pending' row is ever claimed: a row left 'building' belongs to
+// a test still running, and 'pending' is then provably the status the foreign
+// row had before this helper touched it. What is not restored is updated_at,
+// which ClaimBuild moved to now() — it decides the queue's order and nothing
+// else, and its owner's own next claim overwrites it anyway.
 func claimBuildFor(t *testing.T, repo *GameInstances, contest uuid.UUID) provisioning.Template {
 	t.Helper()
 	ctx := t.Context()
 
 	for range 10 {
-		claimed, err := repo.ClaimBuild(ctx, time.Minute)
+		claimed, err := repo.ClaimBuild(ctx, time.Hour)
 		if err != nil {
 			t.Fatalf("claim a build: %v", err)
 		}
 		if claimed.ContestID == contest {
 			return claimed
 		}
-		if err := repo.FinishBuild(ctx, claimed.ContestID, claimed.Version, "", claimed.UpdatedAt); err != nil {
-			t.Fatalf("finish a foreign claim so it is not left stuck building: %v", err)
+		if _, err := testPool.Exec(ctx,
+			`UPDATE game_templates SET status = 'pending'
+			 WHERE contest_id = $1 AND version = $2 AND status = 'building'`,
+			claimed.ContestID, claimed.Version); err != nil {
+			t.Fatalf("put a foreign claim back so it is not left stuck building: %v", err)
 		}
 	}
 	t.Fatalf("claimed 10 builds without reaching contest %s's own row", contest)
@@ -831,10 +848,10 @@ func TestFinishBuildClearsTheDataMarkOnlyWhenNothingChangedDuringTheBuild(t *tes
 	// A second build, with nothing changing under it, does clear the mark.
 	//
 	// FinishBuild only ever leaves a game 'ready' or 'failed', never back to
-	// 'pending' — that requeue is the later task's own RequestBuild, which
-	// this task does not implement — so here it is done the same way any
-	// other edit does it: saving the definition again, exactly as an
-	// organiser queuing a rebuild would.
+	// 'pending', so something has to requeue it. Here it is the way any other
+	// edit does it — saving the definition again — which also proves a save
+	// queues a build that clears the mark; RequestBuild's own requeue is
+	// exercised by the failing build below.
 	requeued, err := repo.SaveDefinition(t.Context(), contest, "game_"+contest.String()[:8], aDefinition())
 	if err != nil {
 		t.Fatalf("save the definition again to queue a second build: %v", err)
@@ -852,5 +869,32 @@ func TestFinishBuildClearsTheDataMarkOnlyWhenNothingChangedDuringTheBuild(t *tes
 	}
 	if settled.DataChangedAt != nil {
 		t.Fatalf("the mark survived a build that saw every change: %v", settled.DataChangedAt)
+	}
+
+	// A build that failed leaves the mark, however quiet everything was
+	// underneath it. The data never reached a database — the half-built
+	// template is dropped and the rows are still only on the volume — so the
+	// one record that they are unbuilt has to survive, or an organiser is
+	// left with a 'failed' game and nothing saying what is missing from it.
+	if err := repo.MarkTableDataChanged(t.Context(), contest); err != nil {
+		t.Fatalf("mark the data changed before the failing build: %v", err)
+	}
+	if _, err := repo.RequestBuild(t.Context(), contest); err != nil {
+		t.Fatalf("ask for a third build: %v", err)
+	}
+	third := claimBuildFor(t, repo, contest)
+	if err := repo.FinishBuild(t.Context(), contest, third.Version,
+		`ERROR: relation "suspects" does not exist`, third.UpdatedAt); err != nil {
+		t.Fatalf("finish the third build as failed: %v", err)
+	}
+	broken, err := repo.TemplateStatus(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("read the template after the failing build: %v", err)
+	}
+	if broken.Status != provisioning.TemplateFailed {
+		t.Fatalf("the failing build left the template %q, want %q", broken.Status, provisioning.TemplateFailed)
+	}
+	if broken.DataChangedAt == nil {
+		t.Fatal("a failed build cleared the data mark; the rows are unbuilt and nothing records it any more")
 	}
 }

@@ -724,10 +724,27 @@ func (s *templateStore) FinishBuild(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.finished = append(s.finished, finish{version: version, err: buildError})
-	if s.template.DataChangedAt != nil && !s.template.DataChangedAt.After(claimedAt) {
+	// The real repository's own CASE, condition for condition (postgres/
+	// gametemplates.go): only a build that succeeded clears the mark, and
+	// only when nothing moved it past the claim. A failed build leaves it —
+	// its template is dropped, so the data never reached a database.
+	if buildError == "" && s.template.DataChangedAt != nil && !s.template.DataChangedAt.After(claimedAt) {
 		s.template.DataChangedAt = nil
 	}
 	return nil
+}
+
+// markBuilt puts the fake's template where FinishBuild leaves a real one when
+// a build succeeds — the state every builder-sourced game is in by the time
+// its screens will let anybody add a row.
+//
+// Here rather than beside its first caller: tabledata_test.go and
+// template_test.go both reach for it, and a helper two files share lives in
+// support_test.go (CLAUDE.md, Go layout rule 5).
+func markBuilt(store *templateStore) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.template.Status = provisioning.TemplateReady
 }
 
 func (s *templateStore) MarkTableDataChanged(_ context.Context, _ uuid.UUID) error {
