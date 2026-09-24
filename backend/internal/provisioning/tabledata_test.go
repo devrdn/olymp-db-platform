@@ -1677,3 +1677,122 @@ func BenchmarkTableDataWindowLastPage(b *testing.B) {
 		}
 	}
 }
+
+// TestARowAddedAfterTheGameWasBuiltLeavesTheTemplateWaitingToBeBuiltAgain is
+// the order a deployment actually runs in, which no test in this package ran
+// before (CLAUDE.md rule 10).
+//
+// The game-build job (internal/app/background.go) claims any template that is
+// 'pending' and builds it within seconds of the definition being saved. An
+// organiser cannot have typed a row before that: AppendTableRow refuses a
+// table that is not in the contest's *saved* definition, so saving — and
+// therefore building — always comes first. Every row typed afterwards
+// therefore has to mark the template out of date, or the only database
+// participants ever copy is the empty one built before the data existed.
+//
+// Against the fake store, because nothing here is a rule PostgreSQL holds:
+// the question is whether the service writes the template's own row at all
+// when a row lands, and a fake that stores one template answers it exactly.
+func TestARowAddedAfterTheGameWasBuiltLeavesTheTemplateWaitingToBeBuiltAgain(t *testing.T) {
+	t.Parallel()
+	service, store, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+	markBuilt(store)
+
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects",
+		[]string{"1", "Margot", ""}); err != nil {
+		t.Fatalf("append a row from the form: %v", err)
+	}
+
+	after, err := store.TemplateStatus(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("read the template: %v", err)
+	}
+	if !after.NeedsBuild() {
+		t.Fatalf("after a row was added the template is %q with no data mark; the row will never be built into a database",
+			after.Status)
+	}
+}
+
+// markBuilt puts the fake's template where FinishBuild leaves a real one when
+// a build succeeds — the state every builder-sourced game is in by the time
+// its screens will let anybody add a row.
+func markBuilt(store *templateStore) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.template.Status = provisioning.TemplateReady
+}
+
+// TestACompletedTableUploadMarksTheGameOutOfDate is the same guarantee for the
+// other way rows arrive: a whole CSV, uploaded in chunks.
+func TestACompletedTableUploadMarksTheGameOutOfDate(t *testing.T) {
+	t.Parallel()
+	service, store, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+	markBuilt(store)
+
+	const csv = "id,name,nickname\n1,Margot,\n"
+	data := beginTableUploadWithContent(t, service, contest, "suspects", csv)
+	if _, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID); err != nil {
+		t.Fatalf("complete the upload: %v", err)
+	}
+
+	after, err := store.TemplateStatus(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("read the template: %v", err)
+	}
+	if !after.NeedsBuild() {
+		t.Fatal("a completed CSV upload left the built game looking current")
+	}
+}
+
+// TestADeletedRowMarksTheGameOutOfDate: a tombstone changes what a build
+// loads exactly as much as a new row does.
+func TestADeletedRowMarksTheGameOutOfDate(t *testing.T) {
+	t.Parallel()
+	service, store, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects",
+		[]string{"1", "Margot", ""}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	markBuilt(store)
+
+	if err := service.DeleteTableRow(t.Context(), uuid.New(), contest, "suspects", 1); err != nil {
+		t.Fatalf("delete the row: %v", err)
+	}
+
+	after, err := store.TemplateStatus(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("read the template: %v", err)
+	}
+	if !after.NeedsBuild() {
+		t.Fatal("a deleted row left the built game looking current")
+	}
+}
+
+// TestBeginningATableUploadDoesNotMarkTheGameOutOfDate: an upload that has
+// only been reserved has changed no row a build would read, and a button
+// offered for it would rebuild the same database again.
+func TestBeginningATableUploadDoesNotMarkTheGameOutOfDate(t *testing.T) {
+	t.Parallel()
+	service, store, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+	markBuilt(store)
+
+	if _, err := service.BeginTableUpload(t.Context(), contest, "suspects", 32); err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	after, err := store.TemplateStatus(t.Context(), contest)
+	if err != nil {
+		t.Fatalf("read the template: %v", err)
+	}
+	if after.NeedsBuild() {
+		t.Fatal("a reserved upload that has changed no row marked the game out of date")
+	}
+}

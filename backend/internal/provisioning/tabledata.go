@@ -543,6 +543,9 @@ func (g *Games) completeTableDataAndAudit(
 		if err != nil {
 			return fmt.Errorf("store the table's data: %w", err)
 		}
+		if err := g.repo.MarkTableDataChanged(ctx, contestID); err != nil {
+			return fmt.Errorf("mark the contest's data changed: %w", err)
+		}
 		if g.audit == nil {
 			return nil
 		}
@@ -833,6 +836,9 @@ func (g *Games) AppendTableRow(ctx context.Context, actorID, contestID uuid.UUID
 		if err != nil {
 			return fmt.Errorf("record the appended row: %w", err)
 		}
+		if err := g.repo.MarkTableDataChanged(ctx, contestID); err != nil {
+			return fmt.Errorf("mark the contest's data changed: %w", err)
+		}
 		if g.audit == nil {
 			return nil
 		}
@@ -1005,6 +1011,9 @@ func (g *Games) bootstrapTableRow(
 		created, err = g.repo.CreateReadyTableData(ctx, id, contestID, tableName, int64(len(content)), 1)
 		if err != nil {
 			return fmt.Errorf("store the table's first row: %w", err)
+		}
+		if err := g.repo.MarkTableDataChanged(ctx, contestID); err != nil {
+			return fmt.Errorf("mark the contest's data changed: %w", err)
 		}
 		if g.audit == nil {
 			return nil
@@ -1266,6 +1275,9 @@ func (g *Games) DeleteTableRow(ctx context.Context, actorID, contestID uuid.UUID
 	run := func(ctx context.Context) error {
 		if err := g.repo.DeleteTableDataRow(ctx, data.ID, row); err != nil {
 			return err
+		}
+		if err := g.repo.MarkTableDataChanged(ctx, contestID); err != nil {
+			return fmt.Errorf("mark the contest's data changed: %w", err)
 		}
 		if g.audit == nil {
 			return nil
