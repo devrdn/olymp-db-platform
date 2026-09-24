@@ -33,6 +33,10 @@ type Games interface {
 	// second and wants the script's length, never the script.
 	StatusOf(ctx context.Context, contestID uuid.UUID) (provisioning.Template, error)
 	SetScript(ctx context.Context, actorID, contestID uuid.UUID, script string) (provisioning.Template, error)
+	// RequestBuild asks for the contest's game to be built again from what is
+	// already stored — the table builder's own button, for data that was
+	// typed in after the build that would have loaded it.
+	RequestBuild(ctx context.Context, actorID, contestID uuid.UUID) (provisioning.Template, error)
 
 	BeginUpload(ctx context.Context, contestID uuid.UUID, filename string, declaredBytes int64) (provisioning.Upload, error)
 	AppendChunk(ctx context.Context, contestID, uploadID uuid.UUID, offset int64, r io.Reader) (int64, error)
@@ -175,6 +179,11 @@ func (h *GameHandler) Mount(r chi.Router) {
 		r.With(h.mw.RequireContestPermission(rbac.PermissionContestView)).Get("/", h.status)
 		r.With(h.mw.RequireContestPermission(rbac.PermissionContestView)).Get("/script", h.script)
 		r.With(h.mw.RequireContestPermission(rbac.PermissionContestEdit)).Put("/script", h.setScript)
+
+		// Building again what is already stored. ContestEdit, like the two
+		// writes above it: this replaces nobody's content, and whoever may
+		// replace the game entirely may certainly ask for it to be built.
+		r.With(h.mw.RequireContestPermission(rbac.PermissionContestEdit)).Post("/build", h.requestBuild)
 
 		// The databases that already exist: the spare pool and the
 		// participants' own copies. Reading them needs what reading the
@@ -461,6 +470,15 @@ type gameResponse struct {
 	// decides which of the three ways to offer, so it is the one place that
 	// is certain to be read before any of them is used.
 	BuilderLimits builderLimitsResponse `json:"builder_limits"`
+	// NeedsBuild is a game whose built database no longer holds the data an
+	// organiser has since put into it — provisioning.Template.NeedsBuild.
+	//
+	// Sent rather than derived on the client from a timestamp: what counts as
+	// "out of date" is a domain rule (a `ready` game with a data mark, and
+	// not a failed or building one), and a second copy of it in the bundle
+	// would go on disagreeing with the server the day the rule moves
+	// (CLAUDE.md rule 11).
+	NeedsBuild bool `json:"needs_build"`
 }
 
 // gameUploadSourceResponse is enough about a file-sourced game's own upload
@@ -513,6 +531,7 @@ func (h *GameHandler) gameView(ctx context.Context, template provisioning.Templa
 		Building:  template.Building(),
 		UpdatedAt: template.UpdatedAt, UploadLimits: h.uploadLimitsView(),
 		BuilderLimits: h.builderLimitsView(),
+		NeedsBuild:    template.NeedsBuild(),
 	}
 	if template.Source == provisioning.SourceFile && template.UploadID != nil {
 		upload, err := h.games.Upload(ctx, template.ContestID, *template.UploadID)
@@ -1379,6 +1398,29 @@ func (h *GameHandler) setDefinition(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusAccepted, h.gameView(r.Context(), template))
 }
 
+// requestBuild asks for the contest's game to be built again from what is
+// already stored — the table builder's rows arrive after the build that would
+// have loaded them, so without this they never reach a database.
+//
+// 202 and not 200: nothing is built by the time this answers. The build is a
+// background job, and the body is the game as it now stands — pending, with
+// the version a copy will be made from — which is exactly what the screen
+// polling the status needs to carry on from.
+func (h *GameHandler) requestBuild(w http.ResponseWriter, r *http.Request) {
+	contestID, ok := h.contestID(w, r)
+	if !ok {
+		return
+	}
+
+	identity, _ := auth.IdentityFrom(r.Context())
+	asked, err := h.games.RequestBuild(r.Context(), identity.UserID, contestID)
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusAccepted, h.gameView(r.Context(), asked))
+}
+
 // tableDataResponse is one table's own CSV data as staff see it — never the
 // path it lives at on disk (uploadResponse's own doc gives the identical
 // reason), and BuilderLimits travels here for the same reason UploadLimits
@@ -1714,6 +1756,12 @@ func (h *GameHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, provisioning.ErrGameNotEditable):
 		httpx.Error(w, r, http.StatusConflict, codeGameNotEditable,
 			"The game cannot be replaced once the contest is running")
+	case errors.Is(err, provisioning.ErrBuildInProgress):
+		httpx.Error(w, r, http.StatusConflict, codeBuildInProgress,
+			"The game is already being built, or is waiting to be")
+	case errors.Is(err, provisioning.ErrNoGame):
+		httpx.Error(w, r, http.StatusNotFound, codeNoGameYet,
+			"This contest has no game to build yet")
 	case errors.Is(err, provisioning.ErrInstanceNotFound):
 		httpx.Error(w, r, http.StatusNotFound, codeGameInstanceNotFound,
 			"This contest has no database by that name")
