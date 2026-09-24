@@ -994,3 +994,86 @@ func TestAFailingGameStoreIsReportedRatherThanReadAsNoGame(t *testing.T) {
 		t.Fatal("Script() swallowed a storage failure")
 	}
 }
+
+// TestNeedsBuildOnlyWhenReadyAndMarked is every state the predicate has to
+// discriminate: only a `ready` template with a mark invites a rebuild. A
+// build already under way (`pending`, `building`) will pick the row up on
+// its own — offering to press a button that a build is already running
+// towards is nonsense — and a `failed` template's own error is what an
+// organiser needs to see next, not an invitation to replace it.
+func TestNeedsBuildOnlyWhenReadyAndMarked(t *testing.T) {
+	t.Parallel()
+	mark := time.Now()
+	for _, tc := range []struct {
+		name   string
+		status provisioning.TemplateStatus
+		marked bool
+		want   bool
+	}{
+		{"ready with a mark", provisioning.TemplateReady, true, true},
+		{"ready without a mark", provisioning.TemplateReady, false, false},
+		{"pending with a mark", provisioning.TemplatePending, true, false},
+		{"building with a mark", provisioning.TemplateBuilding, true, false},
+		{"failed with a mark", provisioning.TemplateFailed, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			template := provisioning.Template{Status: tc.status}
+			if tc.marked {
+				template.DataChangedAt = &mark
+			}
+			if got := template.NeedsBuild(); got != tc.want {
+				t.Fatalf("NeedsBuild() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestABuildClearsAMarkItActuallySaw is the ordinary case: a row changed
+// before the build was ever claimed, so the build's own read of the table
+// data already included it, and the mark must not survive.
+func TestABuildClearsAMarkItActuallySaw(t *testing.T) {
+	t.Parallel()
+	service, store, _ := games(true)
+	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `SELECT 1`); err != nil {
+		t.Fatalf("setting the script: %v", err)
+	}
+	before := time.Now().Add(-time.Hour)
+	store.template.DataChangedAt = &before
+
+	if _, err := service.Build(t.Context(), time.Minute); err != nil {
+		t.Fatalf("building: %v", err)
+	}
+	if store.template.DataChangedAt != nil {
+		t.Fatalf("the mark survived a build that started well after it: %v", *store.template.DataChangedAt)
+	}
+}
+
+// TestABuildLeavesAMarkThatAppearedAfterTheClaim is the race this feature
+// exists for: a row typed while a build is already running must still be
+// picked up by the next one.
+//
+// The fake cannot literally interleave a write with Games.Build's one call,
+// so the mark is set to a timestamp an hour in the future before Build ever
+// runs. That is the same situation a genuinely concurrent write would
+// produce: FinishBuild's own comparison (postgres/gametemplates.go and this
+// package's templateStore.FinishBuild) only ever looks at the two
+// timestamps — the mark's and the claim's — never at which call happened
+// first in wall-clock time. A mark timestamped after the claim behaves
+// identically whether it was written a millisecond after the claim or,
+// as here, deliberately stamped an hour ahead of it.
+func TestABuildLeavesAMarkThatAppearedAfterTheClaim(t *testing.T) {
+	t.Parallel()
+	service, store, _ := games(true)
+	if _, err := service.SetScript(t.Context(), uuid.New(), uuid.New(), `SELECT 1`); err != nil {
+		t.Fatalf("setting the script: %v", err)
+	}
+	after := time.Now().Add(time.Hour)
+	store.template.DataChangedAt = &after
+
+	if _, err := service.Build(t.Context(), time.Minute); err != nil {
+		t.Fatalf("building: %v", err)
+	}
+	if store.template.DataChangedAt == nil {
+		t.Fatal("the build cleared a mark it could not have seen; that row will never be built")
+	}
+}
