@@ -394,6 +394,10 @@
       "meaning": "This account has made more monitoring reads this minute than the installation allows, refused reads included. Wait `Retry-After` seconds and ask again."
     },
     {
+      "code": "no_game_to_build",
+      "meaning": "The contest has no game stored, so there is nothing to build. Deliberately not no_game_yet, which is the participant's answer when their own copy is not ready and whose advice is to wait: the caller here is staff, waiting produces nothing, and the move is to store a game first — a script, an uploaded dump, or a saved description of the tables."
+    },
+    {
       "code": "no_game_yet",
       "meaning": "The contest's game database has not been built. Nobody's mistake and nothing to do with the query."
     },

@@ -1760,8 +1760,12 @@ func (h *GameHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusConflict, codeBuildInProgress,
 			"The game is already being built, or is waiting to be")
 	case errors.Is(err, provisioning.ErrNoGame):
-		httpx.Error(w, r, http.StatusNotFound, codeNoGameYet,
-			"This contest has no game to build yet")
+		// Not codeNoGameYet, which a participant's console renders as "your
+		// database is not ready — try again shortly". Every route on this
+		// handler is staff, and that advice is wrong for them: waiting
+		// produces no game, saving one does.
+		httpx.Error(w, r, http.StatusNotFound, codeNoGameToBuild,
+			"This contest has no game stored to build")
 	case errors.Is(err, provisioning.ErrInstanceNotFound):
 		httpx.Error(w, r, http.StatusNotFound, codeGameInstanceNotFound,
 			"This contest has no database by that name")

@@ -2486,9 +2486,15 @@ func TestAskingForABuildWhileOneRunsIs409BuildInProgress(t *testing.T) {
 	}
 }
 
-// TestAskingForABuildWithNoGameIs404NoGameYet: there is nothing stored to
+// TestAskingForABuildWithNoGameIs404NoGameToBuild: there is nothing stored to
 // build again.
-func TestAskingForABuildWithNoGameIs404NoGameYet(t *testing.T) {
+//
+// Its own code rather than the participant's no_game_yet. That one says the
+// database is not ready yet and to try again shortly, which is true for
+// somebody waiting on their own copy and false here: every route on this
+// handler is staff, waiting never produces a game, and saving a script, a
+// dump or a table definition is the only thing that does.
+func TestAskingForABuildWithNoGameIs404NoGameToBuild(t *testing.T) {
 	f := newGameFixture(t, rbac.PermissionContestAdminAll)
 	f.games.requestBuildErr = provisioning.ErrNoGame
 
@@ -2496,8 +2502,8 @@ func TestAskingForABuildWithNoGameIs404NoGameYet(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status %d, want 404: %s", rec.Code, rec.Body)
 	}
-	if code := errorCode(t, rec); code != "no_game_yet" {
-		t.Fatalf("code %q, want %q", code, "no_game_yet")
+	if code := errorCode(t, rec); code != "no_game_to_build" {
+		t.Fatalf("code %q, want %q", code, "no_game_to_build")
 	}
 }
 
