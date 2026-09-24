@@ -542,6 +542,45 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 	}
 	t.Cleanup(func() { gamedbtest.Drop(saved.Database) })
 
+	// The first build: the one a deployment's own background job runs
+	// seconds after SetDefinition, long before an organiser has typed a
+	// single row. On a deployment this is the *only* build that ever ran
+	// against an empty table builder game — which is exactly why the defect
+	// this test exists to catch could hide behind a test that built only
+	// once, after every row was already in.
+	built, err := games.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("build (first, right after the definition was saved): %v", err)
+	}
+	if built.Status != provisioning.TemplateReady {
+		t.Fatalf("the first build finished as %q: %s", built.Status, built.BuildError)
+	}
+	// Build claims the oldest pending template of *any* contest
+	// (postgres.GameInstances.ClaimBuild's own doc), not necessarily this
+	// test's own. Calling it twice in this test doubles the exposure to a
+	// concurrent test's template being claimed instead of this one, so that
+	// has to fail loudly here rather than let every assertion below run
+	// against a database this test never built.
+	if built.ContestID != contest.ID {
+		t.Fatalf("the first build claimed contest %s, not this test's own %s — a concurrent test's template was claimed instead", built.ContestID, contest.ID)
+	}
+
+	// The assertion the whole reorder exists to make: right after the first
+	// build, before a single row has been loaded, the table it just created
+	// has to be empty. Without this, nothing below proves *which* build
+	// loaded the rows asserted at the end of this test, and a regression
+	// that went back to loading data at the first build (the defect this
+	// branch fixes) would pass anyway (CLAUDE.md rule 10).
+	firstConn := gamedbtest.Connect(t, user, password, built.Database)
+	var suspectsBeforeAnyDataWasLoaded int
+	if err := firstConn.QueryRow(t.Context(), `SELECT count(*) FROM suspects`).Scan(&suspectsBeforeAnyDataWasLoaded); err != nil {
+		t.Fatalf("count suspects right after the first build: %v", err)
+	}
+	if suspectsBeforeAnyDataWasLoaded != 0 {
+		t.Fatalf("suspects has %d row(s) right after the first build, want 0 — no row can have been loaded before the build that first named its table ever ran", suspectsBeforeAnyDataWasLoaded)
+	}
+	_ = firstConn.Close(context.Background())
+
 	// suspects: a whole CSV, uploaded in chunks — the same way a dump is.
 	// Deliberately with no trailing newline, which is what a good many
 	// exporters write and what validateTableFile accepts: the row added from
@@ -589,15 +628,34 @@ func TestAScriptSavedInTheCoreDatabaseFromATableBuilderDefinitionWithCSVDataBuil
 		t.Fatalf("delete sighting 1: %v", err)
 	}
 
-	built, err := games.Build(t.Context(), time.Minute)
+	// The second build: what RequestBuild exists for. Everything loaded above
+	// sat on disk, unreachable by any participant, until this asks for the
+	// game to be built again from what is now stored — the table builder's
+	// own missing half (Games.RequestBuild's own doc).
+	asked, err := games.RequestBuild(t.Context(), uuid.New(), contest.ID)
 	if err != nil {
-		t.Fatalf("build: %v", err)
+		t.Fatalf("request the build again, now that the table builder's data has changed: %v", err)
 	}
-	if built.Status != provisioning.TemplateReady {
-		t.Fatalf("the build finished as %q: %s", built.Status, built.BuildError)
+	if asked.Version <= built.Version {
+		t.Fatalf("RequestBuild returned version %d, want it greater than the first build's %d", asked.Version, built.Version)
 	}
 
-	conn := gamedbtest.Connect(t, user, password, built.Database)
+	second, err := games.Build(t.Context(), time.Minute)
+	if err != nil {
+		t.Fatalf("build (second, with the table builder's data on disk): %v", err)
+	}
+	if second.Status != provisioning.TemplateReady {
+		t.Fatalf("the second build finished as %q: %s", second.Status, second.BuildError)
+	}
+	if second.ContestID != contest.ID {
+		t.Fatalf("the second build claimed contest %s, not this test's own %s — a concurrent test's template was claimed instead", second.ContestID, contest.ID)
+	}
+	// A second Drop and not a no-op: the rebuild makes a second database, and
+	// a test that dropped only the one the first build produced would leave
+	// one behind on the cluster after every run.
+	t.Cleanup(func() { gamedbtest.Drop(second.Database) })
+
+	conn := gamedbtest.Connect(t, user, password, second.Database)
 	defer func() { _ = conn.Close(context.Background()) }()
 
 	var suspectCount int
