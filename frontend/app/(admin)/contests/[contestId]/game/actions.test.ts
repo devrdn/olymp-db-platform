@@ -26,6 +26,7 @@ import {
   gameStatusAction,
   gameTableDataWindowAction,
   gameUploadWindowAction,
+  requestGameBuildAction,
   saveGameDefinitionAction,
   saveGameScriptAction,
 } from "./actions";
@@ -147,6 +148,38 @@ describe("gameStatusAction", () => {
 
   test("returns null for a contest segment that is not an identifier", async () => {
     expect(await gameStatusAction("nope")).toBeNull();
+    expect(serverRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("requestGameBuildAction", () => {
+  test("asks for the game to be built again and revalidates", async () => {
+    serverRequest.mockResolvedValueOnce({ ...game, status: "pending", needs_build: false });
+
+    const result = await requestGameBuildAction(contestId);
+
+    expect(result.code).toBeUndefined();
+    expect(result.value).toMatchObject({ status: "pending", needsBuild: false });
+    expect(serverRequest).toHaveBeenCalledWith(`/contests/${contestId}/game/build`, { method: "POST" });
+    expect(revalidatePath).toHaveBeenCalledWith(`/contests/${contestId}`, "layout");
+  });
+
+  // The screen's own reason to exist: a build already waiting or running is
+  // refused rather than queued twice, and this proves the refusal comes back
+  // as a named code the screen can show a sentence for, not a thrown error.
+  test("carries the server's own refusal when a build is already in progress", async () => {
+    serverRequest.mockRejectedValueOnce(new ApiError("build_in_progress", 409, "already building"));
+
+    const result = await requestGameBuildAction(contestId);
+
+    expect(result).toEqual({ code: "build_in_progress", detail: "already building" });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  test("never sends a request for a contest segment that is not an identifier", async () => {
+    const result = await requestGameBuildAction("nope");
+
+    expect(result).toEqual({ code: "invalid_contest_id" });
     expect(serverRequest).not.toHaveBeenCalled();
   });
 });

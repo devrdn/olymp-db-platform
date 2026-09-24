@@ -561,6 +561,11 @@ const ro = {
         failed: "construire eșuată",
         dropped: "ștearsă",
       },
+      build: {
+        notice: "Datele s-au schimbat de la ultima construire",
+        action: "Construiește din nou",
+        building: "Se construiește…",
+      },
       upload: {
         heading: "Încarcă un dump gata făcut",
         lede: "Un dump gata făcut în locul scriptului scris mai sus — schema, datele, totul deja pregătit. Fișierul este trimis în bucăți, așa că niciun fișier de câțiva gigabytes nu trebuie ținut întreg în memoria browserului, iar o încărcare întreruptă poate continua de unde a rămas.",

@@ -111,6 +111,29 @@ export async function gameStatusAction(contestId: string): Promise<Game | null> 
 }
 
 /**
+ * Asking for the game to be built again — `POST .../game/build`.
+ *
+ * The table builder's rows are stored after the build that would have loaded
+ * them and cannot be stored before it, so this is the only way data an
+ * organiser typed reaches a database. 202 with the game as it now stands;
+ * `refusal` carries a named "no" (the contest is running, a build is already
+ * under way, there is no game yet) through to the screen.
+ */
+export async function requestGameBuildAction(contestId: string): Promise<UploadActionResult<Game>> {
+  if (!isId(contestId)) return { code: "invalid_contest_id" };
+
+  let value: Game;
+  try {
+    value = gameSchema.parse(await serverRequest(`/contests/${contestId}/game/build`, { method: "POST" }));
+  } catch (error) {
+    return refusal(error);
+  }
+
+  revalidatePath(`/contests/${contestId}`, "layout");
+  return { value };
+}
+
+/**
  * The second way to build a contest's game: an organiser's own finished
  * dump, sent in pieces, rather than a script typed into `GameEditor`.
  *
