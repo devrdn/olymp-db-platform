@@ -423,6 +423,219 @@ func TestABuildCannotFinishAVersionThatHasAlreadyBeenReplaced(t *testing.T) {
 	})
 }
 
+// markStatus forces one contest's game to status directly, the way a test
+// that needs a 'ready' or 'failed' row to already exist has to — neither
+// state is reachable through the repository's own calls without a real
+// build running.
+func markStatus(t *testing.T, ctx context.Context, contest uuid.UUID, status string) {
+	t.Helper()
+	tag, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
+		`UPDATE game_templates SET status = $2, updated_at = now() WHERE contest_id = $1`, contest, status)
+	if err != nil {
+		t.Fatalf("mark the game %s: %v", status, err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("marked %d games %s, want this test's one", tag.RowsAffected(), status)
+	}
+}
+
+// TestRequestBuildLeavesTheStoredContentUntouched is the guarantee the fake
+// in support_test.go cannot prove: it reimplements RequestBuild's own
+// condition as an if/else, so a wrong column name, a wrong status literal or
+// a missing AND in the real UPDATE would still pass every test that ran
+// against the fake. This one runs the actual SQL.
+//
+// Run once per source, because each owns a different one of the three
+// content columns RequestBuild must leave alone — a script's init_script, a
+// definition's definition_json, an upload's upload_id — and reading them
+// back after the call is what would catch somebody later adding one of them
+// to the UPDATE's own SET list, rather than trusting that list to be
+// complete.
+func TestRequestBuildLeavesTheStoredContentUntouched(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, ctx context.Context, repo *GameInstances, contest uuid.UUID) provisioning.Template
+	}{
+		{
+			name: "script",
+			setup: func(t *testing.T, ctx context.Context, repo *GameInstances, contest uuid.UUID) provisioning.Template {
+				saved, err := repo.SaveScript(ctx, contest, "game_tpl_c"+uuid.NewString()[:12], `SELECT 1`)
+				if err != nil {
+					t.Fatalf("save script: %v", err)
+				}
+				return saved
+			},
+		},
+		{
+			name: "definition",
+			setup: func(t *testing.T, ctx context.Context, repo *GameInstances, contest uuid.UUID) provisioning.Template {
+				saved, err := repo.SaveDefinition(ctx, contest, "game_tpl_c"+uuid.NewString()[:12], aDefinition())
+				if err != nil {
+					t.Fatalf("save definition: %v", err)
+				}
+				return saved
+			},
+		},
+		{
+			name: "upload",
+			setup: func(t *testing.T, ctx context.Context, repo *GameInstances, contest uuid.UUID) provisioning.Template {
+				id := uuid.New()
+				if _, err := repo.BeginUpload(ctx, id, contest, "dump.sql", 10); err != nil {
+					t.Fatalf("begin upload: %v", err)
+				}
+				saved, err := repo.CompleteUpload(ctx, contest, id, "game_tpl_c"+uuid.NewString()[:12],
+					provisioning.UploadSummary{Bytes: 10, SHA256: "aaaa", Lines: 1}, nil)
+				if err != nil {
+					t.Fatalf("complete upload: %v", err)
+				}
+				return saved
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			anotherPackagesPendingGame(t)
+			withTx(t, func(ctx context.Context) {
+				contest := aContest(t, ctx)
+				repo := NewGameInstances(testPool)
+
+				before := tc.setup(t, ctx, repo, contest)
+				markStatus(t, ctx, contest, "ready")
+
+				asked, err := repo.RequestBuild(ctx, contest)
+				if err != nil {
+					t.Fatalf("RequestBuild: %v", err)
+				}
+				if asked.Status != provisioning.TemplatePending {
+					t.Fatalf("status = %q, want pending", asked.Status)
+				}
+				if asked.Version != before.Version+1 {
+					t.Fatalf("version = %d, want %d (one more than %d): the copies made from the old one must go stale",
+						asked.Version, before.Version+1, before.Version)
+				}
+
+				after, err := repo.Template(ctx, contest)
+				if err != nil {
+					t.Fatalf("read back: %v", err)
+				}
+				if after.Script != before.Script {
+					t.Fatalf("script = %q after RequestBuild, want %q (unchanged)", after.Script, before.Script)
+				}
+				if len(after.Definition.Tables) != len(before.Definition.Tables) {
+					t.Fatalf("definition = %+v after RequestBuild, want %+v (unchanged)", after.Definition, before.Definition)
+				}
+				for i := range before.Definition.Tables {
+					if after.Definition.Tables[i].Name != before.Definition.Tables[i].Name {
+						t.Fatalf("definition = %+v after RequestBuild, want %+v (unchanged)", after.Definition, before.Definition)
+					}
+				}
+				if (after.UploadID == nil) != (before.UploadID == nil) {
+					t.Fatalf("upload_id = %v after RequestBuild, want %v (unchanged)", after.UploadID, before.UploadID)
+				}
+				if after.UploadID != nil && *after.UploadID != *before.UploadID {
+					t.Fatalf("upload_id = %s after RequestBuild, want %s (unchanged)", *after.UploadID, *before.UploadID)
+				}
+			})
+		})
+	}
+}
+
+// TestRequestBuildAcceptsAFailedGameToo: a build that ran and did not finish
+// is exactly as buildable again as one that finished cleanly — the organiser
+// pressing the button does not care which of the two states got them there,
+// and RequestBuild's own WHERE clause names both.
+func TestRequestBuildAcceptsAFailedGameToo(t *testing.T) {
+	anotherPackagesPendingGame(t)
+	withTx(t, func(ctx context.Context) {
+		contest := aContest(t, ctx)
+		repo := NewGameInstances(testPool)
+
+		saved, err := repo.SaveScript(ctx, contest, "game_tpl_c"+uuid.NewString()[:12], `SELECT 1`)
+		if err != nil {
+			t.Fatalf("save: %v", err)
+		}
+		markBuilding(t, ctx, contest, "0 seconds")
+		if err := repo.FinishBuild(ctx, contest, saved.Version, `ERROR: type "nosuchtype" does not exist`, time.Now()); err != nil {
+			t.Fatalf("finish (failed): %v", err)
+		}
+
+		asked, err := repo.RequestBuild(ctx, contest)
+		if err != nil {
+			t.Fatalf("RequestBuild on a failed game: %v", err)
+		}
+		if asked.Status != provisioning.TemplatePending {
+			t.Fatalf("status = %q, want pending", asked.Status)
+		}
+		if asked.BuildError != "" {
+			t.Fatalf("build_error = %q, want cleared", asked.BuildError)
+		}
+	})
+}
+
+// TestRequestBuildRefusesAGameNotReadyOrFailed is the race arbiter itself —
+// the assertion the fake in support_test.go cannot make, because the fake's
+// own if/else is what it exists to prove is not the whole story. A game
+// already 'pending' (a build is waiting) or 'building' (one is running) must
+// both be refused: raising the version out from under a build already under
+// way would leave that build's own outcome recorded against a version
+// nobody is waiting on, the same trap TestABuildCannotFinishAVersionThatHas
+// AlreadyBeenReplaced covers from FinishBuild's side.
+func TestRequestBuildRefusesAGameNotReadyOrFailed(t *testing.T) {
+	for _, status := range []string{"pending", "building"} {
+		t.Run(status, func(t *testing.T) {
+			anotherPackagesPendingGame(t)
+			withTx(t, func(ctx context.Context) {
+				contest := aContest(t, ctx)
+				repo := NewGameInstances(testPool)
+
+				saved, err := repo.SaveScript(ctx, contest, "game_tpl_c"+uuid.NewString()[:12], `SELECT 1`)
+				if err != nil {
+					t.Fatalf("save: %v", err)
+				}
+				if status != "pending" {
+					markStatus(t, ctx, contest, status)
+				}
+
+				if _, err := repo.RequestBuild(ctx, contest); !errors.Is(err, provisioning.ErrBuildInProgress) {
+					t.Fatalf("RequestBuild on a %s game = %v, want ErrBuildInProgress", status, err)
+				}
+
+				now, err := repo.Template(ctx, contest)
+				if err != nil {
+					t.Fatalf("read back: %v", err)
+				}
+				if now.Status != provisioning.TemplateStatus(status) || now.Version != saved.Version {
+					t.Fatalf("the refused request changed the row to %+v, want status %q and version %d unchanged",
+						now, status, saved.Version)
+				}
+			})
+		})
+	}
+}
+
+// TestRequestBuildOnAContestWithNoGameAnswersErrBuildInProgress documents the
+// repository's own answer for a contest_id that names no game_templates row
+// at all: the conditional UPDATE matches nothing, the same as it would for a
+// row that exists but is pending or building, so this repository method
+// cannot itself tell "no game" apart from "not buildable right now" — both
+// read back as zero rows changed.
+//
+// It is Games.RequestBuild, one layer up, that tells the two apart: it reads
+// TemplateStatus first and returns ErrNoGame before this method is ever
+// called, so a caller of the service never observes what this test asserts.
+// This is deliberately the deferred minor from the branch review recorded
+// against this method — not something to fix here — stated as the behaviour
+// that exists, so a later change to it is a decision made on purpose.
+func TestRequestBuildOnAContestWithNoGameAnswersErrBuildInProgress(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		contest := aContest(t, ctx)
+		repo := NewGameInstances(testPool)
+
+		if _, err := repo.RequestBuild(ctx, contest); !errors.Is(err, provisioning.ErrBuildInProgress) {
+			t.Fatalf("RequestBuild on a contest with no game = %v, want ErrBuildInProgress", err)
+		}
+	})
+}
+
 // The first build is the one most likely to get this wrong: the template is
 // not 'ready' yet, so Game() has no row to answer from.
 func TestThePolicyIsReadableBeforeTheGameIsEverBuilt(t *testing.T) {
