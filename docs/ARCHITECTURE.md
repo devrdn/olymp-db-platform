@@ -1,65 +1,101 @@
-# DB Contest — архитектурный план
+# DB Contest — architecture
 
-Платформа для проведения университетских SQL-олимпиад формата «Детектив»: студенты получают историю преступления и доступ к игровой базе данных, пишут SQL-запросы через веб-интерфейс, отвечают на вопросы и находят преступника.
+A platform for running university SQL olympiads in a detective format:
+students are given the story of a crime and a database holding the evidence,
+write SQL in a browser, answer questions from what the queries tell them, and
+name the culprit.
 
-Документ — основа для имплементации. Все ключевые решения зафиксированы с альтернативами и обоснованием.
+This document is the implementation's foundation. Every decision that mattered
+is recorded here together with what was considered instead and why it lost.
+Where a decision has since been revisited, the revision is written beside the
+original rather than replacing it: a document that only ever shows the current
+answer teaches nobody why the earlier one failed.
 
+## 1. Architectural style
 
-## 1. Архитектурный стиль
+### What was considered
 
-### Рассмотренные варианты
-
-| Вариант | Плюсы | Минусы |
+| Option | For | Against |
 |---|---|---|
-| **Классический монолит** | Просто деплоить и отлаживать | Выполнение студенческих SQL внутри того же процесса — риск: тяжёлый запрос или уязвимость влияет на всё приложение |
-| **Микросервисы** (auth, contest, query, reporting…) | Независимое масштабирование | Для университетской системы (сотни участников, одна команда разработки) — избыточная операционная сложность: service discovery, распределённые транзакции, версионирование API |
-| **Serverless** | Нулевая инфраструктура в простое | Система локальная (on-premise), долгоживущие SQL-сессии и провижининг БД плохо ложатся на FaaS |
+| **A classic monolith** | Simple to deploy and to debug | Student SQL runs inside the same process — one heavy query or one vulnerability reaches the whole application |
+| **Microservices** (auth, contest, query, reporting…) | Independent scaling | For a university system — hundreds of participants, one development team — the operational cost is out of proportion: service discovery, distributed transactions, API versioning |
+| **Serverless** | No infrastructure while idle | The system is on-premise, and long-lived SQL sessions and database provisioning sit badly on FaaS |
 
-### Решение: модульный монолит + выделенный Query Runner
+### The decision: a modular monolith plus a separate Query Runner
 
-Основной бэкенд — **один Go-процесс с жёсткими модульными границами** (auth, contests, submissions, reporting, audit). Единственный компонент, вынесенный в **отдельный сервис** — **Query Runner**, который выполняет студенческие SQL-запросы.
+The backend is **one Go process with firm module boundaries** — auth,
+contests, submissions, reporting, audit. Exactly one component is split out
+into a **service of its own**: the **Query Runner**, which executes the SQL
+students write.
 
-Почему именно так:
+Why that line and not another:
 
-1. **Изоляция отказов там, где она реально нужна.** Единственный источник непредсказуемой нагрузки — студенческий SQL. Вынос Query Runner в отдельный процесс означает, что даже при его деградации (OOM, зависшие соединения) авторизация, таймер и приём ответов продолжают работать.
+1. **Failure isolation where it is actually needed.** The one source of
+   unpredictable load is student SQL. With the Query Runner in its own
+   process, sign-in, the clock and answer submission keep working even when it
+   degrades — an out-of-memory kill, connections that will not close.
 
-   Точнее, чем «деградация»: Runner линкует **настоящий парсер PostgreSQL через cgo**, чтобы проверить запрос до выполнения. Это код на C, разбирающий текст, который выбирает атакующий, — а падение там не паника Go, которую ловит `recover`, а конец процесса. Внутри Core API подобранный запрос стал бы **воспроизводимым способом уронить вход, таймер и приём ответов**; и ломать консоль — это буквально содержание олимпиады. Вероятность низкая, последствие полное, ввод состязательный по построению.
+   "Degrades" is too soft for the real reason. The Runner links **PostgreSQL's
+   own parser through cgo** to inspect a statement before running it. That is
+   C code reading text an attacker chose, and a crash there is not a Go panic
+   that `recover` catches — it is the end of the process. Inside the Core API,
+   a well-chosen query would be a **reproducible way to take down sign-in, the
+   clock and answer submission**, and breaking the console is literally the
+   content of the olympiad. The probability is low, the consequence is total,
+   and the input is adversarial by construction.
 
-   Сюда же — **сборка**. Остальные бинари собираются с `CGO_ENABLED=0` и живут на `distroless/static`, без libc вообще. Runner требует cgo и libc в рантайме. Будь он частью бинаря Core API, cgo, компилятор в сборке и libc в рантайме достались бы заодно API, миграциям и bootstrap — расширение поверхности атаки всех троих ради одного компонента. Поэтому у Runner'а свой образ (`db-contest-queryrunner`) на `distroless/base`.
+   The build is part of the same argument. Every other binary compiles with
+   `CGO_ENABLED=0` and ships on `distroless/static`, with no libc at all. The
+   Runner needs cgo, and needs libc at runtime. Were it part of the Core API's
+   binary, cgo, a compiler in the build and libc in the image would come with
+   it — widening the attack surface of the API, the migrations and the
+   bootstrap job for the sake of one component. So the Runner has an image of
+   its own, `db-contest-queryrunner`, on `distroless/base`.
 
-2. **Учётные данные игрового кластера держит только он.** В одном процессе с Core API любая ошибка в любом обработчике API оказывалась бы в досягаемости от баз участников. Конфигурация разделена так, что структура настроек Core API физически не может назвать игровой кластер.
-3. **Масштабирование по месту** — довод настоящий, но в вашем масштабе почти не работает: на одной on-premise машине с сотнями участников никто это реплицировать не будет. Он остаётся как «не мешать в будущем», а не как обоснование.
-3. **Минимальная операционная цена.** Два сервиса вместо десяти — деплой остаётся простым (Docker Compose), но граница безопасности проведена там, где нужно.
-4. **Путь к росту.** Модульные границы внутри монолита позволяют позже вынести reporting или provisioning в отдельные сервисы без переписывания.
+2. **Only the Runner holds the game cluster's credentials.** In one process
+   with the Core API, a mistake in any handler would be within reach of the
+   participants' databases. The configuration is split so that the Core API's
+   settings structure physically cannot name the game cluster.
 
+3. **Minimal operational cost.** Two services instead of ten: deployment stays
+   a Docker Compose file, and the security boundary is drawn where it earns
+   its keep.
 
-## 2. Компоненты системы и их взаимодействие
+4. **Room to grow.** The module boundaries inside the monolith let reporting
+   or provisioning move out later without a rewrite.
+
+Scaling each part independently is a real advantage of the split and almost
+irrelevant at this size: nobody replicates a single on-premise machine serving
+a few hundred participants. It is recorded as "do not make it impossible
+later", not as a reason the decision was taken.
+
+## 2. Components, and how they talk
 
 ```mermaid
 flowchart LR
-    subgraph Клиенты
-        S[Студент - браузер]
-        A[Админ - браузер]
+    subgraph Clients
+        S[Student - browser]
+        A[Organiser - browser]
     end
 
     subgraph Frontend
-        FE[Next.js\nстуденческий и админский UI]
+        FE[Next.js\nparticipant and staff UI]
     end
 
     subgraph Backend
-        API[Core API - Go\nauth / contests / submissions\nprovisioner / reporting / audit]
-        QR[Query Runner - Go\nвалидация и выполнение SQL]
+        API[Core API - Go\nauth / contests / submissions\nprovisioning / reporting / audit]
+        QR[Query Runner - Go\nvalidates and executes SQL]
     end
 
-    subgraph Данные
-        CORE[(PostgreSQL core\nпользователи, олимпиады,\nответы, логи)]
-        GAME[(PostgreSQL game cluster\nБД-шаблон + БД на участника)]
-        REDIS[(Redis\nсессии, rate limit,\nкеш таймера)]
+    subgraph Data
+        CORE[(PostgreSQL core\naccounts, contests,\nanswers, logs)]
+        GAME[(PostgreSQL game cluster\ntemplate + one database per participant)]
+        REDIS[(Redis\nsessions, rate limits,\nclock cache)]
     end
 
-    subgraph Наблюдаемость
-        LOKI[Loki - логи]
-        PROM[Prometheus - метрики]
+    subgraph Observability
+        LOKI[Loki - logs]
+        PROM[Prometheus - metrics]
         GRAF[Grafana]
     end
 
@@ -70,151 +106,247 @@ flowchart LR
     API -->|gRPC| QR
     API --> CORE
     API --> REDIS
-    QR -->|game-роли, семафор| GAME
-    API -->|провижининг| GAME
-    API -.логи/метрики.-> LOKI & PROM
-    QR -.логи/метрики.-> LOKI & PROM
+    QR -->|game roles, semaphore| GAME
+    API -->|provisioning| GAME
+    API -.logs/metrics.-> LOKI & PROM
+    QR -.logs/metrics.-> LOKI & PROM
     LOKI --> GRAF
     PROM --> GRAF
 ```
 
 ### 2.1 Frontend (Next.js)
 
-Одно приложение, два раздела с разграничением по ролям:
+One application, two areas divided by role:
 
-- **Студенческий UI**: список доступных олимпиад с кнопкой «Участвовать» для открытых (раздел 7.1), страница олимпиады (история преступления, таймер, вопросы), SQL-консоль (редактор с подсветкой, таблица результатов, история запросов), профиль с прогрессом и результатами.
-- **Админский UI**: управление пользователями и ролями (только админ системы), конструктор олимпиад (история, вопросы, эталонные ответы, загрузка игровой схемы, тип записи и IP-ограничения — раздел 7.1), управление участниками (добавление поштучно и импортом CSV для `invite_only`), настройка политики SQL-доступа олимпиады, назначение менеджеров олимпиады, мониторинг хода олимпиады в реальном времени и наблюдение за каждым участником — что он делал, вживую и после (раздел 9.4), панель журнала запросов с live-режимом и экспортом (раздел 9.1), отчёты. Видимость разделов определяется ролью: админ системы видит всё, owner/manager олимпиады — только свои олимпиады (раздел 7).
+- **The participant's side**: the contests open to them, with a "take part"
+  button on the open ones (section 7.1); the contest page with the story, the
+  clock and the questions; the SQL console — an editor with highlighting, a
+  result table, a query history; and a profile carrying their progress and
+  results.
+- **The staff side**: accounts and roles (system administrator only); the
+  contest builder — story, questions, reference answers, the game schema,
+  registration type and address restrictions (section 7.1); participant
+  management, one at a time or imported from CSV for an `invite_only` contest;
+  the contest's SQL policy; appointing contest managers; live monitoring of a
+  contest in flight and of each participant — what they did, live and
+  afterwards (section 9.4); the query log with a live mode and export
+  (section 9.1); and reports. What a person sees is decided by role: a system
+  administrator sees everything, a contest's owner and managers see their own
+  contests (section 7).
 
-**SQL-консоль подробнее.** Ключевой инвариант: всё, что студент делает в консоли, — это либо чтение кеша, либо запрос через единый конвейер queryproxy → Query Runner (разделы 4.3, 5). Привилегированных «обходных» путей к БД у UI нет, поэтому никакая кнопка интерфейса не может нагрузить кластер сильнее, чем разрешает admission control, и не влияет на других участников.
+**The SQL console in more detail.** The invariant that matters: everything a
+student does in the console is either a read from cache or a query through the
+one pipeline — `queryproxy` → Query Runner (sections 4.3 and 5). The interface
+has no privileged side door to the database, so no button in it can load the
+cluster harder than admission control allows, and none can affect another
+participant.
 
-- **Результат запроса** — таблица с именами и типами колонок, явным отображением `NULL`, счётчиком строк и временем выполнения; при усечении — баннер «показаны первые 1000 строк, уточните запрос». Ошибка СУБД показывается с привязкой к месту в тексте (PostgreSQL возвращает позицию ошибки — редактор подсвечивает её), отклонение валидатором — человекочитаемой причиной («функция X не поддерживается»). Полученный результат можно скачать в CSV — из уже переданных строк, без повторного похода в БД.
-- **История запросов** — собственные запросы участника (из `query_log`) со статусами и временем; клик восстанавливает запрос в редакторе. Это же «сохранённые наработки»: вернуться к удачному запросу после серии неудачных.
-- **Заметки и вкладки редактора** — рабочее место участника, хранящееся на сервере и переживающее перезагрузку и смену компьютера; подробности и пределы — раздел 6.4. Оно не личное: организатор олимпиады видит его вместе с историей правок, и экран говорит об этом участнику (раздел 9.4).
-- **Обзор схемы («полазить по базе»)** — постоянная левая панель консоли: дерево таблиц и колонок с типами и FK-связями плюс автогенерируемая ER-диаграмма игровой схемы. Источник — **кешированное описание схемы**, построенное один раз при сборке шаблона: клики по дереву не создают ни одного запроса к инстансам и не тратят rate limit студента. Кнопка «посмотреть данные» у таблицы — обычный сгенерированный `SELECT * FROM t LIMIT 50`, который идёт через общий конвейер на общих правах и лимитах (и виден в query_log, как любой запрос).
+- **The result** is a table with column names and types, `NULL` shown as
+  itself, a row count and an execution time. When the result was cut, a banner
+  says so — "the first 1000 rows; narrow the query". A database error is shown
+  against the place it happened (PostgreSQL returns the position, and the
+  editor highlights it); a validator refusal is shown as a readable reason
+  ("the function X is not supported"). What came back can be downloaded as
+  CSV, built from the rows already sent rather than from a second trip to the
+  database.
+- **The query history** holds the participant's own queries, from `query_log`,
+  with their status and timing; clicking one restores it in the editor. It
+  doubles as saved work: a way back to the query that worked after a run of
+  ones that did not.
+- **Notes and editor tabs** are the participant's workspace, kept on the
+  server so it survives a reload and a change of machine; the limits are in
+  section 6.4. It is not private: the contest's organiser sees it along with
+  its edit history, and the screen tells the participant so (section 9.4).
+- **The schema browser** is a permanent panel on the left of the console: a
+  tree of tables and columns with their types and foreign keys, plus a
+  generated ER diagram of the game schema. Its source is a **cached
+  description of the schema**, built once when the template was built, so
+  clicking through the tree costs no query against an instance and none of the
+  student's rate limit. The "show me the data" button on a table is an
+  ordinary generated `SELECT * FROM t LIMIT 50` that goes through the same
+  pipeline under the same rules and limits — and appears in `query_log` like
+  any other query.
 
-Рендеринг: App Router; публичные страницы — SSR, игровая консоль — клиентский компонент. Все запросы к данным идут в Core API; у Next.js нет прямого доступа к БД.
+Rendering: the App Router, with public pages server-rendered and the console a
+client component. Every read goes to the Core API; Next.js has no database
+access of its own.
 
-### 2.2 Core API (Go, модульный монолит)
+### 2.2 Core API (Go, a modular monolith)
 
-| Модуль | Ответственность |
+| Module | Responsibility |
 |---|---|
-| `auth` | Логин/пароль, сессии, RBAC-middleware |
-| `users` | Профили, управление пользователями (админ) |
-| `contests` | CRUD олимпиад, историй, вопросов, эталонных ответов; политика SQL-доступа олимпиады; назначение менеджеров олимпиады; жизненный цикл (draft → published → running → finished); таймер |
-| `registrations` | Запись участников (самозапись для `open`, добавление менеджером для `invite_only`), старт/финиш участия |
-| `submissions` | Приём ответов, автоматическая проверка, подсчёт баллов |
-| `provisioner` | Создание/удаление игровых БД участников из шаблона: очередь с воркерами + резервный пул (раздел 4.2) |
-| `queryproxy` | Тонкий фасад: принимает SQL от фронтенда, применяет rate limit, передаёт в Query Runner, пишет query log |
-| `reporting` | Статистика, лидерборды, экспорт |
-| `audit` | Append-only журнал действий |
-| `monitor` | Наблюдение за участником: сигналы браузера и сервера, история заметок и вкладок, отпечаток запроса; чтение для организатора — таблица участников с отметками, общая лента, запросы, ответы, рабочее место, CSV (раздел 9.4) |
+| `auth` | Sign-in, sessions, the RBAC middleware |
+| `users` | Profiles, account administration |
+| `contests` | Contests, stories, questions and reference answers; the contest's SQL policy; appointing managers; the lifecycle (draft → published → running → finished) and the clock |
+| `registrations` | Enrolment — self-service for `open`, by a manager for `invite_only` — and the start and finish of one participant's run |
+| `submissions` | Taking answers, checking them, scoring |
+| `provisioning` | Creating and removing participants' game databases from a template: a worker queue plus a pool of spares (section 4.2) |
+| `queryproxy` | A thin façade: takes SQL from the interface, applies the rate limit, hands it to the Query Runner, writes the query log |
+| `reporting` | Statistics, leaderboards, export |
+| `audit` | The append-only record of what staff did |
+| `monitor` | Watching a participant: browser and server signals, the history of their notes and tabs, a fingerprint of each query; and the organiser's reads — a participant table with flags, a combined feed, queries, answers, workspace, CSV (section 9.4) |
 
-Модули общаются только через Go-интерфейсы (никаких прямых обращений к чужим таблицам) — это и есть «швы» для будущего разрезания на сервисы.
+Modules talk to each other only through Go interfaces — never by reaching into
+another module's tables. Those interfaces are the seams a future split into
+services would cut along.
 
-### 2.3 Query Runner (Go, отдельный сервис)
+### 2.3 Query Runner (Go, a separate service)
 
-Stateless-сервис с единственной задачей: безопасно выполнить один SQL-запрос студента в его игровой БД и вернуть результат. Подробности в разделе 5. Общение с Core API — по gRPC внутри приватной сети; из внешней сети недоступен.
+A stateless service with one job: execute one student's SQL query in that
+student's game database, safely, and return the result. Section 5 has the
+detail. It speaks gRPC to the Core API on a private network and is not
+reachable from outside.
 
-### 2.4 Потоки данных (ключевые сценарии)
+### 2.4 The paths that matter
 
-**Выполнение SQL-запроса студентом:**
+**A student runs a query:**
 
 ```mermaid
 sequenceDiagram
     participant FE as Frontend
     participant API as Core API
     participant QR as Query Runner
-    participant G as Game DB (участника)
+    participant G as Game DB (the participant's)
 
     FE->>API: POST /api/contests/{id}/query {sql}
-    API->>API: сессия, роль, IP-политика, участие активно, таймер не истёк
+    API->>API: session, role, address policy, participation active, clock not expired
     API->>API: rate limit (Redis)
     API->>QR: Execute(dbName, sql)
-    QR->>QR: парсинг AST, фильтр по политике олимпиады
-    QR->>G: выполнение (роль по политике, statement_timeout, LIMIT)
-    G-->>QR: строки (усечены до N)
-    QR-->>API: результат / ошибка
-    API->>API: запись в query_log
-    API-->>FE: колонки + строки + длительность
+    QR->>QR: parse to an AST, filter against the contest's policy
+    QR->>G: execute (the policy's role, statement_timeout, LIMIT)
+    G-->>QR: rows, truncated to N
+    QR-->>API: result or error
+    API->>API: write query_log
+    API-->>FE: columns, rows, duration
 ```
 
-**Старт олимпиады для участника:** запись на олимпиаду → provisioner ставит создание БД `game_c{contest}_u{user}` в очередь (или мгновенно привязывает копию из резервного пула — раздел 4.2) → статус в `game_instances` = `ready` → в момент старта студенту открывается консоль. После финиша + грейс-период БД удаляются.
+**A contest starts for a participant:** enrolment puts the creation of
+`game_c{contest}_u{user}` on the provisioning queue — or binds a copy already
+waiting in the pool (section 4.2) — the row in `game_instances` reaches
+`ready`, and the console opens when the contest starts. After the finish plus
+a grace period the databases are dropped.
 
-## 3. Технологический стек
+## 3. The stack
 
-| Слой | Выбор | Обоснование |
+| Layer | Choice | Why |
 |---|---|---|
-| Backend | **Go 1.23+**, роутер **chi**, **pgx/v5** + **sqlc** | Требование ТЗ; chi — минималистичный и совместим со stdlib; sqlc даёт типобезопасный SQL без ORM-магии |
-| Парсинг студенческого SQL | **pg_query_go** (обёртка над парсером PostgreSQL) | Валидация по настоящему AST, а не по regex — regex-фильтры SQL обходятся |
-| RPC между сервисами | **gRPC** | Строгий контракт Core API ↔ Query Runner. Решение пересматривалось: HTTP+JSON дал бы меньше механики (обвязка `platform/httpx` и контракт кодов ошибок уже есть), и оно держится на одном — на возможности однажды отдавать результат потоком. Пока результат ≤1000 строк и ≤5 МБ, это единственный аргумент, и его стоит помнить как условие, а не как данность |
-| Frontend | **Next.js 15** (App Router, TypeScript), **TanStack Query**, **CodeMirror 6** (SQL-редактор), **Tailwind CSS** | Требование ТЗ; CodeMirror — лёгкий редактор с подсветкой SQL |
-| Основная БД | **PostgreSQL 16** | Реляционная модель идеальна для сущностей системы; один движок для core и game упрощает эксплуатацию |
-| Игровой кластер | **Отдельный инстанс PostgreSQL 16** | Физическая изоляция от core. PgBouncer убран осознанно: его пулы привязаны к паре «БД + роль», а БД у каждого участника своя — мультиплексирования не получилось бы. Соединениями управляет Query Runner (раздел 4.3) |
-| Кеш / сессии / rate limit | **Redis 7** (опционально) | Сессии, окна rate limit, кеш таймера, лидерборд. За интерфейсом `Cache`: без Redis работает встроенное хранилище в памяти — см. раздел 3.1 |
-| Миграции | **golang-migrate** | Версионируемые SQL-миграции core-БД |
-| Логи | **slog** (JSON) → stdout → **Promtail → Loki** | Стандартная библиотека, структурные логи; Loki дешевле ELK и достаточен |
-| Метрики | **Prometheus + Grafana** (опционально) | Дашборды нагрузки и алерты. За интерфейсом `Recorder`: бэкенд переключается на лог-дайджест или отключается — см. раздел 3.1 |
-| Деплой | **Docker Compose** (on-premise) | Система локальная; путь миграции в k8s описан в разделе 10 |
+| Backend | **Go 1.26**, the **chi** router, **pgx/v5** | chi is minimal and stdlib-compatible; pgx is used directly, with SQL kept inside the `postgres` package rather than generated (section 3.2) |
+| Parsing student SQL | **pg_query_go**, a binding for PostgreSQL's own parser | Validation against a real AST. A regular expression over SQL is a filter that can be walked around |
+| Between the services | **gRPC** | A strict contract between the Core API and the Query Runner. The choice has been revisited: HTTP with JSON would need less machinery, since `platform/httpx` and an error-code contract already exist, and the case for gRPC rests on one thing — being able to stream a result one day. While a result is at most 1000 rows and 5 MB that is the only argument, and it is worth remembering as a condition rather than a given |
+| Frontend | **Next.js 16** (App Router, TypeScript), **CodeMirror 6** for the SQL editor, **Tailwind CSS 4** | Data is read through server components and server actions; there is no client-side query cache to keep in sync |
+| Core database | **PostgreSQL 16** | The relational model fits the domain, and one engine for both clusters keeps operations simple |
+| Game cluster | **A separate PostgreSQL 16 instance** | Physically apart from the core. PgBouncer was dropped deliberately: its pools are keyed by database and role, and every participant has a database of their own, so there would be nothing to multiplex. Connections are managed by the Query Runner (section 4.3) |
+| Cache, sessions, rate limits | **Redis 7**, optional | Sessions, rate-limit windows, the clock cache, the leaderboard. Behind a `Cache` interface: without Redis an in-process store takes over — section 3.1 |
+| Migrations | **golang-migrate** | Versioned SQL against the core database |
+| Logs | **slog** as JSON → stdout → **Promtail → Loki** | The standard library, structured; Loki is cheaper than ELK and sufficient |
+| Metrics | **Prometheus + Grafana**, optional | Behind a `Recorder` interface: the backend switches to a log digest or off entirely — section 3.1 |
+| Deployment | **Docker Compose**, on-premise | The system is local; the path to Kubernetes is in section 12 |
 
-Пароли — **argon2id**. Аутентификация — **серверные сессии** (httpOnly cookie + Redis), не JWT: сессию можно мгновенно отозвать (дисквалификация участника, компрометация), нет проблемы «живого» токена.
+Passwords are hashed with **argon2id**. Authentication is a **server-side
+session** — an httpOnly cookie plus the cache — rather than a JWT, because a
+session can be revoked the moment it has to be: a disqualified participant, a
+compromised account. There is no window in which a token is still good.
 
-## 3.1 Обязательные и опциональные зависимости
+## 3.1 Which dependencies are required, and which are not
 
-Не все зависимости равноценны, и система различает их явно: одна её часть без внешнего компонента бессмысленна, другая — просто работает хуже. Каждая опциональная зависимость спрятана за интерфейсом, у каждой есть встроенная замена, и выбор замены — всегда громкий, никогда молчаливый.
+Not every dependency is equal, and the system says which is which. One part of
+it is meaningless without its external component; another simply works worse.
+Every optional dependency sits behind an interface, every one has a built-in
+replacement, and choosing the replacement is always loud, never silent.
 
-| Зависимость | Класс | Без неё | Поведение при старте |
+| Dependency | Class | Without it | At startup |
 |---|---|---|---|
-| **PostgreSQL (core)** | обязательная | нет пользователей, олимпиад и ответов — сервису нечего обслуживать | отказ с внятной ошибкой |
-| **PostgreSQL (игровой кластер)** | обязательная для игры | нельзя выполнять студенческий SQL | админка и отчёты работают, консоль недоступна |
-| **Redis** | опциональная | сессии, rate limit и кеш уходят в память процесса | старт с предупреждением |
-| **Prometheus** | опциональная | метрики уходят в лог-поток или выключаются | старт по настройке `METRICS_BACKEND` |
-| **Loki / Grafana** | опциональная | логи остаются в stdout контейнера | никак не влияет на сервис |
+| **PostgreSQL (core)** | required | no accounts, contests or answers — there is nothing to serve | refuses to start, with a clear reason |
+| **PostgreSQL (game cluster)** | required for play | student SQL cannot run | staff screens and reports work, the console does not |
+| **Redis** | optional | sessions, rate limits and cache move into the process | starts with a warning |
+| **Prometheus** | optional | metrics go to the log stream, or nowhere | starts according to `METRICS_BACKEND` |
+| **Loki / Grafana** | optional | logs stay in the container's stdout | no effect on the service |
 
-### Кеш: Redis или память
+### The cache: Redis or memory
 
-`Cache` — интерфейс (`Get`/`Set`/`Delete`/`Incr`/`Ping`) с двумя реализациями. Пустой `REDIS_ADDR` выбирает **встроенное хранилище в памяти**: LRU с ограничением по числу записей и TTL на каждую запись. Ограничение по размеру обязательно — ключи строятся из пользовательского ввода (идентификаторы сессий, субъекты rate limit), и неограниченная карта была бы способом расти до убийства процесса.
+`Cache` is an interface — `Get`, `Set`, `Delete`, `Incr`, `Ping` — with two
+implementations. An empty `REDIS_ADDR` selects the **in-process store**: an
+LRU bounded by entry count, with a TTL on each entry. The bound is not
+optional, because the keys are built from user input — session identifiers,
+rate-limit subjects — and an unbounded map would be a way to grow until the
+process dies.
 
-Замена **не эквивалентна**, и разница не косметическая: память не разделяется между репликами (сессии и лимиты разъезжаются по инстансам) и теряется при рестарте. Поэтому:
+The replacement is **not equivalent**, and the difference is not cosmetic:
+memory is not shared between replicas, so sessions and limits drift apart, and
+it is lost on restart. Therefore:
 
-- режим годится **только для одного инстанса** — это записано в предупреждении при старте, в `.env.example` и в README;
-- активный режим отдаётся в `/readyz` полем `cache`, чтобы деградация была видна снаружи, а не только в логе первых секунд;
-- если `REDIS_ADDR` **задан**, но сервер не отвечает — это **ошибка старта**, а не повод подставить память. Оператор указал конкретный адрес; тихо использовать другое хранилище значило бы скрыть сломанный деплой и — при нескольких репликах — незаметно сломать общие сессии.
+- the mode is good for **a single instance only**, and that is said in the
+  startup warning, in `.env.example` and in the README;
+- the active mode is reported by `/readyz` in a `cache` field, so the
+  degradation is visible from outside rather than only in the first seconds of
+  a log;
+- if `REDIS_ADDR` **is set** and the server does not answer, that is a startup
+  failure, not a reason to fall back to memory. The operator named an address;
+  quietly using something else would hide a broken deployment and — with more
+  than one replica — break shared sessions without a sign.
 
-Контракт для вызывающего кода: ошибка `Get` — это промах для read-through кеша, но **fail closed** для всего, что касается безопасности: нечитаемая сессия означает «не аутентифицирован», а не «аутентифицирован».
+The contract for calling code: a failed `Get` is a miss for a read-through
+cache, but **fails closed** for anything touching security. A session that
+cannot be read means "not authenticated", never "authenticated".
 
-### Метрики: сменный бэкенд
+### Metrics: a replaceable backend
 
-Prometheus не может «упасть» для приложения — он сам ходит за `/metrics`. Задача другая: не делать его обязательной зависимостью. `Recorder` — интерфейс с одним методом наблюдения и тремя реализациями, выбираемыми через `METRICS_BACKEND`:
+Prometheus cannot fail for the application — it comes and fetches `/metrics`
+itself. The problem is different: not making it required. `Recorder` is an
+interface with one observation method and three implementations, chosen by
+`METRICS_BACKEND`:
 
-| Значение | Поведение |
+| Value | Behaviour |
 |---|---|
-| `prometheus` (по умолчанию) | приватный registry + эндпоинт `/metrics` на внутреннем порту |
-| `log` | агрегация в памяти и периодический дайджест в лог-поток (счётчики, среднее и максимум по `метод + маршрут + статус`) |
-| `none` | наблюдения отбрасываются |
+| `prometheus` (default) | a private registry and a `/metrics` endpoint on the internal port |
+| `log` | aggregation in memory and a periodic digest into the log stream — counts, mean and maximum per method, route and status |
+| `none` | observations are dropped |
 
-Два следствия зафиксированы в коде тестами: инструментирование **одинаково** для всех бэкендов (смена бэкенда меняет только адресата, но не то, что измеряется), и `/metrics` регистрируется **только** если бэкенд его отдаёт — пустая страница сказала бы скраперу, что сервис инструментирован, тогда как его числа лежат в другом месте. Неизвестное значение `METRICS_BACKEND` — ошибка старта: опечатка должна ловиться при загрузке, а не обнаруживаться после олимпиады как «мы ничего не записали».
+Two consequences are pinned by tests. Instrumentation is **identical** across
+backends, so changing the backend changes where the numbers go and never what
+is measured; and `/metrics` is registered **only** when the backend serves it,
+because an empty page would tell a scraper the service is instrumented while
+its numbers are somewhere else. An unknown `METRICS_BACKEND` is a startup
+failure: a typo should be caught when configuration loads, not discovered
+after an olympiad as "we recorded nothing".
 
-Общий принцип: **метрики — диагностика**. Ни одна ветка их кода не имеет права влиять на обслуживание запроса.
+The principle underneath: **metrics are diagnostics**. No branch of their code
+may affect how a request is served.
 
-## 3.2 Смена СУБД: где проходит шов
+## 3.2 Changing the database: where the seam runs
 
-Честная оценка, а не декларация переносимости.
+An honest assessment rather than a claim of portability.
 
-**Игровой кластер сменить нельзя, и это осознанно.** На PostgreSQL завязана суть продукта: `CREATE DATABASE … TEMPLATE` для провижининга, парсер `pg_query_go` для AST-валидации студенческого SQL, роли с `statement_timeout`, `temp_file_limit` и `CONNECTION LIMIT` на базу, поведение `EXPLAIN`. Сам предмет олимпиады — «студенты пишут SQL к PostgreSQL». Абстракция здесь дала бы иллюзию выбора и стоила бы дорого.
+**The game cluster cannot be changed, and that is deliberate.** The product
+rests on PostgreSQL specifically: `CREATE DATABASE … TEMPLATE` for
+provisioning, `pg_query_go` for validating student SQL against a real AST,
+roles carrying `statement_timeout`, `temp_file_limit` and a per-database
+`CONNECTION LIMIT`, the behaviour of `EXPLAIN`. The subject of the olympiad is
+"students write SQL against PostgreSQL". An abstraction here would offer the
+illusion of a choice and charge a great deal for it.
 
-**Core-БД сменить можно, и шов проведён на уровне репозиториев, а не драйвера.** Абстрагировать `Query`/`Exec` бессмысленно: такая обёртка протекает типами драйвера и не даёт переносимости. Вместо этого каждый доменный модуль объявляет интерфейс, который ему нужен, в своих терминах:
+**The core database can be changed, and the seam runs at the repository, not
+at the driver.** Abstracting `Query` and `Exec` is pointless: such a wrapper
+leaks the driver's types and buys no portability. Instead each domain module
+declares the interface it needs, in its own vocabulary:
 
 ```go
-// Интерфейс объявляет потребитель, а не реализация (идиома Go).
+// The consumer declares the interface, not the implementation — the Go idiom.
 type ContestRepository interface {
     ByID(ctx context.Context, id uuid.UUID) (Contest, error)
     Save(ctx context.Context, c Contest) error
 }
 ```
 
-Реализация живёт в отдельном пакете (`postgres`), SQL не покидает его, а handlers и бизнес-логика знают только интерфейс. Смена СУБД — это новый пакет-реализация, без единой правки в доменном коде. Побочная выгода важнее гипотетической миграции: бизнес-логика тестируется без базы вообще.
+The implementation lives in a package of its own (`postgres`), SQL never
+leaves it, and handlers and business logic know only the interface. Changing
+the database means a new implementation package and not one edit in domain
+code. The side benefit matters more than the hypothetical migration: business
+logic is tested without a database at all.
 
-**Транзакции — часть того же шва.** Архитектура требует атомарности разнородных записей (принятый ответ обновляет счёт и добавляет запись аудита — либо всё, либо ничего). Для этого есть `UnitOfWork`:
+**Transactions are part of the same seam.** The architecture needs unlike
+writes to be atomic — an accepted answer updates a score and appends an audit
+entry, and either both land or neither does. That is `UnitOfWork`:
 
 ```go
 type UnitOfWork interface {
@@ -222,144 +354,463 @@ type UnitOfWork interface {
 }
 ```
 
-Транзакция передаётся через контекст, а репозитории берут её оттуда (`storage.QuerierFrom(ctx, pool)`) — поэтому один и тот же метод репозитория работает и сам по себе, и внутри чужой транзакции, а handler'ы вообще не держат объект транзакции. Вложенный вызов присоединяется к внешней транзакции, а не открывает вторую: независимых вложенных транзакций в PostgreSQL нет, и молча открыть новую значило бы сломать ту атомарность, ради которой вызывающий код и обернул работу.
+The transaction travels in the context and repositories take it from there
+(`storage.QuerierFrom(ctx, pool)`), so one repository method works both alone
+and inside somebody else's transaction, and handlers never hold a transaction
+object at all. A nested call joins the outer transaction rather than opening a
+second one: PostgreSQL has no independent nested transactions, and silently
+opening one would break the very atomicity the caller wrapped the work for.
 
-## 4. Изоляция игровых баз данных
+## 4. Isolating the game databases
 
-Ключевое требование ТЗ (п. 5): каждый участник работает со **своей копией** игровой БД и не может положить систему.
+The requirement: every participant works in **their own copy** of the game
+database and cannot bring the system down.
 
-### Варианты
+### What was considered
 
-| Вариант | Плюсы | Минусы |
+| Option | For | Against |
 |---|---|---|
-| **A. Одна общая игровая БД на всех** | Дёшево | Один тяжёлый запрос деградирует всех; нет изоляции |
-| **B. Схема на участника** (search_path) | Легковесно, тысячи схем в одной БД | Изоляция логическая: ошибка в правах — и участник видит чужую схему; общие shared_buffers |
-| **C. БД на участника в общем игровом кластере** ✅ | Жёсткая граница видимости (нельзя сделать cross-database запрос), быстрый провижининг из шаблона, простое удаление | Больше накладных расходов, чем у схем — приемлемо до ~1–2 тыс. участников |
-| **D. Контейнер PostgreSQL на участника** | Максимальная изоляция (CPU/RAM-квоты) | Тяжело: сотни контейнеров, оркестрация; не оправдано при нагрузке, управляемой admission control (раздел 4.3) |
+| **A. One shared game database** | Cheap | One heavy query degrades everybody; no isolation |
+| **B. A schema per participant** (`search_path`) | Light; thousands of schemas in one database | Isolation is logical: one mistake in privileges and a participant sees somebody else's schema; shared buffers are common |
+| **C. A database per participant in a shared game cluster** ✅ | A hard visibility boundary — a cross-database query is not possible — fast provisioning from a template, simple removal | More overhead than schemas, which is acceptable up to one or two thousand participants |
+| **D. A PostgreSQL container per participant** | Maximum isolation, with CPU and memory quotas | Heavy: hundreds of containers and their orchestration, unjustified when load is governed by admission control (section 4.3) |
 
-### Решение: вариант C
+### The decision: option C
 
-- Админ загружает игровую схему как SQL-скрипт (DDL + данные) → provisioner создаёт **БД-шаблон** `game_tpl_c{contest}` и валидирует её.
-- Инстанс участника создаётся командой `CREATE DATABASE game_c{id}_u{id} TEMPLATE game_tpl_c{id}`. У операции есть жёсткие ограничения (к шаблону в момент копирования не должно быть подключений; массовое создание сотен БД упирается в диск и WAL), поэтому базы **никогда не создаются «всем потоком в момент старта»** — только заранее, через очередь с резервным пулом (раздел 4.2).
-- Доступ к игровым БД имеет **только Query Runner**, под одной из двух ролей — какая используется, определяет политика SQL-доступа олимпиады (раздел 4.1):
+- An organiser supplies the game schema — as a SQL script, an uploaded dump or
+  a table-by-table description — and provisioning builds a **template
+  database**, `game_tpl_c{contest}`, and validates it.
+- A participant's instance is made with `CREATE DATABASE game_c{id}_u{id}
+  TEMPLATE game_tpl_c{id}`. The operation has hard constraints — nothing may
+  be connected to the template while it is copied, and creating hundreds of
+  databases at once saturates disk and WAL — so databases are **never created
+  in a rush at the start**. They are made ahead of time, through a queue with
+  a pool of spares (section 4.2).
+- Only the **Query Runner** reaches a game database, under one of two roles.
+  Which one is decided by the contest's SQL policy (section 4.1):
 
 ```sql
--- Базовая роль: только чтение (режим по умолчанию)
+-- The base role: read only, and the default
 CREATE ROLE game_reader LOGIN CONNECTION LIMIT 60;
 ALTER ROLE game_reader SET default_transaction_read_only = on;
 ALTER ROLE game_reader SET statement_timeout = '5s';
 ALTER ROLE game_reader SET idle_in_transaction_session_timeout = '5s';
 ALTER ROLE game_reader SET work_mem = '16MB';
 ALTER ROLE game_reader SET temp_file_limit = '64MB';
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO game_reader; -- в шаблоне
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO game_reader; -- in the template
 
--- Расширенная роль: для олимпиад с записью / CREATE VIEW
+-- The wider role: for contests that ask participants to write, or to CREATE VIEW
 CREATE ROLE game_writer LOGIN CONNECTION LIMIT 60;
 ALTER ROLE game_writer SET statement_timeout = '5s';
 ALTER ROLE game_writer SET idle_in_transaction_session_timeout = '5s';
 ALTER ROLE game_writer SET work_mem = '16MB';
 ALTER ROLE game_writer SET temp_file_limit = '64MB';
--- Точечные GRANT'ы выдаются при сборке шаблона по политике олимпиады:
---   GRANT INSERT, UPDATE, DELETE ON <разрешённые таблицы> TO game_writer;
---   GRANT CREATE ON SCHEMA work TO game_writer;  -- для VIEW и своих таблиц
+-- Individual grants are issued when the template is built, from the policy:
+--   GRANT INSERT, UPDATE, DELETE ON <the permitted tables> TO game_writer;
+--   GRANT CREATE ON SCHEMA work TO game_writer;  -- for views and own tables
 
--- CONNECTION LIMIT ролей — последний рубеж: реальное ограничение
--- одновременных выполнений — семафор Query Runner (раздел 4.3).
--- Дополнительно на каждом инстансе: ALTER DATABASE <db> CONNECTION LIMIT 2;
--- в шаблоне отозваны чувствительные каталоги (раздел 5):
+-- The roles' CONNECTION LIMIT is the last line, not the first: what actually
+-- bounds concurrent execution is the Query Runner's semaphore (section 4.3).
+-- On each instance as well: ALTER DATABASE <db> CONNECTION LIMIT 2;
+-- and the sensitive catalogues are revoked in the template (section 5):
 --   REVOKE SELECT ON pg_catalog.pg_database, pg_catalog.pg_stat_activity,
 --                   pg_catalog.pg_roles, pg_catalog.pg_settings FROM PUBLIC;
 ```
 
-**Что из перечисленного является границей, а что — умолчанием.** Проверено на живом кластере, а не выведено из документации, потому что разница не видна в самом SQL:
+**Which of those is a boundary and which is merely a default.** Checked
+against a live cluster rather than inferred from documentation, because the
+difference is invisible in the SQL itself:
 
-| Механизм | Держит против SQL, который прошёл мимо валидатора? |
+| Mechanism | Does it hold against SQL that got past the validator? |
 |---|---|
-| Привилегии (`GRANT`/их отсутствие) | **Да.** Роль без `INSERT` не вставит; сессия на это повлиять не может. Именно это останавливает **любую** запись |
-| `REVOKE` чувствительных каталогов | **Да.** И наследуется при `CREATE DATABASE … TEMPLATE` — иначе бы не доехало до участника вовсе |
-| `temp_file_limit` | **Да.** Параметр не `USERSET`, сессия его поднять не может |
-| `statement_timeout` | **Нет.** `USERSET` — `SET statement_timeout = 0` снимает его одной строкой |
-| `default_transaction_read_only` | **Нет.** `USERSET` — снимается так же |
+| Privileges — a `GRANT`, or its absence | **Yes.** A role without `INSERT` does not insert, and no session setting changes that. This is what stops **every** write |
+| `REVOKE` on the sensitive catalogues | **Yes.** And it is inherited by `CREATE DATABASE … TEMPLATE`, or it would never reach the participant at all |
+| `temp_file_limit` | **Yes.** Not a `USERSET` parameter; a session cannot raise it |
+| `statement_timeout` | **No.** `USERSET` — `SET statement_timeout = 0` removes it in one line |
+| `default_transaction_read_only` | **No.** `USERSET`, removed the same way |
 
-Отсюда важное уточнение: `default_transaction_read_only` — не то, что запрещает запись. Запись запрещают отсутствующие `GRANT`'ы; настройка лишь даёт понятную ошибку раньше. А время выполнения против необработанного SQL ограничивает **не** роль, а собственный дедлайн Query Runner'а с отменой запроса — до него SQL не дотягивается (раздел 4.3). Настройки роли остаются: они ограничивают обычный случай, то есть все запросы, если что-то другое ещё не сломалось.
+Hence a correction worth stating plainly: `default_transaction_read_only` is
+not what forbids writing. Missing grants forbid writing; the setting only
+produces a clearer error sooner. And against unvalidated SQL, execution time
+is bounded not by the role but by the Query Runner's own deadline and its
+cancellation — which the SQL cannot reach (section 4.3). The role's settings
+stay because they bound the ordinary case, which is every query as long as
+nothing else has already broken.
 
-- Игровой кластер — **отдельный PostgreSQL-инстанс** (отдельный контейнер/хост с собственными лимитами памяти). Даже полная деградация игрового кластера не затрагивает core-БД: авторизация, ответы и таймер живут.
-- Студент **никогда не получает прямого сетевого доступа к БД** — только через интерфейс (SQL-консоль → Core API → Query Runner). Порт игрового кластера не публикуется наружу.
+- The game cluster is a **separate PostgreSQL instance**, in its own container
+  with its own memory limits. Even its total collapse leaves the core database
+  alone: sign-in, answers and the clock keep working.
+- A student **never gets network access to a database**. The only way in is
+  the interface: console → Core API → Query Runner. The game cluster's port is
+  not published outside.
 
-### 4.1 Политика SQL-доступа олимпиады
+### 4.1 A contest's SQL policy
 
-Не все олимпиады одинаковы: базовый «Детектив» — чистое чтение, но продвинутый сценарий может требовать от студента вести собственные заметки в таблице, помечать улики или строить `VIEW` для промежуточных выводов. Уровень доступа — **настройка олимпиады**, которую задаёт админ системы или менеджер олимпиады через админский UI (форма, не сырой SQL):
+Not every olympiad is the same. The basic detective story is pure reading, but
+a more advanced one may ask a participant to keep their own notes in a table,
+mark evidence, or build a view for an intermediate conclusion. The level of
+access is **a setting of the contest**, chosen by a system administrator or a
+contest manager through a form — never raw SQL:
 
-| Параметр политики | Значения | По умолчанию |
+| Policy field | Values | Default |
 |---|---|---|
 | `mode` | `read_only` \| `read_write` | `read_only` |
-| `writable_tables` | список таблиц игровой схемы, куда разрешён INSERT/UPDATE/DELETE | пусто |
-| `allow_create_view` | студент может создавать/удалять **свои** VIEW | `false` |
-| `allow_own_tables` | студент может создавать **свои** таблицы (для заметок/расчётов) | `false` |
-| `allow_temp_tables` | разрешены временные таблицы | `false` |
+| `writable_tables` | the game tables INSERT/UPDATE/DELETE is allowed on | empty |
+| `allow_create_view` | the participant may create and drop **their own** views | `false` |
+| `allow_own_tables` | the participant may create **their own** tables, for notes or working data | `false` |
+| `allow_temp_tables` | temporary tables are allowed | `false` |
 
-Как это работает:
+How it holds together:
 
-- **Игровые данные и студенческие объекты разделены схемами.** Данные олимпиады живут в схеме `public` (или `game`); для студенческих объектов при сборке шаблона создаётся пустая схема **`work`** — только на неё `game_writer` получает право `CREATE`. VIEW и собственные таблицы студента создаются в `work`, шаблонные таблицы он изменить структурно не может (никаких `ALTER`/`DROP` на `public` — прав нет). Запись в игровые таблицы — только точечные `GRANT INSERT/UPDATE/DELETE` на таблицы из `writable_tables`.
-- **Политика применяется дважды** (эшелонирование, как и везде): Query Runner фильтрует statements по AST согласно политике (раздел 5), а GRANT'ы в шаблоне гарантируют то же самое на уровне СУБД, даже если валидатор ошибётся.
-- **Изоляция делает запись безопасной.** Поскольку у каждого участника своя БД, его INSERT/UPDATE/DELETE и VIEW видны только ему — целостность чужих игровых данных не затрагивается по построению.
-- **Кнопка «Сбросить мою базу».** В режимах с записью студент может испортить себе данные — в UI доступен сброс: provisioner пересоздаёт его инстанс из шаблона (секунды), факт сброса пишется в аудит и query_log. Сброс и удаление выполняются через `DROP DATABASE … WITH (FORCE)` (PostgreSQL 13+): активные сессии терминируются автоматически, зависшее выполнение не заблокирует пересоздание.
-- **Дисковые квоты.** Запись открывает вектор DoS «залить диск». Три уровня: (1) перед каждым DML Query Runner синхронно проверяет размер инстанса по кешу, обновляемому после каждого DML, — при превышении квоты (например, 5× размера шаблона, настраивается в политике) запрос не допускается; (2) фоновый монитор `pg_database_size()` как страховка переводит перелимиченный инстанс в read-only (`ALTER DATABASE … SET default_transaction_read_only = on`) с понятным сообщением студенту. Гонку внутри **одного** statement (`INSERT … SELECT`, успевающий превысить квоту до следующей проверки) полностью убрать нельзя — но перелёт ограничен объёмом, записываемым за `statement_timeout` (5 с), и (3) диск кластера планируется с запасом на этот worst case × число одновременных DML (ограничено семафором 4.3). `temp_file_limit` дополнительно ограничивает временные файлы. Проверка размера относится только к записи, которая может базу увеличить: statement, способный её только уменьшить — `TRUNCATE` и `DROP` своего объекта — на квоте пропускается (`sqlpolicy.Statement.Frees`, решает валидатор по дереву разбора, а не Query Runner по тексту). Иначе предел был бы дверью в одну сторону: на квоте отказ получали бы и те statement'ы, которые единственные способны освободить место, и участник, заливший свою базу двумя запросами, не выбрался бы из неё до конца олимпиады — при том что само сообщение об отказе советует место освободить. `DELETE` в этот список не входит и входить не может: строки уходят, страницы остаются за базой, и `pg_database_size` не сдвигается. Право `TRUNCATE` выдаётся вместе с `INSERT`/`UPDATE`/`DELETE` в двух местах: при сборке шаблона олимпиады и заново на каждом инстансе, который из этого шаблона копируется (`gamedb.settleInstance`). Второе место существует ради олимпиад, созданных раньше: копия наследует каталог шаблона таким, каким он был на момент сборки, поэтому шаблон без этого права дал бы участнику отказ PostgreSQL на statement, который валидатор пропустил, — и совет освободить место, которому невозможно последовать. Выдача на инстансе делает права свойством развёрнутой версии сервиса, а не даты сборки шаблона: пересобирать шаблон ради `TRUNCATE` не нужно, а `GRANT` того, что копия и так унаследовала, ничего не меняет.
-- **Смена политики после публикации** запрещена при `running` (иначе участники в неравных условиях); до старта — можно, изменение попадает в audit_log и требует пересборки шаблона (GRANT'ы).
+- **The game's data and the participant's own objects are separated by
+  schema.** The contest's data lives in `public` (or `game`); building the
+  template also creates an empty schema **`work`**, and that is the only one
+  `game_writer` is granted `CREATE` on. A participant's views and tables go
+  into `work`, and the template's tables cannot be altered structurally —
+  there is no `ALTER` or `DROP` privilege on `public`. Writing into a game
+  table is only ever an individual grant on a table named in
+  `writable_tables`.
+- **The policy is applied twice**, as everything here is: the Query Runner
+  filters statements by AST against the policy (section 5), and the grants in
+  the template enforce the same thing at the database, even if the validator
+  is wrong.
+- **Isolation is what makes writing safe.** Because each participant has their
+  own database, their inserts, updates and views are visible only to them. The
+  integrity of anybody else's data is not at stake by construction.
+- **"Reset my database".** In a writing mode a participant can ruin their own
+  data, so the interface offers a reset: provisioning recreates their instance
+  from the template in seconds, and the fact is written to the audit trail and
+  the query log. Resets and removals use `DROP DATABASE … WITH (FORCE)`
+  (PostgreSQL 13+), so an active session is terminated automatically and a
+  hung statement cannot block the rebuild.
+- **Disk quotas.** Writing opens a denial-of-service vector: fill the disk.
+  Three levels answer it. (1) Before every DML the Query Runner checks the
+  instance's size against a cache refreshed after each DML, and refuses the
+  query when the quota — five times the template's size by default,
+  configurable in the policy — is exceeded. (2) A background monitor reading
+  `pg_database_size()` is the safety net, putting an over-quota instance into
+  read-only (`ALTER DATABASE … SET default_transaction_read_only = on`) with a
+  message the participant can understand. The race inside a **single**
+  statement — an `INSERT … SELECT` that crosses the quota before the next
+  check — cannot be removed entirely, but the overshoot is bounded by what can
+  be written within `statement_timeout`, five seconds. (3) The cluster's disk
+  is planned with room for that worst case multiplied by the number of
+  concurrent DML statements, which the semaphore bounds.
 
-### 4.2 Провижининг без пиков
+  `temp_file_limit` bounds temporary files separately. The size check applies
+  only to writing that can grow the database: a statement that can only shrink
+  it — `TRUNCATE`, or dropping one's own object — passes even at the quota
+  (`sqlpolicy.Statement.Frees`, decided by the validator from the parse tree
+  rather than by the Runner from the text). Otherwise the limit would be a
+  one-way door: at the quota, the only statements able to free space would be
+  refused along with the rest, and a participant who filled their database in
+  two queries would never get out of it — while the refusal itself advises
+  them to free some space. `DELETE` is not on that list and cannot be: the
+  rows go, the pages stay with the database, and `pg_database_size` does not
+  move.
 
-`CREATE DATABASE … TEMPLATE` — не бесплатная операция, и провижининг спроектирован так, чтобы она никогда не выполнялась массово в критический момент:
+  `TRUNCATE` is granted alongside `INSERT`, `UPDATE` and `DELETE` in two
+  places: when a contest's template is built, and again on every instance
+  copied from it (`gamedb.settleInstance`). The second exists for contests
+  created earlier: a copy inherits the template's catalogue as it was when the
+  template was built, so a template without that privilege would hand a
+  participant a PostgreSQL refusal on a statement the validator had allowed —
+  along with advice to free space that they cannot follow. Granting on the
+  instance makes the privilege a property of the deployed version rather than
+  of the template's build date: no rebuild is needed for `TRUNCATE`, and
+  granting what a copy already inherited changes nothing.
+- **Changing the policy after publication** is refused while the contest is
+  `running`, or participants would be competing under different rules. Before
+  the start it is allowed, lands in the audit trail, and requires the template
+  to be rebuilt, because the grants come from it.
 
-- **Очередь с ограниченной параллельностью.** Все создания идут через очередь provisioner'а (2–4 воркера): база создаётся при регистрации/добавлении участника и размазывается по времени до старта, а не залпом в момент старта. Глубина очереди — метрика с алертом (раздел 9).
-- **Резервный пул.** Для каждой опубликованной олимпиады provisioner заранее держит K запасных копий (`game_pool_c{id}_NNN`). K — не число из конфига, а ответ ростера: все, у кого копии ещё нет, плюс запас `GAME_POOL_DEPTH` на тех, кто запишется следующим (`provisioning.Service.RosterDepth`). Урезается двумя разными ограничениями. `GAME_POOL_MAX` — сколько копий вправе запросить одна олимпиада; само по себе это не ограничение диска, потому что 500 копий — это 10 ГиБ при шаблоне в 20 МиБ и терабайт при шаблоне в 2 ГиБ. `GAME_CLUSTER_MAX_BYTES` — сколько байт вправе занимать весь кластер вместе: провижнер спрашивает `DatabaseSize` шаблона (сколько стоит одна копия) и `ClusterBytes` (сколько уже занято) и выдаёт ровно столько копий, сколько влезает. Бюджет общий на кластер, а не на олимпиаду: пер-олимпиадная квота, умноженная на число живых олимпиад, диск не ограничивает. Когда любое из двух сработало, тик пишет предупреждение с обеими цифрами — пул, тихо переставший расти, хуже пула, который сказал почему. Привязка копии к участнику — запись имени в `game_instances`, мгновенная операция. Пул пополняется фоном: обычный тик — раз в минуту для опубликованных и идущих олимпиад (для остальных чаще не нужно — записи на них не идёт), а регистрация участника, импорт списка и переход олимпиады в `running` вдобавок **сразу же будят** тендер, а не ждут минуту вслепую — будильник (`provisioning.Tender`) схлопывает любое число будильников, поданных до того, как тендер успел прочитать канал, в один внеочередной проход: неважно, сколько заявок пришло разом, тик всё равно один и обходит все живые олимпиады, а не только ту, что его разбудила. Разбудить может только уже закоммиченное изменение — заявка, откаченная вместе со своей транзакцией, тендер не поднимает.
-- **Поздняя запись (open-олимпиады).** Записавшийся перед самым стартом получает базу из пула; если пул исчерпан — статус «готовим вашу базу», консоль открывается по SSE-событию готовности (обычно десятки секунд). Опционально — дедлайн записи (например, за 10 минут до старта). `GAME_CLUSTER_MAX_BYTES` действует и здесь, а не только в фоновом тендере: `provisioning.Service.Ensure` считает ту же арифметику (`roomForOneCopy`) перед `CREATE DATABASE` и отказывает сентинелом `ErrClusterFull` — на клиенте это `503 game_cluster_full`. Без этой проверки бюджет ограничивал только пул: при шаблоне в 3 ГБ и дефолтных 64 ГиБ пул честно останавливался копий на двадцати, а все остальные участники создавали копии мимо бюджета, пока не кончалась файловая система хоста — и тогда PostgreSQL вставал у всех, а не у опоздавших. Пересборка уже существующей копии под тем же именем бюджетом не ограничивается: `CreateInstance` сначала дропает старую, кластер не растёт.
-- **Размер шаблона читается раз на версию.** Квота участника — кратное размеру шаблона (`Service.Quota`), и раньше каждый запрос участника стоил `SELECT pg_database_size(...)` по десятиконнектному обслуживающему пулу, который в этот же момент минутами держат `CREATE DATABASE … TEMPLATE` и уборщик. Шаблон неизменен, пока его не пересобрали, а пересборка поднимает версию — значит версия и есть правило инвалидации (`provisioning.templateSizes`).
-- **Инвалидация при пересборке шаблона.** Любая пересборка (новая игровая схема, смена SQL-политики до старта) инкрементирует `game_templates.version`. Provisioner после этого дропает **все свободные копии пула и все уже созданные инстансы** со старой версией и пересоздаёт их через очередь — участник не может получить БД со старыми GRANT'ами или данными. `game_instances.template_version` делает рассинхрон обнаружимым; проверка «все инстансы на актуальной версии» — обязательное условие перехода олимпиады в `running`.
-- **Дисциплина шаблона.** На время `CREATE DATABASE` к шаблону не должно быть подключений: роль-строитель отключается сразу после сборки, «предпросмотр» игровой схемы админом выполняется на отдельной копии, не на шаблоне.
-- **Стратегия копирования** (PostgreSQL 15+): `WAL_LOG` (по умолчанию; без чекпоинтов, но весь объём проходит через WAL) против `FILE_COPY` (быстрее для крупных шаблонов, но два чекпоинта на операцию). Выбор — конфигурация provisioner'а, по замеру на целевом размере шаблона в пилоте.
-- **План Б.** Интерфейс provisioner'а не привязан к модели «БД на участника»: если пилот покажет, что провижининг — узкое место на целевых размерах, вариант B (схема на участника) подключается как альтернативная реализация за тем же Query Runner'ом — с осознанной потерей жёсткости изоляции.
+### 4.2 Provisioning without a spike
 
-### 4.3 Изоляция производительности (admission control)
+`CREATE DATABASE … TEMPLATE` is not free, and provisioning is designed so that
+it never runs in bulk at the moment that matters:
 
-Честная формулировка: вариант C полностью изолирует **видимость данных**, но CPU, диск и память инстанса — общие. `statement_timeout` ограничивает один запрос, но не совокупную нагрузку: 200 участников × тяжёлый запрос уронят инстанс и с таймаутом. Совокупной нагрузкой управляет **admission control в Query Runner**:
+- **A queue with bounded concurrency.** Every creation goes through the
+  provisioning queue, two to four workers wide: a database is made when a
+  participant registers or is added, spread over the time before the start
+  rather than fired off at it. Queue depth is a metric with an alert
+  (section 9).
+- **A pool of spares.** For each published contest, provisioning keeps K spare
+  copies ready (`game_pool_c{id}_NNN`). K is not a number from configuration
+  but the roster's own answer: everybody who has no copy yet, plus
+  `GAME_POOL_DEPTH` for whoever enrols next (`provisioning.Service.
+  RosterDepth`). Two different limits cut it down. `GAME_POOL_MAX` is how many
+  copies one contest may ask for; by itself that is not a disk limit, because
+  500 copies is 10 GiB with a 20 MiB template and a terabyte with a 2 GiB one.
+  `GAME_CLUSTER_MAX_BYTES` is how many bytes the whole cluster may occupy
+  together: provisioning asks `DatabaseSize` for the template — what one copy
+  costs — and `ClusterBytes` for what is already taken, and hands out exactly
+  as many copies as fit. The budget is per cluster and not per contest,
+  because a per-contest quota multiplied by the number of live contests
+  bounds nothing. When either limit binds, the tick logs a warning carrying
+  both figures: a pool that quietly stopped growing is worse than one that
+  says why.
 
-- **Дедлайн держит клиент, а не роль.** `statement_timeout` — параметр уровня `USERSET`: запрос, дошедший до БД без проверки, снимает его одной строкой. Поэтому Query Runner ведёт собственный дедлайн на контекст соединения и отменяет запрос сам; настройка роли остаётся вторым эшелоном для обычного случая. Это разница между «ограничено» и «ограничено тем, кого ограничивают».
-- **1 одновременный запрос на участника** + **глобальный семафор** на N одновременных выполнений на инстанс (N — от числа ядер, порядка 2–3 × CPU). Сверх N — короткая FIFO-очередь; при её переполнении — мгновенный ответ «система занята, повторите через пару секунд», а не зависание.
-- **Соединение после чтения держится до следующего запроса:** установка соединения (TCP, SCRAM-SHA-256, fork бэкенда) на тестовом кластере стоит ~5 мс CPU сервера — столько же, сколько типичный JOIN участника. Поэтому Query Runner держит не более одного простаивающего соединения на БД участника (`queryrunner` pool, `QUERY_CONN_IDLE_TIMEOUT`, по умолчанию 30 с) и сбрасывает сессию `DISCARD ALL` перед тем, как оставить его. Оставляется только соединение чтения, завершившегося без ошибки и без отмены; запись, ошибка, отмена и дедлайн закрывают соединение, как раньше. Все соединения Runner-а — занятые и простаивающие — укладываются в `QUERY_CONCURRENT`: на границе закрывается самое давно не использованное простаивающее, так что расчёт памяти кластера не меняется. Страховка на уровне СУБД: `CONNECTION LIMIT 2` на каждый инстанс-БД и общий лимит роли — оба срабатывают, только если семафор сломан.
-- **Границы контейнера:** игровой кластер живёт в контейнере с cgroup-лимитами CPU/IO/памяти — даже полная деградация не выходит за выделенные ресурсы; core-БД на отдельном инстансе не затрагивается.
-- **Память одного бэкенда ограничена отдельно от памяти контейнера.** Лимит контейнера (`GAME_DB_MEMORY_BYTES`) останавливает кластер целиком, если его превысить, — OOM killer заканчивает работу postmaster вместе со всеми участниками разом. Предел на процесс (`ulimits.data` в `docker-compose.yml`, значение берётся из `GAME_DB_PROCESS_MEMORY_BYTES`, по умолчанию 256 МиБ) переводит переполнение из общего краха в `ERROR: out of memory` внутри того самого бэкенда, который переполнился, — остальные сессии продолжают работать как ни в чём не бывало. Легитимная нагрузка (сборка индекса, `CREATE DATABASE … TEMPLATE`, `VACUUM`, параллельный запрос) остаётся далеко под пределом, измеренным с запасом. Параллельные воркеры делят между собой разделяемую память, на которую этот предел не действует, поэтому у роли участника они дополнительно ограничены числом (`max_parallel_workers_per_gather=1` в session defaults) — граница по памяти держит сам предел процесса, а не эта настройка.
-- **Раннер откажется стартовать с арифметикой, которую кластер не выдержит.** `QUERY_CONCURRENT` (раздел выше) считает не только длину очереди, но и память: каждый одновременный запрос — лишний процесс у предела. Формула, которую раннер проверяет при старте: `(QUERY_CONCURRENT + воркеры параллельного запроса кластера + одновременные сборки шаблона) × предел_процесса + резерв ⩽ GAME_DB_MEMORY_BYTES`, где резерв покрывает `shared_buffers`, разделяемую память параллельных воркеров, сам postmaster и autovacuum. Деплой (`cmd/gamedb`) сверяет то же равенство ещё раз против настоящего кластера, а не только декларации в переменных: свежеподготовленный инстанс подтверждает собственный предел процесса (читая `/proc/self/limits` изнутри самого кластера), число воркеров и сборок, с которыми считалась арифметика, и лимит памяти контейнера — из его же cgroup, — и отказывается закончить подготовку кластера, если хоть одно из этого не совпадает с тем, что заявлено в переменных окружения.
-- **Оставленный клиентом запрос не продолжает исполняться бесконечно.** Раннер сам отменяет запрос, когда истёк его собственный дедлайн или вызывающий явно отменил RPC — сигналом `CancelRequest` серверу, а не просто разрывом соединения, которого исполняющий запрос бэкенд не заметил бы. Отдельная страховка на случай, когда ни дедлайн, ни отмена не пришли вовсе (раннер упал, сеть пропала без TCP-разрыва) — параметр роли `client_connection_check_interval` (250 мс): бэкенд периодически проверяет, что клиент всё ещё на связи, и завершает себя сам, если это не так. Без неё такой бэкенд оставался бы активным неограниченно долго — не занятым никем, но вычитаемым из числа процессов, на которое рассчитана арифметика выше.
-- **Опционально (флаг политики):** pre-flight `EXPLAIN` с порогом стоимости плана — отсекает заведомо взрывные запросы (декартовы произведения на больших таблицах) до выполнения. Эвристика, не гарантия; по умолчанию выключено.
-- **Рост** — шардирование участников по нескольким игровым инстансам (раздел 12); admission control действует на каждый инстанс отдельно.
+  Binding a copy to a participant is a name written into `game_instances`, and
+  is instant. The pool is refilled in the background: the ordinary tick is
+  once a minute for published and running contests — nothing else needs it,
+  since nobody enrols on the rest — while a registration, a roster import and
+  a contest entering `running` additionally **wake the tender at once** rather
+  than waiting out the minute blindly. The alarm (`provisioning.Tender`)
+  collapses any number of wake-ups raised before the tender read its channel
+  into one extra pass: however many requests arrive together, there is still
+  one tick, and it visits every live contest rather than only the one that
+  woke it. Only a committed change can wake it — a registration rolled back
+  with its transaction does not.
+- **Late enrolment, on an open contest.** Somebody enrolling just before the
+  start gets a database from the pool; if the pool is empty they see "your
+  database is being prepared", and the console opens on a readiness event over
+  SSE, usually within tens of seconds. An enrolment deadline — ten minutes
+  before the start, say — is available as an option.
 
-## 5. Безопасное выполнение студенческого SQL
+  `GAME_CLUSTER_MAX_BYTES` binds here too, not only in the background tender:
+  `provisioning.Service.Ensure` does the same arithmetic (`roomForOneCopy`)
+  before `CREATE DATABASE` and refuses with `ErrClusterFull`, which reaches
+  the client as `503 game_cluster_full`. Without that check the budget bounded
+  only the pool: with a 3 GB template and the default 64 GiB, the pool would
+  honestly stop at around twenty copies while every other participant created
+  one outside the budget until the host's filesystem ran out — and then
+  PostgreSQL stopped for everybody, not only for the latecomers. Rebuilding an
+  existing copy under the same name is not charged to the budget:
+  `CreateInstance` drops the old one first, so the cluster does not grow.
+- **A template's size is read once per version.** A participant's quota is a
+  multiple of the template's size (`Service.Quota`), and every query used to
+  cost a `SELECT pg_database_size(...)` against a ten-connection maintenance
+  pool that `CREATE DATABASE … TEMPLATE` and the janitor hold for minutes at a
+  time. A template does not change until it is rebuilt, and a rebuild raises
+  the version — so the version is the invalidation rule
+  (`provisioning.templateSizes`).
+- **Rebuilding a template invalidates copies.** Any rebuild — a new game
+  schema, a policy change before the start — increments
+  `game_templates.version`. Provisioning then drops **every free copy in the
+  pool and every instance already created** at the old version and remakes
+  them through the queue, so nobody can be handed a database with stale grants
+  or stale data. `game_instances.template_version` makes the drift
+  detectable, and "every instance is at the current version" is a condition of
+  a contest entering `running`.
+- **Template discipline.** Nothing may be connected to a template while
+  `CREATE DATABASE` copies it: the builder role is disconnected as soon as the
+  build finishes, and an organiser previewing the game schema does so on a
+  separate copy, never on the template.
+- **The copy strategy** (PostgreSQL 15+) is `WAL_LOG` by default — no
+  checkpoints, but the whole volume passes through WAL — against `FILE_COPY`,
+  faster for large templates but two checkpoints per operation. The choice is
+  provisioning's configuration, to be measured at the target template size
+  during the pilot.
+- **Plan B.** The provisioning interface is not tied to a database per
+  participant. If the pilot shows provisioning to be the bottleneck at the
+  target sizes, option B — a schema per participant — becomes an alternative
+  implementation behind the same Query Runner, at a deliberate cost in
+  isolation.
 
-Здесь классическая защита от SQL-инъекций неприменима — SQL и есть пользовательский ввод. Модель угроз: DoS тяжёлыми запросами, попытки записи/DDL, выход за пределы своей БД, извлечение служебной информации. Защита — эшелонированная:
+### 4.3 Isolating performance: admission control
 
-1. **Аутентификация и контекст.** Запрос принимается только от участника с активной регистрацией в идущей олимпиаде. Имя целевой БД берётся из `game_instances` на сервере — клиент его не передаёт. Раннер, со своей стороны, подчиняется только Core API: каждый gRPC-вызов (обычный и потоковый) несёт общий секрет `QUERY_RUNNER_TOKEN` в метаданных, сверяемый константным по времени сравнением их SHA-256, а не самих байт — иначе, кто угодно, дозвонившийся до раннера, выбирал бы базу и политику вместо Core API. Слушает раннер по умолчанию только loopback (`127.0.0.1:9100`, приватная сеть compose держит его отдельно); вне `ENV=development` оба процесса откажутся стартовать без валидного токена, а не разрешат вызов без него.
-2. **Rate limiting и admission control.** Скользящее окно в Redis (например, 30 запросов/мин на участника), 1 конкурентный запрос на участника и глобальный семафор одновременных выполнений на инстанс (раздел 4.3). Превышение — HTTP 429 с человекочитаемым сообщением.
-3. **Валидация AST по принципу белого списка** (pg_query_go, в Query Runner; политика — из раздела 4.1, передаётся Core API вместе с запросом). Валидатор **разрешает только то, что знает**; всё неопознанное отклоняется. Чёрных списков нет — чёрный список всегда неполон:
-   - ровно **одно** statement;
-   - допустимые корневые узлы: `SELECT` / `WITH … SELECT` / `EXPLAIN`; при соответствующей политике — `INSERT`/`UPDATE`/`DELETE` (только таблицы из `writable_tables`), `CREATE [OR REPLACE] VIEW` / `DROP VIEW` и `CREATE/DROP TABLE` (только в схеме `work`), `CREATE TEMP TABLE`;
-   - обход дерева: каждый узел обязан принадлежать известному набору безопасных типов (выражения, join'ы, подзапросы, агрегаты, оконные функции, CTE…); любой другой тип узла (`COPY`, `SET`, `DO`, DDL вне политики и всё, чего валидатор не знает) — отказ «конструкция не поддерживается»;
-   - вызовы функций — по **allowlist** стандартных функций PostgreSQL (математика, строки, даты, агрегаты, окна…); функций вида `pg_sleep`, `pg_read_file`, `dblink`, `lo_*` в нём просто нет. Ложные отказы — ожидаемая эксплуатационная цена allowlist'а, поэтому вокруг него процесс: список живёт в конфигурации (пополняется без релиза, изменения аудируются), отказ логируется с именем функции («функция X не поддерживается»), панель журнала (9.1) агрегирует такие отказы, и по итогам пилота список пополняется — это явный пункт этапа 7 плана;
-   - функции, которые из маленького аргумента строят большое значение или длинную серию строк (`repeat`, `lpad`, `rpad`, `format`, `generate_series`), допускаются только когда их размерный аргумент — число, записанное прямо в тексте запроса (не колонка, не подзапрос, не арифметика), и не больше заданного предела (константы в `internal/sqlpolicy/checker`: `MaxGeneratedLength` — 10 000 символов, `MaxSeriesLength` — 100 000 значений). Причина в том, что PostgreSQL строит такое значение целиком в самом бэкенде до того, как до него дотягиваются `LIMIT`, дедлайн раннера или байтовый бюджет ответа, — они отбрасывают уже выделенную память, а не предотвращают выделение. Размерный аргумент, не являющийся числом в тексте запроса, допускается без проверки величины: эту границу держит уже не валидатор, а предел памяти процесса ниже. Агрегаты над настоящими строками таблицы (`string_agg`, `array_agg` и подобные) этим правилом не ограничены вовсе — их потолок — объём данных, который загрузил организатор, а не число, которое подставил участник;
-   - каталоги: **структурные** (`pg_class`, `pg_attribute`, `information_schema`) по умолчанию разрешены — студентам полезно смотреть структуру таблиц (флаг `allow_catalog` отключает); **чувствительные** (`pg_database`, `pg_stat_activity`, `pg_roles`, `pg_settings`) запрещены всегда — и валидатором, и `REVOKE` в шаблоне (раздел 4): участник не должен видеть имена чужих БД и чужую активность.
-4. **Права БД — основная граница безопасности.** Роль `game_reader` (read-only) либо `game_writer` с точечными GRANT'ами строго по той же политике, `statement_timeout=5s`, лимиты памяти и temp-файлов, отозванные чувствительные каталоги (раздел 4). Даже полный обход валидатора не даёт ни записи вне политики, ни выхода за пределы своей БД — но обеспечивают это именно **привилегии**, а не `statement_timeout` и не `default_transaction_read_only`: оба `USERSET` и снимаются одной строкой SQL (таблица в разделе 4). Валидатор и GRANT'ы собираются из **одного** описания политики — они не могут разъехаться.
-5. **Ограничение результата.** `SELECT` оборачивается: `SELECT * FROM (…user query…) q LIMIT 1001`; при 1001 строке фронтенду возвращается флаг «результат усечён до 1000 строк». Плюс лимит размера ответа (например, 5 МБ). Для DML возвращается число затронутых строк.
-6. **Контекст выполнения.** Каждый запрос — в отдельной транзакции: `READ ONLY` для чтения, обычная — для разрешённых политикой DML/DDL; соединение чтения может обслужить следующий запрос той же БД, но только после `DISCARD ALL`, а соединение записи, ошибки или отмены закрывается (раздел 4.3). `DISCARD ALL` сбрасывает настройки сессии к значениям роли и БД, снимает сессионные advisory-блокировки, удаляет временные таблицы, подготовленные операторы и кэш планов. Чего он не сбрасывает: определённую через `set_config(..., false)` пользовательскую переменную с точкой в имени (после сброса `current_setting('x.y', true)` возвращает пустую строку, а не NULL) и состояние генератора после `setseed`. Обе функции не входят в allow-list валидатора, а соединение обслуживает только ту БД, к которой открыто, то есть одного участника; данных другого участника и привилегий через них не передать.
-7. **Полное журналирование, двухфазное.** Строка `query_log` создаётся **до** отправки запроса в Query Runner (статус `running`), результат дописывается апдейтом после — падение Core API между выполнением и записью не теряет факт запроса, «зависшие» `running`-строки видны и размечаются фоновой задачей как `error`. Журналируется всё, включая отклонённые валидацией запросы, — это и аудит, и материал для отчётности («сколько запросов понадобилось участнику»). Ради этого `query_log` — единственное осознанное исключение из append-only: приложению разрешён UPDATE полей результата своей строки; `audit_log` остаётся строго append-only.
+Stated honestly: option C fully isolates **what data can be seen**, but an
+instance's CPU, disk and memory are shared. `statement_timeout` bounds one
+query and not the total load — two hundred participants each running a heavy
+query will bring the instance down, timeout or no timeout. The total is
+governed by **admission control in the Query Runner**:
 
-Разделение ответственности слоёв: **права БД** гарантируют невозможность записи вне политики и выхода за пределы своей БД; **валидатор** обеспечивает форму (одно statement, LIMIT), политику и понятные ошибки — и закрывает то, что права не ограничивают (например, `pg_sleep` доступен любой роли — против него работают allowlist функций и таймаут); **admission control** отвечает за ресурсы: таймаут и лимиты памяти ограничивают один запрос, семафор — совокупную нагрузку.
+- **The deadline is held by the client, not by the role.** `statement_timeout`
+  is a `USERSET` parameter: a query that reached the database unchecked
+  removes it in one line. So the Query Runner keeps its own deadline on the
+  connection's context and cancels the query itself; the role's setting
+  remains the second line for the ordinary case. That is the difference
+  between "bounded" and "bounded by the one being bounded".
+- **One concurrent query per participant**, plus a **global semaphore** over N
+  concurrent executions on the instance, N being on the order of two to three
+  times the core count. Beyond N there is a short FIFO queue; when that
+  overflows the answer is immediate — "the system is busy, try again in a few
+  seconds" — rather than a hang.
+- **A read connection is kept until the next query.** Establishing one — TCP,
+  SCRAM-SHA-256, forking a backend — costs about five milliseconds of server
+  CPU on the test cluster, as much as a participant's typical join. So the
+  Runner keeps at most one idle connection per participant database
+  (`QUERY_CONN_IDLE_TIMEOUT`, thirty seconds by default) and resets the
+  session with `DISCARD ALL` before leaving it. Only a read that finished
+  without an error and without a cancellation leaves its connection behind;
+  a write, an error, a cancellation and a deadline all close it as before.
+  Every connection the Runner holds, busy or idle, counts against
+  `QUERY_CONCURRENT`: at the boundary the least recently used idle one is
+  closed, so the cluster's memory arithmetic does not change. The database's
+  own backstop is `CONNECTION LIMIT 2` per instance and the role's overall
+  limit — both of which only ever fire if the semaphore is broken.
+- **Container boundaries.** The game cluster runs in a container with cgroup
+  limits on CPU, IO and memory, so even total degradation stays inside the
+  resources it was given, and the core database on its own instance is
+  untouched.
+- **One backend's memory is bounded separately from the container's.** The
+  container limit (`GAME_DB_MEMORY_BYTES`) stops the whole cluster when
+  exceeded — the OOM killer ends the postmaster and every participant with it.
+  A per-process limit (`ulimits.data` in `docker-compose.yml`, taken from
+  `GAME_DB_PROCESS_MEMORY_BYTES`, 256 MiB by default) turns an overflow from a
+  shared collapse into `ERROR: out of memory` inside the one backend that
+  overflowed, while every other session carries on. Legitimate work — building
+  an index, `CREATE DATABASE … TEMPLATE`, `VACUUM`, a parallel query — stays
+  well under the limit, which was measured with room to spare. Parallel
+  workers share memory the limit does not cover, so the participant's role
+  bounds their number too (`max_parallel_workers_per_gather=1` in the session
+  defaults) — but the memory boundary is held by the process limit, not by
+  that setting.
+- **The Runner refuses to start with arithmetic the cluster cannot survive.**
+  `QUERY_CONCURRENT` decides not only the queue's length but the memory
+  footprint: each concurrent query is one more process against the limit. The
+  formula the Runner checks at startup is `(QUERY_CONCURRENT + the cluster's
+  parallel workers + concurrent template builds) × per-process limit + reserve
+  ⩽ GAME_DB_MEMORY_BYTES`, where the reserve covers `shared_buffers`, the
+  shared memory of parallel workers, the postmaster itself and autovacuum.
+  Deployment (`cmd/gamedb`) checks the same equation again against the real
+  cluster rather than against the declaration in the variables: a freshly
+  prepared instance confirms its own process limit — by reading
+  `/proc/self/limits` from inside the cluster — its worker count, its build
+  concurrency and the container's memory limit from its own cgroup, and
+  refuses to finish preparing the cluster if any of them disagrees with what
+  the environment claims.
+- **A query whose client left does not run forever.** The Runner cancels a
+  query when its own deadline expires or when the caller cancelled the RPC —
+  with a `CancelRequest` to the server rather than by dropping the connection,
+  which the executing backend would not notice. The separate safety net, for
+  when neither a deadline nor a cancellation arrives at all because the Runner
+  died or the network vanished without a TCP reset, is the role's
+  `client_connection_check_interval` at 250 ms: the backend periodically
+  checks that its client is still there and ends itself when it is not.
+  Without it such a backend would stay active indefinitely — occupied by
+  nobody, yet subtracted from the process count the arithmetic above depends
+  on.
+- **Optional, behind a policy flag:** a pre-flight `EXPLAIN` with a plan-cost
+  threshold, cutting off the obviously explosive — a Cartesian product over
+  large tables — before it runs. A heuristic, not a guarantee; off by default.
+- **Growth** means sharding participants across several game instances
+  (section 12); admission control applies to each instance separately.
 
-Остальной API (логин, ответы, админка) использует **только параметризованные запросы** через sqlc — классические инъекции исключены by construction.
+## 5. Executing student SQL safely
 
+Classic injection defence does not apply here, because SQL *is* the user
+input. The threat model is denial of service through heavy queries, attempts
+to write or run DDL, escaping one's own database, and extracting information
+about the installation. The defence is layered:
 
-## 6. Структура основной базы данных (core)
+1. **Authentication and context.** A query is accepted only from a participant
+   with an active registration in a running contest. The target database's
+   name comes from `game_instances` on the server; the client never sends it.
+   The Runner, for its part, obeys only the Core API: every gRPC call, unary
+   or streaming, carries the shared `QUERY_RUNNER_TOKEN` in its metadata,
+   compared in constant time over the SHA-256 of both sides rather than the
+   bytes themselves — otherwise anyone who could reach the Runner would choose
+   the database and the policy instead of the Core API. By default the Runner
+   listens on loopback only (`127.0.0.1:9100`, and Compose's private network
+   keeps it apart); outside `ENV=development` both processes refuse to start
+   without a valid token rather than allowing a call without one.
+2. **Rate limiting and admission control.** A sliding window in the cache —
+   thirty queries a minute per participant, say — one concurrent query per
+   participant, and the global semaphore over concurrent executions on the
+   instance (section 4.3). Exceeding it is an HTTP 429 with a message a person
+   can read.
+3. **Allow-list validation over the AST** (`pg_query_go`, inside the Query
+   Runner; the policy comes from section 4.1, handed over with the query). The
+   validator **permits only what it recognises**, and everything unrecognised
+   is refused. There is no block list, because a block list is always
+   incomplete:
+   - exactly **one** statement;
+   - permitted root nodes are `SELECT`, `WITH … SELECT` and `EXPLAIN`, plus —
+     where the policy allows — `INSERT`/`UPDATE`/`DELETE` restricted to
+     `writable_tables`, `CREATE [OR REPLACE] VIEW` and `DROP VIEW`,
+     `CREATE`/`DROP TABLE` restricted to the `work` schema, and
+     `CREATE TEMP TABLE`;
+   - walking the tree, every node must belong to a known safe set —
+     expressions, joins, subqueries, aggregates, window functions, CTEs. Any
+     other node type (`COPY`, `SET`, `DO`, DDL outside the policy, and
+     anything the validator does not know) is refused as "that construct is
+     not supported";
+   - function calls go through an **allow list** of standard PostgreSQL
+     functions — arithmetic, strings, dates, aggregates, windows. Functions
+     like `pg_sleep`, `pg_read_file`, `dblink` and `lo_*` are simply not in
+     it. False refusals are the operational price of an allow list, so there
+     is a process around it: the list lives in configuration and can grow
+     without a release, changes are audited, a refusal is logged with the
+     function's name ("the function X is not supported"), and the query-log
+     panel (section 9.1) aggregates such refusals so the list can be extended
+     from what the pilot actually found;
+   - functions that build a large value or a long series of rows from a small
+     argument (`repeat`, `lpad`, `rpad`, `format`, `generate_series`) are
+     allowed only when the size argument is a number written directly in the
+     query text — not a column, not a subquery, not arithmetic — and is no
+     larger than a set limit (`internal/sqlpolicy/checker`:
+     `MaxGeneratedLength` at 10,000 characters, `MaxSeriesLength` at 100,000
+     values). The reason is that PostgreSQL builds such a value whole, inside
+     the backend, before `LIMIT`, the Runner's deadline or the response's byte
+     budget can reach it — those discard memory already allocated rather than
+     preventing the allocation. A size argument that is not a literal number
+     is allowed without a size check: that boundary is held by the
+     per-process memory limit below, not by the validator. Aggregates over a
+     table's real rows (`string_agg`, `array_agg` and the like) are not
+     bounded by this rule at all — their ceiling is the data the organiser
+     loaded, not a number the participant chose;
+   - catalogues: the **structural** ones (`pg_class`, `pg_attribute`,
+     `information_schema`) are allowed by default, because looking at the
+     shape of the tables is useful to a student, and `allow_catalog` turns
+     them off. The **sensitive** ones (`pg_database`, `pg_stat_activity`,
+     `pg_roles`, `pg_settings`) are always forbidden, by the validator and by
+     the `REVOKE` in the template (section 4): a participant has no business
+     seeing other databases' names or other people's activity.
+4. **Database privileges are the real boundary.** `game_reader`, or
+   `game_writer` with individual grants from the same policy;
+   `statement_timeout=5s`; memory and temp-file limits; the sensitive
+   catalogues revoked (section 4). Even a complete bypass of the validator
+   yields neither a write outside the policy nor an escape from one's own
+   database — but what guarantees that is the **privileges**, not
+   `statement_timeout` and not `default_transaction_read_only`, both of which
+   are `USERSET` and removable in one line (the table in section 4). The
+   validator and the grants are built from **one** description of the policy,
+   so they cannot drift apart.
+5. **Bounding the result.** A `SELECT` is wrapped — `SELECT * FROM (…the
+   query…) q LIMIT 1001` — and at 1001 rows the interface is told the result
+   was truncated to 1000. There is a response-size limit as well, five
+   megabytes. For DML, the number of affected rows comes back instead.
+6. **The execution context.** Every query runs in its own transaction:
+   `READ ONLY` for a read, an ordinary one for DML or DDL the policy allows. A
+   read's connection may serve the next query against the same database, but
+   only after `DISCARD ALL`; a write's, an error's or a cancellation's is
+   closed (section 4.3). `DISCARD ALL` resets session settings to the role's
+   and the database's, releases session advisory locks, drops temporary
+   tables, prepared statements and the plan cache. What it does not reset: a
+   user-defined variable with a dot in its name set through `set_config(...,
+   false)` — after the discard, `current_setting('x.y', true)` returns an
+   empty string rather than NULL — and the generator state left by `setseed`.
+   Neither function is on the validator's allow list, and a connection serves
+   only the database it was opened against, which is one participant's; there
+   is no way to carry another participant's data or privileges through it.
+7. **Complete logging, in two phases.** The `query_log` row is created
+   **before** the query is sent to the Runner, with status `running`, and the
+   result is written into it afterwards — so a Core API that dies between
+   executing and recording does not lose the fact that a query ran, and rows
+   left `running` are visible and marked `error` by a background job.
+   Everything is logged, including queries the validator refused: it is both
+   the audit trail and the material for reporting ("how many queries did this
+   participant need"). For that, `query_log` is the one deliberate exception
+   to append-only — the application may update the result fields of its own
+   row. `audit_log` stays strictly append-only.
 
-Игровая БД произвольна и задаётся админом per-олимпиада; фиксируем только core-схему.
+Who guarantees what: **database privileges** make writing outside the policy
+and escaping one's own database impossible; **the validator** enforces shape
+(one statement, a `LIMIT`), the policy and readable errors, and closes what
+privileges do not — `pg_sleep` is available to any role, and what stops it is
+the function allow list and the timeout; **admission control** owns resources,
+where the timeout and the memory limits bound one query and the semaphore
+bounds the total.
+
+The rest of the API — sign-in, answers, the staff screens — uses **only
+parameterised queries** through pgx, so classic injection is excluded by
+construction.
+
+## 6. The core database
+
+The game database is arbitrary — an organiser defines it per contest. Only
+the core schema is fixed.
 
 ```mermaid
 erDiagram
@@ -384,10 +835,10 @@ erDiagram
 ```
 
 ```sql
--- Пользователи и RBAC
+-- Accounts and RBAC
 CREATE TABLE users (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    login         text NOT NULL UNIQUE,          -- студ. билет / username
+    login         text NOT NULL UNIQUE,          -- student number or username
     email         text UNIQUE,
     password_hash text NOT NULL,                 -- argon2id
     full_name     text NOT NULL,
@@ -397,7 +848,7 @@ CREATE TABLE users (
     updated_at    timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE roles (          -- student, admin, organizer; расширяемо
+CREATE TABLE roles (          -- student, admin, organizer; extensible
     id   smallserial PRIMARY KEY,
     code text NOT NULL UNIQUE,
     name text NOT NULL
@@ -420,28 +871,28 @@ CREATE TABLE user_roles (
     PRIMARY KEY (user_id, role_id)
 );
 
--- Олимпиады
+-- Contests
 CREATE TABLE contests (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     title       text NOT NULL,
     description text,
     status      text NOT NULL DEFAULT 'draft'
         CHECK (status IN ('draft','published','running','finished','archived')),
-    enrollment  text NOT NULL DEFAULT 'invite_only' -- тип записи (раздел 7.1)
+    enrollment  text NOT NULL DEFAULT 'invite_only' -- how people join (section 7.1)
         CHECK (enrollment IN ('open','invite_only')),
-    allowed_cidrs cidr[] NOT NULL DEFAULT '{}',   -- IP-ограничения; пусто = без ограничений
-    timing      text NOT NULL DEFAULT 'fixed'     -- модель таймера (раздел 8)
+    allowed_cidrs cidr[] NOT NULL DEFAULT '{}',   -- address restriction; empty means none
+    timing      text NOT NULL DEFAULT 'fixed'     -- the clock's model (section 8)
         CHECK (timing IN ('fixed','individual')),
-    duration_min int,                             -- длительность сессии для timing = individual
+    duration_min int,                             -- session length when timing = individual
     starts_at   timestamptz,
     ends_at     timestamptz,
-    settings    jsonb NOT NULL DEFAULT '{}',  -- лимиты запросов, грейс-период и пр.
-                                              -- (политика SQL-доступа — в contest_sql_policies)
+    settings    jsonb NOT NULL DEFAULT '{}',  -- query limits, grace period and the like
+                                              -- (the SQL policy lives in contest_sql_policies)
     created_by  uuid NOT NULL REFERENCES users,
     created_at  timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE contest_managers (   -- админы/менеджеры конкретной олимпиады
+CREATE TABLE contest_managers (   -- the staff of one contest
     contest_id uuid NOT NULL REFERENCES contests ON DELETE CASCADE,
     user_id    uuid NOT NULL REFERENCES users ON DELETE CASCADE,
     role       text NOT NULL DEFAULT 'manager'
@@ -451,7 +902,7 @@ CREATE TABLE contest_managers (   -- админы/менеджеры конкр�
     PRIMARY KEY (contest_id, user_id)
 );
 
-CREATE TABLE contest_sql_policies (  -- политика SQL-доступа (раздел 4.1)
+CREATE TABLE contest_sql_policies (  -- the SQL policy (section 4.1)
     contest_id        uuid PRIMARY KEY REFERENCES contests ON DELETE CASCADE,
     mode              text NOT NULL DEFAULT 'read_only'
         CHECK (mode IN ('read_only','read_write')),
@@ -459,14 +910,15 @@ CREATE TABLE contest_sql_policies (  -- политика SQL-доступа (р�
     allow_create_view boolean NOT NULL DEFAULT false,
     allow_own_tables  boolean NOT NULL DEFAULT false,
     allow_temp_tables boolean NOT NULL DEFAULT false,
-    allow_catalog     boolean NOT NULL DEFAULT true,  -- структурные каталоги; чувствительные
-                                                      -- (pg_database, pg_stat_activity…) закрыты всегда
-    disk_quota_ratio  int NOT NULL DEFAULT 5,         -- квота = N × размер шаблона
+    allow_catalog     boolean NOT NULL DEFAULT true,  -- the structural catalogues; the sensitive
+                                                      -- ones (pg_database, pg_stat_activity…)
+                                                      -- are closed always
+    disk_quota_ratio  int NOT NULL DEFAULT 5,         -- quota = N × the template's size
     updated_by        uuid REFERENCES users,
     updated_at        timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE stories (        -- история преступления
+CREATE TABLE stories (        -- the story of the crime
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     contest_id uuid NOT NULL UNIQUE REFERENCES contests ON DELETE CASCADE,
     body_md    text NOT NULL,                 -- markdown
@@ -476,17 +928,17 @@ CREATE TABLE stories (        -- история преступления
 CREATE TABLE questions (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     contest_id   uuid NOT NULL REFERENCES contests ON DELETE CASCADE,
-    ord          int  NOT NULL,               -- порядок отображения
-    kind         text NOT NULL DEFAULT 'text' -- text | choice | final (кто преступник)
+    ord          int  NOT NULL,               -- display order
+    kind         text NOT NULL DEFAULT 'text' -- text | choice | final (who did it)
         CHECK (kind IN ('text','choice','final')),
     body_md      text NOT NULL,
     points       int  NOT NULL DEFAULT 1,
-    max_attempts int,                          -- NULL = не ограничено
-    choices      jsonb,                        -- для kind = choice
+    max_attempts int,                          -- NULL means unlimited
+    choices      jsonb,                        -- for kind = choice
     UNIQUE (contest_id, ord)
 );
 
-CREATE TABLE question_answers (               -- эталонные ответы
+CREATE TABLE question_answers (               -- the reference answers
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     question_id uuid NOT NULL REFERENCES questions ON DELETE CASCADE,
     match_kind  text NOT NULL DEFAULT 'exact_ci' -- exact | exact_ci | regex
@@ -494,13 +946,13 @@ CREATE TABLE question_answers (               -- эталонные ответы
     value       text NOT NULL
 );
 
--- Игровые шаблоны и инстансы
+-- Game templates and instances
 CREATE TABLE game_templates (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     contest_id   uuid NOT NULL UNIQUE REFERENCES contests ON DELETE CASCADE,
     template_db  text NOT NULL,               -- game_tpl_c{short_id}
-    version      int  NOT NULL DEFAULT 1,     -- растёт при каждой пересборке (раздел 4.2)
-    init_script  text NOT NULL,               -- исходный SQL (DDL + данные)
+    version      int  NOT NULL DEFAULT 1,     -- rises on every rebuild (section 4.2)
+    init_script  text NOT NULL,               -- the source SQL: DDL and data
     status       text NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending','building','ready','failed')),
     build_error  text,
@@ -513,9 +965,9 @@ CREATE TABLE registrations (
     user_id     uuid NOT NULL REFERENCES users ON DELETE CASCADE,
     status      text NOT NULL DEFAULT 'registered'
         CHECK (status IN ('registered','active','finished','disqualified')),
-    started_at  timestamptz,  -- при timing = individual определяет дедлайн (раздел 8)
+    started_at  timestamptz,  -- with timing = individual, this sets the deadline (section 8)
     finished_at timestamptz,
-    total_score int NOT NULL DEFAULT 0,       -- денормализация для лидерборда
+    total_score int NOT NULL DEFAULT 0,       -- denormalised for the leaderboard
     UNIQUE (contest_id, user_id)
 );
 
@@ -523,13 +975,13 @@ CREATE TABLE game_instances (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     registration_id uuid NOT NULL UNIQUE REFERENCES registrations ON DELETE CASCADE,
     db_name         text NOT NULL UNIQUE,
-    template_version int NOT NULL DEFAULT 1,  -- версия шаблона, из которой создан (раздел 4.2)
+    template_version int NOT NULL DEFAULT 1,  -- the template version it was copied from (4.2)
     status          text NOT NULL DEFAULT 'provisioning'
         CHECK (status IN ('provisioning','ready','failed','dropped')),
     created_at      timestamptz NOT NULL DEFAULT now()
 );
 
--- Ответы участников
+-- Answers
 CREATE TABLE submissions (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     registration_id uuid NOT NULL REFERENCES registrations ON DELETE CASCADE,
@@ -542,25 +994,25 @@ CREATE TABLE submissions (
     UNIQUE (registration_id, question_id, attempt_no)
 );
 
--- Журналы
+-- Journals
 CREATE TABLE query_log (
     id              bigserial PRIMARY KEY,
     registration_id uuid NOT NULL REFERENCES registrations ON DELETE CASCADE,
-    request_id      uuid NOT NULL,             -- связь с техническими логами в Loki
+    request_id      uuid NOT NULL,             -- ties the row to the technical logs in Loki
     sql_text        text NOT NULL,
-    status          text NOT NULL DEFAULT 'running' -- двухфазная запись (раздел 5, п.7)
+    status          text NOT NULL DEFAULT 'running' -- written in two phases (section 5, item 7)
         CHECK (status IN ('running','ok','rejected','error','timeout')),
     error_text      text,
     duration_ms     int,
     row_count       int,
     executed_at     timestamptz NOT NULL DEFAULT now(),
-    ip              inet,                      -- адрес клиента (раздел 9.4); NULL у строк до миграции 000033
-    sql_fingerprint bigint                     -- хеш нормализованного текста, только для текстов от 60 символов (раздел 9.4)
+    ip              inet,                      -- the client's address (9.4); NULL before migration 33
+    sql_fingerprint bigint                     -- hash of the normalised text, only from 60 characters (9.4)
 );
 
 CREATE TABLE audit_log (
     id         bigserial PRIMARY KEY,
-    actor_id   uuid REFERENCES users,          -- NULL для системных событий
+    actor_id   uuid REFERENCES users,          -- NULL for a system event
     action     text NOT NULL,                  -- auth.login, contest.create, user.block …
     entity     text,
     entity_id  text,
@@ -571,86 +1023,190 @@ CREATE TABLE audit_log (
 );
 ```
 
-Замечания:
+Notes:
 
-- **Проверка ответов** — на сервере, сравнение с `question_answers` по `match_kind`; эталонные ответы никогда не попадают в API-ответы студенту.
-- `audit_log` — строго append-only (у роли приложения нет прав UPDATE/DELETE). `query_log` — почти append-only: единственный разрешённый UPDATE — дозапись результата в строку, созданную перед выполнением (двухфазная запись, раздел 5, п.7). При росте — месячное партиционирование.
-- `total_score` пересчитывается транзакционно при каждом принятом ответе — лидерборд без агрегаций на лету.
+- **Answers are checked on the server**, against `question_answers` by
+  `match_kind`. A reference answer never appears in an API response to a
+  student.
+- `audit_log` is strictly append-only: the application's role holds no UPDATE
+  or DELETE privilege on it. `query_log` is almost append-only — the one
+  permitted update writes the result into the row created before execution
+  (section 5, item 7). As it grows, monthly partitioning.
+- `total_score` is recomputed transactionally with every accepted answer, so
+  the leaderboard needs no aggregation at read time.
 
-## 6.1 Формат вопросов олимпиады
+## 6.1 How a contest asks its questions
 
-Олимпиада задаёт вопросы в одном из двух режимов — `contests.question_mode`:
+A contest asks in one of two modes, `contests.question_mode`:
 
-| Режим | Что видит участник |
+| Mode | What the participant sees |
 |---|---|
-| `multi` (по умолчанию) | Несколько вопросов, каждый со своими баллами и попытками — текущая модель |
-| `single` | Один вопрос, несущий всю олимпиаду: классический формат «вот история, назови преступника» |
+| `multi` (default) | Several questions, each with its own points and attempts |
+| `single` | One question carrying the whole olympiad: the classic "here is the story, name the culprit" |
 
-Отдельно от режима — **видимость вопроса**, `questions.is_visible`. Скрытый вопрос существует полноценно: у него есть эталонные ответы и баллы, он просто не показывается участнику. Тот видит историю и поле для ответа, а понять, что именно спрашивают, — часть задачи, а не строчка инструкции.
+Separate from the mode is a question's **visibility**, `questions.is_visible`.
+A hidden question exists fully — it has reference answers and points — it is
+simply not shown. The participant sees the story and a field to answer in, and
+working out what is being asked is part of the puzzle rather than a line of
+instructions.
 
-**Почему видимость на вопросе, а не на олимпиаде.** Мотивировал её именно одиночный режим, но в скрытии нет ничего специфичного для него, и флаг на уровне олимпиады пришлось бы переизобретать в первый же раз, когда понадобится один скрытый вопрос среди нескольких.
+**Why visibility belongs to the question and not to the contest.** The single
+mode is what motivated it, but there is nothing single-specific about hiding,
+and a contest-level flag would have to be reinvented the first time somebody
+wanted one hidden question among several.
 
-**Почему «ровно один вопрос при `single`» — не constraint и не триггер.** Организатор, собирая такую олимпиаду, проходит через ноль вопросов, а заменяя вопрос — через два. Триггер воевал бы с редактором без всякой пользы: инвариант обязан держаться только в момент публикации. Он проверяется **гейтом публикации** — там же, где полнота переводов и версии игровых инстансов (раздел 4.2). Это осознанная граница: БД гарантирует то, что верно всегда, гейт — то, что верно на переходе.
+**Why "exactly one question in `single` mode" is not a constraint or a
+trigger.** An organiser building such a contest passes through zero questions,
+and through two while replacing one. A trigger would fight the editor for no
+benefit: the invariant only has to hold at publication. It is checked by the
+**publication gate**, along with translation completeness and the game
+instances' versions (section 4.2). That is a deliberate division: the database
+guarantees what is true always, the gate guarantees what is true at the
+transition.
 
-## 6.1.1 Как олимпиада считает результат (планируется)
+## 6.1.1 How a contest decides a result
 
-Сегодня счёт один: у каждого вопроса есть `points`, они суммируются в `registrations.total_score`. Ниже — три настройки, которые к этому добавляются. Все они опциональны и все по умолчанию выключены: олимпиада, которую собрали не задумываясь о них, ведёт себя ровно как сегодня.
+Today there is one way to score: each question carries `points`, and they are
+summed into `registrations.total_score`. Three settings build on that. All
+three are optional and all are off by default, so a contest assembled without
+a thought for them behaves exactly as it does today.
 
-**Режим оценки — `contests.scoring`: `points` (по умолчанию), `winner` или `icpc`.**
+**The scoring mode — `contests.scoring`: `points` (default), `winner` or
+`icpc`.**
 
-| Режим | Как определяется результат |
+| Mode | How the result is decided |
 |---|---|
-| `points` | Сумма баллов; при равенстве — кто раньше набрал |
-| `winner` | Есть только победитель: кто первым верно ответил на финальный вопрос |
-| `icpc` | Больше решённых вопросов — выше место; при равенстве — меньше штрафного времени |
+| `points` | The sum of the points; a tie goes to whoever reached it first |
+| `winner` | There is only a winner: whoever answered the final question correctly first |
+| `icpc` | More questions solved wins; a tie goes to less penalty time |
 
-Режим решает, **как считается место, а не что записывается**. `submissions` и `points_awarded` пишутся одинаково в обоих: организатору после олимпиады нужны цифры даже там, где участникам их не показывали, а смена режима не должна уничтожать данные. Иначе переключение туда и обратно — необратимая операция, замаскированная под настройку.
+The mode decides **how a place is computed, not what is recorded**.
+`submissions` and `points_awarded` are written identically in every mode: an
+organiser needs the numbers after the olympiad even where participants were
+never shown them, and changing the mode must not destroy data. Otherwise
+switching there and back would be an irreversible operation disguised as a
+setting.
 
-Победитель определяется по `submitted_at`, проставленному сервером. Время клиента здесь не участвует вовсе — иначе призовое место выигрывается переводом часов.
+The winner is decided by `submitted_at`, stamped by the server. The client's
+clock plays no part at all, or a prize would be won by changing it.
 
-Гейт публикации: `winner` требует хотя бы одного вопроса `kind = final`, и у этого финального вопроса обязан быть предел попыток (`max_attempts`). Без ограничения ответ на финальный вопрос — это перебор без цены: раз ответы не расходуют ничего, кроме частоты запросов, найти верный вариант можно простым угадыванием, и «победа» решается скоростью нажатий, а не расследованием. Гейт срабатывает и на публикации, и повторно на старте — олимпиада, уже опубликованная с таким вопросом без лимита, тоже не запустится, пока лимит не появится.
+The publication gate: `winner` requires at least one question of
+`kind = final`, and that final question must carry an attempt limit
+(`max_attempts`). Without one, answering the final question is guessing at no
+cost — attempts spend nothing but rate limit, so the right answer can be found
+by trying, and "winning" is decided by how fast somebody clicks rather than by
+the investigation. The gate fires both at publication and again at the start,
+so a contest already published with such a question will not begin until the
+limit exists.
 
-**У ответов — собственный лимит частоты, а не доля лимита на SQL-запросы.** `ANSWER_RATE_PER_MINUTE` (по умолчанию 6, отдельно от бюджета консоли) считается на регистрацию, ловит и отклонённые попытки (нельзя купить бесплатный перебор через заведомо неверный запрос) и проверяется раньше, чем что-либо ещё в обработчике ответа — раньше разбора вопроса, раньше проверки эталона. Иначе `max_attempts` ограничивал бы только число попыток на *вопрос*, а перебор по нескольким вопросам сразу (или подбор символ за символом в текстовом ответе) остался бы дешёвым способом обойти именно этот предел, а не соревнованием.
+**Answers have a rate limit of their own, not a share of the SQL budget.**
+`ANSWER_RATE_PER_MINUTE` (six by default, separate from the console's budget)
+counts per registration, counts refused attempts too — so a deliberately wrong
+query cannot buy free guessing — and is checked before anything else in the
+answer handler, before the question is resolved and before the reference
+answer is consulted. Otherwise `max_attempts` would bound the attempts on one
+*question* while guessing across several at once, or character by character in
+a text answer, stayed a cheap way around exactly that limit.
 
-В режиме `icpc` у вопроса нет баллов: `submissions.points_awarded` и `registrations.total_score` всегда 0, хотя `questions.points` и `penalty_pct` в данных остаются (участнику не показываются, в редакторе неактивны — вдруг олимпиаду ещё вернут в режим до старта). Место решают число решённых вопросов и штрафное время — минуты от старта олимпиады (`contests.starts_at`, а при индивидуальном таймере — `registrations.started_at`) до первого верного ответа, плюс `contests.icpc_penalty_min` за каждую более раннюю неверную попытку. Гейт публикации отказывает вопросу с вариантами ответа, если лимит попыток не задан или больше, чем число вариантов минус число верных вариантов, — иначе верный вариант перебирается за штраф. Замороженная ICPC-таблица показывает по клетке ещё не решённого вопроса число попыток, отправленных после заморозки, без их результата, — единственное осознанное исключение из правила «после заморозки с сервера не уходит ничего» (раздел 10); при действующем последовательном прохождении попытки после заморозки не показываются вовсе, потому что открытие следующего вопроса выдало бы верный ответ, данный после заморозки. Расчёт сетки, порядок мест и экраны — `docs/superpowers/specs/2026-09-13-icpc-scoring-design.md`.
+In `icpc` mode a question has no points: `submissions.points_awarded` and
+`registrations.total_score` are always zero, while `questions.points` and
+`penalty_pct` stay in the data — not shown to the participant and disabled in
+the editor, in case the contest is moved back to another mode before the
+start. A place is decided by the number of questions solved and by penalty
+time: the minutes from the contest's start (`contests.starts_at`, or
+`registrations.started_at` under an individual clock) to the first correct
+answer, plus `contests.icpc_penalty_min` for every earlier wrong attempt. The
+publication gate refuses a multiple-choice question whose attempt limit is
+unset or larger than the number of options minus the number of correct ones,
+because otherwise the right option is reachable by exhaustion at the price of
+a penalty. A frozen ICPC table shows, in the cell of a question not yet
+solved, how many attempts were submitted after the freeze without their
+outcome — the one deliberate exception to "nothing leaves the server after the
+freeze" (section 10). Where sequential progression is in force, attempts after
+the freeze are not shown at all, because opening the next question would
+reveal that a correct answer was given after it.
 
-**Штраф за неверную попытку — `questions.penalty_pct` (по умолчанию 0), с умолчанием на олимпиаде.**
+**A penalty for a wrong attempt — `questions.penalty_pct`, zero by default,
+with a contest-wide default.**
 
-Каждая неверная попытка снимает процент от номинала вопроса. Настраивает организатор.
+Each wrong attempt costs a percentage of the question's face value. Three
+decisions are worth taking in advance:
 
-Три решения, которые стоит принять заранее:
+1. **The penalty is applied at the moment of answering, and the result is
+   written into `submissions.points_awarded`.** It is never recomputed from
+   the current setting. Otherwise an organiser adjusting the percentage
+   mid-contest would silently rewrite everybody's score, and the denormalised
+   `total_score` would disagree with the recomputation. It is the same
+   boundary the audit trail draws (section 9.2): a record fixes what was
+   decided then, not what is configured now.
+2. **The floor is zero per question.** A score cannot go negative. A question
+   that can take more than it gives makes "do not answer" strictly better than
+   "try", and the olympiad is about trying.
+3. **The penalty and `max_attempts` are two handles on one mechanism, and both
+   may be set at once.** If the penalty zeroed a question before the attempts
+   ran out, the remaining attempts are free. That is deliberate: the point of
+   further attempts is that the participant reaches the answer, not that they
+   are punished again.
 
-1. **Штраф применяется в момент ответа, и результат пишется в `submissions.points_awarded`.** Он никогда не пересчитывается из текущей настройки. Иначе организатор, поправивший процент посреди олимпиады, молча перепишет уже набранные баллы всем — и денормализованный `total_score` разойдётся с пересчётом. Это та же граница, что в аудите (раздел 9.2): запись фиксирует, что было решено тогда, а не что настроено сейчас.
-2. **Пол — ноль за вопрос.** Уйти в минус нельзя. Вопрос, который может отнять больше, чем даёт, делает «не отвечать» строго выгоднее, чем «пробовать», а олимпиада про то, чтобы пробовать.
-3. **Штраф и `max_attempts` — две ручки одного механизма, и обе можно ставить одновременно.** Если штраф обнулил вопрос раньше, чем кончились попытки, оставшиеся попытки бесплатны. Это принято сознательно: смысл дальнейших попыток в том, чтобы участник дошёл до ответа, а не в том, чтобы наказать его ещё раз.
+In `winner` mode a penalty is meaningless and is ignored — not forbidden by
+the setting, simply not applied, because the mode can change.
 
-В режиме `winner` штраф не имеет смысла и игнорируется — не запрещается настройкой, а именно не применяется, потому что режим олимпиады может смениться.
+**Progression — `contests.progression`: `free` (default) or `sequential`.**
 
-**Порядок прохождения — `contests.progression`: `free` (по умолчанию) или `sequential`.**
+Under `sequential` the next question opens only when the previous one is
+**closed** — answered correctly **or** out of attempts.
 
-В `sequential` следующий вопрос открывается, только когда предыдущий **закрыт** — отвечен верно **или** попытки исчерпаны.
+The second condition is mandatory, and it is the main decision here. If a
+question opened only on a correct answer, a participant stuck on the second
+one is locked in for the rest of the olympiad: the competition is over for
+them while the clock runs. So the publication gate **refuses** the
+combination of `sequential` and a question without `max_attempts`: that is a
+contest capable of trapping a participant, and it would do so on the one day
+it costs the most.
 
-Второе условие обязательно, и это главное решение здесь. Если открывать только по верному ответу, участник, застрявший на втором вопросе, заперт до конца олимпиады: для него соревнование кончилось, а часы идут. Поэтому гейт публикации **отказывает** в связке `sequential` + вопрос без `max_attempts`: это олимпиада, которая умеет поймать участника в тупик, и поймать она может ровно в тот день, когда это дороже всего.
+The order is `questions.ord`, the same one used for display. Hidden questions
+(`is_visible = false`) count in the sequence like any other: hidden is not
+absent.
 
-Порядок — `questions.ord`, тот же, что и в отображении. Скрытые вопросы (`is_visible = false`) считаются в последовательности наравне: скрыт — не значит отсутствует.
+**The server checks it, not the interface.** Submitting an answer to a
+question that has not opened is refused by the API. Hiding the question in the
+interface is not enough, for the same reason the password-change flag is
+checked in middleware and not on a screen: a rule that lives only in the
+interface is not a rule.
 
-**Проверяет сервер, а не интерфейс.** Отправка ответа на ещё не открытый вопрос отклоняется API. Прятать вопрос в UI недостаточно ровно по той же причине, по которой флаг смены пароля проверяется в middleware, а не на экране: правило, которое живёт только в интерфейсе, — это не правило.
+It is meaningful only with `question_mode = multi`; with `single` there is one
+question and the sequence degenerates.
 
-Имеет смысл только при `question_mode = multi`; при `single` вопрос один, и последовательность вырождается.
+## 6.2 More than one language
 
-## 6.2 Мультиязычность
+**The game database is entirely English** — the schema, the suspects, the
+evidence. Only authored content is translated: the contest's title and
+description, the story, the questions, the labels on multiple-choice options.
 
-**Игровая база данных — английская целиком**: схема, подозреваемые, улики. Переводится только авторский контент — название и описание олимпиады, история, вопросы, подписи вариантов ответа.
+That decision removes the most expensive part of the problem. Were the
+puzzle's data translated, every contest would need a template per language,
+provisioning would multiply by the number of languages, and a participant
+would have to be pinned to one language for the whole olympiad — because
+changing it would mean rebuilding their database and losing their work. With
+an English database none of that exists: a participant switches language
+whenever they like and loses nothing.
 
-Это решение снимает самую дорогую часть задачи. Будь данные головоломки переведены, каждой олимпиаде понадобился бы шаблон на язык, провижининг умножился бы на число языков, а участника пришлось бы жёстко привязывать к языку на всё время олимпиады — иначе смена языка означала бы пересоздание его базы с потерей работы. С английской базой ничего этого нет: участник переключает язык когда угодно и не теряет ничего.
+### The data model
 
-### Модель данных
+**Languages are data, not code.** A table
+`languages(code, name, native_name, is_active, sort_order)`, seeded with
+three: `en`, `ro`, `ru`. **Adding a fourth is an `INSERT`** — no migration, no
+deployment, no Go to edit. Neither the schema nor the code enumerates language
+codes anywhere, which is exactly why this is a table and not an enum or a
+constant.
 
-**Языки — данные, а не код.** Таблица `languages(code, name, native_name, is_active, sort_order)`, засеяна тремя: `en`, `ro`, `ru`. **Добавление четвёртого — это `INSERT`**, без миграции, без деплоя, без правки Go. Ни схема, ни код нигде не перечисляют коды языков — именно поэтому это таблица, а не enum и не константа.
+**A contest's set of languages** is `contest_languages(contest_id, lang,
+is_default)`. A partial unique index guarantees exactly one default per
+contest: "what do we serve when the requested language is missing" must not be
+ambiguous.
 
-**Набор языков олимпиады** — `contest_languages(contest_id, lang, is_default)`. Частичный уникальный индекс гарантирует ровно один язык по умолчанию на олимпиаду: «что отдать, если запрошенного нет» не должно быть неоднозначным.
-
-**Переводы — отдельные таблицы**, а не `jsonb`-колонки на базовых строках:
+**Translations live in tables of their own**, not in `jsonb` columns on the
+base rows:
 
 ```
 contest_translations  (contest_id, lang) → title, description
@@ -658,79 +1214,219 @@ story_translations    (story_id,   lang) → body_md
 question_translations (question_id, lang) → body_md, choices
 ```
 
-Почему не `jsonb`: он потерял бы внешний ключ на код языка (опечатка `rus` прошла бы молча), потерял бы `NOT NULL` на отдельные поля, и превратил бы запрос «у каких олимпиад нет английской истории» — на котором стоит гейт публикации — в возню с ключами JSON.
+Why not `jsonb`: it would lose the foreign key on the language code, so a
+misspelled `rus` would pass silently; it would lose `NOT NULL` on individual
+fields; and it would turn "which contests have no English story" — the query
+the publication gate stands on — into fumbling with JSON keys.
 
-**Авторский текст переехал в эти таблицы целиком**: `contests.title/description`, `stories.body_md`, `questions.body_md/choices` из базовых таблиц удалены. Копия на базовой строке «для языка по умолчанию» была бы вторым источником правды для одного факта — ровно тот класс ошибок, который этот проект вычищает везде (см. историю с `REDIS_ADDR` и `:9090`).
+**Authored text moved into those tables completely**: `contests.title` and
+`description`, `stories.body_md`, `questions.body_md` and `choices` are gone
+from the base tables. A copy on the base row "for the default language" would
+be a second source of truth for one fact — precisely the class of mistake this
+project removes everywhere else.
 
-**Варианты ответа языконезависимы.** `questions.choice_ids text[]` хранит стабильные идентификаторы (`{a,b,c}`), а подписи к ним — `question_translations.choices` (`{"a": "The butler"}`). Ответ участника — это идентификатор, а не подпись, поэтому проверка вопроса с выбором вообще не зависит от языка чтения.
+**Multiple-choice options are language-independent.** `questions.choice_ids
+text[]` holds stable identifiers (`{a,b,c}`), and the labels live in
+`question_translations.choices` (`{"a": "The butler"}`). A participant's
+answer is an identifier, never a label, so checking a choice question does not
+depend on the language it was read in.
 
-**У эталонных ответов языка нет — намеренно.** База английская, значит ответ, который участник вычитал из неё, английский на любом языке истории. Если переведённая история транслитерирует имя, допустимое написание — просто ещё одна строка (таблица и так допускает несколько ответов на вопрос), а сверка остаётся языконезависимой: участник, вычисливший преступника, задачу решил, и отказ из-за написания оценивал бы язык, а не расследование.
+**Reference answers have no language, deliberately.** The database is English,
+so an answer a participant read out of it is English whatever language the
+story was in. If a translated story transliterates a name, the acceptable
+spelling is simply one more row — the table already allows several answers per
+question — and the comparison stays language-independent: a participant who
+worked out the culprit has solved the problem, and refusing them over spelling
+would be grading language rather than detection.
 
-**Предпочтение участника** — `users.locale`, необязательное. Привязки языка к регистрации нет сознательно: игровой инстанс языконейтрален, переключение ничего не стоит.
+**A participant's preference** is `users.locale`, and it is optional. There is
+deliberately no language bound to a registration: the game instance is
+language-neutral, so switching costs nothing.
 
-### Разрешение языка
+### Resolving a language
 
-Единственная функция — `platform/i18n.Match(preferred, available, fallback)`, через которую проходит всё языкозависимое, чтобы на вопрос «какой язык он получил и почему» был один ответ. Цепочка:
+One function — `platform/i18n.Match(preferred, available, fallback)` — carries
+everything language-dependent, so that "which language did they get, and why"
+has a single answer. The chain:
 
-1. явный выбор запроса (`?lang=`), затем `Accept-Language` по q-весам;
+1. the request's explicit choice (`?lang=`), then `Accept-Language` by its
+   q-weights;
 2. `users.locale`;
-3. язык олимпиады по умолчанию (`contest_languages.is_default`);
-4. `DEFAULT_LOCALE` из конфигурации — **`en`**, потому что база английская и это единственный язык, который в установке есть наверняка;
-5. любой доступный — олимпиада, у которой удалили объявленный дефолт, всё равно обязана что-то отдать.
+3. the contest's default language (`contest_languages.is_default`);
+4. `DEFAULT_LOCALE` from configuration — **`en`**, because the database is
+   English and that is the one language an installation certainly has;
+5. anything available at all: a contest whose declared default was deleted
+   still has to serve something.
 
-Совпадение по региону работает в обе стороны: запрос `ro-MD` принимает доступный `ro`, а запрос `ro` — доступный `ro-MD`; регион уточняет язык, а не заменяет его. Если недоступно вообще ничего, возвращается пустая строка: честного ответа нет, и вызывающий обязан трактовать это как отсутствие контента, а не подсунуть язык, которого никто не писал.
+Regional matching works both ways: a request for `ro-MD` accepts an available
+`ro`, and a request for `ro` accepts an available `ro-MD`. A region refines a
+language rather than replacing it. When nothing is available, the empty string
+comes back: there is no honest answer, and the caller must read that as
+"there is no content" rather than serve a language nobody wrote.
 
-### Сообщения самого API уже мультиязычны
+### The API's own messages are already multilingual
 
-Ответы об ошибках возвращают **машинный код** (`error.code`: `invalid_credentials`, `login_taken`), а человеческий текст — сопровождение для разработчика. Переводит фронтенд, по коду. Это уже так работает с шага 2 и менять ничего не нужно — серверу не придётся знать язык пользователя, чтобы сообщить об ошибке.
+Error responses carry a **machine code** (`error.code`:
+`invalid_credentials`, `login_taken`), and the human sentence beside it is for
+the developer. The interface translates from the code. Nothing needs to change
+for this: the server never has to know a user's language in order to report an
+error.
 
-### Гейт публикации
+### The publication gate
 
-Олимпиада не переходит в `published`, пока для **каждого** объявленного языка нет полного комплекта: `contest_translations`, `story_translations` и `question_translations` на каждый вопрос. Плюс проверка режима из 6.1: при `single` — ровно один вопрос. Иначе участник, выбравший румынский, посреди олимпиады упёрся бы в пустую историю.
+A contest does not reach `published` until **every** declared language has the
+full set: `contest_translations`, `story_translations`, and
+`question_translations` for every question. Plus the mode check from section
+6.1: under `single`, exactly one question. Otherwise a participant who chose
+Romanian would walk into an empty story mid-olympiad.
 
-**Гейт смотрит не только на содержимое, но и на список участников** (`staff_registered`). Аккаунт с правом `contest.admin_all` читает эталонные ответы и незамороженный лидерборд любой олимпиады, не будучи назначенным ни в одну, — поэтому соревноваться он не может. Обе точки регистрации такой аккаунт уже отклоняют (`Enroll`, `AddParticipants`), но ни одна из них не отменяет регистрацию, сделанную до появления этого правила, и не замечает, когда право выдают аккаунту уже после регистрации. Публикация — последний момент перед тем, как кого-либо впустят, и единственный, где организатор видит отказ, пока время ещё есть: гейт называет логины (не больше `contests.MaxReportedStaff`), чтобы их было кого снять со списка. Проверка стоит одного индексированного запроса на публикацию — не на запрос участника, — и держится на обеих дверях, как и остальной гейт: и на `published`, и на `running`, включая старт по расписанию, где отказ уходит в журнал записью `contest.start_blocked`. Чего она не покрывает: олимпиаду, которая на момент развёртывания уже `running`, — такую проверяют разово, запросом к базе.
+**The gate looks at the roster as well as at the content** (`staff_registered`).
+An account holding `contest.admin_all` reads the reference answers and the
+unfrozen leaderboard of any contest without being appointed to one, so it
+cannot compete. Both registration paths already refuse such an account
+(`Enroll`, `AddParticipants`), but neither undoes a registration made before
+that rule existed, and neither notices the permission being granted to an
+account that had already registered. Publication is the last moment before
+anybody is let in, and the only one where an organiser sees the refusal while
+there is still time: the gate names the logins — no more than
+`contests.MaxReportedStaff` of them — so there is somebody to remove. The
+check costs one indexed query per publication, not per participant request,
+and stands on both doors like the rest of the gate: on `published` and on
+`running`, including a scheduled start, where a refusal reaches the journal as
+`contest.start_blocked`. What it does not cover is a contest already `running`
+when this was deployed; those are checked once, with a query.
 
-## 6.3 Авторские экраны: сохранение и редактор истории
+## 6.3 The authoring screens
 
-**Одна кнопка «Сохранить» на странице вопроса.** Раньше вопрос правился тремя запросами — свои поля, тексты по языкам, эталонные ответы, — и у каждого блока была своя кнопка. Автор редактировал один объект, а сохранял его по частям.
+**One Save button on a question's page.** A question used to be edited through
+three requests — its own fields, its texts per language, its reference answers
+— each with its own button. The author was editing one object and saving it in
+parts.
 
-Свести к одной кнопке можно двумя способами, и они не равноценны. Отправить три запроса подряд из браузера — значит получить состояние, где первый прошёл, второй упал: страница наполовину сохранена, а кнопка уже сказала «готово». Честный вариант — **один эндпоинт, принимающий вопрос целиком и пишущий его в одной транзакции**: `PUT /contests/{id}/questions/{questionId}`. Сервис уже выполняет каждую из трёх операций внутри `uow.Do`, так что это объединение существующих шагов, а не новый механизм.
+There are two ways to reduce that to one button, and they are not equivalent.
+Sending three requests in a row from the browser produces a state where the
+first landed and the second failed: the page is half saved and the button has
+already said "done". The honest option is **one endpoint that takes the whole
+question and writes it in one transaction**: `PUT
+/contests/{id}/questions/{questionId}`. The service already runs each of the
+three operations inside `uow.Do`, so this combines existing steps rather than
+introducing a mechanism.
 
-Побочная выгода: в журнал попадёт запись с одним набором изменений вместо трёх разрозненных — то есть то, что автор и сделал, одним действием. Правка эталонных ответов при этом сохраняет **собственную** строку (`contest.answers_change`) в той же транзакции: «кто менял эталоны после публикации» — вопрос, на который журнал отвечает индексированным фильтром (раздел 9), и свернув его в общую запись, мы бы этот ответ потеряли.
+A side benefit: the journal gets one record carrying one set of changes
+instead of three scattered ones — which is what the author actually did, in
+one action. Editing the reference answers still writes its **own** row
+(`contest.answers_change`) in the same transaction: "who changed the reference
+answers after publication" is a question the journal answers with an indexed
+filter (section 9), and folding it into the general record would lose that
+answer.
 
-**И это не только про UX.** Через три узких эндпоинта смена вида вопроса была невозможна: обновление вопроса сверяло *существующие* ответы с *новым* видом и отказывало, а сохранение ответов сверяло *новые* ответы со *старым* видом и тоже отказывало. Как ни заходи, одна половина правки отвергала другую, и текстовый вопрос нельзя было превратить в вопрос с вариантами. Когда обе половины известны разом, ответы сверяются с вопросом таким, каким он станет.
+**And it is not only about the experience.** Through three narrow endpoints,
+changing a question's kind was impossible: updating the question compared the
+*existing* answers against the *new* kind and refused, while saving the
+answers compared the *new* answers against the *old* kind and refused too.
+Whichever way round, one half of the edit rejected the other, and a text
+question could not become a multiple-choice one. When both halves are known at
+once, the answers are compared against the question as it will be.
 
-**Редактор истории — WYSIWYG поверх Markdown.** История хранится как Markdown (`stories.body_md`) на каждый язык; редактор (Milkdown/Crepe) разбирает его в документ, показывает форматирование прямо на месте набора и сериализует обратно в Markdown. Готовый Markdown можно вставить, и обратно приходит Markdown, который можно править руками.
+**The story editor is WYSIWYG over Markdown.** A story is stored as Markdown
+(`stories.body_md`) per language; the editor parses it into a document, shows
+the formatting in place, and serialises back to Markdown. Finished Markdown
+can be pasted in, and Markdown comes back out — editable by hand.
 
-Цена названа один раз и принята. Богатый редактор держит дерево документа и на каждом изменении гоняет его обратно в Markdown; всё, что деревом не представимо, поездку не переживает. Здесь это приемлемо по двум причинам: обычная жертва такого обхода — сырой HTML, который в этом приложении и так запрещён (то есть редактор теряет ровно то, что читатель отказался бы отрисовать), а сама история — это проза: абзацы, заголовки, выделение, списки, цитаты, таблицы, и всё это в дереве есть.
+The price is named once and accepted. A rich editor holds a document tree and
+runs it back to Markdown on every change, and anything the tree cannot
+represent does not survive the trip. That is acceptable here for two reasons:
+the usual casualty of such a round trip is raw HTML, which this application
+forbids anyway — so the editor loses exactly what the reader would refuse to
+render — and a story is prose: paragraphs, headings, emphasis, lists, quotes,
+tables, all of which the tree has.
 
-**Граница безопасности не в редакторе.** Он показывает автору его же текст — это ничья чужая проблема. То, что читает каждый участник, отрисовывает `StoryText`, и он не строит HTML-строку вовсе. Что бы редактор ни пропустил, до читателя это доедет текстом.
+**The security boundary is not in the editor.** It shows an author their own
+text, which is nobody else's problem. What every participant reads is rendered
+by `StoryText`, and that does not build an HTML string at all. Whatever the
+editor let through arrives at the reader as text.
 
-Побочное следствие: экран истории требует JavaScript. Остальной конструктор — нет, и простые формы там оставлены именно поэтому; но редактора такого рода без JavaScript не бывает.
+A consequence: the story screen requires JavaScript. The rest of the builder
+does not, and its plain forms were left plain for that reason — but an editor
+of this kind does not exist without it.
 
-Два ограничения, которые надо заложить сразу:
+Two constraints to build in from the start:
 
-- **Сырой HTML в Markdown выключен, а не вычищается после.** Историю пишет менеджер олимпиады — роль менее доверенная, чем администратор, — а читает её каждый участник. `<script>` в истории это XSS с правами всех участников сразу. Реализовано структурно, а не фильтром: рендерер (`components/product/story-text.tsx`) строит React-элементы и **никогда не собирает HTML-строку**, поэтому в пути нет ни `dangerouslySetInnerHTML`, ни санитайзера, который можно обойти. Сырой HTML не парсится вовсе — он остаётся текстом.
-- **Один и тот же рендерер в конструкторе и на экране участника.** Два разных — это гарантия, что автор увидит не то, что увидит участник, и обнаружится это в день олимпиады.
+- **Raw HTML in Markdown is disabled, not cleaned up afterwards.** A story is
+  written by a contest manager — a less trusted role than an administrator —
+  and read by every participant. A `<script>` in a story is cross-site
+  scripting with every participant's privileges at once. It is handled
+  structurally rather than by a filter: the renderer
+  (`components/product/story-text.tsx`) builds React elements and **never
+  assembles an HTML string**, so there is no `dangerouslySetInnerHTML` in the
+  path and no sanitiser to walk around. Raw HTML is not parsed at all; it
+  stays text.
+- **The same renderer in the builder and on the participant's screen.** Two
+  different ones would guarantee that the author sees something other than the
+  participant does, and that it is discovered on the day of the olympiad.
 
-Что выяснилось при реализации и стоит помнить:
+What implementation taught, and is worth keeping:
 
-- **Вставка предпочитает `text/plain` и разбирается как Markdown.** Браузер отдаёт `text/html` для всего, скопированного со страницы, и вместе с блоком кода приезжает его обвязка — подпись языка, слово с кнопки «Copy», номера строк в жёлобе: это настоящие элементы внутри выделения. Здесь это ничего не стоит, потому что документ и так Markdown: заголовки, списки и выделение переживают вставку из редактора, файла или чата. Вставка без plain-текста и копирование внутри самого редактора проходят как раньше — во втором случае у ProseMirror свой срез, и он лучше переразбора.
-- **Ручка блока живёт слева и требует места.** Две кнопки по 32px с зазором 2px, отступ 8px от абзаца — 74px левее начала текста, и позиционируется она относительно `.milkdown`. Отсюда правило: 56px жёлоба там, где бокс может переполняться видимо, 96px там, где он обрезает. Обрезка вешается на внешний бокс и **никогда** на `.milkdown` — там она срезает саму ручку.
-- **Каждый редактор изолирован (`isolation: isolate`).** В стилях Crepe есть `z-index: 999` (обвязка блока кода), `100` и `50` (таблицы), и `.milkdown` их ничем не ограничивает — они соревнуются в корневом контексте страницы и рисуются поверх развёрнутого на весь экран редактора. Гнаться за числом зависимости бессмысленно; изоляция даёт им потолок, и обёртки соревнуются между собой.
-- **Полноэкранный режим не пересоздаёт редактор.** Тот же узел остаётся на своём месте в дереве, меняется только позиция: редактор — это ProseMirror-инстанс, привязанный к узлу, и вторая копия потеряла бы историю отмены и набранный текст. Закрытые редакторы всех языков — одинаковые прямоугольники со скроллом внутри: высота по содержимому превращала ряд языков в лесенку, а это одна и та же история в трёх переводах.
+- **A paste prefers `text/plain` and is parsed as Markdown.** The browser
+  offers `text/html` for anything copied from a page, and a code block arrives
+  with its furniture — the language label, the word from the Copy button, line
+  numbers in the gutter, all of them real elements inside the selection. Here
+  that costs nothing, because the document is Markdown anyway: headings, lists
+  and emphasis survive a paste from an editor, a file or a chat. A paste with
+  no plain text, and copying inside the editor itself, behave as before — in
+  the second case ProseMirror has its own slice, and it is better than
+  re-parsing.
+- **The block handle lives on the left and needs room.** Two 32px buttons with
+  a 2px gap and an 8px margin from the paragraph — 74px to the left of where
+  the text starts, positioned relative to `.milkdown`. Hence the rule: a 56px
+  gutter where the box may overflow visibly, 96px where it clips. Clipping
+  goes on the outer box and **never** on `.milkdown`, where it would cut off
+  the handle itself.
+- **Each editor is isolated** (`isolation: isolate`). Crepe's styles carry
+  `z-index: 999` for a code block's furniture, and `100` and `50` for tables,
+  and `.milkdown` bounds none of them — they compete in the page's root
+  stacking context and draw over an editor expanded to full screen. Chasing
+  the number is pointless; isolation gives them a ceiling, and the wrappers
+  compete among themselves.
+- **Full screen does not recreate the editor.** The same node stays where it
+  is in the tree and only its position changes: the editor is a ProseMirror
+  instance bound to that node, and a second copy would lose the undo history
+  and the text typed into it. The closed editors of every language are
+  identical rectangles that scroll inside, because height-to-content turned a
+  row of languages into a staircase — and it is one story in three
+  translations.
 
-Редактор грузится только в конструкторе. В бандл участника он не попадает: олимпиада идёт по таймеру, и килобайты редактора там оплачивает тот, кто решает задачу (SPEC, принцип 3).
+The editor is loaded only in the builder. It does not enter a participant's
+bundle: the olympiad runs against a clock, and the editor's kilobytes would be
+paid for by the person solving the problem.
 
-## 6.4 Рабочее место участника: заметки и вкладки SQL
+## 6.4 A participant's workspace: notes and SQL tabs
 
-Дизайн: `docs/superpowers/specs/2026-09-17-play-workspace-design.md`.
+**Notes and the SQL editor's tabs are stored in the core database against
+`registration_id`**, not in the browser's `localStorage`. The olympiad runs in
+computer labs: a browser profile is wiped at sign-out, a student can be moved
+to another machine, a tab can crash. Data on the server survives all of that
+and comes back at the next sign-in from any device; data in `localStorage` is
+gone for good in each of those cases. It also removes a cleanup job of its
+own: when a registration is deleted, `ON DELETE CASCADE` takes the notes and
+the tabs with it.
 
-**Заметки и вкладки SQL-редактора хранятся в core-БД, привязанными к `registration_id`**, а не в `localStorage` браузера. Олимпиада идёт в компьютерных классах: профиль браузера стирается при выходе, студента может пересадить за другую машину, вкладка может упасть. Данные на сервере переживают всё это и возвращаются при следующем входе с любого устройства; данные в `localStorage` в этих случаях пропадают безвозвратно. Заодно это снимает отдельную уборку: регистрация удаляется — `ON DELETE CASCADE` забирает и заметки, и вкладки. **Заметки и вкладки не личные.** Первоначальное решение было обратным — у преподавателей нет API для чтения чужих заметок и вкладок, это личное пространство участника, — и оно отменено наблюдением за участником (раздел 9.4): организатор олимпиады видит текущие заметки и вкладки и всю историю их правок. Каждое сохранение заметок или вкладки пишет ревизию в `workspace_revisions` в той же транзакции, создание, переименование и удаление вкладки — событие в `participant_events`; не записалась история — не сохранилось и само изменение. Участнику это сказано на экране: строкой под заголовком и строкой под полем заметок.
+**Notes and tabs are not private.** The original decision was the opposite —
+teachers had no API for reading them, and it was the participant's own space —
+and it was reversed by participant monitoring (section 9.4): a contest's
+organiser sees the current notes and tabs and the whole history of their
+edits. Every save of a note or a tab writes a revision into
+`workspace_revisions` in the same transaction, and creating, renaming or
+deleting a tab writes an event into `participant_events`; if the history did
+not record, the change did not save. The participant is told so on screen, in
+a line under the heading and a line under the notes field.
 
-`localStorage` в этой схеме остаётся, но на одну задачу: черновик правки, которая набрана, но ещё не подтверждена сервером (ниже), и раскладка экрана самой машины — свёрнутые панели, ширины колонок (раздел 5 SPEC) — это настройка компьютера, а не участника, и ей не место в базе.
+`localStorage` stays in this design for one job: a draft that has been typed
+but not yet confirmed by the server (below), and the layout of the machine's
+own screen — collapsed panels, column widths — which is a setting of the
+computer rather than of the participant and has no place in a database.
 
-**Таблицы — миграция `000032_play_workspace`:**
+**The tables — migration `000032_play_workspace`:**
 
 ```sql
 CREATE TABLE participant_notes (
@@ -749,214 +1445,851 @@ CREATE TABLE participant_sql_tabs (
 CREATE INDEX participant_sql_tabs_registration_idx ON participant_sql_tabs (registration_id, position);
 ```
 
-Ничто в таблице не требует `(registration_id, position)` уникальным — это держит advisory-блокировка по регистрации (`pg_advisory_xact_lock`, тот же приём, что у первой вкладки при гонке), а не индекс: позиции переписываются целиком при удалении и перестановке, и частичный уникальный индекс только мешал бы этому.
+Nothing makes `(registration_id, position)` unique, and that is on purpose: an
+advisory lock per registration holds it (`pg_advisory_xact_lock`, the same
+device the first tab uses against a race), not an index. Positions are
+rewritten wholesale when a tab is deleted or moved, and a partial unique index
+would only get in the way.
 
-**Пределы (правила 2, 5 и 13 в `CLAUDE.md`):**
+**The limits:**
 
-| Что | Предел |
+| What | Limit |
 |---|---|
-| Текст заметок | 20 000 символов |
-| Число вкладок SQL у участника | 10 |
-| Название вкладки | 1–40 символов, без управляющих символов |
-| Текст вкладки | `sqlpolicy.MaxQueryBytes` (64 КиБ) — тот же предел, что у запроса в консоли (раздел 5) |
-| Частота записей | 60 в минуту на учётную запись, общий счётчик для заметок и вкладок; отказы считаются тоже |
+| The notes' text | 20,000 characters |
+| SQL tabs per participant | 10 |
+| A tab's title | 1–40 characters, no control characters |
+| A tab's text | `sqlpolicy.MaxQueryBytes` (64 KiB) — the same limit the console's query has (section 5) |
+| Write rate | 60 a minute per account, one counter shared by notes and tabs; refusals count too |
 
-**Частота записи — отдельный бюджет от бюджета чтения консоли, и проверяется первым.** `admit`, которым идёт остальной `/play/*`, тратит `AdmitRead` — тот же бюджет, что и запуск SQL-запроса. Если бы автосохранение тратило его, непрерывный набор текста (до 40 записей в минуту при паузе в 1,5 с) отнимал бы у участника его же запросы в консоли. Поэтому запись сначала проходит `workspace.Service.AdmitWrite` — свой счётчик, ключ `workspace:user:<account>`, — и только потом переходит к поиску участника и олимпиады. Порядок обязателен правилом 13: счётчик, ограниченный бюджетом до поиска, не даёт отказавшему запросу породить участнику лишних счётчиков в лимитере, а после поиска уже поздно — работа, которую ограничение должно было предотвратить, к тому моменту сделана. Ключ так же ограничен, как адрес (один на учётную запись); то, что участник в двух идущих олимпиадах одновременно делит один бюджет на двоих, — не случай, который стоит решать отдельным механизмом.
+**The write rate is a budget separate from the console's read budget, and it
+is checked first.** The `admit` the rest of `/play/*` goes through spends
+`AdmitRead` — the same budget as running a SQL query. If autosave spent it,
+continuous typing (up to forty writes a minute at a 1.5-second pause) would be
+taking a participant's own queries away from them. So a write goes through
+`workspace.Service.AdmitWrite` first — its own counter, keyed
+`workspace:user:<account>` — and only then looks up the participant and the
+contest. The order is mandatory: a counter bounded by a budget before the
+lookup stops a refused request from creating extra counters in the limiter,
+and after the lookup it is too late, because the work the limit existed to
+prevent has been done. The key is as bounded as an address is — one per
+account — and the fact that a participant in two running contests shares one
+budget between them is not a case worth a mechanism of its own.
 
-**Маршруты — все под `/contests/{id}/play/`,** доступ и аутентификация те же, что у остального `ParticipantHandler` (`admit`, `queryproxy.Service.Access`):
+**The routes are all under `/contests/{id}/play/`,** with the same access and
+authentication as the rest of the participant handler:
 
-- `GET /play/workspace` — заметки и все вкладки; если вкладок ещё нет, сервер создаёт первую («Запрос 1» / «Query 1» / «Interogare 1» по языку запроса).
-- `PUT /play/notes`, `POST /play/tabs`, `PATCH /play/tabs/{tabId}`, `DELETE /play/tabs/{tabId}`, `PUT /play/tabs/order`.
+- `GET /play/workspace` — the notes and every tab; if there are no tabs yet
+  the server creates the first, named in the request's language.
+- `PUT /play/notes`, `POST /play/tabs`, `PATCH /play/tabs/{tabId}`,
+  `DELETE /play/tabs/{tabId}`, `PUT /play/tabs/order`.
 
-**Рабочее место закрывается вместе с олимпиадой, режима «только чтение» нет.** Читать и писать можно, только пока `Access` допускает участника, — тот же `Access`, что у `/play/story` и у консоли. Когда олимпиада для участника закончилась, все маршруты рабочего места отвечают 409 `contest_not_running` / `contest_finished`, как и остальные маршруты `/play`: сам экран `/play` после конца недоступен, поэтому отдельного состояния «заметки видны, но не редактируются» не существует и не нужно.
+**The workspace closes with the contest; there is no read-only mode.** Reading
+and writing are possible only while `Access` admits the participant — the same
+`Access` that guards `/play/story` and the console. Once the contest has ended
+for them, every workspace route answers 409 `contest_not_running` or
+`contest_finished`, like the rest of `/play`. The `/play` screen itself is
+unreachable after the end, so a state where "the notes are visible but not
+editable" does not exist and is not needed.
 
-**Версия документа — `updated_at`, отформатированный `time.RFC3339Nano`,** и только на этих маршрутах: обычный `timeLayout` API округляет до секунды, а клиенту нужно различать два сохранения одного документа в одну секунду, чтобы понять, чей черновик новее. Эта точность не расходится с остальным API — она просто ему не нужна больше нигде.
+**A document's version is `updated_at` formatted as `time.RFC3339Nano`**, and
+only on these routes: the API's ordinary layout rounds to the second, and the
+client needs to tell two saves of one document within the same second apart in
+order to know whose draft is newer. That precision does not conflict with the
+rest of the API — it is simply not needed anywhere else.
 
-**Автосохранение на клиенте** — общий для заметок и вкладок движок (`useAutosave`), а не кнопка «Сохранить»:
+**Autosave on the client** is one engine shared by notes and tabs
+(`useAutosave`), not a Save button:
 
-- запись уходит через 1,5 с после последней правки, но не реже раза в 10 с при непрерывном наборе;
-- при отказе — повтор с нарастающей паузой от 2 до 30 с; сеть, 5xx и 429 (последний — с учётом `Retry-After`) не помечают текст как отклонённый, а вот отказ по лимиту или из-за окончания олимпиады — да;
-- на скрытие вкладки, `pagehide` и потерю фокуса — сохранение уходит немедленно, а на `pagehide` — напрямую в `/api/v1/...` с `keepalive: true`, потому что server action на закрытии страницы не отработает (тем же приёмом читает CSV-журнал участника — раздел 9.1, «Свой журнал запросов участника»);
-- пока сохранение не подтверждено, текст лежит черновиком в `localStorage` (ключ по олимпиаде и документу); после подтверждения черновик убирается, а при перезагрузке до того, как сервер ответил, экран показывает черновик и сразу пробует сохранить его снова.
+- a write goes out 1.5 seconds after the last edit, and at least once every 10
+  seconds during continuous typing;
+- on a refusal it retries with a growing pause from 2 to 30 seconds. Network
+  failures, 5xx and 429 (the last honouring `Retry-After`) do not mark the
+  text as rejected; a refusal by the rate limit or because the contest ended
+  does;
+- hiding the tab, `pagehide` and losing focus each send a save immediately,
+  and on `pagehide` it goes straight to `/api/v1/...` with `keepalive: true`,
+  because a server action will not complete as the page closes;
+- until a save is confirmed, the text sits as a draft in `localStorage`, keyed
+  by contest and document. The draft is removed once the save is confirmed,
+  and a reload before the server answered shows the draft and immediately
+  tries to save it again.
 
-## 7. Аутентификация и авторизация
+## 7. Authentication and authorisation
 
-- **Вход:** логин + пароль (argon2id, per-user salt). Защита от перебора: rate limit по IP и по логину (Redis) — фиксированное окно, а не скользящее и не экспоненциальная задержка, обоснование в разделе 7.2, — единый ответ «неверный логин или пароль» без раскрытия существования учётки.
-- **Сессии:** случайный 256-бит идентификатор в httpOnly, Secure, SameSite=Lax cookie; данные сессии в Redis с TTL (напр., 12 ч) и продлением при активности. Logout и блокировка пользователя = немедленное удаление сессий.
-- **RBAC — два уровня: глобальный и уровень олимпиады.**
-  - **Глобальные роли** (`roles`/`user_roles`): `student`, `organizer` (может создавать олимпиады), `admin` (админ **системы**: всё, включая управление пользователями, глобальными ролями и любыми олимпиадами).
-  - **Роли уровня олимпиады** (`contest_managers`): создатель олимпиады становится её `owner`; owner (или админ системы) назначает `manager`'ов. Owner и manager управляют **только своей олимпиадой**: контент (история, вопросы, ответы), политика SQL-доступа, список участников, мониторинг и отчёты по ней. Разница owner/manager: только owner назначает и снимает менеджеров и может архивировать олимпиаду. Ни owner, ни manager не видят чужие олимпиады и не управляют пользователями системы.
-  - **Персонал и участники одной олимпиады — взаимоисключающие множества.** Owner или manager не может записаться на свою олимпиаду участником, а зарегистрированный участник не может быть назначен её менеджером — обе стороны отклоняются с отдельным кодом (409): персонал знает эталонные ответы и видит чужие результаты, и совмещение ролей сделало бы соревнование нечестным по построению, а не по недосмотру. Правило действует только на новые назначения — учётную запись, которая уже совмещала обе роли до появления проверки, оно не разводит.
-  - **Проверка доступа** двухступенчатая: `RequirePermission("contest.edit", contestID)` — сначала глобальные permissions (админ системы проходит всегда), затем запись в `contest_managers` для данной олимпиады. Middleware проверяет permission, а не роль — новые роли и права добавляются данными, без изменения кода.
-  - Назначение/снятие менеджеров — только через UI, каждое изменение — в `audit_log` (кто, кого, на какую олимпиаду).
-- **Учётные записи** создаёт админ (импорт CSV со списком группы + генерация одноразовых паролей со сменой при первом входе). Самостоятельная регистрация учётных записей на данном этапе отключена — меньше поверхность атаки. (Запись на олимпиаду — отдельный механизм, см. 7.1.)
+- **Sign-in:** a login and a password (argon2id, per-user salt). Against
+  guessing: rate limits by address and by login — a fixed window rather than a
+  sliding one or an exponential delay, for the reason given in section 7.2 —
+  and one answer, "wrong login or password", that never reveals whether an
+  account exists.
+- **Sessions:** a random 256-bit identifier in an httpOnly, Secure,
+  SameSite=Lax cookie; the session's data in the cache with a TTL (twelve
+  hours, say) extended by activity. Signing out, and blocking an account,
+  delete the sessions immediately.
+- **RBAC on two levels, global and per contest.**
+  - **Global roles** (`roles` / `user_roles`): `student`, `organizer` — who may
+    create contests — and `admin`, the **system** administrator, who may do
+    everything including managing accounts, global roles and any contest.
+  - **Contest-level roles** (`contest_managers`): whoever creates a contest
+    becomes its `owner`, and the owner (or a system administrator) appoints
+    `manager`s. An owner and a manager govern **only their own contest**: its
+    content, its SQL policy, its roster, its monitoring and its reports. The
+    difference between the two is that only an owner appoints and removes
+    managers and may archive the contest. Neither sees anybody else's contest,
+    and neither manages accounts.
+  - **A contest's staff and its participants are disjoint sets.** An owner or
+    a manager cannot enrol in their own contest, and a registered participant
+    cannot be appointed its manager; both directions are refused with their
+    own 409 code. Staff know the reference answers and see everybody's
+    results, and combining the roles would make the competition unfair by
+    construction rather than by oversight. The rule binds new appointments
+    only: an account that already held both before the check existed is not
+    separated by it.
+  - **The access check has two steps.**
+    `RequirePermission("contest.edit", contestID)` consults the global
+    permissions first — a system administrator always passes — and then the
+    row in `contest_managers` for that contest. The middleware checks a
+    permission and never a role, so new roles and rights are added as data,
+    without touching code.
+  - Appointing and removing managers happens only through the interface, and
+    every change lands in `audit_log`: who, whom, on which contest.
+- **Accounts are created by an administrator** — a CSV import of a group's
+  roster, with one-time passwords that must be changed at first sign-in.
+  Self-registration of accounts is disabled at this stage: a smaller attack
+  surface. Enrolling in a contest is a separate mechanism (section 7.1).
 
-## 7.1 Доступ к олимпиаде: тип записи и IP-ограничения
+## 7.1 Reaching a contest: enrolment and address restrictions
 
-Обе настройки задаются в форме олимпиады админом системы или owner/manager'ом этой олимпиады; изменения пишутся в `audit_log`.
+Both settings live in the contest's form and are set by a system
+administrator or by the contest's owner or manager; changes are written to
+`audit_log`.
 
-**Тип записи (`contests.enrollment`):**
+**Enrolment (`contests.enrollment`):**
 
-| Тип | Поведение |
+| Type | Behaviour |
 |---|---|
-| `open` | Олимпиада видна в общем списке; студент записывается сам кнопкой «Участвовать» (создаётся запись в `registrations`) до момента старта или дедлайна записи |
-| `invite_only` (по умолчанию) | Самозапись недоступна; участников добавляет owner/manager через админку — поштучно поиском по пользователям или пакетно импортом CSV (список логинов). Олимпиада видна только добавленным участникам |
+| `open` | The contest appears in the public list, and a student enrols themselves with a button — creating the row in `registrations` — until the start or an enrolment deadline |
+| `invite_only` (default) | No self-enrolment; the owner or a manager adds participants, one at a time by searching accounts or in bulk from a CSV of logins. The contest is visible only to those added |
 
-Тип влияет лишь на то, **кто создаёт** запись в `registrations` — дальше оба пути идентичны (провижининг игровой БД, старт, таймер). Смена типа возможна до старта; каждое добавление/удаление участника менеджером — событие аудита.
+The type decides only **who creates** the row in `registrations`; from there
+both paths are identical — provisioning, the start, the clock. The type can be
+changed before the start, and every addition or removal by a manager is an
+audit event.
 
-**IP-ограничения (`contests.allowed_cidrs`):**
+**Address restrictions (`contests.allowed_cidrs`):**
 
-Список адресов и диапазонов в формате CIDR (например, `10.20.0.0/16`, `192.168.1.42/32`) — для очных олимпиад «только из этой аудитории/кампусной сети». Пустой список = ограничений нет.
+A list of addresses and ranges in CIDR form (`10.20.0.0/16`,
+`192.168.1.42/32`), for an in-person olympiad that should run "only from this
+room, or this campus network". An empty list means no restriction.
 
-- **Проверка на каждом действии участника**, а не только при входе: просмотр страницы олимпиады, SQL-запрос, отправка ответа, SSE-подписка. Участник, вышедший из разрешённой сети посреди олимпиады, немедленно теряет доступ (и восстанавливает его, вернувшись) — сессию это не убивает.
-- **Определение IP клиента:** Core API берёт адрес из `X-Forwarded-For`, доверяя **только своему** реверс-прокси (список доверенных прокси — в конфигурации; заголовок от клиента напрямую игнорируется). Это стандартная точка ошибок — закрепить интеграционным тестом на подделку заголовка.
-- **Сопоставление** — типом `inet` в Go (`netip.Prefix.Contains`), список CIDR олимпиады кешируется в памяти/Redis.
-- **Отказ** — понятная страница «Олимпиада доступна только из сети университета», а не голый 403; каждая заблокированная попытка — в `audit_log` (кто, откуда, когда) — это же сигнал о попытке писать со стороннего устройства.
-- **На кого действует:** только на участие студентов. Админы и менеджеры олимпиады под ограничение не попадают (иначе можно случайно запереть самого себя, настроив неверный диапазон) — их действия и так полностью аудируются.
+- **Checked on every action a participant takes**, not only at sign-in:
+  opening the contest page, running a query, submitting an answer,
+  subscribing to events. A participant who leaves the permitted network
+  mid-olympiad loses access at once and regains it on returning; their session
+  is not destroyed.
+- **The client's address** is taken from `X-Forwarded-For`, trusting **only
+  the installation's own** reverse proxy — the list of trusted proxies is
+  configuration, and the header straight from a client is ignored. This is a
+  classic place to get it wrong, so it is pinned by an integration test that
+  forges the header.
+- **Matching** uses Go's own address types (`netip.Prefix.Contains`), and the
+  contest's CIDR list is cached.
+- **A refusal** is a page that says the contest is available only from the
+  university's network, not a bare 403; and every blocked attempt goes to
+  `audit_log` with who, from where and when — which is also the signal that
+  somebody is trying from a device of their own.
+- **Who it binds:** participants only. Administrators and a contest's managers
+  are outside it, or a wrong range would lock the person who set it out of
+  their own contest. Their actions are fully audited anyway.
 
+## 7.2 Authentication as implemented
 
-## 7.2 Реализация аутентификации (шаг 2)
+**Passwords use argon2id** (64 MiB, three iterations, the OWASP baseline) in
+`platform/password`. The parameters are encoded into the digest itself as a
+PHC string, so raising the cost later **rehashes** accounts at their next
+sign-in rather than invalidating them. Comparison is constant-time. An empty
+password and an over-long one are refused: argon2 hashes the whole input, and
+unbounded length is a way to burn CPU on an unauthenticated endpoint.
 
-Как принятые выше решения выглядят в коде.
+**Sessions are server-side, and the token is stored hashed.** The client gets
+a 256-bit opaque token; the cache holds **its SHA-256**. A dump of the cache
+therefore yields digests that cannot authenticate anything and cannot be used
+to steal a live session. The cookie is `HttpOnly` — cross-site scripting
+cannot read the token — `SameSite=Lax`, and `Secure` from **configuration**
+rather than from a proxy header; it is on everywhere except
+`ENV=development`, because a browser silently discards a Secure cookie
+delivered over plain HTTP and a local instance without a certificate would
+become unreachable. The TTL slides (twelve hours by default) and is extended
+on each request, because a participant must not be signed out in the middle of
+an answer. Above it sits an absolute lifetime from sign-in,
+`SESSION_MAX_LIFETIME`, which activity does not extend: a sliding TTL by
+itself never ends a session that is still being used, including one used from
+a cookie copied off a shared computer. A session older than that is refused
+and deleted on its next request, and the cache entry is given a TTL no longer
+than the remaining lifetime in the first place.
 
-**Пароли — argon2id** (64 MiB, 3 итерации, OWASP baseline), пакет `platform/password`. Параметры кодируются в сам дайджест (PHC-строка), поэтому повышение стоимости в будущем **перехеширует** аккаунты при следующем входе, а не инвалидирует их. Сравнение — константное по времени. Пустой и сверхдлинный пароль отклоняются: argon2 хеширует весь ввод, и неограниченная длина — способ жечь CPU на неаутентифицированном эндпоинте.
+**Sessions are revoked through a generation counter.**
+`users.session_generation` rises on a block, a password change, a password
+reset and a change of roles, and a session records the generation it was
+issued under. A mismatch means the session is dead. That is "sign out
+everywhere", implemented without an index of live sessions over a plain
+key-value interface.
 
-**Сессии — серверные, токен хранится хешированным.** Клиенту выдаётся 256-битный опаковый токен, а в кеш кладётся **SHA-256 от него**: дамп Redis даёт дайджесты, непригодные для аутентификации, и не позволяет угнать живую сессию. Cookie: `HttpOnly` (XSS не прочитает токен), `SameSite=Lax`, `Secure` — из **конфигурации**, а не из заголовка прокси; по умолчанию включён везде кроме `ENV=development`, потому что браузер молча выбрасывает Secure-cookie по plain HTTP и локальный стенд без сертификата стал бы недоступен. TTL скользящий (12 ч по умолчанию), продлевается на каждом запросе — участник не должен разлогиниться посреди ответа. Поверх него — абсолютный срок жизни от входа, `SESSION_MAX_LIFETIME` (12 ч по умолчанию), который активность не продлевает: скользящий TTL сам по себе никогда не завершает сессию, которой продолжают пользоваться, в том числе по cookie, скопированной с общего компьютера. Сессия старше срока отклоняется и удаляется при первом же запросе, а запись в кеше заранее ставится с TTL не дальше этого срока.
+The account itself is **checked on every request**, so a block takes effect on
+the next request rather than when the session happens to expire. So that this
+does not cost a query with two aggregates — roles and permissions — on every
+poll, the middleware caches a copy of what it decides from: status, session
+generation, the one-time-password flag and the permissions, for
+`SESSION_ACCOUNT_CACHE_TTL` (five seconds by default, zero to disable;
+`auth.AccountCache`). The entry's key includes a random cache generation kept
+in the same cache: after committing any change of status — in either
+direction — of roles or of a password, including in bulk, `users.Service`
+replaces that generation and the old entry becomes unreachable, so the account
+is re-read from the database on the very next request. That also closes the
+ordinary update race, where a request that read the row before a change writes
+it into the cache after: it writes under the old generation. With Redis the
+generation is shared by every API instance; with the in-process cache it is
+one instance's, as the sessions are. Anything the cache cannot be told about —
+a row edited by hand, a migration changing a role's permissions, a failed
+write of the generation — takes effect within the TTL at the latest. A cache
+error is a miss and a read from the database without a write, as is a
+corrupted entry or one belonging to another account. A cached copy can only
+let a request through: when the copy says to refuse, the middleware re-reads
+the account from the database first, so a copy stale in the permissive
+direction — an unblock, a new session after a password change — never throws
+anybody out.
 
-**Отзыв сессий — через счётчик поколений.** `users.session_generation` растёт при блокировке, смене пароля, сбросе пароля и смене ролей; сессия хранит поколение, на котором выдана. Несовпадение = сессия мертва. Это и есть «выйти со всех устройств», реализованное без индекса живых сессий поверх простого KV-интерфейса. Плюс аккаунт **проверяется на каждом запросе** — блокировка действует со следующего запроса, а не когда сессия сама истечёт. Чтобы это не стоило запроса с двумя агрегатами (роли и права) на каждый опрос участника, middleware держит в кеше копию того, на чём он решает — статус, поколение сессий, флаг одноразового пароля, права — на `SESSION_ACCOUNT_CACHE_TTL` (5 с по умолчанию, 0 — выключено; `auth.AccountCache`). Ключ записи включает случайное поколение кеша, которое хранится в том же кеше: `users.Service` после коммита любой смены статуса (в обе стороны), ролей или пароля, в том числе массовой, заменяет это поколение, и старая запись становится недостижимой — со следующего же запроса аккаунт перечитывается из базы. Это же закрывает гонку обычного удаления: запрос, прочитавший строку до изменения и записавший её в кеш после, пишет под старым поколением. С Redis поколение общее для всех экземпляров API; с кешем в памяти процесса — только для одного экземпляра (как и сами сессии). Всё, о чём кеш не могут известить (правка в базе вручную, миграция, меняющая набор прав роли, неудавшаяся запись поколения), вступает в силу не позже чем через TTL. Ошибка кеша означает промах и чтение из базы без записи; повреждённая запись или запись чужого аккаунта — тоже промах. Копия из кеша может только пропустить запрос: если по ней запрос надо отклонить, middleware сперва перечитывает аккаунт из базы, поэтому устаревшая в «мягкую» сторону копия (разблокировка, новая сессия после смены пароля) никого не выбрасывает.
+**Against guessing: a fixed window**, not a sliding one. A sliding window
+extended by every attempt never resets under load, which turns guessing at
+somebody's account into a denial of service against its owner. Three counters:
+ten attempts per fifteen minutes on the pair of login and address, an overall
+ceiling per login across all addresses (100), and a limit per address (300,
+discussed below). A cache failure refuses the attempt: with no counter there
+is no protection.
 
-**Защита от перебора** — фиксированное окно (не скользящее: скользящее, продлеваемое каждой попыткой, никогда не сбрасывается под нагрузкой и превращает перебор чужого аккаунта в отказ в обслуживании его владельцу). Три счётчика: 10 попыток/15 мин на пару «логин и адрес», общий потолок на логин со всех адресов (100) и лимит на IP (300; подробности ниже). Сбой кеша = отказ в попытке: если счётчик не ведётся, защиты нет.
+**The answers are indistinguishable.** An unknown login and a wrong password
+return the same text and — more importantly — take the **same time**: for an
+account that does not exist, a comparison against a dummy digest is performed
+anyway. Otherwise an early return in microseconds against tens of
+milliseconds would be an oracle for enumerating logins. A blocked account
+learns that it is blocked **only after the password matched**: the owner has a
+right to know, somebody guessing does not.
 
-**Неразличимость ответов.** Неизвестный логин и неверный пароль возвращают один и тот же текст, и — что важнее — **одинаковое время**: для несуществующего аккаунта выполняется сверка с фиктивным дайджестом. Иначе ранний возврат за микросекунды против десятков миллисекунд стал бы оракулом для перечисления логинов. Заблокированный аккаунт узнаёт о блокировке **только после верной сверки пароля**: владелец имеет право знать, угадывающий — нет.
+**Authorisation has two levels** (`internal/rbac`) — exactly the model in
+section 7. A separate permission, `contest.admin_all`, removes the scope, and
+only `admin` holds it; it is a permission rather than a hard-coded "if admin",
+so the same reach can be granted to a new role as data. A failure to load a
+role is a **refusal**, never a grant. Migration 000006 removed the global
+`contest.edit`, `publish` and `manage` from `organizer`: they would have read
+as "may edit any contest", which is precisely what the second level prevents.
 
-**Двухуровневая авторизация** (`internal/rbac`) — ровно та модель из 7: глобальные права для действий уровня установки, `contest_managers` — для действий над конкретной олимпиадой. Отдельное право `contest.admin_all` снимает scope (им обладает только `admin`) — это право, а не хардкод «если админ», поэтому такую же власть можно выдать новой роли данными. Ошибка загрузки роли = **отказ**, не разрешение. Миграция 000006 убрала у `organizer` глобальные `contest.edit`/`publish`/`manage`: они читались бы как «может править любую олимпиаду», что второй уровень как раз и предотвращает.
+**The audit entry is written in the same transaction** as the action:
+`storage.UnitOfWork` is injected into `users.Service`, and every multi-step
+operation — creating an account with its roles, blocking one and dropping its
+sessions — runs under one `Do`, whole or not at all. The request's origin, its
+address and user agent, travels in the context (`audit.RequestMeta`) and is
+stamped onto every entry automatically, so services need not remember it. The
+payload goes through **redaction at any depth**: `password`, `token`,
+`secret`, `password_hash` and keys like them never reach a table that is kept
+for a year and read by administrators. A failed sign-in is logged with the
+login, which is what somebody searches by, and never with the password. A
+failure to write the audit entry **returns an error for a privileged
+operation** — an action nobody can be held to account for is worse than one
+that did not happen — while for a sign-in it is only logged: refusing to let
+people in because the journal is unavailable would turn an observability
+problem into an authentication outage.
 
-**Аудит пишется в той же транзакции**, что и действие: `storage.UnitOfWork` инжектируется в `users.Service`, и каждая многошаговая операция (создание с ролями, блокировка со сбросом сессий) выполняется под одним `Do` — целиком или никак. Происхождение запроса (IP, user agent) едет в контексте (`audit.RequestMeta`) и проставляется на каждую запись автоматически — сервисам не нужно об этом помнить. Payload проходит через **редактирование на любой глубине**: `password`, `token`, `secret`, `password_hash` и подобные ключи не попадают в таблицу, которая хранится год и читается администраторами. Неудачные входы логируются с логином (по нему ищут) и никогда — с паролем. Сбой записи аудита при **привилегированной операции возвращает ошибку** (действие, за которое некому отвечать, хуже несостоявшегося), а при логине — только логируется: отказ входа из-за недоступного журнала превратил бы проблему наблюдаемости в отказ аутентификации.
+**CSRF** is handled by `SameSite=Lax` plus an `Origin` check on every mutating
+request. A request **without** `Origin` is allowed: browsers always send it on
+a cross-origin write, while curl, health probes and server-side integrations
+do not, so requiring it would break every non-browser client without stopping
+the attack.
 
-**CSRF** — `SameSite=Lax` плюс проверка `Origin` на всех мутирующих запросах. Запрос **без** `Origin` пропускается: браузеры всегда его шлют при cross-origin записи, а curl, health-пробы и серверные интеграции — нет; требование заголовка сломало бы всех неброузерных клиентов, не остановив атаку.
+**The one-time password is enforced by the server, not the interface:** until
+`must_change_password` is cleared, the middleware answers 403
+`password_change_required` to everything except changing the password, signing
+out and `/auth/me`. **Trusted proxies:** `TRUSTED_PROXIES` decides whose
+`X-Forwarded-For` to believe, and it is exactly the two containers in front of
+the interface — Caddy and the interface itself — rather than the whole private
+subnet. The subnet as a whole would mean any container in it, including the
+bridge gateway through which the development overlay publishes a port, could
+call itself any address. Without the list at all, every request behind Caddy
+would share the proxy's address and the per-address sign-in throttle would
+choke the whole installation at once. It is also the foundation of the
+address restrictions in section 7.1.
 
-**Одноразовый пароль принуждается сервером, а не UI:** пока `must_change_password` не снят, middleware отвечает 403 `password_change_required` на всё, кроме смены пароля, logout и `/auth/me`. **Доверенные прокси:** `TRUSTED_PROXIES` определяет, чьему `X-Forwarded-For` верить, — и это ровно те два контейнера, что стоят перед интерфейсом (`172.28.0.10/32` Caddy, `172.28.0.11/32` сам интерфейс), а не вся приватная подсеть: подсеть целиком означала бы, что любой контейнер в ней, включая шлюз моста, через который наружу торчит порт дев-оверлея, может назваться чьим угодно адресом. Без этого списка вообще все запросы за Caddy делили бы адрес прокси, и пер-IP троттлинг логина душил бы всю установку разом. Это же основа для IP-ограничений олимпиад из 7.1.
+**The interface forwards somebody else's address only on a secret, never on
+the fact that the request came through Caddy.** Caddy sets the browser's
+`X-Forwarded-For` when it proxies to the interface and adds
+`X-Ingress-Secret`; the interface passes the address and user agent on to the
+API **only** when that secret (`INGRESS_SECRET`, at least 32 characters,
+compared in constant time) matched, and always strips the secret header before
+sending anything anywhere. A plain "I am behind Caddy" flag would not do: any
+container able to reach the interface directly could claim it, while the
+secret is known only to the two processes it was issued to. Without a matching
+secret the API sees the interface's own address — so the sign-in throttle, a
+contest's address restriction and the audit entry all fall back to one shared
+address for every visitor at once, rather than opening a door. A failure here
+always makes the check stricter, never looser.
 
-**Интерфейс передаёт API чужой адрес только по секрету, а не по факту, что запрос пришёл через Caddy.** Caddy сам подставляет `X-Forwarded-For` браузера при пересылке интерфейсу и добавляет `X-Ingress-Secret`; интерфейс форвардит адрес и user-agent на API дальше **только** когда этот секрет (`INGRESS_SECRET`, ⩾ 32 символов, сравнение констант по времени) совпал, а сам заголовок секрета всегда снимает перед отправкой куда бы то ни было. Простого флага «я за Caddy» тут не хватило бы: любой контейнер, способный достучаться до интерфейса напрямую, мог бы себе его приписать, а секрет знают только те два процесса, которым он выдан. Без совпавшего секрета API видит адрес самого интерфейса — то есть троттлинг входа, IP-ограничение олимпиады и запись в аудит откатываются на общий адрес для всех посетителей сразу, а не открывают дверь: отказ здесь всегда делает проверку строже, никогда мягче (правило 9 в `CLAUDE.md`).
+**An installation will not start on a placeholder from the example.**
+`deploy/.env.example` keeps its secrets and passwords empty or explicitly
+marked `change-me` rather than filled in — a completed example would be a
+password known to everybody who read the repository. Outside
+`ENV=development`, the API, the Query Runner and the interface each refuse to
+start if a secret, or a password inside a DSN they read, still carries that
+mark: `DEVICE_COOKIE_SECRET`, `QUERY_RUNNER_TOKEN`, `INGRESS_SECRET`,
+`GAME_AUTHOR_PASSWORD`, and the database and cache passwords inside
+`CORE_DB_DSN`, `REDIS_ADDR`, `GAME_PROVISIONER_DSN` and the Runner's DSNs for
+the game roles. The game-cluster preparation job (`cmd/gamedb`, `make
+game-roles`) holds the same rule for its own credentials, or a cluster
+prepared straight from the example would come up without complaint and fail
+only when something tried to use them.
 
-**Установка не стартует на заглушке из примера.** `deploy/.env.example` держит секреты и пароли пустыми или явно помеченными словом `change-me`, а не готовым значением, — заполненный пример был бы паролем, который знает всякий, кто читал репозиторий. Вне `ENV=development` API, Query Runner и интерфейс отдельно отказываются стартовать, если секрет или пароль в DSN, который они читают, всё ещё несёт эту метку: `DEVICE_COOKIE_SECRET`, `QUERY_RUNNER_TOKEN`, `INGRESS_SECRET`, `GAME_AUTHOR_PASSWORD` и пароли БД и Redis внутри `CORE_DB_DSN`/`REDIS_ADDR`/`GAME_PROVISIONER_DSN`/DSN-ов раннера на игровые роли. Задача подготовки игрового кластера (`cmd/gamedb`, `make game-roles`) держится того же правила для своих собственных учётных данных (DSN администратора кластера, пароли `game_reader`/`game_writer`/`game_author`) — иначе кластер, подготовленный прямо из примера, поднялся бы безо всяких жалоб и упал только в тот момент, когда что-то попыталось бы этими данными воспользоваться.
+**The first administrator is created by a `bootstrap` command**, not an HTTP
+endpoint: an unauthenticated route that creates administrators would remain a
+vulnerability long after it was needed once. The command is idempotent.
 
-**Первый администратор** создаётся командой `bootstrap` из командной строки, а не HTTP-эндпоинтом: неаутентифицированный маршрут, создающий администраторов, остался бы уязвимостью надолго после того, как понадобился один раз. Команда идемпотентна.
+**API responses do not serialise domain objects.** The DTOs are separate from
+`users.User` deliberately: serialising directly would publish `PasswordHash`
+the first time somebody added a field without thinking. Tests on every
+endpoint hold that.
 
-**Ответы API не сериализуют доменные объекты.** DTO отделены от `users.User` намеренно: прямая сериализация опубликовала бы `PasswordHash` при первом же добавлении поля без задней мысли. Это закреплено тестами на всех эндпоинтах.
+**The sign-in attempt counter is never evicted.** In the in-process cache an
+LRU would discard the least used entry, which is exactly what an attacker
+controls: walking other people's logins, they would push the victim's counter
+out and start again from zero, leaving no trace. So `Incr` on a full store
+first collects expired windows, and if there is still no room it returns an
+error. `Limiter.Allow` reads that as "there is no protection" and refuses — a
+visible refusal instead of an invisible bypass. `Set`, which sessions use,
+keeps eviction: a lost session is a second sign-in, not a protection that
+quietly stopped working.
 
-**Счётчик попыток входа не вытесняется.** В in-process кэше (fallback без Redis) LRU выбрасывал бы наименее используемое, а это ровно то, чем атакующий управляет: перебирая чужие логины, он выдавил бы счётчик жертвы и продолжил с нуля, не оставив следа. Поэтому `Incr` при полном хранилище сначала подбирает истёкшие окна, а если места всё равно нет — возвращает ошибку. `Limiter.Allow` читает ошибку как «защиты нет» и отказывает: видимый отказ вместо невидимого обхода. `Set` (сессии) вытеснение сохраняет — потерянная сессия это повторный вход, а не молча переставшая работать защита.
+**The per-address limit counts successful sign-ins too, so it is about
+people.** It cannot be reset on success, or an attacker would launder the
+counter through their own account. That means a room of students behind one
+NAT is one address, and the earlier thirty attempts per quarter-hour would
+have refused honest participants at the start of an olympiad. The default is
+300, set by `MAX_LOGIN_ATTEMPTS_PER_ADDRESS`. Guessing is stopped by the limit
+on the pair of account and address (ten); this one exists against a sweep
+across many logins. That same room is the argument for IPv6 as well: a
+provider gives a home user not one address but a whole /64, so the
+per-address key is built not from the exact address but from a limiter
+subject (`httpx.AddressSubject` / `httpx.ClientSubject`), which leaves IPv4
+exact and folds IPv6 to its /64 — otherwise one subscriber would get a fresh
+budget of attempts for every address inside their own prefix. The audit trail
+and a contest's address restriction still ask for the exact address
+(`httpx.ClientIP`): they need the real address, not a throttling subject.
 
-**Лимит на адрес считает и успешные входы, поэтому он про людей.** Сбрасывать его на успехе нельзя — атакующий отмывал бы счётчик через собственный аккаунт. Значит зал студентов за одним NAT это один адрес, и прежние 30 попыток за четверть часа отказали бы честным участникам на старте олимпиады. По умолчанию 300, настраивается через `MAX_LOGIN_ATTEMPTS_PER_ADDRESS`. Перебор останавливает лимит на пару «аккаунт и адрес» (10), а этот существует против веерного прохода по многим логинам. Ровно тот же зал — довод и для IPv6: один провайдер выдаёт домашнему пользователю не один адрес, а целую подсеть /64, поэтому ключ лимита по адресу строится не из точного IPv4/IPv6, а из «субъекта лимита» (`httpx.AddressSubject`/`httpx.ClientSubject`), который IPv4 оставляет точным, а IPv6 сворачивает до /64, — иначе один абонент получал бы свежий бюджет попыток на каждый адрес внутри собственной подсети. Аудит и IP-ограничение олимпиады при этом продолжают спрашивать точный адрес (`httpx.ClientIP`) — им нужен настоящий адрес, а не субъект троттлинга.
+**Guessing is counted per account-and-address pair, not per account.** Logins
+are not secret — a public results table may show them — and a counter on the
+login alone became a block on demand: ten wrong passwords from anywhere closed
+the owner out for a quarter of an hour, even with the right password. On the
+pair, somebody guessing still stops at ten attempts and the owner, from their
+own address, does not. Against guessing from many addresses there is the
+overall ceiling per account, `MAX_LOGIN_ATTEMPTS_PER_ACCOUNT` (100 per fifteen
+minutes): only attempts the pair limit let through reach it, so one address
+repeating refused attempts does not exhaust it. The order of checks is
+address, login and password lengths, pair, ceiling, then hashing. A successful
+sign-in resets the pair's counter but not the ceiling — otherwise the owner
+signing in would hand a distributed attack a fresh budget.
 
-**Лимит перебора считается по паре «аккаунт и адрес», а не по аккаунту.** Логины не секрет — публичная таблица результатов может их показывать, — и счётчик на один логин превращался в блокировку по желанию: десять неверных паролей откуда угодно закрывали вход владельцу на четверть часа, даже с верным паролем. По паре угадывающий по-прежнему останавливается на десяти попытках, а владелец со своего адреса — нет. Против перебора с многих адресов стоит общий потолок на аккаунт, `MAX_LOGIN_ATTEMPTS_PER_ACCOUNT` (100 за 15 минут): до него доходят только попытки, пропущенные лимитом пары, поэтому один адрес, повторяющий отказанные попытки, потолок не выбирает. Порядок проверок: адрес, длины логина и пароля, пара, потолок, затем хеширование. Успешный вход сбрасывает счётчик пары, но не потолок — иначе вход владельца дарил бы распределённому перебору новый бюджет.
+**The owner's own browser does not share a limit with its address.** Inside
+one room behind a shared NAT, a rival and the owner have the same
+account-and-address pair, and the rival could still close the owner out. So
+after a successful sign-in the browser gets a `dbcontest_device` cookie
+(HttpOnly, SameSite=Lax, Secure by configuration, thirty days,
+`DEVICE_COOKIE_TTL`): an HMAC-SHA256 over the account's identifier, a random
+device identifier, the time of issue, the account's session generation and the
+moment its status last changed, keyed by `DEVICE_COOKIE_SECRET`. The login is
+part of the signature but not of the cookie, so another account's cookie
+simply fails the check.
 
-**Браузер владельца не делит лимит с адресом.** Внутри одной аудитории за общим NAT пара «аккаунт и адрес» у соперника и владельца одна и та же, и соперник всё ещё мог бы закрыть владельцу вход. Поэтому после успешного входа браузер получает cookie `dbcontest_device` (HttpOnly, SameSite=Lax, Secure по конфигурации, 30 дней, `DEVICE_COOKIE_TTL`): HMAC-SHA256 над идентификатором аккаунта, случайным идентификатором устройства, временем выдачи, поколением сессий аккаунта и моментом последней смены статуса, с ключом `DEVICE_COOKIE_SECRET`. Логин входит в подпись, но не в cookie, так что cookie другого аккаунта просто не проходит проверку. Выбрана подпись, а не случайный токен в кеше: in-process кеш терял бы устройства при рестарте и заполнялся бы ими, Redis хранил бы запись на каждый компьютер лаборатории на месяц, а отзыв и так бесплатен — смена пароля двигает поколение, блокировка, удаление и восстановление двигают момент смены статуса, и cookie перестаёт подходить. Попытка с действующей cookie не тратит ни лимит адреса, ни пару, ни потолок; вместо них её ограничивают счётчик этого устройства (`MAX_LOGIN_ATTEMPTS_PER_DEVICE`, 10 за 15 минут) и общий доверенный бюджет аккаунта на все его устройства (`MAX_TRUSTED_LOGIN_ATTEMPTS_PER_ACCOUNT`, 20 за 15 минут). Оба считают и успешные входы и не сбрасываются успехом — иначе собственная cookie аккаунта входила бы без ограничений, и каждый вход занимал бы слот хеширования, сессию и строку журнала; общий бюджет не даёт умножить лимит, собрав заранее много cookie. Исчерпанный доверенный лимит — не отказ: попытка продолжается как обычная, без cookie, и платит лимит адреса, пару и потолок; отдельной записи `too_many_attempts` для него нет. Иначе тот, у кого оказалась копия cookie, выбрал бы доверенные лимиты владельца и закрыл бы ему вход — ровно ту блокировку, от которой cookie защищает. Доверенный вход после половины срока жизни cookie продлевает её под тем же идентификатором устройства; продление бывает только после верного пароля, а счётчики при этом не сбрасываются. Семафор хеширования доверенная попытка проходит как все. Слот берётся после поиска аккаунта и отпускается до любых записей: удерживается он только на счётчиках попытки и самом вычислении.
+A signature was chosen over a random token in the cache: the in-process cache
+would lose devices on restart and fill up with them, Redis would hold a row
+per laboratory computer for a month, and revocation is free anyway — a
+password change moves the generation, and blocking, deletion and restoration
+move the status moment, and the cookie stops fitting. An attempt carrying a
+valid cookie spends neither the address limit, nor the pair, nor the ceiling;
+instead it is bounded by that device's counter
+(`MAX_LOGIN_ATTEMPTS_PER_DEVICE`, ten per fifteen minutes) and by the
+account's overall trusted budget across all of its devices
+(`MAX_TRUSTED_LOGIN_ATTEMPTS_PER_ACCOUNT`, twenty). Both count successes and
+neither resets on one — otherwise an account's own cookie would sign in
+without limit, and every sign-in would take a hashing slot, a session and a
+journal row; the shared budget stops the limit being multiplied by collecting
+cookies in advance. An exhausted trusted limit is not a refusal: the attempt
+continues as an ordinary one, without the cookie, and pays the address limit,
+the pair and the ceiling. Otherwise whoever obtained a copy of the cookie
+would exhaust the owner's trusted limits and close them out — the very lockout
+the cookie exists to prevent. A trusted sign-in past half the cookie's
+lifetime renews it under the same device identifier; renewal only ever follows
+a correct password, and the counters are not reset by it.
 
-**Блокировку входа снимает администратор.** Соперник за тем же адресом лаборатории или перебор с многих адресов всё ещё может закрыть аккаунт на окно. `POST /users/{id}/sign-in/unlock` (право `users.manage`, запись `user.sign_in_unlock` в журнале) сбрасывает счётчики пары, потолок аккаунта и счётчики его доверенных устройств. Перечислить их ключи нельзя — они зависят от логина и адресов попыток, — поэтому в каждый ключ аккаунта входит поколение троттлинга, хранящееся в кеше; разблокировка записывает новое случайное поколение, и старые счётчики просто перестают читаться. Поколение живёт два окна (30 минут): одного хватило бы, чтобы все счётчики нулевого поколения истекли, второе — запас, чтобы истечение на границе окна не встретило счётчик с оставшимся мгновением и не подарило подбирающему второй сброс. Лимит на адрес не сбрасывается — он про машину, а не про аккаунт.
+**An administrator lifts a sign-in lockout.** A rival at the same laboratory
+address, or guessing from many addresses, can still close an account for a
+window. `POST /users/{id}/sign-in/unlock` (the `users.manage` permission, and
+a `user.sign_in_unlock` entry in the journal) resets the pair's counters, the
+account's ceiling and its trusted devices' counters. Their keys cannot be
+enumerated — they depend on the login and on the addresses attempts came from
+— so every key for an account includes a throttling generation kept in the
+cache; unlocking writes a new random generation, and the old counters simply
+stop being read. The generation lives for two windows (thirty minutes): one
+would be enough for every counter of the previous generation to expire, and
+the second is slack, so that an expiry on the boundary does not meet a counter
+with an instant left and hand the guesser a second reset. The per-address
+limit is not reset: it is about a machine, not an account.
 
-**Одновременных вычислений argon2id не больше заданного числа.** Каждое держит 64 MiB, и без ограничения память процесса равна 64 MiB, умноженным на число одновременных попыток входа, — а это число выбирает анонимный отправитель. Поэтому в процессе один `password.Hasher` на всех: вход, смена пароля, выдача паролей администратором и массовые операции. Слотов `PASSWORD_HASH_CONCURRENCY` (в compose 4), ожидание слота для входа и смены пароля — `PASSWORD_HASH_MAX_WAIT` (2 с), после чего ответ 503 `sign_in_busy`; пароль при этом не проверялся, но попытка уже учтена в бюджете, который она платит до ожидания (адреса или доверенного браузера), иначе отказ был бы бесплатным; лимиты самого аккаунта она не тратит. Очередь к слотам общая, поэтому одному адресу (`httpx.AddressSubject`) в ней разрешено не больше восьми ожидающих попыток на слот (при 4 слотах — 32: очередь одного адреса проходит меньше чем за секунду, а аудитория за одним NAT в начале тура в основном встаёт в очередь, а не получает отказ): сверх этого вход без доверенного устройства сразу получает тот же 503, и сотни одновременных попыток с одной машины не выстраиваются перед чужими входами. Выдача паролей администратором (создание, сброс, импорт, массовый сброс) делит те же слоты, но ждёт до 30 с в пределах запроса: импорту, прерванному на середине, пришлось бы начинать заново. Если слот так и не освободился, импорт всё равно отвечает 200 с тем, что успел сделать: созданные аккаунты с их одноразовыми паролями (других копий этих паролей нет), логины строк, до которых он не дошёл (`not_imported`), и причину (`stopped: sign_in_busy`). Лимит памяти контейнера API и `GOMEMLIMIT` посчитаны от числа слотов; расчёт записан в `deploy/docker-compose.yml`.
+**No more than a set number of argon2id computations run at once.** Each holds
+64 MiB, and without a bound the process's memory is 64 MiB times the number of
+concurrent sign-in attempts — a number an anonymous caller chooses. So there
+is one `password.Hasher` for the whole process: sign-in, password changes,
+passwords issued by an administrator, and bulk operations. There are
+`PASSWORD_HASH_CONCURRENCY` slots (four in Compose), and a sign-in or a
+password change waits `PASSWORD_HASH_MAX_WAIT` (two seconds) before answering
+503 `sign_in_busy`. The password was not checked in that case, but the attempt
+has already been counted against the budget it pays before waiting — the
+address or the trusted browser — or the refusal would be free; the account's
+own limits it does not spend.
 
-**Выход из-под одноразового пароля перечислен точными путями.** Раньше сверялся суффикс, и это не то же правило: освобождённым оказывался любой маршрут, чей путь оканчивается на `/auth/me`. Сегодня такого нет, но добавление `/contests/{id}/auth/me` завтра открыло бы API аккаунту с чужим выданным паролем, и в этом изменении ничто не выглядело бы решением про безопасность.
+The queue for slots is shared, so one address (`httpx.AddressSubject`) may
+hold no more than eight waiting attempts per slot — with four slots, 32.
+One address's queue clears in under a second, and a room behind one NAT at the
+start of a round mostly queues rather than being refused. Past that, a sign-in
+without a trusted device gets the same 503 immediately, and hundreds of
+simultaneous attempts from one machine do not line up in front of everybody
+else's. Passwords issued by an administrator — creation, reset, import, bulk
+reset — share the same slots but wait up to thirty seconds within the
+request, because an import interrupted half way would have to start again. If
+a slot never frees, the import still answers 200 with what it managed: the
+accounts it created with their one-time passwords, which exist in no other
+copy; the logins of the rows it did not reach (`not_imported`); and the reason
+(`stopped: sign_in_busy`). The API container's memory limit and `GOMEMLIMIT`
+are computed from the slot count, and the arithmetic is written into
+`deploy/docker-compose.yml`.
 
-## 7.3 Реализация контента (шаг 3)
+**What is exempt from the one-time password is listed by exact path.** It used
+to compare a suffix, which is not the same rule: it exempted any route whose
+path ended in `/auth/me`. None does today, but adding
+`/contests/{id}/auth/me` tomorrow would open the API to an account holding
+somebody else's issued password, and nothing in that change would look like a
+decision about security.
 
-Как решения разделов 6, 6.1, 6.2 и 7.1 выглядят в коде. Модуль — `internal/contests`; он владеет всем, что автор олимпиады пишет и запускает, и не содержит ни SQL, ни HTTP.
+## 7.3 Content as implemented
 
-**Интерфейсы хранилища объявляет потребитель, и их несколько.** `Repository` (олимпиада, её языки и заголовки), `StoryRepository`, `QuestionRepository`, `ManagerRepository`, `RegistrationRepository`, `PolicyStore`, `LanguageCatalog` — каждый в терминах домена и ровно той ширины, которая нужна. Реализации живут в `internal/postgres`. Практическая выгода не в гипотетической смене СУБД: 126 тестов правил олимпиады идут без базы вообще, а `PolicyStore` отделён потому, что у него другой потребитель — игровой контур (шаг 4) читает политику, чтобы собрать GRANT'ы, и заголовки его не касаются.
+How sections 6, 6.1, 6.2 and 7.1 look in code. The module is
+`internal/contests`; it owns everything an organiser writes and runs, and
+contains neither SQL nor HTTP.
 
-**Гейт публикации — не constraint и не триггер, и это принципиально.** Олимпиада в сборке проходит через каждое состояние, которое гейт запрещает: ноль вопросов, история без румынского перевода, вопрос без эталонного ответа. Ограничение в БД воевало бы с редактором. Инвариант обязан держаться на переходе — и проверяется на **обоих**: и в `published`, и в `running`. Второй рубеж не избыточен: контент остаётся редактируемым после публикации намеренно (организатор публикует, чтобы увидеть олимпиаду глазами участника, и может ещё поправить опечатку), а значит последовательность «опубликовать → удалить историю → стартовать» правилами разрешена. Гарантия нужна в момент, когда участников реально впускают. Гейт возвращает **все** причины сразу, машинными кодами (`no_story`, `missing_question_translation` с указанием языка и вопроса): организатору, чинящему олимпиаду по одному отказу за раз, понадобилось бы столько же походов на сервер, сколько у него незаполненных переводов. Тот же вызов доступен как `GET /publish-check` — конструктор показывает оставшуюся работу, а не заставляет узнавать о ней через отказ.
+**The storage interfaces are declared by the consumer, and there are several.**
+`Repository` (the contest, its languages and its titles), `StoryRepository`,
+`QuestionRepository`, `ManagerRepository`, `RegistrationRepository`,
+`PolicyStore`, `LanguageCatalog` — each in the domain's own vocabulary and
+exactly as wide as it needs to be. The implementations live in
+`internal/postgres`. The practical benefit is not a hypothetical change of
+database: the tests of a contest's rules run with no database at all, and
+`PolicyStore` is separate because it has a different consumer — the game side
+reads the policy to build its grants, and titles are none of its business.
 
-**Две границы редактируемости, а не одна.** Контент замерзает на старте: менять вопрос, пока по нему отвечают, — менять задачу под человеком. Настройки остаются открытыми и на `running`, потому что продлить окно после отключения света и поправить неверно указанный диапазон сети — ровно то, что нужно идущей олимпиаде. Не двигается **форма**: режим вопросов, модель тайминга, длительность сессии — под ними уже отвечают. Политика SQL-доступа замерзает вместе с контентом (раздел 4.1): иначе участники получили бы разные права в зависимости от момента подключения, а GRANT'ы шаблона разошлись бы с валидатором.
+**The publication gate is not a constraint and not a trigger, and that is
+fundamental.** A contest under construction passes through every state the
+gate forbids: no questions, a story without its Romanian translation, a
+question with no reference answer. A database constraint would fight the
+editor. The invariant must hold at the transition — and it is checked at
+**both**: at `published` and at `running`. The second is not redundant:
+content stays editable after publication on purpose, because an organiser
+publishes in order to see the contest as a participant does and may still fix
+a typo, which means "publish → delete the story → start" is a sequence the
+rules allow. The guarantee is needed at the moment people are actually let in.
+The gate returns **every** reason at once, as machine codes (`no_story`,
+`missing_question_translation` naming the language and the question): an
+organiser fixing a contest one refusal at a time would need as many trips to
+the server as they have unfinished translations. The same call is available as
+`GET /publish-check`, so the builder shows the remaining work rather than
+making somebody discover it through a refusal.
 
-**Но не любая настройка безопасна двигать даже на `running`.** У `ends_at` и `starts_at` отдельное правило именно потому, что от них считаются два уже наступивших факта, а не только будущий дедлайн: момент заморозки таблицы (раздел 10) — то же самое `ends_at` минус `leaderboard_freeze_min`, — и штрафное время ICPC (раздел 6.1.1) считается от `starts_at`. Пока идущая олимпиада не дошла до момента заморозки, `ends_at` можно двигать свободно, в том числе назад и вперёд, — обычная правка длительности. Но если этот момент уже наступил, сам по себе сдвиг `ends_at` передвинул бы и его: формула, посчитанная от нового `ends_at`, дала бы момент в будущем, и таблица, которая уже замерла, разморозилась бы обратно. Поэтому после заморозки продление `ends_at` на целое число минут записывается вместе с увеличением `leaderboard_freeze_min` на те же минуты — момент заморозки остаётся ровно на месте, а форма настроек, которая заморозку на идущей олимпиаде не отправляет, сохраняется как обычно. Перенос `ends_at` на более раннее время после заморозки отклоняется (`freeze_already_reached`), и любая другая заморозка вместе с продлением — тоже. По той же причине `starts_at` неподвижен на всё время, пока олимпиада с зачётом ICPC идёт: штрафное время участников, уже ответивших, читается от него при каждом расчёте таблицы, а не хранится на их попытках, — сдвинуть `starts_at` значило бы пересчитать чужой штраф задним числом. Продление `ends_at` остаётся разрешённым в обоих случаях.
+**There are two editability boundaries, not one.** Content freezes at the
+start: changing a question while people are answering it changes the problem
+under them. Settings stay open even at `running`, because extending the window
+after a power cut and fixing a mistyped network range are exactly what a
+running olympiad needs. What does not move is **shape**: the question mode,
+the timing model, the session length — people are already answering under
+them. The SQL policy freezes with the content (section 4.1), or participants
+would have different privileges depending on when they connected, and the
+template's grants would drift away from the validator.
 
-**Вопрос проверяется на принадлежность олимпиаде, и ответ — 404, а не 403.** Право выдано на *эту* олимпиаду; без такой проверки владелец одной олимпиады дотянулся бы до чужого вопроса по угаданному идентификатору, и middleware пропустил бы его — он проверял олимпиаду из URL. Сообщать «доступ запрещён» тоже нельзя: существование чужого вопроса само по себе не его дело.
+**But not every setting is safe to move even at `running`.** `ends_at` and
+`starts_at` have a rule of their own, precisely because two facts that have
+already happened are computed from them rather than only a future deadline:
+the moment the leaderboard freezes (section 10) is `ends_at` minus
+`leaderboard_freeze_min`, and ICPC penalty time (section 6.1.1) is measured
+from `starts_at`. While a running contest has not reached the freeze, `ends_at`
+moves freely in either direction — an ordinary change of duration. But once
+that moment has passed, moving `ends_at` would move it too: the formula
+against a new `ends_at` would put the freeze in the future, and a table that
+had already frozen would thaw. So after the freeze, extending `ends_at` by a
+whole number of minutes is written together with an increase of
+`leaderboard_freeze_min` by the same minutes — the freeze stays exactly where
+it was, and the settings form, which does not submit the freeze on a running
+contest, is saved as usual. Moving `ends_at` earlier after the freeze is
+refused (`freeze_already_reached`), and so is any other change to the freeze
+alongside an extension. For the same reason `starts_at` is immobile for as
+long as an ICPC contest runs: the penalty time of participants who have
+already answered is read from it on every recomputation rather than stored on
+their attempts, so moving it would rewrite somebody's penalty after the fact.
+Extending `ends_at` stays allowed in both cases.
 
-**Порядок вопросов — отложенное ограничение уникальности** (миграция 000008). На середине обмена двух вопросов местами обе строки держат одну позицию; немедленная проверка это не переживает, а обойти её нечем — временная позиция вне диапазона видна читателям, а построчный `UPDATE` в фиксированном порядке ломается на первой же перестановке с циклом. `DEFERRABLE INITIALLY IMMEDIATE` оставляет обычный случай прежним (коллизия при вставке падает на своём же statement) и даёт послабление только транзакции, которая его попросит. Побочное следствие зафиксировано в миграции: отложенное ограничение не может обслуживать `ON CONFLICT`. Репозиторий **отказывается** переупорядочивать вне транзакции, а не делает вид, что справился: `SET CONSTRAINTS` вне транзакционного блока молча игнорируется, и операция работала бы или падала в зависимости от порядка обхода строк.
+**A question is checked against its contest, and the answer is 404, not 403.**
+The permission was granted on *this* contest; without the check, the owner of
+one contest could reach another's question by a guessed identifier, and the
+middleware would let them through — it checked the contest in the URL. Saying
+"forbidden" is not acceptable either: the existence of somebody else's
+question is not their business.
 
-**Импорт списка участников — честный частичный успех.** На вход идут логины (у организатора в руках таблица с номерами студбилетов), и одна опечатка не должна отклонять остальные триста строк. Ответ называет каждую непринятую строку и причину (`unknown_account`, `already_enrolled`) — так, чтобы её можно было найти в исходной таблице.
+**Question order uses a deferred unique constraint** (migration 000008).
+Half way through swapping two questions both rows hold the same position; an
+immediate check does not survive that, and there is no way around it — a
+temporary position outside the range is visible to readers, and a row-by-row
+`UPDATE` in a fixed order breaks on the first rearrangement that forms a
+cycle. `DEFERRABLE INITIALLY IMMEDIATE` leaves the ordinary case as it was — a
+collision on insert fails on its own statement — and relaxes only for the
+transaction that asks. A side effect is recorded in the migration: a deferred
+constraint cannot back `ON CONFLICT`. The repository **refuses** to reorder
+outside a transaction rather than pretending it worked: `SET CONSTRAINTS` is
+silently ignored outside a transaction block, and the operation would work or
+fail depending on the order rows happened to be visited in.
 
-**Смена языка по умолчанию — отдельный шаг записи.** Частичный уникальный индекс `contest_languages_single_default_idx` допускает один язык по умолчанию на олимпиаду и проверяется построчно (это индекс, а не constraint, — отложить его нельзя). Поэтому замена набора языков сначала снимает старый флаг и только потом пишет новый: иначе перенос дефолта с `en` на `ro` сталкивается со строкой `en`, которую ещё не переписали, и операция становится просто невыразимой.
+**Importing a roster is an honest partial success.** The input is logins —
+the organiser has a spreadsheet of student numbers — and one typo must not
+refuse the other three hundred rows. The response names every row it did not
+accept and why (`unknown_account`, `already_enrolled`), so it can be found in
+the original spreadsheet.
 
-**Повторная запись участника решается записью, а не чтением.** Два организатора, импортирующие пересекающиеся списки одновременно, оба прошли бы предварительную проверку. Настоящая гарантия — уникальный индекс, и его вердикт трактуется как обычный пропуск строки: одна такая строка не должна ронять остальные триста. То же с самозаписью — двойной клик по кнопке шлёт два запроса.
+**Changing the default language is a separate write.** The partial unique
+index `contest_languages_single_default_idx` allows one default per contest
+and is checked row by row — it is an index, not a constraint, so it cannot be
+deferred. So replacing the set of languages clears the old flag first and only
+then writes the new one: otherwise moving the default from `en` to `ro`
+collides with the `en` row that has not been rewritten yet, and the operation
+becomes simply inexpressible.
 
-**Удаление участника отличается от дисквалификации.** Того, кто уже начал, удалить нельзя: его запросы и ответы — часть записи об олимпиаде. Исключение такого участника — дисквалификация, при которой всё сделанное остаётся.
+**A duplicate enrolment is decided by the write, not by a read.** Two
+organisers importing overlapping lists at the same time would both pass a
+preliminary check. The real guarantee is the unique index, and its verdict is
+treated as an ordinary skipped row: one such row must not bring down the other
+three hundred. The same holds for self-enrolment, where a double click sends
+two requests.
 
-**Владелец олимпиады неизменяем через список персонала.** Два владельца делают неоднозначным «кто может назначать», ни одного — оставляют олимпиаду без того, кто может назначить кого угодно. Передача владения — отдельная операция, а не тихий побочный эффект правки списка.
+**Removing a participant differs from disqualifying one.** Somebody who has
+already started cannot be removed: their queries and answers are part of the
+record of the olympiad. Excluding such a participant is a disqualification,
+under which everything they did remains.
 
-**IP-ограничение проверяется по адресу от доверенного прокси**, никогда по заголовку, прочитанному в обработчике (раздел 7.1), и нераспознанный адрес **отклоняется**: fail-open превратил бы любую ошибку в конфигурации прокси в открытую дверь. Проверка идёт после того, как выяснилось, что олимпиада вообще принимает запись — иначе журнал заполнялся бы шумом о закрытых олимпиадах. Каждый отказ пишется в `audit_log` с адресом.
+**A contest's owner cannot be changed through the staff list.** Two owners
+make "who may appoint" ambiguous, and none leaves the contest without anybody
+who can appoint at all. Transferring ownership is an operation of its own, not
+a quiet side effect of editing a list.
 
-**Эталонные ответы: регулярное выражение компилируется при авторстве.** Шаблон, который не компилируется, обнаруженный посреди идущей олимпиады, ломает проверку всем, кто дошёл до этого вопроса, — в единственный момент, когда починить его некому. Ответ на вопрос с вариантами обязан называть один из его `choice_ids`: иначе автор создал бы ответ, который невозможно отправить, и узнал бы об этом при подведении итогов. Обратное правило держит сервер при приёме ответа: ответ участника на такой вопрос обязан совпадать с одним из `choice_ids` в точности, иначе отказ `answer_not_a_choice` — до проверки и до записи, попытка не тратится. Без него строка, содержащая несколько вариантов сразу, решала бы вопрос без выбора: регулярное выражение эталона не заякорено, и шаблон `b` принимает и `abc`. В `audit_log` попадает только количество ответов — журнал, который читают администраторы, не должен быть местом, где эталоны можно подсмотреть.
+**The address restriction is checked against the address from the trusted
+proxy**, never against a header read in the handler (section 7.1), and an
+unrecognised address is **refused**: failing open would turn any mistake in
+the proxy's configuration into an open door. The check runs after it is
+established that the contest accepts enrolment at all, or the journal would
+fill with noise about closed contests. Every refusal is written to `audit_log`
+with the address.
 
-**Имена таблиц в политике SQL-доступа проверяются строже, чем позволяет PostgreSQL** (`^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$`). Эти имена станут GRANT-запросами при сборке игрового шаблона, где их нельзя передать параметром; узкая форма — то, что делает такую конструкцию безопасной, что бы организатор ни ввёл в форму.
+**Reference answers: a regular expression is compiled while it is authored.**
+A pattern that does not compile, discovered mid-olympiad, breaks checking for
+everybody who reached that question, at the one moment when nobody can fix it.
+An answer to a multiple-choice question must name one of its `choice_ids`, or
+an author would create an answer that cannot be submitted and find out at the
+prize-giving. The mirror rule holds the server when an answer arrives: a
+participant's answer to such a question must match one of the `choice_ids`
+exactly, or it is refused with `answer_not_a_choice` before checking and
+before recording, and the attempt is not spent. Without it, a string
+containing several options at once would solve the question without choosing:
+a reference regular expression is not anchored, and the pattern `b` accepts
+`abc` too. `audit_log` receives only the *number* of answers — a journal read
+by administrators must not be a place where the reference answers can be
+glimpsed.
 
-**Переводы заменяются комплектом, а не по одному ключу.** Согласованным обязан быть набор (ровно один язык по умолчанию, заголовок на каждый объявленный язык), и именно о наполовину применённом наборе гейту публикации пришлось бы гадать.
+**Table names in the SQL policy are validated more strictly than PostgreSQL
+requires** (`^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$`). Those names become
+`GRANT` statements when the game template is built, where they cannot be
+passed as parameters; the narrow shape is what makes that construction safe,
+whatever an organiser types into the form.
 
-**Язык ответа выбирается одной функцией.** Листинг отдаёт один согласованный заголовок и код языка, на котором он выдан; страница олимпиады для персонала отдаёт **все** переводы — они их и пишут, и показ одного сделал бы остальные невидимыми в редакторе. Необъявленный язык не обслуживается, даже если текст на нём есть: заголовок на румынском поверх истории на английском — ровно та смесь, ради предотвращения которой набор языков и объявляется.
+**Translations are replaced as a set, not one key at a time.** What has to be
+consistent is the set — exactly one default language, a title for every
+declared language — and a half-applied set is precisely what the publication
+gate would have to guess about.
 
-**Тесты репозиториев идут против настоящей PostgreSQL**, каждый внутри откатываемой транзакции. Без `CORE_DB_DSN` они пропускаются, а не падают, — `make test` остаётся запускаемым без базы; `make test-db` — то, что реально проверяет SQL, и CI задаёт переменную. Запрос — единственное, что фейк проверить не может. Базу, из которой работает продукт, тесты не трогают: `make test-db` пересоздаёт и мигрирует отдельную `dbcontest_core_test`, а подключаются тесты только через `storagetest`, который отказывается работать с базой, чьё имя (по ответу сервера) не оканчивается на `_test`.
+**The response's language is chosen by one function.** A listing serves one
+consistent title and the code of the language it was served in; a contest's
+page for staff serves **every** translation, because they are the people
+writing them and showing one would make the rest invisible in the editor. An
+undeclared language is not served even when text exists for it: a Romanian
+title over an English story is exactly the mixture that declaring a set of
+languages exists to prevent.
 
-**Смена статуса — сравнение с ожиданием, а не просто запись.** `Transition` читает олимпиаду, проверяет правила перехода и прогоняет gate публикации, и только потом пишет. Между чтением и записью статус может уехать: два организатора нажимают «Запустить» одновременно, оба проходят проверку против одного и того же старого состояния, и второй пишет поверх первого. Опасен не дубль, а последовательность, в которой gate прошёл против состояния, которого к моменту записи уже нет, — так стартует олимпиада без истории. Поэтому `SetStatus` принимает и то, из чего переходим: условие уходит в `WHERE status = $2`, PostgreSQL блокирует строку под UPDATE и перепроверяет его против закоммиченного значения, так что из двух конкурентов ровно один найдёт строку. Второй получает `ErrStatusChanged` → 409 `status_changed` — отдельный код, а не `invalid_transition`: вызывающий был прав минуту назад, и сказать ему надо «посмотрите ещё раз», а не «так нельзя».
+**Repository tests run against a real PostgreSQL**, each inside a transaction
+that is rolled back. Without `CORE_DB_DSN` they skip rather than fail, so
+`make test` stays runnable with no database; `make test-db` is what actually
+exercises the SQL, and CI sets the variable. A query is the one thing a fake
+cannot check. The tests never touch the database the product runs from:
+`make test-db` recreates and migrates a separate `dbcontest_core_test`, and
+the tests connect only through `storagetest`, which refuses a database whose
+name — as the server reports it — does not end in `_test`.
 
-**Позиция нового вопроса выделяется под блокировкой олимпиады.** `INSERT ... (SELECT MAX(ord)+1)` у двух одновременных авторов читает одно и то же число, и уникальный индекс `(contest_id, ord)` отвергает второго — 500 там, где человек должен был просто получить следующий номер. Перед вставкой берётся `SELECT id FROM contests WHERE id = $1 FOR UPDATE`. Отдельным запросом, и это существенно: в READ COMMITTED каждый оператор берёт свой снимок, поэтому INSERT — первое, что вообще способно увидеть строки, закоммиченные другой транзакцией, пока мы ждали. Свёрнутый в один оператор `MAX` читался бы из снимка, взятого до блокировки, и блокировка не давала бы ничего.
+**A status change is a compare-and-set, not simply a write.** `Transition`
+reads the contest, checks the transition's rules, runs the publication gate,
+and only then writes. Between the read and the write the status can move: two
+organisers press Start at the same moment, both pass the check against the
+same old state, and the second writes over the first. The danger is not the
+duplicate but the sequence in which the gate passed against a state that no
+longer exists by the time of the write — that is how a contest starts without
+a story. So `SetStatus` also takes the status being moved from: the condition
+goes into `WHERE status = $2`, PostgreSQL locks the row for the update and
+re-checks it against the committed value, so exactly one of two competitors
+finds the row. The other gets `ErrStatusChanged` → 409 `status_changed`, a
+code of its own rather than `invalid_transition`: the caller was right a
+minute ago, and what they need to hear is "look again", not "that is not
+allowed".
 
-## 8. Таймер олимпиады
+**A new question's position is allocated under a lock on the contest.**
+`INSERT ... (SELECT MAX(ord)+1)` reads the same number for two simultaneous
+authors, and the unique index on `(contest_id, ord)` rejects the second — a
+500 where a person should simply have got the next number. Before the insert,
+`SELECT id FROM contests WHERE id = $1 FOR UPDATE` is taken. As a separate
+statement, and that matters: under READ COMMITTED each statement takes its own
+snapshot, so the INSERT is the first thing able to see rows another
+transaction committed while we waited. A `MAX` folded into the same statement
+would read from the snapshot taken before the lock, and the lock would buy
+nothing.
 
-- **Две модели тайминга** (`contests.timing`, выбирается при создании олимпиады):
-  - `fixed` (по умолчанию) — общее окно: все стартуют в `starts_at`, приём закрывается в `ends_at` для всех одновременно. `registrations.started_at` здесь — только факт для аналитики, на дедлайн не влияет.
-  - `individual` — у каждого участника свои `duration_min` минут с момента **его** старта; начать можно в любой момент окна `[starts_at, ends_at]`. Момент старта — не отдельная кнопка и не подписка на события, а **первое чтение содержимого олимпиады** (истории, списка вопросов или схемы игровой базы): `registrations.started_at` проставляется тем же самым переходом `Start`, которым помечается начало запроса и ответа, вызванным из пути чтения при первом успешном обращении. SSE-подписка эту отметку не ставит — участник, открывший вкладку и ничего не читающий, часы не запускает, — а второе и последующие чтения замеченный старт не двигают.
-- **Единая формула дедлайна участника**, используемая во всех проверках (приём ответов, SQL-запросы, UI): для `fixed` — `deadline = ends_at`; для `individual` — `deadline = LEAST(started_at + duration_min, ends_at)`. Другой логики тайминга в коде не существует — submission-путь, queryproxy и SSE считают дедлайн одной и той же функцией.
-- **Источник истины — сервер:** `contests` и `registrations` в core-БД. Никакие клиентские часы не участвуют в решениях.
-- Все проверки «олимпиада идёт?» выполняются на бэкенде при каждом действии (запрос SQL, отправка ответа). Приём ответов закрывается атомарно по серверному времени; небольшой грейс на сетевые задержки (напр., 5 сек) — конфигурируемо.
-- **Синхронизация UI:** фронтенд получает при загрузке `server_now` и **свой** `deadline` (по формуле выше), считает оффсет локально; раз в 30–60 сек ресинхронизация через **SSE**-канал (`/api/contests/{id}/events`), по нему же приходят события `contest_started` / `contest_finished`. SSE выбран вместо WebSocket: трафик односторонний, SSE проще и переживает reconnect из коробки.
-- Смена статусов `published → running → finished` — фоновым шедулером в Core API: каждый тик реплики соревнуются за advisory lock, lock не удерживается между тиками, поэтому падение реплики сдвигает переход максимум на один тик. **Гарантия закрытия от шедулера не зависит:** проверка `now() < deadline + grace` (формула дедлайна выше) по часам core-БД выполняется в той же транзакции, что и вставка ответа, — просроченный ответ не будет принят даже при мёртвом шедулере; статус и SSE-события влияют только на UI. Сам переход в `finished` при этом честен по тому же счёту: шедулер завершает олимпиаду только когда `ends_at + грейс <= now()`, а не сразу по `ends_at`, — иначе статус переключился бы на «завершена» раньше, чем перестали приниматься ответы и запросы внутри грейса, и другой код, который решает по статусу, а не пересчитывает дедлайн заново, отказал бы честному участнику раньше срока.
+## 8. The contest clock
 
-## 9. Логирование и аудит
+- **Two timing models** (`contests.timing`, chosen when the contest is
+  created):
+  - `fixed` (default) — a shared window: everybody starts at `starts_at` and
+    submission closes at `ends_at` for all at once. `registrations.started_at`
+    here is a fact for analysis and does not affect the deadline.
+  - `individual` — each participant gets their own `duration_min` minutes
+    from **their** start, and may begin at any point inside
+    `[starts_at, ends_at]`. The start is not a separate button and not a
+    subscription to events but the **first read of the contest's content** —
+    the story, the list of questions or the game schema:
+    `registrations.started_at` is stamped by the same `Start` transition that
+    marks the beginning of querying and answering, called from the read path
+    on the first successful request. Subscribing to events does not stamp it,
+    so a participant who opens a tab and reads nothing does not start their
+    clock, and a second read does not move a start already noticed.
+- **One deadline formula**, used by every check — answers, queries, the
+  interface: for `fixed`, `deadline = ends_at`; for `individual`,
+  `deadline = LEAST(started_at + duration_min, ends_at)`. No other timing
+  logic exists in the code; the submission path, the query proxy and the event
+  stream all compute the deadline with the same function.
+- **The source of truth is the server:** `contests` and `registrations` in the
+  core database. No client clock takes part in any decision.
+- Every "is the contest running?" check happens on the backend on every action
+  — a query, an answer. Submission closes atomically against server time, with
+  a small configurable grace for network delay, five seconds by default.
+- **The interface synchronises** by receiving `server_now` and **its own**
+  `deadline` at load, computing the offset locally, and resynchronising every
+  thirty to sixty seconds over **SSE** (`/api/contests/{id}/events`), which
+  also carries `contest_started` and `contest_finished`. SSE was chosen over
+  WebSocket because the traffic is one-way, and SSE is simpler and survives a
+  reconnect out of the box.
+- The transitions `published → running → finished` are driven by a background
+  scheduler in the Core API: on each tick the replicas compete for an advisory
+  lock, and the lock is not held between ticks, so a replica dying moves a
+  transition by at most one tick. **The closing guarantee does not depend on
+  the scheduler:** the check `now() < deadline + grace`, against the core
+  database's clock, runs in the same transaction as the insert of the answer,
+  so a late answer is not accepted even with the scheduler dead; the status
+  and the events only affect the interface. The transition into `finished` is
+  honest by the same measure: the scheduler ends a contest only when
+  `ends_at + grace <= now()`, not at `ends_at` — otherwise the status would
+  read "finished" before answers and queries stopped being accepted within the
+  grace, and other code that decides by status rather than recomputing the
+  deadline would refuse an honest participant early.
 
-Три независимых потока с разными целями:
+## 9. Logging and audit
 
-| Поток | Что | Куда | Хранение |
+Three independent streams with different purposes:
+
+| Stream | What | Where | Retention |
 |---|---|---|---|
-| **Технические логи** | Структурные JSON-логи приложений (slog): HTTP-запросы, ошибки, провижининг; в каждом событии `request_id`, `user_id`; при `METRICS_BACKEND=log` сюда же идёт дайджест метрик | stdout → Promtail → **Loki**, дашборды в Grafana | 30–90 дней |
-| **Аудит действий** (требование п. 13) | Логины/логауты (в т.ч. неудачные), все админские действия (CRUD олимпиад, изменение ответов, блокировки), старт/финиш участия, дисквалификации; для правок — набор изменившихся полей с прежним и новым значением (раздел 9.2) | Таблица `audit_log` в core-БД (append-only), просмотр в админке с фильтрами | 1+ год |
-| **Журнал SQL-запросов** | Каждый студенческий запрос: текст, статус, длительность, число строк, адрес клиента и отпечаток текста (раздел 9.4) | Таблица `query_log`; просмотр и экспорт — через панель в админке (раздел 9.1) | Срок жизни олимпиады + архив |
+| **Technical logs** | Structured JSON from the applications (slog): HTTP requests, errors, provisioning, each event carrying `request_id` and `user_id`; with `METRICS_BACKEND=log`, the metrics digest joins them | stdout → Promtail → **Loki**, dashboards in Grafana | 30–90 days |
+| **The audit trail** | Sign-ins and sign-outs including failed ones, every staff action (contests, reference answers, blocks), the start and finish of a participation, disqualifications; for an edit, the set of changed fields with their old and new values (section 9.2) | The `audit_log` table, append-only, browsable with filters | A year and more |
+| **The query log** | Every student query: its text, status, duration, row count, the client's address and a fingerprint of the text (section 9.4) | The `query_log` table; browsing and export through the panel (section 9.1) | The contest's lifetime, then archive |
 
-Правила: писать аудит в той же транзакции, что и само действие; никогда не логировать пароли и хеши; `request_id` пробрасывается фронтенд → Core API → Query Runner для сквозной трассировки; каждая запись `query_log` несёт этот `request_id` — по нему студенческий запрос связывается с техническими логами в Loki. Метрики (Prometheus): RPS, латентность по эндпоинтам, число активных участников, длительность и частота отказов студенческих запросов, глубина очереди провижининга.
+The rules: the audit entry is written in the same transaction as the action;
+passwords and hashes are never logged; `request_id` is threaded from the
+interface through the Core API to the Query Runner for end-to-end tracing, and
+every `query_log` row carries it, which is what ties a student's query to the
+technical logs in Loki. The metrics are requests per second, latency per
+endpoint, the number of active participants, the duration and refusal rate of
+student queries, and the depth of the provisioning queue.
 
-### 9.1 Панель журнала запросов (админка)
+### 9.1 The query-log panel
 
-Журнал студенческих SQL — первоклассная фича продукта, а не служебная таблица. В админском UI — отдельный раздел «Журнал запросов»:
+The log of student SQL is a first-class feature of the product, not a service
+table. The staff interface gets a section of its own:
 
-- **Просмотр.** Таблица с колонками: время, участник, статус (цветные бейджи: `ok` / `rejected` / `error` / `timeout`), длительность, число строк, свёрнутый текст запроса. Клик по строке — детальная карточка: полный SQL с подсветкой синтаксиса (тот же CodeMirror в read-only), текст ошибки БД или причина отклонения валидатором, длительность, `request_id`.
-- **Фильтры и поиск:** по олимпиаде, участнику, статусу, диапазону времени, полнотекстовый поиск по тексту запроса (например, «кто обращался к таблице suspects»). Пагинация — keyset по `(executed_at, id)`, чтобы панель оставалась быстрой на сотнях тысяч записей.
-- **Live-режим.** Во время олимпиады — «хвост» журнала в реальном времени через уже существующий SSE-канал: админ видит поток запросов участников по мере выполнения. Полезно и для мониторинга («поток встал — все застряли на вопросе 4»), и для контроля честности.
-- **Экспорт** — кнопкой из панели, с учётом текущих фильтров. **CSV** и **NDJSON** стримятся построчно без ограничений по объёму; **XLSX** (для отчётов и деканата) пишется через excelize `StreamWriter` (константная память, сборка во временном файле — честного потокового вывода у формата нет) и ограничен, например, 200 тыс. строк — выборки больше выгружаются в CSV/NDJSON. Большие экспорты выполняются асинхронно с уведомлением о готовности файла. Каждый экспорт фиксируется в `audit_log`. **Ничего из этого абзаца пока не сделано**: панели администратора нет, а значит нет ни фильтров, которые экспорт учитывал бы, ни выборок, ради которых понадобилась бы асинхронность. Что сделано вместо — параграф «Что уже есть» ниже. Часть этих вопросов в пределах одной олимпиады закрывает наблюдение за участником (раздел 9.4): запросы участника с поиском и фильтром по статусу, живая лента и CSV для организатора. Панелью журнала по всем олимпиадам оно не является и её не заменяет.
-- **Доступ по ролям:** админ системы видит журнал всех олимпиад; owner/manager — только своих. Студент в своём профиле видит **собственную** историю запросов (это же удобно ему самому — вернуться к удачному запросу; реализовано, раздел 9.5).
-- **Аналитика поверх журнала** — в модуле отчётности (раздел 10): число запросов на участника, доля ошибок, среднее время до правильного ответа.
+- **Browsing.** A table of time, participant, status — coloured badges for
+  `ok`, `rejected`, `error` and `timeout` — duration, row count and a
+  collapsed query. Clicking a row opens a card: the full SQL with
+  highlighting (the same CodeMirror, read-only), the database's error text or
+  the validator's reason, the duration and the `request_id`.
+- **Filters and search:** by contest, participant, status and time range, with
+  full-text search over the query's text ("who touched the `suspects`
+  table"). Pagination is keyset over `(executed_at, id)`, so the panel stays
+  fast over hundreds of thousands of rows.
+- **A live mode.** During a contest, a tail of the log over the existing event
+  stream: staff watch queries as they run. Useful both for monitoring — "the
+  stream has stopped, everybody is stuck on question four" — and for fairness.
+- **Export** from the panel, honouring the current filters. CSV and NDJSON
+  stream row by row without a size limit; XLSX, for reports, is written
+  through excelize's `StreamWriter` (constant memory, assembled in a temporary
+  file — the format has no honest streaming output) and is capped at, say,
+  200,000 rows, with larger selections exported as CSV or NDJSON. Large
+  exports run asynchronously with a notification when the file is ready, and
+  every export is recorded in `audit_log`.
 
-**Что уже есть.** Из всего экспорта существуют ровно две вещи, и обе — не панель администратора.
+  **None of that paragraph exists yet**: there is no staff panel, so there are
+  no filters for an export to honour and no selections large enough to need
+  the asynchrony. What does exist is below. Some of those questions, within
+  one contest, are answered by participant monitoring (section 9.4): a
+  participant's queries with search and a status filter, a live feed, and CSV
+  for the organiser. That is not a panel across all contests and does not
+  replace one.
+- **Access by role:** a system administrator sees every contest's log; an
+  owner or a manager sees their own. A student sees **their own** history in
+  their profile, which is also useful to them — a way back to the query that
+  worked (section 9.5).
+- **Analysis on top of the log** belongs to reporting (section 10): queries
+  per participant, the share that failed, the average time to a correct
+  answer.
 
-**Свой журнал запросов участника, CSV.** `GET /api/v1/contests/{id}/play/log.csv` рядом с уже существующим `/play/log`: та же страница на экране, а файлом — вся сессия. **Стрим, а не страница** (`postgres.QueryLog.ExportHistory` отдаёт строки по одной, `csv.Writer` пишет их в сокет по мере поступления, в памяти не накапливается ничего, кроме буфера bufio): у журнала нет естественного размера — участник, не отрывающийся от консоли два часа, оставляет сотни строк, — а файл, тихо потерявший большую их часть, не является записью ни о чём. Порядок обратный панельному: панель отвечает «что я только что выполнил» и идёт от свежего, файл читается сверху вниз как запись сеанса и идёт от старого. Оба порядка обслуживает один и тот же индекс `query_log (registration_id, executed_at)` — миграции под это не понадобилось (с миграции 000033 индекс под тем же именем несёт ещё и `id` — раздел 9.4; оба порядка он обслуживает по-прежнему). Доступ решает та же `queryproxy.Service.Access`, что и остальные `/play/*`-эндпоинты, а бюджет частоты (`AdmitRead`) тратится **до** чтения: это самый дорогой read этого хендлера, и он последний, который стоило бы отдавать бесплатно. Строки — только свои: `WHERE registration_id = $1`, где идентификатор пришёл из `Access`, а не из запроса. Текст ошибки проходит ровно ту же редактуру, что и на странице журнала, и не свою собственную: `query_log.error_text` пишется до того, как что-либо выше по стеку что-либо вычищает, поэтому файл иначе стал бы вторым — и более удобным, потому что его сохраняют, — обходом тех же самых защит консоли. В `audit_log` эта выгрузка **не** пишется, и это осознанно: участник забирает то, что и так видит на экране, а журнал аудита — про привилегированные действия. Требование «каждый экспорт фиксируется» относится к панели администратора, где выгружают чужие строки. **Стрим — не значит без границ**, и раньше значило именно это: три ограничения, каждое отвечает на свой вопрос. Сколько можно прочитать — `queryrunner.MaxExportRows` (20 000 строк, `LIMIT` внутри самого курсора) и `MaxExportBytes` (32 МиБ текста запросов): при штатных 30 запросах в минуту это одиннадцать часов безостановочного набора, то есть предел, до которого контест не дотягивается, — а когда он всё же сработал, файл заканчивается отдельной строкой `truncated`, потому что запись, молча оборвавшаяся, хуже короткой. Сколько можно держать соединение — `api.exportDeadline` (минута): чтение идёт внутри транзакции, объём данных медленного читателя не ограничивает, а соединений в пуле ядра 25 (`CORE_DB_POOL_MAX`). И сколько таких выгрузок у одного аккаунта одновременно — одна (`api.ExportGate`): `AdmitRead` ограничивает частоту стартов, а не число одновременных, и тридцать стартов в минуту против пула в 25 соединений — это остановленный вход в систему для всех остальных. Четвёртое ограничение — общее на сервис, а не на аккаунт: `api.ExportSlots` (`EXPORT_CONCURRENCY`, по умолчанию 5 — пятая часть пула) держит потолок на число выгрузок, идущих одновременно по **всем** маршрутам экспорта сразу, потому что «одна на аккаунт» при трёхстах аккаунтах не является границей. Переполнение — отказ `503 exports_busy` с `Retry-After`, а не очередь: ждущий запрос тоже занимает место. Значение сверяется на старте с `CORE_DB_POOL_MAX` — каждое из двух по отдельности выглядит разумным, а вместе они умеют попросить больше соединений, чем в пуле есть.
+**What exists today.** Of all that export, exactly two things exist, and
+neither is a staff panel.
 
-**Пакет олимпиады, JSON.** `GET /api/v1/contests/{id}/export` — то, о чём пункт 12 раздела 15: взять прошлогоднюю олимпиаду и поправить. Несёт объявленные языки с дефолтом, названия и описания по языкам, историю по языкам, вопросы по порядку (вид, баллы, попытки, штраф, видимость, варианты, тексты вариантов) с **эталонными ответами**, настройки контеста, политику SQL и игровой скрипт. Не несёт идентификаторов, статуса, окна проведения и вообще ничего от прошедшего запуска — ни ростера, ни ответов участников, ни журнала: это не бэкап, и притворяться бэкапом опаснее, чем не быть им. **Ограничен, а не стримится** — противоположный CSV выбор по противоположной причине: пакет полезен только целиком, поэтому `contests.MaxPackageQuestions` (500) — единственный список, которому авторская сторона не задала предела, — а при превышении отказ `package_too_large`, а не обрезка. Обрезанный пакет — не олимпиада поменьше, а олимпиада, чей ключ ответов больше не сходится с вопросами, и в файле об этом не сказано ничего.
+**A participant's own query log, as CSV.**
+`GET /api/v1/contests/{id}/play/log.csv`, beside the existing `/play/log`:
+the same page on screen, and the whole session as a file. **A stream, not a
+page** — `postgres.QueryLog.ExportHistory` yields rows one at a time,
+`csv.Writer` writes them into the socket as they arrive, and nothing
+accumulates in memory beyond a buffer. A log has no natural size: a
+participant who does not leave the console for two hours leaves hundreds of
+rows, and a file that quietly lost most of them is not a record of anything.
+The order is the reverse of the panel's: the panel answers "what did I just
+run" and starts from the newest, while the file reads top to bottom as a
+record of the session and starts from the oldest. One index,
+`query_log (registration_id, executed_at)`, serves both, so no migration was
+needed.
 
-**Право на пакет — `contest.edit`, не `contest.view`.** Пакет — это полный ключ к ответам, поэтому он принадлежит праву, которое и так означает «можно писать эти ответы». Участник не проходит ни то, ни другое: участие — это регистрация, а не роль в олимпиаде, так что `rbac` возвращает `ErrForbidden` ещё до хендлера. Проверяется это утверждением о том, **какое именно** право спросил маршрут (`auth.Authorizer` — интерфейс ровно за этим), а не кодом ответа: `managerPermissions` выдаёт менеджеру `contest.view` и `contest.edit` вместе, поэтому по 403 или 200 две эти проводки неразличимы. Выгрузка пишется в `audit_log` (`contest.package_export`) внутри транзакции и **счётчиками**, без содержимого: количество вопросов, количество эталонных ответов, языки, есть ли игра — раздел 9.2 не зря держит эталоны на «только количество», а журнал читают организаторы.
+Access is decided by the same `queryproxy.Service.Access` as every other
+`/play/*` endpoint, and the rate budget (`AdmitRead`) is spent **before** the
+read: it is this handler's most expensive read and the last one worth giving
+away. The rows are only the caller's own — `WHERE registration_id = $1`, with
+the identifier coming from `Access` rather than from the request. The error
+text goes through exactly the same redaction as the log page and not one of
+its own, because `query_log.error_text` is written before anything higher up
+the stack cleans anything — otherwise the file would become a second way, and
+a more convenient one because it is saved, around the same console defences.
+This download is deliberately **not** written to `audit_log`: a participant is
+taking what they can already see on screen, and the audit trail is about
+privileged actions. "Every export is recorded" applies to the staff panel,
+where somebody else's rows are downloaded.
 
-**Чего в этих двух вещах сознательно нет.** NDJSON и XLSX не написаны — их адресат панель администратора, а её нет. Асинхронных выгрузок нет: обе существующие отвечают в том же запросе, потому что одна ограничена, а вторая стримится. И одна дыра названа заранее, до того как появится админский экспорт: текст запроса участника попадает в ячейку CSV как есть, а ячейка, начинающаяся с `=`, `+`, `-` или `@`, — формула для Excel. Сегодня это неопасно (файл забирает себе тот же человек, который эти запросы и писал); в тот день, когда организатор начнёт скачивать чужие строки, экранирование формул надо будет добавить в тот же коммит, что и эндпоинт. Этот день настал вместе с CSV наблюдения (раздел 9.4), и экранирование пришло с ним: ячейка, начинающаяся с `=`, `+`, `-`, `@`, табуляции или возврата каретки, получает впереди апостроф. Собственный CSV участника получил его тогда же и по той же причине, хотя рассуждение выше обещало обратное: `=1+1` — это оператор, который участник набирает в консоли, и формула для того, кто откроет файл, а файл, который участник скачал, часто открывает уже не участник. Обе текстовые ячейки — текст запроса и текст ошибки — проходят через тот же `spreadsheetSafe` (`api/querylog_csv.go`).
+**Streaming does not mean unbounded**, and it used to mean exactly that.
+Three limits, each answering its own question. How much may be read:
+`queryrunner.MaxExportRows` (20,000 rows, as a `LIMIT` inside the cursor
+itself) and `MaxExportBytes` (32 MiB of query text) — at the usual thirty
+queries a minute that is eleven hours of unbroken typing, a limit a contest
+never reaches; and when it does fire, the file ends with a `truncated` row,
+because a record that stopped silently is worse than a short one. How long a
+connection may be held: `api.exportDeadline`, one minute — the read runs
+inside a transaction, a slow reader is not bounded by the data's size, and the
+core pool has 25 connections. And how many such downloads one account may have
+at once: one (`api.ExportGate`), because `AdmitRead` bounds how often they
+start and not how many run, and thirty starts a minute against a pool of 25
+is sign-in stopped for everybody else. A fourth limit is per service rather
+than per account: `api.ExportSlots` (`EXPORT_CONCURRENCY`, five by default, a
+fifth of the pool) caps how many exports run at once across **every** export
+route together, because "one per account" is not a bound at three hundred
+accounts. Overflow is a `503 exports_busy` with `Retry-After` rather than a
+queue: a waiting request occupies a slot too. The value is checked at startup
+against `CORE_DB_POOL_MAX` — each looks reasonable alone, and together they
+can ask for more connections than the pool holds.
 
-Индексы под панель: `query_log (registration_id, executed_at, id)` (до миграции 000033 — `(registration_id, executed_at DESC)`), `query_log (executed_at, id)`, GIN-индекс по `to_tsvector(sql_text)` для полнотекстового поиска.
+**A contest package, as JSON.** `GET /api/v1/contests/{id}/export` — what
+section 15's item 12 is about: take last year's olympiad and adjust it. It
+carries the declared languages with their default, titles and descriptions per
+language, the story per language, the questions in order (kind, points,
+attempts, penalty, visibility, options and their texts) with their **reference
+answers**, the contest's settings, the SQL policy and the game script. It does
+not carry identifiers, status, the scheduling window, or anything at all from
+a past run — no roster, no answers, no log. It is not a backup, and pretending
+to be one is more dangerous than not being one.
 
-**Осознанный пробел.** Отказ по частоте запросов, пойманный собственной предпроверкой `queryproxy.Service` (раздел 5, до записи в журнал), в `query_log` не попадает — предпроверка существует именно для того, чтобы не платить строкой и её GIN-индексом за запрос, который так и не дошёл до базы. Панель и отчётность поверх журнала (число запросов на участника, доля отказов) поэтому недосчитывают такие отказы — ровно на то число, что отсекла предпроверка. Это принятый компромисс, а не забытый баг (см. doc-комментарий на `postgres.QueryLog`): частоту таких отказов по-прежнему видно по HTTP-метрике 429 на эндпоинте консоли (`platform/metrics`), отдельная метрика под это не заводилась.
+**Bounded rather than streamed** — the opposite choice from the CSV, for the
+opposite reason: a package is useful only whole, so
+`contests.MaxPackageQuestions` (500) is the one list the authoring side never
+bounded, and exceeding it is a `package_too_large` refusal rather than a
+truncation. A truncated package is not a smaller olympiad but one whose answer
+key no longer matches its questions, and the file says nothing about it.
 
+**The package needs `contest.edit`, not `contest.view`.** The package is the
+complete answer key, so it belongs to the permission that already means "you
+may write these answers". A participant passes neither: taking part is a
+registration, not a role in the contest, so `rbac` returns `ErrForbidden`
+before the handler. That is asserted by checking **which permission** the
+route asked for (`auth.Authorizer` is an interface for exactly this) rather
+than by the response code: `managerPermissions` grants a manager
+`contest.view` and `contest.edit` together, so the two wirings are
+indistinguishable by a 403 or a 200. The download is written to `audit_log`
+(`contest.package_export`) inside the transaction and as **counts**, without
+content: how many questions, how many reference answers, which languages,
+whether there is a game — section 9.2 keeps reference answers at "the count
+only" for a reason, and the journal is read by organisers.
 
-### 9.2 Что именно записывает аудит
+**What these two deliberately lack.** NDJSON and XLSX are not written, because
+their audience is the staff panel and there is none. There are no asynchronous
+exports: both of these answer within the request, because one is bounded and
+the other streams.
 
-«Кто» журнал пишет всегда: актор, его логин, IP, user-agent, время. Пробел в другом — **что изменилось и на что**.
+And one hole was named in advance, before a staff export existed: a
+participant's query text goes into a CSV cell as it is, and a cell beginning
+with `=`, `+`, `-` or `@` is a formula to a spreadsheet. That day arrived with
+monitoring's CSV (section 9.4), and the escaping came with it: a cell starting
+with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading apostrophe.
+The participant's own CSV got it at the same time and for the same reason,
+although the reasoning above promised otherwise — `=1+1` is an operator a
+participant types into the console and a formula to whoever opens the file,
+and a file a participant downloaded is often opened by somebody else. Both
+text cells, the query and the error, go through the same `spreadsheetSafe`.
 
-Сейчас `from`/`to` пишутся в двух местах из двадцати (смена статуса олимпиады, смена ролей) — там, где кто-то в своё время задал этот вопрос. `contest.update` пишет новые значения двух полей из восьми, которые умеет менять; `contest.question_update` — только идентификатор вопроса. Правило ниже делает уже существующий образец общим.
+The indexes behind the panel: `query_log (registration_id, executed_at, id)`,
+`query_log (executed_at, id)`, and a GIN index on `to_tsvector(sql_text)` for
+full-text search.
 
-**Записывается набор изменений, а не новое состояние.** Payload несёт `changes` — только те поля, которые реально отличаются:
+**A deliberate gap.** A rate refusal caught by `queryproxy.Service`'s own
+pre-check (section 5, before the journal row is written) does not reach
+`query_log` — the pre-check exists precisely so that a query which never got
+to the database costs neither a row nor its GIN index. So the panel and the
+reporting on top of it (queries per participant, the share refused) undercount
+those refusals by exactly what the pre-check turned away. It is an accepted
+trade-off rather than a forgotten bug, and the rate of such refusals is still
+visible through the 429 metric on the console endpoint.
+
+### 9.2 What the audit trail records
+
+"Who" is always recorded: the actor, their login, address, user agent and the
+time. The gap was elsewhere — **what changed, and to what**.
+
+**A set of changes is recorded, not a new state.** The payload carries
+`changes`, holding only the fields that actually differ:
 
 ```json
 {"changes": {
@@ -965,30 +2298,71 @@ CREATE INDEX participant_sql_tabs_registration_idx ON participant_sql_tabs (regi
 }}
 ```
 
-Форма присылает все поля; если писать все, каждое сохранение выглядит как переписывание олимпиады. Если только отличающиеся — журнал читаем, а пустой набор сам становится фактом («сохранили, ничего не изменилось»), который иначе неотличим от настоящей правки.
+A form submits every field; recording all of them makes each save look like a
+rewrite of the contest. Recording only what differs keeps the journal
+readable, and makes an empty set a fact in itself — "saved, nothing changed" —
+which is otherwise indistinguishable from a real edit.
 
-**Поля перечисляются явно, обхода структуры рефлексией нет.** Это не стилистика, а граница безопасности: `contest.answers_change` пишет только количество ответов именно потому, что журнал читают организаторы и он не должен стать местом, где эталоны можно подсмотреть. Универсальный diff слил бы ровно то, что исключено сознательно. Записать можно только то, что кто-то явно назвал в коде.
+**Fields are enumerated explicitly; nothing walks the struct by reflection.**
+That is not style but a security boundary: `contest.answers_change` records
+only the *number* of answers precisely because organisers read the journal and
+it must not become a place where the reference answers can be glimpsed. A
+universal diff would leak exactly what is excluded on purpose. Only what
+somebody named in code can be written.
 
-**Журнал — не система версий.** Для авторского текста (история, формулировка вопроса, название) записывается **факт изменения и языки**, а не сам текст: история сохраняется часто, весит килобайты и хранится год, так что прежние тексты сделали бы `audit_log` самой большой таблицей в базе, состоящей в основном из дублей прозы. И откатиться по ней всё равно нельзя — «вернуть вчерашнюю историю» это версионность контента: другое хранилище, другой срок жизни, отдельная функция, если она понадобится.
+**The journal is not a version-control system.** For authored text — the
+story, a question's wording, a title — the **fact of a change and the
+languages** are recorded, not the text: a story is saved often, weighs
+kilobytes and is kept for a year, so previous versions would make `audit_log`
+the largest table in the database, mostly duplicated prose. And it could not
+be used to roll back anyway: "restore yesterday's story" is content
+versioning — a different store, a different lifetime, a separate feature if it
+is ever needed.
 
-Граница проходит по смыслу поля, а не по типу:
+The boundary follows a field's meaning, not its type:
 
-| Что | Как записывается | Почему |
+| What | How it is recorded | Why |
 |---|---|---|
-| Конфигурация: статус, тип записи, тайминг, окно, `allowed_cidrs`, режим вопросов, баллы, видимость, флаги SQL-политики, языки, роли | `from` → `to` | Маленькое, ровно на эти вопросы и отвечают через полгода |
-| Авторский текст: история, формулировки, названия | факт изменения + список языков | Объём и срок хранения; и это работа для версионности, а не для аудита |
-| Эталонные ответы | только количество | Журнал читают организаторы |
-| Пароли, хеши, токены | не записываются вовсе | Вырезаются на любой глубине до записи (раздел 7.2) |
+| Configuration: status, enrolment, timing, the window, `allowed_cidrs`, the question mode, points, visibility, the SQL policy's flags, languages, roles | `from` → `to` | Small, and exactly what somebody asks about six months later |
+| Authored text: the story, wordings, titles | the fact of the change and the languages | Size and retention; and that is a job for versioning, not for audit |
+| Reference answers | the count only | Organisers read the journal |
+| Passwords, hashes, tokens | not recorded at all | Redacted at any depth before the write (section 7.2) |
 
-**Размер payload ограничен.** Список CIDR или языков короткий, но ограничение ставится на входе, а не на доверии: одна запись не может вырасти настолько, чтобы страница журнала перестала открываться.
+**The payload's size is bounded.** A list of CIDRs or languages is short, but
+the bound is placed on the input rather than on trust: one entry must not grow
+until the journal's page stops opening.
 
-**Запись живёт внутри транзакции действия.** Это не деталь реализации, а единственная расстановка, при которой журнал остаётся доказательством: запись после коммита теряется, пока само изменение остаётся, а запись до коммита переживает откат. Порядок «изменили — записали — коммит» повторяется в двадцати местах сервиса, и ничто в самом коде не заставляет двадцать первое место сделать так же, поэтому это утверждается тестом (`internal/contests/integration_test.go`): каждая операция, которая что-то меняет, обязана оставить хотя бы одну запись, и все её записи должны быть сделаны при открытой транзакции. Единственное исключение — отказ (`contest.access_denied`): менять нечего, значит нечему быть атомарным, а попытка входа с чужого адреса — ровно то, что администратор ищет потом; тест называет это исключение поимённо, чтобы оно оставалось решением, а не пробелом.
+**The entry lives inside the action's transaction.** That is not an
+implementation detail but the only arrangement in which the journal stays
+evidence: an entry written after the commit is lost while the change remains,
+and one written before it survives a rollback. The order "change, record,
+commit" repeats in twenty places, and nothing in the code itself forces the
+twenty-first to follow, so it is asserted by a test
+(`internal/contests/integration_test.go`): every operation that changes
+something must leave at least one entry, and all of its entries must be
+written with the transaction open. The single exception is a refusal
+(`contest.access_denied`): there is nothing to change, so there is nothing to
+be atomic with, and an attempt from an address that is not allowed is exactly
+what an administrator looks for afterwards. The test names that exception, so
+it stays a decision rather than a gap.
 
-**Запись называет и того, кто действовал, и то, над чем действовали.** Актор отдаётся логином, а сущность — именем: заголовком олимпиады в её языке по умолчанию или логином учётной записи. «Изменил эталонные ответы · Олимпиада» отвечает на половину вопроса, а важна вторая половина — какая именно; голый идентификатор читается здесь не лучше, чем читался бы вместо актора. Имя подставляется соединением, а идентификатор остаётся рядом всегда: у удалённой олимпиады имени уже нет, и придумывать его значило бы выдумывать запись.
+**An entry names both who acted and what they acted on.** The actor is given
+by login and the entity by name: a contest's title in its default language, or
+an account's login. "Changed the reference answers · Contest" answers half the
+question, and the important half is which one; a bare identifier reads no
+better here than it would in place of the actor. The name is filled in by a
+join and the identifier always stays beside it: a deleted contest has no name
+any more, and inventing one would be inventing a record.
 
-**Прежнее значение переживает то, что описывает** — и это свойство, а не дефект: у удалённой олимпиады остаётся история того, кто и что в ней менял. Следствие, которое лучше назвать заранее, чем обнаружить: в payload остаются логины удалённых учётных записей. Это осознанно — подотчётность и есть смысл журнала, — но при появлении требований об удалении персональных данных решать придётся именно здесь.
+**A previous value outlives what it describes** — a property, not a defect: a
+deleted contest keeps the history of who changed what in it. The consequence
+is better named in advance than discovered: the payload keeps the logins of
+deleted accounts. That is deliberate, because accountability is what the
+journal is for, but the day a requirement to erase personal data arrives, this
+is where it has to be answered.
 
-**Механизм.** Небольшой помощник в `internal/audit`, который принимает пары и отбрасывает совпавшие:
+**The mechanism** is a small helper in `internal/audit` that takes pairs and
+discards the ones that match:
 
 ```go
 changes := audit.NewChanges()
@@ -996,42 +2370,95 @@ changes.Set("enrollment", current.Enrollment, updated.Enrollment)
 changes.Set("ends_at", current.EndsAt, updated.EndsAt)
 ```
 
-Явное перечисление — то, что удерживает контент снаружи по построению, а отбрасывание совпавших снимает с каждого места вызова проверку «а изменилось ли».
+Enumerating explicitly is what keeps content out by construction, and
+discarding matches removes the "did it actually change?" check from every call
+site.
 
-### 9.3 Два списка участника
+### 9.3 A participant's two lists
 
-`/my` — олимпиады, на которые студент записан. `/open` — всё, что ему видно, включая уже записанные, помеченные.
+`/my` holds the contests a student is enrolled in. `/open` holds everything
+visible to them, including the ones they have joined, marked as such.
 
-Разделены, потому что вопросы разные и один из них срочный: «когда начинается моя» спрашивают в день соревнования под таймером, «во что можно записаться» листают раз в семестр. Смешав их, вы разбавляете список, к которому возвращаются под давлением. Плюс у строк разное действие — «войти» против «записаться», — а одна таблица, где колонка действия означает то одно, то другое, это две таблицы, которые не признались.
+They are separate because the questions are different and one of them is
+urgent: "when does mine start" is asked on the day, under a clock, while "what
+can I join" is browsed once a semester. Mixing them dilutes the list somebody
+returns to under pressure. The rows also carry different actions — "enter"
+against "join" — and one table whose action column means sometimes one and
+sometimes the other is two tables that have not admitted it.
 
-**Каталог не прячет уже записанные.** Отфильтровать их значит ответить на вопрос «что вообще есть» неполно, и студент, не найдя знакомого названия, решит, что запись слетела. Они показываются с отметкой.
+**The catalogue does not hide what is already joined.** Filtering those out
+answers "what is there" incompletely, and a student who does not find a
+familiar title will decide their enrolment was lost. They are shown with a
+mark.
 
-**Отметку даёт поле `enrolled` в сводке, и оно всегда про самого спрашивающего.** Заполняется из аутентифицированной сессии, никогда из параметров запроса, — иначе список превратился бы в способ узнать, кто в чём участвует. Одним запросом на страницу: каталог из двадцати строк не должен становиться двадцатью проверками. Метод живёт на репозитории регистраций, а не полем на `Contest`: «я записан» — факт про пару «зритель и олимпиада», и на доменном типе его пришлось бы либо заполнять, либо оставлять неверным везде, где олимпиада загружается.
+**The mark comes from an `enrolled` field on the summary, and it is always
+about the person asking.** It is filled from the authenticated session and
+never from a request parameter, or the list would become a way to learn who is
+taking part in what. One query per page: a catalogue of twenty rows must not
+become twenty checks. The method lives on the registrations repository rather
+than as a field on `Contest`, because "I am enrolled" is a fact about a pair —
+a viewer and a contest — and on the domain type it would have to be either
+filled in or left wrong everywhere a contest is loaded.
 
-**Фильтр `enrolled` только сужает.** Он отдельное `AND` после правила видимости, а не часть его, так что что бы он ни говорил, право видеть строку решено раньше. Вне участнической выборки он отвергается с 400, а не игнорируется: у организаторского реестра нет «меня», и применённый там он сравнивал бы с пустым идентификатором и тихо возвращал ничего — то же самое, что молча проглотить нечитаемое значение.
+**The `enrolled` filter only narrows.** It is a separate `AND` after the
+visibility rule rather than part of it, so whatever it says, the right to see
+a row was decided earlier. Outside the participant's own listing it is
+rejected with a 400 rather than ignored: a staff register has no "me", and
+applied there it would compare against an empty identifier and quietly return
+nothing — the same thing as silently swallowing an unreadable value.
 
-### 9.4 Наблюдение за участником
+### 9.4 Watching a participant
 
-Дизайн: `docs/superpowers/specs/2026-09-18-participant-monitoring-design.md`. Код: доменный пакет `internal/monitor` (и запись, и чтение), репозитории `internal/postgres/monitor.go` и `watch*.go`, обработчики `internal/api/monitor_handler.go`, `monitor_export.go` и `participant_signals.go`; экраны — `frontend/app/(admin)/contests/[contestId]/monitor/`.
+Code: the domain package `internal/monitor` (both writing and reading), the
+repositories `internal/postgres/monitor.go` and `watch*.go`, the handlers
+`internal/api/monitor_handler.go`, `monitor_export.go` and
+`participant_signals.go`, and the screens under
+`frontend/app/(admin)/contests/[contestId]/monitor/`.
 
-**Зачем.** Организатору олимпиады нужно видеть, что делал каждый участник, — вживую во время олимпиады и полностью после неё. Почти всё для этого уже записывалось: запросы в `query_log`, ответы в `submissions`, входы и выходы в `audit_log`, старт часов в `registrations`. Показана же организатору была только итоговая таблица. Наблюдение собирает эти журналы в одну ленту по олимпиаде и по участнику и добавляет то, чего не записывал никто: уход со страницы, вставку текста, смену адреса, параллельную сессию, историю заметок и вкладок.
+**Why.** A contest's organiser needs to see what each participant did — live
+during the olympiad and completely afterwards. Almost all of it was already
+recorded: queries in `query_log`, answers in `submissions`, sign-ins and
+sign-outs in `audit_log`, the start of the clock in `registrations`. What the
+organiser was shown was only the final table. Monitoring gathers those
+journals into one feed, per contest and per participant, and adds what nobody
+recorded: leaving the page, pasting text, changing address, a parallel
+session, and the history of the notes and tabs.
 
-**Кто видит — право `contest.monitor`.** Миграция 000033 выдаёт его каждой роли, у которой есть `contest.view` (сегодня это organizer и admin); на уровне олимпиады оно входит в `managerPermissions`, то есть owner и manager держат его на своей олимпиаде, а администраторы установки проходят через `contest.admin_all`. Проверяется оно только с идентификатором олимпиады: глобальная выдача организаторам не должна открывать ни одного обзора по всей установке. Каждый маршрут организатора проходит `Authenticate`, затем `RequireContestPermission(contest.monitor)` на олимпиаде из URL. Регистрация в URL обязана принадлежать этой олимпиаде: чужая, несуществующая и некорректный идентификатор дают один и тот же 404 `monitor_participant_not_found` — по ответу нельзя узнать, что такая регистрация где-то есть. Чтобы фронтенд не пересказывал правило `rbac` у себя, `GET /contests/{id}` несёт `may_monitor` — то же решение `Authorize`, что и у маршрутов (`auth.Middleware.MayOnContest`); по нему показывается вкладка «Наблюдение». Поле отдаёт только это чтение, не ответы на правку; если решение не удалось, в лог уходит предупреждение и отдаётся `false`, а не 500 на чтение всей олимпиады.
+**Who sees it — the `contest.monitor` permission.** Migration 000033 grants it
+to every role that has `contest.view`, which today is organizer and admin; at
+contest level it is part of `managerPermissions`, so an owner and a manager
+hold it on their own contest, and installation administrators pass through
+`contest.admin_all`. It is only ever checked with a contest identifier: the
+global grant to organisers must not open an installation-wide view of
+anything. Each staff route runs `Authenticate` and then
+`RequireContestPermission(contest.monitor)` on the contest from the URL. The
+registration in the URL must belong to that contest: one belonging elsewhere,
+one that does not exist and a malformed identifier all give the same 404
+`monitor_participant_not_found`, so the response cannot reveal that such a
+registration exists somewhere. So that the interface does not restate the
+`rbac` rule itself, `GET /contests/{id}` carries `may_monitor` — the same
+`Authorize` decision the routes make — and the Monitoring tab is shown from
+it. The field serves that read only, never a write; if the decision fails, a
+warning goes to the log and `false` is served rather than a 500 on reading the
+whole contest.
 
-**Что записывается нового и почему.**
+**What is newly recorded, and why:**
 
-| Что | Где | Зачем |
+| What | Where | For |
 |---|---|---|
-| Адрес клиента каждого запроса | `query_log.ip` | Вкладка запросов показывает, откуда пришёл каждый; отметка «несколько IP» |
-| Отпечаток текста запроса | `query_log.sql_fingerprint` | Отметка «одинаковые запросы» без сравнения текстов |
-| Уход со страницы, вставка текста | `participant_events` (`page_left`, `paste`) | Сигналы браузера; единственное, чего сервер сам не видит |
-| Смена адреса, параллельная сессия | `participant_events` (`ip_changed`, `parallel_session`) | Сервер видит это сам, но раньше нигде не записывал |
-| Создание, переименование, удаление вкладки | `participant_events` (`tab_*`) | История рабочего места, которую не видно по телу ревизий |
-| Заметки и вкладки SQL во времени | `workspace_revisions` | Раньше хранилось только последнее состояние |
+| The client's address on every query | `query_log.ip` | The queries tab shows where each came from; a "several addresses" flag |
+| A fingerprint of the query text | `query_log.sql_fingerprint` | An "identical queries" flag without comparing texts |
+| Leaving the page, pasting text | `participant_events` (`page_left`, `paste`) | Browser signals — the only thing the server cannot see itself |
+| A change of address, a parallel session | `participant_events` (`ip_changed`, `parallel_session`) | The server sees these itself but recorded them nowhere |
+| Creating, renaming, deleting a tab | `participant_events` (`tab_*`) | Workspace history that the revisions' bodies do not show |
+| Notes and SQL tabs over time | `workspace_revisions` | Only the latest state used to be kept |
 
-Вход, выход, неудачный вход и дисквалификация остаются в `audit_log`, старт и финиш — в `registrations`, запросы — в `query_log`, ответы — в `submissions`. В `participant_events` они не дублируются: лента собирает их при чтении.
+Sign-in, sign-out, a failed sign-in and a disqualification stay in
+`audit_log`; the start and finish stay in `registrations`; queries stay in
+`query_log` and answers in `submissions`. None of them is duplicated into
+`participant_events` — the feed assembles them at read time.
 
-**Таблицы и миграция `000033_participant_monitoring`.**
+**The tables, migration `000033_participant_monitoring`:**
 
 ```sql
 CREATE TABLE participant_events (
@@ -1040,7 +2467,7 @@ CREATE TABLE participant_events (
     registration_id uuid NOT NULL,
     kind            text NOT NULL,
     payload         jsonb NOT NULL DEFAULT '{}',
-    client_at       timestamptz,          -- время, которое назвал браузер; только у сигналов браузера
+    client_at       timestamptz,          -- the time the browser claimed; browser signals only
     created_at      timestamptz NOT NULL DEFAULT now(),
     FOREIGN KEY (registration_id, contest_id)
         REFERENCES registrations (id, contest_id) ON DELETE CASCADE
@@ -1051,683 +2478,1612 @@ CREATE INDEX participant_events_contest_time_idx      ON participant_events (con
 CREATE TABLE workspace_revisions (
     id              bigserial PRIMARY KEY,
     registration_id uuid NOT NULL REFERENCES registrations ON DELETE CASCADE,
-    document        text NOT NULL,        -- 'notes' или id вкладки; не внешний ключ — история удалённой вкладки остаётся
-    title           text,                 -- название вкладки в этот момент; у заметок NULL
+    document        text NOT NULL,        -- 'notes' or a tab's id; not a foreign key, so a
+                                          -- deleted tab keeps its history
+    title           text,                 -- the tab's title at that moment; NULL for notes
     body            text NOT NULL,
-    started_at      timestamptz NOT NULL, -- первая правка, попавшая в ревизию
-    updated_at      timestamptz NOT NULL  -- последняя
+    started_at      timestamptz NOT NULL, -- the first edit that went into this revision
+    updated_at      timestamptz NOT NULL  -- the last
 );
 CREATE INDEX workspace_revisions_document_idx ON workspace_revisions (registration_id, document, id);
 ```
 
-- `participant_events.contest_id` денормализован намеренно: живая лента олимпиады читает диапазон своего индекса без соединения с `registrations`. Олимпиада названа дважды — прямо и через регистрацию, — и составной внешний ключ на `registrations_id_contest_key` держит их согласованными: ошибка вызывающего кода не может положить вставки одного участника в ленту другой олимпиады. Тот же ключ несёт каскад от регистрации и через неё от олимпиады.
-- Индексы событий ведут по времени, а не по `id`: лента сливается с журналами, у которых с этой таблицей нет общих идентификаторов, поэтому курсор и фильтр `from`/`until` — это диапазоны времени, а `id` — только развязка keyset.
-- `query_log` получает `ip inet` и `sql_fingerprint bigint`. Старые строки остаются с `NULL` в обеих колонках. Своего индекса у отпечатка нет и не нужно: с миграции 000037 его читает только триггер, закрывающий строку, — по первичному ключу, по идентификаторам закрытых строк, — и кладёт его в `contest_query_fingerprints`, где по нему и ищут; индекс без читателя стоил бы записи на каждую вставку консоли и на каждое не-HOT обновление строки.
-- **Два keyset-индекса заменены под теми же именами:** `query_log_registration_executed_idx` был `(registration_id, executed_at DESC)`, стал `(registration_id, executed_at, id)`; `submissions_registration_submitted_idx` был `(registration_id, submitted_at) INCLUDE (…)`, стал `(registration_id, submitted_at, id) INCLUDE (question_id, is_correct, points_awarded)`. Страницы организатора — keyset по `(время, id)`, и без `id` в индексе каждая страница сортирует выбранное, а bitmap-план, который выпадает при любом повороте статистики, на каждой странице дочитывает весь остаток диапазона регистрации — чтение, растущее с квадратом. С полным ключом страница — упорядоченный индексный скан, который останавливается на `LIMIT`. Заменены, а не добавлены, чтобы ни одна таблица не получила лишней записи индекса на каждую вставку. Прочие читатели обслуживаются как раньше: свой журнал участника (`ORDER BY executed_at DESC, id DESC`) читает индекс в обратную сторону, CSV участника и окно ответа — префикс, счётчики и лидерборд — диапазон регистрации с теми же `INCLUDE`. Down-файл возвращает оба исходных индекса.
-- `audit_log_failed_login_idx ON audit_log (lower(payload->>'login'), created_at) WHERE action = 'auth.login_failed'` — у неудачного входа нет актора (учётная запись не доказана), и найти его можно только по набранному логину. Частичный, поэтому остальному журналу аудита ничего не стоит.
-- Право `contest.monitor` и его выдача ролям с `contest.view` — `INSERT … SELECT` по `role_permissions`, а не перечисление ролей.
+- `participant_events.contest_id` is denormalised on purpose: a contest's live
+  feed reads a range of its own index without joining `registrations`. The
+  contest is named twice — directly and through the registration — and a
+  composite foreign key keeps the two consistent, so a mistake in calling code
+  cannot file one participant's inserts into another contest's feed. The same
+  key carries the cascade from the registration and through it from the
+  contest.
+- The event indexes lead on time rather than on `id`: the feed merges with
+  journals that share no identifiers with this table, so the cursor and the
+  `from`/`until` filter are time ranges and `id` is only the keyset
+  tie-breaker.
+- `query_log` gains `ip inet` and `sql_fingerprint bigint`. Older rows keep
+  `NULL` in both. The fingerprint has no index of its own and needs none:
+  since migration 000037 it is read only by the trigger that closes a row — by
+  primary key — and placed into `contest_query_fingerprints`, which is where
+  it is searched. An index with no reader would cost a write on every console
+  insert and on every non-HOT update.
+- **Two keyset indexes were replaced under the same names:**
+  `query_log_registration_executed_idx` went from
+  `(registration_id, executed_at DESC)` to `(registration_id, executed_at, id)`,
+  and `submissions_registration_submitted_idx` from
+  `(registration_id, submitted_at) INCLUDE (…)` to
+  `(registration_id, submitted_at, id) INCLUDE (question_id, is_correct, points_awarded)`.
+  The staff pages are keyset over `(time, id)`, and without `id` in the index
+  every page sorts what it selected — and the bitmap plan that appears on any
+  turn of the statistics reads the whole remainder of the registration's range
+  on every page, which grows with the square. With the full key a page is an
+  ordered index scan that stops at the `LIMIT`. They were replaced rather than
+  added, so that no table gained an extra index write per insert. The other
+  readers are served as before: the participant's own log reads the index
+  backwards, their CSV and the answer window read a prefix, and the counters
+  and the leaderboard read the registration's range with the same `INCLUDE`.
+- `audit_log_failed_login_idx ON audit_log (lower(payload->>'login'), created_at)
+  WHERE action = 'auth.login_failed'` — a failed sign-in has no actor, because
+  no account was proved, and the only way to find it is the login that was
+  typed. Partial, so it costs the rest of the journal nothing.
+- The `contest.monitor` permission and its grant to roles holding
+  `contest.view` are an `INSERT … SELECT` over `role_permissions`, not a list
+  of role names.
 
-**Адрес и отпечаток пишутся той же вставкой, что и сам запрос** — путь консоли не получает ни одной лишней записи. Адрес — `httpx.ClientIP` (правило 9 в `CLAUDE.md`), и он проходит все границы до строки журнала (правило 11): `api.ConsoleHandler` → `queryproxy.Command.Address` → `queryrunner.Origin` → `Journalled.Run` → `postgres.QueryLog.Begin`. Контракт gRPC не менялся, и это не упущение: журнал пишется на стороне Core API, Query Runner адрес не видит и не должен, а поле в `queryrunner.Request` молча не пересекло бы границу. Отпечаток — FNV-1a 64 от текста в нижнем регистре со схлопнутыми пробелами, считается в Go один раз до вставки и пишется только если нормализованный текст не короче 60 символов (`monitor.ComparableFingerprint`), иначе `NULL`: короткие запросы совпадают у всех честно, а таблице участников тогда не нужно мерить длину текста при каждом пересчёте.
+**The address and the fingerprint are written by the same insert as the query
+itself**, so the console's path gains no extra write. The address is
+`httpx.ClientIP`, and it crosses every boundary to the journal row:
+`api.ConsoleHandler` → `queryproxy.Command.Address` → `queryrunner.Origin` →
+`Journalled.Run` → `postgres.QueryLog.Begin`. The gRPC contract did not
+change, and that is not an oversight: the journal is written on the Core API's
+side, the Query Runner neither sees the address nor should, and a field in
+`queryrunner.Request` would silently fail to cross the boundary. The
+fingerprint is FNV-1a 64 over the lower-cased text with whitespace collapsed,
+computed once in Go before the insert and written only when the normalised
+text is at least sixty characters long (`monitor.ComparableFingerprint`),
+`NULL` otherwise: short queries match for everybody honestly, and the
+participant table then does not have to measure text length on every
+recomputation.
 
-**Сигналы браузера — `POST /contests/{id}/play/signals`.** Экран олимпиады копит сигналы в памяти и отправляет пачкой раз в 10 с, сразу при скрытии страницы (если прошлая пачка ушла больше 5 с назад) и на `pagehide` с `keepalive`, как автосохранение (раздел 6.4). Уход — скрытие страницы (`visibilitychange`) **или** потеря окном фокуса (`blur`), записывается при возвращении и только от 1 с; на `pagehide` открытый уход закрывается и уходит с временем «пока». Вставка ловится одним слушателем на документе в редакторе SQL, в поле ответа и в заметках (`data-paste-target`) и никогда не отменяется. При 429, сетевой ошибке, 5xx и 408 пачка возвращается в начало буфера (буфер — 200 событий, лишние старые отбрасываются), при прочих 4xx отбрасывается; окончание олимпиады, `not_a_participant` и любой 401 (сессия закончилась) останавливают сборщик совсем.
+**Browser signals — `POST /contests/{id}/play/signals`.** The contest screen
+accumulates signals in memory and sends them in a batch every ten seconds,
+immediately when the page is hidden (if the previous batch left more than five
+seconds ago), and on `pagehide` with `keepalive`, like autosave (section 6.4).
+Leaving means the page being hidden (`visibilitychange`) **or** the window
+losing focus (`blur`); it is recorded on return and only from one second; on
+`pagehide` an open absence is closed and sent with the time so far. A paste is
+caught by one listener on the document, in the SQL editor, the answer field
+and the notes (`data-paste-target`), and is never cancelled. On a 429, a
+network error, a 5xx or a 408 the batch goes back to the front of the buffer
+(200 events, with the oldest surplus dropped); on any other 4xx it is
+discarded. The end of the contest, `not_a_participant` and any 401 stop the
+collector entirely.
 
-Сервер разбирает пачку в таком порядке, и порядок — часть решения:
+The server parses a batch in this order, and the order is part of the design:
 
-1. Бюджет — 12 пачек в минуту на учётную запись (`monitor.BatchesPerMinute`, ключ `signals:user:<account>`), отказы считаются (правило 13); проверяется до всего остального, даже до разбора идентификатора олимпиады. Отказ — 429 `signals_too_often` с `Retry-After: 60`. Бюджет свой: ни чтение консоли, ни запись рабочего места он не тратит.
-2. Тело — не больше 256 КиБ, обрезается там, где приходят байты (`httpx.DecodeJSONWithin`, правило 12); больше 50 событий — отказ. Оба отказа — 400 `signals_batch_too_large`, и оба до `Access`.
-3. `Access`, тот же, что у остального `/play`, и наблюдение за адресом и сессией (ниже). Часы участника маршрут не запускает.
-4. Каждое событие по отдельности: неизвестный вид, серверный вид (`ip_changed`, `tab_*` и т. п. клиент прислать не может), уход короче 1 с, неизвестная цель вставки, нечитаемое событие — **отбрасываются, а не отклоняют пачку**: одно плохое событие не должно стоить соседних хороших.
-5. Вставки ограничиваются ещё раз, чтобы один участник не забил живую ленту организатора: подряд идущие одинаковые вставки (та же цель, тот же текст и длина) складываются в одну с полем `count` (сколько их было; у одиночной поля нет, таблица участников считает сложенную за все), а после 10 оставленных вставок (`monitor.MaxBatchPastes`) остальные вставки пачки отбрасываются. Без этого пачка несла бы до 50 вставок по 500 символов, то есть 600 событий в минуту от одного участника, и несколько участников сообща уводили бы ленту за пределы того, что догоняет один опрос, пряча чужие строки.
-6. Остальное нормализуется и пишется одной вставкой; время ставит сервер (`created_at`). Ответ — 204 и `X-Signals-Kept: n` — число записанных событий, без сложенных и отброшенных.
+1. The budget — twelve batches a minute per account
+   (`monitor.BatchesPerMinute`, keyed `signals:user:<account>`), with refusals
+   counted, checked before anything else, even before the contest identifier
+   is parsed. A refusal is 429 `signals_too_often` with `Retry-After: 60`. The
+   budget is its own: it spends neither the console's reads nor the
+   workspace's writes.
+2. The body — at most 256 KiB, truncated where the bytes arrive
+   (`httpx.DecodeJSONWithin`); more than fifty events is a refusal. Both are
+   400 `signals_batch_too_large`, and both come before `Access`.
+3. `Access`, the same one the rest of `/play` uses, and the address and
+   session observation below. This route does not start the participant's
+   clock.
+4. Each event on its own: an unknown kind, a server-side kind (`ip_changed`,
+   `tab_*` and the like, which a client may not send), an absence shorter than
+   a second, an unknown paste target, an unreadable event — all are
+   **dropped, and do not reject the batch**: one bad event must not cost its
+   good neighbours.
+5. Pastes are bounded again, so that one participant cannot flood an
+   organiser's live feed: consecutive identical pastes — same target, same
+   text and length — are folded into one carrying a `count` (a single one has
+   no such field, and the participant table counts the folded total), and
+   after ten kept pastes (`monitor.MaxBatchPastes`) the batch's remaining
+   pastes are dropped. Without it a batch could carry fifty pastes of five
+   hundred characters — six hundred events a minute from one participant —
+   and a few participants together would push the feed past what one poll can
+   catch up with, hiding everybody else's rows.
+6. The rest is normalised and written in one insert, with the server stamping
+   the time. The response is 204 and `X-Signals-Kept: n`, the number of events
+   written, excluding the folded and the dropped.
 
-| Поле | Предел |
+| Field | Limit |
 |---|---|
-| `page_left.away_ms` | от 1 с (короче не пишется) до 24 ч (длиннее обрезается) |
-| `paste.target` | `editor`, `answer` или `notes` |
-| `paste.text` | первые 500 символов |
-| `paste.chars` | 0…1 048 576 |
-| `paste.count` | 2…50, только у сложенной вставки; от браузера не принимается |
-| Вставок в пачке | 10 после складывания |
-| Событий на регистрацию за всю олимпиаду | 20 000 (`monitor.MaxStoredEvents`); дальше пачка отклоняется — 409 `signals_too_many_stored`, а не 429: ждать бессмысленно, и сборщик такую пачку отбрасывает. Записанное раньше сохраняется. Частота прихода ограничена бюджетом пачек, а объём — ничем не был, и каждую строку потом перечитывают лента, выгрузка и бэкап (правило 2). Двадцать тысяч — порядок сверху над тем, что делает очень активный участник, и два порядка снизу от того, что за олимпиаду успеет браузер, выбирающий весь бюджет |
-| `parallel_session.user_agent` | 200 символов |
-| Название вкладки в событии | 40 символов |
-| `client_at` | хранится только у сигналов браузера и только если не дальше 24 ч от времени сервера |
+| `page_left.away_ms` | from 1 s (shorter is not written) to 24 h (longer is clamped) |
+| `paste.target` | `editor`, `answer` or `notes` |
+| `paste.text` | the first 500 characters |
+| `paste.chars` | 0…1,048,576 |
+| `paste.count` | 2…50, only on a folded paste; never accepted from a browser |
+| Pastes per batch | 10, after folding |
+| Events per registration for the whole contest | 20,000 (`monitor.MaxStoredEvents`); beyond that the batch is refused with 409 `signals_too_many_stored` rather than 429, because waiting is pointless and the collector discards such a batch. What was written earlier is kept. The arrival rate was bounded by the batch budget, the volume by nothing, and every row is re-read later by the feed, the export and the backup. Twenty thousand is an order of magnitude above what a very active participant does, and two below what a browser spending its whole budget would manage |
+| `parallel_session.user_agent` | 200 characters |
+| A tab's title in an event | 40 characters |
+| `client_at` | stored only for browser signals, and only within 24 h of the server's time |
 
-Каждая строка перед записью приводится к виду, который примет `jsonb`: неверный UTF-8 заменяется, NUL вырезается — иначе один такой символ сорвал бы всю пачку.
+Every string is brought into a form `jsonb` will accept before the write:
+invalid UTF-8 is replaced and NUL is stripped, or one such character would
+tear down the whole batch.
 
-**Смена адреса и параллельная сессия — на сервере, без записи на каждый запрос.** `monitor.Tracker` вызывается сразу после того, как участника допустил `Access`: на чтениях `/play` и ответе (`admit`), на записях рабочего места, в консоли (`queryproxy.Service.Run` после `Admitted`) и на маршруте сигналов. SSE-канал не наблюдается: это одно долгое соединение, а не поток запросов. Живёт это рядом с допуском участника, а не в общем middleware (правило 4 раскладки).
+**A change of address and a parallel session are detected on the server,
+without a write per request.** `monitor.Tracker` is called immediately after
+`Access` admitted the participant: on `/play` reads and on an answer, on
+workspace writes, in the console (`queryproxy.Service.Run` after `Admitted`)
+and on the signals route. The event stream is not observed: it is one long
+connection rather than a stream of requests. This lives beside the
+participant's admission rather than in a general middleware.
 
-- В кэше один ключ на регистрацию, `monitor:trail:<registration>`, TTL 24 ч: последний адрес, последняя сессия и когда её видели, пары, о которых уже сообщено (не больше 16, забываются через 10 мин). Сессия хранится хешем — полный SHA-256 токена, тот же, под которым сессию хранит `auth`; сам токен слой API не покидает.
-- **Обычный запрос — одно чтение кэша и ноль записей.** Запись в кэш — только если след изменился или отметка «видели» старше 10 с (`SeenRefresh`, правило 6); вставка в базу — только когда есть событие.
-- **`ip_changed`** — та же сессия пришла с другого адреса. Гасится по неупорядоченной паре адресов: одна и та же пара — не чаще раза в 10 минут (`ParallelReportEvery`), поэтому ноутбук, прыгающий между IPv4 и IPv6, даёт одно событие, а не сорок; новый третий адрес сообщается сразу.
-- **`parallel_session`** — к регистрации обращается другая сессия, пока отслеживаемую видели меньше 2 минут назад (`ParallelWindow`) **и она ещё жива.** Живость спрашивается у хранилища сессий (`auth.SessionStore.SessionAlive`): сессия закончилась, если её записи нет (вышел), если она пережила свой максимальный срок, или если текущая сессия — той же учётной записи более нового поколения (смена пароля, «выйти везде»). Закончившуюся новая сменяет молча. Спрашивается это только когда сессии разные внутри окна и пара уже созрела для повтора — на обычном пути вопросов к хранилищу нет. Та же пара — не чаще раза в 10 минут; параллельная сессия не сдвигает отслеживаемый адрес, иначе чужой вход дал бы ещё и череду `ip_changed`. После окна новая сессия сменяет старую, и если адрес другой — это одно `ip_changed`.
-- **Повторный вход в том же браузере заканчивает прежнюю сессию.** Вход передаёт куку, с которой пришёл (`auth.LoginCommand.PreviousToken`), и прежняя сессия удаляется после создания новой; отказ во входе никого не выводит. Иначе «вышел по таймауту и вошёл снова» выглядело бы параллельной сессией.
-- **Наблюдение не должно стоить участнику запроса.** Всё выполняется под `context.WithoutCancel` и таймаутом 150 мс (`ObserveTimeout`); ошибка кэша, вставки или записи следа пишется в лог как предупреждение, а запрос идёт дальше. Неудачная вставка всё равно двигает след: иначе сбой базы превратился бы в неудачную вставку на каждом запросе.
-- Адрес — точный `httpx.ClientIP`, не групповой ключ ограничителя (правило 9): речь о том, откуда пришёл запрос, а не о бюджете.
-- Сравнения-с-записью в кэше нет, поэтому два одновременных запроса с нового адреса могут дать два одинаковых события. Это принято: лишняя строка, а не пропущенная.
+- The cache holds one key per registration, `monitor:trail:<registration>`,
+  with a 24-hour TTL: the last address, the last session and when it was seen,
+  and the pairs already reported (at most sixteen, forgotten after ten
+  minutes). The session is stored as a hash — the full SHA-256 of the token,
+  the same one `auth` stores it under; the token itself never leaves the API
+  layer.
+- **An ordinary request is one cache read and no writes.** The cache is
+  written only when the trail changed or the "seen" mark is older than ten
+  seconds (`SeenRefresh`); the database is written only when there is an
+  event.
+- **`ip_changed`** is the same session arriving from a different address. It
+  is damped by the unordered pair of addresses: one pair no more than once
+  every ten minutes (`ParallelReportEvery`), so a laptop hopping between IPv4
+  and IPv6 produces one event rather than forty, while a new third address is
+  reported at once.
+- **`parallel_session`** is another session reaching the registration while
+  the tracked one was seen less than two minutes ago (`ParallelWindow`) **and
+  is still alive**. Liveness is asked of the session store
+  (`auth.SessionStore.SessionAlive`): a session has ended if its entry is gone
+  (signed out), if it outlived its maximum lifetime, or if the current session
+  belongs to the same account at a newer generation (a password change, "sign
+  out everywhere"). An ended one is replaced silently. The question is asked
+  only when the sessions differ inside the window and the pair is already due
+  to be reported again — the ordinary path asks the store nothing. The same
+  pair is reported no more than once every ten minutes, and a parallel session
+  does not move the tracked address, or somebody else's sign-in would produce
+  a run of `ip_changed` as well. After the window the new session replaces the
+  old, and if the address differs that is one `ip_changed`.
+- **Signing in again in the same browser ends the previous session.** Sign-in
+  passes the cookie it arrived with (`auth.LoginCommand.PreviousToken`), and
+  the previous session is deleted after the new one is created; a refused
+  sign-in signs nobody out. Otherwise "timed out and signed in again" would
+  look like a parallel session.
+- **Monitoring must not cost the participant a request.** All of it runs under
+  `context.WithoutCancel` with a 150 ms timeout (`ObserveTimeout`), and a
+  failure of the cache, of the insert or of the trail write is logged as a
+  warning while the request carries on. A failed insert still moves the trail,
+  or a database outage would become a failed insert on every request.
+- The address is the exact `httpx.ClientIP`, not the limiter's grouped key:
+  this is about where a request came from, not about a budget.
+- There is no compare-and-set in the cache, so two simultaneous requests from
+  a new address can produce two identical events. That is accepted: a
+  redundant row rather than a missing one.
 
-**История заметок и вкладок — не больше двух ревизий в минуту на документ.** Автосохранение шлёт до 40 записей в минуту, и хранить каждую — до 64 КиБ на запись. Поэтому в той же транзакции, что и сохранение (`postgres.Workspace`), читается последняя ревизия документа под `FOR UPDATE`:
+**The history of notes and tabs keeps at most two revisions a minute per
+document.** Autosave sends up to forty writes a minute, and storing each is up
+to 64 KiB apiece. So in the same transaction as the save
+(`postgres.Workspace`), the document's latest revision is read `FOR UPDATE`:
 
-- тело совпадает — не пишется ничего (сравнение идёт в SQL, тело назад не читается);
-- ревизия **началась** меньше 30 с назад (`RevisionWindow`) — она переписывается на месте: тело, название, `updated_at` (который никогда не сдвигается назад);
-- иначе вставляется новая.
+- the body matches — nothing is written (the comparison happens in SQL; the
+  body is not read back);
+- the revision **began** less than thirty seconds ago (`RevisionWindow`) — it
+  is rewritten in place: body, title, and `updated_at`, which never moves
+  backwards;
+- otherwise a new one is inserted.
 
-Возраст меряется от `started_at`, а не от последней правки, поэтому непрерывный набор всё равно даёт новую ревизию каждые 30 с. Тело ревизии — до 80 000 байт (20 000 символов заметок по 4 байта; вкладка — 64 КиБ), и тест в `workspace` держит каждый предел рабочего места внутри пределов истории. Переименование без правки текста ревизии не пишет — его записывает событие `tab_renamed`. События вкладок читают олимпиаду регистрации внутри транзакции, но только на редких создании, переименовании и удалении — автосохранение за это не платит. Два одновременных *первых* сохранения документа могут вставить по ревизии — лишняя история, ничего не потеряно.
+Age is measured from `started_at` rather than from the last edit, so
+continuous typing still produces a new revision every thirty seconds. A
+revision's body is up to 80,000 bytes — 20,000 characters of notes at four
+bytes each; a tab is 64 KiB — and a test holds every workspace limit inside
+the history's limits. Renaming without editing writes no revision; the
+`tab_renamed` event records it. Tab events read the registration's contest
+inside the transaction, but only on the rare create, rename and delete, so
+autosave does not pay for it. Two simultaneous *first* saves of a document can
+each insert a revision — extra history, nothing lost.
 
-**Маршруты организатора — все `GET` под `/contests/{id}/monitor`:**
+**The organiser's routes, all `GET` under `/contests/{id}/monitor`:**
 
-| Маршрут | Что отдаёт |
+| Route | What it serves |
 |---|---|
-| `/participants` | Таблица участников: запросы (всего, ошибки, отказы), ответы (верные, неверные), уходы (число и суммарное время), вставки, смены IP, параллельные сессии, последняя активность, статус, отметки |
-| `/feed?after\|before=&kinds=&participant=&from=&until=&limit=` | Общая лента олимпиады |
-| `/participants/{rid}` | Заголовок страницы участника: логин, имя, статус, старт и финиш |
-| `/participants/{rid}/timeline` | Лента одного участника, те же параметры без `participant` |
-| `/participants/{rid}/queries?status=&q=&cursor=&limit=` | Запросы целиком: текст, статус, ошибка, длительность, строки, время, IP |
-| `/participants/{rid}/answers` | Попытки по вопросам, у каждой — запросы, которые к ней привели |
-| `/participants/{rid}/workspace` | Заметки и вкладки сейчас и список ревизий (без тел) |
-| `/participants/{rid}/workspace/revisions/{revId}` | Одна ревизия целиком |
-| `/participants/{rid}/export.csv`, `/export.csv` | Лента участника или всей олимпиады файлом |
+| `/participants` | The participant table: queries (total, errors, refusals), answers (right, wrong), absences (count and total time), pastes, address changes, parallel sessions, last activity, status, flags |
+| `/feed?after\|before=&kinds=&participant=&from=&until=&limit=` | The contest's combined feed |
+| `/participants/{rid}` | A participant page's header: login, name, status, start and finish |
+| `/participants/{rid}/timeline` | One participant's feed, the same parameters without `participant` |
+| `/participants/{rid}/queries?status=&q=&cursor=&limit=` | The queries in full: text, status, error, duration, rows, time, address |
+| `/participants/{rid}/answers` | Attempts per question, each with the queries that led to it |
+| `/participants/{rid}/workspace` | The notes and tabs as they are now, and the list of revisions without their bodies |
+| `/participants/{rid}/workspace/revisions/{revId}` | One revision in full |
+| `/participants/{rid}/export.csv`, `/export.csv` | One participant's feed, or the whole contest's, as a file |
 
-Новые коды отказов: `monitor_too_often`, `monitor_participant_not_found`, `monitor_revision_not_found`, `monitor_invalid_cursor`, `monitor_invalid_filter`, `signals_too_often`, `signals_batch_too_large`, `signals_too_many_stored` — с текстами на en/ru/ro (`docs/api/error-codes.json`).
+**Read limits:**
 
-**Пределы чтения (правило 2):**
-
-| Что | Предел |
+| What | Limit |
 |---|---|
-| Бюджет организатора | 240 чтений в минуту на учётную запись по всем маршрутам, ключ `monitor:user:<account>`, отказы считаются; 429 `monitor_too_often` с `Retry-After`. Живой экран тратит 24 чтения в минуту (таблица и лента раз в 5 с) и до дюжины на уточнение незавершённых запросов — остаётся место для нескольких вкладок и нет места для скрипта, обходящего журналы |
-| Страница ленты | до 200 записей (по умолчанию 100); не больше 16 видов в фильтре; текст запроса в ленте обрезан до 1000 символов — полный во вкладке запросов |
-| Страница запросов | до 50; поиск — до 200 символов |
-| Ответы | до 1000 попыток; у попытки до 100 запросов, остальные — числом `more_queries`; тексты — до 1000 символов |
-| Ревизии в списке | до 2000 |
-| Таблица участников | до 2000 регистраций, дальше флаг `truncated` |
-| Курсор | время внутри 2000…2200 года, иначе 400 `monitor_invalid_cursor` |
+| The organiser's budget | 240 reads a minute per account across every route, keyed `monitor:user:<account>`, refusals counted; 429 `monitor_too_often` with `Retry-After`. A live screen spends 24 a minute — the table and the feed every five seconds — plus up to a dozen refreshing unfinished queries, which leaves room for several tabs and no room for a script walking the journals |
+| A feed page | up to 200 entries (100 by default); at most 16 kinds in the filter; query text in the feed truncated to 1000 characters, full in the queries tab |
+| A queries page | up to 50; a search of up to 200 characters |
+| Answers | up to 1000 attempts; up to 100 queries per attempt, the rest as a `more_queries` count; texts up to 1000 characters |
+| Revisions in a list | up to 2000 |
+| The participant table | up to 2000 registrations, beyond which a `truncated` flag |
+| The cursor | a time between the years 2000 and 2200, otherwise 400 `monitor_invalid_cursor` |
 
-**Лента — слияние журналов при чтении, а не отдельная таблица событий.** Курсор — непрозрачный base64url от `(время в мкс, источник, id)`; порядок источников (аудит, старт, событие, запрос, ответ, финиш) развязывает записи одного момента, `id` — записи одного источника. Каждый источник читается своим индексным диапазоном за курсором с `LIMIT` страницы + 1 — `query_log` и `submissions` через `LATERAL` по регистрациям олимпиады, `participant_events` по своему индексу олимпиады или регистрации, — и уже эти куски сливаются в Go. Без курсора — самая свежая страница, `after` — вперёд (живой опрос), `before` — назад; страница всегда от старого к новому, ответ несёт `newest`, `oldest` и `more`.
+**The feed merges journals at read time rather than being a table of its
+own.** The cursor is an opaque base64url of `(time in microseconds, source,
+id)`; the order of sources — audit, start, event, query, answer, finish —
+breaks ties within one instant, and `id` breaks ties within one source. Each
+source is read from its own index range past the cursor with the page's
+`LIMIT` plus one — `query_log` and `submissions` through a `LATERAL` over the
+contest's registrations, `participant_events` from its own contest or
+registration index — and those pieces are merged in Go. With no cursor the
+newest page is served; `after` moves forward (the live poll) and `before`
+backwards; a page always runs oldest to newest, and the response carries
+`newest`, `oldest` and `more`.
 
-- **Чтение вперёд останавливается за 2 с до `statement_timestamp()`** (`monitor.FeedSettle`), и самая свежая страница тоже. Журналы ставят строке время начала своей транзакции, а коммитятся транзакции не в этом порядке: запрос с отметкой 10:00:00.9 может стать видимым после события 10:00:01.0, и опрос, чей курсор уже прошёл 10:00:01.0, не увидел бы его никогда. Цена — живой экран отстаёт на две секунды, и пустой ответ на `after=` нормален.
-- Строка `query_log` появляется в ленте со статусом `running` и дописывается позже (двухфазная запись, раздел 5); курсор её второй раз не отдаст, поэтому экран сам перечитывает незавершённые запросы узким окном `from`/`until`.
-- **Входы ограничены окном олимпиады.** Входы, выходы и неудачные входы участника считаются от `GREATEST(created_at регистрации, начало − 1 ч)` до `COALESCE(finished_at, дедлайн участника, ends_at) + 1 ч` (`monitor.SignInGrace`), где начало — `COALESCE(starts_at олимпиады, started_at участника, created_at регистрации)`: окно олимпиады, когда оно известно, при любом тайминге — при индивидуальном участник, начавший поздно, мог входить после открытия окна, и организатору это важно, — дедлайн — формула `contests.Deadline` (раздел 8). Без начала олимпиады нижней границей служит начало участника, без обоих — регистрация. Войти после конца, чтобы прочитать результат, — дело олимпиады; лекция через неделю — нет. Так же и до начала: олимпиада `invite_only` может записать студента за недели, и недели его входов, адресов и браузеров — вместе с неудачными входами, несущими чужие адреса, — организатору этой олимпиады не принадлежат; вход за час до старта, чтобы проверить машину, — принадлежит. Неограниченным сверху остаётся один случай: индивидуальный тайминг, участник так и не начал, у олимпиады нет конца. Неудачные входы находятся по `lower(логин)` через частичный индекс — чужая опечатка в логине участника приписывается ему, и это намеренно; при смене логина прежние неудачные входы теряются.
-- Дисквалификации — по сущности олимпиады, с фильтром по участнику внутри подзапроса до `LIMIT`.
+- **Reading forward stops two seconds short of `statement_timestamp()`**
+  (`monitor.FeedSettle`), and so does the newest page. The journals stamp a
+  row with the time their transaction began, and transactions do not commit in
+  that order: a query stamped 10:00:00.9 can become visible after an event
+  stamped 10:00:01.0, and a poll whose cursor has already passed 10:00:01.0
+  would never see it. The price is that a live screen trails by two seconds,
+  and an empty answer to `after=` is normal.
+- A `query_log` row appears in the feed as `running` and is completed later
+  (the two-phase write, section 5); the cursor will not serve it a second
+  time, so the screen re-reads unfinished queries itself through a narrow
+  `from`/`until` window.
+- **Sign-ins are bounded by the contest's window.** A participant's sign-ins,
+  sign-outs and failed sign-ins are counted from
+  `GREATEST(the registration's created_at, the start − 1 h)` to
+  `COALESCE(finished_at, the participant's deadline, ends_at) + 1 h`
+  (`monitor.SignInGrace`), where the start is
+  `COALESCE(the contest's starts_at, the participant's started_at, the
+  registration's created_at)`. Signing in after the end to read the result is
+  the contest's business; a lecture a week later is not. The same before the
+  start: an `invite_only` contest may enrol a student weeks ahead, and weeks
+  of their sign-ins, addresses and browsers — along with failed sign-ins
+  carrying other people's addresses — do not belong to that contest's
+  organiser, while signing in an hour before the start to check the machine
+  does. One case is left unbounded above: individual timing where the
+  participant never started and the contest has no end. Failed sign-ins are
+  found by `lower(login)` through the partial index — somebody else's typo in
+  a participant's login is attributed to them, deliberately — and a change of
+  login loses the earlier failures.
+- Disqualifications are read by the contest entity, with the participant
+  filter inside the subquery, before the `LIMIT`.
 
-**Запросы, которые привели к ответу**, — запросы участника в полуинтервале `[предыдущая попытка на любой вопрос, эта попытка)`, для первой попытки — с начала. Считается при чтении одним запросом (`lag()` по попыткам и `LATERAL` на каждую); нижняя граница задана диапазоном `executed_at >= COALESCE(previous, '-infinity')`, чтобы обе границы были условием индекса, а не фильтром.
+**The queries that led to an answer** are the participant's queries in the
+half-open interval `[the previous attempt on any question, this attempt)`, and
+from the beginning for the first attempt. It is computed at read time in one
+query (`lag()` over the attempts and a `LATERAL` for each); the lower bound is
+given as `executed_at >= COALESCE(previous, '-infinity')` so that both bounds
+are index conditions rather than filters.
 
-**Таблица участников — счётчики, которые ведут сами журналы (миграция 000037), кэш 3 с на олимпиаду, single-flight.** Раньше это был один агрегирующий SQL: сначала регистрации, затем каждый счётчик — `LATERAL`-агрегат по всему диапазону регистрации в `query_log`, `submissions` и `participant_events`. Диапазон — верная форма для страницы, которая отдаёт то, что прочла, и неверная для счётчика, который читает всю историю олимпиады ради одного числа и через три секунды читает её снова. На пределе платформы — триста участников, полтора миллиона строк журнала — это чтение всей истории около двадцати раз в минуту, и три агрегата из него (различные адреса, набор отпечатков и проверка «ответа без запросов») читали колонки, которых нет ни в одном обслуживающем индексе, то есть вдобавок поднимали из кучи каждую строку журнала.
+**The participant table reads counters the journals maintain themselves**
+(migration 000037), behind a three-second per-contest cache with
+single-flight. It used to be one aggregating query: the registrations first,
+then each counter as a `LATERAL` aggregate over the registration's whole range
+in `query_log`, `submissions` and `participant_events`. A range is the right
+shape for a page that serves what it read, and the wrong shape for a counter
+that reads the contest's entire history for one number and reads it again
+three seconds later. At the platform's limit — three hundred participants and
+a million and a half journal rows — that is the whole history read about
+twenty times a minute, and three of its aggregates (distinct addresses, the
+set of fingerprints, and the "answered with no queries" check) read columns
+that no serving index holds, so they also lifted every journal row from the
+heap.
 
-Счётчик нельзя сделать дешёвым в пересчёте — можно сделать пересчёт ненужным. Теперь каждый журнал ведёт по строке на регистрацию в `registration_activity`. Было ли за верным ответом хоть одно успешное запросов, решается один раз, в момент ответа, и хранится в `submissions.blind`. Различные адреса регистрации лежат в `registration_addresses` — по строке на адрес, — а какие сравнимые запросы кто успешно выполнил, в `contest_query_fingerprints` — по строке на регистрацию и различный запрос.
+A counter cannot be made cheap to recompute; recomputation can be made
+unnecessary. Now each journal maintains a row per registration in
+`registration_activity`. Whether a correct answer had any successful query
+before it is decided once, at the moment of answering, and stored in
+`submissions.blind`. A registration's distinct addresses live in
+`registration_addresses`, one row per address, and which comparable queries
+whom executed successfully lives in `contest_query_fingerprints`, one row per
+registration and distinct query.
 
-- **Ведут триггеры, а не пишущий код** — по той же причине, по которой её ведёт триггер у `contest_id` в 000034: ни одному пишущему не нужно об этом помнить, и расходиться сводке с журналом не на чем. Триггеры операторные и берут строки из transition-таблиц, поэтому пачка из пятидесяти сигналов и массовая вставка в сто тысяч строк — это один сгруппированный `UPDATE`, а не вызов на строку.
-- **Запись журнала трогает только строки той регистрации, чью строку записали.** Это правило, а не наблюдение, и оно решает, что именно можно держать счётчиком. «Одинаковые запросы» — единственная величина в таблице, которая про двух участников сразу: счётчик для неё пришлось бы прибавлять и тому, кто до сих пор владел отпечатком один, то есть писать в чужую строку. Транзакция, журналирующая запрос, к этому моменту уже держит свою собственную, поэтому двое, выполнившие запросы друг друга в один момент, взяли бы две одни и те же строки в противоположном порядке — и одному из них запрос отказали бы с взаимной блокировкой. Упорядочить их нельзя: первой каждая транзакция берёт свою, а какая это, решает то, кто печатает. Аудитория, вставившая один и тот же стартовый запрос, — обычный случай, а не редкий. Поэтому `contest_query_fingerprints` только записывает, кто что выполнил, а общие отпечатки считаются при чтении таблицы (`TestTwoParticipantsRunningEachOthersQueriesAreNotRefused`).
-- **Путь консоли не подорожал заметно.** Строка `query_log` пишется со статусом `running` — это один upsert счётчиков; работа, заглядывающая в другие таблицы (отпечаток, отметка «ответ без запросов»), происходит при закрытии строки. Измерено на тысяче открытых и закрытых запросов: 330 байт журнала предзаписи сверх 1 964 и около 0,9 мс сверх 2,1 мс на запрос. Байты почти все на открытии — одна новая версия строки сводки, — а время почти всё на закрытии, которое добавляет всего 78 байт: значит, цена закрытия — это накладные расходы на четыре оператора, которые plpgsql там выполняет, а не работа с индексами и не долговечная запись. В множествах искать нечего: `ON CONFLICT DO NOTHING`, попавший в уже существующую строку, пишет ноль байт — уникальный индекс проверяется до того, как вставится хоть один кортеж. Единственный оставшийся рычаг — выполнять на закрытии меньше операторов, и 0,9 мс от запроса консоли примерно в 33 мс этого пока не стоят.
-- **Двухфазная запись учтена.** Запрос журналируется до выполнения и закрывается после, поэтому участник, ответивший, пока его запрос ещё летит, иначе считался бы ответившим вслепую, пока строка говорит `running`. Когда строка становится `ok`, ближайший следующий ответ участника перестаёт считаться слепым: будучи ближайшим, он открывает ровно то окно, которым пользовался прежний агрегат.
-- **Хранится самая крупная вставка, а не число вставок сверх порога**, чтобы `monitor.LargePasteChars` применялся в одном месте — в `RosterRow.Flags`, где применяются и остальные пороги. В API это поле не выходило и не выходит: экран получает отметку, а не счёт.
-- **«Одинаковые запросы» теперь считаются по всей олимпиаде, а не только по тем регистрациям, что попали в `LIMIT` чтения.** Прежний агрегат искал общие отпечатки внутри уже урезанной выборки, так что у олимпиады больше 2 000 участников — там, где таблица и так помечается `truncated`, — ответ зависел от того, где обрезали список. Это осознанная перемена, и новый ответ — правильный: общий запрос общий независимо от того, поместился ли второй его исполнитель на экран.
+- **Triggers maintain them, not the writing code** — for the same reason a
+  trigger maintains `contest_id` elsewhere: no writer has to remember, and
+  there is nothing for the summary and the journal to drift over. The triggers
+  are statement-level and take their rows from transition tables, so a batch
+  of fifty signals and a bulk insert of a hundred thousand rows are each one
+  grouped `UPDATE` rather than a call per row.
+- **A journal write touches only the rows of the registration whose row was
+  written.** That is a rule, not an observation, and it decides what can be a
+  counter at all. "Identical queries" is the one figure in the table that is
+  about two participants at once, and a counter for it would have to be
+  incremented for whoever owned the fingerprint alone until now — a write into
+  somebody else's row. The transaction journalling a query already holds its
+  own by then, so two people running each other's queries at the same moment
+  would take the same two rows in opposite orders, and one of them would be
+  refused with a deadlock. They cannot be ordered: each transaction takes its
+  own first, and which that is depends on who is typing. A room that pasted
+  the same opening query is the ordinary case, not a rare one. So
+  `contest_query_fingerprints` only records who ran what, and shared
+  fingerprints are computed when the table is read.
+- **The console's path did not get noticeably more expensive.** The
+  `query_log` row is written as `running`, which is one upsert of the
+  counters; the work that looks into other tables — the fingerprint, the
+  "answered blind" mark — happens when the row is closed. Measured over a
+  thousand opened and closed queries: 330 bytes of write-ahead log above
+  1,964, and about 0.9 ms above 2.1 ms per query. Almost all of the bytes are
+  on the open — one new version of the summary row — and almost all of the
+  time is on the close, which adds only 78 bytes: so the close costs the
+  overhead of the four statements plpgsql runs there, not index work and not
+  durable writes. There is nothing to look for in the sets: an
+  `ON CONFLICT DO NOTHING` that hit an existing row writes zero bytes, because
+  the unique index is checked before a tuple is inserted. The only lever left
+  is running fewer statements on the close, and 0.9 ms out of a console
+  request of roughly 33 ms does not justify it yet.
+- **The two-phase write is accounted for.** A query is journalled before
+  execution and closed after, so a participant who answered while their query
+  was still in flight would otherwise count as having answered blind while the
+  row still says `running`. When the row becomes `ok`, the participant's next
+  answer stops counting as blind: being the next, it opens exactly the window
+  the old aggregate used.
+- **The largest paste is stored, not a count of pastes above a threshold**, so
+  that `monitor.LargePasteChars` is applied in one place — `RosterRow.Flags`,
+  where the other thresholds are applied. The field has never left the API:
+  the screen gets a flag, not a count.
+- **"Identical queries" is now computed across the whole contest**, not only
+  over the registrations that fitted inside the read's `LIMIT`. The old
+  aggregate looked for shared fingerprints inside an already truncated
+  selection, so for a contest with more than 2,000 participants — where the
+  table is marked `truncated` anyway — the answer depended on where the list
+  was cut. The change is deliberate and the new answer is the right one: a
+  shared query is shared whether or not its second author fitted on screen.
 
-Измерено на одной олимпиаде из трёхсот участников с полутора тысячами запросов, ста восемьюдесятью событиями и двадцатью ответами у каждого тестом, который считает реально прочитанные строки: 525 301 строка на один расчёт до и 9 901 после. Из них 9 000 — срез множества отпечатков, и растёт он с числом *различных* запросов олимпиады, а не с журналом: на меньшем наборе тот же тест смотрит, как эти два числа расходятся — таблица читает 1 321 строку на сорока участниках и 1 321 же после пяти новых кругов той же олимпиады, которые добавляют четверть миллиона строк журнала и ни одной строки множеству, а заменённый агрегат читает 8 481 и затем 22 921. Прежний SQL сохранён в тесте как эталон (`TestWatchRosterAgreesWithTheAggregateItReplaces`) и сверяется с новым чтением колонка за колонкой, поэтому «те же числа» — утверждение теста, а не обещание.
+Measured on one contest of three hundred participants with fifteen hundred
+queries, a hundred and eighty events and twenty answers each, by a test that
+counts the rows actually read: 525,301 rows per computation before and 9,901
+after. Nine thousand of those are the slice of the fingerprint set, and it
+grows with the number of *distinct* queries in the contest rather than with
+the journal: on a smaller set the same test watches the two numbers diverge —
+the table reads 1,321 rows at forty participants and 1,321 again after five
+further rounds of the same contest, which add a quarter of a million journal
+rows and not one row to the set, while the replaced aggregate reads 8,481 and
+then 22,921. The old SQL is kept in the test as the reference
+(`TestWatchRosterAgreesWithTheAggregateItReplaces`) and compared with the new
+read column by column, so "the same numbers" is a test's assertion rather than
+a promise.
 
-Кэш на 3 с (`RosterCacheTTL`) с single-flight по образцу лидерборда: сорок организаторских вкладок, опрашивающих раз в 5 с, — один расчёт; сам расчёт идёт под `context.WithoutCancel` и таймаутом 20 с, срок жизни отсчитывается от момента расчёта.
+The cache is three seconds (`RosterCacheTTL`) with single-flight, following
+the leaderboard's pattern: forty staff tabs polling every five seconds are one
+computation. The computation itself runs under `context.WithoutCancel` with a
+twenty-second timeout, and its lifetime is counted from when it ran.
 
-**Отметки — подсказки, а не приговор.** Пороги — константы в `monitor/roster.go`, не настройки:
+**Flags are hints, not verdicts.** The thresholds are constants in
+`monitor/roster.go`, not settings:
 
-| Отметка | Когда поднимается |
+| Flag | Raised when |
 |---|---|
-| Несколько IP | больше одного адреса в `query_log` или хотя бы одно `ip_changed` |
-| Параллельные сессии | хотя бы одно `parallel_session` |
-| Долгие уходы | суммарно больше 5 минут вне страницы или больше 10 уходов |
-| Ответ без запросов | верный ответ, перед которым с прошлой попытки не было ни одного успешного запроса |
-| Крупная вставка | вставка больше 200 символов в редактор или поле ответа |
-| Одинаковые запросы | тот же отпечаток успешного запроса от 60 символов, что у другого участника олимпиады |
+| Several addresses | more than one address in `query_log`, or at least one `ip_changed` |
+| Parallel sessions | at least one `parallel_session` |
+| Long absences | more than five minutes off the page in total, or more than ten absences |
+| Answered with no queries | a correct answer with no successful query since the previous attempt |
+| A large paste | a paste of more than 200 characters into the editor or the answer field |
+| Identical queries | the same fingerprint of a successful query of at least 60 characters as another participant's |
 
-**Ошибка запроса организатору показывается не вся** (`monitor.StaffErrorText` — одно правило для ленты, вкладки запросов и ответов). Больше, чем видит сам участник в своём журнале: организатору нужно судить о SQL участника, и слова PostgreSQL о его запросе («column does not exist») — та обратная связь, по которой участник работал. Меньше, чем записано: организаторы олимпиады — не операторы платформы, и когда сбой был наш (Query Runner недоступен, соединение с игровым кластером отказано или не прошло аутентификацию, сервер останавливается), текст называет хосты, порты, роли и базы, которые касаются установки, а не участника. Показываются целиком: `rejected` и `timeout`; `error` — если это вердикт самого Query Runner (результат слишком велик, ожидание отменено, время вышло) или ошибка PostgreSQL с SQLSTATE класса про запрос, и в обоих случаях без признаков соединения (`dial tcp`, `host=`, `failed to connect`, `connection refused` и т. п.). Скрываются классы про сервер — 08, 28, 3D, 57, 58 — и всё остальное, как и у участника.
+**An organiser is not shown the whole of a query's error**
+(`monitor.StaffErrorText`, one rule for the feed, the queries tab and the
+answers). More than the participant sees in their own log, because an
+organiser has to judge the participant's SQL and PostgreSQL's words about
+their query ("column does not exist") are the feedback the participant was
+working from. Less than is recorded, because a contest's organisers are not
+the platform's operators: when the failure was ours — the Query Runner
+unreachable, a connection to the game cluster refused or unauthenticated, the
+server shutting down — the text names hosts, ports, roles and databases that
+concern the installation rather than the participant. Shown in full:
+`rejected` and `timeout`; and `error` when it is the Query Runner's own
+verdict (the result is too large, the wait was cancelled, time ran out) or a
+PostgreSQL error whose SQLSTATE class is about the statement — and in both
+cases only when it carries no signs of a connection (`dial tcp`, `host=`,
+`failed to connect`, `connection refused`). The server classes — 08, 28, 3D,
+57, 58 — are hidden, as is everything else, exactly as for the participant.
 
-**Аудит просмотров.** Просмотр пишет в `audit_log` действие `contest.monitor_view` (сущность — олимпиада, в payload — `registration_id`) не чаще раза в 15 минут на пару «организатор — участник», а для таблицы и общей ленты — на пару «организатор — олимпиада». Иначе живой опрос раз в 5 с превратил бы журнал в шум. Частота держится отметкой в кэше `monitor:viewed:*`: одно чтение на запрос, запись — только когда запись аудита сделана, и отметка ставится **после** неё: не записалась — следующий просмотр попробует снова, а сам этот просмотр получает 500 и не получает данных. Отказанное чтение (404) просмотром не считается. Выгрузка CSV пишется всегда, `contest.monitor_export`, до первого байта файла. Оба действия — в `docs/api/audit-actions.json` и в словарях экрана аудита.
+**Views are audited.** A view writes a `contest.monitor_view` action to
+`audit_log` — the entity is the contest, the payload carries
+`registration_id` — no more than once every fifteen minutes per
+organiser-and-participant pair, and per organiser-and-contest pair for the
+table and the combined feed. Otherwise a live poll every five seconds would
+turn the journal into noise. The rate is held by a mark in the cache
+(`monitor:viewed:*`): one read per request, a write only when the audit entry
+was made, and the mark is set **after** it — if the entry failed, the next
+view tries again, while this one gets a 500 and no data. A refused read (404)
+does not count as a view. A CSV export is always written, as
+`contest.monitor_export`, before the file's first byte.
 
-**CSV — поток, у которого есть границы.** Колонки `at, kind, login, full_name, registration_id, data` (JSON). Файл собирается k-way слиянием по источникам (`monitor.StreamFeed`): в выгрузке олимпиады источники с разбивкой по регистрации (входы, запросы, ответы) — отдельный поток на каждую регистрацию страницами по 50, так что каждая строка журнала читается примерно один раз (тест считает прочитанные строки через `pg_stat_xact_user_tables`: 1,00× по `query_log`); общий конец всех источников фиксируется один раз в начале, за 2 с до «сейчас». Пределы: 200 000 строк и 64 МиБ — дальше строка `truncated`; минута на выгрузку, а сбой чтения или истёкший срок — строка `incomplete`; одна выгрузка на учётную запись одновременно, и не больше `EXPORT_CONCURRENCY` (по умолчанию 5) одновременных выгрузок на весь сервис — общий на все маршруты экспорта `api.ExportSlots`, раздел 9.1, переполнение отвечает `503 exports_busy`; олимпиада больше 2000 регистраций целиком не выгружается — единственная строка `too_large` с советом выгружать участников по одному. Ячейки, начинающиеся с `=`, `+`, `-`, `@`, табуляции или возврата каретки, получают апостроф впереди (раздел 9.1).
+**The CSV is a stream with boundaries.** Its columns are
+`at, kind, login, full_name, registration_id, data` (JSON). The file is
+assembled by a k-way merge over the sources (`monitor.StreamFeed`): in a
+contest export the sources that split by registration — sign-ins, queries,
+answers — are one stream per registration in pages of fifty, so each journal
+row is read about once (a test counts the rows read through
+`pg_stat_xact_user_tables`: 1.00× over `query_log`), and the common end of
+every source is fixed once at the beginning, two seconds before "now". The
+limits: 200,000 rows and 64 MiB, beyond which a `truncated` row; a minute for
+the export, and a read failure or an expired deadline gives an `incomplete`
+row; one export per account at a time, and no more than
+`EXPORT_CONCURRENCY` (five by default) across the whole service, shared with
+every other export route (section 9.1), with overflow answering
+`503 exports_busy`. A contest with more than 2,000 registrations is not
+exported whole — a single `too_large` row advises exporting participants one
+at a time. Cells starting with `=`, `+`, `-`, `@`, a tab or a carriage return
+get a leading apostrophe.
 
-**Ни одно чтение не сканирует журнал целиком — и это утверждается тестом.** `TestWatchReadsScanNoJournal` (`internal/postgres/watch_test.go`) пропускает точный SQL каждого чтения через `EXPLAIN` на данных, где рядом с наблюдаемой олимпиадой лежит история четырёхсот чужих участников, и падает на любом узле по `query_log`, `participant_events`, `submissions` или `audit_log`, кроме индексного или bitmap-скана с `Index Cond` по индексу, на фильтре по `executed_at` в `query_log` и на сортировке поверх `query_log` в странице выгрузки. Планировщик при этом не принуждается. То же правило распространено на `contest_query_fingerprints`: это не журнал, но множество по всем олимпиадам установки, и чтение его вне одного среза — та же ошибка, что скан журнала, из которого оно выведено. Таблица участников — единственное чтение, которое не трогает журналы вовсе: `TestWatchRosterCostsWhatItShows` требует по всем четырём нуля, требует, чтобы прочитанное не выросло после пяти новых кругов той же олимпиады, и отдельно — чтобы повторённый запрос не стоил множеству ни строки.
+**No read scans a journal whole, and that is asserted by a test.**
+`TestWatchReadsScanNoJournal` (`internal/postgres/watch_test.go`) runs the
+exact SQL of every read through `EXPLAIN` against data where four hundred
+other participants' history sits beside the contest being watched, and fails
+on any node over `query_log`, `participant_events`, `submissions` or
+`audit_log` other than an index or bitmap scan with an `Index Cond`, on a
+filter over `executed_at` in `query_log`, and on a sort above `query_log` in
+the export's page. The planner is not forced. The same rule extends to
+`contest_query_fingerprints`: it is not a journal but a set across the whole
+installation, and reading it outside one slice is the same mistake as scanning
+the journal it is derived from. The participant table is the one read that
+touches no journal at all: `TestWatchRosterCostsWhatItShows` demands zero over
+all four, demands that what it reads does not grow after five further rounds
+of the same contest, and separately that a repeated query costs the set not
+one row.
 
-**Участнику сказано на экране** (en/ru/ro): под заголовком экрана олимпиады — «Организатор видит ваши запросы, ответы, заметки и действия на этой странице» (и в зале ожидания до старта), под полем заметок — «Заметки видит организатор». Заметки и вкладки поэтому больше не личные — раздел 6.4.
+**The participant is told on screen** (en/ru/ro): under the contest screen's
+heading, "the organiser sees your queries, answers, notes and actions on this
+page" — and in the waiting room before the start — and under the notes field,
+"the organiser sees these notes". That is why notes and tabs are no longer
+private (section 6.4).
 
-**Сигналы браузера — не доказательство.** Уход и вставку сообщает браузер участника, и он может соврать или промолчать: закрытый сборщик, отключённый JavaScript, собственный клиент API. `blur` срабатывает и на клик в адресную строку или в инструменты разработчика. Уход, не закончившийся к концу олимпиады, не записывается; время после `pagehide` у страницы, восстановленной из bfcache, не считается. Поэтому экран называет их сигналами, объясняет каждую отметку и ничего не решает за организатора: решение о дисквалификации остаётся человеку.
+**Browser signals are not evidence.** Absence and pastes are reported by the
+participant's browser, and it can lie or say nothing: a closed collector,
+JavaScript disabled, a client of their own. `blur` fires on a click into the
+address bar or the developer tools. An absence that had not ended by the end
+of the contest is not recorded, and time after `pagehide` on a page restored
+from the back-forward cache is not counted. So the screen calls them signals,
+explains every flag, and decides nothing on the organiser's behalf: a
+disqualification remains a person's decision.
 
-**Путь консоли не замедлился.** Адрес и отпечаток — в той же вставке `query_log`; наблюдение за адресом и сессией — одно чтение кэша (бенчмарк `BenchmarkObserveUnchanged`: около 1,5 мкс на процессном кэше; с Redis — один сетевой `GET`). Проверка — `cmd/consoleload` против тестового игрового кластера до и после этой работы.
+**The console's path did not slow down.** The address and the fingerprint ride
+the same `query_log` insert; the address and session observation is one cache
+read (`BenchmarkObserveUnchanged`: about 1.5 µs on the in-process cache, one
+network `GET` with Redis). Verified with `cmd/consoleload` against the test
+game cluster before and after this work.
 
-**Сознательные пробелы.** Отказ по частоте, пойманный предпроверкой `queryproxy` (раздел 9.1, «Осознанный пробел»), в журнал не попадает — значит и адреса у него нет. Строки `query_log` до миграции 000033 — без адреса и отпечатка.
+**Deliberate gaps.** A rate refusal caught by `queryproxy`'s pre-check
+(section 9.1) does not reach the journal, so it has no address either.
+`query_log` rows from before migration 000033 have neither address nor
+fingerprint.
 
-**Чего наблюдение не видит — списком, чтобы организатор не принял тишину за чистоту.** Проверено разбором перед первой выкаткой:
+**What monitoring does not see — listed, so that an organiser does not mistake
+silence for innocence.** Established by a review before the first deployment:
 
-- **Двое за одним аккаунтом в одной аудитории** неотличимы от одного: один адрес, одна сессия, один браузер. Отметка «параллельная сессия» ловит только вторую сессию в пределах двух минут активности; передача работы с паузой больше этого окна проходит молча.
-- **Второе устройство, которое только смотрит**, следов не оставляет: за лентой событий и за таблицей результатов наблюдения нет, а сами эти экраны сигналов не шлют. Подсказчик, открывший условия и таблицу с телефона, для платформы не существует.
-- **Отсутствие сигналов ничего не доказывает.** Сборщик браузера можно не запускать (свой клиент API, выключенный JavaScript, блокировка `/play/signals`), и платформа не проверяет, что сигналы вообще приходили: чистая лента и лента человека, который отключил сборщик, выглядят одинаково.
-- **Связь ответа с запросами — наблюдение, а не правило.** Отметка «ответ без запросов» говорит, что верного ответа не предваряли успешные запросы; ничто не мешает выполнить произвольный запрос до ответа, чтобы её снять.
+- **Two people on one account in one room** are indistinguishable from one:
+  one address, one session, one browser. The parallel-session flag catches
+  only a second session within two minutes of activity; handing work over with
+  a longer pause passes silently.
+- **A second device that only watches** leaves no trace: nothing observes the
+  event feed or the results table, and those screens send no signals. Somebody
+  prompting from a phone does not exist as far as the platform is concerned.
+- **The absence of signals proves nothing.** The browser collector can be left
+  unstarted — a client of their own, JavaScript off, `/play/signals` blocked —
+  and the platform does not verify that signals arrived at all: a clean feed
+  and the feed of somebody who disabled the collector look identical.
+- **The link between an answer and its queries is an observation, not a
+  rule.** The "answered with no queries" flag says a correct answer was not
+  preceded by successful queries; nothing stops somebody running an arbitrary
+  query beforehand to clear it.
 
-Из этого следует одно рабочее правило: отметки — повод посмотреть на участника, а не вывод о нём. Решение о дисквалификации остаётся человеку и опирается на то, что организатор видел сам.
+One working rule follows: a flag is a reason to look at a participant, not a
+conclusion about them. The decision to disqualify stays with a person and
+rests on what the organiser saw themselves.
 
-### 9.5 Профиль участника: свои олимпиады, отчёт и история
+### 9.5 A participant's profile: their contests, report and history
 
-Дизайн: `docs/superpowers/specs/2026-09-21-participant-profile-design.md`. Код: доменный пакет `internal/profile`, `leaderboard.Service.Own` (`internal/leaderboard/own.go`), обработчики `internal/api/profile_handler.go`; экраны — `frontend/app/(session)/profile/` и `frontend/app/(session)/profile/contests/[contestId]/` (SPEC, раздел 5.2).
+Code: the domain package `internal/profile`, `leaderboard.Service.Own`, the
+handlers in `internal/api/profile_handler.go`; the screens under
+`frontend/app/(session)/profile/`.
 
-Разделы 9.1 и 10 обещали студенту две вещи, которым было негде появиться: собственная история запросов и персональный отчёт по олимпиаде. Обе реализованы, читая теми же кодом и правами, что уже существовали для организатора, а не второй раз.
+Sections 9.1 and 10 promised a student two things that had nowhere to appear:
+their own query history and a personal report on a contest. Both exist now,
+reading through the same code and the same rights that already existed for the
+organiser rather than a second time.
 
-**Только своё.** Регистрация берётся из сессии (`identity.UserID`), а не из URL: ни в одном маршруте `/me/...` нет параметра, которым можно было бы назвать чужую регистрацию. `profile.Service.Open` сперва ищет регистрацию вызывающего по паре «олимпиада — учётная запись», и только затем — саму олимпиаду.
+**Only their own.** The registration comes from the session
+(`identity.UserID`), never from the URL: no `/me/...` route has a parameter
+that could name somebody else's registration. `profile.Service.Open` looks up
+the caller's registration by the contest-and-account pair first, and only then
+the contest itself.
 
-**Один отказ на всё.** Несуществующая олимпиада, чужая регистрация и регистрация, для которой олимпиада ещё не закончилась, — это один и тот же `profile.ErrNotFound`, на HTTP — один и тот же `404 profile_contest_not_found`. Разные ответы говорили бы, существует ли олимпиада и есть ли на ней такой участник; профиль, как и наблюдение (раздел 9.4), этого не говорит никому.
+**One refusal for everything.** A contest that does not exist, somebody else's
+registration, and a registration whose contest has not ended are the same
+`profile.ErrNotFound` and the same `404 profile_contest_not_found`. Different
+answers would say whether a contest exists and whether a given participant is
+in it; the profile, like monitoring, tells nobody that.
 
-**Во время идущей олимпиады профиль её данных не показывает** — строка «идёт» и кнопка входа, и ничего больше. `profile.Over(contest, participant, now)` решает, закончилась ли олимпиада именно для этого участника: регистрация `finished`/`disqualified`, либо олимпиада `finished`/`archived`, либо наступил собственный дедлайн участника (`contests.Deadline` — это покрывает и обычный конец, и индивидуальный таймер). Черновик не закончен ни для кого. Пока это условие не выполнено, всё нужное по ходу олимпиады есть на её собственном экране, под его собственными правилами (окно, сеть, индивидуальный таймер) — профиль не становится вторым путём к тем же данным мимо этих правил.
+**While a contest runs, the profile shows none of its data** — a "running"
+line and a link in, nothing more. `profile.Over(contest, participant, now)`
+decides whether the contest has ended *for this participant*: the registration
+is `finished` or `disqualified`, or the contest is `finished` or `archived`,
+or the participant's own deadline has passed (`contests.Deadline`, covering
+both the ordinary end and an individual clock). A draft has ended for nobody.
+Until that holds, everything needed during a contest is on the contest's own
+screen under its own rules — the window, the network, the individual clock —
+and the profile does not become a second path to the same data around them.
 
-**Какие статусы несёт профиль: `published`, `running`, `finished`, `archived`.** Черновик исключён и из списка `/me/contests`, и из сводки `/me/summary` (`postgres.profileStatuses` — одна константа в обоих запросах, так что четыре числа шапки считают ровно те строки, которые показывает список). Ростер могут заполнить, пока олимпиаду ещё пишут, поэтому регистрация в черновике существует задолго до того, как о самой олимпиаде положено знать; каталог участника отказывает по той же причине (`postgres.Contests.List`: черновик — дело только его авторов). Архив оставлен намеренно: профиль — это история, а архивация убирает законченную олимпиаду с глаз, а не отнимает её у тех, кто её писал. Пинит это `TestProfileReadsLeaveADraftContestOut` и `TestProfileReadsKeepAnArchivedContest`.
+**Which statuses the profile carries: `published`, `running`, `finished`,
+`archived`.** A draft is excluded from both `/me/contests` and `/me/summary`
+(`postgres.profileStatuses`, one constant in both queries, so the header's
+four numbers count exactly the rows the list shows). A roster can be filled
+while the contest is still being written, so a registration in a draft exists
+long before the contest is supposed to be known about; the participant's
+catalogue refuses for the same reason. The archive is kept deliberately: a
+profile is history, and archiving takes a finished contest out of sight rather
+than away from the people who sat it.
 
-**Заморозка не обходится.** Место, число участников и отметка «победитель» на отчёте — это `leaderboard.Service.Own`, читающий то же кэшированное вычисление, что и таблица олимпиады: `Public`, когда она открыта (финал или раскрытая заморозка), иначе `Live` с местом, обнулённым перед выдачей. Два случая читаются на проводе одинаково (`place: null`) и означают разное: замороженная таблица (`place_open: false` — «место появится, когда организатор откроет таблицу») и открытая таблица в режиме `winner`, где место есть только у победителя (`place_open: true`, `place: null`, `winner: true` — у той единственной строки, что победила). `points` в ICPC всегда 0 — сервер их и не начисляет в этом режиме, — а место каждого вопроса в штрафе берётся из `leaderboard.Cell.Penalty`, той же клетки, что рисует сетку лидерборда, а не считается заново.
+**The freeze is not walked around.** A place, the participant count and the
+"winner" mark on a report come from `leaderboard.Service.Own`, reading the
+same cached computation the contest's table does: `Public` when it is open
+(the final table, or a revealed freeze), otherwise `Live` with the place
+blanked before it is served. Two cases read identically on the wire
+(`place: null`) and mean different things: a frozen table (`place_open:
+false` — "your place appears when the organiser opens the table") and an open
+table in `winner` mode, where only the winner has a place (`place_open: true`,
+`place: null`, `winner: true` on the one row that won). `points` in ICPC is
+always zero — the server does not award any in that mode — and each question's
+contribution to the penalty comes from `leaderboard.Cell.Penalty`, the same
+cell that draws the leaderboard's grid, rather than being computed again.
 
-**Строки нет в таблице — `result: null`, а не объект из нулей.** Таблица ограничена (`leaderboard.DefaultMaxRows`, 2000 строк), поэтому у участника большой олимпиады ниже среза — и у дисквалифицированного до того, как таблицу посчитали, — `leaderboard.Service.Own` отвечает `ErrNotAParticipant`. Отчёт всё равно отдаётся: свои запросы, ответы, заметки и разбор по вопросам — это его работа, её никто не отнимает. Обнулённый результат был бы хуже пустого: `scoring: ""` и `state: ""` не называют ни режима, ни состояния таблицы, а читателю сообщают результат «ноль» по правилам, которых нет. Поэтому `profile.Report.Result` — указатель, на проводе `result: null`, в схеме клиента `nullable()`, а экран говорит отдельной фразой, что строки в опубликованной таблице нет. Пинит `TestTheReportOfARegistrationTheTableHasNoRowFor` и `TestTheReportOfARowTheTableDoesNotCarryHasNoResult`.
+**No row in the table means `result: null`, not an object of zeroes.** The
+table is bounded (`leaderboard.DefaultMaxRows`, 2000 rows), so a participant
+of a large contest below the cut — and one disqualified before the table was
+computed — gets `ErrNotAParticipant` from `leaderboard.Service.Own`. The
+report is served anyway: their queries, answers, notes and per-question
+breakdown are their work and nobody takes it away. A zeroed result would be
+worse than an empty one: `scoring: ""` and `state: ""` name neither a mode nor
+a state of the table, while telling the reader their result is "zero" under
+rules that do not exist. So `profile.Report.Result` is a pointer, `result:
+null` on the wire and `nullable()` in the client's schema, and the screen says
+in its own sentence that there is no row in the published table.
 
-**`state` несёт и `not_started`, а не приводится к чему-то похожему.** Состояний таблицы четыре (`leaderboard.Decide`), и четвёртое достижимо: дисквалифицировать можно и на опубликованной, ещё не начавшейся олимпиаде (`DisqualifyParticipant`), а дисквалифицированная регистрация для своего участника закончена (`profile.Over`), — значит, строка и отчёт несут результат таблицы, чья олимпиада не открывалась. Сервер говорит об этом прямо: подменить состояние на `live` или `frozen` значило бы соврать о том, что таблицу вот-вот раскроют. Интерфейс держит `not_started` в `TABLE_STATES` и говорит своей фразой («олимпиада ещё не начиналась»), рядом с фразой про заморозку, — участник видит своё и внятное объяснение вместо ошибки разбора. Пинит `TestAContestThatNeverStartedSaysSoOnTheListAndTheReport`.
+**`state` carries `not_started` too, rather than being coerced into something
+similar.** There are four states of a table (`leaderboard.Decide`), and the
+fourth is reachable: a participant can be disqualified on a published contest
+that has not begun, and a disqualified registration has ended for its own
+participant — so a row and a report can carry the result of a table whose
+contest never opened. The server says so plainly: substituting `live` or
+`frozen` would be lying about a table that is about to be revealed. The
+interface keeps `not_started` in its states and says it in its own sentence,
+beside the one about the freeze, so the participant sees something of their
+own and an intelligible explanation rather than a parse error.
 
-**Числа отчёта берутся из лидерборда и наблюдения — второй формулы нет, кроме одной названной.** Результат (баллы/решено/штраф/место) — `leaderboard.Service.Own`. Вкладки запросов, ответов и заметок — собственные методы `monitor.WatchService`, те же, что читает организатор (раздел 9.4), только регистрация приходит не из URL, а из сессии: `app.go` строит один `WatchService` на оба обработчика. Единственное осознанное исключение — строка списка `/me/contests`: назвать в ней место значило бы считать таблицу каждой олимпиады заново, до полусотни раз на первый заход в профиль, поэтому она несёт баллы/решено/штраф из одного агрегирующего чтения (`postgres.Profile.Enrolments`, `ownResultColumns`/`ownResultJoins`) вместо обращения к лидерборду. Эти выражения — копия арифметики `Leaderboard.Standings`/`ICPCStandings`, и совпадение держат не комментарием, а тестом: `TestProfileEnrolmentsCarryTheOwnResultTheLeaderboardAgreesWith` и `TestProfileEnrolmentsCarryTheICPCResultTheLeaderboardAgreesWith` прогоняют оба запроса на одних данных и сравнивают числа. Места в списке при этом нет вовсе — только `state`/`place_open` от чистой функции `leaderboard.Decide`, без единого чтения.
+**The report's numbers come from the leaderboard and from monitoring; there is
+no second formula but one, and it is named.** The result — points, solved,
+penalty, place — is `leaderboard.Service.Own`. The queries, answers and notes
+tabs are `monitor.WatchService`'s own methods, the same ones the organiser
+reads, with the registration arriving from the session rather than from the
+URL: `app.go` builds one `WatchService` for both handlers. The one deliberate
+exception is a row of the `/me/contests` list: naming a place there would mean
+computing every contest's table again, up to fifty times on a first visit to
+the profile, so it carries points, solved and penalty from one aggregating
+read (`postgres.Profile.Enrolments`) instead of going to the leaderboard.
+Those expressions are a copy of the arithmetic in `Leaderboard.Standings` and
+`ICPCStandings`, and the agreement is held by a test rather than a comment:
+two tests run both queries over the same data and compare the numbers. The
+list carries no place at all — only `state` and `place_open` from the pure
+function `leaderboard.Decide`, with no read whatsoever.
 
-**Бюджет чтения профиля — отдельный от бюджета наблюдения.** 120 чтений в минуту на учётную запись (`api.ProfileReadsPerMinute`), ключ `profile:user:<account>`, тратится посредником до любой работы с базой на каждом маршруте `/me/...`, отказы считаются туда же (правило 13); `429 profile_too_often` с `Retry-After`. Форма та же, что у бюджета наблюдения (раздел 9.4), но свой ключ и свой код: участнику это не «те же экраны», что организатору.
+**The profile's read budget is separate from monitoring's.** 120 reads a
+minute per account (`api.ProfileReadsPerMinute`), keyed
+`profile:user:<account>`, spent by the middleware before any database work on
+every `/me/...` route, with refusals counted; `429 profile_too_often` with
+`Retry-After`. The shape matches monitoring's budget, but the key and the code
+are its own: to a participant these are not "the same screens" the organiser
+has.
 
-**Свой просмотр не пишет аудит.** В отличие от `contest.monitor_view`, которым наблюдение отмечает чужой просмотр не чаще раза в 15 минут (раздел 9.4), профиль ничего не пишет в `audit_log`: чтение собственных данных — не доступ к чужим, фиксировать в журнале нечего.
+**Looking at one's own data writes no audit entry.** Unlike
+`contest.monitor_view`, which records somebody looking at another person no
+more than once every fifteen minutes, the profile writes nothing to
+`audit_log`: reading your own data is not access to anybody else's, and there
+is nothing to record.
 
-**Ошибка запроса показывается так же, как на экране олимпиады.** Текст ошибки идёт через `participantSafeError` — тот же барьер, что и у консоли, — а не через редактуру для организатора (раздел 9.4): участник уже видел эти слова во время игры, так что вторая, более широкая версия ему не добавляет ничего.
+**A query's error is shown as it was on the contest screen.** The error text
+goes through `participantSafeError`, the same barrier the console uses, rather
+than the organiser's redaction: the participant already saw those words while
+playing, so a second, wider version adds them nothing.
 
-**Чем вкладки участника отличаются от вкладок организатора.** Свои запросы не несут колонки `ip`: это его собственный адрес, объяснить он ничего не может, а на экране мешает (`profileQuery` описан отдельным типом, а не через встраивание `monitor.QueryData`). Свои заметки приходят без истории правок — это инструмент наблюдения, а не запись, которую отдают автору обратно.
+**How a participant's tabs differ from an organiser's.** Their queries carry
+no `ip` column: it is their own address, it explains nothing to them, and it
+clutters the screen. Their notes arrive without the edit history — that is an
+instrument of observation, not a record handed back to its author.
 
-**Дисквалификация названа прямо и без причины** (`disqualified: true`): причина — заметка организатора в `audit_log`, у неё свои правила доступа (раздел 9.2), и показывать её здесь значило бы завести эти правила заново.
+**Disqualification is stated plainly and without a reason**
+(`disqualified: true`): the reason is an organiser's note in `audit_log`,
+which has access rules of its own, and showing it here would mean
+reintroducing those rules.
 
-**Маршруты**, все за `Authenticate` и бюджетом, без `contest.monitor`:
+**The routes**, all behind `Authenticate` and the budget, with no
+`contest.monitor`:
 
-| Маршрут | Что отдаёт |
+| Route | What it serves |
 |---|---|
-| `GET /me/summary` | Четыре числа шапки: сколько олимпиад, сколько завершено, сколько всего запросов, сколько вопросов решено |
-| `GET /me/contests` | Олимпиады участника, новые сверху, одним агрегирующим чтением; результат без места, `state`/`place_open` от `leaderboard.Decide`; бегущая олимпиада — только ссылка |
-| `GET /me/contests/{contestId}/report` | Отчёт: результат (с местом, где таблица открыта), время работы, число запросов и успешных, разбор по вопросам |
-| `GET /me/contests/{contestId}/queries?status=&q=&cursor=` | Свои запросы: текст, статус, ошибка, длительность, строки, время — без адреса |
-| `GET /me/contests/{contestId}/answers` | Свои попытки по вопросам и запросы, которые к ним привели |
-| `GET /me/contests/{contestId}/workspace` | Свои заметки и вкладки как они остались, без истории правок |
-| `GET /me/contests/{contestId}/log.csv` | Своя история файлом |
+| `GET /me/summary` | The header's four numbers: contests, completed, total queries, questions solved |
+| `GET /me/contests` | The participant's contests, newest first, in one aggregating read; the result without a place, with `state` and `place_open` from `leaderboard.Decide`; a running contest is a link and nothing more |
+| `GET /me/contests/{contestId}/report` | The report: the result (with a place where the table is open), time worked, queries and successful ones, and a per-question breakdown |
+| `GET /me/contests/{contestId}/queries?status=&q=&cursor=` | Their queries: text, status, error, duration, rows, time — without an address |
+| `GET /me/contests/{contestId}/answers` | Their attempts per question and the queries that led to them |
+| `GET /me/contests/{contestId}/workspace` | Their notes and tabs as they were left, without the edit history |
+| `GET /me/contests/{contestId}/log.csv` | Their history as a file |
 
-`{contestId}` на каждом из последних пяти маршрутов проходит одну и ту же приёмку: бюджет, затем `profile.Service.Open` (регистрация из сессии, затем `profile.Over`) — отказ отвечает `404 profile_contest_not_found` независимо от причины.
+`{contestId}` on each of the last five goes through the same admission: the
+budget, then `profile.Service.Open` — the registration from the session, then
+`profile.Over` — and a refusal answers `404 profile_contest_not_found`
+whatever the cause.
 
-**CSV — тот же писатель, что у экрана олимпиады.** `/me/contests/{id}/log.csv` и `/play/log.csv` вызывают один и тот же код (`api/querylog_csv.go`, вынесенный туда из обработчика игрового экрана) — те же три границы (`queryrunner.MaxExportRows`/`MaxExportBytes`, `api.exportDeadline` и одна выгрузка **на регистрацию** одновременно), та же строка `truncated`, своя у каждого маршрута только причина отказа при второй одновременной выгрузке.
+**The CSV is the same writer the contest screen uses.**
+`/me/contests/{id}/log.csv` and `/play/log.csv` call one piece of code
+(`api/querylog_csv.go`) — the same three boundaries
+(`queryrunner.MaxExportRows` and `MaxExportBytes`, `api.exportDeadline`, and
+one download **per registration** at a time), the same `truncated` row, and
+only the refusal code for a second simultaneous download differs.
 
-Ключ здесь — регистрация, а не учётная запись: участник двух олимпиад вправе качать оба своих журнала сразу, и отказывают ему только во второй выгрузке того же журнала. (У организаторского экспорта ленты наблюдения — свой `ExportGate` и свой ключ, учётная запись: там файл — это вся олимпиада.) Оба участниковых маршрута получают **один и тот же** `api.ExportGate` из `app.go` (`WithExports`): по два отдельных гейта граница держалась бы внутри каждого маршрута, а в сумме опиралась бы на то, что приёмка никогда не пускает одну регистрацию в оба сразу, — то есть была бы гарантией про два других правила. Пинит `TestOneRegistrationHasOneLogDownloadAcrossHandlersSharingTheGate`.
+The key here is the registration, not the account: a participant of two
+contests may download both of their logs at once, and only a second download
+of the same log is refused. (The organiser's monitoring export has its own
+gate keyed by account: there a file is a whole contest.) Both participant
+routes get the **same** `api.ExportGate` from `app.go`: with two separate
+gates the boundary would hold inside each route while the sum of them relied
+on admission never letting one registration into both at once — which would be
+a guarantee about two other rules.
 
-### 9.6 Витрина: главная страница
+### 9.6 The front page
 
-Код: доменный пакет `internal/showcase`, обработчик `internal/api/public_handler.go`;
-экран — `frontend/app/(public)/page.tsx` и `frontend/app/(public)/home/`.
+Code: the domain package `internal/showcase`, the handler
+`internal/api/public_handler.go`; the screen at
+`frontend/app/(public)/page.tsx` and `frontend/app/(public)/home/`.
 
-До неё у продукта не было корня: `/` уводил на форму входа, и человек, которому
-дали ссылку на олимпиаду, видел её раньше, чем узнавал, куда попал. Страница
-публичная целиком; вошедший видит ту же самую, у него меняется одно —
-главное действие ведёт не на вход, а в «мои олимпиады».
+Before it, the product had no root: `/` led to the sign-in form, and somebody
+given a link to an olympiad saw the form before learning where they had
+arrived. The page is entirely public; a signed-in visitor sees the same one,
+with a single difference — the main action leads to their contests rather than
+to sign-in.
 
-**Два публичных чтения, оба вне аутентификации и оба за кэшем на минуту:**
+**Two public reads, both outside authentication and both behind a one-minute
+cache:**
 
-- `GET /public/stats` — четыре числа (проведённые олимпиады, участники,
-  выполненные запросы, решённые вопросы). Считаются по
-  `registration_activity` — сводной таблице наблюдения (раздел 9.4), а **не**
-  `count(*)` по `query_log`: страницу открывает кто угодно без входа, и
-  полный проход по журналу на каждом открытии был бы рычагом нагрузки,
-  который платформа сама кому-нибудь и подставит.
-- `GET /public/contests` — до шести олимпиад: опубликованные, идущие,
-  завершённые, архивные. Черновик не показывается никогда.
+- `GET /public/stats` — four numbers: contests run, participants, queries
+  executed, questions solved. Computed from `registration_activity`, the
+  summary table monitoring maintains (section 9.4), and **not** as a
+  `count(*)` over `query_log`: the page is opened by anybody without signing
+  in, and a full pass over the journal on every open would be a lever of load
+  that the platform hands out itself.
+- `GET /public/contests` — up to a few contests: published, running, finished,
+  archived. A draft is never shown.
 
-Оба читают за бюджетом частоты по адресу (`httpx.AddressSubject`), который
-тратится **до** обращения к базе, и оба собирают одновременные промахи в одно
-чтение (`singleflight`): зал, разом открывший страницу, не превращается в зал
-запросов. Устаревший ответ отдаётся, только если обновление упало, и не
-дольше пятнадцати минут.
+Both read behind a per-address rate budget (`httpx.AddressSubject`) spent
+**before** the database is touched, and both collapse simultaneous misses into
+one read (`singleflight`): a room opening the page at once does not become a
+room of queries. A stale answer is served only when a refresh failed, and for
+no longer than fifteen minutes.
 
-**Отбор статусов — один на весь продукт.** `contests.PublicStatuses`
-определён как «все статусы, кроме черновика», и три репозитория (профиль,
-витрина, обложки) берут его параметром, а не пишут список руками. Новый
-статус попадает в публичные по умолчанию и исключается осознанно — безопасное
-направление для фильтра, который решает, что видит посторонний; тест написан
-против жизненного цикла и падает, пока решение не принято.
+**The status filter is one for the whole product.** `contests.PublicStatuses`
+is defined as "every status except draft", and three repositories — profile,
+front page, covers — take it as a parameter rather than writing the list by
+hand. A new status becomes public by default and is excluded deliberately,
+which is the safe direction for a filter deciding what a stranger sees; the
+test is written against the lifecycle and fails until that decision is taken.
 
-### 9.7 Обложка олимпиады
+### 9.7 A contest's cover
 
-Дизайн: `docs/superpowers/specs/2026-09-22-contest-covers-design.md`. Код:
-`internal/covers` (правила и обработка), `internal/platform/filestore`
-(каталог на томе за портом), `internal/api/cover_handler.go`.
+Code: `internal/covers` (the rules and the processing),
+`internal/platform/filestore` (a directory on a volume behind a port),
+`internal/api/cover_handler.go`.
 
-**Где лежат файлы.** На томе, каталог из `COVER_DIR`, имя файла — хеш
-содержимого и ширина. Не в базе: изображения установки лежат в ней потому,
-что их «несколько сотен килобайт всего», а обложек столько, сколько олимпиад.
-Не в объектном хранилище: отдельный сервис, свои ключи и ещё один способ не
-стартовать — ради нескольких десятков мегабайт.
+**Where the files live.** On a volume, in the directory named by `COVER_DIR`,
+each file named by the hash of its content and its width. Not in the database:
+the installation's own images live there because there are "a few hundred
+kilobytes of them in total", while there are as many covers as contests. Not
+in object storage: a separate service, its own keys and one more way to fail
+to start, for the sake of a few dozen megabytes.
 
-**Цена этого решения названа.** Раздел 12 обещает масштабирование
-добавлением реплик API; каталог на локальном диске это обещание ломает — у
-второй реплики другой диск. Сегодня реплика одна. Хранилище спрятано за
-узким портом (`Put`/`Get`/`Delete`/`List`/`Ping`), поэтому перенос в S3 —
-одна новая реализация и ноль правок в доменном коде.
+**The price of that decision is named.** Section 12 promises scaling by adding
+API replicas; a directory on a local disk breaks that promise, because the
+second replica has a different disk. Today there is one replica. The storage
+sits behind a narrow port (`Put`, `Get`, `Delete`, `List`, `Ping`), so moving
+to S3 is one new implementation and no edits in domain code.
 
-**Том обязан быть в резервной копии**, и `make backup` его забирает: дамп
-базы плюс архив каталога. Бэкап без обложек восстановил бы олимпиады без
-картинок, и узнали бы об этом в день восстановления. `DB_ONLY=1` — явный
-способ сказать «мне нужен только дамп».
+**The volume must be in the backup**, and `make backup` takes it: the
+database dump plus an archive of the directory. A backup without the covers
+would restore contests without their pictures, and that would be discovered on
+the day of the restore. `DB_ONLY=1` is the explicit way to say "the dump
+alone".
 
-**Что происходит с загруженным файлом**, по порядку, и порядок здесь и есть
-защита: тело читается с границей 8 МиБ (правило 12) → тип определяется по
-байтам, не по имени и не по заголовку → `image.DecodeConfig` отказывает по
-размерам **до** полного декодирования (сто байт заголовка PNG могут объявить
-30000 × 30000, это 3.6 ГБ в памяти процесса, который в этот момент ведёт
-олимпиаду; стороны ограничены и по отдельности, и вместе — сорок мегапикселей)
-→ кадрирование по центру до `16/9` → два JPEG, 1600 и 800 пикселей по ширине.
-**SVG не принимается ни под каким видом**: это документ со скриптами, а не
-изображение, и показывали бы его всем посетителям без входа. Файл на выходе —
-тот, который написали мы, поэтому EXIF с геометкой автора, полиглоты и мусор
-после конца изображения не доживают.
+**What happens to an uploaded file**, in order — and the order is the defence:
+the body is read with an 8 MiB bound → the type is determined from the bytes,
+not from the name and not from a header → `image.DecodeConfig` refuses on
+dimensions **before** a full decode (a hundred bytes of PNG header can declare
+30000 × 30000, which is 3.6 GB in the memory of a process currently running an
+olympiad; the sides are bounded individually and together, at forty
+megapixels) → a centre crop to 16/9 → two JPEGs, 1600 and 800 pixels wide.
+**SVG is not accepted in any form**: it is a document with scripts rather than
+an image, and it would be shown to every visitor without sign-in. The file
+that comes out is one we wrote, so EXIF carrying the photographer's location,
+polyglots and rubbish after the end of the image do not survive.
 
-**Кто что читает.** Публичный маршрут отдаёт обложку только опубликованной
-олимпиады; адрес с `v=<хеш>` кэшируется на год как `immutable`, адрес без
-хеша — на минуту, потому что он не называет файл и через него проходит
-замена. Организатор читает свою обложку отдельными маршрутами под
-`contest.view` — они отвечают и для черновика, то есть для того состояния, в
-котором обложку и выбирают, — и отдают `private`, чтобы общий кэш не держал
-картинку неопубликованной олимпиады.
+**Who reads what.** The public route serves a cover only for a published
+contest; an address carrying `v=<hash>` is cached for a year as `immutable`,
+and an address without the hash for a minute, because it does not name a file
+and a replacement passes through it. An organiser reads their own cover
+through separate routes behind `contest.view` — which answer for a draft too,
+the state in which a cover is actually chosen — and those serve `private`, so
+a shared cache does not hold an unpublished contest's picture.
 
-**Где обложка видна.** Карточка на витрине берёт рендер 800, экран участника
-над текстом истории — 1600, и это то самое единственное место, ради которого
-раздел 10 дизайн-спеки писался: картинка ставит сцену перед тем, как участник
-уйдёт в базу. На обоих поверхностях заголовок лежит не на снимке, а на скриме
-из токенов `--scrim-a` → `--scrim-b` → прозрачный (10.2), и обе рисуются на
-сервере: экран игры — клиентский компонент, и импорт обложки из него утащил бы
-её геометрию в клиентский граф того экрана, у которого время до
-интерактивности важнее, чем у любого другого. В печатной копии истории
-обложки нет: лист бумаги нужен ради текста.
+**Where a cover is seen.** A card on the front page takes the 800 rendition
+and the participant's screen above the story takes the 1600 — the one place
+that whole idea was for: a picture sets the scene before the participant
+disappears into the database. On both surfaces the title sits not on the
+photograph but on a scrim built from tokens, and both render on the server:
+the game screen is a client component, and importing the cover into it would
+drag its geometry into the client graph of the one screen where time to
+interactivity matters most. A printed copy of the story has no cover: a sheet
+of paper is for the text.
 
-**Хеш едет вместе со списком олимпиад** (`cover_hash`, `cover_attribution` в
-элементе `/contests`), а не запрашивается отдельно. Экран участника этот
-список уже читает, открывается под таймером и открывается тремя сотнями
-человек в одну минуту — второй запрос ради одного хеша он позволить себе не
-может. В проекции репозитория это два коррелированных подзапроса, ровно как
-языки и переводы, чтобы не получить N+1. Пустой хеш — обычное состояние
-«носит рисованную обложку», а не неудавшееся чтение.
+**The hash travels with the contest list** (`cover_hash`,
+`cover_attribution` on a `/contests` item) rather than being fetched
+separately. The participant's screen already reads that list, opens under a
+clock, and is opened by three hundred people in one minute — it cannot afford
+a second request for one hash. In the repository's projection these are two
+correlated subqueries, exactly as the languages and the translations are, to
+avoid an N+1. An empty hash is the ordinary state "wearing a drawn cover", not
+a failed read.
 
-**Атрибуция обязательна** для загруженной обложки: шлюз публикации не
-пропускает олимпиаду, у которой есть картинка и нет строки авторства
-(дизайн-спека, 10.1). Рисованная обложка авторства не требует — её автор мы.
+**Attribution is mandatory** for an uploaded cover: the publication gate does
+not pass a contest that has a picture and no credit line. A drawn cover needs
+none — we are its author.
 
-**Осиротевшие файлы собирает `cmd/gameorphans`** вместе с потерянными
-игровыми базами: файл, на хеш которого не ссылается ни одна строка
-`contest_covers`, удаляется — но только если он старше часа (моложе может
-быть загрузкой в полёте) и только если на него не ссылается **никто** (имя
-есть хеш, поэтому две олимпиады с одинаковой картинкой делят один файл). По
-умолчанию инструмент печатает, а удаляет по `-apply`. Удаление файла в
-аудит не пишется, в отличие от удаления игровой базы: там привилегированное
-действие над работой участника, здесь хозяйственная уборка.
+**Orphaned files are collected by `cmd/gameorphans`** along with lost game
+databases: a file whose hash no row of `contest_covers` refers to is deleted —
+but only if it is more than an hour old, because a younger one may be an
+upload in flight, and only if **nobody** refers to it, since the name is the
+hash and two contests with the same picture share one file. By default the
+tool prints, and deletes with `-apply`. Deleting a file is not written to the
+audit trail, unlike dropping a game database: that is a privileged action over
+a participant's work, this is housekeeping.
 
-## 10. Отчётность
+## 10. Reporting
 
-Модуль `reporting` поверх core-БД (query_log + submissions + registrations):
+The `reporting` module over the core database — `query_log`, `submissions`,
+`registrations`:
 
-- **Во время олимпиады (админ):** живой лидерборд, прогресс по вопросам (сколько участников на каком вопросе), частота ошибок в запросах, активность по времени.
-- **После олимпиады:** итоговая таблица результатов, разбор по вопросам (процент решивших, среднее число попыток и запросов), персональный отчёт участника (виден в его профиле — реализовано, раздел 9.5).
-- **Экспорт:** CSV/XLSX для деканата.
+- **During a contest, for staff:** a live leaderboard, progress by question
+  (how many participants are on which), the rate of failing queries, activity
+  over time.
+- **Afterwards:** the final table, a breakdown by question (the share who
+  solved it, the average attempts and queries), and a participant's personal
+  report, which they see in their profile (section 9.5).
+- **Export:** CSV and XLSX for the faculty office.
 
-Реализация: SQL-представления + при необходимости материализованные view с обновлением по расписанию; тяжёлые отчёты считаются по завершении олимпиады и кешируются. Отдельная аналитическая БД не нужна на этих объёмах — «шов» модуля позволяет добавить её позже.
+Implementation: SQL views, and materialised views refreshed on a schedule
+where needed; heavy reports are computed once a contest has finished and
+cached. A separate analytical database is unnecessary at these volumes, and
+the module's seam allows one later.
 
-**Лидерборд** (реализован; полный дизайн — `docs/superpowers/specs/2026-09-13-leaderboard-design.md`, код — пакет `internal/leaderboard`). Таблица видна трём аудиториям: организатору (живая всегда, раздел `/contests/{id}/standings`), участнику (вкладка «Таблица» на экране игры) и кому угодно без входа (страница `/contests/{id}/leaderboard`, кнопка на неё — на `/my` и `/open` рядом с входом в олимпиаду). Организатор настраивает на олимпиаде:
+**The leaderboard** (implemented; the code is `internal/leaderboard`). The
+table is seen by three audiences: the organiser, always live, at
+`/contests/{id}/standings`; the participant, on the contest screen's table
+tab; and anybody at all without signing in, at
+`/contests/{id}/leaderboard`. The organiser configures two things per contest:
 
-- **заморозку** — без неё или за N минут/часов до `ends_at`; с этого момента все, кроме организатора, видят таблицу на момент заморозки, а ответы продолжают приниматься и засчитываться;
-- **подпись участника** — логин (по умолчанию) или ФИО.
+- **a freeze** — none, or N minutes or hours before `ends_at`; from then on
+  everybody but the organiser sees the table as it stood at the freeze, while
+  answers continue to be accepted and scored;
+- **how a participant is labelled** — by login (default) or by full name.
 
-Замороженная таблица остаётся замороженной и после конца, пока организатор не нажмёт «Открыть результаты» (необратимо, пишется в `audit_log`). Снимков нет: баллы фиксируются в момент ответа, поэтому таблица на любой момент — тот же запрос по `submissions` с отсечкой `submitted_at < cutoff`, и отсечка применяется в SQL, а не на клиенте. Во время заморозки ничто — ни SSE, ни `ETag`, ни время расчёта — не выдаёт, что таблица изменилась. Публичный эндпоинт отвечает одинаковым 404 для несуществующей олимпиады и черновика, лимитируется по адресу до чтения базы и считает таблицу не чаще раза в 10 секунд на олимпиаду, сколько бы людей ни смотрело.
+A frozen table stays frozen after the end until the organiser presses "reveal
+results", which is irreversible and written to `audit_log`. There are no
+snapshots: points are fixed at the moment of answering, so the table at any
+moment is the same query over `submissions` with a `submitted_at < cutoff`
+condition — and the cutoff is applied in SQL, never on the client. During a
+freeze, nothing — not the event stream, not an `ETag`, not a computation time
+— reveals that the table changed. The public endpoint answers the same 404 for
+a contest that does not exist and for a draft, is rate-limited by address
+before the database is read, and computes the table at most once every ten
+seconds per contest however many people are watching.
 
-**«Не чаще раза в N секунд» не означает «пересчитывает каждый первый после истечения TTL сам за себя».** Промах кеша схлопывается через `singleflight`: если несколько запросов пришли внутри одного и того же окна после истечения TTL, ровно один действительно читает `submissions`, а остальные получают его результат, не начиная собственного расчёта, — иначе граница кеша была бы моментом, когда N человек, обновивших страницу разом, порождают N одинаковых тяжёлых запросов вместо одного. То же самое, отдельным кешем на 3 секунды, покрывает и живую таблицу организатора (`/standings`) — раньше она пересчитывалась на каждый его запрос без всякого кеша вовсе.
+**"At most once every N seconds" does not mean "whoever arrives first after
+the TTL recomputes it alone".** A cache miss is collapsed through
+`singleflight`: when several requests arrive inside the same window after
+expiry, exactly one actually reads `submissions` and the rest take its result
+without starting a computation of their own — otherwise the cache boundary
+would be the moment when N people refreshing at once produce N identical heavy
+queries instead of one. The same applies, with a separate three-second cache,
+to the organiser's live table, which used to be recomputed on every one of
+their requests with no cache at all.
 
-**Открытие результатов не может столкнуться с расчётом, начавшимся секундой раньше.** У каждой олимпиады — счётчик поколения кеша: открытие результатов увеличивает его и одновременно очищает и публичный, и организаторский кеш одним действием под одной блокировкой. Расчёт, начавшийся до этого момента (и потому читающий ещё замороженную таблицу), захватывает поколение при старте и сверяет его перед тем, как положить результат в кеш, — если оно уже сменилось, свежепосчитанный, но устаревший ответ никуда не пишется. Без этого расчёт, который случайно оказался медленным, мог бы записать замороженный ответ обратно в кеш **после** того, как открытие его явно оттуда убрало, — и организатор увидел бы кнопку «открыть результаты» повторно на срок жизни кеша, будто ничего не произошло.
+**Revealing the results cannot collide with a computation that began a second
+earlier.** Each contest has a cache-generation counter: revealing increments
+it and clears both the public and the staff cache in one action under one
+lock. A computation that began before that moment — and therefore reads the
+still-frozen table — captures the generation at its start and checks it before
+storing its result, so a freshly computed but stale answer is written nowhere.
+Without that, a computation that happened to be slow could write the frozen
+answer back into the cache **after** the reveal had explicitly removed it, and
+the organiser would see the "reveal results" button again for the cache's
+lifetime as though nothing had happened.
 
+## 10.1 Installation settings
 
-## 10.1 Настройки установки
+The requirement: an administrator must be able to change how an installation
+looks and behaves — the logo, the name, the contact address, the default
+language — without rebuilding an image or editing `.env` on the server. The
+decisions below were taken in advance so that this would not have to be
+retrofitted.
 
-Требование: администратор должен уметь менять облик и поведение установки — логотип, название, контактный адрес, язык по умолчанию — не пересобирая образ и не редактируя `.env` на сервере. Ниже решения, принятые заранее, чтобы это не пришлось встраивать задним числом.
+**A setting is a row in a table, not an environment variable.** The difference
+is practical: a variable needs a container restart and access to the server,
+which makes it work for whoever has SSH rather than for whoever is responsible
+for the olympiad. Settings live in `settings` — a key, a `jsonb` value, and
+who changed it when — and are edited through the API under the
+`settings.manage` permission.
 
-**Настройка — это строка в таблице, а не переменная окружения.** Разница практическая: переменная требует перезапуска контейнера и доступа к серверу, то есть это работа для того, у кого есть SSH, а не для того, кто отвечает за олимпиаду. Настройки живут в `settings` (ключ, значение `jsonb`, кто и когда менял) и правятся через API под правом `settings.manage`.
+**The boundary follows who is entitled to decide.** The environment keeps what
+a process cannot start without and what is a secret: the database DSN, the
+cache address, `TRUSTED_PROXIES`, `COOKIE_SECURE`. The table takes what is an
+organisation's decision: the name, the logo, the contacts, the default
+language, the session length, the attempt limits. The rule is simple — if a
+wrong value makes the installation unreachable or exposes a secret, it belongs
+in the environment; if it merely looks wrong, it is a setting.
 
-**Граница проходит по тому, кто вправе решать.** В окружении остаётся то, без чего процесс не стартует и что является секретом: DSN базы, адрес Redis, `TRUSTED_PROXIES`, `COOKIE_SECURE`. В таблицу уходит то, что является решением организации: название, логотип, контакты, язык по умолчанию, длина сессии, лимиты попыток. Правило простое: если неверное значение делает установку недоступной или раскрывает секрет — это окружение; если оно просто выглядит не так — это настройка. `MAX_LOGIN_ATTEMPTS_PER_ADDRESS` сегодня в окружении и по этому правилу должен переехать в таблицу, когда она появится.
+**The logo is a file, and that is a decision of its own.** Three slots exist —
+`logo`, `icon`, `favicon` — one row per slot in `settings_files`. Accepting a
+file from a user means four checks, each closing its own hole:
 
-**Логотип — файл, и это отдельное решение.** Реализовано: три слота — `logo`, `icon`, `favicon`, — по одной строке на слот в `settings_files`. Приём файла от пользователя означает четыре проверки, и каждая закрывает свою дыру:
+- **the type is determined from the content twice** — first
+  `http.DetectContentType` over the leading bytes, then `image.DecodeConfig`,
+  and the decoder's format must agree with the detected one. The extension and
+  the request's `Content-Type` are not read at all: both are written by the
+  sender;
+- **SVG is not accepted** — it is an executable document, not a picture. None
+  of the accepted formats (PNG, JPEG, GIF, WebP) carries a script;
+- **two limits**: 512 KiB per file (the request body is cut off at 2 MiB
+  before it is read) and 4096 pixels per side — the second is needed because
+  decoding a header is cheap while a 50000 × 50000 PNG weighs kilobytes;
+- **serving with `Content-Disposition: attachment` and
+  `X-Content-Type-Options: nosniff`** — a second line of defence against a
+  format that turns out one day to be executable.
 
-- **тип определяется по содержимому дважды** — сначала `http.DetectContentType` по первым байтам, затем `image.DecodeConfig`, и формат из декодера обязан совпасть с определённым. Расширение и заголовок `Content-Type` из запроса не читаются вовсе: и то и другое пишет отправитель;
-- **SVG не принимается** — это исполняемый документ, а не картинка. Ни один из принимаемых форматов (PNG, JPEG, GIF, WebP) не переносит скрипт;
-- **два предела**: 512 КиБ на файл (тело запроса обрывается на 2 МиБ ещё до чтения) и 4096 пикселей по стороне — второй нужен потому, что декодирование заголовка дешёвое, а картинка 50000×50000 в PNG весит килобайты;
-- **отдача с `Content-Disposition: attachment` и `X-Content-Type-Options: nosniff`** — вторая линия обороны на случай формата, который однажды окажется исполняемым.
+Storage is in the database itself, as bytes. A volume would mean that
+restoring the database gives an installation without its logo, and that
+`make backup` would have to learn a second source of truth; at half a megabyte
+that price does not pay. The image's address carries its SHA-256
+(`/settings/images/logo?v=…`), so the response is cached forever: a replaced
+logo is a different address, and no cache needs to be told anything.
 
-Хранение — в самой БД, байтами. Том на диске означал бы, что резервная копия базы восстанавливает установку без её логотипа, а `make backup` пришлось бы учить второму источнику правды; на объёме в полмегабайта эта цена не окупается. Адрес картинки несёт её sha256 (`/settings/images/logo?v=…`), поэтому ответ кешируется навсегда: заменённый логотип — это другой адрес, и ни одному кешу ничего не нужно сообщать.
+**Changing a setting is audited like any other edit** — the set of changed
+fields with their old and new values (section 9.2). "Who changed the default
+language in the middle of an olympiad" is exactly the question the journal
+exists for.
 
-**Изменение настройки пишется в аудит как всякая другая правка** — набор изменившихся полей с прежним и новым значением (раздел 9.2). «Кто поменял язык по умолчанию посреди олимпиады» — ровно тот вопрос, ради которого журнал существует.
+**A cache rather than a query per render.** Settings are read on every page
+and changed once a semester: the values are held in the process with a short
+TTL, and a write clears the cache. On one instance that is enough; on several,
+the invalidation travels through Redis, by the same channel the sessions use.
 
-**Кеш, а не запрос на каждый рендер.** Настройки читаются на каждой странице и меняются раз в семестр: значения держатся в памяти процесса с коротким TTL, запись сбрасывает кеш. На одном экземпляре этого достаточно; на нескольких сброс идёт через Redis, тем же каналом, что и сессии.
+**The visual theme does not become a setting.** The palette is the design
+system's tokens, and "give the administrator a palette" turns a coherent
+system into a set of fields where nobody guarantees the contrast. The logo,
+the name and the contacts change; the rules of typography and colour do not.
 
-**Тема оформления настройкой не становится.** Палитра — это токены дизайн-системы (SPEC, раздел 3.3: произвольных цветов нет), и «дайте админу палитру» превращает связную систему в набор полей, где контраст WCAG никто не гарантирует. Логотип, название и контакты меняются; правила типографики и цвета — нет.
+## 11. Security in summary, and the audit plan
 
-## 11. Безопасность (сводно) и план security-аудита
+Student SQL is section 5, database isolation section 4, authentication
+section 7. In addition:
 
-Защита студенческого SQL — раздел 5, изоляция БД — раздел 4, аутентификация — раздел 7. Дополнительно:
+- **The network:** only the reverse proxy is exposed (**Caddy**, with TLS
+  mandatory). The Core API sits behind it; the Query Runner, both databases
+  and Redis are on the private network with no published ports.
+- **Web vulnerabilities:** CSRF through a SameSite cookie plus an `Origin`
+  check on mutating requests; cross-site scripting through React's escaping
+  and — for the stories — a renderer that builds React elements and never an
+  HTML string, so there is no sanitiser in the path to walk around
+  (section 6.3); plus a strict CSP and the usual headers (HSTS,
+  `X-Content-Type-Options`, `frame-ancestors`).
+- **Staff input:** an uploaded game script runs only on the game cluster,
+  under a separate builder role, when a template is created — never against
+  the core database; with validation and a size limit.
+- **Secrets:** through environment variables or Docker secrets; the repository
+  holds only `.env.example`; different passwords for each database role.
+- **Dependencies:** `govulncheck` and `npm audit` in CI; pinned base images.
+- **The integrity of the competition:** reference answers are unreachable from
+  any participant endpoint; attempts are limited per question; changes to
+  questions and answers after publication are in the audit trail; the SQL
+  policy cannot change while `running`; contest managers are appointed
+  explicitly and the appointment is audited; a contest's address restrictions
+  are checked on every participant action, and `X-Forwarded-For` is accepted
+  only from the trusted reverse proxy, which an integration test forges.
+- **Write mode (`mode = read_write`):** filling the disk is bounded by the
+  instance's size quota (`pg_database_size` monitoring plus
+  `temp_file_limit`); the game tables' structure is immutable, with no `ALTER`
+  or `DROP` in either the validator or the grants — `TRUNCATE` is allowed, but
+  only on tables the contest opened for writing anyway, and it does not change
+  a table's shape; a participant's own objects live only in the `work` schema;
+  and the database-per-participant isolation guarantees that writes are
+  invisible to anybody else.
 
-- **Сеть:** наружу открыт только фронтенд/реверс-прокси (**Caddy** или Nginx, TLS обязателен). Core API — за прокси; Query Runner, обе БД, Redis — только в приватной docker-сети, порты не публикуются.
-- **Web-уязвимости:** CSRF — SameSite cookie + проверка Origin на мутирующих запросах; XSS — экранирование по умолчанию в React + рендер markdown историй через санитайзер (rehype-sanitize) + строгий CSP; защита заголовками (HSTS, X-Content-Type-Options, frame-ancestors).
-- **Ввод админа:** загружаемый игровой SQL-скрипт исполняется только на игровом кластере под отдельной ролью-строителем при создании шаблона, никогда — на core-БД; валидация и ограничение размера.
-- **Секреты:** через переменные окружения / docker secrets; в репозитории — только `.env.example`; разные пароли ролей БД (core-приложение, provisioner, game_reader).
-- **Зависимости:** `govulncheck` + `npm audit` в CI; pinned-версии базовых образов.
-- **Целостность соревнования:** эталонные ответы недоступны из студенческих эндпоинтов; лимит попыток на вопрос; audit trail изменений вопросов/ответов после публикации; смена политики SQL-доступа заблокирована во время `running`; назначения менеджеров олимпиад — только явные, с записью в аудит; IP-ограничения олимпиады (раздел 7.1) проверяются на каждом действии участника, а `X-Forwarded-For` принимается только от доверенного реверс-прокси (закреплено интеграционным тестом на подделку заголовка).
-- **Режим записи (mode = read_write):** дополнительные векторы закрыты так — заполнение диска ограничено квотой на размер инстанса (мониторинг `pg_database_size` + `temp_file_limit`), структура игровых таблиц неизменяема (нет `ALTER`/`DROP` ни в валидаторе, ни в GRANT'ах — `TRUNCATE` разрешён, но только на тех таблицах, которые олимпиада и так открыла на запись, и форму таблицы он не меняет), студенческие объекты живут только в схеме `work`, а изоляция «БД на участника» гарантирует, что записи не видны другим участникам.
+**An index of the security and performance decisions added after the first
+audit.** The reasoning lives in the section it belongs to; this is only where
+to look and which variable governs what.
 
-**Указатель по решениям безопасности и производительности, добавленным после первого аудита** — сама формулировка живёт в разделе, на который ссылается, здесь только куда смотреть и какая переменная за что отвечает:
-
-| Решение | Где | Переменные |
+| Decision | Where | Variables |
 |---|---|---|
-| Границы функций-генераторов значений (`repeat`/`lpad`/`rpad`/`format`/`generate_series`) в валидаторе | раздел 5, п. 3 | — |
-| Предел памяти одного процесса игрового кластера и арифметика допуска | раздел 4.3 | `GAME_DB_PROCESS_MEMORY_BYTES`, `GAME_DB_MEMORY_BYTES`, `QUERY_CONCURRENT` |
-| Секрет между Core API и Query Runner, адрес прослушивания по умолчанию | раздел 5, п. 1 | `QUERY_RUNNER_TOKEN` |
-| Ограничение одновременных вычислений argon2id и память API-контейнера | раздел 7.2 | `PASSWORD_HASH_CONCURRENCY`, `PASSWORD_HASH_MAX_WAIT`, `API_GOMEMLIMIT`, `API_MEMORY_BYTES` |
-| Абсолютный срок жизни сессии | раздел 7.2 | `SESSION_MAX_LIFETIME` |
-| Троттлинг входа по паре «аккаунт и адрес», потолок на аккаунт, доверенное устройство, разблокировка персоналом | раздел 7.2 | `MAX_LOGIN_ATTEMPTS_PER_ADDRESS`, `MAX_LOGIN_ATTEMPTS_PER_ACCOUNT`, `MAX_LOGIN_ATTEMPTS_PER_DEVICE`, `MAX_TRUSTED_LOGIN_ATTEMPTS_PER_ACCOUNT`, `DEVICE_COOKIE_SECRET`, `DEVICE_COOKIE_TTL` |
-| Кеш аутентифицированного аккаунта за сессией и его инвалидация | раздел 7.2 | `SESSION_ACCOUNT_CACHE_TTL` |
-| Эталонный ответ-регулярное выражение сверяется целиком, а не подстрокой | раздел 7.3 | — |
-| Собственный лимит частоты ответов; в режиме `winner` финальный вопрос обязан иметь предел попыток | раздел 6.1.1 | `ANSWER_RATE_PER_MINUTE` |
-| При индивидуальном тайминге часы участника стартуют при первом чтении содержимого, а не по подписке на события | раздел 8 | — |
-| Шедулер завершает олимпиаду не раньше, чем истечёт грейс, — тем же условием, что и приём ответов | раздел 8 | `DEADLINE_GRACE` |
-| Персонал и участники одной олимпиады не совмещаются | раздел 7 | — |
-| `ends_at`/`starts_at` неподвижны на идущей олимпиаде там, где от них уже посчитан наступивший факт (момент заморозки, штраф ICPC) | раздел 6.1.1 | — |
-| Доверенные прокси сужены до двух закреплённых адресов; секрет, которым интерфейс подтверждает адрес перед API | раздел 7.2 | `TRUSTED_PROXIES`, `INGRESS_SECRET` |
-| Отказ стартовать вне development на заглушке из `.env.example` | раздел 7.2 | — (само значение — `change-me` в примере) |
-| Досрочное пополнение резервного пула по будильнику, не только по таймеру | раздел 4.2 | `GAME_POOL_DEPTH` |
-| Раннер держит одно простаивающее соединение на игровую БД между запросами | раздел 4.3, раздел 5, п. 6 | `QUERY_CONN_IDLE_TIMEOUT` |
-| Однократный расчёт лидерборда на промах кеша; отдельный кеш живой таблицы организатора; поколение кеша, привязанное к открытию результатов | раздел 10 | — |
-| Размер пула соединений API к core-БД | раздел 12 | `CORE_DB_POOL_MAX` |
-| Сколько CSV-выгрузок одновременно держат соединение из этого пула | раздел 12 | `EXPORT_CONCURRENCY` |
+| Bounds on value-generating functions (`repeat`, `lpad`, `rpad`, `format`, `generate_series`) in the validator | 5, item 3 | — |
+| The game cluster's per-process memory limit and the admission arithmetic | 4.3 | `GAME_DB_PROCESS_MEMORY_BYTES`, `GAME_DB_MEMORY_BYTES`, `QUERY_CONCURRENT` |
+| The shared secret between the Core API and the Query Runner, and the default listen address | 5, item 1 | `QUERY_RUNNER_TOKEN` |
+| Bounding concurrent argon2id computations, and the API container's memory | 7.2 | `PASSWORD_HASH_CONCURRENCY`, `PASSWORD_HASH_MAX_WAIT`, `API_GOMEMLIMIT`, `API_MEMORY_BYTES` |
+| A session's absolute lifetime | 7.2 | `SESSION_MAX_LIFETIME` |
+| Sign-in throttling per account-and-address pair, the per-account ceiling, the trusted device, and an unlock by staff | 7.2 | `MAX_LOGIN_ATTEMPTS_PER_ADDRESS`, `MAX_LOGIN_ATTEMPTS_PER_ACCOUNT`, `MAX_LOGIN_ATTEMPTS_PER_DEVICE`, `MAX_TRUSTED_LOGIN_ATTEMPTS_PER_ACCOUNT`, `DEVICE_COOKIE_SECRET`, `DEVICE_COOKIE_TTL` |
+| Caching the authenticated account behind a session, and invalidating it | 7.2 | `SESSION_ACCOUNT_CACHE_TTL` |
+| A regular-expression reference answer is matched whole, not as a substring | 7.3 | — |
+| A rate limit of its own for answers; in `winner` mode the final question must carry an attempt limit | 6.1.1 | `ANSWER_RATE_PER_MINUTE` |
+| Under individual timing, a participant's clock starts on the first read of the content, not on an event subscription | 8 | — |
+| The scheduler ends a contest no earlier than the grace expires, by the same condition that closes submission | 8 | `DEADLINE_GRACE` |
+| A contest's staff and its participants do not overlap | 7 | — |
+| `ends_at` and `starts_at` are immobile on a running contest where a fact already computed from them has occurred (the freeze, the ICPC penalty) | 6.1.1 | — |
+| Trusted proxies narrowed to two fixed addresses; the secret the interface proves an address with | 7.2 | `TRUSTED_PROXIES`, `INGRESS_SECRET` |
+| Refusing to start outside development on a placeholder from `.env.example` | 7.2 | — |
+| Refilling the spare pool on a wake-up rather than only on a timer | 4.2 | `GAME_POOL_DEPTH` |
+| The Runner keeps one idle connection per game database between queries | 4.3, and 5 item 6 | `QUERY_CONN_IDLE_TIMEOUT` |
+| One leaderboard computation per cache miss; a separate cache for the organiser's live table; a cache generation tied to revealing the results | 10 | — |
+| The API's connection pool to the core database | 12 | `CORE_DB_POOL_MAX` |
+| How many CSV exports hold a connection from that pool at once | 12 | `EXPORT_CONCURRENCY` |
 
-**Принятые риски.** Решения владельца, зафиксированные здесь, чтобы их не приняли за недосмотр:
+**Accepted risks.** The owner's decisions, recorded here so they are not
+mistaken for oversights:
 
-- **Таблица результатов открыта без входа.** `GET /contests/{id}/leaderboard` смонтирован вне аутентификации, поэтому по идентификатору олимпиады её таблицу читает кто угодно, а вместе с местами — логины участников (у школьной установки это номера) или полные имена. Ограничение по сети (раздел 7.1) на этот маршрут не распространяется: оно про действия участника, а не про чтение опубликованной таблицы. Следствия, которые организатор должен знать: при индивидуальном тайминге ещё не стартовавший участник видит по сетке ICPC, кто какие вопросы решил и за сколько; заморозка (раздел 10) скрывает только то, что она скрывает по правилам олимпиады, и не скрывает состав участников. Смягчение — организационное: не публиковать идентификатор олимпиады шире нужного и заморозить таблицу на время, когда стартуют не все сразу. Технические варианты, если решение изменится: закрыть маршрут за аутентификацию или добавить олимпиаде режим обезличенных подписей.
+- **The results table is open without signing in.**
+  `GET /contests/{id}/leaderboard` is mounted outside authentication, so
+  anybody with a contest's identifier reads its table — and with the places,
+  the participants' logins (student numbers, in a university installation) or
+  their full names. The network restriction does not extend to this route: it
+  is about a participant's actions, not about reading a published table. The
+  consequences an organiser should know: under individual timing, a
+  participant who has not started yet can see from the ICPC grid who solved
+  which questions and how quickly; and the freeze hides only what the
+  contest's rules say it hides, not who is taking part. The mitigation is
+  organisational — do not publish a contest's identifier more widely than
+  necessary, and freeze the table for the period when people start at
+  different times. If the decision changes, the technical options are putting
+  the route behind authentication, or giving a contest a mode with anonymised
+  labels.
 
-**План аудита перед первой олимпиадой (требование п. 8):**
+**The audit plan before the first olympiad:**
 
-1. Чек-лист **OWASP ASVS L2** по разделам аутентификации, сессий, контроля доступа, валидации.
-2. Автоматика: SAST (gosec, semgrep), сканирование зависимостей, **OWASP ZAP** baseline-скан развёрнутого стенда.
-3. Ручной пентест Query Runner'а: попытки обхода AST-валидации (вложенные statements, функции записи, доступ к чужим БД, DoS через рекурсивные CTE / декартовы произведения) — оформить как регрессионный набор тестов.
-4. Нагрузочное тестирование (k6): пиковый сценарий «N участников одновременно жмут Run» + массовый провижининг (создание N инстансов из шаблона целевого размера, замер WAL_LOG против FILE_COPY).
-5. Повторять сокращённый аудит перед каждой олимпиадой и полный — при изменениях в auth/queryproxy/provisioner.
+1. An **OWASP ASVS L2** checklist over authentication, sessions, access
+   control and validation.
+2. Automation: SAST (gosec, semgrep), a dependency scan, and an **OWASP ZAP**
+   baseline scan of a deployed instance.
+3. A manual penetration test of the Query Runner: attempts to walk around the
+   AST validation — nested statements, writing functions, reaching another
+   database, denial of service through recursive CTEs or Cartesian products —
+   written up as a regression suite.
+4. Load testing (k6): the peak scenario of N participants pressing Run at
+   once, plus bulk provisioning — creating N instances from a template of the
+   target size, measuring `WAL_LOG` against `FILE_COPY`.
+5. Repeat a reduced audit before every olympiad, and a full one whenever
+   authentication, the query proxy or provisioning changes.
 
+## 12. Scaling
 
-## 12. Масштабируемость
+The target is hundreds of concurrent participants — an olympiad for a whole
+year group.
 
-Целевая нагрузка: сотни одновременных участников (олимпиада на весь поток).
+- **The stateless layers**, the Core API and the Query Runner, hold no state
+  (sessions are in the cache), so they scale horizontally behind the proxy.
+  The Query Runner scales independently, being the main consumer of resources.
+- **The game cluster** shards trivially: participants are unrelated to each
+  other, so growth means a second PostgreSQL instance, `game_instances.db_name`
+  gaining a cluster address, and provisioning distributing participants
+  round-robin. That is the main advantage of the database-per-participant
+  model.
+- **Connections to the game cluster** are managed by the Query Runner: at most
+  one idle connection per database plus the global semaphore (section 4.3),
+  and the total of busy and idle together never exceeds `QUERY_CONCURRENT`.
+  PgBouncer is not used: its pools are keyed by database and role, so with a
+  database per participant it multiplexes nothing.
+- **The core database** will not be the bottleneck at these volumes, and the
+  hot reads — the clock, the leaderboard — are cached. The API's pool to it
+  (`CORE_DB_POOL_MAX`, 25 by default) is sized against that cluster's own
+  `max_connections` (100, set explicitly in `docker-compose.yml` rather than
+  left implied): console pre-checks, event-stream resynchronisation, exports
+  each holding a connection for up to a minute, the leaderboard and the staff
+  dashboards share one pool, while one-off tools (`migrate`, `bootstrap`, the
+  orphan finder) briefly open their own beside it — and the sum stays well
+  under the cluster's ceiling, leaving room for PostgreSQL's reserved
+  connections and an operator's own psql. Exports are counted separately,
+  because a file is read at the client's speed: at most `EXPORT_CONCURRENCY`
+  of them hold a pool connection at once (five by default, a fifth of the
+  pool, leaving twenty connections for short requests), and an export beyond
+  that immediately gets a 503 with `Retry-After`, having read nothing and
+  written nothing to the access log. The limit is shared by every export route
+  — the participant's query log and the organiser's monitoring feeds alike —
+  because their connections are shared.
+- **Start-time peaks** are handled by provisioning in advance through the
+  queue and the spare pool (section 4.2), and by pushing the start event over
+  SSE rather than having clients poll.
+- **Event-stream capacity:** exactly **one** multiplexed SSE channel per
+  client, carrying the clock, the contest's events and the staff live log
+  inside it. An idle connection is cheap in Go — a goroutine and a few
+  kilobytes — but hundreds of them require a raised file-descriptor limit, a
+  heartbeat every thirty seconds or so, and SSE buffering disabled on the
+  reverse proxy; all of which is fixed in the deployment's configuration.
+- **RBAC scales** through the permission model: new roles and rights are rows.
 
-- **Stateless-слои** — Core API и Query Runner не хранят состояния (сессии в Redis) → горизонтальное масштабирование добавлением реплик за прокси. Query Runner масштабируется независимо (главный потребитель ресурсов).
-- **Игровой кластер** — шардируется тривиально: участники не связаны между собой, значит при росте ставится второй PostgreSQL-инстанс, и `game_instances.db_name` дополняется адресом кластера; provisioner раскладывает участников round-robin. Это главное преимущество выбранной модели «БД на участника».
-- **Соединения к игровому кластеру** — под управлением Query Runner: не более одного простаивающего соединения на БД + глобальный семафор (раздел 4.3); физических соединений, занятых и простаивающих вместе, не больше `QUERY_CONCURRENT`. PgBouncer не используется: его пулы привязаны к паре «БД + роль», при БД-на-участника мультиплексирования он не даёт.
-- **Core-БД** — на этих объёмах узким местом не станет; горячие чтения (таймер, лидерборд) кешируются в Redis. Пул соединений API до core-БД (`CORE_DB_POOL_MAX`, по умолчанию 25) посчитан против собственного `max_connections` кластера `pg-core` (100 по умолчанию, задан явно в `docker-compose.yml`, а не оставлен подразумеваемым): консольные предпроверки, ресинхронизация SSE, экспорты, каждый занимающий соединение до минуты, лидерборд и организаторские дашборды делят один пул, а рядом с ним недолго открывают свои собственные разовые инструменты (`migrate`, `bootstrap`, поиск потерянных инстансов) — сумма остаётся с запасом ниже потолка кластера, оставляя место резервным соединениям Postgres и собственному psql оператора. Экспорты при этом считаются отдельно: файл читается со скоростью клиента, поэтому одновременно соединение из пула держат не больше `EXPORT_CONCURRENCY` выгрузок (по умолчанию 5 — пятая часть пула, остальные 20 соединений остаются коротким запросам), а выгрузка сверх этого числа сразу получает 503 `too_many_exports` с заголовком `Retry-After`, ничего не прочитав и не записав в журнал доступа. Ограничение общее для всех маршрутов выгрузки — и журнала запросов участника, и организаторских лент наблюдения, — потому что соединения у них общие.
-- **Пики старта** — провижининг заранее через очередь и резервный пул (раздел 4.2); SSE-раздача события старта вместо синхронного поллинга.
-- **SSE-ёмкость** — на клиента ровно **один** мультиплексированный SSE-канал (таймер, события олимпиады, live-журнал в админке — внутри него). Простаивающее соединение для Go дёшево (горутина + килобайты буферов), но сотни соединений требуют поднятого лимита файловых дескрипторов, heartbeat каждые ~30 с и отключённой буферизации SSE на реверс-прокси — фиксируется в конфигурации деплоя.
-- **RBAC масштабируем** (требование п. 11) за счёт permission-модели: новые роли и права — это строки в таблицах.
+The growth path: Docker Compose on-premise today → the same images in
+Kubernetes with autoscaling for the Query Runner, if the system outgrows one
+university.
 
-Путь роста: Docker Compose (текущий, on-premise) → те же образы в k8s с HPA для Query Runner, если система выйдет за пределы одного вуза.
+## 13. The repository, and deployment
 
-## 13. Структура репозитория и деплой
-
-Монорепозиторий:
+A monorepo:
 
 ```
 DBContest/
 ├── backend/
-│   ├── cmd/api/            # Core API
-│   ├── cmd/queryrunner/    # Query Runner
+│   ├── cmd/api/            # the Core API
+│   ├── cmd/queryrunner/    # the Query Runner
+│   ├── cmd/migrate/        # schema migrations
 │   ├── internal/
-│   │   ├── auth/  contests/  submissions/  provisioner/
-│   │   ├── queryproxy/  reporting/  audit/
-│   │   └── platform/       # config, db, logging, middleware
-│   ├── migrations/         # golang-migrate, core DB
-│   └── proto/              # gRPC-контракт Query Runner
-├── frontend/               # Next.js (app/, components/, lib/)
+│   │   ├── auth/  contests/  submissions/  provisioning/
+│   │   ├── queryproxy/  reporting/  audit/  monitor/  covers/
+│   │   └── platform/       # config, storage, logging, http plumbing
+│   ├── migrations/         # golang-migrate, the core database
+│   └── proto/              # the Query Runner's gRPC contract
+├── frontend/               # Next.js: app/, components/, lib/
 ├── deploy/
-│   ├── docker-compose.yml  # caddy, api, migrate, pg-core (базовый стек);
-│   │                       #  redis — профиль shared;
-│   │                       #  bootstrap — профиль bootstrap;
-│   │                       #  prometheus, loki, promtail, grafana —
-│   │                       #  профиль observability;
-│   │                       #  queryrunner, pg-game, frontend — по мере шагов
-│   ├── docker-compose.build.yml  # сборочный оверлей (см. ниже)
+│   ├── docker-compose.yml  # caddy, api, migrate, pg-core (the base stack);
+│   │                       #  redis, bootstrap, observability as profiles
+│   ├── docker-compose.build.yml  # the build overlay (below)
 │   ├── docker-compose.dev.yml
 │   ├── Caddyfile
 │   └── observability/      # prometheus.yml, promtail.yml, datasources
 └── docs/
-    └── api/error-codes.json # контракт: коды ошибок, которые отдаёт API
+    ├── api/                # generated contracts: error codes, audit actions
+    └── design/             # the design system's specification
 ```
 
-**Состав compose растёт вместе с кодом**, а не забегает вперёд: сервис, за которым нет реализации, дал бы стек, который не поднимается. Опциональные части вынесены в профили, чтобы небольшая установка оставалась небольшой: `shared` (Redis), `observability` (Prometheus + Loki + Grafana), `bootstrap` (разовое создание администратора).
+**The Compose file grows with the code** rather than ahead of it: a service
+with no implementation behind it would be a stack that does not come up.
+Optional parts are profiles, so that a small installation stays small.
 
-**Наружу открыт только Caddy.** Он терминирует TLS, и это не косметика: session-cookie помечается `Secure` вне development, а `Secure`-cookie, доставленную по plain HTTP, браузер молча выбрасывает — вход отработал бы «успешно» и отвалился на следующем запросе. С `SITE_ADDRESS=localhost` Caddy выпускает локальный сертификат сам, с реальным именем — получает публичный автоматически. Порт API наружу не публикуется вовсе; напрямую он доступен только в dev-оверлее.
+**Only Caddy is exposed.** It terminates TLS, and that is not cosmetic: the
+session cookie is marked `Secure` outside development, and a `Secure` cookie
+delivered over plain HTTP is silently discarded by the browser — sign-in would
+appear to succeed and fall over on the next request. With
+`SITE_ADDRESS=localhost` Caddy issues a local certificate itself; with a real
+name it obtains a public one automatically. The API's port is not published at
+all and is reachable directly only in the development overlay.
 
-**Без профиля `observability`** метрики отдаются в эндпоинт, который никто не читает — в такой установке следует ставить `METRICS_BACKEND=log`, тогда статистика попадает в общий лог-поток (раздел 3.1).
+**Without the observability profile**, metrics are served to an endpoint
+nobody reads; such an installation should set `METRICS_BACKEND=log` so the
+statistics join the log stream (section 3.1).
 
-### Сборка и выкатка
+### Building and shipping
 
-**Сервер ничего не компилирует.** Базовый `docker-compose.yml` только называет образы и не содержит `build:` вовсе, поэтому `up` с несуществующим тегом падает с внятной ошибкой, а не собирает молча что-то новое. Сборка на машине, которая обслуживает олимпиаду, означала бы тулчейн и исходники на ней, нагрузку компиляции рядом с БД в худший для этого час и — главное — что запущено не то, что проверил CI: две разные сборки одного коммита.
+**The server compiles nothing.** The base `docker-compose.yml` only names
+images and contains no `build:` at all, so `up` with a tag that does not exist
+fails with a clear error instead of quietly building something new. Building
+on the machine serving an olympiad would mean a toolchain and sources on it,
+compilation load beside the database at the worst possible hour, and — above
+all — that what runs is not what CI checked: two different builds of one
+commit.
 
-`docker-compose.build.yml` возвращает `build:` двум местам, которые действительно собирают: разработчику, поднимающему весь стек из рабочего дерева, и CI. Имя образа берётся из базового файла, так что локальная сборка и релизная не могут разъехаться по тегам.
+`docker-compose.build.yml` gives `build:` back to the two places that really
+build: a developer bringing the whole stack up from a working tree, and CI.
+The image name comes from the base file, so a local build and a release build
+cannot drift apart by tag.
 
-Три семейства команд, и разница между ними существенна:
+Three families of commands, and the difference matters:
 
-| Семейство | Что делает |
+| Family | What it does |
 |---|---|
-| `dev-*` | только инфраструктура (PostgreSQL, Redis); API и интерфейс запускаются из редактора. Ежедневный цикл, образы не участвуют |
-| `stack-*` | весь стек в контейнерах, **собранный из рабочего дерева** — включая незакоммиченное; тег `<commit>` или `<commit>-dirty` |
-| `deploy*` | именованный релиз из реестра, ничего не собирается |
-
-Выкатка — **pull-модель, запускаемая человеком на хосте**: наружу из университетской сети ничего не открывается, приватный ключ от прода не живёт в облачном CI, а слияние в `main` не перезапускает сервис посреди идущего соревнования. Откат — та же команда с прошлой версией. Образы у API и интерфейса раздельные, поэтому `deploy-web` не трогает API и его живые сессии.
-
-**CI по компонентам.** Проверка словаря ошибок читает `docs/api/error-codes.json`, который генерирует бэкенд, а не его исходники, — поэтому фильтры путей честные: изменение в Go больше не тянет за собой фронтовый прогон, и наоборот. Публикация образов идёт только с `main` и с тегов, после тестов и security-скана.
-
-**Миграции на выкатке — не онлайн-операция.** `cmd/migrate` отдаёт файл PostgreSQL одной строкой, а строка из нескольких операторов выполняется как одна неявная транзакция: файл держит все взятые им блокировки до конца. Поэтому `000034_monitoring_contest_scope` и `000037_registration_activity` держат `ACCESS EXCLUSIVE` на `query_log` и `submissions` всё время своих бэкофиллов — на живой олимпиаде это остановленная консоль у всех. Их катают **с остановленным API**, а не «в тихий момент», и не во время соревнования.
-
-Соглашение, которое это оформляет и которое закрепляет тест (`migrations/migrations_test.go`): файл, берущий тяжёлую блокировку, открывается своим `SET lock_timeout` — ждать в очереди опаснее, чем упасть; файл, строящий индекс `CONCURRENTLY`, состоит ровно из одного оператора и **не** несёт `lock_timeout` вовсе, потому что такая сборка ждёт транзакции старше себя через тот же менеджер блокировок, и таймаут оборвал бы её из-за любой минутной выгрузки, оставив невалидный индекс. Само соединение миграций таймаута блокировок не ставит по этой же причине; `statement_timeout` на нём снят, чтобы длинная сборка индекса не обрывалась сама.
-
-**Что перечитать в существующем `.env` перед выкаткой.** Два пункта, и оба тихие.
-
-Первый — `REDIS_ADDR`. Compose подставляет адрес своего Redis выражением `${REDIS_ADDR-…}` — через `-`, не `:-`, — то есть **пустое** значение считается осознанным выбором in-process кэша, а не «не задано». Ранние версии `.env.example` везли строку `REDIS_ADDR=` незакомментированной, поэтому `.env`, скопированный с той версии, после этой выкатки переводит API на кэш в процессе — ровно ту единственную схему, при которой переполнившийся кэш отказывает каждой проверке частоты и выписывает всех разом. Лечение — **удалить строку `REDIS_ADDR=` из своего `.env`**, а не заполнить её. Признаки, если пропустили: предупреждение `cache.New` на старте и `mode` в ответе готовности.
-
-Второй — `EXPORT_CONCURRENCY` рядом с `CORE_DB_POOL_MAX`. Каждое из двух и раньше проверялось на свой диапазон, но не друг против друга, а вместе они умеют попросить у пула больше соединений, чем в нём есть (десять выгрузок против пула в пять — это весь пул, занятый читателями, которые вправе читать медленно). Теперь несогласованная пара отказывает на старте с текстом, называющим обе цифры: выгрузкам отводится не больше двух пятых пула. Лучше узнать это при `deploy`, чем в день олимпиады, но узнать стоит заранее.
-
-**Бэкапы.** `make backup` — дамп core-БД изнутри контейнера, `make restore-check` грузит дамп в одноразовую БД и удаляет её (разница между «бэкапы есть» и «мы думаем, что есть»), `make restore` заменяет живую БД и требует явного подтверждения. Инстансы участников не бэкапятся — они восстанавливаются из шаблона; шаблоны игровых БД будут дампиться вместе с core-БД на шаге 4.
-
-
-### Смена сервера
-
-Записано не потому, что переезд планируется, а потому что это та же процедура, что и восстановление после отказа диска, — и второе не выбирают. День, когда она понадобится, — плохой день для того, чтобы выводить её заново.
-
-**Переносится ровно одно: дамп core-БД.** Так вышло из решений, принятых по другим поводам, и стоит понимать, из каких именно, чтобы случайно их не отменить.
-
-- **Сервер ничего не компилирует** (см. выше): `deploy` — это `pull` плюс `up -d` против именованного тега в реестре. Новой машине нужны Docker, папка `deploy/` и `.env`.
-- **Образы не знают, где они запущены.** Адрес API, язык и тема читаются на каждый запрос; в сборку не зашито ничего, что решает окружение. Один образ работает и на stage, и на проде.
-- **Загруженные файлы — строки в `settings_files`, а не том на диске** (раздел 10.1). Логотип и иконки уезжают вместе с дампом. Именно этот пункт обычно и ломает переезды: том забывают, потому что он не упомянут нигде, кроме `docker-compose.yml`.
-- **Сертификат переполучается сам.** Caddy берёт его из `SITE_ADDRESS`; переносить `caddy-data` не нужно и не следует.
-
-**Что сознательно остаётся на старой машине.** `pg-game-data` — инстансы участников, они создаются провижинером по требованию. `redis-data` — сессии; их потеря означает, что все войдут заново, что при смене сервера скорее правильно, чем нет. `caddy-data` — сертификаты. Тома наблюдаемости — история графиков, переносить по желанию.
-
-**Порядок.**
-
-1. Снять дамп: `make backup`, и **проверить его** — `make restore-check FILE=…`. Непроверенный дамп это гипотеза, а не бэкап.
-2. Поднять новый хост: Docker, `deploy/`, `.env`. `SITE_ADDRESS` — **временное** имя, не боевое.
-3. `make deploy VERSION=vX.Y.Z` — тот же тег, что работает сейчас. Переезд и обновление версии в один заход — это два подозреваемых на один сбой.
-4. `make restore FILE=… CONFIRM=yes` на новом хосте.
-5. Прогнать вход, олимпиаду и SQL-консоль на временном имени.
-6. Переключить DNS, поменять `SITE_ADDRESS` на боевое, `make deploy` ещё раз. Caddy выпишет сертификат на новое имя.
-
-**Шаг 5 возможен целиком, и это не очевидно.** Фронт и API обязаны жить на одном имени — из-за `SameSite=Lax` и сверки `Origin` (см. `deploy/Caddyfile`), — но на временном имени стек самосогласован. То есть переезд репетируется полностью, с настоящими куками и настоящим входом, до того как что-либо переключено.
-
-**Три места, где это не бесплатно.**
-
-**Секреты.** В `.env` пароли Postgres и Redis. Если единственная их копия лежит на переезжаемой машине, то это уже не переезд, а гонка, — и та же ситуация делает восстановление после отказа диска невозможным. Держать их там, откуда они переживут машину, надо до того, как это понадобится.
-
-**Окно DNS.** Сертификат выписывается только после того, как имя указывает на новый хост. Снизить TTL за сутки — и окно измеряется минутами вместо часов.
-
-**Время.** `restore` останавливает API на время работы: `pg_restore` не может удалить объекты, которые держит живой сервис. Переезжать между олимпиадами, не во время.
-
-**Поправка на шаг 4.** Пока игровой контур не написан, `pg-game-data` целиком одноразовый. С появлением шаблонов игровых БД (раздел 4.2) они начнут дампиться вместе с core-БД, и в списке переносимого станет два пункта вместо одного. Инстансы участников останутся одноразовыми и тогда.
-
-**Чего в этой процедуре нет — CI.** Выкатка pull-моделью означает, что ни один пайплайн не знает адреса прода: смена сервера не трогает `.github/workflows` вовсе. Это следствие решения, принятого ради другого (не держать ключ от прода в облаке), и его стоит сохранить.
-
-
-## 14. Порядок имплементации
-
-Номера существующих шагов не двигаются: на «шаг 4» и «шаг 5» ссылаются другие разделы, поэтому добавленное встраивается подпунктом.
-
-- [x] **1. Фундамент** — каркас монорепо, docker-compose (pg-core, redis), миграции core-схемы, каркас Core API + логирование/метрики.
-- [x] **2. Auth + RBAC** — логин, сессии, permissions-middleware (глобальный уровень + `contest_managers`), управление пользователями, `audit_log`, экран `/users` и каталог ролей `GET /roles`.
-- [x] **3. Контент** — CRUD олимпиад/историй/вопросов/ответов, назначение менеджеров, тип записи и управление участниками, IP-ограничения, админский UI конструктора.
-  - **3.1 Доводка конструктора и установки.** Не зависит от игрового контура, поэтому идёт параллельно шагу 4:
-    - [x] экран `/users` и `GET /roles`, закрывший остаток шага 2 (TODO 7);
-    - [x] одна кнопка «Сохранить» на вопросе: `PUT` вопроса целиком, одна транзакция (TODO 4, раздел 6.3);
-    - [x] редактор истории — WYSIWYG поверх Markdown, разбор сырого HTML выключен на чтении (TODO 5, раздел 6.3);
-    - [x] настройки установки: таблица `settings`, право `settings.manage`, название и контакты (TODO 6, раздел 10.1);
-    - [x] загрузка логотипа, иконки приложения и иконки вкладки: `settings_files`, проверка типа по содержимому, пределы размера и стороны, отдача с `nosniff` и `attachment` (TODO 6.1, раздел 10.1).
-- [x] **4. Игровой контур** — игровой кластер, provisioner (очередь + резервный пул, GRANT'ы по политике), Query Runner с whitelist-AST-валидацией и admission control. **Самая рискованная часть, покрыть регрессионными security-тестами** (первая итерация — только `read_only`; режим `read_write` — следующая итерация с собственным набором тестов).
-
-  Порядок внутри шага — от того, что доказуемо в изоляции, к тому, что требует железа. Валидатор первым не потому, что он самый крупный, а потому, что он единственный кусок без сети и без БД: его можно покрыть тестами до дна, а всё остальное потом строится на уже проверенной границе. Ошибка в провижининге видна сразу; валидатор, пропустивший лишнее, молчит.
-
-  - [x] **4.1 Описание политики SQL-доступа** (раздел 4.1) — `internal/sqlpolicy`: `Policy` с `mode`, `writable_tables` и тремя флагами, `Validate()` отвергает несогласованное (право на запись при `read_only`) и имена таблиц, не являющиеся простыми идентификаторами — их предстоит подставлять в GRANT'ы, где связывания параметров для имени не существует. Нулевое значение невалидно намеренно: структура, которую никто не заполнил, не должна молча означать «только чтение».
-  - [x] **4.2 Валидатор AST по белому списку** (раздел 5, п. 3) — `pg_query_go` (настоящий парсер PostgreSQL). Ровно одно statement, разрешённые корневые узлы, обход **всего** дерева protobuf-рефлексией, allowlist функций, расширяемый оператором без релиза, разделение каталогов на структурные и чувствительные. 179 тестов, из них большинство — регрессионные security-тесты.
-
-    Три решения, которые стоит помнить:
-
-    - **Обход рефлексией, а не рукописным switch'ем по грамматике.** Switch перечисляет поля, о которых кто-то подумал; первый же узел с забытым дочерним полем — это поддерево, которое никто не проверяет, молча и только для тех запросов, что до него доходят. Рефлексия не может забыть поле.
-    - **Statements-записи отсутствуют в списке узлов, а не отклоняются в корне.** Именно это отклоняет data-modifying CTE: `WITH gone AS (DELETE … RETURNING *) SELECT * FROM gone` имеет в корне честный `SELECT`, а запись лежит тремя уровнями глубже.
-    - **`read_write` отклоняется явным кодом, а не приближается к `read_only`.** Валидатор, который тихо трактовал бы режим записи как чтение, разошёлся бы с GRANT'ами шаблона — ровно тот раскол, ради предотвращения которого политика и валидатор лежат в одном пакете. Режимы записи — следующая итерация со своим набором тестов.
-  - [x] **4.3 Игровой кластер и роли** (раздел 4) — сервис `pg-game` с cgroup-лимитами и без публикуемого порта; `internal/gamedb` создаёт роли `game_reader`/`game_writer` идемпотентно, закрывает им доступ к служебным базам кластера и снимает чувствительные каталоги с базы. 52 проверки, каждая — подключение **той самой ролью**, под которой выполняется запрос участника: гарантия о том, что откажет СУБД, из Go не утверждается, её можно только спровоцировать.
-
-    Проверка выявила, что раздел 4 переоценивал настройки роли: `statement_timeout` и `default_transaction_read_only` — `USERSET`, сессия снимает их одной строкой. Запись держат привилегии, время — собственный дедлайн Query Runner'а. Таблица в разделе 4 теперь разделяет границы и умолчания.
-
-    Два вывода о самих тестах: закалку применяет **шаблон**, а копия наследует её вместе с каталогом — без этого каждый инстанс пришлось бы закалять отдельно, и пропущенный выглядел бы как остальные. И `CREATE DATABASE … TEMPLATE` отказывается копировать базу, к которой кто-то подключён, — та самая дисциплина шаблона из 4.2, обнаруженная тестом раньше, чем провижинингом.
-  - [x] **4.4 Query Runner** (разделы 4.3, 5 пп. 5–7) — `internal/queryrunner`: дедлайн с отменой, admission control, усечение результата, двухфазный журнал. Плюс `postgres.QueryLog` с фоновой разметкой зависших строк.
-
-    Фоновая разметка зависших строк `query_log` включена в Core API (`internal/app`, раз в минуту, отсечка 2 минуты при дедлайне запроса 5 секунд) — без неё двухфазная запись собрана наполовину, что хуже, чем не заявлять её вовсе. Закалка каталогов применяется к `template1`, поэтому **любая** база, созданная без явного шаблона, наследует её: альтернатива отказывает молча — незакалённый инстанс выглядит ровно как остальные.
-
-    Единственное, что ещё не на пути запроса, — `queryrunner.Journalled` поверх клиента: оборачивать нечего, пока API не отдаёт эндпоинт консоли. Это шаг 5, а не пробел здесь.
-
-    **Вынесен в отдельный сервис**, как и требует раздел 2.3: контракт `proto/queryrunner/v1`, транспорт `internal/rpc` (сервер и клиент рядом, чтобы отображения не разъехались), бинарь `cmd/queryrunner` на своём образе с cgo и libc, одноразовая задача `cmd/gamedb` для подготовки ролей кластера. Клиент удовлетворяет `queryrunner.Executor` — тот же интерфейс, что и локальный Runner, — поэтому журнал Core API оборачивает его, не зная, по какую сторону провода он находится.
-
-    Дедлайн — причина, по которой это отдельный компонент, а не ещё одна настройка роли. Он живёт на контексте соединения, которым владеет процесс, его открывший; когда он срабатывает, серверу отправляется CancelRequest, а соединение закрывается, а не возвращается в пул: отмена, ещё идущая к серверу, не должна достаться следующему запросу. Возвращается только соединение чтения, завершившегося чисто, и только после `DISCARD ALL`.
-
-    Проверено мутацией: если убрать собственный дедлайн Runner'а, тест падает через 5 секунд — время ограничила роль, а не Runner. Второй тест подтверждает, что после отказа клиента на сервере ничего не выполняется: дедлайн, который лишь бросает соединение, освобождает слот у нас и тратит его у них.
-
-    Усечение — это операция над текстом запроса участника, поэтому две детали несущие и обе найдены пробой: закрывающая скобка обёртки должна стоять на своей строке (иначе её съедает хвостовой комментарий), а хвостовые точки с запятой надо убирать (валидатор допускает `SELECT 1;`, подзапрос — нет). `EXPLAIN` не оборачивается: внутри подзапроса он невозможен.
-
-    Журнал: строка пишется **до** запуска и обновляется после. Запрос, который не удалось записать, не выполняется — журнал это материал для отчёта «сколько запросов понадобилось участнику», и пропущенное выполнение это тихо неверный ответ потом. Запрос, который не удалось **закрыть**, — наоборот: он уже выполнен, ответ участнику принадлежит, строку домечает фоновая разметка.
-  - [x] **4.5 Provisioner** (раздел 4.2) — `internal/gamedb` (примитивы DDL) и `internal/provisioning` (оркестрация), фоновое пополнение пула в Core API.
-
-    **Резервная копия и инстанс участника — одна строка.** Свободная копия отличается только тем, что у неё нет владельца, поэтому обе живут в `game_instances` с необязательным `registration_id` (миграция 12). Это делает захват копии одним `UPDATE … FOR UPDATE SKIP LOCKED`, а не парой «удалить здесь, вставить там»: двадцать претендентов на десять копий получают десять разных баз, каждый за один round trip. Без `SKIP LOCKED` тест падает. Инвалидация устаревшей версии и глубина пула по той же причине — один запрос, а не два.
-
-    **Ссылка на регистрацию составная** (`registration_id, contest_id`), поэтому отдать копию одной олимпиады участнику другой невозможно по построению, а не по бдительности приложения.
-
-    **Политика лежит в `contest_sql_policies`** — таблице с миграции 2. Миграция 13 по ошибке завела второе хранилище на `contests`; миграция 14 его убирает и переносит на настоящую таблицу две проверки, которых там не хватало: полную согласованность режима (прежняя проверяла только `writable_tables`, поэтому `read_only` с `allow_own_tables` база принимала, а `Policy.Validate` отвергал) и «имя таблицы можно безопасно подставить в GRANT» доменом `plain_table_name` — подзапрос в `CHECK` PostgreSQL не допускает, а домен проверяется на каждом элементе массива.
-
-    Не подключены точки вызова `Ensure` и `Reset` — им нужен эндпоинт консоли, это шаг 5. Фоновое пополнение и инвалидация работают.
-
-**Шаг 4 закрыт.** Что доделано после проверки:
-
-- [x] очередь провижионинга с ограниченной параллельностью — 2–4 воркера, проверяется отметкой пика одновременных созданий, а не обещанием;
-- [x] `ALTER DATABASE … CONNECTION LIMIT 2` на каждом инстансе — не то, что обеспечивает «один запрос за раз», а то, что держит, если Runner ошибётся;
-- [x] ограничение частоты 30 запросов/мин на участника — отдельный слой от семафора: тысяча дешёвых запросов проходит семафор по одному;
-- [x] дисковая квота — синхронная проверка перед записью, кратная реальному размеру шаблона, с нижним порогом, чтобы крошечный шаблон не давал квоту, исчерпываемую одним `INSERT`;
-- [x] выбор стратегии копирования `WAL_LOG`/`FILE_COPY` — обе проверены на настоящем кластере, неизвестная отвергается при настройке, а не во время олимпиады;
-- [x] режим `read_write` в валидаторе — `INSERT`/`UPDATE`/`DELETE` только в названные политикой таблицы, `CREATE TABLE`/`CREATE VIEW`/`DROP` только в схеме `work` и каждое за своим разрешением. Всё это проверяется **только в корне**: это строже, чем допускает SQL, и ровно то, что перечисляет раздел 5, — CTE с записью остаётся отклонённым.
-
-Запрет менять политику при `running` был реализован раньше (`Contest.ContentEditable`), я ошибочно записал его в пробелы.
-
-- [ ] **5. Игра** — студенческий UI (история, SQL-консоль, вопросы), submissions с автопроверкой, таймер + SSE. Здесь же — правила подсчёта, которые без submissions исполнять нечем:
-  - [x] штраф за неверную попытку: применяется в момент ответа, результат пишется в `submissions.points_awarded` (TODO 2, раздел 6.1.1);
-  - [x] последовательное прохождение: следующий вопрос открывается, когда предыдущий закрыт; проверяет API, гейт публикации отказывает при `sequential` без `max_attempts` (TODO 3, раздел 6.1.1).
-- [ ] **6. Отчётность и журнал** — лидерборд (сделан, раздел 10), панель журнала запросов (фильтры, live-режим, экспорт CSV/XLSX/NDJSON), отчёты. Сюда же — **режим оценки** олимпиады: баллы или единственный победитель, — потому что различает их именно подсчёт места, а не запись ответов (TODO 1, раздел 6.1.1).
-- [ ] **7. Аудит и нагрузка** — security-аудит по плану раздела 11, k6-нагрузка, пилотная олимпиада на тестовой группе; по её итогам — пополнение allowlist функций валидатора (агрегированные отказы из панели журнала). Сюда же — обслуживание пайплайнов:
-  - [ ] обновить `actions/checkout` и `actions/setup-node` до `@v5`. Они объявляют рантайм Node 20, который GitHub уже принудительно поднимает до Node 24 и выводит в лог предупреждением. Сейчас это шум, а не поломка, — но шум в логе CI это то, мимо чего читают настоящую ошибку, и в день отключения Node 20 предупреждение станет отказом.
-
-Каждый этап завершается работающим вертикальным срезом — систему можно показать заказчику после каждого пункта.
-
-**Настройка едет вместе с тем, что её исполняет.** Штраф и последовательность стоят в одном пункте с submissions не по объёму работ, а потому, что настройка, которую никто не соблюдает, — это ложь в интерфейсе организатора: он выставил 20% штрафа, олимпиада прошла, никто ничего не потерял. Ровно так однажды уже вышло с `must_change_password`, который был «рекомендацией», пока его не начали проверять в middleware. Схему можно завезти миграцией раньше — но не поле в конструкторе.
-
-
-## 15. Что решено: сделанное и оставшееся (TODO)
-
-Список того, что описано выше как решение. Он существует, чтобы «мы про это думали» и «мы это сделали» не выглядели в документе одинаково: каждый пункт ссылается на раздел, где решение обосновано, и называет, что затронуто. Порядок — номера, а не приоритет; где пункт встаёт в работу, сказано в разделе 14.
-
-### Осталось
-
-- [x] **1. Режим оценки олимпиады** — баллы или единственный победитель (раздел 6.1.1). `contests.scoring` хранится и настраивается, в режиме `winner` штраф не применяется, лидерборд даёт место только первому верно ответившему на финальный вопрос, гейт публикации отказывает с `winner_needs_final`.
-- [x] **16. Лидерборд: заморозка, открытие результатов, публичная страница** (раздел 10; дизайн — `docs/superpowers/specs/2026-09-13-leaderboard-design.md`). Сделано. Колонки `leaderboard_freeze_min`, `leaderboard_names`, `leaderboard_revealed_at` на `contests`, индекс `submissions (registration_id, submitted_at)`, четыре эндпоинта (публичный, участника, организатора, открытие результатов), вкладка на экране игры, публичная страница, раздел в админке, два новых отказа гейта публикации.
-- [ ] **17. Несколько задач в одной олимпиаде (отложено; решения записаны).** Олимпиада — список задач, у каждой своя история, игровая база, вопросы, политика SQL и режим вопросов; время, участники, зачёт и лидерборд остаются на олимпиаде. Все задачи открыты сразу, отдельного лимита времени у задачи нет, победитель в режиме `winner` — кто раньше всех ответил на финальные вопросы всех задач. Главная цена — диск, растущий с числом задач. Пока олимпиаде достаточно одной задачи. Дизайн — `docs/superpowers/specs/2026-09-13-contest-tasks-design.md`.
-- [x] **6.1 Загрузка логотипа** (раздел 10.1). Сделано: три слота (`logo`, `icon`, `favicon`) в `settings_files`, тип определяется по содержимому дважды — снифф плюс декодирование заголовка, — SVG отклоняется, пределы 512 КиБ и 4096 пикселей по стороне, отдача с `Content-Disposition: attachment` и `nosniff`. Адрес несёт sha256, поэтому кешируется навсегда. Шапка и экран входа носят логотип, `<title>` и иконки вкладки берутся из настроек.
-- [x] **21. Витрина: главная страница** (раздел 9.6). Сделано: публичный корень `/`, два чтения за кэшем и бюджетом по адресу, четыре числа из `registration_activity`, список олимпиад карточками, превью консоли, подвал. Отбор статусов сведён в `contests.PublicStatuses`.
-- [x] **22. Обложка олимпиады** (раздел 9.7). Сделано: загрузка организатором с кадрированием, уменьшением и перекодированием, каталог на томе за портом, публичная и организаторская отдача, атрибуция в гейте публикации, рисованная обложка у олимпиады без снимка, уборка осиротевших файлов в `cmd/gameorphans`, том в `make backup`.
-- [ ] **8. Форма аудита не спрашивает того, что запрос уже умеет** (раздел 6.3). `audit.Filter` несёт `Actor` и `EntityID`, запрос их поддерживает, а форма на `/audit` предлагает только действие, сущность и две даты. То есть «что делал вот этот администратор» и «что происходило вот с этим аккаунтом» — вопросы, на которые сервер отвечает, а экран не даёт их задать. Расширить форму до полного набора полей фильтра; проверить, что каждое новое поле опирается на индекс, а не заставляет `audit_log` читаться целиком (правило 7 в `CLAUDE.md`) — таблица хранится год и растёт быстрее прочих.
-- [ ] **9. Массовые действия над аккаунтами написаны трижды** (раздел 6.3). Три эндпоинта (`/users/bulk/status`, `/bulk/roles`, `/bulk/password-reset`), три серверных действия и пять диалогов сложились по одному образцу, но общего кода у них нет: правило «причина обязательна и обрезается» записано в четырёх местах — в серверном действии одиночной операции, в серверном действии массовой, и по разу в каждой из двух клиентских форм, — а проверка пустого выбора трижды. Сегодня все копии согласны между собой; ничто этого не удерживает, и первое же изменение правила (предел длины, запрет одних пробелов) придётся повторить руками. Свести к одному описанию действия — что оно требует, что показывает, чем отвечает, — а диалоги и серверные действия выводить из него.
-- [ ] **10. Командный режим: несколько человек играют как одна команда** (раздел 16 уже называет его расширением через `registrations.team_id`). Стандартный путь — индивидуальный, командный откладывается сознательно; ниже то, что придётся решить, когда он понадобится, потому что половина этого — не про таблицу команд, а про то, что перестаёт быть личным.
-
-  **Субъект счёта перестаёт быть человеком.** Сегодня `registrations` несёт `total_score`, а `submissions.registration_id` указывает на него. Наименьшее изменение: таблица команд и `registrations.team_id`, а подсчёт читает по команде, когда олимпиада командная. Пустой `team_id` — команда из одного, поэтому индивидуальный путь не трогается вовсе.
-
-  **Игровая база — одна на команду, а не на человека.** Здесь настоящая цена. `game_instances` сейчас захватывается под регистрацию; если каждому участнику команды выдать свою копию, они играют разные олимпиады и делятся выводами, которых у соседа нет. Значит инстанс привязывается к команде, и атомарный захват из `provisioning` меняет субъект. Это самая крупная часть работы, и она в провижининге, а не в UI.
-
-  **Попытки принадлежат команде.** У `submissions` стоит `UNIQUE (registration_id, question_id, attempt_no)`. Двое из команды, ответившие одновременно, не должны оба получить попытку номер один и не должны вдвоём пробить `max_attempts`. Форма задачи ровно та же, что у старта часов: условная вставка, а не чтение-затем-запись.
-
-  **Кто отвечает.** Простейшее правило, которое не превращает интерфейс в переговоры: отвечать может любой из команды, а в записи остаётся, кто именно. Организатору нужен след, участникам — не нужен спор о том, чья очередь.
-
-  **Часы командного вопроса не создают** — при общем окне (`timing = fixed`, стандартный путь) время у всех одно, и делить его между членами команды не приходится. Это ещё один довод в пользу общего окна как основного режима.
-
-  **Гейт публикации получает два новых отказа:** команда без участников и участник, состоящий в двух командах одной олимпиады. Обе ситуации обнаруживаются в день старта, если их не проверить на публикации.
-
-- [ ] **11. Акцент: правило разошлось с кодом** (SPEC разделы 3.1–3.2). Спека говорит про акцент «только для того, что идёт сейчас», и это осознанное ограничение: пульсирующая точка на `running` работает потому, что этим цветом больше не занято ничто. Фактически он уже растёкся — фокусное кольцо, ссылки в истории, ховер в реестре аккаунтов. Правило, которому код противоречит, перестаёт быть правилом: либо сузить употребление обратно, либо переписать строку в 3.1 так, чтобы она описывала действительность. Работы на один заход, и она нужна независимо от того, меняется ли палитра.
-
-- [ ] **11.1. Сменить тон акцента (отложено).** Обсуждалось «как оранжевый у AWS»; решено оставить нынешнюю пару `#0e5048` / `#5ed0bc` и вернуться, если появится повод. Что понадобится, когда вернёмся: тон подбирается **под** `npm run contrast`, а не после неё — оранжевый, читаемый на белом при 4.5:1, тёмный, а на почти-чёрном светлый, и правило удвоенной альфы из 3.2 к нему применяется так же. Отдельно решать, остаётся ли акцент **семантическим** («идёт сейчас») или становится **брендовым** (марка, главное действие, как у AWS): одному токену две эти работы не сделать, и если акцент начнёт означать «главная кнопка», идущая олимпиада перестанет выделяться в реестре — там, где её и ищут. Тогда это два токена, а не один.
-
-- [ ] **12. Массовое создание олимпиад и участников из файла.** Два разных механизма, которые нельзя сводить в один эндпоинт, потому что у них противоположная транзакционная семантика.
-
-  **Участники — частичный успех, и он уже такой.** `POST /participants` принимает логины и отвечает `{added, skipped:[{ref, reason}]}`: одна опечатка не отклоняет остальные триста строк. Файл здесь добавляет только разбор — CSV или столбец, вставленный из таблицы, — а правило уже написано и проверено.
-
-  **Олимпиада — всё или ничего.** Наполовину залитая олимпиада хуже незалитой: гейт публикации отвергнет её по причинам, которых автор не создавал, и разбирать придётся чужую недоделку. Значит отдельный эндпоинт, одна транзакция, отказ целиком с перечнем всех проблем сразу — по образцу гейта.
-
-  **Формат.** Пакет обязан нести набор языков с дефолтом, переводы названия, историю на каждый язык, вопросы с текстами, вариантами и эталонами, настройки. Это ровно то же, что нужно **экспорту**, и делать импорт без экспорта не стоит: организатор хочет взять прошлогоднюю олимпиаду и поправить, а не набрать заново. JSON или YAML для манифеста; ZIP — только когда появятся вложения (картинка к истории, раздел 10 SPEC), потому что сам по себе он лишь добавляет распаковку.
-
-  **Экспорт сделан, импорт — нет.** `GET /contests/{id}/export` отдаёт пакет в JSON: языки с дефолтом, переводы названия, история по языкам, вопросы с вариантами и эталонами, настройки, политика SQL, игровой скрипт (раздел 9.1, «Что уже есть»). Право — `contest.edit`, как и решено ниже. Значит из этого пункта осталась ровно вторая половина: приём такого файла, «всё или ничего», с перечнем всех проблем сразу — и разбор CSV для участников, который по-прежнему отдельный механизм с противоположной семантикой. Форма пакета при этом уже зафиксирована полем `format` и целочисленным `version` в самом файле, чтобы импортёр отказывал незнакомой версии, а не понимал её наполовину.
-
-  **Чем платим за формат.** YAML требует безопасного загрузчика (произвольные теги — это исполнение кода), ZIP — защиты от zip slip и от бомбы распаковки: предел на число записей, на суммарный распакованный размер и на глубину путей, проверяемый **до** записи на диск. И главное по доступу: пакет содержит эталонные ответы, поэтому экспорт — право уровня `contest.edit` на конкретную олимпиаду, а не «скачать может любой, кто видит».
-
-- [x] **13. Полноценный профиль пользователя** (разделы 9.1, 9.5 и 10; SPEC раздел 5.2 и 10.4). Сделано: `/profile` показывает участнику собственную сводку и список его олимпиад, `/profile/contests/{contestId}` — персональный отчёт (итог, свои запросы, свои ответы, свои заметки) по каждой закончившейся для него олимпиаде, читая `leaderboard.Service.Own` и `monitor.WatchService` вместо второй реализации (раздел 9.5). Аватарки не добавлены — решение SPEC 10.4 осталось в силе, профиль показывает инициалы.
-
-- [ ] **14. Второй вид оформления (отложено; решение записано, чтобы не обсуждать заново).** Обсуждался консольный вид «как у AWS» и переключатель тем. Решено: **пока оставляем один вид**. Ниже — то, что выяснилось, потому что выяснять это второй раз дороже, чем прочитать.
-
-  **Тема ≠ расположение.** Сегодня темизируются 87 значений токенов плюс режим плотности (`data-density`: `--control-h` 38/32 px, `--row-py` 16/6 px). Это цвет, кегли, радиусы, высоты контролов, отбивки. Не темизируются: где стоит навигация, хлебные крошки, правая справочная панель, и главное — **боксы вместо линеек**. Узнаваемость консоли AWS держится не на оранжевом, а на контейнерах с рамкой и заголовком; раздел 5 SPEC утверждает ровно обратное («ничего не в коробках, панели разделяются линейкой»). То есть это не тема, а второй дизайн-язык.
-
-  **Если всё же понадобится — форма известна, и шов почти готов.** Не «две папки с темами»: папка темы, содержащая страницы, дублирует маршрут, гвард, запрос, разбор схемы и серверные действия — то есть всё, где живут баги. Работает другое: один маршрут, два слоя представления. Страница грузит и отдаёт готовый объект во view; `views/<вид>/…` держит разметку; `lib/` и `components/ui/` общие. Шов уже стоит — 16 страниц из 18 отдают разметку отдельному компоненту, ещё две (`/open`, `/profile`) верстают инлайн и их надо привести к тому же виду (это полезно и без тем).
-
-  **И одно условие, без которого две темы не живут:** второй вид делается **частичным переопределением с откатом к первому**. Вторая система всегда отстаёт — это закон, а не риск; при откате отставание означает «этот экран пока выглядит как в основной теме», а не «этот экран сломан», и катить можно по экрану за раз.
-
-  **Что вернёт вопрос на стол.** Не вкус, а плотность: реестровый лист хорош там, где сравнивают по столбцу, консоль с фильтрами в панели — там, где строк сотни тысяч. Это журнал запросов (9.1) и лидерборд. Если на реальных объёмах реестр там не справится, нужен не переключатель для пользователя, а консольный словарь **на этих экранах** — свойство экрана, а не предпочтение человека. Решать до того, как 9.1 и 10 написаны: переписывать самые плотные экраны дороже всего.
-
-- [ ] **15. Достижения и уровни для студентов** — в самый дальний ящик, и записано здесь только чтобы не считаться придуманным заново. Технически данные уже есть: `submissions`, `query_log` и `registrations` — это готовый поток событий, из которого достижения выводятся, а не отдельная подсистема учёта.
-
-  Записать стоит другое. Это **первая** фича, в которой личность студента живёт дольше одной олимпиады: сегодня всё, что о нём известно, ограничено регистрацией. И это продуктовое решение, а не техническое — студент, оптимизирующий уровень, и студент, расследующий дело, ведут себя по-разному, а формат («вот история, назови преступника») держится на втором.
-
-- [x] **18. Режим оценки ICPC** — число решённых вопросов и штрафное время вместо баллов (раздел 6.1.1; дизайн — `docs/superpowers/specs/2026-09-13-icpc-scoring-design.md`). Сделано. `contests.scoring` принимает `icpc`, `contests.icpc_penalty_min` (0…240, по умолчанию 20) настраивает штраф и не меняется после старта; `submissions.points_awarded` и `registrations.total_score` в этом режиме всегда 0; гейт публикации отказывает вопросу с вариантами ответа без лимита попыток не больше числа вариантов минус число верных; лидерборд отдаёт сетку по видимым вопросам — буква, минута решения, отметка первого решившего, — место по числу решённых и штрафному времени, а замороженная таблица показывает нерешённым клеткам число попыток после заморозки (кроме олимпиад с последовательным прохождением). На экране сетка — на публичной странице и у организатора от ширины `narrow`; во вкладке игры и на телефоне — только место, участник, решено, штраф.
-
-### Сделано
-
-- [x] **2. Штраф за неверную попытку** (раздел 6.1.1). `questions.penalty_pct`, расчёт внутри той же вставки, что и номер попытки, результат фиксируется в `submissions.points_awarded` и не пересчитывается; в режиме `winner` не применяется.
-- [x] **3. Последовательное прохождение** (раздел 6.1.1). `contests.progression`, проверка в `Service.Submit` и в выдаче вопросов; гейт публикации отказывает при `sequential` без `max_attempts` и при скрытом вопросе, за которым стоит другой.
-- [x] **4. Одна кнопка «Сохранить» на странице вопроса** (раздел 6.3). `PUT /contests/{id}/questions/{questionId}` пишет вопрос целиком — свои поля, тексты, эталонные ответы — в одной транзакции. Заодно стала возможной смена вида вопроса вместе с ответами: через три узких эндпоинта каждый видел половину правки и отказывал из-за другой половины. Правка эталонов сохраняет собственную строку в аудите, чтобы вопрос «кто менял эталоны после публикации» остался индексированным фильтром.
-- [x] **5. Редактор истории** (раздел 6.3). WYSIWYG поверх Markdown (Milkdown/Crepe) на наших токенах, без их тем; картинки, LaTeX и AI-фича выключены. Разворачивается на весь экран и обратно, закрытые редакторы всех языков — одинаковые прямоугольники со скроллом внутри. Вставка предпочитает `text/plain` и разбирается как Markdown, поэтому обвязка скопированного с сайта блока кода не приезжает. Читательская сторона — `StoryText`: React-элементы вместо HTML-строки, `dangerouslySetInnerHTML` в пути нет вовсе, и это же граница безопасности, а не редактор.
-- [x] **6. Настройки установки: название и контакты** (раздел 10.1). Таблица `settings` (ключ + `jsonb` + кто и когда менял), право `settings.manage`, экран `/settings`, название подставляется в шапку каждого экрана и на вход. Каталог известных настроек — код, значения — данные: неизвестный ключ отвергается, чтобы опечатка не выглядела сохранённой правкой. Публичное чтение — **список разрешённых ключей**, а не таблица: экран входа несёт название и виден до входа, поэтому что-то обязано читаться всеми, и в день, когда сюда добавят пароль почтового сервера, эндпоинт «отдай всё» его опубликует.
-- [x] **7. Экран управления аккаунтами `/users`** (закрыл остаток шага 2). Реестр с живым поиском и фильтром по состоянию, карточка аккаунта: профиль, роли, блокировка, сброс пароля. `GET /roles` публикует каталог, чтобы интерфейс не хардкодил коды ролей. Последний администратор не может быть разжалован или заблокирован — иначе установка остаётся без того, кто вернёт права.
-- [x] **19. Рабочее место участника: заметки, вкладки SQL, раскрытие строки результата, сворачиваемые панели** (раздел 6.4; дизайн — `docs/superpowers/specs/2026-09-17-play-workspace-design.md`). Сделано. Заметки и вкладки SQL хранятся в core-БД по регистрации (миграция `000032_play_workspace`), с автосохранением и черновиком в `localStorage` на время до подтверждения сервером; рабочее место закрывается вместе с олимпиадой, режима «только чтение» нет. Экран получил полосу вкладок редактора, панель полного просмотра строки результата под таблицей, перетаскиваемые вертикальные разделители и сворачиваемые панели (схема, боковая, нижняя) с сочетаниями клавиш как в VS Code.
-- [x] **20. Наблюдение за участником** (раздел 9.4; дизайн — `docs/superpowers/specs/2026-09-18-participant-monitoring-design.md`). Сделано. Миграция `000033_participant_monitoring`: таблицы `participant_events` и `workspace_revisions`, колонки `query_log.ip` и `query_log.sql_fingerprint`, keyset-индексы `query_log` и `submissions` с `id`, индекс неудачных входов, право `contest.monitor` у ролей с `contest.view`. Сигналы браузера (уход, вставка) — `POST /play/signals`, 12 пачек в минуту, до 50 событий и 256 КиБ; смена адреса и параллельная сессия — на сервере, одно чтение кэша на запрос; ревизии заметок и вкладок — не больше двух в минуту на документ. Организатор получил вкладку «Наблюдение» (таблица участников с отметками и живая лента) и страницу участника (лента, запросы, ответы с запросами, которые к ним привели, рабочее место с историей, входы и сети), CSV; просмотры и выгрузки пишутся в аудит. Заметки и вкладки больше не личные (раздел 6.4), и участнику это сказано на экране.
-
-## 16. Принятые допущения
-
-- Масштаб — один университет, сотни (не десятки тысяч) одновременных участников; on-premise размещение.
-- Участие индивидуальное (командный режим — расширение: `registrations` получает `team_id`).
-- Ответы проверяются автоматически по эталону; ручная перепроверка жюри — возможное расширение (`submissions.review_status`).
-- Интеграция с университетским SSO (LDAP/OAuth) не требуется сейчас; модуль `auth` изолирован, добавление провайдера не затронет остальное.
+| `dev-*` | Infrastructure only (PostgreSQL, Redis); the API and the interface run from an editor. The daily cycle; no images involved |
+| `stack-*` | The whole stack in containers, **built from the working tree** including uncommitted changes; tagged `<commit>` or `<commit>-dirty` |
+| `deploy*` | A named release from the registry; nothing is built |
+
+Deployment is a **pull model, started by a person on the host**: nothing is
+opened outward from the university's network, the production private key does
+not live in a cloud CI, and a merge into `main` does not restart the service
+in the middle of a competition. A rollback is the same command with the
+previous version. The API and the interface have separate images, so
+`deploy-web` does not touch the API or its live sessions.
+
+**CI is split by component.** The error-dictionary check reads
+`docs/api/error-codes.json`, which the backend generates, rather than the
+backend's sources — so the path filters are honest: a change in Go no longer
+drags a frontend run with it, and the reverse. Images are published only from
+`main` and from tags, after the tests and the security scan.
+
+**Migrations at deployment are not an online operation.** `cmd/migrate` hands
+PostgreSQL a file as one string, and a string of several statements runs as
+one implicit transaction: the file holds every lock it took until the end. So
+the migrations that backfill `query_log` and `submissions` hold
+`ACCESS EXCLUSIVE` on them for the whole backfill, which on a live olympiad is
+the console stopped for everybody. They are applied **with the API stopped**,
+not "in a quiet moment", and never during a competition.
+
+The convention that formalises it, and that a test enforces
+(`migrations/migrations_test.go`): a file that takes a heavy lock opens with
+its own `SET lock_timeout` — waiting in a queue is more dangerous than failing
+— while a file building an index `CONCURRENTLY` consists of exactly one
+statement and carries **no** `lock_timeout` at all, because such a build waits
+through the same lock manager for transactions older than itself, and a
+timeout would abort it over any minute-long export, leaving an invalid index.
+The migration connection itself sets no lock timeout for the same reason, and
+its `statement_timeout` is removed so that a long index build does not abort
+itself.
+
+**What to re-read in an existing `.env` before deploying.** Two items, both
+quiet.
+
+The first is `REDIS_ADDR`. Compose substitutes its own Redis with
+`${REDIS_ADDR-…}` — a single `-`, not `:-` — so an **empty** value is a
+deliberate choice of the in-process cache rather than "unset". Early versions
+of `.env.example` carried `REDIS_ADDR=` uncommented, so an `.env` copied from
+that version switches the API to the in-process cache — precisely the one
+arrangement in which a full cache refuses every rate check and signs everybody
+out at once. The cure is to **delete the `REDIS_ADDR=` line** from your
+`.env`, not to fill it in. The symptoms, if it was missed: a `cache.New`
+warning at startup, and the `mode` field in the readiness response.
+
+The second is `EXPORT_CONCURRENCY` beside `CORE_DB_POOL_MAX`. Each was
+already checked against its own range but not against the other, and together
+they can ask the pool for more connections than it has — ten exports against a
+pool of five is the whole pool held by readers entitled to read slowly. An
+inconsistent pair now fails at startup with a message naming both figures:
+exports get no more than two fifths of the pool. Better to learn that at
+`deploy` than on the day.
+
+**Backups.** `make backup` dumps the core database from inside the container
+and archives the covers volume; `make restore-check` loads a dump into a
+throwaway database and drops it, which is the difference between "we have
+backups" and "we think we have backups"; `make restore` replaces the live
+database and demands an explicit confirmation. Participants' instances are not
+backed up — they are rebuilt from the template.
+
+### Moving to another server
+
+Written down not because a move is planned but because it is the same
+procedure as recovering from a failed disk, and the second is not chosen. The
+day it is needed is a bad day to work it out.
+
+**Exactly one thing is carried across: the core database's dump.** That
+follows from decisions taken for other reasons, and it is worth knowing which,
+so as not to undo them by accident.
+
+- **The server compiles nothing** (above): `deploy` is a `pull` plus `up -d`
+  against a named tag in the registry. A new machine needs Docker, the
+  `deploy/` directory and an `.env`.
+- **The images do not know where they run.** The API's address, the language
+  and the theme are read per request; nothing that the environment decides is
+  baked into a build. One image serves staging and production alike.
+- **Uploaded files are rows in `settings_files`, not a volume** (section
+  10.1). The logo and the icons travel with the dump. This is usually what
+  breaks a move: the volume is forgotten, because it is mentioned nowhere but
+  in `docker-compose.yml`. The covers volume is the exception the backup takes
+  explicitly (section 9.7).
+- **The certificate is reissued automatically.** Caddy takes it from
+  `SITE_ADDRESS`; `caddy-data` need not and should not be carried over.
+
+**What deliberately stays behind.** `pg-game-data`, the participants'
+instances, which provisioning recreates on demand. `redis-data`, the sessions
+— losing them means everybody signs in again, which during a server move is
+more right than wrong. `caddy-data`, the certificates. The observability
+volumes are graph history, carried over only if wanted.
+
+**The order:**
+
+1. Take the dump — `make backup` — and **verify it**:
+   `make restore-check FILE=…`. An unverified dump is a hypothesis, not a
+   backup.
+2. Bring up the new host: Docker, `deploy/`, `.env`. `SITE_ADDRESS` is a
+   **temporary** name, not the real one.
+3. `make deploy VERSION=vX.Y.Z` — the same tag that runs now. Moving and
+   upgrading in one go is two suspects for one failure.
+4. `make restore FILE=… CONFIRM=yes` on the new host.
+5. Exercise sign-in, a contest and the SQL console on the temporary name.
+6. Switch DNS, change `SITE_ADDRESS` to the real name, and `make deploy`
+   again. Caddy issues a certificate for the new name.
+
+**Step 5 is possible in full, and that is not obvious.** The interface and the
+API must live on one name, because of `SameSite=Lax` and the `Origin` check —
+but on a temporary name the stack is self-consistent. So the move can be
+rehearsed completely, with real cookies and a real sign-in, before anything is
+switched.
+
+**Three places where this is not free.**
+
+**Secrets.** The `.env` holds the PostgreSQL and Redis passwords. If their
+only copy is on the machine being moved, this is not a move but a race — and
+the same situation makes recovery from a failed disk impossible. Keep them
+somewhere that outlives the machine, before it is needed.
+
+**The DNS window.** A certificate is issued only after the name points at the
+new host. Lower the TTL a day ahead and the window is measured in minutes
+rather than hours.
+
+**Time.** `restore` stops the API while it runs: `pg_restore` cannot drop
+objects a live service is holding. Move between olympiads, not during one.
+
+**What this procedure does not involve: CI.** A pull-model deployment means no
+pipeline knows the production address, so changing servers does not touch
+`.github/workflows` at all. That is a consequence of a decision taken for
+another reason — not keeping a production key in the cloud — and it is worth
+preserving.
+
+## 14. The order of implementation
+
+The existing step numbers do not move: other sections refer to "step 4" and
+"step 5", so additions are folded in as sub-items.
+
+- [x] **1. Foundations** — the monorepo skeleton, Docker Compose (pg-core,
+  redis), the core schema's migrations, the Core API's skeleton with logging
+  and metrics.
+- [x] **2. Auth and RBAC** — sign-in, sessions, the permission middleware
+  (global plus `contest_managers`), account management, `audit_log`, the
+  `/users` screen and the role catalogue.
+- [x] **3. Content** — contests, stories, questions and answers; appointing
+  managers; enrolment type and participant management; address restrictions;
+  the builder's interface.
+  - **3.1 Finishing the builder and the installation's settings**, which does
+    not depend on the game side and therefore ran in parallel with step 4: the
+    `/users` screen; one Save button per question; the story editor; the
+    installation's settings; and the logo, application icon and favicon.
+- [x] **4. The game side** — the game cluster, provisioning (queue and spare
+  pool, grants from the policy), and the Query Runner with allow-list AST
+  validation and admission control. **The riskiest part, covered by
+  regression security tests.**
+
+  The order inside the step runs from what is provable in isolation to what
+  needs hardware. The validator came first not because it is the largest but
+  because it is the one piece with no network and no database: it can be
+  tested to the bottom, and everything else is then built on a boundary that
+  has already been checked. A mistake in provisioning is visible at once; a
+  validator that let something through says nothing.
+
+  - [x] **4.1 The SQL policy's description** — `internal/sqlpolicy`: a
+    `Policy` with a mode, `writable_tables` and three flags, whose
+    `Validate()` rejects the inconsistent (a write right under `read_only`)
+    and table names that are not plain identifiers, because they have to be
+    substituted into grants where no parameter binding for a name exists. The
+    zero value is invalid deliberately: a struct nobody filled in must not
+    silently mean "read only".
+  - [x] **4.2 The allow-list AST validator** — `pg_query_go`, PostgreSQL's
+    real parser. Exactly one statement, permitted root nodes, a walk over the
+    **whole** tree by protobuf reflection, a function allow list an operator
+    can extend without a release, and the split between structural and
+    sensitive catalogues. Three decisions worth remembering:
+    - **Reflection rather than a hand-written switch over the grammar.** A
+      switch enumerates the fields somebody thought of; the first node with a
+      forgotten child field is a subtree nobody checks — silently, and only
+      for the queries that reach it. Reflection cannot forget a field.
+    - **Writing statements are absent from the node list rather than rejected
+      at the root.** That is what rejects a data-modifying CTE:
+      `WITH gone AS (DELETE … RETURNING *) SELECT * FROM gone` has an honest
+      `SELECT` at its root, with the write three levels down.
+    - **`read_write` is rejected by explicit code rather than approximated as
+      `read_only`.** A validator that quietly treated a write mode as a read
+      would drift from the template's grants — exactly the split that keeping
+      the policy and the validator in one package exists to prevent.
+  - [x] **4.3 The game cluster and its roles** — a `pg-game` service with
+    cgroup limits and no published port; `internal/gamedb` creates
+    `game_reader` and `game_writer` idempotently, closes their access to the
+    cluster's service databases and revokes the sensitive catalogues. Every
+    check connects **as the very role** a participant's query runs under: a
+    guarantee about what the database will refuse cannot be asserted from Go,
+    only provoked.
+
+    That work showed section 4 had overestimated the role's settings:
+    `statement_timeout` and `default_transaction_read_only` are `USERSET` and
+    a session removes them in one line. Writing is held by privileges and time
+    by the Query Runner's own deadline. The table in section 4 now separates
+    boundaries from defaults.
+
+    Two lessons about the tests themselves: hardening is applied by the
+    **template** and inherited by a copy along with its catalogue — without
+    that, every instance would have to be hardened separately and a missed one
+    would look like the rest. And `CREATE DATABASE … TEMPLATE` refuses to copy
+    a database somebody is connected to — the template discipline of section
+    4.2, discovered by a test before provisioning met it.
+  - [x] **4.4 The Query Runner** — `internal/queryrunner`: the deadline with
+    cancellation, admission control, result truncation, the two-phase journal.
+    Plus `postgres.QueryLog` with a background job marking stranded rows.
+
+    **Split into a separate service** as section 2.3 requires: the contract in
+    `proto/queryrunner/v1`, the transport in `internal/rpc` (server and client
+    side by side so the mappings cannot drift), the `cmd/queryrunner` binary
+    on its own image with cgo and libc, and the one-off `cmd/gamedb` job for
+    the cluster's roles. The client satisfies `queryrunner.Executor` — the
+    same interface the local Runner satisfies — so the Core API's journal
+    wraps it without knowing which side of the wire it is on.
+
+    The deadline is why this is a separate component rather than one more role
+    setting. It lives on the connection's context, owned by the process that
+    opened it; when it fires, a `CancelRequest` is sent to the server and the
+    connection is closed rather than returned to the pool, because a
+    cancellation still in flight must not reach the next query. Only a read
+    that finished cleanly returns its connection, and only after
+    `DISCARD ALL`.
+
+    Verified by mutation: remove the Runner's own deadline and the test fails
+    after five seconds — the role bounded the time, not the Runner. A second
+    test confirms that nothing runs on the server after the client gave up: a
+    deadline that merely drops the connection frees a slot on our side and
+    spends one on theirs.
+
+    Truncation is string surgery on a participant's query, so two details
+    carry weight and both were found by probing: the wrapper's closing
+    parenthesis must sit on its own line, or a trailing comment eats it; and
+    trailing semicolons must be removed, because the validator accepts
+    `SELECT 1;` while a subquery does not. `EXPLAIN` is not wrapped: inside a
+    subquery it is impossible.
+
+    The journal: the row is written **before** the run and updated after. A
+    query that could not be recorded is not executed — the journal is the
+    material for "how many queries did this participant need", and a missing
+    execution is a quietly wrong answer later. A query that could not be
+    **closed** is the opposite: it has already run, the answer belongs to the
+    participant, and the background job completes the row.
+  - [x] **4.5 Provisioning** — `internal/gamedb` (the DDL primitives) and
+    `internal/provisioning` (the orchestration), with background pool
+    refilling in the Core API.
+
+    **A spare copy and a participant's instance are one row.** A free copy
+    differs only in having no owner, so both live in `game_instances` with an
+    optional `registration_id`. That makes claiming a copy a single
+    `UPDATE … FOR UPDATE SKIP LOCKED` rather than a delete-here-insert-there
+    pair: twenty claimants for ten copies get ten different databases, each in
+    one round trip. Without `SKIP LOCKED` the test fails.
+
+    **The reference to a registration is composite**
+    (`registration_id, contest_id`), so handing one contest's copy to another
+    contest's participant is impossible by construction rather than by the
+    application's vigilance.
+
+- [ ] **5. The game** — the participant's interface (story, console,
+  questions), submissions with automatic checking, the clock and the event
+  stream. The scoring rules live here too, because without submissions there
+  is nothing to enforce them with: the penalty for a wrong attempt, and
+  sequential progression.
+- [ ] **6. Reporting and the journal** — the leaderboard (done, section 10),
+  the query-log panel (filters, live mode, CSV/XLSX/NDJSON export), reports.
+  And the contest's scoring mode, because what distinguishes the modes is how
+  a place is computed rather than how an answer is recorded.
+- [ ] **7. Audit and load** — the security audit from section 11's plan, a k6
+  load test, a pilot olympiad with a test group, and afterwards an extension
+  of the validator's function allow list from the refusals the panel
+  aggregated.
+
+Each stage ends with a working vertical slice: the system can be shown after
+every item.
+
+**A setting ships with whatever enforces it.** The penalty and the
+progression sit in the same item as submissions not because of the amount of
+work but because a setting nobody honours is a lie in the organiser's
+interface: they set a 20% penalty, the olympiad ran, and nobody lost anything.
+That is exactly what happened once with `must_change_password`, which was a
+"recommendation" until the middleware started checking it. The schema may
+arrive in a migration earlier — the field in the builder may not.
+
+## 15. What is decided: done, and remaining
+
+A list of what is described above as a decision. It exists so that "we thought
+about this" and "we did this" do not look the same in the document: each item
+refers to the section where the decision is argued and names what it touches.
+The order is numeric, not by priority.
+
+### Remaining
+
+- [ ] **8. The audit form does not ask what the query already supports**
+  (section 9.2). `audit.Filter` carries `Actor` and `EntityID` and the query
+  supports them, while the form on `/audit` offers only an action, an entity
+  and two dates. So "what did this administrator do" and "what happened to
+  this account" are questions the server answers and the screen cannot ask.
+  Extend the form to the filter's full set, and check that each new field
+  rests on an index rather than making `audit_log` be read whole — the table
+  is kept for a year and grows faster than the rest.
+- [ ] **9. Bulk account actions are written three times** (section 6.3). Three
+  endpoints (`/users/bulk/status`, `/bulk/roles`, `/bulk/password-reset`),
+  three server actions and five dialogues came out to one pattern with no
+  shared code: the rule "a reason is required and is truncated" is written in
+  four places and the empty-selection check in three. Today every copy agrees;
+  nothing holds them together, and the first change to the rule — a length
+  limit, a ban on whitespace-only — would have to be repeated by hand. Reduce
+  it to one description of an action and derive the dialogues and the server
+  actions from it.
+- [ ] **10. Team mode: several people playing as one team.** The standard path
+  is individual and the team mode is deliberately deferred; what follows is
+  what has to be decided when it is needed, because half of it is not about a
+  teams table but about what stops being personal.
+
+  **The subject of a score stops being a person.** Today `registrations`
+  carries `total_score` and `submissions.registration_id` points at it. The
+  smallest change: a teams table and `registrations.team_id`, with the scoring
+  reading by team when the contest is a team contest. An empty `team_id` is a
+  team of one, so the individual path is not touched at all.
+
+  **One game database per team, not per person.** This is the real cost.
+  `game_instances` is claimed per registration today; giving each member their
+  own copy means they play different olympiads and share conclusions the
+  other's database does not support. So the instance binds to the team and the
+  atomic claim in provisioning changes its subject. That is the largest part
+  of the work, and it is in provisioning rather than in the interface.
+
+  **Attempts belong to the team.** `submissions` carries
+  `UNIQUE (registration_id, question_id, attempt_no)`. Two team members
+  answering at once must not both get attempt number one and must not
+  together break through `max_attempts`. The shape of the problem is exactly
+  the clock's start: a conditional insert, not a read followed by a write.
+
+  **Who answers.** The simplest rule that does not turn the interface into a
+  negotiation: anybody in the team may answer, and the record keeps who did.
+  The organiser needs the trail; the participants do not need an argument
+  about whose turn it is.
+
+  **A team question does not create a clock** — with a shared window the time
+  is the same for everybody, and there is nothing to divide between members.
+  One more argument for the shared window as the primary mode.
+
+  **The publication gate gains two refusals:** a team with no members, and a
+  participant belonging to two teams of one contest. Both are discovered on
+  the day of the start if they are not checked at publication.
+- [ ] **11. The accent colour: the rule has drifted from the code.** The
+  design specification says the accent is "only for what is happening now",
+  and that is a deliberate restriction: the pulsing dot on a running contest
+  works because nothing else uses that colour. In fact it has already spread —
+  the focus ring, links in a story, the hover in the account register. A rule
+  the code contradicts stops being a rule: either narrow the usage back, or
+  rewrite the line so it describes reality. One sitting's work, and needed
+  whether or not the palette changes.
+  - [ ] **11.1 Changing the accent's hue (deferred).** An orange was
+    discussed; the decision is to keep the present pair and return if a reason
+    appears. What will be needed then: the hue is chosen **against** the
+    contrast check rather than after it, and the doubled-alpha rule applies to
+    it the same way. Separately to be decided is whether the accent stays
+    **semantic** ("happening now") or becomes a **brand** colour: one token
+    cannot do both jobs, and if the accent starts meaning "the main button", a
+    running contest stops standing out in the register — which is where it is
+    looked for. Then it is two tokens, not one.
+- [ ] **12. Creating contests and participants in bulk from a file.** Two
+  different mechanisms that cannot be folded into one endpoint, because their
+  transactional semantics are opposite.
+
+  **Participants are a partial success, and already are.**
+  `POST /participants` takes logins and answers
+  `{added, skipped:[{ref, reason}]}`: one typo does not reject the other three
+  hundred rows. A file adds only the parsing here — a CSV, or a column pasted
+  from a spreadsheet — and the rule is already written and tested.
+
+  **A contest is all or nothing.** A half-loaded contest is worse than none:
+  the publication gate will reject it for reasons its author did not create,
+  and somebody will have to unpick another person's unfinished work. So it
+  needs its own endpoint, one transaction, and a refusal in whole with every
+  problem listed at once, following the gate's pattern.
+
+  **The export exists, the import does not.** `GET /contests/{id}/export`
+  serves the package as JSON (section 9.1), under `contest.edit`. So what
+  remains of this item is exactly the second half: accepting such a file, all
+  or nothing, with every problem at once — and the CSV parsing for
+  participants, which stays a separate mechanism with the opposite semantics.
+  The package's shape is already fixed by a `format` field and an integer
+  `version` in the file itself, so an importer can refuse an unknown version
+  rather than understand it halfway.
+
+  **What the format costs.** YAML needs a safe loader, because arbitrary tags
+  are code execution; ZIP needs protection against path traversal and against
+  a decompression bomb — a limit on the number of entries, on the total
+  uncompressed size and on path depth, checked **before** anything is written
+  to disk. And the access rule above all: the package contains the reference
+  answers, so exporting is a `contest.edit` right on that contest rather than
+  "anyone who can see it can download it".
+- [ ] **14. A second visual language (deferred; the decision is recorded so it
+  is not discussed again).** A console-like look and a theme switch were
+  discussed. The decision: **one look for now.** What was learned, because
+  learning it twice is more expensive than reading it:
+
+  **A theme is not a layout.** Today 87 token values are themed, plus a
+  density mode. That is colour, sizes, radii, control heights, spacing. Not
+  themed: where the navigation sits, the breadcrumbs, the right-hand reference
+  panel, and above all **boxes instead of rules**. What makes a cloud console
+  recognisable is not its orange but its bordered, titled containers, and the
+  design specification says the opposite ("nothing in boxes; panels are
+  separated by a rule"). So this is not a theme but a second design language.
+
+  **If it is ever needed, the shape is known and the seam is nearly ready.**
+  Not "two folders of themes": a theme folder containing pages duplicates the
+  route, the guard, the request, the schema parsing and the server actions —
+  everything where bugs live. What works is one route and two presentation
+  layers: the page loads and hands a finished object to a view, and
+  `views/<look>/…` holds the markup while `lib/` and `components/ui/` stay
+  shared. The seam is already there — 16 of 18 pages hand their markup to a
+  separate component, and the remaining two need bringing into line, which is
+  worth doing anyway.
+
+  **And one condition without which two themes do not survive:** the second
+  look is a **partial override with a fallback to the first**. The second
+  system always lags — that is a law, not a risk — and with a fallback the lag
+  means "this screen still looks like the main theme" rather than "this screen
+  is broken", and it can be rolled out one screen at a time.
+
+  **What would put the question back on the table.** Not taste but density: a
+  register list is good where things are compared down a column, and a console
+  with filters in a panel is good where there are hundreds of thousands of
+  rows. That is the query log and the leaderboard. If a register cannot cope
+  there at real volumes, what is needed is not a switch for the user but a
+  console vocabulary **on those screens** — a property of the screen, not a
+  person's preference.
+- [ ] **15. Achievements and levels for students** — the furthest drawer, and
+  recorded here only so it does not count as newly invented. Technically the
+  data exists: `submissions`, `query_log` and `registrations` are already the
+  stream of events achievements would be derived from, rather than a separate
+  accounting subsystem.
+
+  What is worth writing down is something else. This is the **first** feature
+  in which a student's identity outlives one olympiad: today everything known
+  about them is bounded by a registration. And it is a product decision rather
+  than a technical one — a student optimising a level and a student
+  investigating a case behave differently, and the format rests on the second.
+- [ ] **17. Several tasks in one contest (deferred; the decisions are
+  recorded).** A contest would be a list of tasks, each with its own story,
+  game database, questions, SQL policy and question mode, while time,
+  participants, scoring and the leaderboard stay on the contest. Every task
+  opens at once, a task has no time limit of its own, and the winner in
+  `winner` mode is whoever first answered the final questions of every task.
+  The main price is disk, growing with the number of tasks. For now one task
+  per contest is enough.
+
+### Done
+
+- [x] **1. The contest's scoring mode** — points or a single winner
+  (section 6.1.1).
+- [x] **2. A penalty for a wrong attempt** (section 6.1.1). `questions.
+  penalty_pct`, computed inside the same insert as the attempt number, fixed
+  into `submissions.points_awarded` and never recomputed; not applied in
+  `winner` mode.
+- [x] **3. Sequential progression** (section 6.1.1). `contests.progression`,
+  checked in `Service.Submit` and when questions are served; the publication
+  gate refuses `sequential` without `max_attempts`.
+- [x] **4. One Save button on a question's page** (section 6.3).
+- [x] **5. The story editor** (section 6.3). WYSIWYG over Markdown on our own
+  tokens, with images, LaTeX and the AI feature disabled. The reading side is
+  `StoryText`: React elements rather than an HTML string, with no
+  `dangerouslySetInnerHTML` anywhere in the path — and that, rather than the
+  editor, is the security boundary.
+- [x] **6. Installation settings: the name and the contacts** (section 10.1).
+  The catalogue of known settings is code and the values are data: an unknown
+  key is rejected, so a typo does not look like a saved edit. Public reading
+  is an **allow list of keys** rather than the table: the sign-in screen
+  carries the name and is visible before sign-in, so something must be
+  readable by everybody — and on the day somebody adds a mail server's
+  password here, a "serve everything" endpoint would publish it.
+  - [x] **6.1 Uploading the logo, the application icon and the favicon**
+    (section 10.1).
+- [x] **7. The `/users` account screen**, closing the remainder of step 2. The
+  last administrator cannot be demoted or blocked, or the installation is left
+  with nobody who can restore rights.
+- [x] **13. A full participant profile** (sections 9.1, 9.5 and 10). Avatars
+  were not added; the profile shows initials.
+- [x] **16. The leaderboard: the freeze, revealing results, the public page**
+  (section 10).
+- [x] **18. ICPC scoring** — questions solved and penalty time instead of
+  points (section 6.1.1).
+- [x] **19. The participant's workspace: notes, SQL tabs, an expanded result
+  row, collapsible panels** (section 6.4).
+- [x] **20. Watching a participant** (section 9.4).
+- [x] **21. The front page** (section 9.6).
+- [x] **22. A contest's cover** (section 9.7).
+
+## 16. Assumptions
+
+- The scale is one university: hundreds, not tens of thousands, of concurrent
+  participants, hosted on-premise.
+- Participation is individual. Team mode is an extension: `registrations`
+  gains a `team_id` (section 15, item 10).
+- Answers are checked automatically against a reference. Manual review by a
+  jury is a possible extension (`submissions.review_status`).
+- Integration with a university SSO (LDAP, OAuth) is not required now; the
+  `auth` module is isolated, and adding a provider would not touch the rest.

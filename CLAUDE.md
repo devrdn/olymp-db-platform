@@ -12,10 +12,16 @@
    was made. Conversation with the team can be in whatever language suits it;
    what gets committed cannot.
 
-   Two things this rule does not cover. The prose documentation under `docs/`
-   is Russian by the project's own choice and stays that way. User-visible
-   interface text lives in the locale dictionaries and exists in every locale
-   the platform serves.
+   The prose documentation under `docs/` is English too, and the README with
+   it. It used to be Russian, which was defensible while the readers were the
+   people in the room; it stopped being defensible the moment the repository
+   was meant to be opened. A stranger who can read the code and not the
+   document explaining it has been handed the harder half.
+
+   The one thing this rule does not cover is user-visible interface text,
+   which lives in the locale dictionaries and exists in every locale the
+   platform serves — including Russian and Romanian. Writing the project in
+   English is not the same as serving it in English.
 
    Do not quote Russian into an English comment either. A comment that
    switches language mid-sentence to cite a brief or a conversation is
