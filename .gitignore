@@ -21,7 +21,10 @@ deploy/game-uploads/
 # Cover pictures uploaded to an API running on the host (make run).
 deploy/covers/
 
-# Working notes of an agent session: plans, reviews, fix lists. Each of these
-# directories carries a .gitignore of its own, which only helps once the
-# directory exists.
+# Working notes of a planning session: specs, plans, reviews, fix lists, and
+# the editor scratch beside them. They are the scaffolding a change was built
+# with, not the change; what survives a feature is its commit messages, the
+# prose under docs/, and the code.
 .superpowers/
+docs/superpowers/
+.claude/
