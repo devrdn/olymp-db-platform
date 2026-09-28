@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"net/netip"
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/contests"
@@ -32,7 +31,7 @@ type managerListResponse struct {
 }
 
 func (h *ContestsHandler) listManagers(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
@@ -61,7 +60,7 @@ type grantRequest struct {
 }
 
 func (h *ContestsHandler) grantManager(w http.ResponseWriter, r *http.Request) {
-	contestID, ok := h.contestID(w, r)
+	contestID, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
@@ -71,8 +70,7 @@ func (h *ContestsHandler) grantManager(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req grantRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	// Manager is the only role this endpoint exists to hand out, so an
@@ -92,7 +90,7 @@ func (h *ContestsHandler) grantManager(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ContestsHandler) revokeManager(w http.ResponseWriter, r *http.Request) {
-	contestID, ok := h.contestID(w, r)
+	contestID, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
@@ -142,7 +140,7 @@ type participantListResponse struct {
 }
 
 func (h *ContestsHandler) listParticipants(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
@@ -188,14 +186,13 @@ type skippedPayload struct {
 }
 
 func (h *ContestsHandler) addParticipants(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
 
 	var req addParticipantsRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -287,7 +284,7 @@ func (h *ContestsHandler) directorySearch(w http.ResponseWriter, r *http.Request
 }
 
 func (h *ContestsHandler) removeParticipant(w http.ResponseWriter, r *http.Request) {
-	contestID, ok := h.contestID(w, r)
+	contestID, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
@@ -305,7 +302,7 @@ func (h *ContestsHandler) removeParticipant(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *ContestsHandler) disqualifyParticipant(w http.ResponseWriter, r *http.Request) {
-	contestID, ok := h.contestID(w, r)
+	contestID, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
@@ -328,7 +325,7 @@ func (h *ContestsHandler) disqualifyParticipant(w http.ResponseWriter, r *http.R
 // own decision — its enrollment type, its schedule and its network
 // restriction — rather than a permission somebody has to be granted.
 func (h *ContestsHandler) enroll(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
@@ -337,25 +334,11 @@ func (h *ContestsHandler) enroll(w http.ResponseWriter, r *http.Request) {
 	enrolled, err := h.service.Enroll(r.Context(), contests.EnrollCommand{
 		UserID:    identity.UserID,
 		ContestID: id,
-		Address:   clientAddr(r),
+		Address:   clientAddress(r),
 	})
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
 	httpx.JSON(w, r, http.StatusCreated, toParticipantResponse(enrolled))
-}
-
-// clientAddr is the address the network restriction is checked against.
-//
-// It comes from the resolver that knows which proxies are trusted, never from
-// a header read here. An address that will not parse stays the zero value,
-// which a restricted contest refuses: failing open would turn every proxy
-// misconfiguration into an open door.
-func clientAddr(r *http.Request) netip.Addr {
-	addr, err := netip.ParseAddr(httpx.ClientIP(r))
-	if err != nil {
-		return netip.Addr{}
-	}
-	return addr
 }

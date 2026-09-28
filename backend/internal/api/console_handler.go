@@ -101,8 +101,7 @@ func (h *ConsoleHandler) run(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req runQueryRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -136,15 +135,9 @@ func (h *ConsoleHandler) run(w http.ResponseWriter, r *http.Request) {
 		// Microseconds, the unit the field's name promises.
 		DurationMicros: result.Duration.Microseconds(),
 	}
-	if answer.Columns == nil {
-		answer.Columns = []string{}
-	}
-	if answer.ColumnTypes == nil {
-		answer.ColumnTypes = []string{}
-	}
-	if answer.Rows == nil {
-		answer.Rows = [][]any{}
-	}
+	answer.Columns = emptyIfNil(answer.Columns)
+	answer.ColumnTypes = emptyIfNil(answer.ColumnTypes)
+	answer.Rows = emptyIfNil(answer.Rows)
 	httpx.JSON(w, r, http.StatusOK, answer)
 }
 

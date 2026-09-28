@@ -86,8 +86,7 @@ type loginResponse struct {
 // hand it to any script on the page and undo the point of HttpOnly.
 func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -225,8 +224,7 @@ func (h *AuthHandler) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req changePasswordRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 

@@ -117,9 +117,8 @@ func (h *ParticipantHandler) postSignals(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	contestID, err := uuid.Parse(chi.URLParam(r, contestIDParam))
-	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, auth.CodeInvalidContestID, "Contest identifier is not valid")
+	contestID, ok := contestIDFrom(w, r)
+	if !ok {
 		return
 	}
 

@@ -165,15 +165,11 @@ func toUserResponse(u users.User) UserResponse {
 		Status:               u.Status,
 		Roles:                u.Roles,
 		MustChangePassword:   u.MustChangePassword,
-		CreatedAt:            u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		CreatedAt:            u.CreatedAt.UTC().Format(timeLayout),
+		LastLoginAt:          formatTime(u.LastLoginAt),
+		StatusChangedAt:      formatTime(u.StatusChangedAt),
 		StatusReason:         u.StatusReason,
 		StatusChangedByLogin: u.StatusChangedByLogin,
-	}
-	if u.LastLoginAt != nil {
-		out.LastLoginAt = u.LastLoginAt.UTC().Format("2006-01-02T15:04:05Z")
-	}
-	if u.StatusChangedAt != nil {
-		out.StatusChangedAt = u.StatusChangedAt.UTC().Format("2006-01-02T15:04:05Z")
 	}
 	if u.StatusChangedBy != nil {
 		out.StatusChangedBy = u.StatusChangedBy.String()
@@ -215,8 +211,7 @@ type createResponse struct {
 
 func (h *UsersHandler) create(w http.ResponseWriter, r *http.Request) {
 	var req createRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -283,8 +278,7 @@ type skippedAccount struct {
 
 func (h *UsersHandler) importRoster(w http.ResponseWriter, r *http.Request) {
 	var req importRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -323,12 +317,8 @@ func (h *UsersHandler) importRoster(w http.ResponseWriter, r *http.Request) {
 	for _, one := range result.Skipped {
 		skipped = append(skipped, skippedAccount{Login: one.Login, Reason: one.Reason})
 	}
-	notImported := result.NotImported
-	if notImported == nil {
-		notImported = []string{}
-	}
 	httpx.JSON(w, r, http.StatusOK, accountImportResponse{
-		Created: created, Skipped: skipped, NotImported: notImported, Stopped: stopped,
+		Created: created, Skipped: skipped, NotImported: emptyIfNil(result.NotImported), Stopped: stopped,
 	})
 }
 
@@ -395,8 +385,7 @@ func (h *UsersHandler) updateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req updateProfileRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -421,8 +410,7 @@ func (h *UsersHandler) block(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req blockRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -461,8 +449,7 @@ func (h *UsersHandler) deleteAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req deleteRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -537,8 +524,7 @@ func (h *UsersHandler) replaceRoles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req rolesRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 

@@ -136,7 +136,7 @@ type coverResponse struct {
 
 // upload replaces a contest's cover.
 func (h *CoverHandler) upload(w http.ResponseWriter, r *http.Request) {
-	contestID, ok := h.contestID(w, r)
+	contestID, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
@@ -196,7 +196,7 @@ func (h *CoverHandler) upload(w http.ResponseWriter, r *http.Request) {
 // The files stay on the volume for the sweep (covers.Service.Remove): a file
 // system refusing a delete must not be able to fail this request.
 func (h *CoverHandler) remove(w http.ResponseWriter, r *http.Request) {
-	contestID, ok := h.contestID(w, r)
+	contestID, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
@@ -209,7 +209,7 @@ func (h *CoverHandler) remove(w http.ResponseWriter, r *http.Request) {
 
 // staff answers what cover this contest has, whatever its status.
 func (h *CoverHandler) staff(w http.ResponseWriter, r *http.Request) {
-	contestID, ok := h.contestID(w, r)
+	contestID, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
@@ -229,7 +229,7 @@ func (h *CoverHandler) staff(w http.ResponseWriter, r *http.Request) {
 // never hold a picture of a contest that has not been published — and a short
 // life because an organiser replacing a cover looks at the result at once.
 func (h *CoverHandler) staffFile(w http.ResponseWriter, r *http.Request) {
-	contestID, ok := h.contestID(w, r)
+	contestID, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
@@ -377,16 +377,6 @@ func requestedCoverSize(r *http.Request) int {
 		return -1
 	}
 	return size
-}
-
-// contestID reads the identifier both writes act on.
-func (h *CoverHandler) contestID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
-	id, err := uuid.Parse(chi.URLParam(r, contestIDParam))
-	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, auth.CodeInvalidContestID, "Contest identifier is not valid")
-		return uuid.Nil, false
-	}
-	return id, true
 }
 
 // admitUpload spends one upload of the account's budget.

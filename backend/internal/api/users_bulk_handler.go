@@ -41,10 +41,7 @@ type skippedResponse struct {
 }
 
 func asBulkResponse(res users.BulkResult) bulkResponse {
-	changed := res.Changed
-	if changed == nil {
-		changed = []uuid.UUID{}
-	}
+	changed := emptyIfNil(res.Changed)
 	skipped := make([]skippedResponse, 0, len(res.Skipped))
 	for _, s := range res.Skipped {
 		skipped = append(skipped, skippedResponse{ID: s.ID, Login: s.Login, Reason: s.Reason})
@@ -54,8 +51,7 @@ func asBulkResponse(res users.BulkResult) bulkResponse {
 
 func (h *UsersHandler) bulkStatus(w http.ResponseWriter, r *http.Request) {
 	var req bulkStatusRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	identity, _ := auth.IdentityFrom(r.Context())
@@ -79,8 +75,7 @@ type bulkRolesRequest struct {
 
 func (h *UsersHandler) bulkRoles(w http.ResponseWriter, r *http.Request) {
 	var req bulkRolesRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	identity, _ := auth.IdentityFrom(r.Context())
@@ -117,8 +112,7 @@ type bulkPasswordResetResponse struct {
 
 func (h *UsersHandler) bulkResetPassword(w http.ResponseWriter, r *http.Request) {
 	var req bulkPasswordResetRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	identity, _ := auth.IdentityFrom(r.Context())
