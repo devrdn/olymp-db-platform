@@ -319,9 +319,9 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 				databases,
 				queryrunner.NewJournalled(client, postgres.NewQueryLog(pool), log),
 			).WithPerMinuteDefault(cfg.QueryPerMinute).WithGrace(cfg.DeadlineGrace).
-				// Collapses Run's own participant, contest and game lookups
-				// into the one round trip consoleRegistrations.ForRun answers
-				// together.
+				// Collapses the façade's own lookups — Run's participant,
+				// contest, game and instance, Access's participant and
+				// contest — into one round trip each.
 				WithLookup(consoleRegistrations).
 				// The console's schema panel. Wired here and only here: the
 				// console-less Service built further down for the participant
@@ -597,10 +597,14 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 	// AdmitRead never touch them.
 	participantAccess := console
 	if participantAccess == nil {
+		registrations := postgres.NewRegistrations(pool)
 		participantAccess = queryproxy.New(
-			postgres.NewRegistrations(pool), postgres.NewContests(pool),
+			registrations, postgres.NewContests(pool),
 			nil, nil, nil,
-		).WithPerMinuteDefault(cfg.QueryPerMinute).WithGrace(cfg.DeadlineGrace)
+		).WithPerMinuteDefault(cfg.QueryPerMinute).WithGrace(cfg.DeadlineGrace).
+			// Access's participant and contest in one round trip, as the
+			// console's own Service reads them.
+			WithLookup(registrations)
 	}
 	// Sequence is a second instance of the same postgres.Sequence contestService
 	// already holds one of (both are pool-backed, stateless readers): Reader

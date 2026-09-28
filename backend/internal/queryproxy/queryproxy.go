@@ -52,7 +52,7 @@ var (
 	//
 	// Deliberately not ErrFinished, and deliberately not a status write
 	// either. Finishing is a fact about the registration and it closes the
-	// whole play screen: lookupParticipant turns
+	// whole play screen: classifyParticipant turns
 	// contests.RegistrationFinished into ErrFinished for Access as well, so
 	// marking somebody finished here would take away the story, the question
 	// list, the results and the timer along with the console. This is only
@@ -118,9 +118,9 @@ type Games interface {
 }
 
 // LookupResult is everything Run needs about one query before it reaches the
-// runner: who is asking, what they are asking about, and its game — the
-// three rows People.ByUser, Contests.ByID and Games.Game each once read
-// separately.
+// runner: who is asking, what they are asking about, its game, and the
+// participant's own copy of it — the four rows People.ByUser, Contests.ByID,
+// Games.Game and Databases.Instance each once read separately.
 type LookupResult struct {
 	Participant contests.Participant
 	Contest     contests.Contest
@@ -130,19 +130,32 @@ type LookupResult struct {
 	// Game is populated.
 	Game    provisioning.Contest
 	GameErr error
+	// Instance and InstanceErr are the participant's own database as
+	// Databases.Instance would answer it — InstanceErr is
+	// provisioning.ErrNoInstance for a registration that has none yet — and
+	// go to Databases.EnsureFrom as they are, so the common case, a current
+	// copy, costs no read of its own.
+	Instance    provisioning.Instance
+	InstanceErr error
 }
 
-// Lookup is the one round trip Run depends on exclusively. See defaultLookup
-// for what New wires by default and postgres.Registrations.ForRun for the
-// real single query a deployment replaces it with (WithLookup).
+// Lookup answers who is asking and what about, one round trip per request.
+// See defaultLookup for what New wires by default and postgres.Registrations
+// for the real single queries a deployment replaces it with (WithLookup).
 type Lookup interface {
+	// ForRun is everything Run and Schema need (LookupResult).
 	ForRun(ctx context.Context, contestID, userID uuid.UUID) (LookupResult, error)
+	// ForAccess is the participant and the contest, for the read endpoints
+	// that need neither the game nor a database (Access, AccessForEvents).
+	ForAccess(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, contests.Contest, error)
 }
 
 // Databases hands out the participant's own copy, and says how large it may
-// grow.
+// grow. Instance is asked only by New's defaultLookup: the deployment's
+// Lookup reads the same row in its own statement.
 type Databases interface {
-	Ensure(ctx context.Context, contest provisioning.Contest, registration uuid.UUID) (string, error)
+	Instance(ctx context.Context, registration uuid.UUID) (provisioning.Instance, error)
+	EnsureFrom(ctx context.Context, contest provisioning.Contest, registration uuid.UUID, existing provisioning.Instance, err error) (string, error)
 	Quota(ctx context.Context, contest provisioning.Contest) (int64, error)
 }
 
@@ -201,8 +214,6 @@ type Watcher interface {
 // Service answers queries.
 type Service struct {
 	people    People
-	contests  Contests
-	games     Games
 	databases Databases
 	runner    Executor
 	// rate is a second instance of the Query Runner's own sliding-window
@@ -257,8 +268,8 @@ const defaultGrace = 5 * time.Second
 // New assembles the façade.
 func New(people People, contests Contests, games Games, databases Databases, runner Executor) *Service {
 	return &Service{
-		people: people, contests: contests, games: games, databases: databases, runner: runner,
-		lookup:           defaultLookup{people: people, contests: contests, games: games},
+		people: people, databases: databases, runner: runner,
+		lookup:           defaultLookup{people: people, contests: contests, games: games, databases: databases},
 		rate:             queryrunner.NewRateLimiter(0, time.Minute),
 		perMinuteDefault: queryrunner.DefaultLimits().PerMinute,
 		now:              func() time.Time { return time.Now().UTC() },
@@ -266,27 +277,41 @@ func New(people People, contests Contests, games Games, databases Databases, run
 	}
 }
 
-// defaultLookup is New's own Lookup: the three separate calls Run made
-// before this existed, still made the same way and in the same order, behind
-// the one interface Run now depends on exclusively. WithLookup replaces it
-// with a real single query.
+// defaultLookup is New's own Lookup: the separate calls Run made before this
+// existed, still made the same way and in the same order, behind the one
+// interface Run now depends on exclusively. WithLookup replaces it with real
+// single queries.
 type defaultLookup struct {
-	people   People
-	contests Contests
-	games    Games
+	people    People
+	contests  Contests
+	games     Games
+	databases Databases
 }
 
 func (d defaultLookup) ForRun(ctx context.Context, contestID, userID uuid.UUID) (LookupResult, error) {
-	participant, err := d.people.ByUser(ctx, contestID, userID)
-	if err != nil {
-		return LookupResult{}, err
-	}
-	contest, err := d.contests.ByID(ctx, contestID)
+	participant, contest, err := d.ForAccess(ctx, contestID, userID)
 	if err != nil {
 		return LookupResult{}, err
 	}
 	game, gameErr := d.games.Game(ctx, contestID)
-	return LookupResult{Participant: participant, Contest: contest, Game: game, GameErr: gameErr}, nil
+	instance, instanceErr := d.databases.Instance(ctx, participant.ID)
+	return LookupResult{
+		Participant: participant, Contest: contest,
+		Game: game, GameErr: gameErr,
+		Instance: instance, InstanceErr: instanceErr,
+	}, nil
+}
+
+func (d defaultLookup) ForAccess(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, contests.Contest, error) {
+	participant, err := d.people.ByUser(ctx, contestID, userID)
+	if err != nil {
+		return contests.Participant{}, contests.Contest{}, err
+	}
+	contest, err := d.contests.ByID(ctx, contestID)
+	if err != nil {
+		return contests.Participant{}, contests.Contest{}, err
+	}
+	return participant, contest, nil
 }
 
 // WithClock overrides the wall clock Run compares a participant's deadline
@@ -543,7 +568,7 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 	}
 	game := lookup.Game
 
-	database, err := s.databases.Ensure(ctx, game, participant.ID)
+	database, err := s.databases.EnsureFrom(ctx, game, participant.ID, lookup.Instance, lookup.InstanceErr)
 	if err != nil {
 		return nil, provisionFailure(err)
 	}
@@ -592,7 +617,7 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 	return result, err
 }
 
-// provisionFailure is what both callers of Databases.Ensure turn its error
+// provisionFailure is what both callers of Databases.EnsureFrom turn its error
 // into: the cluster having no room becomes this façade's own sentinel, and
 // everything else stays what it was, an outage of ours wearing ErrUnavailable.
 //
@@ -608,14 +633,13 @@ func provisionFailure(err error) error {
 }
 
 // classifyParticipant turns a raw participant and its lookup error into the
-// one answer both Run (via s.lookup) and lookupParticipant (via People)
-// promise a caller: "never registered" and "disqualified" fold into the same
+// one answer every caller of s.lookup — Run, Schema and resolve — promises: "never registered" and "disqualified" fold into the same
 // ErrNotAParticipant, so probing a contest for who is on it learns nothing;
 // "finished" is its own sentence (ErrFinished); anything else is ours
 // (ErrUnavailable, wrapped with wrap so the two callers can each name what
 // they were trying to do).
 //
-// Shared so the two lookups this package makes cannot classify the same
+// Shared so the lookups this package makes cannot classify the same
 // participant two different ways — this project's own history is full of the
 // bug two implementations of "who is this and are they still in" makes.
 func classifyParticipant(participant contests.Participant, err error, wrap string) (contests.Participant, error) {
@@ -630,14 +654,6 @@ func classifyParticipant(participant contests.Participant, err error, wrap strin
 		return contests.Participant{}, ErrFinished
 	}
 	return participant, nil
-}
-
-// lookupParticipant resolves who is asking, for the participant-facing read
-// endpoints (Access, AccessForEvents) that have no reason to read a game and
-// so never go through s.lookup.
-func (s *Service) lookupParticipant(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, error) {
-	participant, err := s.people.ByUser(ctx, contestID, userID)
-	return classifyParticipant(participant, err, "look up the participant")
 }
 
 // Admitted reports whether participant may interact with contest right now:
@@ -752,20 +768,16 @@ func (s *Service) StartOnRead(ctx context.Context, contest contests.Contest, par
 	return started, nil
 }
 
-// resolve is the pair of lookups both Access and AccessForEvents need before
-// either applies its own admission rule to the result: who is asking, and
-// the contest they are asking about. Factored out so the two reads
-// themselves cannot drift between the two callers the way lookupParticipant's
-// own doc already worries about for "who is this and are they still in".
+// resolve is the lookup both Access and AccessForEvents need before either
+// applies its own admission rule to the result: who is asking, and the
+// contest they are asking about, in one round trip (Lookup.ForAccess) —
+// every participant-facing read pays it, autosaves and signals included.
+// Classified by the same classifyParticipant Run uses, so the two cannot
+// disagree about "who is this and are they still in".
 func (s *Service) resolve(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, contests.Contest, error) {
-	participant, err := s.lookupParticipant(ctx, contestID, userID)
-	if err != nil {
+	participant, contest, err := s.lookup.ForAccess(ctx, contestID, userID)
+	if participant, err = classifyParticipant(participant, err, "look up the participant and the contest"); err != nil {
 		return contests.Participant{}, contests.Contest{}, err
-	}
-
-	contest, err := s.contests.ByID(ctx, contestID)
-	if err != nil {
-		return contests.Participant{}, contests.Contest{}, fmt.Errorf("%w: look up the contest: %w", ErrUnavailable, err)
 	}
 	return participant, contest, nil
 }
@@ -783,8 +795,7 @@ func (s *Service) resolve(ctx context.Context, contestID, userID uuid.UUID) (con
 // channel exists to replace (§8).
 //
 // Nothing else is admitted that Access would refuse: the participant must
-// still be registered, not disqualified or finished (resolve's own
-// lookupParticipant), and their address still has to satisfy the contest's
+// still be registered, not disqualified or finished (resolve), and their address still has to satisfy the contest's
 // own network restriction. Reading the story, the questions, or answering a
 // question still goes through Access unchanged — this widens only what the
 // channel may be held open for, never what a participant connected to it may

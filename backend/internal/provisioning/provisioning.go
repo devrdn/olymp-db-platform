@@ -274,7 +274,23 @@ func (s *Service) WithClusterBudget(maxBytes int64) *Service {
 // one row update. Only an empty pool pays for CREATE DATABASE while somebody
 // waits, which is the case the pool exists to make rare.
 func (s *Service) Ensure(ctx context.Context, contest Contest, registration uuid.UUID) (string, error) {
-	switch existing, err := s.repo.Of(ctx, registration); {
+	existing, err := s.Instance(ctx, registration)
+	return s.EnsureFrom(ctx, contest, registration, existing, err)
+}
+
+// Instance returns the database a registration already has, or
+// ErrNoInstance.
+func (s *Service) Instance(ctx context.Context, registration uuid.UUID) (Instance, error) {
+	return s.repo.Of(ctx, registration)
+}
+
+// EnsureFrom is Ensure for a caller that has already read the registration's
+// instance — existing and err are what Instance answered, ErrNoInstance
+// included. The SQL console reads the row in the same statement that finds
+// the participant, so the common case, a current copy, costs it no round
+// trip of its own here.
+func (s *Service) EnsureFrom(ctx context.Context, contest Contest, registration uuid.UUID, existing Instance, err error) (string, error) {
+	switch {
 	case err == nil && existing.Status != InstanceStatusDropped && existing.TemplateVersion >= contest.Version:
 		// Theirs, current, and actually there.
 		return existing.Database, nil

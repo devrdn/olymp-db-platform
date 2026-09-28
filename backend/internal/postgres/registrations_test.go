@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -520,6 +521,78 @@ func TestForRunReportsNoGameForAContestWithoutAReadyTemplate(t *testing.T) {
 		}
 		if got.Participant.UserID != student.ID {
 			t.Errorf("participant = %+v, want user %s even with no game yet", got.Participant, student.ID)
+		}
+		if !errors.Is(got.InstanceErr, provisioning.ErrNoInstance) {
+			t.Errorf("InstanceErr = %v, want provisioning.ErrNoInstance — the registration has no copy", got.InstanceErr)
+		}
+	})
+}
+
+// The participant's own copy comes back with the rest, as GameInstances.Of
+// would have read it, so Ensure has nothing left to ask in the common case.
+func TestForRunReadsTheParticipantsOwnInstance(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewRegistrations(testPool)
+		author := makeUser(t, ctx, "author-forrun-instance")
+		student := makeUser(t, ctx, "student-forrun-instance")
+		contestID := makeContest(t, ctx, author.ID)
+		registration := makeRegistration(t, ctx, contestID, student.ID)
+		putReadyTemplate(t, ctx, contestID, "game_tpl_forrun_instance", 3)
+		instances := NewGameInstances(testPool)
+		if err := instances.Assign(ctx, contestID, registration, "game_db_forrun_instance", 2); err != nil {
+			t.Fatalf("Assign() = %v", err)
+		}
+
+		got, err := repo.ForRun(ctx, contestID, student.ID)
+		if err != nil {
+			t.Fatalf("ForRun() = %v", err)
+		}
+		want, err := instances.Of(ctx, registration)
+		if err != nil {
+			t.Fatalf("Of() = %v", err)
+		}
+		if got.InstanceErr != nil || got.Instance != want {
+			t.Errorf("instance = %+v, %v; want %+v as Of reads it", got.Instance, got.InstanceErr, want)
+		}
+	})
+}
+
+// ForAccess is ForRun without the game: the same participant and contest,
+// and the same single answer for a stranger and for a contest that does not
+// exist.
+func TestForAccessReadsTheParticipantAndTheContestTogether(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewRegistrations(testPool)
+		author := makeUser(t, ctx, "author-foraccess")
+		student := makeUser(t, ctx, "student-foraccess")
+		stranger := makeUser(t, ctx, "stranger-foraccess")
+		contestID := makeContest(t, ctx, author.ID)
+		makeRegistration(t, ctx, contestID, student.ID)
+
+		participant, contest, err := repo.ForAccess(ctx, contestID, student.ID)
+		if err != nil {
+			t.Fatalf("ForAccess() = %v", err)
+		}
+		byUser, err := repo.ByUser(ctx, contestID, student.ID)
+		if err != nil {
+			t.Fatalf("ByUser() = %v", err)
+		}
+		if !reflect.DeepEqual(participant, byUser) {
+			t.Errorf("participant = %+v, want %+v as ByUser reads it", participant, byUser)
+		}
+		byID, err := NewContests(testPool).ByID(ctx, contestID)
+		if err != nil {
+			t.Fatalf("ByID() = %v", err)
+		}
+		if !reflect.DeepEqual(contest, byID) {
+			t.Errorf("contest = %+v, want %+v as ByID reads it", contest, byID)
+		}
+
+		if _, _, err := repo.ForAccess(ctx, contestID, stranger.ID); !errors.Is(err, contests.ErrParticipantNotFound) {
+			t.Errorf("ForAccess(stranger) = %v, want ErrParticipantNotFound", err)
+		}
+		if _, _, err := repo.ForAccess(ctx, uuid.New(), student.ID); !errors.Is(err, contests.ErrParticipantNotFound) {
+			t.Errorf("ForAccess(unknown contest) = %v, want ErrParticipantNotFound", err)
 		}
 	})
 }

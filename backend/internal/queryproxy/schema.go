@@ -52,28 +52,39 @@ func (s *Service) WithSchemas(schemas Schemas) *Service {
 // to be told apart from one whose game is simply slow to answer, and the
 // refusal must not cost the cluster a connection either.
 func (s *Service) Schema(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (provisioning.Schema, error) {
-	participant, contest, err := s.Access(ctx, contestID, userID, addr)
-	if err != nil {
-		return provisioning.Schema{}, err
-	}
-
-	// Before anything is looked up, because a build with nothing to answer
-	// this has nothing to look up *with*. internal/app builds a second,
-	// console-less Service for the participant read endpoints when no Query
-	// Runner is deployed, and hands it nils for the three collaborators only
-	// Run uses — games and databases among them. Asking those first would
-	// turn "this deployment has no console" into a panic mid-request.
+	// A build with nothing to answer this has nothing to look up *with*.
+	// internal/app builds a second, console-less Service for the participant
+	// read endpoints when no Query Runner is deployed, and hands it nils for
+	// the collaborators only Run uses — games and databases among them — so
+	// it admits the caller the way every read does and refuses, rather than
+	// turning "this deployment has no console" into a panic mid-request.
 	if s.schemas == nil {
+		if _, _, err := s.Access(ctx, contestID, userID, addr); err != nil {
+			return provisioning.Schema{}, err
+		}
 		return provisioning.Schema{}, ErrSchemaHidden
 	}
 
-	game, err := s.games.Game(ctx, contestID)
-	switch {
-	case errors.Is(err, provisioning.ErrNoGame):
-		return provisioning.Schema{}, ErrNoGameYet
-	case err != nil:
-		return provisioning.Schema{}, fmt.Errorf("%w: look up the contest's game: %w", ErrUnavailable, err)
+	// Access's own admission, over the one lookup Run makes: it already
+	// carries the game and the participant's copy of it, which this endpoint
+	// needs next.
+	lookup, err := s.lookup.ForRun(ctx, contestID, userID)
+	participant, err := classifyParticipant(lookup.Participant, err, "look up the participant, the contest and its game")
+	if err != nil {
+		return provisioning.Schema{}, err
 	}
+	contest := lookup.Contest
+	if err := s.Admitted(contest, participant, addr); err != nil {
+		return provisioning.Schema{}, err
+	}
+
+	switch {
+	case errors.Is(lookup.GameErr, provisioning.ErrNoGame):
+		return provisioning.Schema{}, ErrNoGameYet
+	case lookup.GameErr != nil:
+		return provisioning.Schema{}, fmt.Errorf("%w: look up the contest's game: %w", ErrUnavailable, lookup.GameErr)
+	}
+	game := lookup.Game
 
 	if !game.Policy.AllowCatalog {
 		return provisioning.Schema{}, ErrSchemaHidden
@@ -83,7 +94,7 @@ func (s *Service) Schema(ctx context.Context, contestID, userID uuid.UUID, addr 
 	// describing. Ensure may create it, which is work this endpoint pays for
 	// on a participant's first visit — and is work their first query would
 	// have paid for a moment later anyway.
-	database, err := s.databases.Ensure(ctx, game, participant.ID)
+	database, err := s.databases.EnsureFrom(ctx, game, participant.ID, lookup.Instance, lookup.InstanceErr)
 	if err != nil {
 		return provisioning.Schema{}, provisionFailure(err)
 	}
