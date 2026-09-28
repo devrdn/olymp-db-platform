@@ -14,6 +14,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
 import { saveQuestionAction, type QuestionState } from "./actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * One question, in one form with one save.
@@ -155,7 +156,7 @@ function SaveRow({
   const t = dict.workspace.question;
 
   const failure = state.code
-    ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
+    ? (messageForCode(state.code, dict.errors))
     : null;
 
   return (

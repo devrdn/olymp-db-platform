@@ -9,6 +9,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
 import { removeImageAction, uploadImageAction, type SettingsState } from "./actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * The marks an installation puts on itself.
@@ -45,7 +46,7 @@ function Slot({
 
   const failure = [state.code, removal.code].find(Boolean);
   const message = failure
-    ? ((dict.errors as Record<string, string>)[failure] ?? dict.errors.fallback)
+    ? (messageForCode(failure, dict.errors))
     : null;
 
   return (

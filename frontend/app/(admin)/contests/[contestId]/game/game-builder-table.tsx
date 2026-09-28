@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { buttonVariants } from "@/components/ui/button";
-import { ApiError, request } from "@/lib/api/client";
+import { ApiError, failureCode, isAbortError, request } from "@/lib/api/client";
 import type { BuilderLimits, TableData, TableDefinition } from "@/lib/api/game";
 import { readableBytes, readableDuration } from "@/lib/format/bytes";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -19,6 +19,7 @@ import {
   deleteTableRowAction,
   gameTableDataWindowAction,
 } from "./actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 type Phase = "idle" | "resumable" | "uploading" | "completing" | "error";
 
@@ -28,24 +29,6 @@ type Phase = "idle" | "resumable" | "uploading" | "completing" | "error";
  * `currentTableUploadAction`'s own count, before giving up and asking a
  * person to press Retry. */
 const MAX_AUTO_RESYNCS = 3;
-
-/** `isAbortError` from `game-upload.tsx` — the identical check, for the
- * identical reason (that file's own doc: `DOMException` is not reliably an
- * `Error` across environments, and a cancelled upload must never read as an
- * unreachable server). Copied rather than imported: neither file exports
- * anything today, and importing across two sibling "use client" leaves for
- * a four-line predicate would be the tighter coupling. */
-function isAbortError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as { name?: unknown }).name === "AbortError"
-  );
-}
-
-function failureCode(error: unknown): string {
-  return error instanceof ApiError ? error.code : "unreachable";
-}
 
 /**
  * One chunk of a table's own CSV upload, sent straight to the API rather
@@ -461,7 +444,7 @@ export function GameBuilderTable({
   }
 
   function message(code: string): string {
-    return (errors as Record<string, string>)[code] ?? errors.fallback;
+    return messageForCode(code, errors);
   }
 
   function updateRowValue(index: number, value: string) {

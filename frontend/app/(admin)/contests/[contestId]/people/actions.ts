@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { ApiError } from "@/lib/api/client";
+import { ApiError, failureCode } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
 import { importResultSchema, parseLogins, type ImportResult } from "@/lib/api/people";
 import { serverRequest } from "@/lib/api/server";
@@ -23,7 +23,7 @@ async function attempt(path: string, init: { method: string; body?: unknown }, c
     (error: unknown) => error,
   );
 
-  if (failure) return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+  if (failure) return { code: failureCode(failure) };
 
   revalidatePath(`/contests/${contestId}`, "layout");
   return { done: true };

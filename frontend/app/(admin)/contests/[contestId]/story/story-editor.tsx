@@ -8,6 +8,7 @@ import { MarkdownEditor } from "@/components/ui/markdown-editor";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import { saveStoryAction, type StoryState } from "./actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * The crime story, one box per declared language.
@@ -51,7 +52,7 @@ export function StoryEditor({
   const [state, formAction, pending] = useActionState<StoryState, FormData>(saveStoryAction, {});
 
   const failure = state.code
-    ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
+    ? (messageForCode(state.code, dict.errors))
     : null;
 
   return (

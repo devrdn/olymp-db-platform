@@ -3,7 +3,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { ApiError } from "@/lib/api/client";
+import { failureCode } from "@/lib/api/client";
 import { serverRequest } from "@/lib/api/server";
 import { checkPasswordChange } from "@/lib/auth/password-change";
 import { SESSION_COOKIE } from "@/lib/auth/session";
@@ -50,7 +50,7 @@ export async function changePasswordAction(
   );
 
   if (failure) {
-    const code = failure instanceof ApiError ? failure.code : "unreachable";
+    const code = failureCode(failure);
 
     // The session died while the form was open. There is nothing to change any
     // more, and reporting it under a password field would be misleading.

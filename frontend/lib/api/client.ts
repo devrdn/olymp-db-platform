@@ -132,6 +132,30 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The code a failure should be reported under: the API's own when the API
+ * answered, `unreachable` for anything else — a network error, a proxy's page,
+ * a response the client could not read. One place for the rule every server
+ * action applies when it turns a thrown error into `{ code }`.
+ */
+export function failureCode(error: unknown): string {
+  return error instanceof ApiError ? error.code : CLIENT_ERROR_CODES.unreachable;
+}
+
+/**
+ * Whether a thrown value is a fetch cancelled on purpose. Checked by name, not
+ * `instanceof`: a `DOMException` is not reliably an `Error` across
+ * environments, and a cancelled request must never read as an unreachable
+ * server.
+ */
+export function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: unknown }).name === "AbortError"
+  );
+}
+
 type ErrorEnvelope = {
   error: { code: string; message: string; request_id?: string };
   /** Named beside the error rather than inside it; see ApiError.subject. */

@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 
 import { requestGameBuildAction } from "./actions";
 import { useGamePoll } from "./game-poll";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * Asking for the game to be built again, and the one sentence that explains
@@ -96,7 +97,7 @@ export function GameBuild({
   if (!editable || !builder || (!game.needsBuild && !failed && !building)) return null;
 
   function message(code: string): string {
-    return (errors as Record<string, string>)[code] ?? errors.fallback;
+    return messageForCode(code, errors);
   }
 
   function requestBuild() {

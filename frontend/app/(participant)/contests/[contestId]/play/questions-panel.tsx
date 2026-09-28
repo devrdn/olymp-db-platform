@@ -12,6 +12,7 @@ import type { Scoring } from "@/lib/api/contests";
 import { cn } from "@/lib/utils";
 
 import { refreshQuestionsAction, submitAnswerAction, type AnswerState } from "./actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * One question's data, paired with its wording already rendered — see
@@ -149,7 +150,7 @@ export function QuestionsPanel({
       </div>
       {/* Stated once, for the whole list, rather than repeated on every
           question — the penalty is a property of the contest, not of any one
-          question (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md). */}
+          question (docs/ARCHITECTURE.md §6.1.1). */}
       {scoring === "icpc" ? (
         <p className="text-small text-ink-3">{t.icpcPenalty.replace("{n}", String(icpcPenaltyMin))}</p>
       ) : null}
@@ -376,8 +377,7 @@ function Verdict({
 /** Why an answer did not go through — the same shape and the same reasoning as the console's own refusal. */
 function Refusal({ state, dict }: { state: Extract<AnswerState, { kind: "refused" }>; dict: PlayDictionary }) {
   const t = dict.participant.play.questions;
-  const errors = dict.errors as Record<string, string>;
-  const message = errors[state.code] ?? errors.fallback;
+  const message = messageForCode(state.code, dict.errors);
 
   // A wait rather than a fault: asking again later is the whole remedy, so
   // these read quietly and carry no request reference to report.

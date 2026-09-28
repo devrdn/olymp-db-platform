@@ -4,7 +4,7 @@ import { CONTEST_STATUSES } from "./contests";
 
 /**
  * The two reads behind the front page
- * (`/public/…`, docs/superpowers/specs/2026-09-22-landing-page-design.md §4).
+ * (`/public/…`, docs/ARCHITECTURE.md §9.6).
  *
  * Both are open: no session, no cookie, nothing about the caller. That is the
  * whole point of them, and it is also the boundary of what they may carry —

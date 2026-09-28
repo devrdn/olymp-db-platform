@@ -70,7 +70,7 @@ export const contestSummarySchema = z
      */
     enrolled: z.boolean().default(false),
     // The two fields the play screen needs to know whether it is running
-    // under ICPC scoring at all (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md):
+    // under ICPC scoring at all (docs/ARCHITECTURE.md §6.1.1):
     // whether to show a question's points, and what a wrong attempt on a
     // question later solved costs. Read here rather than from the staff-only
     // `Contest`, which a participant may not fetch.
@@ -384,7 +384,7 @@ export function icpcPenaltyFromForm(
   return { ok: true, value: whole };
 }
 
-function enumFromForm<T extends string>(
+export function enumFromForm<T extends string>(
   value: FormDataEntryValue | null,
   allowed: readonly T[],
 ): T | undefined {

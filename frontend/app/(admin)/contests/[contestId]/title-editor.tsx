@@ -17,6 +17,7 @@ import { type Contest } from "@/lib/api/contests";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import { saveTranslationsAction, type TitleState } from "./actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * The form inside the dialog: one open field for the language the contest
@@ -75,7 +76,7 @@ function TitleForm({
   if (!primary) return null;
 
   const failure = state.code
-    ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
+    ? (messageForCode(state.code, dict.errors))
     : null;
 
   return (

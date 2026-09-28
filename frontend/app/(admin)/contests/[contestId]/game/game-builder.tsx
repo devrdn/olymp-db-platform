@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 
 import { saveGameDefinitionAction, type GameState } from "./actions";
 import { GameBuilderTable } from "./game-builder-table";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /** One column of a table, as the editor works on it — `ColumnDefinition`
  * (`lib/api/game.ts`) plus a client-only `key` so a row can be reordered or
@@ -287,7 +288,7 @@ export function GameBuilder({
           </span>
           {oversized ? <span className="text-small text-bad">{tb.tooLarge}</span> : null}
           <span role="status" aria-live="polite" className="text-small text-ink-2">
-            {state.code ? ((errors as Record<string, string>)[state.code] ?? errors.fallback) : state.saved ? tb.saved : ""}
+            {state.code ? (messageForCode(state.code, errors)) : state.saved ? tb.saved : ""}
           </span>
         </div>
         {/* `Definition.Validate`'s own refusals name a table or column

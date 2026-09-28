@@ -100,7 +100,6 @@ export function PersonPicker({
   searchFailedText,
   changeText,
   selectedTemplate,
-  disabled,
   help,
   helpLabel,
 }: {
@@ -117,7 +116,6 @@ export function PersonPicker({
   changeText: string;
   /** "Selected: {name} ({login})", filled in once somebody is chosen. */
   selectedTemplate: string;
-  disabled?: boolean;
   /** Passed through to `Combobox`: an explanation behind a "?" beside the label. */
   help?: string;
   helpLabel?: string;
@@ -227,7 +225,6 @@ export function PersonPicker({
           loading || inputValue.trim().length < MIN_DIRECTORY_QUERY_LENGTH ? "" : noResultsText
         }
         statusMessage={status}
-        disabled={disabled}
         describedBy={`${id}-help`}
         help={help}
         helpLabel={helpLabel}

@@ -4,26 +4,12 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { ApiError } from "@/lib/api/client";
-import {
-  contestSchema,
-  ENROLLMENTS,
-  QUESTION_MODES,
-  TIMINGS,
-  type Enrollment,
-  type QuestionMode,
-  type Timing,
-} from "@/lib/api/contests";
+import { contestSchema, type Enrollment, ENROLLMENTS, enumFromForm, QUESTION_MODES, type QuestionMode, type Timing, TIMINGS } from "@/lib/api/contests";
 import { serverRequest } from "@/lib/api/server";
 import { LOCALES, type Locale } from "@/lib/i18n/config";
 
 export type NewContestState = { code?: string };
 
-/** A value the form offered, or the default the API would have picked anyway. */
-function oneOf<T extends string>(value: FormDataEntryValue | null, allowed: readonly T[]): T | null {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value)
-    ? (value as T)
-    : null;
-}
 
 /**
  * Creating a contest.
@@ -51,7 +37,7 @@ export async function createContestAction(
 
   if (chosen.length === 0) return { code: "invalid_request" };
 
-  const fallback = oneOf(form.get("defaultLanguage"), LOCALES) ?? chosen[0];
+  const fallback = enumFromForm(form.get("defaultLanguage"), LOCALES) ?? chosen[0];
   // A default that is not among the chosen languages would be accepted by the
   // form and refused by a partial unique index nobody can read the message of.
   const defaultLanguage = chosen.includes(fallback) ? fallback : chosen[0];
@@ -70,7 +56,7 @@ export async function createContestAction(
   // register that nobody can tell from the next blank row.
   if (!translations[defaultLanguage]) return { code: "invalid_request" };
 
-  const timing = oneOf<Timing>(form.get("timing"), TIMINGS) ?? "fixed";
+  const timing = enumFromForm<Timing>(form.get("timing"), TIMINGS) ?? "fixed";
   const duration = Number(form.get("durationMin"));
   const durationMin =
     timing === "individual" && Number.isFinite(duration) && duration > 0
@@ -82,8 +68,8 @@ export async function createContestAction(
   const created = await serverRequest("/contests", {
     method: "POST",
     body: {
-      enrollment: oneOf<Enrollment>(form.get("enrollment"), ENROLLMENTS) ?? "invite_only",
-      question_mode: oneOf<QuestionMode>(form.get("questionMode"), QUESTION_MODES) ?? "multi",
+      enrollment: enumFromForm<Enrollment>(form.get("enrollment"), ENROLLMENTS) ?? "invite_only",
+      question_mode: enumFromForm<QuestionMode>(form.get("questionMode"), QUESTION_MODES) ?? "multi",
       timing,
       duration_min: durationMin,
       starts_at: null,

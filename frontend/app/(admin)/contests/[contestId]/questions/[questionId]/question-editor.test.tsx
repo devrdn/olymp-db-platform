@@ -219,7 +219,7 @@ describe("QuestionEditor, rules on screen and explanations behind a question mar
   });
 });
 
-// docs/superpowers/specs/2026-09-13-icpc-scoring-design.md, decision 1: a
+// docs/ARCHITECTURE.md §6.1.1: a
 // question's own points and percentage penalty do not exist in ICPC scoring
 // — place is decided by how many questions are solved and, at a tie, by the
 // contest's own penalty time. The fields stay in the data (the mode can

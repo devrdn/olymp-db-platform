@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { buttonVariants } from "@/components/ui/button";
 import { Tag } from "@/components/ui/tag";
-import { ApiError, request } from "@/lib/api/client";
+import { ApiError, failureCode, isAbortError, request } from "@/lib/api/client";
 import type { Game, Upload } from "@/lib/api/game";
 import { readableBytes, readableDuration } from "@/lib/format/bytes";
 import type { Dictionary } from "@/lib/i18n/dictionary";
@@ -19,6 +19,7 @@ import {
   gameUploadWindowAction,
 } from "./actions";
 import { useGamePoll } from "./game-poll";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /** How many consecutive out-of-order refusals the loop resyncs from on its
  * own before giving up and asking a person to press Retry. Covers the one
@@ -28,30 +29,6 @@ import { useGamePoll } from "./game-poll";
 const MAX_AUTO_RESYNCS = 3;
 
 type Phase = "idle" | "resumable" | "uploading" | "completing" | "done" | "error";
-
-/**
- * True for the DOMException `fetch` rejects an aborted request with.
- *
- * The name is the whole test, and `instanceof Error` deliberately is not part
- * of it. `DOMException` only became a subclass of `Error` in the 2021 WebIDL
- * change; browsers have followed it, jsdom has not, and there is no reason for
- * "the organiser pressed Cancel" to depend on which of the two an environment
- * implements. Getting it wrong is not cosmetic either: a cancelled upload
- * whose abort is not recognised falls through to the error branch and tells
- * the organiser the server is unreachable, about a request they stopped
- * themselves.
- */
-function isAbortError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as { name?: unknown }).name === "AbortError"
-  );
-}
-
-function failureCode(error: unknown): string {
-  return error instanceof ApiError ? error.code : "unreachable";
-}
 
 /**
  * One chunk of a game upload, sent straight to the API rather than through a
@@ -466,7 +443,7 @@ export function GameUpload({
   }
 
   function message(code: string): string {
-    return (errors as Record<string, string>)[code] ?? errors.fallback;
+    return messageForCode(code, errors);
   }
 
   if (!editable) {

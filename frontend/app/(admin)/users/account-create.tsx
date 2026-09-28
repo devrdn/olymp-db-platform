@@ -23,6 +23,7 @@ import {
   type CreateAccountState,
   type ImportAccountsState,
 } from "./create-actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * Registering an account from the register itself — the last thing this
@@ -258,7 +259,7 @@ function NewAccountForm({
   }
 
   const failure = state.code
-    ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
+    ? (messageForCode(state.code, dict.errors))
     : null;
 
   return (
@@ -388,7 +389,7 @@ function ImportRosterForm({
           <NotImportedRows
             logins={notImported}
             title={t.roster.notImported.replace("{n}", String(notImported.length))}
-            why={stopped ? ((dict.errors as Record<string, string>)[stopped] ?? dict.errors.fallback) : null}
+            why={stopped ? (messageForCode(stopped, dict.errors)) : null}
           />
         ) : null}
 
@@ -406,7 +407,7 @@ function ImportRosterForm({
   }
 
   const failure = state.code
-    ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
+    ? (messageForCode(state.code, dict.errors))
     : null;
 
   return (

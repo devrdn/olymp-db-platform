@@ -4,10 +4,11 @@ import { Tag } from "@/components/ui/tag";
 import { ContestWindow } from "@/components/product/contest-window";
 import { StateView } from "@/components/product/state-view";
 import { buttonVariants } from "@/components/ui/button";
-import type { ContestStatus, ContestSummary } from "@/lib/api/contests";
+import type { ContestSummary } from "@/lib/api/contests";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
+import { CONTEST_STATUS_TONE } from "@/lib/api/contests-terms";
 
 /**
  * The contest listing, as a register rather than a wall of cards.
@@ -32,15 +33,6 @@ import { cn } from "@/lib/utils";
  * Every string arrives in `dict`. The component holds no copy of its own, so a
  * fourth language needs a dictionary file and nothing here.
  */
-
-/** One tone per state, and the accent spent only on what is happening now. */
-const STATUS_TONE: Record<ContestStatus, "live" | "good" | "mute"> = {
-  draft: "mute",
-  published: "good",
-  running: "live",
-  finished: "mute",
-  archived: "mute",
-};
 
 /* Padding comes from the density tokens, so the same register is comfortable
    in the constructor and compact in the query log without a second component
@@ -162,7 +154,7 @@ export function ContestRegister({
                     </span>
                   </td>
                   <td className={CELL}>
-                    <Tag tone={STATUS_TONE[contest.status]}>{t.status[contest.status]}</Tag>
+                    <Tag tone={CONTEST_STATUS_TONE[contest.status]}>{t.status[contest.status]}</Tag>
                   </td>
                   <td className={cn(CELL, "text-small whitespace-nowrap text-ink-2 max-narrow:hidden")}>
                     {t.enrollment[contest.enrollment]}

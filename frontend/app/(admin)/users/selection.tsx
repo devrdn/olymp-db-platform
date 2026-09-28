@@ -36,6 +36,7 @@ import {
   type BulkPasswordState,
   type BulkState,
 } from "./bulk-actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /** One picked account, as the selection panel below needs to name it. */
 export type SelectedAccount = { id: string; display: string };
@@ -584,7 +585,7 @@ function StatusForm({
   }
 
   const failure = state.code
-    ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
+    ? (messageForCode(state.code, dict.errors))
     : null;
 
   return (
@@ -767,7 +768,7 @@ function RolesForm({
   }
 
   const failure = state.code
-    ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
+    ? (messageForCode(state.code, dict.errors))
     : null;
 
   if (confirmingEmpty) {
@@ -950,7 +951,7 @@ function ResetPasswordForm({
   }
 
   const failure = state.code
-    ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
+    ? (messageForCode(state.code, dict.errors))
     : null;
 
   return (

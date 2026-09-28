@@ -6,7 +6,7 @@ import { ApiError } from "@/lib/api/client";
 
 /**
  * Saving without a button, for one document at a time: the participant's
- * notes, or one SQL tab (docs/superpowers/specs/2026-09-17-play-workspace-design.md, §1, §2).
+ * notes, or one SQL tab (docs/ARCHITECTURE.md §6.4).
  *
  * The rules, all enforced by `AutosaveEngine` below:
  *

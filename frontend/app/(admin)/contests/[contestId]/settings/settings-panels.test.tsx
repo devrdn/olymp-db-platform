@@ -189,7 +189,7 @@ describe("ContestPanel, rules on screen and explanations behind a question mark"
   });
 });
 
-// The ICPC penalty (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md):
+// The ICPC penalty (docs/ARCHITECTURE.md §6.1.1):
 // minutes, 0..240, shown only while ICPC scoring is picked and locked with
 // the rest of the shape once the contest starts — the same rule as the
 // scoring radio it sits beside.

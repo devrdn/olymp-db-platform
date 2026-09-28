@@ -5,7 +5,7 @@ import { SCORINGS } from "./contests-terms";
 
 /**
  * The contest's table, as the API sends it to its three audiences
- * (docs/superpowers/specs/2026-09-13-leaderboard-design.md).
+ * (docs/ARCHITECTURE.md §10).
  *
  * The public and participant copies share one shape: the participant's only
  * extra is `is_you`, and neither carries an identifier of any kind. The staff
@@ -23,7 +23,7 @@ export const STANDINGS_STATES = [
 export type StandingsState = (typeof STANDINGS_STATES)[number];
 
 /**
- * The ICPC grid's cell states (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md,
+ * The ICPC grid's cell states (docs/ARCHITECTURE.md §6.1.1,
  * the section on grid cells). `cells` and `questions` are present only when
  * `scoring` is `"icpc"` — `points` and `winner` rows carry neither.
  */

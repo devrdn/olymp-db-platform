@@ -19,6 +19,7 @@ import {
   reorderQuestionsAction,
   type QuestionListState,
 } from "./actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
@@ -319,7 +320,7 @@ function AddQuestion({ contestId, dict }: { contestId: string; dict: Dictionary 
   );
 
   const failure = state.code
-    ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
+    ? (messageForCode(state.code, dict.errors))
     : null;
 
   return (

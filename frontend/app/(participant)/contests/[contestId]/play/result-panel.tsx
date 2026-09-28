@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import type { ConsoleState } from "./actions";
 import { PaneHandle, SHARE_BOUNDS, useResultRows } from "./pane-splitter";
 import { RowDetail } from "./row-detail";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * What the last query produced, or why it did not — the "Result" tab of the
@@ -806,8 +807,7 @@ const FAULT_CODES = ["internal_error", "query_service_down", "game_cluster_full"
  * unactionable answer whichever language it is in.
  */
 function Refusal({ state, dict }: { state: Extract<ConsoleState, { kind: "refused" }>; dict: PlayDictionary }) {
-  const errors = dict.errors as Record<string, string>;
-  const message = errors[state.code] ?? errors.fallback;
+  const message = messageForCode(state.code, dict.errors);
 
   // Waiting is a different situation from being wrong, and the participant
   // should be able to tell without reading carefully: one of these means try
@@ -821,7 +821,7 @@ function Refusal({ state, dict }: { state: Extract<ConsoleState, { kind: "refuse
   // reference under it. A code this build has no sentence for is counted as a
   // fault: nobody can say what happened, which is when the reference is the
   // only thing worth quoting.
-  const fault = !(state.code in errors) || FAULT_CODES.includes(state.code);
+  const fault = !(state.code in dict.errors) || FAULT_CODES.includes(state.code);
 
   return (
     <div

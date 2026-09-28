@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { ApiError } from "@/lib/api/client";
+import { failureCode } from "@/lib/api/client";
 import { CONTEST_STATUSES, type ContestStatus } from "@/lib/api/contests";
 import { isId } from "@/lib/api/ids";
 import { serverRequest } from "@/lib/api/server";
@@ -52,7 +52,7 @@ export async function saveTranslationsAction(
     (error: unknown) => error,
   );
 
-  if (failure) return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+  if (failure) return { code: failureCode(failure) };
 
   // The title is printed in the header, in the breadcrumb and on the
   // register behind them. All of it is now stale.
@@ -95,7 +95,7 @@ export async function setStatusAction(
     (error: unknown) => error,
   );
 
-  if (failure) return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+  if (failure) return { code: failureCode(failure) };
 
   // The state is printed in the header, in the tab row's context and on the
   // register behind them. All of it is now stale.

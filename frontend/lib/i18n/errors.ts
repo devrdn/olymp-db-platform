@@ -1,5 +1,3 @@
-import type { ApiError } from "@/lib/api/client";
-
 import type { Dictionary } from "./dictionary";
 
 /**
@@ -13,8 +11,12 @@ import type { Dictionary } from "./dictionary";
  * A code the dictionary does not know means the API grew one this build has
  * not learned yet. A plain sentence beats untranslated English, so the fallback
  * is deliberate rather than defensive.
+ *
+ * Takes the code rather than the error because every caller holds a code: a
+ * server action has already turned the failure into `{ code }` by the time a
+ * component renders it. And it takes `dict.errors` rather than the whole
+ * dictionary so that screens holding a trimmed dictionary can call it too.
  */
-export function messageForError(failure: ApiError, dict: Dictionary): string {
-  const messages = dict.errors as Record<string, string>;
-  return messages[failure.code] ?? messages.fallback;
+export function messageForCode(code: string, errors: Dictionary["errors"]): string {
+  return (errors as Record<string, string>)[code] ?? errors.fallback;
 }

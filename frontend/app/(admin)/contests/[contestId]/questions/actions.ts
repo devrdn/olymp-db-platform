@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { ApiError } from "@/lib/api/client";
+import { failureCode } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
 import { serverRequest } from "@/lib/api/server";
 
@@ -29,7 +29,7 @@ async function attempt(
     (error: unknown) => error,
   );
 
-  if (failure) return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+  if (failure) return { code: failureCode(failure) };
 
   // The list, the publish gate on the overview and the question's own screen
   // are all describing what just changed.

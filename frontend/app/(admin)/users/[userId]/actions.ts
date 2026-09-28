@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { deleteAccount, passwordResetSchema, restoreAccount } from "@/lib/api/accounts";
-import { ApiError } from "@/lib/api/client";
+import { ApiError, failureCode } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
 import { serverRequest } from "@/lib/api/server";
 
@@ -42,7 +42,7 @@ async function attempt(action: () => Promise<unknown>): Promise<AccountState> {
     (error: unknown) => error,
   );
 
-  if (failure) return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+  if (failure) return { code: failureCode(failure) };
 
   // Both the card and the register behind it: a blocked account has to stop
   // reading "active" on the list somebody returns to.

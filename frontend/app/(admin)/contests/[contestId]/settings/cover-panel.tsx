@@ -11,6 +11,7 @@ import { coverStaffHref, MAX_COVER_ATTRIBUTION, type ContestCover } from "@/lib/
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import { removeCoverAction, uploadCoverAction, type SettingsState } from "./actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * The refusals that are about the credit line rather than about the file.
@@ -142,7 +143,7 @@ export function CoverPanel({
 
   const failure =
     outcome?.state.code != null
-      ? ((dict.errors as Record<string, string>)[outcome.state.code] ?? dict.errors.fallback)
+      ? (messageForCode(outcome.state.code, dict.errors))
       : null;
   const uploadFailure = outcome?.of === "upload" ? failure : null;
 

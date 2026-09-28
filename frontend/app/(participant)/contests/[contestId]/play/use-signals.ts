@@ -9,7 +9,7 @@ export type { PasteTarget, Signal };
 
 /**
  * What the play screen tells the organiser about its own participant's
- * browser (docs/superpowers/specs/2026-09-18-participant-monitoring-design.md,
+ * browser (docs/ARCHITECTURE.md §9.4,
  * §2.2): leaving the page, and pasting into the SQL editor, an answer or the
  * notes. The organiser's screen calls these signals, not proof — the browser
  * reports them, and a participant's browser can be made to say anything —

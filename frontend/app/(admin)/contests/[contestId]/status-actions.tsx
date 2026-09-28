@@ -7,6 +7,7 @@ import type { ContestStatus } from "@/lib/api/contests";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import { setStatusAction, type StatusState } from "./actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * The transitions a contest can be moved through, as buttons.
@@ -38,7 +39,7 @@ export function StatusActions({
   const [state, formAction, pending] = useActionState<StatusState, FormData>(setStatusAction, {});
 
   const failure = state.code
-    ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
+    ? (messageForCode(state.code, dict.errors))
     : null;
 
   if (next.length === 0) {

@@ -31,6 +31,7 @@ import {
   type ResetState,
 } from "./actions";
 import { offeredActions } from "./offered";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * One account, and what an administrator may do to it.
@@ -90,7 +91,7 @@ function Outcome({
   doneLabel?: string;
 }) {
   const failure = state.code
-    ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
+    ? (messageForCode(state.code, dict.errors))
     : null;
 
   if (failure) {

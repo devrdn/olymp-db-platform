@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import { signInAction, type SignInState } from "./actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /** The one message the whole form points at when a sign-in is rejected. */
 const FAILURE_ID = "sign-in-failure";
@@ -32,7 +33,7 @@ export function SignInForm({ dict, next }: { dict: Dictionary; next?: string }) 
   const [state, formAction, pending] = useActionState<SignInState, FormData>(signInAction, {});
 
   const failure = state.code
-    ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
+    ? (messageForCode(state.code, dict.errors))
     : null;
   // A server too busy to check the password says nothing about what was
   // typed, so the fields are not marked invalid for it; the message alone

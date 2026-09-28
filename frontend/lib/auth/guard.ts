@@ -23,7 +23,7 @@ const PUBLIC_PATHS = ["/", "/login"];
 
 /**
  * A contest's public table, open to anybody with the link
- * (docs/superpowers/specs/2026-09-13-leaderboard-design.md).
+ * (docs/ARCHITECTURE.md §10).
  *
  * A whole-path pattern and not a prefix: `/contests/` as a prefix would open
  * the play screen and every staff screen to a visitor without a session. One
