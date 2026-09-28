@@ -1,5 +1,5 @@
 -- Watching a participant
--- (docs/superpowers/specs/2026-09-18-participant-monitoring-design.md): what a
+-- (docs/ARCHITECTURE.md §9.4): what a
 -- participant did that no other table records, the history of their notes and
 -- SQL tabs, where each of their queries came from, and the permission that
 -- lets a contest's staff see all of it.

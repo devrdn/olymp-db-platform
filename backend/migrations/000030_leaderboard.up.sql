@@ -1,4 +1,4 @@
--- The leaderboard (docs/superpowers/specs/2026-09-13-leaderboard-design.md).
+-- The leaderboard (docs/ARCHITECTURE.md §10).
 --
 -- How long before the window ends the table stops changing for everybody but
 -- the contest's staff. NULL is "no freeze". Bounded in the schema as well as in

@@ -462,7 +462,7 @@ type Config struct {
 	// CoverDir is the directory a contest's uploaded cover pictures are kept
 	// in (internal/platform/filestore) — a directory on a volume rather than
 	// a table in the database or an object store, for the reasons
-	// docs/superpowers/specs/2026-09-22-contest-covers-design.md §1 gives.
+	// docs/ARCHITECTURE.md §9.7 gives.
 	//
 	// Unlike GameUploadDir above, empty is not a way to turn a feature off.
 	// Every installation has a front page and every front page shows covers;

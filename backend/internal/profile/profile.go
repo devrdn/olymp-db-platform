@@ -20,7 +20,7 @@
 // ErrNotFound.
 //
 // The design is
-// docs/superpowers/specs/2026-09-21-participant-profile-design.md.
+// docs/ARCHITECTURE.md §9.5.
 package profile
 
 import (

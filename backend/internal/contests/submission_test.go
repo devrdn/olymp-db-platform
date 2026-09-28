@@ -212,7 +212,7 @@ func TestSubmitIgnoresThePenaltyInWinnerMode(t *testing.T) {
 	}
 }
 
-// The ICPC scoring mode (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md):
+// The ICPC scoring mode (docs/ARCHITECTURE.md §6.1.1):
 // a question carries no points in this mode — place is decided by how many
 // questions are solved and by penalty time, not by points — so a correct
 // answer must write points_awarded = 0 and leave total_score at 0, exactly

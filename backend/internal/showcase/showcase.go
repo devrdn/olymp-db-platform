@@ -17,7 +17,7 @@
 // declared here and implemented by internal/postgres.Showcase; who may call
 // it — the per-address budget — is internal/api's.
 //
-// The design is docs/superpowers/specs/2026-09-22-landing-page-design.md
+// The design is docs/ARCHITECTURE.md §9.6
 // (§1 and §4).
 package showcase
 

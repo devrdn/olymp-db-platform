@@ -5,7 +5,7 @@
 -- 16/9 photograph in two sizes for every olympiad is not what the database is
 -- for and not what a dump should have to carry. The design spec records that
 -- decision and names its price — a second API replica has a different disk —
--- in §1 of docs/superpowers/specs/2026-09-22-contest-covers-design.md.
+-- in docs/ARCHITECTURE.md §9.7.
 --
 -- A file is never removed by the statement that stops referring to it. The
 -- cascade below drops the row when the contest goes, and the sweep that

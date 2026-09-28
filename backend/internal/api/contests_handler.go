@@ -169,7 +169,7 @@ type ContestResponse struct {
 	EndsAt      string `json:"ends_at,omitempty"`
 	// ICPCPenaltyMin is the per-attempt penalty, in minutes, ICPC scoring
 	// applies to a solved question — meaningless in every other mode, but
-	// always present (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md).
+	// always present (docs/ARCHITECTURE.md §6.1.1).
 	ICPCPenaltyMin int                            `json:"icpc_penalty_min"`
 	AllowedCIDRs   []string                       `json:"allowed_cidrs"`
 	Settings       SettingsResponse               `json:"settings"`

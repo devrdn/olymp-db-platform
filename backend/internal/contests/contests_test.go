@@ -347,7 +347,7 @@ func TestValidateRejectsAnUnknownEnrollmentType(t *testing.T) {
 	}
 }
 
-// The leaderboard settings (docs/superpowers/specs/2026-09-13-leaderboard-design.md).
+// The leaderboard settings (docs/ARCHITECTURE.md §10).
 
 func TestValidateRejectsAFreezeOutsideItsBounds(t *testing.T) {
 	// CLAUDE.md rule 2: a minute count that reaches storage has a range. Zero
@@ -392,7 +392,7 @@ func TestValidateRejectsAnUnknownLeaderboardLabel(t *testing.T) {
 	}
 }
 
-// The ICPC scoring mode (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md).
+// The ICPC scoring mode (docs/ARCHITECTURE.md §6.1.1).
 
 func TestValidateAcceptsICPCScoring(t *testing.T) {
 	c := validContest()

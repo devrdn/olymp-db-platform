@@ -93,8 +93,7 @@ const (
 	ScoringWinner = "winner"
 	// ScoringICPC ranks a registration by how many questions it solved and,
 	// to break ties, by how much penalty time solving them cost — the way
-	// ICPC itself scores (docs/superpowers/specs/
-	// 2026-09-13-icpc-scoring-design.md). A question's own points and
+	// ICPC itself scores (docs/ARCHITECTURE.md §6.1.1). A question's own points and
 	// percentage penalty stay in the data (the mode can be switched back
 	// before the contest starts) but mean nothing while this mode is in
 	// force: Service.Submit writes points_awarded = 0 for every submission,
@@ -119,8 +118,7 @@ const DefaultICPCPenaltyMin = 20
 const maxICPCPenaltyMin = 240
 
 // Leaderboard labels: how a participant is named on a table somebody other
-// than the contest's staff reads (docs/superpowers/specs/
-// 2026-09-13-leaderboard-design.md). The table is public, which is why the
+// than the contest's staff reads (docs/ARCHITECTURE.md §10). The table is public, which is why the
 // login is the default and a full name is something an organiser chooses.
 const (
 	LeaderboardNamesLogin    = "login"
