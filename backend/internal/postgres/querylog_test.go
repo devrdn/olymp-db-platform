@@ -502,6 +502,21 @@ func TestHistoryCountsEveryRowEvenOnAPageThatLandsPastTheEnd(t *testing.T) {
 	})
 }
 
+// A registration that has never run a query has no summary row at all
+// (registration_activity is created by the first thing it does), and its
+// history is empty with a total of zero rather than an error.
+func TestHistoryOfARegistrationThatNeverRanAQueryIsEmpty(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		found, total, err := NewQueryLog(testPool).History(ctx, someRegistration(t, ctx), 0, 0)
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+		if total != 0 || len(found) != 0 {
+			t.Fatalf("found = %d, total = %d, want nothing", len(found), total)
+		}
+	})
+}
+
 // completeRow opens and closes one row in a single call, for tests that only
 // care about the finished result.
 func completeRow(t *testing.T, ctx context.Context, log *QueryLog, registration uuid.UUID, sql string, status queryrunner.Status, rows, durationMs int) {

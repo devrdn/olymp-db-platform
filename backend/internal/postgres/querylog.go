@@ -127,10 +127,14 @@ func (l *QueryLog) Complete(ctx context.Context, id int64, outcome queryrunner.O
 // every visit to the tab.
 //
 // Split in two, the page is bounded by the page — `Limit -> Incremental Sort
-// -> Index Scan`, 55 buffers and 0.12 ms for the same fifty rows — and the
-// count is a narrow aggregate the same index answers on its own: an
-// Index Only Scan, 11 buffers, no heap fetches, 0.13 ms. Two round trips
-// instead of one, for an order of magnitude less work; and they are not read
+// -> Index Scan`, 55 buffers and 0.12 ms for the same fifty rows. The count
+// was then a narrow aggregate the same index answered on its own (an Index
+// Only Scan, 11 buffers at nine hundred rows), which still grew with the
+// history; it is now registration_activity.queries, the counter the
+// journal's insert trigger keeps, read by primary key. Nothing deletes a
+// journal row except the registration's own cascade, which takes the counter
+// with it, so the two cannot disagree. Two round trips instead of one, for an
+// order of magnitude less work; and they are not read
 // as one snapshot, so a row written between them makes `total` one ahead of
 // the page. That is the same staleness any second request already had, on a
 // number whose only job is to decide whether to offer "load more".
@@ -147,9 +151,12 @@ func (l *QueryLog) History(ctx context.Context, registrationID uuid.UUID, limit,
 	limit, offset = queryrunner.NormalizeHistoryPage(limit, offset)
 	querier := l.querier(ctx)
 
+	// The count is the summary the journal's own trigger keeps (migration
+	// 000037: every journalled query, a running one included), one row by
+	// primary key however long the history is. No row means no query yet.
 	var total int
-	if err := querier.QueryRow(ctx,
-		`SELECT count(*) FROM query_log WHERE registration_id = $1`,
+	if err := querier.QueryRow(ctx, `
+		SELECT COALESCE((SELECT queries FROM registration_activity WHERE registration_id = $1), 0)`,
 		registrationID).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count the query history of registration %s: %w", registrationID, err)
 	}
