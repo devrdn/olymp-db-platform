@@ -14,7 +14,7 @@
 // Store satisfies it structurally; nothing here is shared by importing.
 //
 // The design decision behind it is recorded in
-// docs/superpowers/specs/2026-09-22-contest-covers-design.md §1: a directory
+// docs/ARCHITECTURE.md §9.7: a directory
 // on a volume rather than a table in the database or an object store, which
 // adds no service, no credentials and no new way to fail to start. The cost
 // is named there too — a second API replica has a different disk — and this

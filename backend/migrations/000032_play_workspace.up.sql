@@ -1,5 +1,5 @@
 -- The participant's own workspace on the play screen
--- (docs/superpowers/specs/2026-09-17-play-workspace-design.md): free-text
+-- (docs/ARCHITECTURE.md §6.4): free-text
 -- notes and SQL editor tabs, kept per registration so a reload, a crashed
 -- browser or another computer in the lab loses nothing.
 --

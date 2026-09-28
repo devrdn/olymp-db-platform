@@ -389,7 +389,7 @@ func TestGateAsksForAFinalAttemptLimitOnlyInWinnerMode(t *testing.T) {
 	}
 }
 
-// The ICPC scoring mode (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md):
+// The ICPC scoring mode (docs/ARCHITECTURE.md §6.1.1):
 // a choice question needs an attempt limit of at most the number of choices
 // less the number of correct ones, or a participant can exhaust every wrong
 // option and still reach a right one for the cost of nothing but penalty time.

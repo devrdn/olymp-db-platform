@@ -1,4 +1,4 @@
--- The ICPC scoring mode (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md):
+-- The ICPC scoring mode (docs/ARCHITECTURE.md §6.1.1):
 -- place is decided by how many questions a registration solved and how much
 -- penalty time solving them cost, never by points.
 --

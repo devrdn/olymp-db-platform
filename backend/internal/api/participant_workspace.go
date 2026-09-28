@@ -17,7 +17,7 @@ import (
 
 // The participant's own workspace on the play screen: notes and SQL editor
 // tabs, stored per registration and autosaved by the interface
-// (docs/superpowers/specs/2026-09-17-play-workspace-design.md).
+// (docs/ARCHITECTURE.md §6.4).
 //
 // Admitted like the rest of /play (admit, and queryproxy.Service.Access
 // behind it): once the contest has ended for the participant, every route

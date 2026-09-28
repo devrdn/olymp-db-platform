@@ -8,7 +8,7 @@
 // rate limits and the network boundary. It contains no SQL; the storage it
 // needs is declared here and implemented in internal/postgres.
 //
-// The design is docs/superpowers/specs/2026-09-13-leaderboard-design.md.
+// The design is docs/ARCHITECTURE.md §10.
 package leaderboard
 
 import (

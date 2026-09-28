@@ -10,7 +10,7 @@
 // contest's own identifier and touches nothing here at all.
 //
 // The design decisions behind it are recorded in
-// docs/superpowers/specs/2026-09-22-contest-covers-design.md §§1, 3 and 4.
+// docs/ARCHITECTURE.md §9.7.
 // Three of them shape every line here:
 //
 //   - Whatever arrives is re-encoded rather than stored. What we serve is a

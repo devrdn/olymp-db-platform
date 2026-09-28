@@ -23,7 +23,7 @@
 // For a cover file: replacing a cover rewrites the row and removing one
 // deletes it, and in both cases the files stay, so that a volume refusing a
 // delete cannot fail an organiser's edit
-// (docs/superpowers/specs/2026-09-22-contest-covers-design.md §4). What that
+// (docs/ARCHITECTURE.md §9.7). What that
 // leaves is growth with no bound on a volume that is also part of the backup.
 // Two rules keep collecting it safe, and internal/covers.OrphanSweeper is
 // where both live: a file younger than an hour may be an upload whose row is

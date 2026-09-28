@@ -1249,7 +1249,7 @@ func TestUpdateSetsAndClearsTheFreezeBeforeTheContestStarts(t *testing.T) {
 	}
 }
 
-// The ICPC scoring mode (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md).
+// The ICPC scoring mode (docs/ARCHITECTURE.md §6.1.1).
 
 // A contest that never mentions the penalty gets the same 20 minutes the
 // column default would give it, so a seed created before an organizer ever

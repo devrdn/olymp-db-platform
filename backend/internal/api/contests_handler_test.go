@@ -725,7 +725,7 @@ func TestUpdatingAContestPreservesUnmentionedProgressionAndScoring(t *testing.T)
 	}
 }
 
-// The ICPC scoring mode (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md):
+// The ICPC scoring mode (docs/ARCHITECTURE.md §6.1.1):
 // icpc_penalty_min is a pointer on the wire the same way freeze_min is, so an
 // update that never mentions it leaves it alone — round-tripped here the same
 // way progression and scoring are above.
