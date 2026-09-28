@@ -24,7 +24,7 @@ import (
 const RosterCacheTTL = 3 * time.Second
 
 // rosterComputeTimeout bounds one shared computation once it belongs to no
-// single caller (see computeOnce); the pool's statement timeout caps the
+// single caller (see flight.Do); the pool's statement timeout caps the
 // query itself, so this guards against an acquire that never returns.
 const rosterComputeTimeout = 20 * time.Second
 
@@ -110,7 +110,7 @@ func NewWatchService(cfg WatchConfig) *WatchService {
 // Roster returns the contest's participants table, from the per-contest
 // cache while it is younger than the TTL. A miss is shared: however many
 // organisers ask in the same instant, the store is asked once
-// (computeOnce).
+// (flight.Do).
 //
 // The number of cached entries is bounded by the contests somebody holding
 // contest.monitor on them asked about — the HTTP layer authorises before this

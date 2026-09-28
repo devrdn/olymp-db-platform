@@ -2,7 +2,7 @@
 //
 // The interface has to translate every action code the trail can be filtered
 // or displayed by, in every language it speaks. Before this existed, the
-// interface's own list of actions (frontend/lib/api/audit-terms.ts) was typed
+// interface's own list of actions was typed
 // by hand from reading audit.go, and nothing tied the two together: an action
 // added to audit.Actions() and never copied into that list still passed both
 // the Go guard (audit_test.go, checked against the very same source) and the

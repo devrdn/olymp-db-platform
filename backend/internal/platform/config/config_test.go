@@ -810,7 +810,7 @@ func repoFile(t *testing.T, name string) string {
 // its own source rather than listed here: a second, hand-typed copy of the
 // vocabulary is exactly the drift the test above exists to catch (the same
 // reasoning frontend/lib/i18n/dictionary.test.ts gives for reading the
-// generated contract instead of AUDIT_ACTIONS).
+// generated contract instead of a hand-typed list of actions).
 func configVariables(t *testing.T) []string {
 	t.Helper()
 	source, err := os.ReadFile("config.go")

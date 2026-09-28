@@ -64,7 +64,7 @@ const (
 	// (design §2.3), and saying nothing is the honest answer.
 	MaxStale = 15 * time.Minute
 	// computeTimeout bounds one shared read once it no longer belongs to any
-	// single caller (see computeOnce). Well above what two aggregate reads
+	// single caller (see flight.Do). Well above what two aggregate reads
 	// take — the core pool's own statement timeout already caps each query —
 	// so what it actually guards is a connection acquire that never returns.
 	computeTimeout = 15 * time.Second
