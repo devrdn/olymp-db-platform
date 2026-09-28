@@ -759,6 +759,15 @@ func (q explainingQuerier) QueryRow(ctx context.Context, sql string, args ...any
 	return q.Querier.QueryRow(ctx, sql, args...)
 }
 
+// SendBatch explains every statement of the batch, which would otherwise
+// reach the database without passing through Query at all.
+func (q explainingQuerier) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults {
+	for _, queued := range b.QueuedQueries {
+		q.explain(ctx, queued.SQL, queued.Arguments...)
+	}
+	return q.Querier.SendBatch(ctx, b)
+}
+
 // measuringQuerier runs every statement under EXPLAIN (ANALYZE) first and
 // adds up how many rows it really touched, per relation.
 //
@@ -792,6 +801,15 @@ func (q measuringQuerier) Query(ctx context.Context, sql string, args ...any) (p
 func (q measuringQuerier) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 	q.measure(ctx, sql, args...)
 	return q.Querier.QueryRow(ctx, sql, args...)
+}
+
+// SendBatch measures every statement of the batch, for the reason
+// explainingQuerier.SendBatch gives.
+func (q measuringQuerier) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults {
+	for _, queued := range b.QueuedQueries {
+		q.measure(ctx, queued.SQL, queued.Arguments...)
+	}
+	return q.Querier.SendBatch(ctx, b)
 }
 
 func (q measuringQuerier) measure(ctx context.Context, sql string, args ...any) {

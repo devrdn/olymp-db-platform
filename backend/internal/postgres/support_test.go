@@ -12,6 +12,8 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/storage/storagetest"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -152,4 +154,31 @@ func contestRow(t *testing.T, ctx context.Context) uuid.UUID {
 	})
 
 	return id
+}
+
+// countingQuerier counts the round trips a read makes: every statement, and
+// every batch as the one round trip it is.
+type countingQuerier struct {
+	storage.Querier
+	trips *int
+}
+
+func (q countingQuerier) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	*q.trips++
+	return q.Querier.Query(ctx, sql, args...)
+}
+
+func (q countingQuerier) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	*q.trips++
+	return q.Querier.QueryRow(ctx, sql, args...)
+}
+
+func (q countingQuerier) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	*q.trips++
+	return q.Querier.Exec(ctx, sql, args...)
+}
+
+func (q countingQuerier) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults {
+	*q.trips++
+	return q.Querier.SendBatch(ctx, b)
 }

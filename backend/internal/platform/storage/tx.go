@@ -16,6 +16,10 @@ type Querier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	// SendBatch sends independent statements in one round trip. Closing the
+	// results runs each queued statement's callback, in order, and reports
+	// the first error.
+	SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults
 }
 
 // UnitOfWork runs a function inside a single database transaction.
