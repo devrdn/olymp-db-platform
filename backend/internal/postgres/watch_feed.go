@@ -65,7 +65,7 @@ func (w *Watch) Feed(ctx context.Context, q monitor.FeedQuery) (monitor.FeedPage
 	}
 	if batch.Len() > 0 {
 		if err := w.querier(ctx).SendBatch(ctx, &batch).Close(); err != nil {
-			return monitor.FeedPage{}, err
+			return monitor.FeedPage{}, fmt.Errorf("read the feed: %w", err)
 		}
 	}
 	page := monitor.MergeFeed(q, items)

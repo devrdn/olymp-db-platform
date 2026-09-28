@@ -239,3 +239,58 @@ func TestSchemaReportsAContestWithNoGame(t *testing.T) {
 		t.Fatalf("answered %v, want ErrNoGameYet", err)
 	}
 }
+
+// The deployment wires the single lookup, and the schema panel is admitted
+// by it alone: the participant, the contest, the game and the participant's
+// copy arrive together, and none of the default's separate reads runs.
+func TestSchemaUsesTheSingleLookupOnceWired(t *testing.T) {
+	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
+	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}
+	game := provisioning.Contest{ID: contest.ID, Template: "game_tpl_c1", Version: 3, Policy: sqlpolicy.ReadOnly()}
+	instance := provisioning.Instance{Database: "game_c1_u1", TemplateVersion: 3, Status: "ready"}
+	peopleCalls, contestCalls, gameCalls, lookupCalls := 0, 0, 0, 0
+	db := &databases{database: "game_c1_u1"}
+	reader := &schemas{schema: provisioning.Schema{Tables: []provisioning.Table{{Name: "guests"}}}}
+
+	service := queryproxy.New(
+		people{participant: participant, calls: &peopleCalls},
+		contestStore{contest: contest, calls: &contestCalls},
+		games{game: game, calls: &gameCalls},
+		db, &runner{},
+	).WithSchemas(reader).
+		WithLookup(lookupFake{participant: participant, contest: contest, game: game, instance: instance, calls: &lookupCalls})
+
+	if _, err := service.Schema(t.Context(), contest.ID, uuid.New(), netip.MustParseAddr("192.0.2.7")); err != nil {
+		t.Fatalf("reading the schema: %v", err)
+	}
+	if lookupCalls != 1 || peopleCalls != 0 || contestCalls != 0 || gameCalls != 0 {
+		t.Fatalf("calls = lookup %d, participant %d, contest %d, game %d; want 1, 0, 0 and 0",
+			lookupCalls, peopleCalls, contestCalls, gameCalls)
+	}
+	if db.existing != instance || db.existingErr != nil {
+		t.Fatalf("EnsureFrom was told %+v, %v; want the copy the lookup read", db.existing, db.existingErr)
+	}
+}
+
+// A contest that closed its catalogues is refused over the single lookup too,
+// before its participant's database is provisioned.
+func TestSchemaOverTheSingleLookupStillRefusesAClosedCatalogueFirst(t *testing.T) {
+	closed := sqlpolicy.ReadOnly()
+	closed.AllowCatalog = false
+	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
+	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}
+	db := &databases{database: "game_c1_u1"}
+	reader := &schemas{}
+
+	service := queryproxy.New(people{}, contestStore{}, games{}, db, &runner{}).
+		WithSchemas(reader).
+		WithLookup(lookupFake{participant: participant, contest: contest,
+			game: provisioning.Contest{ID: contest.ID, Template: "game_tpl_c1", Policy: closed}})
+
+	if _, err := service.Schema(t.Context(), contest.ID, uuid.New(), netip.MustParseAddr("192.0.2.7")); !errors.Is(err, queryproxy.ErrSchemaHidden) {
+		t.Fatalf("answered %v, want ErrSchemaHidden", err)
+	}
+	if db.asked != nil || len(reader.asked) != 0 {
+		t.Fatal("provisioned or read a database for a request that was going to be refused")
+	}
+}
