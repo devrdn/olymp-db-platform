@@ -121,11 +121,19 @@ func (c *Client) Run(ctx context.Context, req queryrunner.Request) (*queryrunner
 		RowsAffected: answer.GetRowsAffected(),
 		Rows:         make([][]any, 0, len(answer.GetRows())),
 	}
+	// Every row's values share one backing array, one allocation for the
+	// whole answer rather than one per row; each row is capped at its own
+	// length, so appending to one can never write into the next.
+	width := 0
+	for _, row := range answer.GetRows() {
+		width += len(row.GetCells())
+	}
+	values := make([]any, 0, width)
 	for _, row := range answer.GetRows() {
 		// Rendered text, and nil where the column was NULL. The console shows
 		// what the database printed; the typed value stayed in the process
 		// that read it, which is the one that had the connection's type map.
-		values := make([]any, 0, len(row.GetCells()))
+		start := len(values)
 		for _, cell := range row.GetCells() {
 			if cell.GetIsNull() {
 				values = append(values, nil)
@@ -133,7 +141,7 @@ func (c *Client) Run(ctx context.Context, req queryrunner.Request) (*queryrunner
 			}
 			values = append(values, cell.GetText())
 		}
-		result.Rows = append(result.Rows, values)
+		result.Rows = append(result.Rows, values[start:len(values):len(values)])
 	}
 	return result, nil
 }

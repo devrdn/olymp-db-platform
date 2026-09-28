@@ -101,6 +101,12 @@ func TestAQueryAndItsAnswerCrossTheWire(t *testing.T) {
 	if result.Rows[1][1] != nil {
 		t.Fatalf("a NULL arrived as %#v", result.Rows[1][1])
 	}
+	// The rows share one backing array; growing one must not write into the
+	// next.
+	_ = append(result.Rows[0], "extra")
+	if result.Rows[1][0] != "2" {
+		t.Fatalf("second id = %#v after the first row grew, want \"2\"", result.Rows[1][0])
+	}
 }
 
 // The refusal has to arrive as a refusal, with its code, because that is what

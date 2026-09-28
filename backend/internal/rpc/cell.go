@@ -14,11 +14,22 @@ import (
 // Text, because the only consumer is a console that shows it. NULL is carried
 // as a flag rather than as an empty string: in SQL those are different, and a
 // participant debugging a left join needs to see which one they have.
+//
+// The row's cells and the fields they point at are each one allocation for
+// the whole row rather than three per cell: every query renders up to a
+// thousand rows here, and the collector pays for each object separately. The
+// cells are only ever addressed in place, never copied.
 func cellsFor(values []any) *pb.Row {
-	row := &pb.Row{Cells: make([]*pb.Cell, 0, len(values))}
-	for _, value := range values {
-		text, null := render(value)
-		row.Cells = append(row.Cells, &pb.Cell{IsNull: ptr(null), Text: ptr(text)})
+	var (
+		cells = make([]pb.Cell, len(values))
+		nulls = make([]bool, len(values))
+		texts = make([]string, len(values))
+		row   = &pb.Row{Cells: make([]*pb.Cell, len(values))}
+	)
+	for i, value := range values {
+		texts[i], nulls[i] = render(value)
+		cells[i].IsNull, cells[i].Text = &nulls[i], &texts[i]
+		row.Cells[i] = &cells[i]
 	}
 	return row
 }
