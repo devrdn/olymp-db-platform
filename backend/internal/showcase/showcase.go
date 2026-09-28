@@ -33,6 +33,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/platform/flight"
 	"github.com/devrdn/db-contest/backend/internal/platform/i18n"
 )
 
@@ -259,7 +260,7 @@ func (s *Service) Numbers(ctx context.Context) (Numbers, error) {
 		return entry.value, nil
 	}
 
-	result, err := s.computeOnce(ctx, "numbers", func(ctx context.Context) (any, error) {
+	result, err := flight.Do(ctx, &s.flight, "numbers", computeTimeout, func(ctx context.Context) (any, error) {
 		return s.repo.Numbers(ctx)
 	})
 	if err != nil {
@@ -304,7 +305,7 @@ func (s *Service) Recent(ctx context.Context, lang string) ([]Contest, error) {
 		return title(entry.value, lang), nil
 	}
 
-	result, err := s.computeOnce(ctx, "recent", func(ctx context.Context) (any, error) {
+	result, err := flight.Do(ctx, &s.flight, "recent", computeTimeout, func(ctx context.Context) (any, error) {
 		return s.repo.Recent(ctx, MaxRecent)
 	})
 	if err != nil {
@@ -352,35 +353,4 @@ func title(list []Contest, lang string) []Contest {
 		}
 	}
 	return out
-}
-
-// computeOnce collapses every concurrent miss of one key into a single call
-// to fn, the way internal/leaderboard's own does and for the same reason: the
-// read belongs to the key rather than to whichever visitor happened to start
-// it.
-//
-// fn runs detached from any one caller's context (context.WithoutCancel),
-// bounded by computeTimeout instead, so a visitor who closes the tab does not
-// cut short a read the visitors behind them are waiting for; each caller
-// still honours its own context and stops waiting when that is done. A panic
-// inside fn becomes an ordinary error rather than a crash on a goroutine
-// nobody recovers.
-func (s *Service) computeOnce(ctx context.Context, key string, fn func(ctx context.Context) (any, error)) (any, error) {
-	ch := s.flight.DoChan(key, func() (result any, err error) {
-		defer func() {
-			if r := recover(); r != nil {
-				err = fmt.Errorf("compute %s: %v", key, r)
-			}
-		}()
-		flightCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), computeTimeout)
-		defer cancel()
-		return fn(flightCtx)
-	})
-
-	select {
-	case res := <-ch:
-		return res.Val, res.Err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
 }

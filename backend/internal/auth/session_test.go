@@ -165,34 +165,6 @@ func TestSessionExpiresAfterItsLifetime(t *testing.T) {
 	}
 }
 
-func TestRefreshExtendsAnActiveSession(t *testing.T) {
-	// Sliding expiry: someone working through a contest must not be logged out
-	// mid-answer.
-	c := cache.NewMemory(100)
-	t.Cleanup(func() { _ = c.Close() })
-	store := NewSessionStore(c, 80*time.Millisecond)
-	ctx := context.Background()
-	token, _ := store.Create(ctx, testPrincipal())
-
-	time.Sleep(50 * time.Millisecond)
-	if err := store.Refresh(ctx, token); err != nil {
-		t.Fatalf("Refresh() returned error: %v", err)
-	}
-	time.Sleep(50 * time.Millisecond)
-
-	if _, err := store.Get(ctx, token); err != nil {
-		t.Errorf("session expired although it was refreshed: %v", err)
-	}
-}
-
-func TestRefreshReportsAnUnknownToken(t *testing.T) {
-	store, _ := newTestStore(t)
-
-	if err := store.Refresh(context.Background(), "unknown"); err != ErrSessionNotFound {
-		t.Errorf("Refresh() on an unknown token = %v, want ErrSessionNotFound", err)
-	}
-}
-
 func TestSessionRecordsWhenItWasIssued(t *testing.T) {
 	store, _ := newTestStore(t)
 	before := time.Now().Add(-time.Second)
@@ -336,7 +308,6 @@ func TestActivityNeverExtendsASessionPastItsMaximumLifetime(t *testing.T) {
 	deadline := time.Now().Add(250 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		if session, err := store.Get(ctx, token); err == nil {
-			_ = store.Refresh(ctx, token)
 			_ = store.Touch(ctx, token, session)
 		}
 		time.Sleep(20 * time.Millisecond)

@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"cmp"
 	"container/heap"
 	"context"
 	"encoding/base64"
@@ -71,16 +72,6 @@ var feedKinds = map[string]Source{
 	string(KindPageLeft): SourceEvent, string(KindPaste): SourceEvent,
 	string(KindIPChanged): SourceEvent, string(KindParallelSession): SourceEvent,
 	string(KindTabCreated): SourceEvent, string(KindTabRenamed): SourceEvent, string(KindTabDeleted): SourceEvent,
-}
-
-// FeedKinds lists every kind a feed filter may name, sorted.
-func FeedKinds() []string {
-	kinds := make([]string, 0, len(feedKinds))
-	for kind := range feedKinds {
-		kinds = append(kinds, kind)
-	}
-	slices.Sort(kinds)
-	return kinds
 }
 
 // The bounds of a feed page (CLAUDE.md rule 2).
@@ -189,27 +180,17 @@ func ParseCursor(text string) (Cursor, error) {
 // and as PostgreSQL compares uuid.
 func (c Cursor) Compare(other Cursor) int {
 	if a, b := c.At.UnixMicro(), other.At.UnixMicro(); a != b {
-		return compareInts(a, b)
+		return cmp.Compare(a, b)
 	}
 	if c.Source != other.Source {
-		return compareInts(int64(c.Source), int64(other.Source))
+		return cmp.Compare(c.Source, other.Source)
 	}
 	if c.Source.numericID() {
 		a, _ := strconv.ParseInt(c.ID, 10, 64)
 		b, _ := strconv.ParseInt(other.ID, 10, 64)
-		return compareInts(a, b)
+		return cmp.Compare(a, b)
 	}
 	return strings.Compare(c.ID, other.ID)
-}
-
-func compareInts(a, b int64) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	}
-	return 0
 }
 
 // FeedQuery asks for one page of the feed.

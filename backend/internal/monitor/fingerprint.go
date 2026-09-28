@@ -26,19 +26,8 @@ import (
 // Computed once, in Go, by the insert that journals the query
 // (postgres.QueryLog.Begin), not by the database.
 func Fingerprint(sql string) int64 {
-	hash := fnv.New64a()
-	// strings.Fields splits on every run of Unicode whitespace and drops the
-	// ends; writing the fields back with one space between them is the
-	// collapse. Written piece by piece so no normalised copy is built.
-	for i, field := range strings.Fields(sql) {
-		if i > 0 {
-			_, _ = hash.Write([]byte{' '})
-		}
-		_, _ = hash.Write([]byte(strings.ToLower(field)))
-	}
-	// Two's-complement reinterpretation of the unsigned sum, not a numeric
-	// conversion: every bit is kept.
-	return int64(hash.Sum64()) // #nosec G115 -- the bit pattern is the value; the sign carries no meaning.
+	fingerprint, _ := normalised(sql)
+	return fingerprint
 }
 
 // ComparableFingerprint is the fingerprint the journal stores: the
@@ -51,16 +40,32 @@ func Fingerprint(sql string) int64 {
 // table compares fingerprints without measuring any text. The normalisation
 // is this file's alone; nothing in SQL repeats it.
 func ComparableFingerprint(sql string) *int64 {
-	length := 0
-	for i, field := range strings.Fields(sql) {
-		if i > 0 {
-			length++
-		}
-		length += utf8.RuneCountInString(strings.ToLower(field))
-	}
+	fingerprint, length := normalised(sql)
 	if length < IdenticalQueryMinChars {
 		return nil
 	}
-	fingerprint := Fingerprint(sql)
 	return &fingerprint
+}
+
+// normalised hashes the normalised text and measures it in one pass, so the
+// journal's insert walks a statement once rather than once to measure it and
+// again to hash it. length counts characters of the normalised text: the
+// lowercased fields and the single spaces between them.
+func normalised(sql string) (fingerprint int64, length int) {
+	hash := fnv.New64a()
+	// strings.Fields splits on every run of Unicode whitespace and drops the
+	// ends; writing the fields back with one space between them is the
+	// collapse. Written piece by piece so no normalised copy is built.
+	for i, field := range strings.Fields(sql) {
+		if i > 0 {
+			_, _ = hash.Write([]byte{' '})
+			length++
+		}
+		lower := strings.ToLower(field)
+		_, _ = hash.Write([]byte(lower))
+		length += utf8.RuneCountInString(lower)
+	}
+	// Two's-complement reinterpretation of the unsigned sum, not a numeric
+	// conversion: every bit is kept.
+	return int64(hash.Sum64()), length // #nosec G115 -- the bit pattern is the value; the sign carries no meaning.
 }

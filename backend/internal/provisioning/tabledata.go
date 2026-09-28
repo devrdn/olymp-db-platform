@@ -331,12 +331,8 @@ func (g *Games) BeginTableUpload(ctx context.Context, contestID uuid.UUID, table
 		return TableData{}, err
 	}
 
-	editable, err := g.author.GameEditable(ctx, contestID)
-	if err != nil {
-		return TableData{}, fmt.Errorf("check whether the game may be replaced: %w", err)
-	}
-	if !editable {
-		return TableData{}, ErrGameNotEditable
+	if err := g.requireEditable(ctx, contestID); err != nil {
+		return TableData{}, err
 	}
 
 	id := uuid.New()
@@ -494,12 +490,8 @@ func (g *Games) CompleteTableUpload(ctx context.Context, actorID, contestID, id 
 		return TableData{}, err
 	}
 
-	editable, err := g.author.GameEditable(ctx, contestID)
-	if err != nil {
-		return TableData{}, fmt.Errorf("check whether the game may be replaced: %w", err)
-	}
-	if !editable {
-		return TableData{}, ErrGameNotEditable
+	if err := g.requireEditable(ctx, contestID); err != nil {
+		return TableData{}, err
 	}
 
 	if data.ReceivedBytes != data.DeclaredBytes {
@@ -546,21 +538,13 @@ func (g *Games) completeTableDataAndAudit(
 		if err := g.repo.MarkTableDataChanged(ctx, contestID); err != nil {
 			return fmt.Errorf("mark the contest's data changed: %w", err)
 		}
-		if g.audit == nil {
-			return nil
-		}
-		return g.audit.Record(ctx, audit.Entry{
+		return g.record(ctx, audit.Entry{
 			ActorID: &actorID, Action: audit.ActionGameTableDataUpload,
 			Entity: "contest", EntityID: contestID.String(),
 			Payload: map[string]any{"table": table, "rows": lines, "bytes": bytes},
 		})
 	}
-	var err error
-	if g.uow != nil {
-		err = g.uow.Do(ctx, run)
-	} else {
-		err = run(ctx)
-	}
+	err := g.atomically(ctx, run)
 	return completed, err
 }
 
@@ -669,10 +653,7 @@ func (g *Games) abortTableData(ctx context.Context, actor *uuid.UUID, data Table
 		if err := g.repo.AbortTableData(ctx, data.ID); err != nil {
 			return fmt.Errorf("mark the table upload aborted: %w", err)
 		}
-		if g.audit == nil {
-			return nil
-		}
-		return g.audit.Record(ctx, audit.Entry{
+		return g.record(ctx, audit.Entry{
 			ActorID: actor, Action: audit.ActionGameTableDataUploadAbort,
 			Entity: "contest", EntityID: data.ContestID.String(),
 			Payload: map[string]any{"table": data.Table, "bytes": data.ReceivedBytes},
@@ -682,12 +663,7 @@ func (g *Games) abortTableData(ctx context.Context, actor *uuid.UUID, data Table
 	if err := g.retireTableDataFile(data.ID); err != nil {
 		return TableData{}, fmt.Errorf("remove the table upload's file: %w", err)
 	}
-	var err error
-	if g.uow != nil {
-		err = g.uow.Do(ctx, mark)
-	} else {
-		err = mark(ctx)
-	}
+	err := g.atomically(ctx, mark)
 	if err != nil {
 		return TableData{}, err
 	}
@@ -766,12 +742,8 @@ func (g *Games) AppendTableRow(ctx context.Context, actorID, contestID uuid.UUID
 		return TableData{}, err
 	}
 
-	editable, err := g.author.GameEditable(ctx, contestID)
-	if err != nil {
-		return TableData{}, fmt.Errorf("check whether the game may be replaced: %w", err)
-	}
-	if !editable {
-		return TableData{}, ErrGameNotEditable
+	if err := g.requireEditable(ctx, contestID); err != nil {
+		return TableData{}, err
 	}
 
 	rowLine, err := formatCSVRow(values)
@@ -839,20 +811,13 @@ func (g *Games) AppendTableRow(ctx context.Context, actorID, contestID uuid.UUID
 		if err := g.repo.MarkTableDataChanged(ctx, contestID); err != nil {
 			return fmt.Errorf("mark the contest's data changed: %w", err)
 		}
-		if g.audit == nil {
-			return nil
-		}
-		return g.audit.Record(ctx, audit.Entry{
+		return g.record(ctx, audit.Entry{
 			ActorID: &actorID, Action: audit.ActionGameTableDataRowAdd,
 			Entity: "contest", EntityID: contestID.String(),
 			Payload: map[string]any{"table": tableName, "row": newLines},
 		})
 	}
-	if g.uow != nil {
-		err = g.uow.Do(ctx, run)
-	} else {
-		err = run(ctx)
-	}
+	err = g.atomically(ctx, run)
 	if err != nil {
 		return TableData{}, err
 	}
@@ -1015,20 +980,13 @@ func (g *Games) bootstrapTableRow(
 		if err := g.repo.MarkTableDataChanged(ctx, contestID); err != nil {
 			return fmt.Errorf("mark the contest's data changed: %w", err)
 		}
-		if g.audit == nil {
-			return nil
-		}
-		return g.audit.Record(ctx, audit.Entry{
+		return g.record(ctx, audit.Entry{
 			ActorID: &actorID, Action: audit.ActionGameTableDataRowAdd,
 			Entity: "contest", EntityID: contestID.String(),
 			Payload: map[string]any{"table": tableName, "row": int64(1)},
 		})
 	}
-	if g.uow != nil {
-		err = g.uow.Do(ctx, run)
-	} else {
-		err = run(ctx)
-	}
+	err = g.atomically(ctx, run)
 	if err != nil {
 		// The database refused to record a file already written — most often
 		// the partial unique index, when a second caller bootstrapped the
@@ -1264,12 +1222,8 @@ func (g *Games) DeleteTableRow(ctx context.Context, actorID, contestID uuid.UUID
 		}
 	}
 
-	editable, err := g.author.GameEditable(ctx, contestID)
-	if err != nil {
-		return fmt.Errorf("check whether the game may be replaced: %w", err)
-	}
-	if !editable {
-		return ErrGameNotEditable
+	if err := g.requireEditable(ctx, contestID); err != nil {
+		return err
 	}
 
 	run := func(ctx context.Context) error {
@@ -1279,19 +1233,13 @@ func (g *Games) DeleteTableRow(ctx context.Context, actorID, contestID uuid.UUID
 		if err := g.repo.MarkTableDataChanged(ctx, contestID); err != nil {
 			return fmt.Errorf("mark the contest's data changed: %w", err)
 		}
-		if g.audit == nil {
-			return nil
-		}
-		return g.audit.Record(ctx, audit.Entry{
+		return g.record(ctx, audit.Entry{
 			ActorID: &actorID, Action: audit.ActionGameTableDataRowDelete,
 			Entity: "contest", EntityID: contestID.String(),
 			Payload: map[string]any{"table": table, "row": row},
 		})
 	}
-	if g.uow != nil {
-		return g.uow.Do(ctx, run)
-	}
-	return run(ctx)
+	return g.atomically(ctx, run)
 }
 
 // loadTableData is finishDefinitionBuild's own seam (template.go): after

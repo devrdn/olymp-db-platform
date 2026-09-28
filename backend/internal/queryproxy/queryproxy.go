@@ -499,7 +499,7 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 	// Admitted below: it is a comparison of two values already in hand, not a
 	// lookup, so recomputing it costs nothing and Admitted has no reason to
 	// hand back a fact its caller can already see for itself.
-	firstAction := contest.Timing == contests.TimingIndividual && participant.StartedAt == nil
+	firstAction := contests.ClockPending(contest, participant)
 
 	// Is the contest running for this participant right now, and are they
 	// calling from an address it allows — the same admission the
@@ -658,7 +658,7 @@ func (s *Service) Admitted(contest contests.Contest, participant contests.Partic
 		return ErrContestNotRunning
 	}
 
-	firstAction := contest.Timing == contests.TimingIndividual && participant.StartedAt == nil
+	firstAction := contests.ClockPending(contest, participant)
 	if firstAction {
 		if !contest.OpenForStart(s.now()) {
 			return ErrContestNotRunning
@@ -736,7 +736,7 @@ func (s *Service) Access(ctx context.Context, contestID, userID uuid.UUID, addr 
 // it, and a deadline that has already passed by the time the clock starts —
 // ends_at arriving mid-request — is refused the way Run refuses it.
 func (s *Service) StartOnRead(ctx context.Context, contest contests.Contest, participant contests.Participant) (contests.Participant, error) {
-	if contest.Timing != contests.TimingIndividual || participant.StartedAt != nil {
+	if !contests.ClockPending(contest, participant) {
 		return participant, nil
 	}
 	if contest.Status != contests.StatusRunning || !contest.OpenForStart(s.now()) {

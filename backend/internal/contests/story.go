@@ -3,7 +3,6 @@ package contests
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
@@ -53,21 +52,17 @@ func (s *Service) Story(ctx context.Context, contestID uuid.UUID) (Story, error)
 // the set the publish gate reasons about, and a half-applied one is exactly
 // what it would then have to guess about.
 func (s *Service) SetStory(ctx context.Context, actorID, contestID uuid.UUID, bodies map[string]string) (Story, error) {
-	c, err := s.contests.ByID(ctx, contestID)
-	if err != nil {
-		return Story{}, err
-	}
 	// Participants are reading it; changing it underneath them changes the
 	// task they are working on.
-	if !c.ContentEditable() {
-		return Story{}, fmt.Errorf("%w: it is %s", ErrNotEditable, c.Status)
+	if _, err := s.editableContest(ctx, contestID); err != nil {
+		return Story{}, err
 	}
 	if err := s.checkLanguageCodes(ctx, langCodes(bodies)); err != nil {
 		return Story{}, err
 	}
 
 	var saved Story
-	err = s.uow.Do(ctx, func(ctx context.Context) error {
+	err := s.uow.Do(ctx, func(ctx context.Context) error {
 		var err error
 		if saved, err = s.stories.Save(ctx, contestID, bodies); err != nil {
 			return err

@@ -336,7 +336,14 @@ func (c Contest) FreezeFitsWindow() bool {
 // cut, or correcting a network range that turned out to be wrong, are exactly
 // the operations a running contest needs.
 func (c Contest) SettingsEditable() bool {
-	return c.Status != StatusFinished && c.Status != StatusArchived
+	return !c.Ended()
+}
+
+// Ended reports a contest that is over for everybody: finished, or archived
+// after it finished. Each participant may have finished earlier, by their
+// own deadline — that is Deadline's question, not this one.
+func (c Contest) Ended() bool {
+	return c.Status == StatusFinished || c.Status == StatusArchived
 }
 
 // SequentialActive reports whether sequential progression (§6.1.1) actually

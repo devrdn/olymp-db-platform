@@ -219,9 +219,8 @@ func NewProvisioner(admin Cluster, adminDSN, authorPassword string) (*Provisione
 // read from an io.Reader rather than held in memory as one string, because a
 // finished dump can be gigabytes: runScript below streams it statement by
 // statement through gamedb.ScriptReader instead. This is the one path both an
-// editor's pasted-in script and an uploaded file's own bytes go through — see
-// BuildTemplateString for the shape the editor supplies, which is now a thin
-// wrapper over this.
+// editor's pasted-in script and an uploaded file's own bytes go through: the
+// editor hands its string over as a strings.Reader.
 //
 // It does not run with the provisioning role's privileges. The route that
 // accepts it is gated by a contest-scoped permission, so its author is any
@@ -272,17 +271,6 @@ func (p *Provisioner) BuildTemplate(ctx context.Context, name string, script io.
 		return err
 	}
 	return nil
-}
-
-// BuildTemplateString is BuildTemplate for a script that already lives in
-// memory as a Go string — the shape an organiser's editor submits, and the
-// only shape this package had before an uploaded file needed the same path.
-// A thin wrapper: strings.NewReader costs nothing next to CREATE DATABASE,
-// and it is what keeps the editor and a file on the exact same execution
-// path BuildTemplate's own doc describes, rather than a second one that could
-// drift from it.
-func (p *Provisioner) BuildTemplateString(ctx context.Context, name, script string, policy sqlpolicy.Policy) error {
-	return p.BuildTemplate(ctx, name, strings.NewReader(script), policy)
 }
 
 // fill runs the organiser's script and applies the contest's privileges, over
@@ -617,16 +605,6 @@ func (p *Provisioner) CreateInstance(ctx context.Context, template, instance str
 		return fmt.Errorf("copy the template: %w", err)
 	}
 	return p.settleInstance(ctx, instance, policy)
-}
-
-// ResetInstance gives a participant their starting database back.
-//
-// The button exists because a contest that permits writing permits ruining
-// your own data, and the way back should not be asking an organizer. It is a
-// fresh copy rather than an undo: there is nothing to reconcile, and seconds
-// is fast enough.
-func (p *Provisioner) ResetInstance(ctx context.Context, template, instance string, policy sqlpolicy.Policy) error {
-	return p.CreateInstance(ctx, template, instance, policy)
 }
 
 // Drop removes a database and whoever is still connected to it.

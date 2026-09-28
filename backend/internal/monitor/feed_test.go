@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"strconv"
@@ -49,7 +50,7 @@ func TestCursorsOrderByTimeThenSourceThenID(t *testing.T) {
 	}
 	for i := range ordered {
 		for j := range ordered {
-			want := compareInts(int64(i), int64(j))
+			want := cmp.Compare(i, j)
 			if got := ordered[i].Compare(ordered[j]); got != want {
 				t.Errorf("Compare(%d, %d) = %d, want %d", i, j, got, want)
 			}

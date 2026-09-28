@@ -58,7 +58,7 @@ func buildTemplate(t *testing.T, policy sqlpolicy.Policy) (*gamedb.Provisioner, 
 
 	p := provisioner(t)
 	template := named(t, "tpl")
-	if err := p.BuildTemplateString(t.Context(), template, detectiveScript, policy); err != nil {
+	if err := buildTemplateString(p, t.Context(), template, detectiveScript, policy); err != nil {
 		t.Fatalf("building the template: %v", err)
 	}
 	return p, template, policy
@@ -246,7 +246,7 @@ func TestAnInstanceInheritsTheCatalogueRules(t *testing.T) {
 func TestATemplateCanBeRebuiltAndCopiedStraightAfter(t *testing.T) {
 	p, template, policy := buildTemplate(t, sqlpolicy.ReadOnly())
 
-	if err := p.BuildTemplateString(t.Context(), template,
+	if err := buildTemplateString(p, t.Context(), template,
 		`CREATE TABLE suspects (id int); INSERT INTO suspects VALUES (7);`, sqlpolicy.ReadOnly()); err != nil {
 		t.Fatalf("rebuilding: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestResettingReplacesTheInstanceUnderALiveConnection(t *testing.T) {
 	}
 
 	// Their connection is still open, on purpose.
-	if err := p.ResetInstance(t.Context(), template, instance, policy); err != nil {
+	if err := p.CreateInstance(t.Context(), template, instance, policy); err != nil {
 		t.Fatalf("resetting: %v", err)
 	}
 
@@ -302,7 +302,7 @@ func TestABrokenScriptLeavesNoTemplateBehind(t *testing.T) {
 	p := provisioner(t)
 	template := named(t, "tpl")
 
-	err := p.BuildTemplateString(t.Context(), template,
+	err := buildTemplateString(p, t.Context(), template,
 		`CREATE TABLE fine (x int); CREATE TABLE oops (x nosuchtype);`, sqlpolicy.ReadOnly())
 	if err == nil {
 		t.Fatal("a broken script built a template")
@@ -362,7 +362,7 @@ func TestAScriptPostgreSQLRefusedComesBackAsTheAuthorsOwnToRead(t *testing.T) {
 	p := provisioner(t)
 	template := named(t, "tpl")
 
-	err := p.BuildTemplateString(t.Context(), template,
+	err := buildTemplateString(p, t.Context(), template,
 		`CREATE TABLE fine (x int); CREATE TABLE oops (x nosuchtype);`, sqlpolicy.ReadOnly())
 
 	var refused *gamedb.ScriptError
@@ -411,7 +411,7 @@ func TestAFailureInsideABatchStillNamesItsOwnLine(t *testing.T) {
 		script.WriteString("INSERT INTO notes (n) VALUES (2);\n")
 	}
 
-	err := p.BuildTemplateString(t.Context(), template, script.String(), sqlpolicy.ReadOnly())
+	err := buildTemplateString(p, t.Context(), template, script.String(), sqlpolicy.ReadOnly())
 
 	var refused *gamedb.ScriptError
 	if !errors.As(err, &refused) {
@@ -436,7 +436,7 @@ func TestAStatementThatCannotRunInATransactionStillBuilds(t *testing.T) {
 		"INSERT INTO notes (n) VALUES (1), (2), (3);\n" +
 		"VACUUM ANALYZE notes;\n"
 
-	if err := p.BuildTemplateString(t.Context(), template, script, sqlpolicy.ReadOnly()); err != nil {
+	if err := buildTemplateString(p, t.Context(), template, script, sqlpolicy.ReadOnly()); err != nil {
 		t.Fatalf("a script with a VACUUM in it: %v", err)
 	}
 
@@ -463,7 +463,7 @@ func TestABufferedBatchIsSentBeforeTheCopyBlockThatNeedsIt(t *testing.T) {
 		"1\tIonescu\n2\tPopescu\n\\.\n" +
 		"CREATE INDEX guests_name ON guests (full_name);\n"
 
-	if err := p.BuildTemplateString(t.Context(), template, script, sqlpolicy.ReadOnly()); err != nil {
+	if err := buildTemplateString(p, t.Context(), template, script, sqlpolicy.ReadOnly()); err != nil {
 		t.Fatalf("a script whose COPY follows a CREATE TABLE: %v", err)
 	}
 
@@ -493,7 +493,7 @@ func TestAnAuthorLoginTheClusterRefusedIsNeverTheScriptsFault(t *testing.T) {
 	}
 
 	template := named(t, "tpl")
-	err = p.BuildTemplateString(t.Context(), template, `CREATE TABLE fine (x int)`, sqlpolicy.ReadOnly())
+	err = buildTemplateString(p, t.Context(), template, `CREATE TABLE fine (x int)`, sqlpolicy.ReadOnly())
 	if err == nil {
 		t.Fatal("a build ran the script over a connection that could not be made")
 	}
@@ -523,7 +523,7 @@ func TestADatabaseNameThatIsNotAPlainIdentifierIsRefused(t *testing.T) {
 		strings.Repeat("x", 64),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := p.BuildTemplateString(t.Context(), name, `SELECT 1`, sqlpolicy.ReadOnly()); err == nil {
+			if err := buildTemplateString(p, t.Context(), name, `SELECT 1`, sqlpolicy.ReadOnly()); err == nil {
 				t.Fatalf("built a template called %q", name)
 			}
 		})
@@ -795,7 +795,7 @@ func TestAHostileGameScriptIsRefusedTheThingsOnlyASuperuserCanDo(t *testing.T) {
 	// build — and "cannot drop the currently open database" would look like
 	// a refusal without being one.
 	sibling := named(t, "sib")
-	if err := provisioner(t).BuildTemplateString(
+	if err := buildTemplateString(provisioner(t),
 		t.Context(), sibling, detectiveScript, sqlpolicy.ReadOnly()); err != nil {
 		t.Fatalf("building the other olympiad's template: %v", err)
 	}
@@ -877,7 +877,7 @@ func TestAHostileGameScriptIsRefusedTheThingsOnlyASuperuserCanDo(t *testing.T) {
 			p := provisioner(t)
 			template := named(t, "tpl")
 
-			err := p.BuildTemplateString(t.Context(), template, hostile.script, sqlpolicy.ReadOnly())
+			err := buildTemplateString(p, t.Context(), template, hostile.script, sqlpolicy.ReadOnly())
 			if err == nil {
 				t.Fatalf("the cluster ran it: %s", hostile.script)
 			}
@@ -949,7 +949,7 @@ func TestAnOrdinaryGameStillBuildsUnderTheAuthorRole(t *testing.T) {
 	p := provisioner(t)
 	template := named(t, "tpl")
 	policy := sqlpolicy.ReadOnly()
-	if err := p.BuildTemplateString(t.Context(), template, script, policy); err != nil {
+	if err := buildTemplateString(p, t.Context(), template, script, policy); err != nil {
 		t.Fatalf("an ordinary game script no longer builds: %v", err)
 	}
 
@@ -1019,7 +1019,7 @@ func TestBuildingWithoutTheAuthorCredentialIsRefusedRatherThanRunAsTheProvisione
 	}
 
 	template := named(t, "tpl")
-	err = p.BuildTemplateString(t.Context(), template, `CREATE TABLE fine (x int)`, sqlpolicy.ReadOnly())
+	err = buildTemplateString(p, t.Context(), template, `CREATE TABLE fine (x int)`, sqlpolicy.ReadOnly())
 	if !errors.Is(err, gamedb.ErrNoAuthorCredential) {
 		t.Fatalf("BuildTemplate without a credential returned %v, want ErrNoAuthorCredential", err)
 	}
@@ -1045,7 +1045,7 @@ func TestClusterBytesCountsEveryDatabaseOnTheCluster(t *testing.T) {
 	// A database this test makes has to move the number, or the total is not
 	// a total.
 	template := named(t, "tpl")
-	if err := p.BuildTemplateString(t.Context(), template,
+	if err := buildTemplateString(p, t.Context(), template,
 		`CREATE TABLE bulk AS SELECT g, repeat('x', 400) AS pad FROM generate_series(1, 20000) g`,
 		sqlpolicy.ReadOnly()); err != nil {
 		t.Fatalf("building a database to measure: %v", err)
