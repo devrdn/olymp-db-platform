@@ -231,6 +231,15 @@ const policyProjectionColumns = `
 	coalesce(p.allow_catalog, true),
 	coalesce(p.disk_quota_ratio, 5)`
 
+// policyScanTargets is where policyProjectionColumns lands, in the same
+// order: the mode as text into mode, which the caller converts once the row
+// is read, and every other field into p directly. Paired with the projection
+// so that the columns and the targets cannot fall out of step.
+func policyScanTargets(p *sqlpolicy.Policy, mode *string) []any {
+	return []any{mode, &p.WritableTables, &p.AllowCreateView, &p.AllowOwnTables,
+		&p.AllowTempTables, &p.AllowCatalog, &p.DiskQuotaRatio}
+}
+
 // Game returns one contest's game: which template it plays on, at what version,
 // under which policy.
 //
@@ -248,10 +257,7 @@ func (r *GameInstances) Game(ctx context.Context, contestID uuid.UUID) (provisio
 		JOIN game_templates t ON t.contest_id = c.id
 		LEFT JOIN contest_sql_policies p ON p.contest_id = c.id
 		WHERE c.id = $1 AND t.status = 'ready'`, contestID).
-		Scan(&c.ID, &c.Template, &c.Version,
-			&mode, &c.Policy.WritableTables, &c.Policy.AllowCreateView,
-			&c.Policy.AllowOwnTables, &c.Policy.AllowTempTables, &c.Policy.AllowCatalog,
-			&c.Policy.DiskQuotaRatio)
+		Scan(append([]any{&c.ID, &c.Template, &c.Version}, policyScanTargets(&c.Policy, &mode)...)...)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		return provisioning.Contest{}, provisioning.ErrNoGame
@@ -286,9 +292,7 @@ func (r *GameInstances) Live(ctx context.Context) ([]provisioning.Contest, error
 	for rows.Next() {
 		var c provisioning.Contest
 		var mode string
-		if err := rows.Scan(&c.ID, &c.Template, &c.Version,
-			&mode, &c.Policy.WritableTables, &c.Policy.AllowCreateView,
-			&c.Policy.AllowOwnTables, &c.Policy.AllowTempTables, &c.Policy.AllowCatalog, &c.Policy.DiskQuotaRatio); err != nil {
+		if err := rows.Scan(append([]any{&c.ID, &c.Template, &c.Version}, policyScanTargets(&c.Policy, &mode)...)...); err != nil {
 			return nil, fmt.Errorf("scan a live contest: %w", err)
 		}
 		c.Policy.Mode = sqlpolicy.Mode(mode)

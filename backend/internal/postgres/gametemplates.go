@@ -289,19 +289,11 @@ func (r *GameInstances) Policy(ctx context.Context, contestID uuid.UUID) (sqlpol
 	var policy sqlpolicy.Policy
 	var mode string
 	err := r.querier(ctx).QueryRow(ctx, `
-		SELECT coalesce(p.mode, 'read_only'),
-		       coalesce(p.writable_tables, '{}')::text[],
-		       coalesce(p.allow_create_view, false),
-		       coalesce(p.allow_own_tables, false),
-		       coalesce(p.allow_temp_tables, false),
-		       coalesce(p.allow_catalog, true),
-		       coalesce(p.disk_quota_ratio, 5)
+		SELECT `+policyProjectionColumns+`
 		FROM contests c
 		LEFT JOIN contest_sql_policies p ON p.contest_id = c.id
 		WHERE c.id = $1`, contestID).
-		Scan(&mode, &policy.WritableTables, &policy.AllowCreateView,
-			&policy.AllowOwnTables, &policy.AllowTempTables, &policy.AllowCatalog,
-			&policy.DiskQuotaRatio)
+		Scan(policyScanTargets(&policy, &mode)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return sqlpolicy.Policy{}, provisioning.ErrNoGame
 	}

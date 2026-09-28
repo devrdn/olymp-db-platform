@@ -116,20 +116,11 @@ func (r *Questions) List(ctx context.Context, contestID uuid.UUID) ([]contests.Q
 
 	var found []contests.Question
 	for rows.Next() {
-		var (
-			q       contests.Question
-			texts   []byte
-			answers []byte
-		)
-		if err := rows.Scan(&q.ID, &q.ContestID, &q.Ord, &q.Kind, &q.Points, &q.MaxAttempts, &q.PenaltyPct,
-			&q.IsVisible, &q.ChoiceIDs, &texts, &answers); err != nil {
-			return nil, fmt.Errorf("scan question: %w", err)
-		}
-		hydrated, err := hydrateQuestion(q, texts, answers)
+		q, err := scanQuestion(rows)
 		if err != nil {
 			return nil, err
 		}
-		found = append(found, hydrated)
+		found = append(found, q)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list questions: %w", err)

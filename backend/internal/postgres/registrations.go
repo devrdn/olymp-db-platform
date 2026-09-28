@@ -89,8 +89,7 @@ func (r *Registrations) List(ctx context.Context, contestID uuid.UUID, f contest
 	)
 	for rows.Next() {
 		var p contests.Participant
-		if err := rows.Scan(&p.ID, &p.ContestID, &p.UserID, &p.Login, &p.FullName, &p.Status,
-			&p.StartedAt, &p.FinishedAt, &p.TotalScore, &p.CreatedAt, &total); err != nil {
+		if err := rows.Scan(append(participantScanTargets(&p), &total)...); err != nil {
 			return nil, 0, fmt.Errorf("scan participant: %w", err)
 		}
 		found = append(found, p)
@@ -127,20 +126,18 @@ func (r *Registrations) ByUser(ctx context.Context, contestID, userID uuid.UUID)
 // queryproxy.LookupResult.
 func (r *Registrations) ForRun(ctx context.Context, contestID, userID uuid.UUID) (queryproxy.LookupResult, error) {
 	var (
-		p                                                              contests.Participant
-		c                                                              contests.Contest
-		settings, languages, translations                              []byte
-		templateDB                                                     *string
-		version                                                        *int
-		mode                                                           string
-		writableTables                                                 []string
-		allowCreateView, allowOwnTables, allowTempTables, allowCatalog bool
-		diskQuotaRatio                                                 int
+		p                                 contests.Participant
+		c                                 contests.Contest
+		settings, languages, translations []byte
+		templateDB                        *string
+		version                           *int
+		mode                              string
+		policy                            sqlpolicy.Policy
 	)
 	targets := participantScanTargets(&p)
 	targets = append(targets, contestScanTargets(&c, &settings, &languages, &translations)...)
-	targets = append(targets, &templateDB, &version, &mode, &writableTables,
-		&allowCreateView, &allowOwnTables, &allowTempTables, &allowCatalog, &diskQuotaRatio)
+	targets = append(targets, &templateDB, &version)
+	targets = append(targets, policyScanTargets(&policy, &mode)...)
 
 	err := r.querier(ctx).QueryRow(ctx, `
 		SELECT `+participantColumns+`,
@@ -169,19 +166,12 @@ func (r *Registrations) ForRun(ctx context.Context, contestID, userID uuid.UUID)
 		result.GameErr = provisioning.ErrNoGame
 		return result, nil
 	}
+	policy.Mode = sqlpolicy.Mode(mode)
 	result.Game = provisioning.Contest{
 		ID:       contest.ID,
 		Template: *templateDB,
 		Version:  *version,
-		Policy: sqlpolicy.Policy{
-			Mode:            sqlpolicy.Mode(mode),
-			WritableTables:  writableTables,
-			AllowCreateView: allowCreateView,
-			AllowOwnTables:  allowOwnTables,
-			AllowTempTables: allowTempTables,
-			AllowCatalog:    allowCatalog,
-			DiskQuotaRatio:  diskQuotaRatio,
-		},
+		Policy:   policy,
 	}
 	return result, nil
 }
