@@ -481,7 +481,7 @@ func (s *Service) ExtendGrace(ctx context.Context, actorID, contestID uuid.UUID,
 	if err != nil {
 		return Contest{}, err
 	}
-	if current.Status != StatusFinished && current.Status != StatusArchived {
+	if !current.Ended() {
 		return Contest{}, fmt.Errorf(
 			"%w: the grace period is set through the ordinary settings while the contest is %s",
 			ErrNotEditable, current.Status)
@@ -646,14 +646,11 @@ func (s *Service) List(ctx context.Context, f Filter) ([]Contest, int, error) {
 
 // SetLanguages sets the languages a contest is offered in.
 func (s *Service) SetLanguages(ctx context.Context, actorID, contestID uuid.UUID, langs []ContestLanguage) error {
-	c, err := s.contests.ByID(ctx, contestID)
-	if err != nil {
-		return err
-	}
 	// Adding a language to a running contest would leave everything authored
 	// in it empty for whoever picked it.
-	if !c.ContentEditable() {
-		return fmt.Errorf("%w: it is %s", ErrNotEditable, c.Status)
+	c, err := s.editableContest(ctx, contestID)
+	if err != nil {
+		return err
 	}
 	if err := validateLanguages(langs); err != nil {
 		return err
@@ -675,12 +672,8 @@ func (s *Service) SetLanguages(ctx context.Context, actorID, contestID uuid.UUID
 
 // SetTranslations replaces a contest's authored titles.
 func (s *Service) SetTranslations(ctx context.Context, actorID, contestID uuid.UUID, translations []Translation) error {
-	c, err := s.contests.ByID(ctx, contestID)
-	if err != nil {
+	if _, err := s.editableContest(ctx, contestID); err != nil {
 		return err
-	}
-	if !c.ContentEditable() {
-		return fmt.Errorf("%w: it is %s", ErrNotEditable, c.Status)
 	}
 	if err := s.checkTranslationLanguages(ctx, translations); err != nil {
 		return err

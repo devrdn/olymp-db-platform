@@ -225,12 +225,8 @@ func (g *Games) BeginUpload(ctx context.Context, contestID uuid.UUID, filename s
 		return Upload{}, ErrUploadTooLarge
 	}
 
-	editable, err := g.author.GameEditable(ctx, contestID)
-	if err != nil {
-		return Upload{}, fmt.Errorf("check whether the game may be replaced: %w", err)
-	}
-	if !editable {
-		return Upload{}, ErrGameNotEditable
+	if err := g.requireEditable(ctx, contestID); err != nil {
+		return Upload{}, err
 	}
 
 	id := uuid.New()
@@ -444,12 +440,8 @@ func (g *Games) CompleteUpload(ctx context.Context, actorID, contestID, uploadID
 		return Template{}, ErrUploadAlreadyComplete
 	}
 
-	editable, err := g.author.GameEditable(ctx, contestID)
-	if err != nil {
-		return Template{}, fmt.Errorf("check whether the game may be replaced: %w", err)
-	}
-	if !editable {
-		return Template{}, ErrGameNotEditable
+	if err := g.requireEditable(ctx, contestID); err != nil {
+		return Template{}, err
 	}
 
 	summary, err := g.files.Complete(uploadID.String(), upload.DeclaredBytes)
@@ -498,10 +490,7 @@ func (g *Games) abortUpload(ctx context.Context, actor *uuid.UUID, upload Upload
 		if err := g.repo.AbortUpload(ctx, upload.ID); err != nil {
 			return fmt.Errorf("mark the upload aborted: %w", err)
 		}
-		if g.audit == nil {
-			return nil
-		}
-		return g.audit.Record(ctx, audit.Entry{
+		return g.record(ctx, audit.Entry{
 			ActorID: actor, Action: audit.ActionGameUploadAbort,
 			Entity: "contest", EntityID: upload.ContestID.String(),
 			Payload: map[string]any{"filename": upload.Filename, "bytes": upload.ReceivedBytes},
@@ -512,12 +501,7 @@ func (g *Games) abortUpload(ctx context.Context, actor *uuid.UUID, upload Upload
 		return Upload{}, fmt.Errorf("remove the upload's file: %w", err)
 	}
 
-	var err error
-	if g.uow != nil {
-		err = g.uow.Do(ctx, mark)
-	} else {
-		err = mark(ctx)
-	}
+	err := g.atomically(ctx, mark)
 	if err != nil {
 		return Upload{}, err
 	}

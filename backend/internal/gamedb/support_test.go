@@ -1,10 +1,13 @@
 package gamedb_test
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/gamedb"
 	"github.com/devrdn/db-contest/backend/internal/gamedb/gamedbtest"
+	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -63,4 +66,12 @@ func refused(t *testing.T, conn *pgx.Conn, sql string) error {
 		t.Fatalf("the database allowed: %s", sql)
 	}
 	return err
+}
+
+// buildTemplateString builds a template from a script held as a string — the
+// shape almost every test here writes its script in. The production path takes
+// an io.Reader, because an uploaded dump is gigabytes that must never be a
+// string; a test's script is a few lines, and this keeps each call short.
+func buildTemplateString(p *gamedb.Provisioner, ctx context.Context, name, script string, policy sqlpolicy.Policy) error {
+	return p.BuildTemplate(ctx, name, strings.NewReader(script), policy)
 }

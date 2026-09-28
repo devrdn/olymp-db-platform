@@ -25,7 +25,7 @@ const codesScript = `CREATE TABLE codes (id integer PRIMARY KEY, label text NOT 
 func TestLoadTableDataCopiesRowsIntoTheTemplate(t *testing.T) {
 	p := provisioner(t)
 	template := named(t, "tpl")
-	if err := p.BuildTemplateString(t.Context(), template, codesScript, sqlpolicy.ReadOnly()); err != nil {
+	if err := buildTemplateString(p, t.Context(), template, codesScript, sqlpolicy.ReadOnly()); err != nil {
 		t.Fatalf("building the template: %v", err)
 	}
 
@@ -58,7 +58,7 @@ func TestLoadTableDataCopiesRowsIntoTheTemplate(t *testing.T) {
 func TestLoadTableDataRefusalBecomesATableDataError(t *testing.T) {
 	p := provisioner(t)
 	template := named(t, "tpl")
-	if err := p.BuildTemplateString(t.Context(), template, codesScript, sqlpolicy.ReadOnly()); err != nil {
+	if err := buildTemplateString(p, t.Context(), template, codesScript, sqlpolicy.ReadOnly()); err != nil {
 		t.Fatalf("building the template: %v", err)
 	}
 

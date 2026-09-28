@@ -440,6 +440,11 @@ func (s *Service) Invalidate(ctx context.Context, contest Contest) (int, error) 
 
 // Reset gives a participant their starting database back, under whatever they
 // have open.
+//
+// The button exists because a contest that permits writing permits ruining
+// your own data, and the way back should not be asking an organizer. It is a
+// fresh copy rather than an undo: there is nothing to reconcile, and seconds
+// is fast enough.
 func (s *Service) Reset(ctx context.Context, contest Contest, registration uuid.UUID) error {
 	existing, err := s.repo.Of(ctx, registration)
 	if err != nil {

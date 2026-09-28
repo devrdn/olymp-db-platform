@@ -12,6 +12,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/platform/flight"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 )
 
@@ -220,7 +221,7 @@ func (s *Service) Public(ctx context.Context, contestID uuid.UUID) (View, error)
 	}
 
 	gen := s.generationOf(contestID)
-	result, err := s.computeOnce(ctx, fmt.Sprintf("public:%s@%d", contestID, gen), func(ctx context.Context) (any, error) {
+	result, err := flight.Do(ctx, &s.flight, fmt.Sprintf("public:%s@%d", contestID, gen), computeTimeout, func(ctx context.Context) (any, error) {
 		return s.computePublic(ctx, contestID, now)
 	})
 	if err != nil {
@@ -307,7 +308,7 @@ func (s *Service) Live(ctx context.Context, contestID uuid.UUID) (StaffView, err
 	}
 
 	gen := s.generationOf(contestID)
-	result, err := s.computeOnce(ctx, fmt.Sprintf("live:%s@%d", contestID, gen), func(ctx context.Context) (any, error) {
+	result, err := flight.Do(ctx, &s.flight, fmt.Sprintf("live:%s@%d", contestID, gen), computeTimeout, func(ctx context.Context) (any, error) {
 		return s.computeLive(ctx, contestID, now)
 	})
 	if err != nil {
@@ -389,7 +390,7 @@ func (s *Service) Reveal(ctx context.Context, actorID, contestID uuid.UUID) (tim
 	if err != nil {
 		return time.Time{}, fmt.Errorf("look up the contest: %w", err)
 	}
-	if c.Status != contests.StatusFinished && c.Status != contests.StatusArchived {
+	if !c.Ended() {
 		return time.Time{}, fmt.Errorf("%w: the contest is %s", ErrNotRevealable, c.Status)
 	}
 	freezeAt, frozen := c.FreezeAt()
@@ -599,45 +600,4 @@ func (s *Service) bumpGeneration(id uuid.UUID) {
 	s.liveMu.Lock()
 	delete(s.liveCache, id)
 	s.liveMu.Unlock()
-}
-
-// computeOnce collapses every concurrent miss for one key into a single call
-// to fn, so however many callers arrive while a table is being computed, the
-// repository is asked once and all of them read the same answer.
-//
-// fn runs detached from any one caller's context (context.WithoutCancel),
-// bounded instead by computeTimeout: the computation belongs to the key, not
-// to whichever caller's request happened to start it, so one caller giving up
-// must not cut short an answer the callers behind it are still waiting for.
-// Each caller of computeOnce still honours its own context — it stops
-// waiting the moment ctx is done, without touching the flight it joined.
-//
-// A panic inside fn is recovered into an error rather than left to
-// singleflight's own handling, which — when a call has joiners — re-panics
-// on a fresh, unrecovered goroutine specifically so the crash cannot be
-// swallowed. That is the right choice for a bug an operator must see, but the
-// wrong one for a single bad computation to cost the whole process; recovery
-// here turns it into an ordinary refusal instead. Either way, singleflight
-// forgets a key the moment its call returns — before any of it is reported
-// back — so a failed or recovered computation is never cached, and the very
-// next call for the same key starts a fresh one rather than waiting behind a
-// key that could never resolve.
-func (s *Service) computeOnce(ctx context.Context, key string, fn func(ctx context.Context) (any, error)) (any, error) {
-	ch := s.flight.DoChan(key, func() (result any, err error) {
-		defer func() {
-			if r := recover(); r != nil {
-				err = fmt.Errorf("compute %s: %v", key, r)
-			}
-		}()
-		flightCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), computeTimeout)
-		defer cancel()
-		return fn(flightCtx)
-	})
-
-	select {
-	case res := <-ch:
-		return res.Val, res.Err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
 }

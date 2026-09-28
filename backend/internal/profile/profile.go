@@ -202,7 +202,7 @@ func Over(c contests.Contest, p contests.Participant, now time.Time) bool {
 	if p.Status == contests.RegistrationFinished || p.Status == contests.RegistrationDisqualified {
 		return true
 	}
-	if c.Status == contests.StatusFinished || c.Status == contests.StatusArchived {
+	if c.Ended() {
 		return true
 	}
 	deadline, ok := contests.Deadline(c, p)

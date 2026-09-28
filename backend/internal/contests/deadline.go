@@ -2,6 +2,16 @@ package contests
 
 import "time"
 
+// ClockPending reports a participant whose own clock has not started: an
+// individual-timing contest they have not yet begun. Under fixed timing
+// nobody has a clock of their own to start, so it is never pending.
+//
+// A fact about the pair, beside Deadline for the same reason Deadline is a
+// plain function: every path that asks already holds both values.
+func ClockPending(c Contest, p Participant) bool {
+	return c.Timing == TimingIndividual && p.StartedAt == nil
+}
+
 // Deadline is the one formula every timing check in the system uses
 // (docs/ARCHITECTURE.md §8): the moment a participant's window in this
 // contest closes.

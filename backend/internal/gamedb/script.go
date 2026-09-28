@@ -697,9 +697,6 @@ type copyProbe struct {
 // being a second full-size copy of every statement in a multi-gigabyte dump.
 var probeWords = [][]byte{[]byte("copy"), []byte("set"), []byte("reset")}
 
-// copyWord is the first token that makes a statement a COPY block.
-var copyWord = []byte("copy")
-
 // stillInteresting reports whether code — the statement's first bytes, with
 // comments and literals already removed — can still be the start of one of
 // probeWords followed by a token boundary. "copyright" is not "copy", which

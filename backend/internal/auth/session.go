@@ -108,7 +108,7 @@ type SessionStore struct {
 }
 
 // NewSessionStore returns a store whose sessions live for ttl, extended on
-// activity by Refresh, and never longer than DefaultMaxSessionLifetime from
+// activity by Touch, and never longer than DefaultMaxSessionLifetime from
 // sign-in.
 func NewSessionStore(c cache.Cache, ttl time.Duration) *SessionStore {
 	return &SessionStore{cache: c, ttl: ttl, maxLifetime: DefaultMaxSessionLifetime}
@@ -271,21 +271,11 @@ func (s *SessionStore) remaining(session Session, now time.Time) time.Duration {
 	return session.IssuedAt.Add(s.maxLifetime).Sub(now)
 }
 
-// Refresh extends an active session by a full lifetime, unconditionally.
-func (s *SessionStore) Refresh(ctx context.Context, token string) error {
-	session, err := s.Get(ctx, token)
-	if err != nil {
-		return err
-	}
-	session.RefreshedAt = time.Now().UTC()
-	return s.put(ctx, token, session)
-}
-
 // Touch extends a session the caller has already loaded, but only when the
 // last extension is old enough to matter.
 //
 // The middleware authenticates every request and used to rewrite the session
-// on each one: a read to authenticate, a second read inside Refresh, then a
+// on each one: a read to authenticate, a second read to refresh it, then a
 // write — three round trips to the cache per request, two of them to move an
 // expiry by a few seconds. Working from the record already in hand and
 // skipping writes inside the refresh interval leaves one read per request for

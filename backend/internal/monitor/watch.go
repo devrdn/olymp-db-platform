@@ -10,6 +10,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
+	"github.com/devrdn/db-contest/backend/internal/platform/flight"
 )
 
 // The organiser's read side (design §4): what a contest's staff are shown of
@@ -119,7 +120,7 @@ func (s *WatchService) Roster(ctx context.Context, contest uuid.UUID) (Roster, e
 	if roster, ok := s.cachedRoster(contest, now); ok {
 		return roster, nil
 	}
-	result, err := s.computeOnce(ctx, "roster:"+contest.String(), func(ctx context.Context) (any, error) {
+	result, err := flight.Do(ctx, &s.flight, "roster:"+contest.String(), rosterComputeTimeout, func(ctx context.Context) (any, error) {
 		roster, err := s.store.Roster(ctx, contest, MaxRosterRows)
 		if err != nil {
 			return nil, err
@@ -157,31 +158,6 @@ func (s *WatchService) storeRoster(contest uuid.UUID, roster Roster, expires tim
 		}
 	}
 	s.rosters[contest] = cachedRoster{roster: roster, expires: expires}
-}
-
-// computeOnce collapses concurrent misses of one key into one call to fn,
-// the way leaderboard.Service does: fn runs detached from any one caller
-// (context.WithoutCancel, bounded by rosterComputeTimeout) because the
-// computation belongs to every caller waiting on it, each caller still stops
-// waiting when its own context ends, and a panic becomes an error instead of
-// taking the process down. A failed computation is never cached.
-func (s *WatchService) computeOnce(ctx context.Context, key string, fn func(ctx context.Context) (any, error)) (any, error) {
-	ch := s.flight.DoChan(key, func() (result any, err error) {
-		defer func() {
-			if r := recover(); r != nil {
-				err = fmt.Errorf("compute %s: %v", key, r)
-			}
-		}()
-		flightCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rosterComputeTimeout)
-		defer cancel()
-		return fn(flightCtx)
-	})
-	select {
-	case res := <-ch:
-		return res.Val, res.Err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
 }
 
 // Participant finds a registration of the contest: another contest's is

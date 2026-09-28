@@ -309,7 +309,7 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 	}
 
 	participant := cmd.Participant
-	if cmd.Contest.Timing == TimingIndividual && participant.StartedAt == nil {
+	if ClockPending(cmd.Contest, participant) {
 		// The same seam queryproxy.Service.Run uses for the identical
 		// decision (§8, finding 2): the registration's own Start, which can
 		// only ever set started_at once (postgres.Registrations.Start).

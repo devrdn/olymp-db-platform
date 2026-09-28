@@ -460,6 +460,22 @@ type Authoring interface {
 	GameEditable(ctx context.Context, contestID uuid.UUID) (bool, error)
 }
 
+// requireEditable is Authoring's answer as the refusal every write to a
+// contest's game gives: ErrGameNotEditable once the contest has started, and
+// the underlying failure wrapped when the answer could not be had. Where each
+// write asks is argued at the write; what it does with the answer is the same
+// everywhere, so it is written once.
+func (g *Games) requireEditable(ctx context.Context, contestID uuid.UUID) error {
+	editable, err := g.author.GameEditable(ctx, contestID)
+	if err != nil {
+		return fmt.Errorf("check whether the game may be replaced: %w", err)
+	}
+	if !editable {
+		return ErrGameNotEditable
+	}
+	return nil
+}
+
 // Games is the half of Service that owns a contest's game: the script an
 // organiser writes, and the template database built from it.
 //
@@ -537,6 +553,26 @@ func NewGames(repo TemplateRepository, cluster TemplateCluster, author Authoring
 func (g *Games) WithAudit(recorder *audit.Recorder, uow unitOfWork) *Games {
 	g.audit, g.uow = recorder, uow
 	return g
+}
+
+// atomically runs fn inside the unit of work WithAudit supplied, so a write
+// and the audit entry recording it land together or not at all — and simply
+// runs it when there is none, which is the arrangement the tests that are not
+// about the trail use.
+func (g *Games) atomically(ctx context.Context, fn func(context.Context) error) error {
+	if g.uow == nil {
+		return fn(ctx)
+	}
+	return g.uow.Do(ctx, fn)
+}
+
+// record writes one audit entry, or nothing when the service was assembled
+// without a trail.
+func (g *Games) record(ctx context.Context, entry audit.Entry) error {
+	if g.audit == nil {
+		return nil
+	}
+	return g.audit.Record(ctx, entry)
 }
 
 // WithUploads turns on the file-upload half of a contest's game. files is
@@ -756,12 +792,8 @@ func (g *Games) RequestBuild(ctx context.Context, actorID, contestID uuid.UUID) 
 		return Template{}, ErrBuildInProgress
 	}
 
-	editable, err := g.author.GameEditable(ctx, contestID)
-	if err != nil {
-		return Template{}, fmt.Errorf("check whether the game may be replaced: %w", err)
-	}
-	if !editable {
-		return Template{}, ErrGameNotEditable
+	if err := g.requireEditable(ctx, contestID); err != nil {
+		return Template{}, err
 	}
 
 	var asked Template
@@ -771,20 +803,13 @@ func (g *Games) RequestBuild(ctx context.Context, actorID, contestID uuid.UUID) 
 		if err != nil {
 			return err
 		}
-		if g.audit == nil {
-			return nil
-		}
-		return g.audit.Record(ctx, audit.Entry{
+		return g.record(ctx, audit.Entry{
 			ActorID: &actorID, Action: audit.ActionGameBuildRequested,
 			Entity: "contest", EntityID: contestID.String(),
 			Payload: map[string]any{"version": asked.Version},
 		})
 	}
-	if g.uow != nil {
-		err = g.uow.Do(ctx, run)
-	} else {
-		err = run(ctx)
-	}
+	err = g.atomically(ctx, run)
 	if err != nil {
 		return Template{}, err
 	}
@@ -814,12 +839,8 @@ func (g *Games) replaceGame(
 	save func(context.Context) (Template, error),
 	entry func(Template) audit.Entry,
 ) (Template, error) {
-	editable, err := g.author.GameEditable(ctx, contestID)
-	if err != nil {
-		return Template{}, fmt.Errorf("check whether the game may be replaced: %w", err)
-	}
-	if !editable {
-		return Template{}, ErrGameNotEditable
+	if err := g.requireEditable(ctx, contestID); err != nil {
+		return Template{}, err
 	}
 
 	var saved Template
@@ -845,18 +866,10 @@ func (g *Games) replaceGame(
 				return fmt.Errorf("discard the table builder's own data: %w", err)
 			}
 		}
-		if g.audit == nil {
-			return nil
-		}
-		return g.audit.Record(ctx, entry(saved))
+		return g.record(ctx, entry(saved))
 	}
 
-	if g.uow != nil {
-		err = g.uow.Do(ctx, run)
-	} else {
-		err = run(ctx)
-	}
-	if err != nil {
+	if err := g.atomically(ctx, run); err != nil {
 		return Template{}, err
 	}
 
