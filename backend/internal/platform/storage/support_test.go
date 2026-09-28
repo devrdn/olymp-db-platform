@@ -24,3 +24,7 @@ func (f *fakeQuerier) QueryRow(context.Context, string, ...any) pgx.Row {
 func (f *fakeQuerier) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
 	return pgconn.CommandTag{}, nil
 }
+
+func (f *fakeQuerier) SendBatch(context.Context, *pgx.Batch) pgx.BatchResults {
+	return nil
+}

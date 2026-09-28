@@ -126,6 +126,32 @@ func TestTheFeedMergesEverySourceInTimeOrder(t *testing.T) {
 	})
 }
 
+// The organiser's feed re-reads itself every few seconds per open tab, and
+// its sources are independent of one another: they go to the database as one
+// batch, and the page's participants are named in one more read — two round
+// trips whatever the number of sources, where there used to be one per
+// source and one for the names.
+func TestTheFeedCostsTwoRoundTrips(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		f := newFeedFixture(t, ctx)
+		watch := NewWatch(testPool)
+		trips := 0
+		watch.wrap = func(inner storage.Querier) storage.Querier {
+			return countingQuerier{Querier: inner, trips: &trips}
+		}
+		page, err := watch.Feed(ctx, monitor.FeedQuery{Contest: f.contest, Limit: monitor.MaxFeedPage})
+		if err != nil {
+			t.Fatalf("feed: %v", err)
+		}
+		if len(page.Items) == 0 {
+			t.Fatal("the feed is empty; the fixture should fill every source")
+		}
+		if trips != 2 {
+			t.Errorf("round trips = %d, want 2 (the sources in one batch, then the names)", trips)
+		}
+	})
+}
+
 // Paging through the feed a few items at a time, forwards and backwards,
 // meets every item exactly once, whatever falls on a page boundary.
 func TestTheFeedPagesWithoutGapsOrRepeats(t *testing.T) {
@@ -592,6 +618,11 @@ func TestTheFeedReadsOnePageNotOnePerParticipant(t *testing.T) {
 			// plan that reads a few rows it then discards, and is still two
 			// orders of magnitude below a page per participant.
 			bound := int64(2 * (page + 1))
+			// And the newest page read something at all: a statement that
+			// bypassed the measurement would otherwise pass every bound.
+			if name == "newest" && touched["query_log"] == 0 {
+				t.Errorf("the %s page read no rows of query_log: the feed's reads went unmeasured", name)
+			}
 			for _, table := range []string{"query_log", "submissions"} {
 				if touched[table] > bound {
 					t.Errorf("the %s page read %d rows of %s, want at most %d: the read grows with the contest, not with the page",

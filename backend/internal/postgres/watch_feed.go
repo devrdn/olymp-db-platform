@@ -39,16 +39,34 @@ func (w *Watch) Feed(ctx context.Context, q monitor.FeedQuery) (monitor.FeedPage
 	if err != nil {
 		return monitor.FeedPage{}, err
 	}
-	var items []monitor.FeedItem
+	// The sources are independent reads, so they go as one batch: one round
+	// trip on every poll rather than one per source. Their callbacks run in
+	// the order they were queued, as the loop used to.
+	var (
+		items []monitor.FeedItem
+		batch pgx.Batch
+	)
 	for source := monitor.SourceAudit; source <= monitor.SourceFinish; source++ {
 		if !q.Reads(source) {
 			continue
 		}
-		found, err := w.readSource(ctx, q, source)
+		st, err := sourceStatement(q, source)
 		if err != nil {
 			return monitor.FeedPage{}, err
 		}
-		items = append(items, found...)
+		if st.sql == "" {
+			continue
+		}
+		batch.Queue(st.sql, st.args...).Query(func(rows pgx.Rows) error {
+			found, err := st.collect(rows)
+			items = append(items, found...)
+			return err
+		})
+	}
+	if batch.Len() > 0 {
+		if err := w.querier(ctx).SendBatch(ctx, &batch).Close(); err != nil {
+			return monitor.FeedPage{}, err
+		}
 	}
 	page := monitor.MergeFeed(q, items)
 	if err := w.name(ctx, q.Contest, page.Items); err != nil {
@@ -65,7 +83,15 @@ func (w *Watch) FeedSource(ctx context.Context, q monitor.FeedQuery, source moni
 	if err != nil {
 		return nil, err
 	}
-	items, err := w.readSource(ctx, q, source)
+	st, err := sourceStatement(q, source)
+	if err != nil || st.sql == "" {
+		return nil, err
+	}
+	rows, err := w.querier(ctx).Query(ctx, st.sql, st.args...)
+	if err != nil {
+		return nil, fmt.Errorf("read the feed's %s: %w", st.what, err)
+	}
+	items, err := st.collect(rows)
 	if err != nil {
 		return nil, err
 	}
@@ -96,21 +122,42 @@ func (w *Watch) FeedRegistrations(ctx context.Context, contest uuid.UUID) ([]uui
 	return ids, nil
 }
 
-// readSource reads one source's range.
-func (w *Watch) readSource(ctx context.Context, q monitor.FeedQuery, source monitor.Source) ([]monitor.FeedItem, error) {
+// feedStatement is one source's read: the statement, its parameters, and how
+// a row of it becomes a feed item. Built without a database, so Feed can send
+// every source it reads as one batch and FeedSource can send one alone. A
+// zero statement (no sql) reads nothing: the filter left the source no kind
+// to read.
+type feedStatement struct {
+	what string
+	sql  string
+	args []any
+	scan func(pgx.CollectableRow) (monitor.FeedItem, error)
+}
+
+// collect reads the statement's rows into feed items.
+func (st feedStatement) collect(rows pgx.Rows) ([]monitor.FeedItem, error) {
+	items, err := pgx.CollectRows(rows, st.scan)
+	if err != nil {
+		return nil, fmt.Errorf("read the feed's %s: %w", st.what, err)
+	}
+	return items, nil
+}
+
+// sourceStatement builds one source's read of its range.
+func sourceStatement(q monitor.FeedQuery, source monitor.Source) (feedStatement, error) {
 	switch source {
 	case monitor.SourceAudit:
-		return w.feedAudit(ctx, q)
+		return feedAudit(q), nil
 	case monitor.SourceStart, monitor.SourceFinish:
-		return w.feedClock(ctx, q, source)
+		return feedClock(q, source), nil
 	case monitor.SourceEvent:
-		return w.feedEvents(ctx, q)
+		return feedEvents(q), nil
 	case monitor.SourceQuery:
-		return w.feedQueries(ctx, q)
+		return feedQueries(q), nil
 	case monitor.SourceAnswer:
-		return w.feedAnswers(ctx, q)
+		return feedAnswers(q), nil
 	}
-	return nil, fmt.Errorf("no feed source %d", source)
+	return feedStatement{}, fmt.Errorf("no feed source %d", source)
 }
 
 // args collects the positional parameters of one statement.
@@ -205,24 +252,21 @@ func journalScope(a *args, q monitor.FeedQuery, alias string) string {
 	return alias + ".contest_id = " + a.add(q.Contest)
 }
 
-func (w *Watch) feedQueries(ctx context.Context, q monitor.FeedQuery) ([]monitor.FeedItem, error) {
+func feedQueries(q monitor.FeedQuery) feedStatement {
 	var a args
 	scope := journalScope(&a, q, "q")
 	bounds, dir := feedBounds(&a, q, monitor.SourceQuery, "q.executed_at", "q.id", "bigint")
 	limit := a.add(q.Limit + 1)
 	chars := a.add(queryrunner.MaxHistorySQLChars)
-	rows, err := w.querier(ctx).Query(ctx, `
-		SELECT q.id, q.registration_id, q.executed_at, left(q.sql_text, `+chars+`),
-		       char_length(q.sql_text) > `+chars+`, q.status, COALESCE(q.error_text, ''),
+	st := feedStatement{what: "queries", args: a, sql: `
+		SELECT q.id, q.registration_id, q.executed_at, left(q.sql_text, ` + chars + `),
+		       char_length(q.sql_text) > ` + chars + `, q.status, COALESCE(q.error_text, ''),
 		       q.duration_ms, q.row_count, COALESCE(host(q.ip), '')
 		FROM query_log q
-		WHERE `+scope+bounds+`
-		ORDER BY q.executed_at `+dir+`, q.id `+dir+`
-		LIMIT `+limit, a...)
-	if err != nil {
-		return nil, fmt.Errorf("read the feed's queries: %w", err)
-	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (monitor.FeedItem, error) {
+		WHERE ` + scope + bounds + `
+		ORDER BY q.executed_at ` + dir + `, q.id ` + dir + `
+		LIMIT ` + limit}
+	st.scan = func(row pgx.CollectableRow) (monitor.FeedItem, error) {
 		var (
 			item monitor.FeedItem
 			data monitor.QueryData
@@ -234,32 +278,30 @@ func (w *Watch) feedQueries(ctx context.Context, q monitor.FeedQuery) ([]monitor
 		data.Error = monitor.StaffErrorText(data.Status, data.Error)
 		item.Source, item.ID, item.Kind, item.Data = monitor.SourceQuery, strconv.FormatInt(data.ID, 10), monitor.FeedKindQuery, data
 		return item, nil
-	})
+	}
+	return st
 }
 
-func (w *Watch) feedAnswers(ctx context.Context, q monitor.FeedQuery) ([]monitor.FeedItem, error) {
+func feedAnswers(q monitor.FeedQuery) feedStatement {
 	var a args
 	scope := journalScope(&a, q, "s")
 	bounds, dir := feedBounds(&a, q, monitor.SourceAnswer, "s.submitted_at", "s.id", "uuid")
 	limit := a.add(q.Limit + 1)
 	// The question is named after the page is cut, not before: the join is a
 	// lookup by primary key for the page's own rows.
-	rows, err := w.querier(ctx).Query(ctx, `
+	st := feedStatement{what: "answers", args: a, sql: `
 		SELECT s.id, s.registration_id, s.submitted_at, s.question_id, COALESCE(qu.ord, 0),
 		       s.attempt_no, s.value, s.is_correct, s.points_awarded
 		FROM (
 		    SELECT s.* FROM submissions s
-		    WHERE `+scope+bounds+`
-		    ORDER BY s.submitted_at `+dir+`, s.id `+dir+`
-		    LIMIT `+limit+`
+		    WHERE ` + scope + bounds + `
+		    ORDER BY s.submitted_at ` + dir + `, s.id ` + dir + `
+		    LIMIT ` + limit + `
 		) s
 		LEFT JOIN questions qu ON qu.id = s.question_id
-		ORDER BY s.submitted_at `+dir+`, s.id `+dir+`
-		LIMIT `+limit, a...)
-	if err != nil {
-		return nil, fmt.Errorf("read the feed's answers: %w", err)
-	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (monitor.FeedItem, error) {
+		ORDER BY s.submitted_at ` + dir + `, s.id ` + dir + `
+		LIMIT ` + limit}
+	st.scan = func(row pgx.CollectableRow) (monitor.FeedItem, error) {
 		var (
 			item monitor.FeedItem
 			data monitor.AnswerData
@@ -270,10 +312,11 @@ func (w *Watch) feedAnswers(ctx context.Context, q monitor.FeedQuery) ([]monitor
 		}
 		item.Source, item.ID, item.Kind, item.Data = monitor.SourceAnswer, data.ID.String(), monitor.FeedKindAnswer, data
 		return item, nil
-	})
+	}
+	return st
 }
 
-func (w *Watch) feedEvents(ctx context.Context, q monitor.FeedQuery) ([]monitor.FeedItem, error) {
+func feedEvents(q monitor.FeedQuery) feedStatement {
 	var a args
 	// The same narrowing the other two journals get, for the same reason:
 	// participant_events carries both columns and this read is keyset-paged
@@ -285,16 +328,13 @@ func (w *Watch) feedEvents(ctx context.Context, q monitor.FeedQuery) ([]monitor.
 	}
 	bounds, dir := feedBounds(&a, q, monitor.SourceEvent, "e.created_at", "e.id", "bigint")
 	limit := a.add(q.Limit + 1)
-	rows, err := w.querier(ctx).Query(ctx, `
+	st := feedStatement{what: "events", args: a, sql: `
 		SELECT e.id, e.registration_id, e.created_at, e.kind, e.payload
 		FROM participant_events e
-		WHERE `+scope+bounds+`
-		ORDER BY e.created_at `+dir+`, e.id `+dir+`
-		LIMIT `+limit, a...)
-	if err != nil {
-		return nil, fmt.Errorf("read the feed's events: %w", err)
-	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (monitor.FeedItem, error) {
+		WHERE ` + scope + bounds + `
+		ORDER BY e.created_at ` + dir + `, e.id ` + dir + `
+		LIMIT ` + limit}
+	st.scan = func(row pgx.CollectableRow) (monitor.FeedItem, error) {
 		var (
 			item    monitor.FeedItem
 			id      int64
@@ -305,13 +345,14 @@ func (w *Watch) feedEvents(ctx context.Context, q monitor.FeedQuery) ([]monitor.
 		}
 		item.Source, item.ID, item.Data = monitor.SourceEvent, strconv.FormatInt(id, 10), json.RawMessage(payload)
 		return item, nil
-	})
+	}
+	return st
 }
 
 // feedClock reads the participants' clock starting or finishing, off
 // registrations. The contest's roster is bounded and has no journal's size,
 // so this is a filter over the contest's registrations.
-func (w *Watch) feedClock(ctx context.Context, q monitor.FeedQuery, source monitor.Source) ([]monitor.FeedItem, error) {
+func feedClock(q monitor.FeedQuery, source monitor.Source) feedStatement {
 	column, kind := "r.started_at", monitor.FeedStarted
 	if source == monitor.SourceFinish {
 		column, kind = "r.finished_at", monitor.FeedFinished
@@ -320,23 +361,21 @@ func (w *Watch) feedClock(ctx context.Context, q monitor.FeedQuery, source monit
 	scope := registrationScope(&a, q)
 	bounds, dir := feedBounds(&a, q, source, column, "r.id", "uuid")
 	limit := a.add(q.Limit + 1)
-	rows, err := w.querier(ctx).Query(ctx, `
-		SELECT r.id, `+column+`
+	st := feedStatement{what: kind, args: a, sql: `
+		SELECT r.id, ` + column + `
 		FROM registrations r
-		WHERE `+scope+` AND `+column+` IS NOT NULL`+bounds+`
-		ORDER BY `+column+` `+dir+`, r.id `+dir+`
-		LIMIT `+limit, a...)
-	if err != nil {
-		return nil, fmt.Errorf("read the feed's %s: %w", kind, err)
-	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (monitor.FeedItem, error) {
+		WHERE ` + scope + ` AND ` + column + ` IS NOT NULL` + bounds + `
+		ORDER BY ` + column + ` ` + dir + `, r.id ` + dir + `
+		LIMIT ` + limit}
+	st.scan = func(row pgx.CollectableRow) (monitor.FeedItem, error) {
 		var item monitor.FeedItem
 		if err := row.Scan(&item.Registration, &item.At); err != nil {
 			return item, fmt.Errorf("scan a feed %s: %w", kind, err)
 		}
 		item.Source, item.ID, item.Kind = source, item.Registration.String(), kind
 		return item, nil
-	})
+	}
+	return st
 }
 
 // auditFeedKinds maps the trail's actions to the feed's kinds.
@@ -347,7 +386,7 @@ var auditFeedKinds = map[string]string{
 	audit.ActionParticipantDisqualify: monitor.FeedDisqualified,
 }
 
-func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.FeedItem, error) {
+func feedAudit(q monitor.FeedQuery) feedStatement {
 	wanted := map[string]bool{}
 	for _, kind := range q.KindsOf(monitor.SourceAudit) {
 		wanted[kind] = true
@@ -464,15 +503,12 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 		WHERE `+scope)
 	}
 	if len(branches) == 0 {
-		return nil, nil
+		return feedStatement{}
 	}
-	sql := "SELECT * FROM (" + strings.Join(parenthesize(branches), " UNION ALL ") + ") a" +
-		" ORDER BY a.created_at " + dir + ", a.id " + dir + " LIMIT " + limit
-	rows, err := w.querier(ctx).Query(ctx, sql, a...)
-	if err != nil {
-		return nil, fmt.Errorf("read the feed's sign-ins: %w", err)
-	}
-	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (monitor.FeedItem, error) {
+	st := feedStatement{what: "sign-ins", args: a,
+		sql: "SELECT * FROM (" + strings.Join(parenthesize(branches), " UNION ALL ") + ") a" +
+			" ORDER BY a.created_at " + dir + ", a.id " + dir + " LIMIT " + limit}
+	st.scan = func(row pgx.CollectableRow) (monitor.FeedItem, error) {
 		var (
 			item      monitor.FeedItem
 			id        int64
@@ -500,7 +536,8 @@ func (w *Watch) feedAudit(ctx context.Context, q monitor.FeedQuery) ([]monitor.F
 		}
 		item.Source, item.ID, item.Kind, item.Data = monitor.SourceAudit, strconv.FormatInt(id, 10), auditFeedKinds[action], data
 		return item, nil
-	})
+	}
+	return st
 }
 
 func parenthesize(parts []string) []string {
