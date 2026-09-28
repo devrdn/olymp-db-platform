@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { ApiError } from "@/lib/api/client";
+import { failureCode } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
 import { serverRequest } from "@/lib/api/server";
 
@@ -36,7 +36,7 @@ export async function enrollAction(_previous: EnrollState, form: FormData): Prom
   );
 
   if (failure) {
-    const code = failure instanceof ApiError ? failure.code : "unreachable";
+    const code = failureCode(failure);
 
     // Two accepted answers wearing an error's clothes: a double-clicked button
     // and a list that was already stale when it rendered. Both mean the

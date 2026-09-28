@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { ApiError } from "@/lib/api/client";
+import { failureCode } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
 import { serverRequest } from "@/lib/api/server";
 
@@ -25,7 +25,7 @@ async function attempt(path: string, init: { method: string; body: unknown }, at
   );
 
   if (failure) {
-    return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+    return { code: failureCode(failure) };
   }
 
   revalidatePath(`/contests/${at.contestId}`, "layout");

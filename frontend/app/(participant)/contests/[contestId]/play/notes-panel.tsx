@@ -11,6 +11,7 @@ import {
 
 import type { PlayDictionary } from "./dictionary";
 import { useAutosave, type AutosaveStatus } from "./use-autosave";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * The notes tab beside the console (§6 of the workspace design): one plain
@@ -196,8 +197,7 @@ function messageFor(status: AutosaveStatus, dict: PlayDictionary): string {
     case "closed":
       return t.closed;
     case "rejected": {
-      const errors = dict.errors as Record<string, string>;
-      return errors[status.code] ?? dict.errors.fallback;
+      return messageForCode(status.code, dict.errors);
     }
   }
 }

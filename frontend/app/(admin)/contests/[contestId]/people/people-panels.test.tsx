@@ -27,7 +27,7 @@ function participant(overrides: Partial<Participant> = {}): Participant {
 }
 
 /**
- * ICPC scoring (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md)
+ * ICPC scoring (docs/ARCHITECTURE.md §6.1.1)
  * ranks by how many questions are solved and, at a tie, by penalty time — a
  * running total of points is not a fact about a registration in this mode
  * (`registrations.total_score` is always 0), so the column that shows it is

@@ -50,16 +50,12 @@ export function MarkdownEditor({
   name,
   defaultValue,
   placeholder,
-  readOnly,
-  className,
   labels,
 }: {
   /** The form field the Markdown is submitted under. */
   name: string;
   defaultValue: string;
   placeholder?: string;
-  readOnly?: boolean;
-  className?: string;
   /**
    * What the one toggle says in each of its two states, and what to say when
    * the editor could not be loaded at all.
@@ -118,13 +114,6 @@ export function MarkdownEditor({
     };
   }, []);
 
-  // Separately, because it can change while the page is open: a contest that
-  // starts freezes its content, and an editor that stayed writable would let
-  // somebody type into a story the API will refuse to save.
-  useEffect(() => {
-    editor.current?.setReadonly(Boolean(readOnly));
-  }, [readOnly]);
-
   const [full, setFull] = useState(false);
 
   // The page behind must not scroll under a surface that covers it, or closing
@@ -168,7 +157,6 @@ export function MarkdownEditor({
         // Fixed rather than re-rendered somewhere else: the node the editor is
         // bound to keeps its place in the tree and only moves on screen.
         full && "fixed inset-0 z-40 bg-bg p-4 narrow:p-8",
-        className,
       )}
     >
       <div className="flex justify-end pb-1.5" hidden={unavailable}>
@@ -204,7 +192,6 @@ export function MarkdownEditor({
             // React reads this once and a later prop would be ignored anyway.
             defaultValue={defaultValue}
             placeholder={placeholder}
-            readOnly={readOnly}
             spellCheck={false}
             className="min-h-40 w-full resize-y border border-edge bg-bg p-3 font-mono text-body text-ink outline-none focus-visible:border-accent narrow:h-[32rem]"
           />

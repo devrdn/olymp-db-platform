@@ -8,6 +8,7 @@ import { serverRequest } from "@/lib/api/server";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
 import { PublicStandings } from "./public-standings";
+import { messageForCode } from "@/lib/i18n/errors";
 
 type Loaded = { kind: "ok"; standings: Standings } | { kind: "refused"; code: string };
 
@@ -63,7 +64,7 @@ export default async function PublicLeaderboardPage(props: PageProps<"/contests/
         />
       ) : (
         <p role="status" className="text-body text-warn">
-          {(dict.errors as Record<string, string>)[loaded.code] ?? dict.errors.fallback}
+          {messageForCode(loaded.code, dict.errors)}
         </p>
       )}
     </Band>

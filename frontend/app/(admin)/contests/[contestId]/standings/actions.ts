@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { ApiError } from "@/lib/api/client";
+import { ApiError, failureCode } from "@/lib/api/client";
 import { isId } from "@/lib/api/ids";
 import { staffStandingsSchema, type StaffStandings } from "@/lib/api/leaderboard";
 import { serverRequest } from "@/lib/api/server";
@@ -49,6 +49,6 @@ export async function revealStandingsAction(_previous: RevealState, form: FormDa
     revalidatePath(`/contests/${contestId}`, "layout");
     return { revealedAt: payload?.revealed_at };
   } catch (error: unknown) {
-    return { code: error instanceof ApiError ? error.code : "unreachable" };
+    return { code: failureCode(error) };
   }
 }

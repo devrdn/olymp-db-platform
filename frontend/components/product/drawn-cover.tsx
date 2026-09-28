@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
  * photograph at all. So this is a cover of the same family as the
  * photographs: the same `16/9`, the same scrim over it, the same title in the
  * same place. A mixed row has to read as one row (design spec
- * `docs/superpowers/specs/2026-09-22-contest-covers-design.md` §2.3).
+ * docs/ARCHITECTURE.md §9.7).
  *
  * **Deterministic in the contest's identifier**, which is what separates a
  * cover from decoration: a drawing that changed between two loads would make

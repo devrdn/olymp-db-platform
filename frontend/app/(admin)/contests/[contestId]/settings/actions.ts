@@ -2,15 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 
-import { ApiError } from "@/lib/api/client";
-import {
-  contestCoverSchema,
-  ENROLLMENTS,
-  icpcPenaltyFromForm,
-  shapeFromForm,
-  type ContestCover,
-  type Enrollment,
-} from "@/lib/api/contests";
+import { ApiError, failureCode } from "@/lib/api/client";
+import { type ContestCover, contestCoverSchema, type Enrollment, ENROLLMENTS, enumFromForm, icpcPenaltyFromForm, shapeFromForm } from "@/lib/api/contests";
 import { isId } from "@/lib/api/ids";
 import { freezeFromForm } from "@/lib/api/leaderboard";
 import { parseTables, SQL_MODES, type SqlMode } from "@/lib/api/policy";
@@ -34,12 +27,6 @@ export type SettingsState = {
   cover?: ContestCover | null;
 };
 
-function oneOf<T extends string>(value: FormDataEntryValue | null, allowed: readonly T[]): T | null {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value)
-    ? (value as T)
-    : null;
-}
-
 async function attempt(
   path: string,
   init: { method: string; body: unknown },
@@ -50,7 +37,7 @@ async function attempt(
     (error: unknown) => error,
   );
 
-  if (failure) return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+  if (failure) return { code: failureCode(failure) };
 
   refresh(contestId);
   return { saved: true };
@@ -120,7 +107,7 @@ export async function saveSettingsAction(
   );
   if (!freeze.ok) return { code: "invalid_request" };
   const leaderboard: { names: string; freeze_min?: number | null } = {
-    names: oneOf(form.get("leaderboardNames"), ["login", "full_name"] as const) ?? "login",
+    names: enumFromForm(form.get("leaderboardNames"), ["login", "full_name"] as const) ?? "login",
   };
   if (freeze.value !== undefined) leaderboard.freeze_min = freeze.value;
 
@@ -142,7 +129,7 @@ export async function saveSettingsAction(
     .filter(Boolean);
 
   const body: Record<string, unknown> = {
-    enrollment: oneOf<Enrollment>(form.get("enrollment"), ENROLLMENTS) ?? "invite_only",
+    enrollment: enumFromForm<Enrollment>(form.get("enrollment"), ENROLLMENTS) ?? "invite_only",
     ...shape.value,
     starts_at: moment(form.get("startsAt")),
     ends_at: moment(form.get("endsAt")),
@@ -183,7 +170,7 @@ export async function saveLanguagesAction(
 
   if (chosen.length === 0) return { code: "invalid_request" };
 
-  const asked = oneOf(form.get("defaultLanguage"), LOCALES);
+  const asked = enumFromForm(form.get("defaultLanguage"), LOCALES);
   const fallback = asked && chosen.includes(asked) ? asked : chosen[0];
 
   return attempt(
@@ -213,7 +200,7 @@ export async function savePolicyAction(
   const contestId = form.get("contestId");
   if (!isId(contestId)) return { code: "invalid_contest_id" };
 
-  const mode = oneOf<SqlMode>(form.get("mode"), SQL_MODES) ?? "read_only";
+  const mode = enumFromForm<SqlMode>(form.get("mode"), SQL_MODES) ?? "read_only";
   const { tables, rejected } = parseTables(String(form.get("writableTables") ?? ""));
 
   if (rejected.length > 0) return { code: "invalid_request", rejected };
@@ -309,7 +296,7 @@ export async function removeCoverAction(
     (error: unknown) => error,
   );
 
-  if (failure) return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+  if (failure) return { code: failureCode(failure) };
 
   refresh(contestId);
   return { saved: true, cover: null };

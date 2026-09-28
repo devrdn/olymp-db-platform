@@ -26,6 +26,7 @@ import {
   type PeopleState,
 } from "./actions";
 import { PersonPicker } from "./person-picker";
+import { messageForCode } from "@/lib/i18n/errors";
 
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
@@ -40,7 +41,7 @@ const STATUS_TONE: Record<RegistrationStatus, "live" | "good" | "mute" | "bad"> 
 
 /** A failure this panel is reporting, in the interface's own words. */
 function message(code: string | undefined, dict: Dictionary): string | null {
-  return code ? ((dict.errors as Record<string, string>)[code] ?? dict.errors.fallback) : null;
+  return code ? (messageForCode(code, dict.errors)) : null;
 }
 
 /**
@@ -181,7 +182,7 @@ export function ParticipantPanel({
   participants: Participant[];
   total: number;
   locale: Locale;
-  // ICPC scoring (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md)
+  // ICPC scoring (docs/ARCHITECTURE.md §6.1.1)
   // ranks by how many questions are solved and, at a tie, by penalty time —
   // `registrations.total_score` is always 0 in this mode, so the column that
   // shows it would be a column of zeroes rather than a fact worth a glance.

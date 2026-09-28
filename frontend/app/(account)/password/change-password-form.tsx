@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import { changePasswordAction, type ChangePasswordState } from "./actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /** The one message the blamed fields point at. */
 const FAILURE_ID = "change-password-failure";
@@ -51,7 +52,7 @@ export function ChangePasswordForm({ dict }: { dict: Dictionary }) {
   );
 
   const failure = state.code
-    ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
+    ? (messageForCode(state.code, dict.errors))
     : null;
   const blamed = state.code ? (BLAMED[state.code] ?? []) : [];
 

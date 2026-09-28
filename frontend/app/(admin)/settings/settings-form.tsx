@@ -9,6 +9,7 @@ import type { Settings } from "@/lib/api/settings";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import { saveSettingsAction, type SettingsState } from "./actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * The installation's own details.
@@ -27,7 +28,7 @@ export function SettingsForm({ settings, dict }: { settings: Settings; dict: Dic
   );
 
   const failure = state.code
-    ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
+    ? (messageForCode(state.code, dict.errors))
     : null;
 
   return (

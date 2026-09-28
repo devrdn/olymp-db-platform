@@ -483,7 +483,7 @@ describe("a question's state", () => {
   });
 });
 
-// docs/superpowers/specs/2026-09-13-icpc-scoring-design.md: place is decided
+// docs/ARCHITECTURE.md §6.1.1: place is decided
 // by how many questions are solved and, at a tie, by penalty time — a
 // question's own points are never shown to a participant in this mode, and a
 // correct answer is worth mentioning without a point value attached.

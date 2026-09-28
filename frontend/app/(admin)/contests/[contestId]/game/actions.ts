@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { ApiError } from "@/lib/api/client";
+import { ApiError, failureCode } from "@/lib/api/client";
 import {
   gameSchema,
   tableDataSchema,
@@ -55,7 +55,7 @@ export type UploadActionResult<T> = { code?: string; value?: T; detail?: string 
  */
 function refusal(error: unknown): { code: string; detail?: string } {
   return {
-    code: error instanceof ApiError ? error.code : "unreachable",
+    code: failureCode(error),
     detail: error instanceof ApiError ? error.message : undefined,
   };
 }
@@ -85,7 +85,7 @@ export async function saveGameScriptAction(_previous: GameState, form: FormData)
     (error: unknown) => error,
   );
 
-  if (failure) return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+  if (failure) return { code: failureCode(failure) };
 
   // The overview's publish gate and this section's own note both count on
   // whether the game is built.
@@ -170,7 +170,7 @@ export async function beginGameUploadAction(
     });
     value = uploadSchema.parse(body);
   } catch (error) {
-    return { code: error instanceof ApiError ? error.code : "unreachable" };
+    return { code: failureCode(error) };
   }
 
   // A second tab, or a reload racing this one, must see the same "receiving"
@@ -219,7 +219,7 @@ export async function gameUploadWindowAction(
     );
     value = uploadWindowSchema.parse(body);
   } catch (error) {
-    return { code: error instanceof ApiError ? error.code : "unreachable" };
+    return { code: failureCode(error) };
   }
 
   return { value };
@@ -247,7 +247,7 @@ export async function completeGameUploadAction(
     });
     value = gameSchema.parse(body);
   } catch (error) {
-    return { code: error instanceof ApiError ? error.code : "unreachable" };
+    return { code: failureCode(error) };
   }
 
   revalidatePath(`/contests/${contestId}`, "layout");
@@ -274,7 +274,7 @@ export async function abortGameUploadAction(
     (error: unknown) => error,
   );
 
-  if (failure) return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+  if (failure) return { code: failureCode(failure) };
 
   // Frees the "one receiving upload" slot a reload's own read would
   // otherwise still see as taken.
@@ -329,7 +329,7 @@ export async function saveGameDefinitionAction(_previous: GameState, form: FormD
 
   if (failure) {
     return {
-      code: failure instanceof ApiError ? failure.code : "unreachable",
+      code: failureCode(failure),
       // Several of `Definition.Validate`'s own refusals name the table or
       // column at fault (`ErrDefinitionInvalidName`, `ErrDefinitionDuplicate
       // Name`, `ErrDefinitionInvalidType`, `ErrDefinitionInvalidPrimaryKey`
@@ -386,7 +386,7 @@ export async function beginTableUploadAction(
     );
     value = tableDataSchema.parse(body);
   } catch (error) {
-    return { code: error instanceof ApiError ? error.code : "unreachable" };
+    return { code: failureCode(error) };
   }
 
   return { value };
@@ -457,7 +457,7 @@ export async function abortTableUploadAction(
     );
     value = tableDataSchema.parse(body);
   } catch (error) {
-    return { code: error instanceof ApiError ? error.code : "unreachable" };
+    return { code: failureCode(error) };
   }
 
   return { value };
@@ -482,7 +482,7 @@ export async function gameTableDataWindowAction(
     );
     value = tableRowWindowSchema.parse(body);
   } catch (error) {
-    return { code: error instanceof ApiError ? error.code : "unreachable" };
+    return { code: failureCode(error) };
   }
 
   return { value };
@@ -544,7 +544,7 @@ export async function deleteTableRowAction(
     (error: unknown) => error,
   );
 
-  if (failure) return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+  if (failure) return { code: failureCode(failure) };
 
   // A tombstone is a change to the data a build would load, so it marks the
   // game out of date exactly as an added row does — `completeTableUpload

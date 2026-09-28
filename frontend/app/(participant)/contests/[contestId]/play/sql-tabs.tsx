@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 import type { PlayDictionary } from "./dictionary";
 import type { AutosaveEngine, AutosaveStatus } from "./use-autosave";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /** One tab, as the strip needs it: what it is called and which document it is. */
 export type SqlTabView = { id: string; title: string };
@@ -413,12 +414,11 @@ function messageFor(
   dict: PlayDictionary,
 ): string {
   const t = dict.participant.play.workspace.editor;
-  const errors = dict.errors as Record<string, string>;
   // The workspace was never read, so there is nothing to save to and no
   // status to report — only the fact itself, which the participant has to
   // know before they type two hours of work into it.
   if (!stored) return t.unsaved;
-  if (error !== null) return errors[error] ?? dict.errors.fallback;
+  if (error !== null) return messageForCode(error, dict.errors);
   switch (status?.kind) {
     case undefined:
     case "saved":
@@ -431,7 +431,7 @@ function messageFor(
     case "closed":
       return t.status.closed;
     case "rejected":
-      return errors[status.code] ?? dict.errors.fallback;
+      return messageForCode(status.code, dict.errors);
   }
 }
 

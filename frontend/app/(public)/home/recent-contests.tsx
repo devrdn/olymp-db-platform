@@ -5,10 +5,11 @@ import { ContestWindow } from "@/components/product/contest-window";
 import { DrawnCover } from "@/components/product/drawn-cover";
 import { StateView } from "@/components/product/state-view";
 import { Tag } from "@/components/ui/tag";
-import { coverHref, type ContestStatus } from "@/lib/api/contests";
+import { coverHref } from "@/lib/api/contests";
 import type { PublicContest } from "@/lib/api/showcase";
 import type { Locale } from "@/lib/i18n/config";
 import type { Dictionary } from "@/lib/i18n/dictionary";
+import { CONTEST_STATUS_TONE } from "@/lib/api/contests-terms";
 
 /**
  * What this installation is running, and what it has just run.
@@ -31,15 +32,6 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
  * and a shadow around content is the wall of cards this direction was chosen
  * to get away from.
  */
-
-/** One tone per state, and the accent spent only on what is happening now. */
-const STATUS_TONE: Record<ContestStatus, "live" | "good" | "mute"> = {
-  draft: "mute",
-  published: "good",
-  running: "live",
-  finished: "mute",
-  archived: "mute",
-};
 
 /**
  * How many cards the page will print.
@@ -195,7 +187,7 @@ function Card({
 
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-t border-line pt-4">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
-          <Tag tone={STATUS_TONE[contest.status]}>{shared.status[contest.status]}</Tag>
+          <Tag tone={CONTEST_STATUS_TONE[contest.status]}>{shared.status[contest.status]}</Tag>
           <span className="font-mono text-data text-ink-3">
             <ContestWindow
               startsAt={contest.startsAt}

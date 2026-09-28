@@ -5,7 +5,7 @@ import { request, type RequestOptions } from "./client";
 /**
  * The participant's own workspace on the play screen: notes and SQL editor
  * tabs, kept on the server per registration
- * (docs/superpowers/specs/2026-09-17-play-workspace-design.md, §1–§4).
+ * (docs/ARCHITECTURE.md §6.4).
  *
  * Two halves, one file, so the whole contract is read in one place:
  *

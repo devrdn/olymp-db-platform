@@ -22,6 +22,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
 import { fetchStaffStandingsAction, revealStandingsAction, type RevealState } from "./actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /** How often a running contest's staff table asks the server again. */
 export const STAFF_REFRESH_MS = 15_000;
@@ -348,7 +349,7 @@ function Reveal({ contestId, dict }: { contestId: string; dict: Dictionary }) {
   const t = dict.leaderboard.staff;
   const [open, setOpen] = useState(false);
   const [state, formAction, pending] = useActionState<RevealState, FormData>(revealStandingsAction, {});
-  const failure = state.code ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback) : null;
+  const failure = state.code ? (messageForCode(state.code, dict.errors)) : null;
 
   return (
     <>

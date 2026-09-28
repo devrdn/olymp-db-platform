@@ -5,11 +5,13 @@ import { useEffect, useRef, useState } from "react";
 
 import { Tag } from "@/components/ui/tag";
 import type { PlayDictionary } from "./dictionary";
+import { readableDuration } from "@/lib/format/bytes";
 import { cn } from "@/lib/utils";
 
 import { useContentLoaded } from "./content-loaded";
 import { PanelToggles } from "./panel-toggles";
 import { useContestEvents } from "./use-contest-events";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * The thin bar above the workspace: the contest's title and the clock,
@@ -132,7 +134,7 @@ export function PlayHeader({
           row rather than squeezing the title or the clock. */}
       {channelError ? (
         <p role="status" aria-live="polite" className="w-full basis-full text-small text-warn">
-          {(dict.errors as Record<string, string>)[channelError] ?? dict.errors.fallback}
+          {messageForCode(channelError, dict.errors)}
         </p>
       ) : null}
     </div>
@@ -314,7 +316,7 @@ function PlayClock({
     <>
       {live}
       <ClockText tone={remainingMs <= 5 * 60_000 ? "bad" : remainingMs <= 15 * 60_000 ? "warn" : "ink"}>
-        {formatRemaining(remainingMs)}
+        {readableDuration(Math.floor(remainingMs / 1000))}
       </ClockText>
     </>
   );
@@ -350,13 +352,4 @@ function ClockText({ tone, children }: { tone: "ink" | "ink-2" | "ink-3" | "warn
       {children}
     </span>
   );
-}
-
-function formatRemaining(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
 }

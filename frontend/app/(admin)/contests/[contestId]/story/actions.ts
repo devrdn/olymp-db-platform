@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { ApiError } from "@/lib/api/client";
+import { failureCode } from "@/lib/api/client";
 import { cleanEditorMarkdown } from "@/lib/format/markdown";
 import { isId } from "@/lib/api/ids";
 import { serverRequest } from "@/lib/api/server";
@@ -45,7 +45,7 @@ export async function saveStoryAction(_previous: StoryState, form: FormData): Pr
     (error: unknown) => error,
   );
 
-  if (failure) return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+  if (failure) return { code: failureCode(failure) };
 
   // The gate on the overview counts this story; so does the register's title.
   revalidatePath(`/contests/${contestId}`, "layout");

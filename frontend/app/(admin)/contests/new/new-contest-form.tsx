@@ -12,6 +12,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
 import { createContestAction, type NewContestState } from "./actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 const FAILURE_ID = "new-contest-failure";
 
@@ -46,7 +47,7 @@ export function NewContestForm({ dict, locale }: { dict: Dictionary; locale: Loc
   const [timing, setTiming] = useState<string>("fixed");
 
   const failure = state.code
-    ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
+    ? (messageForCode(state.code, dict.errors))
     : null;
 
   function toggle(code: Locale, on: boolean) {

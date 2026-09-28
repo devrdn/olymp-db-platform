@@ -10,33 +10,13 @@ import {
 
 /**
  * The wire shapes of the organiser's monitoring routes
- * (`/contests/{id}/monitor/…`, docs/superpowers/specs/2026-09-18-participant-monitoring-design.md §4)
+ * (`/contests/{id}/monitor/…`, docs/ARCHITECTURE.md §9.4)
  * and the browser-side reads the live screen polls them with.
  *
  * The live screen reads from the browser rather than through a Server Action:
  * a refusal's `Retry-After` is what the screen waits on after a 429, and a
  * Server Action hands back the error code and loses the header.
  */
-
-/** Every kind the feed's `kinds` filter may name (monitor.FeedKinds). */
-export const FEED_KINDS = [
-  "answer",
-  "disqualified",
-  "finished",
-  "ip_changed",
-  "page_left",
-  "parallel_session",
-  "paste",
-  "query",
-  "sign_in",
-  "sign_in_failed",
-  "sign_out",
-  "started",
-  "tab_created",
-  "tab_deleted",
-  "tab_renamed",
-] as const;
-export type FeedKind = (typeof FEED_KINDS)[number];
 
 /** The six flags of design §5, in the order the table shows them. */
 export const MONITOR_FLAGS = [

@@ -7,7 +7,7 @@ import { queriesSchema, type QueriesPage, type QueriesParams, type ReadOptions }
 
 /**
  * The wire shapes of a participant's own profile
- * (`/me/…`, docs/superpowers/specs/2026-09-21-participant-profile-design.md §3).
+ * (`/me/…`, docs/ARCHITECTURE.md §9.5).
  *
  * Read on the server, where the session already is, and parsed at the boundary
  * so a contract change surfaces here with the field name in the message rather

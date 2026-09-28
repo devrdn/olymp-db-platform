@@ -2,7 +2,7 @@ import { Band } from "@/components/layout/band";
 import { ContestWindow } from "@/components/product/contest-window";
 import { Tag } from "@/components/ui/tag";
 import { questionListSchema, untranslated } from "@/lib/api/content";
-import { contentEditable, publishCheckSchema, titleIn, type ContestStatus } from "@/lib/api/contests";
+import { contentEditable, publishCheckSchema, titleIn } from "@/lib/api/contests";
 import { PUBLISH_PROBLEMS } from "@/lib/api/publish-gate";
 import { activeDictionary, activeLocale } from "@/lib/i18n/server";
 
@@ -10,15 +10,7 @@ import { ContestCrumbs } from "./contest-crumbs";
 import { ContestNav, type NavGroup } from "./contest-nav";
 import { loadContest, loadContestResource } from "./contest";
 import { TitleEditor } from "./title-editor";
-
-/** One tone per state, and the accent spent only on what is happening now. */
-const STATUS_TONE: Record<ContestStatus, "live" | "good" | "mute"> = {
-  draft: "mute",
-  published: "good",
-  running: "live",
-  finished: "mute",
-  archived: "mute",
-};
+import { CONTEST_STATUS_TONE } from "@/lib/api/contests-terms";
 
 export async function generateMetadata(props: LayoutProps<"/contests/[contestId]">) {
   const [{ contestId }, locale] = await Promise.all([props.params, activeLocale()]);
@@ -123,7 +115,7 @@ export default async function ContestLayout(props: LayoutProps<"/contests/[conte
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Tag tone={STATUS_TONE[contest.status]}>{dict.contests.status[contest.status]}</Tag>
+            <Tag tone={CONTEST_STATUS_TONE[contest.status]}>{dict.contests.status[contest.status]}</Tag>
             <span className="font-mono text-data text-ink-3">
               {dict.contests.mode[contest.questionMode]}
             </span>

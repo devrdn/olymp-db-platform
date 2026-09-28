@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import type { Dictionary } from "@/lib/i18n/dictionary";
 
 import { enrollAction, type EnrollState } from "./actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * The one interactive cell in the participant's register.
@@ -34,7 +35,7 @@ export function EnrollButton({ contestId, dict }: { contestId: string; dict: Dic
   }
 
   const failure = state.code
-    ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
+    ? (messageForCode(state.code, dict.errors))
     : null;
 
   return (

@@ -23,6 +23,7 @@ import {
   saveSettingsAction,
   type SettingsState,
 } from "./actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 /**
  * A titled block with its own save.
@@ -110,7 +111,7 @@ function SaveRow({
   const t = dict.workspace.settings;
 
   const failure = state.code
-    ? ((dict.errors as Record<string, string>)[state.code] ?? dict.errors.fallback)
+    ? (messageForCode(state.code, dict.errors))
     : null;
 
   return (
@@ -389,7 +390,7 @@ export function ContestPanel({
             onPick={setScoring}
           />
 
-          {/* ICPC's own penalty (docs/superpowers/specs/2026-09-13-icpc-scoring-design.md):
+          {/* ICPC's own penalty (docs/ARCHITECTURE.md §6.1.1):
               minutes added to a registration's penalty time for every wrong
               attempt on a question it later solves. Shown only in this mode —
               the other two scorings have no use for it — and locked with the

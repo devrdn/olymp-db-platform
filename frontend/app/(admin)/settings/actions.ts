@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { ApiError } from "@/lib/api/client";
+import { failureCode } from "@/lib/api/client";
 import { serverRequest } from "@/lib/api/server";
 import { IMAGE_KINDS, SETTING_KEYS } from "@/lib/api/settings";
 
@@ -31,7 +31,7 @@ export async function saveSettingsAction(
   );
 
   if (failure) {
-    return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+    return { code: failureCode(failure) };
   }
 
   // The name is in the bar of every screen, so the whole tree is stale, not
@@ -67,7 +67,7 @@ export async function uploadImageAction(
   );
 
   if (failure) {
-    return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+    return { code: failureCode(failure) };
   }
 
   revalidatePath("/", "layout");
@@ -87,7 +87,7 @@ export async function removeImageAction(
   );
 
   if (failure) {
-    return { code: failure instanceof ApiError ? failure.code : "unreachable" };
+    return { code: failureCode(failure) };
   }
 
   revalidatePath("/", "layout");

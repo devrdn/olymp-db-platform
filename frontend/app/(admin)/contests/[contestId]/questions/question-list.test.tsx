@@ -37,7 +37,7 @@ function question(overrides: Partial<Question> = {}): Question {
   } as Question;
 }
 
-// docs/superpowers/specs/2026-09-13-icpc-scoring-design.md, decision 1: a
+// docs/ARCHITECTURE.md §6.1.1: a
 // question has no points in ICPC scoring, so the list shows no points column
 // there, the same way the question editor disables the field.
 describe("QuestionList, the points column", () => {

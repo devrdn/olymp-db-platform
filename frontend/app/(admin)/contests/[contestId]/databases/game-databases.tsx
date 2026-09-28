@@ -12,6 +12,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
 import { cn } from "@/lib/utils";
 
 import { dropGameInstanceAction, type GameState } from "./actions";
+import { messageForCode } from "@/lib/i18n/errors";
 
 const HEAD =
   "border-b border-line-2 px-(--row-px) py-2.5 font-mono text-label font-medium text-ink-3 uppercase";
@@ -26,7 +27,7 @@ const STATUS_TONE: Record<GameInstance["status"], "good" | "warn" | "bad" | "mut
 
 /** A failure this panel is reporting, in the interface's own words. */
 function message(code: string | undefined, dict: Dictionary): string | null {
-  return code ? ((dict.errors as Record<string, string>)[code] ?? dict.errors.fallback) : null;
+  return code ? (messageForCode(code, dict.errors)) : null;
 }
 
 /**
