@@ -369,7 +369,7 @@ func (r *Users) SetStatus(ctx context.Context, ids []uuid.UUID, status string, c
 		// A nil By means the system made the change, not a missing user — write
 		// NULL rather than uuid.Nil, or the foreign key on status_changed_by
 		// raises a raw constraint violation instead of the actor being absent.
-		ids, status, nullIfEmpty(change.Reason), change.At, nullIfEmptyUUID(change.By))
+		ids, status, nullIfEmpty(change.Reason), change.At, nilUUID(change.By))
 	if err != nil {
 		return fmt.Errorf("set account status: %w", mapUserConstraint(err))
 	}
@@ -647,16 +647,6 @@ func distinctUserIDs(ids []uuid.UUID) []uuid.UUID {
 		out = append(out, id)
 	}
 	return out
-}
-
-// nullIfEmptyUUID stores NULL rather than the zero UUID, so a system-initiated
-// status change leaves status_changed_by absent instead of tripping its
-// foreign key to users.
-func nullIfEmptyUUID(id uuid.UUID) *uuid.UUID {
-	if id == uuid.Nil {
-		return nil
-	}
-	return &id
 }
 
 // mapUserConstraint translates a unique violation into the sentinel the

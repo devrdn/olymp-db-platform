@@ -234,7 +234,7 @@ func (w *Workspace) UpdateTab(ctx context.Context, registration, id uuid.UUID, p
 	err := w.uow.Do(ctx, func(ctx context.Context) error {
 		// The old title comes from the row as it was locked for this update,
 		// so two renames racing each other each report what they replaced.
-		var oldTitle, title, body string
+		var oldTitle, title string
 		err := w.querier(ctx).QueryRow(ctx, `
 			UPDATE participant_sql_tabs AS t
 			SET title      = coalesce($3, t.title),
@@ -246,8 +246,8 @@ func (w *Workspace) UpdateTab(ctx context.Context, registration, id uuid.UUID, p
 				FOR UPDATE
 			) AS old
 			WHERE t.id = old.id
-			RETURNING old.title, t.title, t.body, t.updated_at`,
-			id, registration, patch.Title, patch.Body).Scan(&oldTitle, &title, &body, &at)
+			RETURNING old.title, t.title, t.updated_at`,
+			id, registration, patch.Title, patch.Body).Scan(&oldTitle, &title, &at)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return workspace.ErrTabNotFound
 		}
@@ -262,8 +262,11 @@ func (w *Workspace) UpdateTab(ctx context.Context, registration, id uuid.UUID, p
 		if patch.Body == nil {
 			return nil
 		}
+		// The body is the one this call wrote: coalesce($4, t.body) with $4
+		// set is $4. Reading it back would carry up to MaxTabBodyBytes out of
+		// the database on every autosave for a value already in hand.
 		return w.history.RecordRevision(ctx, monitor.Revision{
-			Registration: registration, Document: monitor.TabDocument(id), Title: title, Body: body, At: at,
+			Registration: registration, Document: monitor.TabDocument(id), Title: title, Body: *patch.Body, At: at,
 		})
 	})
 	if err != nil {
