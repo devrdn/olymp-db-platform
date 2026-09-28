@@ -20,9 +20,9 @@ import (
 // Registrations implements contests.RegistrationRepository.
 var _ contests.RegistrationRepository = (*Registrations)(nil)
 
-// Registrations also answers queryproxy's combined lookup (see ForRun below):
-// the SQL console's hot path reads one round trip where it used to read
-// three.
+// Registrations also answers queryproxy's combined lookups (see ForRun and
+// ForAccess below): the SQL console's hot path and every participant-facing
+// read cost one round trip where they used to cost several.
 var _ queryproxy.Lookup = (*Registrations)(nil)
 
 // participantColumns joins the account for the same reason the staff list
@@ -110,9 +110,9 @@ func (r *Registrations) ByUser(ctx context.Context, contestID, userID uuid.UUID)
 }
 
 // ForRun implements queryproxy.Lookup: the participant, the contest they are
-// asking about, and its game, in one round trip — where Run used to open
-// three, one apiece against registrations, contests and (through
-// GameInstances.Game) contests again.
+// asking about, its game and the participant's own copy of it, in one round
+// trip — where Run used to open four, one apiece against registrations,
+// contests, (through GameInstances.Game) contests again and game_instances.
 //
 // The INNER JOIN against contests is what keeps "never registered" and "no
 // such contest" one answer rather than two: a registration's own foreign key
@@ -123,7 +123,10 @@ func (r *Registrations) ByUser(ctx context.Context, contestID, userID uuid.UUID)
 // rather than INNER, deliberately: a contest with no ready template must
 // still come back with its participant and its own columns populated, only
 // its game reading as absent (provisioning.ErrNoGame) — see
-// queryproxy.LookupResult.
+// queryproxy.LookupResult. The instance is LEFT JOINed for the same reason: a
+// registration with no copy yet reads as provisioning.ErrNoInstance, exactly
+// what GameInstances.Of says of it. registration_id is unique there, so the
+// join cannot multiply the row.
 func (r *Registrations) ForRun(ctx context.Context, contestID, userID uuid.UUID) (queryproxy.LookupResult, error) {
 	var (
 		p                                 contests.Participant
@@ -133,22 +136,27 @@ func (r *Registrations) ForRun(ctx context.Context, contestID, userID uuid.UUID)
 		version                           *int
 		mode                              string
 		policy                            sqlpolicy.Policy
+		instanceDB, instanceStatus        *string
+		instanceVersion                   *int
 	)
 	targets := participantScanTargets(&p)
 	targets = append(targets, contestScanTargets(&c, &settings, &languages, &translations)...)
 	targets = append(targets, &templateDB, &version)
 	targets = append(targets, policyScanTargets(&policy, &mode)...)
+	targets = append(targets, &instanceDB, &instanceVersion, &instanceStatus)
 
 	err := r.querier(ctx).QueryRow(ctx, `
 		SELECT `+participantColumns+`,
 		       `+contestColumns+`,
 		       t.template_db, t.version,
-		       `+policyProjectionColumns+`
+		       `+policyProjectionColumns+`,
+		       gi.db_name, gi.template_version, gi.status
 		FROM registrations r
 		JOIN users u ON u.id = r.user_id
 		JOIN contests c ON c.id = r.contest_id
 		LEFT JOIN game_templates t ON t.contest_id = c.id AND t.status = 'ready'
 		LEFT JOIN contest_sql_policies p ON p.contest_id = c.id
+		LEFT JOIN game_instances gi ON gi.registration_id = r.id
 		WHERE r.contest_id = $1 AND r.user_id = $2`, contestID, userID).Scan(targets...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return queryproxy.LookupResult{}, contests.ErrParticipantNotFound
@@ -162,6 +170,13 @@ func (r *Registrations) ForRun(ctx context.Context, contestID, userID uuid.UUID)
 		return queryproxy.LookupResult{}, err
 	}
 	result := queryproxy.LookupResult{Participant: p, Contest: contest}
+	if instanceDB == nil {
+		result.InstanceErr = provisioning.ErrNoInstance
+	} else {
+		result.Instance = provisioning.Instance{
+			Database: *instanceDB, TemplateVersion: *instanceVersion, Status: *instanceStatus,
+		}
+	}
 	if templateDB == nil {
 		result.GameErr = provisioning.ErrNoGame
 		return result, nil
@@ -174,6 +189,37 @@ func (r *Registrations) ForRun(ctx context.Context, contestID, userID uuid.UUID)
 		Policy:   policy,
 	}
 	return result, nil
+}
+
+// ForAccess implements queryproxy.Lookup: the participant and the contest
+// they are asking about, in one round trip, for the read endpoints that need
+// no game. The INNER JOIN keeps "never registered" and "no such contest" one
+// answer, for the reason ForRun gives.
+func (r *Registrations) ForAccess(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, contests.Contest, error) {
+	var (
+		p                                 contests.Participant
+		c                                 contests.Contest
+		settings, languages, translations []byte
+	)
+	targets := append(participantScanTargets(&p), contestScanTargets(&c, &settings, &languages, &translations)...)
+	err := r.querier(ctx).QueryRow(ctx, `
+		SELECT `+participantColumns+`,
+		       `+contestColumns+`
+		FROM registrations r
+		JOIN users u ON u.id = r.user_id
+		JOIN contests c ON c.id = r.contest_id
+		WHERE r.contest_id = $1 AND r.user_id = $2`, contestID, userID).Scan(targets...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return contests.Participant{}, contests.Contest{}, contests.ErrParticipantNotFound
+	}
+	if err != nil {
+		return contests.Participant{}, contests.Contest{}, fmt.Errorf("scan participant and contest: %w", err)
+	}
+	contest, err := hydrate(c, settings, languages, translations)
+	if err != nil {
+		return contests.Participant{}, contests.Contest{}, err
+	}
+	return p, contest, nil
 }
 
 // EnrolledIn reports which of these contests the user is registered for.

@@ -468,20 +468,21 @@ func (noOpExecutor) Run(context.Context, queryrunner.Request, queryrunner.Origin
 	return &queryrunner.Result{Columns: []string{"a"}}, nil
 }
 
-// TestRunsCoreRoundTripsAreMeasured counts how many statements one
-// steady-state Run call sends to the core database, with a real
-// pgx.QueryTracer against dbcontest_core_test rather than assumed from
-// reading the code. The scenario is the common case an olympiad spends
-// almost all of its queries in — a fixed-timing, read-only contest, a
-// participant who has already started and already has a current game
-// database — so neither Start nor Quota adds a round trip of its own, and
-// what is left is exactly the lookup this collapses to one query.
-//
-// The commit before WithLookup existed measured 5 the same way (People,
-// Contests, Games and Answerable each their own call, plus Ensure); this one
-// measures 3 (the combined lookup, Answerable, Ensure) — two fewer per query,
-// on every query the console runs.
-func TestRunsCoreRoundTripsAreMeasured(t *testing.T) {
+// roundTrips is the steady state an olympiad spends almost all of its
+// requests in, against dbcontest_core_test with a pgx.QueryTracer counting
+// every statement a real connection sends: a fixed-timing, read-only contest
+// with a ready template, and a participant who has already started and
+// already holds a current copy of it — so neither Start nor Quota adds a
+// round trip of its own, and Ensure answers without the game cluster.
+type roundTrips struct {
+	tracer    *countingTracer
+	service   *queryproxy.Service
+	contestID uuid.UUID
+	student   uuid.UUID
+}
+
+func roundTripFixture(t *testing.T) roundTrips {
+	t.Helper()
 	ctx := context.Background()
 	tracer := &countingTracer{}
 	pool, err := storagetest.OpenCore(ctx, func(cfg *pgxpool.Config) {
@@ -505,9 +506,6 @@ func TestRunsCoreRoundTripsAreMeasured(t *testing.T) {
 		_, _ = pool.Exec(clean, `DELETE FROM contests WHERE id = $1`, contestID)
 	})
 
-	// A ready template — read-only, so Quota is never asked for — and a
-	// participant already holding a current copy of it, so Ensure answers
-	// from repo.Of alone.
 	// The names are unique per run: the fixture is committed, a game
 	// database's name is unique across the installation, and a template
 	// name that looks like another run's would make any leftover row
@@ -535,29 +533,73 @@ func TestRunsCoreRoundTripsAreMeasured(t *testing.T) {
 	databases := provisioning.New(games, panicCluster{t: t})
 	service := queryproxy.New(registrations, postgres.NewContests(pool), games, databases, noOpExecutor{}).
 		WithAnswerable(postgres.NewAnswerable(pool)).
-		WithLookup(registrations)
+		WithLookup(registrations).
+		WithSchemas(&schemas{})
+	return roundTrips{tracer: tracer, service: service, contestID: contestID, student: student}
+}
 
-	cmd := queryproxy.Command{ContestID: contestID, UserID: student, SQL: `SELECT 1`, RequestID: uuid.New()}
-
-	// One warm-up call so connection setup (any statement pgx itself issues
-	// while establishing the session) does not inflate the count, then reset
-	// the tracer and measure the next, otherwise identical, call.
-	if _, err := service.Run(ctx, cmd); err != nil {
-		t.Fatalf("warm-up Run() = %v", err)
+// measure runs call once to warm the connection up — so any statement pgx
+// itself issues while establishing the session does not inflate the count —
+// and then counts the statements an otherwise identical second call sends.
+func (r roundTrips) measure(t *testing.T, call func() error) int {
+	t.Helper()
+	if err := call(); err != nil {
+		t.Fatalf("warm-up call = %v", err)
 	}
-	tracer.reset()
-
-	if _, err := service.Run(ctx, cmd); err != nil {
-		t.Fatalf("measured Run() = %v", err)
+	r.tracer.reset()
+	if err := call(); err != nil {
+		t.Fatalf("measured call = %v", err)
 	}
+	return r.tracer.get()
+}
 
-	got := tracer.get()
-	t.Logf("core round trips for one steady-state Run() with the merged lookup: %d", got)
-	// One combined lookup (participant + contest + game), one AnswerableLeft,
-	// one Ensure (→ repo.Of). A regression that reopens either of the two
-	// round trips the lookup collapsed changes this number.
-	if got != 3 {
-		t.Errorf("core round trips = %d, want 3 (one combined lookup, one AnswerableLeft, one Ensure)", got)
+// One steady-state query costs the core database two statements: the
+// combined lookup (participant, contest, game and the participant's own
+// copy of it) and AnswerableLeft. Before the lookup was merged the same
+// query measured 5 — People, Contests, Games, Answerable and Ensure's own
+// read of the instance each a round trip of their own.
+func TestRunsCoreRoundTripsAreMeasured(t *testing.T) {
+	r := roundTripFixture(t)
+	cmd := queryproxy.Command{ContestID: r.contestID, UserID: r.student, SQL: `SELECT 1`, RequestID: uuid.New()}
+
+	got := r.measure(t, func() error {
+		_, err := r.service.Run(context.Background(), cmd)
+		return err
+	})
+	if got != 2 {
+		t.Errorf("core round trips = %d, want 2 (one combined lookup, one AnswerableLeft)", got)
+	}
+}
+
+// Every participant-facing read (the story, the questions, the query log,
+// the workspace, every autosave and signal) is admitted through Access, so
+// its cost is paid on every one of them: one statement for who is asking and
+// the contest they are asking about, where it used to be two.
+func TestAccessCostsOneCoreRoundTrip(t *testing.T) {
+	r := roundTripFixture(t)
+
+	got := r.measure(t, func() error {
+		_, _, err := r.service.Access(context.Background(), r.contestID, r.student, netip.Addr{})
+		return err
+	})
+	if got != 1 {
+		t.Errorf("core round trips = %d, want 1 (participant and contest together)", got)
+	}
+}
+
+// The schema panel is admitted by the same combined lookup Run uses, which
+// already carries the game and the participant's copy of it: one statement,
+// where Access, a separate read of the game and Ensure's own read of the
+// instance used to cost four.
+func TestSchemaCostsOneCoreRoundTrip(t *testing.T) {
+	r := roundTripFixture(t)
+
+	got := r.measure(t, func() error {
+		_, err := r.service.Schema(context.Background(), r.contestID, r.student, netip.Addr{})
+		return err
+	})
+	if got != 1 {
+		t.Errorf("core round trips = %d, want 1 (the combined lookup)", got)
 	}
 }
 

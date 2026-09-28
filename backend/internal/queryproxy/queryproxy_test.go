@@ -102,16 +102,19 @@ func (g games) Game(context.Context, uuid.UUID) (provisioning.Contest, error) {
 }
 
 // lookupFake is the fake behind queryproxy.Lookup: the single round trip
-// WithLookup wires in, standing in for postgres.Registrations.ForRun. calls
-// counts how often it was reached, so a test can prove Run used this one
-// call instead of its own default's three separate ones.
+// WithLookup wires in, standing in for postgres.Registrations. calls counts
+// how often either method was reached, so a test can prove the façade used
+// this one call instead of its own default's separate ones.
 type lookupFake struct {
 	participant contests.Participant
 	contest     contests.Contest
 	game        provisioning.Contest
 	gameErr     error
-	err         error
-	calls       *int
+	// instance is the participant's own copy as the lookup read it; left
+	// zero, the registration has none (provisioning.ErrNoInstance).
+	instance provisioning.Instance
+	err      error
+	calls    *int
 }
 
 func (l lookupFake) ForRun(context.Context, uuid.UUID, uuid.UUID) (queryproxy.LookupResult, error) {
@@ -121,9 +124,21 @@ func (l lookupFake) ForRun(context.Context, uuid.UUID, uuid.UUID) (queryproxy.Lo
 	if l.err != nil {
 		return queryproxy.LookupResult{}, l.err
 	}
-	return queryproxy.LookupResult{
+	result := queryproxy.LookupResult{
 		Participant: l.participant, Contest: l.contest, Game: l.game, GameErr: l.gameErr,
-	}, nil
+		Instance: l.instance,
+	}
+	if l.instance.Database == "" {
+		result.InstanceErr = provisioning.ErrNoInstance
+	}
+	return result, nil
+}
+
+func (l lookupFake) ForAccess(context.Context, uuid.UUID, uuid.UUID) (contests.Participant, contests.Contest, error) {
+	if l.calls != nil {
+		*l.calls++
+	}
+	return l.participant, l.contest, l.err
 }
 
 // answerable is the fake behind queryproxy.Answerable: whether this contest
@@ -149,10 +164,22 @@ type databases struct {
 	asked      *provisioning.Contest
 	quotaAsked bool
 	lastQuota  int64
+	// existing and existingErr are what EnsureFrom was told of the
+	// registration's copy, so a test can prove the lookup's own read of it
+	// reached provisioning untouched.
+	existing    provisioning.Instance
+	existingErr error
 }
 
-func (d *databases) Ensure(_ context.Context, c provisioning.Contest, _ uuid.UUID) (string, error) {
+// Instance answers that the registration has no copy yet; what EnsureFrom
+// does with that is provisioning's business, not this package's.
+func (d *databases) Instance(context.Context, uuid.UUID) (provisioning.Instance, error) {
+	return provisioning.Instance{}, provisioning.ErrNoInstance
+}
+
+func (d *databases) EnsureFrom(_ context.Context, c provisioning.Contest, _ uuid.UUID, existing provisioning.Instance, err error) (string, error) {
 	d.asked = &c
+	d.existing, d.existingErr = existing, err
 	return d.database, d.err
 }
 
@@ -1917,6 +1944,60 @@ func TestTheSingleLookupRemovesTwoCoreRoundTripsFromRun(t *testing.T) {
 				peopleCalls, contestCalls, gameCalls)
 		}
 	})
+}
+
+// The participant's copy arrives with the lookup, and provisioning is told
+// what was read rather than reading it again.
+func TestTheInstanceTheLookupReadReachesProvisioningUntouched(t *testing.T) {
+	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
+	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}
+	game := provisioning.Contest{ID: contest.ID, Template: "game_tpl_c1", Version: 2, Policy: sqlpolicy.ReadOnly()}
+	instance := provisioning.Instance{Database: "game_c1_u1", TemplateVersion: 2, Status: "ready"}
+
+	for name, given := range map[string]struct {
+		instance provisioning.Instance
+		wantErr  error
+	}{
+		"a registration with a copy":   {instance: instance},
+		"a registration with none yet": {wantErr: provisioning.ErrNoInstance},
+	} {
+		t.Run(name, func(t *testing.T) {
+			db := &databases{database: "x"}
+			service := queryproxy.New(people{}, contestStore{}, games{}, db, &runner{result: &queryrunner.Result{}}).
+				WithLookup(lookupFake{participant: participant, contest: contest, game: game, instance: given.instance})
+
+			if _, err := service.Run(t.Context(), command()); err != nil {
+				t.Fatalf("running: %v", err)
+			}
+			if db.existing != given.instance || !errors.Is(db.existingErr, given.wantErr) || (given.wantErr == nil && db.existingErr != nil) {
+				t.Fatalf("EnsureFrom was told %+v, %v; want %+v, %v", db.existing, db.existingErr, given.instance, given.wantErr)
+			}
+		})
+	}
+}
+
+// Access is paid by every participant-facing read, so it must use the one
+// lookup the deployment wires rather than the default's two separate reads.
+func TestAccessUsesTheSingleLookupOnceWired(t *testing.T) {
+	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
+	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}
+	peopleCalls, contestCalls, lookupCalls := 0, 0, 0
+	service := queryproxy.New(
+		people{participant: participant, calls: &peopleCalls},
+		contestStore{contest: contest, calls: &contestCalls},
+		games{}, &databases{}, &runner{},
+	).WithLookup(lookupFake{participant: participant, contest: contest, calls: &lookupCalls})
+
+	got, _, err := service.Access(t.Context(), contest.ID, uuid.New(), netip.Addr{})
+	if err != nil {
+		t.Fatalf("Access() = %v", err)
+	}
+	if got.ID != participant.ID {
+		t.Fatalf("Access() answered participant %v, want %v", got.ID, participant.ID)
+	}
+	if lookupCalls != 1 || peopleCalls != 0 || contestCalls != 0 {
+		t.Fatalf("calls = lookup %d, participant %d, contest %d; want 1, 0 and 0", lookupCalls, peopleCalls, contestCalls)
+	}
 }
 
 // A lookup that could not be read at all must be marked as ours, exactly as
