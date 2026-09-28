@@ -59,3 +59,15 @@ func TestANullDriverValueStaysNull(t *testing.T) {
 		t.Fatal("a null numeric was not rendered as null")
 	}
 }
+
+// A console answer at the row bound: a thousand rows of eight columns, some
+// of them NULL. What it costs to render is paid by every query.
+func BenchmarkCellsFor(b *testing.B) {
+	values := []any{"Alice", int64(42), nil, "2026-03-01", 3.5, "Library", nil, true}
+	b.ReportAllocs()
+	for b.Loop() {
+		for range 1000 {
+			_ = cellsFor(values)
+		}
+	}
+}
