@@ -13,8 +13,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Stories implements contests.StoryRepository.
-var _ contests.StoryRepository = (*Stories)(nil)
+// Stories implements contests.StoryRepository, and the participant's
+// contests.StoryText beside it.
+var (
+	_ contests.StoryRepository = (*Stories)(nil)
+	_ contests.StoryText       = (*Stories)(nil)
+)
 
 // Stories stores the crime story of a contest.
 type Stories struct {
@@ -55,6 +59,24 @@ func (r *Stories) ByContest(ctx context.Context, contestID uuid.UUID) (contests.
 		return contests.Story{}, fmt.Errorf("decode story translations: %w", err)
 	}
 	return story, nil
+}
+
+// BodyIn returns the story's text in one language: one row by the
+// translations' primary key, where ByContest aggregates and decodes them all.
+func (r *Stories) BodyIn(ctx context.Context, contestID uuid.UUID, lang string) (string, error) {
+	var body string
+	err := r.querier(ctx).QueryRow(ctx, `
+		SELECT st.body_md
+		FROM stories s
+		JOIN story_translations st ON st.story_id = s.id
+		WHERE s.contest_id = $1 AND st.lang = $2`, contestID, lang).Scan(&body)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", contests.ErrStoryNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("load story text: %w", err)
+	}
+	return body, nil
 }
 
 // Save creates or replaces the story.

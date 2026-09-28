@@ -68,3 +68,32 @@ func TestAContestWithNoStoryReportsNotFound(t *testing.T) {
 		}
 	})
 }
+
+// BodyIn is the participant's read: one language's text, and the same
+// ErrStoryNotFound for a contest with no story as for a story with nothing in
+// that language.
+func TestBodyInReadsOneLanguageOfTheStory(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewStories(testPool)
+		author := makeUser(t, ctx, "author-story-bodyin")
+		id := makeContest(t, ctx, author.ID)
+		empty := makeContest(t, ctx, author.ID)
+
+		if _, err := repo.Save(ctx, id, map[string]string{
+			"en": "A body in the stacks.",
+			"ro": "Un cadavru între rafturi.",
+		}); err != nil {
+			t.Fatalf("Save() = %v", err)
+		}
+
+		if body, err := repo.BodyIn(ctx, id, "ro"); err != nil || body != "Un cadavru între rafturi." {
+			t.Errorf("BodyIn(ro) = %q, %v", body, err)
+		}
+		if _, err := repo.BodyIn(ctx, id, "ru"); !errors.Is(err, contests.ErrStoryNotFound) {
+			t.Errorf("BodyIn(ru) = %v, want ErrStoryNotFound", err)
+		}
+		if _, err := repo.BodyIn(ctx, empty, "en"); !errors.Is(err, contests.ErrStoryNotFound) {
+			t.Errorf("BodyIn(no story) = %v, want ErrStoryNotFound", err)
+		}
+	})
+}
