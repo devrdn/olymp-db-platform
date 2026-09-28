@@ -612,8 +612,7 @@ func (h *GameHandler) setScript(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req setGameScriptRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -893,8 +892,7 @@ func (h *GameHandler) beginUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req beginUploadRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -1161,12 +1159,8 @@ func (h *GameHandler) uploadWindow(w http.ResponseWriter, r *http.Request) {
 	// zero lines) serialises as [] rather than null and the interface has one
 	// shape to render — the same reasoning instances gives above for an empty
 	// pool.
-	lines := window.Lines
-	if lines == nil {
-		lines = []string{}
-	}
 	httpx.JSON(w, r, http.StatusOK, uploadWindowResponse{
-		FromLine: window.FromLine, Lines: lines,
+		FromLine: window.FromLine, Lines: emptyIfNil(window.Lines),
 		TotalLines: window.TotalLines, Truncated: window.Truncated,
 	})
 }
@@ -1191,28 +1185,13 @@ func intQueryParam(r *http.Request, name string, def int) int {
 // clampedIntQueryParam is intQueryParam with an upper bound applied after —
 // see defaultUploadWindowLines's own doc for why one is needed at all.
 func clampedIntQueryParam(r *http.Request, name string, def, max int) int {
-	n := intQueryParam(r, name, def)
-	if n > max {
-		return max
-	}
-	return n
+	return min(intQueryParam(r, name, def), max)
 }
 
 // clampedInt64QueryParam is clampedIntQueryParam for the one budget large
 // enough to need 64 bits: max_bytes.
 func clampedInt64QueryParam(r *http.Request, name string, def, max int64) int64 {
-	raw := r.URL.Query().Get(name)
-	if raw == "" {
-		return def
-	}
-	n, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || n < 0 {
-		return def
-	}
-	if n > max {
-		return max
-	}
-	return n
+	return min(int64QueryParam(r, name, def), max)
 }
 
 // int64QueryParam is intQueryParam for a 64-bit budget with no upper bound of
@@ -1384,8 +1363,7 @@ func (h *GameHandler) setDefinition(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req definitionRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -1444,14 +1422,10 @@ type tableDataResponse struct {
 }
 
 func (h *GameHandler) tableDataView(d provisioning.TableData) tableDataResponse {
-	deleted := d.DeletedRows
-	if deleted == nil {
-		deleted = []int64{}
-	}
 	return tableDataResponse{
 		ID: d.ID.String(), Table: d.Table,
 		DeclaredBytes: d.DeclaredBytes, ReceivedBytes: d.ReceivedBytes,
-		Lines: d.Lines, ActiveRows: d.ActiveRows(), DeletedRows: deleted,
+		Lines: d.Lines, ActiveRows: d.ActiveRows(), DeletedRows: emptyIfNil(d.DeletedRows),
 		Status: string(d.Status), CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
 		BuilderLimits: h.builderLimitsView(),
 	}
@@ -1481,8 +1455,7 @@ func (h *GameHandler) beginTableUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req beginTableUploadRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -1662,11 +1635,7 @@ func (h *GameHandler) tableDataWindow(w http.ResponseWriter, r *http.Request) {
 
 	rows := make([]tableRowResponse, 0, len(window.Rows))
 	for _, row := range window.Rows {
-		fields := row.Fields
-		if fields == nil {
-			fields = []string{}
-		}
-		rows = append(rows, tableRowResponse{Row: row.Row, Fields: fields})
+		rows = append(rows, tableRowResponse{Row: row.Row, Fields: emptyIfNil(row.Fields)})
 	}
 	httpx.JSON(w, r, http.StatusOK, tableRowWindowResponse{
 		FromRow: window.FromRow, Rows: rows, TotalRows: window.TotalRows, Truncated: window.Truncated,
@@ -1695,8 +1664,7 @@ func (h *GameHandler) appendTableRow(w http.ResponseWriter, r *http.Request) {
 	table := chi.URLParam(r, tableParam)
 
 	var req appendTableRowRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 

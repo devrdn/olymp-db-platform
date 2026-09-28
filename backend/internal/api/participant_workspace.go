@@ -95,9 +95,8 @@ func (h *ParticipantHandler) admitWorkspaceWrite(w http.ResponseWriter, r *http.
 		return workspace.Session{}, false
 	}
 
-	contestID, err := uuid.Parse(chi.URLParam(r, contestIDParam))
-	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, auth.CodeInvalidContestID, "Contest identifier is not valid")
+	contestID, ok := contestIDFrom(w, r)
+	if !ok {
 		return workspace.Session{}, false
 	}
 	participant, contest, err := h.access.Access(r.Context(), contestID, identity.UserID, clientAddress(r))
@@ -197,8 +196,7 @@ func (h *ParticipantHandler) saveNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req saveNotesRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if req.Body == nil {
@@ -225,8 +223,7 @@ func (h *ParticipantHandler) createTab(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createTabRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	tab, err := h.workspaces.CreateTab(r.Context(), session, req.Title)
@@ -254,8 +251,7 @@ func (h *ParticipantHandler) updateTab(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req updateTabRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	at, err := h.workspaces.UpdateTab(r.Context(), session, id, workspace.TabPatch{Title: req.Title, Body: req.Body})
@@ -295,8 +291,7 @@ func (h *ParticipantHandler) reorderTabs(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req reorderTabsRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	// Bounded before anything is parsed (CLAUDE.md rule 2): a list longer

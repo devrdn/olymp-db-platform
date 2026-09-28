@@ -484,8 +484,7 @@ type contestRequest struct {
 
 func (h *ContestsHandler) create(w http.ResponseWriter, r *http.Request) {
 	var req contestRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -541,7 +540,7 @@ func (h *ContestsHandler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ContestsHandler) byID(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
@@ -569,14 +568,13 @@ func (h *ContestsHandler) byID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ContestsHandler) update(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
 
 	var req contestRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	starts, ends, err := req.window()
@@ -640,14 +638,13 @@ type graceRequest struct {
 // grace period (§2.4, contests.Service.ExtendGrace) — the one exception to a
 // finished contest's otherwise-frozen settings.
 func (h *ContestsHandler) extendGrace(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
 
 	var req graceRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -661,7 +658,7 @@ func (h *ContestsHandler) extendGrace(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ContestsHandler) delete(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
@@ -681,14 +678,13 @@ type statusRequest struct {
 // setStatus is mounted separately from editing: publishing and starting are
 // the contest.publish permission, not contest.edit.
 func (h *ContestsHandler) setStatus(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
 
 	var req statusRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -720,7 +716,7 @@ type problemPayload struct {
 }
 
 func (h *ContestsHandler) publishCheck(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
@@ -760,14 +756,13 @@ type languagesRequest struct {
 }
 
 func (h *ContestsHandler) setLanguages(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
 
 	var req languagesRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -784,14 +779,13 @@ type translationsRequest struct {
 }
 
 func (h *ContestsHandler) setTranslations(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
 
 	var req translationsRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -816,7 +810,7 @@ type PolicyResponse struct {
 }
 
 func (h *ContestsHandler) policy(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
@@ -830,14 +824,13 @@ func (h *ContestsHandler) policy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ContestsHandler) setPolicy(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
 
 	var req PolicyResponse
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -868,17 +861,18 @@ func toPolicyResponse(p contests.SQLPolicy) PolicyResponse {
 		AllowCatalog:    p.AllowCatalog,
 		DiskQuotaRatio:  p.DiskQuotaRatio,
 	}
-	if out.WritableTables == nil {
-		out.WritableTables = []string{}
-	}
+	out.WritableTables = emptyIfNil(out.WritableTables)
 	if !p.UpdatedAt.IsZero() {
 		out.UpdatedAt = p.UpdatedAt.UTC().Format(timeLayout)
 	}
 	return out
 }
 
-// contestID reads and validates the contest in the URL.
-func (h *ContestsHandler) contestID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+// contestIDFrom reads and validates the contest in the URL, answering 400
+// invalid_contest_id itself when it does not parse. One definition for every
+// handler that answers that way; GameHandler keeps its own because its routes
+// have always answered invalid_request instead.
+func contestIDFrom(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, contestIDParam))
 	if err != nil {
 		httpx.Error(w, r, http.StatusBadRequest, auth.CodeInvalidContestID, "Contest identifier is not valid")

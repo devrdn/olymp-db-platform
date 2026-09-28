@@ -8,9 +8,6 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/auth"
 	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
-	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 )
 
 // The contest package: one olympiad as a file an organizer can edit and,
@@ -183,9 +180,8 @@ type PackagedGame struct {
 // script by provisioning.MaxScriptBytes, the options per question, the
 // reference answers, the writable tables).
 func (h *ContestsHandler) exportPackage(w http.ResponseWriter, r *http.Request) {
-	contestID, err := uuid.Parse(chi.URLParam(r, contestIDParam))
-	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, auth.CodeInvalidContestID, "Contest identifier is not valid")
+	contestID, ok := contestIDFrom(w, r)
+	if !ok {
 		return
 	}
 	identity, _ := auth.IdentityFrom(r.Context())
@@ -301,11 +297,12 @@ func toContestPackage(pkg contests.Package) ContestPackage {
 	return out
 }
 
-// emptyIfNil keeps a nil slice out of the document, for the same reason the
-// maps above are always allocated.
-func emptyIfNil(in []string) []string {
+// emptyIfNil keeps a nil slice out of a response, so it encodes as [] and not
+// as null: a client reading a list must not have to tell "empty" from
+// "absent". Shared by every handler that serialises a slice it did not make.
+func emptyIfNil[T any](in []T) []T {
 	if in == nil {
-		return []string{}
+		return []T{}
 	}
 	return in
 }

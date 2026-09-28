@@ -39,7 +39,7 @@ func toStoryResponse(s contests.Story) StoryResponse {
 }
 
 func (h *ContestsHandler) story(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
@@ -57,14 +57,13 @@ type storyRequest struct {
 }
 
 func (h *ContestsHandler) setStory(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
 
 	var req storyRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -123,9 +122,7 @@ func toQuestionResponse(q contests.Question) QuestionResponse {
 		Texts:       make(map[string]QuestionTextResponse, len(q.Texts)),
 		Answers:     make([]AnswerResponse, 0, len(q.Answers)),
 	}
-	if out.ChoiceIDs == nil {
-		out.ChoiceIDs = []string{}
-	}
+	out.ChoiceIDs = emptyIfNil(out.ChoiceIDs)
 	for lang, text := range q.Texts {
 		out.Texts[lang] = QuestionTextResponse{BodyMD: text.BodyMD, Choices: text.Choices}
 	}
@@ -142,7 +139,7 @@ type questionListResponse struct {
 }
 
 func (h *ContestsHandler) listQuestions(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
@@ -207,14 +204,13 @@ func (req questionRequest) command(contestID, questionID, actorID uuid.UUID) con
 }
 
 func (h *ContestsHandler) addQuestion(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
 
 	var req questionRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -234,8 +230,7 @@ func (h *ContestsHandler) updateQuestion(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req questionRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -269,14 +264,13 @@ type reorderRequest struct {
 }
 
 func (h *ContestsHandler) reorderQuestions(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.contestID(w, r)
+	id, ok := contestIDFrom(w, r)
 	if !ok {
 		return
 	}
 
 	var req reorderRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -310,8 +304,7 @@ func (h *ContestsHandler) setQuestionTexts(w http.ResponseWriter, r *http.Reques
 	}
 
 	var req questionTextsRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -346,8 +339,7 @@ func (h *ContestsHandler) saveQuestion(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.IdentityFrom(r.Context())
 
 	var req saveQuestionRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -388,8 +380,7 @@ func (h *ContestsHandler) setAnswers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req answersRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -408,7 +399,7 @@ func (h *ContestsHandler) setAnswers(w http.ResponseWriter, r *http.Request) {
 
 // questionRoute reads both identifiers a question endpoint names.
 func (h *ContestsHandler) questionRoute(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {
-	contestID, ok := h.contestID(w, r)
+	contestID, ok := contestIDFrom(w, r)
 	if !ok {
 		return uuid.Nil, uuid.Nil, false
 	}

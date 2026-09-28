@@ -289,9 +289,8 @@ func (h *ParticipantHandler) admit(w http.ResponseWriter, r *http.Request) (cont
 		return contests.Participant{}, contests.Contest{}, false
 	}
 
-	contestID, err := uuid.Parse(chi.URLParam(r, contestIDParam))
-	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, auth.CodeInvalidContestID, "Contest identifier is not valid")
+	contestID, ok := contestIDFrom(w, r)
+	if !ok {
 		return contests.Participant{}, contests.Contest{}, false
 	}
 
@@ -401,9 +400,7 @@ func toParticipantQuestionResponse(q contests.ParticipantQuestion) participantQu
 		Correct:           q.Correct,
 		PointsAwarded:     q.PointsAwarded,
 	}
-	if out.ChoiceIDs == nil {
-		out.ChoiceIDs = []string{}
-	}
+	out.ChoiceIDs = emptyIfNil(out.ChoiceIDs)
 	return out
 }
 
@@ -566,8 +563,7 @@ func (h *ParticipantHandler) answer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req answerRequest
-	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
