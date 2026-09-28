@@ -24,7 +24,7 @@ import (
 // is reached. Reader does not repeat that check: a second implementation of
 // "may this student see this contest" is the bug this project keeps finding.
 type Reader struct {
-	stories   StoryRepository
+	stories   StoryText
 	questions VisibleQuestionRepository
 	attempts  AttemptStore
 	// sequence resolves which question is currently answerable under
@@ -38,7 +38,7 @@ type Reader struct {
 }
 
 // NewReader assembles a participant-facing content reader.
-func NewReader(stories StoryRepository, questions VisibleQuestionRepository, attempts AttemptStore, sequence SequentialGate) *Reader {
+func NewReader(stories StoryText, questions VisibleQuestionRepository, attempts AttemptStore, sequence SequentialGate) *Reader {
 	return &Reader{stories: stories, questions: questions, attempts: attempts, sequence: sequence}
 }
 
@@ -53,15 +53,17 @@ func NewReader(stories StoryRepository, questions VisibleQuestionRepository, att
 // answers the same way a story that was never authored at all does, rather
 // than showing an empty page as if it were the story.
 func (r *Reader) Story(ctx context.Context, contestID uuid.UUID, lang string) (string, error) {
-	story, err := r.stories.ByContest(ctx, contestID)
-	if err != nil {
-		return "", err
-	}
-	body, ok := story.Body(lang)
-	if !ok {
-		return "", ErrStoryNotFound
-	}
-	return body, nil
+	return r.stories.BodyIn(ctx, contestID, lang)
+}
+
+// StoryText is the participant's read of a story: the one language they are
+// shown, rather than the staff StoryRepository's every translation decoded to
+// return one of them — the same split VisibleQuestionRepository makes for the
+// questions.
+type StoryText interface {
+	// BodyIn returns the story's text in lang, or ErrStoryNotFound when the
+	// contest has no story or no text in lang.
+	BodyIn(ctx context.Context, contestID uuid.UUID, lang string) (string, error)
 }
 
 // ParticipantQuestion is one visible question as its participant sees it: its

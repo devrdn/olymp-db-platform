@@ -202,7 +202,10 @@ type Stories struct {
 	Err error
 }
 
-var _ contests.StoryRepository = (*Stories)(nil)
+var (
+	_ contests.StoryRepository = (*Stories)(nil)
+	_ contests.StoryText       = (*Stories)(nil)
+)
 
 // NewStories returns an empty story store.
 func NewStories() *Stories {
@@ -218,6 +221,18 @@ func (r *Stories) ByContest(_ context.Context, contestID uuid.UUID) (contests.St
 		return contests.Story{}, contests.ErrStoryNotFound
 	}
 	return story, nil
+}
+
+func (r *Stories) BodyIn(ctx context.Context, contestID uuid.UUID, lang string) (string, error) {
+	story, err := r.ByContest(ctx, contestID)
+	if err != nil {
+		return "", err
+	}
+	body, ok := story.Body(lang)
+	if !ok {
+		return "", contests.ErrStoryNotFound
+	}
+	return body, nil
 }
 
 func (r *Stories) Save(_ context.Context, contestID uuid.UUID, bodies map[string]string) (contests.Story, error) {
