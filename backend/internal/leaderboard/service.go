@@ -33,7 +33,7 @@ const (
 	// without a bound is an answer whose size the caller chooses.
 	DefaultMaxRows = 2000
 	// computeTimeout bounds one shared computation once it no longer belongs
-	// to any single caller (see computeOnce). Comfortably above how long an
+	// to any single caller (see flight.Do). Comfortably above how long an
 	// ordinary standings query takes — the core pool's own statement timeout
 	// already caps the query itself — so what this actually guards against is
 	// a connection acquire that never returns, not a slow but honest query.
@@ -150,8 +150,8 @@ type Service struct {
 	liveCache map[uuid.UUID]cachedLive
 
 	// flight collapses concurrent misses of the same key — a contest's public
-	// table or its staff table, computeOnce's own callers tell the two apart
-	// by key — into one call to the repository. See computeOnce for why a
+	// table or its staff table, flight.Do's callers here tell the two apart
+	// by key — into one call to the repository. See flight.Do for why a
 	// panic or a caller's cancellation cannot wedge or narrow it.
 	flight singleflight.Group
 
@@ -208,7 +208,7 @@ func NewService(cfg Config) *Service {
 //
 // A miss is shared rather than repeated: however many viewers arrive in the
 // same instant — an audience refreshing together right on the cache's own
-// boundary — computeOnce collapses them into the one computation the first of
+// boundary — flight.Do collapses them into the one computation the first of
 // them started (see its own doc for what that guarantees each caller).
 //
 // The generation read below is what keeps a Reveal racing this call honest:
@@ -237,7 +237,7 @@ func (s *Service) Public(ctx context.Context, contestID uuid.UUID) (View, error)
 }
 
 // computePublic is Public's actual computation, run at most once per miss
-// (see computeOnce) rather than once per caller.
+// (see flight.Do) rather than once per caller.
 func (s *Service) computePublic(ctx context.Context, contestID uuid.UUID, now time.Time) (View, error) {
 	c, err := s.contest(ctx, contestID)
 	if err != nil {
@@ -322,7 +322,7 @@ func (s *Service) Live(ctx context.Context, contestID uuid.UUID) (StaffView, err
 }
 
 // computeLive is Live's actual computation, run at most once per miss (see
-// computeOnce) rather than once per staff request.
+// flight.Do) rather than once per staff request.
 func (s *Service) computeLive(ctx context.Context, contestID uuid.UUID, now time.Time) (StaffView, error) {
 	c, err := s.contests.ByID(ctx, contestID)
 	if errors.Is(err, contests.ErrNotFound) {
