@@ -155,3 +155,18 @@ commit messages and this documentation — is written in English.
 
 The platform runs contests. The architecture document's section 15 is the
 honest list of what is finished and what is not.
+
+## Contributing and security
+
+How changes are made here — English in everything committed, a linear
+history, tests on the path the deployment uses — is in
+[CONTRIBUTING.md](CONTRIBUTING.md). A vulnerability is reported privately, not
+in an issue: see [SECURITY.md](SECURITY.md).
+
+## License
+
+DB Contest is licensed under the [Apache License, Version 2.0](LICENSE). You
+may use, modify and run it, including for commercial purposes, provided you
+keep the license and the [NOTICE](NOTICE) with it and say what you changed.
+The fonts it serves (JetBrains Mono, Literata, Onest) are under the SIL Open
+Font License, and every dependency under its own license.
