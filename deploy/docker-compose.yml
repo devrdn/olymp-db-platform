@@ -678,7 +678,8 @@ services:
 
   # The only service reachable from outside. It terminates TLS, which the
   # session cookie depends on: a Secure cookie sent over plain HTTP is
-  # discarded by the browser, and sign-in would fail on the request after it.
+  # discarded by the browser, and sign-in would fail on the request after it —
+  # unless an edge proxy in front terminates TLS instead (EDGE_TRUSTED_PROXIES).
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -689,6 +690,10 @@ services:
       # refuse to start on an empty value; web does, and Caddy is useless
       # without web, so that is the refusal this deployment relies on.
       INGRESS_SECRET: ${INGRESS_SECRET:-}
+      # The edge proxy's own addresses, whose X-Forwarded-For and
+      # X-Forwarded-Proto Caddy believes. Empty trusts nobody (see the
+      # Caddyfile and deploy/.env.example).
+      EDGE_TRUSTED_PROXIES: ${EDGE_TRUSTED_PROXIES:-}
     ports:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
@@ -699,8 +704,9 @@ services:
     depends_on:
       - api
       - web
-    # Pinned for the same reason as web: it is the outermost hop whose
-    # X-Forwarded-For the API believes.
+    # Pinned for the same reason as web: it is the hop in front of the API
+    # whose X-Forwarded-For the API believes. An edge proxy in front of it is
+    # believed by Caddy, never by the API.
     networks:
       internal:
         ipv4_address: 172.28.0.10

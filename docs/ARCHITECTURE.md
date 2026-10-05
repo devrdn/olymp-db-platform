@@ -1590,7 +1590,11 @@ room, or this campus network". An empty list means no restriction.
   the installation's own** reverse proxy — the list of trusted proxies is
   configuration, and the header straight from a client is ignored. This is a
   classic place to get it wrong, so it is pinned by an integration test that
-  forges the header.
+  forges the header. Behind an edge proxy that terminates TLS (a WAF, a CDN, a
+  load balancer), Caddy is the one that believes the edge
+  (`EDGE_TRUSTED_PROXIES`, its chain read right to left) and hands the API a
+  single client address; the API's own list does not change. `make edge-check`
+  proves what Caddy forwards in both arrangements.
 - **Matching** uses Go's own address types (`netip.Prefix.Contains`), and the
   contest's CIDR list is cached.
 - **A refusal** is a page that says the contest is available only from the
@@ -3557,6 +3561,22 @@ appear to succeed and fall over on the next request. With
 `SITE_ADDRESS=localhost` Caddy issues a local certificate itself; with a real
 name it obtains a public one automatically. The API's port is not published at
 all and is reachable directly only in the development overlay.
+
+Where the organisation already has an edge proxy that terminates TLS, Caddy
+sits behind it instead: `SITE_ADDRESS=http://<hostname>` stops it asking for a
+certificate, and `EDGE_TRUSTED_PROXIES` names the edge's own addresses — never
+a network — so that Caddy believes its `X-Forwarded-For` and
+`X-Forwarded-Proto` and nobody else's. The browser still uses HTTPS, so
+`COOKIE_SECURE` stays on; the edge has to forward the browser's `Host`, or the
+API's cross-origin check no longer recognises the site
+(`deploy/.env.example`).
+
+Caddy routes `/api/*` to the API and everything else to the interface as two
+sibling `handle` blocks. Caddy runs every `handle` before any `reverse_proxy`,
+so a catch-all `handle` beside `reverse_proxy /api/*` silently sends the API's
+requests through the interface's rewrite, which replaces `Host` with the API's
+own address — and the cross-origin check then refuses a browser's direct
+writes.
 
 **Without the observability profile**, metrics are served to an endpoint
 nobody reads; such an installation should set `METRICS_BACKEND=log` so the

@@ -11,10 +11,10 @@ import (
 // IPResolver determines the address a request actually came from when the
 // service sits behind a reverse proxy.
 //
-// The problem it solves is not cosmetic: with the proxy as the only ingress,
-// RemoteAddr is the proxy for every request, so the per-address login throttle
-// collapses into one counter shared by the whole installation and the audit
-// trail records the proxy instead of the participant.
+// The problem it solves is not cosmetic: every request reaches the API through
+// the proxy, so RemoteAddr is the proxy for every request, the per-address
+// login throttle collapses into one counter shared by the whole installation,
+// and the audit trail records the proxy instead of the participant.
 //
 // X-Forwarded-For cannot simply be believed either — a direct client writes
 // whatever it likes into it. The resolver therefore trusts the header only

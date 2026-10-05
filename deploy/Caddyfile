@@ -1,32 +1,60 @@
-# Reverse proxy and TLS terminator — the only service exposed to the network.
+# Reverse proxy in front of the API and the interface, in one of two places.
 #
-# SITE_ADDRESS decides how TLS is obtained. Left as "localhost" Caddy issues a
-# local certificate itself, so a development stack is HTTPS without any setup;
-# set it to the real hostname and Caddy obtains a public certificate from Let's
-# Encrypt automatically.
+# Usually it is the first hop: the only service exposed to the network, and the
+# TLS terminator. SITE_ADDRESS decides how TLS is obtained. Left as "localhost"
+# Caddy issues a local certificate itself, so a development stack is HTTPS
+# without any setup; set it to the real hostname and Caddy obtains a public
+# certificate from Let's Encrypt automatically.
 #
-# This matters beyond encryption: the session cookie is marked Secure outside
+# Or it sits behind an edge proxy that terminates TLS itself — a WAF, a CDN, a
+# load balancer — and forwards over plain HTTP. Then SITE_ADDRESS is
+# "http://<hostname>", which stops Caddy asking for a certificate of its own,
+# and EDGE_TRUSTED_PROXIES names the edge (see the global options below and
+# deploy/.env.example).
+#
+# TLS matters beyond encryption: the session cookie is marked Secure outside
 # development, and a browser silently discards a Secure cookie delivered over
-# plain HTTP. Without TLS in front, signing in would appear to succeed and then
-# fail on the next request.
+# plain HTTP. Without TLS somewhere in front, signing in would appear to
+# succeed and then fail on the next request.
+{
+	servers {
+		# Whose X-Forwarded-For and X-Forwarded-Proto Caddy believes: the edge
+		# proxy, if there is one, and nobody else. EDGE_TRUSTED_PROXIES names
+		# its own addresses, space separated; never a network, or any machine
+		# on it could choose its own address and scheme. Unset, the list is
+		# empty and nothing a client sends is believed, which is the first-hop
+		# behaviour. private_ranges is deliberately not the default: it would
+		# trust every container on the compose network.
+		trusted_proxies static {$EDGE_TRUSTED_PROXIES}
+		# Read the chain right to left. An edge appends the address it saw
+		# (nginx's $proxy_add_x_forwarded_for); everything to the left of it
+		# is what the client typed, and the default left-to-right reading
+		# would let a client pick its own address by sending one.
+		trusted_proxies_strict
+	}
+}
 
 {$SITE_ADDRESS:localhost} {
 	encode zstd gzip
 
-	# Tell the application which scheme the browser actually used. The API
-	# compares this against the Origin header on every write; it is trustworthy
-	# only because this proxy is the sole ingress and overwrites whatever the
-	# client sent.
+	# The API believes this proxy's X-Forwarded-For and X-Forwarded-Proto
+	# (TRUSTED_PROXIES), so what is written into them is the client's address
+	# and scheme as far as the login throttle, a contest's network
+	# restriction, the audit trail and the cross-origin check are concerned.
 	#
-	# X-Forwarded-For is set to the connecting peer explicitly, replacing
-	# whatever the client sent. That is also Caddy's default without a
-	# trusted_proxies option, but the API's client address — its login
-	# throttle, a contest's network restriction, the audit trail — rests on it,
-	# so it is written down rather than inherited from an image tag.
+	# X-Forwarded-For is {client_ip}, one address: the connecting peer, or —
+	# when the peer is a trusted edge — the client the edge reported. Left to
+	# Caddy, a trusted edge's chain would be passed on with the edge appended
+	# to it, and the API, which trusts only this hop, would take the edge for
+	# the client.
+	#
+	# X-Forwarded-Proto is left to Caddy, which sets it from the scheme it was
+	# reached by, or keeps a trusted edge's: behind an edge that terminates
+	# TLS, Caddy's own scheme is http while the browser's is https, and the
+	# API compares the Origin against the browser's.
 	handle /api/* {
 		reverse_proxy api:8080 {
-			header_up X-Forwarded-Proto {scheme}
-			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-For {client_ip}
 			header_up -X-Ingress-Secret
 		}
 	}
@@ -44,15 +72,15 @@
 	# browser makes to it directly. Sibling handle blocks are exclusive, and
 	# the one with the path runs first.
 	#
-	# The interface's server calls the API itself and hands this address on,
-	# and the API believes it. So the interface hands it on only when the
+	# The interface's server calls the API itself and hands this address on —
+	# the same {client_ip} — and the API believes it. So the interface hands it on only when the
 	# request carries INGRESS_SECRET, which this proxy sets here, replacing any
 	# value a client sent: a request that reached the interface any other way
 	# cannot name its own address (frontend/lib/api/forwarded.ts). The same
 	# value is given to the web service.
 	handle {
 		reverse_proxy web:3000 {
-			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-For {client_ip}
 			header_up X-Ingress-Secret {env.INGRESS_SECRET}
 		}
 	}
