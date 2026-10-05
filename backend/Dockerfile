@@ -22,12 +22,26 @@ RUN go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/api  
     go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/migrate   ./cmd/migrate && \
     go build -trimpath -ldflags="-s -w"                            -o /out/bootstrap ./cmd/bootstrap
 
+# Where the API's two named volumes are mounted (GAME_UPLOAD_DIR and COVER_DIR's
+# defaults), made here because the runtime stage has no shell to make them.
+RUN mkdir -p /out/var/lib/dbcontest/uploads /out/var/lib/dbcontest/covers
+
 # Runtime stage: no shell, no package manager, non-root by default.
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 
 COPY --from=build /out/api       /usr/local/bin/api
 COPY --from=build /out/migrate   /usr/local/bin/migrate
 COPY --from=build /out/bootstrap /usr/local/bin/bootstrap
+
+# Owned by nonroot (65532), the user the API runs as. Docker initialises a new
+# named volume from the image's directory at its mount point, ownership
+# included; with no directory there, the volume's root is root's 0755 and the
+# API cannot create its upload or cover directories — it restarts forever on a
+# fresh install. A volume that already exists is never initialised again: an
+# install created before this needs a one-time chown (deploy/.env.example).
+# Numeric rather than a name, so it does not depend on the base image's
+# /etc/passwd and reads the same as the CI check that asserts it.
+COPY --from=build --chown=65532:65532 /out/var/lib/dbcontest /var/lib/dbcontest
 
 USER nonroot:nonroot
 EXPOSE 8080 9090
