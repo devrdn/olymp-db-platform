@@ -47,8 +47,11 @@ on:
         default: false
         type: boolean
 
-permissions:
-  contents: read
+# No `permissions` here. A called workflow may only narrow what its caller
+# granted, so a block at this level would cap every caller at it: a
+# `contents: read` here left the publishing caller's `packages: write` with
+# nothing, and the first tag's push was refused by the registry. The caller's
+# job decides, as the header says.
 
 jobs:
   image:
