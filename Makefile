@@ -522,6 +522,11 @@ restore: require-env ## Replace the core database from a dump (FILE=path CONFIRM
 # a volume that already holds some of the same files replaces each with an
 # identical one — this is additive, and it is why it does not empty the
 # directory first.
+#
+# KNOWN DEFECT (issue #56): `compose cp` keeps the host user's uid and the
+# files' 0600 mode, so the API, running as uid 65532, cannot read what this
+# restores, and every restored contest shows a broken cover. Until #56 is
+# fixed, a restore is not complete without the chown it prints.
 restore-covers: require-env ## Restore the covers volume from an archive (FILE=path CONFIRM=yes)
 	@test -n "$(FILE)" || { echo "usage: make restore-covers FILE=$(BACKUP_DIR)/covers-....tar.gz CONFIRM=yes"; exit 1; }
 	@test -f "$(FILE)" || { echo "no such file: $(FILE)"; exit 1; }
@@ -535,6 +540,9 @@ restore-covers: require-env ## Restore the covers volume from an archive (FILE=p
 			  rm -rf $$staging; exit 1; }; \
 		rm -rf $$staging; \
 		echo "restored the covers volume from $(FILE)"; \
+		echo "KNOWN DEFECT (issue #56): the restored files are not owned by the API's user and it cannot read them."; \
+		echo "Until #56 is fixed, give them to it before the API serves a cover:"; \
+		echo "  docker run --rm --volumes-from \$$($(COMPOSE) ps -q api) alpine chown -R 65532:65532 $(CONTAINER_COVER_DIR)"; \
 		echo "Restart the api if it is running: docker compose -f deploy/docker-compose.yml restart api"
 
 # The two halves of the game circuit that are not the API.
