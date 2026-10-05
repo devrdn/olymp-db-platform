@@ -132,7 +132,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env require-version build test test-race test-db test-game game-orphans api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
+.PHONY: help require-env require-version build test test-race test-db test-game game-orphans api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers restore-covers-check edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -289,6 +289,12 @@ vuln: ## Scan dependencies and the toolchain for known vulnerabilities
 sec: ## Static security analysis
 	@test -x $(GOSEC) || go install github.com/securego/gosec/v2/cmd/gosec@latest
 	cd $(BACKEND) && $(GOSEC) -exclude-generated -quiet ./...
+
+# That `make restore-covers` gives back covers the API can read: the real target
+# against a throwaway compose project with the API image built from this tree.
+# Needs Docker; touches neither deploy/.env nor a running stack.
+restore-covers-check: ## Prove restored covers belong to the API's user
+	deploy/restore-covers-check.sh
 
 # What the bundled Caddy tells the API about the client — address, scheme, Host,
 # and which service /api/* reaches — with the real image and the real Caddyfile,
@@ -523,26 +529,36 @@ restore: require-env ## Replace the core database from a dump (FILE=path CONFIRM
 # identical one — this is additive, and it is why it does not empty the
 # directory first.
 #
-# KNOWN DEFECT (issue #56): `compose cp` keeps the host user's uid and the
-# files' 0600 mode, so the API, running as uid 65532, cannot read what this
-# restores, and every restored contest shows a broken cover. Until #56 is
-# fixed, a restore is not complete without the chown it prints.
+# The files go back owned by the API's user, 65532. Copied in as they are, they
+# keep whoever ran `make` as their owner and the 0600 the API wrote them with,
+# and the API cannot open a single one: every restored contest shows a broken
+# cover, discovered on the day the backup was needed (#56). So the archive is
+# packed again with that owner written into it — GNU tar and bsdtar spell it
+# differently, and bsdtar is also told to leave out the extended attributes a
+# Mac attaches to every file, which a Linux volume refuses — and handed to
+# `docker cp -`, which extracts it as written. Into
+# a file first rather than a pipe: /bin/sh has no pipefail, and a tar that
+# failed halfway would otherwise reach the volume as a partial restore.
 restore-covers: require-env ## Restore the covers volume from an archive (FILE=path CONFIRM=yes)
 	@test -n "$(FILE)" || { echo "usage: make restore-covers FILE=$(BACKUP_DIR)/covers-....tar.gz CONFIRM=yes"; exit 1; }
 	@test -f "$(FILE)" || { echo "no such file: $(FILE)"; exit 1; }
 	@test "$(CONFIRM)" = "yes" || { \
 		echo "This copies $(FILE) into the covers volume at $(CONTAINER_COVER_DIR)."; \
 		echo "Re-run with CONFIRM=yes when that is what you mean."; exit 1; }
-	@staging=$$(mktemp -d); \
+	@staging=$$(mktemp -d); packed=$$staging.tar; \
 		tar -xzf "$(FILE)" -C $$staging || { echo "$(FILE) is not a readable archive"; rm -rf $$staging; exit 1; }; \
-		$(COMPOSE) cp $$staging/. api:$(CONTAINER_COVER_DIR) || \
+		api=$$($(COMPOSE) ps -aq api); \
+		test -n "$$api" || \
 			{ echo "the covers were NOT restored: no api container to write $(CONTAINER_COVER_DIR) to"; \
 			  rm -rf $$staging; exit 1; }; \
-		rm -rf $$staging; \
+		if tar --version 2>/dev/null | grep -q 'GNU tar'; then owner="--owner=65532 --group=65532 --numeric-owner"; \
+		else owner="--uid 65532 --gid 65532 --no-xattrs --no-acls"; fi; \
+		COPYFILE_DISABLE=1 tar -cf $$packed $$owner -C $$staging . && \
+		docker cp - $$api:$(CONTAINER_COVER_DIR) < $$packed || \
+			{ echo "the covers were NOT restored: they could not be copied into $(CONTAINER_COVER_DIR)"; \
+			  rm -rf $$staging $$packed; exit 1; }; \
+		rm -rf $$staging $$packed; \
 		echo "restored the covers volume from $(FILE)"; \
-		echo "KNOWN DEFECT (issue #56): the restored files are not owned by the API's user and it cannot read them."; \
-		echo "Until #56 is fixed, give them to it before the API serves a cover:"; \
-		echo "  docker run --rm --volumes-from \$$($(COMPOSE) ps -q api) alpine chown -R 65532:65532 $(CONTAINER_COVER_DIR)"; \
 		echo "Restart the api if it is running: docker compose -f deploy/docker-compose.yml restart api"
 
 # The two halves of the game circuit that are not the API.
