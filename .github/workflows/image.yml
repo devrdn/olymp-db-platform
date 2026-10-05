@@ -40,6 +40,13 @@ on:
         required: false
         default: ""
         type: string
+      owned:
+        description: Directories the built image must contain and who must own
+          them, as space-separated path:uid pairs (paths without the leading
+          slash). Empty to skip.
+        required: false
+        default: ""
+        type: string
       publish:
         description: Whether to push. False builds and throws the result away,
           which is the point on a merge.
@@ -103,18 +110,45 @@ jobs:
       # What the image actually contains, asserted rather than assumed. This is
       # the check that catches the wrong stage being built — which happened,
       # and produced an image named for the API with no api binary in it.
-      - name: the image carries the binary it is named for
-        if: inputs.expect != ''
+      #
+      # And who owns what a volume will be mounted on. A new named volume is
+      # initialised from the image's directory at its mount point, ownership
+      # included; where the image has no such directory the volume's root is
+      # root's, and a process running as nonroot cannot write to it — the API
+      # restarted forever on a fresh install for exactly that.
+      - name: the image carries what it is meant to
+        if: inputs.expect != '' || inputs.owned != ''
         run: |
           set -eu
           image=$(echo "$TAGS" | head -1)
+          listing="$RUNNER_TEMP/image-listing"
           docker create --name check "$image" >/dev/null
-          docker export check | tar -t | grep -qx "$EXPECT" \
-            || { echo "$image has no $EXPECT"; exit 1; }
+          # Listed to a file first: a reader that stops at the first match
+          # closes the pipe while tar is still writing to it.
+          docker export check | tar -tv --numeric-owner >"$listing"
           docker rm check >/dev/null
+
+          failed=0
+          if [ -n "$EXPECT" ] && ! awk -v want="$EXPECT" \
+              '$6 == want { found = 1 } END { exit !found }' "$listing"; then
+            echo "$image has no $EXPECT"
+            failed=1
+          fi
+          for entry in $OWNED; do
+            dir=${entry%:*}
+            uid=${entry##*:}
+            if ! awk -v want="$dir/" -v uid="$uid" \
+                '$6 == want && $1 ~ /^d/ { split($2, who, "/"); if (who[1] == uid) found = 1 }
+                 END { exit !found }' "$listing"; then
+              echo "$image has no directory $dir owned by uid $uid"
+              failed=1
+            fi
+          done
+          exit "$failed"
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
           EXPECT: ${{ inputs.expect }}
+          OWNED: ${{ inputs.owned }}
 
       - name: publish
         if: inputs.publish

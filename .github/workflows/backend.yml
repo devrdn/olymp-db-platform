@@ -220,6 +220,9 @@ jobs:
           - target: runtime
             image: db-contest-backend
             expect: usr/local/bin/api
+            # GAME_UPLOAD_DIR and COVER_DIR's defaults, where the compose
+            # file mounts the API's two named volumes.
+            owned: var/lib/dbcontest/uploads:65532 var/lib/dbcontest/covers:65532
           - target: queryrunner
             image: db-contest-queryrunner
             expect: usr/local/bin/queryrunner
@@ -229,6 +232,7 @@ jobs:
       target: ${{ matrix.target }}
       image: ${{ matrix.image }}
       expect: ${{ matrix.expect }}
+      owned: ${{ matrix.owned }}
       publish: false
 
   publish-images:
@@ -244,6 +248,9 @@ jobs:
           - target: runtime
             image: db-contest-backend
             expect: usr/local/bin/api
+            # GAME_UPLOAD_DIR and COVER_DIR's defaults, where the compose
+            # file mounts the API's two named volumes.
+            owned: var/lib/dbcontest/uploads:65532 var/lib/dbcontest/covers:65532
           - target: queryrunner
             image: db-contest-queryrunner
             expect: usr/local/bin/queryrunner
@@ -253,4 +260,5 @@ jobs:
       target: ${{ matrix.target }}
       image: ${{ matrix.image }}
       expect: ${{ matrix.expect }}
+      owned: ${{ matrix.owned }}
       publish: true
