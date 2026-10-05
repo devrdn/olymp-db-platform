@@ -132,7 +132,7 @@ GOVULN := $(GOBIN)/govulncheck
 GOSEC  := $(GOBIN)/gosec
 
 .DEFAULT_GOAL := help
-.PHONY: help require-env require-version build test test-race test-db test-game game-orphans api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
+.PHONY: help require-env require-version build test test-race test-db test-game game-orphans api-contract audit-contract proto proto-check static-check backup restore restore-check restore-covers edge-check images images-push deploy deploy-api deploy-web deployed cover lint vet fmt tidy run migrate-up migrate-down migrate-version bootstrap stack-bootstrap stack-observability dev-up dev-observability dev-db-ui dev-down dev-logs stack-up stack-down check fmt-check tidy-check vuln sec test-all front front-install front-check front-build front-start front-test front-lint
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -289,6 +289,13 @@ vuln: ## Scan dependencies and the toolchain for known vulnerabilities
 sec: ## Static security analysis
 	@test -x $(GOSEC) || go install github.com/securego/gosec/v2/cmd/gosec@latest
 	cd $(BACKEND) && $(GOSEC) -exclude-generated -quiet ./...
+
+# What the bundled Caddy tells the API about the client — address, scheme, Host,
+# and which service /api/* reaches — with the real image and the real Caddyfile,
+# first hop and behind an edge proxy. Needs Docker; starts and removes its own
+# throwaway network and containers.
+edge-check: ## Prove what deploy/Caddyfile forwards, with and without an edge proxy
+	deploy/edge-check.sh
 
 # The full gate, mirroring the CI workflow so a green run here means a green run
 # there. Unlike `check` it changes nothing on disk: every step verifies rather
