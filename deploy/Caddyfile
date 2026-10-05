@@ -23,16 +23,26 @@
 	# trusted_proxies option, but the API's client address — its login
 	# throttle, a contest's network restriction, the audit trail — rests on it,
 	# so it is written down rather than inherited from an image tag.
-	reverse_proxy /api/* api:8080 {
-		header_up X-Forwarded-Proto {scheme}
-		header_up X-Forwarded-For {remote_host}
-		header_up -X-Ingress-Secret
+	handle /api/* {
+		reverse_proxy api:8080 {
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-For {remote_host}
+			header_up -X-Ingress-Secret
+		}
 	}
 
 	# Everything else is the interface. Serving it from this same name is not a
 	# convenience: the session cookie is SameSite=Lax and the API compares the
 	# Origin header against its own Host on every write, so a frontend on a
 	# second hostname would be rejected by its own backend.
+	#
+	# The two are handle blocks, not a bare reverse_proxy beside a handle:
+	# Caddy runs every handle before any reverse_proxy, so a catch-all handle
+	# next to `reverse_proxy /api/*` takes the API's requests too and sends
+	# them through the interface's rewrite — which replaces Host with the API's
+	# own address, and the API's cross-origin check then refuses every write a
+	# browser makes to it directly. Sibling handle blocks are exclusive, and
+	# the one with the path runs first.
 	#
 	# The interface's server calls the API itself and hands this address on,
 	# and the API believes it. So the interface hands it on only when the
