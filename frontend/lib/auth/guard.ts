@@ -22,6 +22,17 @@ import { ApiError } from "@/lib/api/client";
 const PUBLIC_PATHS = ["/", "/login"];
 
 /**
+ * Reachable without a session, and only as written: nothing beneath them.
+ *
+ * `/healthz` is the web container's liveness probe (app/healthz/route.ts),
+ * which the healthcheck asks with no session. Guarded, it would be redirected
+ * to sign-in, and rendering sign-in asks the API for the site's settings — an
+ * idle installation would then send the API four requests a minute, and web
+ * would be unhealthy whenever the API is. It says nothing but "ok".
+ */
+const PUBLIC_EXACT = ["/healthz"];
+
+/**
  * A contest's public table, open to anybody with the link
  * (docs/ARCHITECTURE.md §10).
  *
@@ -68,6 +79,9 @@ export function guardRedirect(
     return `/login?next=${encodeURIComponent(pathname + search)}`;
   }
   if (PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`))) {
+    return null;
+  }
+  if (PUBLIC_EXACT.includes(pathname)) {
     return null;
   }
   if (PUBLIC_PATTERNS.some((pattern) => pattern.test(pathname))) {
