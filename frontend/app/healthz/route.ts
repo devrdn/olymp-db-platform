@@ -5,8 +5,9 @@
  * to fetch /login, and rendering any page asks the API for the site's settings
  * (lib/api/branding.ts, from the root layout's metadata): every installation,
  * idle or not, sent the API four requests a minute — on a real install almost
- * all of its access log — and web turned unhealthy whenever the API did,
- * which restarting web cannot fix.
+ * all of its access log — to learn whether this process was up. (With the API
+ * down the page still renders on the product's default branding, so the probe
+ * stayed green; it was measuring more than it reported, not failing.)
  *
  * So this is a route handler, which renders no layout, and it reads no cookie
  * and calls nothing. It is public (lib/auth/guard.ts, PUBLIC_EXACT) because

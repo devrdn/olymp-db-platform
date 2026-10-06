@@ -27,8 +27,8 @@ const PUBLIC_PATHS = ["/", "/login"];
  * `/healthz` is the web container's liveness probe (app/healthz/route.ts),
  * which the healthcheck asks with no session. Guarded, it would be redirected
  * to sign-in, and rendering sign-in asks the API for the site's settings — an
- * idle installation would then send the API four requests a minute, and web
- * would be unhealthy whenever the API is. It says nothing but "ok".
+ * idle installation would then send the API four requests a minute. It says
+ * nothing but "ok".
  */
 const PUBLIC_EXACT = ["/healthz"];
 
