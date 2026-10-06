@@ -41,6 +41,14 @@ describe("proxy", () => {
     expect(destination("/contests", true)).toBeNull();
   });
 
+  // The web container's healthcheck asks this with no session and treats a
+  // redirect as a failure; followed, it would render /login and call the API.
+  test("lets a signed-out liveness probe through, setting no cookie", () => {
+    const response = proxy(request("/healthz"));
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
   /**
    * The redirect above lands here, and this is the assertion the loop broke:
    * sign-in must stay reachable while carrying where to go next, or the guard

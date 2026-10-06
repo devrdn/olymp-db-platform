@@ -664,9 +664,14 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    # Liveness from Next alone (frontend/app/healthz/route.ts). Not a page:
+    # rendering one asks the API for the site's settings, so probing /login
+    # sent the API four requests a minute and made web unhealthy whenever the
+    # API was. A redirect counts as a failure — the guard sending /healthz to
+    # sign-in would otherwise pass, render /login, and bring that back.
     healthcheck:
       test:
-        ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+        ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz',{redirect:'manual'}).then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 5s
       retries: 3

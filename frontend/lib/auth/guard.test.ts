@@ -29,6 +29,17 @@ test("and it is still only the front page that is open", () => {
     expect(guardRedirect("/my", "", false)).toBe("/login?next=%2Fmy");
   });
 
+  // The container's healthcheck is a signed-out request. Redirected, it would
+  // render /login — and every render of a page asks the API for the site's
+  // settings, so an idle stack would keep the API busy answering a probe.
+  test("leaves the liveness route reachable without a session", () => {
+    expect(guardRedirect("/healthz", "", false)).toBeNull();
+  });
+
+  test("opens the liveness route itself and nothing beneath it", () => {
+    expect(guardRedirect("/healthz/anything", "", false)).toBe("/login?next=%2Fhealthz%2Fanything");
+  });
+
   test("leaves a contest's public table reachable without a session", () => {
     expect(guardRedirect("/contests/3f1a8c22-1b4e-4a77-9f0d-2c5b8e91a4d6/leaderboard", "", false)).toBeNull();
   });
