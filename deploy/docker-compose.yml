@@ -666,8 +666,8 @@ services:
         condition: service_healthy
     # Liveness from Next alone (frontend/app/healthz/route.ts). Not a page:
     # rendering one asks the API for the site's settings, so probing /login
-    # sent the API four requests a minute and made web unhealthy whenever the
-    # API was. A redirect counts as a failure — the guard sending /healthz to
+    # sent the API four requests a minute to learn whether web was up. A
+    # redirect counts as a failure — the guard sending /healthz to
     # sign-in would otherwise pass, render /login, and bring that back.
     healthcheck:
       test:

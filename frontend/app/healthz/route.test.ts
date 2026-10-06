@@ -2,8 +2,8 @@ import { describe, expect, test, vi } from "vitest";
 
 // Liveness must not depend on the API: the container's healthcheck asks this
 // every fifteen seconds, and a probe that reached the API would fill its log
-// and turn this container unhealthy whenever the API is. Any import of the
-// API client is a failure here, not a dependency to fake.
+// with four requests a minute. Any call to the API client is a failure here,
+// not a dependency to fake.
 const { serverRequest } = vi.hoisted(() => ({ serverRequest: vi.fn() }));
 vi.mock("@/lib/api/server", () => ({ serverRequest }));
 
