@@ -4,194 +4,64 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
-	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 )
 
-func TestParticipantCarriesTheAccountItNames(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		repo := NewRegistrations(testPool)
-		author := makeUser(t, ctx, "author-reg")
-		student := makeUser(t, ctx, "student-reg")
-		id := makeContest(t, ctx, author.ID)
-
-		added, err := repo.Add(ctx, id, student.ID)
-		if err != nil {
-			t.Fatalf("Add() = %v", err)
-		}
-		if added.Status != contests.RegistrationRegistered {
-			t.Errorf("status = %q, want registered", added.Status)
-		}
-
-		got, err := repo.ByUser(ctx, id, student.ID)
-		if err != nil {
-			t.Fatalf("ByUser() = %v", err)
-		}
-		if got.Login != "student-reg" {
-			t.Errorf("login = %q, want student-reg", got.Login)
-		}
-	})
-}
-
-func TestRegisteringTheSamePersonTwiceIsReportedAsAlreadyEnrolled(t *testing.T) {
-	// The unique index is the real guarantee against two staff adding the same
-	// student at the same moment; it has to arrive as something the caller can
-	// act on rather than an opaque constraint violation.
-	withTx(t, func(ctx context.Context) {
-		repo := NewRegistrations(testPool)
-		author := makeUser(t, ctx, "author-dup")
-		student := makeUser(t, ctx, "student-dup")
-		id := makeContest(t, ctx, author.ID)
-		if _, err := repo.Add(ctx, id, student.ID); err != nil {
-			t.Fatalf("Add() = %v", err)
-		}
-
-		_, err := repo.Add(ctx, id, student.ID)
-
-		if !errors.Is(err, contests.ErrAlreadyEnrolled) {
-			t.Errorf("Add() twice = %v, want ErrAlreadyEnrolled", err)
-		}
-	})
-}
-
-func TestParticipantsAreFilteredByStatus(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		repo := NewRegistrations(testPool)
-		author := makeUser(t, ctx, "author-filter")
-		staying := makeUser(t, ctx, "student-staying")
-		excluded := makeUser(t, ctx, "student-excluded")
-		id := makeContest(t, ctx, author.ID)
-		if _, err := repo.Add(ctx, id, staying.ID); err != nil {
-			t.Fatalf("Add() = %v", err)
-		}
-		out, err := repo.Add(ctx, id, excluded.ID)
-		if err != nil {
-			t.Fatalf("Add() = %v", err)
-		}
-		if err := repo.SetStatus(ctx, out.ID, contests.RegistrationDisqualified); err != nil {
-			t.Fatalf("SetStatus() = %v", err)
-		}
-
-		found, total, err := repo.List(ctx, id, contests.ParticipantFilter{
-			Status: contests.RegistrationDisqualified, Limit: 10,
+// What a single caller can observe of the registrations is the contract every
+// contests.RegistrationRepository answers to, the in-memory one the service
+// tests use included (conteststest.RegistrationRepositoryContract). What
+// follows it here is what only the real database can be asked: two first
+// actions racing for one start time, each of the tables that make a registration
+// undeletable, and the combined lookups queryproxy reads.
+func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
+	conteststest.RegistrationRepositoryContract(t, func(t *testing.T, run func(context.Context, conteststest.RegistrationTarget)) {
+		withTx(t, func(ctx context.Context) {
+			accounts := NewUsers(testPool)
+			author := makeUser(t, ctx, "author-reg")
+			// Inside one transaction now() is its start time, which is what
+			// created_at defaults to, so the clock a row is stamped with is
+			// exactly the one read here — through the transaction, as the
+			// insert reads it; the pool itself is another session.
+			var now time.Time
+			if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
+				t.Fatalf("read the database clock: %v", err)
+			}
+			run(ctx, conteststest.RegistrationTarget{
+				Repo: NewRegistrations(testPool),
+				NewUser: func(login, fullName string) uuid.UUID {
+					created, err := accounts.Create(ctx, users.User{
+						Login: login, FullName: fullName, Status: users.StatusActive, PasswordHash: "not-a-real-hash",
+					})
+					if err != nil {
+						t.Fatalf("create user %q: %v", login, err)
+					}
+					return created.ID
+				},
+				NewContest: func() uuid.UUID { return makeContest(t, ctx, author.ID) },
+				// admin is the seeded role that carries contest.admin_all
+				// (migration 000006).
+				GrantAdminAll: func(user uuid.UUID) {
+					if err := accounts.ReplaceRoles(ctx, user, []string{"admin"}); err != nil {
+						t.Fatalf("ReplaceRoles() = %v", err)
+					}
+				},
+				RecordWork: func(registration uuid.UUID) {
+					exec(t, ctx, `INSERT INTO participant_notes (registration_id, body, updated_at)
+						VALUES ($1, 'kept', now())`, registration)
+				},
+				Now: func() time.Time { return now },
+			})
 		})
-		if err != nil {
-			t.Fatalf("List() = %v", err)
-		}
-
-		if total != 1 || len(found) != 1 || found[0].UserID != excluded.ID {
-			t.Errorf("found %d of %d, want only the disqualified participant", len(found), total)
-		}
-	})
-}
-
-// The ordinary case: a participant's first action records now and moves them
-// to active.
-func TestStartingAParticipantRecordsTheTimeAndMovesThemToActive(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		repo := NewRegistrations(testPool)
-		author := makeUser(t, ctx, "author-start")
-		student := makeUser(t, ctx, "student-start")
-		id := makeContest(t, ctx, author.ID)
-		added, err := repo.Add(ctx, id, student.ID)
-		if err != nil {
-			t.Fatalf("Add() = %v", err)
-		}
-
-		now := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
-		started, err := repo.Start(ctx, added.ID, now)
-		if err != nil {
-			t.Fatalf("Start() = %v", err)
-		}
-		if started.StartedAt == nil || !started.StartedAt.Equal(now) {
-			t.Errorf("StartedAt = %v, want %v", started.StartedAt, now)
-		}
-		if started.Status != contests.RegistrationActive {
-			t.Errorf("status = %q, want %q", started.Status, contests.RegistrationActive)
-		}
-	})
-}
-
-// A second call must not move the clock: the guard is "started_at IS NULL",
-// so the first timestamp survives every call after it — the same property
-// the concurrency test below proves under real contention.
-func TestStartingATwiceStartedParticipantKeepsTheFirstTime(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		repo := NewRegistrations(testPool)
-		author := makeUser(t, ctx, "author-restart")
-		student := makeUser(t, ctx, "student-restart")
-		id := makeContest(t, ctx, author.ID)
-		added, err := repo.Add(ctx, id, student.ID)
-		if err != nil {
-			t.Fatalf("Add() = %v", err)
-		}
-
-		first := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
-		if _, err := repo.Start(ctx, added.ID, first); err != nil {
-			t.Fatalf("first Start() = %v", err)
-		}
-
-		later := first.Add(time.Hour)
-		got, err := repo.Start(ctx, added.ID, later)
-		if err != nil {
-			t.Fatalf("second Start() = %v", err)
-		}
-		if !got.StartedAt.Equal(first) {
-			t.Errorf("StartedAt after a second Start() = %v, want the first time %v, not %v", got.StartedAt, first, later)
-		}
-	})
-}
-
-// Finding 4: the UPDATE used to guard only started_at IS NULL, not status —
-// so a disqualification landing between a caller's lookup of the participant
-// and this call would be silently undone, moving them straight to 'active'
-// as if nothing had happened. The status guard means Start now leaves a
-// disqualified registration exactly as it found it.
-func TestStartingADisqualifiedParticipantDoesNotReactivateThem(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		repo := NewRegistrations(testPool)
-		author := makeUser(t, ctx, "author-dq-start")
-		student := makeUser(t, ctx, "student-dq-start")
-		id := makeContest(t, ctx, author.ID)
-		added, err := repo.Add(ctx, id, student.ID)
-		if err != nil {
-			t.Fatalf("Add() = %v", err)
-		}
-		if err := repo.SetStatus(ctx, added.ID, contests.RegistrationDisqualified); err != nil {
-			t.Fatalf("SetStatus() = %v", err)
-		}
-
-		got, err := repo.Start(ctx, added.ID, time.Now())
-		if err != nil {
-			t.Fatalf("Start() = %v", err)
-		}
-		if got.Status != contests.RegistrationDisqualified {
-			t.Errorf("status after Start() = %q, want %q (unchanged)", got.Status, contests.RegistrationDisqualified)
-		}
-		if got.StartedAt != nil {
-			t.Errorf("StartedAt after Start() = %v, want nil — a disqualified registration was never started", got.StartedAt)
-		}
-	})
-}
-
-// Starting a registration that does not exist reports ErrParticipantNotFound,
-// the same as every other lookup on a bad id.
-func TestStartingAnUnknownRegistrationIsReportedAsNotFound(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		repo := NewRegistrations(testPool)
-
-		if _, err := repo.Start(ctx, uuid.New(), time.Now()); !errors.Is(err, contests.ErrParticipantNotFound) {
-			t.Errorf("Start() = %v, want ErrParticipantNotFound", err)
-		}
 	})
 }
 
@@ -280,97 +150,6 @@ func TestStartingConcurrentlyProducesOneStartTimeNotTwo(t *testing.T) {
 			t.Errorf("the stored StartedAt %v does not match what every racer read back %v", final.StartedAt, started)
 		}
 	}
-}
-
-func TestRemovingAParticipantTakesTheRegistrationAway(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		repo := NewRegistrations(testPool)
-		author := makeUser(t, ctx, "author-remove")
-		student := makeUser(t, ctx, "student-remove")
-		id := makeContest(t, ctx, author.ID)
-		if _, err := repo.Add(ctx, id, student.ID); err != nil {
-			t.Fatalf("Add() = %v", err)
-		}
-
-		if err := repo.Remove(ctx, id, student.ID); err != nil {
-			t.Fatalf("Remove() = %v", err)
-		}
-
-		if _, err := repo.ByUser(ctx, id, student.ID); !errors.Is(err, contests.ErrParticipantNotFound) {
-			t.Errorf("ByUser() = %v, want ErrParticipantNotFound", err)
-		}
-	})
-}
-
-// The publish gate's own question: which of this contest's participants
-// administers every contest, and so reads its reference answers and its
-// unfrozen leaderboard. Read through the roles the account holds now, not
-// through anything recorded on the registration — the case the gate exists
-// for is an account granted the permission after it registered.
-func TestRegisteredWithPermissionNamesOnlyTheAccountsThatHoldIt(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		repo := NewRegistrations(testPool)
-		accounts := NewUsers(testPool)
-		author := makeUser(t, ctx, "author-perm")
-		student := makeUser(t, ctx, "student-perm")
-		inspector := makeUser(t, ctx, "inspector-perm")
-		id := makeContest(t, ctx, author.ID)
-		for _, u := range []uuid.UUID{student.ID, inspector.ID} {
-			if _, err := repo.Add(ctx, id, u); err != nil {
-				t.Fatalf("Add() = %v", err)
-			}
-		}
-
-		// Nobody holds it yet, which is the ordinary contest.
-		held, err := repo.RegisteredWithPermission(ctx, id, rbac.PermissionContestAdminAll)
-		if err != nil {
-			t.Fatalf("RegisteredWithPermission() = %v", err)
-		}
-		if len(held) != 0 {
-			t.Fatalf("logins = %v, want none", held)
-		}
-
-		// admin is the seeded role that carries contest.admin_all
-		// (migration 000006).
-		if err := accounts.ReplaceRoles(ctx, inspector.ID, []string{"admin"}); err != nil {
-			t.Fatalf("ReplaceRoles() = %v", err)
-		}
-
-		held, err = repo.RegisteredWithPermission(ctx, id, rbac.PermissionContestAdminAll)
-		if err != nil {
-			t.Fatalf("RegisteredWithPermission() = %v", err)
-		}
-		if !slices.Equal(held, []string{"inspector-perm"}) {
-			t.Errorf("logins = %v, want [inspector-perm]", held)
-		}
-	})
-}
-
-// The same account, registered for somebody else's contest, is nothing to do
-// with this one: the answer is scoped to the roster it was asked about.
-func TestRegisteredWithPermissionLooksOnlyAtItsOwnContest(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		repo := NewRegistrations(testPool)
-		accounts := NewUsers(testPool)
-		author := makeUser(t, ctx, "author-perm-scope")
-		inspector := makeUser(t, ctx, "inspector-perm-scope")
-		theirs := makeContest(t, ctx, author.ID)
-		ours := makeContest(t, ctx, author.ID)
-		if _, err := repo.Add(ctx, theirs, inspector.ID); err != nil {
-			t.Fatalf("Add() = %v", err)
-		}
-		if err := accounts.ReplaceRoles(ctx, inspector.ID, []string{"admin"}); err != nil {
-			t.Fatalf("ReplaceRoles() = %v", err)
-		}
-
-		held, err := repo.RegisteredWithPermission(ctx, ours, rbac.PermissionContestAdminAll)
-		if err != nil {
-			t.Fatalf("RegisteredWithPermission() = %v", err)
-		}
-		if len(held) != 0 {
-			t.Errorf("logins = %v, want none — they are registered for another contest", held)
-		}
-	})
 }
 
 // A registration is undeletable once anything of the participant's own hangs

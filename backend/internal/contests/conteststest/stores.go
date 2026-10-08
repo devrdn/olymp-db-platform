@@ -462,7 +462,9 @@ type AccountLookup func(ctx context.Context, id uuid.UUID) (login, fullName stri
 // real one refuses.
 type PermissionLookup func(ctx context.Context, id uuid.UUID) []string
 
-// Registrations is an in-memory contests.RegistrationRepository.
+// Registrations is an in-memory contests.RegistrationRepository, held to the
+// same answers as postgres.Registrations by RegistrationRepositoryContract,
+// which both run.
 type Registrations struct {
 	byID map[uuid.UUID]contests.Participant
 	// Accounts resolves the login and name carried on every participant.
@@ -470,6 +472,9 @@ type Registrations struct {
 	// Permissions resolves what a participant's account may do, for
 	// RegisteredWithPermission.
 	Permissions PermissionLookup
+	// Clock is what Add stamps CreatedAt with, the way the table's default
+	// stamps it with the database's own now(). Nil leaves CreatedAt zero.
+	Clock func() time.Time
 	// work holds the registrations the store reports as having a record
 	// behind them (PutWork).
 	work map[uuid.UUID]bool
@@ -546,7 +551,7 @@ func (r *Registrations) List(_ context.Context, contestID uuid.UUID, f contests.
 		if f.Status != "" && p.Status != f.Status {
 			continue
 		}
-		if f.Query != "" && !strings.Contains(strings.ToLower(p.Login), strings.ToLower(f.Query)) {
+		if f.Query != "" && !matchesQuery(p, f.Query) {
 			continue
 		}
 		matched = append(matched, p)
@@ -559,6 +564,16 @@ func (r *Registrations) List(_ context.Context, contestID uuid.UUID, f contests.
 	}
 	end := min(f.Offset+f.Limit, total)
 	return matched[f.Offset:end], total, nil
+}
+
+// matchesQuery reports whether the search names the participant's login or
+// full name, ignoring case, as the real repository's ILIKE does. The text is
+// a substring and nothing more: a percent sign or an underscore in it means
+// itself.
+func matchesQuery(p contests.Participant, query string) bool {
+	query = strings.ToLower(query)
+	return strings.Contains(strings.ToLower(p.Login), query) ||
+		strings.Contains(strings.ToLower(p.FullName), query)
 }
 
 func (r *Registrations) ByUser(_ context.Context, contestID, userID uuid.UUID) (contests.Participant, error) {
@@ -586,6 +601,9 @@ func (r *Registrations) Add(ctx context.Context, contestID, userID uuid.UUID) (c
 		ContestID: contestID,
 		UserID:    userID,
 		Status:    contests.RegistrationRegistered,
+	}
+	if r.Clock != nil {
+		p.CreatedAt = r.Clock()
 	}
 	if r.Accounts != nil {
 		p.Login, p.FullName = r.Accounts(ctx, userID)
@@ -638,13 +656,14 @@ func (r *Registrations) SetStatus(_ context.Context, registrationID uuid.UUID, s
 // Start mirrors postgres.Registrations.Start: it sets StartedAt and moves the
 // status to active together, and only the first call for a registration has
 // any effect — a second one reads back what the first wrote instead of
-// moving the clock.
+// moving the clock. A registration whose status is anything but registered
+// (disqualified, say) is read back as it is: starting it would undo that.
 func (r *Registrations) Start(_ context.Context, registrationID uuid.UUID, now time.Time) (contests.Participant, error) {
 	p, ok := r.byID[registrationID]
 	if !ok {
 		return contests.Participant{}, contests.ErrParticipantNotFound
 	}
-	if p.StartedAt == nil {
+	if p.StartedAt == nil && p.Status == contests.RegistrationRegistered {
 		started := now
 		p.StartedAt = &started
 		p.Status = contests.RegistrationActive
