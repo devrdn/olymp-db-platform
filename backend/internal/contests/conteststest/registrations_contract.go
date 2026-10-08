@@ -10,6 +10,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
+	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 )
 
@@ -17,8 +18,8 @@ import (
 // repository holding no registrations yet, and the means to create what a
 // registration hangs off. A real schema needs an account and a contest to
 // exist before a registration can name them, so each implementation fills
-// these its own way: the in-memory store mints identifiers, PostgreSQL
-// inserts rows.
+// these its own way: the in-memory store mints identifiers and remembers
+// them, PostgreSQL inserts rows.
 type RegistrationTarget struct {
 	Repo contests.RegistrationRepository
 	// NewUser creates an account and returns its identifier. The login and
@@ -174,6 +175,30 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 			// and a transaction cannot be read from after that.
 			if _, err := target.Repo.Add(ctx, contest, user); !errors.Is(err, contests.ErrAlreadyEnrolled) {
 				t.Errorf("Add() twice error = %v, want ErrAlreadyEnrolled", err)
+			}
+		})
+	})
+
+	t.Run("Add for a contest that is not there is reported", func(t *testing.T) {
+		// A contest deleted while somebody was being registered for it: the
+		// caller is told the contest is gone, not that the store failed.
+		each(t, func(ctx context.Context, target RegistrationTarget) {
+			user := target.NewUser("alice", "alice")
+
+			if _, err := target.Repo.Add(ctx, uuid.New(), user); !errors.Is(err, contests.ErrNotFound) {
+				t.Errorf("Add() for an unknown contest error = %v, want contests.ErrNotFound", err)
+			}
+		})
+	})
+
+	t.Run("Add of an account that is not there is reported", func(t *testing.T) {
+		// The account's own package names the refusal, the one the contest
+		// routes already answer for an account that is not there.
+		each(t, func(ctx context.Context, target RegistrationTarget) {
+			contest := target.NewContest()
+
+			if _, err := target.Repo.Add(ctx, contest, uuid.New()); !errors.Is(err, users.ErrNotFound) {
+				t.Errorf("Add() of an unknown account error = %v, want users.ErrNotFound", err)
 			}
 		})
 	})

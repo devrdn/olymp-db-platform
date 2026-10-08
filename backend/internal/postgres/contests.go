@@ -454,13 +454,19 @@ func (r *Contests) ReplaceLanguages(ctx context.Context, id uuid.UUID, langs []c
 	// Delete-then-insert in one statement each: "replace" has to mean replace,
 	// and a language quietly left behind would keep the publish gate demanding
 	// translations for something the contest no longer offers.
-	if _, err := r.querier(ctx).Exec(ctx,
-		`DELETE FROM contest_languages WHERE contest_id = $1 AND NOT (lang = ANY($2))`,
-		id, codes); err != nil {
-		return fmt.Errorf("replace contest languages: %w", err)
-	}
+	const stale = `DELETE FROM contest_languages WHERE contest_id = $1 AND NOT (lang = ANY($2))`
 	if len(codes) == 0 {
+		exists, err := clearChildren(ctx, r.querier(ctx), stale, "contests", id, codes)
+		if err != nil {
+			return fmt.Errorf("replace contest languages: %w", err)
+		}
+		if !exists {
+			return contests.ErrNotFound
+		}
 		return nil
+	}
+	if _, err := r.querier(ctx).Exec(ctx, stale, id, codes); err != nil {
+		return fmt.Errorf("replace contest languages: %w", err)
 	}
 
 	// Clear the old default before writing the new one. Only one language per
@@ -481,7 +487,11 @@ func (r *Contests) ReplaceLanguages(ctx context.Context, id uuid.UUID, langs []c
 		ON CONFLICT (contest_id, lang) DO UPDATE SET is_default = EXCLUDED.is_default`,
 		id, codes, defaults)
 	if err != nil {
-		return fmt.Errorf("replace contest languages: %w", err)
+		// A contest deleted since the caller read it is refused here, by
+		// the foreign key.
+		return fmt.Errorf("replace contest languages: %w", missingParent(err, map[string]error{
+			"contest_languages_contest_id_fkey": contests.ErrNotFound,
+		}))
 	}
 	return nil
 }
@@ -497,13 +507,19 @@ func (r *Contests) ReplaceTranslations(ctx context.Context, id uuid.UUID, transl
 		descriptions = append(descriptions, t.Description)
 	}
 
-	if _, err := r.querier(ctx).Exec(ctx,
-		`DELETE FROM contest_translations WHERE contest_id = $1 AND NOT (lang = ANY($2))`,
-		id, langs); err != nil {
-		return fmt.Errorf("replace contest translations: %w", err)
-	}
+	const stale = `DELETE FROM contest_translations WHERE contest_id = $1 AND NOT (lang = ANY($2))`
 	if len(langs) == 0 {
+		exists, err := clearChildren(ctx, r.querier(ctx), stale, "contests", id, langs)
+		if err != nil {
+			return fmt.Errorf("replace contest translations: %w", err)
+		}
+		if !exists {
+			return contests.ErrNotFound
+		}
 		return nil
+	}
+	if _, err := r.querier(ctx).Exec(ctx, stale, id, langs); err != nil {
+		return fmt.Errorf("replace contest translations: %w", err)
 	}
 
 	_, err := r.querier(ctx).Exec(ctx, `
@@ -514,7 +530,9 @@ func (r *Contests) ReplaceTranslations(ctx context.Context, id uuid.UUID, transl
 		SET title = EXCLUDED.title, description = EXCLUDED.description, updated_at = now()`,
 		id, langs, titles, descriptions)
 	if err != nil {
-		return fmt.Errorf("replace contest translations: %w", err)
+		return fmt.Errorf("replace contest translations: %w", missingParent(err, map[string]error{
+			"contest_translations_contest_id_fkey": contests.ErrNotFound,
+		}))
 	}
 	return nil
 }
@@ -539,12 +557,21 @@ func (r *Contests) ReplaceTranslations(ctx context.Context, id uuid.UUID, transl
 // database. FOR NO KEY UPDATE does not conflict with a key-share lock, and
 // still conflicts with itself, which is the only property GrantManager,
 // Enroll and AddParticipants actually need from it.
+//
+// A contest that is not there is ErrNotFound: a lock that found no row
+// holds nothing, and a caller told otherwise would go on to write against a
+// contest deleted since it read it. Once the row is found it is held until
+// the transaction ends, so it cannot be deleted under the caller after that.
 func (r *Contests) LockContest(ctx context.Context, id uuid.UUID) error {
 	if !storage.InTx(ctx) {
 		return errors.New("locking a contest must run inside a transaction")
 	}
-	if _, err := r.querier(ctx).Exec(ctx, `SELECT id FROM contests WHERE id = $1 FOR NO KEY UPDATE`, id); err != nil {
+	tag, err := r.querier(ctx).Exec(ctx, `SELECT id FROM contests WHERE id = $1 FOR NO KEY UPDATE`, id)
+	if err != nil {
 		return fmt.Errorf("lock contest: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return contests.ErrNotFound
 	}
 	return nil
 }

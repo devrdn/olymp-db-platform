@@ -14,7 +14,7 @@ import (
 // holding no stories yet, and the means to create what a story hangs off. A
 // real schema needs a contest to exist before a story can name it, so each
 // implementation fills NewContest its own way: the in-memory store mints an
-// identifier, PostgreSQL inserts a row.
+// identifier and remembers it, PostgreSQL inserts a row.
 type StoryTarget struct {
 	Repo contests.StoryRepository
 	// Text is the participant's read over the same stories as Repo: what Repo
@@ -222,6 +222,13 @@ func StoryRepositoryContract(t *testing.T, each func(t *testing.T, run func(cont
 			load(t, ctx, target, contest).Bodies["en"] = "Scribbled over."
 
 			wantBodies(t, load(t, ctx, target, contest), map[string]string{"en": english}, "loaded after the caller's writes")
+		}},
+		{"saving the story of a contest that is not there is reported", func(t *testing.T, ctx context.Context, target StoryTarget) {
+			// A contest deleted while its story was being edited: the author
+			// is told the contest is gone, not that the store failed.
+			if _, err := target.Repo.Save(ctx, uuid.New(), map[string]string{"en": english}); !errors.Is(err, contests.ErrNotFound) {
+				t.Errorf("Save() for an unknown contest error = %v, want ErrNotFound", err)
+			}
 		}},
 		{"the participant's read serves one language of the story", func(t *testing.T, ctx context.Context, target StoryTarget) {
 			contest := target.NewContest()

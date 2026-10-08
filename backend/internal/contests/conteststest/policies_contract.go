@@ -2,6 +2,7 @@ package conteststest
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ import (
 // no policies yet, and the means to create what a policy hangs off. A real
 // schema needs the contest to exist, and the account that last changed the
 // policy, so each implementation fills these its own way: the in-memory store
-// mints identifiers, PostgreSQL inserts rows.
+// mints identifiers (and remembers the contests), PostgreSQL inserts rows.
 type PolicyTarget struct {
 	Store contests.PolicyStore
 	// NewContest creates a contest and returns its identifier.
@@ -36,10 +37,12 @@ type PolicyTarget struct {
 // context to call the store with, and cleans up afterwards. Only the
 // behaviour a single caller can observe is here. What a database refuses by
 // constraint (a mode it does not know, write permissions under read_only, a
-// table name of the wrong shape, an unknown contest or account) is left out on
-// purpose: the contract does not ask a store to refuse a policy, which
+// table name of the wrong shape, an unknown account) is left out on purpose:
+// the contract does not ask a store to refuse a policy, which
 // SQLPolicy.Validate rules out before it is written, and every policy it saves
-// is a coherent one.
+// is a coherent one. A contest that is not there is the exception, because no
+// validation rules it out: one deleted while its policy was being edited is
+// reported as ErrNotFound.
 func PolicyStoreContract(t *testing.T, each func(t *testing.T, run func(context.Context, PolicyTarget))) {
 	save := func(t *testing.T, ctx context.Context, target PolicyTarget, p contests.SQLPolicy) {
 		t.Helper()
@@ -223,6 +226,16 @@ func PolicyStoreContract(t *testing.T, each func(t *testing.T, run func(context.
 			sameAs(t, load(t, ctx, target, untouched), want, target.Now(), "the other contest once configured")
 			if got := load(t, ctx, target, configured); got.Mode != contests.ModeReadWrite || got.DiskQuotaRatio != 2 {
 				t.Errorf("the first contest = %+v, want it as it was saved", got)
+			}
+		})
+	})
+
+	t.Run("saving the policy of a contest that is not there is reported", func(t *testing.T) {
+		each(t, func(ctx context.Context, target PolicyTarget) {
+			err := target.Store.Save(ctx, contests.DefaultSQLPolicy(uuid.New()))
+
+			if !errors.Is(err, contests.ErrNotFound) {
+				t.Errorf("Save() for an unknown contest error = %v, want ErrNotFound", err)
 			}
 		})
 	})

@@ -89,6 +89,16 @@ func NewFixture() *Fixture {
 	}
 	f.Registrations.Accounts = accounts
 	f.Managers.Accounts = accounts
+	// A question, a story, a SQL policy and a registration name a contest
+	// that must be there, the way the real tables' foreign keys demand. The
+	// account a registration names is left unchecked
+	// (Registrations.UserExists is nil): every service path resolves the
+	// account before registering it, and the leaderboard and profile rigs
+	// register accounts they never create.
+	f.Questions.ContestExists = f.Contests.Exists
+	f.Stories.ContestExists = f.Contests.Exists
+	f.Policies.ContestExists = f.Contests.Exists
+	f.Registrations.ContestExists = f.Contests.Exists
 	// And what that account may do, which is what the publish gate reads to
 	// find a participant who administers every contest.
 	f.Registrations.Permissions = func(ctx context.Context, id uuid.UUID) []string {

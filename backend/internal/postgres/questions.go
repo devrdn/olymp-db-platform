@@ -192,6 +192,11 @@ func (r *Questions) ByID(ctx context.Context, questionID uuid.UUID) (contests.Qu
 // The position is computed in the statement rather than read first and written
 // back: two organizers adding a question at the same moment would otherwise
 // both read the same number, and one of the inserts would fail.
+//
+// A contest that is not there is contests.ErrNotFound, answered by the lock
+// that comes first: it finds the contest row or does not, and a row it finds
+// cannot be deleted before the transaction ends, so the insert's own foreign
+// key never has the contest to refuse.
 func (r *Questions) Create(ctx context.Context, q contests.Question) (contests.Question, error) {
 	querier := r.querier(ctx)
 
@@ -224,7 +229,8 @@ func (r *Questions) Create(ctx context.Context, q contests.Question) (contests.Q
 }
 
 // lockContest serialises everything that allocates a position within one
-// contest, by taking the contest row itself.
+// contest, by taking the contest row itself, and reports
+// contests.ErrNotFound when there is no row to take.
 //
 // The lock lives until the surrounding transaction ends, so outside one it
 // would be released before the INSERT it is meant to protect and the guard
@@ -234,8 +240,12 @@ func lockContest(ctx context.Context, q storage.Querier, contestID uuid.UUID) er
 	if !storage.InTx(ctx) {
 		return errors.New("adding a question must run inside a transaction")
 	}
-	if _, err := q.Exec(ctx, `SELECT id FROM contests WHERE id = $1 FOR UPDATE`, contestID); err != nil {
+	tag, err := q.Exec(ctx, `SELECT id FROM contests WHERE id = $1 FOR UPDATE`, contestID)
+	if err != nil {
 		return fmt.Errorf("lock contest for a new question: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return contests.ErrNotFound
 	}
 	return nil
 }
@@ -348,13 +358,19 @@ func (r *Questions) ReplaceTexts(ctx context.Context, questionID uuid.UUID, text
 		choices = append(choices, encoded)
 	}
 
-	if _, err := r.querier(ctx).Exec(ctx,
-		`DELETE FROM question_translations WHERE question_id = $1 AND NOT (lang = ANY($2))`,
-		questionID, langs); err != nil {
-		return fmt.Errorf("replace question translations: %w", err)
-	}
+	const stale = `DELETE FROM question_translations WHERE question_id = $1 AND NOT (lang = ANY($2))`
 	if len(langs) == 0 {
+		exists, err := clearChildren(ctx, r.querier(ctx), stale, "questions", questionID, langs)
+		if err != nil {
+			return fmt.Errorf("replace question translations: %w", err)
+		}
+		if !exists {
+			return contests.ErrQuestionNotFound
+		}
 		return nil
+	}
+	if _, err := r.querier(ctx).Exec(ctx, stale, questionID, langs); err != nil {
+		return fmt.Errorf("replace question translations: %w", err)
 	}
 
 	_, err := r.querier(ctx).Exec(ctx, `
@@ -365,7 +381,11 @@ func (r *Questions) ReplaceTexts(ctx context.Context, questionID uuid.UUID, text
 		SET body_md = EXCLUDED.body_md, choices = EXCLUDED.choices, updated_at = now()`,
 		questionID, langs, bodies, choices)
 	if err != nil {
-		return fmt.Errorf("replace question translations: %w", err)
+		// A question deleted since the caller read it is refused here, by
+		// the foreign key.
+		return fmt.Errorf("replace question translations: %w", missingParent(err, map[string]error{
+			"question_translations_question_id_fkey": contests.ErrQuestionNotFound,
+		}))
 	}
 	return nil
 }
@@ -376,12 +396,19 @@ func (r *Questions) ReplaceTexts(ctx context.Context, questionID uuid.UUID, text
 // accepting something the organizer has already decided is wrong, and the
 // rows carry no identity anybody outside this table refers to.
 func (r *Questions) ReplaceAnswers(ctx context.Context, questionID uuid.UUID, answers []contests.Answer) error {
-	if _, err := r.querier(ctx).Exec(ctx,
-		`DELETE FROM question_answers WHERE question_id = $1`, questionID); err != nil {
-		return fmt.Errorf("replace reference answers: %w", err)
-	}
+	const all = `DELETE FROM question_answers WHERE question_id = $1`
 	if len(answers) == 0 {
+		exists, err := clearChildren(ctx, r.querier(ctx), all, "questions", questionID)
+		if err != nil {
+			return fmt.Errorf("replace reference answers: %w", err)
+		}
+		if !exists {
+			return contests.ErrQuestionNotFound
+		}
 		return nil
+	}
+	if _, err := r.querier(ctx).Exec(ctx, all, questionID); err != nil {
+		return fmt.Errorf("replace reference answers: %w", err)
 	}
 
 	kinds := make([]string, 0, len(answers))
@@ -396,7 +423,9 @@ func (r *Questions) ReplaceAnswers(ctx context.Context, questionID uuid.UUID, an
 		SELECT $1, kind, value FROM unnest($2::text[], $3::text[]) AS t(kind, value)`,
 		questionID, kinds, values)
 	if err != nil {
-		return fmt.Errorf("replace reference answers: %w", err)
+		return fmt.Errorf("replace reference answers: %w", missingParent(err, map[string]error{
+			"question_answers_question_id_fkey": contests.ErrQuestionNotFound,
+		}))
 	}
 	return nil
 }
