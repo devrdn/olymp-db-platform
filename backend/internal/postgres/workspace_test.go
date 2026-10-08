@@ -158,6 +158,24 @@ func TestWorkspaceTabsAreAppendedUpToTheLimit(t *testing.T) {
 
 // The limit is counted under the lock that inserts: parallel creates cannot
 // each see room for one more.
+// A participant whose events are at the budget can still open a tab: the
+// event recording it is the server's own and is never refused for the budget,
+// and refused it used to fail the tab change with an internal error.
+func TestATabIsCreatedWhenTheEventBudgetIsFull(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		repo := NewWorkspace(testPool)
+		registration := workspaceRegistration(t, ctx)
+		if _, _, err := repo.Load(ctx, registration, "Tab 1"); err != nil {
+			t.Fatalf("Load() = %v", err)
+		}
+		setStoredCount(t, ctx, registration, monitor.MaxStoredEvents)
+
+		if _, err := repo.CreateTab(ctx, registration, 3, numbered); err != nil {
+			t.Fatalf("CreateTab() at a full event budget = %v, want the tab created", err)
+		}
+	})
+}
+
 func TestConcurrentCreatesStayWithinTheLimit(t *testing.T) {
 	ctx, registration := committedRegistration(t)
 	repo := NewWorkspace(testPool)

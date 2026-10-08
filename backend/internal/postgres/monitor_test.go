@@ -172,6 +172,39 @@ func TestMonitorRefusesEventsPastWhatARegistrationStores(t *testing.T) {
 	})
 }
 
+// The ceiling bounds what a browser posts, and nothing the server observes is
+// refused by it. Otherwise a participant fills the budget with signals of
+// their own and then changes address or opens a second session unrecorded:
+// exactly what the monitoring exists to catch. A tab's life is the server's
+// record too, and the tab change it belongs to must not fail over it.
+func TestEventsTheServerObservesAreStoredPastTheBudget(t *testing.T) {
+	withTx(t, func(ctx context.Context) {
+		store := NewMonitor(testPool)
+		f := newMonitorFixture(t, ctx)
+		if err := store.InsertEvents(ctx, []monitor.Event{f.event(monitor.PageLeft{AwayMs: 5000})}); err != nil {
+			t.Fatalf("the first event: %v", err)
+		}
+		setStoredCount(t, ctx, f.registration, monitor.MaxStoredEvents)
+
+		server := []monitor.Event{
+			f.event(monitor.IPChanged{From: netip.MustParseAddr("192.0.2.1"), To: netip.MustParseAddr("198.51.100.7")}),
+			f.event(monitor.ParallelSession{OtherIP: netip.MustParseAddr("198.51.100.8"), UserAgent: "Firefox"}),
+			f.event(monitor.TabCreated{TabID: uuid.New(), Title: "Query 2"}),
+		}
+		if err := store.InsertEvents(ctx, server); err != nil {
+			t.Fatalf("events the server observed, at the budget: err = %v, want them stored", err)
+		}
+		if stored := storedCount(t, ctx, f.registration); stored != monitor.MaxStoredEvents+int64(len(server)) {
+			t.Errorf("stored = %d, want the budget plus the %d server events", stored, len(server))
+		}
+
+		// What the browser posts is still refused at the same line.
+		if err := store.InsertEvents(ctx, []monitor.Event{f.event(monitor.PageLeft{AwayMs: 5000})}); !errors.Is(err, monitor.ErrTooManyEvents) {
+			t.Fatalf("a browser event past the budget: err = %v, want ErrTooManyEvents", err)
+		}
+	})
+}
+
 func storedCount(t *testing.T, ctx context.Context, registration uuid.UUID) int64 {
 	t.Helper()
 	var stored int64
