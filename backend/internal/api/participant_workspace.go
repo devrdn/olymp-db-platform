@@ -22,8 +22,8 @@ import (
 // Admitted like the rest of /play (admit, and queryproxy.Service.Access
 // behind it): once the contest has ended for the participant, every route
 // here answers contest_ended, deadline_passed or contest_finished exactly as
-// /play/story does. There is no read-only mode, because the play screen itself is closed
-// by then.
+// /play/story does. There is no read-only mode, because the play screen
+// itself is closed by then.
 //
 // Two differences from the other /play routes are the point of this file.
 // Nothing here starts an individual participant's clock: keeping notes is not
