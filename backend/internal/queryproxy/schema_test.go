@@ -148,6 +148,33 @@ func TestSchemaDescribesThePairItWasHandedWithoutAdmittingItAgain(t *testing.T) 
 	}
 }
 
+// The game lookup reads the participant's registration again, and that row
+// can be a different one from the registration Access admitted: removed from
+// the roster and added back in between. The participant's copy of the game
+// belongs to a registration, so describing one would describe the wrong
+// database; the read is refused, failing closed, as a registration gone since
+// Access found it, and nothing is provisioned or read.
+func TestSchemaRefusesARegistrationReplacedSinceItWasAdmitted(t *testing.T) {
+	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
+	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, UserID: uuid.New(), Status: contests.RegistrationActive}
+	readded := participant
+	readded.ID = uuid.New()
+	db := &databases{database: "game_c1_u1"}
+	reader := &schemas{schema: provisioning.Schema{Tables: []provisioning.Table{{Name: "guests"}}}}
+	service := queryproxy.New(
+		people{participant: readded}, contestStore{contest: contest},
+		games{game: provisioning.Contest{ID: contest.ID, Policy: sqlpolicy.ReadOnly()}},
+		db, &runner{},
+	).WithSchemas(reader)
+
+	if _, err := service.Schema(t.Context(), contest, participant, netip.MustParseAddr("192.0.2.7")); !errors.Is(err, contests.ErrNotAParticipant) {
+		t.Fatalf("Schema() = %v, want ErrNotAParticipant", err)
+	}
+	if db.asked != nil || len(reader.asked) != 0 {
+		t.Fatalf("provisioned %v and read %v for a registration that was replaced, want neither", db.asked, reader.asked)
+	}
+}
+
 // individualSchemaFixture is schemaFixture for a participant of an
 // individual-timing contest who has not started yet.
 func individualSchemaFixture(policy sqlpolicy.Policy, allowed []netip.Prefix) (*queryproxy.Service, *schemas, *int, admitted) {

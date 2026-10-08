@@ -1317,6 +1317,26 @@ func TestStartOnReadRefusesAStartThatLeftTheClockPending(t *testing.T) {
 	}
 }
 
+// A registration disqualified between the first gate and the start is one
+// Start does not move, so its clock comes back still pending. That is not a
+// store breaking its contract: the participant is told the gate's answer for
+// who they now are, not handed an error of ours.
+func TestStartOnReadRefusesARegistrationDisqualifiedBeforeItsClockStarted(t *testing.T) {
+	contest := individualContest()
+	starts := 0
+	p := contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}
+	disqualified := p
+	disqualified.Status = contests.RegistrationDisqualified
+	service := accessFixture(people{participant: disqualified, startsNothing: true, starts: &starts}, contestStore{contest: contest})
+
+	if _, err := service.StartOnRead(t.Context(), contest, p, netip.Addr{}); !errors.Is(err, contests.ErrNotAParticipant) {
+		t.Fatalf("StartOnRead() = %v, want ErrNotAParticipant", err)
+	}
+	if starts != 1 {
+		t.Fatalf("Start called %d times, want 1", starts)
+	}
+}
+
 // The write failing is ours, not a refusal of the participant.
 func TestStartOnReadMarksAFailureToStartAsOurs(t *testing.T) {
 	contest := individualContest()

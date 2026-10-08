@@ -393,18 +393,24 @@ func TestEventsSendsContestFinishedAndClosesOnceItIsOverForTheParticipant(t *tes
 
 // A refusal that does not mean the contest is over for this participant
 // closes the channel without claiming it finished — that would be a
-// different, wrong fact: a contest taken back to draft, or an address that
-// stopped being allowed, may yet let them back in. A disqualified participant
+// different, wrong fact: a published contest taken back to draft while they
+// wait for it, or an address that stopped being allowed, may yet let them
+// back in. A disqualified participant
 // is over, and still closes without it: the channel ends as not_a_participant
 // always has, telling a disqualified caller nothing a stranger would not be
 // told. A lookup that finds nobody knows nothing, and closes the same way.
 func TestEventsClosesWithoutContestFinishedWhenItIsNotOverOrTheyWereDisqualified(t *testing.T) {
 	for name, given := range map[string]struct {
+		// waiting opens the channel on a published contest rather than a
+		// running one: the only status a contest can be taken back to draft
+		// from (allowedTransitions).
+		waiting     bool
 		contest     func(id uuid.UUID) contests.Contest
 		participant func(p contests.Participant) contests.Participant
 		err         error
 	}{
-		"the contest was taken back to draft": {
+		"the contest was taken back to draft while they waited": {
+			waiting: true,
 			contest: func(id uuid.UUID) contests.Contest {
 				return contests.Contest{ID: id, Status: contests.StatusDraft}
 			},
@@ -433,13 +439,18 @@ func TestEventsClosesWithoutContestFinishedWhenItIsNotOverOrTheyWereDisqualified
 			participant := contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}
 			f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
 			f.access.participant = participant
+			opened := "event: contest_started"
+			if given.waiting {
+				f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusPublished}
+				opened = "event: sync"
+			}
 			f.handler.WithResyncInterval(testResync)
 
 			req, cancel := f.request(contestID)
 			defer cancel()
 			rec, done := f.serve(req)
 
-			waitForSubstring(t, rec, "event: contest_started")
+			waitForSubstring(t, rec, opened)
 			if given.contest != nil {
 				f.access.setContest(given.contest(contestID))
 			}
@@ -874,7 +885,7 @@ func (w *deadlineAwareWriter) Write(b []byte) (int, error) {
 }
 
 // TestEventsResyncArmsTheWriteDeadlineAfterTheLookupsNotBeforeThem is finding
-// 2's own regression test. AccessForEvents is two database reads, and the
+// 2's own regression test. AccessForEvents is a database round trip, and the
 // deadline this handler arms exists to bound the write that follows, not the
 // wait for its own storage. A resync tick whose lookups alone take longer
 // than writeTimeout must not disconnect an otherwise-healthy client just

@@ -1486,8 +1486,9 @@ authentication as the rest of the participant handler:
 **The workspace closes with the contest; there is no read-only mode.** Reading
 and writing are possible only while `Access` admits the participant — the same
 `Access` that guards `/play/story` and the console. Once the contest has ended
-for them, every workspace route answers 409 `contest_not_running` or
-`contest_finished`, like the rest of `/play`. The `/play` screen itself is
+for them, every workspace route answers 409 `deadline_passed`,
+`contest_not_running` or `contest_finished` (section 8.1), like the rest of
+`/play`. The `/play` screen itself is
 unreachable after the end, so a state where "the notes are visible but not
 editable" does not exist and is not needed.
 
@@ -2079,7 +2080,7 @@ nothing.
     here is a fact for analysis and does not affect the deadline.
   - `individual` — each participant gets their own `duration_min` minutes
     from **their** start, and may begin at any point inside
-    `[starts_at, ends_at]`. The start is not a separate button and not a
+    `[starts_at, ends_at)`. The start is not a separate button and not a
     subscription to events but the **first read of the contest's content** —
     the story, the list of questions or the game schema:
     `registrations.started_at` is stamped by the same `Start` transition that
@@ -2090,13 +2091,15 @@ nothing.
 - **One deadline formula**, used by every check — answers, queries, the
   interface: for `fixed`, `deadline = ends_at`; for `individual`,
   `deadline = LEAST(started_at + duration_min, ends_at)`. No other timing
-  logic exists in the code; the submission path, the query proxy and the event
-  stream all compute the deadline with the same function.
+  logic exists in the code: the participation gate (section 8.1), the
+  submission path and the event stream all compute the deadline with the same
+  function, `contests.Deadline`, and only the gate adds the grace to it.
 - **The source of truth is the server:** `contests` and `registrations` in the
   core database. No client clock takes part in any decision.
 - Every "is the contest running?" check happens on the backend on every action
-  — a query, an answer. Submission closes atomically against server time, with
-  a small configurable grace for network delay, five seconds by default.
+  — a query, an answer — and is one rule, the participation gate (section 8.1).
+  Submission closes atomically against server time, with a small configurable
+  grace for network delay (`DEADLINE_GRACE`), five seconds by default.
 - **The interface synchronises** by receiving `server_now` and **its own**
   `deadline` at load, computing the offset locally, and resynchronising every
   thirty to sixty seconds over **SSE** (`/api/contests/{id}/events`), which
@@ -2116,6 +2119,103 @@ nothing.
   read "finished" before answers and queries stopped being accepted within the
   grace, and other code that decides by status rather than recomputing the
   deadline would refuse an honest participant early.
+
+### 8.1 The participation gate
+
+Whether a participant may do something in a contest right now is decided in
+one place: `contests.StandingOf(contest, registration, now, grace, address)`.
+It is a pure function in the `contests` package and reads nothing: every
+caller already holds the contest and the registration, and the console's
+admission fetches both in one round trip (`queryproxy.Lookup.ForAccess`). Its
+answer, a `contests.Standing`, is computed for the request and never stored.
+Four questions are asked of it:
+
+- **`MayAct`** — read the story, the questions, the query log and the schema;
+  run a query; submit an answer; read and write the workspace; send signals.
+- **`MayWait`** — hold the events channel open: whenever `MayAct`, and also
+  while a published contest has not started, for a registration that is
+  neither disqualified nor finished and an address the contest allows, so the
+  start arrives over the channel instead of by polling.
+- **`Over`** — the participant may never act in this contest again, so the
+  profile may show their results (section 9.5). True for a disqualified or
+  finished registration, a contest that is `finished` or `archived`, and,
+  while the contest runs, the participant's own time being up. Never true for a
+  draft, never for a published contest because of its calendar, and never
+  dependent on the address: walking out of the room does not end a contest.
+- **`Refusal`** — `nil` exactly when `MayAct`, and otherwise exactly one
+  sentinel, which the API answers the same way on every route that meets it.
+
+The three cannot contradict each other: `Over` implies neither `MayAct` nor
+`MayWait`, `MayAct` implies `MayWait`, and `Refusal` is `nil` only when
+`MayAct` holds. These are property-tested over every row of the gate's own
+table (`standing_test.go`), which covers each boundary below to the
+nanosecond.
+
+**Time.** The grace is added in exactly one place (`closesAt` in
+`standing.go`), and nowhere else adds it:
+
+- Under fixed timing the contest is open while its status is `running` —
+  before `starts_at` too, since the status is what an organiser or the
+  scheduler moves to open the shared window — until `ends_at` plus the grace.
+- A participant whose individual clock has started may act until their own
+  deadline plus the grace.
+- A participant whose individual clock has not started may start inside
+  `[starts_at, ends_at)`, with **no** grace: the grace is an allowance for a
+  request already on its way from somebody working, not more time to begin.
+  Before `starts_at` the contest is not running for them; at `ends_at` itself
+  it is too late. An unset bound is open on that side.
+- At exactly the deadline plus the grace the participant is refused. That is
+  the instant the core database refuses an answer's write (`now() >=
+  deadline`, with the grace already in the deadline it is handed), so the gate
+  never admits what the write would refuse. `contests.Service.Submit` hands
+  the write that same instant, from the same helper.
+- Timing data no deadline can be computed from — an individual contest with
+  no duration, a fixed one with no `ends_at`, a timing this build does not
+  know — fails closed.
+
+**What each state is told.** States that can never change come first, then
+the address, then "not yet": a participant whose time is up is told so from
+any network, and one on the wrong network is told that before being told to
+wait, since waiting will not help them.
+
+| State | Sentinel | Answer |
+|---|---|---|
+| Not registered, or disqualified | `contests.ErrNotAParticipant` | 403 `not_a_participant` |
+| Registration finished | `contests.ErrParticipantFinished` | 409 `contest_finished` |
+| Contest finished or archived | `contests.ErrContestNotRunning` | 409 `contest_not_running` |
+| Own time up, or too late to start an individual clock | `contests.ErrDeadlinePassed` | 409 `deadline_passed` |
+| Address outside `allowed_cidrs` | `contests.ErrAddressNotAllowed` | 403 `address_not_allowed` |
+| Draft, published and not started, a status this build does not know, before an individual window, broken timing data | `contests.ErrContestNotRunning` | 409 `contest_not_running` |
+
+Never registered and disqualified are the same answer on purpose: telling them
+apart would say whether an account is on a contest's roster. A published
+contest opened from an address it does not allow therefore answers
+`address_not_allowed`, not `contest_not_running`.
+
+**Who asks it.** `queryproxy.Service.Access` admits every `/play` read, the
+answer route, the workspace and the signals, and the schema panel goes through
+it like every other `/play` read; `Run` admits the console's queries;
+`AccessForEvents` holds the events channel open on `MayWait`, and when the
+channel closes because `Over` holds it sends `contest_finished` — except for a
+disqualified participant, whose channel closes as `not_a_participant` always
+has. `contests.Service.Submit` asks before it reads the question.
+`profile.Service` asks `Over`, with the installation's `DEADLINE_GRACE`. An
+individual clock is started (`queryproxy.Service.StartOnRead`, a console's
+first query, a first answer) only after the gate admits the participant, and
+the gate is asked again of the registration `Start` hands back: it may be
+another request's earlier start whose time is already up, or a registration
+disqualified in between, which `Start` does not move.
+
+**What it does not decide.** Rate limits stay outside it and the gate counts
+nothing: each resource keeps its own budget, and the read budget every
+participant-facing request pays (`AdmitRead`), like the console's query rate,
+is charged before the gate is asked, so a refused request still spends it.
+The participant leaderboard is not gated; it keeps its own visibility
+rule. The registration lookup is the caller's — a registration that is not
+found is `not_a_participant`, a store that fails is ours. And the core
+database's own check at write time stays the last word on whether an answer
+lands: the gate decides whether the request is taken at all, the write
+whether it arrived in time.
 
 ## 9. Logging and audit
 
@@ -2613,10 +2713,11 @@ tear down the whole batch.
 **A change of address and a parallel session are detected on the server,
 without a write per request.** `monitor.Tracker` is called immediately after
 `Access` admitted the participant: on `/play` reads and on an answer, on
-workspace writes, in the console (`queryproxy.Service.Run` after `Admitted`)
-and on the signals route. The event stream is not observed: it is one long
-connection rather than a stream of requests. This lives beside the
-participant's admission rather than in a general middleware.
+workspace writes, in the console (`queryproxy.Service.Run` once the
+participation gate, section 8.1, has admitted the query) and on the signals
+route. The event stream is not observed: it is one long connection rather than
+a stream of requests. This lives beside the participant's admission rather
+than in a general middleware.
 
 - The cache holds one key per registration, `monitor:trail:<registration>`,
   with a 24-hour TTL: the last address, the last session and when it was seen,
@@ -3004,17 +3105,18 @@ in it; the profile, like monitoring, tells nobody that.
 line and a link in, nothing more. Whether the contest has ended *for this
 participant* is the participation gate's own answer,
 `contests.StandingOf(contest, participant, now, grace, …).Over()`, asked with
-the installation's `DEADLINE_GRACE`: over exactly when they may never act in it
-again, so the play screen and the results are never open at once. That is the
-registration `finished` or `disqualified`; the contest `finished` or
+the installation's `DEADLINE_GRACE`: over exactly when they may never act in
+it again, so the play screen and the results are never open at once. That is
+the registration `finished` or `disqualified`; the contest `finished` or
 `archived`; or, while it runs, the participant's own deadline plus the grace
 gone by (`contests.Deadline`, covering both the ordinary end and an individual
 clock), or, unstarted under an individual clock, the contest's window closed
 before they began. A draft has ended for nobody, and a contest that never ran
 — published, or in a status this build does not know — is not over by its
-calendar: it is over once it finishes. Until that holds, everything needed during a contest is on the contest's own
-screen under its own rules — the window, the network, the individual clock —
-and the profile does not become a second path to the same data around them.
+calendar: it is over once it finishes. Until that holds, everything needed
+during a contest is on the contest's own screen under its own rules — the
+window, the network, the individual clock — and the profile does not become a
+second path to the same data around them.
 
 **Which statuses the profile carries: `published`, `running`, `finished`,
 `archived`.** A draft is excluded from both `/me/contests` and `/me/summary`

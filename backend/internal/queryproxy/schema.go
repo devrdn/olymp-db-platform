@@ -53,8 +53,9 @@ func (s *Service) WithSchemas(schemas Schemas) *Service {
 // Run uses, asked about the admitted contest and the participant's own
 // account: a second round trip after Access's, which is what admitting every
 // read in one place costs this endpoint. What that lookup says about the
-// registration and the contest is not asked again — the admission already
-// spoke for them.
+// registration's status and the contest is not asked again — the admission
+// already spoke for them — but it must be the registration admitted: one
+// removed and added back since is refused as not a participant.
 //
 // The catalogue flag is checked before the database is provisioned, and
 // before anything is read: a contest that hides its schema must not be able
@@ -74,8 +75,17 @@ func (s *Service) Schema(ctx context.Context, contest contests.Contest, particip
 	// Only the lookup's own failures are read here: a registration gone since
 	// Access found it is not_a_participant, anything else is ours.
 	lookup, err := s.lookup.ForRun(ctx, contest.ID, participant.UserID)
-	if _, err := classifyParticipant(lookup.Participant, err, "look up the contest's game and the participant's copy"); err != nil {
+	found, err := classifyParticipant(lookup.Participant, err, "look up the contest's game and the participant's copy")
+	if err != nil {
 		return provisioning.Schema{}, err
+	}
+	// A different registration from the one Access admitted — removed from
+	// the roster and added back in between — is the admitted one gone, and
+	// is refused the same way: the instance the lookup found is the new
+	// registration's, and describing it to the admitted one would describe
+	// the wrong database. Nothing is provisioned or read for it.
+	if found.ID != participant.ID {
+		return provisioning.Schema{}, contests.ErrNotAParticipant
 	}
 
 	switch {

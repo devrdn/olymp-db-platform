@@ -324,9 +324,15 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 	// the participant's own deadline plus the grace, from the same helper
 	// (closesAt), worked out once rather than inside every retry — the grace
 	// is a fixed installation setting, not something that could change
-	// between tries. The gate has just admitted this participant, so a
-	// deadline is there to compute; failing closed is for a rule that ever
-	// stops saying so.
+	// between tries.
+	//
+	// The gate has just admitted this participant, so a deadline is there to
+	// compute — except for one it admitted to start whose clock Start left
+	// pending: a Start that reported success without starting anything broke
+	// its own contract, and a pending clock has no deadline (Deadline). Taken
+	// at its word, the gate would let them start forever with no deadline
+	// running; this fails closed instead, as the gate does on any
+	// registration no deadline can be computed for.
 	deadline, ok := Deadline(cmd.Contest, participant)
 	if !ok {
 		return SubmitOutcome{}, ErrContestNotRunning
@@ -373,9 +379,10 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 // the registration's own Start, which can only ever set started_at once
 // (postgres.Registrations.Start). Nothing here invents a second way to start
 // a participant's clock. The first gate let them start inside the contest's
-// window; the second decides whether the participant they now are may act —
-// a start that leaves no deadline to compute is broken data, refused here
-// rather than written against no deadline.
+// window; the second decides whether the participant they now are may act:
+// the start another request made first, whose time may already be up, or a
+// registration disqualified since, which Start does not move. A start that
+// leaves no deadline to compute is refused by Submit before the write.
 func (s *Service) startClock(ctx context.Context, c Contest, p Participant, addr netip.Addr) (Participant, error) {
 	if !ClockPending(c, p) {
 		return p, nil
@@ -383,13 +390,6 @@ func (s *Service) startClock(ctx context.Context, c Contest, p Participant, addr
 	started, err := s.registrations.Start(ctx, p.ID, s.now())
 	if err != nil {
 		return Participant{}, fmt.Errorf("start the participant's clock: %w", err)
-	}
-	// A Start that reports success and hands back a clock still pending
-	// broke its own contract. The gate would let such a participant start
-	// forever, with no deadline running, so it fails closed the way the gate
-	// fails closed on any registration no deadline can be computed for.
-	if ClockPending(c, started) {
-		return Participant{}, fmt.Errorf("%w: starting the participant's clock left it unstarted", ErrContestNotRunning)
 	}
 	if err := StandingOf(c, started, s.now(), s.grace, addr).Refusal(); err != nil {
 		return Participant{}, err

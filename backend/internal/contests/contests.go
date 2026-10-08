@@ -3,8 +3,11 @@
 // staff it, and the people who take part.
 //
 // It answers "what may be changed, by whom, and when" — the lifecycle rules,
-// the publish gate, the enrollment rules and the network restriction. It does
-// not answer "who is allowed to call this" (that is internal/rbac, applied by
+// the publish gate, the enrollment rules and the network restriction — and
+// "may this participant act in this contest now": the participation gate,
+// StandingOf, the one rule every participant-facing path asks (the console,
+// the play screen, the events channel, answers, the profile). It does not
+// answer "who is allowed to call this" (that is internal/rbac, applied by
 // the HTTP layer) and it contains no SQL: the storage interfaces are declared
 // here in the domain's own terms and implemented in internal/postgres.
 package contests
