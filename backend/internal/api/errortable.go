@@ -78,29 +78,54 @@ func (t errorTable) answer(w http.ResponseWriter, r *http.Request, log *slog.Log
 	return false
 }
 
-// queryproxyErrors answers every error in queryproxy.Errors(): what the
-// console, the play screen and the events channel all meet when they admit a
-// participant. TestEveryQueryproxyErrorHasItsAnswer walks that list, so an
-// error added there without a row here fails the build's tests rather than a
-// participant's request.
-var queryproxyErrors = errorTable{
+// joined is tables one after another, as one table. For rows more than one
+// package's table answers — standingErrors — so that they are written once and
+// composed into each table that meets them, rather than copied into each.
+func joined(tables ...errorTable) errorTable {
+	var all errorTable
+	for _, t := range tables {
+		all = append(all, t...)
+	}
+	return all
+}
+
+// standingErrors answers the participation gate's refusals
+// (contests.StandingOf): what a participant meets on the console, the play
+// screen, the events channel and the answer route alike, whichever of them
+// asked. Composed into queryproxyErrors and contestsErrors, whose packages
+// both hand these over, and walked by both their tests.
+var standingErrors = errorTable{
 	// The same answer whether the caller never registered, was disqualified,
 	// or the contest named in the URL belongs to somebody else entirely:
 	// telling those apart would say whether an account is on a roster, or
 	// whether a contest exists at all.
-	{err: queryproxy.ErrNotAParticipant, status: http.StatusForbidden, code: codeNotAParticipant,
+	{err: contests.ErrNotAParticipant, status: http.StatusForbidden, code: codeNotAParticipant,
 		message: "The caller is not taking part in this contest"},
-	{err: queryproxy.ErrContestNotRunning, status: http.StatusConflict, code: codeContestNotRunning,
+	{err: contests.ErrContestNotRunning, status: http.StatusConflict, code: codeContestNotRunning,
 		message: "The contest is not running"},
-	{err: queryproxy.ErrFinished, status: http.StatusConflict, code: codeContestFinished,
+	{err: contests.ErrParticipantFinished, status: http.StatusConflict, code: codeContestFinished,
 		message: "The participant has already finished"},
+	{err: contests.ErrDeadlinePassed, status: http.StatusConflict, code: codeDeadlinePassed,
+		message: "The deadline for this contest has passed"},
+	// Deliberately explicit: "you are on the wrong network" is something the
+	// participant can act on, unlike a bare 403. The same answer at
+	// enrolment and at the door of the console.
+	{err: contests.ErrAddressNotAllowed, status: http.StatusForbidden, code: codeAddressNotAllowed,
+		message: "This contest is only available from the university network"},
+}
+
+// queryproxyErrors answers every error in queryproxy.Errors(): what the
+// console, the play screen and the events channel all meet when they admit a
+// participant. TestEveryQueryproxyErrorHasItsAnswer walks that list, so an
+// error added there without a row here fails the build's tests rather than a
+// participant's request. The gate's refusals, which queryproxy exports under
+// its own names, are answered by standingErrors.
+var queryproxyErrors = joined(errorTable{
 	// 409 rather than 403, for the same reason codeQuestionClosed is one: a
 	// fact about where the contest currently stands for this participant, not
 	// a permission they lack, and it stops being true the moment the contest
 	// gives them something to answer again.
 	{err: queryproxy.ErrNothingLeftToAnswer, status: http.StatusConflict, code: codeNothingLeftToAnswer},
-	{err: queryproxy.ErrAddressNotAllowed, status: http.StatusForbidden, code: codeAddressNotAllowed,
-		message: "This contest is only available from the university network"},
 	{err: queryproxy.ErrNoGameYet, status: http.StatusConflict, code: codeNoGameYet,
 		message: "The contest has no game database yet"},
 	// 503 and not 500: the game cluster is at the disk budget its operator
@@ -124,7 +149,7 @@ var queryproxyErrors = errorTable{
 	// and simply does not offer the panel.
 	{err: queryproxy.ErrSchemaHidden, status: http.StatusForbidden, code: codeSchemaHidden,
 		message: "This contest does not show the game's schema"},
-}
+}, standingErrors)
 
 // queryRetryAfter is how long a caller over its query rate waits before a
 // place is certain to be free: the limiter is a sliding minute
@@ -228,12 +253,13 @@ var monitorErrors = errorTable{
 // organiser's contest routes meet, and what a participant meets reading the
 // story or submitting an answer. TestEveryContestsErrorHasItsAnswer walks that
 // list. A contest's staff routes also meet the account package's refusals and
-// answer those first (contestUserErrors).
+// answer those first (contestUserErrors). The participation gate's refusals
+// are answered by standingErrors.
 //
 // The mapping is the API's contract: 404 for things that are not there, 400
 // for a request that could never be right, 409 for one that is right but not
 // now, 422 for a request that is understood and cannot be met.
-var contestsErrors = errorTable{
+var contestsErrors = joined(errorTable{
 	{err: contests.ErrNotFound, status: http.StatusNotFound, code: codeNotFound,
 		message: "Contest not found"},
 	// Also the answer when the question named in the URL belongs to another
@@ -278,13 +304,6 @@ var contestsErrors = errorTable{
 	{err: contests.ErrStaffCannotParticipate, status: http.StatusConflict, code: codeStaffCannotParticipate},
 	{err: contests.ErrParticipantCannotBeStaff, status: http.StatusConflict, code: codeParticipantCannotBeStaff},
 
-	// Deliberately explicit: "you are on the wrong network" is something the
-	// participant can act on, unlike a bare 403. The same code and text as
-	// queryproxy.ErrAddressNotAllowed, which refuses the same thing at the
-	// door of the console rather than at enrolment.
-	{err: contests.ErrAddressNotAllowed, status: http.StatusForbidden, code: codeAddressNotAllowed,
-		message: "This contest is only available from the university network"},
-
 	// A request whose shape could never be right, by its own rule: the error's
 	// own text says which.
 	{err: contests.ErrInvalidContest, status: http.StatusBadRequest, code: codeInvalidRequest},
@@ -310,14 +329,12 @@ var contestsErrors = errorTable{
 	// about this question's current state, not a permission the caller lacks).
 	{err: contests.ErrQuestionNotOpen, status: http.StatusConflict, code: codeQuestionNotOpen,
 		message: "A question ordered before this one is not closed yet"},
-	{err: contests.ErrDeadlinePassed, status: http.StatusConflict, code: codeDeadlinePassed,
-		message: "The deadline for this contest has passed"},
 	// Running out of retries is a fact about this exact moment, not an outage —
 	// the same 409 family as codeQuestionClosed and codeStatusChanged, and the
 	// same honest instruction: try again.
 	{err: contests.ErrTooManyAttemptConflicts, status: http.StatusConflict, code: codeAttemptConflict,
 		message: "Too many submissions to this question arrived at once; try again"},
-}
+}, standingErrors)
 
 // notPublishableMessage is what a contest that is not ready to publish is told,
 // with or without the list of problems.
