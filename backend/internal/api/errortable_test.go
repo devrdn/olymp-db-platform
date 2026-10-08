@@ -69,6 +69,8 @@ func TestEveryQueryproxyErrorHasItsAnswer(t *testing.T) {
 			message: "The caller is not taking part in this contest"},
 		contests.ErrContestNotRunning: {status: http.StatusConflict, code: "contest_not_running",
 			message: "The contest is not running"},
+		contests.ErrContestEnded: {status: http.StatusConflict, code: "contest_ended",
+			message: "The contest has ended"},
 		contests.ErrParticipantFinished: {status: http.StatusConflict, code: "contest_finished",
 			message: "The participant has already finished"},
 		contests.ErrDeadlinePassed: {status: http.StatusConflict, code: "deadline_passed",
@@ -95,8 +97,8 @@ func TestEveryQueryproxyErrorHasItsAnswer(t *testing.T) {
 	}
 
 	gate := []error{
-		contests.ErrNotAParticipant, contests.ErrContestNotRunning, contests.ErrParticipantFinished,
-		contests.ErrDeadlinePassed, contests.ErrAddressNotAllowed,
+		contests.ErrNotAParticipant, contests.ErrContestNotRunning, contests.ErrContestEnded,
+		contests.ErrParticipantFinished, contests.ErrDeadlinePassed, contests.ErrAddressNotAllowed,
 	}
 	for _, err := range append(queryproxy.Errors(), gate...) {
 		t.Run(err.Error(), func(t *testing.T) {
@@ -405,6 +407,8 @@ func TestEveryContestsErrorHasItsAnswer(t *testing.T) {
 			message: "The caller is not taking part in this contest"},
 		contests.ErrContestNotRunning: {status: http.StatusConflict, code: "contest_not_running",
 			message: "The contest is not running"},
+		contests.ErrContestEnded: {status: http.StatusConflict, code: "contest_ended",
+			message: "The contest has ended"},
 		contests.ErrParticipantFinished: {status: http.StatusConflict, code: "contest_finished",
 			message: "The participant has already finished"},
 		contests.ErrInvalidContest: {status: http.StatusBadRequest, code: invalid,

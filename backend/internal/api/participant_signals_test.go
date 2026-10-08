@@ -266,6 +266,7 @@ func TestSignalsAreAdmittedLikeThePlayScreen(t *testing.T) {
 	}{
 		{contests.ErrNotAParticipant, http.StatusForbidden, "not_a_participant"},
 		{contests.ErrContestNotRunning, http.StatusConflict, "contest_not_running"},
+		{contests.ErrContestEnded, http.StatusConflict, "contest_ended"},
 		{contests.ErrParticipantFinished, http.StatusConflict, "contest_finished"},
 		{contests.ErrDeadlinePassed, http.StatusConflict, "deadline_passed"},
 		{contests.ErrAddressNotAllowed, http.StatusForbidden, "address_not_allowed"},

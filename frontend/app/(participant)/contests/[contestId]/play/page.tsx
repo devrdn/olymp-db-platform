@@ -49,7 +49,10 @@ export async function generateMetadata() {
  * nothing left on this screen worth keeping — it is shown the "not
  * available" page below, the same way `contest_finished` and
  * `contest_not_running` (the two this screen originally handled) already
- * were.
+ * were. A contest that has ended (`contest_ended`) and one that is merely not
+ * open now (`contest_not_running`) take it alike: the difference matters to
+ * the events channel, which keeps waiting on the second, not to a read of the
+ * content, which neither of them allows.
  *
  * `story_not_found` deliberately does not take the screen: it is a fact about the
  * story alone (`Reader.Story` refuses this way the instant a contest's story
@@ -64,6 +67,7 @@ function takesTheScreen(code: string): boolean {
   // these reads meet.
   return (
     kind === "closed" ||
+    kind === "dormant" ||
     kind === "excluded" ||
     kind === "elsewhere" ||
     code === "query_too_often" ||
@@ -478,11 +482,11 @@ function ScreenUnavailable({ body, code, dict }: { body: string; code?: string; 
  *
  * One of the codes that lands here is not like the others, and treating it
  * the same took a participant out of an olympiad for reloading. A rate limit
- * lifts by itself within the minute; `contest_finished`, `not_a_participant`
- * and an address outside the network do not lift at all. SPEC.md's own state
- * list calls the first `blocked` and requires it to carry "the reason and the
- * moment it lifts", so it says so and offers the way back — which is the same
- * address, once the minute has passed.
+ * lifts by itself within the minute; `contest_finished`, `contest_ended`,
+ * `not_a_participant` and an address outside the network do not lift at all.
+ * SPEC.md's own state list calls the first `blocked` and requires it to carry
+ * "the reason and the moment it lifts", so it says so and offers the way
+ * back — which is the same address, once the minute has passed.
  */
 function UnavailablePage({
   title,

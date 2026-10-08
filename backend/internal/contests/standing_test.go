@@ -204,15 +204,21 @@ func standingRows() []standingRow {
 		{name: "a status this build does not know",
 			contest: fixedContest("paused"), participant: registered(), now: standingTen, addr: inTheLab,
 			refusal: contests.ErrContestNotRunning},
+		// An ended contest is named as ended, not as "not running": the one
+		// will never open again, the other may, and the play screen has to
+		// tell a participant which.
 		{name: "finished",
 			contest: fixedContest(contests.StatusFinished), participant: registered(), now: standingTen, addr: inTheLab,
-			over: true, refusal: contests.ErrContestNotRunning},
+			over: true, refusal: contests.ErrContestEnded},
 		{name: "finished, said before the address",
 			contest: fixedContest(contests.StatusFinished), participant: registered(), now: standingTen, addr: outsideTheLab,
-			over: true, refusal: contests.ErrContestNotRunning},
+			over: true, refusal: contests.ErrContestEnded},
 		{name: "archived",
 			contest: individualContest(contests.StatusArchived), participant: startedAt(standingTen), now: standingTen, addr: inTheLab,
-			over: true, refusal: contests.ErrContestNotRunning},
+			over: true, refusal: contests.ErrContestEnded},
+		{name: "archived without ever running, before its own starts_at",
+			contest: fixedContest(contests.StatusArchived), participant: registered(), now: standingStarts.Add(-time.Hour), addr: inTheLab,
+			over: true, refusal: contests.ErrContestEnded},
 
 		// The registration's own status comes before everything else.
 		{name: "disqualified inside the window",

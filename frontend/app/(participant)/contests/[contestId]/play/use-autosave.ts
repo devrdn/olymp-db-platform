@@ -26,9 +26,14 @@ import { isClosed, type ClosedCode } from "./refusals";
  *   8, 16 and then every 30 s; a 429 waits as long as `Retry-After` says;
  * - a refusal of the text itself (a 4xx such as `workspace_notes_too_long`)
  *   is not retried until the text changes;
- * - once the contest has closed for the participant (409
- *   `contest_not_running` or `contest_finished`), the engine stops for good
- *   and says so; there is no read-only mode to fall back to.
+ * - once the contest has closed for the participant (409 `contest_ended`,
+ *   `contest_finished` or `deadline_passed`), the engine stops for good and
+ *   says so; there is no read-only mode to fall back to. `contest_not_running`
+ *   (a contest not open now, which may open later) is not one of them and
+ *   has no handling of its own: the workspace is on screen only once the
+ *   contest runs, and a running contest can only go on to finish, never
+ *   back to draft, so it cannot arrive mid-work. Should it arrive anyway, it
+ *   is a refusal like any other 4xx.
  *
  * Until the server has confirmed a text, it is kept as a draft in
  * `localStorage`, keyed by account, contest and document, for the one case the

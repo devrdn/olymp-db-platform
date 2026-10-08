@@ -7,7 +7,7 @@ import (
 )
 
 // What a participant meets at the gate (StandingOf): the one refusal a
-// Standing gives when it does not let them act. The fifth, a network the
+// Standing gives when it does not let them act. The sixth, a network the
 // contest is not held on, is ErrAddressNotAllowed (enrollment.go), which
 // enrolment refuses for the same reason.
 var (
@@ -17,11 +17,17 @@ var (
 	// probing a contest whether an account is on its roster.
 	ErrNotAParticipant = errors.New("not a participant of this contest")
 	// ErrContestNotRunning is a contest that is not open to this participant
-	// yet, or no longer open to anybody: a draft, a published contest that has
-	// not started, a status this build does not know, an individual window
-	// that has not opened, a contest that has finished or been archived, or
-	// timing data no deadline can be computed from.
+	// now, but may yet be: a draft (a published contest can be taken back to
+	// one), a published contest that has not started, a status this build
+	// does not know, an individual window that has not opened, or timing data
+	// no deadline can be computed from. A contest that will never open again
+	// is ErrContestEnded instead.
 	ErrContestNotRunning = errors.New("the contest is not running")
+	// ErrContestEnded is a contest finished or archived: over for everybody,
+	// and it never opens again. Distinct from ErrContestNotRunning so that a
+	// participant waiting for a contest that is merely not open yet is never
+	// told it is over.
+	ErrContestEnded = errors.New("the contest has ended")
 	// ErrParticipantFinished is a registration that is finished. Their
 	// answers are in; everything closing with them is the point of finishing.
 	ErrParticipantFinished = errors.New("the participant has finished")
@@ -202,6 +208,10 @@ func (s Standing) Over() bool {
 // Refusal is why the participant may not act: nil exactly when MayAct, and
 // otherwise one of the gate's sentinels, unwrapped.
 //
+// A contest that has ended is ErrContestEnded and one that is merely not open
+// now is ErrContestNotRunning: the play screen stops for good on the first
+// and keeps waiting on the second, so the two must never share a sentinel.
+//
 // States that can never change come first, then the address, then "not yet":
 // a participant whose time is up is told so from anywhere, and one on the
 // wrong network is told that before being told to wait, since waiting will
@@ -213,7 +223,7 @@ func (s Standing) Refusal() error {
 	case phaseFinished:
 		return ErrParticipantFinished
 	case phaseEnded:
-		return ErrContestNotRunning
+		return ErrContestEnded
 	case phaseTimeUp:
 		return ErrDeadlinePassed
 	}

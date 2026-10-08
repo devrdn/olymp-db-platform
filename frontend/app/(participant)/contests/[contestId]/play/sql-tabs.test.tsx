@@ -407,7 +407,7 @@ describe("reordering the tabs", () => {
 
 /**
  * Once the contest is over for this participant every write is refused
- * (`contest_not_running` / `contest_finished`), so the strip stops offering
+ * (`contest_ended` / `contest_finished`), so the strip stops offering
  * writes: what is on screen is still readable, and nothing invites an action
  * that can only fail.
  */

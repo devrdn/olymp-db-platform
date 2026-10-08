@@ -335,7 +335,7 @@ func TestWhoMayAskAndWhen(t *testing.T) {
 		"a contest that has finished": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
 			contest: contests.Contest{Status: contests.StatusFinished},
-			want:    contests.ErrContestNotRunning,
+			want:    contests.ErrContestEnded,
 		},
 		"somebody disqualified": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationDisqualified}},
@@ -1017,7 +1017,7 @@ func TestAccessAgreesWithRunAboutWhoMayAskAndWhen(t *testing.T) {
 		"a contest that has finished": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
 			contest: contests.Contest{Status: contests.StatusFinished},
-			want:    contests.ErrContestNotRunning,
+			want:    contests.ErrContestEnded,
 		},
 		"somebody disqualified": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationDisqualified}},
@@ -1207,7 +1207,7 @@ func TestStartOnReadOutsideTheWindowStartsNoClock(t *testing.T) {
 	}{
 		"before starts_at": {func(c *contests.Contest) { later := time.Now().Add(time.Hour); c.StartsAt = &later }, contests.ErrContestNotRunning},
 		"after ends_at":    {func(c *contests.Contest) { earlier := time.Now().Add(-time.Minute); c.EndsAt = &earlier }, contests.ErrDeadlinePassed},
-		"not running":      {func(c *contests.Contest) { c.Status = contests.StatusFinished }, contests.ErrContestNotRunning},
+		"finished":         {func(c *contests.Contest) { c.Status = contests.StatusFinished }, contests.ErrContestEnded},
 	} {
 		t.Run(name, func(t *testing.T) {
 			contest := individualContest()
@@ -1417,7 +1417,7 @@ func TestAccessForEventsAdmitsExactlyOneMoreStatusThanAccess(t *testing.T) {
 		"a contest that has finished": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
 			contest: contests.Contest{Status: contests.StatusFinished},
-			want:    contests.ErrContestNotRunning,
+			want:    contests.ErrContestEnded,
 		},
 		"a contest still a draft": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}},
@@ -1473,7 +1473,7 @@ func TestAccessForEventsHandsBackTheStandingItDecidedOn(t *testing.T) {
 		"a contest that has finished": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
 			contest: contests.Contest{Status: contests.StatusFinished},
-			want:    contests.ErrContestNotRunning, over: true,
+			want:    contests.ErrContestEnded, over: true,
 		},
 		"a registration that is finished": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationFinished}},
@@ -2488,8 +2488,8 @@ func TestARefusedQueryIsNotObserved(t *testing.T) {
 	cmd.Address = netip.MustParseAddr("192.0.2.44")
 	cmd.Session = monitor.SessionTag("token")
 
-	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, contests.ErrContestNotRunning) {
-		t.Fatalf("error = %v, want ErrContestNotRunning", err)
+	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, contests.ErrContestEnded) {
+		t.Fatalf("error = %v, want ErrContestEnded", err)
 	}
 	if len(seen.visits) != 0 {
 		t.Fatalf("a refused query was observed: %+v", seen.visits)

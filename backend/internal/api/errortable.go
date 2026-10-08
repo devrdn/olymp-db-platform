@@ -103,6 +103,11 @@ var standingErrors = errorTable{
 		message: "The caller is not taking part in this contest"},
 	{err: contests.ErrContestNotRunning, status: http.StatusConflict, code: codeContestNotRunning,
 		message: "The contest is not running"},
+	// 409 like contest_not_running, and a code of its own because the play
+	// screen acts on the difference: this one stops it for good, the other
+	// keeps it waiting.
+	{err: contests.ErrContestEnded, status: http.StatusConflict, code: codeContestEnded,
+		message: "The contest has ended"},
 	{err: contests.ErrParticipantFinished, status: http.StatusConflict, code: codeContestFinished,
 		message: "The participant has already finished"},
 	{err: contests.ErrDeadlinePassed, status: http.StatusConflict, code: codeDeadlinePassed,

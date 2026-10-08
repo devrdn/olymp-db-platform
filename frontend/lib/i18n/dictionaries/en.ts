@@ -2016,6 +2016,8 @@ const en = {
       "You are not taking part in this contest.",
     contest_not_running:
       "The contest is not running, so it takes no queries.",
+    contest_ended:
+      "The contest has ended, so it takes nothing more.",
     no_game_yet:
       "This contest's database has not been prepared yet. Nothing you did — try again shortly.",
     no_game_to_build:

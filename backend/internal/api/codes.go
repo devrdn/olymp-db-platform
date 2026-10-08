@@ -49,7 +49,9 @@ var (
 	codeNotAParticipant = httpx.NewCode("not_a_participant",
 		"The caller is not taking part in this contest. The same answer whether they never registered or were disqualified: telling those apart would say whether an account is on a roster.")
 	codeContestNotRunning = httpx.NewCode("contest_not_running",
-		"The contest has not started, or has finished. Queries are taken only while it runs.")
+		"The contest is not open to this participant now, but may be later: it has not started, has been taken back to draft, or their own window has not opened. Queries are taken only while it runs. A contest that has ended answers contest_ended instead.")
+	codeContestEnded = httpx.NewCode("contest_ended",
+		"The contest has finished or been archived. It is over for everybody and will not open again, so nothing more is taken from anyone.")
 	codeContestFinished = httpx.NewCode("contest_finished",
 		"The participant has already finished. Their answers are in, and the console closes with them.")
 	codeNothingLeftToAnswer = httpx.NewCode("nothing_left_to_answer",
@@ -363,7 +365,7 @@ var (
 	// One code per workspace.Service refusal (CLAUDE.md rule 1). The
 	// interface autosaves, so each of these decides what it does next: wait
 	// and retry, or tell the participant what to shorten. A contest that has
-	// ended is not one of them: the workspace answers contest_not_running or
+	// ended is not one of them: the workspace answers contest_ended or
 	// contest_finished like the rest of /play.
 	codeWorkspaceTooOften = httpx.NewCode("workspace_too_often",
 		"This participant has saved their notes and tabs more often this minute than the installation allows, refused saves included. Nothing was saved; `Retry-After` says how long to wait at most.")

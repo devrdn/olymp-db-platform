@@ -272,6 +272,10 @@ export function useSqlTabs({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // `contest_not_running` is not a closed code and needs no branch here: the
+  // strip exists only once the contest runs, and a running contest can only
+  // go on to finish, never back to draft, so it cannot arrive mid-work.
+  // Should it arrive anyway, it is reported as an ordinary refusal below.
   const report = useCallback((failure: unknown) => {
     if (failure instanceof ApiError && isClosed(failure.code)) {
       setClosed(failure.code);

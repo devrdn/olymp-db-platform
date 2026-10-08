@@ -15,6 +15,10 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
  *
  * - `closed`: the contest is over for this participant. Nothing will be
  *   accepted again.
+ * - `dormant`: the contest is not open now, but may be later — it has not
+ *   started, or a published contest was taken back to draft and may be
+ *   published again. Not over, so nothing stops for good on it; it lifts
+ *   when the organiser opens the contest, not on any timer of ours.
  * - `excluded`: the account is not taking part — never was, or was
  *   disqualified. Retrying repeats the refusal.
  * - `elsewhere`: the request came from outside the contest's network. It
@@ -28,17 +32,26 @@ import type { Dictionary } from "@/lib/i18n/dictionary";
  * - `refused`: everything else — the request itself was refused, and the
  *   dictionary's sentence for its code says what to change.
  *
- * A code is added here only when it is one of the first five; an ordinary
+ * A code is added here only when it is one of the first six; an ordinary
  * refusal needs nothing but its sentence in the dictionaries.
  */
-export type RefusalKind = "closed" | "excluded" | "elsewhere" | "passing" | "fault" | "refused";
+export type RefusalKind =
+  | "closed"
+  | "dormant"
+  | "excluded"
+  | "elsewhere"
+  | "passing"
+  | "fault"
+  | "refused";
 
 const KINDS = {
   contest_finished: "closed",
-  contest_not_running: "closed",
+  contest_ended: "closed",
   // The participant's own time is up while the contest may still be running
   // for everyone else: as final for them as the contest ending.
   deadline_passed: "closed",
+
+  contest_not_running: "dormant",
 
   not_a_participant: "excluded",
 

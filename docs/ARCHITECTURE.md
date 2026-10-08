@@ -1487,7 +1487,7 @@ authentication as the rest of the participant handler:
 and writing are possible only while `Access` admits the participant — the same
 `Access` that guards `/play/story` and the console. Once the contest has ended
 for them, every workspace route answers 409 `deadline_passed`,
-`contest_not_running` or `contest_finished` (section 8.1), like the rest of
+`contest_ended` or `contest_finished` (section 8.1), like the rest of
 `/play`. The `/play` screen itself is
 unreachable after the end, so a state where "the notes are visible but not
 editable" does not exist and is not needed.
@@ -2186,7 +2186,7 @@ wait, since waiting will not help them.
 |---|---|---|
 | Not registered, or disqualified | `contests.ErrNotAParticipant` | 403 `not_a_participant` |
 | Registration finished | `contests.ErrParticipantFinished` | 409 `contest_finished` |
-| Contest finished or archived | `contests.ErrContestNotRunning` | 409 `contest_not_running` |
+| Contest finished or archived | `contests.ErrContestEnded` | 409 `contest_ended` |
 | Own time up, or too late to start an individual clock | `contests.ErrDeadlinePassed` | 409 `deadline_passed` |
 | Address outside `allowed_cidrs` | `contests.ErrAddressNotAllowed` | 403 `address_not_allowed` |
 | Draft, published and not started, a status this build does not know, before an individual window, broken timing data | `contests.ErrContestNotRunning` | 409 `contest_not_running` |
@@ -2195,6 +2195,11 @@ Never registered and disqualified are the same answer on purpose: telling them
 apart would say whether an account is on a contest's roster. A published
 contest opened from an address it does not allow therefore answers
 `address_not_allowed`, not `contest_not_running`.
+
+An ended contest and one that is merely not open are two codes on purpose:
+`contest_ended` will never lift, `contest_not_running` may (a published
+contest can be taken back to draft and published again), and the play screen
+stops for good on the first while it keeps waiting on the second.
 
 **Who asks it.** `queryproxy.Service.Access` admits every `/play` read, the
 answer route, the workspace and the signals, and the schema panel goes through

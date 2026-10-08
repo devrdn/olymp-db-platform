@@ -1819,6 +1819,8 @@ const ro = {
       "Nu participați la această olimpiadă.",
     contest_not_running:
       "Olimpiada nu se desfășoară, deci nu acceptă interogări.",
+    contest_ended:
+      "Olimpiada s-a încheiat, deci nu mai acceptă nimic.",
     no_game_yet:
       "Baza de date a acestei olimpiade nu este încă pregătită. Nu este greșeala dumneavoastră — încercați peste puțin timp.",
     no_game_to_build:

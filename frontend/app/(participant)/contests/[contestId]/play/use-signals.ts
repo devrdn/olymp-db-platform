@@ -46,13 +46,18 @@ export type { PasteTarget, Signal };
  * - a batch refused as such (another 4xx) is dropped: sending it again would
  *   be refused again;
  * - once the contest has closed for the participant (409
- *   `contest_not_running` or `contest_finished`), the participant is not
- *   on its roster (403 `not_a_participant`), or the session has ended (any
- *   401), the collector stops for good:
+ *   `contest_ended`, `contest_finished` or `deadline_passed`), the
+ *   participant is not on its roster (403 `not_a_participant`), or the
+ *   session has ended (any 401), the collector stops for good:
  *   every later batch would be refused alike. `address_not_allowed` is not
  *   final — a laptop briefly on a hotspot is outside the network for a
  *   moment — so that batch is dropped like any other refusal and collecting
  *   goes on, at one refused request per 10 s at most;
+ * - `contest_not_running` (a contest not open now) does not stop it either,
+ *   and needs nothing of its own: signals are collected only on the running
+ *   screen, and a running contest's one way onward is to finish — it can
+ *   never go back to draft — so it cannot arrive mid-work. Should it arrive
+ *   anyway, the batch is dropped like any other refusal;
  * - a page restored from the back/forward cache (`pageshow` with
  *   `persisted`) records the time since its `pagehide` as an absence.
  *

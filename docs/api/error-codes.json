@@ -42,12 +42,16 @@
       "meaning": "The operation would lock the caller out of their own account, so it is refused on oneself."
     },
     {
+      "code": "contest_ended",
+      "meaning": "The contest has finished or been archived. It is over for everybody and will not open again, so nothing more is taken from anyone."
+    },
+    {
       "code": "contest_finished",
       "meaning": "The participant has already finished. Their answers are in, and the console closes with them."
     },
     {
       "code": "contest_not_running",
-      "meaning": "The contest has not started, or has finished. Queries are taken only while it runs."
+      "meaning": "The contest is not open to this participant now, but may be later: it has not started, has been taken back to draft, or their own window has not opened. Queries are taken only while it runs. A contest that has ended answers contest_ended instead."
     },
     {
       "code": "cover_attribution_required",
