@@ -2015,7 +2015,7 @@ const en = {
     not_a_participant:
       "You are not taking part in this contest.",
     contest_not_running:
-      "The contest is not running, so it takes no queries.",
+      "The contest is not open right now. It may open later.",
     contest_ended:
       "The contest has ended, so it takes nothing more.",
     no_game_yet:
