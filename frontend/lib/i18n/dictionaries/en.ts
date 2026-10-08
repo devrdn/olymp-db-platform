@@ -1965,7 +1965,6 @@ const en = {
     too_many_attempts: "Too many attempts. Wait and try again.",
     sign_in_busy: "The system is busy checking passwords. Try again in a moment.",
     wrong_password: "The current password is wrong.",
-    invalid_password: "That password does not meet the requirements.",
     weak_password: "That password is too simple. Make it longer and more varied.",
     password_mismatch: "The two new passwords do not match.",
     same_password: "The new password matches the old one.",

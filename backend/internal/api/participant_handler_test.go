@@ -760,8 +760,9 @@ func TestACallerWithinTheRateBudgetStillReachesAccess(t *testing.T) {
 	}
 }
 
-// Finding 4: contests.ErrStoryNotFound must map to 404 — a sentinel with a
-// mapping in fail() and, until now, no test asserting it.
+// A contest with no story yet: the reader's refusal reaches the participant
+// as a 404 through the contests table (contestsErrors), on the story route
+// itself rather than only in the table's own test.
 func TestAMissingStoryIsA404(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()

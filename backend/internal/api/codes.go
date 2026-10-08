@@ -262,8 +262,6 @@ var (
 		"The new password does not meet the policy. The message says which rule.")
 	codeSamePassword = httpx.NewCode("same_password",
 		"The new password is the one already in use.")
-	codeInvalidPassword = httpx.NewCode("invalid_password",
-		"The password is not acceptable. The message says why.")
 
 	// --- Accounts -----------------------------------------------------------
 
