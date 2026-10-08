@@ -99,7 +99,8 @@ func TestOpenAdmitsOnEveryWayAContestEndsForOneParticipant(t *testing.T) {
 }
 
 // An individual participant who never started is not "finished" while the
-// contest runs: there is no deadline to have passed (contests.Deadline).
+// contest's window is still open: they may yet start, and nothing of theirs
+// has run out.
 func TestOpenRefusesAnIndividualParticipantWhoNeverStarted(t *testing.T) {
 	r := newRig(t)
 	r.now = start.Add(time.Hour)
@@ -126,5 +127,63 @@ func TestSummaryIsOneRead(t *testing.T) {
 	}
 	if r.store.reads["summary"] != 1 {
 		t.Errorf("the store was read %d times, want one", r.store.reads["summary"])
+	}
+}
+
+// The profile opens a contest's results exactly when the play screen closes
+// it: at the participant's deadline plus the grace, the instant the
+// participation gate refuses them at. At the deadline itself they may still
+// be answering, and play and results are never open at once.
+func TestOpenWaitsForTheGraceAfterTheDeadline(t *testing.T) {
+	for name, given := range map[string]struct {
+		now  time.Time
+		want error
+	}{
+		"at exactly the deadline":          {now: end, want: profile.ErrNotFound},
+		"an instant before deadline+grace": {now: end.Add(grace - time.Nanosecond), want: profile.ErrNotFound},
+		"at deadline+grace":                {now: end.Add(grace), want: nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t)
+			r.now = given.now
+			c, _ := r.seed(t, contests.StatusRunning)
+
+			if _, err := r.service.Open(t.Context(), c.ID, r.user); !errors.Is(err, given.want) {
+				t.Errorf("Open() = %v, want %v", err, given.want)
+			}
+		})
+	}
+}
+
+// An individual participant who never started, in a contest that is still
+// running, can no longer start once the contest's own window has closed: the
+// contest is over for them, and its report opens, at ends_at.
+func TestOpenAdmitsAnIndividualParticipantWhoNeverStartedOnceTheWindowCloses(t *testing.T) {
+	r := newRig(t)
+	r.now = end
+	c, _ := r.seed(t, contests.StatusRunning)
+	duration := 30
+	c.Timing, c.DurationMin = contests.TimingIndividual, &duration
+	r.contests.Put(c)
+
+	if _, err := r.service.Open(t.Context(), c.ID, r.user); err != nil {
+		t.Errorf("Open() = %v, want the report: too late to start is over", err)
+	}
+}
+
+// A contest that never ran is not over by its calendar. A published contest
+// whose fixed ends_at has gone by without it being started, or one in a
+// status this build does not know, is over once it finishes, not before.
+func TestOpenRefusesAContestThatNeverRanHoweverLate(t *testing.T) {
+	for _, status := range []string{contests.StatusPublished, "paused"} {
+		t.Run(status, func(t *testing.T) {
+			r := newRig(t)
+			r.now = end.Add(time.Hour)
+			c, _ := r.seed(t, status)
+
+			if _, err := r.service.Open(t.Context(), c.ID, r.user); !errors.Is(err, profile.ErrNotFound) {
+				t.Errorf("Open() = %v, want ErrNotFound", err)
+			}
+		})
 	}
 }

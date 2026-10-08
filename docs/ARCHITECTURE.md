@@ -3001,12 +3001,18 @@ answers would say whether a contest exists and whether a given participant is
 in it; the profile, like monitoring, tells nobody that.
 
 **While a contest runs, the profile shows none of its data** — a "running"
-line and a link in, nothing more. `profile.Over(contest, participant, now)`
-decides whether the contest has ended *for this participant*: the registration
-is `finished` or `disqualified`, or the contest is `finished` or `archived`,
-or the participant's own deadline has passed (`contests.Deadline`, covering
-both the ordinary end and an individual clock). A draft has ended for nobody.
-Until that holds, everything needed during a contest is on the contest's own
+line and a link in, nothing more. Whether the contest has ended *for this
+participant* is the participation gate's own answer,
+`contests.StandingOf(contest, participant, now, grace, …).Over()`, asked with
+the installation's `DEADLINE_GRACE`: over exactly when they may never act in it
+again, so the play screen and the results are never open at once. That is the
+registration `finished` or `disqualified`; the contest `finished` or
+`archived`; or, while it runs, the participant's own deadline plus the grace
+gone by (`contests.Deadline`, covering both the ordinary end and an individual
+clock), or, unstarted under an individual clock, the contest's window closed
+before they began. A draft has ended for nobody, and a contest that never ran
+— published, or in a status this build does not know — is not over by its
+calendar: it is over once it finishes. Until that holds, everything needed during a contest is on the contest's own
 screen under its own rules — the window, the network, the individual clock —
 and the profile does not become a second path to the same data around them.
 
@@ -3116,7 +3122,7 @@ reintroducing those rules.
 
 `{contestId}` on each of the last five goes through the same admission: the
 budget, then `profile.Service.Open` — the registration from the session, then
-`profile.Over` — and a refusal answers `404 profile_contest_not_found`
+the gate's `Over` — and a refusal answers `404 profile_contest_not_found`
 whatever the cause.
 
 **The CSV is the same writer the contest screen uses.**
