@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
@@ -194,4 +195,30 @@ var usersErrors = errorTable{
 		message: "Choose a password different from the current one"},
 	{err: users.ErrWrongPassword, status: http.StatusBadRequest, code: codeWrongPassword,
 		message: "Current password is incorrect"},
+}
+
+// monitorErrors answers every error in monitor.Errors(): what the
+// organiser's monitoring screens meet, and what a participant's signals route
+// meets. TestEveryMonitorErrorHasItsAnswer walks that list. The profile reads
+// the same data under codes of its own and derives its table with with
+// (profileMonitorErrors).
+var monitorErrors = errorTable{
+	{err: monitor.ErrParticipantNotFound, status: http.StatusNotFound, code: codeMonitorParticipantNotFound,
+		message: "No such participant in this contest"},
+	{err: monitor.ErrRevisionNotFound, status: http.StatusNotFound, code: codeMonitorRevisionNotFound,
+		message: "No such revision of this participant"},
+	{err: monitor.ErrInvalidCursor, status: http.StatusBadRequest, code: codeMonitorInvalidCursor},
+	// A feed's filter and a participant's queries' filter are one code; the
+	// text, the error's own, says which was refused.
+	{err: monitor.ErrInvalidFeedFilter, status: http.StatusBadRequest, code: codeMonitorInvalidFilter},
+	{err: monitor.ErrInvalidQueryFilter, status: http.StatusBadRequest, code: codeMonitorInvalidFilter},
+	{err: monitor.ErrSignalsTooOften, status: http.StatusTooManyRequests, code: codeSignalsTooOften,
+		message:    "Too many signal batches this minute; keep them and send them later",
+		retryAfter: monitor.SignalRetryAfter()},
+	{err: monitor.ErrBatchTooLarge, status: http.StatusBadRequest, code: codeSignalsBatchTooLarge},
+	// Conflict and not 429: the batch is refused by what this registration has
+	// already stored, not by how fast it is arriving, so waiting changes
+	// nothing and the collector should drop it rather than keep it (design
+	// §9.4 — a 4xx that is not 429 is discarded).
+	{err: monitor.ErrTooManyEvents, status: http.StatusConflict, code: codeSignalsTooManyStored},
 }

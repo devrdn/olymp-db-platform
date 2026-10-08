@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
@@ -265,5 +266,81 @@ func TestAnOverrideTakesPrecedenceOverTheTableItReplacesARowOf(t *testing.T) {
 	got, _ = answer(t, base, users.ErrNotFound)
 	if got.message != "base" {
 		t.Errorf("the base table answered %+v after deriving from it, want it unchanged", got)
+	}
+}
+
+// Every error monitor hands to a caller has a row, with the answer the
+// monitoring handler and the participant's signals route gave before they
+// shared one table. The profile answers three of them under codes of its own,
+// checked below against its own table.
+func TestEveryMonitorErrorHasItsAnswer(t *testing.T) {
+	want := map[error]answered{
+		monitor.ErrParticipantNotFound: {status: http.StatusNotFound, code: "monitor_participant_not_found",
+			message: "No such participant in this contest"},
+		monitor.ErrRevisionNotFound: {status: http.StatusNotFound, code: "monitor_revision_not_found",
+			message: "No such revision of this participant"},
+		monitor.ErrInvalidCursor: {status: http.StatusBadRequest, code: "monitor_invalid_cursor",
+			message: "the feed cursor is not valid"},
+		monitor.ErrInvalidFeedFilter: {status: http.StatusBadRequest, code: "monitor_invalid_filter",
+			message: "the feed filter is not valid"},
+		monitor.ErrInvalidQueryFilter: {status: http.StatusBadRequest, code: "monitor_invalid_filter",
+			message: "the query filter is not valid"},
+		monitor.ErrSignalsTooOften: {status: http.StatusTooManyRequests, code: "signals_too_often",
+			message:    "Too many signal batches this minute; keep them and send them later",
+			retryAfter: "60"},
+		monitor.ErrBatchTooLarge: {status: http.StatusBadRequest, code: "signals_batch_too_large",
+			message: "a batch holds at most 50 events"},
+		monitor.ErrTooManyEvents: {status: http.StatusConflict, code: "signals_too_many_stored",
+			message: "a participant stores at most 20000 events"},
+	}
+
+	declared := map[string]bool{}
+	for _, info := range httpx.Catalog() {
+		declared[info.Code] = true
+	}
+
+	for _, err := range monitor.Errors() {
+		t.Run(err.Error(), func(t *testing.T) {
+			expected, known := want[err]
+			if !known {
+				t.Fatalf("no expected answer written for %q: add one beside its row", err)
+			}
+			got, ok := answer(t, monitorErrors, err)
+			if !ok {
+				t.Fatal("the table has no row for it, so it would reach the client as internal_error")
+			}
+			if got != expected {
+				t.Errorf("answered %+v, want %+v", got, expected)
+			}
+			wrapped, ok := answer(t, monitorErrors, fmt.Errorf("%w: while reading", err))
+			if !ok || wrapped.status != expected.status || wrapped.code != expected.code {
+				t.Errorf("wrapped, answered %+v (matched %v), want status %d and code %q",
+					wrapped, ok, expected.status, expected.code)
+			}
+			if !declared[got.code] {
+				t.Errorf("code %q is not in the catalog, so it is not in error-codes.json", got.code)
+			}
+		})
+	}
+}
+
+// The profile reads the same monitoring data under its own codes: a
+// registration the monitoring reads do not recognise is the profile's one
+// answer for a contest that is not the caller's finished one, and the cursor
+// and the filter of the queries tab are profile_ codes.
+func TestTheProfileAnswersTheMonitorsErrorsUnderItsOwnCodes(t *testing.T) {
+	want := map[error]answered{
+		monitor.ErrParticipantNotFound: {status: http.StatusNotFound, code: "profile_contest_not_found",
+			message: "No finished contest of yours with that identifier"},
+		monitor.ErrInvalidCursor: {status: http.StatusBadRequest, code: "profile_invalid_cursor",
+			message: "the feed cursor is not valid"},
+		monitor.ErrInvalidQueryFilter: {status: http.StatusBadRequest, code: "profile_invalid_filter",
+			message: "the query filter is not valid"},
+	}
+	for err, expected := range want {
+		got, ok := answer(t, profileMonitorErrors, err)
+		if !ok || got != expected {
+			t.Errorf("%v: answered %+v (matched %v), want %+v", err, got, ok, expected)
+		}
 	}
 }

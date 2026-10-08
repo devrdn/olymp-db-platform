@@ -168,21 +168,9 @@ func (h *ParticipantHandler) postSignals(w http.ResponseWriter, r *http.Request)
 // failSignals maps a signal refusal to a response (CLAUDE.md rule 1).
 // Anything else is ours, and an internal error.
 func (h *ParticipantHandler) failSignals(w http.ResponseWriter, r *http.Request, err error) {
-	switch {
-	case errors.Is(err, monitor.ErrSignalsTooOften):
-		w.Header().Set("Retry-After", strconv.Itoa(int(monitor.SignalRetryAfter()/time.Second)))
-		httpx.Error(w, r, http.StatusTooManyRequests, codeSignalsTooOften,
-			"Too many signal batches this minute; keep them and send them later")
-	case errors.Is(err, monitor.ErrBatchTooLarge):
-		httpx.Error(w, r, http.StatusBadRequest, codeSignalsBatchTooLarge, err.Error())
-	case errors.Is(err, monitor.ErrTooManyEvents):
-		// Conflict and not 429: the batch is refused by what this
-		// registration has already stored, not by how fast it is arriving,
-		// so waiting changes nothing and the collector should drop it rather
-		// than keep it (design §9.4 — a 4xx that is not 429 is discarded).
-		httpx.Error(w, r, http.StatusConflict, codeSignalsTooManyStored, err.Error())
-	default:
-		h.log.ErrorContext(r.Context(), "the participant's browser signals could not be stored", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+	if monitorErrors.answer(w, r, h.log, err) {
+		return
 	}
+	h.log.ErrorContext(r.Context(), "the participant's browser signals could not be stored", "error", err)
+	httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 }

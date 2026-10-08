@@ -299,18 +299,6 @@ func TestAnAccountSendsAtMostTwelveSignalBatchesAMinute(t *testing.T) {
 	expectStatus(t, f.send(http.MethodPut, play+"/notes", `{"body":"x"}`), http.StatusOK, "")
 }
 
-// A registration that has stored all the signals the installation keeps for
-// one is told so, and told it in a way that says waiting will not help: the
-// collector discards a 4xx that is not 429 and keeps a 429 to send again
-// (design §9.4).
-func TestSignalsPastWhatARegistrationStoresAreRefusedForGood(t *testing.T) {
-	f := newParticipantFixture(t)
-	play := f.workspaceContest(t)
-	f.signalStore.fail = monitor.ErrTooManyEvents
-	expectStatus(t, f.send(http.MethodPost, play+"/signals", signalsBody(goodAbsence)),
-		http.StatusConflict, "signals_too_many_stored")
-}
-
 func TestAFailedSignalInsertIsAnInternalError(t *testing.T) {
 	f := newParticipantFixture(t)
 	play := f.workspaceContest(t)
