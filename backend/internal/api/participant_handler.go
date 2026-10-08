@@ -280,7 +280,7 @@ func (h *ParticipantHandler) Mount(r chi.Router) {
 // AdmitRead runs before Access and before the URL is even parsed into
 // anything Access could look up with: it is the same order Run itself uses
 // (a rate check keyed by the account, ahead of any lookup at all), so a
-// caller cannot spend Access's two database round trips — or, on
+// caller cannot spend Access's database round trip — or, on
 // /play/questions, Reader's own two more — for free by asking as fast as the
 // network allows.
 func (h *ParticipantHandler) admit(w http.ResponseWriter, r *http.Request) (contests.Participant, contests.Contest, bool) {
