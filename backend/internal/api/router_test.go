@@ -443,3 +443,22 @@ type countingRecorder struct{ status int }
 func (c *countingRecorder) ObserveRequest(_, _ string, status int, _ time.Duration, _ bool) {
 	c.status = status
 }
+
+func TestPublicRouterRefusesAQueryNoStoredTextCanMatch(t *testing.T) {
+	// A NUL byte or bytes that are not UTF-8 in a query parameter would reach
+	// a comparison PostgreSQL refuses by failing the statement — a 500 for
+	// the client's own malformed address. Refused once, here, for every route.
+	for _, target := range []string{
+		"/api/v1/version?status=%00",
+		"/api/v1/version?q=%FF%FE",
+		"/api/v1/version?%00=x",
+	} {
+		rec := do(t, NewRouter(testDeps()), http.MethodGet, target)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"invalid_request"`) {
+			t.Errorf("GET %s = %d %s, want 400 invalid_request", target, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := do(t, NewRouter(testDeps()), http.MethodGet, "/api/v1/version?q=%D0%9B%25"); rec.Code != http.StatusOK {
+		t.Errorf("GET with an ordinary non-ASCII query = %d, want 200", rec.Code)
+	}
+}

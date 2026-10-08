@@ -9,7 +9,9 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/devrdn/db-contest/backend/internal/health"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
@@ -99,6 +101,7 @@ func NewRouter(deps Deps) *chi.Mux {
 	r.Use(metrics.Middleware(deps.recorder()))
 	r.Use(httpx.SecureHeaders)
 	r.Use(httpx.Recoverer(deps.Logger))
+	r.Use(refuseUnstorableQuery)
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusNotFound, codeNotFound, "Resource not found")
@@ -149,4 +152,26 @@ func versionHandler(version string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, r, http.StatusOK, map[string]string{"version": version})
 	}
+}
+
+// refuseUnstorableQuery answers 400 to a query string holding a NUL byte or
+// bytes that are not UTF-8, for every route at once.
+//
+// No stored text can contain either, and PostgreSQL refuses both by failing
+// the statement that compares them: a status filter or a search pasted with
+// one was a 500 for the client's own malformed address. Bodies are held to
+// the same rule by httpx.DecodeJSON.
+func refuseUnstorableQuery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for key, values := range r.URL.Query() {
+			for _, text := range append(values, key) {
+				if !utf8.ValidString(text) || strings.ContainsRune(text, 0) {
+					httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest,
+						"A query parameter holds a NUL character or bytes that are not UTF-8")
+					return
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
