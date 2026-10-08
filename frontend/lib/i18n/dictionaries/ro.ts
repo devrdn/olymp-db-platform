@@ -1865,7 +1865,7 @@ const ro = {
     game_table_row_field_count:
       "Un rând are alt număr de câmpuri decât are tabelul coloane. Mesajul spune care rând.",
     game_table_value_invalid:
-      "O valoare nu se potrivește cu tipul coloanei sau este goală acolo unde nu se permite. Mesajul spune care rând și care coloană.",
+      "O valoare nu se potrivește cu tipul coloanei, este goală acolo unde nu se permite, sau fișierul nu este salvat în UTF-8 (în Excel — „CSV UTF-8”). Mesajul spune care rând și care coloană.",
     game_table_field_too_long:
       "Un câmp al fișierului este mai lung decât acceptă această instalare.",
     game_table_line_too_long:

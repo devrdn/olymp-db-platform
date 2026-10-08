@@ -258,6 +258,33 @@ func TestCompleteTableUploadNamesTheRowAndColumnOfAValueThatDoesNotParse(t *test
 	}
 }
 
+// A file saved in a legacy encoding — Excel's "CSV" on a Russian or Romanian
+// Windows writes cp1251 — used to pass the upload, its text columns checked
+// for nothing, and fail minutes later as a game build error. It is refused
+// when the upload completes, naming the row and column and saying what to do.
+func TestCompleteTableUploadRefusesTextThatIsNotUTF8(t *testing.T) {
+	t.Parallel()
+	for name, content := range map[string]string{
+		// "Марго" in cp1251.
+		"cp1251":     "id,name,nickname\n1,\xcc\xe0\xf0\xe3\xee,\n",
+		"a NUL byte": "id,name,nickname\n1,Mar\x00got,\n",
+	} {
+		service, _, _, _ := tableDataGames(t, true)
+		contest := uuid.New()
+		withSuspects(t, service, contest)
+		data := beginTableUploadWithContent(t, service, contest, "suspects", content)
+
+		_, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID)
+		if !errors.Is(err, provisioning.ErrTableValueInvalid) {
+			t.Fatalf("%s: error = %v, want ErrTableValueInvalid", name, err)
+		}
+		if !strings.Contains(err.Error(), "row 1") || !strings.Contains(err.Error(), `"name"`) ||
+			!strings.Contains(err.Error(), "UTF-8") {
+			t.Fatalf("%s: error = %q, does not name row 1's name column and the encoding", name, err)
+		}
+	}
+}
+
 // A row that does not match the table's own columns is refused before
 // anything is written — a value with the wrong number of fields, or one
 // that will not parse as its column's type, must not reach the file at all.

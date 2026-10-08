@@ -2062,7 +2062,7 @@ const en = {
     game_table_row_field_count:
       "A row has a different number of fields than the table has columns. The message says which row.",
     game_table_value_invalid:
-      "A value does not fit its column's type, or is empty in a column that does not allow it. The message says which row and column.",
+      "A value does not fit its column's type, is empty in a column that does not allow it, or the file is not UTF-8 (in Excel, save as “CSV UTF-8”). The message says which row and column.",
     game_table_field_too_long:
       "One field of the file is longer than this installation allows.",
     game_table_line_too_long:
