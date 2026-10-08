@@ -196,7 +196,7 @@ func (h *ParticipantHandler) saveNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req saveNotesRequest
-	if !decodeBody(w, r, &req) {
+	if !h.decodeWorkspaceBody(w, r, &req) {
 		return
 	}
 	if req.Body == nil {
@@ -223,7 +223,7 @@ func (h *ParticipantHandler) createTab(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createTabRequest
-	if !decodeBody(w, r, &req) {
+	if !h.decodeWorkspaceBody(w, r, &req) {
 		return
 	}
 	tab, err := h.workspaces.CreateTab(r.Context(), session, req.Title)
@@ -251,7 +251,7 @@ func (h *ParticipantHandler) updateTab(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req updateTabRequest
-	if !decodeBody(w, r, &req) {
+	if !h.decodeWorkspaceBody(w, r, &req) {
 		return
 	}
 	at, err := h.workspaces.UpdateTab(r.Context(), session, id, workspace.TabPatch{Title: req.Title, Body: req.Body})
@@ -291,7 +291,7 @@ func (h *ParticipantHandler) reorderTabs(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req reorderTabsRequest
-	if !decodeBody(w, r, &req) {
+	if !h.decodeWorkspaceBody(w, r, &req) {
 		return
 	}
 	// Bounded before anything is parsed (CLAUDE.md rule 2): a list longer
@@ -318,6 +318,24 @@ func (h *ParticipantHandler) reorderTabs(w http.ResponseWriter, r *http.Request)
 
 // failWorkspace maps a workspace refusal to a response (CLAUDE.md rule 1).
 // Anything else is ours, and an internal error.
+// decodeWorkspaceBody is decodeBody for the workspace's writes, which have a
+// refusal of their own for text no stored row can hold
+// (workspace.ErrTextInvalid, translated for the participant). A NUL that
+// arrives spelled in the JSON is the same refusal, so it gets the same
+// answer, not the generic one every other body gets.
+func (h *ParticipantHandler) decodeWorkspaceBody(w http.ResponseWriter, r *http.Request, v any) bool {
+	err := httpx.DecodeJSON(w, r, v)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, httpx.ErrNULText):
+		h.failWorkspace(w, r, workspace.ErrTextInvalid)
+	default:
+		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
+	}
+	return false
+}
+
 func (h *ParticipantHandler) failWorkspace(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, workspace.ErrTooOften):

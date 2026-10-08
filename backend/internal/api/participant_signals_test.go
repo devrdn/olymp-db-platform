@@ -94,6 +94,28 @@ func TestSignalsAreStoredForTheAdmittedRegistration(t *testing.T) {
 	}
 }
 
+// A paste is recorded whatever it held. Text with a NUL character cannot be
+// stored as it is, but refusing the batch for it would let a participant hide
+// a paste by pasting one, so the character is dropped (monitor.Paste) and the
+// paste kept — the events travel as raw JSON past the body's own NUL check.
+func TestAPasteHoldingANULIsKeptNotRefused(t *testing.T) {
+	f := newParticipantFixture(t)
+	play := f.workspaceContest(t)
+
+	rec := f.send(http.MethodPost, play+"/signals", signalsBody(
+		`{"kind":"paste","target":"editor","chars":5,"text":"SEL\u0000T"}`,
+	))
+	expectStatus(t, rec, http.StatusNoContent, "")
+
+	stored := f.signalStore.stored()
+	if len(stored) != 1 {
+		t.Fatalf("stored %d events, want the paste", len(stored))
+	}
+	if got := stored[0].Payload.(monitor.Paste).Text; got != "SELT" {
+		t.Fatalf("paste text = %q, want the NUL dropped", got)
+	}
+}
+
 // One bad signal must not cost the browser the good ones: every per-event
 // problem is a drop, and the batch still answers 204.
 func TestBadSignalsAreDroppedNotRefused(t *testing.T) {

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
+	"strings"
 )
 
 // maxBodyBytes bounds a request body. Several endpoints are reachable without
@@ -14,6 +16,13 @@ const maxBodyBytes = 1 << 20 // 1 MiB
 
 // ErrBadRequest reports a body the handler could not use.
 var ErrBadRequest = errors.New("request body is not valid")
+
+// ErrNULText reports a body whose text holds a NUL character, which no
+// stored text can contain. Like ErrBodyTooLarge it always comes wrapped
+// together with ErrBadRequest, so a handler with a refusal of its own for
+// unstorable text (the participant's workspace) can name it, and every other
+// handler answers it as any bad body.
+var ErrNULText = errors.New("a text value contains a NUL character")
 
 // ErrBodyTooLarge reports a body over the limit it was read within. It always
 // comes wrapped together with ErrBadRequest, so a handler that does not care
@@ -54,7 +63,45 @@ func DecodeJSONWithin(w http.ResponseWriter, r *http.Request, v any, limit int64
 		return fmt.Errorf("%w: body must contain a single JSON object", ErrBadRequest)
 	}
 
+	// JSON may spell a NUL character (\u0000); PostgreSQL cannot store one and
+	// refuses it by failing the statement, which would answer the client's
+	// own malformed value with a 500. Bytes that are not UTF-8 need no check:
+	// the decoder has already replaced them.
+	if holdsNUL(reflect.ValueOf(v)) {
+		return fmt.Errorf("%w: %w", ErrBadRequest, ErrNULText)
+	}
+
 	return nil
+}
+
+// holdsNUL reports whether any string reachable from v — a field, an
+// element, a map key or value — contains a NUL character.
+func holdsNUL(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		return !v.IsNil() && holdsNUL(v.Elem())
+	case reflect.String:
+		return strings.ContainsRune(v.String(), 0)
+	case reflect.Struct:
+		for i := range v.NumField() {
+			if holdsNUL(v.Field(i)) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := range v.Len() {
+			if holdsNUL(v.Index(i)) {
+				return true
+			}
+		}
+	case reflect.Map:
+		for _, key := range v.MapKeys() {
+			if holdsNUL(key) || holdsNUL(v.MapIndex(key)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // decodeMessage turns a decoder error into something a client can act on,

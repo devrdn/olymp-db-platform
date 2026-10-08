@@ -147,3 +147,48 @@ func TestDecodeErrorNeverExposesInternals(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeRejectsANULCharacterAnywhereInTheBody(t *testing.T) {
+	// PostgreSQL cannot store a NUL byte and refuses one by failing the
+	// statement: a name pasted with one was a 500 for what is the client's
+	// own malformed value.
+	type nested struct {
+		Rows []payload         `json:"rows"`
+		Tags map[string]string `json:"tags"`
+	}
+	for _, body := range []string{
+		`{"login":"iva\u0000nov"}`,
+		`{"rows":[{"login":"ok"},{"login":"\u0000"}]}`,
+		`{"tags":{"\u0000":"key"}}`,
+		`{"tags":{"value":"\u0000"}}`,
+	} {
+		var got nested
+		var flat payload
+		target := any(&got)
+		if strings.HasPrefix(body, `{"login"`) {
+			target = &flat
+		}
+		if err := decode(body, target); !errors.Is(err, ErrBadRequest) {
+			t.Errorf("DecodeJSON(%s) error = %v, want ErrBadRequest", body, err)
+		}
+	}
+}
+
+func TestDecodeAcceptsTheTextOfAnEscapeThatIsNotANUL(t *testing.T) {
+	// A backslash followed by "u0000" is six ordinary characters.
+	var got payload
+	if err := decode(`{"login":"a\\u0000b"}`, &got); err != nil {
+		t.Fatalf("DecodeJSON() returned error: %v", err)
+	}
+	if got.Login != `a\u0000b` {
+		t.Errorf("login = %q, want the literal text", got.Login)
+	}
+}
+
+func TestANULInTheBodyIsNamedSoAHandlerCanAnswerItItself(t *testing.T) {
+	var got payload
+	err := decode(`{"login":"\u0000"}`, &got)
+	if !errors.Is(err, ErrNULText) || !errors.Is(err, ErrBadRequest) {
+		t.Errorf("DecodeJSON() error = %v, want ErrNULText wrapped with ErrBadRequest", err)
+	}
+}
