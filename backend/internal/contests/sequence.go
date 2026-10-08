@@ -17,10 +17,12 @@ import (
 // Declared here, narrow, rather than reusing QuestionRepository or
 // AttemptStore: the answer is a single yes/no about a state that only grows
 // more open as the participant works — a question answered correctly stays
-// closed. The one way back is an organizer raising a question's attempt cap,
-// which reopens a question closed only by its spent attempts; that makes the
-// gate stricter, never looser, and an answer that races it was one the
-// participant was entitled to a moment earlier. So it is safe to compute
+// closed. An organizer's edit can move it either way (raising or clearing a
+// question's attempt cap reopens a question closed only by its spent
+// attempts; reordering changes which come first), but content is editable
+// only while the contest is a draft or published (Contest.ContentEditable)
+// and answers are taken only while it runs, so the two do not overlap. While
+// Submit can be called, the state only grows more open, and it is safe to compute
 // with a plain read ahead of the write, unlike the
 // deadline and attempt-count checks Insert folds into itself precisely
 // because those are not monotonic in the same way. Submit consults this only
