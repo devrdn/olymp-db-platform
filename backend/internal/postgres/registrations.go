@@ -299,7 +299,11 @@ func (r *Registrations) Add(ctx context.Context, contestID, userID uuid.UUID) (c
 		SELECT `+participantColumns+`
 		FROM inserted r JOIN users u ON u.id = r.user_id`, contestID, userID))
 	if err != nil {
-		// No row inserted and no error: the conflict above.
+		// No row and no error can only be the conflict above: the user's
+		// foreign key guarantees the joined account exists, and the join
+		// filters nothing. A filter added to it (say, on the account's
+		// status) would make this misreport a refused join as "already
+		// enrolled".
 		if errors.Is(err, contests.ErrParticipantNotFound) {
 			return contests.Participant{}, contests.ErrAlreadyEnrolled
 		}
