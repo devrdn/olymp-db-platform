@@ -366,7 +366,7 @@ func TestAnIndividualParticipantsFirstReadStartsTheClockOnceAndTheEventsChannelN
 	service := queryproxy.New(registrations, postgres.NewContests(pool), nil, nil, nil).
 		WithClock(func() time.Time { return clock })
 
-	if _, _, err := service.AccessForEvents(ctx, contestID, student, netip.Addr{}); err != nil {
+	if _, _, _, err := service.AccessForEvents(ctx, contestID, student, netip.Addr{}); err != nil {
 		t.Fatalf("AccessForEvents() = %v", err)
 	}
 	if stored, err := registrations.ByUser(ctx, contestID, student); err != nil || stored.StartedAt != nil {

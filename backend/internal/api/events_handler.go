@@ -31,7 +31,10 @@ import (
 // refuses exactly what it always refused.
 type EventsAccess interface {
 	AdmitRead(userID uuid.UUID) error
-	AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error)
+	// AccessForEvents also hands back the participant's contests.Standing,
+	// refused or not: a resync that is refused asks it whether the contest
+	// is over for them (queryproxy.Service.AccessForEvents).
+	AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, contests.Standing, error)
 }
 
 // GET /contests/{id}/events — a Server-Sent Events channel for a participant
@@ -43,8 +46,9 @@ type EventsAccess interface {
 // deadline (contests.Deadline — never with the grace queryproxy adds before
 // refusing a late answer; see queryproxy.Service's own doc for why a
 // deadline shown to a participant must not carry it); and a "contest_started"
-// or "contest_finished" event when the contest's status is the reason the
-// channel opened or closed. Nothing about another participant ever crosses
+// event when the contest starts, and a "contest_finished" event when the
+// channel closes because the contest is over for this participant
+// (contests.Standing.Over). Nothing about another participant ever crosses
 // it — every event is built from this caller's own contests.Participant and
 // contests.Contest, the same two values Access resolves for the read
 // endpoints (participant_handler.go), and nothing else is ever added to the
@@ -314,7 +318,7 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 	}
 
 	addr := clientAddress(r)
-	participant, contest, err := h.access.AccessForEvents(r.Context(), contestID, identity.UserID, addr)
+	participant, contest, _, err := h.access.AccessForEvents(r.Context(), contestID, identity.UserID, addr)
 	if err != nil {
 		h.fail(w, r, err)
 		return
@@ -403,7 +407,7 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 			// storage (finding 2). A resync whose lookups run slow would
 			// otherwise disconnect an honest, still-enrolled client for a
 			// delay entirely on this side of the connection.
-			newParticipant, newContest, err := h.access.AccessForEvents(r.Context(), contestID, identity.UserID, addr)
+			newParticipant, newContest, standing, err := h.access.AccessForEvents(r.Context(), contestID, identity.UserID, addr)
 			if err != nil {
 				// A store that is briefly away is not a refusal of this
 				// participant (finding 3): retried on the next tick, the
@@ -414,20 +418,18 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 					h.log.WarnContext(r.Context(), "events resync could not reach storage; retrying next tick", "error", err)
 					continue
 				}
-				// ErrParticipantFinished, ErrContestNotRunning and
-				// ErrDeadlinePassed all mean the contest's window is over
-				// for this participant — their registration finished, the
-				// status moved to finished, or their own deadline passed
-				// while the scheduler has not caught up yet (§8: the status
-				// and this channel affect only what the interface shows,
-				// never the closing guarantee itself). A caller turned away
-				// by ErrNotAParticipant (disqualified mid-contest) or
-				// ErrAddressNotAllowed learns nothing more specific than
-				// the channel closing — the same "not this caller's
-				// business" rule the read endpoints already apply to a
-				// refusal that is not about the contest's own clock.
-				if errors.Is(err, contests.ErrParticipantFinished) || errors.Is(err, contests.ErrContestNotRunning) ||
-					errors.Is(err, contests.ErrDeadlinePassed) {
+				// Over is the gate's own answer to "is it over for this
+				// participant": their registration finished, the contest
+				// finished, or their own time ran out while the scheduler
+				// has not caught up yet (§8: the status and this channel
+				// affect only what the interface shows, never the closing
+				// guarantee itself). Anything not over — a contest taken back
+				// to draft, an address no longer allowed — closes without
+				// it, since it may yet let them back in. A disqualified
+				// participant is over too, and still closes without it, as
+				// not_a_participant always has here: the channel tells a
+				// disqualified caller nothing a stranger would not be told.
+				if standing.Over() && !errors.Is(err, contests.ErrNotAParticipant) {
 					h.setWriteDeadline(rc)
 					if writeEvent(w, eventContestFinished, statusPayload{Status: contests.StatusFinished}) == nil {
 						_ = rc.Flush()
