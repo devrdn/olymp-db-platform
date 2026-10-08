@@ -12,9 +12,10 @@ import (
 // named here, with the reason it never reaches a response.
 func TestEveryExportedErrorIsListed(t *testing.T) {
 	sentineltest.AssertListed(t, ".",
-		// CleanBatch drops an event that Normalize refuses instead of
-		// refusing the batch, so the store's own Normalize only ever sees
-		// events that have passed it.
+		// An event from a browser that Normalize refuses is dropped by
+		// CleanBatch rather than refusing the batch; every other event the
+		// store receives the server builds itself (the tracker, the
+		// workspace), so none of these reaches a response.
 		"ErrEventInvalid", "ErrAwayTooShort", "ErrPasteTarget",
 		// Raised only by a revision the workspace builds from fields it has
 		// already bounded; a failure there is a defect of ours and answers as

@@ -1,9 +1,11 @@
 package sentineltest_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/platform/sentineltest"
@@ -72,5 +74,62 @@ func TestScanRefusesSourceItCannotParse(t *testing.T) {
 	dir := writePackage(t, map[string]string{"broken.go": "package broken\n\nvar ErrX = \n"})
 	if _, _, err := sentineltest.Scan(dir); err == nil {
 		t.Fatal("Scan accepted source that does not parse")
+	}
+}
+
+// recorder stands in for the test AssertListed is given, collecting what it
+// reports instead of failing the test that runs it.
+type recorder struct {
+	testing.TB
+	errors []string
+}
+
+func (r *recorder) Helper() {}
+
+func (r *recorder) Errorf(format string, args ...any) {
+	r.errors = append(r.errors, fmt.Sprintf(format, args...))
+}
+
+func (r *recorder) Fatalf(format string, args ...any) {
+	r.errors = append(r.errors, fmt.Sprintf(format, args...))
+}
+
+// AssertListed reports a sentinel missing from both lists, one named twice,
+// and a name that is not one of the package's errors — each by name.
+func TestAssertListedNamesEveryMismatch(t *testing.T) {
+	dir := writePackage(t, map[string]string{
+		"odd.go": header +
+			"var ErrListed = errors.New(\"listed\")\n" +
+			"var ErrForgotten = errors.New(\"forgotten\")\n" +
+			"var ErrTwice = errors.New(\"twice\")\n\n" +
+			"func Errors() []error { return []error{ErrListed, ErrTwice} }\n",
+	})
+
+	r := &recorder{TB: t}
+	sentineltest.AssertListed(r, dir, "ErrTwice", "ErrImagined")
+
+	for _, want := range []string{"ErrForgotten is declared", "ErrTwice is listed more than once", "ErrImagined is listed but not"} {
+		if !slices.ContainsFunc(r.errors, func(got string) bool { return strings.Contains(got, want) }) {
+			t.Errorf("no report containing %q in %q", want, r.errors)
+		}
+	}
+	if len(r.errors) != 3 {
+		t.Errorf("reports = %q, want exactly three", r.errors)
+	}
+}
+
+// A package whose lists agree is reported clean.
+func TestAssertListedPassesWhenEverySentinelIsAccountedFor(t *testing.T) {
+	dir := writePackage(t, map[string]string{
+		"odd.go": header +
+			"var ErrOut = errors.New(\"out\")\n" +
+			"var ErrIn = fmt.Errorf(\"at most %d\", Max)\n\n" +
+			"func Errors() []error { return []error{ErrOut} }\n",
+	})
+
+	r := &recorder{TB: t}
+	sentineltest.AssertListed(r, dir, "ErrIn")
+	if len(r.errors) != 0 {
+		t.Errorf("reports = %q, want none", r.errors)
 	}
 }
