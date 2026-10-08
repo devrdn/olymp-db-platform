@@ -184,6 +184,25 @@ func TestAPagePastTheEndStillCountsEveryMatch(t *testing.T) {
 	})
 }
 
+func TestAFilterNoStoredEntryCanEqualFindsNothingRatherThanFailing(t *testing.T) {
+	// The entity filters are compared, never stored; a NUL byte in one was a
+	// failed statement and a 500 for whoever pasted it.
+	withTx(t, func(ctx context.Context) {
+		actor := makeUser(t, ctx, "auditor-odd-filter")
+		writeTrail(t, ctx, actor.ID)
+
+		for _, f := range []audit.Filter{
+			{Actor: actor.ID, Entity: "contest\x00"},
+			{Actor: actor.ID, EntityID: "\xff"},
+		} {
+			found, total, err := NewAuditTrail(testPool).List(ctx, f.Normalize())
+			if err != nil || len(found) != 0 || total != 0 {
+				t.Errorf("List(%+v) = (%d, %d, %v), want nothing and no error", f, len(found), total, err)
+			}
+		}
+	})
+}
+
 func TestTheTrailNamesWhatWasActedUpon(t *testing.T) {
 	// "Changed the reference answers · Contest" answers half a question. Which
 	// contest is the half that matters, and a bare identifier is no more
