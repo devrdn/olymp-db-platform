@@ -12,6 +12,7 @@
 package conteststest
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"slices"
@@ -366,12 +367,18 @@ func (r *Contests) LockContest(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// Stories is an in-memory contests.StoryRepository.
+// Stories is an in-memory contests.StoryRepository, held to the same answers
+// as postgres.Stories by StoryRepositoryContract, which both run.
 type Stories struct {
 	byContest map[uuid.UUID]contests.Story
+	// Clock is what Save stamps UpdatedAt with, the way the table stamps it
+	// with the database's own now(). Nil leaves it as it is.
+	Clock func() time.Time
 	// Err, when set, is what ByContest returns instead of a lookup — a
 	// database away, which a caller must propagate, not mistake for a
-	// contest that simply has no story yet.
+	// contest that simply has no story yet. Save reads its result back
+	// through ByContest, as the real one does, so Save returns it too, after
+	// storing the story.
 	Err error
 }
 
@@ -393,6 +400,8 @@ func (r *Stories) ByContest(_ context.Context, contestID uuid.UUID) (contests.St
 	if !ok {
 		return contests.Story{}, contests.ErrStoryNotFound
 	}
+	// The text is the caller's to keep, as a row decoded afresh is.
+	story.Bodies = maps(story.Bodies)
 	return story, nil
 }
 
@@ -408,14 +417,17 @@ func (r *Stories) BodyIn(ctx context.Context, contestID uuid.UUID, lang string) 
 	return body, nil
 }
 
-func (r *Stories) Save(_ context.Context, contestID uuid.UUID, bodies map[string]string) (contests.Story, error) {
+func (r *Stories) Save(ctx context.Context, contestID uuid.UUID, bodies map[string]string) (contests.Story, error) {
 	story, ok := r.byContest[contestID]
 	if !ok {
 		story = contests.Story{ID: uuid.New(), ContestID: contestID}
 	}
 	story.Bodies = maps(bodies)
+	if r.Clock != nil {
+		story.UpdatedAt = r.Clock()
+	}
 	r.byContest[contestID] = story
-	return story, nil
+	return r.ByContest(ctx, contestID)
 }
 
 func (r *Stories) Delete(_ context.Context, contestID uuid.UUID) error {
@@ -924,9 +936,13 @@ func (r *Registrations) AddScore(_ context.Context, registrationID uuid.UUID, de
 	return nil
 }
 
-// Policies is an in-memory contests.PolicyStore.
+// Policies is an in-memory contests.PolicyStore, held to the same answers as
+// postgres.SQLPolicies by PolicyStoreContract, which both run.
 type Policies struct {
 	byContest map[uuid.UUID]contests.SQLPolicy
+	// Clock is what Save stamps UpdatedAt with, the way the statement stamps it
+	// with the database's own now(). Nil leaves it as it is.
+	Clock func() time.Time
 }
 
 var _ contests.PolicyStore = (*Policies)(nil)
@@ -943,12 +959,28 @@ func (r *Policies) ByContest(_ context.Context, contestID uuid.UUID) (contests.S
 		// store.
 		return contests.DefaultSQLPolicy(contestID), nil
 	}
-	return p, nil
+	return clonePolicy(p), nil
 }
 
 func (r *Policies) Save(_ context.Context, p contests.SQLPolicy) error {
+	p = clonePolicy(p)
+	if r.Clock != nil {
+		p.UpdatedAt = r.Clock()
+	}
 	r.byContest[p.ContestID] = p
 	return nil
+}
+
+// clonePolicy copies what a policy holds by reference, so neither the caller
+// of Save nor the caller of ByContest shares it with the store, and gives an
+// unset list the empty one a stored array reads back as.
+func clonePolicy(p contests.SQLPolicy) contests.SQLPolicy {
+	p.WritableTables = append([]string{}, p.WritableTables...)
+	if p.UpdatedBy != nil {
+		by := *p.UpdatedBy
+		p.UpdatedBy = &by
+	}
+	return p
 }
 
 // Attempts is an in-memory contests.AttemptStore, derived from the submission
@@ -1187,7 +1219,8 @@ func (r *Submissions) All(registrationID, questionID uuid.UUID) []contests.Submi
 	return append([]contests.Submission(nil), r.byKey[submissionKey{registrationID, questionID}]...)
 }
 
-// Languages is a fixed language catalog.
+// Languages is an in-memory contests.LanguageCatalog, held to the same answers
+// as postgres.Languages by LanguageCatalogContract, which both run.
 type Languages struct {
 	Available []contests.Language
 }
@@ -1203,6 +1236,8 @@ func NewLanguages() *Languages {
 	}}
 }
 
+// Active lists the active languages in display order: by sort order, ties
+// broken by code, as the table is read.
 func (r *Languages) Active(context.Context) ([]contests.Language, error) {
 	var active []contests.Language
 	for _, l := range r.Available {
@@ -1210,6 +1245,9 @@ func (r *Languages) Active(context.Context) ([]contests.Language, error) {
 			active = append(active, l)
 		}
 	}
+	slices.SortFunc(active, func(a, b contests.Language) int {
+		return cmp.Or(cmp.Compare(a.SortOrder, b.SortOrder), strings.Compare(a.Code, b.Code))
+	})
 	return active, nil
 }
 
