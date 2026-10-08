@@ -248,18 +248,12 @@ func (h *AuthHandler) changePassword(w http.ResponseWriter, r *http.Request) {
 		OldPassword: req.OldPassword,
 		NewPassword: req.NewPassword,
 	})
+	if usersErrors.answer(w, r, h.log, err) {
+		return
+	}
 	switch {
 	case err == nil:
 		h.service.ClearPasswordChangeThrottle(r.Context(), identity.UserID)
-	case errors.Is(err, users.ErrWrongPassword):
-		httpx.Error(w, r, http.StatusBadRequest, codeWrongPassword, "Current password is incorrect")
-		return
-	case errors.Is(err, users.ErrWeakPassword):
-		httpx.Error(w, r, http.StatusBadRequest, codeWeakPassword, err.Error())
-		return
-	case errors.Is(err, users.ErrSamePassword):
-		httpx.Error(w, r, http.StatusBadRequest, codeSamePassword, "Choose a password different from the current one")
-		return
 	case errors.Is(err, password.ErrBusy):
 		busy(w, r)
 		return

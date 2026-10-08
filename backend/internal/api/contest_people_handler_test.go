@@ -88,8 +88,9 @@ func TestOwnershipIsNotHandedOverThroughTheStaffList(t *testing.T) {
 func TestAppointingADeletedAccountIsRefusedWithAConflict(t *testing.T) {
 	// A deleted account can never sign in; appointing it would staff the
 	// contest with somebody who can never act on it. contests.Service.GrantManager
-	// refuses it with users.ErrAccountDeleted, which the handler's fail switch
-	// must map to a declared code rather than an internal error.
+	// refuses it with users.ErrAccountDeleted, which must reach the client as a
+	// declared code rather than an internal error. A blocked account is refused
+	// the same way, as account_blocked: both are rows of usersErrors.
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
 	deleted := f.stores.Users.Add(users.User{
@@ -107,25 +108,21 @@ func TestAppointingADeletedAccountIsRefusedWithAConflict(t *testing.T) {
 	}
 }
 
-func TestAppointingABlockedAccountIsRefusedWithAConflict(t *testing.T) {
-	// A blocked account can never sign in either — auth.Service.Login and
-	// auth.Middleware both refuse it — so appointing one is refused for the
-	// same reason as a deleted account, just above, and answers with the
-	// same wire code the login flow already uses for it.
+// The contest routes answer a missing account under their own code, not the
+// accounts screens' not_found (contestUserErrors); every other refusal the
+// account can meet is usersErrors' own, and walked there.
+func TestAppointingAnUnknownAccountIsAnsweredAsUserNotFound(t *testing.T) {
 	f := newContestFixture(t)
 	c := f.ownedContest(t, contests.StatusDraft)
-	blocked := f.stores.Users.Add(users.User{
-		Login: "blocked", FullName: "blocked", Status: users.StatusBlocked,
-	})
 
 	rec := f.do(http.MethodPut,
-		"/contests/"+c.ID.String()+"/managers/"+blocked.ID.String(), `{"role": "manager"}`)
+		"/contests/"+c.ID.String()+"/managers/"+uuid.NewString(), `{"role": "manager"}`)
 
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (%s)", rec.Code, rec.Body.String())
 	}
-	if code := errorCode(t, rec); code != "account_blocked" {
-		t.Errorf("error code = %q, want account_blocked", code)
+	if code := errorCode(t, rec); code != "user_not_found" {
+		t.Errorf("error code = %q, want user_not_found", code)
 	}
 }
 

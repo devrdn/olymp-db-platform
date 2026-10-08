@@ -10,6 +10,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
+	"github.com/devrdn/db-contest/backend/internal/users"
 )
 
 // errorRow is how one domain error answers a request, wherever it surfaces.
@@ -37,6 +38,19 @@ type errorRow struct {
 // errorTable is a domain package's errors, answered. Rows are matched in
 // order with errors.Is, so a wrapped sentinel finds its row.
 type errorTable []errorRow
+
+// with returns a table that answers the overrides the way they say and
+// everything else as t does. It is for the handler whose wire contract differs
+// from the package's for one error — the same sentinel under another code —
+// so that the difference is written down once, beside the handler, rather than
+// the handler keeping a switch of its own for the whole package. t itself is
+// not changed.
+func (t errorTable) with(overrides ...errorRow) errorTable {
+	derived := make(errorTable, 0, len(overrides)+len(t))
+	// Rows are matched in order, so the overrides go first.
+	derived = append(derived, overrides...)
+	return append(derived, t...)
+}
 
 // answer writes the response for err and reports whether a row matched. An
 // error no row knows is left to the caller, which answers it itself — usually
@@ -137,4 +151,47 @@ var queryrunnerErrors = errorTable{
 	{err: queryrunner.ErrJournalUnavailable, status: http.StatusInternalServerError, code: httpx.CodeInternalError,
 		message: "Internal server error",
 		logAs:   "a query could not be journalled"},
+}
+
+// usersErrors answers every error in users.Errors(): what the account screens
+// meet. TestEveryUsersErrorHasItsAnswer walks that list. A handler whose
+// contract names an error differently derives its own table with with.
+var usersErrors = errorTable{
+	{err: users.ErrNotFound, status: http.StatusNotFound, code: codeNotFound,
+		message: "User not found"},
+	{err: users.ErrLoginTaken, status: http.StatusConflict, code: codeLoginTaken,
+		message: "This login is already in use"},
+	{err: users.ErrEmailTaken, status: http.StatusConflict, code: codeEmailTaken,
+		message: "This email is already in use"},
+	// 409, not 403: whoever asked is entitled to do this, and it is the
+	// state of the installation that refuses. Telling them they lack
+	// permission would send them looking for a right they already hold.
+	{err: users.ErrLastAdministrator, status: http.StatusConflict, code: codeLastAdministrator},
+	{err: users.ErrCannotActOnSelf, status: http.StatusBadRequest, code: codeCannotActOnSelf,
+		message: "This operation cannot be performed on your own account"},
+	{err: users.ErrReasonRequired, status: http.StatusBadRequest, code: codeReasonRequired,
+		message: "A reason is required"},
+	// 409, not 403, the same choice as ErrLastAdministrator above and for the
+	// same reason: the caller holds the right to do this, and it is the
+	// account's own state — deleted — that refuses it, not a permission they
+	// lack.
+	{err: users.ErrAccountDeleted, status: http.StatusConflict, code: codeAccountDeleted,
+		message: "This account is deleted"},
+	// The same wire code auth's own sign-in refusal answers with — the
+	// client's dictionary already carries a message for it — reused rather
+	// than declared a second time under a name of its own.
+	{err: users.ErrAccountBlocked, status: http.StatusConflict, code: codeAccountBlocked,
+		message: "This account is blocked"},
+	{err: users.ErrTooManyAccounts, status: http.StatusBadRequest, code: codeTooManyAccounts},
+	{err: users.ErrRosterTooLarge, status: http.StatusBadRequest, code: codeInvalidRequest},
+	{err: users.ErrInvalidAccount, status: http.StatusBadRequest, code: codeInvalidRequest},
+	// Only changing your own password refuses a new one: a reset and an import
+	// generate theirs. The sentinel's own text says which rule the policy
+	// refused; the unchanged password gets a sentence rather than the
+	// sentinel's text, which is written for a log.
+	{err: users.ErrWeakPassword, status: http.StatusBadRequest, code: codeWeakPassword},
+	{err: users.ErrSamePassword, status: http.StatusBadRequest, code: codeSamePassword,
+		message: "Choose a password different from the current one"},
+	{err: users.ErrWrongPassword, status: http.StatusBadRequest, code: codeWrongPassword,
+		message: "Current password is incorrect"},
 }
