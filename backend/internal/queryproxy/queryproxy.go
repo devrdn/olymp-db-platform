@@ -7,6 +7,13 @@
 // how much it may return are the Query Runner's, and this package does not
 // second-guess any of them.
 //
+// The middle question has one answer for the whole service, and it is not
+// written here: this package looks the registration up and asks the
+// participation gate, contests.StandingOf, the same rule every other
+// participant-facing path asks. What it keeps of its own is in front of the
+// gate — the rate limits — and behind it: starting an individual clock, and
+// telling the monitor who was seen.
+//
 // The one rule worth stating on its own: the database is looked up from the
 // registration on every request and never arrives in one. A participant names
 // their query and nothing else — section 5, point 1.
@@ -719,8 +726,8 @@ func (s *Service) StartOnRead(ctx context.Context, contest contests.Contest, par
 
 // startClock is StartOnRead's rule, shared with Run's first query: check,
 // start, check again. A participant whose clock is not pending is handed back
-// as is, at no cost; one whose clock Start left pending is refused, failing
-// closed.
+// as is, at no cost; one the gate admits with their clock still pending after
+// Start is refused, failing closed.
 func (s *Service) startClock(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error) {
 	if !contests.ClockPending(contest, participant) {
 		return participant, nil
@@ -732,14 +739,19 @@ func (s *Service) startClock(ctx context.Context, contest contests.Contest, part
 	if err != nil {
 		return contests.Participant{}, fmt.Errorf("%w: start the participant's clock: %w", ErrUnavailable, err)
 	}
-	// A Start that reports success and hands back a clock still pending broke
-	// its own contract. The gate would let such a participant start forever,
-	// with no deadline running, so it is refused here, as ours.
-	if contests.ClockPending(contest, started) {
-		return contests.Participant{}, fmt.Errorf("%w: starting the participant's clock left it unstarted", ErrUnavailable)
-	}
+	// The gate first: a registration Start does not move — disqualified or
+	// finished since the check above — comes back with its clock still
+	// pending, and the participant is told what the gate says of who they
+	// now are.
 	if err := s.admit(contest, started, addr); err != nil {
 		return contests.Participant{}, err
+	}
+	// A clock still pending that the gate admits is a Start that reported
+	// success without starting anything: a store that broke its own contract.
+	// The gate would let such a participant start forever, with no deadline
+	// running, so it is refused here, as ours.
+	if contests.ClockPending(contest, started) {
+		return contests.Participant{}, fmt.Errorf("%w: starting the participant's clock left it unstarted", ErrUnavailable)
 	}
 	return started, nil
 }

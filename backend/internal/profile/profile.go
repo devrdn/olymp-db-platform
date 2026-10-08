@@ -3,7 +3,10 @@
 // for each one that has ended for them, their report, their queries, their
 // answers and their notes.
 //
-// It answers only "is this the caller's own, and is it over for them". It
+// It answers only "is this the caller's own, and is it over for them" — and
+// the second half is not its own rule: it asks the participation gate
+// (contests.StandingOf(...).Over, with the installation's grace), so a
+// contest's results open exactly when its play screen closes. It
 // does not compute a result — points, solved, penalty and place come from
 // internal/leaderboard, and the queries, answers and workspace are read by
 // internal/monitor, by the same methods a contest's staff read them with.

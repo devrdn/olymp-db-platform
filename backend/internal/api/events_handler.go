@@ -43,9 +43,10 @@ type EventsAccess interface {
 //
 // It carries exactly two things over the channel's lifetime: a "sync" event,
 // every defaultResyncInterval, with server_now and this caller's own
-// deadline (contests.Deadline — never with the grace queryproxy adds before
-// refusing a late answer; see queryproxy.Service's own doc for why a
-// deadline shown to a participant must not carry it); and a "contest_started"
+// deadline (contests.Deadline — never with the grace the participation gate,
+// contests.StandingOf, adds before refusing a late action: the grace is an
+// allowance for a request already on its way, not time a participant is
+// shown); and a "contest_started"
 // event when the contest starts, and a "contest_finished" event when the
 // channel closes because the contest is over for this participant
 // (contests.Standing.Over). Nothing about another participant ever crosses
@@ -400,11 +401,11 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 			if !alive {
 				return
 			}
-			// Armed after the lookups below, not before: AccessForEvents is
-			// two database reads, and a deadline meant to bound how long this
+			// Armed after the lookup below, not before: AccessForEvents is a
+			// database round trip, and a deadline meant to bound how long this
 			// goroutine may block trying to write must not start ticking
 			// against time this request spends waiting on the server's own
-			// storage (finding 2). A resync whose lookups run slow would
+			// storage (finding 2). A resync whose lookup runs slow would
 			// otherwise disconnect an honest, still-enrolled client for a
 			// delay entirely on this side of the connection.
 			newParticipant, newContest, standing, err := h.access.AccessForEvents(r.Context(), contestID, identity.UserID, addr)
@@ -493,9 +494,9 @@ type statusPayload struct {
 
 // syncPayload is the whole body of a sync event: server_now, for the
 // frontend to compute its own clock offset against, and this participant's
-// own deadline — never anyone else's, and never with queryproxy's grace
-// added (see EventsHandler's own doc and queryproxy.Service's own comment on
-// why a deadline shown to a participant must not carry it).
+// own deadline — never anyone else's, and never with the gate's grace added
+// (see EventsHandler's own doc for why a deadline shown to a participant must
+// not carry it).
 type syncPayload struct {
 	ServerNow string `json:"server_now"`
 	// Deadline is absent, not null, when contests.Deadline has none yet — an

@@ -19,8 +19,9 @@ func ClockPending(c Contest, p Participant) bool {
 //   - fixed:      deadline = ends_at. Everybody shares one window;
 //     registration.StartedAt is analytics only and never enters the formula.
 //   - individual: deadline = LEAST(started_at + duration_min, ends_at). A
-//     participant may begin anywhere in [starts_at, ends_at] and gets their
-//     own minutes from their own start, capped by the contest's own end.
+//     participant may begin anywhere in [starts_at, ends_at) (StandingOf
+//     decides that) and gets their own minutes from their own start, capped
+//     by the contest's own end.
 //
 // ok is false when no deadline can be produced: an individual-timing
 // participant who has not started yet (there is nothing for duration_min to
@@ -32,10 +33,12 @@ func ClockPending(c Contest, p Participant) bool {
 // currently open to the participant, never as open without limit.
 //
 // A plain function over values the caller already holds, not a method that
-// fetches: the submission path, queryproxy and SSE each already have their
-// own Contest and Participant in hand by the time they need this, and a
-// second lookup here would just be a second place the timing rule could
-// drift from this one.
+// fetches: the participation gate (StandingOf), the submission path and the
+// events channel each already have their own Contest and Participant in hand
+// by the time they need this, and a second lookup here would just be a
+// second place the timing rule could drift from this one. None of them adds
+// the grace to it themselves; closesAt in standing.go is the one place that
+// does.
 func Deadline(c Contest, p Participant) (deadline time.Time, ok bool) {
 	switch c.Timing {
 	case TimingFixed:
@@ -61,32 +64,4 @@ func Deadline(c Contest, p Participant) (deadline time.Time, ok bool) {
 		// not one of the two models, there is no deadline.
 		return time.Time{}, false
 	}
-}
-
-// OpenForStart reports whether now falls inside the contest's own window —
-// [starts_at, ends_at] — the wall-clock fact an individual participant's
-// first action must satisfy before it may ever write registrations.started_at
-// (§8, finding 1).
-//
-// Deliberately independent of Contest.Status: status is a manual step in an
-// organiser's own workflow and can be moved to "running" hours before
-// starts_at, or left at "running" long after ends_at by a scheduler that
-// never ticked. Neither says anything about the wall clock, and queryproxy
-// already has its own status check for what status alone is good for — this
-// answers a different question, and is checked in addition to it, not instead
-// of it.
-//
-// A nil bound is open on that side: starts_at unset means the contest opens
-// immediately, ends_at unset means it never closes on its own. This mirrors
-// what CheckPublishable already tolerates — an individual contest must have a
-// starts_at to publish, but not an ends_at — so both are reachable in
-// production, not merely type-level possibilities.
-func (c Contest) OpenForStart(now time.Time) bool {
-	if c.StartsAt != nil && now.Before(*c.StartsAt) {
-		return false
-	}
-	if c.EndsAt != nil && now.After(*c.EndsAt) {
-		return false
-	}
-	return true
 }

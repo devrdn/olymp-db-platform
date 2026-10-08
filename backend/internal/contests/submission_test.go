@@ -1109,24 +1109,61 @@ func TestSubmitHandsInsertTheDeadlinePlusGrace(t *testing.T) {
 	}
 }
 
-// The gate is asked again once Submit has started the clock, with the
-// participant Start handed back: a start that leaves no deadline to compute
-// (an individual contest with no duration) is refused before the write, as
-// broken data, not written against no deadline.
+// The gate is asked again once Submit has started the clock, of the
+// participant Start handed back: a request that lost the race to an earlier
+// start is handed that start, and its time can already be up. Refused before
+// the write, so Insert is never handed a deadline already behind it.
 func TestSubmitAsksTheGateAgainAfterStartingTheClock(t *testing.T) {
 	f := conteststest.NewFixture()
-	starts, ends := f.Now.Add(-time.Hour), f.Now.Add(time.Hour)
+	starts, ends := f.Now.Add(-3*time.Hour), f.Now.Add(3*time.Hour)
+	longAgo := f.Now.Add(-2 * time.Hour)
+	duration := 30
 	c := f.Contests.Put(contests.Contest{
-		Status: contests.StatusRunning, Timing: contests.TimingIndividual, StartsAt: &starts, EndsAt: &ends,
+		Status: contests.StatusRunning, Timing: contests.TimingIndividual, DurationMin: &duration,
+		StartsAt: &starts, EndsAt: &ends,
 	})
-	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationRegistered})
+	stored := f.Registrations.Put(contests.Participant{
+		ContestID: c.ID, Status: contests.RegistrationActive, StartedAt: &longAgo,
+	})
+	// The request still holds the registration as it was before the other
+	// request started the clock.
+	unstarted := stored
+	unstarted.Status, unstarted.StartedAt = contests.RegistrationRegistered, nil
 	q := f.Questions.Put(contests.Question{ContestID: c.ID, Kind: contests.KindText, IsVisible: true})
 
 	_, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
-		Participant: p, Contest: c, QuestionID: q.ID, Value: "anything",
+		Participant: unstarted, Contest: c, QuestionID: q.ID, Value: "anything",
 	})
-	if !errors.Is(err, contests.ErrContestNotRunning) {
-		t.Fatalf("error = %v, want ErrContestNotRunning", err)
+	if !errors.Is(err, contests.ErrDeadlinePassed) {
+		t.Fatalf("error = %v, want ErrDeadlinePassed", err)
+	}
+	if len(f.Submissions.Requests) != 0 {
+		t.Fatalf("Insert was handed %d requests, want none", len(f.Submissions.Requests))
+	}
+}
+
+// A registration disqualified between the first gate and the start is one
+// Start does not move: its clock is still pending when it comes back. What
+// the participant is told is the gate's answer for who they now are, not a
+// broken start.
+func TestSubmitRefusesARegistrationDisqualifiedBeforeItsClockStarted(t *testing.T) {
+	f := conteststest.NewFixture()
+	starts, ends := f.Now.Add(-time.Hour), f.Now.Add(time.Hour)
+	duration := 30
+	c := f.Contests.Put(contests.Contest{
+		Status: contests.StatusRunning, Timing: contests.TimingIndividual, DurationMin: &duration,
+		StartsAt: &starts, EndsAt: &ends,
+	})
+	stored := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationDisqualified})
+	admitted := stored
+	admitted.Status = contests.RegistrationRegistered
+	q := f.Questions.Put(contests.Question{ContestID: c.ID, Kind: contests.KindText, IsVisible: true})
+
+	_, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: admitted, Contest: c, QuestionID: q.ID, Value: "anything",
+	})
+	if !errors.Is(err, contests.ErrNotAParticipant) {
+		t.Fatalf("error = %v, want ErrNotAParticipant", err)
 	}
 	if len(f.Submissions.Requests) != 0 {
 		t.Fatalf("Insert was handed %d requests, want none", len(f.Submissions.Requests))
