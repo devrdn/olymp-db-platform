@@ -15,7 +15,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
-	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -614,42 +613,15 @@ func (h *ParticipantHandler) admitAnswer(w http.ResponseWriter, r *http.Request,
 // to a response.
 //
 // CLAUDE.md rule 1: every one of these is a declared sentinel with a mapping
-// here and a handler test asserting the 4xx it produces.
+// — queryproxy's and the rate refusal in errortable.go, the reader's and
+// Submit's here — and a test asserting the 4xx it produces.
 func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
+	// Admission and the rate limit: the same tables the console and the
+	// events channel answer from (errortable.go).
+	if queryproxyErrors.answer(w, r, h.log, err) || queryrunnerErrors.answer(w, r, h.log, err) {
+		return
+	}
 	switch {
-	case errors.Is(err, queryrunner.ErrTooManyQueries):
-		httpx.Error(w, r, http.StatusTooManyRequests, codeQueryTooOften,
-			"This caller is asking faster than this installation allows")
-	case errors.Is(err, queryproxy.ErrNotAParticipant):
-		// The same answer whether the caller never registered, was
-		// disqualified, or the contest named in the URL belongs to somebody
-		// else entirely: telling those apart would say whether an account is
-		// on a roster, or whether a contest exists at all.
-		httpx.Error(w, r, http.StatusForbidden, codeNotAParticipant, "The caller is not taking part in this contest")
-	case errors.Is(err, queryproxy.ErrContestNotRunning):
-		httpx.Error(w, r, http.StatusConflict, codeContestNotRunning, "The contest is not running")
-	case errors.Is(err, queryproxy.ErrFinished):
-		httpx.Error(w, r, http.StatusConflict, codeContestFinished, "The participant has already finished")
-	case errors.Is(err, queryproxy.ErrSchemaHidden):
-		// A rule of the game, not an outage and not a missing resource: the
-		// contest exists and the caller is in it. The interface reads this
-		// code and simply does not offer the panel.
-		httpx.Error(w, r, http.StatusForbidden, codeSchemaHidden, "This contest does not show the game's schema")
-	case errors.Is(err, queryproxy.ErrNoGameYet):
-		httpx.Error(w, r, http.StatusConflict, codeNoGameYet, "The contest has no game database yet")
-	case errors.Is(err, queryproxy.ErrNoRoomForDatabase):
-		// 503 and not 500: the schema panel could not be shown because the
-		// game cluster is at the disk budget its operator set, which is a fact
-		// about this installation right now rather than anything broken. It is
-		// also worth an operator's attention — the pool's own constrained
-		// warning says the pool stopped growing, and this says participants are
-		// now being turned away — so it is logged as well as answered.
-		h.log.ErrorContext(r.Context(), "the game cluster has no room for a participant's database", "error", err)
-		httpx.Error(w, r, http.StatusServiceUnavailable, codeGameClusterFull,
-			"The game cluster has no room for another copy of this contest")
-	case errors.Is(err, queryproxy.ErrAddressNotAllowed):
-		httpx.Error(w, r, http.StatusForbidden, codeAddressNotAllowed,
-			"This contest is only available from the university network")
 	case errors.Is(err, contests.ErrStoryNotFound):
 		httpx.Error(w, r, http.StatusNotFound, codeStoryNotFound, "This contest has no story yet")
 	case errors.Is(err, contests.ErrQuestionNotFound):
@@ -685,9 +657,6 @@ func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err er
 			"Too many submissions to this question arrived at once; try again")
 	case errors.Is(err, ErrExportsBusy):
 		exportsBusy(w, r)
-	case errors.Is(err, queryproxy.ErrUnavailable):
-		h.log.ErrorContext(r.Context(), "could not resolve participant access", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 	default:
 		h.log.ErrorContext(r.Context(), "participant content could not be read", "error", err)
 		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")

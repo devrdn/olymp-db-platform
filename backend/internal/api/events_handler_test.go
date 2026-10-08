@@ -170,34 +170,27 @@ func TestEventsRequiresAuthentication(t *testing.T) {
 // read endpoints, driven through this one: this is not a fourth
 // implementation of "may this student be here", so a refusal from the same
 // façade must become the same status and code here too.
-func TestEventsMapsAccessRefusalsToTheDocumentedStatusAndCode(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		err        error
-		wantStatus int
-		wantCode   string
-	}{
-		{"not a participant", queryproxy.ErrNotAParticipant, http.StatusForbidden, "not_a_participant"},
-		{"contest not running", queryproxy.ErrContestNotRunning, http.StatusConflict, "contest_not_running"},
-		{"participant finished", queryproxy.ErrFinished, http.StatusConflict, "contest_finished"},
-		{"address not allowed", queryproxy.ErrAddressNotAllowed, http.StatusForbidden, "address_not_allowed"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newEventsFixture(t)
-			f.access.err = tc.err
+//
+// The mapping itself is one table (errortable.go, walked by
+// TestEveryQueryproxyErrorHasItsAnswer); what this proves is that the channel
+// hands its refusal to that table, so one representative refusal is enough.
+func TestEventsAnswersAccessRefusalsFromTheSharedTable(t *testing.T) {
+	f := newEventsFixture(t)
+	f.access.err = queryproxy.ErrAddressNotAllowed
 
-			req, cancel := f.request(uuid.New())
-			defer cancel()
-			rec := httptest.NewRecorder()
-			f.router.ServeHTTP(rec, req)
+	req, cancel := f.request(uuid.New())
+	defer cancel()
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
 
-			if rec.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d (body: %s)", rec.Code, tc.wantStatus, rec.Body.String())
-			}
-			if code := errorCode(t, rec); code != tc.wantCode {
-				t.Fatalf("code = %q, want %q", code, tc.wantCode)
-			}
-		})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "address_not_allowed" {
+		t.Fatalf("code = %q, want address_not_allowed", code)
+	}
+	if message := errorMessage(t, rec); message != "This contest is only available from the university network" {
+		t.Fatalf("message = %q", message)
 	}
 }
 
@@ -221,6 +214,9 @@ func TestEventsRateLimitRefusalNeverReachesAccess(t *testing.T) {
 	}
 	if f.access.accessCalled {
 		t.Fatal("Access was called after AdmitRead refused")
+	}
+	if retry := rec.Header().Get("Retry-After"); retry != "60" {
+		t.Fatalf("Retry-After = %q, want 60", retry)
 	}
 }
 

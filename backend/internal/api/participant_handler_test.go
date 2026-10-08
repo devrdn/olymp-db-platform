@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -316,7 +317,9 @@ type participantFixture struct {
 	watcher *recordingWatcher
 	// signalStore records every batch of browser signals stored.
 	signalStore *signalStore
-	cookie      *http.Cookie
+	// logs is what the handler logged.
+	logs   *logBuffer
+	cookie *http.Cookie
 }
 
 // fixtureUserAgent is the browser every fixture request claims to be.
@@ -350,7 +353,8 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 	c := cache.NewMemory(1000)
 	t.Cleanup(func() { _ = c.Close() })
 
-	log := logging.New("error", io.Discard)
+	logs := &logBuffer{}
+	log := logging.New("error", logs)
 	sessions := auth.NewSessionStore(c, time.Hour)
 	token, err := sessions.Create(t.Context(), auth.Principal{UserID: actor.ID, Login: actor.Login})
 	if err != nil {
@@ -389,6 +393,7 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 		workspaceStore: workspaceStore,
 		watcher:        watcher,
 		signalStore:    signals,
+		logs:           logs,
 		cookie:         &http.Cookie{Name: auth.SessionCookieName, Value: token},
 	}
 }
@@ -644,41 +649,49 @@ func TestAReferenceAnswerNeverAppearsInTheQuestionsResponse(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 1: every refusal queryproxy.Service.Access can answer with
-// needs a declared sentinel, a mapping in fail(), and a test asserting the
-// 4xx. This table is that test for every one of them, driven through both
-// endpoints.
-func TestAccessRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		err        error
-		wantStatus int
-		wantCode   string
-	}{
-		{"not a participant", queryproxy.ErrNotAParticipant, http.StatusForbidden, "not_a_participant"},
-		{"contest not running", queryproxy.ErrContestNotRunning, http.StatusConflict, "contest_not_running"},
-		{"participant finished", queryproxy.ErrFinished, http.StatusConflict, "contest_finished"},
-		{"address not allowed", queryproxy.ErrAddressNotAllowed, http.StatusForbidden, "address_not_allowed"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newParticipantFixture(t)
-			f.access.err = tc.err
-			contestID := uuid.New()
+// Every refusal queryproxy hands over is answered from one table
+// (errortable.go, and TestEveryQueryproxyErrorHasItsAnswer walks every one of
+// them). What this proves is that each read endpoint hands its refusal to
+// that table, so one representative refusal is enough.
+func TestAccessRefusalsAreAnsweredFromTheSharedTable(t *testing.T) {
+	f := newParticipantFixture(t)
+	f.access.err = queryproxy.ErrAddressNotAllowed
+	contestID := uuid.New()
 
-			for _, path := range []string{
-				"/contests/" + contestID.String() + "/play/story",
-				"/contests/" + contestID.String() + "/play/questions",
-				"/contests/" + contestID.String() + "/play/log",
-			} {
-				rec := f.get(path)
-				if rec.Code != tc.wantStatus {
-					t.Fatalf("%s: status = %d, want %d (body: %s)", path, rec.Code, tc.wantStatus, rec.Body.String())
-				}
-				if code := errorCode(t, rec); code != tc.wantCode {
-					t.Fatalf("%s: code = %q, want %q", path, code, tc.wantCode)
-				}
-			}
-		})
+	for _, path := range []string{
+		"/contests/" + contestID.String() + "/play/story",
+		"/contests/" + contestID.String() + "/play/questions",
+		"/contests/" + contestID.String() + "/play/log",
+	} {
+		rec := f.get(path)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s: status = %d, want 403 (body: %s)", path, rec.Code, rec.Body.String())
+		}
+		if code := errorCode(t, rec); code != "address_not_allowed" {
+			t.Fatalf("%s: code = %q, want address_not_allowed", path, code)
+		}
+		if message := errorMessage(t, rec); message != "This contest is only available from the university network" {
+			t.Fatalf("%s: message = %q", path, message)
+		}
+	}
+}
+
+// A full game cluster turns the schema panel away, and an operator hears of
+// it: participants are being refused, which the pool's own warning does not
+// say.
+func TestAFullGameClusterOnTheSchemaPanelIsLogged(t *testing.T) {
+	f := newParticipantFixture(t)
+	f.access.schemaErr = fmt.Errorf("%w: %w", queryproxy.ErrNoRoomForDatabase, provisioning.ErrClusterFull)
+
+	rec := f.get("/contests/" + uuid.New().String() + "/play/schema")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "game_cluster_full" {
+		t.Fatalf("code = %q, want game_cluster_full", code)
+	}
+	if !f.logs.loggedError("the game cluster has no room") {
+		t.Fatal("a full game cluster was answered without being logged")
 	}
 }
 
@@ -717,6 +730,9 @@ func TestARateLimitRefusalIsA429AndNeverReachesAccess(t *testing.T) {
 			}
 			if f.access.accessCalled {
 				t.Fatal("Access was called after AdmitRead refused — the rate check must run first, before Access's own lookups")
+			}
+			if retry := rec.Header().Get("Retry-After"); retry != "60" {
+				t.Fatalf("Retry-After = %q, want 60", retry)
 			}
 		})
 	}

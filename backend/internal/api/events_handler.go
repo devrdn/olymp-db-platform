@@ -16,7 +16,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/platform/metrics"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
-	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
@@ -572,30 +571,14 @@ func (l *connLimiter) count(id uuid.UUID) int {
 // response.
 //
 // CLAUDE.md rule 1: every one of these is a declared sentinel with a mapping
-// here and a handler test asserting the 4xx it produces.
+// in errortable.go and a test asserting the 4xx it produces.
 func (h *EventsHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
-	switch {
-	case errors.Is(err, queryrunner.ErrTooManyQueries):
-		httpx.Error(w, r, http.StatusTooManyRequests, codeQueryTooOften,
-			"This caller is asking faster than this installation allows")
-	case errors.Is(err, queryproxy.ErrNotAParticipant):
-		// The same answer whether the caller never registered, was
-		// disqualified, or the contest named in the URL belongs to somebody
-		// else entirely (participant_handler.go's own fail carries the same
-		// reasoning for the same sentinel).
-		httpx.Error(w, r, http.StatusForbidden, codeNotAParticipant, "The caller is not taking part in this contest")
-	case errors.Is(err, queryproxy.ErrContestNotRunning):
-		httpx.Error(w, r, http.StatusConflict, codeContestNotRunning, "The contest is not running")
-	case errors.Is(err, queryproxy.ErrFinished):
-		httpx.Error(w, r, http.StatusConflict, codeContestFinished, "The participant has already finished")
-	case errors.Is(err, queryproxy.ErrAddressNotAllowed):
-		httpx.Error(w, r, http.StatusForbidden, codeAddressNotAllowed,
-			"This contest is only available from the university network")
-	case errors.Is(err, queryproxy.ErrUnavailable):
-		h.log.ErrorContext(r.Context(), "could not resolve participant access", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
-	default:
-		h.log.ErrorContext(r.Context(), "could not open the events channel", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+	// The same tables the console and the play screen answer from
+	// (errortable.go): this is not a fourth implementation of "may this
+	// student be here", so its refusals read the same.
+	if queryproxyErrors.answer(w, r, h.log, err) || queryrunnerErrors.answer(w, r, h.log, err) {
+		return
 	}
+	h.log.ErrorContext(r.Context(), "could not open the events channel", "error", err)
+	httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 }
