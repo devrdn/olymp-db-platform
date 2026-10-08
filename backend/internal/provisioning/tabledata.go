@@ -436,7 +436,7 @@ func (g *Games) checkTableHeaderOnFirstChunk(ctx context.Context, contestID, id 
 	if !complete {
 		return nil // the header has not fully arrived in this chunk; nothing to check yet
 	}
-	fields, err := splitCSVLine(line)
+	fields, err := splitHeaderLine(line)
 	if err != nil {
 		return err
 	}
@@ -591,7 +591,7 @@ func (g *Games) validateTableFile(ctx context.Context, id string, table TableDef
 		}
 		return 0, err
 	}
-	headerFields, err := splitCSVLine(header)
+	headerFields, err := splitHeaderLine(header)
 	if err != nil {
 		return 0, err
 	}

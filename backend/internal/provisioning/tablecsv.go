@@ -428,6 +428,20 @@ func firstLineIfComplete(r io.Reader) ([]byte, bool, error) {
 	}
 }
 
+// utf8BOM is the byte-order mark Excel's "CSV UTF-8" writes at the very
+// start of the file.
+var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
+
+// splitHeaderLine is splitCSVLine for the file's first line, which may start
+// with a byte-order mark: Excel's "CSV UTF-8", the format the encoding
+// refusal tells people to save as, writes one. Read as text it became part of
+// the first column's name, and the header was refused for a difference no one
+// could see. Only the header carries one, and it is read only to be compared:
+// the build skips the header line, so nothing else needs to know.
+func splitHeaderLine(line []byte) ([]csvField, error) {
+	return splitCSVLine(bytes.TrimPrefix(line, utf8BOM))
+}
+
 // headerFields is the header line a completed CSV must start with —
 // table.Columns' own names, in order, exactly as Definition.Tables[].Name
 // carries them, before folding or quoting: it is the file's own promise that
@@ -516,7 +530,7 @@ func validateScalar(text string, t ColumnType) error {
 		return errors.New("is not UTF-8 text; save the file as CSV UTF-8 and upload it again")
 	}
 	if strings.ContainsRune(text, 0) {
-		return errors.New("holds a NUL character, which no column can store; UTF-8 text cannot contain one")
+		return errors.New("holds a NUL character, which PostgreSQL cannot store in any column")
 	}
 	switch t {
 	case ColumnText:
