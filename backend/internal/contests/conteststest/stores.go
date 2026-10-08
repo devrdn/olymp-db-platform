@@ -951,32 +951,39 @@ func (r *Policies) Save(_ context.Context, p contests.SQLPolicy) error {
 	return nil
 }
 
-// Attempts is an in-memory contests.AttemptStore.
+// Attempts is an in-memory contests.AttemptStore, derived from the submission
+// store the way the real one reads the submissions table, so an answer a test
+// records through Insert is what it reads back here, as in production — held
+// to the same answers as postgres.Attempts by AttemptStoreContract, which both
+// run. It has no store of its own for a test to stage stats in: every state a
+// participant can be in is one Insert can produce, and a staged one could say
+// what no sequence of submissions ever would.
 type Attempts struct {
-	byRegistration map[uuid.UUID]map[uuid.UUID]contests.AttemptStats
+	submissions *Submissions
 }
 
 var _ contests.AttemptStore = (*Attempts)(nil)
 
-// NewAttempts returns an empty attempt store.
-func NewAttempts() *Attempts {
-	return &Attempts{byRegistration: map[uuid.UUID]map[uuid.UUID]contests.AttemptStats{}}
+// NewAttempts derives attempt stats from the given submission store.
+func NewAttempts(submissions *Submissions) *Attempts {
+	return &Attempts{submissions: submissions}
 }
 
-// Put stages one registration's attempt count and correctness on a question,
-// as the real repository would derive it from the submissions it has
-// recorded.
-func (r *Attempts) Put(registrationID, questionID uuid.UUID, stats contests.AttemptStats) {
-	if r.byRegistration[registrationID] == nil {
-		r.byRegistration[registrationID] = map[uuid.UUID]contests.AttemptStats{}
-	}
-	r.byRegistration[registrationID][questionID] = stats
-}
-
+// ForRegistration mirrors postgres.Attempts.ForRegistration: per question the
+// registration answered, how many submissions it made, whether any was
+// correct, and the sum of what they were awarded.
 func (r *Attempts) ForRegistration(_ context.Context, registrationID uuid.UUID) (map[uuid.UUID]contests.AttemptStats, error) {
-	out := make(map[uuid.UUID]contests.AttemptStats, len(r.byRegistration[registrationID]))
-	for id, stats := range r.byRegistration[registrationID] {
-		out[id] = stats
+	out := map[uuid.UUID]contests.AttemptStats{}
+	for key, recorded := range r.submissions.byKey {
+		if key.registrationID != registrationID {
+			continue
+		}
+		stats := contests.AttemptStats{Attempts: len(recorded)}
+		for _, s := range recorded {
+			stats.Correct = stats.Correct || s.IsCorrect
+			stats.PointsAwarded += s.PointsAwarded
+		}
+		out[key.questionID] = stats
 	}
 	return out, nil
 }
@@ -1092,7 +1099,8 @@ func pointsAwarded(req contests.SubmissionRequest, priorAttempts int) int {
 // the same two stores Submit itself consults in production — which questions
 // exist and in what order, and what a registration has already submitted to
 // each — rather than a store of its own a test could forget to keep in sync
-// with what Submit actually wrote.
+// with what Submit actually wrote. It is held to the same answers as
+// postgres.Sequence by SequentialGateContract, which both run.
 type SequentialProgress struct {
 	questions   *Questions
 	submissions *Submissions

@@ -117,3 +117,38 @@ func TestManagersHonoursTheRepositoryContract(t *testing.T) {
 		})
 	})
 }
+
+func TestAttemptsHonoursTheRepositoryContract(t *testing.T) {
+	AttemptStoreContract(t, func(t *testing.T, run func(context.Context, AttemptTarget)) {
+		questions := NewQuestions()
+		submissions := NewSubmissions()
+		submissions.Clock = func() time.Time { return FixtureNow }
+		run(context.Background(), AttemptTarget{
+			Store:           NewAttempts(submissions),
+			Questions:       questions,
+			Submissions:     submissions,
+			ContestID:       uuid.New(),
+			RegistrationID:  uuid.New(),
+			NewRegistration: uuid.New,
+			Now:             submissions.Clock,
+		})
+	})
+}
+
+func TestSequentialProgressHonoursTheRepositoryContract(t *testing.T) {
+	SequentialGateContract(t, func(t *testing.T, run func(context.Context, SequenceTarget)) {
+		questions := NewQuestions()
+		submissions := NewSubmissions()
+		submissions.Clock = func() time.Time { return FixtureNow }
+		run(context.Background(), SequenceTarget{
+			Gate:            NewSequentialProgress(questions, submissions),
+			Questions:       questions,
+			Submissions:     submissions,
+			ContestID:       uuid.New(),
+			RegistrationID:  uuid.New(),
+			NewRegistration: uuid.New,
+			NewContest:      uuid.New,
+			Now:             submissions.Clock,
+		})
+	})
+}
