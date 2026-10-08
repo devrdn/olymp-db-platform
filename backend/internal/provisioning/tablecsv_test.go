@@ -264,24 +264,55 @@ func TestCompleteTableUploadNamesTheRowAndColumnOfAValueThatDoesNotParse(t *test
 // when the upload completes, naming the row and column and saying what to do.
 func TestCompleteTableUploadRefusesTextThatIsNotUTF8(t *testing.T) {
 	t.Parallel()
-	for name, content := range map[string]string{
+	for name, tc := range map[string]struct{ content, says string }{
 		// "Марго" in cp1251.
-		"cp1251":     "id,name,nickname\n1,\xcc\xe0\xf0\xe3\xee,\n",
-		"a NUL byte": "id,name,nickname\n1,Mar\x00got,\n",
+		"cp1251":     {"id,name,nickname\n1,\xcc\xe0\xf0\xe3\xee,\n", "UTF-8"},
+		"a NUL byte": {"id,name,nickname\n1,Mar\x00got,\n", "NUL"},
 	} {
 		service, _, _, _ := tableDataGames(t, true)
 		contest := uuid.New()
 		withSuspects(t, service, contest)
-		data := beginTableUploadWithContent(t, service, contest, "suspects", content)
+		data := beginTableUploadWithContent(t, service, contest, "suspects", tc.content)
 
 		_, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID)
 		if !errors.Is(err, provisioning.ErrTableValueInvalid) {
 			t.Fatalf("%s: error = %v, want ErrTableValueInvalid", name, err)
 		}
 		if !strings.Contains(err.Error(), "row 1") || !strings.Contains(err.Error(), `"name"`) ||
-			!strings.Contains(err.Error(), "UTF-8") {
-			t.Fatalf("%s: error = %q, does not name row 1's name column and the encoding", name, err)
+			!strings.Contains(err.Error(), tc.says) {
+			t.Fatalf("%s: error = %q, does not name row 1's name column and say %s", name, err, tc.says)
 		}
+	}
+}
+
+// Excel's "CSV UTF-8" — what the refusal above tells people to save as —
+// starts the file with a byte-order mark. Read as part of the first column's
+// name, it refused the file with a header that looked exactly like the one
+// wanted.
+func TestCompleteTableUploadReadsAnExcelUTF8FileWithItsByteOrderMark(t *testing.T) {
+	t.Parallel()
+	service, _, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	content := "\xef\xbb\xbfid,name,nickname\n1,Марго,\n"
+	data := beginTableUploadWithContent(t, service, contest, "suspects", content)
+
+	if _, err := service.CompleteTableUpload(t.Context(), uuid.New(), contest, data.ID); err != nil {
+		t.Fatalf("CompleteTableUpload() = %v, want the file accepted", err)
+	}
+}
+
+// The form's own row takes the same check: a NUL reaching the service by any
+// route other than the JSON body (which refuses it first) is refused here.
+func TestAppendTableRowRefusesANULCharacter(t *testing.T) {
+	t.Parallel()
+	service, _, _, _ := tableDataGames(t, true)
+	contest := uuid.New()
+	withSuspects(t, service, contest)
+
+	if _, err := service.AppendTableRow(t.Context(), uuid.New(), contest, "suspects", []string{"1", "Mar\x00got", ""}); !errors.Is(err, provisioning.ErrTableValueInvalid) {
+		t.Fatalf("error = %v, want ErrTableValueInvalid", err)
 	}
 }
 
