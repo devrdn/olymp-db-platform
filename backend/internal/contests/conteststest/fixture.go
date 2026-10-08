@@ -101,6 +101,11 @@ func NewFixture() *Fixture {
 	// A registration is stamped by the same clock, the way the table stamps
 	// it with the database's own.
 	f.Registrations.Clock = func() time.Time { return f.Now }
+	// And a contest by the same one, the way its own table stamps it.
+	f.Contests.Clock = func() time.Time { return f.Now }
+	// The listing of a user's contests and of what a participant may see
+	// reads who staffs and who is registered, which are these two stores.
+	f.Contests.Rosters(f.Managers, f.Registrations)
 
 	f.Service = contests.NewService(contests.ServiceConfig{
 		Contests:      f.Contests,

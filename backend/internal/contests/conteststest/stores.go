@@ -13,6 +13,7 @@ package conteststest
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -23,13 +24,23 @@ import (
 	"github.com/google/uuid"
 )
 
-// Contests is an in-memory contests.Repository.
+// Contests is an in-memory contests.Repository, held to the same answers as
+// postgres.Contests by ContestRepositoryContract, which both run.
 type Contests struct {
 	byID map[uuid.UUID]contests.Contest
 	// order preserves insertion order, so listings are deterministic.
 	order []uuid.UUID
 	// racesTo stages one concurrent status change; see SetStatusRaces.
 	racesTo string
+	// Clock is what Create stamps CreatedAt and UpdatedAt with, and what
+	// Update and SetStatus stamp UpdatedAt with, the way the table's default
+	// and the statements stamp them with the database's own now(). Nil leaves
+	// them as they are.
+	Clock func() time.Time
+	// managers and registrations answer the two filters that depend on other
+	// tables, Filter.ManagedBy and Filter.VisibleTo; see Rosters.
+	managers      *Managers
+	registrations *Registrations
 }
 
 var _ contests.Repository = (*Contests)(nil)
@@ -39,8 +50,33 @@ func NewContests() *Contests {
 	return &Contests{byID: map[uuid.UUID]contests.Contest{}}
 }
 
+// Rosters tells List where to look up who staffs a contest and who is
+// registered for it, which the real listing joins from the managers and the
+// registrations tables. Until it is called nobody staffs anything and
+// nobody is registered, so a ManagedBy listing is empty and a VisibleTo
+// listing holds only the open contests.
+func (r *Contests) Rosters(managers *Managers, registrations *Registrations) {
+	r.managers, r.registrations = managers, registrations
+}
+
 // Count reports how many contests are stored.
 func (r *Contests) Count() int { return len(r.byID) }
+
+// store keeps a copy of the contest, so nothing the caller does to its own
+// value afterwards reaches the stored one.
+func (r *Contests) store(c contests.Contest) {
+	if _, exists := r.byID[c.ID]; !exists {
+		r.order = append(r.order, c.ID)
+	}
+	r.byID[c.ID] = cloneContest(c)
+}
+
+func (r *Contests) now() (time.Time, bool) {
+	if r.Clock == nil {
+		return time.Time{}, false
+	}
+	return r.Clock(), true
+}
 
 // Put stores a contest as given, for tests that need a particular state.
 func (r *Contests) Put(c contests.Contest) contests.Contest {
@@ -58,16 +94,74 @@ func (r *Contests) Put(c contests.Contest) contests.Contest {
 	if c.ICPCPenaltyMin == 0 {
 		c.ICPCPenaltyMin = contests.DefaultICPCPenaltyMin
 	}
-	if _, exists := r.byID[c.ID]; !exists {
-		r.order = append(r.order, c.ID)
-	}
-	r.byID[c.ID] = c
+	r.store(c)
 	return c
 }
 
+// cloneContest copies everything a caller could write to through a contest.
+// The real repository hands out rows it has just read and keeps nothing of
+// what it is given, so a caller editing a contest it holds has not changed
+// the stored one until it saves.
+func cloneContest(c contests.Contest) contests.Contest {
+	c.DurationMin = clonePointer(c.DurationMin)
+	c.StartsAt = clonePointer(c.StartsAt)
+	c.EndsAt = clonePointer(c.EndsAt)
+	c.AllowedCIDRs = slices.Clone(c.AllowedCIDRs)
+	c.Settings.EnrollmentDeadline = clonePointer(c.Settings.EnrollmentDeadline)
+	c.LeaderboardFreezeMin = clonePointer(c.LeaderboardFreezeMin)
+	c.LeaderboardRevealedAt = clonePointer(c.LeaderboardRevealedAt)
+	c.Languages = slices.Clone(c.Languages)
+	if c.Translations != nil {
+		translations := make(map[string]contests.Translation, len(c.Translations))
+		for lang, t := range c.Translations {
+			translations[lang] = t
+		}
+		c.Translations = translations
+	}
+	return c
+}
+
+func clonePointer[T any](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+// served is what a read hands out: a copy of the stored contest with its
+// languages in the order the real projection gives them, the default first
+// and the rest by code.
+func served(c contests.Contest) contests.Contest {
+	c = cloneContest(c)
+	slices.SortFunc(c.Languages, func(a, b contests.ContestLanguage) int {
+		if a.IsDefault != b.IsDefault {
+			if a.IsDefault {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.Code, b.Code)
+	})
+	return c
+}
+
+// Create stores the contest's own columns only: its identity and timestamps
+// are assigned here, and its languages and titles have operations of their
+// own, so whatever the caller's value carries of either is dropped, as the
+// real insert does not write it. The defaults Put applies for a seed are not
+// applied either: a stored zero is a zero.
 func (r *Contests) Create(_ context.Context, c contests.Contest) (contests.Contest, error) {
 	c.ID = uuid.New()
-	return r.Put(c), nil
+	c.Languages, c.Translations = nil, nil
+	c.LeaderboardRevealedAt = nil
+	c.CoverHash, c.CoverAttribution = "", ""
+	c.CreatedAt, c.UpdatedAt = time.Time{}, time.Time{}
+	if now, ok := r.now(); ok {
+		c.CreatedAt, c.UpdatedAt = now, now
+	}
+	r.store(c)
+	return served(c), nil
 }
 
 func (r *Contests) ByID(_ context.Context, id uuid.UUID) (contests.Contest, error) {
@@ -75,12 +169,18 @@ func (r *Contests) ByID(_ context.Context, id uuid.UUID) (contests.Contest, erro
 	if !ok {
 		return contests.Contest{}, contests.ErrNotFound
 	}
-	return c, nil
+	return served(c), nil
 }
 
-func (r *Contests) List(_ context.Context, f contests.Filter) ([]contests.Contest, int, error) {
+// List filters the way the real query does: the title search, the status, the
+// contests a user staffs, and what a participant may see. Newest start first,
+// contests with no start last, and the most recently created first among those
+// that start together.
+func (r *Contests) List(ctx context.Context, f contests.Filter) ([]contests.Contest, int, error) {
 	var matched []contests.Contest
-	for _, id := range r.order {
+	// Walked newest first, so that the stable sort below leaves the later
+	// insertion first among contests it cannot tell apart.
+	for _, id := range slices.Backward(r.order) {
 		c := r.byID[id]
 		if f.Status != "" && c.Status != f.Status {
 			continue
@@ -88,8 +188,28 @@ func (r *Contests) List(_ context.Context, f contests.Filter) ([]contests.Contes
 		if f.Query != "" && !matchesTitle(c, f.Query) {
 			continue
 		}
-		matched = append(matched, c)
+		if f.ManagedBy != uuid.Nil && !r.staffs(f.ManagedBy, c.ID) {
+			continue
+		}
+		if f.VisibleTo != uuid.Nil && !r.visibleTo(f.VisibleTo, c) {
+			continue
+		}
+		if f.Enrolled != nil && *f.Enrolled != r.registered(f.VisibleTo, c.ID) {
+			continue
+		}
+		matched = append(matched, served(c))
 	}
+	slices.SortStableFunc(matched, func(a, b contests.Contest) int {
+		switch {
+		case a.StartsAt != nil && b.StartsAt != nil && !a.StartsAt.Equal(*b.StartsAt):
+			return b.StartsAt.Compare(*a.StartsAt)
+		case a.StartsAt == nil && b.StartsAt != nil:
+			return 1
+		case a.StartsAt != nil && b.StartsAt == nil:
+			return -1
+		}
+		return b.CreatedAt.Compare(a.CreatedAt)
+	})
 
 	total := len(matched)
 	if f.Offset >= total {
@@ -97,6 +217,41 @@ func (r *Contests) List(_ context.Context, f contests.Filter) ([]contests.Contes
 	}
 	end := min(f.Offset+f.Limit, total)
 	return matched[f.Offset:end], total, nil
+}
+
+// staffs reports whether the user owns or manages the contest.
+func (r *Contests) staffs(user, contest uuid.UUID) bool {
+	if r.managers == nil {
+		return false
+	}
+	return slices.ContainsFunc(r.managers.byContest[contest], func(m contests.Manager) bool { return m.UserID == user })
+}
+
+// registered reports whether the user is registered for the contest, in any
+// status of the contest and of the registration.
+func (r *Contests) registered(user, contest uuid.UUID) bool {
+	if r.registrations == nil || user == uuid.Nil {
+		return false
+	}
+	for _, p := range r.registrations.byID {
+		if p.ContestID == contest && p.UserID == user {
+			return true
+		}
+	}
+	return false
+}
+
+// visibleTo is what a participant may see: the contests they are on, once
+// those are no longer drafts, plus open ones still taking signups. A draft
+// is nobody's business but its authors'.
+func (r *Contests) visibleTo(user uuid.UUID, c contests.Contest) bool {
+	switch c.Status {
+	case contests.StatusPublished, contests.StatusRunning:
+		return c.Enrollment == contests.EnrollmentOpen || r.registered(user, c.ID)
+	case contests.StatusFinished:
+		return r.registered(user, c.ID)
+	}
+	return false
 }
 
 func matchesTitle(c contests.Contest, query string) bool {
@@ -108,14 +263,26 @@ func matchesTitle(c contests.Contest, query string) bool {
 	return false
 }
 
+// Update saves the contest's own columns and nothing else: its status moves
+// through SetStatus, its languages and titles have operations of their own,
+// and its author, its creation time and the moment a leaderboard was revealed
+// are not the caller's to rewrite.
 func (r *Contests) Update(_ context.Context, c contests.Contest) error {
 	stored, ok := r.byID[c.ID]
 	if !ok {
 		return contests.ErrNotFound
 	}
-	// Status is not among the updatable fields, matching the real repository.
-	c.Status = stored.Status
-	r.byID[c.ID] = c
+	stored.Enrollment, stored.QuestionMode = c.Enrollment, c.QuestionMode
+	stored.Progression, stored.Scoring = c.Progression, c.Scoring
+	stored.ICPCPenaltyMin = c.ICPCPenaltyMin
+	stored.Timing, stored.DurationMin = c.Timing, c.DurationMin
+	stored.StartsAt, stored.EndsAt = c.StartsAt, c.EndsAt
+	stored.AllowedCIDRs, stored.Settings = c.AllowedCIDRs, c.Settings
+	stored.LeaderboardFreezeMin, stored.LeaderboardNames = c.LeaderboardFreezeMin, c.LeaderboardNames
+	if now, ok := r.now(); ok {
+		stored.UpdatedAt = now
+	}
+	r.store(stored)
 	return nil
 }
 
@@ -139,6 +306,9 @@ func (r *Contests) SetStatus(_ context.Context, id uuid.UUID, from, to string) e
 		return contests.ErrStatusChanged
 	}
 	c.Status = to
+	if now, ok := r.now(); ok {
+		c.UpdatedAt = now
+	}
 	r.byID[id] = c
 	return nil
 }
@@ -180,13 +350,16 @@ func (r *Contests) ReplaceTranslations(_ context.Context, id uuid.UUID, translat
 	return nil
 }
 
-// LockContest is a no-op beyond checking the contest exists: the real
-// cross-session locking this stands in for is exercised against a real
-// database (internal/postgres/contests_test.go), and this fixture's
-// UnitOfWork already runs every call sequentially in one goroutine, so
-// there is no concurrent second caller for an in-memory lock to matter
-// against.
-func (r *Contests) LockContest(_ context.Context, id uuid.UUID) error {
+// LockContest is a no-op beyond refusing to run outside a unit of work, as
+// the real one does, and checking the contest exists: the real cross-session
+// locking this stands in for is exercised against a real database
+// (internal/postgres/contests_test.go), and this fixture's UnitOfWork already
+// runs every call sequentially in one goroutine, so there is no concurrent
+// second caller for an in-memory lock to matter against.
+func (r *Contests) LockContest(ctx context.Context, id uuid.UUID) error {
+	if !inTx(ctx) {
+		return errors.New("locking a contest must run inside a transaction")
+	}
 	if _, ok := r.byID[id]; !ok {
 		return contests.ErrNotFound
 	}

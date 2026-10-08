@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/google/uuid"
 )
@@ -59,5 +60,38 @@ func TestQuestionsHonoursTheRepositoryContract(t *testing.T) {
 	QuestionRepositoryContract(t, func(t *testing.T, run func(context.Context, QuestionTarget)) {
 		repo := NewQuestions()
 		run(context.Background(), QuestionTarget{Repo: repo, Visible: repo, NewContest: uuid.New})
+	})
+}
+
+func TestContestsHonoursTheRepositoryContract(t *testing.T) {
+	ContestRepositoryContract(t, func(t *testing.T, run func(context.Context, ContestTarget)) {
+		var (
+			repo          = NewContests()
+			managers      = NewManagers()
+			registrations = NewRegistrations()
+		)
+		repo.Clock = func() time.Time { return FixtureNow }
+		repo.Rosters(managers, registrations)
+		run(
+			// The same marker the fixture's unit of work puts on a context.
+			context.WithValue(context.Background(), txKey{}, true),
+			ContestTarget{
+				Repo:    repo,
+				NewUser: uuid.New,
+				Appoint: func(contest, user uuid.UUID, role rbac.ContestRole) {
+					if err := managers.Grant(context.Background(), contests.Manager{
+						ContestID: contest, UserID: user, Role: role, GrantedBy: user,
+					}); err != nil {
+						t.Fatalf("Grant() = %v", err)
+					}
+				},
+				Register: func(contest, user uuid.UUID) {
+					if _, err := registrations.Add(context.Background(), contest, user); err != nil {
+						t.Fatalf("Add() = %v", err)
+					}
+				},
+				Outside: context.Background(),
+				Now:     repo.Clock,
+			})
 	})
 }
