@@ -118,8 +118,9 @@ var standingErrors = errorTable{
 // console, the play screen and the events channel all meet when they admit a
 // participant. TestEveryQueryproxyErrorHasItsAnswer walks that list, so an
 // error added there without a row here fails the build's tests rather than a
-// participant's request. The gate's refusals, which queryproxy exports under
-// its own names, are answered by standingErrors.
+// participant's request. The gate's refusals, which queryproxy hands over as
+// contests declares them, are answered by standingErrors, and that test walks
+// them too.
 var queryproxyErrors = joined(errorTable{
 	// 409 rather than 403, for the same reason codeQuestionClosed is one: a
 	// fact about where the contest currently stands for this participant, not

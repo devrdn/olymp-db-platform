@@ -176,7 +176,7 @@ func TestEventsRequiresAuthentication(t *testing.T) {
 // hands its refusal to that table, so one representative refusal is enough.
 func TestEventsAnswersAccessRefusalsFromTheSharedTable(t *testing.T) {
 	f := newEventsFixture(t)
-	f.access.err = queryproxy.ErrAddressNotAllowed
+	f.access.err = contests.ErrAddressNotAllowed
 
 	req, cancel := f.request(uuid.New())
 	defer cancel()
@@ -339,12 +339,40 @@ func TestEventsSendsContestFinishedAndClosesWhenAccessStartsRefusing(t *testing.
 	rec, done := f.serve(req)
 
 	waitForSubstring(t, rec, "event: contest_started")
-	f.access.setErr(queryproxy.ErrContestNotRunning)
+	f.access.setErr(contests.ErrContestNotRunning)
 
 	waitDone(t, done)
 	body := rec.String()
 	if !strings.Contains(body, "event: contest_finished") {
 		t.Fatalf("no contest_finished event once the contest was no longer running: %s", body)
+	}
+	if !strings.Contains(body, `"status":"finished"`) {
+		t.Fatalf("contest_finished does not carry the finished status: %s", body)
+	}
+}
+
+// A participant whose own time runs out while the channel is open is told
+// so the same way: the admission answers ErrDeadlinePassed for it, and the
+// channel must not close silently on a participant whose contest is over.
+func TestEventsSendsContestFinishedWhenTheParticipantsTimeIsUp(t *testing.T) {
+	f := newEventsFixture(t)
+	contestID := uuid.New()
+	ends := time.Now().Add(time.Hour)
+	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+	f.access.participant = contests.Participant{ID: uuid.New()}
+	f.handler.WithResyncInterval(testResync)
+
+	req, cancel := f.request(contestID)
+	defer cancel()
+	rec, done := f.serve(req)
+
+	waitForSubstring(t, rec, "event: contest_started")
+	f.access.setErr(contests.ErrDeadlinePassed)
+
+	waitDone(t, done)
+	body := rec.String()
+	if !strings.Contains(body, "event: contest_finished") {
+		t.Fatalf("no contest_finished event once the participant's time was up: %s", body)
 	}
 	if !strings.Contains(body, `"status":"finished"`) {
 		t.Fatalf("contest_finished does not carry the finished status: %s", body)
@@ -367,7 +395,7 @@ func TestEventsClosesWithoutContestFinishedForAnUnrelatedRefusal(t *testing.T) {
 	rec, done := f.serve(req)
 
 	waitForSubstring(t, rec, "event: contest_started")
-	f.access.setErr(queryproxy.ErrNotAParticipant)
+	f.access.setErr(contests.ErrNotAParticipant)
 
 	waitDone(t, done)
 	if strings.Contains(rec.String(), "contest_finished") {

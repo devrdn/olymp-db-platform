@@ -494,11 +494,12 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		auditTrail,
 		auditRecorder,
 		storage.NewUnitOfWork(pool),
-		// The same grace Submit and queryproxy.Admitted add to a
-		// participant's own deadline (cfg.DeadlineGrace, one grace for the
-		// whole installation, §8), so the scheduler's own finish check never
-		// closes a contest a tick before a late-arriving answer or query
-		// inside that grace would still be admitted.
+		// The same grace Submit and the participation gate
+		// (contests.StandingOf) add to a participant's own deadline
+		// (cfg.DeadlineGrace, one grace for the whole installation, §8), so
+		// the scheduler's own finish check never closes a contest a tick
+		// before a late-arriving answer or query inside that grace would
+		// still be admitted.
 		cfg.DeadlineGrace,
 	).WithPoolTrigger(poolTrigger).WithCovers(postgres.NewCovers(pool))
 	a.tasks = append(a.tasks, advanceContestSchedule(log, scheduler.Advance))

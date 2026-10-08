@@ -31,15 +31,13 @@ import (
 //
 // Separate errors because each is a different sentence to the person asking,
 // and because only one of them means they did something wrong.
+//
+// Whether this participant may act in this contest at all is not among them:
+// that is the participation gate's (contests.StandingOf), and its refusals —
+// not a participant, the contest not running, finished, time up, an address
+// the contest is not held on — are contests' sentinels, handed over as the
+// gate gives them.
 var (
-	// ErrNotAParticipant, ErrContestNotRunning, ErrFinished and
-	// ErrAddressNotAllowed are the participation gate's own refusals, declared
-	// by contests beside the rule that gives them (contests.StandingOf). They
-	// are the same values under the names this package has always exported,
-	// so a caller that matches them here matches the gate's.
-	ErrNotAParticipant   = contests.ErrNotAParticipant
-	ErrContestNotRunning = contests.ErrContestNotRunning
-	ErrFinished          = contests.ErrParticipantFinished
 	// ErrNothingLeftToAnswer is a participant for whom no question of the
 	// contest is still answerable: every one of them is either answered
 	// correctly or out of attempts. The console exists to help somebody
@@ -48,21 +46,16 @@ var (
 	// execution slot, a database and a journal writer for a contest they can
 	// no longer score a point in.
 	//
-	// Deliberately not ErrFinished, and deliberately not a status write
-	// either. Finishing is a fact about the registration and it closes the
-	// whole play screen: classifyParticipant turns
-	// contests.RegistrationFinished into ErrFinished for Access as well, so
-	// marking somebody finished here would take away the story, the question
-	// list, the results and the timer along with the console. This is only
+	// Deliberately not contests.ErrParticipantFinished, and deliberately not
+	// a status write either. Finishing is a fact about the registration and
+	// it closes the whole play screen: the gate refuses a finished
+	// registration for Access as well, so marking somebody finished here
+	// would take away the story, the question list, the results and the
+	// timer along with the console. This is only
 	// about the console, only about right now, and it reverses itself the
 	// moment the contest gives them something to answer again — an organiser
 	// raising max_attempts, or making a hidden question visible.
 	ErrNothingLeftToAnswer = errors.New("no question of this contest is still answerable")
-	// ErrAddressNotAllowed is a query from outside the network the contest is
-	// held on. Checked on every query and not only at enrolment: a restriction
-	// that is applied once is a restriction somebody walks out of the room
-	// with.
-	ErrAddressNotAllowed = contests.ErrAddressNotAllowed
 	// ErrNoGameYet is a contest whose game database was never built. Nobody's
 	// fault, and not a fact about the query.
 	ErrNoGameYet = errors.New("the contest has no game database yet")
@@ -101,13 +94,13 @@ var (
 // can reach a client as "internal error"; a test here reads the package's
 // source so that none can be declared and left off it.
 //
-// Not everything Run returns is here. A *sqlpolicy.Refusal it builds itself,
-// and the Query Runner's and its transport's errors it passes through, belong
-// to those packages and are answered from their own lists.
+// Not everything this package returns is here. The participation gate's
+// refusals are contests' (contests.Errors), a *sqlpolicy.Refusal Run builds
+// itself, and the Query Runner's and its transport's errors it passes
+// through, belong to those packages and are answered from their own lists.
 func Errors() []error {
 	return []error{
-		ErrNotAParticipant, ErrContestNotRunning, ErrFinished, ErrNothingLeftToAnswer,
-		ErrAddressNotAllowed, ErrNoGameYet, ErrNoRoomForDatabase, ErrUnavailable,
+		ErrNothingLeftToAnswer, ErrNoGameYet, ErrNoRoomForDatabase, ErrUnavailable,
 		ErrDatabaseDeclined, ErrSchemaHidden,
 	}
 }
@@ -250,14 +243,16 @@ type Service struct {
 	// configuration override it. Zero means the installation itself has no
 	// limit, the same convention config.Runner.PerMinute uses.
 	perMinuteDefault int
-	// now is the clock Run compares a participant's deadline against. A field
-	// rather than a bare time.Now() call so a test can hold "now" still next
-	// to a deadline it names explicitly, instead of racing the wall clock.
+	// now is the instant every admission here asks the participation gate
+	// about. A field rather than a bare time.Now() call so a test can hold
+	// "now" still next to a deadline it names explicitly, instead of racing
+	// the wall clock.
 	now func() time.Time
-	// grace is the network-latency allowance added to a deadline before Run
-	// refuses a query for arriving too late (§8). It is never subtracted from
-	// what a participant is shown — nothing here renders a deadline, and the
-	// day something does, it must call contests.Deadline without this.
+	// grace is the network-latency allowance an already-working participant
+	// is given past their deadline (§8), handed to the gate
+	// (contests.StandingOf), which is the one place it is added. It is never
+	// part of what a participant is shown — nothing here renders a deadline,
+	// and the day something does, it must call contests.Deadline without this.
 	grace time.Duration
 	// schemas answers what a contest's game looks like, for the console's
 	// schema panel. Set by WithSchemas and nil until then — see Schema for
@@ -329,8 +324,8 @@ func (d defaultLookup) ForAccess(ctx context.Context, contestID, userID uuid.UUI
 	return participant, contest, nil
 }
 
-// WithClock overrides the wall clock Run compares a participant's deadline
-// against. A deployment never calls this and gets time.Now().UTC(); tests use
+// WithClock overrides the wall clock every admission here asks the gate
+// about. A deployment never calls this and gets time.Now().UTC(); tests use
 // it to place "now" precisely relative to a deadline instead of racing it.
 func (s *Service) WithClock(now func() time.Time) *Service {
 	if now != nil {
@@ -341,9 +336,9 @@ func (s *Service) WithClock(now func() time.Time) *Service {
 
 // WithGrace overrides the network-latency allowance New defaults to five
 // seconds, so a deployment's own configuration decides what "just in time"
-// means here the same way it will for the submission path and SSE — all
-// three add this on top of the one contests.Deadline formula rather than
-// keeping a grace of their own.
+// means here the same way it does for the submission path — both hand it to
+// the gate, which adds it on top of the one contests.Deadline formula, rather
+// than keeping a grace of their own.
 //
 // Panics on a negative grace, the same as WithPerMinuteDefault does on a
 // negative rate: config.Load never produces one (DEADLINE_GRACE is rejected
@@ -444,7 +439,7 @@ func effectiveRateLimit(contestLimit, installationLimit int) int {
 // check keyed by the authenticated caller (finding 3). cmd.ContestID is
 // attacker-chosen and unbounded — any UUID at all, most naming no contest —
 // so a caller who names a random one every time would pay nothing but a
-// session read to reach ErrNotAParticipant, over and over, with no limiter in
+// session read to reach contests.ErrNotAParticipant, over and over, with no limiter in
 // front of it: the participant lookup below (and, for somebody who is a
 // participant but disqualified or finished, the contest lookup after it too)
 // used to run on every one of those requests for free. cmd.UserID is the
@@ -468,14 +463,12 @@ func effectiveRateLimit(contestLimit, installationLimit int) int {
 // this time so a contest's own tighter setting is what binds, and only a query
 // that clears it is charged the work below.
 //
-// Then, in this order, from values already in hand: is the contest running
-// for this participant and has their own deadline passed (the one formula
-// every timing check in the system uses, §8), are they calling from an address
-// it allows, and is the query within its length. The one exception is a
-// not-yet-started individual participant, who has no deadline to compare
-// against yet: for that one case this checks the contest's own window instead
-// (finding 1) and leaves the deadline check itself for after the clock is
-// actually started, further down.
+// Then, from values already in hand: may this participant act in this
+// contest now, from this address — the participation gate
+// (contests.StandingOf), the same one every participant-facing read asks —
+// and is the query within its length. A not-yet-started individual
+// participant is admitted inside the contest's own window (finding 1), and
+// asked again once their clock has started, further down.
 //
 // Next is the one check that costs a round trip of its own: has this
 // participant anything left to answer at all (ErrNothingLeftToAnswer)? After
@@ -496,7 +489,8 @@ func effectiveRateLimit(contestLimit, installationLimit int) int {
 //
 // Only then is a database provisioned, which may create one. And only
 // once every one of those has admitted the request does a not-yet-started
-// individual participant's clock actually start (finding 2): starting it any
+// individual participant's clock actually start (finding 2), through the same
+// seam a first read starts it (StartOnRead): starting it any
 // earlier meant a query refused for its address, its length, an unprovisioned
 // game, or a provisioning failure still cost that participant their own first
 // minute, permanently, for a request that was never going to be answered
@@ -529,26 +523,13 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 		return nil, err
 	}
 
-	// Whether this call could be the deliberate action that starts an
-	// individual participant's own clock (§8). Fixed timing never starts a
-	// clock at all, and a participant who already has one does not get a
-	// second — Start's own guard is "started_at IS NULL", but reading
-	// StartedAt here first is what keeps every query after the first from
-	// touching the registration row through anything but the read this
-	// function already paid for. Recomputed here rather than read back from
-	// Admitted below: it is a comparison of two values already in hand, not a
-	// lookup, so recomputing it costs nothing and Admitted has no reason to
-	// hand back a fact its caller can already see for itself.
-	firstAction := contests.ClockPending(contest, participant)
-
-	// Is the contest running for this participant right now, and are they
-	// calling from an address it allows — the same admission the
-	// participant-facing read endpoints require before showing the story or
-	// the questions (see Access). Run adds its own rate limiting around this
-	// call rather than folding it in, because a refused query still has to
-	// count against the caller's rate (finding 3, see the doc above), and a
-	// read of the story never costs a rate check at all.
-	if err := s.Admitted(contest, participant, cmd.Address); err != nil {
+	// May this participant act in this contest right now, from where they
+	// are — the same gate the participant-facing read endpoints ask before
+	// showing the story or the questions (see Access). Run keeps its own rate
+	// limiting around it rather than folding it in, because a refused query
+	// still has to count against the caller's rate (finding 3, see the doc
+	// above), and a read of the story never costs a rate check at all.
+	if err := s.admit(contest, participant, cmd.Address); err != nil {
 		return nil, err
 	}
 	if s.watcher != nil {
@@ -600,17 +581,14 @@ func (s *Service) Run(ctx context.Context, cmd Command) (*queryrunner.Result, er
 
 	// Every other refusal has now had its say — the query is otherwise
 	// admitted, and only now does a not-yet-started individual participant's
-	// first deliberate action actually start their own clock (finding 2).
-	// The window was already confirmed open above; nothing between then and
-	// here can have moved it, short of the contest's own ends_at arriving
-	// mid-request, which deadlinePassed below still catches.
-	if firstAction {
-		if participant, err = s.people.Start(ctx, participant.ID, s.now()); err != nil {
-			return nil, fmt.Errorf("%w: start the participant's clock: %w", ErrUnavailable, err)
-		}
-		if s.deadlinePassed(contest, participant) {
-			return nil, ErrContestNotRunning
-		}
+	// first deliberate action actually start their own clock (finding 2). A
+	// participant who has one already, or who never will under fixed timing,
+	// costs no write: startClock reads StartedAt from the participant this
+	// function already paid for. The gate is asked again around the start,
+	// for the contest's own ends_at arriving mid-request and for a start
+	// another request made first.
+	if participant, err = s.startClock(ctx, contest, participant, cmd.Address); err != nil {
+		return nil, err
 	}
 
 	result, err := s.runner.Run(ctx, queryrunner.Request{
@@ -648,60 +626,31 @@ func provisionFailure(err error) error {
 }
 
 // classifyParticipant turns a raw participant and its lookup error into the
-// one answer every caller of s.lookup — Run, Schema and resolve — promises: "never registered" and "disqualified" fold into the same
-// ErrNotAParticipant, so probing a contest for who is on it learns nothing;
-// "finished" is its own sentence (ErrFinished); anything else is ours
-// (ErrUnavailable, wrapped with wrap so the two callers can each name what
-// they were trying to do).
-//
-// Shared so the lookups this package makes cannot classify the same
-// participant two different ways — this project's own history is full of the
-// bug two implementations of "who is this and are they still in" makes.
+// one answer every caller of s.lookup — Run, Schema and resolve — promises:
+// no registration at all is contests.ErrNotAParticipant, the same refusal the
+// gate gives a disqualified registration, so probing a contest for who is on
+// it learns nothing; anything else is ours (ErrUnavailable, wrapped with wrap
+// so each caller can name what it was trying to do). What the registration's
+// own status means is the gate's to say, not this function's.
 func classifyParticipant(participant contests.Participant, err error, wrap string) (contests.Participant, error) {
 	switch {
 	case errors.Is(err, contests.ErrParticipantNotFound):
-		return contests.Participant{}, ErrNotAParticipant
+		return contests.Participant{}, contests.ErrNotAParticipant
 	case err != nil:
 		return contests.Participant{}, fmt.Errorf("%w: %s: %w", ErrUnavailable, wrap, err)
-	case participant.Status == contests.RegistrationDisqualified:
-		return contests.Participant{}, ErrNotAParticipant
-	case participant.Status == contests.RegistrationFinished:
-		return contests.Participant{}, ErrFinished
 	}
 	return participant, nil
 }
 
-// Admitted reports whether participant may interact with contest right now:
-// its window is open to them and their address is allowed. It never starts an
-// individual participant's clock — that is done by Run once every other check
-// downstream has had its say (§8, finding 2), and by StartOnRead once a read
-// of the contest's content has succeeded — so a caller that only wants to
-// know "is this still open to me" can ask without the side effect of asking.
-//
-// The one rule of timing this codebase has (§8) is contests.Deadline, and this
-// is the one place both Run and Access compare against it: a not-yet-started
-// individual participant has no deadline for that formula to compute yet, so
-// their own window is checked instead (contest.OpenForStart) exactly as Run's
-// own doc explains for finding 1; everybody else is checked against their own
-// deadline, grace included, by deadlinePassed.
-func (s *Service) Admitted(contest contests.Contest, participant contests.Participant, addr netip.Addr) error {
-	if contest.Status != contests.StatusRunning {
-		return ErrContestNotRunning
-	}
-
-	firstAction := contests.ClockPending(contest, participant)
-	if firstAction {
-		if !contest.OpenForStart(s.now()) {
-			return ErrContestNotRunning
-		}
-	} else if s.deadlinePassed(contest, participant) {
-		return ErrContestNotRunning
-	}
-
-	if !contest.AllowsAddress(addr) {
-		return ErrAddressNotAllowed
-	}
-	return nil
+// admit asks the participation gate (contests.StandingOf) whether participant
+// may act in contest now, from addr, with this service's clock and grace: nil,
+// or the gate's one refusal. It never starts an individual participant's
+// clock — Run does that once every other check downstream has had its say
+// (§8, finding 2), and StartOnRead once a read of the contest's content has
+// succeeded — so a caller that only wants to know "is this still open to me"
+// can ask without the side effect of asking.
+func (s *Service) admit(contest contests.Contest, participant contests.Participant, addr netip.Addr) error {
+	return contests.StandingOf(contest, participant, s.now(), s.grace, addr).Refusal()
 }
 
 // Access resolves who is asking and confirms they may currently interact with
@@ -711,30 +660,26 @@ func (s *Service) Admitted(contest contests.Contest, participant contests.Partic
 // StartOnRead.
 //
 // This is deliberately the same admission Run requires before it will take a
-// query — registered and not disqualified or finished, the contest running
-// (or, for an individual participant who has not started, its own window
-// open), their own deadline not passed, their address allowed — and nothing
-// more: no rate limit of its own, no game lookup, no database provisioning,
-// because reading the story costs none of what running a query against the
+// query — the participation gate, contests.StandingOf — and nothing more: no
+// rate limit of its own, no game lookup, no database provisioning, because
+// reading the story costs none of what running a query against the
 // participant's own database costs. It is exposed here rather than
 // reimplemented beside the read endpoints because "may this student see this
 // contest" answered twice, even slightly differently, is exactly the shape of
 // bug this project keeps finding.
 //
-// "No rate limit of its own" is not "no rate limit at all": the two lookups
-// here are still a cost a caller can spend for free unless something charges
-// for it, exactly the reasoning Run's own doc gives for checking a rate
-// before any lookup. AdmitRead is that charge, kept a separate method rather
-// than folded into this one so a caller that already holds a fresh
-// contests.Participant and contests.Contest — Run itself, mid-query — can
-// still ask Admitted without paying twice.
+// "No rate limit of its own" is not "no rate limit at all": the lookup here
+// is still a cost a caller can spend for free unless something charges for
+// it, exactly the reasoning Run's own doc gives for checking a rate before
+// any lookup. AdmitRead is that charge, kept a separate method rather than
+// folded into this one.
 func (s *Service) Access(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error) {
 	participant, contest, err := s.resolve(ctx, contestID, userID)
 	if err != nil {
 		return contests.Participant{}, contests.Contest{}, err
 	}
 
-	if err := s.Admitted(contest, participant, addr); err != nil {
+	if err := s.admit(contest, participant, addr); err != nil {
 		return contests.Participant{}, contests.Contest{}, err
 	}
 	return participant, contest, nil
@@ -762,33 +707,42 @@ func (s *Service) Access(ctx context.Context, contestID, userID uuid.UUID, addr 
 // watching the clock or the standings is not reading the contest.
 //
 // Nothing is written for fixed timing or for a participant already started.
-// Otherwise the window is checked again here rather than trusted from the
-// caller's earlier Access, so this method alone never starts a clock outside
-// it, and a deadline that has already passed by the time the clock starts —
-// ends_at arriving mid-request — is refused the way Run refuses it.
-func (s *Service) StartOnRead(ctx context.Context, contest contests.Contest, participant contests.Participant) (contests.Participant, error) {
+// Otherwise the gate is asked here, from addr, rather than trusted from the
+// caller's earlier Access, so this method alone never starts a clock the gate
+// would refuse — outside the contest's own window, at or after ends_at, or
+// from a network the contest is not held on — and asked again of the
+// participant Start hands back, whose start may be one another request made
+// first and whose time may already be up.
+func (s *Service) StartOnRead(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error) {
+	return s.startClock(ctx, contest, participant, addr)
+}
+
+// startClock is StartOnRead's rule, shared with Run's first query: check,
+// start, check again. A participant whose clock is not pending is handed back
+// as is, at no cost.
+func (s *Service) startClock(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error) {
 	if !contests.ClockPending(contest, participant) {
 		return participant, nil
 	}
-	if contest.Status != contests.StatusRunning || !contest.OpenForStart(s.now()) {
-		return contests.Participant{}, ErrContestNotRunning
+	if err := s.admit(contest, participant, addr); err != nil {
+		return contests.Participant{}, err
 	}
 	started, err := s.people.Start(ctx, participant.ID, s.now())
 	if err != nil {
 		return contests.Participant{}, fmt.Errorf("%w: start the participant's clock: %w", ErrUnavailable, err)
 	}
-	if s.deadlinePassed(contest, started) {
-		return contests.Participant{}, ErrContestNotRunning
+	if err := s.admit(contest, started, addr); err != nil {
+		return contests.Participant{}, err
 	}
 	return started, nil
 }
 
 // resolve is the lookup both Access and AccessForEvents need before either
-// applies its own admission rule to the result: who is asking, and the
-// contest they are asking about, in one round trip (Lookup.ForAccess) —
-// every participant-facing read pays it, autosaves and signals included.
+// asks the gate about the result: who is asking, and the contest they are
+// asking about, in one round trip (Lookup.ForAccess) — every
+// participant-facing read pays it, autosaves and signals included.
 // Classified by the same classifyParticipant Run uses, so the two cannot
-// disagree about "who is this and are they still in".
+// disagree about "who is this".
 func (s *Service) resolve(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, contests.Contest, error) {
 	participant, contest, err := s.lookup.ForAccess(ctx, contestID, userID)
 	if participant, err = classifyParticipant(participant, err, "look up the participant and the contest"); err != nil {
@@ -798,38 +752,27 @@ func (s *Service) resolve(ctx context.Context, contestID, userID uuid.UUID) (con
 }
 
 // AccessForEvents resolves who is asking and confirms they may hold the
-// events channel open for contestID right now (§8, finding 4) — Access's own
-// admission, with exactly one status added to what it accepts: published and
-// not yet started.
+// events channel open for contestID right now (§8, finding 4): the gate's
+// MayWait, which is everything Access admits and one thing more — a published
+// contest that has not started, so a participant enrolled before starts_at
+// can observe the published → running transition on this channel rather than
+// poll for it.
 //
-// Without this, a participant enrolled before starts_at could never observe
-// the published → running transition on this channel at all: Access refuses
-// a contest that has not started, so the channel itself would already have
-// been refused before that transition could ever be announced on it, and a
-// waiting participant would have nothing to do but poll — exactly what this
-// channel exists to replace (§8).
-//
-// Nothing else is admitted that Access would refuse: the participant must
-// still be registered, not disqualified or finished (resolve), and their address still has to satisfy the contest's
-// own network restriction. Reading the story, the questions, or answering a
-// question still goes through Access unchanged — this widens only what the
-// channel may be held open for, never what a participant connected to it may
-// do.
+// Nothing else is admitted that Access would refuse: a waiting participant
+// must still hold a registration that is neither disqualified nor finished,
+// and call from an address the contest's own network restriction allows.
+// Reading the story, the questions, or answering a question still goes
+// through Access unchanged — this widens only what the channel may be held
+// open for, never what a participant connected to it may do.
 func (s *Service) AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error) {
 	participant, contest, err := s.resolve(ctx, contestID, userID)
 	if err != nil {
 		return contests.Participant{}, contests.Contest{}, err
 	}
 
-	if contest.Status == contests.StatusPublished {
-		if !contest.AllowsAddress(addr) {
-			return contests.Participant{}, contests.Contest{}, ErrAddressNotAllowed
-		}
-		return participant, contest, nil
-	}
-
-	if err := s.Admitted(contest, participant, addr); err != nil {
-		return contests.Participant{}, contests.Contest{}, err
+	// MayWait is false only where MayAct is too, so Refusal names why.
+	if standing := contests.StandingOf(contest, participant, s.now(), s.grace, addr); !standing.MayWait() {
+		return contests.Participant{}, contests.Contest{}, standing.Refusal()
 	}
 	return participant, contest, nil
 }
@@ -853,20 +796,6 @@ func (s *Service) AccessForEvents(ctx context.Context, contestID, userID uuid.UU
 // together into double the intended rate.
 func (s *Service) AdmitRead(userID uuid.UUID) error {
 	return s.rate.Admit(userID.String(), s.perMinuteDefault)
-}
-
-// deadlinePassed reports whether contest is no longer open to participant, by
-// the one formula every timing check in the system uses (contests.Deadline,
-// §8): a fixed contest past its own ends_at, or an individual participant
-// past their own started_at+duration_min, is refused here on the server's own
-// clock even if contests.Status has not (yet, or ever, with a dead scheduler)
-// caught up to "finished". ok is false for a state with no deadline to
-// compare against at all — an individual participant who has not started, or
-// an invariant Contest.Validate would have refused — and that is treated as
-// passed rather than as no limit.
-func (s *Service) deadlinePassed(contest contests.Contest, participant contests.Participant) bool {
-	deadline, ok := contests.Deadline(contest, participant)
-	return !ok || s.now().After(deadline.Add(s.grace))
 }
 
 // speaksForTheDatabase reports an error that carries PostgreSQL's own words

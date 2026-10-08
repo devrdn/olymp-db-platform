@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
@@ -90,10 +91,11 @@ func TestSchemaEndpointNamesEveryRefusal(t *testing.T) {
 		{"the contest hides its schema", queryproxy.ErrSchemaHidden, http.StatusForbidden, "schema_hidden"},
 		{"the game was never built", queryproxy.ErrNoGameYet, http.StatusConflict, "no_game_yet"},
 		{"the game cluster is full", queryproxy.ErrNoRoomForDatabase, http.StatusServiceUnavailable, "game_cluster_full"},
-		{"not a participant", queryproxy.ErrNotAParticipant, http.StatusForbidden, "not_a_participant"},
-		{"the contest is not running", queryproxy.ErrContestNotRunning, http.StatusConflict, "contest_not_running"},
-		{"the participant has finished", queryproxy.ErrFinished, http.StatusConflict, "contest_finished"},
-		{"the address is not allowed", queryproxy.ErrAddressNotAllowed, http.StatusForbidden, "address_not_allowed"},
+		{"not a participant", contests.ErrNotAParticipant, http.StatusForbidden, "not_a_participant"},
+		{"the contest is not running", contests.ErrContestNotRunning, http.StatusConflict, "contest_not_running"},
+		{"the participant has finished", contests.ErrParticipantFinished, http.StatusConflict, "contest_finished"},
+		{"the participant's time is up", contests.ErrDeadlinePassed, http.StatusConflict, "deadline_passed"},
+		{"the address is not allowed", contests.ErrAddressNotAllowed, http.StatusForbidden, "address_not_allowed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newParticipantFixture(t)

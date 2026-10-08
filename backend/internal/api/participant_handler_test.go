@@ -72,15 +72,18 @@ type fakeAccess struct {
 	schemaErr   error
 	schemaAsked uuid.UUID
 	// startedOnRead records the registrations StartOnRead was asked to start,
-	// and startOnReadErr is what it answers with.
+	// startedFrom the address each was asked from, and startOnReadErr is what
+	// it answers with.
 	startedOnRead  []uuid.UUID
+	startedFrom    []netip.Addr
 	startOnReadErr error
 }
 
-func (a *fakeAccess) StartOnRead(_ context.Context, _ contests.Contest, participant contests.Participant) (contests.Participant, error) {
+func (a *fakeAccess) StartOnRead(_ context.Context, _ contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.startedOnRead = append(a.startedOnRead, participant.ID)
+	a.startedFrom = append(a.startedFrom, addr)
 	if a.startOnReadErr != nil {
 		return contests.Participant{}, a.startOnReadErr
 	}
@@ -454,7 +457,9 @@ func (f *participantFixture) playContest(t *testing.T) uuid.UUID {
 
 // Reading the story or the question list is reading the contest, and under
 // individual timing that is where the participant's clock starts: each read
-// hands the registration admission resolved to StartOnRead.
+// hands the registration admission resolved to StartOnRead, with the address
+// the request came from, since starting is admitted by the same gate as the
+// read and the gate asks where the caller is.
 func TestReadingTheStoryOrTheQuestionsStartsTheClock(t *testing.T) {
 	for _, path := range []string{"/play/story", "/play/questions"} {
 		t.Run(path, func(t *testing.T) {
@@ -467,6 +472,10 @@ func TestReadingTheStoryOrTheQuestionsStartsTheClock(t *testing.T) {
 			}
 			if len(f.access.startedOnRead) != 1 || f.access.startedOnRead[0] != f.access.participant.ID {
 				t.Fatalf("StartOnRead asked for %v, want exactly the resolved registration", f.access.startedOnRead)
+			}
+			// httptest.NewRequest's own RemoteAddr, 192.0.2.1:1234.
+			if want := netip.MustParseAddr("192.0.2.1"); len(f.access.startedFrom) != 1 || f.access.startedFrom[0] != want {
+				t.Fatalf("StartOnRead asked from %v, want %v", f.access.startedFrom, want)
 			}
 		})
 	}
@@ -481,7 +490,7 @@ func TestARefusedContentReadStartsNoClock(t *testing.T) {
 		want  int
 	}{
 		"questions over the rate":           {"/play/questions", func(f *participantFixture) { f.access.admitReadErr = queryrunner.ErrTooManyQueries }, http.StatusTooManyRequests},
-		"story from an address not allowed": {"/play/story", func(f *participantFixture) { f.access.err = queryproxy.ErrAddressNotAllowed }, http.StatusForbidden},
+		"story from an address not allowed": {"/play/story", func(f *participantFixture) { f.access.err = contests.ErrAddressNotAllowed }, http.StatusForbidden},
 		"a story that does not exist": {"/play/story", func(f *participantFixture) {
 			_ = f.stories.Delete(context.Background(), f.access.contest.ID)
 		}, http.StatusNotFound},
@@ -507,7 +516,7 @@ func TestARefusedContentReadStartsNoClock(t *testing.T) {
 func TestAContentReadWhoseClockCannotStartIsRefused(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := f.playContest(t)
-	f.access.startOnReadErr = queryproxy.ErrContestNotRunning
+	f.access.startOnReadErr = contests.ErrContestNotRunning
 
 	rec := f.get("/contests/" + contestID.String() + "/play/questions")
 	if rec.Code != http.StatusConflict || errorCode(t, rec) != "contest_not_running" {
@@ -671,7 +680,7 @@ func TestAReferenceAnswerNeverAppearsInTheQuestionsResponse(t *testing.T) {
 // that table, so one representative refusal is enough.
 func TestAccessRefusalsAreAnsweredFromTheSharedTable(t *testing.T) {
 	f := newParticipantFixture(t)
-	f.access.err = queryproxy.ErrAddressNotAllowed
+	f.access.err = contests.ErrAddressNotAllowed
 	contestID := uuid.New()
 
 	for _, path := range []string{
@@ -716,7 +725,7 @@ func TestAFullGameClusterOnTheSchemaPanelIsLogged(t *testing.T) {
 // contest exists, and never a body that says anything about it.
 func TestAParticipantOfAnotherContestLearnsNothingAboutThisOne(t *testing.T) {
 	f := newParticipantFixture(t)
-	f.access.err = queryproxy.ErrNotAParticipant
+	f.access.err = contests.ErrNotAParticipant
 
 	rec := f.get("/contests/" + uuid.New().String() + "/play/story")
 	if rec.Code != http.StatusForbidden {
@@ -988,7 +997,7 @@ func TestParticipantRoutesDoNotShadowTheStaffContentEndpoints(t *testing.T) {
 	router := chi.NewRouter()
 	api.NewContestsHandler(stores.Service, mw, log, "en").Mount(router)
 	reader := contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts(stores.Submissions), stores.Sequence)
-	access := &fakeAccess{err: queryproxy.ErrNotAParticipant}
+	access := &fakeAccess{err: contests.ErrNotAParticipant}
 	api.NewParticipantHandler(access, reader, &fakeHistory{}, stores.Service, answerRate(c, fixtureAnswersPerMinute), mw, log, "en").Mount(router)
 
 	do := func(path string) *httptest.ResponseRecorder {
@@ -1110,8 +1119,8 @@ func TestAnswerRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 	}{
 		{"question not found", contests.ErrQuestionNotFound, http.StatusNotFound, "question_not_found",
 			"No such question in this contest"},
-		{"not a participant", queryproxy.ErrNotAParticipant, http.StatusForbidden, "not_a_participant", ""},
-		{"contest not running", queryproxy.ErrContestNotRunning, http.StatusConflict, "contest_not_running", ""},
+		{"not a participant", contests.ErrNotAParticipant, http.StatusForbidden, "not_a_participant", ""},
+		{"contest not running", contests.ErrContestNotRunning, http.StatusConflict, "contest_not_running", ""},
 		// An organiser removed the caller between admission and the answer:
 		// their registration is gone, which a participant hears as it is told
 		// everywhere else — not taking part — and never as the organiser's
@@ -1643,7 +1652,7 @@ func TestTheQueryLogCSVOfAParticipantWhoRanNothingIsAHeaderRow(t *testing.T) {
 // participant to name in it.
 func TestTheQueryLogCSVIsRefusedToSomebodyNotInTheContest(t *testing.T) {
 	f := newParticipantFixture(t)
-	f.access.setErr(queryproxy.ErrNotAParticipant)
+	f.access.setErr(contests.ErrNotAParticipant)
 
 	rec := f.get("/contests/" + uuid.New().String() + "/play/log.csv")
 	if rec.Code != http.StatusForbidden {
@@ -1886,7 +1895,7 @@ func TestAnAdmittedPlayRequestIsObserved(t *testing.T) {
 func TestARefusedPlayRequestIsNotObserved(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := f.playContest(t)
-	f.access.err = queryproxy.ErrContestNotRunning
+	f.access.err = contests.ErrContestNotRunning
 
 	if rec := f.get("/contests/" + contestID.String() + "/play/story"); rec.Code == http.StatusOK {
 		t.Fatalf("status = %d, want a refusal", rec.Code)

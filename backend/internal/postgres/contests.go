@@ -369,12 +369,12 @@ func (r *Contests) DueToStart(ctx context.Context) ([]contests.Contest, error) {
 
 // AdvanceFinished moves every running contest whose deadline has passed to
 // finished: ends_at plus grace, the same network-latency allowance
-// submission.go and queryproxy.Admitted add before refusing a fixed-timing
-// participant's own late answer or query (§8's one deadline formula, one
-// grace). Comparing against ends_at alone used to close a contest a tick
-// before that grace ran out, so which of two answers submitted a moment
-// apart was accepted depended on whether the scheduler had ticked yet — a
-// race no participant could see or control.
+// submission.go and the participation gate (contests.StandingOf) add before
+// refusing a fixed-timing participant's own late answer or query (§8's one
+// deadline formula, one grace). Comparing against ends_at alone used to
+// close a contest a tick before that grace ran out, so which of two answers
+// submitted a moment apart was accepted depended on whether the scheduler
+// had ticked yet — a race no participant could see or control.
 //
 // A contest with no ends_at (individual timing needs none to publish) never
 // matches this WHERE clause, and stays running until an organizer moves it by

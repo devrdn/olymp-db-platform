@@ -60,8 +60,9 @@ type ParticipantAccess interface {
 	// StartOnRead starts an individual participant's clock on their first
 	// read of the contest's content (queryproxy.Service.StartOnRead). The
 	// story and question endpoints call it once their content has been read,
-	// before it is sent; nothing else here does.
-	StartOnRead(ctx context.Context, contest contests.Contest, participant contests.Participant) (contests.Participant, error)
+	// before it is sent; nothing else here does. addr is the caller's, as
+	// Access was given it: starting is admitted by the same gate as the read.
+	StartOnRead(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error)
 	// Schema describes the contest's game, for the console's schema panel. It
 	// applies Access's own admission itself and then the one rule that is its
 	// own: a contest that closed its catalogues does not show its shape here
@@ -308,7 +309,7 @@ func (h *ParticipantHandler) admit(w http.ResponseWriter, r *http.Request) (cont
 // reason starts nothing; before the response, so content is never sent to a
 // participant whose clock could not be started.
 func (h *ParticipantHandler) startOnRead(w http.ResponseWriter, r *http.Request, contest contests.Contest, participant contests.Participant) bool {
-	if _, err := h.access.StartOnRead(r.Context(), contest, participant); err != nil {
+	if _, err := h.access.StartOnRead(r.Context(), contest, participant, clientAddress(r)); err != nil {
 		h.fail(w, r, err)
 		return false
 	}

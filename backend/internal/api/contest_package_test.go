@@ -15,7 +15,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
-	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/go-chi/chi/v5"
@@ -329,7 +328,7 @@ func TestBothExportRoutesSurviveBeingMountedTogether(t *testing.T) {
 	router := chi.NewRouter()
 	api.NewContestsHandler(stores.Service, mw, log, "en").Mount(router)
 	access := &fakeAccess{}
-	access.err = queryproxy.ErrNotAParticipant
+	access.err = contests.ErrNotAParticipant
 	api.NewParticipantHandler(access, contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts(stores.Submissions), nil),
 		&fakeHistory{}, &fakeSubmitter{}, answerRate(memory, fixtureAnswersPerMinute), mw, log, "en").Mount(router)
 

@@ -414,8 +414,9 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 					h.log.WarnContext(r.Context(), "events resync could not reach storage; retrying next tick", "error", err)
 					continue
 				}
-				// ErrFinished and ErrContestNotRunning both mean the
-				// contest's window is over for this participant — the
+				// ErrParticipantFinished, ErrContestNotRunning and
+				// ErrDeadlinePassed all mean the contest's window is over
+				// for this participant — their registration finished, the
 				// status moved to finished, or their own deadline passed
 				// while the scheduler has not caught up yet (§8: the status
 				// and this channel affect only what the interface shows,
@@ -425,7 +426,8 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 				// the channel closing — the same "not this caller's
 				// business" rule the read endpoints already apply to a
 				// refusal that is not about the contest's own clock.
-				if errors.Is(err, queryproxy.ErrFinished) || errors.Is(err, queryproxy.ErrContestNotRunning) {
+				if errors.Is(err, contests.ErrParticipantFinished) || errors.Is(err, contests.ErrContestNotRunning) ||
+					errors.Is(err, contests.ErrDeadlinePassed) {
 					h.setWriteDeadline(rc)
 					if writeEvent(w, eventContestFinished, statusPayload{Status: contests.StatusFinished}) == nil {
 						_ = rc.Flush()

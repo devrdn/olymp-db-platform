@@ -13,6 +13,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/api"
 	"github.com/devrdn/db-contest/backend/internal/auth"
+	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/cache"
 	"github.com/devrdn/db-contest/backend/internal/platform/logging"
@@ -249,7 +250,7 @@ func TestAnUnreachableQueryServiceIsA503WithItsOwnCode(t *testing.T) {
 // events channel do — one table, one sentence — rather than with the
 // sentinel's own lower-case text, which it used to send.
 func TestTheConsoleRefusesADisallowedAddressInTheSameWordsAsThePlayScreen(t *testing.T) {
-	fixture := newConsoleFixture(t, fakeConsole{err: queryproxy.ErrAddressNotAllowed})
+	fixture := newConsoleFixture(t, fakeConsole{err: contests.ErrAddressNotAllowed})
 
 	rec := fixture.run("SELECT 1")
 	if rec.Code != http.StatusForbidden {
@@ -259,6 +260,24 @@ func TestTheConsoleRefusesADisallowedAddressInTheSameWordsAsThePlayScreen(t *tes
 		t.Fatalf("code = %q, want address_not_allowed", code)
 	}
 	if message := errorMessage(t, rec); message != "This contest is only available from the university network" {
+		t.Fatalf("message = %q", message)
+	}
+}
+
+// A participant whose own time is up is told so at the console in the words
+// the answer route uses for the same fact: the gate gives one refusal for it
+// wherever it is asked.
+func TestTheConsoleRefusesAParticipantWhoseTimeIsUpWithDeadlinePassed(t *testing.T) {
+	fixture := newConsoleFixture(t, fakeConsole{err: contests.ErrDeadlinePassed})
+
+	rec := fixture.run("SELECT 1")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "deadline_passed" {
+		t.Fatalf("code = %q, want deadline_passed", code)
+	}
+	if message := errorMessage(t, rec); message != "The deadline for this contest has passed" {
 		t.Fatalf("message = %q", message)
 	}
 }
@@ -331,7 +350,7 @@ func TestAConsoleWithNothingLeftToAnswerIsA409(t *testing.T) {
 // client that cannot tell them apart shows the wrong screen to one of them.
 func TestNothingLeftToAnswerIsNotTheSameCodeAsHavingFinished(t *testing.T) {
 	nothingLeft := errorCode(t, newConsoleFixture(t, fakeConsole{err: queryproxy.ErrNothingLeftToAnswer}).run("SELECT 1"))
-	finished := errorCode(t, newConsoleFixture(t, fakeConsole{err: queryproxy.ErrFinished}).run("SELECT 1"))
+	finished := errorCode(t, newConsoleFixture(t, fakeConsole{err: contests.ErrParticipantFinished}).run("SELECT 1"))
 
 	if nothingLeft == finished {
 		t.Fatalf("both answered %q — the interface cannot tell a closed console from a closed contest", nothingLeft)

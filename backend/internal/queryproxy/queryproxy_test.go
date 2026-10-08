@@ -26,6 +26,10 @@ import (
 // internal/contests, not re-tested against every one of these fakes.
 var openWindow = time.Now().Add(24 * time.Hour)
 
+// closedWindow is a contest end far enough in the past, grace and all, that
+// every participant's time is up.
+var closedWindow = time.Now().Add(-24 * time.Hour)
+
 // The collaborators are faked because each is tested where it lives: the
 // repositories against a real database, the provisioner against a real
 // cluster, the runner against both. What is under test here is the order of
@@ -43,6 +47,10 @@ type people struct {
 	// simulate the write failing.
 	starts   *int
 	startErr error
+	// stored is a start already on the row when Start is reached: what
+	// postgres.Registrations.Start hands back to a request that lost the race
+	// to one that started the clock first. nil starts it at now.
+	stored *time.Time
 }
 
 func (p people) ByUser(context.Context, uuid.UUID, uuid.UUID) (contests.Participant, error) {
@@ -65,6 +73,9 @@ func (p people) Start(_ context.Context, _ uuid.UUID, now time.Time) (contests.P
 	}
 	started := p.participant
 	started.StartedAt = &now
+	if p.stored != nil {
+		started.StartedAt = p.stored
+	}
 	started.Status = contests.RegistrationActive
 	return started, nil
 }
@@ -302,22 +313,22 @@ func TestWhoMayAskAndWhen(t *testing.T) {
 		"somebody who never registered": {
 			people:  people{err: contests.ErrParticipantNotFound},
 			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow},
-			want:    queryproxy.ErrNotAParticipant,
+			want:    contests.ErrNotAParticipant,
 		},
 		"a contest that has not started": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
 			contest: contests.Contest{Status: contests.StatusPublished},
-			want:    queryproxy.ErrContestNotRunning,
+			want:    contests.ErrContestNotRunning,
 		},
 		"a contest that has finished": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
 			contest: contests.Contest{Status: contests.StatusFinished},
-			want:    queryproxy.ErrContestNotRunning,
+			want:    contests.ErrContestNotRunning,
 		},
 		"somebody disqualified": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationDisqualified}},
 			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow},
-			want:    queryproxy.ErrNotAParticipant,
+			want:    contests.ErrNotAParticipant,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -349,8 +360,8 @@ func TestAFixedContestStopsAcceptingQueriesAtItsEndEvenIfStatusLagsBehind(t *tes
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
 	)
 
-	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrContestNotRunning) {
-		t.Fatalf("error = %v, want ErrContestNotRunning", err)
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrDeadlinePassed) {
+		t.Fatalf("error = %v, want ErrDeadlinePassed", err)
 	}
 }
 
@@ -379,8 +390,8 @@ func TestAnIndividualParticipantsOwnDeadlinePassesEvenThoughTheContestWindowHasN
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
 	)
 
-	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrContestNotRunning) {
-		t.Fatalf("error = %v, want ErrContestNotRunning (the participant's own 10 minutes are long over)", err)
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrDeadlinePassed) {
+		t.Fatalf("error = %v, want ErrDeadlinePassed (the participant's own 10 minutes are long over)", err)
 	}
 }
 
@@ -546,7 +557,7 @@ func TestAFirstQueryBeforeStartsAtStartsNoClock(t *testing.T) {
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
 	)
 
-	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrContestNotRunning) {
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrContestNotRunning) {
 		t.Fatalf("a first query before starts_at: error = %v, want ErrContestNotRunning", err)
 	}
 	if starts != 0 {
@@ -577,11 +588,72 @@ func TestAFirstQueryAfterEndsAtStartsNoClock(t *testing.T) {
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
 	)
 
-	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrContestNotRunning) {
-		t.Fatalf("a first query after ends_at: error = %v, want ErrContestNotRunning", err)
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrDeadlinePassed) {
+		t.Fatalf("a first query after ends_at: error = %v, want ErrDeadlinePassed", err)
 	}
 	if starts != 0 {
 		t.Fatalf("Start was called %d times for a query after ends_at, want 0", starts)
+	}
+}
+
+// Starting has no grace: the grace is an allowance for a request already on
+// its way from somebody working, not more time to begin. At exactly ends_at a
+// participant who has not started is too late, and nothing is written.
+func TestAFirstQueryAtExactlyEndsAtIsTooLateToStart(t *testing.T) {
+	opened := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	closes := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	duration := 30
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingIndividual,
+		DurationMin: &duration, StartsAt: &opened, EndsAt: &closes,
+	}
+	starts := 0
+	run := &runner{result: &queryrunner.Result{}}
+	service := queryproxy.New(
+		people{participant: contests.Participant{
+			ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered,
+		}, starts: &starts},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, run,
+	).WithClock(func() time.Time { return closes }).WithGrace(5 * time.Second)
+
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrDeadlinePassed) {
+		t.Fatalf("a first query at exactly ends_at: error = %v, want ErrDeadlinePassed", err)
+	}
+	if starts != 0 || run.calls != 0 {
+		t.Fatalf("Start called %d times and the runner %d times at ends_at, want 0 and 0", starts, run.calls)
+	}
+}
+
+// Start hands back the start already on the row when another request got
+// there first, and that start can be one whose time is already up. The query
+// is refused for it after the start, the same as before it, and never run.
+func TestAFirstQueryWhoseStartFindsTheTimeAlreadyUpIsRefused(t *testing.T) {
+	now := time.Date(2026, 3, 1, 11, 0, 0, 0, time.UTC)
+	opened := now.Add(-3 * time.Hour)
+	closes := now.Add(3 * time.Hour)
+	longAgo := now.Add(-2 * time.Hour)
+	duration := 30
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingIndividual,
+		DurationMin: &duration, StartsAt: &opened, EndsAt: &closes,
+	}
+	run := &runner{result: &queryrunner.Result{}}
+	service := queryproxy.New(
+		people{participant: contests.Participant{
+			ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered,
+		}, stored: &longAgo},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, run,
+	).WithClock(func() time.Time { return now })
+
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrDeadlinePassed) {
+		t.Fatalf("error = %v, want ErrDeadlinePassed", err)
+	}
+	if run.calls != 0 {
+		t.Fatalf("the runner was reached %d times by a query whose time was up, want 0", run.calls)
 	}
 }
 
@@ -610,7 +682,7 @@ func TestADisallowedAddressDoesNotStartTheClock(t *testing.T) {
 
 	fromHome := command()
 	fromHome.Address = netip.MustParseAddr("203.0.113.7")
-	if _, err := service.Run(t.Context(), fromHome); !errors.Is(err, queryproxy.ErrAddressNotAllowed) {
+	if _, err := service.Run(t.Context(), fromHome); !errors.Is(err, contests.ErrAddressNotAllowed) {
 		t.Fatalf("error = %v, want ErrAddressNotAllowed", err)
 	}
 	if starts != 0 {
@@ -698,9 +770,48 @@ func TestTheGraceWindowAcceptsAQueryArrivingJustAfterTheDeadlineAndNoLater(t *te
 		t.Fatalf("a query 3s after the deadline, within a 5s grace, was refused: %v", err)
 	}
 
+	lastInstant := build(deadline.Add(5*time.Second - time.Nanosecond))
+	if _, err := lastInstant.Run(t.Context(), command()); err != nil {
+		t.Fatalf("a query one nanosecond before the grace ends was refused: %v", err)
+	}
+
+	// At exactly the deadline plus the grace the core database refuses an
+	// answer written at that instant (now() >= deadline), and the console
+	// closes at the same instant rather than one tick later.
+	atGrace := build(deadline.Add(5 * time.Second))
+	if _, err := atGrace.Run(t.Context(), command()); !errors.Is(err, contests.ErrDeadlinePassed) {
+		t.Fatalf("error = %v, want ErrDeadlinePassed for a query at exactly the deadline plus the grace", err)
+	}
+
 	pastGrace := build(deadline.Add(6 * time.Second))
-	if _, err := pastGrace.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrContestNotRunning) {
-		t.Fatalf("error = %v, want ErrContestNotRunning for a query past the grace too", err)
+	if _, err := pastGrace.Run(t.Context(), command()); !errors.Is(err, contests.ErrDeadlinePassed) {
+		t.Fatalf("error = %v, want ErrDeadlinePassed for a query past the grace too", err)
+	}
+}
+
+// A contest that has not started, opened from a network it is not held on,
+// names the network: waiting will not help the caller, moving will.
+func TestAPublishedContestFromADisallowedAddressNamesTheAddress(t *testing.T) {
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusPublished,
+		AllowedCIDRs: []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")},
+	}
+	p := people{participant: contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered}}
+	service := queryproxy.New(p, contestStore{contest: contest},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, &runner{result: &queryrunner.Result{}})
+
+	fromHome := command()
+	fromHome.Address = netip.MustParseAddr("203.0.113.7")
+	if _, err := service.Run(t.Context(), fromHome); !errors.Is(err, contests.ErrAddressNotAllowed) {
+		t.Fatalf("Run() = %v, want ErrAddressNotAllowed", err)
+	}
+	if _, _, err := service.Access(t.Context(), contest.ID, uuid.New(), netip.MustParseAddr("203.0.113.7")); !errors.Is(err, contests.ErrAddressNotAllowed) {
+		t.Fatalf("Access() = %v, want ErrAddressNotAllowed", err)
+	}
+	// From the room it is still a contest that has not started.
+	if _, _, err := service.Access(t.Context(), contest.ID, uuid.New(), netip.MustParseAddr("10.20.3.4")); !errors.Is(err, contests.ErrContestNotRunning) {
+		t.Fatalf("Access() from the room = %v, want ErrContestNotRunning", err)
 	}
 }
 
@@ -762,7 +873,7 @@ func TestTheContestsNetworkIsCheckedOnEveryQuery(t *testing.T) {
 
 	fromHome := command()
 	fromHome.Address = netip.MustParseAddr("203.0.113.7")
-	if _, err := service.Run(t.Context(), fromHome); !errors.Is(err, queryproxy.ErrAddressNotAllowed) {
+	if _, err := service.Run(t.Context(), fromHome); !errors.Is(err, contests.ErrAddressNotAllowed) {
 		t.Fatalf("error = %v, want ErrAddressNotAllowed", err)
 	}
 
@@ -770,7 +881,7 @@ func TestTheContestsNetworkIsCheckedOnEveryQuery(t *testing.T) {
 	// contest held on one network cannot be honoured without knowing which
 	// one this is.
 	unknown := command()
-	if _, err := service.Run(t.Context(), unknown); !errors.Is(err, queryproxy.ErrAddressNotAllowed) {
+	if _, err := service.Run(t.Context(), unknown); !errors.Is(err, contests.ErrAddressNotAllowed) {
 		t.Fatalf("error = %v, want ErrAddressNotAllowed", err)
 	}
 }
@@ -785,8 +896,8 @@ func TestAParticipantWhoHasFinishedIsDone(t *testing.T) {
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
 	)
 
-	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrFinished) {
-		t.Fatalf("error = %v, want ErrFinished", err)
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrParticipantFinished) {
+		t.Fatalf("error = %v, want ErrParticipantFinished", err)
 	}
 }
 
@@ -854,27 +965,27 @@ func TestAccessAgreesWithRunAboutWhoMayAskAndWhen(t *testing.T) {
 		"somebody who never registered": {
 			people:  people{err: contests.ErrParticipantNotFound},
 			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow},
-			want:    queryproxy.ErrNotAParticipant,
+			want:    contests.ErrNotAParticipant,
 		},
 		"a contest that has not started": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
 			contest: contests.Contest{Status: contests.StatusPublished},
-			want:    queryproxy.ErrContestNotRunning,
+			want:    contests.ErrContestNotRunning,
 		},
 		"a contest that has finished": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
 			contest: contests.Contest{Status: contests.StatusFinished},
-			want:    queryproxy.ErrContestNotRunning,
+			want:    contests.ErrContestNotRunning,
 		},
 		"somebody disqualified": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationDisqualified}},
 			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow},
-			want:    queryproxy.ErrNotAParticipant,
+			want:    contests.ErrNotAParticipant,
 		},
 		"somebody who has finished": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationFinished}},
 			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow},
-			want:    queryproxy.ErrFinished,
+			want:    contests.ErrParticipantFinished,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -897,17 +1008,60 @@ func TestAccessRefusesAFixedContestPastItsDeadline(t *testing.T) {
 	contest := contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &past}
 	service := accessFixture(people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}}, contestStore{contest: contest})
 
-	if _, _, err := service.Access(t.Context(), uuid.New(), uuid.New(), netip.Addr{}); !errors.Is(err, queryproxy.ErrContestNotRunning) {
-		t.Fatalf("error = %v, want ErrContestNotRunning", err)
+	if _, _, err := service.Access(t.Context(), uuid.New(), uuid.New(), netip.Addr{}); !errors.Is(err, contests.ErrDeadlinePassed) {
+		t.Fatalf("error = %v, want ErrDeadlinePassed", err)
+	}
+}
+
+// A read is admitted on the same instant a query is: a working participant
+// up to one nanosecond before their deadline plus the grace, and not at it.
+func TestAccessClosesAtExactlyTheDeadlinePlusTheGrace(t *testing.T) {
+	deadline := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	contest := contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &deadline}
+	p := people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}}
+	at := func(now time.Time) *queryproxy.Service {
+		return accessFixture(p, contestStore{contest: contest}).
+			WithClock(func() time.Time { return now }).WithGrace(5 * time.Second)
+	}
+
+	if _, _, err := at(deadline.Add(5*time.Second-time.Nanosecond)).Access(t.Context(), uuid.New(), uuid.New(), netip.Addr{}); err != nil {
+		t.Fatalf("Access() one nanosecond before the grace ends = %v, want nil", err)
+	}
+	if _, _, err := at(deadline.Add(5*time.Second)).Access(t.Context(), uuid.New(), uuid.New(), netip.Addr{}); !errors.Is(err, contests.ErrDeadlinePassed) {
+		t.Fatalf("Access() at exactly the deadline plus the grace = %v, want ErrDeadlinePassed", err)
+	}
+}
+
+// An individual participant who has not started may begin up to ends_at and
+// not at it: no grace for starting, on a read as on a query.
+func TestAccessRefusesAnUnstartedIndividualParticipantAtExactlyEndsAt(t *testing.T) {
+	opened := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	closes := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	duration := 30
+	contest := contests.Contest{
+		Status: contests.StatusRunning, Timing: contests.TimingIndividual,
+		DurationMin: &duration, StartsAt: &opened, EndsAt: &closes,
+	}
+	p := people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}}
+	at := func(now time.Time) *queryproxy.Service {
+		return accessFixture(p, contestStore{contest: contest}).
+			WithClock(func() time.Time { return now }).WithGrace(5 * time.Second)
+	}
+
+	if _, _, err := at(closes.Add(-time.Nanosecond)).Access(t.Context(), uuid.New(), uuid.New(), netip.Addr{}); err != nil {
+		t.Fatalf("Access() one nanosecond before ends_at = %v, want nil", err)
+	}
+	if _, _, err := at(closes).Access(t.Context(), uuid.New(), uuid.New(), netip.Addr{}); !errors.Is(err, contests.ErrDeadlinePassed) {
+		t.Fatalf("Access() at exactly ends_at = %v, want ErrDeadlinePassed", err)
 	}
 }
 
 // An individual participant who has not started yet has nothing for the
-// deadline formula to compute from — Access must fall back to the contest's
-// own window (contest.OpenForStart), exactly as Run does before it will ever
-// start a clock, and it must not start one itself: Access also admits the
-// answer endpoint and the query log, and a content read starts the clock
-// separately, once it has succeeded (StartOnRead).
+// deadline formula to compute from — the gate (contests.StandingOf) admits
+// them inside the contest's own window, for Access exactly as for Run before
+// it will ever start a clock, and Access must not start one itself: it also
+// admits the answer endpoint and the query log, and a content read starts
+// the clock separately, once it has succeeded (StartOnRead).
 func TestAccessLetsAnIndividualParticipantReadBeforeTheyHaveStartedAndNeverStartsTheirClock(t *testing.T) {
 	future := time.Now().Add(time.Hour)
 	duration := 30
@@ -956,7 +1110,7 @@ func TestStartOnReadStartsAnIndividualParticipantsClock(t *testing.T) {
 	registered := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered}
 	service := accessFixture(people{participant: registered, starts: &starts}, contestStore{contest: contest})
 
-	started, err := service.StartOnRead(t.Context(), contest, registered)
+	started, err := service.StartOnRead(t.Context(), contest, registered, netip.Addr{})
 	if err != nil {
 		t.Fatalf("StartOnRead() = %v", err)
 	}
@@ -974,7 +1128,7 @@ func TestStartOnReadDoesNotMoveAClockAlreadyRunning(t *testing.T) {
 	running := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive, StartedAt: &began}
 	service := accessFixture(people{participant: running, starts: &starts}, contestStore{contest: contest})
 
-	got, err := service.StartOnRead(t.Context(), contest, running)
+	got, err := service.StartOnRead(t.Context(), contest, running, netip.Addr{})
 	if err != nil {
 		t.Fatalf("StartOnRead() = %v", err)
 	}
@@ -994,7 +1148,7 @@ func TestStartOnReadNeverStartsAFixedTimingClock(t *testing.T) {
 	p := contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}
 	service := accessFixture(people{participant: p, starts: &starts}, contestStore{contest: contest})
 
-	if _, err := service.StartOnRead(t.Context(), contest, p); err != nil {
+	if _, err := service.StartOnRead(t.Context(), contest, p, netip.Addr{}); err != nil {
 		t.Fatalf("StartOnRead() = %v", err)
 	}
 	if starts != 0 {
@@ -1005,25 +1159,96 @@ func TestStartOnReadNeverStartsAFixedTimingClock(t *testing.T) {
 // Outside the contest's own window there is no clock to start: the read is
 // refused the way Run refuses a first query there, and nothing is written.
 func TestStartOnReadOutsideTheWindowStartsNoClock(t *testing.T) {
-	for name, shift := range map[string]func(*contests.Contest){
-		"before starts_at": func(c *contests.Contest) { later := time.Now().Add(time.Hour); c.StartsAt = &later },
-		"after ends_at":    func(c *contests.Contest) { earlier := time.Now().Add(-time.Minute); c.EndsAt = &earlier },
-		"not running":      func(c *contests.Contest) { c.Status = contests.StatusFinished },
+	for name, given := range map[string]struct {
+		shift func(*contests.Contest)
+		want  error
+	}{
+		"before starts_at": {func(c *contests.Contest) { later := time.Now().Add(time.Hour); c.StartsAt = &later }, contests.ErrContestNotRunning},
+		"after ends_at":    {func(c *contests.Contest) { earlier := time.Now().Add(-time.Minute); c.EndsAt = &earlier }, contests.ErrDeadlinePassed},
+		"not running":      {func(c *contests.Contest) { c.Status = contests.StatusFinished }, contests.ErrContestNotRunning},
 	} {
 		t.Run(name, func(t *testing.T) {
 			contest := individualContest()
-			shift(&contest)
+			given.shift(&contest)
 			starts := 0
 			p := contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}
 			service := accessFixture(people{participant: p, starts: &starts}, contestStore{contest: contest})
 
-			if _, err := service.StartOnRead(t.Context(), contest, p); !errors.Is(err, queryproxy.ErrContestNotRunning) {
-				t.Fatalf("StartOnRead() = %v, want ErrContestNotRunning", err)
+			if _, err := service.StartOnRead(t.Context(), contest, p, netip.Addr{}); !errors.Is(err, given.want) {
+				t.Fatalf("StartOnRead() = %v, want %v", err, given.want)
 			}
 			if starts != 0 {
 				t.Fatalf("Start called %d times outside the window, want 0", starts)
 			}
 		})
+	}
+}
+
+// Starting is admitted by the same gate as the read, address included:
+// StartOnRead is not trusted to have been called only after Access, so a
+// caller outside the contest's network starts nothing.
+func TestStartOnReadFromADisallowedAddressStartsNoClock(t *testing.T) {
+	contest := individualContest()
+	contest.AllowedCIDRs = []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}
+	starts := 0
+	p := contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}
+	service := accessFixture(people{participant: p, starts: &starts}, contestStore{contest: contest})
+
+	if _, err := service.StartOnRead(t.Context(), contest, p, netip.MustParseAddr("203.0.113.7")); !errors.Is(err, contests.ErrAddressNotAllowed) {
+		t.Fatalf("StartOnRead() = %v, want ErrAddressNotAllowed", err)
+	}
+	if starts != 0 {
+		t.Fatalf("Start called %d times from a disallowed address, want 0", starts)
+	}
+	if _, err := service.StartOnRead(t.Context(), contest, p, netip.MustParseAddr("10.20.3.4")); err != nil {
+		t.Fatalf("StartOnRead() from the room = %v, want nil", err)
+	}
+	if starts != 1 {
+		t.Fatalf("Start called %d times from the room, want 1", starts)
+	}
+}
+
+// At exactly ends_at it is too late to begin: no grace for starting.
+func TestStartOnReadAtExactlyEndsAtStartsNoClock(t *testing.T) {
+	opened := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	closes := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	duration := 30
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingIndividual,
+		DurationMin: &duration, StartsAt: &opened, EndsAt: &closes,
+	}
+	starts := 0
+	p := contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}
+	service := accessFixture(people{participant: p, starts: &starts}, contestStore{contest: contest}).
+		WithClock(func() time.Time { return closes }).WithGrace(5 * time.Second)
+
+	if _, err := service.StartOnRead(t.Context(), contest, p, netip.Addr{}); !errors.Is(err, contests.ErrDeadlinePassed) {
+		t.Fatalf("StartOnRead() = %v, want ErrDeadlinePassed", err)
+	}
+	if starts != 0 {
+		t.Fatalf("Start called %d times at ends_at, want 0", starts)
+	}
+}
+
+// The gate is asked again once the clock has started, of the participant as
+// Start answered them: a request that lost the race to an earlier start is
+// handed that start, and its time can already be up.
+func TestStartOnReadRefusesAStartWhoseTimeIsAlreadyUp(t *testing.T) {
+	now := time.Date(2026, 3, 1, 11, 0, 0, 0, time.UTC)
+	opened := now.Add(-3 * time.Hour)
+	closes := now.Add(3 * time.Hour)
+	longAgo := now.Add(-2 * time.Hour)
+	duration := 30
+	contest := contests.Contest{
+		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingIndividual,
+		DurationMin: &duration, StartsAt: &opened, EndsAt: &closes,
+	}
+	p := contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}
+	service := accessFixture(people{participant: p, stored: &longAgo}, contestStore{contest: contest}).
+		WithClock(func() time.Time { return now })
+
+	if _, err := service.StartOnRead(t.Context(), contest, p, netip.Addr{}); !errors.Is(err, contests.ErrDeadlinePassed) {
+		t.Fatalf("StartOnRead() = %v, want ErrDeadlinePassed", err)
 	}
 }
 
@@ -1033,7 +1258,7 @@ func TestStartOnReadMarksAFailureToStartAsOurs(t *testing.T) {
 	p := contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}
 	service := accessFixture(people{participant: p, startErr: errors.New("connection reset")}, contestStore{contest: contest})
 
-	if _, err := service.StartOnRead(t.Context(), contest, p); !errors.Is(err, queryproxy.ErrUnavailable) {
+	if _, err := service.StartOnRead(t.Context(), contest, p, netip.Addr{}); !errors.Is(err, queryproxy.ErrUnavailable) {
 		t.Fatalf("StartOnRead() = %v, want ErrUnavailable", err)
 	}
 }
@@ -1066,7 +1291,7 @@ func TestAccessChecksTheAddressRestriction(t *testing.T) {
 	}
 	service := accessFixture(people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}}, contestStore{contest: contest})
 
-	if _, _, err := service.Access(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("203.0.113.7")); !errors.Is(err, queryproxy.ErrAddressNotAllowed) {
+	if _, _, err := service.Access(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("203.0.113.7")); !errors.Is(err, contests.ErrAddressNotAllowed) {
 		t.Fatalf("error = %v, want ErrAddressNotAllowed", err)
 	}
 	if _, _, err := service.Access(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("10.20.3.4")); err != nil {
@@ -1097,27 +1322,32 @@ func TestAccessForEventsAdmitsExactlyOneMoreStatusThanAccess(t *testing.T) {
 		"somebody who never registered": {
 			people:  people{err: contests.ErrParticipantNotFound},
 			contest: contests.Contest{Status: contests.StatusPublished},
-			want:    queryproxy.ErrNotAParticipant,
+			want:    contests.ErrNotAParticipant,
 		},
 		"somebody disqualified, even for a published contest": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationDisqualified}},
 			contest: contests.Contest{Status: contests.StatusPublished},
-			want:    queryproxy.ErrNotAParticipant,
+			want:    contests.ErrNotAParticipant,
 		},
 		"a contest that has finished": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
 			contest: contests.Contest{Status: contests.StatusFinished},
-			want:    queryproxy.ErrContestNotRunning,
+			want:    contests.ErrContestNotRunning,
 		},
 		"a contest still a draft": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}},
 			contest: contests.Contest{Status: contests.StatusDraft},
-			want:    queryproxy.ErrContestNotRunning,
+			want:    contests.ErrContestNotRunning,
 		},
 		"a running contest, exactly as Access itself admits it": {
 			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
 			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow},
 			want:    nil,
+		},
+		"a running contest whose time is up for them": {
+			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &closedWindow},
+			want:    contests.ErrDeadlinePassed,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1138,7 +1368,7 @@ func TestAccessForEventsStillChecksTheAddressRestrictionForAPublishedContest(t *
 	contest := contests.Contest{Status: contests.StatusPublished, AllowedCIDRs: []netip.Prefix{inRoom}}
 	service := accessFixture(people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}}, contestStore{contest: contest})
 
-	if _, _, err := service.AccessForEvents(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("203.0.113.7")); !errors.Is(err, queryproxy.ErrAddressNotAllowed) {
+	if _, _, err := service.AccessForEvents(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("203.0.113.7")); !errors.Is(err, contests.ErrAddressNotAllowed) {
 		t.Fatalf("error = %v, want ErrAddressNotAllowed", err)
 	}
 	if _, _, err := service.AccessForEvents(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("10.20.3.4")); err != nil {
@@ -1453,8 +1683,8 @@ func TestARequestRefusedByTheDeadlineStillCountsAgainstTheRate(t *testing.T) {
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
 	).WithClock(func() time.Time { return deadline.Add(time.Minute) })
 
-	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrContestNotRunning) {
-		t.Fatalf("the first query past the deadline: error = %v, want ErrContestNotRunning", err)
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrDeadlinePassed) {
+		t.Fatalf("the first query past the deadline: error = %v, want ErrDeadlinePassed", err)
 	}
 
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryrunner.ErrTooManyQueries) {
@@ -1477,7 +1707,7 @@ func TestARequestRefusedBecauseTheContestIsNotRunningStillCountsAgainstTheRate(t
 		&databases{database: "x"}, &runner{result: &queryrunner.Result{}},
 	)
 
-	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrContestNotRunning) {
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrContestNotRunning) {
 		t.Fatalf("the first query before the contest opened: error = %v, want ErrContestNotRunning", err)
 	}
 
@@ -1505,7 +1735,7 @@ func TestANeverRegisteredCallerEventuallyMeetsTheLimiterBeforeTheLookup(t *testi
 	).WithPerMinuteDefault(1)
 	cmd := command()
 
-	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, queryproxy.ErrNotAParticipant) {
+	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, contests.ErrNotAParticipant) {
 		t.Fatalf("the first request: error = %v, want ErrNotAParticipant", err)
 	}
 	if calls != 1 {
@@ -1528,7 +1758,7 @@ func TestADisqualifiedCallerEventuallyMeetsTheLimiterBeforeTheLookup(t *testing.
 	).WithPerMinuteDefault(1)
 	cmd := command()
 
-	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, queryproxy.ErrNotAParticipant) {
+	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, contests.ErrNotAParticipant) {
 		t.Fatalf("the first request: error = %v, want ErrNotAParticipant", err)
 	}
 	if calls != 1 {
@@ -1551,8 +1781,8 @@ func TestAFinishedCallerEventuallyMeetsTheLimiterBeforeTheLookup(t *testing.T) {
 	).WithPerMinuteDefault(1)
 	cmd := command()
 
-	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, queryproxy.ErrFinished) {
-		t.Fatalf("the first request: error = %v, want ErrFinished", err)
+	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, contests.ErrParticipantFinished) {
+		t.Fatalf("the first request: error = %v, want ErrParticipantFinished", err)
 	}
 	if calls != 1 {
 		t.Fatalf("the participant was looked up %d times after 1 request, want 1", calls)
@@ -1809,8 +2039,8 @@ func TestAParticipantWithNothingLeftToAnswerIsRefusedTheConsole(t *testing.T) {
 }
 
 // The refusal is not the end of the registration: it is narrower than
-// ErrFinished, which closes the whole play screen. Nothing here writes
-// contests.RegistrationFinished, and the read endpoints that share this
+// contests.ErrParticipantFinished, which closes the whole play screen.
+// Nothing here writes contests.RegistrationFinished, and the read endpoints that share this
 // service's own admission stay open — the story, the questions, the timer.
 func TestNothingLeftToAnswerDoesNotCloseTheReadEndpoints(t *testing.T) {
 	service, _, _ := fixture(t)
@@ -2034,7 +2264,7 @@ func TestASingleLookupsMissingGameIsStillCheckedAtItsUsualPoint(t *testing.T) {
 	fromHome := command()
 	fromHome.Address = netip.MustParseAddr("203.0.113.7")
 	service := queryproxy.New(people{}, contestStore{}, games{}, &databases{}, &runner{}).WithLookup(lookup)
-	if _, err := service.Run(t.Context(), fromHome); !errors.Is(err, queryproxy.ErrAddressNotAllowed) {
+	if _, err := service.Run(t.Context(), fromHome); !errors.Is(err, contests.ErrAddressNotAllowed) {
 		t.Fatalf("error = %v, want ErrAddressNotAllowed — the address check comes before the game is looked at", err)
 	}
 
@@ -2103,7 +2333,7 @@ func TestARefusedQueryIsNotObserved(t *testing.T) {
 	cmd.Address = netip.MustParseAddr("192.0.2.44")
 	cmd.Session = monitor.SessionTag("token")
 
-	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, queryproxy.ErrContestNotRunning) {
+	if _, err := service.Run(t.Context(), cmd); !errors.Is(err, contests.ErrContestNotRunning) {
 		t.Fatalf("error = %v, want ErrContestNotRunning", err)
 	}
 	if len(seen.visits) != 0 {

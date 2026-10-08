@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/devrdn/db-contest/backend/internal/workspace"
@@ -350,10 +349,11 @@ func TestWorkspaceAccessRefusalsAreTheParticipantRoutesOwn(t *testing.T) {
 		status int
 		code   string
 	}{
-		{queryproxy.ErrNotAParticipant, http.StatusForbidden, "not_a_participant"},
-		{queryproxy.ErrContestNotRunning, http.StatusConflict, "contest_not_running"},
-		{queryproxy.ErrFinished, http.StatusConflict, "contest_finished"},
-		{queryproxy.ErrAddressNotAllowed, http.StatusForbidden, "address_not_allowed"},
+		{contests.ErrNotAParticipant, http.StatusForbidden, "not_a_participant"},
+		{contests.ErrContestNotRunning, http.StatusConflict, "contest_not_running"},
+		{contests.ErrParticipantFinished, http.StatusConflict, "contest_finished"},
+		{contests.ErrDeadlinePassed, http.StatusConflict, "deadline_passed"},
+		{contests.ErrAddressNotAllowed, http.StatusForbidden, "address_not_allowed"},
 	} {
 		t.Run(tc.code, func(t *testing.T) {
 			f := newParticipantFixture(t)
