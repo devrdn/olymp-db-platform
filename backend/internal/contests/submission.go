@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"net/netip"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -157,7 +158,8 @@ type SubmissionRequest struct {
 	PenaltyPerAttempt int
 	// Deadline is this participant's own deadline, grace already added
 	// (contests.Deadline plus Service.grace, summed once by Submit before
-	// the retry loop starts) — the instant at or after which Insert must
+	// the retry loop starts, by the same closesAt the participation gate
+	// refuses at) — the instant at or after which Insert must
 	// refuse the write regardless of attempts remaining. Checked by the
 	// implementation against its own clock at the moment it actually writes
 	// the row, not against a value Submit read earlier (finding 4, finding
@@ -205,27 +207,29 @@ type SubmissionRepository interface {
 
 // SubmitCommand is a participant answering one question.
 //
-// Participant and Contest are trusted as already resolved and admitted by
-// the caller — queryproxy.Service.Access, the same admission the SQL console
-// and the participant-facing read endpoints require (registered, not
-// disqualified or finished, the contest running or its own window open, the
-// address allowed). Submit does not repeat that check: a second
-// implementation of "may this student act here" is the bug this project
-// keeps finding (see Reader's own doc for the identical reasoning on the read
-// side). contests cannot import queryproxy to call Access itself either way —
-// queryproxy is built on top of this package, not the other way round — so
-// the caller (internal/api) is where that admission and this command meet.
+// Participant and Contest are trusted as already resolved by the caller: the
+// answer route resolves them through queryproxy.Service.Access, which admits
+// them through the participation gate (StandingOf) before the body is even
+// read. Submit asks the same gate again, from Address — not a second rule,
+// the same function — because Submit is the method that writes, and nothing
+// stops another caller from reaching it without the route's admission.
+// contests cannot import queryproxy to call Access itself either way —
+// queryproxy is built on top of this package, not the other way round.
 //
-// What Submit adds on top, and Access could never answer on its own: whether
-// the question actually belongs to this contest, whether this registration
-// may still answer it at all, and whether the deadline has passed by the
-// core database's own clock (§8) at the moment of the write rather than the
-// moment Access was called.
+// What Submit adds on top, and the gate could never answer on its own:
+// whether the question actually belongs to this contest, whether this
+// registration may still answer it at all, and whether the deadline has
+// passed by the core database's own clock (§8) at the moment of the write
+// rather than the moment the gate was asked.
 type SubmitCommand struct {
 	Participant Participant
 	Contest     Contest
 	QuestionID  uuid.UUID
 	Value       string
+	// Address is where the answer came from, for the contest's network
+	// restriction. The zero value is an address nobody could name, which a
+	// restricted contest refuses (Contest.AllowsAddress).
+	Address netip.Addr
 }
 
 // SubmitOutcome is what Submit hands back: never a reference answer, only
@@ -257,6 +261,12 @@ type SubmitOutcome struct {
 // and lets it work out the final number atomically, the same way it already
 // works out the attempt number.
 func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome, error) {
+	// The participation gate first, before the question is read or a clock
+	// started: a participant who may not act learns nothing about which
+	// questions exist, and a refused answer starts nothing.
+	if err := StandingOf(cmd.Contest, cmd.Participant, s.now(), s.grace, cmd.Address).Refusal(); err != nil {
+		return SubmitOutcome{}, err
+	}
 	if utf8.RuneCountInString(cmd.Value) > maxAnswerRunes {
 		return SubmitOutcome{}, fmt.Errorf("%w: at most %d characters", ErrAnswerTooLong, maxAnswerRunes)
 	}
@@ -305,25 +315,23 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 		return SubmitOutcome{}, ErrNotAChoice
 	}
 
-	participant := cmd.Participant
-	if ClockPending(cmd.Contest, participant) {
-		// The same seam queryproxy.Service.Run uses for the identical
-		// decision (§8, finding 2): the registration's own Start, which can
-		// only ever set started_at once (postgres.Registrations.Start).
-		// Nothing here invents a second way to start a participant's clock.
-		participant, err = s.registrations.Start(ctx, participant.ID, s.now())
-		if err != nil {
-			return SubmitOutcome{}, fmt.Errorf("start the participant's clock: %w", err)
-		}
+	participant, err := s.startClock(ctx, cmd.Contest, cmd.Participant, cmd.Address)
+	if err != nil {
+		return SubmitOutcome{}, err
 	}
 
+	// The instant the write must refuse at is the one the gate refuses at:
+	// the participant's own deadline plus the grace, from the same helper
+	// (closesAt), worked out once rather than inside every retry — the grace
+	// is a fixed installation setting, not something that could change
+	// between tries. The gate has just admitted this participant, so a
+	// deadline is there to compute; failing closed is for a rule that ever
+	// stops saying so.
 	deadline, ok := Deadline(cmd.Contest, participant)
 	if !ok {
-		return SubmitOutcome{}, ErrDeadlinePassed
+		return SubmitOutcome{}, ErrContestNotRunning
 	}
-	// Grace added once, here, rather than inside every retry: it is a fixed
-	// installation setting, not something that could change between tries.
-	deadlineWithGrace := deadline.Add(s.grace)
+	writeDeadline := closesAt(deadline, s.grace)
 
 	correct := s.grade(ctx, q, cmd.Value)
 	points := awardablePoints(q, cmd.Contest)
@@ -331,7 +339,7 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 
 	var result Submission
 	for attempt := 0; ; attempt++ {
-		result, err = s.submitOnce(ctx, participant.ID, q, cmd.Value, correct, points, penaltyPerAttempt, deadlineWithGrace)
+		result, err = s.submitOnce(ctx, participant.ID, q, cmd.Value, correct, points, penaltyPerAttempt, writeDeadline)
 		if !errors.Is(err, ErrAttemptConflict) {
 			break
 		}
@@ -354,6 +362,39 @@ func (s *Service) Submit(ctx context.Context, cmd SubmitCommand) (SubmitOutcome,
 		AttemptsRemaining: attemptsRemaining(q.MaxAttempts, result.AttemptNo),
 		Closed:            isClosed(q.MaxAttempts, AttemptStats{Attempts: result.AttemptNo, Correct: correct}),
 	}, nil
+}
+
+// startClock starts an individual participant's own clock on their first
+// answer, and asks the gate again about the participant that start handed
+// back. Anybody whose clock is already running, or who has none of their
+// own, is returned as they are: the gate has already admitted them.
+//
+// The same seam queryproxy uses for the identical decision (§8, finding 2):
+// the registration's own Start, which can only ever set started_at once
+// (postgres.Registrations.Start). Nothing here invents a second way to start
+// a participant's clock. The first gate let them start inside the contest's
+// window; the second decides whether the participant they now are may act —
+// a start that leaves no deadline to compute is broken data, refused here
+// rather than written against no deadline.
+func (s *Service) startClock(ctx context.Context, c Contest, p Participant, addr netip.Addr) (Participant, error) {
+	if !ClockPending(c, p) {
+		return p, nil
+	}
+	started, err := s.registrations.Start(ctx, p.ID, s.now())
+	if err != nil {
+		return Participant{}, fmt.Errorf("start the participant's clock: %w", err)
+	}
+	// A Start that reports success and hands back a clock still pending
+	// broke its own contract. The gate would let such a participant start
+	// forever, with no deadline running, so it fails closed the way the gate
+	// fails closed on any registration no deadline can be computed for.
+	if ClockPending(c, started) {
+		return Participant{}, fmt.Errorf("%w: starting the participant's clock left it unstarted", ErrContestNotRunning)
+	}
+	if err := StandingOf(c, started, s.now(), s.grace, addr).Refusal(); err != nil {
+		return Participant{}, err
+	}
+	return started, nil
 }
 
 // penaltyAmount is how many points one wrong attempt costs against q's own
