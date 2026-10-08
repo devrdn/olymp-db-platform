@@ -23,6 +23,7 @@ import { playDictionary, type PlayDictionary } from "./dictionary";
 import { PanelVisibilityProvider } from "./panel-toggles";
 import { PlayHeader } from "./play-header";
 import { PrintView } from "./print-view";
+import { refusalKind } from "./refusals";
 import { StoryCover } from "./story-cover";
 import type { QuestionEntry } from "./questions-panel";
 import { ReloadLink } from "./reload-link";
@@ -35,9 +36,9 @@ export async function generateMetadata() {
 }
 
 /**
- * Error codes that mean this participant may not use this screen at all
- * right now, regardless of which of the three requests below surfaces one
- * first (finding 2). Every one of them comes out of the same admission gate
+ * Whether a refusal means this participant may not use this screen at all
+ * right now, regardless of which of the three requests below surfaces it
+ * first (finding 2). Every such refusal comes out of the same admission gate
  * `/play/story`, `/play/questions` and `/play/log` all share (`ParticipantHandler.admit`
  * on the Go side: `AdmitRead`, then `Access`) — a contest this participant's
  * own deadline has passed for, an address that stopped being allowed, an
@@ -50,20 +51,25 @@ export async function generateMetadata() {
  * `contest_not_running` (the two this screen originally handled) already
  * were.
  *
- * `story_not_found` is deliberately not in this set: it is a fact about the
+ * `story_not_found` deliberately does not take the screen: it is a fact about the
  * story alone (`Reader.Story` refuses this way the instant a contest's story
  * has no translation for the negotiated language), and the questions, the
  * log and the console are unaffected by it — see where it is handled below
  * for why it gets its own, narrower treatment instead.
  */
-const SCREEN_UNAVAILABLE_CODES = new Set([
-  "contest_finished",
-  "contest_not_running",
-  "not_a_participant",
-  "address_not_allowed",
-  "query_too_often",
-  "question_not_found",
-]);
+function takesTheScreen(code: string): boolean {
+  const kind = refusalKind(code);
+  // query_too_often is named rather than taken as a kind: of the refusals
+  // that pass by themselves, the gate's own rate limit is the only one
+  // these reads meet.
+  return (
+    kind === "closed" ||
+    kind === "excluded" ||
+    kind === "elsewhere" ||
+    code === "query_too_often" ||
+    code === "question_not_found"
+  );
+}
 
 /**
  * Where a participant works: the full-screen olympiad workspace (Task 3) —
@@ -90,7 +96,7 @@ const SCREEN_UNAVAILABLE_CODES = new Set([
  * be allowed, or they may simply be asking faster than this installation's
  * own rate allows — and every one of those is shown the same way, from the
  * same dictionary, rather than treated as a page that failed to load
- * (SCREEN_UNAVAILABLE_CODES's own doc, finding 2). The one exception is the
+ * (takesTheScreen's own doc, finding 2). The one exception is the
  * story missing a translation: that is a fact about the story alone, and
  * losing it must not lose the questions, the log or the console beside it.
  */
@@ -191,7 +197,7 @@ export default async function PlayPage({ params }: PageProps<"/contests/[contest
  * split out the whole page — the header included — was one async function
  * and therefore one wait.
  *
- * A refusal that takes this whole screen away (SCREEN_UNAVAILABLE_CODES) is
+ * A refusal that takes this whole screen away (takesTheScreen) is
  * answered here rather than by the page, and so is shown beneath the bar
  * instead of replacing the page with a heading of its own. That is the one
  * visible consequence of the split, and it is the better screen: the
@@ -227,7 +233,7 @@ async function PlayPanels({
   // Fetched together, and answered mostly independently (finding 2): the
   // three requests share the same admission gate, so a refusal that is
   // really about this participant's own access to the contest (see
-  // SCREEN_UNAVAILABLE_CODES) means the same thing regardless of which
+  // takesTheScreen) means the same thing regardless of which
   // settles first. But a refusal that is only about the story itself — it
   // has no translation for this language — has nothing to do with whether
   // the questions list, the log or the console still work, so `Promise.all`
@@ -254,7 +260,7 @@ async function PlayPanels({
 
   if (questionsResult.status === "rejected") {
     const error = questionsResult.reason;
-    if (error instanceof ApiError && SCREEN_UNAVAILABLE_CODES.has(error.code)) {
+    if (error instanceof ApiError && takesTheScreen(error.code)) {
       return <ScreenUnavailable body={errors[error.code]} code={error.code} dict={dict} />;
     }
     throw error;
@@ -263,7 +269,7 @@ async function PlayPanels({
 
   // The story: read on success, or reduced to a shown reason on the one
   // refusal that is about the story alone. Anything else — including a
-  // SCREEN_UNAVAILABLE_CODES refusal reaching this request instead of one of
+  // takesTheScreen refusal reaching this request instead of one of
   // the others — is answered the same way the questions list's own refusal
   // above is, since it means the same thing no matter which request it
   // arrived on.
@@ -273,7 +279,7 @@ async function PlayPanels({
     storyBody = playStorySchema.parse(storyResult.value).bodyMd;
   } else {
     const error = storyResult.reason;
-    if (error instanceof ApiError && SCREEN_UNAVAILABLE_CODES.has(error.code)) {
+    if (error instanceof ApiError && takesTheScreen(error.code)) {
       return <ScreenUnavailable body={errors[error.code]} code={error.code} dict={dict} />;
     }
     if (error instanceof ApiError && error.code === "story_not_found") {
@@ -284,7 +290,7 @@ async function PlayPanels({
   }
 
   // The query log's own first page: read on success, or — unless the
-  // refusal is one of SCREEN_UNAVAILABLE_CODES, in which case the whole
+  // refusal is one that takesTheScreen, in which case the whole
   // screen is unavailable exactly as it would be for the other two — quietly
   // reduced to an empty page rather than failing this whole screen. The log
   // is a record of what already happened, not something the console needs to
@@ -307,7 +313,7 @@ async function PlayPanels({
     initialLog = { ...queryLogResponseSchema.parse(logResult.value), failed: false };
   } else {
     const error = logResult.reason;
-    if (error instanceof ApiError && SCREEN_UNAVAILABLE_CODES.has(error.code)) {
+    if (error instanceof ApiError && takesTheScreen(error.code)) {
       return <ScreenUnavailable body={errors[error.code]} code={error.code} dict={dict} />;
     }
     // Any other failure (a transient 500, an unreachable API): degrade
@@ -467,7 +473,6 @@ function ScreenUnavailable({ body, code, dict }: { body: string; code?: string; 
   );
 }
 
-/** The plain "nothing to show" screen every non-running status and every whole-screen refusal (SCREEN_UNAVAILABLE_CODES) reduces to. */
 /**
  * The plain "nothing to show" screen.
  *

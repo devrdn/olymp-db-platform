@@ -14,7 +14,8 @@ import {
 } from "@/lib/api/workspace";
 
 import type { SqlTabView } from "./sql-tabs";
-import { AutosaveEngine, attachEngine, type ClosedCode } from "./use-autosave";
+import { isClosed, type ClosedCode } from "./refusals";
+import { AutosaveEngine, attachEngine } from "./use-autosave";
 
 /**
  * Everything the SQL tabs are, apart from how they are drawn (§5 of the
@@ -100,8 +101,6 @@ function noActive(): string | null {
 
 /** The id of the single tab a workspace that could not be read falls back to. */
 export const LOCAL_TAB_ID = "local";
-
-const CLOSED_CODES: ReadonlySet<string> = new Set<ClosedCode>(["contest_finished", "contest_not_running"]);
 
 type Entry = { engine: AutosaveEngine; detach: () => void };
 
@@ -274,8 +273,8 @@ export function useSqlTabs({
   }, []);
 
   const report = useCallback((failure: unknown) => {
-    if (failure instanceof ApiError && CLOSED_CODES.has(failure.code)) {
-      setClosed(failure.code as ClosedCode);
+    if (failure instanceof ApiError && isClosed(failure.code)) {
+      setClosed(failure.code);
       return;
     }
     setError(failureCode(failure));
