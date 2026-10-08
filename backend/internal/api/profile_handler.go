@@ -594,21 +594,37 @@ func (h *ProfileHandler) logCSV(w http.ResponseWriter, r *http.Request) {
 		})
 }
 
+// profileContestNotFound is the one answer for every contest that is not the
+// caller's finished one: one that does not exist, one somebody else is on, one
+// still running for this caller, and a registration the monitoring reads do
+// not recognise. Telling them apart would say what exists and who is on it.
+const profileContestNotFound = "No finished contest of yours with that identifier"
+
+// profileMonitorErrors is monitorErrors with the three answers the profile
+// gives under codes of its own, on routes the participant reads about their
+// own finished contest rather than an organiser about someone else's. Clients
+// read both sets of codes, so neither can change. These routes read through
+// ParseCursor and ProfileWatch's Queries, Answers and Workspace, which between
+// them refuse with exactly these three; the table's other rows (a feed's
+// filter, a revision, the signals') belong to calls the profile does not make.
+var profileMonitorErrors = monitorErrors.with(
+	errorRow{err: monitor.ErrParticipantNotFound, status: http.StatusNotFound, code: codeProfileContestNotFound,
+		message: profileContestNotFound},
+	errorRow{err: monitor.ErrInvalidCursor, status: http.StatusBadRequest, code: codeProfileInvalidCursor},
+	errorRow{err: monitor.ErrInvalidQueryFilter, status: http.StatusBadRequest, code: codeProfileInvalidFilter},
+)
+
 // fail maps a refusal to a response (CLAUDE.md rule 1).
 func (h *ProfileHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
+	// No error of the profile's or the leaderboard's wraps one of the
+	// monitoring's, so the order of the table and the switch below decides
+	// nothing.
+	if profileMonitorErrors.answer(w, r, h.log, err) {
+		return
+	}
 	switch {
-	case errors.Is(err, profile.ErrNotFound), errors.Is(err, leaderboard.ErrNotFound),
-		errors.Is(err, monitor.ErrParticipantNotFound):
-		// One answer for every one of them: a contest that does not exist,
-		// one somebody else is on, one still running for this caller, and a
-		// registration the monitoring reads do not recognise. Telling them
-		// apart would say what exists and who is on it.
-		httpx.Error(w, r, http.StatusNotFound, codeProfileContestNotFound,
-			"No finished contest of yours with that identifier")
-	case errors.Is(err, monitor.ErrInvalidCursor):
-		httpx.Error(w, r, http.StatusBadRequest, codeProfileInvalidCursor, err.Error())
-	case errors.Is(err, monitor.ErrInvalidQueryFilter):
-		httpx.Error(w, r, http.StatusBadRequest, codeProfileInvalidFilter, err.Error())
+	case errors.Is(err, profile.ErrNotFound), errors.Is(err, leaderboard.ErrNotFound):
+		httpx.Error(w, r, http.StatusNotFound, codeProfileContestNotFound, profileContestNotFound)
 	case errors.Is(err, ErrExportsBusy):
 		exportsBusy(w, r)
 	default:

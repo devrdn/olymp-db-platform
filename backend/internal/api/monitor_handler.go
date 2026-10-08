@@ -584,15 +584,10 @@ func (h *MonitorHandler) revision(w http.ResponseWriter, r *http.Request) {
 
 // fail maps a monitoring refusal to a response (CLAUDE.md rule 1).
 func (h *MonitorHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
+	if monitorErrors.answer(w, r, h.log, err) {
+		return
+	}
 	switch {
-	case errors.Is(err, monitor.ErrParticipantNotFound):
-		httpx.Error(w, r, http.StatusNotFound, codeMonitorParticipantNotFound, "No such participant in this contest")
-	case errors.Is(err, monitor.ErrRevisionNotFound):
-		httpx.Error(w, r, http.StatusNotFound, codeMonitorRevisionNotFound, "No such revision of this participant")
-	case errors.Is(err, monitor.ErrInvalidCursor):
-		httpx.Error(w, r, http.StatusBadRequest, codeMonitorInvalidCursor, err.Error())
-	case errors.Is(err, monitor.ErrInvalidFeedFilter), errors.Is(err, monitor.ErrInvalidQueryFilter):
-		httpx.Error(w, r, http.StatusBadRequest, codeMonitorInvalidFilter, err.Error())
 	case errors.Is(err, ErrExportsBusy):
 		exportsBusy(w, r)
 	default:
