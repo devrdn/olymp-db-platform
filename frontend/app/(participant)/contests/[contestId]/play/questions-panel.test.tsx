@@ -325,6 +325,23 @@ describe("the questions panel", () => {
     expect(screen.getByRole("textbox")).toHaveValue("the gardener");
   });
 
+  // The same rule as the console's: a reference printed under an ordinary
+  // refusal reads as though the refusal were a fault, and nobody will be
+  // asked to quote it.
+  test("carries a reference for a fault, and not for an ordinary refusal", async () => {
+    answer.current = { kind: "refused", code: "answer_too_long", requestId: "req-7" };
+    const { unmount } = render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
+    await submit("the gardener");
+    await screen.findByText(en.errors.answer_too_long);
+    expect(screen.queryByText(/req-7/)).not.toBeInTheDocument();
+    unmount();
+
+    answer.current = { kind: "refused", code: "internal_error", requestId: "req-8" };
+    render(<QuestionsPanel contestId="c1" items={[entry()]} dict={en} />);
+    await submit("the gardener");
+    expect(await screen.findByText(/req-8/)).toBeInTheDocument();
+  });
+
   // Finding 5: a closed question loaded fresh from the server — no live
   // submission behind it — must still say whether it was won, and for how
   // much, the same way one just answered in this session does.

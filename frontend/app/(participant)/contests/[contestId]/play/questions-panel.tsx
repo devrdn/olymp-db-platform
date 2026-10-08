@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 
 import { refreshQuestionsAction, submitAnswerAction, type AnswerState } from "./actions";
 import { messageForCode } from "@/lib/i18n/errors";
+import { refusalKind, showsReference } from "./refusals";
 
 /**
  * One question's data, paired with its wording already rendered — see
@@ -380,8 +381,8 @@ function Refusal({ state, dict }: { state: Extract<AnswerState, { kind: "refused
   const message = messageForCode(state.code, dict.errors);
 
   // A wait rather than a fault: asking again later is the whole remedy, so
-  // these read quietly and carry no request reference to report.
-  const passing = ["query_too_often", "answer_too_often", "attempt_conflict"].includes(state.code);
+  // these read quietly.
+  const passing = refusalKind(state.code) === "passing";
 
   return (
     <div
@@ -390,7 +391,7 @@ function Refusal({ state, dict }: { state: Extract<AnswerState, { kind: "refused
     >
       {message}
       {state.subject ? <span className="ml-1 font-mono text-ink-2">{state.subject}</span> : null}
-      {state.requestId && !passing ? (
+      {state.requestId && showsReference(state.code, dict.errors) ? (
         <p className="mt-1.5 font-mono text-ink-3">{t.reference.replace("{id}", state.requestId)}</p>
       ) : null}
     </div>

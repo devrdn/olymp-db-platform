@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { ApiError } from "@/lib/api/client";
 
+import { isClosed, type ClosedCode } from "./refusals";
+
 /**
  * Saving without a button, for one document at a time: the participant's
  * notes, or one SQL tab (docs/ARCHITECTURE.md §6.4).
@@ -61,8 +63,6 @@ export type AutosaveStatus =
   /** The contest is over for this participant; nothing more will be saved. */
   | { kind: "closed"; code: ClosedCode };
 
-export type ClosedCode = "contest_finished" | "contest_not_running";
-
 export type AutosaveOptions = {
   /**
    * Who is typing. `null` when the account could not be read, and then no
@@ -104,8 +104,6 @@ export const AUTOSAVE_RETRY_FIRST_MS = 2000;
 export const AUTOSAVE_RETRY_MAX_MS = 30_000;
 /** How long the draft waits for typing to pause before it is written. */
 export const AUTOSAVE_DRAFT_WRITE_MS = 300;
-
-const CLOSED_CODES: ReadonlySet<string> = new Set<ClosedCode>(["contest_finished", "contest_not_running"]);
 
 /** What every draft key starts with, whoever wrote it. */
 const DRAFT_PREFIX = "dbcontest.play.draft.";
@@ -450,8 +448,8 @@ export class AutosaveEngine {
     if (keepalive && this.lastKeepalive === text) this.lastKeepalive = null;
     if (this.discarded) return;
 
-    if (error instanceof ApiError && CLOSED_CODES.has(error.code)) {
-      this.closedCode = error.code as ClosedCode;
+    if (error instanceof ApiError && isClosed(error.code)) {
+      this.closedCode = error.code;
       this.clearTimers();
       this.sendWhenIdle = false;
       this.storeDraft(true);

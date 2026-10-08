@@ -5,6 +5,8 @@ import { useEffect } from "react";
 import { ApiError } from "@/lib/api/client";
 import { sendSignals, type PasteTarget, type Signal } from "@/lib/api/workspace";
 
+import { refusalKind } from "./refusals";
+
 export type { PasteTarget, Signal };
 
 /**
@@ -84,12 +86,17 @@ export const PASTE_TARGET_ATTRIBUTE = "data-paste-target";
 /** Sends one batch; rejects with the failure. */
 export type SendSignals = (events: Signal[], options: { keepalive: boolean }) => Promise<void>;
 
-/** Refusals every later batch would get too: the collector stops on them. */
-const FINAL_CODES: ReadonlySet<string> = new Set([
-  "contest_finished",
-  "contest_not_running",
-  "not_a_participant",
-]);
+/**
+ * Whether every later batch would be refused the same way, so the collector
+ * stops. Not a refusal for the address: a laptop briefly on a hotspot is
+ * outside the contest's network for a moment, and stopping would silence
+ * monitoring until a reload.
+ */
+function isFinal(code: string): boolean {
+  const kind = refusalKind(code);
+  return kind === "closed" || kind === "excluded";
+}
+
 const PASTE_TARGETS: ReadonlySet<string> = new Set<PasteTarget>(["editor", "answer", "notes"]);
 
 /** The watched field a paste landed in, or null when it is none of them. */
@@ -270,7 +277,7 @@ export class SignalCollector {
     if (error instanceof ApiError) {
       // A 401 is final too, whatever its code: the session has ended, and
       // retrying would hold the batch and send it every ten seconds forever.
-      if (FINAL_CODES.has(error.code) || error.status === 401) {
+      if (isFinal(error.code) || error.status === 401) {
         this.stop();
         return;
       }

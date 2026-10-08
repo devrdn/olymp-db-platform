@@ -4,27 +4,23 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { API_PREFIX } from "@/lib/api/client";
 
+import { isClosed, refusalKind } from "./refusals";
+
 export type ContestPhase = "waiting" | "running" | "finished";
 
 type SyncPayload = { server_now: string; deadline?: string };
 
 /**
- * Error codes a closed channel is refused with that reconnecting cannot fix:
- * this participant's own access to the contest was revoked (disqualified, or
- * the address they are on stopped being allowed), not something that clears
- * on its own the way a rate limit or a briefly busy server does.
+ * Whether a refusal of the channel is one reconnecting on a timer cannot
+ * fix: this participant is not taking part (disqualified, say), or is
+ * connecting from outside the contest's network. Neither clears on its own
+ * the way a rate limit or a briefly busy server does; the second lifts only
+ * once the machine is back on the network, and the header says why meanwhile.
  */
-const TERMINAL_CODES = new Set(["not_a_participant", "address_not_allowed"]);
-
-/**
- * Error codes that mean the contest is over for this participant — the same
- * fact the resync loop's own ErrFinished/ErrContestNotRunning branch already
- * announces as `contest_finished` once a connection is open
- * (events_handler.go's own doc). Reached here only when that same refusal
- * happens at connect time instead — a page opened after the participant's
- * own deadline already passed, say.
- */
-const FINISHED_CODES = new Set(["contest_finished", "contest_not_running"]);
+function isTerminal(code: string): boolean {
+  const kind = refusalKind(code);
+  return kind === "excluded" || kind === "elsewhere";
+}
 
 /** How long to wait before the first reconnect attempt, and the ceiling a doubling backoff is capped at. */
 const RECONNECT_MIN_DELAY_MS = 5_000;
@@ -217,18 +213,20 @@ export function useContestEvents(contestId: string, initialPhase: ContestPhase =
             return;
           }
           const code = result.code ?? "unreachable";
-          if (FINISHED_CODES.has(code)) {
+          if (isClosed(code)) {
             // Not an error to show — the contest is simply over for this
             // participant, the same fact the resync loop announces as
             // contest_finished when it happens after a connection is
-            // already open.
+            // already open (events_handler.go's own doc). Reached here only
+            // when that refusal comes at connect time instead — a page
+            // opened after the participant's own deadline passed, say.
             setPhase("finished");
             return;
           }
           setChannelError(code);
-          if (TERMINAL_CODES.has(code)) {
-            // Reconnecting cannot change who this account is or where it is
-            // connecting from; retrying would only repeat the same refusal.
+          if (isTerminal(code)) {
+            // Retrying on a timer would only repeat the same refusal
+            // (isTerminal's own doc).
             return;
           }
           scheduleReconnect();

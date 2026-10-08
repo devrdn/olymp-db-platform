@@ -11,6 +11,7 @@ import type { ConsoleState } from "./actions";
 import { PaneHandle, SHARE_BOUNDS, useResultRows } from "./pane-splitter";
 import { RowDetail } from "./row-detail";
 import { messageForCode } from "@/lib/i18n/errors";
+import { refusalKind, showsReference } from "./refusals";
 
 /**
  * What the last query produced, or why it did not — the "Result" tab of the
@@ -796,9 +797,6 @@ function DownloadButton({
   );
 }
 
-/** The codes that mean the installation failed, not the query. */
-const FAULT_CODES = ["internal_error", "query_service_down", "game_cluster_full"];
-
 /**
  * Why a query did not run.
  *
@@ -812,16 +810,7 @@ function Refusal({ state, dict }: { state: Extract<ConsoleState, { kind: "refuse
   // Waiting is a different situation from being wrong, and the participant
   // should be able to tell without reading carefully: one of these means try
   // again in a moment, the other means change the query.
-  const passing = ["query_busy", "query_already_running", "query_too_often", "no_game_yet"].includes(
-    state.code,
-  );
-
-  // Named as the faults rather than as the refusals, because a refusal is
-  // what the list of codes mostly is and a new one should not arrive with a
-  // reference under it. A code this build has no sentence for is counted as a
-  // fault: nobody can say what happened, which is when the reference is the
-  // only thing worth quoting.
-  const fault = !(state.code in dict.errors) || FAULT_CODES.includes(state.code);
+  const passing = refusalKind(state.code) === "passing";
 
   return (
     <div
@@ -840,7 +829,7 @@ function Refusal({ state, dict }: { state: Extract<ConsoleState, { kind: "refuse
           the only case where anybody will be asked for it — and a reference
           number printed under an ordinary refusal reads as though the refusal
           were a fault. */}
-      {state.requestId && fault ? (
+      {state.requestId && showsReference(state.code, dict.errors) ? (
         <p className="mt-2 font-mono text-small text-ink-3">
           {dict.participant.console.reference.replace("{id}", state.requestId)}
         </p>
