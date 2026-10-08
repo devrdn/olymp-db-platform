@@ -166,7 +166,10 @@ func Key(hash string, size int) string {
 // already exists. Of the two ways this can be interrupted, only one is
 // visible to a visitor.
 func (s *Service) Upload(ctx context.Context, contestID uuid.UUID, actorID uuid.UUID, src io.Reader, attribution string) (Cover, error) {
-	credit := strings.TrimSpace(attribution)
+	// A NUL or bytes that are not UTF-8 cannot be stored (PostgreSQL fails
+	// the insert) and cannot be seen in a caption, so they are dropped rather
+	// than refused.
+	credit := strings.TrimSpace(strings.ReplaceAll(strings.ToValidUTF8(attribution, ""), "\x00", ""))
 	switch {
 	case credit == "":
 		return Cover{}, ErrAttributionRequired

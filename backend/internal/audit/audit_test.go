@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -174,6 +175,36 @@ func TestExplicitOriginWinsOverTheContext(t *testing.T) {
 	got := sink.entries[0]
 	if got.IP != "203.0.113.7" || got.UserAgent != "explicit" {
 		t.Errorf("origin = %q/%q, want the explicit values to win", got.IP, got.UserAgent)
+	}
+}
+
+func TestTheUserAgentIsStorableAndBoundedWhereverItCameFrom(t *testing.T) {
+	// The header is the client's. Bytes that are not UTF-8, or a cut through
+	// the middle of a character, made the insert fail (SQLSTATE 22021): an
+	// audited write answered 500, and a sign-in's entry silently vanished.
+	long := strings.Repeat("я", 300) // 600 bytes, two per character
+	for name, ctx := range map[string]context.Context{
+		"from the request": WithRequestMeta(context.Background(), "203.0.113.7", long),
+		"explicit":         context.Background(),
+	} {
+		sink := &recordingSink{}
+		entry := Entry{Action: ActionAuthLogin}
+		if name == "explicit" {
+			entry.UserAgent = long
+		}
+		_ = New(sink).Record(ctx, entry)
+
+		got := sink.entries[0].UserAgent
+		if !utf8.ValidString(got) || len(got) != 512 || got != strings.Repeat("я", 256) {
+			t.Errorf("%s: user agent of %d bytes, valid %v; want 256 whole characters",
+				name, len(got), utf8.ValidString(got))
+		}
+	}
+
+	sink := &recordingSink{}
+	_ = New(sink).Record(context.Background(), Entry{Action: ActionAuthLogin, UserAgent: "Agent\xff\xfe/1.0"})
+	if got := sink.entries[0].UserAgent; got != "Agent/1.0" {
+		t.Errorf("user agent = %q, want the bytes that are not UTF-8 dropped", got)
 	}
 }
 

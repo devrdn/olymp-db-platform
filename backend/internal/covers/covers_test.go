@@ -69,6 +69,33 @@ func TestACreditLineHasABound(t *testing.T) {
 	}
 }
 
+func TestACreditLineKeepsOnlyTextItCanStore(t *testing.T) {
+	// It arrives as a multipart field, past the JSON body's own check. A NUL
+	// or bytes that are not UTF-8 made the insert fail — a 500 for a pasted
+	// credit line — and are invisible in a caption anyway, so they are
+	// dropped; a line of nothing but them is no credit line at all.
+	ctx := context.Background()
+	f := newFixture()
+	contest := uuid.New()
+
+	if _, err := f.service.Upload(ctx, contest, uuid.New(),
+		bytes.NewReader(jpegOf(t, 320, 180)), "Photo\x00: A.\xff Organiser"); err != nil {
+		t.Fatalf("Upload() = %v", err)
+	}
+	stored, err := f.service.ByContest(ctx, contest)
+	if err != nil {
+		t.Fatalf("ByContest() = %v", err)
+	}
+	if stored.Attribution != "Photo: A. Organiser" {
+		t.Errorf("attribution = %q, want the storable text", stored.Attribution)
+	}
+
+	_, err = f.service.Upload(ctx, uuid.New(), uuid.New(), &refusingReader{t: t}, " \x00\xfe ")
+	if !errors.Is(err, covers.ErrAttributionRequired) {
+		t.Fatalf("Upload() of an unstorable credit line = %v, want ErrAttributionRequired", err)
+	}
+}
+
 func TestNothingIsRecordedWhenThePictureIsRefused(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture()

@@ -154,15 +154,22 @@ func versionHandler(version string) http.HandlerFunc {
 	}
 }
 
-// refuseUnstorableQuery answers 400 to a query string holding a NUL byte or
-// bytes that are not UTF-8, for every route at once.
+// refuseUnstorableQuery answers 400 to an address — its decoded path or its
+// query string — holding a NUL byte or bytes that are not UTF-8, for every
+// route at once.
 //
 // No stored text can contain either, and PostgreSQL refuses both by failing
-// the statement that compares them: a status filter or a search pasted with
-// one was a 500 for the client's own malformed address. Bodies are held to
-// the same rule by httpx.DecodeJSON.
+// the statement that compares them: a status filter, a search or a path
+// segment naming a database was a 500 for the client's own malformed address.
+// JSON bodies are held to the same rule by httpx.DecodeJSON. A multipart
+// field, or a header the trail stores, is checked where it is read.
 func refuseUnstorableQuery(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !utf8.ValidString(r.URL.Path) || strings.ContainsRune(r.URL.Path, 0) {
+			httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest,
+				"The path holds a NUL character or bytes that are not UTF-8")
+			return
+		}
 		for key, values := range r.URL.Query() {
 			for _, text := range append(values, key) {
 				if !utf8.ValidString(text) || strings.ContainsRune(text, 0) {
