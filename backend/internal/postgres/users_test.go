@@ -249,6 +249,25 @@ func TestDeletedAccountReleasesItsLogin(t *testing.T) {
 // account that no longer holds the login at all. Run against PostgreSQL,
 // never the in-memory fake, because the point being proven is what an
 // unordered SELECT against real rows actually returns.
+func TestByLoginOfAStringNoLoginCanBeIsNotFoundAndTheTransactionGoesOn(t *testing.T) {
+	// A roster resolves every login in one transaction. PostgreSQL refuses a
+	// NUL byte or bytes that are not UTF-8 by failing the statement, which
+	// aborted that transaction and lost the whole import over one pasted
+	// line; at /login it was a 500 for what is simply no such account.
+	withTx(t, func(ctx context.Context) {
+		repo := NewUsers(testPool)
+		for _, login := range []string{"ada\x00lovelace", "\xff\xfe", strings.Repeat("a", 101)} {
+			if _, err := repo.ByLogin(ctx, login); !errors.Is(err, users.ErrNotFound) {
+				t.Errorf("ByLogin(%q) error = %v, want users.ErrNotFound", login, err)
+			}
+		}
+		made := makeUser(t, ctx, "after-the-odd-ones")
+		if got, err := repo.ByLogin(ctx, "after-the-odd-ones"); err != nil || got.ID != made.ID {
+			t.Errorf("ByLogin() afterwards = (%v, %v), want the account just made", got.ID, err)
+		}
+	})
+}
+
 func TestByLoginPrefersTheLiveAccountOverADeletedOne(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)

@@ -170,6 +170,11 @@ const auditListWhere = `WHERE ($1::uuid IS NULL OR a.actor_id = $1)
 // has since been deleted still has its entries — the trail outlives the people
 // in it, which is the point of keeping one.
 func (r *AuditTrail) List(ctx context.Context, f audit.Filter) ([]audit.Record, int, error) {
+	// The entity filters are compared, never stored: one that no stored entry
+	// can equal matches nothing, and asking would fail the statement.
+	if !storableText(f.Entity) || !storableText(f.EntityID) {
+		return nil, 0, nil
+	}
 	args := []any{nilUUID(f.Actor), f.Action, f.Entity, f.EntityID, f.From, f.To}
 	rows, err := storage.QuerierFrom(ctx, r.pool).Query(ctx, `
 		SELECT a.id, a.actor_id, COALESCE(u.login, ''), a.action,

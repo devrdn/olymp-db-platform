@@ -16,7 +16,13 @@ import "strings"
 //
 // Postgres reads a backslash as the default escape character, which is why
 // this does not spell out ESCAPE in the queries.
+//
+// What no stored text can contain — a NUL byte, bytes that are not UTF-8 —
+// is dropped first (see storableText): PostgreSQL would refuse the pattern by
+// failing the statement, a 500 for one pasted control character, and no row
+// could have matched it anyway.
 func escapeLike(s string) string {
+	s = strings.ReplaceAll(strings.ToValidUTF8(s, ""), "\x00", "")
 	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return replacer.Replace(s)
 }
