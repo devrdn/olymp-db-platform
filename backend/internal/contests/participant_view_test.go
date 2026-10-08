@@ -296,8 +296,8 @@ func TestQuestionsClosesAQuestionOnceEveryAttemptIsSpent(t *testing.T) {
 	if len(found) != 1 || !found[0].Closed {
 		t.Fatalf("found = %+v, want the question closed", found)
 	}
-	if *found[0].AttemptsRemaining != 0 {
-		t.Fatalf("attempts remaining = %d, want 0", *found[0].AttemptsRemaining)
+	if found[0].AttemptsRemaining == nil || *found[0].AttemptsRemaining != 0 {
+		t.Fatalf("attempts remaining = %v, want 0", found[0].AttemptsRemaining)
 	}
 }
 

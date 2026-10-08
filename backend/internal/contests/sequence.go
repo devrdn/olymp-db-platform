@@ -15,9 +15,13 @@ import (
 // participant can see".
 //
 // Declared here, narrow, rather than reusing QuestionRepository or
-// AttemptStore: the answer is a single yes/no about a state that only ever
-// grows monotonically more open (a question does not un-close once it closes),
-// so it is safe to compute with a plain read ahead of the write, unlike the
+// AttemptStore: the answer is a single yes/no about a state that only grows
+// more open as the participant works — a question answered correctly stays
+// closed. The one way back is an organizer raising a question's attempt cap,
+// which reopens a question closed only by its spent attempts; that makes the
+// gate stricter, never looser, and an answer that races it was one the
+// participant was entitled to a moment earlier. So it is safe to compute
+// with a plain read ahead of the write, unlike the
 // deadline and attempt-count checks Insert folds into itself precisely
 // because those are not monotonic in the same way. Submit consults this only
 // when the contest is actually sequential — a contest that never uses it

@@ -950,7 +950,18 @@ func TestQuestionsCarryCorrectAndPointsAwarded(t *testing.T) {
 		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
 		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}},
 	})
-	f.submit(t, registrationID, q, true)
+	// One wrong attempt at a penalty of two before the right one: what was
+	// won is 8, not the question's face value, so a list that echoed the
+	// question's points instead of the submission's would fail here.
+	for _, correct := range []bool{false, true} {
+		if _, err := f.submissions.Insert(t.Context(), contests.SubmissionRequest{
+			RegistrationID: registrationID, QuestionID: q.ID, Value: "an answer",
+			IsCorrect: correct, Points: q.Points, PenaltyPerAttempt: 2,
+			Deadline: conteststest.FixtureNow.Add(time.Hour),
+		}); err != nil {
+			t.Fatalf("Insert() = %v", err)
+		}
+	}
 
 	rec := f.get("/contests/" + contestID.String() + "/play/questions")
 	if rec.Code != http.StatusOK {
@@ -968,8 +979,8 @@ func TestQuestionsCarryCorrectAndPointsAwarded(t *testing.T) {
 	if len(payload.Items) != 1 {
 		t.Fatalf("items = %+v, want 1", payload.Items)
 	}
-	if got := payload.Items[0]; !got.Correct || got.PointsAwarded != 10 {
-		t.Fatalf("item = %+v, want {Correct: true, PointsAwarded: 10}", got)
+	if got := payload.Items[0]; !got.Correct || got.PointsAwarded != 8 {
+		t.Fatalf("item = %+v, want {Correct: true, PointsAwarded: 8}", got)
 	}
 }
 
