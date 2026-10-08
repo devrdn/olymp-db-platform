@@ -2093,7 +2093,9 @@ nothing.
   `deadline = LEAST(started_at + duration_min, ends_at)`. No other timing
   logic exists in the code: the participation gate (section 8.1), the
   submission path and the event stream all compute the deadline with the same
-  function, `contests.Deadline`, and only the gate adds the grace to it.
+  function, `contests.Deadline`, and on the participant's side only the gate
+  adds the grace to it (the scheduler adds the same grace when it finishes a
+  contest, below).
 - **The source of truth is the server:** `contests` and `registrations` in the
   core database. No client clock takes part in any decision.
 - Every "is the contest running?" check happens on the backend on every action
@@ -2126,7 +2128,8 @@ Whether a participant may do something in a contest right now is decided in
 one place: `contests.StandingOf(contest, registration, now, grace, address)`.
 It is a pure function in the `contests` package and reads nothing: every
 caller already holds the contest and the registration, and the console's
-admission fetches both in one round trip (`queryproxy.Lookup.ForAccess`). Its
+admission fetches both in one round trip (`queryproxy.Lookup.ForAccess` for
+reads and the event stream, `ForRun` for the console). Its
 answer, a `contests.Standing`, is computed for the request and never stored.
 Four questions are asked of it:
 
@@ -2151,8 +2154,9 @@ The three cannot contradict each other: `Over` implies neither `MayAct` nor
 table (`standing_test.go`), which covers each boundary below to the
 nanosecond.
 
-**Time.** The grace is added in exactly one place (`closesAt` in
-`standing.go`), and nowhere else adds it:
+**Time.** On the participant's side the grace is added in exactly one place
+(`closesAt` in `standing.go`); the only other addition is the scheduler's own
+`ends_at + grace` when it finishes a contest, which agrees with it:
 
 - Under fixed timing the contest is open while its status is `running` —
   before `starts_at` too, since the status is what an organiser or the

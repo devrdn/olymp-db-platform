@@ -80,7 +80,7 @@ type EventsAccess interface {
 //     so the number that matters (how many sockets one participant holds)
 //     is capped regardless of how quickly they were opened. This is a
 //     deliberate choice, not an oversight: opening a channel still costs the
-//     same two database lookups a read does, so it is charged the same way a
+//     same database lookup a read does, so it is charged the same way a
 //     read is (CLAUDE.md rule 13) rather than exempted from the budget it
 //     would otherwise be free to spend in a loop — what actually keeps a
 //     flaky connection from spending that budget is the stream's retry field and
@@ -115,12 +115,12 @@ type EventsAccess interface {
 //     to keep an honest, if unlucky, connection from ever needing to.
 //   - Holding nothing while idle. Between ticks this goroutine holds a
 //     ticker and a TCP socket the standard library already owns — no pooled
-//     database connection, no held row lock. AccessForEvents's two lookups
+//     database connection, no held row lock. AccessForEvents's one lookup
 //     acquire a connection from the pool and return it before the next tick
 //     even begins, the same way any other short request would. A room of two
 //     hundred participants therefore costs, between ticks, two hundred idle
 //     goroutines and sockets and nothing the game database's connection
-//     pool would ever notice; during a tick it costs the same two lookups
+//     pool would ever notice; during a tick it costs the same lookup
 //     Access always costs, spread over whatever fraction of
 //     defaultResyncInterval two hundred participants' tickers happen to
 //     land in.
@@ -444,7 +444,7 @@ func (h *EventsHandler) events(w http.ResponseWriter, r *http.Request) {
 			// against a zero value and wrongly announce a fresh start.
 			wasRunning := contest.Status == contests.StatusRunning
 			participant, contest = newParticipant, newContest
-			// The lookups are done; everything from here writes to the
+			// The lookup is done; everything from here writes to the
 			// connection, so this is where the deadline belongs (finding 2).
 			h.setWriteDeadline(rc)
 			// The published → running transition, announced the moment a

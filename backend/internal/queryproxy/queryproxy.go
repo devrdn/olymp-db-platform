@@ -806,7 +806,7 @@ func (s *Service) AccessForEvents(ctx context.Context, contestID, userID uuid.UU
 // AdmitRead applies, to the participant-facing read endpoints, the same
 // pre-lookup rate check Run applies to itself (see Run's own doc): keyed by
 // the authenticated caller's userID, against the installation's own
-// perMinuteDefault, before Access ever runs its two lookups.
+// perMinuteDefault, before Access ever runs its lookup.
 //
 // The key is bounded the same way Run's first check is bounded: one per
 // authenticated account, assigned at sign-in and never supplied by the
