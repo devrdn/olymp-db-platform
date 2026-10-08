@@ -175,9 +175,9 @@ export type PasteTarget = "editor" | "answer" | "notes";
  * the server dropped some of them. Refused with 429 `signals_too_often` (with
  * `Retry-After`) past twelve batches a minute, 400 `signals_batch_too_large`,
  * and 409 `contest_ended` / `contest_finished` / `deadline_passed` once the
- * contest has closed for this participant. Sent through the same browser request builder
- * as the workspace's writes, and with `keepalive` on the way out for the same
- * reason.
+ * contest has closed for this participant. Sent through the same browser
+ * request builder as the workspace's writes, and with `keepalive` on the way
+ * out for the same reason.
  */
 export async function sendSignals(contestId: string, events: Signal[], options: WriteOptions = {}): Promise<void> {
   await browserRequest(playPath(contestId, "signals"), {
