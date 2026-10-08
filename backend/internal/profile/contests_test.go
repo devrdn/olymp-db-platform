@@ -88,6 +88,42 @@ func TestARunningContestCarriesNoResult(t *testing.T) {
 	}
 }
 
+// The list answers "is it over" by the same rule as Open: a running contest
+// at its deadline is still being taken, and carries no result until the
+// grace has gone by too.
+func TestARunningContestCarriesNoResultUntilTheGraceHasGoneBy(t *testing.T) {
+	for name, given := range map[string]struct {
+		now      time.Time
+		wantOver bool
+	}{
+		"at exactly the deadline": {now: end, wantOver: false},
+		"at deadline+grace":       {now: end.Add(grace), wantOver: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t)
+			r.now = given.now
+			r.enrol(t, contests.StatusRunning, scored(20, 2))
+
+			rows, _, err := r.service.Contests(t.Context(), r.user)
+			if err != nil {
+				t.Fatalf("Contests() = %v", err)
+			}
+			if len(rows) != 1 {
+				t.Fatalf("Contests() returned %d rows, want 1", len(rows))
+			}
+			if rows[0].Over != given.wantOver {
+				t.Fatalf("Over = %v, want %v", rows[0].Over, given.wantOver)
+			}
+			if !given.wantOver && rows[0].Result.Points != 0 {
+				t.Errorf("result = %+v, want none while the contest is still being taken", rows[0].Result)
+			}
+			if given.wantOver && rows[0].Result.Points != 20 {
+				t.Errorf("result = %+v, want the participant's own 20 points", rows[0].Result)
+			}
+		})
+	}
+}
+
 // The freeze is not walked round: the participant's own numbers are shown,
 // and the row says the table is not open.
 func TestAFrozenContestShowsTheOwnResultAndSaysTheTableIsShut(t *testing.T) {

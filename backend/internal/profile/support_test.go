@@ -19,6 +19,11 @@ var (
 	end   = start.Add(3 * time.Hour)
 )
 
+// grace is the rig's installation grace (DEADLINE_GRACE): what a participant
+// already at work is given past their deadline, and so how long after it the
+// profile still keeps their results shut.
+const grace = 5 * time.Second
+
 // store is the profile's storage double. It holds the enrolments a test
 // arranged and counts how often each read was made, so "one aggregating
 // query" is a fact a test can assert rather than a promise in a comment.
@@ -104,6 +109,7 @@ func newRig(t *testing.T) *rig {
 		Results:      r.results,
 		Attempts:     r.attempts,
 		Now:          func() time.Time { return r.now },
+		Grace:        grace,
 	})
 	return r
 }

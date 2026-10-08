@@ -58,14 +58,14 @@ func (s *Service) Contests(ctx context.Context, userID uuid.UUID) ([]Enrolment, 
 	now := s.now()
 	for i := range rows {
 		row := &rows[i]
-		row.Over = Over(row.Contest, row.Participant, now)
+		row.Over = s.over(row.Contest, row.Participant, now)
 		if !row.Over {
 			// Nothing of a contest that is still being taken, not even the
 			// state of its table: during one, the profile is a way back in.
 			row.Result = Result{}
 			continue
 		}
-		// A contest whose state cannot be decided — a draft, which Over
+		// A contest whose state cannot be decided — a draft, which over
 		// already refuses — leaves the row's own numbers and no state, rather
 		// than failing a list for one row.
 		if decision, err := leaderboard.Decide(row.Contest, now); err == nil {

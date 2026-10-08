@@ -671,6 +671,10 @@ func New(ctx context.Context, cfg config.Config, version string) (*App, error) {
 		Participants: postgres.NewRegistrations(pool),
 		Results:      standings,
 		Attempts:     watch,
+		// The same grace as the console and the answer route
+		// (cfg.DeadlineGrace): results open at the instant the participation
+		// gate stops letting the participant act, never while it still does.
+		Grace: cfg.DeadlineGrace,
 	}), watch, history, limiter, authMiddleware, log, cfg.DefaultLocale).
 		WithExports(logExports).
 		WithExportSlots(exportSlots))

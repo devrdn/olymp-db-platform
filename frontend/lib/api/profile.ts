@@ -24,7 +24,7 @@ import { queriesSchema, type QueriesPage, type QueriesParams, type ReadOptions }
  *
  * `not_started` is here because it reaches a real reader, not for symmetry: a
  * participant disqualified from a published contest is finished with it
- * (`profile.Over`), so their row and their report carry a result — of a table
+ * (`contests.Standing.Over`), so their row and their report carry a result — of a table
  * whose contest never opened. The server says so rather than rounding the
  * state up to a running one, and the screen has a sentence of its own for it.
  */

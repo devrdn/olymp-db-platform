@@ -832,7 +832,7 @@ func TestTheReportOfARowTheTableDoesNotCarryHasNoResult(t *testing.T) {
 //
 // The combination is reachable: DisqualifyParticipant allows a published
 // contest, and a disqualified registration is over for its participant
-// (profile.Over), so the row is shown with a result — of a table
+// (contests.Standing.Over), so the row is shown with a result — of a table
 // leaderboard.Decide calls not_started. Normalising it here would have the
 // API say the table is live or frozen when it is neither; what the interface
 // needs is the true state and a sentence of its own for it.

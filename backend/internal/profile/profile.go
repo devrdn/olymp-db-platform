@@ -27,6 +27,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"time"
 
 	"github.com/google/uuid"
@@ -113,6 +114,13 @@ type Config struct {
 	Attempts     Attempts
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// Grace is the installation's deadline allowance (DEADLINE_GRACE), the
+	// same value the console and the answer route are given
+	// (internal/app/app.go passes cfg.DeadlineGrace to all three): a
+	// participant already at work may act until their deadline plus it, so
+	// their results open only then. Taken exactly as given, zero included —
+	// config.Load is where "unset" becomes five seconds.
+	Grace time.Duration
 }
 
 // Service answers a participant's reads of their own account.
@@ -123,12 +131,13 @@ type Service struct {
 	results  Results
 	attempts Attempts
 	now      func() time.Time
+	grace    time.Duration
 }
 
 // NewService returns the service.
 func NewService(cfg Config) *Service {
 	s := &Service{store: cfg.Store, contests: cfg.Contests, people: cfg.Participants,
-		results: cfg.Results, attempts: cfg.Attempts, now: cfg.Now}
+		results: cfg.Results, attempts: cfg.Attempts, now: cfg.Now, grace: cfg.Grace}
 	if s.now == nil {
 		s.now = time.Now
 	}
@@ -148,7 +157,7 @@ type Access struct {
 // The registration is looked up by the account asking, never by an
 // identifier in a request: there is no way to name somebody else's
 // registration here, because nothing carries one. The contest must then be
-// over for this participant (Over), so the profile is not a second door into
+// over for this participant (over), so the profile is not a second door into
 // a contest that is still being taken.
 //
 // The order is the registration first: a caller with no registration is
@@ -171,42 +180,28 @@ func (s *Service) Open(ctx context.Context, contestID, userID uuid.UUID) (Access
 	case err != nil:
 		return Access{}, fmt.Errorf("look up the contest: %w", err)
 	}
-	if !Over(contest, participant, s.now()) {
+	if !s.over(contest, participant, s.now()) {
 		return Access{}, ErrNotFound
 	}
 	return Access{Contest: contest, Participant: participant}, nil
 }
 
-// Over reports whether the contest has ended for this participant — the one
-// rule the whole package turns on (design §3).
+// over reports whether the contest has ended for this participant — the one
+// rule the whole package turns on (design §3) — and is the participation
+// gate's own answer (contests.Standing.Over), not a second reading of it: a
+// contest is over for them exactly when they may never act in it again, so
+// the play screen and the results are never open at once.
 //
-// Three ways it ends, any one of them enough:
-//
-//   - the registration is finished or disqualified. A disqualified
-//     participant sees their own work and the fact of it; that is not a
-//     reason to withhold what they did.
-//   - the contest itself is finished or archived.
-//   - the participant's own deadline has passed (contests.Deadline) — which
-//     covers a fixed contest whose end has been reached while its status has
-//     not caught up, and an individual participant whose hour is up while the
-//     contest runs on for everybody else.
-//
-// A draft is over for nobody: its status is neither finished nor archived and
-// it has no window anybody could have played inside. An individual
-// participant who never started has no deadline for the same reason
-// contests.Deadline reports none — and so nothing has passed.
-func Over(c contests.Contest, p contests.Participant, now time.Time) bool {
-	if c.Status == contests.StatusDraft {
-		return false
-	}
-	if p.Status == contests.RegistrationFinished || p.Status == contests.RegistrationDisqualified {
-		return true
-	}
-	if c.Ended() {
-		return true
-	}
-	deadline, ok := contests.Deadline(c, p)
-	return ok && !now.Before(deadline)
+// That is: the registration finished or disqualified; the contest itself
+// finished or archived; or, while it runs, the participant's own deadline
+// plus the installation grace gone by, or, unstarted under an individual
+// timer, the contest's window closed before they began. A draft is over for
+// nobody, and a contest that never ran — published, or in a status this build
+// does not know — is not over by its calendar however late it is: it is over
+// once it finishes. Where the caller is does not enter into it, so no address
+// is asked for.
+func (s *Service) over(c contests.Contest, p contests.Participant, now time.Time) bool {
+	return contests.StandingOf(c, p, now, s.grace, netip.Addr{}).Over()
 }
 
 // Summary is the profile's four numbers.
