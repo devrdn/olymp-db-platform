@@ -238,17 +238,6 @@ func TestDeletedAccountReleasesItsLogin(t *testing.T) {
 	})
 }
 
-// TestByLoginPrefersTheLiveAccountOverADeletedOne is the guarantee only the
-// real database can prove: the partial unique index on lower(login) (WHERE
-// status <> 'deleted') promises at most one *live* row per login, not one row
-// overall, so once a deleted account's login has been given to a new one, two
-// rows legitimately share lower(login). Before ByLogin ordered its result,
-// a bare SELECT gave no guarantee which of the two a single-row QueryRow
-// returned — sign-in could check a password against the deleted original's
-// hash, and creating the replacement could be refused as a duplicate of an
-// account that no longer holds the login at all. Run against PostgreSQL,
-// never the in-memory fake, because the point being proven is what an
-// unordered SELECT against real rows actually returns.
 func TestByLoginOfAStringNoLoginCanBeIsNotFoundAndTheTransactionGoesOn(t *testing.T) {
 	// A roster resolves every login in one transaction. PostgreSQL refuses a
 	// NUL byte or bytes that are not UTF-8 by failing the statement, which
@@ -268,6 +257,17 @@ func TestByLoginOfAStringNoLoginCanBeIsNotFoundAndTheTransactionGoesOn(t *testin
 	})
 }
 
+// TestByLoginPrefersTheLiveAccountOverADeletedOne is the guarantee only the
+// real database can prove: the partial unique index on lower(login) (WHERE
+// status <> 'deleted') promises at most one *live* row per login, not one row
+// overall, so once a deleted account's login has been given to a new one, two
+// rows legitimately share lower(login). Before ByLogin ordered its result,
+// a bare SELECT gave no guarantee which of the two a single-row QueryRow
+// returned — sign-in could check a password against the deleted original's
+// hash, and creating the replacement could be refused as a duplicate of an
+// account that no longer holds the login at all. Run against PostgreSQL,
+// never the in-memory fake, because the point being proven is what an
+// unordered SELECT against real rows actually returns.
 func TestByLoginPrefersTheLiveAccountOverADeletedOne(t *testing.T) {
 	withTx(t, func(ctx context.Context) {
 		repo := NewUsers(testPool)
