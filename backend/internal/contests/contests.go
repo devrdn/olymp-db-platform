@@ -410,11 +410,6 @@ func (c Contest) LanguageCodes() []string {
 	return codes
 }
 
-// Speaks reports whether the contest declares the language.
-func (c Contest) Speaks(code string) bool {
-	return slices.Contains(c.LanguageCodes(), code)
-}
-
 // Validate checks the fields a contest must always satisfy.
 //
 // It mirrors the table's CHECK constraints rather than trusting them: the
