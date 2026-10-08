@@ -551,6 +551,9 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 				{"the first page", contests.ParticipantFilter{Limit: 2}, []string{"ada", "ben"}},
 				{"the second page", contests.ParticipantFilter{Limit: 2, Offset: 2}, []string{"cy", "dee"}},
 				{"a short last page", contests.ParticipantFilter{Limit: 2, Offset: 4}, []string{"eve"}},
+				// Empty, and still counting everyone: a screen that went one
+				// page too far must be able to step back.
+				{"a page past the end", contests.ParticipantFilter{Limit: 2, Offset: 6}, nil},
 			} {
 				got, total := list(t, ctx, target, contest, tc.filter)
 				if !slices.Equal(got, tc.want) || total != 5 {

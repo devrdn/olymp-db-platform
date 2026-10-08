@@ -164,6 +164,26 @@ func TestTheTotalCountsEveryMatchNotJustThePage(t *testing.T) {
 	})
 }
 
+func TestAPagePastTheEndStillCountsEveryMatch(t *testing.T) {
+	// A panel that went one page too far must be able to step back; a total
+	// of zero tells it the trail is empty.
+	withTx(t, func(ctx context.Context) {
+		actor := makeUser(t, ctx, "auditor-past-end")
+		writeTrail(t, ctx, actor.ID)
+
+		filter := audit.Filter{Actor: actor.ID, Limit: 1}.Normalize()
+		filter.Offset = 5
+		found, total, err := NewAuditTrail(testPool).List(ctx, filter)
+		if err != nil {
+			t.Fatalf("List() = %v", err)
+		}
+
+		if len(found) != 0 || total != 2 {
+			t.Errorf("page of %d with total %d, want 0 of 2", len(found), total)
+		}
+	})
+}
+
 func TestTheTrailNamesWhatWasActedUpon(t *testing.T) {
 	// "Changed the reference answers · Contest" answers half a question. Which
 	// contest is the half that matters, and a bare identifier is no more

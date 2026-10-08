@@ -63,9 +63,7 @@ type ContestTarget struct {
 // database's collation. A contest is told apart from its neighbours by a
 // marker that its title begins with.
 //
-// Some answers are deliberately not pinned. A page that starts past the last
-// contest is empty on both, but the total it reports alongside is the number
-// of matches in one and zero in the other. Replacing the languages or the
+// Some answers are deliberately not pinned. Replacing the languages or the
 // titles of a contest that does not exist is refused by the in-memory store
 // with ErrNotFound and by PostgreSQL with whatever its foreign key says, or
 // not at all for an empty set. Locking a contest that does not exist is
@@ -1103,10 +1101,14 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 				t.Errorf("total of a page shorter than the limit = %d, want 5", total)
 			}
 
-			// The total of a page past the end is not stated; see the
-			// contract's own doc.
-			found, _ = list(t, ctx, target, contests.Filter{Query: marker, Limit: 2, Offset: 5})
+			// A page past the end is empty, and still says how many there
+			// are: a screen that went one page too far must be able to step
+			// back rather than conclude nothing exists.
+			found, total = list(t, ctx, target, contests.Filter{Query: marker, Limit: 2, Offset: 5})
 			wantOrder(t, found)
+			if total != 5 {
+				t.Errorf("total of a page past the end = %d, want 5", total)
+			}
 		})
 	})
 
