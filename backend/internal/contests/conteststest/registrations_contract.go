@@ -171,10 +171,17 @@ func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run fu
 				t.Error("a second contest reused the first registration")
 			}
 
-			// Last, because a database refuses it by failing the statement,
-			// and a transaction cannot be read from after that.
 			if _, err := target.Repo.Add(ctx, contest, user); !errors.Is(err, contests.ErrAlreadyEnrolled) {
 				t.Errorf("Add() twice error = %v, want ErrAlreadyEnrolled", err)
+			}
+
+			// The refusal is an answer, not a failure of the caller's
+			// transaction: a roster import treats it as one skipped row and
+			// goes on to register the next person in the same transaction.
+			next := target.NewUser("bob", "bob")
+			add(t, ctx, target, contest, next)
+			if got, err := target.Repo.ByUser(ctx, contest, user); err != nil || got.ID != first.ID {
+				t.Errorf("ByUser() after the refusal = (%v, %v), want the first registration", got.ID, err)
 			}
 		})
 	})

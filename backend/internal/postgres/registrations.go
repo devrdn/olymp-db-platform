@@ -14,7 +14,6 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -281,19 +280,27 @@ func (r *Registrations) EnrolledIn(ctx context.Context, userID uuid.UUID, contes
 // users.ErrNotFound, decided by the table's foreign keys at the insert
 // itself, so one deleted since the caller read it is answered the same way
 // as one that never existed.
+//
+// Somebody already registered is contests.ErrAlreadyEnrolled, decided by the
+// unique (contest_id, user_id) at the insert — the real guarantee against two
+// staff adding the same student at the same moment — but through ON CONFLICT
+// DO NOTHING rather than by letting the insert fail. A failed statement
+// aborts the caller's transaction, and the roster import treats this answer
+// as one skipped row and goes on to register the next person in the same
+// transaction: a unique violation there used to lose the whole import over
+// one student who was already on it.
 func (r *Registrations) Add(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, error) {
 	p, err := scanParticipant(r.querier(ctx).QueryRow(ctx, `
 		WITH inserted AS (
-			INSERT INTO registrations (contest_id, user_id) VALUES ($1, $2) RETURNING *
+			INSERT INTO registrations (contest_id, user_id) VALUES ($1, $2)
+			ON CONFLICT (contest_id, user_id) DO NOTHING
+			RETURNING *
 		)
 		SELECT `+participantColumns+`
 		FROM inserted r JOIN users u ON u.id = r.user_id`, contestID, userID))
 	if err != nil {
-		// The unique index is the real guarantee against two staff adding the
-		// same student at the same moment, and the caller has to be able to
-		// act on it rather than be handed a constraint name.
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
+		// No row inserted and no error: the conflict above.
+		if errors.Is(err, contests.ErrParticipantNotFound) {
 			return contests.Participant{}, contests.ErrAlreadyEnrolled
 		}
 		return contests.Participant{}, missingParent(err, map[string]error{
