@@ -22,9 +22,10 @@ whatever — is writing the change.
 - **Tests with the change**, on the path the deployment uses: a repository
   test runs against a real database, a role-dependent behaviour connects as
   that role. A bug fix starts with a test that fails.
-- **An error the API returns is a declared code**: a sentinel, its mapping in
-  the handler, the code in `docs/api/error-codes.json` and a message in every
-  locale.
+- **An error the API returns is a declared code**: a sentinel, its answer —
+  a row in `internal/api/errortable.go` when several handlers answer the
+  package, the handler's own `fail` when one does (CLAUDE.md, security rule
+  1) — the code in `docs/api/error-codes.json` and a message in every locale.
 
 ## Checks to run
 
