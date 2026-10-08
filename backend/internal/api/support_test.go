@@ -3,8 +3,10 @@ package api_test
 import (
 	"bytes"
 	"context"
+	"net/http/httptest"
 	"strings"
 	"sync"
+	"testing"
 
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
@@ -56,4 +58,28 @@ func (b *logBuffer) loggedError(message string) bool {
 		}
 	}
 	return false
+}
+
+// errorCode reads the machine code out of an error response.
+func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	body := decode(t, rec)
+	detail, ok := body["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("response carries no error object: %s", rec.Body.String())
+	}
+	code, _ := detail["code"].(string)
+	return code
+}
+
+// errorMessage reads the text out of an error response.
+func errorMessage(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	body := decode(t, rec)
+	detail, ok := body["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("response carries no error object: %s", rec.Body.String())
+	}
+	message, _ := detail["message"].(string)
+	return message
 }
