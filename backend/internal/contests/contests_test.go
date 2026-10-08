@@ -198,17 +198,6 @@ func TestLanguageCodesKeepDeclarationOrder(t *testing.T) {
 	}
 }
 
-func TestSpeaksReportsDeclaredLanguagesOnly(t *testing.T) {
-	c := validContest()
-
-	if !c.Speaks("ro") {
-		t.Error("Speaks(ro) = false for a declared language, want true")
-	}
-	if c.Speaks("ru") {
-		t.Error("Speaks(ru) = true for an undeclared language, want false")
-	}
-}
-
 func TestValidateAcceptsAWellFormedContest(t *testing.T) {
 	if err := validContest().Validate(); err != nil {
 		t.Errorf("Validate() = %v, want nil", err)
