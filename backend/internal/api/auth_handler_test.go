@@ -374,6 +374,32 @@ func TestPasswordChangeRejectsAWrongCurrentPassword(t *testing.T) {
 	}
 }
 
+// Changing your own password names why the new one was refused: a code for
+// the policy and another for the unchanged password (usersErrors).
+func TestPasswordChangeNamesWhyTheNewPasswordWasRefused(t *testing.T) {
+	f := newHandlerFixture(t)
+	cookie := f.login(t)
+
+	cases := []struct {
+		name, body, code string
+	}{
+		{"too weak", `{"old_password":"` + testPassword + `","new_password":"y"}`, "weak_password"},
+		{"unchanged", `{"old_password":"` + testPassword + `","new_password":"` + testPassword + `"}`, "same_password"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rec := f.post("/auth/password", c.body, cookie)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+			}
+			if code := errorCode(t, rec); code != c.code {
+				t.Errorf("code = %q, want %s", code, c.code)
+			}
+		})
+	}
+}
+
 func TestPasswordChangeRequiresASession(t *testing.T) {
 	f := newHandlerFixture(t)
 

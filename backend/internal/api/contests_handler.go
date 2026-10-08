@@ -891,12 +891,28 @@ func (h *ContestsHandler) memberID(w http.ResponseWriter, r *http.Request) (uuid
 	return id, true
 }
 
+// contestUserErrors is usersErrors with the one answer the contest routes give
+// differently: a missing account is user_not_found here — a code of its own,
+// on routes whose URL names a contest as well — where the account screens say
+// the generic not_found. Clients read both codes, so neither can change.
+var contestUserErrors = usersErrors.with(
+	errorRow{err: users.ErrNotFound, status: http.StatusNotFound, code: codeUserNotFound,
+		message: "User not found"},
+)
+
 // fail maps a domain error onto a response.
 //
 // The mapping is the API's contract: 404 for things that are not there, 400
 // for a request that could never be right, 409 for one that is right but not
 // now, 422 for a publication that is simply not ready yet.
 func (h *ContestsHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
+	// Appointing an account to the staff meets the account's own refusals.
+	// Checked first: no contests error wraps a users one (GrantManager and
+	// Enroll return users.Err… bare), so nothing the switch below recognises
+	// can also match here.
+	if contestUserErrors.answer(w, r, h.log, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, contests.ErrNotFound):
 		httpx.Error(w, r, http.StatusNotFound, codeNotFound, "Contest not found")
@@ -908,15 +924,6 @@ func (h *ContestsHandler) fail(w http.ResponseWriter, r *http.Request, err error
 		httpx.Error(w, r, http.StatusNotFound, codeParticipantNotFound, "Participant not found")
 	case errors.Is(err, contests.ErrManagerNotFound):
 		httpx.Error(w, r, http.StatusNotFound, codeManagerNotFound, "This user does not staff the contest")
-	case errors.Is(err, users.ErrNotFound):
-		httpx.Error(w, r, http.StatusNotFound, codeUserNotFound, "User not found")
-	case errors.Is(err, users.ErrAccountDeleted):
-		httpx.Error(w, r, http.StatusConflict, codeAccountDeleted, "This account is deleted")
-	case errors.Is(err, users.ErrAccountBlocked):
-		// The same wire code auth's own sign-in refusal answers with — the
-		// client's dictionary already carries a message for it — reused
-		// rather than declared a second time under a name of its own.
-		httpx.Error(w, r, http.StatusConflict, codeAccountBlocked, "This account is blocked")
 
 	case errors.Is(err, contests.ErrPackageTooLarge):
 		// 422 rather than 500: the request was understood and the contest is

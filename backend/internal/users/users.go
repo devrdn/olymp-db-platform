@@ -92,6 +92,25 @@ var (
 	ErrAccountBlocked = errors.New("this account is blocked")
 )
 
+// Errors lists every sentinel this package declares: all of them are refusals
+// a caller meets, from the account that is not there to a selection past its
+// bound. internal/api answers each from a table of its own, and a test there
+// walks this list so that none can reach a client as "internal error"; a test
+// here reads the package's source so that none can be declared and left off
+// it.
+//
+// Not everything the service returns is here. Errors from the password
+// hasher (password.ErrBusy) and the repository's own failures pass through
+// it and belong to those packages.
+func Errors() []error {
+	return []error{
+		ErrNotFound, ErrInvalidAccount, ErrLoginTaken, ErrEmailTaken,
+		ErrWeakPassword, ErrSamePassword, ErrWrongPassword,
+		ErrLastAdministrator, ErrReasonRequired, ErrAccountDeleted, ErrAccountBlocked,
+		ErrCannotActOnSelf, ErrRosterTooLarge, ErrTooManyAccounts,
+	}
+}
+
 // Statuses is every state an account can be in, for validating a filter
 // against something other than a comment. It mirrors the CHECK constraint on
 // the column, which remains the real guarantee.

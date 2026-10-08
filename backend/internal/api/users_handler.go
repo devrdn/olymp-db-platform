@@ -549,36 +549,10 @@ func (h *UsersHandler) accountID(w http.ResponseWriter, r *http.Request) (uuid.U
 // fail maps a service error onto a response. Anything unrecognised becomes a
 // 500 with the detail kept in the log, never in the body.
 func (h *UsersHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
+	if usersErrors.answer(w, r, h.log, err) {
+		return
+	}
 	switch {
-	case errors.Is(err, users.ErrNotFound):
-		httpx.Error(w, r, http.StatusNotFound, codeNotFound, "User not found")
-	case errors.Is(err, users.ErrLoginTaken):
-		httpx.Error(w, r, http.StatusConflict, codeLoginTaken, "This login is already in use")
-	case errors.Is(err, users.ErrEmailTaken):
-		httpx.Error(w, r, http.StatusConflict, codeEmailTaken, "This email is already in use")
-	case errors.Is(err, users.ErrLastAdministrator):
-		// 409, not 403: whoever asked is entitled to do this, and it is the
-		// state of the installation that refuses. Telling them they lack
-		// permission would send them looking for a right they already hold.
-		httpx.Error(w, r, http.StatusConflict, codeLastAdministrator, err.Error())
-	case errors.Is(err, users.ErrCannotActOnSelf):
-		httpx.Error(w, r, http.StatusBadRequest, codeCannotActOnSelf,
-			"This operation cannot be performed on your own account")
-	case errors.Is(err, users.ErrReasonRequired):
-		httpx.Error(w, r, http.StatusBadRequest, codeReasonRequired,
-			"A reason is required")
-	case errors.Is(err, users.ErrAccountDeleted):
-		// 409, not 403, the same choice as ErrLastAdministrator above and for
-		// the same reason: the caller holds the right to do this, and it is
-		// the account's own state — deleted — that refuses it, not a
-		// permission they lack.
-		httpx.Error(w, r, http.StatusConflict, codeAccountDeleted, "This account is deleted")
-	case errors.Is(err, users.ErrTooManyAccounts):
-		httpx.Error(w, r, http.StatusBadRequest, codeTooManyAccounts, err.Error())
-	case errors.Is(err, users.ErrRosterTooLarge), errors.Is(err, users.ErrInvalidAccount):
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
-	case errors.Is(err, users.ErrWeakPassword), errors.Is(err, users.ErrSamePassword):
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidPassword, err.Error())
 	case errors.Is(err, password.ErrBusy):
 		// Issuing a password waits far longer for a hashing slot than a
 		// sign-in does, and still ran out — or the administrator's request
