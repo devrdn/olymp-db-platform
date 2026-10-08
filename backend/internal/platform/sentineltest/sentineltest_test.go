@@ -20,30 +20,50 @@ func writePackage(t *testing.T, files map[string]string) string {
 	return dir
 }
 
-// A plain sentinel is read with its message; one declared any other way is
-// named rather than skipped, so a completeness check cannot pass without
-// looking at it. Test files are not the package's API and are not read.
-func TestScanReadsPlainSentinelsAndNamesTheRest(t *testing.T) {
+const header = "package odd\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\nconst Max = 3\n\n"
+
+// Every exported Err… counts, however it is built — a message wrapped with
+// fmt.Errorf around a bound is as much a sentinel as errors.New. What Errors()
+// returns is read from its own body, so the two are compared by name.
+// Unexported values and test files are not the package's API.
+func TestScanReadsEverySentinelAndWhatErrorsReturns(t *testing.T) {
 	dir := writePackage(t, map[string]string{
-		"odd.go": "package odd\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\n" +
+		"odd.go": header +
 			"var ErrPlain = errors.New(\"plain\")\n" +
-			"var errHidden = errors.New(\"unexported\")\n" +
-			"var ErrWrapped = fmt.Errorf(\"%w: more\", ErrPlain)\n" +
-			"var ErrA, ErrB = pair()\n\n" +
-			"func pair() (error, error) { return ErrPlain, errHidden }\n",
+			"var ErrBound = fmt.Errorf(\"at most %d\", Max)\n" +
+			"var errHidden = errors.New(\"unexported\")\n\n" +
+			"func Errors() []error { return []error{ErrPlain, ErrBound} }\n",
 		"odd_test.go": "package odd\n\nimport \"errors\"\n\nvar ErrOnlyInTests = errors.New(\"test\")\n",
 	})
 
-	declared, unclassified, err := sentineltest.Scan(dir)
+	declared, listed, err := sentineltest.Scan(dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
-	if len(declared) != 1 || declared["ErrPlain"] != "plain" {
-		t.Errorf("declared = %v, want only ErrPlain", declared)
+	if !slices.Equal(declared, []string{"ErrBound", "ErrPlain"}) {
+		t.Errorf("declared = %v, want ErrBound and ErrPlain", declared)
 	}
-	slices.Sort(unclassified)
-	if !slices.Equal(unclassified, []string{"ErrA", "ErrB", "ErrWrapped"}) {
-		t.Errorf("unclassified = %v, want ErrA, ErrB and ErrWrapped", unclassified)
+	if !slices.Equal(listed, []string{"ErrBound", "ErrPlain"}) {
+		t.Errorf("listed = %v, want ErrBound and ErrPlain", listed)
+	}
+}
+
+// Errors() has to be a plain list of the package's own sentinels; anything
+// else cannot be read, and is said so rather than taken as empty.
+func TestScanRefusesAnErrorsItCannotRead(t *testing.T) {
+	for name, body := range map[string]string{
+		"missing":  "",
+		"computed": "func Errors() []error { return append([]error{}, ErrPlain) }\n",
+		"foreign":  "func Errors() []error { return []error{other.ErrX} }\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := writePackage(t, map[string]string{
+				"odd.go": header + "var ErrPlain = errors.New(\"plain\")\n\n" + body,
+			})
+			if _, _, err := sentineltest.Scan(dir); err == nil {
+				t.Fatal("Scan accepted an Errors() it cannot read")
+			}
+		})
 	}
 }
 
