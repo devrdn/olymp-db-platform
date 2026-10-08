@@ -54,3 +54,10 @@ func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 		})
 	})
 }
+
+func TestQuestionsHonoursTheRepositoryContract(t *testing.T) {
+	QuestionRepositoryContract(t, func(t *testing.T, run func(context.Context, QuestionTarget)) {
+		repo := NewQuestions()
+		run(context.Background(), QuestionTarget{Repo: repo, Visible: repo, NewContest: uuid.New})
+	})
+}

@@ -270,15 +270,43 @@ func (r *Questions) Put(q contests.Question) contests.Question {
 	if q.ID == uuid.Nil {
 		q.ID = uuid.New()
 	}
-	r.byID[q.ID] = q
+	r.byID[q.ID] = cloneQuestion(q)
 	return q
+}
+
+// cloneQuestion copies everything a caller could write to through a
+// question. The real repository hands out rows it has just read and keeps
+// nothing of what it is given, so a caller editing a question it holds has
+// not changed the stored one until it saves; sharing maps and slices with
+// the store would make a test see an edit that production never would.
+func cloneQuestion(q contests.Question) contests.Question {
+	if q.MaxAttempts != nil {
+		attempts := *q.MaxAttempts
+		q.MaxAttempts = &attempts
+	}
+	q.ChoiceIDs = slices.Clone(q.ChoiceIDs)
+	q.Texts = cloneTexts(q.Texts)
+	q.Answers = slices.Clone(q.Answers)
+	return q
+}
+
+func cloneTexts(texts map[string]contests.QuestionText) map[string]contests.QuestionText {
+	if texts == nil {
+		return nil
+	}
+	out := make(map[string]contests.QuestionText, len(texts))
+	for lang, text := range texts {
+		text.Choices = maps(text.Choices)
+		out[lang] = text
+	}
+	return out
 }
 
 func (r *Questions) List(_ context.Context, contestID uuid.UUID) ([]contests.Question, error) {
 	var found []contests.Question
 	for _, q := range r.byID {
 		if q.ContestID == contestID {
-			found = append(found, q)
+			found = append(found, cloneQuestion(q))
 		}
 	}
 	slices.SortFunc(found, func(a, b contests.Question) int { return a.Ord - b.Ord })
@@ -317,14 +345,19 @@ func (r *Questions) ByID(_ context.Context, questionID uuid.UUID) (contests.Ques
 	if !ok {
 		return contests.Question{}, contests.ErrQuestionNotFound
 	}
-	return q, nil
+	return cloneQuestion(q), nil
 }
 
+// Create stores the question's own fields only: its position and identifier
+// are assigned here, and its text and answers have operations of their own,
+// so whatever the caller's value carries of either is dropped, as the real
+// insert does not write it.
 func (r *Questions) Create(ctx context.Context, q contests.Question) (contests.Question, error) {
 	existing, _ := r.List(ctx, q.ContestID)
 	q.ID = uuid.New()
 	q.Ord = len(existing) + 1
-	return r.Put(q), nil
+	q.Texts, q.Answers = nil, nil
+	return cloneQuestion(r.Put(q)), nil
 }
 
 func (r *Questions) Update(_ context.Context, q contests.Question) error {
@@ -332,10 +365,10 @@ func (r *Questions) Update(_ context.Context, q contests.Question) error {
 	if !ok {
 		return contests.ErrQuestionNotFound
 	}
-	// Position, text and answers have their own operations, exactly as in the
-	// real repository.
-	q.Ord, q.Texts, q.Answers = stored.Ord, stored.Texts, stored.Answers
-	r.byID[q.ID] = q
+	// Position, contest, text and answers are not Update's to change,
+	// exactly as in the real repository.
+	q.ContestID, q.Ord, q.Texts, q.Answers = stored.ContestID, stored.Ord, stored.Texts, stored.Answers
+	r.byID[q.ID] = cloneQuestion(q)
 	return nil
 }
 
@@ -372,7 +405,7 @@ func (r *Questions) ReplaceTexts(_ context.Context, questionID uuid.UUID, texts 
 	if !ok {
 		return contests.ErrQuestionNotFound
 	}
-	q.Texts = texts
+	q.Texts = cloneTexts(texts)
 	r.byID[questionID] = q
 	return nil
 }
@@ -382,7 +415,17 @@ func (r *Questions) ReplaceAnswers(_ context.Context, questionID uuid.UUID, answ
 	if !ok {
 		return contests.ErrQuestionNotFound
 	}
-	q.Answers = slices.Clone(answers)
+	// Each answer gets an identity of its own and belongs to this question,
+	// and they are kept in the order of their values. The real query orders
+	// by the database's collation; byte order agrees with it for the
+	// lower-case ASCII values the contract uses, not in general.
+	stored := make([]contests.Answer, len(answers))
+	for i, a := range answers {
+		a.ID, a.QuestionID = uuid.New(), questionID
+		stored[i] = a
+	}
+	slices.SortStableFunc(stored, func(a, b contests.Answer) int { return strings.Compare(a.Value, b.Value) })
+	q.Answers = stored
 	r.byID[questionID] = q
 	return nil
 }
