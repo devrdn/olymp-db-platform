@@ -1101,6 +1101,11 @@ func TestAnswerSubmitsTheURLsQuestionAndTheBodysValue(t *testing.T) {
 	if got.Participant.ID != participantID || got.Contest.ID != contestID {
 		t.Fatalf("command = %+v, want the participant and contest Access resolved", got)
 	}
+	// httptest.NewRequest's own RemoteAddr, 192.0.2.1:1234: Submit asks the
+	// participation gate itself, from the caller's own address.
+	if want := netip.MustParseAddr("192.0.2.1"); got.Address != want {
+		t.Fatalf("Address = %v, want %v (the caller's)", got.Address, want)
+	}
 }
 
 // The response carries exactly what SubmitOutcome says — never more, never
@@ -1152,6 +1157,11 @@ func TestAnswerRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 			"No such question in this contest"},
 		{"not a participant", contests.ErrNotAParticipant, http.StatusForbidden, "not_a_participant", ""},
 		{"contest not running", contests.ErrContestNotRunning, http.StatusConflict, "contest_not_running", ""},
+		// Submit asks the participation gate itself, so every refusal of the
+		// gate can come back from it, not only from Access.
+		{"deadline passed", contests.ErrDeadlinePassed, http.StatusConflict, "deadline_passed", ""},
+		{"address not allowed", contests.ErrAddressNotAllowed, http.StatusForbidden, "address_not_allowed", ""},
+		{"participant finished", contests.ErrParticipantFinished, http.StatusConflict, "contest_finished", ""},
 		// An organiser removed the caller between admission and the answer:
 		// their registration is gone, which a participant hears as it is told
 		// everywhere else — not taking part — and never as the organiser's

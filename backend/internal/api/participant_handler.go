@@ -34,16 +34,16 @@ import (
 // anything about another participant, or anything about a contest the caller
 // is not enrolled in — including whether it exists.
 //
-// Access is decided exactly once, by queryproxy.Service.Access, which is the
+// Access is decided by one rule, asked through queryproxy.Service.Access: the
 // same admission the SQL console requires before it will take a query
 // (registered and not disqualified or finished, the contest running, the
 // address allowed). This handler asks it and nothing else: no permission
 // check, because taking part in a contest is a registration, not a
 // permission an administrator grants — the façade looks the registration up,
-// the same way ConsoleHandler does. answer builds on the very same admission
-// rather than a second one of its own (contests.SubmitCommand's own doc
-// explains why contests.Service.Submit could not ask Access itself, and why
-// that is this handler's job instead).
+// the same way ConsoleHandler does. answer builds on the very same admission,
+// and hands Submit the caller's address so that Submit, the method that
+// writes, asks the same participation gate again for itself
+// (contests.SubmitCommand's own doc says why both ask).
 
 // ParticipantAccess is the slice of queryproxy.Service this handler needs: is
 // the caller allowed into this contest right now, and who and what did that
@@ -573,6 +573,7 @@ func (h *ParticipantHandler) answer(w http.ResponseWriter, r *http.Request) {
 		Contest:     contest,
 		QuestionID:  questionID,
 		Value:       req.Value,
+		Address:     clientAddress(r),
 	})
 	if err != nil {
 		h.fail(w, r, err)

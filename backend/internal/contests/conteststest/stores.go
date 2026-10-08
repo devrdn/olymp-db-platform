@@ -1060,6 +1060,10 @@ type Submissions struct {
 	// ErrAttemptConflict instead of writing anything, simulating a
 	// submission that lost the attempt-number race and must be retried.
 	ConflictsRemaining int
+	// Requests is every request Insert was handed, in order, whatever it
+	// answered: what a test reads to prove the deadline Submit wrote with, or
+	// that a refused answer never reached the write at all.
+	Requests []contests.SubmissionRequest
 }
 
 type submissionKey struct {
@@ -1082,6 +1086,7 @@ func (r *Submissions) now() time.Time {
 }
 
 func (r *Submissions) Insert(_ context.Context, req contests.SubmissionRequest) (contests.Submission, error) {
+	r.Requests = append(r.Requests, req)
 	if r.ConflictsRemaining > 0 {
 		r.ConflictsRemaining--
 		return contests.Submission{}, contests.ErrAttemptConflict

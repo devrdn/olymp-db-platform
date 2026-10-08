@@ -50,6 +50,10 @@ type Fixture struct {
 	// a test about the trigger itself asserts on f.PoolTrigger.Triggered, and
 	// every other test simply never looks.
 	PoolTrigger *PoolTrigger
+
+	// config is what Service was assembled from, kept so WithGrace can
+	// assemble it again over the same stores.
+	config contests.ServiceConfig
 }
 
 // NewFixture assembles a service over empty stores.
@@ -114,7 +118,7 @@ func NewFixture() *Fixture {
 	// reads who staffs and who is registered, which are these two stores.
 	f.Contests.Rosters(f.Managers, f.Registrations)
 
-	f.Service = contests.NewService(contests.ServiceConfig{
+	f.config = contests.ServiceConfig{
 		Contests:      f.Contests,
 		Stories:       f.Stories,
 		Questions:     f.Questions,
@@ -143,7 +147,17 @@ func NewFixture() *Fixture {
 		// See FixtureDefaultGraceMin's own doc.
 		DefaultGraceMin: FixtureDefaultGraceMin,
 		PoolTrigger:     f.PoolTrigger,
-	})
+	}
+	f.Service = contests.NewService(f.config)
+	return f
+}
+
+// WithGrace reassembles Service over the same stores with grace as the
+// deadline allowance (ServiceConfig.Grace), for a test about what the grace
+// moves. Every other fixture has none: an instant past a deadline is past it.
+func (f *Fixture) WithGrace(grace time.Duration) *Fixture {
+	f.config.Grace = grace
+	f.Service = contests.NewService(f.config)
 	return f
 }
 

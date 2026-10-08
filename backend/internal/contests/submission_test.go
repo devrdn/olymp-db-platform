@@ -2,6 +2,7 @@ package contests_test
 
 import (
 	"errors"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -913,5 +914,249 @@ func TestSubmitHonoursAnExplicitlyConfiguredZeroGrace(t *testing.T) {
 	})
 	if !errors.Is(err, contests.ErrDeadlinePassed) {
 		t.Fatalf("error = %v, want ErrDeadlinePassed — a configured zero grace must not become five seconds", err)
+	}
+}
+
+// Submit asks the participation gate (StandingOf) itself, before it reads the
+// question and before it starts anybody's clock: the answer route admits
+// first too, but Submit is the method that writes, and any other caller of it
+// must meet the same rule. A refused answer starts nothing and writes nothing.
+func TestSubmitRefusesWhatTheGateRefusesBeforeStartingOrWriting(t *testing.T) {
+	duration := 30
+	for name, given := range map[string]struct {
+		contest     func(now time.Time) contests.Contest
+		participant contests.Participant
+		address     netip.Addr
+		want        error
+	}{
+		"disqualified": {
+			contest: func(now time.Time) contests.Contest {
+				ends := now.Add(time.Hour)
+				return contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+			},
+			participant: contests.Participant{Status: contests.RegistrationDisqualified},
+			want:        contests.ErrNotAParticipant,
+		},
+		"finished": {
+			contest: func(now time.Time) contests.Contest {
+				ends := now.Add(time.Hour)
+				return contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+			},
+			participant: contests.Participant{Status: contests.RegistrationFinished},
+			want:        contests.ErrParticipantFinished,
+		},
+		"contest published, not started": {
+			contest: func(now time.Time) contests.Contest {
+				starts, ends := now.Add(time.Hour), now.Add(2*time.Hour)
+				return contests.Contest{Status: contests.StatusPublished, Timing: contests.TimingFixed, StartsAt: &starts, EndsAt: &ends}
+			},
+			participant: contests.Participant{Status: contests.RegistrationRegistered},
+			want:        contests.ErrContestNotRunning,
+		},
+		// The address is the caller's own, handed in by whoever called: an
+		// individual participant on the wrong network starts no clock.
+		"address the contest does not allow": {
+			contest: func(now time.Time) contests.Contest {
+				starts, ends := now.Add(-time.Hour), now.Add(time.Hour)
+				return contests.Contest{
+					Status: contests.StatusRunning, Timing: contests.TimingIndividual, DurationMin: &duration,
+					StartsAt: &starts, EndsAt: &ends, AllowedCIDRs: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+				}
+			},
+			participant: contests.Participant{Status: contests.RegistrationRegistered},
+			address:     netip.MustParseAddr("192.0.2.1"),
+			want:        contests.ErrAddressNotAllowed,
+		},
+		// Starting has no grace: at exactly ends_at it is too late to begin,
+		// and the clock is not started only to be refused at the write.
+		"unstarted at exactly ends_at": {
+			contest: func(now time.Time) contests.Contest {
+				starts, ends := now.Add(-time.Hour), now
+				return contests.Contest{
+					Status: contests.StatusRunning, Timing: contests.TimingIndividual, DurationMin: &duration,
+					StartsAt: &starts, EndsAt: &ends,
+				}
+			},
+			participant: contests.Participant{Status: contests.RegistrationRegistered},
+			want:        contests.ErrDeadlinePassed,
+		},
+		// No deadline can be computed from a fixed contest with no end: that
+		// is broken data, and the gate refuses it as not running.
+		"broken timing data": {
+			contest: func(time.Time) contests.Contest {
+				return contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed}
+			},
+			participant: contests.Participant{Status: contests.RegistrationActive},
+			want:        contests.ErrContestNotRunning,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := conteststest.NewFixture().WithGrace(5 * time.Second)
+			c := f.Contests.Put(given.contest(f.Now))
+			given.participant.ContestID = c.ID
+			p := f.Registrations.Put(given.participant)
+			q := f.Questions.Put(contests.Question{
+				ContestID: c.ID, Kind: contests.KindText, Points: 10, IsVisible: true,
+				Answers: []contests.Answer{{MatchKind: contests.MatchExact, Value: "yes"}},
+			})
+
+			_, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+				Participant: p, Contest: c, QuestionID: q.ID, Value: "yes", Address: given.address,
+			})
+			if !errors.Is(err, given.want) {
+				t.Fatalf("error = %v, want %v", err, given.want)
+			}
+			stored, err := f.Registrations.ByUser(t.Context(), c.ID, p.UserID)
+			if err != nil {
+				t.Fatalf("ByUser() = %v", err)
+			}
+			if stored.StartedAt != p.StartedAt || stored.Status != p.Status {
+				t.Fatalf("registration = %+v, want it untouched — a refused answer starts no clock", stored)
+			}
+			if len(f.Submissions.Requests) != 0 {
+				t.Fatalf("Insert was handed %d requests, want none", len(f.Submissions.Requests))
+			}
+		})
+	}
+}
+
+// The gate comes before the question is looked up: a participant who may not
+// act is told so, and learns nothing about which questions exist.
+func TestSubmitAsksTheGateBeforeLookingTheQuestionUp(t *testing.T) {
+	f := conteststest.NewFixture()
+	c := runningFixedContest(f)
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationDisqualified})
+
+	_, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: uuid.New(), Value: "anything",
+	})
+	if !errors.Is(err, contests.ErrNotAParticipant) {
+		t.Fatalf("error = %v, want ErrNotAParticipant, not a verdict on the question", err)
+	}
+}
+
+// The deadline Insert checks at the moment of the write is the participant's
+// own deadline plus the grace — the instant the gate refuses at too, so the
+// gate never admits what the write will refuse, nor refuses what it would
+// take. For a participant already at work, and for one this very answer
+// started.
+func TestSubmitHandsInsertTheDeadlinePlusGrace(t *testing.T) {
+	const grace = 5 * time.Second
+	duration := 30
+	for name, given := range map[string]struct {
+		contest      func(now time.Time) contests.Contest
+		participant  func(now time.Time) contests.Participant
+		wantDeadline func(now time.Time) time.Time
+	}{
+		"fixed, already working": {
+			contest: func(now time.Time) contests.Contest {
+				starts, ends := now.Add(-time.Hour), now.Add(time.Hour)
+				return contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, StartsAt: &starts, EndsAt: &ends}
+			},
+			participant: func(time.Time) contests.Participant {
+				return contests.Participant{Status: contests.RegistrationActive}
+			},
+			wantDeadline: func(now time.Time) time.Time { return now.Add(time.Hour + grace) },
+		},
+		"individual, started ten minutes ago": {
+			contest: func(now time.Time) contests.Contest {
+				starts, ends := now.Add(-time.Hour), now.Add(time.Hour)
+				return contests.Contest{
+					Status: contests.StatusRunning, Timing: contests.TimingIndividual, DurationMin: &duration,
+					StartsAt: &starts, EndsAt: &ends,
+				}
+			},
+			participant: func(now time.Time) contests.Participant {
+				started := now.Add(-10 * time.Minute)
+				return contests.Participant{Status: contests.RegistrationActive, StartedAt: &started}
+			},
+			wantDeadline: func(now time.Time) time.Time { return now.Add(20*time.Minute + grace) },
+		},
+		"individual, started by this answer": {
+			contest: func(now time.Time) contests.Contest {
+				starts, ends := now.Add(-time.Hour), now.Add(time.Hour)
+				return contests.Contest{
+					Status: contests.StatusRunning, Timing: contests.TimingIndividual, DurationMin: &duration,
+					StartsAt: &starts, EndsAt: &ends,
+				}
+			},
+			participant: func(time.Time) contests.Participant {
+				return contests.Participant{Status: contests.RegistrationRegistered}
+			},
+			wantDeadline: func(now time.Time) time.Time { return now.Add(30*time.Minute + grace) },
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := conteststest.NewFixture().WithGrace(grace)
+			c := f.Contests.Put(given.contest(f.Now))
+			participant := given.participant(f.Now)
+			participant.ContestID = c.ID
+			p := f.Registrations.Put(participant)
+			q := f.Questions.Put(contests.Question{ContestID: c.ID, Kind: contests.KindText, IsVisible: true})
+
+			if _, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+				Participant: p, Contest: c, QuestionID: q.ID, Value: "anything",
+			}); err != nil {
+				t.Fatalf("Submit() = %v", err)
+			}
+			if len(f.Submissions.Requests) != 1 {
+				t.Fatalf("Insert was handed %d requests, want 1", len(f.Submissions.Requests))
+			}
+			if got, want := f.Submissions.Requests[0].Deadline, given.wantDeadline(f.Now); !got.Equal(want) {
+				t.Fatalf("Insert's deadline = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// The gate is asked again once Submit has started the clock, with the
+// participant Start handed back: a start that leaves no deadline to compute
+// (an individual contest with no duration) is refused before the write, as
+// broken data, not written against no deadline.
+func TestSubmitAsksTheGateAgainAfterStartingTheClock(t *testing.T) {
+	f := conteststest.NewFixture()
+	starts, ends := f.Now.Add(-time.Hour), f.Now.Add(time.Hour)
+	c := f.Contests.Put(contests.Contest{
+		Status: contests.StatusRunning, Timing: contests.TimingIndividual, StartsAt: &starts, EndsAt: &ends,
+	})
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationRegistered})
+	q := f.Questions.Put(contests.Question{ContestID: c.ID, Kind: contests.KindText, IsVisible: true})
+
+	_, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q.ID, Value: "anything",
+	})
+	if !errors.Is(err, contests.ErrContestNotRunning) {
+		t.Fatalf("error = %v, want ErrContestNotRunning", err)
+	}
+	if len(f.Submissions.Requests) != 0 {
+		t.Fatalf("Insert was handed %d requests, want none", len(f.Submissions.Requests))
+	}
+}
+
+// A Start that reports success and hands back a clock still pending broke its
+// own contract: taken at its word, the gate would let the participant start
+// forever with no deadline running. Submit fails closed instead, as the gate
+// does on any registration no deadline can be computed for, and writes
+// nothing. (An active registration with no start time is the state that makes
+// the store's Start change nothing, as the real statement does.)
+func TestSubmitFailsClosedWhenStartLeavesTheClockPending(t *testing.T) {
+	f := conteststest.NewFixture()
+	starts, ends := f.Now.Add(-time.Hour), f.Now.Add(time.Hour)
+	duration := 30
+	c := f.Contests.Put(contests.Contest{
+		Status: contests.StatusRunning, Timing: contests.TimingIndividual, DurationMin: &duration,
+		StartsAt: &starts, EndsAt: &ends,
+	})
+	p := f.Registrations.Put(contests.Participant{ContestID: c.ID, Status: contests.RegistrationActive})
+	q := f.Questions.Put(contests.Question{ContestID: c.ID, Kind: contests.KindText, IsVisible: true})
+
+	_, err := f.Service.Submit(t.Context(), contests.SubmitCommand{
+		Participant: p, Contest: c, QuestionID: q.ID, Value: "anything",
+	})
+	if !errors.Is(err, contests.ErrContestNotRunning) {
+		t.Fatalf("error = %v, want ErrContestNotRunning: the clock never started", err)
+	}
+	if len(f.Submissions.Requests) != 0 {
+		t.Fatalf("Insert was handed %d requests, want none", len(f.Submissions.Requests))
 	}
 }
