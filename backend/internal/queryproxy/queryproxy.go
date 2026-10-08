@@ -97,11 +97,15 @@ var (
 	ErrDatabaseDeclined = errors.New("the database refused the query")
 )
 
-// Errors lists every error this package hands to a caller: the refusals a
-// participant meets and ErrUnavailable, which is ours. internal/api answers
+// Errors lists every sentinel this package declares: the refusals a
+// participant meets, and ErrUnavailable, which is ours. internal/api answers
 // each from a table of its own, and a test there walks this list so that none
 // can reach a client as "internal error"; a test here reads the package's
 // source so that none can be declared and left off it.
+//
+// Not everything Run returns is here. A *sqlpolicy.Refusal it builds itself,
+// and the Query Runner's and its transport's errors it passes through, belong
+// to those packages and are answered from their own lists.
 func Errors() []error {
 	return []error{
 		ErrNotAParticipant, ErrContestNotRunning, ErrFinished, ErrNothingLeftToAnswer,

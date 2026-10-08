@@ -12,6 +12,7 @@ import (
 
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
+	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 )
 
 // answered is what one error turned into: the response a client sees, and
@@ -106,6 +107,47 @@ func TestEveryQueryproxyErrorHasItsAnswer(t *testing.T) {
 			}
 			if !declared[got.code] {
 				t.Errorf("code %q is not in the catalog, so it is not in error-codes.json", got.code)
+			}
+		})
+	}
+}
+
+// Every outcome the Query Runner reports, and a journal that could not be
+// opened, has a row, with the answer the console gave before the table
+// existed — the sentence for the rate refusal and Retry-After are this
+// table's own additions.
+func TestEveryQueryRunnerOutcomeHasItsAnswer(t *testing.T) {
+	want := map[error]answered{
+		queryrunner.ErrTimeout: {status: http.StatusGatewayTimeout, code: "query_timed_out",
+			message: "the query took too long"},
+		queryrunner.ErrCanceled: {status: http.StatusRequestTimeout, code: "query_cancelled",
+			message: "the caller stopped waiting"},
+		queryrunner.ErrBusy: {status: http.StatusServiceUnavailable, code: "query_busy",
+			message: "the system is busy"},
+		queryrunner.ErrAlreadyRunning: {status: http.StatusConflict, code: "query_already_running",
+			message: "a query is already running"},
+		queryrunner.ErrTooManyQueries: {status: http.StatusTooManyRequests, code: "query_too_often",
+			message: "This caller is asking faster than this installation allows", retryAfter: "60"},
+		queryrunner.ErrDiskFull: {status: http.StatusConflict, code: "query_disk_full",
+			message: "the database is at its size limit"},
+		queryrunner.ErrResultTooLarge: {status: http.StatusBadRequest, code: "query_result_too_large",
+			message: "the result is too large to read"},
+		queryrunner.ErrJournalUnavailable: {status: http.StatusInternalServerError, code: "internal_error",
+			message: "Internal server error", logged: true},
+	}
+
+	for _, err := range append(queryrunner.Outcomes(), queryrunner.ErrJournalUnavailable) {
+		t.Run(err.Error(), func(t *testing.T) {
+			expected, known := want[err]
+			if !known {
+				t.Fatalf("no expected answer written for %q: add one beside its row", err)
+			}
+			got, ok := answer(t, queryrunnerErrors, err)
+			if !ok {
+				t.Fatal("the table has no row for it, so it would reach the client as internal_error")
+			}
+			if got != expected {
+				t.Errorf("answered %+v, want %+v", got, expected)
 			}
 		})
 	}

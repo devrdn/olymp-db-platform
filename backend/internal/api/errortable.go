@@ -99,7 +99,7 @@ var queryproxyErrors = errorTable{
 	// and none of it goes to the client.
 	{err: queryproxy.ErrUnavailable, status: http.StatusInternalServerError, code: httpx.CodeInternalError,
 		message: "Internal server error",
-		logAs:   "could not resolve a participant's access"},
+		logAs:   "a participant's request could not be answered"},
 	// The database's own words, held back because the contest hides its
 	// schema (queryproxy.ErrDatabaseDeclined): this text is all that is said.
 	{err: queryproxy.ErrDatabaseDeclined, status: http.StatusBadRequest, code: codeQueryDeclined},
@@ -115,11 +115,10 @@ var queryproxyErrors = errorTable{
 // (queryrunner.RateLimiter), so a full window always clears.
 const queryRetryAfter = time.Minute
 
-// queryrunnerErrors answers the Query Runner's outcomes the console meets,
-// and the rate refusal every handler that admits a participant shares.
-//
-// Not yet the whole of queryrunner's errors, and not yet walked by a test the
-// way queryproxyErrors is: that is this table's own step, after the pilot.
+// queryrunnerErrors answers the Query Runner's outcomes — every error in
+// queryrunner.Outcomes(), which TestEveryQueryRunnerOutcomeHasItsAnswer walks
+// — and a journal that could not be opened. The console meets all of them;
+// the play screen and the events channel meet the rate refusal.
 var queryrunnerErrors = errorTable{
 	{err: queryrunner.ErrTimeout, status: http.StatusGatewayTimeout, code: codeQueryTimedOut},
 	{err: queryrunner.ErrCanceled, status: http.StatusRequestTimeout, code: codeQueryCancelled},

@@ -1512,8 +1512,8 @@ func TestQueryLogSaysWhichRowsHadTheirStatementCut(t *testing.T) {
 }
 
 // A failure to read the log is ours, not the participant's — the same
-// treatment every other infrastructure failure on this handler gets
-// (queryproxy.ErrUnavailable's own case in fail()).
+// treatment every other infrastructure failure on this handler gets (fail's
+// default, and queryproxy.ErrUnavailable's row in errortable.go).
 func TestQueryLogReadFailureIsA500(t *testing.T) {
 	f := newParticipantFixture(t)
 	contestID := uuid.New()

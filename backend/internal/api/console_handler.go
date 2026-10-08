@@ -216,6 +216,12 @@ func (h *ConsoleHandler) fail(w http.ResponseWriter, r *http.Request, err error)
 	// Admission and the runner's own outcomes: the same tables the play
 	// screen and the events channel answer from, so a refusal reads the same
 	// whichever of them a participant meets it on.
+	//
+	// Before the transport check below, which a table row therefore wins:
+	// queryproxy.ErrUnavailable wraps only the core database's and the
+	// provisioner's failures, never the query service's, so no error carries
+	// both today. If one ever did, it would be answered as ours (500) rather
+	// than as the query service being down (503).
 	if queryproxyErrors.answer(w, r, h.log, err) || queryrunnerErrors.answer(w, r, h.log, err) {
 		return
 	}

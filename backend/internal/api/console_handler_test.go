@@ -20,6 +20,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
+	"github.com/devrdn/db-contest/backend/internal/rpc"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
 	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/devrdn/db-contest/backend/internal/users/userstest"
@@ -224,6 +225,23 @@ func TestAQueryRefusedForItsRateIsA429(t *testing.T) {
 	// The limit is a sliding minute: waiting it out always finds a place.
 	if retry := rec.Header().Get("Retry-After"); retry != "60" {
 		t.Fatalf("Retry-After = %q, want 60", retry)
+	}
+}
+
+// The query service being unreachable is ours, and says so: 503 with its own
+// code, never the participant's query being wrong.
+func TestAnUnreachableQueryServiceIsA503WithItsOwnCode(t *testing.T) {
+	fixture := newConsoleFixture(t, fakeConsole{err: fmt.Errorf("%w: dial tcp", rpc.ErrUnreachable)})
+
+	rec := fixture.run("SELECT 1")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "query_service_down" {
+		t.Fatalf("code = %q, want query_service_down", code)
+	}
+	if !fixture.logs.loggedError("the query service could not be reached") {
+		t.Fatal("an unreachable query service was answered without being logged")
 	}
 }
 
