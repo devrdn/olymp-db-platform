@@ -2,95 +2,48 @@ package postgres
 
 import (
 	"context"
-	"errors"
 	"testing"
+	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
-	"github.com/devrdn/db-contest/backend/internal/rbac"
+	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/devrdn/db-contest/backend/internal/users"
+	"github.com/google/uuid"
 )
 
-func TestStaffEntryCarriesTheAccountItNames(t *testing.T) {
-	// The staff screen would otherwise be a page of identifiers.
-	withTx(t, func(ctx context.Context) {
-		repo := NewContestManagers(testPool)
-		author := makeUser(t, ctx, "author-staff")
-		id := makeContest(t, ctx, author.ID)
-
-		if err := repo.Grant(ctx, contests.Manager{
-			ContestID: id, UserID: author.ID, Role: rbac.RoleOwner, GrantedBy: author.ID,
-		}); err != nil {
-			t.Fatalf("Grant() = %v", err)
-		}
-
-		got, err := repo.Get(ctx, id, author.ID)
-		if err != nil {
-			t.Fatalf("Get() = %v", err)
-		}
-		if got.Login != "author-staff" || got.Role != rbac.RoleOwner {
-			t.Errorf("staff entry = %+v, want the owner's login and role", got)
-		}
-	})
-}
-
-func TestGrantingAgainChangesTheRoleInsteadOfFailing(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		repo := NewContestManagers(testPool)
-		author := makeUser(t, ctx, "author-regrant")
-		helper := makeUser(t, ctx, "helper-regrant")
-		id := makeContest(t, ctx, author.ID)
-
-		for _, role := range []rbac.ContestRole{rbac.RoleManager, rbac.RoleManager} {
-			if err := repo.Grant(ctx, contests.Manager{
-				ContestID: id, UserID: helper.ID, Role: role, GrantedBy: author.ID,
-			}); err != nil {
-				t.Fatalf("Grant() = %v", err)
+// What a single caller can observe of a contest's staff is the contract every
+// contests.ManagerRepository answers to, the in-memory one the service tests
+// use included (conteststest.ManagerRepositoryContract). Nothing is left for
+// this file to ask of the real database beyond it: the constraints on the
+// table (one owner per contest, a real account and a real contest) are
+// refused by the database and are not part of what the contract states.
+func TestContestManagersHonoursTheRepositoryContract(t *testing.T) {
+	conteststest.ManagerRepositoryContract(t, func(t *testing.T, run func(context.Context, conteststest.ManagerTarget)) {
+		withTx(t, func(ctx context.Context) {
+			accounts := NewUsers(testPool)
+			author := makeUser(t, ctx, "author-staff")
+			// Inside one transaction now() is its start time, which is what
+			// granted_at is stamped with, so the clock a row is stamped with
+			// is exactly the one read here — through the transaction, as the
+			// insert reads it; the pool itself is another session.
+			var now time.Time
+			if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
+				t.Fatalf("read the database clock: %v", err)
 			}
-		}
-
-		if _, err := repo.Get(ctx, id, helper.ID); err != nil {
-			t.Errorf("Get() = %v", err)
-		}
-	})
-}
-
-func TestStaffListNamesTheOwnerFirst(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		repo := NewContestManagers(testPool)
-		author := makeUser(t, ctx, "aaa-owner")
-		helper := makeUser(t, ctx, "000-helper")
-		id := makeContest(t, ctx, author.ID)
-
-		if err := repo.Grant(ctx, contests.Manager{
-			ContestID: id, UserID: helper.ID, Role: rbac.RoleManager, GrantedBy: author.ID,
-		}); err != nil {
-			t.Fatalf("Grant() = %v", err)
-		}
-		if err := repo.Grant(ctx, contests.Manager{
-			ContestID: id, UserID: author.ID, Role: rbac.RoleOwner, GrantedBy: author.ID,
-		}); err != nil {
-			t.Fatalf("Grant() = %v", err)
-		}
-
-		staff, err := repo.List(ctx, id)
-		if err != nil {
-			t.Fatalf("List() = %v", err)
-		}
-		if len(staff) != 2 || staff[0].Role != rbac.RoleOwner {
-			t.Errorf("staff = %+v, want the owner first even though their login sorts later", staff)
-		}
-	})
-}
-
-func TestRevokingSomebodyWhoIsNotStaffIsNotFound(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		author := makeUser(t, ctx, "author-revoke")
-		stranger := makeUser(t, ctx, "stranger-revoke")
-		id := makeContest(t, ctx, author.ID)
-
-		err := NewContestManagers(testPool).Revoke(ctx, id, stranger.ID)
-
-		if !errors.Is(err, contests.ErrManagerNotFound) {
-			t.Errorf("Revoke() = %v, want ErrManagerNotFound", err)
-		}
+			run(ctx, conteststest.ManagerTarget{
+				Repo: NewContestManagers(testPool),
+				NewUser: func(login, fullName string) uuid.UUID {
+					created, err := accounts.Create(ctx, users.User{
+						Login: login, FullName: fullName, Status: users.StatusActive, PasswordHash: "not-a-real-hash",
+					})
+					if err != nil {
+						t.Fatalf("create user %q: %v", login, err)
+					}
+					return created.ID
+				},
+				NewContest: func() uuid.UUID { return makeContest(t, ctx, author.ID) },
+				Now:        func() time.Time { return now },
+			})
+		})
 	})
 }

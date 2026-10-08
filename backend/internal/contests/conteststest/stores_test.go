@@ -95,3 +95,25 @@ func TestContestsHonoursTheRepositoryContract(t *testing.T) {
 			})
 	})
 }
+
+func TestManagersHonoursTheRepositoryContract(t *testing.T) {
+	ManagerRepositoryContract(t, func(t *testing.T, run func(context.Context, ManagerTarget)) {
+		type account struct{ login, fullName string }
+		accounts := map[uuid.UUID]account{}
+		repo := NewManagers()
+		repo.Clock = func() time.Time { return FixtureNow }
+		repo.Accounts = func(_ context.Context, id uuid.UUID) (string, string) {
+			return accounts[id].login, accounts[id].fullName
+		}
+		run(context.Background(), ManagerTarget{
+			Repo: repo,
+			NewUser: func(login, fullName string) uuid.UUID {
+				id := uuid.New()
+				accounts[id] = account{login, fullName}
+				return id
+			},
+			NewContest: uuid.New,
+			Now:        repo.Clock,
+		})
+	})
+}

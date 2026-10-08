@@ -75,14 +75,16 @@ func NewFixture() *Fixture {
 	// Derived from the same question and submission stores above, not a
 	// third store of its own — see SequentialProgress's own doc.
 	f.Sequence = NewSequentialProgress(f.Questions, f.Submissions)
-	// Participants carry the login the real repository joins in.
-	f.Registrations.Accounts = func(ctx context.Context, id uuid.UUID) (string, string) {
+	// Participants and staff carry the login the real repositories join in.
+	accounts := func(ctx context.Context, id uuid.UUID) (string, string) {
 		user, err := f.Users.ByID(ctx, id)
 		if err != nil {
 			return "", ""
 		}
 		return user.Login, user.FullName
 	}
+	f.Registrations.Accounts = accounts
+	f.Managers.Accounts = accounts
 	// And what that account may do, which is what the publish gate reads to
 	// find a participant who administers every contest.
 	f.Registrations.Permissions = func(ctx context.Context, id uuid.UUID) []string {
@@ -101,6 +103,8 @@ func NewFixture() *Fixture {
 	// A registration is stamped by the same clock, the way the table stamps
 	// it with the database's own.
 	f.Registrations.Clock = func() time.Time { return f.Now }
+	// And an appointment to the staff, the way its own table stamps it.
+	f.Managers.Clock = func() time.Time { return f.Now }
 	// And a contest by the same one, the way its own table stamps it.
 	f.Contests.Clock = func() time.Time { return f.Now }
 	// The listing of a user's contests and of what a participant may see
