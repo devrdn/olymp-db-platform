@@ -2115,5 +2115,5 @@ func TestARefusedQueryIsNotObserved(t *testing.T) {
 // caller, and so which ones need an answer of their own (internal/api's
 // errorTable). Every exported sentinel in the package's source is on it.
 func TestEveryExportedErrorIsListed(t *testing.T) {
-	sentineltest.AssertListed(t, ".", queryproxy.Errors(), nil)
+	sentineltest.AssertListed(t, ".")
 }
