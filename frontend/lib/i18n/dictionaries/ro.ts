@@ -1768,7 +1768,6 @@ const ro = {
     too_many_attempts: "Prea multe încercări. Așteptați și încercați din nou.",
     sign_in_busy: "Sistemul verifică în acest moment prea multe parole. Încercați din nou peste câteva clipe.",
     wrong_password: "Parola curentă este greșită.",
-    invalid_password: "Parola nu îndeplinește cerințele.",
     weak_password: "Parola este prea simplă. Faceți-o mai lungă și mai variată.",
     password_mismatch: "Cele două parole noi nu coincid.",
     same_password: "Parola nouă coincide cu cea veche.",

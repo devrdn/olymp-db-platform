@@ -326,10 +326,6 @@
       "meaning": "The login or the password is wrong. Deliberately the same answer for both, so the endpoint cannot be used to discover which logins exist."
     },
     {
-      "code": "invalid_password",
-      "meaning": "The password is not acceptable. The message says why."
-    },
-    {
       "code": "invalid_question_id",
       "meaning": "A question identifier in the path or body is not a valid UUID."
     },

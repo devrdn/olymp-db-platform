@@ -30,7 +30,6 @@ const BLAMED: Record<string, readonly ("current" | "next" | "confirm")[]> = {
   /** The handover secret itself is wrong. Nothing about the new one is. */
   wrong_password: ["current"],
   weak_password: ["next"],
-  invalid_password: ["next"],
   same_password: ["next"],
   /** A field was left empty, and the form cannot tell which from here. */
   invalid_request: ["current", "next", "confirm"],
