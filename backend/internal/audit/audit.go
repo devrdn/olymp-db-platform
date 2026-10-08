@@ -11,7 +11,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -246,6 +248,24 @@ func IsAction(code string) bool {
 // for a year, so an unbounded value is storage someone else gets to spend.
 const MaxUserAgentLength = 512
 
+// storableUserAgent is the header as the trail can keep it: bytes that are
+// not UTF-8 and NUL characters dropped, and cut to MaxUserAgentLength bytes
+// on a character boundary. PostgreSQL refuses either by failing the insert,
+// which answered an audited write with a 500 and lost a sign-in's entry
+// without a word; a cut through the middle of a character was enough for a
+// perfectly ordinary long header to do it.
+func storableUserAgent(userAgent string) string {
+	userAgent = strings.ReplaceAll(strings.ToValidUTF8(userAgent, ""), "\x00", "")
+	if len(userAgent) <= MaxUserAgentLength {
+		return userAgent
+	}
+	cut := MaxUserAgentLength
+	for cut > 0 && !utf8.RuneStart(userAgent[cut]) {
+		cut--
+	}
+	return userAgent[:cut]
+}
+
 // sensitiveKeys never reach the trail, whatever a caller passes in.
 var sensitiveKeys = map[string]struct{}{
 	"password":         {},
@@ -351,6 +371,8 @@ func prepareEntry(ctx context.Context, e Entry) (Entry, error) {
 			e.UserAgent = meta.userAgent
 		}
 	}
+	// An explicit one comes from the same header, by another route.
+	e.UserAgent = storableUserAgent(e.UserAgent)
 	return e, nil
 }
 
@@ -367,10 +389,7 @@ type requestMeta struct {
 // audit write in a request names where the action came from without each call
 // site remembering to.
 func WithRequestMeta(ctx context.Context, ip, userAgent string) context.Context {
-	if len(userAgent) > MaxUserAgentLength {
-		userAgent = userAgent[:MaxUserAgentLength]
-	}
-	return context.WithValue(ctx, metaKey{}, requestMeta{ip: ip, userAgent: userAgent})
+	return context.WithValue(ctx, metaKey{}, requestMeta{ip: ip, userAgent: storableUserAgent(userAgent)})
 }
 
 // redact returns a copy of the payload with sensitive values removed, at any

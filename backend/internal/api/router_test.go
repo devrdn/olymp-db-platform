@@ -452,6 +452,9 @@ func TestPublicRouterRefusesAQueryNoStoredTextCanMatch(t *testing.T) {
 		"/api/v1/version?status=%00",
 		"/api/v1/version?q=%FF%FE",
 		"/api/v1/version?%00=x",
+		// A path segment reaches handlers too (an instance's database name).
+		"/api/v1/ver%00sion",
+		"/api/v1/version/%FF",
 	} {
 		rec := do(t, NewRouter(testDeps()), http.MethodGet, target)
 		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"invalid_request"`) {
