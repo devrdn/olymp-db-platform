@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // This file is the table builder's own CSV: reading it in, one bounded line
@@ -505,7 +506,18 @@ func validateRow(fields []csvField, table TableDefinition, row int64) error {
 // column's type is refused with the row and column that named it rather than
 // however many minutes into a build PostgreSQL's own COPY would take to say
 // the same thing.
+//
+// Before the type, the text itself: bytes that are not UTF-8 — a file Excel
+// saved as "CSV" in a Russian or Romanian locale is cp1251 — or a NUL
+// character are refused by PostgreSQL in any column, text included, and used
+// to surface only as a failed build.
 func validateScalar(text string, t ColumnType) error {
+	if !utf8.ValidString(text) {
+		return errors.New("is not UTF-8 text; save the file as CSV UTF-8 and upload it again")
+	}
+	if strings.ContainsRune(text, 0) {
+		return errors.New("holds a NUL character, which no column can store; UTF-8 text cannot contain one")
+	}
 	switch t {
 	case ColumnText:
 		return nil

@@ -176,7 +176,7 @@ var (
 	codeGameTableRowFieldCount = httpx.NewCode("game_table_row_field_count",
 		"A row's field count does not match the table's columns. The message names the row.")
 	codeGameTableValueInvalid = httpx.NewCode("game_table_value_invalid",
-		"A value does not match its column's type, or is empty in a column that does not allow it. The message names the row and the column.")
+		"A value does not match its column's type, is empty in a column that does not allow it, or is not storable text (bytes that are not UTF-8, as in a file saved in a legacy encoding, or a NUL character). The message names the row and the column.")
 	codeGameTableFieldTooLong = httpx.NewCode("game_table_field_too_long",
 		"One field is longer than this platform allows — a field of the uploaded file, or a value typed into the row form. The message names the row and the column.")
 	codeGameTableLineTooLong = httpx.NewCode("game_table_line_too_long",
