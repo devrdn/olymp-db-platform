@@ -22,14 +22,10 @@ var (
 	// the second one, and it applies to a hidden question exactly as it does
 	// to a visible one, since Submit never consults IsVisible at all.
 	ErrQuestionClosed = errors.New("this question is closed")
-	// ErrDeadlinePassed is a submission that arrived after this
-	// participant's own deadline, checked against the core database's own
-	// clock inside the same statement as the write (§8) — a second,
-	// authoritative check, not a repeat of whatever the caller already
-	// confirmed on the way in (queryproxy.Service.Access): the two happen at
-	// different moments, and only this one gets to be the last word on
-	// whether the write lands.
-	ErrDeadlinePassed = errors.New("the deadline for this contest has passed")
+	// An answer that arrives after the participant's own deadline is refused
+	// with ErrDeadlinePassed, declared with the gate (standing.go) because a
+	// participant whose time is up meets it there first.
+
 	// ErrAttemptConflict reports that two submissions to the same question by
 	// the same registration computed the same next attempt number at the
 	// same moment (finding 3): the table's own

@@ -32,16 +32,14 @@ import (
 // Separate errors because each is a different sentence to the person asking,
 // and because only one of them means they did something wrong.
 var (
-	// ErrNotAParticipant covers never having registered and having been
-	// disqualified alike: both mean this contest will not take a question from
-	// this person, and distinguishing them to the caller would tell somebody
-	// probing a contest whether an account is on its roster.
-	ErrNotAParticipant = errors.New("not a participant of this contest")
-	// ErrContestNotRunning is a contest that has not started or has finished.
-	ErrContestNotRunning = errors.New("the contest is not running")
-	// ErrFinished is a participant who has already finished. Their answers
-	// are in; the console closing with them is the point of finishing.
-	ErrFinished = errors.New("the participant has finished")
+	// ErrNotAParticipant, ErrContestNotRunning, ErrFinished and
+	// ErrAddressNotAllowed are the participation gate's own refusals, declared
+	// by contests beside the rule that gives them (contests.StandingOf). They
+	// are the same values under the names this package has always exported,
+	// so a caller that matches them here matches the gate's.
+	ErrNotAParticipant   = contests.ErrNotAParticipant
+	ErrContestNotRunning = contests.ErrContestNotRunning
+	ErrFinished          = contests.ErrParticipantFinished
 	// ErrNothingLeftToAnswer is a participant for whom no question of the
 	// contest is still answerable: every one of them is either answered
 	// correctly or out of attempts. The console exists to help somebody
@@ -64,7 +62,7 @@ var (
 	// held on. Checked on every query and not only at enrolment: a restriction
 	// that is applied once is a restriction somebody walks out of the room
 	// with.
-	ErrAddressNotAllowed = errors.New("the address is not allowed")
+	ErrAddressNotAllowed = contests.ErrAddressNotAllowed
 	// ErrNoGameYet is a contest whose game database was never built. Nobody's
 	// fault, and not a fact about the query.
 	ErrNoGameYet = errors.New("the contest has no game database yet")
