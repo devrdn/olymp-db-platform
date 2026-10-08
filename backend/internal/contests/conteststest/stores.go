@@ -603,9 +603,19 @@ func (r *Questions) ReplaceAnswers(_ context.Context, questionID uuid.UUID, answ
 	return nil
 }
 
-// Managers is an in-memory contests.ManagerRepository.
+// Managers is an in-memory contests.ManagerRepository, held to the same
+// answers as postgres.ContestManagers by ManagerRepositoryContract, which both
+// run.
 type Managers struct {
 	byContest map[uuid.UUID][]contests.Manager
+	// Accounts resolves the login and name carried on every staff entry, the
+	// way the real repository joins them in at read time. Nil leaves what the
+	// entry was stored with.
+	Accounts AccountLookup
+	// Clock is what Grant stamps GrantedAt with, the way the table's default
+	// stamps it with the database's own now(), whatever time the caller
+	// carries. Nil keeps the time the caller carries.
+	Clock func() time.Time
 	// Lookups counts Get and List calls, so a test can tell how many staff
 	// lookups a bulk operation made.
 	Lookups int
@@ -618,9 +628,21 @@ func NewManagers() *Managers {
 	return &Managers{byContest: map[uuid.UUID][]contests.Manager{}}
 }
 
-func (r *Managers) List(_ context.Context, contestID uuid.UUID) ([]contests.Manager, error) {
+// named returns the entry as a read presents it: with the account's own login
+// and name when the store can find them.
+func (r *Managers) named(ctx context.Context, m contests.Manager) contests.Manager {
+	if r.Accounts != nil {
+		m.Login, m.FullName = r.Accounts(ctx, m.UserID)
+	}
+	return m
+}
+
+func (r *Managers) List(ctx context.Context, contestID uuid.UUID) ([]contests.Manager, error) {
 	r.Lookups++
 	staff := slices.Clone(r.byContest[contestID])
+	for i, m := range staff {
+		staff[i] = r.named(ctx, m)
+	}
 	slices.SortFunc(staff, func(a, b contests.Manager) int {
 		if a.Role == b.Role {
 			return strings.Compare(a.Login, b.Login)
@@ -633,17 +655,20 @@ func (r *Managers) List(_ context.Context, contestID uuid.UUID) ([]contests.Mana
 	return staff, nil
 }
 
-func (r *Managers) Get(_ context.Context, contestID, userID uuid.UUID) (contests.Manager, error) {
+func (r *Managers) Get(ctx context.Context, contestID, userID uuid.UUID) (contests.Manager, error) {
 	r.Lookups++
 	for _, m := range r.byContest[contestID] {
 		if m.UserID == userID {
-			return m, nil
+			return r.named(ctx, m), nil
 		}
 	}
 	return contests.Manager{}, contests.ErrManagerNotFound
 }
 
 func (r *Managers) Grant(_ context.Context, m contests.Manager) error {
+	if r.Clock != nil {
+		m.GrantedAt = r.Clock()
+	}
 	staff := r.byContest[m.ContestID]
 	for i, existing := range staff {
 		if existing.UserID == m.UserID {
@@ -667,9 +692,9 @@ func (r *Managers) Revoke(_ context.Context, contestID, userID uuid.UUID) error 
 }
 
 // AccountLookup names an account, standing in for the join the real
-// repository does. Without it a participant would come back with an empty
-// login, which is not what the endpoint returns and not what a test should be
-// allowed to pass against.
+// repository does. Without it a participant or a staff entry would come back
+// with an empty login, which is not what the endpoint returns and not what a
+// test should be allowed to pass against.
 type AccountLookup func(ctx context.Context, id uuid.UUID) (login, fullName string)
 
 // PermissionLookup reports what an account may do, standing in for the join
