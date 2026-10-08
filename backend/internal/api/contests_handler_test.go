@@ -297,7 +297,7 @@ func TestReadingAContestSaysWhetherTheViewerMayMonitorIt(t *testing.T) {
 func TestListingAnswersInTheRequestedLanguage(t *testing.T) {
 	// The title lives only in the translations, so a listing has to negotiate
 	// one — this is the single place that decision is made (§6.2).
-	f := newContestFixture(t)
+	f := newContestFixture(t, rbac.PermissionContestCreate)
 	c := f.ownedContest(t, contests.StatusDraft)
 	// The contest has to offer the language, not merely have text in it: a
 	// title in Romanian over a story in English is the mixture the declared
@@ -329,7 +329,7 @@ func TestListingAnswersInTheRequestedLanguage(t *testing.T) {
 }
 
 func TestListingFallsBackWhenTheRequestedLanguageIsMissing(t *testing.T) {
-	f := newContestFixture(t)
+	f := newContestFixture(t, rbac.PermissionContestCreate)
 	c := f.ownedContest(t, contests.StatusDraft)
 	if err := f.service.SetTranslations(t.Context(), f.actor.ID, c.ID, []contests.Translation{
 		{Lang: "en", Title: "The Library Murder"},
@@ -355,12 +355,14 @@ func TestListingFallsBackWhenTheRequestedLanguageIsMissing(t *testing.T) {
 // second round trip for one hash is one this product cannot spend there.
 func TestListingCarriesTheCoverAContestWears(t *testing.T) {
 	f := newContestFixture(t)
-	c := f.ownedContest(t, contests.StatusDraft)
+	_, cookie := f.asParticipant(t, "s.popescu")
+	c := f.stores.SeedContest(contests.StatusPublished)
+	c.Enrollment = contests.EnrollmentOpen
 	c.CoverHash = "9f86d081884c7d65"
 	c.CoverAttribution = "Photo: A. Organiser, CC BY 4.0"
 	f.stores.Contests.Put(c)
 
-	rec := f.do(http.MethodGet, "/contests", "")
+	rec := f.asked(t, "/contests?scope=participant", cookie)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
@@ -384,11 +386,17 @@ func TestListingCarriesTheCoverAContestWears(t *testing.T) {
 // of a register that shows no pictures at all (design spec §10).
 func TestListingSaysNothingAboutTheCoverOfAContestThatWearsADrawnOne(t *testing.T) {
 	f := newContestFixture(t)
-	f.ownedContest(t, contests.StatusDraft)
+	_, cookie := f.asParticipant(t, "s.popescu")
+	open := f.stores.SeedContest(contests.StatusPublished)
+	open.Enrollment = contests.EnrollmentOpen
+	f.stores.Contests.Put(open)
 
-	rec := f.do(http.MethodGet, "/contests", "")
+	rec := f.asked(t, "/contests?scope=participant", cookie)
 
 	items, _ := decode(t, rec)["items"].([]any)
+	if len(items) == 0 {
+		t.Fatalf("no contests listed: %s", rec.Body.String())
+	}
 	first, _ := items[0].(map[string]any)
 	if got, ok := first["cover_hash"]; ok {
 		t.Errorf("cover_hash = %v, want it absent for a contest with no uploaded picture", got)
@@ -813,7 +821,11 @@ func TestTheListingSaysWhetherTheCallerIsOnEachContest(t *testing.T) {
 	f := newContestFixture(t)
 	student, cookie := f.asParticipant(t, "s.popescu")
 	mine := f.stores.SeedContest(contests.StatusPublished)
+	// Open, so that it is offered to a student who is not on it: an
+	// invitation-only contest they never joined is not listed to them at all.
 	other := f.stores.SeedContest(contests.StatusPublished)
+	other.Enrollment = contests.EnrollmentOpen
+	f.stores.Contests.Put(other)
 	if _, err := f.stores.Registrations.Add(t.Context(), mine.ID, student.ID); err != nil {
 		t.Fatalf("Add() returned error: %v", err)
 	}
@@ -835,20 +847,29 @@ func TestTheEnrolmentFlagIsAlwaysAboutTheCaller(t *testing.T) {
 	f := newContestFixture(t)
 	_, cookie := f.asParticipant(t, "s.popescu")
 	other, _ := f.asParticipant(t, "i.ivanov")
+	// Open, so that the caller is offered it without being on it: the only
+	// way the listing can say anything about it is the flag under test.
 	shared := f.stores.SeedContest(contests.StatusPublished)
+	shared.Enrollment = contests.EnrollmentOpen
+	f.stores.Contests.Put(shared)
 	if _, err := f.stores.Registrations.Add(t.Context(), shared.ID, other.ID); err != nil {
 		t.Fatalf("Add() returned error: %v", err)
 	}
 
-	for _, query := range []string{
-		"/contests?scope=participant&user_id=" + other.ID.String(),
-		"/contests?scope=participant&enrolled=true&user_id=" + other.ID.String(),
-		"/contests?scope=participant&visible_to=" + other.ID.String(),
+	// The caller is not on the contest, so asking for the contests they are on
+	// lists nothing; the other two list it, and not as theirs.
+	for query, listedForCaller := range map[string]bool{
+		"/contests?scope=participant&user_id=" + other.ID.String():               true,
+		"/contests?scope=participant&enrolled=true&user_id=" + other.ID.String(): false,
+		"/contests?scope=participant&visible_to=" + other.ID.String():            true,
 	} {
-		for id, row := range listed(t, f.asked(t, query, cookie)) {
-			if row["enrolled"] == true {
-				t.Errorf("%s reported somebody else's registration as the caller's (%s)", query, id)
-			}
+		rows := listed(t, f.asked(t, query, cookie))
+		row, present := rows[shared.ID.String()]
+		if present != listedForCaller {
+			t.Errorf("%s: contest listed = %v, want %v", query, present, listedForCaller)
+		}
+		if row["enrolled"] == true {
+			t.Errorf("%s reported somebody else's registration as the caller's", query)
 		}
 	}
 }
