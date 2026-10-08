@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -230,6 +231,7 @@ func TestEventsSendsServerNowAndTheParticipantsOwnDeadlineOnConnect(t *testing.T
 	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
 	f.access.participant = contests.Participant{ID: uuid.New()}
 	fixedNow := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	f.access.gateNow = fixedNow
 	f.handler.WithClock(func() time.Time { return fixedNow }).WithResyncInterval(time.Hour)
 
 	req, cancel := f.request(contestID)
@@ -322,84 +324,137 @@ func TestEventsResyncsOnEveryTick(t *testing.T) {
 	waitDone(t, done)
 }
 
-// The channel closes itself, with a contest_finished event, once Access
-// starts reporting the contest is over for this participant — the scenario
-// where the status catches up (or the participant's own deadline passes)
-// while the connection is already open.
-func TestEventsSendsContestFinishedAndClosesWhenAccessStartsRefusing(t *testing.T) {
-	f := newEventsFixture(t)
-	contestID := uuid.New()
-	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-	f.access.participant = contests.Participant{ID: uuid.New()}
-	f.handler.WithResyncInterval(testResync)
+// The channel closes itself with a contest_finished event once the
+// participant's Standing is over: the status caught up, their registration
+// finished, or their own time ran out while the connection was open. Each
+// case is staged as the state that produces it and decided by the real gate
+// (fakeAccess.AccessForEvents), not by a sentinel picked to match.
+func TestEventsSendsContestFinishedAndClosesOnceItIsOverForTheParticipant(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	for name, given := range map[string]struct {
+		contest     func(id uuid.UUID) contests.Contest
+		participant func(p contests.Participant) contests.Participant
+	}{
+		"the contest finished": {
+			contest: func(id uuid.UUID) contests.Contest {
+				return contests.Contest{ID: id, Status: contests.StatusFinished}
+			},
+		},
+		"the registration finished": {
+			participant: func(p contests.Participant) contests.Participant {
+				p.Status = contests.RegistrationFinished
+				return p
+			},
+		},
+		"the participant's own time is up": {
+			contest: func(id uuid.UUID) contests.Contest {
+				return contests.Contest{ID: id, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &past}
+			},
+		},
+		"the participant's own time is up, seen from outside the network": {
+			contest: func(id uuid.UUID) contests.Contest {
+				return contests.Contest{ID: id, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &past,
+					AllowedCIDRs: []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}}
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newEventsFixture(t)
+			contestID := uuid.New()
+			ends := time.Now().Add(time.Hour)
+			participant := contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}
+			f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+			f.access.participant = participant
+			f.handler.WithResyncInterval(testResync)
 
-	req, cancel := f.request(contestID)
-	defer cancel()
-	rec, done := f.serve(req)
+			req, cancel := f.request(contestID)
+			defer cancel()
+			rec, done := f.serve(req)
 
-	waitForSubstring(t, rec, "event: contest_started")
-	f.access.setErr(contests.ErrContestNotRunning)
+			waitForSubstring(t, rec, "event: contest_started")
+			if given.contest != nil {
+				f.access.setContest(given.contest(contestID))
+			}
+			if given.participant != nil {
+				f.access.setParticipant(given.participant(participant))
+			}
 
-	waitDone(t, done)
-	body := rec.String()
-	if !strings.Contains(body, "event: contest_finished") {
-		t.Fatalf("no contest_finished event once the contest was no longer running: %s", body)
-	}
-	if !strings.Contains(body, `"status":"finished"`) {
-		t.Fatalf("contest_finished does not carry the finished status: %s", body)
+			waitDone(t, done)
+			body := rec.String()
+			if !strings.Contains(body, "event: contest_finished") {
+				t.Fatalf("no contest_finished event once it was over: %s", body)
+			}
+			if !strings.Contains(body, `"status":"finished"`) {
+				t.Fatalf("contest_finished does not carry the finished status: %s", body)
+			}
+		})
 	}
 }
 
-// A participant whose own time runs out while the channel is open is told
-// so the same way: the admission answers ErrDeadlinePassed for it, and the
-// channel must not close silently on a participant whose contest is over.
-func TestEventsSendsContestFinishedWhenTheParticipantsTimeIsUp(t *testing.T) {
-	f := newEventsFixture(t)
-	contestID := uuid.New()
-	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-	f.access.participant = contests.Participant{ID: uuid.New()}
-	f.handler.WithResyncInterval(testResync)
+// A refusal that does not mean the contest is over for this participant
+// closes the channel without claiming it finished — that would be a
+// different, wrong fact: a contest taken back to draft, or an address that
+// stopped being allowed, may yet let them back in. A disqualified participant
+// is over, and still closes without it: the channel ends as not_a_participant
+// always has, telling a disqualified caller nothing a stranger would not be
+// told. A lookup that finds nobody knows nothing, and closes the same way.
+func TestEventsClosesWithoutContestFinishedWhenItIsNotOverOrTheyWereDisqualified(t *testing.T) {
+	for name, given := range map[string]struct {
+		contest     func(id uuid.UUID) contests.Contest
+		participant func(p contests.Participant) contests.Participant
+		err         error
+	}{
+		"the contest was taken back to draft": {
+			contest: func(id uuid.UUID) contests.Contest {
+				return contests.Contest{ID: id, Status: contests.StatusDraft}
+			},
+		},
+		"the address stopped being allowed": {
+			contest: func(id uuid.UUID) contests.Contest {
+				ends := time.Now().Add(time.Hour)
+				return contests.Contest{ID: id, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends,
+					AllowedCIDRs: []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}}
+			},
+		},
+		"the participant was disqualified": {
+			participant: func(p contests.Participant) contests.Participant {
+				p.Status = contests.RegistrationDisqualified
+				return p
+			},
+		},
+		"the registration is gone": {
+			err: contests.ErrNotAParticipant,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newEventsFixture(t)
+			contestID := uuid.New()
+			ends := time.Now().Add(time.Hour)
+			participant := contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}
+			f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
+			f.access.participant = participant
+			f.handler.WithResyncInterval(testResync)
 
-	req, cancel := f.request(contestID)
-	defer cancel()
-	rec, done := f.serve(req)
+			req, cancel := f.request(contestID)
+			defer cancel()
+			rec, done := f.serve(req)
 
-	waitForSubstring(t, rec, "event: contest_started")
-	f.access.setErr(contests.ErrDeadlinePassed)
+			waitForSubstring(t, rec, "event: contest_started")
+			if given.contest != nil {
+				f.access.setContest(given.contest(contestID))
+			}
+			if given.participant != nil {
+				f.access.setParticipant(given.participant(participant))
+			}
+			if given.err != nil {
+				f.access.setErr(given.err)
+			}
 
-	waitDone(t, done)
-	body := rec.String()
-	if !strings.Contains(body, "event: contest_finished") {
-		t.Fatalf("no contest_finished event once the participant's time was up: %s", body)
-	}
-	if !strings.Contains(body, `"status":"finished"`) {
-		t.Fatalf("contest_finished does not carry the finished status: %s", body)
-	}
-}
-
-// A refusal that is not about the contest's own clock (disqualification, an
-// address that stopped being allowed) closes the channel without claiming
-// the contest finished — that would be a different, wrong fact.
-func TestEventsClosesWithoutContestFinishedForAnUnrelatedRefusal(t *testing.T) {
-	f := newEventsFixture(t)
-	contestID := uuid.New()
-	ends := time.Now().Add(time.Hour)
-	f.access.contest = contests.Contest{ID: contestID, Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &ends}
-	f.access.participant = contests.Participant{ID: uuid.New()}
-	f.handler.WithResyncInterval(testResync)
-
-	req, cancel := f.request(contestID)
-	defer cancel()
-	rec, done := f.serve(req)
-
-	waitForSubstring(t, rec, "event: contest_started")
-	f.access.setErr(contests.ErrNotAParticipant)
-
-	waitDone(t, done)
-	if strings.Contains(rec.String(), "contest_finished") {
-		t.Fatalf("a disqualification was reported as the contest finishing: %s", rec.String())
+			waitDone(t, done)
+			if strings.Contains(rec.String(), "contest_finished") {
+				t.Fatalf("the channel claimed the contest finished: %s", rec.String())
+			}
+		})
 	}
 }
 

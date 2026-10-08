@@ -719,7 +719,8 @@ func (s *Service) StartOnRead(ctx context.Context, contest contests.Contest, par
 
 // startClock is StartOnRead's rule, shared with Run's first query: check,
 // start, check again. A participant whose clock is not pending is handed back
-// as is, at no cost.
+// as is, at no cost; one whose clock Start left pending is refused, failing
+// closed.
 func (s *Service) startClock(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error) {
 	if !contests.ClockPending(contest, participant) {
 		return participant, nil
@@ -730,6 +731,12 @@ func (s *Service) startClock(ctx context.Context, contest contests.Contest, part
 	started, err := s.people.Start(ctx, participant.ID, s.now())
 	if err != nil {
 		return contests.Participant{}, fmt.Errorf("%w: start the participant's clock: %w", ErrUnavailable, err)
+	}
+	// A Start that reports success and hands back a clock still pending broke
+	// its own contract. The gate would let such a participant start forever,
+	// with no deadline running, so it is refused here, as ours.
+	if contests.ClockPending(contest, started) {
+		return contests.Participant{}, fmt.Errorf("%w: starting the participant's clock left it unstarted", ErrUnavailable)
 	}
 	if err := s.admit(contest, started, addr); err != nil {
 		return contests.Participant{}, err
@@ -764,17 +771,24 @@ func (s *Service) resolve(ctx context.Context, contestID, userID uuid.UUID) (con
 // Reading the story, the questions, or answering a question still goes
 // through Access unchanged — this widens only what the channel may be held
 // open for, never what a participant connected to it may do.
-func (s *Service) AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error) {
+//
+// The Standing the gate decided on is handed back with the answer, refused or
+// not, because the channel has one more question than "may they wait": when it
+// closes, is it over for them (Standing.Over), so it can say the contest
+// finished rather than merely close. A lookup that failed decided nothing and
+// hands back the zero Standing, which is over for nobody.
+func (s *Service) AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, contests.Standing, error) {
 	participant, contest, err := s.resolve(ctx, contestID, userID)
 	if err != nil {
-		return contests.Participant{}, contests.Contest{}, err
+		return contests.Participant{}, contests.Contest{}, contests.Standing{}, err
 	}
 
 	// MayWait is false only where MayAct is too, so Refusal names why.
-	if standing := contests.StandingOf(contest, participant, s.now(), s.grace, addr); !standing.MayWait() {
-		return contests.Participant{}, contests.Contest{}, standing.Refusal()
+	standing := contests.StandingOf(contest, participant, s.now(), s.grace, addr)
+	if !standing.MayWait() {
+		return contests.Participant{}, contests.Contest{}, standing, standing.Refusal()
 	}
-	return participant, contest, nil
+	return participant, contest, standing, nil
 }
 
 // AdmitRead applies, to the participant-facing read endpoints, the same

@@ -51,6 +51,10 @@ type people struct {
 	// postgres.Registrations.Start hands back to a request that lost the race
 	// to one that started the clock first. nil starts it at now.
 	stored *time.Time
+	// startsNothing makes Start report success and hand back a participant
+	// whose clock is still pending: a store that broke its own contract,
+	// which the façade must not take for a started clock.
+	startsNothing bool
 }
 
 func (p people) ByUser(context.Context, uuid.UUID, uuid.UUID) (contests.Participant, error) {
@@ -72,6 +76,9 @@ func (p people) Start(_ context.Context, _ uuid.UUID, now time.Time) (contests.P
 		return contests.Participant{}, p.startErr
 	}
 	started := p.participant
+	if p.startsNothing {
+		return started, nil
+	}
 	started.StartedAt = &now
 	if p.stored != nil {
 		started.StartedAt = p.stored
@@ -639,11 +646,12 @@ func TestAFirstQueryWhoseStartFindsTheTimeAlreadyUpIsRefused(t *testing.T) {
 		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingIndividual,
 		DurationMin: &duration, StartsAt: &opened, EndsAt: &closes,
 	}
+	starts := 0
 	run := &runner{result: &queryrunner.Result{}}
 	service := queryproxy.New(
 		people{participant: contests.Participant{
 			ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered,
-		}, stored: &longAgo},
+		}, stored: &longAgo, starts: &starts},
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "x"}, run,
@@ -652,8 +660,37 @@ func TestAFirstQueryWhoseStartFindsTheTimeAlreadyUpIsRefused(t *testing.T) {
 	if _, err := service.Run(t.Context(), command()); !errors.Is(err, contests.ErrDeadlinePassed) {
 		t.Fatalf("error = %v, want ErrDeadlinePassed", err)
 	}
+	// Start was reached: the refusal is the check after it, not the one
+	// before, which had nothing to refuse.
+	if starts != 1 {
+		t.Fatalf("Start called %d times, want 1", starts)
+	}
 	if run.calls != 0 {
 		t.Fatalf("the runner was reached %d times by a query whose time was up, want 0", run.calls)
+	}
+}
+
+// Start reporting success while the clock is still pending is a store that
+// broke its contract, not a participant who may now query without a
+// deadline: the query is refused as ours and never run.
+func TestAFirstQueryWhoseStartLeavesTheClockPendingIsRefusedAsOurs(t *testing.T) {
+	contest := individualContest()
+	starts := 0
+	run := &runner{result: &queryrunner.Result{}}
+	service := queryproxy.New(
+		people{participant: contests.Participant{
+			ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered,
+		}, startsNothing: true, starts: &starts},
+		contestStore{contest: contest},
+		games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "x"}, run,
+	)
+
+	if _, err := service.Run(t.Context(), command()); !errors.Is(err, queryproxy.ErrUnavailable) {
+		t.Fatalf("error = %v, want ErrUnavailable", err)
+	}
+	if starts != 1 || run.calls != 0 {
+		t.Fatalf("Start called %d times and the runner %d times, want 1 and 0", starts, run.calls)
 	}
 }
 
@@ -1243,12 +1280,35 @@ func TestStartOnReadRefusesAStartWhoseTimeIsAlreadyUp(t *testing.T) {
 		ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingIndividual,
 		DurationMin: &duration, StartsAt: &opened, EndsAt: &closes,
 	}
+	starts := 0
 	p := contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}
-	service := accessFixture(people{participant: p, stored: &longAgo}, contestStore{contest: contest}).
+	service := accessFixture(people{participant: p, stored: &longAgo, starts: &starts}, contestStore{contest: contest}).
 		WithClock(func() time.Time { return now })
 
 	if _, err := service.StartOnRead(t.Context(), contest, p, netip.Addr{}); !errors.Is(err, contests.ErrDeadlinePassed) {
 		t.Fatalf("StartOnRead() = %v, want ErrDeadlinePassed", err)
+	}
+	// Start was reached: the refusal is the check after it, not the one
+	// before, which had nothing to refuse.
+	if starts != 1 {
+		t.Fatalf("Start called %d times, want 1", starts)
+	}
+}
+
+// A Start that reports success and hands back a participant whose clock is
+// still pending has not started anything. Taking it at its word would hand
+// the reader content with no deadline running; it is refused as ours.
+func TestStartOnReadRefusesAStartThatLeftTheClockPending(t *testing.T) {
+	contest := individualContest()
+	starts := 0
+	p := contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}
+	service := accessFixture(people{participant: p, startsNothing: true, starts: &starts}, contestStore{contest: contest})
+
+	if _, err := service.StartOnRead(t.Context(), contest, p, netip.Addr{}); !errors.Is(err, queryproxy.ErrUnavailable) {
+		t.Fatalf("StartOnRead() = %v, want ErrUnavailable", err)
+	}
+	if starts != 1 {
+		t.Fatalf("Start called %d times, want 1", starts)
 	}
 }
 
@@ -1271,7 +1331,7 @@ func TestAccessForEventsNeverStartsTheClock(t *testing.T) {
 	p := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationRegistered}
 	service := accessFixture(people{participant: p, starts: &starts}, contestStore{contest: contest})
 
-	participant, _, err := service.AccessForEvents(t.Context(), contest.ID, uuid.New(), netip.Addr{})
+	participant, _, _, err := service.AccessForEvents(t.Context(), contest.ID, uuid.New(), netip.Addr{})
 	if err != nil {
 		t.Fatalf("AccessForEvents() = %v", err)
 	}
@@ -1353,9 +1413,79 @@ func TestAccessForEventsAdmitsExactlyOneMoreStatusThanAccess(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			service := accessFixture(given.people, contestStore{contest: given.contest})
 
-			_, _, err := service.AccessForEvents(t.Context(), uuid.New(), uuid.New(), netip.Addr{})
+			_, _, _, err := service.AccessForEvents(t.Context(), uuid.New(), uuid.New(), netip.Addr{})
 			if !errors.Is(err, given.want) {
 				t.Fatalf("error = %v, want %v", err, given.want)
+			}
+		})
+	}
+}
+
+// AccessForEvents hands back the Standing it decided on, refused or not, so
+// the events channel can tell a contest that is over for this participant
+// from one that merely is not open to them now, without a second lookup or a
+// list of sentinels. A lookup that found nobody knows nothing: the zero
+// Standing, which is over for nobody.
+func TestAccessForEventsHandsBackTheStandingItDecidedOn(t *testing.T) {
+	inRoom := []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}
+	for name, given := range map[string]struct {
+		people  people
+		contest contests.Contest
+		addr    netip.Addr
+		want    error
+		over    bool
+	}{
+		"a running contest, open to them": {
+			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow},
+			want:    nil, over: false,
+		},
+		"a running contest whose time is up for them": {
+			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &closedWindow},
+			want:    contests.ErrDeadlinePassed, over: true,
+		},
+		"a contest that has finished": {
+			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+			contest: contests.Contest{Status: contests.StatusFinished},
+			want:    contests.ErrContestNotRunning, over: true,
+		},
+		"a registration that is finished": {
+			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationFinished}},
+			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow},
+			want:    contests.ErrParticipantFinished, over: true,
+		},
+		"somebody disqualified": {
+			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationDisqualified}},
+			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow},
+			want:    contests.ErrNotAParticipant, over: true,
+		},
+		"a contest taken back to draft": {
+			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+			contest: contests.Contest{Status: contests.StatusDraft},
+			want:    contests.ErrContestNotRunning, over: false,
+		},
+		"a running contest, open to them, from outside its network": {
+			people:  people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow, AllowedCIDRs: inRoom},
+			addr:    netip.MustParseAddr("203.0.113.7"),
+			want:    contests.ErrAddressNotAllowed, over: false,
+		},
+		"somebody who never registered": {
+			people:  people{err: contests.ErrParticipantNotFound},
+			contest: contests.Contest{Status: contests.StatusFinished},
+			want:    contests.ErrNotAParticipant, over: false,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service := accessFixture(given.people, contestStore{contest: given.contest})
+
+			_, _, standing, err := service.AccessForEvents(t.Context(), uuid.New(), uuid.New(), given.addr)
+			if !errors.Is(err, given.want) {
+				t.Fatalf("error = %v, want %v", err, given.want)
+			}
+			if standing.Over() != given.over {
+				t.Fatalf("Over() = %v, want %v", standing.Over(), given.over)
 			}
 		})
 	}
@@ -1368,10 +1498,10 @@ func TestAccessForEventsStillChecksTheAddressRestrictionForAPublishedContest(t *
 	contest := contests.Contest{Status: contests.StatusPublished, AllowedCIDRs: []netip.Prefix{inRoom}}
 	service := accessFixture(people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered}}, contestStore{contest: contest})
 
-	if _, _, err := service.AccessForEvents(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("203.0.113.7")); !errors.Is(err, contests.ErrAddressNotAllowed) {
+	if _, _, _, err := service.AccessForEvents(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("203.0.113.7")); !errors.Is(err, contests.ErrAddressNotAllowed) {
 		t.Fatalf("error = %v, want ErrAddressNotAllowed", err)
 	}
-	if _, _, err := service.AccessForEvents(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("10.20.3.4")); err != nil {
+	if _, _, _, err := service.AccessForEvents(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("10.20.3.4")); err != nil {
 		t.Fatalf("a read from the contest's own network was refused for a published contest: %v", err)
 	}
 }

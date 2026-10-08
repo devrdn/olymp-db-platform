@@ -77,6 +77,10 @@ type fakeAccess struct {
 	startedOnRead  []uuid.UUID
 	startedFrom    []netip.Addr
 	startOnReadErr error
+	// gateNow is the instant AccessForEvents asks the gate about; zero is the
+	// wall clock. A test that pins its contest to fixed dates sets it, so the
+	// gate does not find that contest's time up because the calendar moved on.
+	gateNow time.Time
 }
 
 func (a *fakeAccess) StartOnRead(_ context.Context, _ contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error) {
@@ -115,15 +119,18 @@ func (a *fakeAccess) Access(_ context.Context, contestID, _ uuid.UUID, _ netip.A
 	return a.participant, a.contest, a.err
 }
 
-// AccessForEvents answers with whatever a test staged, exactly like Access —
-// the events handler tests care about what the handler does with the
-// participant and contest a test hands it, not about re-deriving
-// queryproxy.Service's own admission rule (proven in its own package,
-// internal/queryproxy/queryproxy_test.go). This fake never distinguishes the
-// one status AccessForEvents admits that Access would not
-// (contests.StatusPublished) — a test controls that simply by staging
-// f.access.contest.Status itself.
-func (a *fakeAccess) AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, error) {
+// AccessForEvents answers the way queryproxy.Service.AccessForEvents does,
+// over whatever a test staged: a staged err is a lookup that failed, with
+// nothing known about the participant (the zero Standing); otherwise the real
+// gate, contests.StandingOf, is asked of the staged participant and contest,
+// and anything it will not let wait is refused with its own Refusal and the
+// Standing it was refused on. The rule itself is proven where queryproxy owns
+// it (internal/queryproxy/queryproxy_test.go); asking the real gate here is
+// what lets an events test stage a state — a finished registration, a time
+// that ran out, a contest taken back to draft — and see what the channel does
+// with the Standing that state produces, rather than a sentinel picked to
+// match.
+func (a *fakeAccess) AccessForEvents(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (contests.Participant, contests.Contest, contests.Standing, error) {
 	a.mu.Lock()
 	delay := a.delay
 	a.mu.Unlock()
@@ -131,10 +138,22 @@ func (a *fakeAccess) AccessForEvents(ctx context.Context, contestID, userID uuid
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
-			return contests.Participant{}, contests.Contest{}, ctx.Err()
+			return contests.Participant{}, contests.Contest{}, contests.Standing{}, ctx.Err()
 		}
 	}
-	return a.Access(ctx, contestID, userID, addr)
+	participant, contest, err := a.Access(ctx, contestID, userID, addr)
+	if err != nil {
+		return contests.Participant{}, contests.Contest{}, contests.Standing{}, err
+	}
+	now := a.gateNow
+	if now.IsZero() {
+		now = time.Now()
+	}
+	standing := contests.StandingOf(contest, participant, now, 0, addr)
+	if !standing.MayWait() {
+		return contests.Participant{}, contests.Contest{}, standing, standing.Refusal()
+	}
+	return participant, contest, standing, nil
 }
 
 // setDelay stages how long the next AccessForEvents calls take to answer
@@ -152,6 +171,16 @@ func (a *fakeAccess) setErr(err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.err = err
+}
+
+// setParticipant changes what Access answers a participant with, safely
+// against a connection's own goroutine reading it concurrently on its next
+// resync tick — how a test finishes or disqualifies a registration while the
+// channel is open.
+func (a *fakeAccess) setParticipant(p contests.Participant) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.participant = p
 }
 
 // setContest changes what Access answers a contest with, safely against a
