@@ -80,10 +80,23 @@ Distilled from a review of the whole service. Each one names a class of
 mistake that was actually found, not a hypothetical.
 
 1. **Every error a service hands to the HTTP layer is a declared sentinel** (or
-   wraps one with `%w`). A bare `errors.New` inside a service is a 500 waiting
-   to happen: the handler's `fail` switch cannot name it, so the client is
-   told "internal error" for its own typo. When adding a refusal, add the
-   sentinel, the mapping in `fail`, and a handler test asserting the 4xx.
+   wraps one with `%w`), **and every sentinel has a declared answer.** A bare
+   `errors.New` inside a service is a 500 waiting to happen: no mapping can
+   name it, so the client is told "internal error" for its own typo. Where the
+   answer lives depends on who gives it:
+   - **A package more than one handler answers** lists its errors in
+     `Errors()`, and `internal/api/errortable.go` holds one row per error.
+     `sentineltest.AssertListed` (in the package's tests) and
+     `TestEvery<Pkg>ErrorHasItsAnswer` keep the source, the list and the table
+     in step, so a new refusal is: the sentinel, its name in `Errors()`, its
+     row, and the row's literal in that test. A handler that must answer
+     differently says so with `table.with(...)` beside it — only for a path it
+     can actually reach.
+   - **An error one handler answers** stays in that handler's `fail` switch,
+     with a handler test asserting the 4xx.
+
+   Either way its code is declared in `codes.go` and has a sentence in every
+   locale; `make api-contract` and `make front-check` say when one is missing.
 2. **Every field and every list that reaches storage has an explicit bound in
    the domain.** Columns are unbounded `text`, and the 1 MiB body limit bounds
    the request, not a field: without a check a login can be a megabyte long
