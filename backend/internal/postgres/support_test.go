@@ -76,6 +76,23 @@ func withTx(t *testing.T, body func(ctx context.Context)) {
 	}
 }
 
+// txNow is the database clock as a contract runner states times against it.
+//
+// Inside one transaction now() is its start time, so it is exactly the value
+// that column defaults (created_at, updated_at, granted_at) and the clock
+// comparisons a repository makes (deadlines, DueToStart) read. It is read
+// through the transaction, as the repository reads it: the pool itself is
+// another session, with a clock of its own.
+func txNow(t *testing.T, ctx context.Context) time.Time {
+	t.Helper()
+
+	var now time.Time
+	if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
+		t.Fatalf("read the database clock: %v", err)
+	}
+	return now
+}
+
 // makeUser stores an account the contest fixtures can hang off.
 func makeUser(t *testing.T, ctx context.Context, login string) users.User {
 	t.Helper()

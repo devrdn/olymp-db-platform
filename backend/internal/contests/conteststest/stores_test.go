@@ -10,6 +10,13 @@ import (
 	"github.com/google/uuid"
 )
 
+// inUnitOfWork is a context carrying the same marker the fixture's unit of
+// work puts on one, which is what the fakes that refuse to run outside a
+// transaction look for.
+func inUnitOfWork() context.Context {
+	return context.WithValue(context.Background(), txKey{}, true)
+}
+
 func TestSubmissionsHonoursTheRepositoryContract(t *testing.T) {
 	SubmissionRepositoryContract(t, func(t *testing.T, run func(context.Context, SubmissionTarget)) {
 		repo := NewSubmissions()
@@ -59,7 +66,10 @@ func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 func TestQuestionsHonoursTheRepositoryContract(t *testing.T) {
 	QuestionRepositoryContract(t, func(t *testing.T, run func(context.Context, QuestionTarget)) {
 		repo := NewQuestions()
-		run(context.Background(), QuestionTarget{Repo: repo, Visible: repo, NewContest: uuid.New})
+		run(inUnitOfWork(), QuestionTarget{
+			Repo: repo, Visible: repo, NewContest: uuid.New,
+			Outside: context.Background(),
+		})
 	})
 }
 
@@ -73,8 +83,7 @@ func TestContestsHonoursTheRepositoryContract(t *testing.T) {
 		repo.Clock = func() time.Time { return FixtureNow }
 		repo.Rosters(managers, registrations)
 		run(
-			// The same marker the fixture's unit of work puts on a context.
-			context.WithValue(context.Background(), txKey{}, true),
+			inUnitOfWork(),
 			ContestTarget{
 				Repo:    repo,
 				NewUser: uuid.New,
@@ -118,12 +127,12 @@ func TestManagersHonoursTheRepositoryContract(t *testing.T) {
 	})
 }
 
-func TestAttemptsHonoursTheRepositoryContract(t *testing.T) {
+func TestAttemptsHonoursTheStoreContract(t *testing.T) {
 	AttemptStoreContract(t, func(t *testing.T, run func(context.Context, AttemptTarget)) {
 		questions := NewQuestions()
 		submissions := NewSubmissions()
 		submissions.Clock = func() time.Time { return FixtureNow }
-		run(context.Background(), AttemptTarget{
+		run(inUnitOfWork(), AttemptTarget{
 			Store:           NewAttempts(submissions),
 			Questions:       questions,
 			Submissions:     submissions,
@@ -135,12 +144,12 @@ func TestAttemptsHonoursTheRepositoryContract(t *testing.T) {
 	})
 }
 
-func TestSequentialProgressHonoursTheRepositoryContract(t *testing.T) {
+func TestSequentialProgressHonoursTheGateContract(t *testing.T) {
 	SequentialGateContract(t, func(t *testing.T, run func(context.Context, SequenceTarget)) {
 		questions := NewQuestions()
 		submissions := NewSubmissions()
 		submissions.Clock = func() time.Time { return FixtureNow }
-		run(context.Background(), SequenceTarget{
+		run(inUnitOfWork(), SequenceTarget{
 			Gate:            NewSequentialProgress(questions, submissions),
 			Questions:       questions,
 			Submissions:     submissions,

@@ -24,6 +24,9 @@ type QuestionTarget struct {
 	Visible contests.VisibleQuestionRepository
 	// NewContest creates a contest and returns its identifier.
 	NewContest func() uuid.UUID
+	// Outside is a context that is not inside a unit of work. The context
+	// every other case is run with is inside one.
+	Outside context.Context
 }
 
 // QuestionRepositoryContract is what every contests.QuestionRepository and
@@ -37,8 +40,8 @@ type QuestionTarget struct {
 // context to call the repository with, and cleans up afterwards. Only the
 // behaviour a single caller can observe is here. What needs a second
 // transaction or the real database (two authors adding a question at the
-// same moment, the bounds on a column, reordering outside a transaction) is
-// outside it, and is asked of PostgreSQL alone where a test exists.
+// same moment, the bounds on a column) is outside it, and is asked of
+// PostgreSQL alone where a test exists.
 //
 // Texts use the language codes "en", "ru" and "ro", which the real schema
 // seeds. A question is told apart from its neighbours by its Points, which
@@ -584,6 +587,32 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 			err := target.Repo.Reorder(ctx, ours, []uuid.UUID{foreign.ID, mine.ID})
 
 			notFound(t, err, "Reorder() naming another contest's question")
+		})
+	})
+
+	t.Run("Create and Reorder refuse to run outside a unit of work", func(t *testing.T) {
+		// Both rely on a transaction for what they promise (the lock that
+		// serialises position allocation, the deferred ordering constraint),
+		// and a silent no-op outside one is a race that only appears under
+		// load. The refusal is a plain error, not a lookup failure: a missing
+		// transaction must not read as a missing question.
+		each(t, func(ctx context.Context, target QuestionTarget) {
+			contest := target.NewContest()
+			first := create(t, ctx, target, textual(contest, 10))
+
+			_, err := target.Repo.Create(target.Outside, textual(contest, 20))
+			if err == nil {
+				t.Error("Create() outside a unit of work = nil, want an error")
+			} else if errors.Is(err, contests.ErrQuestionNotFound) {
+				t.Errorf("Create() outside a unit of work = %v, want the missing transaction reported, not a lookup failure", err)
+			}
+
+			err = target.Repo.Reorder(target.Outside, contest, []uuid.UUID{first.ID})
+			if err == nil {
+				t.Error("Reorder() outside a unit of work = nil, want an error")
+			} else if errors.Is(err, contests.ErrQuestionNotFound) {
+				t.Errorf("Reorder() outside a unit of work = %v, want the missing transaction reported, not a lookup failure", err)
+			}
 		})
 	})
 

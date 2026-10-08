@@ -28,14 +28,7 @@ func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 		withTx(t, func(ctx context.Context) {
 			accounts := NewUsers(testPool)
 			author := makeUser(t, ctx, "author-reg")
-			// Inside one transaction now() is its start time, which is what
-			// created_at defaults to, so the clock a row is stamped with is
-			// exactly the one read here — through the transaction, as the
-			// insert reads it; the pool itself is another session.
-			var now time.Time
-			if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
-				t.Fatalf("read the database clock: %v", err)
-			}
+			now := txNow(t, ctx)
 			run(ctx, conteststest.RegistrationTarget{
 				Repo: NewRegistrations(testPool),
 				NewUser: func(login, fullName string) uuid.UUID {

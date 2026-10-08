@@ -2,6 +2,11 @@
 // contests package declares, plus a fixture that assembles a service from
 // them.
 //
+// It also publishes the contracts every implementation of those interfaces
+// answers to (the *_contract.go files): the in-memory stores here run them, and
+// so does internal/postgres against the real repositories, which is what keeps
+// the stores the service tests trust honest about what production does.
+//
 // It exists so the contest rules — the lifecycle, the publish gate, the
 // enrollment and staffing rules — are exercised against real behaviour rather
 // than assertions on mock calls, and without a database. The HTTP handlers use
@@ -538,6 +543,11 @@ func (r *Questions) ByID(_ context.Context, questionID uuid.UUID) (contests.Ques
 // so whatever the caller's value carries of either is dropped, as the real
 // insert does not write it.
 func (r *Questions) Create(ctx context.Context, q contests.Question) (contests.Question, error) {
+	// The real insert locks the contest row first, which only holds inside a
+	// transaction, so it refuses to run outside one.
+	if !inTx(ctx) {
+		return contests.Question{}, errors.New("adding a question must run inside a transaction")
+	}
 	existing, _ := r.List(ctx, q.ContestID)
 	q.ID = uuid.New()
 	q.Ord = len(existing) + 1
@@ -573,7 +583,12 @@ func (r *Questions) Delete(ctx context.Context, questionID uuid.UUID) error {
 	return nil
 }
 
-func (r *Questions) Reorder(_ context.Context, contestID uuid.UUID, ordered []uuid.UUID) error {
+func (r *Questions) Reorder(ctx context.Context, contestID uuid.UUID, ordered []uuid.UUID) error {
+	// The real reorder defers its uniqueness check to the end of the
+	// transaction, which it cannot do outside one, so it refuses first.
+	if !inTx(ctx) {
+		return errors.New("reordering questions must run inside a transaction")
+	}
 	for i, id := range ordered {
 		q, ok := r.byID[id]
 		if !ok || q.ContestID != contestID {
@@ -1030,11 +1045,11 @@ func (r *Attempts) ForRegistration(_ context.Context, registrationID uuid.UUID) 
 // same answers as the real one by SubmissionRepositoryContract, which both
 // run. It does not reproduce the real repository's concurrency guarantee — a
 // Go map has no analogue of the table's own UNIQUE constraint racing two
-// transactions — so
-// the genuine race (finding 3) is proven where it can actually happen,
-// against PostgreSQL (internal/postgres/submissions_test.go), not here.
-// ConflictsRemaining exists so a Service-level test can still exercise
-// Submit's own retry loop deterministically, without a second goroutine.
+// transactions — so the genuine race (finding 3) is proven where it can
+// actually happen, against PostgreSQL (internal/postgres/submissions_test.go),
+// not here. ConflictsRemaining exists so a Service-level test can still
+// exercise Submit's own retry loop deterministically, without a second
+// goroutine.
 type Submissions struct {
 	byKey map[submissionKey][]contests.Submission
 	// Clock answers what Insert checks req.Deadline against; nil defaults to

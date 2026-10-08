@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
-	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/google/uuid"
 )
 
@@ -19,14 +18,7 @@ func TestStoriesHonoursTheRepositoryContract(t *testing.T) {
 	conteststest.StoryRepositoryContract(t, func(t *testing.T, run func(context.Context, conteststest.StoryTarget)) {
 		withTx(t, func(ctx context.Context) {
 			author := makeUser(t, ctx, "author-story")
-			// Inside one transaction now() is its start time, which is what
-			// updated_at is stamped with, so the clock a row is stamped with
-			// is exactly the one read here — through the transaction, as the
-			// insert reads it; the pool itself is another session.
-			var now time.Time
-			if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
-				t.Fatalf("read the database clock: %v", err)
-			}
+			now := txNow(t, ctx)
 			repo := NewStories(testPool)
 			run(ctx, conteststest.StoryTarget{
 				Repo:       repo,

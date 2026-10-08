@@ -31,9 +31,10 @@ type SubmissionTarget struct {
 // fail only in a contest.
 //
 // each runs one case: it prepares a fresh target, calls run with it and the
-// context to call the repository with, and cleans up afterwards. Only the behaviour a single caller can observe is
-// here; the race between two transactions is a property of the real
-// statement and is proven against PostgreSQL alone.
+// context to call the repository with, and cleans up afterwards. Only the
+// behaviour a single caller can observe is here; the race between two
+// transactions is a property of the real statement and is proven against
+// PostgreSQL alone.
 func SubmissionRepositoryContract(t *testing.T, each func(t *testing.T, run func(context.Context, SubmissionTarget))) {
 	// Every deadline is stated against the store's clock: a day ahead for
 	// the cases not about the deadline, an hour behind for those that are.
