@@ -616,9 +616,10 @@ var profileMonitorErrors = monitorErrors.with(
 
 // fail maps a refusal to a response (CLAUDE.md rule 1).
 func (h *ProfileHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
-	// No error of the profile's or the leaderboard's wraps one of the
-	// monitoring's, so the order of the table and the switch below decides
-	// nothing.
+	// The profile wraps the monitoring's errors (a failed read of the
+	// answers, for one) but no error matches both one of these rows and a
+	// profile or leaderboard sentinel below, and the two "not found" answers
+	// are the same anyway, so the order decides nothing.
 	if profileMonitorErrors.answer(w, r, h.log, err) {
 		return
 	}
