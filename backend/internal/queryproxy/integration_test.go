@@ -587,19 +587,24 @@ func TestAccessCostsOneCoreRoundTrip(t *testing.T) {
 	}
 }
 
-// The schema panel is admitted by the same combined lookup Run uses, which
-// already carries the game and the participant's copy of it: one statement,
-// where Access, a separate read of the game and Ensure's own read of the
-// instance used to cost four.
-func TestSchemaCostsOneCoreRoundTrip(t *testing.T) {
+// The schema panel is admitted by Access, like every other /play read, and
+// then reads the game and the participant's copy of it through the combined
+// lookup Run uses: two statements. It was one while Schema admitted the
+// caller itself over that lookup; the second is what one admission for every
+// read costs here. Before the lookup was merged, the same read cost four.
+func TestTheSchemaReadCostsTwoCoreRoundTrips(t *testing.T) {
 	r := roundTripFixture(t)
 
 	got := r.measure(t, func() error {
-		_, err := r.service.Schema(context.Background(), r.contestID, r.student, netip.Addr{})
+		participant, contest, err := r.service.Access(context.Background(), r.contestID, r.student, netip.Addr{})
+		if err != nil {
+			return err
+		}
+		_, err = r.service.Schema(context.Background(), contest, participant, netip.Addr{})
 		return err
 	})
-	if got != 1 {
-		t.Errorf("core round trips = %d, want 1 (the combined lookup)", got)
+	if got != 2 {
+		t.Errorf("core round trips = %d, want 2 (Access, then the combined lookup)", got)
 	}
 }
 

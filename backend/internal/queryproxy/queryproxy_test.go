@@ -134,11 +134,16 @@ type lookupFake struct {
 	instance provisioning.Instance
 	err      error
 	calls    *int
+	// asked records the contest and the account ForRun was last asked about.
+	asked *[2]uuid.UUID
 }
 
-func (l lookupFake) ForRun(context.Context, uuid.UUID, uuid.UUID) (queryproxy.LookupResult, error) {
+func (l lookupFake) ForRun(_ context.Context, contestID, userID uuid.UUID) (queryproxy.LookupResult, error) {
 	if l.calls != nil {
 		*l.calls++
+	}
+	if l.asked != nil {
+		*l.asked = [2]uuid.UUID{contestID, userID}
 	}
 	if l.err != nil {
 		return queryproxy.LookupResult{}, l.err

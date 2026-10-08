@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net/netip"
 
+	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
-	"github.com/google/uuid"
 )
 
 // ErrSchemaHidden is a contest that closed its catalogues.
@@ -38,42 +38,43 @@ func (s *Service) WithSchemas(schemas Schemas) *Service {
 	return s
 }
 
-// Schema answers what the game looks like, for the console's schema panel.
+// Schema answers what the game looks like, for the console's schema panel,
+// to participant in contest: a pair the caller's Access has already admitted
+// (the /play/schema handler admits it like every other /play read, and
+// observes it). It does not admit them a second time.
 //
-// The same admission every other participant-facing read requires (Access):
-// the participation gate, contests.StandingOf. The schema is contest content
-// like the story and the questions, so under individual timing a successful
-// read starts the participant's clock (StartOnRead) — only once it has been
-// read, so a refused read, a hidden schema included, starts nothing.
+// The schema is contest content like the story and the questions, so under
+// individual timing a successful read starts the participant's clock
+// (StartOnRead, which asks the gate again for the start itself) — only once
+// it has been read, so a refused read, a hidden schema included, starts
+// nothing.
+//
+// The game and the participant's copy of it come from the combined lookup
+// Run uses, asked about the admitted contest and the participant's own
+// account: a second round trip after Access's, which is what admitting every
+// read in one place costs this endpoint. What that lookup says about the
+// registration and the contest is not asked again — the admission already
+// spoke for them.
 //
 // The catalogue flag is checked before the database is provisioned, and
 // before anything is read: a contest that hides its schema must not be able
 // to be told apart from one whose game is simply slow to answer, and the
 // refusal must not cost the cluster a connection either.
-func (s *Service) Schema(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (provisioning.Schema, error) {
+func (s *Service) Schema(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (provisioning.Schema, error) {
 	// A build with nothing to answer this has nothing to look up *with*.
 	// internal/app builds a second, console-less Service for the participant
 	// read endpoints when no Query Runner is deployed, and hands it nils for
 	// the collaborators only Run uses — games and databases among them — so
-	// it admits the caller the way every read does and refuses, rather than
-	// turning "this deployment has no console" into a panic mid-request.
+	// it refuses, rather than turning "this deployment has no console" into a
+	// panic mid-request.
 	if s.schemas == nil {
-		if _, _, err := s.Access(ctx, contestID, userID, addr); err != nil {
-			return provisioning.Schema{}, err
-		}
 		return provisioning.Schema{}, ErrSchemaHidden
 	}
 
-	// Access's own admission, over the one lookup Run makes: it already
-	// carries the game and the participant's copy of it, which this endpoint
-	// needs next.
-	lookup, err := s.lookup.ForRun(ctx, contestID, userID)
-	participant, err := classifyParticipant(lookup.Participant, err, "look up the participant, the contest and its game")
-	if err != nil {
-		return provisioning.Schema{}, err
-	}
-	contest := lookup.Contest
-	if err := s.admit(contest, participant, addr); err != nil {
+	// Only the lookup's own failures are read here: a registration gone since
+	// Access found it is not_a_participant, anything else is ours.
+	lookup, err := s.lookup.ForRun(ctx, contest.ID, participant.UserID)
+	if _, err := classifyParticipant(lookup.Participant, err, "look up the contest's game and the participant's copy"); err != nil {
 		return provisioning.Schema{}, err
 	}
 
