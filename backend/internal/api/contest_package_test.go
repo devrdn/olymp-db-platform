@@ -330,7 +330,7 @@ func TestBothExportRoutesSurviveBeingMountedTogether(t *testing.T) {
 	api.NewContestsHandler(stores.Service, mw, log, "en").Mount(router)
 	access := &fakeAccess{}
 	access.err = queryproxy.ErrNotAParticipant
-	api.NewParticipantHandler(access, contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts(), nil),
+	api.NewParticipantHandler(access, contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts(stores.Submissions), nil),
 		&fakeHistory{}, &fakeSubmitter{}, answerRate(memory, fixtureAnswersPerMinute), mw, log, "en").Mount(router)
 
 	contestID := uuid.New().String()

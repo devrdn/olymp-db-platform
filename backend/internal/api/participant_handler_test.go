@@ -310,7 +310,9 @@ type participantFixture struct {
 	submitter *fakeSubmitter
 	stories   *conteststest.Stories
 	questions *conteststest.Questions
-	attempts  *conteststest.Attempts
+	// submissions is what the reader's attempt stats derive from, as
+	// production derives them from the submissions table.
+	submissions *conteststest.Submissions
 	// workspaceStore is the in-memory store behind the workspace endpoints.
 	workspaceStore *failingWorkspace
 	// watcher records every visit admission reported.
@@ -369,8 +371,9 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 
 	stories := conteststest.NewStories()
 	questions := conteststest.NewQuestions()
-	attempts := conteststest.NewAttempts()
-	reader := contests.NewReader(stories, questions, attempts, nil)
+	submissions := conteststest.NewSubmissions()
+	submissions.Clock = func() time.Time { return conteststest.FixtureNow }
+	reader := contests.NewReader(stories, questions, conteststest.NewAttempts(submissions), nil)
 	access := &fakeAccess{}
 	history := &fakeHistory{}
 	submitter := &fakeSubmitter{}
@@ -389,7 +392,7 @@ func newParticipantFixture(t *testing.T) *participantFixture {
 
 	return &participantFixture{
 		router: router, access: access, history: history, submitter: submitter,
-		stories: stories, questions: questions, attempts: attempts,
+		stories: stories, questions: questions, submissions: submissions,
 		workspaceStore: workspaceStore,
 		watcher:        watcher,
 		signalStore:    signals,
@@ -414,6 +417,19 @@ func (f *participantFixture) post(path, body string) *httptest.ResponseRecorder 
 	rec := httptest.NewRecorder()
 	f.router.ServeHTTP(rec, req)
 	return rec
+}
+
+// submit records one answer through the submission store the reader's attempt
+// stats derive from, carrying the question's own points and cap.
+func (f *participantFixture) submit(t *testing.T, registrationID uuid.UUID, q contests.Question, correct bool) {
+	t.Helper()
+	if _, err := f.submissions.Insert(t.Context(), contests.SubmissionRequest{
+		RegistrationID: registrationID, QuestionID: q.ID, Value: "an answer",
+		IsCorrect: correct, Points: q.Points, MaxAttempts: q.MaxAttempts,
+		Deadline: conteststest.FixtureNow.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("Insert() = %v", err)
+	}
 }
 
 // playContest stages a running contest with one visible question and a story
@@ -847,7 +863,8 @@ func TestQuestionsCarryAttemptsRemainingAndClosed(t *testing.T) {
 		MaxAttempts: &maxAttempts,
 		Texts:       map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}},
 	})
-	f.attempts.Put(registrationID, q.ID, contests.AttemptStats{Attempts: 2})
+	f.submit(t, registrationID, q, false)
+	f.submit(t, registrationID, q, false)
 
 	rec := f.get("/contests/" + contestID.String() + "/play/questions")
 	if rec.Code != http.StatusOK {
@@ -893,7 +910,7 @@ func TestQuestionsCarryCorrectAndPointsAwarded(t *testing.T) {
 		ContestID: contestID, Ord: 1, Kind: contests.KindText, Points: 10, IsVisible: true,
 		Texts: map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}},
 	})
-	f.attempts.Put(registrationID, q.ID, contests.AttemptStats{Attempts: 1, Correct: true, PointsAwarded: 10})
+	f.submit(t, registrationID, q, true)
 
 	rec := f.get("/contests/" + contestID.String() + "/play/questions")
 	if rec.Code != http.StatusOK {
@@ -970,7 +987,7 @@ func TestParticipantRoutesDoNotShadowTheStaffContentEndpoints(t *testing.T) {
 	// Both handlers mounted over one router, exactly as app.go mounts them.
 	router := chi.NewRouter()
 	api.NewContestsHandler(stores.Service, mw, log, "en").Mount(router)
-	reader := contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts(), stores.Sequence)
+	reader := contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts(stores.Submissions), stores.Sequence)
 	access := &fakeAccess{err: queryproxy.ErrNotAParticipant}
 	api.NewParticipantHandler(access, reader, &fakeHistory{}, stores.Service, answerRate(c, fixtureAnswersPerMinute), mw, log, "en").Mount(router)
 
@@ -1213,7 +1230,7 @@ func TestSevenConcurrentAnswersEndUpAsARefusalNotAnInternalError(t *testing.T) {
 	})
 
 	access := &fakeAccess{participant: p, contest: c}
-	reader := contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts(), stores.Sequence)
+	reader := contests.NewReader(stores.Stories, stores.Questions, conteststest.NewAttempts(stores.Submissions), stores.Sequence)
 	router := chi.NewRouter()
 	// stores.Service, not a fakeSubmitter: what answers here is the real
 	// retry loop.
@@ -1364,7 +1381,7 @@ func TestAnAnswerIsRefusedWhenItsRateCannotBeCounted(t *testing.T) {
 	}
 	submitter := &fakeSubmitter{}
 	router := chi.NewRouter()
-	api.NewParticipantHandler(access, contests.NewReader(conteststest.NewStories(), conteststest.NewQuestions(), conteststest.NewAttempts(), nil),
+	api.NewParticipantHandler(access, contests.NewReader(conteststest.NewStories(), conteststest.NewQuestions(), conteststest.NewAttempts(conteststest.NewSubmissions()), nil),
 		&fakeHistory{}, submitter, api.AnswerRate{Limiter: failingLimiter{}, PerMinute: 6}, mw, log, "en").Mount(router)
 
 	req := httptest.NewRequest(http.MethodPost, "/contests/"+contestID.String()+"/questions/"+uuid.New().String()+"/answer",
