@@ -902,91 +902,33 @@ var contestUserErrors = usersErrors.with(
 
 // fail maps a domain error onto a response.
 //
-// The mapping is the API's contract: 404 for things that are not there, 400
-// for a request that could never be right, 409 for one that is right but not
-// now, 422 for a publication that is simply not ready yet.
+// The mapping is the API's contract, and lives in contestsErrors
+// (errortable.go); what is left here is the answer that carries details, and
+// the 500 for everything no table knows.
 func (h *ContestsHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	// Appointing an account to the staff meets the account's own refusals.
 	// Checked first: no contests error wraps a users one (GrantManager and
-	// Enroll return users.Err… bare), so nothing the switch below recognises
-	// can also match here.
+	// Enroll return users.Err… bare), so nothing contestsErrors recognises can
+	// also match here.
 	if contestUserErrors.answer(w, r, h.log, err) {
 		return
 	}
-	switch {
-	case errors.Is(err, contests.ErrNotFound):
-		httpx.Error(w, r, http.StatusNotFound, codeNotFound, "Contest not found")
-	case errors.Is(err, contests.ErrQuestionNotFound):
-		httpx.Error(w, r, http.StatusNotFound, codeQuestionNotFound, "Question not found")
-	case errors.Is(err, contests.ErrStoryNotFound):
-		httpx.Error(w, r, http.StatusNotFound, codeStoryNotFound, "This contest has no story yet")
-	case errors.Is(err, contests.ErrParticipantNotFound):
-		httpx.Error(w, r, http.StatusNotFound, codeParticipantNotFound, "Participant not found")
-	case errors.Is(err, contests.ErrManagerNotFound):
-		httpx.Error(w, r, http.StatusNotFound, codeManagerNotFound, "This user does not staff the contest")
-
-	case errors.Is(err, contests.ErrPackageTooLarge):
-		// 422 rather than 500: the request was understood and the contest is
-		// real, it simply carries more questions than one package holds. Its
-		// own code rather than invalid_request, because the caller sent no
-		// field to correct — what has to change is the contest.
-		httpx.Error(w, r, http.StatusUnprocessableEntity, codePackageTooLarge, err.Error())
-
-	case errors.Is(err, contests.ErrNotPublishable):
-		// The gate answers with a code and the whole list of what is missing.
-		// It goes through the same helper as every other error rather than
-		// building its own envelope: writing one by hand is how this code
-		// once reached clients undeclared, with no message in any language.
+	// The gate's refusal carries the whole list of what is missing; the table
+	// holds the same answer without it. The gate returns the typed error on
+	// its own, never wrapped around another sentinel, so asking for it first
+	// changes nothing for the rest.
+	var notReady *contests.NotPublishableError
+	if errors.As(err, &notReady) {
 		httpx.ErrorWithDetails(w, r, http.StatusUnprocessableEntity,
-			codeNotPublishable, "The contest is not ready to publish",
+			codeNotPublishable, notPublishableMessage,
 			map[string]any{"problems": problemsOf(err)})
-
-	case errors.Is(err, contests.ErrInvalidTransition):
-		httpx.Error(w, r, http.StatusConflict, codeInvalidTransition, err.Error())
-	case errors.Is(err, contests.ErrStatusChanged):
-		// Its own code, not invalid_transition: the caller asked for something
-		// that was legal when they asked, so the interface tells them to look
-		// again rather than that they were wrong.
-		httpx.Error(w, r, http.StatusConflict, codeStatusChanged, err.Error())
-	case errors.Is(err, contests.ErrNotEditable):
-		httpx.Error(w, r, http.StatusConflict, codeNotEditable, err.Error())
-	case errors.Is(err, contests.ErrFreezeAlreadyReached):
-		httpx.Error(w, r, http.StatusConflict, codeFreezeAlreadyReached, err.Error())
-	case errors.Is(err, contests.ErrICPCStartLocked):
-		httpx.Error(w, r, http.StatusConflict, codeICPCStartLocked, err.Error())
-	case errors.Is(err, contests.ErrOwnerImmutable):
-		httpx.Error(w, r, http.StatusConflict, codeOwnerImmutable, err.Error())
-	case errors.Is(err, contests.ErrAlreadyEnrolled):
-		httpx.Error(w, r, http.StatusConflict, codeAlreadyEnrolled, err.Error())
-	case errors.Is(err, contests.ErrEnrollmentClosed):
-		httpx.Error(w, r, http.StatusConflict, codeEnrollmentClosed, err.Error())
-	case errors.Is(err, contests.ErrParticipantStarted):
-		httpx.Error(w, r, http.StatusConflict, codeParticipantStarted, err.Error())
-	case errors.Is(err, contests.ErrStaffCannotParticipate):
-		httpx.Error(w, r, http.StatusConflict, codeStaffCannotParticipate, err.Error())
-	case errors.Is(err, contests.ErrParticipantCannotBeStaff):
-		httpx.Error(w, r, http.StatusConflict, codeParticipantCannotBeStaff, err.Error())
-
-	case errors.Is(err, contests.ErrAddressNotAllowed):
-		// Deliberately explicit: "you are on the wrong network" is something
-		// the participant can act on, unlike a bare 403.
-		httpx.Error(w, r, http.StatusForbidden, codeAddressNotAllowed,
-			"This contest is only available from the university network")
-
-	case errors.Is(err, contests.ErrInvalidContest),
-		errors.Is(err, contests.ErrInvalidQuestion),
-		errors.Is(err, contests.ErrInvalidAnswer),
-		errors.Is(err, contests.ErrInvalidPolicy),
-		errors.Is(err, contests.ErrInvalidRole),
-		errors.Is(err, contests.ErrUnknownLanguage),
-		errors.Is(err, contests.ErrRosterTooLarge),
-		errors.Is(err, contests.ErrQueryTooLong):
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, err.Error())
-
-	default:
-		h.log.ErrorContext(r.Context(), "contest operation failed", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
+		return
 	}
+	if contestsErrors.answer(w, r, h.log, err) {
+		return
+	}
+	h.log.ErrorContext(r.Context(), "contest operation failed", "error", err)
+	httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 }
 
 // window parses the schedule out of a request.

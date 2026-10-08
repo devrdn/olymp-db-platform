@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
@@ -222,3 +223,102 @@ var monitorErrors = errorTable{
 	// §9.4 — a 4xx that is not 429 is discarded).
 	{err: monitor.ErrTooManyEvents, status: http.StatusConflict, code: codeSignalsTooManyStored},
 }
+
+// contestsErrors answers every error in contests.Errors(): what the
+// organiser's contest routes meet, and what a participant meets reading the
+// story or submitting an answer. TestEveryContestsErrorHasItsAnswer walks that
+// list. A contest's staff routes also meet the account package's refusals and
+// answer those first (contestUserErrors).
+//
+// The mapping is the API's contract: 404 for things that are not there, 400
+// for a request that could never be right, 409 for one that is right but not
+// now, 422 for a request that is understood and cannot be met.
+var contestsErrors = errorTable{
+	{err: contests.ErrNotFound, status: http.StatusNotFound, code: codeNotFound,
+		message: "Contest not found"},
+	// Also the answer when the question named in the URL belongs to another
+	// contest: that it exists elsewhere is not this caller's business
+	// (contests.Service.Submit's own doc).
+	{err: contests.ErrQuestionNotFound, status: http.StatusNotFound, code: codeQuestionNotFound,
+		message: "No such question in this contest"},
+	{err: contests.ErrStoryNotFound, status: http.StatusNotFound, code: codeStoryNotFound,
+		message: "This contest has no story yet"},
+	{err: contests.ErrParticipantNotFound, status: http.StatusNotFound, code: codeParticipantNotFound,
+		message: "Participant not found"},
+	{err: contests.ErrManagerNotFound, status: http.StatusNotFound, code: codeManagerNotFound,
+		message: "This user does not staff the contest"},
+
+	// 422 rather than 500: the request was understood and the contest is real,
+	// it simply carries more questions than one package holds. Its own code
+	// rather than invalid_request, because the caller sent no field to correct
+	// — what has to change is the contest.
+	{err: contests.ErrPackageTooLarge, status: http.StatusUnprocessableEntity, code: codePackageTooLarge},
+	// The publish gate answers with a code and the whole list of what is
+	// missing, built by the handler from the typed error before this table is
+	// asked (ContestsHandler.fail); this row is the same answer without the
+	// list, for the sentinel itself. It goes through the same helper as every
+	// other error rather than building its own envelope: writing one by hand is
+	// how this code once reached clients undeclared, with no message in any
+	// language.
+	{err: contests.ErrNotPublishable, status: http.StatusUnprocessableEntity, code: codeNotPublishable,
+		message: notPublishableMessage},
+
+	{err: contests.ErrInvalidTransition, status: http.StatusConflict, code: codeInvalidTransition},
+	// Its own code, not invalid_transition: the caller asked for something that
+	// was legal when they asked, so the interface tells them to look again
+	// rather than that they were wrong.
+	{err: contests.ErrStatusChanged, status: http.StatusConflict, code: codeStatusChanged},
+	{err: contests.ErrNotEditable, status: http.StatusConflict, code: codeNotEditable},
+	{err: contests.ErrFreezeAlreadyReached, status: http.StatusConflict, code: codeFreezeAlreadyReached},
+	{err: contests.ErrICPCStartLocked, status: http.StatusConflict, code: codeICPCStartLocked},
+	{err: contests.ErrOwnerImmutable, status: http.StatusConflict, code: codeOwnerImmutable},
+	{err: contests.ErrAlreadyEnrolled, status: http.StatusConflict, code: codeAlreadyEnrolled},
+	{err: contests.ErrEnrollmentClosed, status: http.StatusConflict, code: codeEnrollmentClosed},
+	{err: contests.ErrParticipantStarted, status: http.StatusConflict, code: codeParticipantStarted},
+	{err: contests.ErrStaffCannotParticipate, status: http.StatusConflict, code: codeStaffCannotParticipate},
+	{err: contests.ErrParticipantCannotBeStaff, status: http.StatusConflict, code: codeParticipantCannotBeStaff},
+
+	// Deliberately explicit: "you are on the wrong network" is something the
+	// participant can act on, unlike a bare 403. The same code and text as
+	// queryproxy.ErrAddressNotAllowed, which refuses the same thing at the
+	// door of the console rather than at enrolment.
+	{err: contests.ErrAddressNotAllowed, status: http.StatusForbidden, code: codeAddressNotAllowed,
+		message: "This contest is only available from the university network"},
+
+	// A request whose shape could never be right, by its own rule: the error's
+	// own text says which.
+	{err: contests.ErrInvalidContest, status: http.StatusBadRequest, code: codeInvalidRequest},
+	{err: contests.ErrInvalidQuestion, status: http.StatusBadRequest, code: codeInvalidRequest},
+	{err: contests.ErrInvalidAnswer, status: http.StatusBadRequest, code: codeInvalidRequest},
+	{err: contests.ErrInvalidPolicy, status: http.StatusBadRequest, code: codeInvalidRequest},
+	{err: contests.ErrInvalidRole, status: http.StatusBadRequest, code: codeInvalidRequest},
+	{err: contests.ErrUnknownLanguage, status: http.StatusBadRequest, code: codeInvalidRequest},
+	{err: contests.ErrRosterTooLarge, status: http.StatusBadRequest, code: codeInvalidRequest},
+	{err: contests.ErrQueryTooLong, status: http.StatusBadRequest, code: codeInvalidRequest},
+
+	// What a participant meets submitting an answer.
+	{err: contests.ErrAnswerTooLong, status: http.StatusBadRequest, code: codeAnswerTooLong},
+	// The caller's own malformed request, like an overlong answer: the
+	// interface only ever sends an option id for a choice question.
+	{err: contests.ErrNotAChoice, status: http.StatusBadRequest, code: codeAnswerNotAChoice,
+		message: "A choice question takes one of its own option identifiers"},
+	{err: contests.ErrQuestionClosed, status: http.StatusConflict, code: codeQuestionClosed,
+		message: "This question is already answered correctly, or every attempt has been used"},
+	// The server is what enforces sequential order (§6.1.1), not the
+	// interface: a direct request naming a question that has not opened yet is
+	// refused here, the same 409 family as codeQuestionClosed (another fact
+	// about this question's current state, not a permission the caller lacks).
+	{err: contests.ErrQuestionNotOpen, status: http.StatusConflict, code: codeQuestionNotOpen,
+		message: "A question ordered before this one is not closed yet"},
+	{err: contests.ErrDeadlinePassed, status: http.StatusConflict, code: codeDeadlinePassed,
+		message: "The deadline for this contest has passed"},
+	// Running out of retries is a fact about this exact moment, not an outage —
+	// the same 409 family as codeQuestionClosed and codeStatusChanged, and the
+	// same honest instruction: try again.
+	{err: contests.ErrTooManyAttemptConflicts, status: http.StatusConflict, code: codeAttemptConflict,
+		message: "Too many submissions to this question arrived at once; try again"},
+}
+
+// notPublishableMessage is what a contest that is not ready to publish is told,
+// with or without the list of problems.
+const notPublishableMessage = "The contest is not ready to publish"

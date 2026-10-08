@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/monitor"
 	"github.com/devrdn/db-contest/backend/internal/platform/httpx"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
@@ -342,5 +343,110 @@ func TestTheProfileAnswersTheMonitorsErrorsUnderItsOwnCodes(t *testing.T) {
 		if !ok || got != expected {
 			t.Errorf("%v: answered %+v (matched %v), want %+v", err, got, ok, expected)
 		}
+	}
+}
+
+// Every error contests hands to a caller has a row, with the answer the
+// contests handler and the participant's answer route gave before they shared
+// one table. A refusal of the request's own shape is invalid_request with the
+// error's own text, as it was; the rest have a code each.
+func TestEveryContestsErrorHasItsAnswer(t *testing.T) {
+	const invalid = "invalid_request"
+	want := map[error]answered{
+		contests.ErrNotFound: {status: http.StatusNotFound, code: "not_found",
+			message: "Contest not found"},
+		contests.ErrQuestionNotFound: {status: http.StatusNotFound, code: "question_not_found",
+			message: "No such question in this contest"},
+		contests.ErrStoryNotFound: {status: http.StatusNotFound, code: "story_not_found",
+			message: "This contest has no story yet"},
+		contests.ErrParticipantNotFound: {status: http.StatusNotFound, code: "participant_not_found",
+			message: "Participant not found"},
+		contests.ErrManagerNotFound: {status: http.StatusNotFound, code: "manager_not_found",
+			message: "This user does not staff the contest"},
+		contests.ErrPackageTooLarge: {status: http.StatusUnprocessableEntity, code: "package_too_large",
+			message: "contest carries more questions than one package holds"},
+		contests.ErrNotPublishable: {status: http.StatusUnprocessableEntity, code: "not_publishable",
+			message: "The contest is not ready to publish"},
+		contests.ErrInvalidTransition: {status: http.StatusConflict, code: "invalid_transition",
+			message: "contest cannot move to that status"},
+		contests.ErrStatusChanged: {status: http.StatusConflict, code: "status_changed",
+			message: "contest status changed while the request was being decided"},
+		contests.ErrNotEditable: {status: http.StatusConflict, code: "not_editable",
+			message: "contest can no longer be edited"},
+		contests.ErrFreezeAlreadyReached: {status: http.StatusConflict, code: "freeze_already_reached",
+			message: "the leaderboard has already frozen, so the end date can only move later"},
+		contests.ErrICPCStartLocked: {status: http.StatusConflict, code: "icpc_start_locked",
+			message: "the start date cannot change while ICPC scoring is running"},
+		contests.ErrOwnerImmutable: {status: http.StatusConflict, code: "owner_immutable",
+			message: "the contest owner cannot be changed here"},
+		contests.ErrAlreadyEnrolled: {status: http.StatusConflict, code: "already_enrolled",
+			message: "already taking part in this contest"},
+		contests.ErrEnrollmentClosed: {status: http.StatusConflict, code: "enrollment_closed",
+			message: "this contest is not accepting signups"},
+		contests.ErrParticipantStarted: {status: http.StatusConflict, code: "participant_started",
+			message: "this participant has a record in this contest; disqualify instead of removing"},
+		contests.ErrStaffCannotParticipate: {status: http.StatusConflict, code: "staff_cannot_participate",
+			message: "contest staff cannot also register as a participant"},
+		contests.ErrParticipantCannotBeStaff: {status: http.StatusConflict, code: "participant_cannot_be_staff",
+			message: "a participant cannot be appointed to the contest staff"},
+		contests.ErrAddressNotAllowed: {status: http.StatusForbidden, code: "address_not_allowed",
+			message: "This contest is only available from the university network"},
+		contests.ErrInvalidContest: {status: http.StatusBadRequest, code: invalid,
+			message: "contest is not valid"},
+		contests.ErrInvalidQuestion: {status: http.StatusBadRequest, code: invalid,
+			message: "question is not valid"},
+		contests.ErrInvalidAnswer: {status: http.StatusBadRequest, code: invalid,
+			message: "reference answer is not valid"},
+		contests.ErrInvalidPolicy: {status: http.StatusBadRequest, code: invalid,
+			message: "sql policy is not valid"},
+		contests.ErrInvalidRole: {status: http.StatusBadRequest, code: invalid,
+			message: "unknown contest role"},
+		contests.ErrUnknownLanguage: {status: http.StatusBadRequest, code: invalid,
+			message: "language is not available"},
+		contests.ErrRosterTooLarge: {status: http.StatusBadRequest, code: invalid,
+			message: "too many entries in one roster"},
+		contests.ErrQueryTooLong: {status: http.StatusBadRequest, code: invalid,
+			message: "search text is too long"},
+		contests.ErrAnswerTooLong: {status: http.StatusBadRequest, code: "answer_too_long",
+			message: "the answer is too long"},
+		contests.ErrNotAChoice: {status: http.StatusBadRequest, code: "answer_not_a_choice",
+			message: "A choice question takes one of its own option identifiers"},
+		contests.ErrQuestionClosed: {status: http.StatusConflict, code: "question_closed",
+			message: "This question is already answered correctly, or every attempt has been used"},
+		contests.ErrQuestionNotOpen: {status: http.StatusConflict, code: "question_not_open",
+			message: "A question ordered before this one is not closed yet"},
+		contests.ErrDeadlinePassed: {status: http.StatusConflict, code: "deadline_passed",
+			message: "The deadline for this contest has passed"},
+		contests.ErrTooManyAttemptConflicts: {status: http.StatusConflict, code: "attempt_conflict",
+			message: "Too many submissions to this question arrived at once; try again"},
+	}
+
+	declared := map[string]bool{}
+	for _, info := range httpx.Catalog() {
+		declared[info.Code] = true
+	}
+
+	for _, err := range contests.Errors() {
+		t.Run(err.Error(), func(t *testing.T) {
+			expected, known := want[err]
+			if !known {
+				t.Fatalf("no expected answer written for %q: add one beside its row", err)
+			}
+			got, ok := answer(t, contestsErrors, err)
+			if !ok {
+				t.Fatal("the table has no row for it, so it would reach the client as internal_error")
+			}
+			if got != expected {
+				t.Errorf("answered %+v, want %+v", got, expected)
+			}
+			wrapped, ok := answer(t, contestsErrors, fmt.Errorf("%w: while deciding", err))
+			if !ok || wrapped.status != expected.status || wrapped.code != expected.code {
+				t.Errorf("wrapped, answered %+v (matched %v), want status %d and code %q",
+					wrapped, ok, expected.status, expected.code)
+			}
+			if !declared[got.code] {
+				t.Errorf("code %q is not in the catalog, so it is not in error-codes.json", got.code)
+			}
+		})
 	}
 }
