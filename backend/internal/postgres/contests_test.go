@@ -24,7 +24,7 @@ import (
 // hang off a contest, the cover a listing carries, and the locks, which are
 // between sessions. The rest of the file is about other interfaces: the
 // registrations lookup (Registrations.EnrolledIn) and the scheduler's
-// (contests.ScheduleRepository).
+// (contests.ScheduleRepository), which has a contract of its own.
 func TestContestsHonoursTheRepositoryContract(t *testing.T) {
 	conteststest.ContestRepositoryContract(t, func(t *testing.T, run func(context.Context, conteststest.ContestTarget)) {
 		withTx(t, func(ctx context.Context) {
@@ -309,10 +309,9 @@ func TestTryLockRefusesASecondHolderUntilTheFirstEndsItsTransaction(t *testing.T
 }
 
 // setSchedule puts a seeded contest (already valid by makeContest's own
-// column defaults) into the status and window a DueToStart or
-// AdvanceFinished test needs, without fighting the enumerated CHECK
-// constraints a hand-built contests.Contest would have to satisfy on every
-// other field.
+// column defaults) into the status and window a schedule case needs, without
+// fighting the enumerated CHECK constraints a hand-built contests.Contest
+// would have to satisfy on every other field.
 func setSchedule(t *testing.T, ctx context.Context, id uuid.UUID, status string, startsAt, endsAt *time.Time) {
 	t.Helper()
 	_, err := storage.QuerierFrom(ctx, testPool).Exec(ctx,
@@ -323,150 +322,36 @@ func setSchedule(t *testing.T, ctx context.Context, id uuid.UUID, status string,
 	}
 }
 
-func TestDueToStartFindsOnlyPublishedContestsPastTheirStart(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		repo := NewContests(testPool)
-		author := makeUser(t, ctx, "author-due-to-start")
-		past := time.Now().Add(-time.Hour)
-		future := time.Now().Add(time.Hour)
-
-		due := makeContest(t, ctx, author.ID)
-		setSchedule(t, ctx, due, contests.StatusPublished, &past, nil)
-		notYet := makeContest(t, ctx, author.ID)
-		setSchedule(t, ctx, notYet, contests.StatusPublished, &future, nil)
-		alreadyRunning := makeContest(t, ctx, author.ID)
-		setSchedule(t, ctx, alreadyRunning, contests.StatusRunning, &past, nil)
-
-		found, err := repo.DueToStart(ctx)
-		if err != nil {
-			t.Fatalf("DueToStart() = %v", err)
-		}
-
-		seen := idSet(found)
-		if !seen[due] {
-			t.Errorf("DueToStart() = %v, want it to include the due contest %s", seen, due)
-		}
-		if seen[notYet] {
-			t.Error("DueToStart() returned a contest whose start is still in the future")
-		}
-		if seen[alreadyRunning] {
-			t.Error("DueToStart() returned a contest that was already running")
-		}
-
-		// DueToStart only reads: Scheduler decides whether a candidate may
-		// move once it has re-run the publish gate against it (finding 1),
-		// and this method has no business making that call itself.
-		loaded, _ := repo.ByID(ctx, due)
-		if loaded.Status != contests.StatusPublished {
-			t.Errorf("DueToStart() moved a contest by itself; status = %q, want it left published", loaded.Status)
-		}
+// What a single caller can observe of the scheduler's reads and moves is
+// the contract the in-memory Schedule answers to as well
+// (conteststest.ScheduleRepositoryContract). What it leaves to this file is
+// TryLock refusing a second holder, which only two transactions can see
+// (TestTryLockRefusesASecondHolderUntilTheFirstEndsItsTransaction above).
+func TestContestsHonoursTheScheduleRepositoryContract(t *testing.T) {
+	conteststest.ScheduleRepositoryContract(t, func(t *testing.T, run func(context.Context, conteststest.ScheduleTarget)) {
+		withTx(t, func(ctx context.Context) {
+			repo := NewContests(testPool)
+			author := makeUser(t, ctx, "author-schedule-contract")
+			// Inside one transaction now() is its start time, which is what
+			// DueToStart and AdvanceFinished compare against and what a move
+			// stamps updated_at with; read through the transaction, since the
+			// pool itself is another session.
+			var now time.Time
+			if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
+				t.Fatalf("read the database clock: %v", err)
+			}
+			run(ctx, conteststest.ScheduleTarget{
+				Repo:     repo,
+				Contests: repo,
+				Seed: func(status string, startsAt, endsAt *time.Time) uuid.UUID {
+					id := makeContest(t, ctx, author.ID)
+					setSchedule(t, ctx, id, status, startsAt, endsAt)
+					return id
+				},
+				Now: func() time.Time { return now },
+			})
+		})
 	})
-}
-
-func TestAdvanceFinishedMovesOnlyRunningContestsPastTheirEnd(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		repo := NewContests(testPool)
-		author := makeUser(t, ctx, "author-advance-finished")
-		past := time.Now().Add(-time.Hour)
-		future := time.Now().Add(time.Hour)
-
-		over := makeContest(t, ctx, author.ID)
-		setSchedule(t, ctx, over, contests.StatusRunning, nil, &past)
-		stillOpen := makeContest(t, ctx, author.ID)
-		setSchedule(t, ctx, stillOpen, contests.StatusRunning, nil, &future)
-		// Individual timing needs no ends_at to publish (CheckPublishable): a
-		// contest left with none must never be swept up here, or an
-		// organizer's still-open olympiad closes itself for no reason anybody
-		// set.
-		noEnd := makeContest(t, ctx, author.ID)
-		setSchedule(t, ctx, noEnd, contests.StatusRunning, nil, nil)
-
-		moved, err := repo.AdvanceFinished(ctx, 0)
-		if err != nil {
-			t.Fatalf("AdvanceFinished() = %v", err)
-		}
-
-		if !idInList(moved, over) {
-			t.Errorf("AdvanceFinished() = %v, want it to include the overdue contest %s", moved, over)
-		}
-		if idInList(moved, stillOpen) {
-			t.Errorf("AdvanceFinished() moved a contest whose end is still in the future")
-		}
-		if idInList(moved, noEnd) {
-			t.Errorf("AdvanceFinished() moved a contest with no ends_at at all")
-		}
-
-		loaded, _ := repo.ByID(ctx, over)
-		if loaded.Status != contests.StatusFinished {
-			t.Errorf("overdue contest's status = %q, want finished", loaded.Status)
-		}
-	})
-}
-
-// TestAdvanceFinishedRespectsTheGracePeriod is a regression test: the
-// scheduler used to compare only ends_at against now(), so a contest whose
-// deadline (§8's own formula) still carried its network-latency grace was
-// closed a tick early — the same request a fixed-timing participant's answer
-// or query is admitted for (deadline.go, queryproxy.Admitted) was refused by
-// the scheduler's own comparison, at random depending on which tick won the
-// race. Passing the grace through to the WHERE clause keeps both doors
-// agreeing on one deadline.
-func TestAdvanceFinishedRespectsTheGracePeriod(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		repo := NewContests(testPool)
-		author := makeUser(t, ctx, "author-advance-grace")
-		const grace = 5 * time.Second
-
-		// Ended two seconds ago: still inside a five-second grace, so a
-		// participant's late answer or query is still admitted (the same
-		// window submission.go and queryproxy.Admitted check), and the
-		// scheduler must not close the contest out from under them.
-		insideGrace := makeContest(t, ctx, author.ID)
-		endedRecently := time.Now().Add(-2 * time.Second)
-		setSchedule(t, ctx, insideGrace, contests.StatusRunning, nil, &endedRecently)
-
-		// Ended ten seconds ago: past even the grace, so this one must finish.
-		pastGrace := makeContest(t, ctx, author.ID)
-		endedAWhileAgo := time.Now().Add(-10 * time.Second)
-		setSchedule(t, ctx, pastGrace, contests.StatusRunning, nil, &endedAWhileAgo)
-
-		moved, err := repo.AdvanceFinished(ctx, grace)
-		if err != nil {
-			t.Fatalf("AdvanceFinished() = %v", err)
-		}
-
-		if idInList(moved, insideGrace) {
-			t.Errorf("AdvanceFinished() finished a contest still inside its grace period")
-		}
-		if !idInList(moved, pastGrace) {
-			t.Errorf("AdvanceFinished() = %v, want it to include the contest past its grace %s", moved, pastGrace)
-		}
-
-		loaded, _ := repo.ByID(ctx, insideGrace)
-		if loaded.Status != contests.StatusRunning {
-			t.Errorf("contest still inside its grace period: status = %q, want running", loaded.Status)
-		}
-	})
-}
-
-// idInList reports whether id is among moved, for the AdvanceFinished test
-// above.
-func idInList(moved []uuid.UUID, id uuid.UUID) bool {
-	for _, m := range moved {
-		if m == id {
-			return true
-		}
-	}
-	return false
-}
-
-// idSet indexes a listing by identifier, for readable assertions.
-func idSet(found []contests.Contest) map[uuid.UUID]bool {
-	seen := make(map[uuid.UUID]bool, len(found))
-	for _, c := range found {
-		seen[c.ID] = true
-	}
-	return seen
 }
 
 // TestLockContestSerialisesConcurrentWriters proves LockContest is a real

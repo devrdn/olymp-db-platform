@@ -80,7 +80,7 @@ func newRoster() (*conteststest.Registrations, *userstest.Repository) {
 	return roster, users
 }
 
-// duePublishable stages a contest that passes CheckPublishable, together
+// duePublishable stages a due contest that passes CheckPublishable, together
 // with the story and question a test's Stories/Questions fakes need to carry
 // to answer that way — the same fixture publish_test.go's own publishable()
 // builds, wired into the stores a Scheduler test reads from instead of
@@ -92,13 +92,46 @@ func duePublishable(f schedulerFixture) contests.Contest {
 		q.ContestID = c.ID
 		f.questions.Put(q)
 	}
-	return c
+	return putDue(f, c)
+}
+
+// putDue stores c in the schedule's contest store the way DueToStart finds
+// it: published, with its start at the schedule's clock. publishable() leaves
+// a contest a draft, which no tick is ever handed.
+func putDue(f schedulerFixture, c contests.Contest) contests.Contest {
+	c.Status = contests.StatusPublished
+	opens := f.repo.Contests.Clock()
+	c.StartsAt = &opens
+	return f.repo.Contests.Put(c)
+}
+
+// putRunning stores a running contest whose end is ago before the schedule's
+// clock, and returns its id.
+func putRunning(f schedulerFixture, ago time.Duration) uuid.UUID {
+	ended := f.repo.Contests.Clock().Add(-ago)
+	return f.repo.Contests.Put(contests.Contest{Status: contests.StatusRunning, EndsAt: &ended}).ID
+}
+
+// putOverdue stores a running contest whose end and grace have both passed by
+// the schedule's clock, the way AdvanceFinished finds it, and returns its id.
+func putOverdue(f schedulerFixture) uuid.UUID {
+	return putRunning(f, schedulerFixtureGrace+time.Minute)
+}
+
+// statusOf reads a contest's status back from the schedule's store.
+func statusOf(t *testing.T, f schedulerFixture, id uuid.UUID) string {
+	t.Helper()
+	c, err := f.repo.Contests.ByID(context.Background(), id)
+	if err != nil {
+		t.Fatalf("ByID() = %v", err)
+	}
+	return c.Status
 }
 
 func TestAdvanceDoesNothingWhenAnotherReplicaHoldsTheLock(t *testing.T) {
 	f := newScheduler()
 	f.repo.Acquired = false
-	f.repo.Due = []contests.Contest{{ID: uuid.New()}}
+	putDue(f, contests.Contest{})
 
 	started, finished, err := f.scheduler.Advance(context.Background())
 	if err != nil {
@@ -121,9 +154,7 @@ func TestAdvanceDoesNothingWhenAnotherReplicaHoldsTheLock(t *testing.T) {
 func TestAdvanceStartsAContestThatPassesThePublishGateAndFinishesAnOverdueOne(t *testing.T) {
 	f := newScheduler()
 	due := duePublishable(f)
-	f.repo.Due = []contests.Contest{due}
-	finished := uuid.New()
-	f.repo.Finished = []uuid.UUID{finished}
+	finished := putOverdue(f)
 
 	gotStarted, gotFinished, err := f.scheduler.Advance(context.Background())
 	if err != nil {
@@ -189,7 +220,7 @@ func TestAdvanceBlocksAContestThatFailsThePublishGate(t *testing.T) {
 		q.ContestID = c.ID
 		f.questions.Put(q)
 	}
-	f.repo.Due = []contests.Contest{c}
+	putDue(f, c)
 
 	started, finished, err := f.scheduler.Advance(context.Background())
 	if err != nil {
@@ -241,7 +272,6 @@ func TestAdvanceBlocksAContestAnAdministratorIsRegisteredFor(t *testing.T) {
 		Login: "inspector", FullName: "inspector", Status: users.StatusActive, Roles: []string{role},
 	})
 	f.roster.Put(contests.Participant{ContestID: c.ID, UserID: admin.ID})
-	f.repo.Due = []contests.Contest{c}
 
 	started, _, err := f.scheduler.Advance(context.Background())
 	if err != nil {
@@ -279,7 +309,7 @@ func TestAdvanceRecordsTheBlockOnceAcrossManyConsecutiveTicks(t *testing.T) {
 		q.ContestID = c.ID
 		f.questions.Put(q)
 	}
-	f.repo.Due = []contests.Contest{c}
+	putDue(f, c)
 
 	const ticks = 5
 	for i := 0; i < ticks; i++ {
@@ -296,22 +326,22 @@ func TestAdvanceRecordsTheBlockOnceAcrossManyConsecutiveTicks(t *testing.T) {
 	}
 }
 
-// TestAdvanceRecordsASecondEntryWhenABlockedContestIsFixedAndBrokenAgain
-// proves the point of the dedup above is to stop repetition, not to stop
-// reporting: once anything else has been recorded for the contest since the
-// last block — here, the gate actually passing and the contest starting —
-// the very next refusal must get its own entry again, even carrying the same
-// problem codes as the first one did.
-func TestAdvanceRecordsASecondEntryWhenABlockedContestIsFixedAndBrokenAgain(t *testing.T) {
+// TestAdvanceRecordsTheSameBlockAgainOnceSomethingElseWasRecorded proves the
+// point of the dedup above is to stop repetition, not to stop reporting: once
+// anything else has been recorded for the contest since the last block — here
+// an organizer's edit, which leaves it published and still blocked — the very
+// next refusal must get its own entry again, even carrying the same problem
+// codes as the first one did.
+func TestAdvanceRecordsTheSameBlockAgainOnceSomethingElseWasRecorded(t *testing.T) {
 	f := newScheduler()
 	c, _, questions := publishable()
 	for _, q := range questions {
 		q.ContestID = c.ID
 		f.questions.Put(q)
 	}
-	f.repo.Due = []contests.Contest{c}
+	putDue(f, c)
 
-	// First tick: no story yet, blocked and recorded.
+	// First tick: no story, blocked and recorded.
 	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
 		t.Fatalf("Advance() first tick = %v", err)
 	}
@@ -327,25 +357,21 @@ func TestAdvanceRecordsASecondEntryWhenABlockedContestIsFixedAndBrokenAgain(t *t
 		t.Fatalf("audit entries after a repeat of the same block = %d, want still 1", len(f.sink.Entries))
 	}
 
-	// The organizer fixes it: the story arrives, and this tick's gate passes
-	// and starts the contest — a different entry, standing for "something
-	// changed since the last block".
-	_, story, _ := publishable()
-	f.stories.Save(context.Background(), c.ID, story.Bodies)
-	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
-		t.Fatalf("Advance() fix tick = %v", err)
+	// The organizer edits the contest without adding the story: the entry
+	// Service.Update records for it, in its own transaction. The contest is
+	// still published, still due, and still refused for the same reason.
+	edit := audit.Entry{
+		Action: audit.ActionContestUpdate, Entity: "contest", EntityID: c.ID.String(),
+		Payload: map[string]any{"changes": map[string]any{}},
+	}
+	if err := f.uow.Do(context.Background(), func(ctx context.Context) error {
+		return f.sink.Append(ctx, edit)
+	}); err != nil {
+		t.Fatalf("recording the edit = %v", err)
 	}
 
-	// The organizer breaks it again — the manual equivalent of Transition
-	// putting the contest back to published with the story removed a second
-	// time — and it becomes due once more.
-	if err := f.stories.Delete(context.Background(), c.ID); err != nil {
-		t.Fatalf("Delete() = %v", err)
-	}
-	f.repo.Due = []contests.Contest{c}
-
 	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
-		t.Fatalf("Advance() second break tick = %v", err)
+		t.Fatalf("Advance() tick after the edit = %v", err)
 	}
 
 	var blocked []audit.Entry
@@ -355,7 +381,10 @@ func TestAdvanceRecordsASecondEntryWhenABlockedContestIsFixedAndBrokenAgain(t *t
 		}
 	}
 	if len(blocked) != 2 {
-		t.Fatalf("start_blocked entries = %d, want 2 — the second break is a fresh refusal, not a repeat", len(blocked))
+		t.Fatalf("start_blocked entries = %d, want 2 — the block after the edit is a fresh refusal, not a repeat", len(blocked))
+	}
+	if got := statusOf(t, f, c.ID); got != contests.StatusPublished {
+		t.Errorf("status = %q, want the blocked contest left published", got)
 	}
 }
 
@@ -366,13 +395,27 @@ func TestAdvanceRecordsASecondEntryWhenABlockedContestIsFixedAndBrokenAgain(t *t
 // if the value actually arrives.
 func TestAdvanceFinishesWithTheSchedulersOwnGrace(t *testing.T) {
 	f := newScheduler()
+	// Two seconds and ten seconds past their end: inside and past the
+	// fixture's five-second grace.
+	insideGrace := putRunning(f, 2*time.Second)
+	pastGrace := putRunning(f, 10*time.Second)
 
-	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
+	_, finished, err := f.scheduler.Advance(context.Background())
+	if err != nil {
 		t.Fatalf("Advance() = %v", err)
 	}
 
 	if f.repo.GraceSeen != schedulerFixtureGrace {
 		t.Errorf("AdvanceFinished() was called with grace = %v, want %v", f.repo.GraceSeen, schedulerFixtureGrace)
+	}
+	if finished != 1 {
+		t.Errorf("finished = %d, want 1 — only the contest past its grace", finished)
+	}
+	if got := statusOf(t, f, insideGrace); got != contests.StatusRunning {
+		t.Errorf("contest inside its grace: status = %q, want running", got)
+	}
+	if got := statusOf(t, f, pastGrace); got != contests.StatusFinished {
+		t.Errorf("contest past its grace: status = %q, want finished", got)
 	}
 }
 
@@ -396,7 +439,7 @@ func TestAdvanceRecordsNothingWhenTheLockIsWonAndNothingMoved(t *testing.T) {
 
 func TestAdvanceFailsWithoutRecordingWhenTheAuditSinkFails(t *testing.T) {
 	f := newScheduler()
-	f.repo.Finished = []uuid.UUID{uuid.New()}
+	putOverdue(f)
 	failure := errors.New("audit sink is down")
 	f.sink.AppendManyErr = failure
 
@@ -445,7 +488,7 @@ func TestAdvanceFailsWhenAdvancingToFinishedFails(t *testing.T) {
 func TestAdvanceFailsWhenThePublishGateItselfFails(t *testing.T) {
 	f := newScheduler()
 	c, _, _ := publishable()
-	f.repo.Due = []contests.Contest{c}
+	putDue(f, c)
 	failure := errors.New("story store is away")
 	f.stories.Err = failure
 
@@ -468,13 +511,15 @@ func TestAdvanceFailsWhenThePublishGateItselfFails(t *testing.T) {
 // audit entry, not this tick's failure.
 func TestAdvanceSkipsAContestThatRacedWithAManualTransition(t *testing.T) {
 	f := newScheduler()
-	due := duePublishable(f)
-	f.repo.Due = []contests.Contest{due}
-	f.repo.Raced = map[uuid.UUID]error{due.ID: contests.ErrStatusChanged}
+	duePublishable(f)
+	f.repo.Contests.SetStatusRaces(contests.StatusRunning)
 
 	started, _, err := f.scheduler.Advance(context.Background())
 	if err != nil {
 		t.Fatalf("Advance() = %v, want the race to be skipped rather than fail the tick", err)
+	}
+	if f.repo.SetStatusCalls != 1 {
+		t.Fatalf("SetStatus calls = %d, want 1 — the race is lost at the write", f.repo.SetStatusCalls)
 	}
 	if started != 0 {
 		t.Errorf("started = %d, want 0 — a raced contest was not this tick's to move", started)
@@ -491,7 +536,6 @@ func TestAdvanceSkipsAContestThatRacedWithAManualTransition(t *testing.T) {
 func TestAdvanceTriggersThePoolForEveryContestItStarts(t *testing.T) {
 	f := newScheduler()
 	due := duePublishable(f)
-	f.repo.Due = []contests.Contest{due}
 
 	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
 		t.Fatalf("Advance() = %v", err)
@@ -517,7 +561,7 @@ func TestAdvanceDoesNotTriggerThePoolWhenNothingStarted(t *testing.T) {
 	}
 	// The story never staged: the gate refuses this one (see
 	// TestAdvanceBlocksAContestThatFailsThePublishGate).
-	f.repo.Due = []contests.Contest{c}
+	putDue(f, c)
 
 	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
 		t.Fatalf("Advance() = %v", err)
@@ -532,12 +576,14 @@ func TestAdvanceDoesNotTriggerThePoolWhenNothingStarted(t *testing.T) {
 // not actually start it.
 func TestAdvanceDoesNotTriggerThePoolForAContestThatRacedAManualTransition(t *testing.T) {
 	f := newScheduler()
-	due := duePublishable(f)
-	f.repo.Due = []contests.Contest{due}
-	f.repo.Raced = map[uuid.UUID]error{due.ID: contests.ErrStatusChanged}
+	duePublishable(f)
+	f.repo.Contests.SetStatusRaces(contests.StatusRunning)
 
 	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
 		t.Fatalf("Advance() = %v", err)
+	}
+	if f.repo.SetStatusCalls != 1 {
+		t.Fatalf("SetStatus calls = %d, want 1 — the race is lost at the write", f.repo.SetStatusCalls)
 	}
 	if len(f.poolTrigger.Triggered) != 0 {
 		t.Fatalf("triggered = %v, want none for a raced contest", f.poolTrigger.Triggered)
@@ -551,8 +597,7 @@ func TestAdvanceDoesNotTriggerThePoolForAContestThatRacedAManualTransition(t *te
 // only ever fires after Advance's own transaction has actually committed.
 func TestAdvanceDoesNotTriggerThePoolWhenTheTransactionFails(t *testing.T) {
 	f := newScheduler()
-	due := duePublishable(f)
-	f.repo.Due = []contests.Contest{due}
+	duePublishable(f)
 	f.sink.AppendManyErr = errors.New("audit sink is down")
 
 	if _, _, err := f.scheduler.Advance(context.Background()); err == nil {
@@ -578,8 +623,7 @@ func TestAdvanceWithNoPoolTriggerWiredStillWorks(t *testing.T) {
 
 	f := schedulerFixture{scheduler: scheduler, repo: repo, stories: stories, questions: questions,
 		roster: roster, users: users, sink: sink, uow: uow}
-	due := duePublishable(f)
-	f.repo.Due = []contests.Contest{due}
+	duePublishable(f)
 
 	if _, _, err := f.scheduler.Advance(context.Background()); err != nil {
 		t.Fatalf("Advance() with no pool trigger wired = %v", err)
