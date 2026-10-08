@@ -4,7 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/netip"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -2108,4 +2114,85 @@ func TestARefusedQueryIsNotObserved(t *testing.T) {
 	if len(seen.visits) != 0 {
 		t.Fatalf("a refused query was observed: %+v", seen.visits)
 	}
+}
+
+// Errors is how the HTTP layer learns which of this package's errors reach a
+// caller, and so which ones need an answer of their own (internal/api's
+// errorTable). A sentinel declared here and left out of it would reach a
+// client as "internal error" for a refusal that is really theirs, so every
+// exported `Err… = errors.New(…)` in the package's source is listed — read
+// from the source itself, because a list kept by hand is exactly what drifts.
+func TestEveryExportedErrorIsListed(t *testing.T) {
+	listed := map[string]bool{}
+	for _, err := range queryproxy.Errors() {
+		listed[err.Error()] = true
+	}
+
+	declared := exportedErrors(t, ".")
+	if len(declared) == 0 {
+		t.Fatal("found no exported errors in the package source; the scan is broken")
+	}
+	for name, message := range declared {
+		if !listed[message] {
+			t.Errorf("%s (%q) is declared but not in Errors()", name, message)
+		}
+	}
+	if len(queryproxy.Errors()) != len(declared) {
+		t.Errorf("Errors() lists %d errors, the package declares %d", len(queryproxy.Errors()), len(declared))
+	}
+}
+
+// exportedErrors reads the package's non-test source and returns every
+// exported `Err… = errors.New("…")`, by name, with its message.
+func exportedErrors(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	fset := token.NewFileSet()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	found := map[string]string{}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			spec, ok := n.(*ast.ValueSpec)
+			if !ok {
+				return true
+			}
+			for i, ident := range spec.Names {
+				if !ident.IsExported() || !strings.HasPrefix(ident.Name, "Err") || i >= len(spec.Values) {
+					continue
+				}
+				call, ok := spec.Values[i].(*ast.CallExpr)
+				if !ok || len(call.Args) != 1 {
+					continue
+				}
+				fun, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || fun.Sel.Name != "New" {
+					continue
+				}
+				if pkg, ok := fun.X.(*ast.Ident); !ok || pkg.Name != "errors" {
+					continue
+				}
+				lit, ok := call.Args[0].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				message, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatalf("%s: %v", ident.Name, err)
+				}
+				found[ident.Name] = message
+			}
+			return true
+		})
+	}
+	return found
 }

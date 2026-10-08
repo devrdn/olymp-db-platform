@@ -213,65 +213,19 @@ func (h *ConsoleHandler) fail(w http.ResponseWriter, r *http.Request, err error)
 		return
 	}
 
-	for _, mapping := range []struct {
-		is     error
-		status int
-		code   httpx.Code
-	}{
-		{queryproxy.ErrNotAParticipant, http.StatusForbidden, codeNotAParticipant},
-		{queryproxy.ErrContestNotRunning, http.StatusConflict, codeContestNotRunning},
-		{queryproxy.ErrFinished, http.StatusConflict, codeContestFinished},
-		// 409 rather than 403, for the same reason codeQuestionClosed is one:
-		// this is a fact about where the contest currently stands for this
-		// participant, not a permission they lack, and it stops being true
-		// the moment the contest gives them something to answer again.
-		{queryproxy.ErrNothingLeftToAnswer, http.StatusConflict, codeNothingLeftToAnswer},
-		{queryproxy.ErrAddressNotAllowed, http.StatusForbidden, codeAddressNotAllowed},
-		{queryproxy.ErrNoGameYet, http.StatusConflict, codeNoGameYet},
-		// 503 rather than 409: unlike every other refusal in this list, this
-		// one is not a fact about the contest or the caller but about the
-		// installation, and 503 is what says "this service cannot serve you
-		// right now, and it is not your request's fault". Not 500, because it
-		// is not a fault — nothing is broken, the disk budget the operator set
-		// is simply full, and a 500 would send them looking for a stack trace
-		// that does not exist.
-		{queryproxy.ErrNoRoomForDatabase, http.StatusServiceUnavailable, codeGameClusterFull},
-		{queryproxy.ErrDatabaseDeclined, http.StatusBadRequest, codeQueryDeclined},
-		{queryrunner.ErrTimeout, http.StatusGatewayTimeout, codeQueryTimedOut},
-		{queryrunner.ErrCanceled, http.StatusRequestTimeout, codeQueryCancelled},
-		{queryrunner.ErrBusy, http.StatusServiceUnavailable, codeQueryBusy},
-		{queryrunner.ErrAlreadyRunning, http.StatusConflict, codeQueryAlreadyRunning},
-		{queryrunner.ErrTooManyQueries, http.StatusTooManyRequests, codeQueryTooOften},
-		{queryrunner.ErrDiskFull, http.StatusConflict, codeQueryDiskFull},
-		{queryrunner.ErrResultTooLarge, http.StatusBadRequest, codeQueryResultTooLarge},
-	} {
-		if errors.Is(err, mapping.is) {
-			httpx.Error(w, r, mapping.status, mapping.code, err.Error())
-			return
-		}
+	// Admission and the runner's own outcomes: the same tables the play
+	// screen and the events channel answer from, so a refusal reads the same
+	// whichever of them a participant meets it on.
+	if queryproxyErrors.answer(w, r, h.log, err) || queryrunnerErrors.answer(w, r, h.log, err) {
+		return
 	}
 
-	// Ours failing is not the query being wrong. A database that cannot be
-	// reached answered as `400 invalid_request` tells the client to stop
-	// retrying and the participant to fix a query that was fine — with our
-	// connection string attached to the explanation.
-	switch {
-	case errors.Is(err, rpc.ErrUnreachable):
+	// Ours failing is not the query being wrong. A query service that cannot
+	// be reached answered as `400 invalid_request` tells the client to stop
+	// retrying and the participant to fix a query that was fine.
+	if errors.Is(err, rpc.ErrUnreachable) {
 		h.log.ErrorContext(r.Context(), "the query service could not be reached", "error", err)
 		httpx.Error(w, r, http.StatusServiceUnavailable, codeQueryServiceDown, "The query service is unavailable")
-		return
-	case errors.Is(err, queryproxy.ErrUnavailable):
-		h.log.ErrorContext(r.Context(), "a query could not be answered", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
-		return
-	case errors.Is(err, queryrunner.ErrJournalUnavailable):
-		// The query never reached the database: opening its journal row
-		// failed first. That is ours, not the participant's SQL being wrong,
-		// so it gets the same treatment as the query service being down
-		// rather than the database's own words below — which are shown only
-		// for a query that actually reached the database.
-		h.log.ErrorContext(r.Context(), "a query could not be journalled", "error", err)
-		httpx.Error(w, r, http.StatusInternalServerError, httpx.CodeInternalError, "Internal server error")
 		return
 	}
 

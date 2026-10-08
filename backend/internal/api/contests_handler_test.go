@@ -166,6 +166,18 @@ func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 	return code
 }
 
+// errorMessage reads the text out of an error response.
+func errorMessage(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	body := decode(t, rec)
+	detail, ok := body["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("response carries no error object: %s", rec.Body.String())
+	}
+	message, _ := detail["message"].(string)
+	return message
+}
+
 // ownedContest seeds a contest the fixture's actor owns.
 func (f *contestFixture) ownedContest(t *testing.T, status string) contests.Contest {
 	t.Helper()

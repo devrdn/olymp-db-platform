@@ -97,6 +97,19 @@ var (
 	ErrDatabaseDeclined = errors.New("the database refused the query")
 )
 
+// Errors lists every error this package hands to a caller: the refusals a
+// participant meets and ErrUnavailable, which is ours. internal/api answers
+// each from a table of its own, and a test there walks this list so that none
+// can reach a client as "internal error"; a test here reads the package's
+// source so that none can be declared and left off it.
+func Errors() []error {
+	return []error{
+		ErrNotAParticipant, ErrContestNotRunning, ErrFinished, ErrNothingLeftToAnswer,
+		ErrAddressNotAllowed, ErrNoGameYet, ErrNoRoomForDatabase, ErrUnavailable,
+		ErrDatabaseDeclined, ErrSchemaHidden,
+	}
+}
+
 // People answers who is asking, and starts their clock.
 type People interface {
 	ByUser(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, error)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -71,6 +70,7 @@ func (c recordingConsole) Run(_ context.Context, cmd queryproxy.Command) (*query
 type consoleFixture struct {
 	router http.Handler
 	cookie *http.Cookie
+	logs   *logBuffer
 }
 
 func newConsoleFixture(t *testing.T, console api.Console) *consoleFixture {
@@ -82,7 +82,8 @@ func newConsoleFixture(t *testing.T, console api.Console) *consoleFixture {
 	c := cache.NewMemory(1000)
 	t.Cleanup(func() { _ = c.Close() })
 
-	log := logging.New("error", io.Discard)
+	logs := &logBuffer{}
+	log := logging.New("error", logs)
 	sessions := auth.NewSessionStore(c, time.Hour)
 	token, err := sessions.Create(t.Context(), auth.Principal{UserID: actor.ID, Login: actor.Login})
 	if err != nil {
@@ -101,6 +102,7 @@ func newConsoleFixture(t *testing.T, console api.Console) *consoleFixture {
 	return &consoleFixture{
 		router: router,
 		cookie: &http.Cookie{Name: auth.SessionCookieName, Value: token},
+		logs:   logs,
 	}
 }
 
@@ -219,23 +221,27 @@ func TestAQueryRefusedForItsRateIsA429(t *testing.T) {
 	if code := errorCode(t, rec); code != "query_too_often" {
 		t.Fatalf("code = %q, want %q", code, "query_too_often")
 	}
+	// The limit is a sliding minute: waiting it out always finds a place.
+	if retry := rec.Header().Get("Retry-After"); retry != "60" {
+		t.Fatalf("Retry-After = %q, want 60", retry)
+	}
 }
 
-// CLAUDE.md's security rule 1 again, this time for the sentinel
-// queryproxy.Service now returns for a deadline computed by contests.Deadline
-// (docs/ARCHITECTURE.md §8) as much as for a contest whose status alone says
-// it is not running — the façade does not distinguish the two to its caller,
-// and this handler must still turn either into the same 409 a participant
-// can act on.
-func TestAParticipantPastTheirDeadlineGetsA409(t *testing.T) {
-	fixture := newConsoleFixture(t, fakeConsole{err: queryproxy.ErrContestNotRunning})
+// The console answers an admission refusal exactly as the play screen and the
+// events channel do — one table, one sentence — rather than with the
+// sentinel's own lower-case text, which it used to send.
+func TestTheConsoleRefusesADisallowedAddressInTheSameWordsAsThePlayScreen(t *testing.T) {
+	fixture := newConsoleFixture(t, fakeConsole{err: queryproxy.ErrAddressNotAllowed})
 
 	rec := fixture.run("SELECT 1")
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusConflict, rec.Body.String())
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body: %s)", rec.Code, rec.Body.String())
 	}
-	if code := errorCode(t, rec); code != "contest_not_running" {
-		t.Fatalf("code = %q, want %q", code, "contest_not_running")
+	if code := errorCode(t, rec); code != "address_not_allowed" {
+		t.Fatalf("code = %q, want address_not_allowed", code)
+	}
+	if message := errorMessage(t, rec); message != "This contest is only available from the university network" {
+		t.Fatalf("message = %q", message)
 	}
 }
 
@@ -258,6 +264,11 @@ func TestAFullGameClusterIsA503WithItsOwnCode(t *testing.T) {
 	}
 	if code := errorCode(t, rec); code != "game_cluster_full" {
 		t.Fatalf("code = %q, want %q", code, "game_cluster_full")
+	}
+	// An operator has to hear that participants are being turned away; the
+	// console used to answer this without a word in the log.
+	if !fixture.logs.loggedError("the game cluster has no room") {
+		t.Fatal("a full game cluster was answered without being logged")
 	}
 }
 
