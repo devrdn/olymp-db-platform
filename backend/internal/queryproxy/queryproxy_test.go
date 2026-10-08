@@ -4,19 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"net/netip"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/monitor"
+	"github.com/devrdn/db-contest/backend/internal/platform/sentineltest"
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/queryrunner"
@@ -2118,129 +2113,7 @@ func TestARefusedQueryIsNotObserved(t *testing.T) {
 
 // Errors is how the HTTP layer learns which of this package's errors reach a
 // caller, and so which ones need an answer of their own (internal/api's
-// errorTable). A sentinel declared here and left out of it would reach a
-// client as "internal error" for a refusal that is really theirs, so every
-// exported `Err… = errors.New(…)` in the package's source is listed — read
-// from the source itself, because a list kept by hand is exactly what drifts.
+// errorTable). Every exported sentinel in the package's source is on it.
 func TestEveryExportedErrorIsListed(t *testing.T) {
-	listed := map[string]bool{}
-	for _, err := range queryproxy.Errors() {
-		listed[err.Error()] = true
-	}
-
-	declared, unclassified := exportedErrors(t, ".")
-	for _, name := range unclassified {
-		t.Errorf("%s is exported but not a plain errors.New sentinel; this test cannot tell whether it is listed", name)
-	}
-	if len(declared) == 0 {
-		t.Fatal("found no exported errors in the package source; the scan is broken")
-	}
-	for name, message := range declared {
-		if !listed[message] {
-			t.Errorf("%s (%q) is declared but not in Errors()", name, message)
-		}
-	}
-	if len(queryproxy.Errors()) != len(declared) {
-		t.Errorf("Errors() lists %d errors, the package declares %d", len(queryproxy.Errors()), len(declared))
-	}
-}
-
-// A sentinel declared any other way — wrapped with fmt.Errorf, built from a
-// constant, returned by a function — is not silently skipped: the scan names
-// it, so the completeness test above fails rather than passes without looking.
-func TestTheErrorScanNamesWhatItCannotRead(t *testing.T) {
-	dir := t.TempDir()
-	source := "package odd\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\n" +
-		"var ErrPlain = errors.New(\"plain\")\n" +
-		"var ErrWrapped = fmt.Errorf(\"%w: more\", ErrPlain)\n" +
-		"var ErrA, ErrB = pair()\n\n" +
-		"func pair() (error, error) { return ErrPlain, ErrPlain }\n"
-	if err := os.WriteFile(filepath.Join(dir, "odd.go"), []byte(source), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	declared, unclassified := exportedErrors(t, dir)
-	if declared["ErrPlain"] != "plain" || len(declared) != 1 {
-		t.Errorf("declared = %v, want only ErrPlain", declared)
-	}
-	want := map[string]bool{"ErrWrapped": true, "ErrA": true, "ErrB": true}
-	if len(unclassified) != len(want) {
-		t.Fatalf("unclassified = %v, want ErrWrapped, ErrA and ErrB", unclassified)
-	}
-	for _, name := range unclassified {
-		if !want[name] {
-			t.Errorf("unexpected unclassified %s", name)
-		}
-	}
-}
-
-// exportedErrors reads the package's non-test source and returns every
-// exported `Err… = errors.New("…")`, by name, with its message — and, apart,
-// the names of exported Err… values declared any other way, which it cannot
-// match against a list by message.
-func exportedErrors(t *testing.T, dir string) (map[string]string, []string) {
-	t.Helper()
-	fset := token.NewFileSet()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read %s: %v", dir, err)
-	}
-	found := map[string]string{}
-	var unclassified []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
-		ast.Inspect(file, func(n ast.Node) bool {
-			spec, ok := n.(*ast.ValueSpec)
-			if !ok {
-				return true
-			}
-			for i, ident := range spec.Names {
-				if !ident.IsExported() || !strings.HasPrefix(ident.Name, "Err") {
-					continue
-				}
-				if message, ok := plainSentinel(spec, i); ok {
-					found[ident.Name] = message
-				} else {
-					unclassified = append(unclassified, ident.Name)
-				}
-			}
-			return true
-		})
-	}
-	return found, unclassified
-}
-
-// plainSentinel reports the message of the i-th name in spec when its value is
-// exactly errors.New("…").
-func plainSentinel(spec *ast.ValueSpec, i int) (string, bool) {
-	if len(spec.Values) != len(spec.Names) {
-		return "", false
-	}
-	call, ok := spec.Values[i].(*ast.CallExpr)
-	if !ok || len(call.Args) != 1 {
-		return "", false
-	}
-	fun, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || fun.Sel.Name != "New" {
-		return "", false
-	}
-	if pkg, ok := fun.X.(*ast.Ident); !ok || pkg.Name != "errors" {
-		return "", false
-	}
-	lit, ok := call.Args[0].(*ast.BasicLit)
-	if !ok || lit.Kind != token.STRING {
-		return "", false
-	}
-	message, err := strconv.Unquote(lit.Value)
-	if err != nil {
-		return "", false
-	}
-	return message, true
+	sentineltest.AssertListed(t, ".", queryproxy.Errors(), nil)
 }
