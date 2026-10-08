@@ -316,8 +316,6 @@ func (h *ParticipantHandler) reorderTabs(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// failWorkspace maps a workspace refusal to a response (CLAUDE.md rule 1).
-// Anything else is ours, and an internal error.
 // decodeWorkspaceBody is decodeBody for the workspace's writes, which have a
 // refusal of their own for text no stored row can hold
 // (workspace.ErrTextInvalid, translated for the participant). A NUL that
@@ -336,6 +334,8 @@ func (h *ParticipantHandler) decodeWorkspaceBody(w http.ResponseWriter, r *http.
 	return false
 }
 
+// failWorkspace maps a workspace refusal to a response (CLAUDE.md rule 1).
+// Anything else is ours, and an internal error.
 func (h *ParticipantHandler) failWorkspace(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, workspace.ErrTooOften):

@@ -83,12 +83,20 @@ func holdsNUL(v reflect.Value) bool {
 	case reflect.String:
 		return strings.ContainsRune(v.String(), 0)
 	case reflect.Struct:
+		// Only what the decoder can have filled: an unexported field (a
+		// time's location, say) holds nothing the client sent.
+		fields := v.Type()
 		for i := range v.NumField() {
-			if holdsNUL(v.Field(i)) {
+			if fields.Field(i).IsExported() && holdsNUL(v.Field(i)) {
 				return true
 			}
 		}
 	case reflect.Slice, reflect.Array:
+		// Bytes are not text: a json.RawMessage is decoded later, and whoever
+		// decodes it owns this check; an identifier is an array of bytes.
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			return false
+		}
 		for i := range v.Len() {
 			if holdsNUL(v.Index(i)) {
 				return true
