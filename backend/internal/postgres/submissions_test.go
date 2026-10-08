@@ -33,14 +33,7 @@ func TestSubmissionsHonoursTheRepositoryContract(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Create() = %v", err)
 			}
-			// Inside one transaction now() is its start time, so the
-			// clock Insert reads is exactly the one read here — through the
-			// transaction, as Insert reads it; the pool itself is another
-			// session with a clock of its own.
-			var now time.Time
-			if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
-				t.Fatalf("read the database clock: %v", err)
-			}
+			now := txNow(t, ctx)
 			run(ctx, conteststest.SubmissionTarget{
 				Repo: NewSubmissions(testPool), RegistrationID: registrationID, QuestionID: q.ID,
 				Now: func() time.Time { return now },

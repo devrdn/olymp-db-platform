@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/google/uuid"
@@ -17,8 +16,7 @@ import (
 // to, the in-memory one the service tests use included
 // (conteststest.QuestionRepositoryContract). What follows it here is what only
 // the real database can be asked: the bounds its columns keep when the domain
-// check is not in front of them, and the refusal to reorder outside a
-// transaction.
+// check is not in front of them.
 func TestQuestionsHonoursTheRepositoryContract(t *testing.T) {
 	conteststest.QuestionRepositoryContract(t, func(t *testing.T, run func(context.Context, conteststest.QuestionTarget)) {
 		withTx(t, func(ctx context.Context) {
@@ -28,6 +26,7 @@ func TestQuestionsHonoursTheRepositoryContract(t *testing.T) {
 				Repo:       repo,
 				Visible:    repo,
 				NewContest: func() uuid.UUID { return makeContest(t, ctx, author.ID) },
+				Outside:    context.Background(),
 			})
 		})
 	})
@@ -73,22 +72,4 @@ func TestQuestionPointsAtTheBoundIsAcceptedByTheDatabase(t *testing.T) {
 			t.Fatalf("insert with points = %d (the bound itself): %v", atTheBound, err)
 		}
 	})
-}
-
-func TestReorderOutsideATransactionIsRefused(t *testing.T) {
-	// It relies on deferring the constraint, and SET CONSTRAINTS outside a
-	// transaction is silently ignored — the reorder would then work or fail
-	// depending on the order rows happened to be visited.
-	if testPool == nil {
-		t.Skip("set CORE_DB_DSN to run the database tests")
-	}
-
-	err := NewQuestions(testPool).Reorder(context.Background(), uuid.New(), []uuid.UUID{uuid.New()})
-
-	if err == nil {
-		t.Fatal("Reorder() outside a transaction = nil, want a refusal")
-	}
-	if errors.Is(err, contests.ErrQuestionNotFound) {
-		t.Errorf("Reorder() = %v, want the missing transaction reported, not a lookup failure", err)
-	}
 }

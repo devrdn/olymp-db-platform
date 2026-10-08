@@ -33,15 +33,7 @@ func TestContestsHonoursTheRepositoryContract(t *testing.T) {
 				managers      = NewContestManagers(testPool)
 				registrations = NewRegistrations(testPool)
 			)
-			// Inside one transaction now() is its start time, which is what
-			// created_at and updated_at default to, so the clock a row is
-			// stamped with is exactly the one read here, through the
-			// transaction as the insert reads it; the pool itself is another
-			// session.
-			var now time.Time
-			if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
-				t.Fatalf("read the database clock: %v", err)
-			}
+			now := txNow(t, ctx)
 			run(ctx, conteststest.ContestTarget{
 				Repo: NewContests(testPool),
 				NewUser: func() uuid.UUID {
@@ -332,14 +324,7 @@ func TestContestsHonoursTheScheduleRepositoryContract(t *testing.T) {
 		withTx(t, func(ctx context.Context) {
 			repo := NewContests(testPool)
 			author := makeUser(t, ctx, "author-schedule-contract")
-			// Inside one transaction now() is its start time, which is what
-			// DueToStart and AdvanceFinished compare against and what a move
-			// stamps updated_at with; read through the transaction, since the
-			// pool itself is another session.
-			var now time.Time
-			if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
-				t.Fatalf("read the database clock: %v", err)
-			}
+			now := txNow(t, ctx)
 			run(ctx, conteststest.ScheduleTarget{
 				Repo:     repo,
 				Contests: repo,

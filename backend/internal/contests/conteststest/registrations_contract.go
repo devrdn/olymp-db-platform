@@ -51,8 +51,9 @@ type RegistrationTarget struct {
 // one start time is a property of the real statement and is proven against
 // PostgreSQL alone.
 //
-// Logins are lower-case letters and digits throughout, because the roster is ordered by
-// them and the order of anything else depends on the database's collation.
+// Logins are lower-case letters and digits throughout, because the roster is
+// ordered by them and the order of anything else depends on the database's
+// collation.
 func RegistrationRepositoryContract(t *testing.T, each func(t *testing.T, run func(context.Context, RegistrationTarget))) {
 	started := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
 
