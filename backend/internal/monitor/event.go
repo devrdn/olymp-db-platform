@@ -103,6 +103,12 @@ const (
 	// browser sending its full allowance for a whole contest would reach.
 	// Past it the signals are refused, not silently dropped: the screen is
 	// told, and what is already stored stays.
+	//
+	// It bounds what the browser posts and nothing else. The events the
+	// server observes (an address changing, a second session, a tab's life)
+	// are always stored, each bounded where it is written: refused, they
+	// would let a participant fill the budget with signals of their own and
+	// then change address or open a second session unrecorded.
 	MaxStoredEvents = 20000
 )
 

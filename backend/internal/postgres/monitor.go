@@ -100,8 +100,19 @@ func (m *Monitor) InsertEvents(ctx context.Context, events []monitor.Event) erro
 	return nil
 }
 
-// checkStored refuses a batch that would take a registration past
-// monitor.MaxStoredEvents stored events.
+// checkStored refuses a batch whose browser events would take a registration
+// past monitor.MaxStoredEvents stored events.
+//
+// Only what the browser posts is refused (monitor.Kind.FromBrowser). Events
+// the server observes — an address changing, a second session, a tab's life —
+// are always stored: refused, a participant could fill the budget with
+// signals of their own and then change address or open a second session
+// unrecorded, which is what the monitoring exists to catch; and a tab change
+// would fail with the event that records it. Each of those is bounded where it
+// is written instead (the tracker reports a pair at most once per
+// monitor.ParallelReportEvery; the workspace caps tabs and writes a minute).
+// The count they are measured against is every stored event, so the server's
+// own fill the budget a little sooner, which only ever costs the browser.
 //
 // One statement whatever the batch size, and it asks registration_activity —
 // a primary key per registration in the batch — rather than counting
@@ -116,7 +127,12 @@ func (m *Monitor) InsertEvents(ctx context.Context, events []monitor.Event) erro
 func (m *Monitor) checkStored(ctx context.Context, events []monitor.Event) error {
 	arriving := make(map[uuid.UUID]int, len(events))
 	for _, event := range events {
-		arriving[event.Registration]++
+		if event.Payload.Kind().FromBrowser() {
+			arriving[event.Registration]++
+		}
+	}
+	if len(arriving) == 0 {
+		return nil
 	}
 	registrations := make([]uuid.UUID, 0, len(arriving))
 	for registration := range arriving {
