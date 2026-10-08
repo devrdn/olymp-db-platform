@@ -1076,33 +1076,30 @@ func TestAnswerReturnsTheOutcome(t *testing.T) {
 	}
 }
 
-// CLAUDE.md rule 1: every refusal contests.Service.Submit can answer with
-// needs a declared sentinel, a mapping in fail(), and a test asserting the
-// 4xx.
+// Every refusal contests.Service.Submit can answer with is a row in
+// contestsErrors, and TestEveryContestsErrorHasItsAnswer walks all of them.
+// What this proves is that the answer route hands Submit's refusal to that
+// table, so one contests refusal is enough; the sentence is the one the
+// organiser's routes send too, since both read the same row. The queryproxy
+// cases are the admission refusals Submit passes through.
 func TestAnswerRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		err        error
-		wantStatus int
-		wantCode   string
+		name        string
+		err         error
+		wantStatus  int
+		wantCode    string
+		wantMessage string
 	}{
-		{"question not found", contests.ErrQuestionNotFound, http.StatusNotFound, "question_not_found"},
-		{"answer too long", contests.ErrAnswerTooLong, http.StatusBadRequest, "answer_too_long"},
-		// A choice question takes one of its option ids and nothing else; any
-		// other string is the caller's own malformed request.
-		{"answer not a choice", contests.ErrNotAChoice, http.StatusBadRequest, "answer_not_a_choice"},
-		{"question closed", contests.ErrQuestionClosed, http.StatusConflict, "question_closed"},
-		// §6.1.1: a sequential contest refuses an answer to a question a
-		// registration has not opened yet, whatever the interface shows.
-		{"question not open", contests.ErrQuestionNotOpen, http.StatusConflict, "question_not_open"},
-		{"deadline passed", contests.ErrDeadlinePassed, http.StatusConflict, "deadline_passed"},
-		// Finding 1: seven concurrent answers to the very same question can
-		// run contests.Service.Submit out of retries; before this fix the
-		// handler had no case for it and a real outage and this ordinary
-		// contention answered the same way — internal_error, 500.
-		{"too many concurrent attempts", contests.ErrTooManyAttemptConflicts, http.StatusConflict, "attempt_conflict"},
-		{"not a participant", queryproxy.ErrNotAParticipant, http.StatusForbidden, "not_a_participant"},
-		{"contest not running", queryproxy.ErrContestNotRunning, http.StatusConflict, "contest_not_running"},
+		{"question not found", contests.ErrQuestionNotFound, http.StatusNotFound, "question_not_found",
+			"No such question in this contest"},
+		{"not a participant", queryproxy.ErrNotAParticipant, http.StatusForbidden, "not_a_participant", ""},
+		{"contest not running", queryproxy.ErrContestNotRunning, http.StatusConflict, "contest_not_running", ""},
+		// An organiser removed the caller between admission and the answer:
+		// their registration is gone, which a participant hears as it is told
+		// everywhere else — not taking part — and never as the organiser's
+		// participant_not_found, a code the play screen does not know.
+		{"registration removed mid-answer", fmt.Errorf("start the participant's clock: %w", contests.ErrParticipantNotFound),
+			http.StatusForbidden, "not_a_participant", "The caller is not taking part in this contest"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newParticipantFixture(t)
@@ -1117,6 +1114,11 @@ func TestAnswerRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 			}
 			if code := errorCode(t, rec); code != tc.wantCode {
 				t.Fatalf("code = %q, want %q", code, tc.wantCode)
+			}
+			if tc.wantMessage != "" {
+				if message := errorMessage(t, rec); message != tc.wantMessage {
+					t.Fatalf("message = %q, want %q", message, tc.wantMessage)
+				}
 			}
 		})
 	}

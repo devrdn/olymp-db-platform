@@ -608,53 +608,35 @@ func (h *ParticipantHandler) admitAnswer(w http.ResponseWriter, r *http.Request,
 	return true
 }
 
-// fail maps a refusal from queryproxy.Service.AdmitRead, from
-// queryproxy.Service.Access, from the reader, or from contests.Service.Submit,
-// to a response.
+// participantContestsErrors is contestsErrors as a participant hears it.
+//
+// One answer differs. A registration that vanished mid-request — an organiser
+// removing the caller between admission and Submit starting their clock — is
+// participant_not_found to an organiser, a code the play screen does not
+// know. To the participant it is what a missing registration is everywhere
+// else on their side (queryproxy's classifyParticipant): not taking part.
+var participantContestsErrors = contestsErrors.with(
+	errorRow{err: contests.ErrParticipantNotFound, status: http.StatusForbidden, code: codeNotAParticipant,
+		message: "The caller is not taking part in this contest"},
+)
+
+// fail maps an error from admission (AdmitRead, Access, Schema, StartOnRead),
+// the reader, contests.Service.Submit or the export slots to a response.
 //
 // CLAUDE.md rule 1: every one of these is a declared sentinel with a mapping
-// — queryproxy's and the rate refusal in errortable.go, the reader's and
-// Submit's here — and a test asserting the 4xx it produces.
+// in errortable.go (queryproxy's, the rate refusal, the reader's and
+// Submit's), and a test that walks the package's list asserting the 4xx it
+// produces. What is left here is this handler's own: the export slots.
 func (h *ParticipantHandler) fail(w http.ResponseWriter, r *http.Request, err error) {
 	// Admission and the rate limit: the same tables the console and the
 	// events channel answer from (errortable.go).
 	if queryproxyErrors.answer(w, r, h.log, err) || queryrunnerErrors.answer(w, r, h.log, err) {
 		return
 	}
+	if participantContestsErrors.answer(w, r, h.log, err) {
+		return
+	}
 	switch {
-	case errors.Is(err, contests.ErrStoryNotFound):
-		httpx.Error(w, r, http.StatusNotFound, codeStoryNotFound, "This contest has no story yet")
-	case errors.Is(err, contests.ErrQuestionNotFound):
-		// Also the answer when the question named in the URL belongs to
-		// another contest: that it exists elsewhere is not this caller's
-		// business (contests.Service.Submit's own doc).
-		httpx.Error(w, r, http.StatusNotFound, codeQuestionNotFound, "No such question in this contest")
-	case errors.Is(err, contests.ErrAnswerTooLong):
-		httpx.Error(w, r, http.StatusBadRequest, codeAnswerTooLong, err.Error())
-	case errors.Is(err, contests.ErrNotAChoice):
-		// The caller's own malformed request, like an overlong answer: the
-		// interface only ever sends an option id for a choice question.
-		httpx.Error(w, r, http.StatusBadRequest, codeAnswerNotAChoice,
-			"A choice question takes one of its own option identifiers")
-	case errors.Is(err, contests.ErrQuestionClosed):
-		httpx.Error(w, r, http.StatusConflict, codeQuestionClosed,
-			"This question is already answered correctly, or every attempt has been used")
-	case errors.Is(err, contests.ErrQuestionNotOpen):
-		// §6.1.1: the server is what enforces sequential order, not the
-		// interface — a direct request naming a question that has not opened
-		// yet is refused here, the same 409 family as codeQuestionClosed
-		// (another fact about this question's current state, not a
-		// permission the caller lacks).
-		httpx.Error(w, r, http.StatusConflict, codeQuestionNotOpen,
-			"A question ordered before this one is not closed yet")
-	case errors.Is(err, contests.ErrDeadlinePassed):
-		httpx.Error(w, r, http.StatusConflict, codeDeadlinePassed, "The deadline for this contest has passed")
-	case errors.Is(err, contests.ErrTooManyAttemptConflicts):
-		// Finding 1: running out of retries is a fact about this exact
-		// moment, not an outage — the same 409 family as codeQuestionClosed
-		// and codeStatusChanged, and the same honest instruction: try again.
-		httpx.Error(w, r, http.StatusConflict, codeAttemptConflict,
-			"Too many submissions to this question arrived at once; try again")
 	case errors.Is(err, ErrExportsBusy):
 		exportsBusy(w, r)
 	default:

@@ -431,6 +431,13 @@ func TestPublishingAnIncompleteContestIsRefusedWithItsReasons(t *testing.T) {
 	if code := errorCode(t, rec); code != "not_publishable" {
 		t.Errorf("error code = %q, want not_publishable", code)
 	}
+	// The refusal names what is missing. The shared table answers the same
+	// status and code without it, so this is what keeps the typed error asked
+	// for before the table (ContestsHandler.fail).
+	problems, _ := decode(t, rec)["problems"].([]any)
+	if len(problems) == 0 {
+		t.Errorf("problems = %v, want the missing story and questions named (%s)", problems, rec.Body.String())
+	}
 }
 
 func TestAnImpossibleTransitionIsAConflict(t *testing.T) {
