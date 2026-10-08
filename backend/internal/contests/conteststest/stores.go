@@ -727,9 +727,11 @@ func (r *Attempts) ForRegistration(_ context.Context, registrationID uuid.UUID) 
 // (postgres.Submissions.Insert): a submission is refused with
 // ErrDeadlinePassed once the clock has reached req.Deadline, or with
 // ErrQuestionClosed once the question is already answered correctly or every
-// attempt is spent, and otherwise takes the next attempt number. It does not
-// reproduce the real repository's concurrency guarantee — a Go map has no
-// analogue of the table's own UNIQUE constraint racing two transactions — so
+// attempt is spent, and otherwise takes the next attempt number — held to the
+// same answers as the real one by SubmissionRepositoryContract, which both
+// run. It does not reproduce the real repository's concurrency guarantee — a
+// Go map has no analogue of the table's own UNIQUE constraint racing two
+// transactions — so
 // the genuine race (finding 3) is proven where it can actually happen,
 // against PostgreSQL (internal/postgres/submissions_test.go), not here.
 // ConflictsRemaining exists so a Service-level test can still exercise
