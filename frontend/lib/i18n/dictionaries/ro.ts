@@ -1818,7 +1818,7 @@ const ro = {
     not_a_participant:
       "Nu participați la această olimpiadă.",
     contest_not_running:
-      "Olimpiada nu se desfășoară, deci nu acceptă interogări.",
+      "Olimpiada nu este deschisă acum. Se poate deschide mai târziu.",
     contest_ended:
       "Olimpiada s-a încheiat, deci nu mai acceptă nimic.",
     no_game_yet:
