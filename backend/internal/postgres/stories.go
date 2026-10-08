@@ -91,7 +91,11 @@ func (r *Stories) Save(ctx context.Context, contestID uuid.UUID, bodies map[stri
 		ON CONFLICT (contest_id) DO UPDATE SET updated_at = now()
 		RETURNING id`, contestID).Scan(&storyID)
 	if err != nil {
-		return contests.Story{}, fmt.Errorf("save story: %w", err)
+		// A contest deleted since the caller read it is refused here, by
+		// the foreign key.
+		return contests.Story{}, fmt.Errorf("save story: %w", missingParent(err, map[string]error{
+			"stories_contest_id_fkey": contests.ErrNotFound,
+		}))
 	}
 
 	langs := make([]string, 0, len(bodies))

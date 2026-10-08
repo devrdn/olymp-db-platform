@@ -42,6 +42,12 @@ func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 		repo.Accounts = func(_ context.Context, id uuid.UUID) (string, string) {
 			return accounts[id].login, accounts[id].fullName
 		}
+		known := map[uuid.UUID]bool{}
+		repo.ContestExists = func(id uuid.UUID) bool { return known[id] }
+		repo.UserExists = func(id uuid.UUID) bool {
+			_, ok := accounts[id]
+			return ok
+		}
 		repo.Permissions = func(_ context.Context, id uuid.UUID) []string {
 			if admins[id] {
 				return []string{rbac.PermissionContestAdminAll}
@@ -55,7 +61,11 @@ func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 				accounts[id] = account{login, fullName}
 				return id
 			},
-			NewContest:    uuid.New,
+			NewContest: func() uuid.UUID {
+				id := uuid.New()
+				known[id] = true
+				return id
+			},
 			GrantAdminAll: func(user uuid.UUID) { admins[user] = true },
 			RecordWork:    repo.PutWork,
 			Now:           repo.Clock,
@@ -66,8 +76,15 @@ func TestRegistrationsHonoursTheRepositoryContract(t *testing.T) {
 func TestQuestionsHonoursTheRepositoryContract(t *testing.T) {
 	QuestionRepositoryContract(t, func(t *testing.T, run func(context.Context, QuestionTarget)) {
 		repo := NewQuestions()
+		known := map[uuid.UUID]bool{}
+		repo.ContestExists = func(id uuid.UUID) bool { return known[id] }
 		run(inUnitOfWork(), QuestionTarget{
-			Repo: repo, Visible: repo, NewContest: uuid.New,
+			Repo: repo, Visible: repo,
+			NewContest: func() uuid.UUID {
+				id := uuid.New()
+				known[id] = true
+				return id
+			},
 			Outside: context.Background(),
 		})
 	})
@@ -166,11 +183,17 @@ func TestStoriesHonoursTheRepositoryContract(t *testing.T) {
 	StoryRepositoryContract(t, func(t *testing.T, run func(context.Context, StoryTarget)) {
 		repo := NewStories()
 		repo.Clock = func() time.Time { return FixtureNow }
+		known := map[uuid.UUID]bool{}
+		repo.ContestExists = func(id uuid.UUID) bool { return known[id] }
 		run(context.Background(), StoryTarget{
-			Repo:       repo,
-			Text:       repo,
-			NewContest: uuid.New,
-			Now:        repo.Clock,
+			Repo: repo,
+			Text: repo,
+			NewContest: func() uuid.UUID {
+				id := uuid.New()
+				known[id] = true
+				return id
+			},
+			Now: repo.Clock,
 		})
 	})
 }
@@ -198,11 +221,17 @@ func TestPoliciesHonoursTheStoreContract(t *testing.T) {
 	PolicyStoreContract(t, func(t *testing.T, run func(context.Context, PolicyTarget)) {
 		store := NewPolicies()
 		store.Clock = func() time.Time { return FixtureNow }
+		known := map[uuid.UUID]bool{}
+		store.ContestExists = func(id uuid.UUID) bool { return known[id] }
 		run(context.Background(), PolicyTarget{
-			Store:      store,
-			NewContest: uuid.New,
-			NewUser:    uuid.New,
-			Now:        store.Clock,
+			Store: store,
+			NewContest: func() uuid.UUID {
+				id := uuid.New()
+				known[id] = true
+				return id
+			},
+			NewUser: uuid.New,
+			Now:     store.Clock,
 		})
 	})
 }

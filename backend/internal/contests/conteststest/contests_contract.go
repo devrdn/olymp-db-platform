@@ -63,15 +63,11 @@ type ContestTarget struct {
 // database's collation. A contest is told apart from its neighbours by a
 // marker that its title begins with.
 //
-// Some answers are deliberately not pinned. Replacing the languages or the
-// titles of a contest that does not exist is refused by the in-memory store
-// with ErrNotFound and by PostgreSQL with whatever its foreign key says, or
-// not at all for an empty set. Locking a contest that does not exist is
-// refused by the in-memory store and does nothing in PostgreSQL. The order of
-// contests that start at the same moment, or have no start, is left open:
-// PostgreSQL breaks the tie by creation time, which a transaction stamps
-// identically on every row it writes. And what a participant is shown of an
-// archived contest is not stated.
+// Some answers are deliberately not pinned. The order of contests that start
+// at the same moment, or have no start, is left open: PostgreSQL breaks the
+// tie by creation time, which a transaction stamps identically on every row
+// it writes. And what a participant is shown of an archived contest is not
+// stated.
 func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(context.Context, ContestTarget))) {
 	at := func(hour int) time.Time { return time.Date(2026, 3, 1, hour, 0, 0, 0, time.UTC) }
 
@@ -758,6 +754,20 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 		})
 	})
 
+	t.Run("ReplaceLanguages of a contest that is not there is reported", func(t *testing.T) {
+		// A contest deleted while its languages were being edited: the
+		// organiser is told the contest is gone, not that the store failed.
+		each(t, func(ctx context.Context, target ContestTarget) {
+			// No languages at all write nothing that could name the contest,
+			// and are still an edit of a contest that is not there.
+			notFound(t, target.Repo.ReplaceLanguages(ctx, uuid.New(), nil), "ReplaceLanguages() with none")
+
+			// Last, because a database refuses it by failing the statement,
+			// and a transaction cannot be read from after that.
+			notFound(t, target.Repo.ReplaceLanguages(ctx, uuid.New(), []contests.ContestLanguage{english}), "ReplaceLanguages()")
+		})
+	})
+
 	t.Run("ReplaceTranslations sets the title and description per language", func(t *testing.T) {
 		each(t, func(ctx context.Context, target ContestTarget) {
 			created := create(t, ctx, target, plain(target.NewUser()))
@@ -822,6 +832,19 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 			if got := byID(t, ctx, target, theirs.ID); !reflect.DeepEqual(got.Translations, want) {
 				t.Errorf("another contest's titles = %v, want %v", got.Translations, want)
 			}
+		})
+	})
+
+	t.Run("ReplaceTranslations of a contest that is not there is reported", func(t *testing.T) {
+		each(t, func(ctx context.Context, target ContestTarget) {
+			// No titles at all write nothing that could name the contest,
+			// and are still an edit of a contest that is not there.
+			notFound(t, target.Repo.ReplaceTranslations(ctx, uuid.New(), nil), "ReplaceTranslations() with none")
+
+			// Last, because a database refuses it by failing the statement,
+			// and a transaction cannot be read from after that.
+			notFound(t, target.Repo.ReplaceTranslations(ctx, uuid.New(), []contests.Translation{{Lang: "en", Title: "Gone"}}),
+				"ReplaceTranslations()")
 		})
 	})
 
@@ -1227,6 +1250,14 @@ func ContestRepositoryContract(t *testing.T, each func(t *testing.T, run func(co
 					t.Fatalf("LockContest() #%d = %v", i+1, err)
 				}
 			}
+		})
+	})
+
+	t.Run("LockContest of a contest that is not there is reported", func(t *testing.T) {
+		// A lock taken on nothing protects nothing: the caller would go on to
+		// write against a contest that has gone, believing it held it.
+		each(t, func(ctx context.Context, target ContestTarget) {
+			notFound(t, target.Repo.LockContest(ctx, uuid.New()), "LockContest()")
 		})
 	})
 

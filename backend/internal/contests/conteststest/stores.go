@@ -27,6 +27,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/audit"
 	"github.com/devrdn/db-contest/backend/internal/contests"
 	"github.com/devrdn/db-contest/backend/internal/rbac"
+	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 )
 
@@ -67,6 +68,13 @@ func (r *Contests) Rosters(managers *Managers, registrations *Registrations) {
 
 // Count reports how many contests are stored.
 func (r *Contests) Count() int { return len(r.byID) }
+
+// Exists reports whether the contest is stored: what the stores of the rows
+// that hang off a contest ask in place of the real schema's foreign key.
+func (r *Contests) Exists(id uuid.UUID) bool {
+	_, ok := r.byID[id]
+	return ok
+}
 
 // store keeps a copy of the contest, so nothing the caller does to its own
 // value afterwards reaches the stored one.
@@ -385,6 +393,10 @@ type Stories struct {
 	// through ByContest, as the real one does, so Save returns it too, after
 	// storing the story.
 	Err error
+	// ContestExists is what Save asks about the contest a story belongs to,
+	// standing in for the real table's foreign key. Nil takes every contest
+	// as there: a story store standing alone in a test has nothing to ask.
+	ContestExists func(id uuid.UUID) bool
 }
 
 var (
@@ -423,6 +435,9 @@ func (r *Stories) BodyIn(ctx context.Context, contestID uuid.UUID, lang string) 
 }
 
 func (r *Stories) Save(ctx context.Context, contestID uuid.UUID, bodies map[string]string) (contests.Story, error) {
+	if r.ContestExists != nil && !r.ContestExists(contestID) {
+		return contests.Story{}, contests.ErrNotFound
+	}
 	story, ok := r.byContest[contestID]
 	if !ok {
 		story = contests.Story{ID: uuid.New(), ContestID: contestID}
@@ -443,6 +458,11 @@ func (r *Stories) Delete(_ context.Context, contestID uuid.UUID) error {
 // Questions is an in-memory contests.QuestionRepository.
 type Questions struct {
 	byID map[uuid.UUID]contests.Question
+	// ContestExists is what Create asks about the contest a question is
+	// added to, standing in for the real insert finding the contest row it
+	// locks. Nil takes every contest as there: a question store standing
+	// alone in a test has no contests to ask.
+	ContestExists func(id uuid.UUID) bool
 }
 
 var (
@@ -547,6 +567,9 @@ func (r *Questions) Create(ctx context.Context, q contests.Question) (contests.Q
 	// transaction, so it refuses to run outside one.
 	if !inTx(ctx) {
 		return contests.Question{}, errors.New("adding a question must run inside a transaction")
+	}
+	if r.ContestExists != nil && !r.ContestExists(q.ContestID) {
+		return contests.Question{}, contests.ErrNotFound
 	}
 	existing, _ := r.List(ctx, q.ContestID)
 	q.ID = uuid.New()
@@ -743,6 +766,13 @@ type Registrations struct {
 	// Clock is what Add stamps CreatedAt with, the way the table's default
 	// stamps it with the database's own now(). Nil leaves CreatedAt zero.
 	Clock func() time.Time
+	// ContestExists and UserExists are what Add asks about the contest and
+	// the account it registers, standing in for the real table's foreign
+	// keys. Nil takes every contest, or every account, as there: a
+	// registration store standing alone in a test has nothing to ask, and
+	// the fixture asks only about the contest (see NewFixture).
+	ContestExists func(id uuid.UUID) bool
+	UserExists    func(id uuid.UUID) bool
 	// work holds the registrations the store reports as having a record
 	// behind them (PutWork).
 	work map[uuid.UUID]bool
@@ -857,6 +887,12 @@ func (r *Registrations) ByUser(_ context.Context, contestID, userID uuid.UUID) (
 }
 
 func (r *Registrations) Add(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, error) {
+	if r.ContestExists != nil && !r.ContestExists(contestID) {
+		return contests.Participant{}, contests.ErrNotFound
+	}
+	if r.UserExists != nil && !r.UserExists(userID) {
+		return contests.Participant{}, users.ErrNotFound
+	}
 	// Checked against the stored rows rather than through ByUser: the real
 	// guarantee is a unique index, and it does not stop holding because a
 	// lookup missed.
@@ -958,6 +994,10 @@ type Policies struct {
 	// Clock is what Save stamps UpdatedAt with, the way the statement stamps it
 	// with the database's own now(). Nil leaves it as it is.
 	Clock func() time.Time
+	// ContestExists is what Save asks about the contest a policy belongs to,
+	// standing in for the real table's foreign key. Nil takes every contest
+	// as there: a policy store standing alone in a test has nothing to ask.
+	ContestExists func(id uuid.UUID) bool
 }
 
 var _ contests.PolicyStore = (*Policies)(nil)
@@ -978,6 +1018,9 @@ func (r *Policies) ByContest(_ context.Context, contestID uuid.UUID) (contests.S
 }
 
 func (r *Policies) Save(_ context.Context, p contests.SQLPolicy) error {
+	if r.ContestExists != nil && !r.ContestExists(p.ContestID) {
+		return contests.ErrNotFound
+	}
 	p = clonePolicy(p)
 	if r.Clock != nil {
 		p.UpdatedAt = r.Clock()

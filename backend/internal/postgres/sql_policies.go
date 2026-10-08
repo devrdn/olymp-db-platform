@@ -72,7 +72,11 @@ func (r *SQLPolicies) Save(ctx context.Context, p contests.SQLPolicy) error {
 		p.ContestID, p.Mode, stringList(p.WritableTables), p.AllowCreateView,
 		p.AllowOwnTables, p.AllowTempTables, p.AllowCatalog, p.DiskQuotaRatio, p.UpdatedBy)
 	if err != nil {
-		return fmt.Errorf("save sql policy: %w", err)
+		// A contest deleted since the caller read it is refused here, by
+		// the foreign key.
+		return fmt.Errorf("save sql policy: %w", missingParent(err, map[string]error{
+			"contest_sql_policies_contest_id_fkey": contests.ErrNotFound,
+		}))
 	}
 	return nil
 }

@@ -15,8 +15,8 @@ import (
 // isolation: the repository may hold other questions already, so a case only
 // ever looks at the contests it created itself. A real schema needs a contest
 // to exist before a question can name it, so each implementation fills
-// NewContest its own way: the in-memory store mints an identifier, PostgreSQL
-// inserts a row.
+// NewContest its own way: the in-memory store mints an identifier and
+// remembers it, PostgreSQL inserts a row.
 type QuestionTarget struct {
 	Repo contests.QuestionRepository
 	// Visible is the participant-facing read over the same questions as
@@ -261,6 +261,18 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 				t.Errorf("Ord = %d, want 3", got.Ord)
 			}
 			wantLayout(t, ctx, target, contest, []int{10, 30, 40}, []int{1, 2, 3})
+		})
+	})
+
+	t.Run("Create in a contest that is not there is reported", func(t *testing.T) {
+		// A contest deleted while a question was being added to it: the
+		// author is told the contest is gone, not that the store failed.
+		each(t, func(ctx context.Context, target QuestionTarget) {
+			_, err := target.Repo.Create(ctx, textual(uuid.New(), 10))
+
+			if !errors.Is(err, contests.ErrNotFound) {
+				t.Errorf("Create() in an unknown contest error = %v, want ErrNotFound", err)
+			}
 		})
 	})
 
@@ -692,6 +704,21 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 		})
 	})
 
+	t.Run("ReplaceTexts of a question that is not there is reported", func(t *testing.T) {
+		// A question deleted while its text was being edited.
+		each(t, func(ctx context.Context, target QuestionTarget) {
+			// No text at all writes nothing that could name the question,
+			// and is still an edit of a question that is not there.
+			notFound(t, target.Repo.ReplaceTexts(ctx, uuid.New(), map[string]contests.QuestionText{}),
+				"ReplaceTexts() of an unknown question with none")
+
+			// Last, because a database refuses it by failing the statement,
+			// and a transaction cannot be read from after that.
+			notFound(t, target.Repo.ReplaceTexts(ctx, uuid.New(), map[string]contests.QuestionText{"en": {BodyMD: "Who did it?"}}),
+				"ReplaceTexts() of an unknown question")
+		})
+	})
+
 	t.Run("ReplaceAnswers sets the reference answers", func(t *testing.T) {
 		each(t, func(ctx context.Context, target QuestionTarget) {
 			created := create(t, ctx, target, textual(target.NewContest(), 10))
@@ -804,6 +831,21 @@ func QuestionRepositoryContract(t *testing.T, each func(t *testing.T, run func(c
 			if got := answersOf(byID(t, ctx, target, other.ID)); !slices.Equal(got, want) {
 				t.Errorf("the other question's answers = %v, want %v", got, want)
 			}
+		})
+	})
+
+	t.Run("ReplaceAnswers of a question that is not there is reported", func(t *testing.T) {
+		// A question deleted while its answers were being edited.
+		each(t, func(ctx context.Context, target QuestionTarget) {
+			// No answers at all write nothing that could name the question,
+			// and are still an edit of a question that is not there.
+			notFound(t, target.Repo.ReplaceAnswers(ctx, uuid.New(), nil),
+				"ReplaceAnswers() of an unknown question with none")
+
+			// Last, because a database refuses it by failing the statement,
+			// and a transaction cannot be read from after that.
+			notFound(t, target.Repo.ReplaceAnswers(ctx, uuid.New(), []contests.Answer{{MatchKind: contests.MatchExact, Value: "the butler"}}),
+				"ReplaceAnswers() of an unknown question")
 		})
 	})
 

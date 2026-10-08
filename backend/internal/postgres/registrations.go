@@ -11,6 +11,7 @@ import (
 	"github.com/devrdn/db-contest/backend/internal/provisioning"
 	"github.com/devrdn/db-contest/backend/internal/queryproxy"
 	"github.com/devrdn/db-contest/backend/internal/sqlpolicy"
+	"github.com/devrdn/db-contest/backend/internal/users"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -275,6 +276,11 @@ func (r *Registrations) EnrolledIn(ctx context.Context, userID uuid.UUID, contes
 }
 
 // Add registers a user for a contest.
+//
+// A contest or an account that is not there is contests.ErrNotFound or
+// users.ErrNotFound, decided by the table's foreign keys at the insert
+// itself, so one deleted since the caller read it is answered the same way
+// as one that never existed.
 func (r *Registrations) Add(ctx context.Context, contestID, userID uuid.UUID) (contests.Participant, error) {
 	p, err := scanParticipant(r.querier(ctx).QueryRow(ctx, `
 		WITH inserted AS (
@@ -290,7 +296,10 @@ func (r *Registrations) Add(ctx context.Context, contestID, userID uuid.UUID) (c
 		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
 			return contests.Participant{}, contests.ErrAlreadyEnrolled
 		}
-		return contests.Participant{}, err
+		return contests.Participant{}, missingParent(err, map[string]error{
+			"registrations_contest_id_fkey": contests.ErrNotFound,
+			"registrations_user_id_fkey":    users.ErrNotFound,
+		})
 	}
 	return p, nil
 }
