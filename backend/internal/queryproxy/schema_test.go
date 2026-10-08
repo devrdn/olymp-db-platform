@@ -131,21 +131,36 @@ func TestSchemaRequiresTheSameAdmissionAsEveryOtherRead(t *testing.T) {
 			contest: contests.Contest{Status: contests.StatusPublished, Timing: contests.TimingFixed, EndsAt: &openWindow},
 			person:  contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive},
 			addr:    netip.MustParseAddr("192.0.2.7"),
-			want:    queryproxy.ErrContestNotRunning,
+			want:    contests.ErrContestNotRunning,
 		},
 		{
 			name:    "a participant who has finished",
 			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow},
 			person:  contests.Participant{ID: uuid.New(), Status: contests.RegistrationFinished},
 			addr:    netip.MustParseAddr("192.0.2.7"),
-			want:    queryproxy.ErrFinished,
+			want:    contests.ErrParticipantFinished,
 		},
 		{
 			name:    "a disqualified participant",
 			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow},
 			person:  contests.Participant{ID: uuid.New(), Status: contests.RegistrationDisqualified},
 			addr:    netip.MustParseAddr("192.0.2.7"),
-			want:    queryproxy.ErrNotAParticipant,
+			want:    contests.ErrNotAParticipant,
+		},
+		{
+			name:    "a participant whose time is up",
+			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &closedWindow},
+			person:  contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive},
+			addr:    netip.MustParseAddr("192.0.2.7"),
+			want:    contests.ErrDeadlinePassed,
+		},
+		{
+			name: "a contest that has not started, from a network it is not held on",
+			contest: contests.Contest{Status: contests.StatusPublished, Timing: contests.TimingFixed, EndsAt: &openWindow,
+				AllowedCIDRs: []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}},
+			person: contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered},
+			addr:   netip.MustParseAddr("192.0.2.7"),
+			want:   contests.ErrAddressNotAllowed,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -208,7 +223,7 @@ func TestARefusedSchemaReadStartsNoClock(t *testing.T) {
 		allowed []netip.Prefix
 		want    error
 	}{
-		"an address the contest does not allow": {sqlpolicy.ReadOnly(), []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}, queryproxy.ErrAddressNotAllowed},
+		"an address the contest does not allow": {sqlpolicy.ReadOnly(), []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}, contests.ErrAddressNotAllowed},
 		"a contest that hides its schema":       {closed, nil, queryproxy.ErrSchemaHidden},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -67,15 +67,15 @@ func makeIntegrationUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 
 // makeRunningIndividualContest inserts a contest already running under
 // individual timing, with the exact fields contests.Deadline (and, since
-// finding 1, Contest.OpenForStart) read. Direct SQL rather than the contests
-// service: reaching "running" through the service means walking
+// finding 1, the gate's own window check) read. Direct SQL rather than the
+// contests service: reaching "running" through the service means walking
 // draft → published → running, which is the lifecycle package's own concern
 // and only noise here.
 //
 // startsAt is a parameter rather than the database's own now() minus an
 // interval: the test below drives queryproxy with its own pinned clock
 // (WithClock), which has nothing to do with the wall-clock time this fixture
-// is created at, and OpenForStart compares starts_at against that pinned
+// is created at, and the gate compares starts_at against that pinned
 // clock, not against when the row was inserted.
 func makeRunningIndividualContest(t *testing.T, ctx context.Context, pool *pgxpool.Pool, author uuid.UUID, durationMin int, startsAt, endsAt time.Time) uuid.UUID {
 	t.Helper()
@@ -108,7 +108,7 @@ func TestAnIndividualParticipantCanQueryOnceTheirFirstActionStartsTheClockAndCan
 	// and comparing their deadline, so the two calls below are exactly ten
 	// minutes and one second apart from the façade's own point of view. The
 	// contest's own starts_at has to be pinned against this same clock, not
-	// the database's own now(): OpenForStart (finding 1) compares starts_at
+	// the database's own now(): the gate (finding 1) compares starts_at
 	// to whatever clock Run is given, and a fixture stamped by the real wall
 	// clock would place a fixed 2026 test date outside a window that opened
 	// today.
@@ -160,8 +160,8 @@ func TestAnIndividualParticipantCanQueryOnceTheirFirstActionStartsTheClockAndCan
 	// proven against the schema rather than a fake that could not have hidden
 	// it either way.
 	clock = clock.Add(durationMin * time.Minute)
-	if _, err := service.Run(ctx, cmd); !errors.Is(err, queryproxy.ErrContestNotRunning) {
-		t.Fatalf("a query past the participant's own deadline: error = %v, want ErrContestNotRunning", err)
+	if _, err := service.Run(ctx, cmd); !errors.Is(err, contests.ErrDeadlinePassed) {
+		t.Fatalf("a query past the participant's own deadline: error = %v, want ErrDeadlinePassed", err)
 	}
 }
 
@@ -244,27 +244,27 @@ func TestAccessAgainstTheRealSchemaAnswersTheOwnersOwnStandingCheck(t *testing.T
 	// exactly the same refusal a caller naming a contest ID that names
 	// nothing at all would (ErrNotAParticipant), never a 404 that would
 	// confirm this contest exists and never anything else about it.
-	if _, _, err := service.Access(ctx, running, stranger, netip.Addr{}); !errors.Is(err, queryproxy.ErrNotAParticipant) {
+	if _, _, err := service.Access(ctx, running, stranger, netip.Addr{}); !errors.Is(err, contests.ErrNotAParticipant) {
 		t.Fatalf("a stranger to this contest: error = %v, want ErrNotAParticipant", err)
 	}
 
 	// A contest ID that names nothing at all reads the same way.
-	if _, _, err := service.Access(ctx, uuid.New(), enrolled, netip.Addr{}); !errors.Is(err, queryproxy.ErrNotAParticipant) {
+	if _, _, err := service.Access(ctx, uuid.New(), enrolled, netip.Addr{}); !errors.Is(err, contests.ErrNotAParticipant) {
 		t.Fatalf("a contest that does not exist: error = %v, want ErrNotAParticipant", err)
 	}
 
 	// A disqualified participant of this very contest is refused the same
 	// way — disqualification must not read as "not registered" to the
 	// caller, but it must read as the same code a stranger gets.
-	if _, _, err := service.Access(ctx, running, disqualified, netip.Addr{}); !errors.Is(err, queryproxy.ErrNotAParticipant) {
+	if _, _, err := service.Access(ctx, running, disqualified, netip.Addr{}); !errors.Is(err, contests.ErrNotAParticipant) {
 		t.Fatalf("a disqualified participant: error = %v, want ErrNotAParticipant", err)
 	}
 
 	// A contest past its own ends_at is refused even though nothing here ever
 	// flips contests.status to finished — the same deadline formula Run
 	// checks before taking a query.
-	if _, _, err := service.Access(ctx, notRunningAnymore, enrolled, netip.Addr{}); !errors.Is(err, queryproxy.ErrContestNotRunning) {
-		t.Fatalf("a contest past its own deadline: error = %v, want ErrContestNotRunning", err)
+	if _, _, err := service.Access(ctx, notRunningAnymore, enrolled, netip.Addr{}); !errors.Is(err, contests.ErrDeadlinePassed) {
+		t.Fatalf("a contest past its own deadline: error = %v, want ErrDeadlinePassed", err)
 	}
 }
 
@@ -333,7 +333,7 @@ func TestTheConsoleClosesOnceNothingIsAnswerableAgainstTheRealSchema(t *testing.
 	}
 
 	// And nothing else closed with it: the play screen's own admission still
-	// admits them, which is the whole reason this is not ErrFinished.
+	// admits them, which is the whole reason this is not ErrParticipantFinished.
 	if _, _, err := service.Access(ctx, contestID, student, netip.Addr{}); err != nil {
 		t.Fatalf("Access() = %v, want nil — only the console closes", err)
 	}
@@ -377,7 +377,7 @@ func TestAnIndividualParticipantsFirstReadStartsTheClockOnceAndTheEventsChannelN
 	if err != nil {
 		t.Fatalf("Access() = %v", err)
 	}
-	if _, err := service.StartOnRead(ctx, contest, participant); err != nil {
+	if _, err := service.StartOnRead(ctx, contest, participant, netip.Addr{}); err != nil {
 		t.Fatalf("StartOnRead() = %v", err)
 	}
 	stored, err := registrations.ByUser(ctx, contestID, student)
@@ -389,7 +389,7 @@ func TestAnIndividualParticipantsFirstReadStartsTheClockOnceAndTheEventsChannelN
 	// before the start, the way a racing read would: the stored start stays
 	// where it is.
 	clock = clock.Add(7 * time.Minute)
-	if _, err := service.StartOnRead(ctx, contest, participant); err != nil {
+	if _, err := service.StartOnRead(ctx, contest, participant, netip.Addr{}); err != nil {
 		t.Fatalf("second StartOnRead() = %v", err)
 	}
 	again, err := registrations.ByUser(ctx, contestID, student)

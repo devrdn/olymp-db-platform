@@ -59,18 +59,24 @@ func answer(t *testing.T, table errorTable, err error) (answered, bool) {
 // and the events channel — answered for it before they shared one table. The
 // expected values are written out, not derived: they are the contract the
 // interface already reads codes from.
+//
+// Those are queryproxy's own errors and the participation gate's refusals,
+// which queryproxy hands over as contests declares them: a participant whose
+// time is up meets deadline_passed at the console as at the answer route.
 func TestEveryQueryproxyErrorHasItsAnswer(t *testing.T) {
 	want := map[error]answered{
-		queryproxy.ErrNotAParticipant: {status: http.StatusForbidden, code: "not_a_participant",
+		contests.ErrNotAParticipant: {status: http.StatusForbidden, code: "not_a_participant",
 			message: "The caller is not taking part in this contest"},
-		queryproxy.ErrContestNotRunning: {status: http.StatusConflict, code: "contest_not_running",
+		contests.ErrContestNotRunning: {status: http.StatusConflict, code: "contest_not_running",
 			message: "The contest is not running"},
-		queryproxy.ErrFinished: {status: http.StatusConflict, code: "contest_finished",
+		contests.ErrParticipantFinished: {status: http.StatusConflict, code: "contest_finished",
 			message: "The participant has already finished"},
+		contests.ErrDeadlinePassed: {status: http.StatusConflict, code: "deadline_passed",
+			message: "The deadline for this contest has passed"},
+		contests.ErrAddressNotAllowed: {status: http.StatusForbidden, code: "address_not_allowed",
+			message: "This contest is only available from the university network"},
 		queryproxy.ErrNothingLeftToAnswer: {status: http.StatusConflict, code: "nothing_left_to_answer",
 			message: "no question of this contest is still answerable"},
-		queryproxy.ErrAddressNotAllowed: {status: http.StatusForbidden, code: "address_not_allowed",
-			message: "This contest is only available from the university network"},
 		queryproxy.ErrNoGameYet: {status: http.StatusConflict, code: "no_game_yet",
 			message: "The contest has no game database yet"},
 		queryproxy.ErrNoRoomForDatabase: {status: http.StatusServiceUnavailable, code: "game_cluster_full",
@@ -88,7 +94,11 @@ func TestEveryQueryproxyErrorHasItsAnswer(t *testing.T) {
 		declared[info.Code] = true
 	}
 
-	for _, err := range queryproxy.Errors() {
+	gate := []error{
+		contests.ErrNotAParticipant, contests.ErrContestNotRunning, contests.ErrParticipantFinished,
+		contests.ErrDeadlinePassed, contests.ErrAddressNotAllowed,
+	}
+	for _, err := range append(queryproxy.Errors(), gate...) {
 		t.Run(err.Error(), func(t *testing.T) {
 			expected, known := want[err]
 			if !known {

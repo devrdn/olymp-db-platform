@@ -18,9 +18,9 @@ var (
 	ErrNotAParticipant = errors.New("not a participant of this contest")
 	// ErrContestNotRunning is a contest that is not open to this participant
 	// yet, or no longer open to anybody: a draft, a published contest that has
-	// not started, an individual window that has not opened, a contest that
-	// has finished or been archived, or timing data no deadline can be
-	// computed from.
+	// not started, a status this build does not know, an individual window
+	// that has not opened, a contest that has finished or been archived, or
+	// timing data no deadline can be computed from.
 	ErrContestNotRunning = errors.New("the contest is not running")
 	// ErrParticipantFinished is a registration that is finished. Their
 	// answers are in; everything closing with them is the point of finishing.
@@ -146,7 +146,8 @@ func phaseOf(c Contest, p Participant, now time.Time, grace time.Duration) phase
 
 // startPhase is where a participant who has not started their own clock
 // stands in a running contest: before its window, inside it, or too late to
-// begin. ends_at is the last instant they may not start at — no grace.
+// begin. ends_at is the first instant they may no longer start at, with no
+// grace.
 func startPhase(c Contest, now time.Time) phase {
 	if c.StartsAt != nil && now.Before(*c.StartsAt) {
 		return phaseNotRunning

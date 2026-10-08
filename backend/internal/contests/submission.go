@@ -21,11 +21,12 @@ var (
 	// shown" and "not answerable" are different decisions (§6.1) — this is
 	// the second one, and it applies to a hidden question exactly as it does
 	// to a visible one, since Submit never consults IsVisible at all.
-	ErrQuestionClosed = errors.New("this question is closed")
+	//
 	// An answer that arrives after the participant's own deadline is refused
-	// with ErrDeadlinePassed, declared with the gate (standing.go) because a
-	// participant whose time is up meets it there first.
-
+	// with ErrDeadlinePassed instead, declared beside the participation gate
+	// (standing.go), because a participant whose time is up meets it there
+	// first.
+	ErrQuestionClosed = errors.New("this question is closed")
 	// ErrAttemptConflict reports that two submissions to the same question by
 	// the same registration computed the same next attempt number at the
 	// same moment (finding 3): the table's own

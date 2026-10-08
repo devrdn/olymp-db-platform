@@ -41,11 +41,10 @@ func (s *Service) WithSchemas(schemas Schemas) *Service {
 // Schema answers what the game looks like, for the console's schema panel.
 //
 // The same admission every other participant-facing read requires (Access):
-// registered and not disqualified or finished, the contest open to them,
-// their address allowed. The schema is contest content like the story and the
-// questions, so under individual timing a successful read starts the
-// participant's clock (StartOnRead) — only once it has been read, so a refused
-// read, a hidden schema included, starts nothing.
+// the participation gate, contests.StandingOf. The schema is contest content
+// like the story and the questions, so under individual timing a successful
+// read starts the participant's clock (StartOnRead) — only once it has been
+// read, so a refused read, a hidden schema included, starts nothing.
 //
 // The catalogue flag is checked before the database is provisioned, and
 // before anything is read: a contest that hides its schema must not be able
@@ -74,7 +73,7 @@ func (s *Service) Schema(ctx context.Context, contestID, userID uuid.UUID, addr 
 		return provisioning.Schema{}, err
 	}
 	contest := lookup.Contest
-	if err := s.Admitted(contest, participant, addr); err != nil {
+	if err := s.admit(contest, participant, addr); err != nil {
 		return provisioning.Schema{}, err
 	}
 
@@ -103,7 +102,7 @@ func (s *Service) Schema(ctx context.Context, contestID, userID uuid.UUID, addr 
 	if err != nil {
 		return provisioning.Schema{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	if _, err := s.StartOnRead(ctx, contest, participant); err != nil {
+	if _, err := s.StartOnRead(ctx, contest, participant, addr); err != nil {
 		return provisioning.Schema{}, err
 	}
 	return schema, nil
