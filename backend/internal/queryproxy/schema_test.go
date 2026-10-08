@@ -26,11 +26,18 @@ func (s *schemas) Schema(_ context.Context, _ provisioning.Contest, database str
 	return s.schema, s.err
 }
 
+// admitted is a participant and the contest they were admitted to, as the
+// caller's Access resolved them: what Schema is handed.
+type admitted struct {
+	contest     contests.Contest
+	participant contests.Participant
+}
+
 // schemaFixture assembles the façade around a policy, so each test can say
 // what the contest allows and nothing else.
-func schemaFixture(policy sqlpolicy.Policy) (*queryproxy.Service, *databases, *schemas) {
+func schemaFixture(policy sqlpolicy.Policy) (*queryproxy.Service, *databases, *schemas, admitted) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
-	registration := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}
+	registration := contests.Participant{ID: uuid.New(), ContestID: contest.ID, UserID: uuid.New(), Status: contests.RegistrationActive}
 	db := &databases{database: "game_c1_u1"}
 	reader := &schemas{schema: provisioning.Schema{Tables: []provisioning.Table{{Name: "guests"}}}}
 
@@ -40,13 +47,13 @@ func schemaFixture(policy sqlpolicy.Policy) (*queryproxy.Service, *databases, *s
 		games{game: provisioning.Contest{ID: contest.ID, Template: "game_tpl_c1", Version: 3, Policy: policy}},
 		db, &runner{},
 	).WithSchemas(reader)
-	return service, db, reader
+	return service, db, reader, admitted{contest: contest, participant: registration}
 }
 
 func TestSchemaDescribesTheParticipantsOwnDatabase(t *testing.T) {
-	service, _, reader := schemaFixture(sqlpolicy.ReadOnly())
+	service, _, reader, pair := schemaFixture(sqlpolicy.ReadOnly())
 
-	got, err := service.Schema(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("192.0.2.7"))
+	got, err := service.Schema(t.Context(), pair.contest, pair.participant, netip.MustParseAddr("192.0.2.7"))
 	if err != nil {
 		t.Fatalf("reading the schema: %v", err)
 	}
@@ -67,9 +74,9 @@ func TestSchemaDescribesTheParticipantsOwnDatabase(t *testing.T) {
 func TestSchemaIsRefusedWhereTheContestClosedItsCatalogues(t *testing.T) {
 	closed := sqlpolicy.ReadOnly()
 	closed.AllowCatalog = false
-	service, db, reader := schemaFixture(closed)
+	service, db, reader, pair := schemaFixture(closed)
 
-	_, err := service.Schema(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("192.0.2.7"))
+	_, err := service.Schema(t.Context(), pair.contest, pair.participant, netip.MustParseAddr("192.0.2.7"))
 	if !errors.Is(err, queryproxy.ErrSchemaHidden) {
 		t.Fatalf("answered %v, want ErrSchemaHidden", err)
 	}
@@ -90,101 +97,60 @@ func TestSchemaIsRefusedWhereTheContestClosedItsCatalogues(t *testing.T) {
 // touch them — and neither may this.
 func TestSchemaIsRefusedByAConsolelessBuildRatherThanPanicking(t *testing.T) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
-	service := queryproxy.New(
-		people{participant: contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}},
-		contestStore{contest: contest},
-		nil, nil, nil,
-	)
+	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}
+	service := queryproxy.New(people{participant: participant}, contestStore{contest: contest}, nil, nil, nil)
 
-	if _, err := service.Schema(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("192.0.2.7")); !errors.Is(err, queryproxy.ErrSchemaHidden) {
+	if _, err := service.Schema(t.Context(), contest, participant, netip.MustParseAddr("192.0.2.7")); !errors.Is(err, queryproxy.ErrSchemaHidden) {
 		t.Fatalf("answered %v, want ErrSchemaHidden", err)
 	}
 }
 
 func TestSchemaIsRefusedWhenNothingWasWiredToAnswerIt(t *testing.T) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
+	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}
 	service := queryproxy.New(
-		people{participant: contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}},
+		people{participant: participant},
 		contestStore{contest: contest},
 		games{game: provisioning.Contest{ID: contest.ID, Policy: sqlpolicy.ReadOnly()}},
 		&databases{database: "game_c1_u1"}, &runner{},
 	)
 
-	if _, err := service.Schema(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("192.0.2.7")); !errors.Is(err, queryproxy.ErrSchemaHidden) {
+	if _, err := service.Schema(t.Context(), contest, participant, netip.MustParseAddr("192.0.2.7")); !errors.Is(err, queryproxy.ErrSchemaHidden) {
 		t.Fatalf("answered %v, want ErrSchemaHidden", err)
 	}
 }
 
-// Everything Access refuses, this refuses — the panel is a participant-facing
-// read like the story and the questions, and "may this student see this
-// contest" is answered in one place.
-func TestSchemaRequiresTheSameAdmissionAsEveryOtherRead(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		contest contests.Contest
-		person  contests.Participant
-		addr    netip.Addr
-		want    error
-	}{
-		{
-			name:    "a contest that has not started",
-			contest: contests.Contest{Status: contests.StatusPublished, Timing: contests.TimingFixed, EndsAt: &openWindow},
-			person:  contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive},
-			addr:    netip.MustParseAddr("192.0.2.7"),
-			want:    contests.ErrContestNotRunning,
-		},
-		{
-			name:    "a participant who has finished",
-			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow},
-			person:  contests.Participant{ID: uuid.New(), Status: contests.RegistrationFinished},
-			addr:    netip.MustParseAddr("192.0.2.7"),
-			want:    contests.ErrParticipantFinished,
-		},
-		{
-			name:    "a disqualified participant",
-			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow},
-			person:  contests.Participant{ID: uuid.New(), Status: contests.RegistrationDisqualified},
-			addr:    netip.MustParseAddr("192.0.2.7"),
-			want:    contests.ErrNotAParticipant,
-		},
-		{
-			name:    "a participant whose time is up",
-			contest: contests.Contest{Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &closedWindow},
-			person:  contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive},
-			addr:    netip.MustParseAddr("192.0.2.7"),
-			want:    contests.ErrDeadlinePassed,
-		},
-		{
-			name: "a contest that has not started, from a network it is not held on",
-			contest: contests.Contest{Status: contests.StatusPublished, Timing: contests.TimingFixed, EndsAt: &openWindow,
-				AllowedCIDRs: []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}},
-			person: contests.Participant{ID: uuid.New(), Status: contests.RegistrationRegistered},
-			addr:   netip.MustParseAddr("192.0.2.7"),
-			want:   contests.ErrAddressNotAllowed,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			reader := &schemas{}
-			service := queryproxy.New(
-				people{participant: tc.person}, contestStore{contest: tc.contest},
-				games{game: provisioning.Contest{Policy: sqlpolicy.ReadOnly()}},
-				&databases{database: "game_c1_u1"}, &runner{},
-			).WithSchemas(reader)
+// Schema is handed a participant and a contest the caller's Access already
+// admitted (the /play/schema handler, like every other /play route), and
+// does not admit them a second time: what the game lookup reads about the
+// registration and the contest is not asked again. Here that read would
+// refuse — disqualified, finished — and the pair handed in is still described.
+func TestSchemaDescribesThePairItWasHandedWithoutAdmittingItAgain(t *testing.T) {
+	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
+	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, UserID: uuid.New(), Status: contests.RegistrationActive}
+	since := participant
+	since.Status = contests.RegistrationDisqualified
+	ended := contest
+	ended.Status = contests.StatusFinished
+	reader := &schemas{schema: provisioning.Schema{Tables: []provisioning.Table{{Name: "guests"}}}}
+	service := queryproxy.New(
+		people{participant: since}, contestStore{contest: ended},
+		games{game: provisioning.Contest{ID: contest.ID, Policy: sqlpolicy.ReadOnly()}},
+		&databases{database: "game_c1_u1"}, &runner{},
+	).WithSchemas(reader)
 
-			_, err := service.Schema(t.Context(), uuid.New(), uuid.New(), tc.addr)
-			if !errors.Is(err, tc.want) {
-				t.Fatalf("answered %v, want %v", err, tc.want)
-			}
-			if len(reader.asked) != 0 {
-				t.Fatal("described the game to somebody who was refused")
-			}
-		})
+	got, err := service.Schema(t.Context(), contest, participant, netip.MustParseAddr("192.0.2.7"))
+	if err != nil {
+		t.Fatalf("Schema() = %v, want the admitted pair described", err)
+	}
+	if len(got.Tables) != 1 || got.Tables[0].Name != "guests" {
+		t.Fatalf("returned %+v", got.Tables)
 	}
 }
 
 // individualSchemaFixture is schemaFixture for a participant of an
 // individual-timing contest who has not started yet.
-func individualSchemaFixture(policy sqlpolicy.Policy, allowed []netip.Prefix) (*queryproxy.Service, *schemas, *int) {
+func individualSchemaFixture(policy sqlpolicy.Policy, allowed []netip.Prefix) (*queryproxy.Service, *schemas, *int, admitted) {
 	contest := individualContest()
 	contest.AllowedCIDRs = allowed
 	starts := 0
@@ -196,15 +162,15 @@ func individualSchemaFixture(policy sqlpolicy.Policy, allowed []netip.Prefix) (*
 		games{game: provisioning.Contest{ID: contest.ID, Template: "game_tpl_c1", Version: 3, Policy: policy}},
 		&databases{database: "game_c1_u1"}, &runner{},
 	).WithSchemas(reader)
-	return service, reader, &starts
+	return service, reader, &starts, admitted{contest: contest, participant: registration}
 }
 
 // The schema is contest content like the story and the questions: under
 // individual timing, reading it is a first read that starts the clock.
 func TestReadingTheSchemaStartsAnIndividualParticipantsClock(t *testing.T) {
-	service, _, starts := individualSchemaFixture(sqlpolicy.ReadOnly(), nil)
+	service, _, starts, pair := individualSchemaFixture(sqlpolicy.ReadOnly(), nil)
 
-	if _, err := service.Schema(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("192.0.2.7")); err != nil {
+	if _, err := service.Schema(t.Context(), pair.contest, pair.participant, netip.MustParseAddr("192.0.2.7")); err != nil {
 		t.Fatalf("Schema() = %v", err)
 	}
 	if *starts != 1 {
@@ -212,9 +178,10 @@ func TestReadingTheSchemaStartsAnIndividualParticipantsClock(t *testing.T) {
 	}
 }
 
-// A schema read that is refused showed nothing, so it starts nothing: not from
-// an address the contest does not allow, and not where the contest hides its
-// schema.
+// A schema read that is refused showed nothing, so it starts nothing: not
+// where the contest hides its schema, and not from an address the contest
+// does not allow — the caller's Access refuses that first, and the start
+// asks the gate again rather than trust it did.
 func TestARefusedSchemaReadStartsNoClock(t *testing.T) {
 	closed := sqlpolicy.ReadOnly()
 	closed.AllowCatalog = false
@@ -227,9 +194,9 @@ func TestARefusedSchemaReadStartsNoClock(t *testing.T) {
 		"a contest that hides its schema":       {closed, nil, queryproxy.ErrSchemaHidden},
 	} {
 		t.Run(name, func(t *testing.T) {
-			service, _, starts := individualSchemaFixture(given.policy, given.allowed)
+			service, _, starts, pair := individualSchemaFixture(given.policy, given.allowed)
 
-			if _, err := service.Schema(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("192.0.2.7")); !errors.Is(err, given.want) {
+			if _, err := service.Schema(t.Context(), pair.contest, pair.participant, netip.MustParseAddr("192.0.2.7")); !errors.Is(err, given.want) {
 				t.Fatalf("Schema() = %v, want %v", err, given.want)
 			}
 			if *starts != 0 {
@@ -243,27 +210,30 @@ func TestARefusedSchemaReadStartsNoClock(t *testing.T) {
 // a fault.
 func TestSchemaReportsAContestWithNoGame(t *testing.T) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
+	participant := contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}
 	service := queryproxy.New(
-		people{participant: contests.Participant{ID: uuid.New(), Status: contests.RegistrationActive}},
+		people{participant: participant},
 		contestStore{contest: contest},
 		games{err: provisioning.ErrNoGame},
 		&databases{}, &runner{},
 	).WithSchemas(&schemas{})
 
-	if _, err := service.Schema(t.Context(), uuid.New(), uuid.New(), netip.MustParseAddr("192.0.2.7")); !errors.Is(err, queryproxy.ErrNoGameYet) {
+	if _, err := service.Schema(t.Context(), contest, participant, netip.MustParseAddr("192.0.2.7")); !errors.Is(err, queryproxy.ErrNoGameYet) {
 		t.Fatalf("answered %v, want ErrNoGameYet", err)
 	}
 }
 
-// The deployment wires the single lookup, and the schema panel is admitted
-// by it alone: the participant, the contest, the game and the participant's
-// copy arrive together, and none of the default's separate reads runs.
+// The deployment wires the single lookup, and the schema panel reads the game
+// and the participant's copy through it alone, asked about the admitted
+// contest and the admitted participant's own account: none of the default's
+// separate reads runs.
 func TestSchemaUsesTheSingleLookupOnceWired(t *testing.T) {
 	contest := contests.Contest{ID: uuid.New(), Status: contests.StatusRunning, Timing: contests.TimingFixed, EndsAt: &openWindow}
-	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, Status: contests.RegistrationActive}
+	participant := contests.Participant{ID: uuid.New(), ContestID: contest.ID, UserID: uuid.New(), Status: contests.RegistrationActive}
 	game := provisioning.Contest{ID: contest.ID, Template: "game_tpl_c1", Version: 3, Policy: sqlpolicy.ReadOnly()}
 	instance := provisioning.Instance{Database: "game_c1_u1", TemplateVersion: 3, Status: "ready"}
 	peopleCalls, contestCalls, gameCalls, lookupCalls := 0, 0, 0, 0
+	var asked [2]uuid.UUID
 	db := &databases{database: "game_c1_u1"}
 	reader := &schemas{schema: provisioning.Schema{Tables: []provisioning.Table{{Name: "guests"}}}}
 
@@ -273,14 +243,17 @@ func TestSchemaUsesTheSingleLookupOnceWired(t *testing.T) {
 		games{game: game, calls: &gameCalls},
 		db, &runner{},
 	).WithSchemas(reader).
-		WithLookup(lookupFake{participant: participant, contest: contest, game: game, instance: instance, calls: &lookupCalls})
+		WithLookup(lookupFake{participant: participant, contest: contest, game: game, instance: instance, calls: &lookupCalls, asked: &asked})
 
-	if _, err := service.Schema(t.Context(), contest.ID, uuid.New(), netip.MustParseAddr("192.0.2.7")); err != nil {
+	if _, err := service.Schema(t.Context(), contest, participant, netip.MustParseAddr("192.0.2.7")); err != nil {
 		t.Fatalf("reading the schema: %v", err)
 	}
 	if lookupCalls != 1 || peopleCalls != 0 || contestCalls != 0 || gameCalls != 0 {
 		t.Fatalf("calls = lookup %d, participant %d, contest %d, game %d; want 1, 0, 0 and 0",
 			lookupCalls, peopleCalls, contestCalls, gameCalls)
+	}
+	if asked != [2]uuid.UUID{contest.ID, participant.UserID} {
+		t.Fatalf("the lookup was asked about %v, want the admitted contest %v and account %v", asked, contest.ID, participant.UserID)
 	}
 	if db.existing != instance || db.existingErr != nil {
 		t.Fatalf("EnsureFrom was told %+v, %v; want the copy the lookup read", db.existing, db.existingErr)
@@ -302,7 +275,7 @@ func TestSchemaOverTheSingleLookupStillRefusesAClosedCatalogueFirst(t *testing.T
 		WithLookup(lookupFake{participant: participant, contest: contest,
 			game: provisioning.Contest{ID: contest.ID, Template: "game_tpl_c1", Policy: closed}})
 
-	if _, err := service.Schema(t.Context(), contest.ID, uuid.New(), netip.MustParseAddr("192.0.2.7")); !errors.Is(err, queryproxy.ErrSchemaHidden) {
+	if _, err := service.Schema(t.Context(), contest, participant, netip.MustParseAddr("192.0.2.7")); !errors.Is(err, queryproxy.ErrSchemaHidden) {
 		t.Fatalf("answered %v, want ErrSchemaHidden", err)
 	}
 	if db.asked != nil || len(reader.asked) != 0 {

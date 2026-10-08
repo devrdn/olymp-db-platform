@@ -63,12 +63,13 @@ type ParticipantAccess interface {
 	// before it is sent; nothing else here does. addr is the caller's, as
 	// Access was given it: starting is admitted by the same gate as the read.
 	StartOnRead(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (contests.Participant, error)
-	// Schema describes the contest's game, for the console's schema panel. It
-	// applies Access's own admission itself and then the one rule that is its
-	// own: a contest that closed its catalogues does not show its shape here
-	// either (queryproxy.ErrSchemaHidden). A successful read starts the clock
-	// the same way the story and the questions do.
-	Schema(ctx context.Context, contestID, userID uuid.UUID, addr netip.Addr) (provisioning.Schema, error)
+	// Schema describes the contest's game, for the console's schema panel, to
+	// a participant and contest Access has already admitted: it does not admit
+	// them again. The one rule that is its own: a contest that closed its
+	// catalogues does not show its shape here either
+	// (queryproxy.ErrSchemaHidden). A successful read starts the clock the
+	// same way the story and the questions do, from addr.
+	Schema(ctx context.Context, contest contests.Contest, participant contests.Participant, addr netip.Addr) (provisioning.Schema, error)
 }
 
 // Submitter is the slice of contests.Service this handler needs to record an
@@ -621,7 +622,7 @@ var participantContestsErrors = contestsErrors.with(
 		message: "The caller is not taking part in this contest"},
 )
 
-// fail maps an error from admission (AdmitRead, Access, Schema, StartOnRead),
+// fail maps an error from admission (AdmitRead, Access, StartOnRead), Schema,
 // the reader, contests.Service.Submit or the export slots to a response.
 //
 // CLAUDE.md rule 1: every one of these is a declared sentinel with a mapping
@@ -671,25 +672,19 @@ type schemaColumn struct {
 //
 // A read like the story and the questions, so it goes through the same admit
 // — the rate budget first, then the one place that answers "may this student
-// see this contest". The refusal that is this endpoint's own,
+// see this contest", then the watcher — and hands Schema the pair admission
+// resolved. The refusal that is this endpoint's own,
 // ErrSchemaHidden, is a 403 rather than a 404: the contest exists and the
 // participant is in it; what they are being told is that this olympiad does
 // not hand its schema over, which is a rule of the game rather than a
 // missing thing.
 func (h *ParticipantHandler) schema(w http.ResponseWriter, r *http.Request) {
-	identity, _ := auth.IdentityFrom(r.Context())
-
-	contestID, err := uuid.Parse(chi.URLParam(r, contestIDParam))
-	if err != nil {
-		httpx.Error(w, r, http.StatusBadRequest, codeInvalidRequest, "The contest identifier is not a UUID")
-		return
-	}
-	if err := h.access.AdmitRead(identity.UserID); err != nil {
-		h.fail(w, r, err)
+	participant, contest, ok := h.admit(w, r)
+	if !ok {
 		return
 	}
 
-	schema, err := h.access.Schema(r.Context(), contestID, identity.UserID, clientAddress(r))
+	schema, err := h.access.Schema(r.Context(), contest, participant, clientAddress(r))
 	if err != nil {
 		h.fail(w, r, err)
 		return

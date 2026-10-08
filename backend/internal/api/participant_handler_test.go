@@ -65,12 +65,13 @@ type fakeAccess struct {
 	// lookups running slow (finding 2), without a real, adjustable-latency
 	// store behind this fake.
 	delay time.Duration
-	// schema and schemaErr are what Schema answers, and schemaAsked records
-	// which contest it was asked about — the same shape gotContestID gives
-	// Access, for the same reason.
+	// schema and schemaErr are what Schema answers, and schemaAsked and
+	// schemaFor record the contest and the registration it was handed, so a
+	// test can prove they are the pair Access admitted.
 	schema      provisioning.Schema
 	schemaErr   error
 	schemaAsked uuid.UUID
+	schemaFor   uuid.UUID
 	// startedOnRead records the registrations StartOnRead was asked to start,
 	// startedFrom the address each was asked from, and startOnReadErr is what
 	// it answers with.
@@ -94,10 +95,11 @@ func (a *fakeAccess) StartOnRead(_ context.Context, _ contests.Contest, particip
 	return participant, nil
 }
 
-func (a *fakeAccess) Schema(_ context.Context, contestID, _ uuid.UUID, _ netip.Addr) (provisioning.Schema, error) {
+func (a *fakeAccess) Schema(_ context.Context, contest contests.Contest, participant contests.Participant, _ netip.Addr) (provisioning.Schema, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.schemaAsked = contestID
+	a.schemaAsked = contest.ID
+	a.schemaFor = participant.ID
 	if a.schemaErr != nil {
 		return provisioning.Schema{}, a.schemaErr
 	}

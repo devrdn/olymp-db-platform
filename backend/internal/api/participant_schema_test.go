@@ -16,7 +16,7 @@ import (
 
 func TestSchemaEndpointAnswersWithTheGamesShape(t *testing.T) {
 	f := newParticipantFixture(t)
-	contest := uuid.New()
+	contest := f.playContest(t)
 	f.access.schema = provisioning.Schema{Tables: []provisioning.Table{
 		{Name: "guests", Columns: []provisioning.Column{
 			{Name: "id", Type: "uuid"},
@@ -28,8 +28,14 @@ func TestSchemaEndpointAnswersWithTheGamesShape(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
-	if f.access.schemaAsked != contest {
-		t.Fatalf("asked about %s, want the contest named in the URL", f.access.schemaAsked)
+	// Access is asked about the contest the URL names, and Schema is handed
+	// the pair Access admitted.
+	if f.access.gotContestID != contest {
+		t.Fatalf("Access asked about %s, want the contest named in the URL", f.access.gotContestID)
+	}
+	if f.access.schemaAsked != contest || f.access.schemaFor != f.access.participant.ID {
+		t.Fatalf("Schema handed %s/%s, want the admitted %s/%s",
+			f.access.schemaAsked, f.access.schemaFor, contest, f.access.participant.ID)
 	}
 
 	var body struct {
@@ -115,6 +121,72 @@ func TestSchemaEndpointNamesEveryRefusal(t *testing.T) {
 			}
 			if body.Error.Code != tc.code {
 				t.Fatalf("code %q, want %q", body.Error.Code, tc.code)
+			}
+		})
+	}
+}
+
+// The schema panel is a /play read like the story: admitted by the same
+// Access, and observed like every other admitted request, so the tracker of
+// address changes and parallel sessions hears of a registration that only
+// ever looks at the schema.
+func TestASchemaReadIsObserved(t *testing.T) {
+	f := newParticipantFixture(t)
+	contestID := f.playContest(t)
+
+	if rec := f.get("/contests/" + contestID.String() + "/play/schema"); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	visits := f.watcher.seen()
+	if len(visits) != 1 {
+		t.Fatalf("the request was observed %d times, want once", len(visits))
+	}
+	if got := visits[0]; got.Contest != contestID || got.Registration != f.access.participant.ID {
+		t.Fatalf("visit filed under %v/%v, want %v/%v", got.Contest, got.Registration, contestID, f.access.participant.ID)
+	}
+}
+
+// Admission refuses before the schema is asked for anything: the game is not
+// looked up, no database is ensured, and nothing is observed. The refusal is
+// the gate's own, answered from the shared table.
+func TestARefusedAdmissionNeverReachesTheSchema(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"not a participant", contests.ErrNotAParticipant, http.StatusForbidden, "not_a_participant"},
+		{"the contest is not running", contests.ErrContestNotRunning, http.StatusConflict, "contest_not_running"},
+		{"the participant has finished", contests.ErrParticipantFinished, http.StatusConflict, "contest_finished"},
+		{"the participant's time is up", contests.ErrDeadlinePassed, http.StatusConflict, "deadline_passed"},
+		{"the address is not allowed", contests.ErrAddressNotAllowed, http.StatusForbidden, "address_not_allowed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newParticipantFixture(t)
+			contestID := f.playContest(t)
+			f.access.err = tc.err
+
+			rec := f.get("/contests/" + contestID.String() + "/play/schema")
+			if rec.Code != tc.status {
+				t.Fatalf("status %d, want %d: %s", rec.Code, tc.status, rec.Body)
+			}
+			var body struct {
+				Error struct {
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v — %s", err, rec.Body)
+			}
+			if body.Error.Code != tc.code {
+				t.Fatalf("code %q, want %q", body.Error.Code, tc.code)
+			}
+			if f.access.schemaAsked != uuid.Nil {
+				t.Fatal("the schema was asked for after admission refused the request")
+			}
+			if visits := f.watcher.seen(); len(visits) != 0 {
+				t.Fatalf("a refused request was observed: %+v", visits)
 			}
 		})
 	}
