@@ -2,88 +2,41 @@ package postgres
 
 import (
 	"context"
+	"strconv"
 	"testing"
+	"time"
 
-	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
+	"github.com/devrdn/db-contest/backend/internal/platform/storage"
+	"github.com/google/uuid"
 )
 
-func TestAContestNobodyConfiguredIsReadOnly(t *testing.T) {
-	// The absence of a policy row must not read as "no restrictions".
-	withTx(t, func(ctx context.Context) {
-		author := makeUser(t, ctx, "author-policy-default")
-		id := makeContest(t, ctx, author.ID)
-
-		policy, err := NewSQLPolicies(testPool).ByContest(ctx, id)
-		if err != nil {
-			t.Fatalf("ByContest() = %v", err)
-		}
-
-		if policy.Mode != contests.ModeReadOnly {
-			t.Errorf("mode = %q, want read_only", policy.Mode)
-		}
-		if !policy.AllowCatalog {
-			t.Error("AllowCatalog = false, want the structural catalogs open by default")
-		}
-	})
-}
-
-func TestPolicySurvivesARoundTrip(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		repo := NewSQLPolicies(testPool)
-		author := makeUser(t, ctx, "author-policy")
-		id := makeContest(t, ctx, author.ID)
-
-		if err := repo.Save(ctx, contests.SQLPolicy{
-			ContestID:       id,
-			Mode:            contests.ModeReadWrite,
-			WritableTables:  []string{"notes", "public.evidence"},
-			AllowCreateView: true,
-			AllowOwnTables:  true,
-			AllowCatalog:    false,
-			DiskQuotaRatio:  3,
-			UpdatedBy:       &author.ID,
-		}); err != nil {
-			t.Fatalf("Save() = %v", err)
-		}
-
-		loaded, err := repo.ByContest(ctx, id)
-		if err != nil {
-			t.Fatalf("ByContest() = %v", err)
-		}
-		switch {
-		case loaded.Mode != contests.ModeReadWrite:
-			t.Errorf("mode = %q, want read_write", loaded.Mode)
-		case len(loaded.WritableTables) != 2:
-			t.Errorf("writable tables = %v, want two", loaded.WritableTables)
-		case !loaded.AllowCreateView || !loaded.AllowOwnTables || loaded.AllowCatalog:
-			t.Errorf("flags = %+v, want them as saved", loaded)
-		case loaded.DiskQuotaRatio != 3:
-			t.Errorf("quota ratio = %d, want 3", loaded.DiskQuotaRatio)
-		case loaded.UpdatedBy == nil || *loaded.UpdatedBy != author.ID:
-			t.Errorf("updated_by = %v, want %v", loaded.UpdatedBy, author.ID)
-		}
-	})
-}
-
-func TestSavingThePolicyAgainReplacesIt(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		repo := NewSQLPolicies(testPool)
-		author := makeUser(t, ctx, "author-policy-twice")
-		id := makeContest(t, ctx, author.ID)
-		if err := repo.Save(ctx, contests.SQLPolicy{
-			ContestID: id, Mode: contests.ModeReadWrite,
-			WritableTables: []string{"notes"}, DiskQuotaRatio: 5,
-		}); err != nil {
-			t.Fatalf("Save() = %v", err)
-		}
-
-		if err := repo.Save(ctx, contests.DefaultSQLPolicy(id)); err != nil {
-			t.Fatalf("Save() = %v", err)
-		}
-
-		loaded, _ := repo.ByContest(ctx, id)
-		if loaded.Mode != contests.ModeReadOnly || len(loaded.WritableTables) != 0 {
-			t.Errorf("policy = %+v, want it back to read-only with no writable tables", loaded)
-		}
+// What a single caller can observe of the SQL policy is the contract every
+// contests.PolicyStore answers to, the in-memory one the service tests use
+// included (conteststest.PolicyStoreContract). What the table refuses by
+// constraint is not part of it, and has no test here yet.
+func TestSQLPoliciesHonoursTheStoreContract(t *testing.T) {
+	conteststest.PolicyStoreContract(t, func(t *testing.T, run func(context.Context, conteststest.PolicyTarget)) {
+		withTx(t, func(ctx context.Context) {
+			author := makeUser(t, ctx, "author-policy")
+			// Inside one transaction now() is its start time, which is what
+			// updated_at is stamped with, so the clock a row is stamped with
+			// is exactly the one read here — through the transaction, as the
+			// insert reads it; the pool itself is another session.
+			var now time.Time
+			if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
+				t.Fatalf("read the database clock: %v", err)
+			}
+			editors := 0
+			run(ctx, conteststest.PolicyTarget{
+				Store:      NewSQLPolicies(testPool),
+				NewContest: func() uuid.UUID { return makeContest(t, ctx, author.ID) },
+				NewUser: func() uuid.UUID {
+					editors++
+					return makeUser(t, ctx, "editor-policy-"+strconv.Itoa(editors)).ID
+				},
+				Now: func() time.Time { return now },
+			})
+		})
 	})
 }

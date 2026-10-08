@@ -107,6 +107,9 @@ func NewFixture() *Fixture {
 	f.Managers.Clock = func() time.Time { return f.Now }
 	// And a contest by the same one, the way its own table stamps it.
 	f.Contests.Clock = func() time.Time { return f.Now }
+	// And a story and a SQL policy, the way their tables stamp them.
+	f.Stories.Clock = func() time.Time { return f.Now }
+	f.Policies.Clock = func() time.Time { return f.Now }
 	// The listing of a user's contests and of what a participant may see
 	// reads who staffs and who is registered, which are these two stores.
 	f.Contests.Rosters(f.Managers, f.Registrations)

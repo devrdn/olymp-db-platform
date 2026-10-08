@@ -152,3 +152,48 @@ func TestSequentialProgressHonoursTheRepositoryContract(t *testing.T) {
 		})
 	})
 }
+
+func TestStoriesHonoursTheRepositoryContract(t *testing.T) {
+	StoryRepositoryContract(t, func(t *testing.T, run func(context.Context, StoryTarget)) {
+		repo := NewStories()
+		repo.Clock = func() time.Time { return FixtureNow }
+		run(context.Background(), StoryTarget{
+			Repo:       repo,
+			Text:       repo,
+			NewContest: uuid.New,
+			Now:        repo.Clock,
+		})
+	})
+}
+
+func TestLanguagesHonoursTheCatalogContract(t *testing.T) {
+	LanguageCatalogContract(t, func(t *testing.T, run func(context.Context, LanguageTarget)) {
+		catalog := NewLanguages()
+		run(context.Background(), LanguageTarget{
+			Catalog: catalog,
+			Add: func(l contests.Language) {
+				catalog.Available = append(catalog.Available, l)
+			},
+			Retire: func(code string) {
+				for i := range catalog.Available {
+					if catalog.Available[i].Code == code {
+						catalog.Available[i].IsActive = false
+					}
+				}
+			},
+		})
+	})
+}
+
+func TestPoliciesHonoursTheStoreContract(t *testing.T) {
+	PolicyStoreContract(t, func(t *testing.T, run func(context.Context, PolicyTarget)) {
+		store := NewPolicies()
+		store.Clock = func() time.Time { return FixtureNow }
+		run(context.Background(), PolicyTarget{
+			Store:      store,
+			NewContest: uuid.New,
+			NewUser:    uuid.New,
+			Now:        store.Clock,
+		})
+	})
+}
