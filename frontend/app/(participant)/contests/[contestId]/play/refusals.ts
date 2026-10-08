@@ -36,6 +36,9 @@ export type RefusalKind = "closed" | "excluded" | "elsewhere" | "passing" | "fau
 const KINDS = {
   contest_finished: "closed",
   contest_not_running: "closed",
+  // The participant's own time is up while the contest may still be running
+  // for everyone else: as final for them as the contest ending.
+  deadline_passed: "closed",
 
   not_a_participant: "excluded",
 
