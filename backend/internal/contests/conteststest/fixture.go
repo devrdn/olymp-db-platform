@@ -98,6 +98,9 @@ func NewFixture() *Fixture {
 	// exercising the gap between them (§8's whole reason for asking the core
 	// database's own clock rather than trusting the caller's).
 	f.Submissions.Clock = func() time.Time { return f.Now }
+	// A registration is stamped by the same clock, the way the table stamps
+	// it with the database's own.
+	f.Registrations.Clock = func() time.Time { return f.Now }
 
 	f.Service = contests.NewService(contests.ServiceConfig{
 		Contests:      f.Contests,
