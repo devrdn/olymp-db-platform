@@ -8,221 +8,44 @@ import (
 	"time"
 
 	"github.com/devrdn/db-contest/backend/internal/contests"
+	"github.com/devrdn/db-contest/backend/internal/contests/conteststest"
 	"github.com/devrdn/db-contest/backend/internal/platform/storage"
 	"github.com/google/uuid"
 )
 
-// farDeadline is a deadline no test below means to trip — every test that is
-// not specifically about the deadline uses it, so an unrelated failure never
-// reads as "the deadline check misfired".
+// farDeadline is a deadline no test in this package means to trip, so an
+// unrelated failure never reads as "the deadline check misfired".
 var farDeadline = time.Now().UTC().Add(24 * time.Hour)
 
-func TestInsertTakesTheNextAttemptNumber(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		author := makeUser(t, ctx, "author-submit")
-		student := makeUser(t, ctx, "student-submit")
-		contestID := makeContest(t, ctx, author.ID)
-		registrationID := makeRegistration(t, ctx, contestID, student.ID)
-		q, err := NewQuestions(testPool).Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
-		if err != nil {
-			t.Fatalf("Create() = %v", err)
-		}
-
-		repo := NewSubmissions(testPool)
-		first, err := repo.Insert(ctx, contests.SubmissionRequest{
-			RegistrationID: registrationID, QuestionID: q.ID, Value: "wrong",
-			Deadline: farDeadline,
-		})
-		if err != nil {
-			t.Fatalf("first Insert() = %v", err)
-		}
-		if first.AttemptNo != 1 {
-			t.Fatalf("first AttemptNo = %d, want 1", first.AttemptNo)
-		}
-		if first.SubmittedAt.IsZero() {
-			t.Fatal("SubmittedAt is zero, want the database's own now()")
-		}
-
-		second, err := repo.Insert(ctx, contests.SubmissionRequest{
-			RegistrationID: registrationID, QuestionID: q.ID, Value: "still wrong",
-			Deadline: farDeadline,
-		})
-		if err != nil {
-			t.Fatalf("second Insert() = %v", err)
-		}
-		if second.AttemptNo != 2 {
-			t.Fatalf("second AttemptNo = %d, want 2", second.AttemptNo)
-		}
-	})
-}
-
-func TestInsertRefusesOnceAlreadyCorrect(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		author := makeUser(t, ctx, "author-submit-2")
-		student := makeUser(t, ctx, "student-submit-2")
-		contestID := makeContest(t, ctx, author.ID)
-		registrationID := makeRegistration(t, ctx, contestID, student.ID)
-		q, err := NewQuestions(testPool).Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
-		if err != nil {
-			t.Fatalf("Create() = %v", err)
-		}
-
-		repo := NewSubmissions(testPool)
-		if _, err := repo.Insert(ctx, contests.SubmissionRequest{
-			RegistrationID: registrationID, QuestionID: q.ID, Value: "correct", IsCorrect: true, Points: 10,
-			Deadline: farDeadline,
-		}); err != nil {
-			t.Fatalf("first Insert() = %v", err)
-		}
-
-		_, err = repo.Insert(ctx, contests.SubmissionRequest{
-			RegistrationID: registrationID, QuestionID: q.ID, Value: "correct again",
-			Deadline: farDeadline,
-		})
-		if !errors.Is(err, contests.ErrQuestionClosed) {
-			t.Fatalf("second Insert() error = %v, want ErrQuestionClosed", err)
-		}
-	})
-}
-
-func TestInsertRefusesOnceMaxAttemptsIsSpent(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		author := makeUser(t, ctx, "author-submit-3")
-		student := makeUser(t, ctx, "student-submit-3")
-		contestID := makeContest(t, ctx, author.ID)
-		registrationID := makeRegistration(t, ctx, contestID, student.ID)
-		q, err := NewQuestions(testPool).Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
-		if err != nil {
-			t.Fatalf("Create() = %v", err)
-		}
-
-		max := 2
-		repo := NewSubmissions(testPool)
-		for i := 0; i < max; i++ {
-			if _, err := repo.Insert(ctx, contests.SubmissionRequest{
-				RegistrationID: registrationID, QuestionID: q.ID, Value: "wrong",
-				Deadline: farDeadline, MaxAttempts: &max,
-			}); err != nil {
-				t.Fatalf("Insert() attempt %d = %v", i+1, err)
+// What a single caller can observe of Insert is the contract every
+// contests.SubmissionRepository answers to, the in-memory one the service
+// tests use included (conteststest.SubmissionRepositoryContract). What
+// follows it here is what only the real statement can be asked: its int4
+// arithmetic, and the race between two transactions.
+func TestSubmissionsHonoursTheRepositoryContract(t *testing.T) {
+	conteststest.SubmissionRepositoryContract(t, func(t *testing.T, run func(context.Context, conteststest.SubmissionTarget)) {
+		withTx(t, func(ctx context.Context) {
+			author := makeUser(t, ctx, "author-submit")
+			student := makeUser(t, ctx, "student-submit")
+			contestID := makeContest(t, ctx, author.ID)
+			registrationID := makeRegistration(t, ctx, contestID, student.ID)
+			q, err := NewQuestions(testPool).Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
+			if err != nil {
+				t.Fatalf("Create() = %v", err)
 			}
-		}
-
-		_, err = repo.Insert(ctx, contests.SubmissionRequest{
-			RegistrationID: registrationID, QuestionID: q.ID, Value: "one more",
-			Deadline: farDeadline, MaxAttempts: &max,
-		})
-		if !errors.Is(err, contests.ErrQuestionClosed) {
-			t.Fatalf("error = %v, want ErrQuestionClosed", err)
-		}
-	})
-}
-
-// §8, finding 4, finding 5: the deadline is checked against the database's
-// own clock inside Insert's own statement, not a value read earlier by the
-// caller — proven here by giving Insert a deadline that has already passed
-// and confirming the row is refused rather than written.
-func TestInsertRefusesAfterTheDeadline(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		author := makeUser(t, ctx, "author-submit-4")
-		student := makeUser(t, ctx, "student-submit-4")
-		contestID := makeContest(t, ctx, author.ID)
-		registrationID := makeRegistration(t, ctx, contestID, student.ID)
-		q, err := NewQuestions(testPool).Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
-		if err != nil {
-			t.Fatalf("Create() = %v", err)
-		}
-
-		repo := NewSubmissions(testPool)
-		_, err = repo.Insert(ctx, contests.SubmissionRequest{
-			RegistrationID: registrationID, QuestionID: q.ID, Value: "too late",
-			Deadline: time.Now().UTC().Add(-time.Hour),
-		})
-		if !errors.Is(err, contests.ErrDeadlinePassed) {
-			t.Fatalf("error = %v, want ErrDeadlinePassed", err)
-		}
-
-		var stored int
-		if err := testPool.QueryRow(ctx,
-			`SELECT COUNT(*) FROM submissions WHERE registration_id = $1 AND question_id = $2`,
-			registrationID, q.ID).Scan(&stored); err != nil {
-			t.Fatalf("count stored submissions: %v", err)
-		}
-		if stored != 0 {
-			t.Fatalf("stored = %d, want 0 — a submission past its deadline must not be written", stored)
-		}
-	})
-}
-
-// When both a passed deadline and a closed question would refuse the write,
-// the deadline is what the caller learns about — the same priority this
-// codebase gave the two checks before they were folded into Insert's own
-// statement (submission.go's own doc).
-func TestInsertPrefersDeadlinePassedOverQuestionClosed(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		author := makeUser(t, ctx, "author-submit-5")
-		student := makeUser(t, ctx, "student-submit-5")
-		contestID := makeContest(t, ctx, author.ID)
-		registrationID := makeRegistration(t, ctx, contestID, student.ID)
-		q, err := NewQuestions(testPool).Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
-		if err != nil {
-			t.Fatalf("Create() = %v", err)
-		}
-
-		repo := NewSubmissions(testPool)
-		if _, err := repo.Insert(ctx, contests.SubmissionRequest{
-			RegistrationID: registrationID, QuestionID: q.ID, Value: "correct", IsCorrect: true, Points: 10,
-			Deadline: farDeadline,
-		}); err != nil {
-			t.Fatalf("first Insert() = %v", err)
-		}
-
-		// The question is already closed (answered correctly above) and the
-		// deadline given here has already passed too.
-		_, err = repo.Insert(ctx, contests.SubmissionRequest{
-			RegistrationID: registrationID, QuestionID: q.ID, Value: "too late as well",
-			Deadline: time.Now().UTC().Add(-time.Hour),
-		})
-		if !errors.Is(err, contests.ErrDeadlinePassed) {
-			t.Fatalf("error = %v, want ErrDeadlinePassed (priority over an already-closed question)", err)
-		}
-	})
-}
-
-// §6.1.1: points_awarded is computed inside Insert's own statement from the
-// same already-committed attempt count the attempt number comes from — two
-// wrong attempts at 50% of a 10-point question leave 10 - 2*5 = 0 for a
-// correct third try, floored at zero rather than going negative.
-func TestInsertAppliesThePenaltyFromTheAlreadyCommittedAttemptCount(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		author := makeUser(t, ctx, "author-submit-6")
-		student := makeUser(t, ctx, "student-submit-6")
-		contestID := makeContest(t, ctx, author.ID)
-		registrationID := makeRegistration(t, ctx, contestID, student.ID)
-		q, err := NewQuestions(testPool).Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
-		if err != nil {
-			t.Fatalf("Create() = %v", err)
-		}
-
-		repo := NewSubmissions(testPool)
-		for i := 0; i < 2; i++ {
-			if _, err := repo.Insert(ctx, contests.SubmissionRequest{
-				RegistrationID: registrationID, QuestionID: q.ID, Value: "wrong",
-				Points: 10, PenaltyPerAttempt: 5, Deadline: farDeadline,
-			}); err != nil {
-				t.Fatalf("wrong attempt %d: Insert() = %v", i+1, err)
+			// Inside one transaction now() is its start time, so the
+			// clock Insert reads is exactly the one read here — through the
+			// transaction, as Insert reads it; the pool itself is another
+			// session with a clock of its own.
+			var now time.Time
+			if err := storage.QuerierFrom(ctx, testPool).QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
+				t.Fatalf("read the database clock: %v", err)
 			}
-		}
-
-		correct, err := repo.Insert(ctx, contests.SubmissionRequest{
-			RegistrationID: registrationID, QuestionID: q.ID, Value: "correct", IsCorrect: true,
-			Points: 10, PenaltyPerAttempt: 5, Deadline: farDeadline,
+			run(ctx, conteststest.SubmissionTarget{
+				Repo: NewSubmissions(testPool), RegistrationID: registrationID, QuestionID: q.ID,
+				Now: func() time.Time { return now },
+			})
 		})
-		if err != nil {
-			t.Fatalf("correct attempt: Insert() = %v", err)
-		}
-		if correct.PointsAwarded != 0 {
-			t.Fatalf("PointsAwarded = %d, want 0 (10 - 2*5, floored at zero)", correct.PointsAwarded)
-		}
 	})
 }
 
@@ -277,33 +100,6 @@ func TestInsertNeverOverflowsInt4AtTheDomainsOwnPointsAndPenaltyCeiling(t *testi
 		}
 		if correct.PointsAwarded != 0 {
 			t.Fatalf("PointsAwarded = %d, want 0 (the penalty floors it long before this many attempts)", correct.PointsAwarded)
-		}
-	})
-}
-
-// A wrong attempt always scores zero, whatever Points and PenaltyPerAttempt
-// say — the CASE in Insert's own statement takes the ELSE branch outright.
-func TestInsertNeverAwardsPointsForAWrongAnswer(t *testing.T) {
-	withTx(t, func(ctx context.Context) {
-		author := makeUser(t, ctx, "author-submit-7")
-		student := makeUser(t, ctx, "student-submit-7")
-		contestID := makeContest(t, ctx, author.ID)
-		registrationID := makeRegistration(t, ctx, contestID, student.ID)
-		q, err := NewQuestions(testPool).Create(ctx, contests.Question{ContestID: contestID, Kind: contests.KindText, IsVisible: true})
-		if err != nil {
-			t.Fatalf("Create() = %v", err)
-		}
-
-		repo := NewSubmissions(testPool)
-		wrong, err := repo.Insert(ctx, contests.SubmissionRequest{
-			RegistrationID: registrationID, QuestionID: q.ID, Value: "wrong",
-			Points: 10, PenaltyPerAttempt: 0, Deadline: farDeadline,
-		})
-		if err != nil {
-			t.Fatalf("Insert() = %v", err)
-		}
-		if wrong.PointsAwarded != 0 {
-			t.Fatalf("PointsAwarded = %d, want 0 for a wrong answer", wrong.PointsAwarded)
 		}
 	})
 }
