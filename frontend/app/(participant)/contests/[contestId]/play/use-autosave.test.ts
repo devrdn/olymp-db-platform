@@ -356,14 +356,14 @@ describe("a save that fails", () => {
     expect(readDraft()?.text).toBe("ab");
   });
 
-  test("stops the same way when the contest is not running", async () => {
-    const save = vi.fn<SaveFn>().mockRejectedValue(new ApiError("contest_not_running", 409, "no"));
+  test("stops the same way when the contest has ended", async () => {
+    const save = vi.fn<SaveFn>().mockRejectedValue(new ApiError("contest_ended", 409, "no"));
     const hook = mount({ save });
 
     type(hook, "a");
     await wait(1500);
 
-    expect(hook.result.current.status).toEqual({ kind: "closed", code: "contest_not_running" });
+    expect(hook.result.current.status).toEqual({ kind: "closed", code: "contest_ended" });
   });
 
   test("is not retried when the server refused that text, until the text changes", async () => {

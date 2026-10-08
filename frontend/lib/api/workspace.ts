@@ -21,8 +21,8 @@ import { request, type RequestOptions } from "./client";
  *   wait for the other. One request builder serves both the ordinary save
  *   and the one sent on the way out; `keepalive` is the only difference.
  *
- * Every write can be refused with 409 `contest_not_running` or
- * `contest_finished` once the contest has closed for this participant, and
+ * Every write can be refused with 409 `contest_ended`, `contest_finished` or
+ * `deadline_passed` once the contest has closed for this participant, and
  * with 429 `workspace_too_often` (with `Retry-After`) past sixty writes a
  * minute; the autosave engine reads both from the `ApiError` these raise.
  *
@@ -174,8 +174,8 @@ export type PasteTarget = "editor" | "answer" | "notes";
  * POST .../play/signals: a batch of at most 50 signals. Answers 204 even when
  * the server dropped some of them. Refused with 429 `signals_too_often` (with
  * `Retry-After`) past twelve batches a minute, 400 `signals_batch_too_large`,
- * and 409 `contest_not_running` / `contest_finished` once the contest has
- * closed for this participant. Sent through the same browser request builder
+ * and 409 `contest_ended` / `contest_finished` / `deadline_passed` once the
+ * contest has closed for this participant. Sent through the same browser request builder
  * as the workspace's writes, and with `keepalive` on the way out for the same
  * reason.
  */

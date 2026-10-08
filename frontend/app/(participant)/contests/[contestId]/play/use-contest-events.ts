@@ -93,7 +93,9 @@ const RECONNECT_JITTER = 0.5;
  * `fetch` of the same URL why: a code this installation expects to clear on
  * its own (too many connections, a rate limit, a transient server error)
  * gets a reconnect and a translated reason exposed as `channelError` for the
- * screen to show meanwhile; a code that will never clear on its own (this
+ * screen to show meanwhile — and so does a contest that is not open now but
+ * may be (`contest_not_running`), which is never read as the contest having
+ * finished; a code that will never clear on its own (this
  * account was removed from the contest, or the address it is on stopped
  * being allowed) gets the same message with no retry, since nothing this tab
  * does will change either fact. A probe the server *admits* — the proxy case
@@ -223,6 +225,11 @@ export function useContestEvents(contestId: string, initialPhase: ContestPhase =
             setPhase("finished");
             return;
           }
+          // A contest that is not open now (`dormant`: a published contest
+          // taken back to draft, say) is not over, and is not terminal
+          // either: it is shown, and the channel keeps reconnecting on the
+          // same backoff until the contest is published again and a sync
+          // clears the reason.
           setChannelError(code);
           if (isTerminal(code)) {
             // Retrying on a timer would only repeat the same refusal

@@ -234,17 +234,44 @@ describe("useContestEvents", () => {
       expect(FakeEventSource.instances).toHaveLength(1);
     });
 
-    test("a refusal because the contest is over sets phase to finished, not an error", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse(409, "contest_finished")));
-      const { result } = renderHook(() => useContestEvents("c1"));
+    test.each(["contest_finished", "contest_ended"])(
+      "a refusal because the contest is over (%s) sets phase to finished, not an error",
+      async (code) => {
+        vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse(409, code)));
+        const { result } = renderHook(() => useContestEvents("c1"));
+
+        await act(async () => {
+          FakeEventSource.instances[0].failPermanently();
+          await vi.advanceTimersByTimeAsync(0);
+        });
+
+        expect(result.current.phase).toBe("finished");
+        expect(result.current.channelError).toBeNull();
+      },
+    );
+
+    // A participant waiting for an olympiad its organiser took back to
+    // draft: the channel is refused until it is published again, and the
+    // screen must keep waiting for that rather than announce the end.
+    test("a refusal because the contest is not open now is shown and reconnects, and never finishes", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse(409, "contest_not_running")));
+      const { result } = renderHook(() => useContestEvents("c1", "waiting"));
 
       await act(async () => {
         FakeEventSource.instances[0].failPermanently();
         await vi.advanceTimersByTimeAsync(0);
       });
 
-      expect(result.current.phase).toBe("finished");
-      expect(result.current.channelError).toBeNull();
+      expect(result.current.phase).toBe("waiting");
+      expect(result.current.channelError).toBe("contest_not_running");
+      expect(FakeEventSource.instances).toHaveLength(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+
+      expect(FakeEventSource.instances).toHaveLength(2);
+      expect(result.current.phase).toBe("waiting");
     });
 
     // Finding 3: an admitted probe used to reconnect synchronously, with the

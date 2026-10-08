@@ -21,8 +21,9 @@ function contractCodes(): Set<string> {
 describe("refusalKind", () => {
   test.each([
     ["contest_finished", "closed"],
-    ["contest_not_running", "closed"],
+    ["contest_ended", "closed"],
     ["deadline_passed", "closed"],
+    ["contest_not_running", "dormant"],
     ["not_a_participant", "excluded"],
     ["address_not_allowed", "elsewhere"],
     ["query_too_often", "passing"],
@@ -61,8 +62,12 @@ describe("refusalKind", () => {
 describe("isClosed", () => {
   test("is true only for the contest being over for this participant", () => {
     expect(isClosed("contest_finished")).toBe(true);
-    expect(isClosed("contest_not_running")).toBe(true);
+    expect(isClosed("contest_ended")).toBe(true);
     expect(isClosed("deadline_passed")).toBe(true);
+    // Not open now is not over: a published contest taken back to draft may
+    // be published again, and the participant waiting for it must not be
+    // told it has finished.
+    expect(isClosed("contest_not_running")).toBe(false);
     expect(isClosed("not_a_participant")).toBe(false);
     expect(isClosed("query_too_often")).toBe(false);
   });

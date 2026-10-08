@@ -99,6 +99,7 @@ func TestSchemaEndpointNamesEveryRefusal(t *testing.T) {
 		{"the game cluster is full", queryproxy.ErrNoRoomForDatabase, http.StatusServiceUnavailable, "game_cluster_full"},
 		{"not a participant", contests.ErrNotAParticipant, http.StatusForbidden, "not_a_participant"},
 		{"the contest is not running", contests.ErrContestNotRunning, http.StatusConflict, "contest_not_running"},
+		{"the contest has ended", contests.ErrContestEnded, http.StatusConflict, "contest_ended"},
 		{"the participant has finished", contests.ErrParticipantFinished, http.StatusConflict, "contest_finished"},
 		{"the participant's time is up", contests.ErrDeadlinePassed, http.StatusConflict, "deadline_passed"},
 		{"the address is not allowed", contests.ErrAddressNotAllowed, http.StatusForbidden, "address_not_allowed"},
@@ -158,6 +159,7 @@ func TestARefusedAdmissionNeverReachesTheSchema(t *testing.T) {
 	}{
 		{"not a participant", contests.ErrNotAParticipant, http.StatusForbidden, "not_a_participant"},
 		{"the contest is not running", contests.ErrContestNotRunning, http.StatusConflict, "contest_not_running"},
+		{"the contest has ended", contests.ErrContestEnded, http.StatusConflict, "contest_ended"},
 		{"the participant has finished", contests.ErrParticipantFinished, http.StatusConflict, "contest_finished"},
 		{"the participant's time is up", contests.ErrDeadlinePassed, http.StatusConflict, "deadline_passed"},
 		{"the address is not allowed", contests.ErrAddressNotAllowed, http.StatusForbidden, "address_not_allowed"},

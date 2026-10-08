@@ -26,7 +26,7 @@ func Errors() []error {
 		ErrAlreadyEnrolled, ErrEnrollmentClosed, ErrParticipantStarted,
 		ErrStaffCannotParticipate, ErrParticipantCannotBeStaff,
 		ErrAddressNotAllowed,
-		ErrNotAParticipant, ErrContestNotRunning, ErrParticipantFinished, ErrDeadlinePassed,
+		ErrNotAParticipant, ErrContestNotRunning, ErrContestEnded, ErrParticipantFinished, ErrDeadlinePassed,
 		ErrInvalidContest, ErrInvalidQuestion, ErrInvalidAnswer,
 		ErrInvalidPolicy, ErrInvalidRole, ErrUnknownLanguage,
 		ErrRosterTooLarge, ErrQueryTooLong,

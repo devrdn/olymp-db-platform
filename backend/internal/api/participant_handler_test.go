@@ -1168,6 +1168,7 @@ func TestAnswerRefusalsBecomeTheDocumentedStatusAndCode(t *testing.T) {
 			"No such question in this contest"},
 		{"not a participant", contests.ErrNotAParticipant, http.StatusForbidden, "not_a_participant", ""},
 		{"contest not running", contests.ErrContestNotRunning, http.StatusConflict, "contest_not_running", ""},
+		{"contest ended", contests.ErrContestEnded, http.StatusConflict, "contest_ended", ""},
 		// Submit asks the participation gate itself, so every refusal of the
 		// gate can come back from it, not only from Access.
 		{"deadline passed", contests.ErrDeadlinePassed, http.StatusConflict, "deadline_passed", ""},

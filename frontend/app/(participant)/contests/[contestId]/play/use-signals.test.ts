@@ -332,7 +332,7 @@ describe("sending", () => {
 
   test.each([
     ["contest_finished", 409],
-    ["contest_not_running", 409],
+    ["contest_ended", 409],
     ["not_a_participant", 403],
     // The session ended: signed out, expired or revoked. Every later batch
     // would be refused alike, and the screen is on its way to the sign-in page.
